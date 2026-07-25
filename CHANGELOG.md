@@ -12,6 +12,39 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Looping & indefinite animations (RFC-0025).** `with anim.*(…)` grows the
+  modifiers that turn a one-shot transition into continuous motion —
+  `repeat: N | infinite` (`loop: true` is sugar for the latter),
+  `reverse: true` (alternate plays run back-to-front, so one curve becomes an
+  oscillation), `delay: <duration>` and `from: <value>` (the explicit second
+  endpoint a loop needs) — plus two new curve surfaces:
+  - **`anim.keyframes(0%: …, 50%: … ease_out, 100%: …, duration: 2s, loop: true)`**
+    — a multi-step sequence *in value position* (it supplies its own values, so
+    it is the property value rather than a `with` clause), with per-segment
+    easing, capped at 8 steps (`TooManyKeyframes`). Steps may be scalars,
+    colours (blended in OKLab), or coordinate pairs (interpolated
+    component-wise, so `translate` keyframes work).
+  - **`anim.stagger(spring(), 50ms, i)`** — sugar for `delay: i * 50ms` over a
+    `for` loop's index, with entrance semantics: a retarget replays the cascade
+    in order instead of cancelling the offset, while a plain `delay:` *is*
+    cancelled by a retarget so a delayed transition can never overwrite a more
+    recent interaction (RFC-0025 §5).
+
+  Every curve family (`spring`, `linear`, `ease`, and now the individually
+  addressable `ease_in`/`ease_out`/`ease_in_out`) repeats through one integer-
+  millisecond clock: a fixed-duration curve wraps at its duration, and a spring
+  wraps at its *analytic* settle time, so "restart when it settles" needs no
+  per-frame state. Infinite animations stay in the active set (frames keep
+  flowing at the display rate); a finite repeat holds its final value and lets
+  the app idle; and an animation that stops being drawn — offscreen, or in a
+  collapsed `when` branch — is **paused** and later resumes in phase rather than
+  jumping (RFC-0025 §2), at zero cost while it is away. New grammar: percentage
+  literals (`50%`), seconds durations (`1.5s`), and the `for i, item in items`
+  index binding. Engine surface: `frame::{RepeatMode, LoopPhase, loop_phase,
+  KeyframeCursor, keyframe_cursor, ease_progress, MAX_KEYFRAME_STEPS}` and
+  `Motion::{sample_secs, natural_duration_ms}`.
+  Example: `crates/byard-cli/examples/looping_animations`.
+
 - **Backdrop blur & vibrancy (RFC-0023 §2).** Four new paint-time style
   properties — `blur: Float` (frosted-glass backdrop blur in logical px,
   clamped to 40), `backdrop_tint: Color` (blended over the blurred sample; the

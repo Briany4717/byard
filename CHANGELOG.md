@@ -33,8 +33,13 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     tabs are preserved permanently. Nothing is instantiated up front — a
     ten-route table costs ten compiled patterns, not ten View trees.
   - **Transitions** (`slide`, `slide_up`, `fade`, `none`) run two screens at once
-    and place both from a single progress scalar: the positional ones ride
-    RFC-0010's spring, the cross-fade a fixed ramp. The screen the navigation
+    and place both from a single progress scalar, driven by a fixed-duration
+    **monotone** ramp — decelerating into place for the positional ones,
+    symmetric for the cross-fade. Deliberately not a spring: RFC-0010's default
+    spring is underdamped, and a screen's arrival must not overshoot its own
+    edge and wobble back. A duration ramp is bounded to `0..=1`, never reverses,
+    and lands on exactly `1.0` at exactly its duration, so the frames stop the
+    same instant the pixels do. The screen the navigation
     names stays in the container's normal flow and its transitioning partner is
     laid out absolutely over the same rect, so a transition costs two `f32` and
     an alpha folded into the transform every subtree already inherits — no

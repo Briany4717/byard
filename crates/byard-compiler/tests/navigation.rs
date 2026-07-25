@@ -345,6 +345,148 @@ fn the_incoming_screen_slides_monotonically_into_place() {
     );
 }
 
+/// The x of the text run `needle` in an already-rendered frame.
+fn text_x_in(frame: &RenderFrame, needle: &str) -> Option<f32> {
+    frame.texts().iter().find(|t| t.text == needle).map(|t| t.x)
+}
+
+/// A transition must be **monotone** and land **exactly** at rest.
+///
+/// The regression this pins: driving normalized progress with RFC-0010's
+/// underdamped spring made the incoming screen reach its resting place, then
+/// walk visibly back out (the spring's undershoot) before finally snapping into
+/// place — and, because the settle test read the unclamped curve, it kept
+/// requesting frames through a long tail and could park with the screen a few
+/// pixels out until the next input forced a redraw.
+#[test]
+fn a_transition_never_moves_backwards_and_lands_exactly_at_rest() {
+    let mut app = App::new(SLIDING);
+    app.at(0);
+    app.set("navPath", "/detail");
+    app.at(1);
+
+    let mut previous = f32::MAX;
+    let mut settled_at = None;
+    for step in 0..80 {
+        let ms = 1 + step * 16;
+        let frame = app.at(ms);
+        let Some(x) = text_x_in(&frame, "detail") else {
+            panic!("the incoming screen must paint on every frame of its transition");
+        };
+        assert!(
+            x <= previous,
+            "the transition must never reverse: {x} after {previous} (at {ms} ms)"
+        );
+        previous = x;
+        if !app.interp.has_active_animations() {
+            settled_at = Some(ms);
+            break;
+        }
+    }
+
+    let settled_at = settled_at.expect("the transition must settle");
+    // It stops asking for frames on the very frame it arrives — not before
+    // (which would park it mid-slide) and not long after (a tail nobody sees).
+    // Exactly, not approximately: a duration ramp lands on `p = 1`, so the
+    // offset is `width * 0.0`. Any residual here is a screen parked off-place.
+    assert_eq!(
+        previous.total_cmp(&0.0),
+        std::cmp::Ordering::Equal,
+        "the arrived screen sits exactly at rest, not near it: {previous}"
+    );
+    assert!(
+        settled_at <= 400,
+        "and settles within its declared duration, not through a spring's tail: {settled_at} ms"
+    );
+
+    // Nothing moves once it has settled, with or without input behind the
+    // frame: a later redraw must be pixel-identical, never a second jump.
+    let quiet = app.at(settled_at + 500);
+    assert_eq!(text_x_in(&quiet, "detail"), Some(0.0));
+    app.interp.dispatch_events(&[
+        pointer(EventKind::PointerMove, (W / 2.0, H / 2.0), 1),
+        pointer(EventKind::PointerMove, (W / 3.0, H / 3.0), 2),
+    ]);
+    app.interp.tick();
+    let after_input = app.at(settled_at + 700);
+    assert_eq!(
+        text_x_in(&after_input, "detail"),
+        Some(0.0),
+        "an input event must not disturb a settled transition"
+    );
+    assert!(!app.interp.has_active_animations());
+}
+
+/// The same guarantee in the other direction: a pop's leaving screen only ever
+/// moves out, and the revealed one only ever moves in.
+#[test]
+fn a_pop_never_moves_backwards_either() {
+    let mut app = App::new(SLIDING);
+    app.at(0);
+    app.set("navPath", "/detail");
+    app.at(1);
+    app.at(2_000);
+
+    app.set("navPath", "/");
+    app.at(2_001);
+    let (mut leaving, mut revealed) = (f32::MIN, f32::MIN);
+    for step in 0..80 {
+        let ms = 2_001 + step * 16;
+        let frame = app.at(ms);
+        if let Some(x) = text_x_in(&frame, "detail") {
+            assert!(
+                x >= leaving,
+                "the popped screen must only move out: {x} after {leaving}"
+            );
+            leaving = x;
+        }
+        let home = text_x_in(&frame, "home").expect("the revealed screen paints throughout");
+        assert!(
+            home >= revealed,
+            "the revealed screen must only move in: {home} after {revealed}"
+        );
+        revealed = home;
+        if !app.interp.has_active_animations() {
+            break;
+        }
+    }
+    assert_eq!(
+        revealed.total_cmp(&0.0),
+        std::cmp::Ordering::Equal,
+        "the revealed screen lands exactly at rest: {revealed}"
+    );
+    assert_eq!(app.texts(), ["home"]);
+}
+
+/// A released swipe pays only for the distance still to travel — a gesture let
+/// go a hair from the end must not sit through a whole transition.
+#[test]
+fn a_released_swipe_finishes_in_proportion_to_what_is_left() {
+    let mut app = App::new(SWIPEABLE);
+    app.at(0);
+    app.set("navPath", "/detail");
+    app.at(1);
+    app.at(2_000);
+
+    // Drag almost the whole way, then release.
+    app.interp.dispatch_events(&[
+        pointer(EventKind::PointerDown, (4.0, H / 2.0), 0),
+        pointer(EventKind::PointerMove, (W * 0.95, H / 2.0), 16),
+    ]);
+    app.at(2_016);
+    app.interp
+        .dispatch_events(&[pointer(EventKind::PointerUp, (W * 0.95, H / 2.0), 32)]);
+    app.interp.tick();
+
+    // Well inside a full transition's duration, it is already done.
+    app.at(2_016 + 64);
+    assert!(
+        !app.interp.has_active_animations(),
+        "the tail is scaled to the 5% that was left, not a full transition"
+    );
+    assert_eq!(app.texts(), ["home"]);
+}
+
 #[test]
 fn transition_none_swaps_instantly_and_requests_no_frames() {
     let src = SLIDING.replace("transition: slide", "transition: none");

@@ -704,23 +704,56 @@ const NAV_SWIPE_COMMIT: f32 = 0.5;
 /// scrolling child in the middle of the screen is never stolen from.
 const NAV_SWIPE_EDGE: f32 = 24.0;
 
+/// The progress curve for the *remaining* `fraction` of a transition — what a
+/// released swipe-back hands over to (RFC-0026): the same ramp, shortened to the
+/// distance still to travel, with a floor so a hand-off at the very end is still
+/// a frame or two of motion rather than a snap.
+fn nav_transition_tail(
+    transition: crate::interp::nav::NavTransition,
+    fraction: f32,
+) -> byard_core::frame::MotionCurve {
+    /// Shortest tail worth animating: one 60 Hz frame.
+    const MIN_TAIL_MS: f32 = 16.0;
+    let mut curve = nav_progress_curve(transition);
+    curve.params[0] = (curve.params[0] * fraction.clamp(0.0, 1.0)).max(MIN_TAIL_MS);
+    curve
+}
+
 /// The `0 → 1` progress curve driving a route transition (RFC-0026
-/// §"Transitions"): the positional transitions ride RFC-0010's default spring,
-/// the cross-fade a fixed linear ramp — exactly the pairing the RFC specifies,
-/// expressed in the same packed curve every other animation uses.
+/// §"Transitions"): a **fixed-duration, monotone** ramp — decelerating into
+/// place for the positional transitions, symmetric for the cross-fade.
+///
+/// Deliberately *not* a spring, even though a spring drives every other
+/// animation in the engine. A spring is the right primitive for a value that
+/// may be retargeted mid-flight; it is the wrong one for normalized progress.
+/// RFC-0010's default spring is underdamped (`ζ ≈ 0.69`), and a screen's
+/// arrival must not overshoot: past `p = 1` the incoming screen would slide off
+/// its own leading edge, and the undershoot that follows would walk it visibly
+/// back out again — a wobble at the exact moment the transition is meant to be
+/// over. Clamping `p` hides the overshoot but not the undershoot, and it makes
+/// the settle test (which reads the *unclamped* curve) disagree with what is on
+/// screen, so the engine keeps asking for frames long after the motion looks
+/// finished and can park with the screen a few pixels out of place.
+///
+/// A duration ramp has none of those problems: bounded to `0..=1` by
+/// construction, monotone, and landing on exactly `1.0` at exactly
+/// [`duration_ms`](crate::interp::nav::NavTransition::duration_ms). The
+/// decelerating cubic is the shape a *critically damped* spring traces — the
+/// feel RFC-0026 asks for — without the asymptotic tail that never ends.
 fn nav_progress_curve(
     transition: crate::interp::nav::NavTransition,
 ) -> byard_core::frame::MotionCurve {
     use crate::interp::nav::NavTransition;
-    match transition {
-        NavTransition::Fade | NavTransition::None => byard_core::frame::MotionCurve {
-            kind: byard_core::frame::MotionCurve::EASE_IN_OUT,
-            #[allow(clippy::cast_precision_loss)]
-            params: [transition.duration_ms() as f32, 0.0, 0.0],
-        },
-        NavTransition::Slide | NavTransition::SlideUp => {
-            pack_curve(crate::interp::anim::Curve::DEFAULT_SPRING)
-        }
+    let kind = match transition {
+        // Decelerate into place: fast off the mark, easing to a stop.
+        NavTransition::Slide | NavTransition::SlideUp => byard_core::frame::MotionCurve::EASE_OUT,
+        // A cross-fade has no direction to decelerate along.
+        NavTransition::Fade | NavTransition::None => byard_core::frame::MotionCurve::EASE_IN_OUT,
+    };
+    byard_core::frame::MotionCurve {
+        kind,
+        #[allow(clippy::cast_precision_loss)]
+        params: [transition.duration_ms() as f32, 0.0, 0.0],
     }
 }
 
@@ -2952,27 +2985,29 @@ impl Interpreter {
     /// changed (a screen mounted or unmounted), which is what makes a
     /// transition's start and end structural events.
     fn advance_nav(&mut self, pool: usize) -> bool {
-        // Progress is a `0..=1` scalar, not pixels: settle it on its own scale
-        // rather than the half-pixel default.
-        const EPS_POS: f32 = 0.002;
-        const EPS_VEL: f32 = 0.02;
-
         let before: Vec<usize> = self.nav_pools[pool].live.iter().map(|s| s.entry).collect();
         let (p, pop) = match self.nav_pools[pool].anim {
             None => (1.0, false),
             Some(anim) if anim.gesture => (anim.gesture_p, anim.pop),
             Some(anim) => {
-                let p = anim.motion.sample(self.now_ms).clamp(0.0, 1.0);
-                if anim
-                    .motion
-                    .is_settled_with_eps(self.now_ms, EPS_POS, EPS_VEL)
-                {
+                // A duration ramp is *done* when its duration has elapsed —
+                // exactly, on the frame it reaches `p = 1`. Settling on the
+                // clock rather than on an epsilon around the value keeps "the
+                // motion has stopped" and "the pixels have stopped" the same
+                // instant: an epsilon test keeps frames coming through a tail
+                // the eye cannot see, and can call it settled at a `p` that is
+                // not quite `1`, leaving the screen fractionally out of place
+                // until something else forces a redraw.
+                let elapsed = self.now_ms.saturating_sub(anim.motion.start_ms);
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let duration = anim.motion.curve.params[0].max(0.0) as u32;
+                if elapsed >= duration {
                     self.finish_nav(pool);
                     (1.0, false)
                 } else {
                     // Keep the frames coming while a screen is still moving.
                     self.any_active = true;
-                    (p, anim.pop)
+                    (anim.motion.sample(self.now_ms), anim.pop)
                 }
             }
         };
@@ -3200,7 +3235,12 @@ impl Interpreter {
             return;
         };
         let p = anim.gesture_p;
-        let curve = nav_progress_curve(self.nav_pools[pool].transition);
+        // The gesture already covered `p` of the distance, so the ramp that
+        // finishes (or undoes) it runs only for the fraction still to travel: a
+        // finger released a hair from the end must not sit through a whole
+        // transition's worth of frames to cross the last few pixels.
+        let remaining = if p >= NAV_SWIPE_COMMIT { 1.0 - p } else { p };
+        let curve = nav_transition_tail(self.nav_pools[pool].transition, remaining);
         if p >= NAV_SWIPE_COMMIT {
             // Commit: finish the pop the finger started, and reflect the new
             // path so app state and screen agree (`current` is already there).

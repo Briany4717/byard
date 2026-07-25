@@ -302,7 +302,7 @@ fn walk_members(members: &[Member], visit: &mut impl FnMut(&ElementNode)) {
                 visit(el);
                 walk_members(&el.children, visit);
             }
-            Member::For { body, .. } => walk_members(body, visit),
+            Member::For { body, .. } | Member::Route { body, .. } => walk_members(body, visit),
             Member::When { then, els, .. } => {
                 walk_members(then, visit);
                 if let Some(els) = els {

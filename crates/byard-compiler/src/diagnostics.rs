@@ -191,6 +191,50 @@ pub enum CompileError {
         /// The offending template string.
         template: String,
     },
+    /// A `route`/`tab` case was written outside its navigation container
+    /// (RFC-0026: `route` belongs to a `NavStack`, `tab` to a `NavHost`).
+    MisplacedNavCase {
+        /// Source range of the case.
+        span: Span,
+        /// The keyword written (`route` / `tab`).
+        keyword: String,
+        /// The container it belongs inside.
+        container: String,
+    },
+    /// A navigation container holds something other than its own cases
+    /// (RFC-0026: a `NavStack`'s children are `route` blocks, a `NavHost`'s are
+    /// `tab` blocks — nothing else).
+    NavCaseRequired {
+        /// Source range of the offending child.
+        span: Span,
+        /// The container's intrinsic name.
+        container: String,
+        /// The keyword the container accepts.
+        keyword: String,
+        /// What was found instead.
+        found: String,
+    },
+    /// A route pattern is not a well-formed path (RFC-0026 §"Route matching"):
+    /// a `:param` segment must name a parameter, `*` must stand alone as the
+    /// final segment, and a pattern may not repeat a parameter name.
+    InvalidRoutePattern {
+        /// Source range of the pattern literal.
+        span: Span,
+        /// The offending pattern.
+        pattern: String,
+        /// Why it was rejected.
+        reason: String,
+    },
+    /// A navigation container was pointed at a path no `route` in its table
+    /// matches (RFC-0026 §"Route matching"). A *runtime* condition — the
+    /// container keeps showing the last matched route — reported once per
+    /// distinct path rather than every frame.
+    UnmatchedRoute {
+        /// Source range of the navigation container.
+        span: Span,
+        /// The path that matched nothing.
+        path: String,
+    },
     /// A `Canvas` child is not a recognized shape command (RFC-0020 §1:
     /// `Canvas` children are shape commands only — intrinsics, user views,
     /// declarations, and control flow are all rejected).
@@ -556,6 +600,10 @@ impl CompileError {
             | Self::UnexpectedChildren { span, .. }
             | Self::ShapeOutsideCanvas { span, .. }
             | Self::InvalidGridTemplate { span, .. }
+            | Self::MisplacedNavCase { span, .. }
+            | Self::NavCaseRequired { span, .. }
+            | Self::InvalidRoutePattern { span, .. }
+            | Self::UnmatchedRoute { span, .. }
             | Self::UnknownShapeCommand { span, .. }
             | Self::UnknownShapeParam { span, .. }
             | Self::MissingShapeParam { span, .. }
@@ -619,6 +667,10 @@ impl CompileError {
             | Self::UnexpectedChildren { span, .. }
             | Self::ShapeOutsideCanvas { span, .. }
             | Self::InvalidGridTemplate { span, .. }
+            | Self::MisplacedNavCase { span, .. }
+            | Self::NavCaseRequired { span, .. }
+            | Self::InvalidRoutePattern { span, .. }
+            | Self::UnmatchedRoute { span, .. }
             | Self::UnknownShapeCommand { span, .. }
             | Self::UnknownShapeParam { span, .. }
             | Self::MissingShapeParam { span, .. }
@@ -684,6 +736,10 @@ impl CompileError {
             Self::UnexpectedChildren { .. } => "UnexpectedChildren",
             Self::ShapeOutsideCanvas { .. } => "ShapeOutsideCanvas",
             Self::InvalidGridTemplate { .. } => "InvalidGridTemplate",
+            Self::MisplacedNavCase { .. } => "MisplacedNavCase",
+            Self::NavCaseRequired { .. } => "NavCaseRequired",
+            Self::InvalidRoutePattern { .. } => "InvalidRoutePattern",
+            Self::UnmatchedRoute { .. } => "UnmatchedRoute",
             Self::UnknownShapeCommand { .. } => "UnknownShapeCommand",
             Self::UnknownShapeParam { .. } => "UnknownShapeParam",
             Self::MissingShapeParam { .. } => "MissingShapeParam",
@@ -789,6 +845,27 @@ impl CompileError {
                     "`{template}` is not a valid grid template; use `Nfr`, a number \
                      (px), `auto`, or `repeat(N, <track>)` separated by spaces"
                 )
+            }
+            Self::MisplacedNavCase {
+                keyword, container, ..
+            } => {
+                format!("`{keyword}` is only valid directly inside a `{container}`")
+            }
+            Self::NavCaseRequired {
+                container,
+                keyword,
+                found,
+                ..
+            } => {
+                format!("a `{container}` holds `{keyword}` blocks only; found {found}")
+            }
+            Self::InvalidRoutePattern {
+                pattern, reason, ..
+            } => {
+                format!("`{pattern}` is not a valid route pattern: {reason}")
+            }
+            Self::UnmatchedRoute { path, .. } => {
+                format!("no route matches `{path}`; the navigation stays where it is")
             }
             Self::UnknownShapeCommand { name, hint, .. } => with_hint(
                 format!(

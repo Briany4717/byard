@@ -10,7 +10,9 @@
 pub mod ast;
 mod expr;
 
-use ast::{Attr, AttrKind, ElementNode, Member, Param, StyleRule, Type, UseDecl, ViewDecl};
+use ast::{
+    Attr, AttrKind, ElementNode, Member, Param, RouteKind, StyleRule, Type, UseDecl, ViewDecl,
+};
 
 use crate::diagnostics::{CompileError, Span};
 use crate::lexer::{SpannedToken, Token, lex};
@@ -315,6 +317,20 @@ impl<'a> Parser<'a> {
             Some(Token::For) => Some(self.parse_for()),
             Some(Token::When) => Some(self.parse_when()),
             Some(Token::Style) => Some(self.parse_style_block()),
+            // RFC-0026 `route "/x" { … }` / `tab "home" { … }`. Contextual, not
+            // reserved: `route`/`tab` stay ordinary identifiers everywhere else,
+            // and the following string literal is what distinguishes a nav case
+            // from an element (no element form ever puts a literal after its
+            // name). Placement — `route` under a `NavStack`, `tab` under a
+            // `NavHost` — is a *checker* rule, so a misplaced case still parses
+            // and gets a precise diagnostic instead of a parse cascade.
+            Some(Token::Ident(name)) if matches!(self.peek2(), Some(Token::StrLit)) => {
+                match name.as_str() {
+                    "route" => Some(self.parse_route(RouteKind::Route)),
+                    "tab" => Some(self.parse_route(RouteKind::Tab)),
+                    _ => Some(Member::Element(self.parse_element())),
+                }
+            }
             Some(Token::Ident(_)) => Some(Member::Element(self.parse_element())),
             _ => {
                 self.error("a declaration or element");
@@ -446,6 +462,52 @@ impl<'a> Parser<'a> {
             cond,
             then,
             els,
+            span: self.span_from(start),
+        }
+    }
+
+    /// `nav_case := ("route" | "tab") STRING "{" ("|" IDENT "|")? member* "}"`
+    /// (RFC-0026).
+    ///
+    /// The pattern is a *static* literal — a route table is resolved at mount
+    /// time, so an interpolated pattern has no meaning; any interpolation is
+    /// dropped with a diagnostic rather than silently half-matched. The optional
+    /// `|params|` header binds the extracted `:param` segments as a record.
+    fn parse_route(&mut self, kind: RouteKind) -> Member {
+        let start = self.cur_span();
+        self.advance(); // route | tab
+        let pattern_span = self.cur_span();
+        self.advance(); // STRING
+        let parts = self.parse_string_literal(pattern_span);
+        let mut pattern = String::new();
+        for part in &parts {
+            match part {
+                ast::StrPart::Text(t) => pattern.push_str(t.as_str()),
+                ast::StrPart::Interp(_) => self.error_at(
+                    pattern_span,
+                    "a literal route pattern (interpolation is not allowed — a route \
+                     table is fixed at mount time)",
+                ),
+            }
+        }
+
+        self.expect(&Token::LBrace, "'{'");
+        // `{|params| … }` — the params binding, written like a lambda header so
+        // it reads the same as every other block parameter in the language.
+        let params = if self.eat(&Token::Pipe) {
+            let name = self.expect_ident("a route params binding name");
+            self.expect(&Token::Pipe, "'|'");
+            name
+        } else {
+            None
+        };
+        let body = self.parse_block_members();
+        Member::Route {
+            kind,
+            pattern,
+            params,
+            body,
+            pattern_span,
             span: self.span_from(start),
         }
     }

@@ -496,6 +496,12 @@ fn find_in_members(
                     return Some(target);
                 }
             }
+            // RFC-0026: a `route`/`tab` body holds ordinary members.
+            Member::Route { body, span, .. } if span_contains(*span, offset) => {
+                if let Some(target) = find_in_members(body, offset, parent_element) {
+                    return Some(target);
+                }
+            }
             Member::When {
                 cond,
                 then,
@@ -881,7 +887,9 @@ fn find_element_at_offset(members: &[Member], offset: usize) -> Option<String> {
                 }
                 return Some(el.name.to_string());
             }
-            Member::For { body, span, .. } if span_contains(*span, offset) => {
+            Member::For { body, span, .. } | Member::Route { body, span, .. }
+                if span_contains(*span, offset) =>
+            {
                 if let Some(name) = find_element_at_offset(body, offset) {
                     return Some(name);
                 }
@@ -947,6 +955,25 @@ fn collect_locals_in_members(
                     CompletionItemKind::VARIABLE,
                     "Loop Item".to_string(),
                 ));
+                collect_locals_in_members(body, offset, locals);
+            }
+            // RFC-0026: inside a route body, `route` and the optional
+            // `{|params| … }` binding are in scope.
+            Member::Route {
+                params, body, span, ..
+            } if span_contains(*span, offset) => {
+                locals.push((
+                    "route".to_string(),
+                    CompletionItemKind::VARIABLE,
+                    "Route".to_string(),
+                ));
+                if let Some(params) = params {
+                    locals.push((
+                        params.to_string(),
+                        CompletionItemKind::VARIABLE,
+                        "Route Params".to_string(),
+                    ));
+                }
                 collect_locals_in_members(body, offset, locals);
             }
             Member::When {
@@ -1179,8 +1206,10 @@ fn handle_completion(
 
     let mut items = Vec::new();
 
+    // `route`/`tab` are contextual (RFC-0026) rather than reserved, but they
+    // open a block like the rest, so they belong in the same completion set.
     let keywords = &[
-        "use", "var", "let", "fn", "inject", "for", "in", "when", "else", "style",
+        "use", "var", "let", "fn", "inject", "for", "in", "when", "else", "style", "route", "tab",
     ];
     for kw in keywords {
         items.push(CompletionItem {
@@ -1294,7 +1323,9 @@ fn find_element_ref_in_members(members: &[Member], offset: usize) -> Option<Stri
                     return Some(name);
                 }
             }
-            Member::For { body, span, .. } if span_contains(*span, offset) => {
+            Member::For { body, span, .. } | Member::Route { body, span, .. }
+                if span_contains(*span, offset) =>
+            {
                 if let Some(name) = find_element_ref_in_members(body, offset) {
                     return Some(name);
                 }
@@ -1341,6 +1372,11 @@ fn find_local_declaration_span(members: &[Member], var_name: &str, offset: usize
                         span.start + 4 + var.as_str().len() as u32,
                     ));
                 }
+                if let Some(s) = find_local_declaration_span(body, var_name, offset) {
+                    return Some(s);
+                }
+            }
+            Member::Route { body, span, .. } if span_contains(*span, offset) => {
                 if let Some(s) = find_local_declaration_span(body, var_name, offset) {
                     return Some(s);
                 }
@@ -1423,6 +1459,11 @@ fn find_class_ref_in_members(members: &[Member], offset: usize) -> Option<String
                 if let Some(name) = find_class_ref_in_expr(iter, offset) {
                     return Some(name);
                 }
+                if let Some(name) = find_class_ref_in_members(body, offset) {
+                    return Some(name);
+                }
+            }
+            Member::Route { body, span, .. } if span_contains(*span, offset) => {
                 if let Some(name) = find_class_ref_in_members(body, offset) {
                     return Some(name);
                 }

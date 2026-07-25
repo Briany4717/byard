@@ -26,6 +26,13 @@ the dependency order.
 
 ## N-A1 — Status: designed, not built
 
+> **Superseded (2026-07-25):** RFC-0026 is now implemented in full — the two
+> intrinsics, the `route`/`tab` sub-syntax, transitions, state preservation,
+> `swipe_back`, deep linking and the `navigate`/`back`/`replace` actions. The
+> sequencing this section records held: RFC-0027 landed first and the expression
+> layer it added is what route params read. The rest of this addendum is kept as
+> the dependency record it was written to be.
+
 Mark RFC-0026 as **"Active — not implemented"** in the document map. Its three
 primitives (`NavStack`, `NavHost`, navigation actions) and its "navigation state
 is a reactive `var`" model are unchanged and correct; they simply have no code

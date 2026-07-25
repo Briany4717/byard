@@ -179,6 +179,28 @@ pub enum Member {
         /// Source span.
         span: Span,
     },
+    /// `route "/detail/:id" {|params| … }` / `tab "home" { … }` — one case of a
+    /// navigation container (RFC-0026). A `tab` is a `route` whose pattern is a
+    /// plain literal name and which never binds params, so both share one node;
+    /// [`kind`](RouteKind) records which keyword was written, for diagnostics and
+    /// for the placement rule (a `route` belongs to a `NavStack`, a `tab` to a
+    /// `NavHost`).
+    Route {
+        /// Which keyword introduced this case.
+        kind: RouteKind,
+        /// The written pattern (`/detail/:id`, `home`), verbatim. Compiled to
+        /// segments at lower time.
+        pattern: String,
+        /// The optional `{|params| … }` binding, bound to the route's extracted
+        /// parameters as a record.
+        params: Option<Symbol>,
+        /// The case's body.
+        body: Vec<Member>,
+        /// Source span of the pattern literal alone (for pattern diagnostics).
+        pattern_span: Span,
+        /// Source span.
+        span: Span,
+    },
     /// `style { .class #[...] ... }` — scoped style rules (static; D5).
     Style {
         /// The style rules.
@@ -188,6 +210,36 @@ pub enum Member {
     },
     /// A bare expression statement (e.g. a call).
     Expr(Expr),
+}
+
+/// Which navigation keyword introduced a [`Member::Route`] (RFC-0026).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RouteKind {
+    /// `route "/detail/:id" { … }` — a `NavStack` case; the pattern may carry
+    /// `:param` and `*` segments.
+    Route,
+    /// `tab "home" { … }` — a `NavHost` case; the pattern is a plain name.
+    Tab,
+}
+
+impl RouteKind {
+    /// The keyword as written, for diagnostics.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Route => "route",
+            Self::Tab => "tab",
+        }
+    }
+
+    /// The navigation container this case belongs inside.
+    #[must_use]
+    pub const fn container(self) -> &'static str {
+        match self {
+            Self::Route => "NavStack",
+            Self::Tab => "NavHost",
+        }
+    }
 }
 
 /// An element: `IDENT ("(" content ")")? attr_block? ("{" children "}" | "=>" action)`.

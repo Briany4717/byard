@@ -921,3 +921,103 @@ fn empty_braces_stay_a_callback_block_not_a_record() {
     let e = init_expr("{}");
     assert!(matches!(e, Expr::Lambda { .. }));
 }
+
+// ---------------------------------------------------------------------------
+// RFC-0026 — navigation cases (`route` / `tab`)
+// ---------------------------------------------------------------------------
+
+/// The nav cases of the first element in `src`'s single view.
+fn nav_cases(src: &str) -> Vec<Member> {
+    as_element(&one_view(src).body[1]).children.clone()
+}
+
+const NAV_SRC: &str = r#"
+View App() {
+    var navPath = "/"
+    NavStack(path: navPath) #[transition: slide] {
+        route "/" { Text("home") }
+        route "/detail/:id" {|params| Text("detail") }
+    }
+}
+"#;
+
+#[test]
+fn route_cases_parse_with_their_pattern_and_body() {
+    let cases = nav_cases(NAV_SRC);
+    assert_eq!(cases.len(), 2);
+    let Member::Route {
+        kind,
+        pattern,
+        params,
+        body,
+        ..
+    } = &cases[0]
+    else {
+        panic!("expected a route, got {:?}", cases[0]);
+    };
+    assert_eq!(*kind, RouteKind::Route);
+    assert_eq!(pattern, "/");
+    assert_eq!(*params, None);
+    assert_eq!(body.len(), 1);
+}
+
+#[test]
+fn a_route_binds_its_params_with_a_lambda_style_header() {
+    let cases = nav_cases(NAV_SRC);
+    let Member::Route {
+        pattern, params, ..
+    } = &cases[1]
+    else {
+        panic!("expected a route");
+    };
+    assert_eq!(pattern, "/detail/:id");
+    assert_eq!(*params, Some(sym("params")));
+}
+
+#[test]
+fn tab_cases_parse_as_routes_tagged_with_their_keyword() {
+    let src = r#"
+View App() {
+    var active = "home"
+    NavHost(active: active) {
+        tab "home" { Text("home") }
+        tab "search" { Text("search") }
+    }
+}
+"#;
+    let cases = nav_cases(src);
+    assert_eq!(cases.len(), 2);
+    for (case, name) in cases.iter().zip(["home", "search"]) {
+        let Member::Route { kind, pattern, .. } = case else {
+            panic!("expected a tab");
+        };
+        assert_eq!(*kind, RouteKind::Tab);
+        assert_eq!(pattern, name);
+    }
+}
+
+#[test]
+fn route_and_tab_stay_ordinary_identifiers_elsewhere() {
+    // Contextual keywords: only `route`/`tab` *followed by a string literal*
+    // open a case, so nothing else that spells them breaks.
+    let view = one_view(r#"View App() { var route = 1 let tab = route + 1 Text("{tab}") }"#);
+    assert!(matches!(view.body[0], Member::Var { .. }));
+    assert!(matches!(view.body[1], Member::Let { .. }));
+}
+
+#[test]
+fn a_case_pattern_may_not_interpolate() {
+    // A route table is fixed at mount time, so a computed pattern is an error.
+    let parsed = parse(r#"View App() { NavStack(path: p) { route "/x/{p}" { Text("x") } } }"#);
+    assert!(!parsed.errors.is_empty());
+}
+
+#[test]
+fn a_misplaced_case_still_parses_so_the_checker_can_explain_it() {
+    // Placement is a checker rule, not a parse rule — the case parses cleanly
+    // and gets a precise diagnostic later instead of a parse cascade.
+    let parsed = parse(r#"View App() { Column { route "/" { Text("x") } } }"#);
+    assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+    let column = as_element(&parsed.views[0].body[0]);
+    assert!(matches!(column.children[0], Member::Route { .. }));
+}

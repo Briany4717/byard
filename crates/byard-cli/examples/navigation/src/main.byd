@@ -1,0 +1,215 @@
+// RFC-0026 — navigation & routing: stacks, tabs, transitions, deep linking.
+//
+// Run it (from the repo root):
+//   cd crates/byard-cli/examples/navigation
+//   cargo run -p byard-cli -- dev
+//
+// Deep link straight into a screen, as an OS intent would:
+//   cargo run -p byard-cli -- dev --deep-link byard://detail/7
+//
+// The whole model is one line of state: navigation IS a reactive `var`. There
+// is no navigation controller to hold, no route object, no widget reference —
+// setting `homePath = "/detail/2"` *is* the push, and setting it back *is* the
+// pop.
+//
+// What to verify visually:
+//   1. TABS: the three buttons along the bottom switch the whole content area.
+//      Switching is a cross-fade, and each tab keeps its state — scroll the
+//      Library list, jump to Profile, come back: the list is where you left it.
+//   2. PUSH: in Library, tap a row. The detail screen slides in from the right
+//      while the list drifts left underneath it (parallax) — that is the
+//      `slide` transition, driven by RFC-0010's spring.
+//   3. ROUTE PARAMS: the detail screen shows the id from its path, extracted by
+//      the `:id` segment of `route "/detail/:id"`.
+//   4. POP: tap "Back" (or drag from the very left edge of the window — the
+//      `swipe_back` gesture follows your pointer in real time and completes if
+//      you pass halfway, otherwise springs back). The detail screen slides out
+//      to the right, revealing the list exactly as it was.
+//   5. STATE PRESERVATION: bump the counter on the Library screen, push into a
+//      detail, come back — the counter still reads what you left it at. The
+//      covered screen was never unmounted.
+//   6. NESTED STACKS: Library and Profile each own an independent `NavStack`
+//      with its own history. Push into a Profile sub-screen, switch to Library,
+//      switch back — Profile is still on its sub-screen.
+//   7. REPLACE: on the Profile "Edit" screen, "Save" uses `replace(…)` — it
+//      swaps the screen without stacking, so one Back returns to Profile's root
+//      rather than to the edit screen you just left.
+//   8. MODAL: "About" in Settings uses `transition: slide_up` — it rises from
+//      the bottom over a stationary screen.
+//   9. DEEP LINK: launch with `--deep-link byard://detail/7` and the app opens
+//      already on Book #7 — the URL's path went straight through the Library
+//      stack's route table. (A deep link reaches every *mounted*
+//      `deep_link: true` stack, so the stack that should receive one belongs in
+//      the tab the app starts on.)
+//  10. IDLE: when nothing is moving the engine parks — `byard dev`'s telemetry
+//      line stops entirely. A transition costs frames only while it runs.
+View Main() {
+    var tab = "library"
+
+    // One navigation `var` per stack. Each is independent history — the
+    // standard mobile shape (a tab bar over a stack per tab).
+    var libraryPath = "/"
+    var profilePath = "/"
+    var settingsPath = "/"
+
+    // Ordinary app state living *on* a screen, to prove preservation.
+    var likes = 0
+
+    let screen = style { bg: 0x14141C, p: 24, gap: 14, grow: 1 }
+    let title = style { color: 0xE6E1E5, size: 22 }
+    let body = style { color: 0x938F99, size: 13, wrap: true }
+    let row = style { bg: 0x1D1B24, radius: 12, p: (14, 16), gap: 12 }
+    let chip = style { bg: 0x381E72, color: 0xD0BCFF, radius: 20, p: (8, 16) }
+
+    // A tab button: `selected:` drives the engine-owned `selected` state
+    // (RFC-0024), so the active tab styles itself.
+    let tabButton = style {
+        radius: 20, p: (10, 20), bg: 0x1D1B24, color: 0x938F99
+        on selected { bg: 0x381E72, color: 0xD0BCFF }
+    }
+
+    Column #[bg: 0x0F0E13, grow: 1] {
+        // ── content: one tab at a time, each tab's state preserved ──────────
+        NavHost(active: tab) #[grow: 1, transition: fade] {
+
+            tab "library" {
+                // `deep_link: true` accepts OS URL intents: `byard://detail/7`
+                // lands on the detail screen with `id = "7"`.
+                NavStack(path: libraryPath) #[grow: 1, transition: slide,
+                                              swipe_back: true, deep_link: true] {
+                    route "/" {
+                        Column #[..screen] {
+                            Text("Library") #[..title]
+                            Text("Tap a row to push a detail screen. The list stays alive underneath it.")
+                                #[..body]
+
+                            Row #[..row, tap => libraryPath = "/detail/1"] {
+                                Text("Great Expectations") #[color: 0xE6E1E5, size: 15]
+                                Spacer
+                                Text("→") #[color: 0x938F99, size: 15]
+                            }
+                            Row #[..row, tap => libraryPath = "/detail/2"] {
+                                Text("The Left Hand of Darkness") #[color: 0xE6E1E5, size: 15]
+                                Spacer
+                                Text("→") #[color: 0x938F99, size: 15]
+                            }
+                            Row #[..row, tap => libraryPath = "/detail/3"] {
+                                Text("Piranesi") #[color: 0xE6E1E5, size: 15]
+                                Spacer
+                                Text("→") #[color: 0x938F99, size: 15]
+                            }
+
+                            Row #[gap: 12, align: center] {
+                                Button("♥ {likes}") #[..chip] => likes++
+                                Text("this counter survives a push and pop") #[..body]
+                            }
+                        }
+                    }
+
+                    // `:id` is a dynamic segment; `{|params| … }` binds the
+                    // extracted parameters (all `Str` in v1).
+                    route "/detail/:id" {|params|
+                        Column #[..screen, bg: 0x1A1620] {
+                            Text("Book #{params.id}") #[..title]
+                            Text("This screen was instantiated for `{route.path}`. Pushing `/detail/2` while `/detail/1` is open creates a second entry — each concrete path is its own screen.")
+                                #[..body]
+                            Spacer
+                            Row #[gap: 12] {
+                                Button("‹ Back") #[..chip] => back(libraryPath)
+                                Button("Deeper") #[..chip] => libraryPath = "/detail/{params.id}/notes"
+                            }
+                        }
+                    }
+
+                    route "/detail/:id/notes" {|params|
+                        Column #[..screen, bg: 0x141A1C] {
+                            Text("Notes on #{params.id}") #[..title]
+                            Text("Three deep. `back(…)` walks the history one step; setting the path straight to `/` pops all the way and discards what it skipped.")
+                                #[..body]
+                            Spacer
+                            Row #[gap: 12] {
+                                Button("‹ Back") #[..chip] => back(libraryPath)
+                                Button("Home") #[..chip] => libraryPath = "/"
+                            }
+                        }
+                    }
+
+                    // A catch-all: anything the routes above do not match.
+                    route "*" {
+                        Column #[..screen] {
+                            Text("Not found") #[..title]
+                            Text("No route matched `{route.path}`.") #[..body]
+                            Button("Home") #[..chip] => libraryPath = "/"
+                        }
+                    }
+                }
+            }
+
+            tab "profile" {
+                NavStack(path: profilePath) #[grow: 1, transition: slide, swipe_back: true] {
+                    route "/" {
+                        Column #[..screen] {
+                            Text("Profile") #[..title]
+                            Text("This stack's history is its own. Push into Edit, switch to Library, come back — you are still on Edit.")
+                                #[..body]
+                            Button("Edit profile") #[..chip] => profilePath = "/edit"
+                        }
+                    }
+                    route "/edit" {
+                        Column #[..screen, bg: 0x191426] {
+                            Text("Edit profile") #[..title]
+                            Text("`Save` uses `replace(profilePath, \"/saved\")`: the saved screen takes this one's slot rather than stacking on it, so Back skips straight to the root.")
+                                #[..body]
+                            Spacer
+                            Row #[gap: 12] {
+                                Button("‹ Back") #[..chip] => back(profilePath)
+                                Button("Save") #[..chip] => replace(profilePath, "/saved")
+                            }
+                        }
+                    }
+                    route "/saved" {
+                        Column #[..screen, bg: 0x14231C] {
+                            Text("Saved ✓") #[..title]
+                            Text("One Back from here returns to the profile root — the edit screen is gone, not buried.")
+                                #[..body]
+                            Spacer
+                            Button("‹ Back") #[..chip] => back(profilePath)
+                        }
+                    }
+                }
+            }
+
+            tab "settings" {
+                NavStack(path: settingsPath) #[grow: 1, transition: slide_up] {
+                    route "/" {
+                        Column #[..screen] {
+                            Text("Settings") #[..title]
+                            Text("This stack uses `transition: slide_up` — a modal presentation that rises over a screen which stays put.")
+                                #[..body]
+                            Button("About") #[..chip] => settingsPath = "/about"
+                        }
+                    }
+                    route "/about" {
+                        Column #[..screen, bg: 0x231C14] {
+                            Text("About") #[..title]
+                            Text("Byard — navigation with no controllers, no route objects, and no widget references. Just a `var`.")
+                                #[..body]
+                            Spacer
+                            Button("Close") #[..chip] => back(settingsPath)
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── the tab bar: ordinary buttons writing an ordinary `var` ─────────
+        Row #[bg: 0x1D1B24, p: 10, gap: 10, justify: center] {
+            Button("Library") #[..tabButton, selected: tab == "library"]
+                => tab = "library"
+            Button("Profile") #[..tabButton, selected: tab == "profile"]
+                => tab = "profile"
+            Button("Settings") #[..tabButton, selected: tab == "settings"]
+                => tab = "settings"
+        }
+    }
+}

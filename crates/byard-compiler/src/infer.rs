@@ -174,7 +174,11 @@ impl Checker<'_> {
                 // Nested members in children keep the same View scope.
                 self.check_members(&el.children, false);
             }
-            Member::For { body, .. } => self.check_members(body, false),
+            // RFC-0026: a `route`/`tab` body is an ordinary member list in the
+            // same View scope, like a `for` body or a `when` branch.
+            Member::For { body, .. } | Member::Route { body, .. } => {
+                self.check_members(body, false);
+            }
             Member::When { then, els, .. } => {
                 self.check_members(then, false);
                 if let Some(els) = els {
@@ -614,6 +618,7 @@ fn member_span(member: &Member) -> Span {
         | Member::Inject { span, .. }
         | Member::For { span, .. }
         | Member::When { span, .. }
+        | Member::Route { span, .. }
         | Member::Style { span, .. } => *span,
         Member::Element(el) => el.span,
         Member::Expr(e) => e.span(),

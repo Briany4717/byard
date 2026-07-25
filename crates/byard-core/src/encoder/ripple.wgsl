@@ -115,6 +115,13 @@ fn sd_rounded_box(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>) -> f32 {
     if (p.x > 0.0 && p.y > 0.0) { r_corner = r.z; }
     if (p.x < 0.0 && p.y > 0.0) { r_corner = r.w; }
 
+    // A corner radius may never exceed half the box (RFC-0001 §3.1: the
+    // rounded-rect SDF is only well-defined for `r <= min(half)`; beyond it the
+    // field folds in on itself and the corners visibly deform — a `radius: 20`
+    // pill on a 33px-tall button is the everyday case). Clamping here, at the
+    // one place the radius is consumed, keeps every pipeline honest and matches
+    // the CSS rule that an over-large radius is reduced to fit.
+    r_corner = min(r_corner, min(b.x, b.y));
     let q = abs(p) - b + vec2<f32>(r_corner);
     return min(max(q.x, q.y), 0.0) + length(max(q, vec2<f32>(0.0))) - r_corner;
 }

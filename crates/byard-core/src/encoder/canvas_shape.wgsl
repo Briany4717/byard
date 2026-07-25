@@ -117,8 +117,11 @@ fn wrap_angle(a: f32) -> f32 {
 }
 
 fn sd_rounded_box(p: vec2<f32>, b: vec2<f32>, r: f32) -> f32 {
-    let q = abs(p) - b + vec2<f32>(r);
-    return min(max(q.x, q.y), 0.0) + length(max(q, vec2<f32>(0.0))) - r;
+    // Clamped for the same reason as the box pipelines: past half the extent the
+    // rounded-rect field folds in on itself (RFC-0001 §3.1).
+    let rc = min(r, min(b.x, b.y));
+    let q = abs(p) - b + vec2<f32>(rc);
+    return min(max(q.x, q.y), 0.0) + length(max(q, vec2<f32>(0.0))) - rc;
 }
 
 // Per-fragment shape evaluation: signed stroke distance (< 0 inside the

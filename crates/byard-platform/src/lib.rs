@@ -22,6 +22,21 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, NamedKey};
 use winit::window::{Window, WindowId};
 
+/// The control flow a poll-mode loop should adopt for the next iteration:
+/// `Poll` while the application has frame-driven work, `Wait` once it has none
+/// (RFC-0010's active-animation set, RFC-0025 §2's power argument).
+///
+/// Split out as a pure function so the decision is unit-testable without a
+/// window: it is the one line that decides whether a settled app costs 0 % or
+/// 100 % of a core.
+fn control_flow_for(wants_frames: bool) -> ControlFlow {
+    if wants_frames {
+        ControlFlow::Poll
+    } else {
+        ControlFlow::Wait
+    }
+}
+
 /// User event posted to the winit loop by the logic thread's [`FrameWaker`]
 /// when it publishes a frame that changed in response to input. It carries no
 /// data — its only job is to wake a `Wait`-mode loop so it redraws the update.
@@ -315,11 +330,21 @@ impl<H: PlatformHost> ApplicationHandler<FramePublished> for WinitApp<H> {
         }
     }
 
-    /// In poll mode, request a redraw after every event-loop iteration so
-    /// the logic thread's latest `RenderFrame` is presented without waiting
-    /// for the next user input event (needed for hot-reload in `byard dev`).
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
-        if self.poll {
+    /// Decides, once per event-loop iteration, whether to keep spinning.
+    ///
+    /// A poll-mode host requests a redraw after every iteration so the logic
+    /// thread's latest `RenderFrame` is presented without waiting for a user
+    /// event (hot-reload in `byard dev`) — but only *while the application has
+    /// frame-driven work*. When [`PlatformHost::wants_frames`] goes false (every
+    /// animation settled, per the RFC-0010/RFC-0025 active set) the loop drops
+    /// back to `Wait` and genuinely idles at zero frames; input events and the
+    /// logic thread's frame waker both bring it back.
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if !self.poll {
+            return;
+        }
+        event_loop.set_control_flow(control_flow_for(self.host.wants_frames()));
+        if self.host.wants_frames() {
             if let Some(window) = &self.window {
                 window.request_redraw();
             }
@@ -549,5 +574,14 @@ mod tests {
         let physical = winit::dpi::PhysicalPosition::new(5.0, -3.0);
         let origin = to_scroll_origin(MouseScrollDelta::PixelDelta(physical), 1.0);
         assert_eq!(origin, ScrollOrigin::Scroll(5.0, -3.0));
+    }
+
+    #[test]
+    fn a_settled_app_stops_spinning_and_a_moving_one_keeps_polling() {
+        // The whole idle contract in one line: while the RFC-0010 active set has
+        // work the loop spins (smooth animation), and the moment it empties the
+        // loop blocks on OS events instead of burning a core on a static scene.
+        assert_eq!(control_flow_for(true), ControlFlow::Poll);
+        assert_eq!(control_flow_for(false), ControlFlow::Wait);
     }
 }

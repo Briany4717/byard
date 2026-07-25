@@ -131,6 +131,12 @@ const DECORATION: &[(&str, PropType)] = &[
     ("border", PropType::Color),
     ("border_width", PropType::Int),
     ("shadow", PropType::Str),
+    // RFC-0001 §3.1: the `DecoratedBox` pipeline's declared remit includes
+    // gradients. `gradient` is a named tuple (validated at lower time, like
+    // `shadow`); `gradient_offset` is an ordinary number, so it animates through
+    // the RFC-0010/RFC-0025 chokepoints for free.
+    ("gradient", PropType::Str),
+    ("gradient_offset", PropType::Float),
 ];
 /// Paint-time transform props (RFC-0011). `opacity` is deliberately **not**
 /// repeated here — it already lives in [`DECORATION`] and is wired end to
@@ -820,13 +826,38 @@ pub fn validate_element(
                         value: inner, anim, ..
                     } = target
                     {
-                        if let Err(err) = crate::interp::anim::resolve_curve(anim) {
+                        // RFC-0025: the whole motion spec is validated, not just
+                        // the curve — a misspelt `revrse:` or an out-of-range
+                        // `repeat:` is a diagnostic, never a silently ignored
+                        // modifier.
+                        if let Err(err) = crate::interp::anim::resolve_motion(anim) {
                             errs.push(err);
                         }
                         target = inner;
                     }
                     if let Some(err) = check_value_type(ty, target) {
                         errs.push(err);
+                    }
+                }
+            } else if let Some(track) = crate::interp::anim::resolve_keyframes(value) {
+                // RFC-0025 §3: `anim.keyframes(…)` stands in value position. It
+                // is rejected on a layout property for the same reason `with`
+                // is (a relayout every frame, INV-8), and each step's value is
+                // type-checked against the property like any other value.
+                if is_layout_prop(an) {
+                    errs.push(CompileError::LayoutPropNotAnimatable {
+                        span: value.span(),
+                        prop: an.to_string(),
+                    });
+                } else {
+                    match track {
+                        Ok(track) => errs.extend(
+                            track
+                                .steps
+                                .iter()
+                                .filter_map(|step| check_value_type(ty, step.value)),
+                        ),
+                        Err(err) => errs.push(err),
                     }
                 }
             } else if let Some(err) = check_value_type(ty, value) {
@@ -1457,6 +1488,57 @@ mod tests {
             e.iter()
                 .any(|err| matches!(err, CompileError::UnknownAnimation { .. })),
             "a bad nested curve must still be reported"
+        );
+    }
+
+    #[test]
+    fn keyframes_check_their_steps_and_are_rejected_on_a_layout_prop() {
+        // RFC-0025 §3: keyframes are a value, checked like any other value.
+        assert!(
+            errs(
+                "View V() { Box #[translate: anim.keyframes(0%: (-100, 0), 100%: (300, 0), \
+                 duration: 2s, loop: true)] {} }"
+            )
+            .is_empty(),
+            "a well-formed sequence on a paint prop checks clean"
+        );
+        // …on a layout property it would relayout every frame (INV-8).
+        let e =
+            errs("View V() { Box #[width: anim.keyframes(0%: 0, 100%: 200, duration: 1s)] {} }");
+        assert!(
+            matches!(&e[0], CompileError::LayoutPropNotAnimatable { prop, .. } if prop == "width"),
+            "got {e:?}"
+        );
+        // A malformed sequence is reported, not silently dropped.
+        let e = errs("View V() { Box #[radius: anim.keyframes(0%: 4, 100%: 12)] {} }");
+        assert!(
+            matches!(&e[0], CompileError::InvalidAnimation { .. }),
+            "a missing `duration:` is an error, got {e:?}"
+        );
+        // Each step's value is type-checked against the property.
+        let e = errs(
+            "View V() { Box #[radius: anim.keyframes(0%: 4, 100%: \"big\", duration: 1s)] {} }",
+        );
+        assert!(
+            e.iter()
+                .any(|err| matches!(err, CompileError::AttributeTypeMismatch { .. })),
+            "got {e:?}"
+        );
+    }
+
+    #[test]
+    fn a_bad_animation_modifier_is_reported_through_the_element_checker() {
+        // RFC-0025 §4 modifiers are validated with the curve, so a typo never
+        // silently degrades a looping animation into a one-shot.
+        let e = errs("View V() { Box #[scale: 1.2 with anim.spring(repeat: often)] {} }");
+        assert!(
+            matches!(&e[0], CompileError::InvalidAnimation { .. }),
+            "got {e:?}"
+        );
+        assert!(
+            errs("View V() { Box #[scale: 1.2 with anim.spring(repeat: infinite, reverse: true)] {} }")
+                .is_empty(),
+            "the well-formed modifiers check clean"
         );
     }
 

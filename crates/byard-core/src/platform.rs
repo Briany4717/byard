@@ -216,6 +216,22 @@ pub trait PlatformHost {
     /// method as an error — only unrecoverable surface errors do.
     fn on_redraw(&mut self) -> Result<(), ByardError>;
 
+    /// Whether the application still has frame-driven work — the render-thread
+    /// side of the RFC-0010 active-animation set (extended by RFC-0025's
+    /// repeating animations).
+    ///
+    /// A continuously-redrawing (`Poll`) host asks this between iterations and
+    /// spins **only while it is true**: once every animation has settled, and
+    /// nothing else is in flight, the loop drops back to blocking on OS events,
+    /// so a static scene costs exactly zero frames. Input and the frame waker
+    /// both wake it again, so nothing is missed.
+    ///
+    /// Defaults to `true`, which is the historical always-spin behaviour: a host
+    /// that cannot answer keeps redrawing rather than risking a stalled window.
+    fn wants_frames(&self) -> bool {
+        true
+    }
+
     /// Called when the user requests the window close (close button,
     /// Cmd+Q, etc.). Returning `true` tells the host it is safe to exit its
     /// event loop; returning `false` keeps the window open (e.g. to show an

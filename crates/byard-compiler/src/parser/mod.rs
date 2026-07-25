@@ -397,19 +397,32 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// `for_stmt := "for" IDENT "in" expr "{" member* "}"`.
+    /// `for_stmt := "for" (IDENT ",")? IDENT "in" expr "{" member* "}"`.
+    ///
+    /// The two-name form binds the item's index first (`for i, item in items`),
+    /// which is what RFC-0025's stagger reads (`delay: i * 50ms`).
     fn parse_for(&mut self) -> Member {
         let start = self.cur_span();
         self.advance(); // for
-        let var = self
+        let first = self
             .expect_ident("a loop variable")
             .unwrap_or_else(|| Symbol::intern(""));
+        // `for i, item in …` — the first name was the index.
+        let (index, var) = if self.eat(&Token::Comma) {
+            let item = self
+                .expect_ident("a loop variable")
+                .unwrap_or_else(|| Symbol::intern(""));
+            (Some(first), item)
+        } else {
+            (None, first)
+        };
         self.expect(&Token::In, "'in'");
         let iter = self.parse_expr(0);
         self.expect(&Token::LBrace, "'{'");
         let body = self.parse_block_members();
         Member::For {
             var,
+            index,
             iter,
             body,
             span: self.span_from(start),

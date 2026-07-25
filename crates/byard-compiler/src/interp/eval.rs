@@ -11394,6 +11394,45 @@ mod tests {
     }
 
     #[test]
+    fn stopping_the_looping_example_empties_the_active_set() {
+        // Ties the shipped RFC-0025 example to the promise its header makes: with
+        // `loading` off, *every* endless animation is unmounted, so the active set
+        // empties and a host may park its event loop instead of spinning. A
+        // stray infinite animation left outside the `when` would show up here as
+        // an app that can never idle.
+        let src = include_str!("../../../byard-cli/examples/looping_animations/src/main.byd");
+        let parsed = parse(src);
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let known: Vec<&str> = parsed.views.iter().map(|v| v.name.as_str()).collect();
+        let mut interp = Interpreter::new();
+        let tree = interp.lower_view(&parsed.views[0], &known);
+        assert!(interp.errors().is_empty(), "{:?}", interp.errors());
+        interp.tick();
+        let at = |interp: &mut Interpreter, ms: u32| {
+            interp.set_now_ms(ms);
+            let mut frame = byard_core::frame::RenderFrame::new();
+            interp.render(&tree, &mut frame, 700.0, 750.0);
+            interp.has_active_animations()
+        };
+        assert!(at(&mut interp, 0), "the loaders animate on mount");
+        assert!(at(&mut interp, 2_000), "and keep animating");
+
+        let loading = interp.var_signal(&Symbol::intern("loading")).unwrap();
+        interp.write_var(loading, Value::Bool(false));
+        interp.tick();
+        for ms in [2_100_u32, 3_000, 9_000] {
+            assert!(
+                !at(&mut interp, ms),
+                "nothing may still be animating at t={ms} after Stop"
+            );
+        }
+        // Starting again brings the motion back (a fresh mount, from the top).
+        interp.write_var(loading, Value::Bool(true));
+        interp.tick();
+        assert!(at(&mut interp, 9_100), "Start resumes the motion");
+    }
+
+    #[test]
     fn a_layout_property_cannot_be_keyframed() {
         // RFC-0025 §3 defers to RFC-0010: keyframes on a layout prop would
         // relayout every frame (INV-8), so they are rejected like `with` is.

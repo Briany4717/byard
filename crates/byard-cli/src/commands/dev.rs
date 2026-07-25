@@ -25,7 +25,7 @@ use byard_core::{
 use byard_platform::WinitHost;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::deps::{cache_dir, resolve_project};
@@ -89,6 +89,7 @@ pub fn run(file: Option<&Path>) -> Result<(), String> {
         engine: None,
         width_bits: None,
         height_bits: None,
+        animating: None,
         file_override: file.map(Path::to_path_buf),
         watch_paths,
         vector_cache_dir,
@@ -150,9 +151,43 @@ struct ByldRuntime {
     /// e.g. overlapping blurs), so each distinct warning prints once instead
     /// of every frame.
     reported_perf: std::collections::HashSet<String>,
+    /// The RFC-0010 active-animation set, published for the render thread
+    /// (`AtomicBool` because that is the only way it may cross — INV-2).
+    ///
+    /// The logic thread writes it after every render; the event loop reads it to
+    /// decide whether to keep spinning. Without this the accessor existed and
+    /// nothing consulted it, so `byard dev` polled forever and a settled scene
+    /// still cost a full core.
+    animating: Arc<AtomicBool>,
+    /// Wakes an idle (`Wait`-mode) render loop.
+    ///
+    /// The relay only wakes on an *input-bearing* tick, which is not enough once
+    /// the loop is allowed to sleep: a hot reload and an animation that starts
+    /// without input both change the frame with no input behind them. Fired on
+    /// the rising edge only, so a steadily animating scene (already spinning)
+    /// posts nothing.
+    waker: byard_core::relay::FrameWaker,
 }
 
 impl ByldRuntime {
+    /// Publishes the active-animation set for the render thread, waking an idle
+    /// loop on the **rising** edge (nothing moving → something moving). A loop
+    /// that is already spinning needs no event, and a settled one must not be
+    /// woken at all — that is the whole point of letting it sleep.
+    fn publish_animating(&self, active: bool) {
+        let was = self.animating.swap(active, Ordering::Relaxed);
+        if active && !was {
+            self.wake_render_loop();
+        }
+    }
+
+    /// Asks the render loop to present the next frame, for the changes that have
+    /// no input event behind them (a hot reload, a fresh error overlay, an
+    /// animation that just started).
+    fn wake_render_loop(&self) {
+        (self.waker)();
+    }
+
     fn apply_reload(&mut self, new_views: &[ViewDecl], _kind: ReloadKind) {
         // The rendered root is the first tracked view. Editing any view it
         // transitively instantiates must re-derive its tree, so compute the
@@ -200,13 +235,19 @@ impl LogicRuntime for ByldRuntime {
                             ViewReload::Patch(ReloadKind::ReactiveCompatible) => acc,
                         });
                 match gate(worst, pointer_pressed) {
-                    Gated::Apply => self.apply_reload(&parsed.views, worst),
+                    Gated::Apply => {
+                        self.apply_reload(&parsed.views, worst);
+                        // A reload changes the frame with no input behind it, so
+                        // an idle loop has to be told to present it.
+                        self.wake_render_loop();
+                    }
                     Gated::Defer => {
                         self.pending_reload = Some((parsed.views, worst));
                     }
                 }
             } else {
                 self.error_state = Some(parsed.errors);
+                self.wake_render_loop();
             }
         }
 
@@ -216,6 +257,7 @@ impl LogicRuntime for ByldRuntime {
                 self.pending_reload = Some((new_views, kind));
             } else {
                 self.apply_reload(&new_views, kind);
+                self.wake_render_loop();
             }
         }
 
@@ -250,8 +292,14 @@ impl LogicRuntime for ByldRuntime {
             // "fix your file" error screen (C4: overlay path is independent of
             // the interpreter).
             render_error_overlay(frame, errors, w, h);
+            // An error overlay is static: nothing to animate, so the loop may
+            // sleep until the next save.
+            self.publish_animating(false);
         } else {
             self.interp.render(&self.tree, frame, w, h);
+            // RFC-0010/RFC-0025: publish whether anything is still in motion, so
+            // the event loop can stop requesting frames once it all settles.
+            self.publish_animating(self.interp.has_active_animations());
             // RFC-0023 runtime perf diagnostics (e.g. ≥ 3 stacked frosted-glass
             // panes): surface each distinct warning once on the terminal.
             for warning in self.interp.perf_warnings() {
@@ -377,6 +425,9 @@ struct App {
     engine: Option<Engine>,
     width_bits: Option<Arc<AtomicU32>>,
     height_bits: Option<Arc<AtomicU32>>,
+    /// Mirror of the logic thread's active-animation set (RFC-0010), read by the
+    /// event loop to decide whether to keep spinning.
+    animating: Option<Arc<AtomicBool>>,
     /// The `byard dev [file]` override, threaded into the watcher's
     /// re-resolve closure so it re-discovers the same manifest.
     file_override: Option<PathBuf>,
@@ -448,6 +499,10 @@ impl PlatformHost for App {
         let height_bits = Arc::new(AtomicU32::new(h.to_bits()));
         let w_clone = Arc::clone(&width_bits);
         let h_clone = Arc::clone(&height_bits);
+        // Seeded `true` so the first frames are always drawn; the logic thread
+        // takes over the moment it has rendered once.
+        let animating = Arc::new(AtomicBool::new(true));
+        let animating_logic = Arc::clone(&animating);
 
         // Hot-reload channel (RFC-0006 §3.5, D10).
         let reload_channel = Arc::new(LatestWins::<ParsedFile>::new());
@@ -489,6 +544,10 @@ impl PlatformHost for App {
         // `byard dev` runs in Poll mode (redraws every iteration for hot-reload),
         // so the waker is not strictly required — installing it is still correct
         // and makes input-driven redraws prompt if the mode ever changes.
+        // The logic thread keeps its own handle: the relay only wakes on an
+        // input-bearing tick, and a hot reload (or an animation starting from a
+        // non-input source) also has to reach a sleeping loop.
+        let waker_for_logic = waker.clone();
         engine.set_frame_waker(waker);
 
         // RFC-0009 §2-C: the render thread reports which vector-atlas
@@ -529,13 +588,26 @@ impl PlatformHost for App {
                 height_bits: h_clone,
                 start: std::time::Instant::now(),
                 reported_perf: std::collections::HashSet::new(),
+                animating: animating_logic,
+                waker: waker_for_logic,
             })
         })?;
 
         self.engine = Some(engine);
         self.width_bits = Some(width_bits);
         self.height_bits = Some(height_bits);
+        self.animating = Some(animating);
         Ok(())
+    }
+
+    /// RFC-0010's active set, read from the logic thread's published flag: while
+    /// something is animating the loop keeps requesting frames, and once
+    /// everything has settled it sleeps until the next input, file save or
+    /// published frame. Before the first render (`None`) it keeps spinning.
+    fn wants_frames(&self) -> bool {
+        self.animating
+            .as_ref()
+            .is_none_or(|flag| flag.load(Ordering::Relaxed))
     }
 
     fn on_resize(&mut self, size: WindowSize) {

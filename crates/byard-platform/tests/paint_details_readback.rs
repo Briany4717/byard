@@ -184,17 +184,22 @@ fn an_over_large_radius_is_reduced_to_a_pill_not_a_deformed_box() {
         "the corner is still cut, got {:?}",
         rb.at(x + 1.0, y + 1.0)
     );
-    // The widest painted row is the middle one and it spans the full width
-    // (the deformed shape was narrower than its own rect everywhere).
-    let painted_width = |row_y: f32| {
-        (0..(LOGICAL_W as u32))
-            .filter(|lx| rb.at(*lx as f32 + 0.5, row_y).3 > 128)
-            .count()
-    };
+
+    // The one point that actually separates the two shapes: the *shoulder*,
+    // where the unclamped field erodes the silhouette by ~3 px. Measured from
+    // the box centre (80, 28.5) with half-extents (60, 16.5):
+    //   • the true stadium (r reduced to 16.5) reaches |dx| = 43.5 + √(16.5² −
+    //     15²) ≈ 50.4 at |dy| = 15;
+    //   • the unclamped field (r = 20) reaches only |dx| = 40 + √(20² − 18.5²)
+    //     ≈ 47.6 there — its boundary is an arc centred *outside* the box.
+    // So (129, 43.5) is ~1.4 px inside the correct shape and ~1.4 px outside the
+    // deformed one: painted now, empty before. Point-sampled rather than
+    // row-scanned, so the claim is about the silhouette and not about how a
+    // given rasteriser fills the interior.
+    let shoulder = rb.at(x + 109.0, y + 31.5);
     assert!(
-        painted_width(mid_y) >= (w as usize) - 2,
-        "the pill is as wide as its rect, got {} of {w}",
-        painted_width(mid_y)
+        shoulder.3 > 200,
+        "the shoulder is filled, so the ends are not pinched inward, got {shoulder:?}"
     );
 }
 

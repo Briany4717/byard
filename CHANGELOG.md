@@ -131,6 +131,21 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A settled app now genuinely idles at zero frames (RFC-0010 / RFC-0025 §2).**
+  `Interpreter::has_active_animations()` existed and **nothing consulted it**:
+  `byard dev` set `ControlFlow::Poll` once at start-up and requested a redraw on
+  every event-loop iteration forever, so a completely static scene still cost a
+  full core — the active-set settling that the whole animation design is built
+  around had no consumer. The event loop now asks the host each iteration
+  (`PlatformHost::wants_frames`, default `true` so no other host changes
+  behaviour) and spins **only while something is in motion**, dropping back to
+  `Wait` the moment everything settles. The logic thread publishes the flag
+  across the boundary as an `AtomicBool` (INV-2) and wakes the loop on the rising
+  edge — plus on a hot reload or a fresh error overlay, which change the frame
+  with no input behind them, so live-reload stays immediate. Visible in
+  `byard dev`: the once-a-second telemetry line stops printing when the scene
+  settles and returns when it moves.
+
 - **An over-large corner radius no longer deforms the box.** The rounded-rect SDF
   is only well-defined for `radius <= min(half_width, half_height)`; past it the
   distance field folds in on itself and the silhouette is pulled *inside* its own

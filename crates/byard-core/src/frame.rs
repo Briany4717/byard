@@ -887,7 +887,11 @@ impl Default for DecoratedBox {
 ///
 /// `offset` shifts the ramp along its own axis and **wraps**: that is what makes
 /// an animated offset (RFC-0010 `with`, RFC-0025 `repeat: infinite`) a seamless
-/// travelling sweep instead of a jump at the end of each play.
+/// travelling sweep instead of a jump at the end of each play. Note the sign: a
+/// *rising* offset moves the ramp's colours **against** `angle`, so a
+/// left-to-right sweep is `angle: 180deg` (a ramp pointing right-to-left) with an
+/// offset counting up — the same relationship a scrolling background-position has
+/// in CSS.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct Gradient {
     /// Ramp direction in radians.

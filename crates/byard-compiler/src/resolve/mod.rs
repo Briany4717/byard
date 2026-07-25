@@ -464,7 +464,9 @@ impl Resolver<'_> {
             Member::Element(el) => {
                 self.rewrite_element(el, pkg_name, local, aliases, bare, errors);
             }
-            Member::For { body, .. } => {
+            // A `for` body and an RFC-0026 `route`/`tab` body are both plain
+            // member lists that may name package-qualified views.
+            Member::For { body, .. } | Member::Route { body, .. } => {
                 for m in body {
                     self.rewrite_member(m, pkg_name, local, aliases, bare, errors);
                 }

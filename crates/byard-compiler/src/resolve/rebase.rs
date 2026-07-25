@@ -127,6 +127,18 @@ fn shift_member(member: &mut Member, delta: u32) {
                 }
             }
         }
+        Member::Route {
+            body,
+            pattern_span,
+            span,
+            ..
+        } => {
+            shift(span, delta);
+            shift(pattern_span, delta);
+            for m in body {
+                shift_member(m, delta);
+            }
+        }
         Member::Style { rules, span } => {
             shift(span, delta);
             for rule in rules {

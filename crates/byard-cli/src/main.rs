@@ -35,6 +35,10 @@ enum Command {
     Dev {
         /// Path to a `.byd` file. Defaults to `entry` in `byard.toml`.
         file: Option<PathBuf>,
+        /// Deliver a deep-link URL at startup, as an OS intent would
+        /// (RFC-0026): `--deep-link byard://item/42`.
+        #[arg(long, value_name = "URL")]
+        deep_link: Option<String>,
     },
     /// Parse and validate without opening a window (CI-friendly).
     Check {
@@ -77,7 +81,9 @@ fn main() {
     let cli = Cli::parse();
     let result = match cli.command {
         Command::New { name } => commands::new::run(&name),
-        Command::Dev { file } => commands::dev::run(file.as_deref()),
+        Command::Dev { file, deep_link } => {
+            commands::dev::run(file.as_deref(), deep_link.as_deref())
+        }
         Command::Check { file } => commands::check::run(file.as_deref()),
         Command::Build { file } => commands::build::run(file.as_deref()),
         Command::Clean { file } => commands::clean::run(file.as_deref()),

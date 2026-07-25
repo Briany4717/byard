@@ -472,11 +472,16 @@ fn find_in_members(
             }
             Member::For {
                 var,
+                index,
                 iter,
                 body,
                 span,
             } if span_contains(*span, offset) => {
-                let var_start = span.start as usize + 4; // after "for "
+                // `for item in …` puts the item name right after "for "; the
+                // `for i, item in …` form (RFC-0025) puts the index there and
+                // the item after ", ".
+                let var_start =
+                    span.start as usize + 4 + index.as_ref().map_or(0, |i| i.as_str().len() + 2);
                 let var_end = var_start + var.as_str().len();
                 if offset >= var_start && offset < var_end {
                     return Some(HoverTarget::VarIdent {
@@ -1413,10 +1418,7 @@ fn find_class_ref_in_members(members: &[Member], offset: usize) -> Option<String
                 }
             }
             Member::For {
-                var: _,
-                iter,
-                body,
-                span,
+                iter, body, span, ..
             } if span_contains(*span, offset) => {
                 if let Some(name) = find_class_ref_in_expr(iter, offset) {
                     return Some(name);

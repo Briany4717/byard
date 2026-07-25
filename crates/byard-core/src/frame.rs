@@ -373,13 +373,20 @@ impl Motion {
             // Finite-difference the eased/linear ramp — cheap and only used for
             // settling, where a derivative-free estimate is plenty.
             const H: f32 = 1.0 / 240.0;
-            (self.sample_at(t + H) - self.sample_at(t)) / H
+            (self.sample_secs(t + H) - self.sample_secs(t)) / H
         }
     }
 
-    /// Position at an explicit elapsed time `t` seconds (used by the
-    /// finite-difference velocity of the non-spring curves).
-    fn sample_at(&self, t: f32) -> f32 {
+    /// Position at an explicit elapsed time `t` seconds, independent of
+    /// [`start_ms`](Self::start_ms).
+    ///
+    /// This is the entry point a *looping* animation samples through
+    /// (RFC-0025): the repeat clock ([`loop_phase`]) reduces wall time to an
+    /// offset inside one iteration, and that offset — not `now − start_ms` — is
+    /// what the curve is evaluated at. Also used by the finite-difference
+    /// velocity of the non-spring curves.
+    #[must_use]
+    pub fn sample_secs(&self, t: f32) -> f32 {
         match self.curve.kind {
             MotionCurve::SPRING => spring_position(self, t),
             MotionCurve::LINEAR => self.from + (self.to - self.from) * clamp01(progress(self, t)),
@@ -405,6 +412,234 @@ impl Motion {
     #[must_use]
     pub fn is_settled_with_eps(&self, now_ms: u32, eps_pos: f32, eps_vel: f32) -> bool {
         (self.sample(now_ms) - self.to).abs() < eps_pos && self.velocity(now_ms).abs() < eps_vel
+    }
+
+    /// Shortest period a repeating animation may wrap at (one 60 Hz frame).
+    pub const MIN_PERIOD_MS: u32 = 16;
+    /// Longest period a repeating animation may wrap at — the cap an undamped
+    /// spring (which never settles) falls back to.
+    pub const MAX_PERIOD_MS: u32 = 10_000;
+
+    /// How long one play of this motion lasts, in whole milliseconds — the
+    /// period a repeating animation wraps at (RFC-0025 §1).
+    ///
+    /// A fixed-duration curve simply reports its duration. A spring has no
+    /// duration, so its period is the time it takes to come to rest within
+    /// `eps_pos`: the closed forms all decay under an `e^{-ζωt}` envelope, so
+    /// `|d|·e^{-ζωt} = eps` inverts to `t = ln(|d| / eps) / (ζω)` — a genuine
+    /// closed form, no iteration. That is exactly the "restarts when it settles"
+    /// rule of RFC-0025, evaluated ahead of time so every curve family repeats
+    /// through the one integer-millisecond clock.
+    ///
+    /// Clamped to [`MIN_PERIOD_MS`](Self::MIN_PERIOD_MS)`..=`
+    /// [`MAX_PERIOD_MS`](Self::MAX_PERIOD_MS): a zero period would leave a
+    /// repeat with nothing to wrap, and an undamped (`damping: 0`) spring never
+    /// settles at all.
+    #[must_use]
+    #[allow(clippy::many_single_char_names)]
+    pub fn natural_duration_ms(&self, eps_pos: f32) -> u32 {
+        let eps = eps_pos.max(f32::EPSILON);
+        let ms = if self.curve.kind == MotionCurve::SPRING {
+            let [k, c, _] = self.curve.params;
+            let omega = k.max(0.0).sqrt();
+            let zeta = if omega == 0.0 {
+                0.0
+            } else {
+                c.max(0.0) / (2.0 * omega)
+            };
+            // The envelope's decay rate: `ζω` under- and critically damped, the
+            // slower of the two real roots when overdamped.
+            let rate = if zeta > 1.0 {
+                zeta * omega - omega * (zeta * zeta - 1.0).sqrt()
+            } else {
+                zeta * omega
+            };
+            let d = (self.from - self.to).abs().max(eps);
+            if rate <= 0.0 {
+                f32::INFINITY
+            } else {
+                (d / eps).ln() / rate * 1000.0
+            }
+        } else {
+            self.curve.params[0]
+        };
+        #[allow(clippy::cast_precision_loss)]
+        let lo = Self::MIN_PERIOD_MS as f32;
+        #[allow(clippy::cast_precision_loss)]
+        let hi = Self::MAX_PERIOD_MS as f32;
+        // NaN-safe: an unorderable duration falls back to the cap rather than
+        // to whatever `clamp` would do with it.
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        if ms.is_finite() {
+            ms.clamp(lo, hi) as u32
+        } else {
+            Self::MAX_PERIOD_MS
+        }
+    }
+}
+
+/// How many times a looping animation plays (RFC-0025 §1: `repeat: N`,
+/// `repeat: infinite`, the default single play).
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+pub enum RepeatMode {
+    /// Play once and hold the final value — RFC-0010's original behaviour.
+    #[default]
+    Once,
+    /// Play exactly `n` times (`n ≥ 1`), then hold the final value.
+    Count(u32),
+    /// Play forever, until the element unmounts or leaves the viewport.
+    Infinite,
+}
+
+impl RepeatMode {
+    /// Whether this mode plays more than once (so the animation needs the
+    /// repeat clock rather than the plain `now − start` path).
+    #[must_use]
+    pub fn is_repeating(self) -> bool {
+        !matches!(self, Self::Once)
+    }
+}
+
+/// Where a repeating animation is within its current iteration (RFC-0025 §1) —
+/// the output of [`loop_phase`], and the only bridge between wall time and a
+/// curve's own `0..duration` domain.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct LoopPhase {
+    /// Offset *inside the current iteration*, in seconds, already
+    /// direction-corrected: on an alternating (`reverse`) odd iteration this
+    /// counts back down from the period, so the curve replays back-to-front.
+    pub t_secs: f32,
+    /// Zero-based iteration index, clamped to the last one once `finished`.
+    pub iteration: u32,
+    /// True once a finite repeat has played out. The caller holds the final
+    /// value and drops the animation from the active set — an
+    /// [`Infinite`](RepeatMode::Infinite) animation never reports this, which is
+    /// what keeps frames flowing.
+    pub finished: bool,
+}
+
+/// Reduces wall-clock `elapsed_ms` (since the animation's own start, delay
+/// already subtracted) to a position inside one iteration of a `period_ms`
+/// animation under `repeat`/`reverse` (RFC-0025 §1).
+///
+/// The wrap is done in **integer milliseconds** so an animation that has been
+/// spinning for hours keeps exactly the same per-iteration precision as one that
+/// just started (an `f32` seconds accumulator would quietly lose sub-frame
+/// resolution after a few hours).
+#[must_use]
+pub fn loop_phase(period_ms: u32, elapsed_ms: u32, repeat: RepeatMode, reverse: bool) -> LoopPhase {
+    let period = period_ms.max(1);
+    #[allow(clippy::cast_precision_loss)]
+    let secs = |ms: u32| ms as f32 / 1000.0;
+    // Which play we are in, and how far into it.
+    let iteration = elapsed_ms / period;
+    let local = elapsed_ms % period;
+    // The number of plays this mode allows; `None` = endless.
+    let plays = match repeat {
+        RepeatMode::Once => Some(1),
+        RepeatMode::Count(n) => Some(n.max(1)),
+        RepeatMode::Infinite => None,
+    };
+    if let Some(plays) = plays {
+        if iteration >= plays {
+            // Played out: hold the end of the *last* iteration. Alternating an
+            // odd number of times ends back at the start value.
+            let last = plays - 1;
+            let ends_at_start = reverse && last % 2 == 1;
+            return LoopPhase {
+                t_secs: if ends_at_start { 0.0 } else { secs(period) },
+                iteration: last,
+                finished: true,
+            };
+        }
+    }
+    let forward = !reverse || iteration % 2 == 0;
+    LoopPhase {
+        t_secs: if forward {
+            secs(local)
+        } else {
+            secs(period - local)
+        },
+        iteration,
+        finished: false,
+    }
+}
+
+/// Maximum number of steps in one `anim.keyframes(…)` sequence (RFC-0025
+/// resolved question "max keyframe steps"): 8 covers every real UI pattern
+/// (Material's indeterminate progress uses 3–4, a rich shimmer 4–5) and keeps
+/// the per-animation step table compact.
+pub const MAX_KEYFRAME_STEPS: usize = 8;
+
+/// The pair of keyframe steps surrounding the current progress, and the eased
+/// blend factor between them (RFC-0025 §3) — [`keyframe_cursor`]'s answer.
+///
+/// Deliberately value-free: the *timing* half of keyframes lives here in
+/// `byard-core` (pure, unit-tested arithmetic), while interpolating the actual
+/// values — which may be scalars or coordinate pairs — stays with the
+/// interpreter that knows what a value is.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct KeyframeCursor {
+    /// Index of the step being interpolated *from*.
+    pub lo: usize,
+    /// Index of the step being interpolated *to* (`== lo` when parked on a step).
+    pub hi: usize,
+    /// Eased `0..=1` blend factor from `lo`'s value to `hi`'s.
+    pub t: f32,
+}
+
+/// Locates `progress` (`0..=1` through the sequence) within an ascending
+/// `percents` table and applies the destination step's easing (RFC-0025 §3:
+/// each step's easing governs the segment arriving *at* it).
+///
+/// `easings[i]` is the easing into step `i`; `easings[0]` is unused. Progress
+/// before the first step or after the last parks on that step, so a sequence
+/// that does not start at `0%` holds its first value until it begins.
+#[must_use]
+pub fn keyframe_cursor(percents: &[f32], easings: &[u32], progress: f32) -> KeyframeCursor {
+    let park = |i: usize| KeyframeCursor {
+        lo: i,
+        hi: i,
+        t: 0.0,
+    };
+    if percents.is_empty() {
+        return park(0);
+    }
+    let last = percents.len() - 1;
+    let p = clamp01(progress);
+    if p <= percents[0] {
+        return park(0);
+    }
+    if p >= percents[last] {
+        return park(last);
+    }
+    // The first step strictly past `p` closes the active segment. The table is
+    // capped at `MAX_KEYFRAME_STEPS`, so the linear scan is a handful of
+    // comparisons — cheaper than a branchy binary search at this size.
+    let hi = percents.iter().position(|&s| s > p).unwrap_or(last);
+    let lo = hi - 1;
+    let span = percents[hi] - percents[lo];
+    let raw = if span <= 0.0 {
+        1.0
+    } else {
+        (p - percents[lo]) / span
+    };
+    KeyframeCursor {
+        lo,
+        hi,
+        t: ease_progress(easings.get(hi).copied().unwrap_or(MotionCurve::LINEAR), raw),
+    }
+}
+
+/// Remaps a `0..=1` progress through one of the [`MotionCurve`] easing families
+/// (`LINEAR` passes through). Public so a keyframe segment and a `with` curve
+/// share exactly one easing implementation.
+#[must_use]
+pub fn ease_progress(kind: u32, p: f32) -> f32 {
+    if kind == MotionCurve::LINEAR {
+        clamp01(p)
+    } else {
+        ease(kind, clamp01(p))
     }
 }
 
@@ -598,6 +833,11 @@ pub struct DecoratedBox {
     pub shadow_color: [f32; 4],
     /// Element opacity `0.0–1.0`.
     pub opacity: f32,
+    /// An optional linear colour ramp composited over the fill (RFC-0001 §3.1:
+    /// the `DecoratedBox` pipeline's declared remit is "rectangles with
+    /// border-radius, **gradients**, box-shadows"). `None` is the historical
+    /// behaviour — a flat `base.color`.
+    pub gradient: Option<Gradient>,
     /// Whether this decoration changed since the last tick.
     ///
     /// The encoder's analogue of [`TextLine::dirty`] for the `DecoratedBox`
@@ -626,8 +866,67 @@ impl Default for DecoratedBox {
             shadow_spread: 0.0,
             shadow_color: [0.0; 4],
             opacity: 1.0,
+            gradient: None,
             dirty: false,
         }
+    }
+}
+
+/// A three-stop linear colour ramp painted over a `DecoratedBox`'s fill
+/// (RFC-0001 §3.1's `DecoratedBox` remit).
+///
+/// The ramp runs along `angle` (0 = left→right, `π/2` = top→bottom) across the
+/// element's own box, from `from` at the start, through `mid` at `mid_pos`, to
+/// `to` at the end — enough for the ordinary two-stop case (`mid` on the line
+/// between them) *and* for the highlight-band shape a shimmer needs
+/// (transparent → bright → transparent), which two stops cannot express.
+///
+/// Each stop is straight (non-premultiplied) linear-space RGBA and the ramp is
+/// composited **over** the fill, so a translucent ramp is a wash over the
+/// element's own colour rather than a replacement.
+///
+/// `offset` shifts the ramp along its own axis and **wraps**: that is what makes
+/// an animated offset (RFC-0010 `with`, RFC-0025 `repeat: infinite`) a seamless
+/// travelling sweep instead of a jump at the end of each play. Note the sign: a
+/// *rising* offset moves the ramp's colours **against** `angle`, so a
+/// left-to-right sweep is `angle: 180deg` (a ramp pointing right-to-left) with an
+/// offset counting up — the same relationship a scrolling background-position has
+/// in CSS.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct Gradient {
+    /// Ramp direction in radians.
+    pub angle: f32,
+    /// Colour at the start of the ramp.
+    pub from: [f32; 4],
+    /// Colour at `mid_pos`.
+    pub mid: [f32; 4],
+    /// Colour at the end of the ramp.
+    pub to: [f32; 4],
+    /// Where `mid` sits along the ramp, `0.0..=1.0`.
+    pub mid_pos: f32,
+    /// Phase shift along the ramp, wrapping at 1.0.
+    pub offset: f32,
+}
+
+impl Gradient {
+    /// A two-stop ramp: `mid` is the midpoint of `from`/`to`, so the result is
+    /// an ordinary linear gradient with no third stop to reason about.
+    #[must_use]
+    pub fn two_stop(angle: f32, from: [f32; 4], to: [f32; 4]) -> Self {
+        Self {
+            angle,
+            from,
+            mid: std::array::from_fn(|i| f32::midpoint(from[i], to[i])),
+            to,
+            mid_pos: 0.5,
+            offset: 0.0,
+        }
+    }
+
+    /// The unit direction vector of the ramp.
+    #[must_use]
+    pub fn direction(&self) -> [f32; 2] {
+        [self.angle.cos(), self.angle.sin()]
     }
 }
 
@@ -2150,6 +2449,175 @@ mod motion_tests {
                 "clamped damping stays bounded"
             );
         }
+    }
+
+    // ── Looping & keyframes (RFC-0025) ───────────────────────────────────
+
+    fn linear(from: f32, to: f32, ms: f32) -> Motion {
+        Motion {
+            from,
+            to,
+            start_ms: 0,
+            curve: MotionCurve {
+                kind: MotionCurve::LINEAR,
+                params: [ms, 0.0, 0.0],
+            },
+        }
+    }
+
+    #[test]
+    fn a_fixed_duration_curve_repeats_at_its_own_duration() {
+        assert_eq!(linear(0.0, 1.0, 800.0).natural_duration_ms(0.002), 800);
+    }
+
+    #[test]
+    fn a_springs_period_is_the_time_it_takes_to_settle() {
+        let m = spring(0.0, 1.0, 0);
+        let period = m.natural_duration_ms(0.002);
+        // The period must be exactly where the motion comes to rest: still
+        // moving a hair before, at rest a hair after.
+        assert!(!m.is_settled_with_eps(period - 60, 0.002, 0.02));
+        assert!(m.is_settled_with_eps(period + 60, 0.002, 0.02));
+    }
+
+    #[test]
+    fn an_undamped_spring_falls_back_to_the_period_cap() {
+        // `damping: 0` never settles, so there is no natural period to find.
+        let mut m = spring(0.0, 1.0, 0);
+        m.curve.params = [210.0, 0.0, 0.0];
+        assert_eq!(m.natural_duration_ms(0.002), Motion::MAX_PERIOD_MS);
+        // An instant curve still gets a wrappable (non-zero) period.
+        assert_eq!(linear(0.0, 1.0, 0.0).natural_duration_ms(0.002), 16);
+    }
+
+    #[test]
+    fn a_single_play_finishes_at_the_end_of_its_period() {
+        let p = loop_phase(1_000, 400, RepeatMode::Once, false);
+        assert!(!p.finished && (p.t_secs - 0.4).abs() < 1e-6);
+        let p = loop_phase(1_000, 2_500, RepeatMode::Once, false);
+        assert!(p.finished, "past its only play");
+        assert!((p.t_secs - 1.0).abs() < 1e-6, "holds the final value");
+        assert_eq!(p.iteration, 0);
+    }
+
+    #[test]
+    fn an_infinite_repeat_wraps_forever_and_never_finishes() {
+        for (elapsed, want_t, want_i) in [
+            (0, 0.0, 0),
+            (999, 0.999, 0),
+            (1_000, 0.0, 1),
+            (2_500, 0.5, 2),
+        ] {
+            let p = loop_phase(1_000, elapsed, RepeatMode::Infinite, false);
+            assert!(!p.finished, "an infinite repeat never finishes");
+            assert!((p.t_secs - want_t).abs() < 1e-6, "t at {elapsed}ms");
+            assert_eq!(p.iteration, want_i);
+        }
+        // Hours in, the phase is still exact to the millisecond (integer wrap).
+        let p = loop_phase(1_000, 4 * 3_600_000 + 250, RepeatMode::Infinite, false);
+        assert!((p.t_secs - 0.25).abs() < 1e-6);
+    }
+
+    #[test]
+    fn reverse_alternates_the_direction_each_iteration() {
+        // Even iterations run 0 → period, odd ones period → 0.
+        let fwd = loop_phase(1_000, 250, RepeatMode::Infinite, true);
+        assert!((fwd.t_secs - 0.25).abs() < 1e-6);
+        let back = loop_phase(1_000, 1_250, RepeatMode::Infinite, true);
+        assert!((back.t_secs - 0.75).abs() < 1e-6, "counting back down");
+        // The two directions meet exactly at the boundary — no jump.
+        let a = loop_phase(1_000, 999, RepeatMode::Infinite, true).t_secs;
+        let b = loop_phase(1_000, 1_001, RepeatMode::Infinite, true).t_secs;
+        assert!(
+            (a - b).abs() < 3e-3,
+            "continuous across the turn: {a} vs {b}"
+        );
+    }
+
+    #[test]
+    fn a_counted_repeat_plays_exactly_n_times_then_holds() {
+        // Three forward plays: still going inside the third, done after it.
+        assert!(!loop_phase(100, 250, RepeatMode::Count(3), false).finished);
+        let end = loop_phase(100, 300, RepeatMode::Count(3), false);
+        assert!(end.finished && end.iteration == 2);
+        assert!((end.t_secs - 0.1).abs() < 1e-6, "holds the far end");
+        // Alternating plays end wherever the *last* one pointed: an even count
+        // ends back at the start value, an odd count at the far end.
+        let end = loop_phase(100, 999, RepeatMode::Count(2), true);
+        assert!(end.finished && end.t_secs == 0.0);
+        let end = loop_phase(100, 999, RepeatMode::Count(3), true);
+        assert!(end.finished && (end.t_secs - 0.1).abs() < 1e-6);
+        // `repeat: 0` is meaningless; it degrades to a single play, never to a
+        // division by zero or an animation that "already finished at t = 0".
+        assert!(!loop_phase(100, 10, RepeatMode::Count(0), false).finished);
+    }
+
+    #[test]
+    fn a_looped_motion_samples_the_same_curve_at_the_phase_offset() {
+        // The whole point of the phase: feeding it to `sample_secs` replays one
+        // curve endlessly without ever touching `start_ms`.
+        let m = linear(0.0, 100.0, 500.0);
+        let at =
+            |elapsed| m.sample_secs(loop_phase(500, elapsed, RepeatMode::Infinite, false).t_secs);
+        assert!((at(0) - 0.0).abs() < 1e-4);
+        assert!((at(250) - 50.0).abs() < 1e-3);
+        assert!((at(500) - 0.0).abs() < 1e-4, "wrapped back to the start");
+        assert!((at(750) - 50.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn a_keyframe_cursor_walks_the_segments_in_order() {
+        let percents = [0.0, 0.5, 1.0];
+        let easings = [MotionCurve::LINEAR; 3];
+        let c = keyframe_cursor(&percents, &easings, 0.25);
+        assert_eq!((c.lo, c.hi), (0, 1));
+        assert!(
+            (c.t - 0.5).abs() < 1e-6,
+            "halfway through the first segment"
+        );
+        let c = keyframe_cursor(&percents, &easings, 0.75);
+        assert_eq!((c.lo, c.hi), (1, 2));
+        assert!((c.t - 0.5).abs() < 1e-6);
+        // Exactly on a step: the next segment has opened but not advanced, so
+        // the blend still reads that step's own value.
+        let c = keyframe_cursor(&percents, &easings, 0.5);
+        assert_eq!((c.lo, c.t), (1, 0.0));
+    }
+
+    #[test]
+    fn keyframe_progress_outside_the_table_parks_on_an_end_step() {
+        // A sequence that starts at 20% holds its first value until then, and
+        // holds its last value after the final step.
+        let percents = [0.2, 0.8];
+        let easings = [MotionCurve::LINEAR; 2];
+        assert_eq!(keyframe_cursor(&percents, &easings, 0.0).hi, 0);
+        assert_eq!(keyframe_cursor(&percents, &easings, 1.0).lo, 1);
+        // Degenerate tables never panic and never divide by a zero span.
+        assert_eq!(keyframe_cursor(&[], &[], 0.5).lo, 0);
+        let c = keyframe_cursor(&[0.0, 0.5, 0.5, 1.0], &[MotionCurve::LINEAR; 4], 0.5);
+        assert!(c.t.is_finite());
+    }
+
+    #[test]
+    fn a_keyframe_segment_applies_its_own_easing() {
+        // `easings[i]` is the easing *into* step `i`: the first segment eases
+        // out (fast then slow), the second is linear.
+        let percents = [0.0, 0.5, 1.0];
+        let easings = [
+            MotionCurve::LINEAR,
+            MotionCurve::EASE_OUT,
+            MotionCurve::LINEAR,
+        ];
+        let eased = keyframe_cursor(&percents, &easings, 0.25).t;
+        assert!(eased > 0.5, "ease-out is ahead of linear at the midpoint");
+        let plain = keyframe_cursor(&percents, &easings, 0.75).t;
+        assert!(
+            (plain - 0.5).abs() < 1e-6,
+            "the linear segment is untouched"
+        );
+        // The shared easing helper agrees with the curve sampler.
+        assert!((ease_progress(MotionCurve::LINEAR, 0.3) - 0.3).abs() < 1e-6);
+        assert!(ease_progress(MotionCurve::EASE_IN, 0.5) < 0.5);
     }
 
     // ── ScrollView content clip (RFC-0005) ───────────────────────────────

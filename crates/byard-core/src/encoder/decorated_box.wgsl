@@ -23,6 +23,12 @@ struct InstanceInput {
     @location(9) t_scale: vec2<f32>,
     @location(10) t_rotate: f32,
     @location(11) t_origin: vec2<f32>,
+    // Linear gradient (RFC-0001 §3.1), active only when `misc.w > 0.5`.
+    @location(12) grad_from: vec4<f32>,
+    @location(13) grad_mid: vec4<f32>,
+    @location(14) grad_to: vec4<f32>,
+    // (dir_x, dir_y, mid_pos, offset)
+    @location(15) grad_axis: vec4<f32>,
 };
 
 struct VertexOutput {
@@ -35,6 +41,10 @@ struct VertexOutput {
     @location(5) shadow_color: vec4<f32>,
     @location(6) params: vec4<f32>,
     @location(7) misc: vec4<f32>,
+    @location(8) grad_from: vec4<f32>,
+    @location(9) grad_mid: vec4<f32>,
+    @location(10) grad_to: vec4<f32>,
+    @location(11) grad_axis: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> viewport_size: vec2<f32>;
@@ -102,7 +112,31 @@ fn vs_main(vertex: VertexInput, instance: InstanceInput) -> VertexOutput {
     out.shadow_color = instance.shadow_color;
     out.params = instance.params;
     out.misc = instance.misc;
+    out.grad_from = instance.grad_from;
+    out.grad_mid = instance.grad_mid;
+    out.grad_to = instance.grad_to;
+    out.grad_axis = instance.grad_axis;
     return out;
+}
+
+/// The gradient's colour at this fragment (RFC-0001 §3.1): projects the point
+/// onto the ramp's axis, normalized so `0` is the box's leading edge along that
+/// axis and `1` the trailing one, shifted by `offset` and **wrapped** — which is
+/// what makes an animated offset a seamless travelling sweep. `mid` splits the
+/// ramp at `mid_pos`, so a three-stop highlight band (transparent → bright →
+/// transparent) is expressible, not just a two-stop fade.
+fn gradient_color(in: VertexOutput) -> vec4<f32> {
+    let dir = in.grad_axis.xy;
+    // Half-extent of the box measured along `dir` (a box is convex, so the
+    // support function is just the weighted sum of the half-sizes).
+    let extent = max(abs(dir.x) * in.half_size.x + abs(dir.y) * in.half_size.y, 1e-5);
+    let raw = (dot(in.local_pos, dir) / extent) * 0.5 + 0.5 + in.grad_axis.w;
+    let t = fract(raw);
+    let mid_pos = clamp(in.grad_axis.z, 0.0, 1.0);
+    if (t < mid_pos) {
+        return mix(in.grad_from, in.grad_mid, t / max(mid_pos, 1e-5));
+    }
+    return mix(in.grad_mid, in.grad_to, (t - mid_pos) / max(1.0 - mid_pos, 1e-5));
 }
 
 fn sd_rounded_box(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>) -> f32 {
@@ -111,6 +145,13 @@ fn sd_rounded_box(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>) -> f32 {
     if (p.x > 0.0 && p.y > 0.0) { r_corner = r.z; }
     if (p.x < 0.0 && p.y > 0.0) { r_corner = r.w; }
 
+    // A corner radius may never exceed half the box (RFC-0001 §3.1: the
+    // rounded-rect SDF is only well-defined for `r <= min(half)`; beyond it the
+    // field folds in on itself and the corners visibly deform — a `radius: 20`
+    // pill on a 33px-tall button is the everyday case). Clamping here, at the
+    // one place the radius is consumed, keeps every pipeline honest and matches
+    // the CSS rule that an over-large radius is reduced to fit.
+    r_corner = min(r_corner, min(b.x, b.y));
     let q = abs(p) - b + vec2<f32>(r_corner);
     return min(max(q.x, q.y), 0.0) + length(max(q, vec2<f32>(0.0))) - r_corner;
 }
@@ -147,6 +188,19 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // ring are SDF-anti-aliased — a hard `fdist > -border_width` test left the
     // inner edge jagged (visible on thin rings like `RadioButton`).
     var surface = in.color;
+    // The ramp composites over the element's own fill (straight-alpha src-over),
+    // so a translucent ramp brightens/darkens the surface instead of replacing
+    // it — the shimmer case — while an opaque one paints the surface outright.
+    if (in.misc.w > 0.5) {
+        let g = gradient_color(in);
+        let a = g.a + surface.a * (1.0 - g.a);
+        if (a > 0.0) {
+            surface = vec4<f32>(
+                (g.rgb * g.a + surface.rgb * surface.a * (1.0 - g.a)) / a,
+                a,
+            );
+        }
+    }
     if (border_width > 0.0) {
         let border_cov = smoothstep(
             -border_width - edge_softness,

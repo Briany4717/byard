@@ -42,6 +42,15 @@ pub struct DecoratedInstance {
     pub t_rotate: f32,
     /// Paint-time transform pivot (RFC-0011).
     pub t_origin: [f32; 2],
+    /// Gradient start colour (RFC-0001 §3.1); all-zero when `misc.w == 0`.
+    pub grad_from: [f32; 4],
+    /// Gradient mid colour.
+    pub grad_mid: [f32; 4],
+    /// Gradient end colour.
+    pub grad_to: [f32; 4],
+    /// `[dir_x, dir_y, mid_pos, offset]` — the ramp's axis, its middle stop's
+    /// position, and its wrapping phase shift.
+    pub grad_axis: [f32; 4],
 }
 
 impl From<&DecoratedBox> for DecoratedInstance {
@@ -54,18 +63,31 @@ impl From<&DecoratedBox> for DecoratedInstance {
             shadow_color: d.shadow_color,
             params: [d.border_width, d.shadow_dx, d.shadow_dy, d.shadow_blur],
             // misc.y (depth) is stamped per-instance in `draw`; misc.z carries
-            // the shadow spread (RFC-0011).
-            misc: [d.opacity, 0.0, d.shadow_spread, 0.0],
+            // the shadow spread (RFC-0011) and misc.w flags a gradient, so the
+            // shader pays nothing for the (overwhelmingly common) flat fill.
+            misc: [
+                d.opacity,
+                0.0,
+                d.shadow_spread,
+                if d.gradient.is_some() { 1.0 } else { 0.0 },
+            ],
             t_translate: d.base.transform.translate,
             t_scale: d.base.transform.scale,
             t_rotate: d.base.transform.rotate,
             t_origin: d.base.transform.origin,
+            grad_from: d.gradient.map_or([0.0; 4], |g| g.from),
+            grad_mid: d.gradient.map_or([0.0; 4], |g| g.mid),
+            grad_to: d.gradient.map_or([0.0; 4], |g| g.to),
+            grad_axis: d.gradient.map_or([0.0; 4], |g| {
+                let [dx, dy] = g.direction();
+                [dx, dy, g.mid_pos, g.offset]
+            }),
         }
     }
 }
 
 impl DecoratedInstance {
-    /// Vertex buffer layout for the per-instance step (locations 1..=11; the
+    /// Vertex buffer layout for the per-instance step (locations 1..=15; the
     /// static quad occupies location 0).
     #[must_use]
     pub fn layout() -> wgpu::VertexBufferLayout<'static> {
@@ -81,6 +103,10 @@ impl DecoratedInstance {
             9 => Float32x2, // transform.scale
             10 => Float32, // transform.rotate
             11 => Float32x2, // transform.origin
+            12 => Float32x4, // gradient from
+            13 => Float32x4, // gradient mid
+            14 => Float32x4, // gradient to
+            15 => Float32x4, // gradient axis (dir, mid_pos, offset)
         ];
         wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<DecoratedInstance>() as wgpu::BufferAddress,

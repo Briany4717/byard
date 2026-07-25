@@ -12,6 +12,67 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Gradient fills (RFC-0001 §3.1).** Two new paint properties on every box-path
+  intrinsic — `gradient: (angle: 90deg, from: <color>, mid: <color>, to: <color>,
+  mid_pos: 0.5)` and `gradient_offset: Float` — fulfilling the `DecoratedBox`
+  pipeline's declared remit ("rectangles with border-radius, **gradients**,
+  box-shadows"). The ramp is three-stop by design: two stops cover the ordinary
+  fade (`mid` defaults to their midpoint), and the third is what makes a
+  *highlight band* (transparent → bright → transparent) expressible, which is the
+  shape a shimmer needs. It composites over the element's own fill with
+  straight-alpha src-over — a translucent ramp brightens the surface, an opaque
+  one paints it — is clipped by the element's border radius for free, and each
+  stop is an ordinary colour value, so `with`/keyframed stops crossfade in OKLab
+  like any other animated colour. `gradient_offset` shifts the ramp along its
+  axis and **wraps**, so an animated offset (`gradient_offset: 1.0 with
+  anim.linear(1.4s, from: 0.0, repeat: infinite)`) is a seamless travelling sweep
+  with no extra elements: the RFC-0025 example's shimmer is now a gradient inside
+  each skeleton bar rather than a rectangle floating over them. Engine surface:
+  `frame::{Gradient, DecoratedBox::gradient}` + four instance slots on the
+  `DecoratedBox` pipeline (inactive gradients cost one `misc.w` compare).
+
+- **`restart: <expr>` on any animation (RFC-0025 §5).** A replay trigger: when the
+  witness value changes, the animation's timeline starts over and its delays are
+  honoured again, so a staggered entrance replays *in item order*. Without it a
+  mount-time animation is observable exactly once — its endpoints never change,
+  so nothing ever retargets it — which left RFC-0025's own stagger cascade
+  unrepeatable. This is the reference-free equivalent of changing a `key`
+  (RFC-0003 forbids handles), and it works on curves, keyframe sequences and
+  staggers alike (`anim.stagger(spring(), 90ms, i, restart: attempt)`).
+
+- **Looping & indefinite animations (RFC-0025).** `with anim.*(…)` grows the
+  modifiers that turn a one-shot transition into continuous motion —
+  `repeat: N | infinite` (`loop: true` is sugar for the latter),
+  `reverse: true` (alternate plays run back-to-front, so one curve becomes an
+  oscillation), `delay: <duration>` and `from: <value>` (the explicit second
+  endpoint a loop needs) — plus two new curve surfaces:
+  - **`anim.keyframes(0%: …, 50%: … ease_out, 100%: …, duration: 2s, loop: true)`**
+    — a multi-step sequence *in value position* (it supplies its own values, so
+    it is the property value rather than a `with` clause), with per-segment
+    easing, capped at 8 steps (`TooManyKeyframes`). Steps may be scalars,
+    colours (blended in OKLab), or coordinate pairs (interpolated
+    component-wise, so `translate` keyframes work).
+  - **`anim.stagger(spring(), 50ms, i)`** — sugar for `delay: i * 50ms` over a
+    `for` loop's index, with entrance semantics: a retarget replays the cascade
+    in order instead of cancelling the offset, while a plain `delay:` *is*
+    cancelled by a retarget so a delayed transition can never overwrite a more
+    recent interaction (RFC-0025 §5).
+
+  Every curve family (`spring`, `linear`, `ease`, and now the individually
+  addressable `ease_in`/`ease_out`/`ease_in_out`) repeats through one integer-
+  millisecond clock: a fixed-duration curve wraps at its duration, and a spring
+  wraps at its *analytic* settle time, so "restart when it settles" needs no
+  per-frame state. Infinite animations stay in the active set (frames keep
+  flowing at the display rate); a finite repeat holds its final value and lets
+  the app idle; and an animation that stops being drawn — offscreen, or in a
+  collapsed `when` branch — is **paused** and later resumes in phase rather than
+  jumping (RFC-0025 §2), at zero cost while it is away. New grammar: percentage
+  literals (`50%`), seconds durations (`1.5s`), and the `for i, item in items`
+  index binding. Engine surface: `frame::{RepeatMode, LoopPhase, loop_phase,
+  KeyframeCursor, keyframe_cursor, ease_progress, MAX_KEYFRAME_STEPS}` and
+  `Motion::{sample_secs, natural_duration_ms}`.
+  Example: `crates/byard-cli/examples/looping_animations`.
+
 - **Backdrop blur & vibrancy (RFC-0023 §2).** Four new paint-time style
   properties — `blur: Float` (frosted-glass backdrop blur in logical px,
   clamped to 40), `backdrop_tint: Color` (blended over the blurred sample; the
@@ -69,6 +130,46 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `text::TextSizer` trait.
 
 ### Fixed
+
+- **A settled app now genuinely idles at zero frames (RFC-0010 / RFC-0025 §2).**
+  `Interpreter::has_active_animations()` existed and **nothing consulted it**:
+  `byard dev` set `ControlFlow::Poll` once at start-up and requested a redraw on
+  every event-loop iteration forever, so a completely static scene still cost a
+  full core — the active-set settling that the whole animation design is built
+  around had no consumer. The event loop now asks the host each iteration
+  (`PlatformHost::wants_frames`, default `true` so no other host changes
+  behaviour) and spins **only while something is in motion**, dropping back to
+  `Wait` the moment everything settles. The logic thread publishes the flag
+  across the boundary as an `AtomicBool` (INV-2) and wakes the loop on the rising
+  edge — plus on a hot reload or a fresh error overlay, which change the frame
+  with no input behind them, so live-reload stays immediate. Visible in
+  `byard dev`: the once-a-second telemetry line stops printing when the scene
+  settles and returns when it moves.
+
+- **An over-large corner radius no longer deforms the box.** The rounded-rect SDF
+  is only well-defined for `radius <= min(half_width, half_height)`; past it the
+  distance field folds in on itself and the silhouette is pulled *inside* its own
+  rect — visible on any pill button (`radius: 20` on a 33 px-tall button, the
+  everyday case: its ends curved inward and looked pinched). The radius is now
+  reduced to fit at the one place it is consumed, in every pipeline's
+  `sd_rounded_box` (solid, decorated, ripple, backdrop, texture, canvas rect), so
+  a too-large radius renders as the pill it is asking for — the CSS rule. Proven
+  on a real GPU by `an_over_large_radius_is_reduced_to_a_pill_not_a_deformed_box`.
+
+- **`Spacer` actually flexes (RFC-0005).** The catalog specifies `Spacer` as a
+  "flexible gap" with `grow: Int` (default 1) and `basis: Int`; the
+  implementation ignored both and laid out a fixed 0×12 leaf, so `Row { Text …
+  Spacer Text … }` left the trailing item glued to the leading one instead of
+  pushing it to the far end. It is now a real flex leaf (`LayoutAtlas::add_flex_leaf`):
+  `basis` is its size before growing, `grow` its share of the free space, and
+  both are ordinary reactive props.
+
+- **An unmounted `when` branch now drops its animation state (RFC-0025).** "No
+  separate stop-animation API — the animation lives and dies with its element"
+  now holds literally: collapsing a branch forgets the animations inside it, so a
+  spinner that comes back starts its turn again instead of resuming a stale phase.
+  §2's offscreen rule is unchanged and now covers only what it was written for —
+  an element that is still mounted but not painted pauses and resumes *in phase*.
 
 - **Hit targets now follow the scroll offset (RFC-0005).** Interactive
   elements inside a `ScrollView` registered their hit rects at the laid-out

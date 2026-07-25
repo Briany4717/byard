@@ -682,11 +682,24 @@ impl Parser<'_> {
         }
     }
 
-    /// `arg_list := arg ("," arg)*`, `arg := (IDENT ":")? expr`. Stops at
-    /// `close`. A trailing comma is allowed.
+    /// `arg_list := arg ("," arg)*`,
+    /// `arg := (IDENT ":")? expr | PERCENT ":" expr IDENT?`. Stops at `close`. A
+    /// trailing comma is allowed.
     pub(super) fn parse_arg_list(&mut self, close: &Token) -> Vec<Arg> {
         let mut args = Vec::new();
         while self.cur().is_some() && self.cur() != Some(close) {
+            // A keyframe step `50%: value ease_out` (RFC-0025 §4). Any call may
+            // *carry* one; only `anim.keyframes(…)` gives it meaning (D6).
+            if let Some(step) = self.parse_keyframe_step() {
+                args.push(Arg {
+                    name: None,
+                    value: step,
+                });
+                if !self.eat(&Token::Comma) {
+                    break;
+                }
+                continue;
+            }
             // Named argument `name: expr` (two-token lookahead).
             let name = if let (Some(Token::Ident(sym)), Some(Token::Colon)) =
                 (self.cur().cloned(), self.peek2())
@@ -704,6 +717,40 @@ impl Parser<'_> {
             }
         }
         args
+    }
+
+    /// `keyframe_step := PERCENT ":" expr IDENT?` (RFC-0025 §4) — one timed step
+    /// of an `anim.keyframes(…)` sequence, e.g. `50%: 200 ease_out`. Returns
+    /// `None` (consuming nothing) when the cursor is not on a percentage, so the
+    /// ordinary argument forms parse exactly as before.
+    ///
+    /// The trailing easing name is unambiguous: `%` is not an operator and an
+    /// identifier is never an infix continuation of a value, so the step's value
+    /// expression always ends right before it.
+    fn parse_keyframe_step(&mut self) -> Option<Expr> {
+        let (Some(&Token::PercentLit(percent)), Some(Token::Colon)) = (self.cur(), self.peek2())
+        else {
+            return None;
+        };
+        let start = self.cur_span();
+        self.advance(); // percentage
+        self.advance(); // :
+        let value = Box::new(self.parse_expr(0));
+        let easing = match (self.cur().cloned(), self.peek2()) {
+            // `ease_out` — but not `ease_out:`, which is the next named argument.
+            (Some(Token::Ident(name)), next) if next != Some(Token::Colon) => {
+                let span = self.cur_span();
+                self.advance();
+                Some((name, span))
+            }
+            _ => None,
+        };
+        Some(Expr::KeyframeStep {
+            percent,
+            value,
+            easing,
+            span: self.span_from(start),
+        })
     }
 
     /// Splits a raw `StrLit` (whose `span` covers the quoted source) into text

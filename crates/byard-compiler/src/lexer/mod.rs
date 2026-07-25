@@ -129,13 +129,39 @@ pub enum Token {
         s[..s.len() - 3].parse::<f64>().ok()
     })]
     AngleLit(f64),
-    /// A duration literal with a `ms` suffix (RFC-0010: `anim.linear(200ms)`),
-    /// value in **milliseconds**. Listed before the plain number rules so
-    /// `logos`'s longest-match prefers `200ms` over `200` + `ms`. The parser
-    /// lowers it to an `Expr::IntLit` node (see `parser/expr.rs`): a duration is
-    /// only meaningful inside an `anim.*` curve call, read there as milliseconds.
+    /// A duration literal — `200ms` (RFC-0010) or the seconds form `1.5s` /
+    /// `2s` (RFC-0025 §4) — value always in **milliseconds**.
+    ///
+    /// Listed before the plain number rules so `logos`'s longest-match prefers
+    /// `200ms` over `200` + `ms`. The seconds form is canonicalized to ms right
+    /// here, the same unit normalization [`Token::AngleLit`] does for `deg`. The
+    /// parser lowers it to an `Expr::IntLit` node (see `parser/expr.rs`): a
+    /// duration is only meaningful inside an `anim.*` curve call, read there as
+    /// milliseconds.
     #[regex(r"[0-9]+ms", |lex| lex.slice()[..lex.slice().len() - 2].parse::<u32>().ok())]
+    #[regex(r"[0-9]+(\.[0-9]+)?s", |lex| {
+        let s = lex.slice();
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        s[..s.len() - 1]
+            .parse::<f64>()
+            .ok()
+            .map(|secs| (secs * 1000.0).round())
+            // The regex admits no sign, so the range check is purely the upper
+            // bound — but it is what makes the cast below lossless.
+            .filter(|ms| *ms >= 0.0 && *ms <= f64::from(u32::MAX))
+            .map(|ms| ms as u32)
+    })]
     DurationLit(u32),
+    /// A percentage literal (RFC-0025 §4: `anim.keyframes(0%: …, 50%: …)`),
+    /// canonicalized at lex time to the **fraction** `0.5` — again the
+    /// [`Token::AngleLit`] precedent (a pure, infallible unit transform). `%` is
+    /// not an operator in `byld`, so the suffix is unambiguous. Listed before
+    /// the plain number rules for longest-match.
+    #[regex(r"[0-9]+(\.[0-9]+)?%", |lex| {
+        let s = lex.slice();
+        s[..s.len() - 1].parse::<f64>().ok().map(|p| p / 100.0)
+    })]
+    PercentLit(f64),
     /// A floating-point literal. Listed before [`Token::IntLit`] because
     /// `logos` longest-match makes `3.14` a float, `3` an int.
     #[regex(r"[0-9]+\.[0-9]+", |lex| lex.slice().parse::<f64>().ok())]

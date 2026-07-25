@@ -1,0 +1,178 @@
+// RFC-0025 — looping & indefinite animations: repeat, reverse, keyframes, stagger.
+//
+// Run it (from the repo root):
+//   cd crates/byard-cli/examples/looping_animations
+//   cargo run -p byard-cli -- dev
+//
+// What to verify visually:
+//   1. SPINNER (top left): the purple arc rotates smoothly and endlessly, one
+//      turn per second, with no seam at the wrap — `rotate: 360deg with
+//      anim.linear(1s, from: 0deg, repeat: infinite)`.
+//   2. INDETERMINATE BAR: the purple bar sweeps left → right while its width
+//      stretches and shrinks, restarting every 2 s. Two `anim.keyframes(…)`
+//      sequences on one element (translate and scale), each with per-segment
+//      easing.
+//   3. PULSING BADGE: the red dot breathes between 1.0× and 1.4× forever —
+//      `repeat: infinite, reverse: true` turns one spring into an oscillation.
+//   4. COLOUR PULSE: the "LIVE" chip crossfades between purple and red
+//      *through OKLab* — the mid-points stay saturated, never muddy grey.
+//   5. SHIMMER: a highlight sweeps *through* each grey bar — a gradient inside
+//      the bar's own fill, slid by an animated `gradient_offset`, so it is
+//      clipped to the bar, fades at both ends, and loops with no seam.
+//   6. STAGGER: press "Replay entrance" — the five rows fade and slide up one
+//      after another, 90 ms apart, from a single written animation
+//      (`anim.stagger(…, 90ms, i, restart: entrance)` over the `for` loop's
+//      index `i`). The counter on the right shows which run you are watching.
+//   7. FINITE REPEAT: the amber square bounces exactly three times and stops,
+//      holding its final position — `repeat: 3`.
+//   8. START / STOP: press "Stop" — every endless animation unmounts with its
+//      element, the active set empties, and the event loop *parks*: the
+//      once-a-second telemetry line `byard dev` prints to the terminal stops
+//      appearing entirely, because no frames are being drawn at all. Press
+//      "Start" and both resume: the animations begin again from the top (they
+//      live and die with their element) and the telemetry stream comes back.
+View Main() {
+    var loading = true
+    var entrance = 0
+
+    let rows = ["Inbox", "Starred", "Snoozed", "Sent", "Archive"]
+
+    // One skeleton bar: its own fill *plus* a highlight ramp that slides through
+    // it. `gradient_offset` is an ordinary number, so RFC-0010's `with` drives
+    // it and RFC-0025's `repeat: infinite` makes the sweep endless.
+    //
+    // `angle: 180deg` points the ramp right-to-left, which with a *rising* offset
+    // is what sweeps the highlight left-to-right (a rising offset moves the
+    // colours against the ramp's direction — the CSS background-position rule).
+    let bar = style {
+        bg: 0x2B2930, radius: 4, height: 18
+        gradient: (angle: 180deg, from: 0x00FFFFFF, mid: 0x26FFFFFF,
+                   to: 0x00FFFFFF, mid_pos: 0.5)
+        gradient_offset: 1.0 with anim.linear(1.4s, from: 0.0, repeat: infinite)
+    }
+
+    Column #[bg: 0x141218, p: 28, gap: 22, width: 620] {
+        Row #[gap: 12, align: center] {
+            Text("RFC-0025 — looping animations") #[color: 0xE6E1E5, size: 20]
+            Spacer
+            Button(loading ? "Stop" : "Start") #[bg: 0x4A4458, color: 0xE6E1E5,
+                                                radius: 20, p: (8, 16)]
+                => loading = !loading
+            Button("Replay entrance") #[bg: 0x4A4458, color: 0xE6E1E5,
+                                        radius: 20, p: (8, 16)]
+                => entrance++
+        }
+
+        // ── 1 + 3 + 4: spinner, pulsing badge, colour pulse ───────────────
+        //
+        // Every endless animation lives inside `when loading`, which is what
+        // makes "Stop" mean *stop*: the elements unmount, their animation state
+        // goes with them (RFC-0025), the active set empties, and the event loop
+        // parks instead of spinning.
+        Row #[gap: 28, align: center] {
+            when loading {
+                Row #[gap: 28, align: center] {
+                    // The animation lives and dies with its element: no
+                    // start/stop API — unmounting is what stops it.
+                    Box #[width: 56, height: 56, origin: center,
+                          rotate: 360deg with anim.linear(1s, from: 0deg, repeat: infinite)] {
+                        Canvas #[width: 56, height: 56] {
+                            arc(cx: 28, cy: 28, r: 22,
+                                stroke: 0x36323C, stroke_width: 5)
+                            arc(cx: 28, cy: 28, r: 22, start: -90, sweep: 250,
+                                stroke: 0xD0BCFF, stroke_width: 5, cap: round)
+                        }
+                    }
+
+                    // A pulsing notification dot: one spring, two endpoints,
+                    // forever.
+                    Box #[width: 44, height: 44, radius: 22, bg: 0x2B2930, origin: center,
+                          scale: 1.4 with anim.spring(from: 1.0, stiffness: 90, damping: 9,
+                                                      repeat: infinite, reverse: true)] {
+                        Box #[width: 14, height: 14, radius: 7, bg: 0xEF5350] {}
+                    }
+
+                    // A colour that loops: interpolated in OKLab, so the
+                    // crossfade never passes through grey.
+                    Box #[radius: 14, p: (6, 14),
+                          bg: 0xEF5350 with anim.linear(700ms, from: 0x6750A4,
+                                                        repeat: infinite, reverse: true)] {
+                        Text("LIVE") #[color: 0xFFFFFF, size: 13, weight: medium]
+                    }
+                }
+            }
+
+            // 7: a *finite* repeat — three bounces, then it holds and the
+            // animation leaves the active set on its own, with no `when` needed.
+            Box #[width: 34, height: 34, radius: 8, bg: 0xFFB300,
+                  translate: (60, 0) with anim.ease_in_out(500ms, from: 0, repeat: 3)] {}
+        }
+
+        // ── 2: Material indeterminate progress bar ────────────────────────
+        Column #[gap: 8] {
+            Text("Indeterminate progress — two keyframe sequences")
+                #[color: 0x938F99, size: 12]
+            when loading {
+                Box #[bg: 0x36323C, radius: 3, width: 560, height: 6] {
+                    Box #[bg: 0xD0BCFF, radius: 3, width: 140, height: 6, origin: center,
+                          translate: anim.keyframes(
+                              0%: (-140, 0),
+                              60%: (160, 0) ease_in_out,
+                              100%: (420, 0) ease_out,
+                              duration: 2s, loop: true),
+                          scale: anim.keyframes(
+                              0%: (0.3, 1),
+                              60%: (1.6, 1) ease_in_out,
+                              100%: (0.3, 1) ease_in,
+                              duration: 2s, loop: true)] {}
+                }
+            }
+        }
+
+        // ── 5: shimmer / skeleton sweep ───────────────────────────────────
+        //
+        // The highlight belongs *to each bar*, not on top of them: every bar
+        // carries its own gradient (transparent → white → transparent) and slides
+        // it with `gradient_offset`. A ramp inside the bar's own fill is clipped
+        // by its rounded rect for free, fades at both ends, and — because the
+        // ramp wraps — the loop has no seam.
+        Column #[gap: 8] {
+            Text("Shimmer skeleton — a gradient sweeping through each bar")
+                #[color: 0x938F99, size: 12]
+            when loading {
+                Column #[gap: 10] {
+                    Box #[..bar, width: 560] {}
+                    Box #[..bar, width: 420] {}
+                    Box #[..bar, width: 300] {}
+                }
+            }
+        }
+
+        // ── 6: staggered entrance over a `for` loop's index ───────────────
+        Column #[gap: 8] {
+            Text("Staggered entrance — one animation, five start times")
+                #[color: 0x938F99, size: 12]
+            Column #[gap: 6] {
+                for i, row in rows {
+                    // `restart: entrance` is the replay trigger: the endpoints
+                    // never change, so without it the cascade would only ever be
+                    // seen once, at start-up. A replay honours the offsets again,
+                    // so the rows come in one after another every time.
+                    Row #[bg: 0x211F26, radius: 8, width: 560, p: (10, 14), gap: 10,
+                          align: center,
+                          opacity: 1.0 with
+                              anim.stagger(linear(320ms, from: 0.0), 90ms, i,
+                                           restart: entrance),
+                          translate: (0, 0) with
+                              anim.stagger(spring(from: (0, 18)), 90ms, i,
+                                           restart: entrance)] {
+                        Box #[width: 8, height: 8, radius: 4, bg: 0xD0BCFF] {}
+                        Text(row) #[color: 0xE6E1E5, size: 14]
+                        Spacer
+                        Text("run {entrance}") #[color: 0x938F99, size: 12]
+                    }
+                }
+            }
+        }
+    }
+}

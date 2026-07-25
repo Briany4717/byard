@@ -332,6 +332,14 @@ pub enum CompileError {
         /// The offending layout property name.
         prop: String,
     },
+    /// An `anim.keyframes(…)` sequence declared more steps than the RFC-0025
+    /// contract allows ([`MAX_KEYFRAME_STEPS`](byard_core::frame::MAX_KEYFRAME_STEPS)).
+    TooManyKeyframes {
+        /// Source range of the offending `anim.keyframes(…)` call.
+        span: Span,
+        /// How many steps were written.
+        found: usize,
+    },
     /// A curve call had a malformed argument list (RFC-0010): a missing
     /// duration, a non-numeric value, or an unknown parameter name.
     InvalidAnimation {
@@ -563,6 +571,7 @@ impl CompileError {
             | Self::RecursiveView { span, .. }
             | Self::UnknownAnimation { span, .. }
             | Self::LayoutPropNotAnimatable { span, .. }
+            | Self::TooManyKeyframes { span, .. }
             | Self::InvalidAnimation { span, .. }
             | Self::NotAStyle { span }
             | Self::UnknownStyleState { span, .. }
@@ -625,6 +634,7 @@ impl CompileError {
             | Self::RecursiveView { span, .. }
             | Self::UnknownAnimation { span, .. }
             | Self::LayoutPropNotAnimatable { span, .. }
+            | Self::TooManyKeyframes { span, .. }
             | Self::InvalidAnimation { span, .. }
             | Self::NotAStyle { span }
             | Self::UnknownStyleState { span, .. }
@@ -689,6 +699,7 @@ impl CompileError {
             Self::RecursiveView { .. } => "RecursiveView",
             Self::UnknownAnimation { .. } => "UnknownAnimation",
             Self::LayoutPropNotAnimatable { .. } => "LayoutPropNotAnimatable",
+            Self::TooManyKeyframes { .. } => "TooManyKeyframes",
             Self::InvalidAnimation { .. } => "InvalidAnimation",
             Self::NotAStyle { .. } => "NotAStyle",
             Self::UnknownStyleState { .. } => "UnknownStyleState",
@@ -847,6 +858,10 @@ impl CompileError {
                     "unknown interaction state `{name}` (expected hover/pressed/focused/disabled)"
                 ),
                 hint.as_deref(),
+            ),
+            Self::TooManyKeyframes { found, .. } => format!(
+                "`anim.keyframes` takes at most {} steps, found {found}",
+                byard_core::frame::MAX_KEYFRAME_STEPS
             ),
             Self::ImportAfterView { .. } => {
                 "`use` imports must appear at the top of the file, before any `View`".to_string()

@@ -429,6 +429,113 @@ fn with_animation_optional_parens_and_named_args_parse() {
 }
 
 #[test]
+fn a_for_loop_may_bind_an_index_before_its_item() {
+    // RFC-0025 §"Stagger" reads the item's position: `for i, item in items`.
+    let view = one_view("View V() { Column { for i, item in [1, 2] { Text(item) } } }");
+    let column = as_element(&view.body[0]);
+    let Member::For { var, index, .. } = &column.children[0] else {
+        panic!("expected a for loop, got {:?}", column.children[0]);
+    };
+    assert_eq!(*var, sym("item"));
+    assert_eq!(index.as_ref(), Some(&sym("i")));
+    // The one-name form still binds only the item.
+    let view = one_view("View V() { Column { for item in [1, 2] { Text(item) } } }");
+    let column = as_element(&view.body[0]);
+    assert!(matches!(
+        &column.children[0],
+        Member::For { var, index: None, .. } if *var == sym("item")
+    ));
+}
+
+#[test]
+fn animation_modifiers_and_second_durations_parse() {
+    // RFC-0025 §4: repeat/reverse/delay/loop modifiers ride along as ordinary
+    // named arguments, and a duration may be written in seconds.
+    one_view("View V() { Box #[scale: 1.3 with anim.spring(repeat: infinite, reverse: true)] }");
+    one_view("View V() { Box #[rotate: 360deg with anim.linear(1.5s, repeat: 3)] }");
+    one_view("View V() { Box #[opacity: 1.0 with anim.spring(delay: i * 50ms)] }");
+}
+
+#[test]
+fn a_seconds_duration_canonicalizes_to_milliseconds() {
+    // `1.5s` and `1500ms` are the same literal after lexing (the `deg → rad`
+    // precedent: units normalize at lex time).
+    let view = one_view("View V() { Box #[opacity: 1.0 with anim.linear(1.5s)] }");
+    let el = as_element(&view.body[0]);
+    let AttrKind::Prop {
+        value: Expr::Animated { anim, .. },
+    } = &el.attrs[0].kind
+    else {
+        panic!("expected an Animated value");
+    };
+    let Expr::Call { args, .. } = anim.as_ref() else {
+        panic!("expected the curve call");
+    };
+    assert!(matches!(args[0].value, Expr::IntLit(1500, _)));
+}
+
+#[test]
+fn keyframe_steps_parse_with_percentages_and_per_segment_easing() {
+    // RFC-0025 §4: `50%: 200 ease_out` is one step; the trailing identifier is
+    // the segment's easing, and it must not be mistaken for the next argument.
+    let view = one_view(
+        "View V() { Box #[translate: anim.keyframes(0%: 0, 50%: 200 ease_out, 100%: 0, \
+         duration: 2s, loop: true)] }",
+    );
+    let el = as_element(&view.body[0]);
+    let AttrKind::Prop {
+        value: Expr::Call { args, .. },
+    } = &el.attrs[0].kind
+    else {
+        panic!("expected the keyframes call, got {:?}", el.attrs[0].kind);
+    };
+    let steps: Vec<_> = args
+        .iter()
+        .filter_map(|a| match &a.value {
+            Expr::KeyframeStep {
+                percent, easing, ..
+            } => Some((
+                *percent,
+                easing.as_ref().map(|(n, _)| n.as_str().to_string()),
+            )),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        steps,
+        vec![
+            (0.0, None),
+            (0.5, Some("ease_out".to_string())),
+            (1.0, None)
+        ]
+    );
+    // The modifiers after the steps stay ordinary named arguments.
+    let named: Vec<_> = args
+        .iter()
+        .filter_map(|a| a.name.as_ref().map(|n| n.as_str().to_string()))
+        .collect();
+    assert_eq!(named, vec!["duration", "loop"]);
+}
+
+#[test]
+fn a_keyframe_step_value_may_be_a_coordinate_pair() {
+    // The step's value is a full expression, so a `translate` pair works.
+    let view =
+        one_view("View V() { Box #[translate: anim.keyframes(0%: (-100, 0), 100%: (300, 0))] }");
+    let el = as_element(&view.body[0]);
+    let AttrKind::Prop {
+        value: Expr::Call { args, .. },
+    } = &el.attrs[0].kind
+    else {
+        panic!("expected the keyframes call");
+    };
+    let Expr::KeyframeStep { value, .. } = &args[0].value else {
+        panic!("expected a keyframe step");
+    };
+    assert!(matches!(value.as_ref(), Expr::Tuple(..)));
+}
+
+#[test]
 fn style_value_and_spread_parse() {
     // RFC-0016: `let s = style { … }` binds a style value; `#[..s]` spreads it.
     let view = one_view(

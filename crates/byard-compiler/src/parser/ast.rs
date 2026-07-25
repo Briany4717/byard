@@ -157,6 +157,10 @@ pub enum Member {
     For {
         /// Loop variable.
         var: Symbol,
+        /// The optional index variable of the `for i, item in items` form
+        /// (RFC-0025 §"Stagger", whose `delay: i * 50ms` needs it). Bound to the
+        /// item's zero-based position.
+        index: Option<Symbol>,
         /// Iterable expression.
         iter: Expr,
         /// Loop body.
@@ -585,6 +589,22 @@ pub enum Expr {
         /// Source span.
         span: Span,
     },
+    /// One timed step of a keyframe sequence — `50%: 200 ease_out` (RFC-0025
+    /// §4). Appears only as an argument, and the parser assigns it no meaning
+    /// beyond its shape (D6): `anim.keyframes(…)` is the one call that reads
+    /// these, resolved with everything else at lower time.
+    KeyframeStep {
+        /// Position in the sequence as a `0..=1` fraction (`50%` → `0.5`),
+        /// canonicalized by the lexer.
+        percent: f64,
+        /// The value this step animates to.
+        value: Box<Expr>,
+        /// The optional easing name governing the segment that *arrives* at this
+        /// step (`ease_out`); absent means linear.
+        easing: Option<(Symbol, Span)>,
+        /// Source span.
+        span: Span,
+    },
     /// A first-class style value `style { name: value, … }` (RFC-0016): an
     /// ordered bundle of attributes, `let`-bound and applied to an element with
     /// the `..` spread. Static and composable; no cascade.
@@ -638,6 +658,7 @@ impl Expr {
             | Self::Binary { span, .. }
             | Self::Ternary { span, .. }
             | Self::Animated { span, .. }
+            | Self::KeyframeStep { span, .. }
             | Self::StyleValue { span, .. }
             | Self::Merge { span, .. }
             | Self::Error(span) => *span,

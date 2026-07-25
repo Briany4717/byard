@@ -68,6 +68,94 @@ fn step_decimals(step: f64) -> i32 {
 const ANIM_SETTLE_EPS_POS: f32 = 0.002;
 const ANIM_SETTLE_EPS_VEL: f32 = 0.02;
 
+/// The private timeline of one repeating, delayed or keyframed animation
+/// (RFC-0025), kept in [`Interpreter::anim_clocks`].
+///
+/// A one-shot `with` animation needs no clock of its own — its `Motion` carries
+/// `start_ms` and the value is a function of `now − start_ms`. A repeating one
+/// does: it has to know where its *sequence* began, independently of the
+/// endpoints, and it has to survive frames on which it is not drawn at all.
+#[derive(Clone, Copy)]
+struct LoopClock {
+    /// Engine time (ms) the current timeline began, delay included.
+    start_ms: u32,
+    /// Engine time (ms) this animation was last sampled.
+    last_seen_ms: u32,
+    /// The render this animation was last sampled on — the offscreen probe. A
+    /// *render* count, not a clock reading, so "was this drawn last frame?" is
+    /// exact however fast or slow the host is pacing frames.
+    last_seen_seq: u64,
+    /// Fingerprint of the endpoints this timeline was started for
+    /// ([`endpoint_key`]), so a retarget can restart it (RFC-0025 §5) without
+    /// the endpoints themselves having to be persisted.
+    endpoints: u64,
+    /// Whether this timeline still waits out its `delay` (RFC-0025 §5): true on
+    /// mount, and cleared by a retarget that cancels a `delay:` — never by one
+    /// that restarts a stagger.
+    honor_delay: bool,
+}
+
+/// Where a keyframe sequence sits right now: the two step *values* surrounding
+/// the current time and the eased factor between them (RFC-0025 §3).
+///
+/// Values stay as expressions until the caller needs them, which is what lets
+/// one blend serve both the numeric and the colour path — a colour blends in
+/// OKLab, a scalar numerically, and neither wants the other's interpretation.
+struct KeyframeBlend<'a> {
+    /// The step being interpolated from.
+    lo: &'a Expr,
+    /// The step being interpolated to (`lo` when parked on a step).
+    hi: &'a Expr,
+    /// Eased `0..=1` factor from `lo` to `hi`.
+    t: f32,
+}
+
+/// A fingerprint of a repeating animation's endpoints, used to notice a
+/// retarget (RFC-0025 §5).
+///
+/// Repeating animations recompute their endpoints every frame, so nothing needs
+/// to be stored to *sample* them — only enough to answer "are these the same
+/// endpoints as last frame?". A hash of the raw bits answers exactly that, for
+/// one scalar or four colour channels alike.
+fn endpoint_key(motions: &[byard_core::frame::Motion]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for motion in motions {
+        motion.from.to_bits().hash(&mut hasher);
+        motion.to.to_bits().hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+/// Interpolates between two evaluated keyframe values (RFC-0025 §3).
+///
+/// Scalars blend numerically; a tuple blends component-wise (keeping the left
+/// operand's field names), which is what makes `translate: anim.keyframes(0%:
+/// (-100, 0), …)` mean what it reads like. Anything else — mismatched shapes
+/// included — snaps at the segment's midpoint rather than inventing a value.
+fn lerp_value(a: &Value, b: &Value, t: f32) -> Value {
+    let scalar = |v: &Value| match v {
+        Value::Float(f) => Some(*f),
+        #[allow(clippy::cast_precision_loss)]
+        Value::Int(n) => Some(*n as f64),
+        _ => None,
+    };
+    if let (Some(x), Some(y)) = (scalar(a), scalar(b)) {
+        return Value::Float(x + (y - x) * f64::from(t));
+    }
+    if let (Value::Tuple(xs), Value::Tuple(ys)) = (a, b) {
+        if xs.len() == ys.len() {
+            return Value::Tuple(
+                xs.iter()
+                    .zip(ys)
+                    .map(|((name, x), (_, y))| (name.clone(), lerp_value(x, y, t)))
+                    .collect(),
+            );
+        }
+    }
+    if t < 0.5 { a.clone() } else { b.clone() }
+}
+
 /// RFC-0021 pull-to-refresh geometry, in logical px. The pull region resists with
 /// a diminishing-returns curve that asymptotes to [`PULL_MAX`]; releasing past
 /// [`PULL_THRESHOLD`] triggers a refresh and rests the indicator at [`PULL_REST`].
@@ -247,6 +335,10 @@ struct WhenPool {
 struct ForPool {
     /// The loop variable name, bound to each slot's signal when lowering a body.
     item_var: Symbol,
+    /// The optional index variable (`for i, item in …`, RFC-0025). Bound to the
+    /// slot's own index as a constant while its body is lowered — a pooled slot
+    /// *is* its position, so the index never needs to be reactive.
+    index_var: Option<Symbol>,
     /// The loop body AST, re-lowered only when the pool grows to a new index.
     body: Vec<Member>,
     /// User-view names in scope at lower time (for lowering new bodies).
@@ -589,6 +681,12 @@ pub struct Interpreter {
     /// animating alongside (RFC-0023: a tint fading in is an alpha ramp), and
     /// is interruptible like the scalar props. Keyed by the `with` node's span.
     color_animations: std::collections::HashMap<Span, [byard_core::frame::Motion; 4]>,
+    /// Loop clocks for repeating, delayed and keyframed animations (RFC-0025),
+    /// keyed by the animation node's span like the two maps above. A repeating
+    /// animation cannot sample against `now − start_ms` the way a one-shot does:
+    /// it needs its own timeline, which is what a [`LoopClock`] carries — plus
+    /// the last-sampled stamp that implements §2's offscreen pause.
+    anim_clocks: std::collections::HashMap<Span, LoopClock>,
     /// Live ripple ink reveals (RFC-0023), spawned by a press gesture over an
     /// element whose resolved `ripple_active` is true. Gesture-like state: it
     /// persists across renders (a ripple keeps fading after release) and is
@@ -2060,13 +2158,18 @@ impl Interpreter {
             // reconciliation (never per frame); the driver renders one pooled body
             // per current element.
             Member::For {
-                var, iter, body, ..
+                var,
+                index,
+                iter,
+                body,
+                ..
             } => {
                 let list_scope = self.bind_value(iter);
                 let pool = self.for_pools.len();
                 let env_snapshot = self.capture_env_snapshot();
                 self.for_pools.push(ForPool {
                     item_var: var.clone(),
+                    index_var: index.clone(),
                     body: body.clone(),
                     known_views: known_views.iter().map(|s| (*s).to_string()).collect(),
                     env_snapshot,
@@ -2445,6 +2548,9 @@ impl Interpreter {
                         // `self.for_pools` is released before `lower_members`
                         // (which may append *nested* pools to `self.for_pools`).
                         let item_var = self.for_pools[*pool].item_var.clone();
+                        let index_var = self.for_pools[*pool].index_var.clone();
+                        #[allow(clippy::cast_possible_wrap)]
+                        let slot_index = self.for_pools[*pool].bodies.len() as i64;
                         let body_ast = self.for_pools[*pool].body.clone();
                         let known: Vec<String> = self.for_pools[*pool].known_views.clone();
                         let env_snap = self.for_pools[*pool].env_snapshot.clone();
@@ -2453,6 +2559,9 @@ impl Interpreter {
                             self.env.push(k.clone(), v.clone());
                         }
                         self.env.push(item_var, Value::Signal(slot));
+                        if let Some(index_var) = index_var {
+                            self.env.push(index_var, Value::Int(slot_index));
+                        }
                         let known_refs: Vec<&str> = known.iter().map(String::as_str).collect();
                         // Mark that we are lowering inside a `for` body so any
                         // event action captures `t` in its env snapshot (the
@@ -5176,7 +5285,26 @@ impl Interpreter {
         {
             return Some(self.eval_animated_color(target, anim, *span));
         }
+        // A keyframed colour (RFC-0025 §3) blends its two surrounding steps in
+        // the same perceptual space, for the same reason.
+        if crate::interp::anim::is_keyframes_call(value) {
+            return self.eval_keyframe_color(value);
+        }
         self.eval_pure(value).as_int()
+    }
+
+    /// Samples a keyframed colour sequence (RFC-0025 §3 × RFC-0010 A3): the two
+    /// steps surrounding "now", mixed in OKLab so the sweep has no muddy
+    /// mid-points. Returns `None` only if the sequence is malformed (already
+    /// reported) or its steps are not colours.
+    fn eval_keyframe_color(&mut self, expr: &Expr) -> Option<i64> {
+        let blend = self.keyframe_blend(expr)?;
+        let lo = self.eval_pure(blend.lo).as_int()?;
+        if blend.t <= 0.0 {
+            return Some(lo);
+        }
+        let hi = self.eval_pure(blend.hi).as_int()?;
+        Some(mix_hex_oklab(lo, hi, blend.t))
     }
 
     /// Drives one colour `with` animation (RFC-0010 A3): interpolates from the
@@ -5195,21 +5323,18 @@ impl Interpreter {
         if !self.clock_set {
             return target_int;
         }
-        let Ok(curve) = crate::interp::anim::resolve_curve(anim) else {
+        let Ok(spec) = crate::interp::anim::resolve_motion(anim) else {
             return target_int;
         };
-        let packed = pack_curve(curve);
+        let packed = pack_curve(spec.curve);
         let now = self.now_ms;
-        // Channel targets: OKLab L/a/b plus the alpha byte (auto-detected via
-        // the lexer tag or the magnitude heuristic, like every colour
-        // consumer — this is what lets `0x00FFFFFF → 0x80FFFFFF` ramp).
-        let lab = oklab_from_hex(target_int);
-        let alpha = if super::intrinsics::color_has_alpha(target_int) {
-            ((target_int >> 24) & 0xFF) as f32 / 255.0
-        } else {
-            1.0
-        };
-        let target_ch = [lab[0], lab[1], lab[2], alpha];
+        // RFC-0025: a repeating/delayed colour runs on its own timeline. Its
+        // endpoints are two *colours*, so the channels are driven together off
+        // one shared phase rather than each settling on its own.
+        if !spec.is_plain() {
+            return self.eval_looped_color(target_int, &spec, key);
+        }
+        let target_ch = color_channels(target_int);
         let motions = self.color_animations.entry(key).or_insert_with(|| {
             [0, 1, 2, 3].map(|i| byard_core::frame::Motion {
                 from: target_ch[i],
@@ -5236,12 +5361,39 @@ impl Interpreter {
         if !all_settled {
             self.any_active = true;
         }
-        let rgb = hex_from_oklab([current[0], current[1], current[2]]);
-        #[allow(clippy::cast_sign_loss)]
-        let alpha_byte = i64::from((current[3].clamp(0.0, 1.0) * 255.0).round() as u8);
-        // Tagged like an 8-digit literal, so a downstream consumer honours a
-        // mid-ramp alpha of exactly zero instead of reading it as opaque.
-        crate::lexer::COLOR_HAS_ALPHA_TAG | (alpha_byte << 24) | rgb
+        color_from_channels(current)
+    }
+
+    /// Drives one repeating / delayed colour animation (RFC-0025 × RFC-0010 A3).
+    ///
+    /// The four channels are two *colours* apart, not four independent scalars,
+    /// so they share one period (the longest channel's) and one phase: the whole
+    /// colour arrives together, and an alternating loop reverses as one.
+    fn eval_looped_color(
+        &mut self,
+        target_int: i64,
+        spec: &crate::interp::anim::MotionSpec<'_>,
+        key: Span,
+    ) -> i64 {
+        let from_int = spec.from.map_or(target_int, |expr| {
+            self.eval_pure(expr).as_int().unwrap_or(target_int)
+        });
+        let now = self.now_ms;
+        let curve = pack_curve(spec.curve);
+        let (from_ch, to_ch) = (color_channels(from_int), color_channels(target_int));
+        let motions: [byard_core::frame::Motion; 4] =
+            std::array::from_fn(|i| byard_core::frame::Motion {
+                from: from_ch[i],
+                to: to_ch[i],
+                start_ms: now,
+                curve,
+            });
+        match self.loop_at(&motions, spec, key) {
+            Some(t_secs) => {
+                color_from_channels(std::array::from_fn(|i| motions[i].sample_secs(t_secs)))
+            }
+            None => color_from_channels(from_ch),
+        }
     }
 
     fn eval_int_prop(&mut self, attrs: &[Attr], name: &str) -> Option<i64> {
@@ -6256,6 +6408,11 @@ impl Interpreter {
                 let val = self.eval_pure(other);
                 if let Some(v) = spacing_value(&val) {
                     (v, v)
+                } else if let Some(pair) = axis_pair_of_value(&val, default) {
+                    // A *computed* pair — what keyframed coordinates resolve to
+                    // (RFC-0025: `translate: anim.keyframes(0%: (-100, 0), …)`
+                    // blends component-wise and arrives here as a tuple value).
+                    pair
                 } else {
                     self.errors.push(CompileError::AttributeTypeMismatch {
                         span: other.span(),
@@ -6600,6 +6757,13 @@ impl Interpreter {
             // slice, so for now the target resolves instantly (as it did before
             // any `with` was written), which is a safe, correct fallback.
             Expr::Animated { value, .. } => self.lower_expr(value, payload_name),
+            // A keyframe step (RFC-0025) only means anything inside
+            // `anim.keyframes(…)`, which is driven at the `eval_pure`
+            // chokepoint. Reaching the reactive lowering path means it was
+            // written somewhere else; lower to its value, the same inert
+            // fallback `Animated` takes.
+            #[allow(clippy::match_same_arms)] // a different rule, same fallback
+            Expr::KeyframeStep { value, .. } => self.lower_expr(value, payload_name),
             // A callback-prop action block (RFC-0019): lower each statement in
             // order and run them in sequence when the callback fires, returning
             // the last statement's value (`Unit` for the no-op default `{}`).
@@ -6991,6 +7155,13 @@ impl Interpreter {
         if let Expr::Animated { value, anim, span } = expr {
             return self.eval_animated(value, anim, *span);
         }
+        // An `anim.keyframes(…)` sequence (RFC-0025 §3) *is* the property value,
+        // so it is driven at the same chokepoint: every animatable scalar (and
+        // the coordinate pairs, which interpolate component-wise) gets keyframes
+        // for free, with no per-prop plumbing.
+        if crate::interp::anim::is_keyframes_call(expr) {
+            return self.eval_keyframes(expr);
+        }
         let mut compute = self.lower_expr(expr, None);
         compute(&mut self.ctx)
     }
@@ -7001,24 +7172,40 @@ impl Interpreter {
     /// A target change reseeds `from` to the current on-screen value so a
     /// mid-flight reversal is continuous.
     fn eval_animated(&mut self, target: &Expr, anim: &Expr, key: Span) -> Value {
-        let target_val = match self.eval_pure(target) {
-            Value::Float(f) => f as f32,
-            Value::Int(n) => n as f32,
-            // A non-numeric target can't be interpolated — pass it through
-            // untouched (the checker already restricts `with` to numeric props).
-            other => return other,
-        };
+        let target_value = self.eval_pure(target);
         // No advancing clock (a host that never calls `set_now_ms`, e.g. a
         // non-animating test path): resolve straight to the target so an
         // animation can never latch `has_active_animations` on `t = 0` forever.
         if !self.clock_set {
-            return Value::Float(f64::from(target_val));
+            return target_value;
         }
-        let Ok(curve) = crate::interp::anim::resolve_curve(anim) else {
+        let Ok(spec) = crate::interp::anim::resolve_motion(anim) else {
             // The checker already reported this; render the target inertly.
-            return Value::Float(f64::from(target_val));
+            return target_value;
         };
-        let packed = pack_curve(curve);
+        let target_val = match &target_value {
+            #[allow(clippy::cast_possible_truncation)]
+            Value::Float(f) => *f as f32,
+            #[allow(clippy::cast_precision_loss)]
+            Value::Int(n) => *n as f32,
+            // A coordinate pair animates component-wise off one shared clock, so
+            // `translate: (0, 0) with anim.spring(delay: i * 50ms)` (RFC-0025's
+            // stagger shape) moves as one. Only the RFC-0025 paths handle a pair;
+            // a plain `with` keeps its historical pass-through.
+            Value::Tuple(items) if !spec.is_plain() => {
+                return self.eval_looped_pair(items, &spec, key);
+            }
+            // Anything else can't be interpolated — pass it through untouched
+            // (the checker already restricts `with` to numeric props).
+            _ => return target_value,
+        };
+        // RFC-0025: a repeating, delayed or explicitly-started animation runs on
+        // its own timeline; everything else keeps the original single-shot path
+        // below, byte for byte.
+        if !spec.is_plain() {
+            return Value::Float(f64::from(self.eval_looped(target_val, &spec, key)));
+        }
+        let packed = pack_curve(spec.curve);
         let now = self.now_ms;
         let motion = self
             .animations
@@ -7051,6 +7238,290 @@ impl Interpreter {
             self.any_active = true;
         }
         Value::Float(f64::from(sampled))
+    }
+
+    /// Drives one repeating / delayed / explicitly-started `with` animation
+    /// (RFC-0025 §1, §5) and returns the value sampled at the current engine
+    /// time.
+    ///
+    /// A repeating animation needs no persisted endpoints — it is fully
+    /// determined by `from`, `to`, the curve and its own timeline, all of which
+    /// are recomputed each frame. What *is* persisted is the timeline
+    /// ([`LoopClock`]), which the RFC-0025 clock reduces to an offset inside one
+    /// iteration ([`loop_phase`](byard_core::frame::loop_phase)) for the curve to
+    /// be sampled at. A finite repeat that has played out holds its final value
+    /// and leaves the active set; an infinite one never does, which is what keeps
+    /// frames flowing for a spinner.
+    fn eval_looped(
+        &mut self,
+        target_val: f32,
+        spec: &crate::interp::anim::MotionSpec<'_>,
+        key: Span,
+    ) -> f32 {
+        let from_val = spec
+            .from
+            .map_or(target_val, |expr| self.eval_number(expr, target_val));
+        let motion = byard_core::frame::Motion {
+            from: from_val,
+            to: target_val,
+            start_ms: self.now_ms,
+            curve: pack_curve(spec.curve),
+        };
+        match self.loop_at(&[motion], spec, key) {
+            Some(phase) => motion.sample_secs(phase),
+            None => from_val,
+        }
+    }
+
+    /// The pair form of [`Self::eval_looped`]: each component gets its own
+    /// endpoints, all sampled off one shared phase so the axes stay in lockstep
+    /// (a diagonal entrance must not arrive one axis at a time). A `from:` may be
+    /// a pair or a scalar broadcast to both axes.
+    fn eval_looped_pair(
+        &mut self,
+        items: &[(Option<Symbol>, Value)],
+        spec: &crate::interp::anim::MotionSpec<'_>,
+        key: Span,
+    ) -> Value {
+        let Some(targets) = items
+            .iter()
+            .map(|(_, v)| spacing_value(v))
+            .collect::<Option<Vec<f32>>>()
+        else {
+            // A non-numeric component can't be interpolated; pass the pair
+            // through as written.
+            return Value::Tuple(items.to_vec());
+        };
+        let from_value = spec.from.map(|expr| self.eval_pure(expr));
+        let froms: Vec<f32> = targets
+            .iter()
+            .enumerate()
+            .map(|(axis, target)| match &from_value {
+                Some(Value::Tuple(from_items)) => from_items
+                    .get(axis)
+                    .and_then(|(_, v)| spacing_value(v))
+                    .unwrap_or(*target),
+                Some(scalar) => spacing_value(scalar).unwrap_or(*target),
+                None => *target,
+            })
+            .collect();
+        let curve = pack_curve(spec.curve);
+        let now = self.now_ms;
+        let motions: Vec<byard_core::frame::Motion> = froms
+            .iter()
+            .zip(&targets)
+            .map(|(from, to)| byard_core::frame::Motion {
+                from: *from,
+                to: *to,
+                start_ms: now,
+                curve,
+            })
+            .collect();
+        let phase = self.loop_at(&motions, spec, key);
+        Value::Tuple(
+            items
+                .iter()
+                .zip(&motions)
+                .map(|((name, _), motion)| {
+                    let sampled = match phase {
+                        Some(t_secs) => motion.sample_secs(t_secs),
+                        None => motion.from,
+                    };
+                    (name.clone(), Value::Float(f64::from(sampled)))
+                })
+                .collect(),
+        )
+    }
+
+    /// The shared body of every repeating animation (RFC-0025 §1, §5): advances
+    /// the timeline for `key`, applies the delay, and returns the offset *inside
+    /// one iteration* at which `motions` should be sampled — or `None` while the
+    /// delay is still holding the start value.
+    ///
+    /// All components share one period (the longest), so a multi-channel
+    /// animation — a pair of axes, a colour's four channels — completes each play
+    /// as a unit and alternates as a unit.
+    fn loop_at(
+        &mut self,
+        motions: &[byard_core::frame::Motion],
+        spec: &crate::interp::anim::MotionSpec<'_>,
+        key: Span,
+    ) -> Option<f32> {
+        use byard_core::frame::{Motion, loop_phase};
+
+        // A goal change restarts the sequence from its own start value — an
+        // oscillation has two fixed endpoints, so there is nothing to reseed
+        // `from` from (unlike the interruptible one-shot spring).
+        let (elapsed, honor_delay) =
+            self.loop_elapsed(key, endpoint_key(motions), spec.delay.is_cancellable());
+        // §5: on a *retarget* a `delay:` is cancelled — the animation heads for
+        // the new target at once, so a delayed transition can never overwrite a
+        // more recent interaction — while a stagger's offset is honoured again
+        // and the cascade replays in order. On the first mount both wait.
+        let delay_ms = if honor_delay {
+            self.eval_delay(&spec.delay)
+        } else {
+            0
+        };
+        // Still inside the delay: hold the start value, and stay in the active
+        // set so the frames that will start the motion keep coming.
+        if elapsed < delay_ms {
+            self.any_active = true;
+            return None;
+        }
+        let period = motions
+            .iter()
+            .map(|m| m.natural_duration_ms(ANIM_SETTLE_EPS_POS))
+            .max()
+            .unwrap_or(Motion::MIN_PERIOD_MS);
+        let phase = loop_phase(period, elapsed - delay_ms, spec.repeat, spec.reverse);
+        if !phase.finished {
+            self.any_active = true;
+        }
+        Some(phase.t_secs)
+    }
+
+    /// Samples an `anim.keyframes(…)` value at the current engine time
+    /// (RFC-0025 §3). Scalars interpolate numerically; a coordinate pair
+    /// interpolates component-wise, so `translate` keyframes work.
+    fn eval_keyframes(&mut self, expr: &Expr) -> Value {
+        let Some(blend) = self.keyframe_blend(expr) else {
+            return Value::Unit;
+        };
+        let lo = self.eval_pure(blend.lo);
+        if blend.t <= 0.0 {
+            return lo;
+        }
+        let hi = self.eval_pure(blend.hi);
+        lerp_value(&lo, &hi, blend.t)
+    }
+
+    /// Positions a keyframe sequence on the engine clock: which two steps
+    /// surround "now" and how far between them the value sits (RFC-0025 §3).
+    ///
+    /// Returns `None` when the sequence is malformed (the checker has already
+    /// reported it) or the host never advanced the clock. Marks the animation
+    /// active unless a finite sequence has played out — the settling contract
+    /// the whole animation system shares.
+    fn keyframe_blend<'a>(&mut self, expr: &'a Expr) -> Option<KeyframeBlend<'a>> {
+        use byard_core::frame::{MAX_KEYFRAME_STEPS, MotionCurve, keyframe_cursor, loop_phase};
+
+        let track = crate::interp::anim::resolve_keyframes(expr)?.ok()?;
+        let key = expr.span();
+        // Without an advancing clock, resolve to the sequence's first value —
+        // mirrors the `with` path, and never latches the active set at `t = 0`.
+        if !self.clock_set {
+            let first = track.steps.first()?.value;
+            return Some(KeyframeBlend {
+                lo: first,
+                hi: first,
+                t: 0.0,
+            });
+        }
+        let delay_ms = self.eval_delay(&track.delay);
+        // A keyframe track has no endpoints to retarget: its steps *are* the
+        // values, so a reactive step just re-blends where the sequence already
+        // is rather than restarting it.
+        let (elapsed, _) = self.loop_elapsed(key, 0, false);
+        if elapsed < delay_ms {
+            self.any_active = true;
+            let first = track.steps.first()?.value;
+            return Some(KeyframeBlend {
+                lo: first,
+                hi: first,
+                t: 0.0,
+            });
+        }
+        let phase = loop_phase(
+            track.duration_ms,
+            elapsed - delay_ms,
+            track.repeat,
+            track.reverse,
+        );
+        if !phase.finished {
+            self.any_active = true;
+        }
+        // The step table is capped by the RFC (and validated on resolution), so
+        // the timing lookup runs on the stack with no allocation.
+        let mut percents = [0.0_f32; MAX_KEYFRAME_STEPS];
+        let mut easings = [MotionCurve::LINEAR; MAX_KEYFRAME_STEPS];
+        let len = track.steps.len().min(MAX_KEYFRAME_STEPS);
+        for (slot, step) in track.steps.iter().enumerate().take(len) {
+            percents[slot] = step.percent;
+            easings[slot] = step.easing;
+        }
+        #[allow(clippy::cast_precision_loss)]
+        let progress = phase.t_secs / (track.duration_ms as f32 / 1000.0);
+        let cursor = keyframe_cursor(&percents[..len], &easings[..len], progress);
+        Some(KeyframeBlend {
+            lo: track.steps[cursor.lo].value,
+            hi: track.steps[cursor.hi].value,
+            t: cursor.t,
+        })
+    }
+
+    /// Evaluates an animation's start offset in milliseconds (RFC-0025 §5).
+    /// `anim.stagger(…)` multiplies its per-item step by the loop index, which
+    /// is why the offset stays an expression until here.
+    fn eval_delay(&mut self, delay: &crate::interp::anim::Delay<'_>) -> u32 {
+        use crate::interp::anim::Delay;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let ms = |v: f32| v.max(0.0).min(f32::from(u16::MAX)) as u32;
+        match delay {
+            Delay::None => 0,
+            Delay::Offset(expr) => ms(self.eval_number(expr, 0.0)),
+            #[allow(clippy::cast_precision_loss)]
+            Delay::Stagger { step_ms, index } => ms(self.eval_number(index, 0.0) * *step_ms as f32),
+        }
+    }
+
+    /// Evaluates `expr` as an `f32`, falling back to `default` for a
+    /// non-numeric result (the checker restricts these positions to numbers).
+    #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+    fn eval_number(&mut self, expr: &Expr, default: f32) -> f32 {
+        match self.eval_pure(expr) {
+            Value::Float(f) => f as f32,
+            Value::Int(n) => n as f32,
+            _ => default,
+        }
+    }
+
+    /// Advances the RFC-0025 timeline keyed by `key`, returning the milliseconds
+    /// elapsed on it and whether its `delay` still applies.
+    ///
+    /// Three jobs, all of them about *when* rather than *what*:
+    /// - seeds the timeline the first time the animation is seen (delay honoured
+    ///   — an entrance is meant to wait);
+    /// - implements §2's offscreen pause — missing a whole render means the
+    ///   element was not drawn (it left the viewport, or its `when` branch
+    ///   collapsed), so the timeline is shifted forward by the time it was away
+    ///   instead of counting it as motion: the animation resumes where it
+    ///   stopped and costs nothing while it is gone;
+    /// - restarts the timeline when the endpoints change (§5). A restart drops a
+    ///   `cancellable` delay so the property heads for its new target at once,
+    ///   and keeps a stagger's, so the cascade replays in order.
+    fn loop_elapsed(&mut self, key: Span, endpoints: u64, cancellable: bool) -> (u32, bool) {
+        let (now, seq) = (self.now_ms, self.frame_seq);
+        let clock = self.anim_clocks.entry(key).or_insert(LoopClock {
+            start_ms: now,
+            last_seen_ms: now,
+            last_seen_seq: seq,
+            endpoints,
+            honor_delay: true,
+        });
+        if seq.saturating_sub(clock.last_seen_seq) > 1 {
+            clock.start_ms = clock
+                .start_ms
+                .saturating_add(now.saturating_sub(clock.last_seen_ms));
+        }
+        clock.last_seen_seq = seq;
+        if clock.endpoints != endpoints {
+            clock.endpoints = endpoints;
+            clock.start_ms = now;
+            clock.honor_delay = !cancellable;
+        }
+        clock.last_seen_ms = now;
+        (now.saturating_sub(clock.start_ms), clock.honor_delay)
     }
 
     fn resolve_var(&self, target: &Expr, span: Span) -> Result<SignalId, CompileError> {
@@ -8412,6 +8883,65 @@ fn hex_from_oklab(lab: [f32; 3]) -> i64 {
     let bl = -0.004_196_086_3 * l - 0.703_418_6 * m + 1.707_614_7 * s;
     let to_byte = |c: f32| -> i64 { (linear_to_srgb(c).clamp(0.0, 1.0) * 255.0).round() as i64 };
     (to_byte(r) << 16) | (to_byte(g) << 8) | to_byte(bl)
+}
+
+/// Reads an already-evaluated two-axis value (`(x, y)` positional or
+/// `(x: …, y: …)` named) as a pair, leaving unset axes at `default`.
+///
+/// The value-level counterpart of `resolve_axis_pair_value`'s syntactic tuple
+/// handling, for pairs that only exist after evaluation — a keyframed
+/// `translate` (RFC-0025 §3) being the case that needs it.
+fn axis_pair_of_value(value: &Value, default: (f32, f32)) -> Option<(f32, f32)> {
+    let items = value.as_tuple()?;
+    if items.iter().all(|(name, _)| name.is_some()) {
+        let axis = |want: &str| {
+            items
+                .iter()
+                .find(|(name, _)| name.as_ref().is_some_and(|n| n.as_str() == want))
+                .and_then(|(_, v)| spacing_value(v))
+        };
+        return Some((
+            axis("x").unwrap_or(default.0),
+            axis("y").unwrap_or(default.1),
+        ));
+    }
+    let [(_, x), (_, y)] = items else {
+        return None;
+    };
+    Some((spacing_value(x)?, spacing_value(y)?))
+}
+
+/// Splits a packed colour into the four channels a colour animation drives:
+/// OKLab `L`/`a`/`b` plus alpha as `0..=1` (RFC-0010 A3, RFC-0023's alpha ramp).
+///
+/// Alpha is auto-detected exactly as every other colour consumer does it (the
+/// lexer's 8-digit tag, else the magnitude heuristic), which is what lets
+/// `0x00FFFFFF → 0x80FFFFFF` ramp instead of popping.
+fn color_channels(hex: i64) -> [f32; 4] {
+    let lab = oklab_from_hex(hex);
+    #[allow(clippy::cast_precision_loss)]
+    let alpha = if super::intrinsics::color_has_alpha(hex) {
+        ((hex >> 24) & 0xFF) as f32 / 255.0
+    } else {
+        1.0
+    };
+    [lab[0], lab[1], lab[2], alpha]
+}
+
+/// Packs the four animated channels back into `0xAARRGGBB`, tagged like an
+/// 8-digit literal so a downstream consumer honours a mid-ramp alpha of exactly
+/// zero instead of reading it as opaque.
+fn color_from_channels(ch: [f32; 4]) -> i64 {
+    let rgb = hex_from_oklab([ch[0], ch[1], ch[2]]);
+    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+    let alpha_byte = i64::from((ch[3].clamp(0.0, 1.0) * 255.0).round() as u8);
+    crate::lexer::COLOR_HAS_ALPHA_TAG | (alpha_byte << 24) | rgb
+}
+
+/// Mixes two packed colours in OKLab at factor `t` (RFC-0025 §3 keyframes).
+fn mix_hex_oklab(a: i64, b: i64, t: f32) -> i64 {
+    let (from, to) = (color_channels(a), color_channels(b));
+    color_from_channels(std::array::from_fn(|i| from[i] + (to[i] - from[i]) * t))
 }
 
 /// sRGB gamma → linear (per channel).
@@ -10178,6 +10708,360 @@ mod tests {
         assert!((a - 2.0).abs() < 0.6, "starts near 2, got {a}");
         assert!((b - 7.0).abs() < 1.5, "~halfway, got {b}");
         assert!((c - 12.0).abs() < 0.6, "arrives at 12, got {c}");
+    }
+
+    // ── RFC-0025: looping & indefinite animations ────────────────────────
+
+    /// Renders `src` at each of `times` (ms on the engine clock) and returns
+    /// what `sample` reads from the frame, plus whether the animation was still
+    /// in the active set at that instant — the two things every looping test
+    /// asks about.
+    fn sample_over_time(
+        src: &str,
+        times: &[u32],
+        sample: impl Fn(&byard_core::frame::RenderFrame) -> f32,
+    ) -> Vec<(f32, bool)> {
+        let (mut interp, tree) = lower_named(src, "V");
+        assert!(interp.errors().is_empty(), "{:?}", interp.errors());
+        interp.tick();
+        times
+            .iter()
+            .map(|ms| {
+                interp.set_now_ms(*ms);
+                let mut frame = byard_core::frame::RenderFrame::new();
+                interp.render(&tree, &mut frame, 400.0, 300.0);
+                (sample(&frame), interp.has_active_animations())
+            })
+            .collect()
+    }
+
+    /// The first emitted box's paint-time `translate.x`.
+    fn translate_x(frame: &byard_core::frame::RenderFrame) -> f32 {
+        frame.instances()[0].transform.translate[0]
+    }
+
+    #[test]
+    fn an_infinite_repeat_wraps_and_keeps_the_frames_coming() {
+        // A 400 ms linear ramp from 0 → 100, repeating forever: it must wrap at
+        // the period and never let the app idle (that is what a spinner needs).
+        let src = "View V() { Box #[bg: 0x808080, width: 10, height: 10, \
+                   translate: (100, 0) with anim.linear(400ms, from: 0, repeat: infinite)] }";
+        let seen = sample_over_time(src, &[0, 200, 400, 600, 4_000], translate_x);
+        let x: Vec<f32> = seen.iter().map(|(v, _)| *v).collect();
+        assert!((x[0] - 0.0).abs() < 1.0, "starts at `from`, got {}", x[0]);
+        assert!((x[1] - 50.0).abs() < 2.0, "halfway, got {}", x[1]);
+        assert!((x[2] - 0.0).abs() < 1.0, "wrapped, got {}", x[2]);
+        assert!((x[3] - 50.0).abs() < 2.0, "second play, got {}", x[3]);
+        assert!(
+            seen.iter().all(|(_, active)| *active),
+            "an infinite animation never settles"
+        );
+    }
+
+    #[test]
+    fn reverse_oscillates_between_the_two_endpoints() {
+        // The RFC's pulsing badge: `from` and the target are the two ends, and
+        // alternating plays turn it into a continuous oscillation.
+        let src = "View V() { Box #[bg: 0x808080, width: 10, height: 10, \
+                   translate: (100, 0) with anim.linear(400ms, from: 0, \
+                   repeat: infinite, reverse: true)] }";
+        let x: Vec<f32> = sample_over_time(src, &[0, 200, 400, 600, 800], translate_x)
+            .into_iter()
+            .map(|(v, _)| v)
+            .collect();
+        assert!((x[0] - 0.0).abs() < 1.0, "out from `from`, got {}", x[0]);
+        assert!((x[1] - 50.0).abs() < 2.0);
+        assert!((x[2] - 100.0).abs() < 1.0, "at the far end, got {}", x[2]);
+        assert!((x[3] - 50.0).abs() < 2.0, "coming back, got {}", x[3]);
+        assert!((x[4] - 0.0).abs() < 1.0, "home again, got {}", x[4]);
+    }
+
+    #[test]
+    fn a_counted_repeat_stops_and_lets_the_app_idle() {
+        let src = "View V() { Box #[bg: 0x808080, width: 10, height: 10, \
+                   translate: (100, 0) with anim.linear(400ms, from: 0, repeat: 2)] }";
+        let seen = sample_over_time(src, &[0, 500, 799, 900, 5_000], translate_x);
+        assert!(seen[1].1, "still playing the second time");
+        assert!((seen[3].0 - 100.0).abs() < 1.0, "holds the final value");
+        assert!(
+            !seen[3].1 && !seen[4].1,
+            "a finite repeat leaves the active set, so the app idles"
+        );
+    }
+
+    #[test]
+    fn a_delay_holds_the_start_value_then_animates() {
+        let src = "View V() { Box #[bg: 0x808080, width: 10, height: 10, \
+                   translate: (100, 0) with anim.linear(200ms, from: 0, delay: 300ms)] }";
+        let seen = sample_over_time(src, &[0, 200, 400, 600], translate_x);
+        assert!((seen[0].0).abs() < 0.01, "held at `from` during the delay");
+        assert!((seen[1].0).abs() < 0.01, "still held at 200ms");
+        assert!(
+            seen[1].1,
+            "a pending delay keeps requesting frames — otherwise it would never start"
+        );
+        assert!((seen[2].0 - 50.0).abs() < 2.0, "halfway, got {}", seen[2].0);
+        assert!((seen[3].0 - 100.0).abs() < 0.5, "arrived");
+    }
+
+    #[test]
+    fn stagger_offsets_each_item_by_its_index() {
+        // RFC-0025 §"Stagger": one written animation, a different start per item.
+        let src = "View V() { let xs = [1, 2, 3] \
+                   Column { for i, x in xs { \
+                       Box #[bg: 0x808080, width: 10, height: 10, \
+                             translate: (100, 0) with \
+                             anim.stagger(linear(200ms, from: 0), 100ms, i)] {} \
+                   } } }";
+        // Every reading starts from a render at t = 0: an animation's timeline
+        // begins when it first appears, exactly as it does in a running app.
+        let at = |ms: u32| {
+            *sample_over_time(src, &[0, ms], |f| {
+                // Each row's translate, in row order.
+                f.instances()
+                    .iter()
+                    .map(|b| b.transform.translate[0])
+                    .sum::<f32>()
+            })
+            .last()
+            .map(|(v, _)| v)
+            .unwrap()
+        };
+        // At 100 ms the first row is halfway (50), the second just starting (0),
+        // the third still waiting (0).
+        assert!((at(100) - 50.0).abs() < 3.0, "only row 0 has moved");
+        // At 200 ms: row 0 arrived (100), row 1 halfway (50), row 2 starting (0).
+        assert!((at(200) - 150.0).abs() < 4.0, "the wave has advanced");
+        // Once every row has played out, they are all at the target.
+        assert!((at(1_000) - 300.0).abs() < 0.5, "all rows arrived");
+    }
+
+    #[test]
+    fn keyframes_walk_their_steps_and_loop() {
+        // RFC-0025 §3: a three-step sequence over 400 ms, looping forever.
+        let src = "View V() { Box #[bg: 0x808080, width: 10, height: 10, \
+                   translate: anim.keyframes(0%: 0, 50%: 80, 100%: 0, \
+                   duration: 400ms, loop: true)] }";
+        let seen = sample_over_time(src, &[0, 100, 200, 300, 400, 500], translate_x);
+        let x: Vec<f32> = seen.iter().map(|(v, _)| *v).collect();
+        assert!((x[0] - 0.0).abs() < 0.5, "the 0% step");
+        assert!(
+            (x[1] - 40.0).abs() < 2.0,
+            "midway to the 50% step, got {}",
+            x[1]
+        );
+        assert!((x[2] - 80.0).abs() < 0.5, "the 50% step, got {}", x[2]);
+        assert!((x[3] - 40.0).abs() < 2.0, "coming back down, got {}", x[3]);
+        assert!((x[4] - 0.0).abs() < 0.5, "wrapped to the start");
+        assert!((x[5] - 40.0).abs() < 2.0, "second play");
+        assert!(
+            seen.iter().all(|(_, active)| *active),
+            "a loop never settles"
+        );
+    }
+
+    #[test]
+    fn keyframe_pairs_interpolate_component_wise() {
+        // A coordinate pair per step (the RFC's indeterminate-progress shape).
+        let src = "View V() { Box #[bg: 0x808080, width: 10, height: 10, \
+                   translate: anim.keyframes(0%: (-100, 10), 100%: (300, 30), duration: 400ms)] }";
+        let seen = sample_over_time(src, &[0, 200], |f| {
+            let t = f.instances()[0].transform.translate;
+            // Encode both axes in one sample: x + y * 1000.
+            t[0] + t[1] * 1000.0
+        });
+        let (x, y) = (seen[1].0 % 1000.0, (seen[1].0 / 1000.0).floor());
+        assert!(
+            (x - 100.0).abs() < 2.0,
+            "x halfway from -100 to 300, got {x}"
+        );
+        assert!((y - 20.0).abs() < 0.5, "y halfway from 10 to 30, got {y}");
+    }
+
+    #[test]
+    fn a_keyframe_segment_uses_its_own_easing() {
+        // Same two-segment shape, but the first arrives with `ease_out`: at the
+        // quarter mark it must be further along than the linear version.
+        let linear = "View V() { Box #[bg: 0x808080, width: 10, height: 10, \
+                      translate: anim.keyframes(0%: 0, 50%: 100, 100%: 0, duration: 400ms)] }";
+        let eased = "View V() { Box #[bg: 0x808080, width: 10, height: 10, \
+                     translate: anim.keyframes(0%: 0, 50%: 100 ease_out, 100%: 0, \
+                     duration: 400ms)] }";
+        let at_quarter = |src: &str| sample_over_time(src, &[0, 100], translate_x)[1].0;
+        assert!(
+            at_quarter(eased) > at_quarter(linear) + 10.0,
+            "ease_out leads linear: {} vs {}",
+            at_quarter(eased),
+            at_quarter(linear)
+        );
+    }
+
+    #[test]
+    fn a_keyframed_colour_blends_in_oklab() {
+        // A colour sequence samples its two surrounding steps perceptually,
+        // never by lerping the packed integer.
+        let src = "View V() { Box #[width: 10, height: 10, \
+                   bg: anim.keyframes(0%: 0x000000, 100%: 0xFFFFFF, duration: 400ms)] }";
+        let grey = |f: &byard_core::frame::RenderFrame| f.instances()[0].color[0];
+        let seen = sample_over_time(src, &[0, 200, 400], grey);
+        assert!(seen[0].0 < 0.01, "starts black, got {}", seen[0].0);
+        assert!(
+            seen[1].0 > 0.30 && seen[1].0 < 0.48,
+            "the OKLab midpoint of black→white is mid *lightness*: brighter than \
+             the naive channel lerp (0x7F7F7F ≈ 0.22 in linear light), and still \
+             below linear 0.5 — got {}",
+            seen[1].0
+        );
+        assert!(seen[2].0 > 0.99, "ends white, got {}", seen[2].0);
+    }
+
+    #[test]
+    fn a_looping_colour_oscillates_between_two_colours() {
+        let src = "View V() { Box #[width: 10, height: 10, \
+                   bg: 0xFFFFFF with anim.linear(400ms, from: 0x000000, \
+                   repeat: infinite, reverse: true)] }";
+        let grey = |f: &byard_core::frame::RenderFrame| f.instances()[0].color[0];
+        let seen = sample_over_time(src, &[0, 400, 800], grey);
+        assert!(seen[0].0 < 0.01, "starts black");
+        assert!(seen[1].0 > 0.99, "reaches white");
+        assert!(seen[2].0 < 0.01, "and comes back");
+        assert!(seen.iter().all(|(_, active)| *active));
+    }
+
+    #[test]
+    fn an_unmounted_loop_pauses_and_resumes_in_phase() {
+        // RFC-0025 §2: an animation that stops being drawn (here a collapsed
+        // `when` branch — the same thing viewport culling does) is *paused*, not
+        // left running: while it is away the app idles, and when it comes back it
+        // continues from where it stopped instead of jumping ahead.
+        let src = "View V() { var shown: Bool = true \
+                   when shown { \
+                       Box #[bg: 0x808080, width: 10, height: 10, \
+                             translate: (100, 0) with anim.linear(400ms, from: 0, \
+                             repeat: infinite)] {} \
+                   } }";
+        let (mut interp, tree) = lower_named(src, "V");
+        assert!(interp.errors().is_empty(), "{:?}", interp.errors());
+        interp.tick();
+        let render = |interp: &mut Interpreter, ms: u32| {
+            interp.set_now_ms(ms);
+            let mut frame = byard_core::frame::RenderFrame::new();
+            interp.render(&tree, &mut frame, 400.0, 300.0);
+            (
+                frame.instances().first().map(|b| b.transform.translate[0]),
+                interp.has_active_animations(),
+            )
+        };
+        render(&mut interp, 0);
+        let (x, active) = render(&mut interp, 100);
+        assert!((x.unwrap() - 25.0).abs() < 2.0, "a quarter in, got {x:?}");
+        assert!(active);
+
+        // Hide it for two whole periods.
+        let shown = interp.var_signal(&Symbol::intern("shown")).unwrap();
+        interp.write_var(shown, Value::Bool(false));
+        interp.tick();
+        let (x, active) = render(&mut interp, 900);
+        assert_eq!(x, None, "nothing is drawn while hidden");
+        assert!(!active, "an offscreen loop costs no frames");
+
+        // Show it again: it resumes a quarter in, not wherever wall time landed.
+        interp.write_var(shown, Value::Bool(true));
+        interp.tick();
+        let (x, _) = render(&mut interp, 900);
+        assert!(
+            (x.unwrap() - 25.0).abs() < 3.0,
+            "resumes in phase, got {x:?}"
+        );
+    }
+
+    #[test]
+    fn a_retarget_cancels_a_pending_delay_but_never_a_stagger() {
+        // RFC-0025 §5: a delayed transition must not overwrite a newer target,
+        // so a target change restarts it immediately — while a stagger's
+        // entrance offset survives (it is sequencing, not a response).
+        let delayed = "View V() { var on: Bool = false \
+                       Box #[bg: 0x808080, width: 10, height: 10, \
+                             translate: ((on ? 100 : 0), 0) with anim.linear(200ms, from: 0, \
+                             delay: 400ms)] }";
+        let (mut interp, tree) = lower_named(delayed, "V");
+        interp.tick();
+        let at = |interp: &mut Interpreter, ms: u32| {
+            interp.set_now_ms(ms);
+            let mut frame = byard_core::frame::RenderFrame::new();
+            interp.render(&tree, &mut frame, 400.0, 300.0);
+            translate_x(&frame)
+        };
+        at(&mut interp, 0);
+        // Flip the target at 300 ms — inside the original delay window.
+        let on = interp.var_signal(&Symbol::intern("on")).unwrap();
+        interp.write_var(on, Value::Bool(true));
+        interp.tick();
+        at(&mut interp, 300);
+        // The pending delay is cancelled, so the property heads for the new
+        // target at once rather than sitting still for another 400 ms.
+        assert!(
+            (at(&mut interp, 400) - 50.0).abs() < 3.0,
+            "halfway 100 ms after the retarget, got {}",
+            at(&mut interp, 400)
+        );
+        assert!((at(&mut interp, 500) - 100.0).abs() < 1.0, "arrived");
+
+        // A stagger, by contrast, honours its offset again — the cascade
+        // *replays* in item order instead of snapping.
+        let staggered = "View V() { var on: Bool = false \
+                         Column { for i, row in [1, 2] { \
+                             Box #[bg: 0x808080, width: 10, height: 10, \
+                                   translate: ((on ? 100 : 0), 0) with \
+                                   anim.stagger(linear(100ms, from: 0), 200ms, i)] {} \
+                         } } }";
+        let (mut interp, tree) = lower_named(staggered, "V");
+        interp.tick();
+        let xs = |interp: &mut Interpreter, ms: u32| {
+            interp.set_now_ms(ms);
+            let mut frame = byard_core::frame::RenderFrame::new();
+            interp.render(&tree, &mut frame, 400.0, 300.0);
+            frame
+                .instances()
+                .iter()
+                .map(|b| b.transform.translate[0])
+                .collect::<Vec<_>>()
+        };
+        xs(&mut interp, 0);
+        let on = interp.var_signal(&Symbol::intern("on")).unwrap();
+        interp.write_var(on, Value::Bool(true));
+        interp.tick();
+        xs(&mut interp, 0);
+        // 150 ms in: row 0 (no offset) has arrived, row 1 is still waiting out
+        // its 200 ms offset.
+        let seen = xs(&mut interp, 150);
+        assert!((seen[0] - 100.0).abs() < 1.0, "row 0 played, got {seen:?}");
+        assert!(seen[1].abs() < 1.0, "row 1 still waiting, got {seen:?}");
+        let seen = xs(&mut interp, 400);
+        assert!(
+            seen.iter().all(|x| (x - 100.0).abs() < 1.0),
+            "the whole cascade has played, got {seen:?}"
+        );
+    }
+
+    #[test]
+    fn a_layout_property_cannot_be_keyframed() {
+        // RFC-0025 §3 defers to RFC-0010: keyframes on a layout prop would
+        // relayout every frame (INV-8), so they are rejected like `with` is.
+        let parsed = parse(
+            "View V() { Box #[bg: 0x808080, height: 10, \
+             width: anim.keyframes(0%: 0, 100%: 200, duration: 1s)] }",
+        );
+        let mut interp = Interpreter::new();
+        let _ = interp.lower_view(&parsed.views[0], &[]);
+        assert!(
+            interp
+                .errors()
+                .iter()
+                .any(|e| matches!(e, CompileError::LayoutPropNotAnimatable { prop, .. } if prop == "width")),
+            "expected LayoutPropNotAnimatable, got {:?}",
+            interp.errors()
+        );
     }
 
     /// RFC-0005 `ScrollView`: content is clipped to the viewport and translated

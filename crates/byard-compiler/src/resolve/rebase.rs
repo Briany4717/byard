@@ -303,6 +303,18 @@ fn shift_expr(expr: &mut Expr, delta: u32) {
             shift_expr(left, delta);
             shift_expr(right, delta);
         }
+        Expr::KeyframeStep {
+            value,
+            easing,
+            span,
+            ..
+        } => {
+            shift(span, delta);
+            shift_expr(value, delta);
+            if let Some((_, easing_span)) = easing {
+                shift(easing_span, delta);
+            }
+        }
     }
 }
 

@@ -833,6 +833,11 @@ pub struct DecoratedBox {
     pub shadow_color: [f32; 4],
     /// Element opacity `0.0–1.0`.
     pub opacity: f32,
+    /// An optional linear colour ramp composited over the fill (RFC-0001 §3.1:
+    /// the `DecoratedBox` pipeline's declared remit is "rectangles with
+    /// border-radius, **gradients**, box-shadows"). `None` is the historical
+    /// behaviour — a flat `base.color`.
+    pub gradient: Option<Gradient>,
     /// Whether this decoration changed since the last tick.
     ///
     /// The encoder's analogue of [`TextLine::dirty`] for the `DecoratedBox`
@@ -861,8 +866,63 @@ impl Default for DecoratedBox {
             shadow_spread: 0.0,
             shadow_color: [0.0; 4],
             opacity: 1.0,
+            gradient: None,
             dirty: false,
         }
+    }
+}
+
+/// A three-stop linear colour ramp painted over a `DecoratedBox`'s fill
+/// (RFC-0001 §3.1's `DecoratedBox` remit).
+///
+/// The ramp runs along `angle` (0 = left→right, `π/2` = top→bottom) across the
+/// element's own box, from `from` at the start, through `mid` at `mid_pos`, to
+/// `to` at the end — enough for the ordinary two-stop case (`mid` on the line
+/// between them) *and* for the highlight-band shape a shimmer needs
+/// (transparent → bright → transparent), which two stops cannot express.
+///
+/// Each stop is straight (non-premultiplied) linear-space RGBA and the ramp is
+/// composited **over** the fill, so a translucent ramp is a wash over the
+/// element's own colour rather than a replacement.
+///
+/// `offset` shifts the ramp along its own axis and **wraps**: that is what makes
+/// an animated offset (RFC-0010 `with`, RFC-0025 `repeat: infinite`) a seamless
+/// travelling sweep instead of a jump at the end of each play.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct Gradient {
+    /// Ramp direction in radians.
+    pub angle: f32,
+    /// Colour at the start of the ramp.
+    pub from: [f32; 4],
+    /// Colour at `mid_pos`.
+    pub mid: [f32; 4],
+    /// Colour at the end of the ramp.
+    pub to: [f32; 4],
+    /// Where `mid` sits along the ramp, `0.0..=1.0`.
+    pub mid_pos: f32,
+    /// Phase shift along the ramp, wrapping at 1.0.
+    pub offset: f32,
+}
+
+impl Gradient {
+    /// A two-stop ramp: `mid` is the midpoint of `from`/`to`, so the result is
+    /// an ordinary linear gradient with no third stop to reason about.
+    #[must_use]
+    pub fn two_stop(angle: f32, from: [f32; 4], to: [f32; 4]) -> Self {
+        Self {
+            angle,
+            from,
+            mid: std::array::from_fn(|i| f32::midpoint(from[i], to[i])),
+            to,
+            mid_pos: 0.5,
+            offset: 0.0,
+        }
+    }
+
+    /// The unit direction vector of the ramp.
+    #[must_use]
+    pub fn direction(&self) -> [f32; 2] {
+        [self.angle.cos(), self.angle.sin()]
     }
 }
 

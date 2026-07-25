@@ -110,6 +110,33 @@ struct KeyframeBlend<'a> {
     t: f32,
 }
 
+/// The source range a list of members covers, as one span — the union of their
+/// own spans. Used to name a `when` branch's extent so its animation state can
+/// be dropped with it.
+fn members_span(members: &[Member]) -> Span {
+    let mut span = Span::new(u32::MAX, 0);
+    for member in members {
+        let member_span = match member {
+            Member::Var { span, .. }
+            | Member::Let { span, .. }
+            | Member::Fn { span, .. }
+            | Member::Inject { span, .. }
+            | Member::For { span, .. }
+            | Member::When { span, .. }
+            | Member::Style { span, .. } => *span,
+            Member::Element(el) => el.span,
+            Member::Expr(expr) => expr.span(),
+        };
+        span.start = span.start.min(member_span.start);
+        span.end = span.end.max(member_span.end);
+    }
+    if span.end <= span.start {
+        Span::new(0, 0)
+    } else {
+        span
+    }
+}
+
 /// A fingerprint of a repeating animation's endpoints, used to notice a
 /// retarget (RFC-0025 §5).
 ///
@@ -218,8 +245,13 @@ pub enum RenderNode {
         /// The reactive scope projecting the text content.
         content: ScopeId,
     },
-    /// A flexible gap (layout-only).
-    Spacer,
+    /// A flexible gap (layout-only, RFC-0005): absorbs its parent's free space
+    /// along the main axis. `attrs` carries `grow`/`basis`, which is why this is
+    /// not a unit variant — a `Spacer` that ignored them could not flex.
+    Spacer {
+        /// `grow` (default 1) and `basis` (default 0).
+        attrs: Vec<Attr>,
+    },
     /// A texture-sampled image (M21).
     Image {
         /// Styling attributes (width, height, fit, radii, opacity, …).
@@ -319,6 +351,13 @@ struct WhenPool {
     then_ast: Vec<Member>,
     /// The `else` branch AST (empty when there is no `else`).
     els_ast: Vec<Member>,
+    /// Source range each branch spans, so a branch that goes away can take its
+    /// animation state with it (RFC-0025: an animation lives and dies with its
+    /// element). `(then, else)`.
+    branch_spans: (Span, Span),
+    /// Which branch was selected on the previous reconcile, or `None` before the
+    /// first one — the edge detector for that unmount.
+    last_take: Option<bool>,
     /// User-view names in scope at lower time.
     known_views: Vec<String>,
     /// Instance env captured at lower time (RFC-0019), restored when lowering.
@@ -555,6 +594,9 @@ fn shadow_decorated(
         shadow_spread: sh.spread,
         shadow_color: sh.color,
         opacity,
+        // A shadow cast is geometry, not fill: the element's own ramp belongs to
+        // its surface, never to the blurred silhouette beneath it.
+        gradient: None,
         dirty: true,
     }
 }
@@ -1777,7 +1819,7 @@ impl Interpreter {
                     }
                 }
             }
-            "Spacer" => RenderNode::Spacer,
+            "Spacer" => RenderNode::Spacer { attrs },
             // Image intrinsic → TextureSampler pipeline (M21).
             // Syntax: Image("path.jpg") #[fit: .cover, width: 200, height: 150]
             "Image" => {
@@ -2141,12 +2183,17 @@ impl Interpreter {
                 let pool = self.when_pools.len();
                 let env_snapshot = self.capture_env_snapshot();
                 self.when_pools.push(WhenPool {
+                    branch_spans: (
+                        members_span(then),
+                        els.as_deref().map_or(Span::new(0, 0), members_span),
+                    ),
                     then_ast: then.clone(),
                     els_ast: els.clone().unwrap_or_default(),
                     known_views: known_views.iter().map(|s| (*s).to_string()).collect(),
                     env_snapshot,
                     then: None,
                     els: None,
+                    last_take: None,
                 });
                 out.push(RenderNode::When {
                     cond: cond_scope,
@@ -2488,6 +2535,20 @@ impl Interpreter {
                         .binding_value(*cond)
                         .and_then(|v| v.as_bool())
                         .unwrap_or(false);
+                    // RFC-0025: an animation lives and dies with its element, so a
+                    // branch that has just been unmounted drops its animation
+                    // state — a spinner that comes back starts its turn again
+                    // rather than resuming a stale phase. (This is the opposite of
+                    // §2's *offscreen* rule, where the element is still mounted and
+                    // must resume exactly where it paused.)
+                    let previous = self.when_pools[*pool].last_take;
+                    if previous.is_some_and(|was| was != take) {
+                        let (then_span, els_span) = self.when_pools[*pool].branch_spans;
+                        let gone = if take { els_span } else { then_span };
+                        self.drop_animation_state(gone);
+                        dirtied = true;
+                    }
+                    self.when_pools[*pool].last_take = Some(take);
                     // Lazily lower the taken branch on first selection (so an
                     // untaken recursive branch never lowers), then descend into it
                     // to reconcile any nested `when`/`for`.
@@ -3193,8 +3254,14 @@ impl Interpreter {
             RenderNode::When { .. } | RenderNode::For { .. } => {
                 unreachable!("when/for are expanded by build_children before build_layout_tree")
             }
-            RenderNode::Spacer => {
-                let id = self.atlas.add_leaf(LeafSize::new(0.0, 12.0))?;
+            RenderNode::Spacer { attrs } => {
+                // RFC-0005: a `Spacer` is a *flexible* gap — `grow` (default 1)
+                // is its share of the parent's free space, `basis` its size
+                // before growing. Both are read through the ordinary prop path,
+                // so they are reactive (and animatable) like any other value.
+                let grow = self.eval_float_prop(attrs, "grow").unwrap_or(1.0) as f32;
+                let basis = self.eval_float_prop(attrs, "basis").unwrap_or(0.0) as f32;
+                let id = self.atlas.add_flex_leaf(grow, basis)?;
                 flat_ids.push(id);
                 Ok(id)
             }
@@ -3666,7 +3733,7 @@ impl Interpreter {
             // flow — its 0×0 leaf holds a slot in the flat-id cursor (already
             // advanced above) while its children are emitted separately in the
             // deferred overlay phase (RFC-0017).
-            RenderNode::Spacer | RenderNode::Overlay { .. } => {}
+            RenderNode::Spacer { .. } | RenderNode::Overlay { .. } => {}
             RenderNode::Text {
                 attrs,
                 state_blocks,
@@ -3858,6 +3925,10 @@ impl Interpreter {
                             .map_or(1.0, |v| v as f32);
                     child_opacity = opacity;
                     let translucent = (opacity - 1.0).abs() > f32::EPSILON;
+                    // RFC-0001 §3.1: a gradient is a `DecoratedBox` feature, so
+                    // its presence promotes the box off the flat SolidBox path
+                    // exactly as a border/shadow/opacity does.
+                    let gradient = self.resolve_gradient(paint_attrs);
                     // `Toggle`/`Slider` own their visuals (track/fill/thumb) and
                     // treat `bg` as the *accent* colour, not a full-rect fill —
                     // painting the rect here would draw a slab behind the control.
@@ -3865,10 +3936,14 @@ impl Interpreter {
                         name.as_str(),
                         "Toggle" | "Slider" | "Checkbox" | "RadioButton"
                     );
-                    if let (false, Some(color)) = (owns_visuals, bg) {
+                    // A gradient is a fill in its own right, so a box with a ramp
+                    // and no `bg` still has a surface to paint (the ramp over a
+                    // transparent base).
+                    if !owns_visuals && (bg.is_some() || gradient.is_some()) {
                         let base = byard_core::BoxInstance {
                             rect: [rect.x, rect.y, rect.width, rect.height],
-                            color: super::intrinsics::color_to_rgba(color, false),
+                            color: bg
+                                .map_or([0.0; 4], |c| super::intrinsics::color_to_rgba(c, false)),
                             radii,
                             transform,
                         };
@@ -3881,14 +3956,15 @@ impl Interpreter {
                         for sh in shadows.iter().rev() {
                             frame.push_decorated(shadow_decorated(base, opacity, sh));
                         }
-                        if translucent {
-                            // A translucent box blends its fill as one unit on the
-                            // decorated pipeline (leaf showcase boxes); keep it whole.
+                        if translucent || gradient.is_some() {
+                            // A translucent or gradient-filled box blends its fill
+                            // as one unit on the decorated pipeline; keep it whole.
                             frame.push_decorated(byard_core::frame::DecoratedBox {
                                 base,
                                 border_width,
                                 border_color: border_rgba,
                                 opacity,
+                                gradient,
                                 // Re-walked and re-emitted every tick;
                                 // mirror Text's always-dirty lowering.
                                 dirty: true,
@@ -6182,6 +6258,103 @@ impl Interpreter {
         s
     }
 
+    /// Resolves the `gradient` prop into a [`Gradient`](byard_core::frame::Gradient)
+    /// — a linear colour ramp painted over the element's fill (RFC-0001 §3.1's
+    /// `DecoratedBox` remit).
+    ///
+    /// Surface (named fields, any order, all optional):
+    /// `gradient: (angle: 90deg, from: 0x00FFFFFF, mid: 0x33FFFFFF, to: 0x00FFFFFF, mid_pos: 0.5)`.
+    /// A bare `mid` is what makes a *band* (transparent → bright → transparent)
+    /// expressible; omit it and the ramp is an ordinary two-stop fade. The
+    /// separate `gradient_offset` prop shifts the ramp along its axis and, being
+    /// an ordinary numeric prop, animates through the RFC-0010/RFC-0025
+    /// chokepoints — a looping offset is a travelling sweep.
+    fn resolve_gradient(&mut self, attrs: &[Attr]) -> Option<byard_core::frame::Gradient> {
+        let value = attrs.iter().find_map(|a| match (&a.name, &a.kind) {
+            (n, AttrKind::Prop { value }) if n.as_str() == "gradient" => Some(value),
+            _ => None,
+        })?;
+        let Expr::Tuple(args, span) = value else {
+            self.errors.push(CompileError::AttributeTypeMismatch {
+                span: value.span(),
+                expected: "a gradient, e.g. `(angle: 90deg, from: 0x00FFFFFF, to: 0xFFFFFFFF)`"
+                    .to_string(),
+            });
+            return None;
+        };
+        let mut angle = 0.0_f32;
+        let (mut from, mut to, mut mid) = (None, None, None);
+        let mut mid_pos = 0.5_f32;
+        for arg in args {
+            let Some(field) = arg.name.as_ref().map(crate::Symbol::as_str) else {
+                self.errors.push(CompileError::ConflictingSpacingField {
+                    span: *span,
+                    message: "`gradient` takes named fields \
+                              (angle / from / mid / to / mid_pos)"
+                        .to_string(),
+                });
+                return None;
+            };
+            match field {
+                "angle" => angle = self.eval_num(&arg.value),
+                "from" => from = Some(self.eval_gradient_stop(&arg.value)),
+                "to" => to = Some(self.eval_gradient_stop(&arg.value)),
+                "mid" => mid = Some(self.eval_gradient_stop(&arg.value)),
+                "mid_pos" => mid_pos = self.eval_num(&arg.value).clamp(0.0, 1.0),
+                unknown => {
+                    let hint = crate::util::closest_match(
+                        unknown,
+                        ["angle", "from", "mid", "to", "mid_pos"],
+                    )
+                    .map(String::from);
+                    self.errors.push(CompileError::UnknownAttribute {
+                        span: arg.value.span(),
+                        name: format!("gradient.{unknown}"),
+                        hint: hint.map(|h| format!("gradient.{h}")),
+                    });
+                }
+            }
+        }
+        // A ramp needs two ends; a single stop is a flat wash the caller could
+        // have written as `bg`, so it is a mistake worth naming.
+        let (Some(from), Some(to)) = (from, to) else {
+            self.errors.push(CompileError::AttributeTypeMismatch {
+                span: *span,
+                expected: "a gradient with both `from:` and `to:` colours".to_string(),
+            });
+            return None;
+        };
+        let offset = self
+            .eval_float_prop(attrs, "gradient_offset")
+            .map_or(0.0, |v| v as f32);
+        Some(byard_core::frame::Gradient {
+            angle,
+            from,
+            mid: mid.unwrap_or_else(|| std::array::from_fn(|i| f32::midpoint(from[i], to[i]))),
+            to,
+            mid_pos,
+            offset,
+        })
+    }
+
+    /// Evaluates one gradient stop colour to linear RGBA. A `with`-animated stop
+    /// is driven through the OKLab colour path (RFC-0010 A3) like any other
+    /// animated colour, so a gradient can crossfade.
+    fn eval_gradient_stop(&mut self, expr: &Expr) -> [f32; 4] {
+        let packed = match expr {
+            Expr::Animated {
+                value: target,
+                anim,
+                span,
+            } => self.eval_animated_color(target, anim, *span),
+            other if crate::interp::anim::is_keyframes_call(other) => {
+                self.eval_keyframe_color(other).unwrap_or(0)
+            }
+            other => self.eval_pure(other).as_int().unwrap_or(0),
+        };
+        super::intrinsics::color_rgba_auto(packed)
+    }
+
     /// Evaluates a numeric shadow field (offset/blur/spread) to `f32`.
     #[allow(clippy::cast_possible_truncation)]
     fn eval_num(&mut self, e: &Expr) -> f32 {
@@ -7352,8 +7525,14 @@ impl Interpreter {
         // A goal change restarts the sequence from its own start value — an
         // oscillation has two fixed endpoints, so there is nothing to reseed
         // `from` from (unlike the interruptible one-shot spring).
-        let (elapsed, honor_delay) =
-            self.loop_elapsed(key, endpoint_key(motions), spec.delay.is_cancellable());
+        // A `restart:` witness joins the endpoints in the fingerprint, so a
+        // change to it restarts the timeline exactly as a retarget would — the
+        // reference-free "play that again" (RFC-0025 §5's replay case). It is
+        // never *cancellable*: a replay is meant to run its delays again.
+        let restart = spec.restart.map(|expr| self.restart_key(expr));
+        let fingerprint = endpoint_key(motions) ^ restart.unwrap_or(0);
+        let cancellable = spec.delay.is_cancellable() && restart.is_none();
+        let (elapsed, honor_delay) = self.loop_elapsed(key, fingerprint, cancellable);
         // §5: on a *retarget* a `delay:` is cancelled — the animation heads for
         // the new target at once, so a delayed transition can never overwrite a
         // more recent interaction — while a stagger's offset is honoured again
@@ -7421,8 +7600,10 @@ impl Interpreter {
         let delay_ms = self.eval_delay(&track.delay);
         // A keyframe track has no endpoints to retarget: its steps *are* the
         // values, so a reactive step just re-blends where the sequence already
-        // is rather than restarting it.
-        let (elapsed, _) = self.loop_elapsed(key, 0, false);
+        // is rather than restarting it. An explicit `restart:` witness is the one
+        // thing that does start it over.
+        let fingerprint = track.restart.map_or(0, |expr| self.restart_key(expr));
+        let (elapsed, _) = self.loop_elapsed(key, fingerprint, false);
         if elapsed < delay_ms {
             self.any_active = true;
             let first = track.steps.first()?.value;
@@ -7475,6 +7656,27 @@ impl Interpreter {
         }
     }
 
+    /// Hashes a `restart:` witness value (RFC-0025 §5's replay case).
+    ///
+    /// Only *change* matters, never order or magnitude, so any value the language
+    /// can produce is usable as a replay trigger — a counter, a bool, a selected
+    /// id, a route name.
+    fn restart_key(&mut self, expr: &Expr) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        match self.eval_pure(expr) {
+            Value::Int(n) => n.hash(&mut hasher),
+            Value::Float(f) => f.to_bits().hash(&mut hasher),
+            Value::Bool(b) => b.hash(&mut hasher),
+            Value::Str(s) => s.hash(&mut hasher),
+            // A structural value hashes through its rendering — coarse, but a
+            // replay trigger only needs "is this the same as last frame?".
+            other => format!("{other:?}").hash(&mut hasher),
+        }
+        // Never 0: that is the "no witness" sentinel the keyframe path uses.
+        hasher.finish() | 1
+    }
+
     /// Evaluates `expr` as an `f32`, falling back to `default` for a
     /// non-numeric result (the checker restricts these positions to numbers).
     #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
@@ -7484,6 +7686,24 @@ impl Interpreter {
             Value::Int(n) => n as f32,
             _ => default,
         }
+    }
+
+    /// Forgets every animation whose source node lies inside `range` — what an
+    /// unmounted `when` branch takes with it (RFC-0025: "no separate stop
+    /// animation API — the animation lives and dies with its element").
+    ///
+    /// Animation state is keyed by the source span of the `with`/keyframes node,
+    /// so "inside this branch" is exactly "inside this source range". Rare
+    /// (branch flips only), so a linear sweep of the three maps is the right
+    /// trade against paying for a reverse index every frame.
+    fn drop_animation_state(&mut self, range: Span) {
+        if range.end <= range.start {
+            return;
+        }
+        let inside = |key: &Span| key.start >= range.start && key.end <= range.end;
+        self.animations.retain(|key, _| !inside(key));
+        self.color_animations.retain(|key, _| !inside(key));
+        self.anim_clocks.retain(|key, _| !inside(key));
     }
 
     /// Advances the RFC-0025 timeline keyed by `key`, returning the milliseconds
@@ -10929,11 +11149,11 @@ mod tests {
     }
 
     #[test]
-    fn an_unmounted_loop_pauses_and_resumes_in_phase() {
-        // RFC-0025 §2: an animation that stops being drawn (here a collapsed
-        // `when` branch — the same thing viewport culling does) is *paused*, not
-        // left running: while it is away the app idles, and when it comes back it
-        // continues from where it stopped instead of jumping ahead.
+    fn an_unmounted_branch_starts_its_animation_over() {
+        // RFC-0025: "no separate stop-animation API — the animation lives and
+        // dies with its element". A collapsed `when` branch really *unmounts*,
+        // so its animation state goes with it: when the branch comes back the
+        // spinner starts its turn again instead of resuming a stale phase.
         let src = "View V() { var shown: Bool = true \
                    when shown { \
                        Box #[bg: 0x808080, width: 10, height: 10, \
@@ -10957,16 +11177,63 @@ mod tests {
         assert!((x.unwrap() - 25.0).abs() < 2.0, "a quarter in, got {x:?}");
         assert!(active);
 
-        // Hide it for two whole periods.
+        // Hide it: nothing is drawn, and the app can idle.
         let shown = interp.var_signal(&Symbol::intern("shown")).unwrap();
         interp.write_var(shown, Value::Bool(false));
         interp.tick();
         let (x, active) = render(&mut interp, 900);
         assert_eq!(x, None, "nothing is drawn while hidden");
-        assert!(!active, "an offscreen loop costs no frames");
+        assert!(!active, "an unmounted loop costs no frames");
 
-        // Show it again: it resumes a quarter in, not wherever wall time landed.
+        // Show it again: a fresh mount, so a fresh turn from `from`.
         interp.write_var(shown, Value::Bool(true));
+        interp.tick();
+        let (x, _) = render(&mut interp, 900);
+        assert!(x.unwrap().abs() < 2.0, "a remount starts over, got {x:?}");
+        let (x, _) = render(&mut interp, 1_000);
+        assert!(
+            (x.unwrap() - 25.0).abs() < 3.0,
+            "…and runs from there, got {x:?}"
+        );
+    }
+
+    #[test]
+    fn an_animation_that_stops_being_drawn_pauses_and_resumes_in_phase() {
+        // RFC-0025 §2, the *other* case: the element is still mounted, it just
+        // is not being painted (here a list that empties and refills — the same
+        // thing viewport culling does to a windowed row). That is a **pause**:
+        // the app idles while it is away and the motion continues exactly where
+        // it stopped, with no jump.
+        let src = "View V() { var rows: List<Int> = [1] \
+                   Column { for row in rows { \
+                       Box #[bg: 0x808080, width: 10, height: 10, \
+                             translate: (100, 0) with anim.linear(400ms, from: 0, \
+                             repeat: infinite)] {} \
+                   } } }";
+        let (mut interp, tree) = lower_named(src, "V");
+        assert!(interp.errors().is_empty(), "{:?}", interp.errors());
+        interp.tick();
+        let render = |interp: &mut Interpreter, ms: u32| {
+            interp.set_now_ms(ms);
+            let mut frame = byard_core::frame::RenderFrame::new();
+            interp.render(&tree, &mut frame, 400.0, 300.0);
+            (
+                frame.instances().first().map(|b| b.transform.translate[0]),
+                interp.has_active_animations(),
+            )
+        };
+        render(&mut interp, 0);
+        let (x, _) = render(&mut interp, 100);
+        assert!((x.unwrap() - 25.0).abs() < 2.0, "a quarter in, got {x:?}");
+
+        let rows = interp.var_signal(&Symbol::intern("rows")).unwrap();
+        interp.write_var(rows, Value::List(vec![]));
+        interp.tick();
+        let (x, active) = render(&mut interp, 900);
+        assert_eq!(x, None, "nothing is drawn while it is away");
+        assert!(!active, "and it costs no frames");
+
+        interp.write_var(rows, Value::List(vec![Value::Int(1)]));
         interp.tick();
         let (x, _) = render(&mut interp, 900);
         assert!(
@@ -11042,6 +11309,88 @@ mod tests {
             seen.iter().all(|x| (x - 100.0).abs() < 1.0),
             "the whole cascade has played, got {seen:?}"
         );
+    }
+
+    #[test]
+    fn a_restart_witness_replays_the_animation_in_order() {
+        // RFC-0025 §5's replay case: an entrance's endpoints never change, so
+        // nothing would ever retarget it. `restart:` is the reference-free "play
+        // that again" — and because a replay is intentional sequencing, the
+        // stagger offsets are honoured again rather than cancelled.
+        let src = "View V() { var attempt: Int = 0 \
+                   Column { for i, row in [1, 2] { \
+                       Box #[bg: 0x808080, width: 10, height: 10, \
+                             translate: (100, 0) with \
+                             anim.stagger(linear(100ms, from: 0), 200ms, i, restart: attempt)] {} \
+                   } } }";
+        let (mut interp, tree) = lower_named(src, "V");
+        assert!(interp.errors().is_empty(), "{:?}", interp.errors());
+        interp.tick();
+        let xs = |interp: &mut Interpreter, ms: u32| {
+            interp.set_now_ms(ms);
+            let mut frame = byard_core::frame::RenderFrame::new();
+            interp.render(&tree, &mut frame, 400.0, 300.0);
+            frame
+                .instances()
+                .iter()
+                .map(|b| b.transform.translate[0])
+                .collect::<Vec<_>>()
+        };
+        // The first cascade plays out.
+        xs(&mut interp, 0);
+        let seen = xs(&mut interp, 600);
+        assert!(
+            seen.iter().all(|x| (x - 100.0).abs() < 1.0),
+            "both rows arrived, got {seen:?}"
+        );
+
+        // Bump the witness: the cascade runs again, in item order.
+        let attempt = interp.var_signal(&Symbol::intern("attempt")).unwrap();
+        interp.write_var(attempt, Value::Int(1));
+        interp.tick();
+        let seen = xs(&mut interp, 600);
+        assert!(
+            seen[0].abs() < 1.0 && seen[1].abs() < 1.0,
+            "the replay starts both rows over, got {seen:?}"
+        );
+        let seen = xs(&mut interp, 700);
+        assert!(
+            (seen[0] - 100.0).abs() < 1.0,
+            "row 0 has replayed, got {seen:?}"
+        );
+        assert!(
+            seen[1].abs() < 1.0,
+            "row 1 is still waiting out its offset, got {seen:?}"
+        );
+        let seen = xs(&mut interp, 950);
+        assert!(
+            seen.iter().all(|x| (x - 100.0).abs() < 1.0),
+            "the whole cascade replayed, got {seen:?}"
+        );
+    }
+
+    #[test]
+    fn a_restart_witness_also_replays_a_keyframe_sequence() {
+        let src = "View V() { var attempt: Int = 0 \
+                   Box #[bg: 0x808080, width: 10, height: 10, \
+                         translate: anim.keyframes(0%: 0, 100%: 100, duration: 400ms, \
+                         restart: attempt)] {} }";
+        let (mut interp, tree) = lower_named(src, "V");
+        assert!(interp.errors().is_empty(), "{:?}", interp.errors());
+        interp.tick();
+        let at = |interp: &mut Interpreter, ms: u32| {
+            interp.set_now_ms(ms);
+            let mut frame = byard_core::frame::RenderFrame::new();
+            interp.render(&tree, &mut frame, 400.0, 300.0);
+            translate_x(&frame)
+        };
+        at(&mut interp, 0);
+        assert!((at(&mut interp, 400) - 100.0).abs() < 1.0, "played out");
+        let attempt = interp.var_signal(&Symbol::intern("attempt")).unwrap();
+        interp.write_var(attempt, Value::Int(1));
+        interp.tick();
+        assert!(at(&mut interp, 400).abs() < 1.0, "the sequence starts over");
+        assert!((at(&mut interp, 600) - 50.0).abs() < 3.0, "and runs again");
     }
 
     #[test]
@@ -15597,6 +15946,173 @@ mod tests {
             .find(|d| (d.base.color[3] - 0.5).abs() < 0.01)
             .expect("the tint lowers to a translucent decorated fill");
         assert_eq!(wash.base.rect, [0.0, 0.0, 100.0, 100.0]);
+    }
+
+    // ── Gradient fills (RFC-0001 §3.1) ──────────────────────────────────
+
+    #[test]
+    fn a_gradient_promotes_the_box_and_resolves_its_ramp() {
+        let (_interp, frame) = rendered_frame(
+            "View V() { Box #[width: 200, height: 40, bg: 0x2B2930, \
+             gradient: (angle: 90deg, from: 0x00FFFFFF, mid: 0x40FFFFFF, to: 0x00FFFFFF, \
+             mid_pos: 0.25), gradient_offset: 0.5] {} }",
+        );
+        assert!(
+            frame.instances().is_empty(),
+            "a gradient promotes the box off the flat SolidBox path"
+        );
+        let g = frame.decorated()[0]
+            .gradient
+            .expect("the ramp reaches the frame");
+        assert!(
+            (g.angle - std::f32::consts::FRAC_PI_2).abs() < 1e-5,
+            "90deg is canonicalized to radians by the lexer, got {}",
+            g.angle
+        );
+        assert!((g.mid_pos - 0.25).abs() < 1e-6);
+        assert!((g.offset - 0.5).abs() < 1e-6);
+        // Straight-alpha stops: a transparent white end and a 25 %-alpha middle.
+        assert!(
+            g.from[3] < 0.01 && g.to[3] < 0.01,
+            "the ends are transparent"
+        );
+        assert!(
+            (g.mid[3] - 0.25).abs() < 0.01,
+            "the band's alpha, got {:?}",
+            g.mid
+        );
+        assert!(g.mid[0] > 0.99, "…and it is white");
+    }
+
+    #[test]
+    fn an_omitted_mid_stop_is_the_midpoint_of_the_two_ends() {
+        let (_interp, frame) = rendered_frame(
+            "View V() { Box #[width: 100, height: 20, \
+             gradient: (from: 0xFF000000, to: 0xFFFFFFFF)] {} }",
+        );
+        let g = frame.decorated()[0].gradient.unwrap();
+        // A two-stop ramp: the implicit middle is exactly halfway, so the ramp
+        // is indistinguishable from a plain linear gradient.
+        for channel in 0..3 {
+            assert!(
+                (g.mid[channel] - f32::midpoint(g.from[channel], g.to[channel])).abs() < 1e-6,
+                "channel {channel} must be the midpoint"
+            );
+        }
+        assert!(
+            !frame.decorated()[0].base.color[3].is_nan(),
+            "a gradient with no `bg` still paints a surface"
+        );
+    }
+
+    #[test]
+    fn a_gradient_offset_animates_like_any_other_number() {
+        // The travelling-sweep case: `gradient_offset` is an ordinary numeric
+        // prop, so RFC-0025's looping keyframes drive it with no extra plumbing.
+        let src = "View V() { Box #[width: 100, height: 20, bg: 0x222222, \
+                   gradient: (from: 0x00FFFFFF, mid: 0x40FFFFFF, to: 0x00FFFFFF), \
+                   gradient_offset: anim.keyframes(0%: 0.0, 100%: 1.0, \
+                   duration: 400ms, loop: true)] {} }";
+        let seen = sample_over_time(src, &[0, 200, 400], |f| {
+            f.decorated()[0].gradient.map_or(-1.0, |g| g.offset)
+        });
+        assert!((seen[0].0).abs() < 0.01, "starts at 0, got {}", seen[0].0);
+        assert!((seen[1].0 - 0.5).abs() < 0.05, "halfway, got {}", seen[1].0);
+        assert!((seen[2].0).abs() < 0.01, "wrapped, got {}", seen[2].0);
+        assert!(
+            seen.iter().all(|(_, active)| *active),
+            "a loop keeps frames coming"
+        );
+    }
+
+    #[test]
+    fn a_malformed_gradient_is_reported_not_ignored() {
+        let errs = |src: &str| {
+            let parsed = parse(src);
+            let mut interp = Interpreter::new();
+            let tree = interp.lower_view(&parsed.views[0], &[]);
+            let mut frame = byard_core::frame::RenderFrame::new();
+            interp.render(&tree, &mut frame, 400.0, 300.0);
+            interp.errors().to_vec()
+        };
+        // A single end is a flat wash the author could have written as `bg`.
+        assert!(matches!(
+            errs("View V() { Box #[width: 10, height: 10, gradient: (from: 0xFF0000)] {} }")
+                .first(),
+            Some(CompileError::AttributeTypeMismatch { .. })
+        ));
+        // A misspelt field names the fix instead of silently doing nothing.
+        assert!(matches!(
+            errs("View V() { Box #[width: 10, height: 10, \
+                  gradient: (from: 0xFF0000, to: 0x00FF00, angel: 90deg)] {} }")
+                .first(),
+            Some(CompileError::UnknownAttribute { hint: Some(h), .. }) if h == "gradient.angle"
+        ));
+        // Not a tuple at all.
+        assert!(matches!(
+            errs("View V() { Box #[width: 10, height: 10, gradient: 0xFF0000] {} }").first(),
+            Some(CompileError::AttributeTypeMismatch { .. })
+        ));
+    }
+
+    // ── Spacer flexes (RFC-0005) ─────────────────────────────────────────
+
+    #[test]
+    fn a_spacer_absorbs_the_free_space_of_its_row() {
+        // RFC-0005: `Spacer` is a *flexible* gap (`grow`, default 1). Before it
+        // flexed, a trailing item sat glued to the leading one instead of at the
+        // far end of the row.
+        let (_interp, frame) = rendered_frame(
+            "View V() { Row #[width: 300, height: 20] { \
+                 Box #[bg: 0xFF0000, width: 20, height: 20] {} \
+                 Spacer \
+                 Box #[bg: 0x00FF00, width: 20, height: 20] {} \
+             } }",
+        );
+        let x_of = |red: bool| {
+            frame
+                .instances()
+                .iter()
+                .find(|b| (b.color[0] > 0.8) == red && (b.color[1] > 0.8) != red)
+                .map(|b| b.rect[0])
+                .expect("both boxes are emitted")
+        };
+        assert!((x_of(true) - 0.0).abs() < 0.5, "the first box stays put");
+        assert!(
+            (x_of(false) - 280.0).abs() < 0.5,
+            "the second is pushed to the far end, got {}",
+            x_of(false)
+        );
+    }
+
+    #[test]
+    fn a_spacer_honours_grow_and_basis() {
+        // `grow: 0` degenerates to a fixed `basis`-sized gap; two spacers with
+        // different `grow` split the free space in proportion.
+        let (_interp, frame) = rendered_frame(
+            "View V() { Row #[width: 300, height: 20] { \
+                 Spacer #[grow: 0, basis: 40] \
+                 Box #[bg: 0xFF0000, width: 20, height: 20] {} \
+                 Spacer #[grow: 1] \
+                 Box #[bg: 0x00FF00, width: 20, height: 20] {} \
+                 Spacer #[grow: 3] \
+             } }",
+        );
+        let x_of = |red: bool| {
+            frame
+                .instances()
+                .iter()
+                .find(|b| (b.color[0] > 0.8) == red && (b.color[1] > 0.8) != red)
+                .map(|b| b.rect[0])
+                .unwrap()
+        };
+        assert!((x_of(true) - 40.0).abs() < 0.5, "the fixed 40px gap held");
+        // 300 − 40 − 20 − 20 = 220 free, split 1 : 3 → 55 then 165.
+        assert!(
+            (x_of(false) - (40.0 + 20.0 + 55.0)).abs() < 1.0,
+            "the free space split 1:3, got {}",
+            x_of(false)
+        );
     }
 
     #[test]

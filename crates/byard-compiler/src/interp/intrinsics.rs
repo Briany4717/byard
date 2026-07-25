@@ -131,6 +131,12 @@ const DECORATION: &[(&str, PropType)] = &[
     ("border", PropType::Color),
     ("border_width", PropType::Int),
     ("shadow", PropType::Str),
+    // RFC-0001 §3.1: the `DecoratedBox` pipeline's declared remit includes
+    // gradients. `gradient` is a named tuple (validated at lower time, like
+    // `shadow`); `gradient_offset` is an ordinary number, so it animates through
+    // the RFC-0010/RFC-0025 chokepoints for free.
+    ("gradient", PropType::Str),
+    ("gradient_offset", PropType::Float),
 ];
 /// Paint-time transform props (RFC-0011). `opacity` is deliberately **not**
 /// repeated here — it already lives in [`DECORATION`] and is wired end to

@@ -707,6 +707,47 @@ impl LayoutAtlas {
         Ok(id)
     }
 
+    /// Adds a **flexible leaf** — a node with no intrinsic size that absorbs the
+    /// free space of its parent's main axis (RFC-0005 `Spacer`: "flexible gap",
+    /// `grow` / `basis`).
+    ///
+    /// `basis` is the leaf's main-axis size *before* growing (flex-basis, so the
+    /// parent's direction decides which axis it means) and `grow` is its share of
+    /// whatever is left over. It never shrinks below `basis`. A `grow` of `0`
+    /// degenerates to a fixed `basis`-sized gap, which is what makes `Spacer
+    /// #[grow: 0, basis: 12]` an ordinary spacer.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the atlas is in the `Computed` state. Call [`Self::clear`]
+    /// before adding new nodes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AtlasError::Backend`] if the backend refuses the node.
+    pub fn add_flex_leaf(&mut self, grow: f32, basis: f32) -> Result<AtlasNodeId, AtlasError> {
+        self.assert_building("add_flex_leaf");
+
+        let style = Style {
+            flex_basis: Dimension::from_length(basis.max(0.0)),
+            flex_grow: grow.max(0.0),
+            flex_shrink: 0.0,
+            ..Default::default()
+        };
+
+        let next_index = self.next_target_index();
+        let node = self
+            .tree
+            .new_leaf_with_context(style, next_index)
+            .map_err(|e| AtlasError::from_taffy(&e))?;
+        let id = AtlasNodeId {
+            node_id: node,
+            atlas_id: self.instance_id,
+        };
+        self.nodes_by_index.push(id);
+        Ok(id)
+    }
+
     /// Adds a **wrapping `Text` leaf** (RFC-0005 default wrap): a leaf whose size
     /// is resolved by the [`TextSizer`](crate::text::TextSizer) callback during
     /// [`compute`](Self::compute), so it reflows to the width its parent offers.

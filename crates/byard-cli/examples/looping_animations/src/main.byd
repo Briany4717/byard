@@ -16,21 +16,34 @@
 //      `repeat: infinite, reverse: true` turns one spring into an oscillation.
 //   4. COLOUR PULSE: the "LIVE" chip crossfades between purple and red
 //      *through OKLab* — the mid-points stay saturated, never muddy grey.
-//   5. SHIMMER: the highlight band sweeps across the three grey placeholder
-//      rows, fading in and out as it goes (a 4-step keyframe sequence).
+//   5. SHIMMER: a highlight sweeps *through* each grey bar — a gradient inside
+//      the bar's own fill, slid by an animated `gradient_offset`, so it is
+//      clipped to the bar, fades at both ends, and loops with no seam.
 //   6. STAGGER: press "Replay entrance" — the five rows fade and slide up one
 //      after another, 90 ms apart, from a single written animation
-//      (`anim.stagger(…, 90ms, i)` over the `for` loop's index `i`).
+//      (`anim.stagger(…, 90ms, i, restart: entrance)` over the `for` loop's
+//      index `i`). The counter on the right shows which run you are watching.
 //   7. FINITE REPEAT: the amber square bounces exactly three times and stops,
 //      holding its final position — `repeat: 3`.
 //   8. START / STOP: press "Stop" — every looping animation unmounts with its
 //      element and the app goes fully idle (0 frames, `byard dev` shows the
-//      frame counter freeze). Press "Start": they resume in phase.
+//      frame counter freeze). Press "Start" and they begin again from the top:
+//      an animation lives and dies with its element.
 View Main() {
     var loading = true
     var entrance = 0
 
     let rows = ["Inbox", "Starred", "Snoozed", "Sent", "Archive"]
+
+    // One skeleton bar: its own fill *plus* a highlight ramp that slides through
+    // it. `gradient_offset` is an ordinary number, so RFC-0010's `with` drives
+    // it and RFC-0025's `repeat: infinite` makes the sweep endless.
+    let bar = style {
+        bg: 0x2B2930, radius: 4, height: 18
+        gradient: (angle: 90deg, from: 0x00FFFFFF, mid: 0x26FFFFFF,
+                   to: 0x00FFFFFF, mid_pos: 0.5)
+        gradient_offset: 1.0 with anim.linear(1.4s, from: 0.0, repeat: infinite)
+    }
 
     Column #[bg: 0x141218, p: 28, gap: 22, width: 620] {
         Row #[gap: 12, align: center] {
@@ -103,29 +116,20 @@ View Main() {
         }
 
         // ── 5: shimmer / skeleton sweep ───────────────────────────────────
+        //
+        // The highlight belongs *to each bar*, not on top of them: every bar
+        // carries its own gradient (transparent → white → transparent) and slides
+        // it with `gradient_offset`. A ramp inside the bar's own fill is clipped
+        // by its rounded rect for free, fades at both ends, and — because the
+        // ramp wraps — the loop has no seam.
         Column #[gap: 8] {
-            Text("Shimmer skeleton — a keyframed highlight sweep")
+            Text("Shimmer skeleton — a gradient sweeping through each bar")
                 #[color: 0x938F99, size: 12]
             when loading {
-                ZStack #[width: 560, height: 74] {
-                    Column #[gap: 10] {
-                        Box #[bg: 0x2B2930, radius: 4, width: 560, height: 18] {}
-                        Box #[bg: 0x2B2930, radius: 4, width: 420, height: 18] {}
-                        Box #[bg: 0x2B2930, radius: 4, width: 300, height: 18] {}
-                    }
-                    // The band sweeps across and breathes as it goes: the
-                    // opacity sequence has its own steps and easings.
-                    Box #[bg: 0xFFFFFF, radius: 8, width: 120, height: 74,
-                          translate: anim.keyframes(
-                              0%: (-220, 0),
-                              100%: (220, 0),
-                              duration: 1.4s, loop: true),
-                          opacity: anim.keyframes(
-                              0%: 0.0,
-                              25%: 0.12 ease_out,
-                              75%: 0.12,
-                              100%: 0.0 ease_in,
-                              duration: 1.4s, loop: true)] {}
+                Column #[gap: 10] {
+                    Box #[..bar, width: 560] {}
+                    Box #[..bar, width: 420] {}
+                    Box #[..bar, width: 300] {}
                 }
             }
         }
@@ -136,17 +140,22 @@ View Main() {
                 #[color: 0x938F99, size: 12]
             Column #[gap: 6] {
                 for i, row in rows {
-                    // `entrance` retargets every row at once; the stagger
-                    // offsets keep their per-item order (RFC-0025 §5: an
-                    // entrance cascade is never cancelled).
-                    Row #[bg: 0x211F26, radius: 8, width: 560, p: (8, 12), align: center,
-                          opacity: 1.0 with anim.stagger(linear(320ms, from: 0.0), 90ms, i),
+                    // `restart: entrance` is the replay trigger: the endpoints
+                    // never change, so without it the cascade would only ever be
+                    // seen once, at start-up. A replay honours the offsets again,
+                    // so the rows come in one after another every time.
+                    Row #[bg: 0x211F26, radius: 8, width: 560, p: (10, 14), gap: 10,
+                          align: center,
+                          opacity: 1.0 with
+                              anim.stagger(linear(320ms, from: 0.0), 90ms, i,
+                                           restart: entrance),
                           translate: (0, 0) with
-                              anim.stagger(spring(from: (0, 18)), 90ms, i)] {
+                              anim.stagger(spring(from: (0, 18)), 90ms, i,
+                                           restart: entrance)] {
                         Box #[width: 8, height: 8, radius: 4, bg: 0xD0BCFF] {}
-                        Text("  {row}") #[color: 0xE6E1E5, size: 14]
+                        Text(row) #[color: 0xE6E1E5, size: 14]
                         Spacer
-                        Text("{entrance}") #[color: 0x49454F, size: 11]
+                        Text("run {entrance}") #[color: 0x938F99, size: 12]
                     }
                 }
             }

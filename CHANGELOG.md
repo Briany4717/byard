@@ -12,6 +12,34 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Gradient fills (RFC-0001 §3.1).** Two new paint properties on every box-path
+  intrinsic — `gradient: (angle: 90deg, from: <color>, mid: <color>, to: <color>,
+  mid_pos: 0.5)` and `gradient_offset: Float` — fulfilling the `DecoratedBox`
+  pipeline's declared remit ("rectangles with border-radius, **gradients**,
+  box-shadows"). The ramp is three-stop by design: two stops cover the ordinary
+  fade (`mid` defaults to their midpoint), and the third is what makes a
+  *highlight band* (transparent → bright → transparent) expressible, which is the
+  shape a shimmer needs. It composites over the element's own fill with
+  straight-alpha src-over — a translucent ramp brightens the surface, an opaque
+  one paints it — is clipped by the element's border radius for free, and each
+  stop is an ordinary colour value, so `with`/keyframed stops crossfade in OKLab
+  like any other animated colour. `gradient_offset` shifts the ramp along its
+  axis and **wraps**, so an animated offset (`gradient_offset: 1.0 with
+  anim.linear(1.4s, from: 0.0, repeat: infinite)`) is a seamless travelling sweep
+  with no extra elements: the RFC-0025 example's shimmer is now a gradient inside
+  each skeleton bar rather than a rectangle floating over them. Engine surface:
+  `frame::{Gradient, DecoratedBox::gradient}` + four instance slots on the
+  `DecoratedBox` pipeline (inactive gradients cost one `misc.w` compare).
+
+- **`restart: <expr>` on any animation (RFC-0025 §5).** A replay trigger: when the
+  witness value changes, the animation's timeline starts over and its delays are
+  honoured again, so a staggered entrance replays *in item order*. Without it a
+  mount-time animation is observable exactly once — its endpoints never change,
+  so nothing ever retargets it — which left RFC-0025's own stagger cascade
+  unrepeatable. This is the reference-free equivalent of changing a `key`
+  (RFC-0003 forbids handles), and it works on curves, keyframe sequences and
+  staggers alike (`anim.stagger(spring(), 90ms, i, restart: attempt)`).
+
 - **Looping & indefinite animations (RFC-0025).** `with anim.*(…)` grows the
   modifiers that turn a one-shot transition into continuous motion —
   `repeat: N | infinite` (`loop: true` is sugar for the latter),
@@ -102,6 +130,31 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `text::TextSizer` trait.
 
 ### Fixed
+
+- **An over-large corner radius no longer deforms the box.** The rounded-rect SDF
+  is only well-defined for `radius <= min(half_width, half_height)`; past it the
+  distance field folds in on itself and the silhouette is pulled *inside* its own
+  rect — visible on any pill button (`radius: 20` on a 33 px-tall button, the
+  everyday case: its ends curved inward and looked pinched). The radius is now
+  reduced to fit at the one place it is consumed, in every pipeline's
+  `sd_rounded_box` (solid, decorated, ripple, backdrop, texture, canvas rect), so
+  a too-large radius renders as the pill it is asking for — the CSS rule. Proven
+  on a real GPU by `an_over_large_radius_is_reduced_to_a_pill_not_a_deformed_box`.
+
+- **`Spacer` actually flexes (RFC-0005).** The catalog specifies `Spacer` as a
+  "flexible gap" with `grow: Int` (default 1) and `basis: Int`; the
+  implementation ignored both and laid out a fixed 0×12 leaf, so `Row { Text …
+  Spacer Text … }` left the trailing item glued to the leading one instead of
+  pushing it to the far end. It is now a real flex leaf (`LayoutAtlas::add_flex_leaf`):
+  `basis` is its size before growing, `grow` its share of the free space, and
+  both are ordinary reactive props.
+
+- **An unmounted `when` branch now drops its animation state (RFC-0025).** "No
+  separate stop-animation API — the animation lives and dies with its element"
+  now holds literally: collapsing a branch forgets the animations inside it, so a
+  spinner that comes back starts its turn again instead of resuming a stale phase.
+  §2's offscreen rule is unchanged and now covers only what it was written for —
+  an element that is still mounted but not painted pauses and resumes *in phase*.
 
 - **Hit targets now follow the scroll offset (RFC-0005).** Interactive
   elements inside a `ScrollView` registered their hit rects at the laid-out

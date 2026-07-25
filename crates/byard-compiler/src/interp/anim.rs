@@ -119,6 +119,15 @@ pub struct MotionSpec<'a> {
     pub reverse: bool,
     /// The start offset (§5).
     pub delay: Delay<'a>,
+    /// `restart: <expr>` — replay the animation whenever this value changes.
+    ///
+    /// A mount-time animation (an entrance, a cascade) is otherwise observable
+    /// exactly once: its endpoints never change, so nothing ever retargets it.
+    /// This is the reference-free way to say "play that again" — the same role a
+    /// changed `key` plays in a retained-tree framework — and it is what makes
+    /// RFC-0025's own stagger example re-runnable. A restart honours the
+    /// animation's delays again, so a cascade replays *in order*.
+    pub restart: Option<&'a Expr>,
     /// `from:` — the explicit start value of the animation.
     ///
     /// Not in the RFC's snippets, and required by them: a looping animation
@@ -141,6 +150,7 @@ impl<'a> MotionSpec<'a> {
             reverse: false,
             delay: Delay::None,
             from: None,
+            restart: None,
         }
     }
 
@@ -148,7 +158,11 @@ impl<'a> MotionSpec<'a> {
     /// runtime takes the original single-shot path unchanged.
     #[must_use]
     pub fn is_plain(&self) -> bool {
-        !self.repeat.is_repeating() && self.delay.is_none() && self.from.is_none() && !self.reverse
+        !self.repeat.is_repeating()
+            && self.delay.is_none()
+            && self.from.is_none()
+            && self.restart.is_none()
+            && !self.reverse
     }
 }
 
@@ -180,6 +194,8 @@ pub struct KeyframeTrack<'a> {
     pub reverse: bool,
     /// The start offset.
     pub delay: Delay<'a>,
+    /// `restart:` — replay the sequence whenever this value changes.
+    pub restart: Option<&'a Expr>,
 }
 
 /// The closed set of curve names, for the unknown-curve suggestion.
@@ -195,7 +211,9 @@ const CURVE_NAMES: &[&str] = &[
 ];
 
 /// The modifier names every curve accepts (RFC-0025 §4), for suggestions.
-const MODIFIER_NAMES: &[&str] = &["repeat", "reverse", "delay", "loop", "duration", "from"];
+const MODIFIER_NAMES: &[&str] = &[
+    "repeat", "reverse", "delay", "loop", "duration", "from", "restart",
+];
 
 /// The easing names a keyframe step may carry, mapped to their curve tags.
 const SEGMENT_EASINGS: &[(&str, u32)] = &[
@@ -257,6 +275,7 @@ pub fn resolve_motion(anim: &Expr) -> Result<MotionSpec<'_>, CompileError> {
         reverse: mods.reverse.unwrap_or(false),
         delay: mods.delay.map_or(Delay::None, Delay::Offset),
         from: mods.from,
+        restart: mods.restart,
     })
 }
 
@@ -365,6 +384,7 @@ fn resolve_keyframe_args<'a>(
         repeat: mods.repeat.unwrap_or_default(),
         reverse: mods.reverse.unwrap_or(false),
         delay: mods.delay.map_or(Delay::None, Delay::Offset),
+        restart: mods.restart,
     })
 }
 
@@ -374,6 +394,10 @@ fn resolve_keyframe_args<'a>(
 /// (`base`/`step`/`index`).
 fn resolve_stagger<'a>(args: &[&'a Arg], call_span: Span) -> Result<MotionSpec<'a>, CompileError> {
     const FIELDS: [&str; 3] = ["base", "step", "index"];
+    // Modifiers may sit on the stagger itself (`anim.stagger(spring(), 90ms, i,
+    // restart: attempt)`) as well as on its base curve — the outer position is
+    // the natural place for `restart:`, which is about the cascade, not the curve.
+    let (args, stagger_mods) = split_modifiers(args)?;
     let mut slots: [Option<&Expr>; 3] = [None; 3];
     for (position, arg) in args.iter().enumerate() {
         let slot = match &arg.name {
@@ -418,6 +442,7 @@ fn resolve_stagger<'a>(args: &[&'a Arg], call_span: Span) -> Result<MotionSpec<'
         reverse: mods.reverse.unwrap_or(false),
         delay: Delay::Stagger { step_ms, index },
         from: mods.from,
+        restart: mods.restart.or(stagger_mods.restart),
     })
 }
 
@@ -448,6 +473,7 @@ struct Modifiers<'a> {
     delay: Option<&'a Expr>,
     duration_ms: Option<u32>,
     from: Option<&'a Expr>,
+    restart: Option<&'a Expr>,
 }
 
 /// Splits a curve call's arguments into the curve's own arguments and the
@@ -486,6 +512,7 @@ fn split_modifiers<'a>(args: &[&'a Arg]) -> Result<(Vec<&'a Arg>, Modifiers<'a>)
             "delay" => mods.delay = Some(&arg.value),
             "duration" => mods.duration_ms = Some(duration_literal(&arg.value, "duration")?),
             "from" => mods.from = Some(&arg.value),
+            "restart" => mods.restart = Some(&arg.value),
             _ => rest.push(*arg),
         }
     }
@@ -995,6 +1022,35 @@ mod tests {
                 CompileError::InvalidAnimation { .. }
             ));
         });
+    }
+
+    #[test]
+    fn a_restart_witness_resolves_on_curves_keyframes_and_staggers() {
+        with_spec("anim.spring(restart: attempt)", |spec| {
+            let spec = spec.unwrap();
+            assert!(matches!(spec.restart, Some(Expr::Ident(..))));
+            assert!(
+                !spec.is_plain(),
+                "a replayable animation needs its own timeline"
+            );
+        });
+        // On a stagger the witness belongs to the *cascade*, so it may sit at the
+        // stagger's own level, past the three positional arguments.
+        with_spec(
+            "anim.stagger(spring(), 90ms, i, restart: attempt)",
+            |spec| {
+                let spec = spec.unwrap();
+                assert!(matches!(spec.restart, Some(Expr::Ident(..))));
+                assert!(matches!(spec.delay, Delay::Stagger { step_ms: 90, .. }));
+            },
+        );
+        with_keyframes(
+            "anim.keyframes(0%: 0, 100%: 1, duration: 1s, restart: page)",
+            |track| {
+                let track = track.unwrap().unwrap();
+                assert!(matches!(track.restart, Some(Expr::Ident(..))));
+            },
+        );
     }
 
     #[test]

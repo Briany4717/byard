@@ -48,6 +48,11 @@
           "match": "\\b(View|var|let|fn|inject|as|for|in|when|else|style|untrack|with|merge|use)\\b"
         },
         {
+          "comment": "RFC-0026 navigation cases. Contextual, not reserved: only a `route`/`tab` introducing a pattern literal is a keyword.",
+          "name": "keyword.control.byld",
+          "match": "\\b(route|tab)\\b(?=\\s*\")"
+        },
+        {
           "name": "keyword.other.byld",
           "match": "=>"
         }

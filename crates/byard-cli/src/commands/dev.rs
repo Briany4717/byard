@@ -31,7 +31,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::deps::{cache_dir, resolve_project};
 use crate::manifest::Manifest;
 
-pub fn run(file: Option<&Path>) -> Result<(), String> {
+pub fn run(file: Option<&Path>, deep_link: Option<&str>) -> Result<(), String> {
     let manifest = Manifest::discover(file)?;
 
     // Initial resolve on the main thread: catch errors before opening the
@@ -96,6 +96,7 @@ pub fn run(file: Option<&Path>) -> Result<(), String> {
         initial_views,
         initial_errors,
         initial_theme: manifest.theme.clone(),
+        deep_link: deep_link.map(str::to_string),
         last_gpu_telemetry: byard_core::telemetry::SampleBlock::default(),
         last_telemetry_print: std::time::Instant::now(),
     })
@@ -167,6 +168,11 @@ struct ByldRuntime {
     /// the rising edge only, so a steadily animating scene (already spinning)
     /// posts nothing.
     waker: byard_core::relay::FrameWaker,
+    /// A `--deep-link <url>` waiting to be delivered (RFC-0026), applied after
+    /// the first render. It waits because a navigation container only exists
+    /// once the frame that mounts it has been reconciled — a stack nested in a
+    /// tab is not there to receive anything before that.
+    pending_deep_link: Option<String>,
 }
 
 impl ByldRuntime {
@@ -310,9 +316,28 @@ impl LogicRuntime for ByldRuntime {
                              each pane re-blurs the ones below it (RFC-0023)"
                         )
                     }
+                    // RFC-0026: a navigation stack that keeps growing is almost
+                    // always a push that never pops.
+                    byard_compiler::interp::eval::PerfWarning::DeepNavStack { depth, path } => {
+                        format!(
+                            "perf: `NavStack` is {depth} deep — refused to push `{path}`; \
+                             every entry below the top stays in memory (RFC-0026)"
+                        )
+                    }
                 };
                 if self.reported_perf.insert(text.clone()) {
                     eprintln!("  {text}");
+                }
+            }
+            // RFC-0026 deep linking: the host's whole job is to hand the URL
+            // over — from here it is an ordinary navigation, with the same
+            // push, transition and `route_change` as a tap.
+            if let Some(url) = self.pending_deep_link.take() {
+                if self.interp.apply_deep_link(&url) {
+                    self.interp.tick();
+                    self.wake_render_loop();
+                } else {
+                    eprintln!("  no route matches the deep link `{url}` — ignoring it");
                 }
             }
         }
@@ -441,6 +466,9 @@ struct App {
     /// The resolved design-token theme (RFC-0022), installed on the interpreter
     /// so `inject Theme as t` resolves and `t.token` references paint.
     initial_theme: byard_compiler::interp::theme::Theme,
+    /// A `--deep-link <url>` handed in at startup (RFC-0026): delivered to the
+    /// interpreter once the tree is lowered, exactly as an OS intent would be.
+    deep_link: Option<String>,
     /// This (render/main) thread's GPU telemetry ring, drained on **every**
     /// redraw — not just when about to print — so it only ever holds
     /// samples produced since the *previous redraw*. `byard dev`'s Poll-mode
@@ -556,6 +584,7 @@ impl PlatformHost for App {
         let (vector_ack_tx, vector_ack_rx) = crossbeam_channel::unbounded();
         engine.set_vector_ack_sender(vector_ack_tx);
         let vector_cache_dir = self.vector_cache_dir.clone();
+        let deep_link = self.deep_link.clone();
 
         engine.start_logic_from_view(move |_arena| {
             let (mut interp, tree, current_views) = if initial_views.is_empty() {
@@ -590,6 +619,7 @@ impl PlatformHost for App {
                 reported_perf: std::collections::HashSet::new(),
                 animating: animating_logic,
                 waker: waker_for_logic,
+                pending_deep_link: deep_link,
             })
         })?;
 

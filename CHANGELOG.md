@@ -12,6 +12,50 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Navigation & routing (RFC-0026).** Two new intrinsics — `NavStack(path: navPath)`
+  and `NavHost(active: tab)` — plus a `route "/detail/:id" {|params| … }` /
+  `tab "home" { … }` sub-syntax, and the `navigate`/`back`/`replace` actions.
+  Navigation state is a reactive `var` and nothing else: setting
+  `navPath = "/detail/42"` *is* the push, setting it back *is* the pop. There is
+  no navigation controller, no route object and no widget reference (RFC-0003).
+
+  - **Route matching** compiles each pattern once at mount time and matches in
+    declaration order, first match wins: literal segments, `:param` segments
+    (`Str` in v1, exposed as `route.params.id` and through the optional
+    `{|params| … }` binding), and a trailing `*` catch-all. `route.path` carries
+    the concrete path. A malformed pattern (`/detail/:`, a non-final `*`, a
+    repeated parameter) is a compile error; a path no route matches is a runtime
+    warning that leaves the last matched screen up, reported once per path.
+  - **State preservation** falls out of the entry model: a screen's View subtree
+    is lowered the first time navigation reaches it and kept alive underneath
+    whatever covers it, so its `var`s, scroll offsets and controllers are exactly
+    where you left them on the way back. A multi-pop discards what it skipped;
+    tabs are preserved permanently. Nothing is instantiated up front — a
+    ten-route table costs ten compiled patterns, not ten View trees.
+  - **Transitions** (`slide`, `slide_up`, `fade`, `none`) run two screens at once
+    and place both from a single progress scalar: the positional ones ride
+    RFC-0010's spring, the cross-fade a fixed ramp. The screen the navigation
+    names stays in the container's normal flow and its transitioning partner is
+    laid out absolutely over the same rect, so a transition costs two `f32` and
+    an alpha folded into the transform every subtree already inherits — no
+    relayout, no extra pass (INV-8), and the frames stop the moment it settles.
+  - **`swipe_back: true`** is the Cupertino interactive edge pop: a drag from the
+    leading 24 px follows the pointer in real time over the *real* preserved
+    screen underneath, and on release the finger's progress hands over to the
+    spring — commit past halfway, spring back otherwise, with nothing jumping at
+    the hand-off.
+  - **`deep_link: true`** accepts OS URL intents through
+    `Interpreter::apply_deep_link`, which takes `byard://item/42`,
+    `https://app.example/item/42` and a bare `/item/42` alike; `byard dev
+    --deep-link <url>` delivers one at startup so the path is verifiable without
+    a platform integration. A URL no route matches is rejected rather than
+    navigating anything to a blank screen.
+  - **Guards.** `max_depth` (default 10, `0` disables) refuses a push past its
+    limit with a `PerfWarning::DeepNavStack` and reflects the refusal back into
+    the navigation `var`, so app state and screen never diverge — a runaway push
+    loop is flagged, not crashed. `route_change(e)` fires once a navigation
+    settles. Nested stacks (one per tab) each keep their own independent history.
+
 - **Gradient fills (RFC-0001 §3.1).** Two new paint properties on every box-path
   intrinsic — `gradient: (angle: 90deg, from: <color>, mid: <color>, to: <color>,
   mid_pos: 0.5)` and `gradient_offset: Float` — fulfilling the `DecoratedBox`

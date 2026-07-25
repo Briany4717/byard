@@ -755,7 +755,7 @@ impl Parser<'_> {
 
     /// Splits a raw `StrLit` (whose `span` covers the quoted source) into text
     /// and interpolation parts, recursively parsing each `{ expr }` (PEP 701).
-    fn parse_string_literal(&mut self, span: Span) -> Vec<StrPart> {
+    pub(super) fn parse_string_literal(&mut self, span: Span) -> Vec<StrPart> {
         let raw = &self.source[span.start as usize..span.end as usize];
         // Strip the surrounding quotes; a malformed (unclosed) literal is
         // already reported by the lexer, so guard the slice defensively.

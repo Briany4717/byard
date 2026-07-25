@@ -35,7 +35,16 @@ pub const INTRINSIC_NAMES: &[&str] = &[
     "Canvas",
     "Grid",
     "ZStack",
+    "NavStack",
+    "NavHost",
 ];
+
+/// Whether `name` is one of the RFC-0026 navigation containers, whose children
+/// are `route`/`tab` cases rather than elements.
+#[must_use]
+pub fn is_nav_container(name: &str) -> bool {
+    matches!(name, "NavStack" | "NavHost")
+}
 
 /// The scalar type an attribute value must have (RFC-0005 §1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -91,6 +100,10 @@ const ANCHOR: &[&str] = &["center", "top", "bottom", "start", "end"];
 /// RFC-0018 `ZStack` `alignment`: how children smaller than the stack are
 /// positioned within it. Two-word tokens are `<block>_<inline>`; single-word
 /// tokens centre on the other axis.
+/// RFC-0026 `transition`: how a navigation container swaps one screen for the
+/// next. `slide` is the iOS/Material push, `slide_up` the modal presentation,
+/// `fade` a cross-fade, `none` an instant swap (no second live screen).
+const TRANSITION: &[&str] = &["slide", "slide_up", "fade", "none"];
 const ALIGN2D: &[&str] = &[
     "center",
     "top_start",
@@ -692,8 +705,146 @@ pub fn lookup(name: &str) -> Option<Intrinsic> {
                 events: events_from(false, &[]),
             }
         }
+        // RFC-0026: `NavStack` — a push/pop stack of screens. Content: none.
+        // Children: `route` blocks only (enforced by [`validate_nav`], since
+        // they are not elements). Props: Layout + Decoration + Transform, plus
+        // the reflected `path` (the navigation state — an ordinary `var`, never
+        // a controller object), the `transition` family, the Cupertino
+        // `swipe_back` edge gesture, `deep_link` (accept OS URL intents) and
+        // `max_depth` (the runaway-push guard). Event: `route_change`, fired
+        // once a navigation settles. Pipeline: a stack container — during a
+        // transition two screens are laid out in the same cell and composited
+        // with per-screen transform/opacity.
+        "NavStack" => {
+            let mut props = props_from(&[LAYOUT, DECORATION, EFFECTS, TRANSFORM]);
+            props.insert("transition", PropType::Enum(TRANSITION));
+            props.insert("swipe_back", PropType::Bool);
+            props.insert("deep_link", PropType::Bool);
+            props.insert("max_depth", PropType::Int);
+            props.insert("anchor", PropType::Enum(ANCHOR));
+            props.insert("col", PropType::Int);
+            props.insert("row", PropType::Int);
+            props.insert("col_span", PropType::Int);
+            props.insert("row_span", PropType::Int);
+            Intrinsic {
+                // The navigation state is the container's content — `NavStack(
+                // path: navPath)`. It is *required*: a navigation container with
+                // nothing driving it is a container with no navigation.
+                arity: 1,
+                content: Some(PropType::Str),
+                children: true,
+                focusable: false,
+                interactive: true,
+                props,
+                events: events_from(false, &["route_change"]),
+            }
+        }
+        // RFC-0026: `NavHost` — the flat tab container. Content: none. Children:
+        // `tab` blocks only. Props: as `NavStack` minus the stack-only ones,
+        // with the reflected `active` naming the visible tab; `transition`
+        // defaults to `fade`, since a tab switch has no push direction.
+        "NavHost" => {
+            let mut props = props_from(&[LAYOUT, DECORATION, EFFECTS, TRANSFORM]);
+            props.insert("transition", PropType::Enum(TRANSITION));
+            props.insert("anchor", PropType::Enum(ANCHOR));
+            props.insert("col", PropType::Int);
+            props.insert("row", PropType::Int);
+            props.insert("col_span", PropType::Int);
+            props.insert("row_span", PropType::Int);
+            Intrinsic {
+                // `NavHost(active: activeTab)` — the visible tab's name.
+                arity: 1,
+                content: Some(PropType::Str),
+                children: true,
+                focusable: false,
+                interactive: true,
+                props,
+                events: events_from(false, &[]),
+            }
+        }
         _ => return None,
     })
+}
+
+/// Validates a navigation container's children (RFC-0026): a `NavStack` holds
+/// `route` blocks, a `NavHost` holds `tab` blocks, and nothing else — an
+/// element, a declaration, or the wrong keyword is a precise diagnostic rather
+/// than a silently ignored child. Each accepted case's pattern is compiled here
+/// too, so a malformed pattern is caught at check time, not first navigation.
+///
+/// Call alongside [`validate_element`], which covers the container's own
+/// attributes.
+#[must_use]
+pub fn validate_nav(el: &ElementNode) -> Vec<CompileError> {
+    use crate::parser::ast::RouteKind;
+
+    let want = if el.name.as_str() == "NavStack" {
+        RouteKind::Route
+    } else {
+        RouteKind::Tab
+    };
+    let mut errs = Vec::new();
+    for child in &el.children {
+        match child {
+            Member::Route {
+                kind,
+                pattern,
+                pattern_span,
+                ..
+            } if *kind == want => {
+                if let Err(err) = crate::interp::nav::RoutePattern::compile(pattern, *pattern_span)
+                {
+                    errs.push(err);
+                }
+            }
+            // The right shape, the wrong container — say so directly.
+            Member::Route { kind, span, .. } => errs.push(CompileError::MisplacedNavCase {
+                span: *span,
+                keyword: kind.as_str().to_string(),
+                container: kind.container().to_string(),
+            }),
+            other => errs.push(CompileError::NavCaseRequired {
+                span: member_span(other),
+                container: el.name.as_str().to_string(),
+                keyword: want.as_str().to_string(),
+                found: describe_member(other),
+            }),
+        }
+    }
+    errs
+}
+
+/// A short description of a non-case member, for [`validate_nav`]'s message.
+fn describe_member(m: &Member) -> String {
+    match m {
+        Member::Element(e) => format!("the element `{}`", e.name.as_str()),
+        Member::Var { .. } => "a `var` declaration".to_string(),
+        Member::Let { .. } => "a `let` declaration".to_string(),
+        Member::Fn { .. } => "a `fn` declaration".to_string(),
+        Member::Inject { .. } => "an `inject` declaration".to_string(),
+        Member::For { .. } => "a `for` loop".to_string(),
+        Member::When { .. } => "a `when` block".to_string(),
+        Member::Style { .. } => "a `style` block".to_string(),
+        Member::Route { kind, .. } => format!("a `{}` block", kind.as_str()),
+        Member::Expr(_) => "an expression".to_string(),
+    }
+}
+
+/// The source span of any member (mirrors the private helper in `eval`, kept
+/// local so this module stays self-contained).
+fn member_span(m: &Member) -> crate::diagnostics::Span {
+    match m {
+        Member::Var { span, .. }
+        | Member::Let { span, .. }
+        | Member::Fn { span, .. }
+        | Member::Inject { span, .. }
+        | Member::For { span, .. }
+        | Member::When { span, .. }
+        | Member::Route { span, .. }
+        | Member::Style { span, .. } => *span,
+        Member::Element(e) => e.span,
+        Member::Expr(e) => e.span(),
+    }
 }
 
 /// Validates `el` against the §5 contract, returning every diagnostic it
@@ -1077,6 +1228,7 @@ pub fn validate_canvas(el: &ElementNode, attrs: &[Attr]) -> Vec<CompileError> {
             Member::For { span, .. } => push_non_shape(&mut errs, *span, "for"),
             Member::When { span, .. } => push_non_shape(&mut errs, *span, "when"),
             Member::Style { span, .. } => push_non_shape(&mut errs, *span, "style"),
+            Member::Route { kind, span, .. } => push_non_shape(&mut errs, *span, kind.as_str()),
             Member::Expr(e) => push_non_shape(&mut errs, e.span(), "an expression"),
         }
     }

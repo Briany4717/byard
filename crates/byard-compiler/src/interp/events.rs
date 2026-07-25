@@ -78,6 +78,11 @@ pub enum EventKind {
     /// A pull-to-refresh gesture crossed its threshold and released.
     /// **Internal-only** (RFC-0021 pull-to-refresh).
     Refresh,
+    // ── RFC-0026 navigation ──────────────────────────────────────────────
+    /// A navigation container settled on a new route. **Internal-only**: fired
+    /// by the navigation machinery once the transition completes, with the new
+    /// path as its payload.
+    RouteChange,
 }
 
 impl EventKind {
@@ -620,7 +625,8 @@ impl EventRouter {
             | EventKind::EndReached
             | EventKind::PageChange
             | EventKind::ScrollEnd
-            | EventKind::Refresh => {}
+            | EventKind::Refresh
+            | EventKind::RouteChange => {}
         }
     }
 

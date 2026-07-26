@@ -3355,6 +3355,17 @@ impl Interpreter {
     ) {
         use byard_core::frame::Viewport;
 
+        // RFC-0030 §I1. `layout.taffy` (Native) nests strictly inside this
+        // scope — the interpreter owns the `LayoutAtlas` and drives it from
+        // here — which is exactly why the interpreter tax is self-time and
+        // not inclusive time (RFC-0030 §I2b): an AOT build still pays for
+        // Taffy in full, so billing layout to the interpreter would make the
+        // AOT projection optimistic by the entire cost of layout.
+        byard_core::profile_scope!(
+            "interp.render",
+            byard_core::telemetry::ScopeKind::Interpreter
+        );
+
         // Recomputed every frame: an animation re-marks itself active below if it
         // sampled without having settled this tick (RFC-0010).
         self.any_active = false;
@@ -9774,6 +9785,13 @@ impl Interpreter {
 
         /// Logical pixels a `ScrollView` scrolls per wheel line (RFC-0005).
         const WHEEL_LINE_PX: f32 = 40.0;
+
+        // RFC-0030 §I1: hit-testing, gesture recognition and handler
+        // invocation — all interpreter work, all gone in an AOT build.
+        byard_core::profile_scope!(
+            "interp.dispatch_events",
+            byard_core::telemetry::ScopeKind::Interpreter
+        );
 
         let comp_events: Vec<CompEvent> = events
             .iter()

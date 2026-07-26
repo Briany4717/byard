@@ -387,6 +387,13 @@ impl ReactiveCtx {
     /// mounts create new bindings), then value bindings, each guarded to one
     /// evaluation per epoch. The frame write is value-equality–gated (§5/§7).
     pub fn pull(&mut self, epoch: u32) {
+        // RFC-0030 §I1 — the reactive tick itself: memo re-evaluation,
+        // structural reconciliation and frame projection. Declared on `pull`
+        // rather than on `Interpreter::tick` so every driver is covered by
+        // construction, including the fixpoint re-pulls that
+        // `Interpreter::render` performs while structure settles (those nest
+        // one level down, and the depth field keeps the frame total honest).
+        byard_core::profile_scope!("interp.tick", byard_core::telemetry::ScopeKind::Interpreter);
         let structural: Vec<ScopeId> = self.dirty_structural.drain(..).collect();
         for s in structural {
             self.reconcile_structural(s, epoch);

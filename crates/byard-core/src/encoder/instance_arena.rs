@@ -137,35 +137,24 @@ impl InstanceArena {
     /// An empty slice returns an empty [`Region`] without touching the
     /// staging buffer, so a pipeline with nothing to draw costs nothing.
     pub fn push_vertex<T: bytemuck::Pod>(&mut self, data: &[T]) -> Region {
-        self.push_bytes(bytemuck::cast_slice(data), VERTEX_ALIGNMENT)
+        self.push_bytes(bytemuck::cast_slice(data), VERTEX_ALIGNMENT, false)
     }
 
     /// Appends `value` as a **uniform** region, padded to the device's
     /// reported `min_uniform_buffer_offset_alignment`.
     pub fn push_uniform<T: bytemuck::Pod>(&mut self, value: &T) -> Region {
         let alignment = self.uniform_alignment;
-        self.push_bytes(bytemuck::bytes_of(value), alignment)
+        self.push_bytes(bytemuck::bytes_of(value), alignment, true)
     }
 
-    fn push_bytes(&mut self, bytes: &[u8], alignment: u64) -> Region {
+    fn push_bytes(&mut self, bytes: &[u8], alignment: u64, pad_len: bool) -> Region {
         if bytes.is_empty() {
             return Region::default();
         }
-        let padding = align_padding(self.staging.len() as u64, alignment);
-        self.staging
-            .resize(self.staging.len() + usize_of(padding), 0);
-        let offset = self.staging.len() as u64;
-        debug_assert_eq!(
-            offset % alignment,
-            0,
-            "instance arena produced a misaligned region at {offset} \
-             (alignment {alignment})"
-        );
-        self.staging.extend_from_slice(bytes);
-        Region {
-            offset,
-            len: bytes.len() as u64,
-        }
+        let region = self.reserve_at(bytes.len() as u64, alignment, pad_len);
+        let start = usize_of(region.offset);
+        self.staging[start..start + bytes.len()].copy_from_slice(bytes);
+        region
     }
 
     /// Reserves `bytes` of **vertex** space without supplying the data yet.
@@ -178,27 +167,54 @@ impl InstanceArena {
     /// any pass opens); the contents arrive later via
     /// [`write_region`](Self::write_region).
     pub fn reserve_vertex(&mut self, bytes: u64) -> Region {
-        self.reserve(bytes, VERTEX_ALIGNMENT)
+        self.reserve_at(bytes, VERTEX_ALIGNMENT, false)
     }
 
     /// [`reserve_vertex`](Self::reserve_vertex) for a **uniform** region,
     /// padded to the device's reported alignment.
     pub fn reserve_uniform(&mut self, bytes: u64) -> Region {
         let alignment = self.uniform_alignment;
-        self.reserve(bytes, alignment)
+        self.reserve_at(bytes, alignment, true)
     }
 
-    fn reserve(&mut self, bytes: u64, alignment: u64) -> Region {
+    /// Appends `bytes` of zeroed space at the next `alignment`-aligned offset.
+    ///
+    /// `pad_len` additionally rounds the region's **length** up to `alignment`,
+    /// which uniform regions require and vertex regions do not.
+    ///
+    /// # Why a uniform region's length is padded too
+    ///
+    /// Aligning the offset is the part RFC-0033 §G2 names, and it is not
+    /// sufficient. D3D12 describes a constant-buffer view with a `SizeInBytes`
+    /// that must itself be a multiple of 256, so a 32-byte binding is widened
+    /// by the backend — and a 32-byte region sitting near the end of the
+    /// buffer is then described as reaching past it. On Metal and Vulkan
+    /// nothing happens; on DX12 it is an out-of-bounds descriptor, which
+    /// surfaced as a hard `STATUS_ACCESS_VIOLATION` in the backdrop readback
+    /// test rather than as a validation error.
+    ///
+    /// This is the same failure §G2 predicted, one level down: the offset rule
+    /// is the documented one, the size rule is the one that bites, and both
+    /// only bite on a backend the author is not developing on.
+    fn reserve_at(&mut self, bytes: u64, alignment: u64, pad_len: bool) -> Region {
         if bytes == 0 {
             return Region::default();
         }
+        let len = if pad_len {
+            bytes + align_padding(bytes, alignment)
+        } else {
+            bytes
+        };
         let padding = align_padding(self.staging.len() as u64, alignment);
-        let total = usize_of(padding + bytes);
-        self.staging.resize(self.staging.len() + total, 0);
-        Region {
-            offset: self.staging.len() as u64 - bytes,
-            len: bytes,
-        }
+        let offset = self.staging.len() as u64 + padding;
+        debug_assert_eq!(
+            offset % alignment,
+            0,
+            "instance arena produced a misaligned region at {offset} \
+             (alignment {alignment})"
+        );
+        self.staging.resize(usize_of(offset + len), 0);
+        Region { offset, len }
     }
 
     /// Writes `bytes` into an already-reserved region.
@@ -394,6 +410,39 @@ mod tests {
             "a uniform region must start on the device's alignment"
         );
         assert!(uniform.offset >= 4, "and after the vertex region before it");
+        assert_eq!(
+            uniform.len % alignment,
+            0,
+            "and its *length* must be a multiple of it too — D3D12 widens a \
+             constant-buffer view's size to the same granularity, so a short \
+             region near the end of the buffer is described as reaching past it"
+        );
+        assert!(
+            arena.staged_len() >= uniform.offset + uniform.len,
+            "the padded length must actually be reserved, not merely reported"
+        );
+    }
+
+    #[test]
+    fn a_reserved_uniform_is_alignment_sized_and_fits_inside_the_staging() {
+        // The reservation path is the one the backdrop takes, and it is the
+        // one that crashed on DX12 while passing everywhere else.
+        let Some((device, queue)) = try_device() else {
+            eprintln!("no GPU adapter — skipping");
+            return;
+        };
+        let mut arena = InstanceArena::new(&device);
+        let alignment = arena.uniform_alignment();
+        arena.begin_frame();
+        let _ = arena.push_vertex(&[1u32, 2, 3]);
+        let region = arena.reserve_uniform(32);
+        arena.upload(&device, &queue);
+
+        assert_eq!(region.offset % alignment, 0);
+        assert_eq!(region.len % alignment, 0);
+        assert!(region.offset + region.len <= arena.capacity());
+        // And the region is writable at its full reported length.
+        arena.write_region(&queue, region, &[0u8; 32]);
     }
 
     #[test]

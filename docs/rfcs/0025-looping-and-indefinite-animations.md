@@ -1,6 +1,7 @@
 # RFC-0025: Looping & Indefinite Animations — repeat, reverse, keyframes, stagger
 
-- **Status:** Draft
+- **Status:** Active — implemented
+- **Status note (2026-07-26):** Shipped in full: `repeat`, `reverse`, `from:`, `restart:`, `anim.keyframes` and stagger.
 - **Author(s):** Briany4717
 - **Created:** 2026-07-10
 - **Last updated:** 2026-07-10

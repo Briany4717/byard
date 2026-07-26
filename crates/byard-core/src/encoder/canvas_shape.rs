@@ -14,8 +14,6 @@
 //! `path(d: …)` commands never reach this pipeline; they rasterize through
 //! `VectorMSDF` (RFC-0020 §2, Tier 2).
 
-use wgpu::util::DeviceExt;
-
 use crate::ByardError;
 use crate::frame::CanvasShape;
 
@@ -170,52 +168,54 @@ pub async fn build_pipeline(
     Ok(pipeline)
 }
 
+/// Stages this batch's instances into the frame's arena (RFC-0033 §G1).
+///
+/// `depths` is parallel to `shapes`; a short/empty slice falls back to the far
+/// plane so a missing depth can't push a shape in front of others.
+pub fn stage(
+    arena: &mut super::instance_arena::InstanceArena,
+    scratch: &mut Vec<CanvasShapeInstance>,
+    shapes: &[CanvasShape],
+    depths: &[f32],
+) -> super::instance_arena::Region {
+    if shapes.is_empty() {
+        return super::instance_arena::Region::default();
+    }
+    scratch.clear();
+    scratch.extend(shapes.iter().enumerate().map(|(i, s)| {
+        let depth = depths
+            .get(i)
+            .copied()
+            .unwrap_or(crate::frame::DRAW_DEPTH_CLEAR);
+        CanvasShapeInstance::new(s, depth)
+    }));
+    arena.push_vertex(scratch)
+}
+
 /// Draws every [`CanvasShape`], scissored to its content clip (RFC-0005).
 /// Everything here is transparent geometry — the pipeline tests the shared
 /// draw-order depth buffer but never writes it (see the module docs).
 #[allow(clippy::too_many_arguments)]
 pub fn draw(
     render_pass: &mut wgpu::RenderPass<'_>,
-    device: &wgpu::Device,
+    arena: &super::instance_arena::InstanceArena,
+    region: super::instance_arena::Region,
     pipeline: &wgpu::RenderPipeline,
     bind_group: &wgpu::BindGroup,
     quad_buffer: &wgpu::Buffer,
-    shapes: &[CanvasShape],
-    depths: &[f32],
+    count: usize,
     clip_slice: &[Option<u16>],
     ctx: super::ClipCtx<'_>,
 ) {
-    if shapes.is_empty() {
+    if region.is_empty() {
         return;
     }
-    // `depths` is parallel to `shapes`; a short/empty slice falls back to the
-    // far plane so a missing depth can't push a shape in front of others.
-    let instances: Vec<CanvasShapeInstance> = shapes
-        .iter()
-        .enumerate()
-        .map(|(i, s)| {
-            let depth = depths
-                .get(i)
-                .copied()
-                .unwrap_or(crate::frame::DRAW_DEPTH_CLEAR);
-            CanvasShapeInstance::new(s, depth)
-        })
-        .collect();
-    let instance_buffer = {
-        crate::profile_scope!("encode.buffers");
-        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("ByardCore - CanvasShape Instance Buffer"),
-            contents: bytemuck::cast_slice(&instances),
-            usage: wgpu::BufferUsages::VERTEX,
-        })
-    };
-
     render_pass.set_pipeline(pipeline);
     render_pass.set_bind_group(0, bind_group, &[]);
     render_pass.set_vertex_buffer(0, quad_buffer.slice(..));
-    render_pass.set_vertex_buffer(1, instance_buffer.slice(..));
+    render_pass.set_vertex_buffer(1, arena.slice(region));
     // Content-clip runs (RFC-0005): scissor each run to its ScrollView viewport.
-    super::for_each_clip_run(render_pass, instances.len(), clip_slice, ctx, |p, s, e| {
+    super::for_each_clip_run(render_pass, count, clip_slice, ctx, |p, s, e| {
         p.draw(0..4, s..e);
     });
 }

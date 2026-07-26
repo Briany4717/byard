@@ -1,6 +1,7 @@
 # RFC-0017: Overlay & Z-Layer System — portals, modals, and floating surfaces
 
-- **Status:** Draft
+- **Status:** Active — implemented; §Positioning's absolute `(x, y)` and `relative(ref)` anchoring deferred
+- **Status note (2026-07-26):** Shipped: the `Overlay` intrinsic, the overlay stack, per-layer draw batches, modality and scrim, dismissal, and the transform/animation interaction. Deferred to Future possibilities and recorded at the call site (`intrinsics.rs`'s `ANCHOR` set): coordinate anchoring beyond the edge/centre tokens.
 - **Author(s):** Briany4717
 - **Created:** 2026-07-10
 - **Last updated:** 2026-07-10

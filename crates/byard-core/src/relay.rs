@@ -151,6 +151,19 @@ pub struct Relay {
     // leave it unset. Set rarely (once at startup), read once per published
     // frame — the mutex is never contended.
     frame_waker: Mutex<Option<FrameWaker>>,
+    /// Monotonic count of frames published through [`Relay::publish`], stamped
+    /// onto each frame as its [`RenderFrame::version`]. The encoder uses the
+    /// gap between consecutive versions it *encodes* to detect that the render
+    /// thread skipped a frame, and therefore possibly a dirty bit
+    /// (RFC-0001 §5.2).
+    publish_seq: std::sync::atomic::AtomicU64,
+    /// Whether the frame currently in [`Relay::latest`] has been rendered.
+    ///
+    /// Set by [`Relay::mark_rendered`] once the encoder has actually consumed
+    /// a frame; cleared on every publish. [`Relay::publish`] uses it to decide
+    /// whether the frame it is about to replace still carries dirty bits that
+    /// nobody has acted on (RFC-0032 §R3 step 6).
+    rendered: AtomicBool,
 }
 
 /// A host-installed callback the logic thread fires after publishing a changed
@@ -202,6 +215,8 @@ impl Relay {
             input_tx,
             input_rx,
             frame_waker: Mutex::new(None),
+            publish_seq: std::sync::atomic::AtomicU64::new(0),
+            rendered: AtomicBool::new(false),
         })
     }
 
@@ -276,6 +291,35 @@ impl Relay {
         // drain, which is the part that can actually cost something.
         crate::profile_scope!("relay.publish");
         frame.drain_telemetry();
+        // Stamp the publish sequence (RFC-0001 §5.2, generalised by RFC-0032).
+        //
+        // The relay is latest-wins: a slow render thread simply never sees
+        // some published frames. That was harmless while every primitive was
+        // emitted `dirty: true` — the encoder re-shaped everything on every
+        // frame it *did* see. Now that the interpreter reports what actually
+        // changed, a skipped frame is a lost dirty bit: the frame that carried
+        // "this line's text changed" was dropped, and the next one truthfully
+        // reports the line clean while the encoder's cached glyph buffer still
+        // holds the string from two frames ago.
+        //
+        // Counting publishes here rather than asking each host to remember is
+        // the point: this is the only place every published frame passes
+        // through, so the counter cannot be forgotten by a new runtime.
+        frame.set_version(
+            self.publish_seq
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                .wrapping_add(1),
+        );
+        // If the frame we are about to replace was never rendered, its dirty
+        // bits describe changes nobody has drawn yet. Carry them forward
+        // rather than dropping them — see `RenderFrame::merge_dirty_from` for
+        // why the union is the correct operation and why the alternative
+        // (detect the skip, redraw everything) gives the whole win back.
+        if !self.rendered.swap(false, Ordering::Relaxed) {
+            if let Some(previous) = self.latest.load_full() {
+                frame.merge_dirty_from(&previous);
+            }
+        }
         let previous = self.latest.swap(Some(Arc::new(frame)));
         if let Some(arc) = previous {
             if let Ok(reclaimed) = Arc::try_unwrap(arc) {
@@ -285,6 +329,18 @@ impl Relay {
             // deallocated normally once that reader drops it — we simply
             // don't get to recycle its buffer this time.
         }
+    }
+
+    /// Records that the frame currently in the slot has been rendered, so the
+    /// next [`publish`](Self::publish) may drop its dirty bits instead of
+    /// carrying them forward.
+    ///
+    /// Called by the render thread **after** the encode succeeds, not when the
+    /// frame is fetched: a frame read and then abandoned (a lost surface, an
+    /// occluded window) has not been drawn, and its dirty bits still have to
+    /// reach the screen eventually.
+    pub fn mark_rendered(&self) {
+        self.rendered.store(true, Ordering::Relaxed);
     }
 
     /// Returns a clone of the current latest frame, or `None` if nothing

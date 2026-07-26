@@ -24,8 +24,6 @@
 //! the region size changes, so a steady frosted nav-bar allocates nothing
 //! per frame after the first.
 
-use wgpu::util::DeviceExt;
-
 use crate::ByardError;
 use crate::frame::{BLUR_QUALITY_HIGH, BLUR_QUALITY_LOW, BackdropInstance};
 
@@ -128,8 +126,39 @@ pub struct BlurScratch {
 pub struct PreparedBackdrop {
     /// Group-1 bind group sampling the blurred scratch target.
     bind_group: wgpu::BindGroup,
-    /// The single-instance vertex buffer for the composite quad.
-    instance_buffer: wgpu::Buffer,
+    /// The composite quad's region in the frame's instance arena.
+    instance: super::instance_arena::Region,
+}
+
+/// The arena regions one backdrop needs, reserved during the frame's staging
+/// pass and filled while the pane is being prepared (RFC-0033 §G2).
+///
+/// The backdrop is the one pipeline whose data is not known before the render
+/// passes open: a pane samples what is behind it, so it can only be prepared
+/// once that has been rasterised. Reserving up front keeps the arena's rule
+/// intact — the GPU buffer is final before the first pass — while still
+/// removing the per-frame `create_buffer_init` calls.
+///
+/// It is also the **alignment case**: the blur parameters are a uniform, so
+/// their regions are padded to the device's own
+/// `min_uniform_buffer_offset_alignment` rather than to 4.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct BackdropRegions {
+    /// The composite quad's single vertex instance.
+    pub instance: super::instance_arena::Region,
+    /// Blur parameters for the horizontal pass.
+    pub blur_h: super::instance_arena::Region,
+    /// Blur parameters for the vertical pass.
+    pub blur_v: super::instance_arena::Region,
+}
+
+/// Reserves one backdrop's arena regions during the staging pass.
+pub fn reserve(arena: &mut super::instance_arena::InstanceArena) -> BackdropRegions {
+    BackdropRegions {
+        instance: arena.reserve_vertex(std::mem::size_of::<CompositeQuad>() as u64),
+        blur_h: arena.reserve_uniform(std::mem::size_of::<BlurParams>() as u64),
+        blur_v: arena.reserve_uniform(std::mem::size_of::<BlurParams>() as u64),
+    }
 }
 
 /// Builds a texture+sampler+uniform bind-group layout entry set shared by
@@ -406,19 +435,20 @@ fn ensure_scratch(
 fn blur_pass(
     encoder: &mut wgpu::CommandEncoder,
     device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    arena: &super::instance_arena::InstanceArena,
+    region: super::instance_arena::Region,
     pipes: &BackdropPipelines,
     src: &wgpu::TextureView,
     dst: &wgpu::TextureView,
     params: BlurParams,
     label: &str,
 ) {
-    let uniform = {
-        crate::profile_scope!("encode.buffers");
-        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("ByardCore - Blur Params"),
-            contents: bytemuck::bytes_of(&params),
-            usage: wgpu::BufferUsages::UNIFORM,
-        })
+    arena.write_region(queue, region, bytemuck::bytes_of(&params));
+    let uniform = wgpu::BufferBinding {
+        buffer: arena.buffer(),
+        offset: region.offset,
+        size: std::num::NonZeroU64::new(region.len),
     };
     let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("ByardCore - Blur Pass BG"),
@@ -434,7 +464,7 @@ fn blur_pass(
             },
             wgpu::BindGroupEntry {
                 binding: 2,
-                resource: uniform.as_entire_binding(),
+                resource: wgpu::BindingResource::Buffer(uniform),
             },
         ],
     });
@@ -511,6 +541,9 @@ fn sample_region(
 pub fn prepare(
     encoder: &mut wgpu::CommandEncoder,
     device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    arena: &super::instance_arena::InstanceArena,
+    regions: BackdropRegions,
     pipes: &BackdropPipelines,
     scratch: &mut ScratchCache,
     slot: usize,
@@ -576,6 +609,9 @@ pub fn prepare(
     blur_pass(
         encoder,
         device,
+        queue,
+        arena,
+        regions.blur_h,
         pipes,
         &s.src_view,
         &s.a_view,
@@ -590,6 +626,9 @@ pub fn prepare(
     blur_pass(
         encoder,
         device,
+        queue,
+        arena,
+        regions.blur_v,
         pipes,
         &s.a_view,
         &s.b_view,
@@ -605,6 +644,9 @@ pub fn prepare(
     // 3. Everything the resumed main pass needs to composite.
     Some(composite_resources(
         device,
+        queue,
+        arena,
+        regions,
         pipes,
         &s.b_view,
         b,
@@ -615,8 +657,12 @@ pub fn prepare(
 /// Builds the bind group and single-instance quad the resumed main pass
 /// composites with — the hand-off half of [`prepare`].
 #[allow(clippy::cast_precision_loss)]
+#[allow(clippy::too_many_arguments)]
 fn composite_resources(
     device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    arena: &super::instance_arena::InstanceArena,
+    regions: BackdropRegions,
     pipes: &BackdropPipelines,
     blurred: &wgpu::TextureView,
     b: &BackdropInstance,
@@ -652,24 +698,19 @@ fn composite_resources(
         t_rotate: b.transform.rotate,
         t_origin: b.transform.origin,
     };
-    let instance_buffer = {
-        crate::profile_scope!("encode.buffers");
-        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("ByardCore - Backdrop Composite Instance"),
-            contents: bytemuck::bytes_of(&quad),
-            usage: wgpu::BufferUsages::VERTEX,
-        })
-    };
+    arena.write_region(queue, regions.instance, bytemuck::bytes_of(&quad));
     PreparedBackdrop {
         bind_group,
-        instance_buffer,
+        instance: regions.instance,
     }
 }
 
 /// Draws one prepared backdrop composite inside the (resumed) main UI pass,
 /// scissored to its content clip (RFC-0005).
+#[allow(clippy::too_many_arguments)]
 pub fn draw_composite(
     render_pass: &mut wgpu::RenderPass<'_>,
+    arena: &super::instance_arena::InstanceArena,
     pipes: &BackdropPipelines,
     viewport_bind_group: &wgpu::BindGroup,
     quad_buffer: &wgpu::Buffer,
@@ -681,7 +722,7 @@ pub fn draw_composite(
     render_pass.set_bind_group(0, viewport_bind_group, &[]);
     render_pass.set_bind_group(1, &prepared.bind_group, &[]);
     render_pass.set_vertex_buffer(0, quad_buffer.slice(..));
-    render_pass.set_vertex_buffer(1, prepared.instance_buffer.slice(..));
+    render_pass.set_vertex_buffer(1, arena.slice(prepared.instance));
     super::for_each_clip_run(render_pass, 1, &[clip], ctx, |p, s, e| {
         p.draw(0..4, s..e);
     });

@@ -16,41 +16,36 @@
 //! than a code one. A benchmark proves a path is fast; only an integration
 //! assertion proves anyone walks it.
 //!
-//! # What it asserts, and why some of it is `#[ignore]`d
+//! # What changed
 //!
-//! The tests below fall into two groups.
+//! The file used to hold two groups: the current behaviour pinned, and three
+//! `#[ignore]`d acceptance criteria for behaviour that was blocked on a signal
+//! the interpreter did not produce. RFC-0032 produces it, so the acceptance
+//! criteria are now ordinary tests and the pins that described the *old*
+//! behaviour are gone — they said "the atlas is torn down every frame", which
+//! is no longer true and must not become true again.
 //!
-//! **Group 1 — the current behaviour, pinned.** These pass today. They exist so
-//! that a change to the interpreter's frame path is a *deliberate* change with
-//! a failing test attached, rather than a silent drift.
+//! What the tests are pinning now, in order of how badly it hurts to get it
+//! wrong:
 //!
-//! **Group 2 — the acceptance criteria, `#[ignore]`d.** These describe the
-//! behaviour the incremental design was built for and do **not** pass. They are
-//! written now, and ignored rather than deleted, so the gap is visible in
-//! `cargo test` output instead of living in nobody's head — and so that whoever
-//! closes it has an acceptance criterion already waiting instead of writing
-//! their own after the fact.
-//!
-//! # What actually blocks group 2
-//!
-//! Not the atlas, and not the one-line call site the surface reading suggests.
-//! The interpreter stores element attributes as raw expressions on the render
-//! node and re-evaluates them from scratch every frame, so there is no reactive
-//! edge from a signal to a box's colour or width and therefore **no per-element
-//! change signal at all**. Both group-2 behaviours need one:
-//!
-//! - passing a real dirty set to `populate_frame` needs to know *which nodes*
-//!   changed;
-//! - skipping `atlas.clear()` needs to know that nothing *layout-affecting*
-//!   changed — and an animated `width` or an edited `Text` would otherwise keep
-//!   the previous frame's geometry, leaving a stale rect that hit-testing still
-//!   answers from. An element that looks like it moved but is tappable where it
-//!   used to be is a correctness bug, not a performance regression.
-//!
-//! So the two findings the audit classified separately have one root cause, and
-//! closing them is a change to the evaluation model rather than a call-site fix.
-//! The measurements that say it is worth doing are in `cargo bench --bench
-//! atlas`: 3.8–7.2× on layout time and ~72 % of the per-frame heap allocations.
+//! 1. **The retained path is taken.** A frame with no structural change, no
+//!    resize, no reload, no theme flip and no overlay/route movement does not
+//!    clear the atlas.
+//! 2. **Every eligibility condition forces a rebuild.** This is the safety
+//!    half and the more important one: the fast path is opt-in per condition,
+//!    with rebuilding as the default (RFC-0032 §R4, default-deny).
+//! 3. **Wrapping text still wraps.** `recompute_dirty` without a sizer falls
+//!    back to a leaf's natural single-line size, which would silently un-wrap
+//!    every paragraph on the frame after any retained one. RFC-0032 §R5 exists
+//!    for this and it is the single most likely way the RFC ships a visible
+//!    bug.
+//! 4. **Hit-testing still answers from where things are.** A missed
+//!    invalidation here does not merely look wrong: it leaves a rect that the
+//!    spatial grid still answers from, i.e. an element that appears to have
+//!    moved and is tappable where it used to be. That failure is invisible in
+//!    a screenshot and invisible in a test that only checks pixels.
+//! 5. **The dirty set is real.** A recolour produces one dirty primitive, not
+//!    all of them and not none.
 
 #![cfg(feature = "telemetry")]
 
@@ -79,8 +74,8 @@ View Probe() {
 }
 "#;
 
-fn build() -> (Interpreter, Vec<RenderNode>) {
-    let parsed = parse(SOURCE);
+fn build_from(source: &str) -> (Interpreter, Vec<RenderNode>) {
+    let parsed = parse(source);
     assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
     let mut interp = Interpreter::new();
     let tree = interp.lower_view(&parsed.views[0], &[]);
@@ -88,155 +83,49 @@ fn build() -> (Interpreter, Vec<RenderNode>) {
     (interp, tree)
 }
 
+fn build() -> (Interpreter, Vec<RenderNode>) {
+    build_from(SOURCE)
+}
+
 /// One frame of the runner loop, with the atlas path counters reset first so
 /// the snapshot describes this frame alone.
 fn frame(interp: &mut Interpreter, tree: &[RenderNode]) -> (RenderFrame, path_counters::Counts) {
+    frame_at(interp, tree, W, H)
+}
+
+fn frame_at(
+    interp: &mut Interpreter,
+    tree: &[RenderNode],
+    w: f32,
+    h: f32,
+) -> (RenderFrame, path_counters::Counts) {
     path_counters::reset();
     interp.tick();
     let mut f = RenderFrame::new();
-    interp.render(tree, &mut f, W, H);
+    interp.render(tree, &mut f, w, h);
     (f, path_counters::snapshot())
 }
 
 /// Flips the `hot` var, so the next frame differs from the previous one by
 /// exactly one box's colour and nothing else.
 fn change_one_colour(interp: &mut Interpreter) {
+    flip_bool(interp, "hot");
+}
+
+fn flip_bool(interp: &mut Interpreter, name: &str) {
     let sig = interp
-        .var_signal(&Symbol::intern("hot"))
-        .expect("the probe view declares `hot`");
+        .var_signal(&Symbol::intern(name))
+        .unwrap_or_else(|| panic!("the probe view declares `{name}`"));
     let current = interp.peek(sig).as_bool().unwrap_or(false);
     interp.write_var(sig, Value::Bool(!current));
 }
 
-// ── Group 1: the current behaviour, pinned ─────────────────────────────────
+// ── 1. The retained path is taken ──────────────────────────────────────────
 
 #[test]
-fn a_value_only_frame_still_tears_down_and_rebuilds_the_whole_atlas() {
-    // Pins H1. A frame whose only difference is one box's colour still calls
-    // `clear()` — bumping the view generation and invalidating every
-    // previously-issued `TargetId` — and runs a full `compute`, never
-    // `recompute_dirty`.
-    //
-    // If this test fails because `clears` dropped to 0, that is the *good*
-    // outcome and `the_retained_layout_path_is_taken_on_a_value_only_frame`
-    // below is the test to un-ignore. Do not "fix" this one by relaxing it.
-    let (mut interp, tree) = build();
-    let _warmup = frame(&mut interp, &tree);
-
-    change_one_colour(&mut interp);
-    let (_f, counts) = frame(&mut interp, &tree);
-
-    assert_eq!(
-        counts.clears, 1,
-        "the interpreter clears the atlas once per frame"
-    );
-    assert!(
-        counts.full_computes >= 1,
-        "and runs a full layout pass over the freshly rebuilt tree"
-    );
-    assert_eq!(
-        counts.retained_recomputes, 0,
-        "the retained path is never entered from production"
-    );
-}
-
-#[test]
-fn the_atlas_contributes_no_dirty_rects_to_the_frame() {
-    // Pins H2. `populate_frame` is called with an empty dirty set, so every
-    // rect the atlas pushes is `dirty: false` and the atlas adds nothing to
-    // the frame's dirty union.
-    let (mut interp, tree) = build();
-    let _warmup = frame(&mut interp, &tree);
-
-    change_one_colour(&mut interp);
-    let (f, counts) = frame(&mut interp, &tree);
-
-    assert_eq!(counts.populate_calls, 1, "populate_frame runs once a frame");
-    assert_eq!(
-        counts.populate_dirty_targets, 0,
-        "and receives no targets at all — not stale ones, none"
-    );
-    assert!(
-        !f.rects().is_empty(),
-        "the frame did receive geometry, so the empty dirty set is the finding \
-         rather than an empty frame"
-    );
-    assert!(
-        f.dirty().iter().all(|d| !d),
-        "with no targets passed, nothing can be marked dirty"
-    );
-}
-
-#[test]
-fn the_view_generation_advances_every_frame() {
-    // The mechanism `TargetId`'s generation field exists for — distinguishing
-    // one *view* from another — degenerates into distinguishing one *frame*
-    // from another when `clear()` runs per frame. This is what makes the dirty
-    // channel unusable even if a caller did have targets to pass: they would
-    // be a generation stale by the time `populate_frame` saw them.
-    let (mut interp, tree) = build();
-    let (_f, first) = frame(&mut interp, &tree);
-    let (_f, second) = frame(&mut interp, &tree);
-
-    assert_eq!(first.clears, 1);
-    assert_eq!(second.clears, 1);
-}
-
-#[test]
-fn the_counters_do_not_fire_when_nothing_renders() {
-    // A negative case, so the assertions above are known to be measuring the
-    // render path rather than something that happens to be true always.
-    let (mut interp, _tree) = build();
-    path_counters::reset();
-    interp.tick();
-    let counts = path_counters::snapshot();
-    assert_eq!(counts.clears, 0);
-    assert_eq!(counts.full_computes, 0);
-    assert_eq!(counts.populate_calls, 0);
-}
-
-#[test]
-fn a_structural_change_is_indistinguishable_from_a_value_change_at_the_atlas() {
-    // The counters must not accidentally already encode "something structural
-    // happened" — if they did, the retained-path condition would look
-    // available when it is not. Mounting a whole new subtree and recolouring
-    // one box produce the identical atlas call sequence.
-    let (mut interp, tree) = build();
-    let _warmup = frame(&mut interp, &tree);
-
-    change_one_colour(&mut interp);
-    let (_f, value_only) = frame(&mut interp, &tree);
-
-    let mut interp2 = {
-        let parsed = parse(SOURCE);
-        let mut i = Interpreter::new();
-        let _ = i.lower_view(&parsed.views[0], &[]);
-        i.tick();
-        i
-    };
-    let parsed = parse(SOURCE);
-    let tree2 = interp2.lower_view(&parsed.views[0], &[]);
-    let (_f, first_ever) = frame(&mut interp2, &tree2);
-
-    assert_eq!(
-        (value_only.clears, value_only.retained_recomputes),
-        (first_ever.clears, first_ever.retained_recomputes),
-        "the atlas cannot tell a recolour from a first render, which is exactly \
-         why it cannot take a cheaper path on one of them"
-    );
-}
-
-// ── Group 2: acceptance criteria for the retained path ─────────────────────
-
-#[test]
-#[ignore = "blocked: the interpreter has no per-element change signal — \
-            attributes are raw expressions re-evaluated every frame, so it \
-            cannot know whether anything layout-affecting changed. See this \
-            file's module docs."]
 fn the_retained_layout_path_is_taken_on_a_value_only_frame() {
-    // The acceptance criterion for reactivating `recompute_dirty` in the
-    // interpreter: a frame with no structural change, no resize, no hot reload
-    // and no theme change must not tear the atlas down.
+    // Was `#[ignore]`d, blocked on the interpreter having no per-element
+    // change signal. RFC-0032 is that signal.
     let (mut interp, tree) = build();
     let _warmup = frame(&mut interp, &tree);
 
@@ -255,54 +144,492 @@ fn the_retained_layout_path_is_taken_on_a_value_only_frame() {
 }
 
 #[test]
-#[ignore = "blocked: same missing per-element change signal — `ReactiveCtx` \
-            tracks value bindings (Text content, Image src), not the attribute \
-            surface, and there is no binding→atlas-node map. See this file's \
-            module docs."]
-fn the_atlas_marks_exactly_the_changed_node_dirty() {
-    // The acceptance criterion for the atlas→frame dirty channel: one box's
-    // colour changed, so exactly one rect comes back dirty — not zero (today)
-    // and not all of them (which would make the channel useless in the other
-    // direction).
+fn a_steady_scene_never_rebuilds_after_the_first_frame() {
+    // The counter RFC-0032 §R7 names as the acceptance surface:
+    // `full_computes` ~0 in steady state. Ten frames, no input at all.
     let (mut interp, tree) = build();
-    let _warmup = frame(&mut interp, &tree);
+    let (_f, first) = frame(&mut interp, &tree);
+    assert_eq!(first.full_computes, 1, "the first frame builds the tree");
 
-    change_one_colour(&mut interp);
-    let (f, counts) = frame(&mut interp, &tree);
+    for i in 0..10 {
+        let (_f, counts) = frame(&mut interp, &tree);
+        assert_eq!(
+            (counts.clears, counts.full_computes),
+            (0, 0),
+            "steady-state frame {i} rebuilt the atlas"
+        );
+    }
+}
 
-    assert!(
-        counts.populate_dirty_targets > 0,
-        "the interpreter must pass the tick's dirty set, not an empty slice"
-    );
+#[test]
+fn the_counters_do_not_fire_when_nothing_renders() {
+    // A negative case, so the assertions above are known to be measuring the
+    // render path rather than something that happens to be true always.
+    let (mut interp, _tree) = build();
+    path_counters::reset();
+    interp.tick();
+    let counts = path_counters::snapshot();
+    assert_eq!(counts.clears, 0);
+    assert_eq!(counts.full_computes, 0);
+    assert_eq!(counts.populate_calls, 0);
+}
+
+// ── 2. Every eligibility condition forces a rebuild (RFC-0032 §R4) ─────────
+//
+// One test per clause of the whitelist. A clause without a test is a clause
+// that does not ship: "if any eligibility condition proves hard to test,
+// remove it from the whitelist rather than shipping it untested."
+
+/// Asserts that `frame_fn` produced a full rebuild rather than a retained pass.
+fn assert_rebuilt(counts: &path_counters::Counts, why: &str) {
+    assert_eq!(counts.clears, 1, "{why} must force a full rebuild");
+    assert_eq!(counts.full_computes, 1, "{why} must run a full layout pass");
     assert_eq!(
-        f.dirty().iter().filter(|d| **d).count(),
-        1,
-        "exactly the recoloured node is dirty"
+        counts.retained_recomputes, 0,
+        "{why} must not take the retained path"
     );
 }
 
 #[test]
-#[ignore = "blocked: depends on the retained layout path above — a structural \
-            change can only be *required* to force a rebuild once a rebuild is \
-            no longer unconditional. See this file's module docs."]
-fn every_structural_change_still_forces_a_full_rebuild() {
-    // The safety half of the retained path, and the more important half: the
-    // fast path must be opt-in per condition, with rebuilding as the default.
-    // A missed invalidation here does not merely look wrong — it leaves a
-    // stale rect that hit-testing still answers from, i.e. an element that
-    // appears to have moved but is tappable where it used to be.
+fn a_resize_forces_a_full_rebuild() {
     let (mut interp, tree) = build();
     let _warmup = frame(&mut interp, &tree);
+    let (_f, counts) = frame_at(&mut interp, &tree, W * 0.5, H);
+    assert_rebuilt(&counts, "a viewport change");
+}
 
-    // A resize is the simplest structural trigger that needs no grammar.
-    path_counters::reset();
-    interp.tick();
-    let mut f = RenderFrame::new();
-    interp.render(&tree, &mut f, W * 0.5, H);
-    let counts = path_counters::snapshot();
+#[test]
+fn a_structural_change_forces_a_full_rebuild() {
+    const STRUCTURAL: &str = r"
+View Probe() {
+    var shown = false
+    Column #[width: 400, height: 300] {
+        Box #[width: 100, height: 40, bg: 0x0000FF] {}
+        when shown {
+            Box #[width: 100, height: 40, bg: 0xFF0000] {}
+        }
+    }
+}
+";
+    let (mut interp, tree) = build_from(STRUCTURAL);
+    let _warmup = frame(&mut interp, &tree);
+    let _settle = frame(&mut interp, &tree);
 
+    flip_bool(&mut interp, "shown");
+    let (_f, counts) = frame(&mut interp, &tree);
+    assert_rebuilt(&counts, "mounting a `when` branch");
+}
+
+#[test]
+fn a_for_pool_growing_forces_a_full_rebuild() {
+    const LOOP_SRC: &str = r"
+View Probe() {
+    var items = [1, 2]
+    Column #[width: 400, height: 300] {
+        for it in items {
+            Box #[width: 100, height: 40, bg: 0x0000FF] {}
+        }
+    }
+}
+";
+    let (mut interp, tree) = build_from(LOOP_SRC);
+    let _warmup = frame(&mut interp, &tree);
+    let _settle = frame(&mut interp, &tree);
+
+    let sig = interp
+        .var_signal(&Symbol::intern("items"))
+        .expect("`items` is declared");
+    interp.write_var(
+        sig,
+        Value::List(vec![Value::Int(1), Value::Int(2), Value::Int(3)]),
+    );
+    let (_f, counts) = frame(&mut interp, &tree);
+    assert_rebuilt(&counts, "a `for` list growing");
+}
+
+#[test]
+fn a_theme_scheme_flip_forces_a_full_rebuild() {
+    // RFC-0032 §Q6: a scheme flip changes nearly every resolved value at once,
+    // so marking would visit everything and then recompute everything.
+    let (mut interp, tree) = build();
+    interp.set_theme(byard_compiler::interp::theme::Theme::default());
+    let _warmup = frame(&mut interp, &tree);
+    let _settle = frame(&mut interp, &tree);
+
+    interp.set_theme_dark(!interp.theme_is_dark());
+    let (_f, counts) = frame(&mut interp, &tree);
+    assert_rebuilt(&counts, "a theme scheme flip");
+}
+
+#[test]
+fn a_hot_reload_forces_a_full_rebuild() {
+    use byard_compiler::interp::reload::diff_view;
+
+    let (mut interp, tree) = build();
+    let _warmup = frame(&mut interp, &tree);
+    let _settle = frame(&mut interp, &tree);
+
+    let old = parse(SOURCE);
+    let new = parse(SOURCE);
+    interp.reload(&new.views[0], diff_view(&old.views[0], &new.views[0]));
+    let (_f, counts) = frame(&mut interp, &tree);
+    assert_rebuilt(&counts, "a hot reload");
+}
+
+#[test]
+fn mounting_an_overlay_forces_a_full_rebuild() {
+    // An overlay mounts through a `when` guard (RFC-0017) — there is no
+    // `visible:` attribute — so this also re-covers the structural clause. The
+    // overlay-count clause it targets is nonetheless load-bearing on its own:
+    // overlay and navigation pools do not travel through
+    // `reconcile_structure`, which is why `a_route_push_forces_a_full_rebuild`
+    // below can move a route without any `when` in sight.
+    const OVERLAY_SRC: &str = r"
+View Probe() {
+    var open = false
+    Column #[width: 400, height: 300] {
+        Box #[width: 100, height: 40, bg: 0x0000FF] {}
+        when open {
+            Overlay #[modal: true] {
+                Box #[width: 80, height: 80, bg: 0xFF0000] {}
+            }
+        }
+    }
+}
+";
+    let (mut interp, tree) = build_from(OVERLAY_SRC);
+    let _warmup = frame(&mut interp, &tree);
+    let _settle = frame(&mut interp, &tree);
+
+    flip_bool(&mut interp, "open");
+    let (_f, counts) = frame(&mut interp, &tree);
+    assert_rebuilt(&counts, "mounting an overlay");
+}
+
+#[test]
+fn a_route_push_forces_a_full_rebuild() {
+    const NAV_SRC: &str = r#"
+View Probe() {
+    var path = "/"
+    NavStack(path: path) #[width: 400, height: 300] {
+        route "/" {
+            Box #[width: 100, height: 40, bg: 0x0000FF] {}
+        }
+        route "/detail" {
+            Box #[width: 100, height: 40, bg: 0xFF0000] {}
+        }
+    }
+}
+"#;
+    let (mut interp, tree) = build_from(NAV_SRC);
+    let _warmup = frame(&mut interp, &tree);
+    let _settle = frame(&mut interp, &tree);
+
+    let sig = interp
+        .var_signal(&Symbol::intern("path"))
+        .expect("`path` is declared");
+    interp.write_var(sig, Value::Str("/detail".to_string()));
+    let (_f, counts) = frame(&mut interp, &tree);
+    assert_rebuilt(&counts, "a route push");
+}
+
+// ── 3. Wrapping text still wraps across a retained frame (RFC-0032 §R5) ────
+
+const WRAP_SRC: &str = r#"
+View Probe() {
+    var hot = false
+    Column #[width: 240, height: 400] {
+        Box #[width: 40, height: 20, bg: hot ? 0xFF0000 : 0x0000FF] {}
+        Text("A paragraph long enough that it must wrap onto several lines when it is offered only the width of this narrow column, which is the whole point of measuring it inside layout.")
+            #[size: 14]
+        Text("A second unwrapped run") #[size: 14, wrap: false]
+        Box #[width: 40, height: 20, bg: 0x00FF00] {}
+    }
+}
+"#;
+
+/// How far down the column the *last* emitted solid box sits.
+///
+/// This is the observable that proves a paragraph above it wrapped: the
+/// paragraph's own rect is not directly addressable from here, but everything
+/// below it moves by exactly the height it occupies. An un-wrapped (collapsed
+/// to one line) paragraph pulls its siblings up, which is precisely the
+/// visible bug RFC-0032 §R5 exists to prevent.
+fn last_box_y(f: &RenderFrame) -> f32 {
+    f.instances()
+        .iter()
+        .map(|b| b.rect[1])
+        .fold(f32::MIN, f32::max)
+}
+
+#[test]
+fn wrapping_text_still_wraps_across_a_retained_frame() {
+    // The trap this guards: `recompute_dirty` runs the measure protocol with
+    // **no sizer**, so a wrapping `Text` leaf falls back to its natural
+    // single-line size and every paragraph silently un-wraps on the frame
+    // after any retained one. `recompute_dirty_with_text` exists solely for
+    // this, and this test is what stops someone "simplifying" it away.
+    let (mut interp, tree) = build_from(WRAP_SRC);
+    let (full, first) = frame(&mut interp, &tree);
+    assert_eq!(first.full_computes, 1);
+    let wrapped_y = last_box_y(&full);
+    assert!(
+        wrapped_y > 60.0,
+        "the fixture's paragraph must actually wrap for this test to mean \
+         anything; the trailing box sits at y={wrapped_y}"
+    );
+
+    // Force the paragraph to be re-measured on the retained frame by changing
+    // something above it, so this is not passing merely because Taffy skipped
+    // the leaf entirely.
+    change_one_colour(&mut interp);
+    let (retained, counts) = frame(&mut interp, &tree);
+    assert_eq!(counts.retained_recomputes, 1, "this frame must be retained");
+    assert_eq!(counts.clears, 0);
+
+    assert!(
+        (last_box_y(&retained) - wrapped_y).abs() < 0.5,
+        "the paragraph collapsed across a retained frame — the trailing box \
+         moved from y={wrapped_y} to y={} because the retained path lost its \
+         text sizer",
+        last_box_y(&retained)
+    );
+}
+
+#[test]
+fn a_text_content_change_is_layout_class_and_reflows_on_the_retained_path() {
+    // The row RFC-0032 §R2's classification table turns on: text content is
+    // layout-class. If it were treated as paint-only, an edited paragraph
+    // would keep the previous string's line count and the box below it would
+    // never move.
+    const EDIT_SRC: &str = r#"
+View Probe() {
+    var long = false
+    Column #[width: 200, height: 400] {
+        Text(long ? "A much longer paragraph that certainly needs more than one line at this width and then some more words to be sure of it." : "short")
+            #[size: 14]
+        Box #[width: 40, height: 20, bg: 0x00FF00] {}
+    }
+}
+"#;
+    let (mut interp, tree) = build_from(EDIT_SRC);
+    let (short, _) = frame(&mut interp, &tree);
+    let short_y = last_box_y(&short);
+
+    flip_bool(&mut interp, "long");
+    let (long, counts) = frame(&mut interp, &tree);
     assert_eq!(
-        counts.clears, 1,
-        "a viewport change must always force the full rebuild"
+        counts.retained_recomputes, 1,
+        "editing text is not a structural change — the tree is retained"
+    );
+    assert!(
+        last_box_y(&long) > short_y,
+        "the edited paragraph did not reflow: the box below it stayed at \
+         y={short_y} (now {})",
+        last_box_y(&long)
+    );
+    assert!(
+        counts.populate_dirty_targets > 0,
+        "a layout-affecting change must reach `populate_frame` as a dirty target"
+    );
+    assert_eq!(
+        counts.populate_dirty_matched, counts.populate_dirty_targets,
+        "every target must match a live node — a lower ratio means the targets \
+         are generation-stale, which is a caller bug rather than an empty set"
+    );
+}
+
+// ── 4. Hit-testing after a retained frame ─────────────────────────────────
+
+#[test]
+fn hit_testing_lands_on_the_element_that_is_visually_there() {
+    // The failure this rules out is the one that stopped PR #148: a rect that
+    // is stale but still in the spatial grid, so an element renders in its new
+    // place and answers taps in its old one. Invisible in a screenshot.
+    //
+    // The case exercised is deliberately the hard one — a **sibling reflow**.
+    // The first box's height changes, so the second box moves even though
+    // nothing about *it* changed and nothing marked it. RFC-0032 §R3 delegates
+    // that to Taffy's own dirty propagation and rebuilds the grid from the
+    // resolved rects; this test is the proof that the delegation works.
+    const REFLOW_SRC: &str = r"
+View Probe() {
+    var tall = false
+    Column #[width: 200, height: 400] {
+        Box #[width: 100, height: tall ? 120 : 40, bg: 0x0000FF] {}
+        Box #[width: 100, height: 40, bg: 0x00FF00] {}
+    }
+}
+";
+    let (mut interp, tree) = build_from(REFLOW_SRC);
+    let _warmup = frame(&mut interp, &tree);
+
+    let before = interp
+        .atlas
+        .hit_test(50.0, 60.0)
+        .and_then(|n| interp.atlas.node_index(n));
+
+    flip_bool(&mut interp, "tall");
+    let (_f, counts) = frame(&mut interp, &tree);
+    assert_eq!(
+        counts.retained_recomputes, 1,
+        "a height change is a value change, not a structural one"
+    );
+
+    // y = 60 was inside the second box; after the first box grows to 120 it is
+    // inside the *first* one. If the grid were stale, the answer would not
+    // have changed.
+    let after = interp
+        .atlas
+        .hit_test(50.0, 60.0)
+        .and_then(|n| interp.atlas.node_index(n));
+    assert!(
+        before != after,
+        "the spatial grid still answers from the pre-reflow geometry — a node \
+         that moved because a sibling resized was never re-indexed"
+    );
+
+    // And the moved-but-unmarked sibling is reachable at its new position.
+    let moved = interp.atlas.hit_test(50.0, 140.0);
+    assert!(
+        moved.is_some(),
+        "the second box is not hit-testable at the position it was pushed to"
+    );
+}
+
+// ── 5. A real dirty set, end to end ───────────────────────────────────────
+
+#[test]
+fn a_single_colour_change_produces_exactly_one_dirty_primitive() {
+    let (mut interp, tree) = build();
+    let _warmup = frame(&mut interp, &tree);
+    let _settle = frame(&mut interp, &tree);
+
+    change_one_colour(&mut interp);
+    let (f, _counts) = frame(&mut interp, &tree);
+
+    let dirty: Vec<usize> = f
+        .instances_dirty()
+        .iter()
+        .enumerate()
+        .filter(|(_, d)| **d)
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(
+        dirty.len(),
+        1,
+        "exactly the recoloured box is dirty; got {dirty:?} of {} instances",
+        f.instances().len()
+    );
+    assert!(
+        f.texts().iter().all(|t| !t.dirty),
+        "the text did not change and must not be re-shaped"
+    );
+}
+
+#[test]
+fn a_paint_only_frame_marks_no_layout_targets() {
+    // The other half of the previous test, and the reason `populate_frame`'s
+    // target set is *not* simply "everything that changed": a recolour has no
+    // layout consequence, so nothing is marked, nothing is recomputed, and no
+    // text leaf is re-measured. `targets_received > 0` is the acceptance
+    // criterion for a **layout-affecting** frame (covered above), not for
+    // every frame in which some value moved.
+    let (mut interp, tree) = build();
+    let _warmup = frame(&mut interp, &tree);
+    let _settle = frame(&mut interp, &tree);
+
+    change_one_colour(&mut interp);
+    let (_f, counts) = frame(&mut interp, &tree);
+    assert_eq!(
+        counts.populate_dirty_targets, 0,
+        "a colour is not a layout input"
+    );
+    assert_eq!(counts.populate_calls, 1);
+}
+
+#[test]
+fn an_unchanged_frame_marks_nothing_dirty_at_all() {
+    let (mut interp, tree) = build();
+    let _warmup = frame(&mut interp, &tree);
+    let _settle = frame(&mut interp, &tree);
+
+    let (f, counts) = frame(&mut interp, &tree);
+    assert_eq!(counts.populate_dirty_targets, 0);
+    assert!(
+        f.instances_dirty().iter().all(|d| !d),
+        "nothing changed, so no box may be reported dirty"
+    );
+    assert!(
+        f.texts().iter().all(|t| !t.dirty),
+        "nothing changed, so no text line may be re-shaped"
+    );
+}
+
+#[test]
+fn the_first_frame_reports_everything_dirty() {
+    // The mirror image, and the reason the digest carries a `primed` flag: a
+    // first frame in which nothing is dirty would simply never be drawn.
+    let (mut interp, tree) = build();
+    let (f, _counts) = frame(&mut interp, &tree);
+    assert!(
+        f.instances_dirty().iter().all(|d| *d),
+        "every instance on the first frame must be dirty"
+    );
+    assert!(f.texts().iter().all(|t| t.dirty));
+}
+
+// ── Parity: the retained frame paints what a rebuilt frame paints ─────────
+
+#[test]
+fn a_retained_frame_is_byte_identical_to_a_forced_full_rebuild() {
+    // INV-22: the retained path is not intended to change any output, so any
+    // difference is a bug. Comparing the emitted primitives rather than pixels
+    // makes the check exact and cheap enough to run on every commit — a pixel
+    // comparison of the same frame lives in `byard-platform`'s readback tests.
+    let (mut interp, tree) = build_from(WRAP_SRC);
+    let _warmup = frame(&mut interp, &tree);
+
+    change_one_colour(&mut interp);
+    let (retained, counts) = frame(&mut interp, &tree);
+    assert_eq!(counts.retained_recomputes, 1);
+
+    // Same interpreter, same state, same frame — but rebuilt.
+    interp.invalidate_retained_layout();
+    let (rebuilt, counts) = frame(&mut interp, &tree);
+    assert_eq!(counts.full_computes, 1);
+
+    let boxes = |f: &RenderFrame| -> Vec<[f32; 12]> {
+        f.instances()
+            .iter()
+            .map(|b| {
+                let mut v = [0.0; 12];
+                v[..4].copy_from_slice(&b.rect);
+                v[4..8].copy_from_slice(&b.color);
+                v[8..].copy_from_slice(&b.radii);
+                v
+            })
+            .collect()
+    };
+    assert_eq!(
+        boxes(&retained),
+        boxes(&rebuilt),
+        "the retained path emitted different solid geometry"
+    );
+    assert_eq!(
+        retained.rects(),
+        rebuilt.rects(),
+        "the retained path resolved different layout rects"
+    );
+    let texts = |f: &RenderFrame| -> Vec<(String, f32, f32, f32)> {
+        f.texts()
+            .iter()
+            .map(|t| (t.text.clone(), t.x, t.y, t.font_size))
+            .collect()
+    };
+    assert_eq!(
+        texts(&retained),
+        texts(&rebuilt),
+        "the retained path placed or shaped text differently"
     );
 }

@@ -13,8 +13,6 @@
 //! **only** on the render thread via [`VectorAtlas::apply_uploads`] (INV-8); a
 //! background worker never touches the `wgpu::Queue`.
 
-use wgpu::util::DeviceExt;
-
 use crate::ByardError;
 use crate::frame::{AtlasUpload, VectorInstance};
 
@@ -325,34 +323,27 @@ pub async fn build_pipeline(
 #[allow(clippy::too_many_arguments)]
 pub fn draw(
     render_pass: &mut wgpu::RenderPass<'_>,
-    device: &wgpu::Device,
+    arena: &super::instance_arena::InstanceArena,
+    region: super::instance_arena::Region,
     pipeline: &wgpu::RenderPipeline,
     viewport_bind_group: &wgpu::BindGroup,
     quad_buffer: &wgpu::Buffer,
     atlas: &VectorAtlas,
-    instances: &[VectorInstance],
+    count: usize,
     clip_slice: &[Option<u16>],
     ctx: super::ClipCtx<'_>,
 ) {
-    if instances.is_empty() {
+    if region.is_empty() {
         return;
     }
-    let buffer = {
-        crate::profile_scope!("encode.buffers");
-        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("ByardCore - VectorMSDF Instance Buffer"),
-            contents: bytemuck::cast_slice(instances),
-            usage: wgpu::BufferUsages::VERTEX,
-        })
-    };
     render_pass.set_pipeline(pipeline);
     render_pass.set_bind_group(0, viewport_bind_group, &[]);
     render_pass.set_bind_group(1, atlas.bind_group(), &[]);
     render_pass.set_vertex_buffer(0, quad_buffer.slice(..));
-    render_pass.set_vertex_buffer(1, buffer.slice(..));
+    render_pass.set_vertex_buffer(1, arena.slice(region));
     // Content-clip runs (RFC-0005): an icon scrolled out of its viewport is
     // scissored away (a zero-area run is skipped entirely).
-    super::for_each_clip_run(render_pass, instances.len(), clip_slice, ctx, |p, s, e| {
+    super::for_each_clip_run(render_pass, count, clip_slice, ctx, |p, s, e| {
         p.draw(0..4, s..e);
     });
 }

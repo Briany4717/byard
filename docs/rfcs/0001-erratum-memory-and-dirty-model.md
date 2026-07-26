@@ -123,6 +123,29 @@ runtime. RFC-0001's model is worth reaching; the measurements say so (the
 retained layout path is 3.8–7.2× cheaper and avoids ~72 % of the per-frame
 allocations). Reaching it needs its own RFC.
 
+> **Closed by RFC-0032.** The producer exists: two value fingerprints per
+> element, hashed from the resolved values the render walk already computes.
+> `Interpreter::render` takes the retained path on an eligible frame,
+> `populate_frame` receives the layout-dirty set, and every primitive carries
+> `dirty` derived from a comparison against its own resolved values last
+> frame — so §2.2 and §3.3 now describe the runtime rather than the intent.
+> Two things this erratum did **not** anticipate turned up on the way, and
+> both are worth knowing:
+>
+> - The relay is latest-wins, so a dirty bit published in a frame the render
+>   thread skips is simply lost. Harmless while everything was dirty always;
+>   the single biggest cost once it is not. `Relay::publish` now merges an
+>   unrendered frame's dirty bits into its replacement.
+> - The scissor's per-primitive bounds under-covered in three places nobody
+>   had reason to notice while the union spanned the whole frame: the
+>   antialiased fringe of every analytic pipeline, a wrapping `Text`'s line
+>   count, and a drop shadow's reach outside its box.
+>
+> C1 and C2 are unaffected: there is still no garbage collector, and the hot
+> path still allocates. Retaining the Taffy tree removes the largest single
+> source of that allocation but does not make the claim "allocation-free"
+> true, and it should still not be used.
+
 ---
 
 ## What this erratum does not do

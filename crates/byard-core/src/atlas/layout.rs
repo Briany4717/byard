@@ -5,6 +5,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
+use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::frame::{Rect, RenderFrame, TargetId, TargetKind, Viewport};
@@ -13,6 +14,7 @@ use taffy::{
     AlignItems, AvailableSpace, Dimension, Display, FlexDirection, GridPlacement,
     GridTemplateComponent, JustifyContent, LengthPercentage, LengthPercentageAuto, Line, NodeId,
     Overflow, Point, Position, Rect as TaffyRect, Size, Style, TaffyError, TaffyTree,
+    TraversePartialTree,
 };
 
 use super::spatial::SpatialGrid;
@@ -47,6 +49,149 @@ const _: () = assert!(
     std::mem::size_of::<AtlasNodeId>() <= 16,
     "AtlasNodeId exceeded its 16-byte CPU register optimization budget!"
 );
+
+/// Which constructor produced a build-order slot.
+///
+/// The retained build path (RFC-0032 §R4) re-walks the tree in the identical
+/// order and reuses the node that already occupies each slot. That reuse is
+/// only sound if the slot holds the *same kind* of node, so the kind is
+/// recorded on the way in and checked on the way back — a mismatch aborts the
+/// retained build rather than restyling a container as if it were a leaf.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum NodeKind {
+    /// [`LayoutAtlas::add_leaf`].
+    Leaf,
+    /// [`LayoutAtlas::add_flex_leaf`].
+    FlexLeaf,
+    /// [`LayoutAtlas::add_text_leaf`].
+    TextLeaf,
+    /// [`LayoutAtlas::add_container`].
+    Container,
+    /// [`LayoutAtlas::add_grid_container`].
+    Grid,
+    /// [`LayoutAtlas::add_stack_container`].
+    Stack,
+}
+
+impl NodeKind {
+    /// Whether this kind is created as a childless Taffy leaf.
+    const fn is_leaf(self) -> bool {
+        matches!(self, Self::Leaf | Self::FlexLeaf | Self::TextLeaf)
+    }
+}
+
+/// Hashes a node's **resolved layout inputs** into a 64-bit fingerprint
+/// (RFC-0032 §R2).
+///
+/// Two rules make this trustworthy, and both are the difference between a
+/// fingerprint that answers "did this change?" and one that answers it wrongly
+/// in a way nobody notices:
+///
+/// - **`f32`s are hashed through [`f32::to_bits`], never directly.** Hashing
+///   the float would make `NaN` compare unequal to itself (an element
+///   permanently dirty — wasteful but visible) and `-0.0` compare equal to
+///   `0.0` (an element permanently *clean* — silent, and wrong).
+/// - **The kind discriminant is hashed first**, so a leaf and a container that
+///   happen to carry the same numbers never collide into "unchanged".
+///
+/// `FxHasher` rather than `DefaultHasher` (RFC-0032 §Q7): `endpoint_key` runs
+/// once per animation, this runs once per node per frame. Nothing here is
+/// adversarial.
+struct LayoutFingerprint(rustc_hash::FxHasher);
+
+impl LayoutFingerprint {
+    fn new(kind: NodeKind) -> Self {
+        let mut h = rustc_hash::FxHasher::default();
+        (kind as u8).hash(&mut h);
+        Self(h)
+    }
+
+    fn f32(&mut self, v: f32) -> &mut Self {
+        v.to_bits().hash(&mut self.0);
+        self
+    }
+
+    fn opt_f32(&mut self, v: Option<f32>) -> &mut Self {
+        match v {
+            Some(x) => {
+                1u8.hash(&mut self.0);
+                x.to_bits().hash(&mut self.0);
+            }
+            None => 0u8.hash(&mut self.0),
+        }
+        self
+    }
+
+    fn u8(&mut self, v: u8) -> &mut Self {
+        v.hash(&mut self.0);
+        self
+    }
+
+    fn bool(&mut self, v: bool) -> &mut Self {
+        self.u8(u8::from(v))
+    }
+
+    fn str(&mut self, v: &str) -> &mut Self {
+        v.hash(&mut self.0);
+        self
+    }
+
+    fn spacing(&mut self, s: Spacing) -> &mut Self {
+        self.f32(s.top).f32(s.right).f32(s.bottom).f32(s.left)
+    }
+
+    fn tracks(&mut self, tracks: &[GridTrack]) -> &mut Self {
+        (tracks.len() as u64).hash(&mut self.0);
+        for t in tracks {
+            match t {
+                GridTrack::Fr(f) => {
+                    self.u8(0).f32(*f);
+                }
+                GridTrack::Px(p) => {
+                    self.u8(1).f32(*p);
+                }
+                GridTrack::Auto => {
+                    self.u8(2);
+                }
+            }
+        }
+        self
+    }
+
+    fn container(&mut self, s: &ContainerStyle) -> &mut Self {
+        self.opt_f32(s.width)
+            .opt_f32(s.height)
+            .u8(s.direction as u8)
+            .f32(s.gap)
+            .spacing(s.padding)
+            .spacing(s.margin)
+            .u8(s.align as u8)
+            .u8(s.justify as u8)
+            .f32(s.grow)
+            .bool(s.scroll_x)
+            .bool(s.scroll_y)
+            .bool(s.absolute)
+    }
+
+    /// Folds in the *identity* of this node's children.
+    ///
+    /// A container whose own style is unchanged but whose child list is not
+    /// must still be treated as changed — otherwise a reordered row would keep
+    /// last frame's geometry. The retained path already refuses to run when
+    /// the structure changed, so this is the second line of defence rather
+    /// than the first, and it is cheap.
+    fn children(&mut self, children: &[AtlasNodeId]) -> &mut Self {
+        (children.len() as u64).hash(&mut self.0);
+        for c in children {
+            c.node_id.hash(&mut self.0);
+        }
+        self
+    }
+
+    fn finish(&self) -> u64 {
+        self.0.finish()
+    }
+}
 
 /// Explicit size for a leaf node.
 #[derive(Debug, Clone, Copy)]
@@ -531,6 +676,20 @@ pub enum AtlasError {
         /// the id.
         actual: u32,
     },
+
+    /// A retained build (RFC-0032 §R4) reached a build-order slot it could not
+    /// reuse — the walk produced a different node kind, a different child
+    /// count, or more nodes than the retained tree holds.
+    ///
+    /// This is a *recoverable* signal rather than a failure: the caller
+    /// finishes the walk, [`LayoutAtlas::end_retained_build`] returns `false`,
+    /// and the frame is rebuilt from scratch. It exists as an error rather
+    /// than a silent fallback so a retained build that is going wrong cannot
+    /// quietly return a node id belonging to some other element.
+    RetainedSlotMismatch {
+        /// The build-order slot that could not be reused.
+        index: usize,
+    },
 }
 
 impl AtlasError {
@@ -546,6 +705,11 @@ impl fmt::Display for AtlasError {
             Self::ForeignNode { expected, actual } => write!(
                 f,
                 "AtlasNodeId belongs to atlas instance {actual}, but was used with atlas instance {expected}"
+            ),
+            Self::RetainedSlotMismatch { index } => write!(
+                f,
+                "retained layout build could not reuse build-order slot {index}; \
+                 the frame must be rebuilt from scratch"
             ),
         }
     }
@@ -653,7 +817,44 @@ pub mod path_counters {
 /// The `telemetry`-off stand-ins: every recording call compiles to nothing, so
 /// a shipped build carries no counters at all.
 #[cfg(not(feature = "telemetry"))]
-mod path_counters {
+pub mod path_counters {
+    /// The `telemetry`-off counterpart of the real
+    /// [`Counts`](super::path_counters::Counts): the same shape, always zero,
+    /// so consumers (the `byard dev` readout, the frame budget suite) compile
+    /// and read identically in both builds instead of being written twice
+    /// behind a `cfg`.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    pub struct Counts {
+        /// Always `0` without the `telemetry` feature.
+        pub clears: u64,
+        /// Always `0` without the `telemetry` feature.
+        pub full_computes: u64,
+        /// Always `0` without the `telemetry` feature.
+        pub retained_recomputes: u64,
+        /// Always `0` without the `telemetry` feature.
+        pub populate_calls: u64,
+        /// Always `0` without the `telemetry` feature.
+        pub populate_dirty_targets: u64,
+        /// Always `0` without the `telemetry` feature.
+        pub populate_dirty_matched: u64,
+    }
+
+    /// Always the zero snapshot without the `telemetry` feature.
+    #[must_use]
+    pub const fn snapshot() -> Counts {
+        Counts {
+            clears: 0,
+            full_computes: 0,
+            retained_recomputes: 0,
+            populate_calls: 0,
+            populate_dirty_targets: 0,
+            populate_dirty_matched: 0,
+        }
+    }
+
+    /// No-op without the `telemetry` feature.
+    pub const fn reset() {}
+
     pub(super) const fn record_clear() {}
     pub(super) const fn record_full_compute() {}
     pub(super) const fn record_retained_recompute() {}
@@ -697,6 +898,37 @@ pub struct LayoutAtlas {
     /// shape it to the width the parent offers. Rebuilt each view (cleared on
     /// [`clear()`](Self::clear)).
     text_specs: HashMap<NodeId, TextLeaf>,
+    /// What kind of node occupies each build-order slot, parallel to
+    /// [`Self::nodes_by_index`]. Only read by the retained build.
+    node_kinds: Vec<NodeKind>,
+    /// Hash of the resolved layout inputs of each build-order slot, parallel
+    /// to [`Self::nodes_by_index`] (RFC-0032 §R2).
+    layout_fingerprints: Vec<u64>,
+    /// Explicit grid placements, so a retained build can tell a re-application
+    /// of the same placement (skip) from a real change (restyle + mark).
+    grid_items: rustc_hash::FxHashMap<NodeId, GridItemPlacement>,
+    /// Nodes whose style was rewritten during the current retained build —
+    /// [`Self::set_grid_item`] must re-apply its placement on top of a
+    /// rewritten style even when the placement itself did not change.
+    restyled: rustc_hash::FxHashSet<NodeId>,
+    /// State of the in-progress retained build, or `None` on the full path.
+    retained: Option<RetainedBuild>,
+    /// The targets whose layout inputs changed this frame, in build order.
+    ///
+    /// Reused across frames (cleared, never reallocated in steady state) and
+    /// handed to [`Self::populate_frame`] by the interpreter — this is the
+    /// dirty set RFC-0001 §2.2 described and the runtime did not produce.
+    layout_dirty: Vec<TargetId>,
+}
+
+/// Bookkeeping for one retained build pass (RFC-0032 §R4).
+struct RetainedBuild {
+    /// Which build-order slot the next `add_*` call will occupy.
+    cursor: usize,
+    /// Set when a slot could not be reused. The build still runs to
+    /// completion (so the caller's walk is not left half-done) and is then
+    /// discarded wholesale in favour of a full rebuild.
+    mismatch: bool,
 }
 
 impl LayoutAtlas {
@@ -714,6 +946,12 @@ impl LayoutAtlas {
             instance_id: Self::next_instance_id(),
             parents: rustc_hash::FxHashMap::default(),
             text_specs: HashMap::new(),
+            node_kinds: Vec::new(),
+            layout_fingerprints: Vec::new(),
+            grid_items: rustc_hash::FxHashMap::default(),
+            restyled: rustc_hash::FxHashSet::default(),
+            retained: None,
+            layout_dirty: Vec::new(),
         }
     }
 
@@ -770,7 +1008,201 @@ impl LayoutAtlas {
         self.nodes_by_index.clear();
         self.parents.clear();
         self.text_specs.clear();
+        self.node_kinds.clear();
+        self.layout_fingerprints.clear();
+        self.grid_items.clear();
+        self.restyled.clear();
+        self.retained = None;
+        self.layout_dirty.clear();
         self.current_generation = self.current_generation.wrapping_add(1);
+    }
+
+    /// Opens a **retained build** (RFC-0032 §R3/§R4): the caller re-walks the
+    /// same tree in the same order, and each `add_*` call reuses the node that
+    /// already occupies that build-order slot instead of creating a new one.
+    ///
+    /// Nothing is torn down — the Taffy tree, its cached geometry, the parent
+    /// map, the spatial grid and, critically, the **view generation** all
+    /// survive. That last one is the point: [`Self::clear`] bumps the
+    /// generation, which invalidates every outstanding [`TargetId`], which is
+    /// why the dirty channel could never be used while every frame cleared.
+    ///
+    /// A slot whose style hash differs from last frame's is restyled and
+    /// marked dirty in Taffy, and its target lands in
+    /// [`Self::layout_dirty_targets`]. **Taffy then decides what to
+    /// recompute** — this method never decides which *rects* changed, only
+    /// which *inputs* did (RFC-0032 §R3, INV-23).
+    ///
+    /// The caller must finish with [`Self::end_retained_build`] and honour its
+    /// verdict.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the atlas has no nodes — there is nothing to retain, and the
+    /// caller should have taken the full path.
+    pub fn begin_retained_build(&mut self) {
+        assert!(
+            !self.nodes_by_index.is_empty(),
+            "LayoutAtlas::begin_retained_build called on an empty atlas — \
+             the full build path is the only correct one for the first frame"
+        );
+        self.state = AtlasState::Building;
+        self.root = None;
+        self.children_scratch.clear();
+        self.restyled.clear();
+        self.layout_dirty.clear();
+        self.retained = Some(RetainedBuild {
+            cursor: 0,
+            mismatch: false,
+        });
+    }
+
+    /// Closes a retained build and reports whether it may be used.
+    ///
+    /// Returns `false` when any slot could not be reused or when the caller's
+    /// walk produced a different number of nodes than the retained tree holds.
+    /// A `false` verdict is **not** an error the caller may ignore: the atlas
+    /// is now in an inconsistent state and the caller must [`clear`](Self::clear)
+    /// and rebuild from scratch before computing.
+    ///
+    /// The default is the full rebuild, and every way of leaving this method
+    /// unsure returns `false` (RFC-0032 §R4, default-deny).
+    pub fn end_retained_build(&mut self) -> bool {
+        let Some(build) = self.retained.take() else {
+            return false;
+        };
+        let complete = build.cursor == self.nodes_by_index.len();
+        if !build.mismatch && complete {
+            self.state = AtlasState::Computed;
+            return true;
+        }
+        false
+    }
+
+    /// The targets whose layout inputs changed during the last retained build
+    /// (RFC-0032 §R3 step 5) — what [`Self::populate_frame`] wants.
+    #[must_use]
+    pub fn layout_dirty_targets(&self) -> &[TargetId] {
+        &self.layout_dirty
+    }
+
+    /// Places a node into the next build-order slot: creates it on the full
+    /// path, or reuses (and restyles when its fingerprint moved) the node that
+    /// already occupies the slot on the retained path.
+    ///
+    /// Every `add_*` constructor funnels through here, which is what keeps the
+    /// two paths from drifting: there is exactly one place that decides what a
+    /// build-order slot means.
+    fn place(
+        &mut self,
+        kind: NodeKind,
+        fingerprint: u64,
+        style: Style,
+        children: &[AtlasNodeId],
+        text: Option<TextLeaf>,
+    ) -> Result<AtlasNodeId, AtlasError> {
+        let Some(cursor) = self.retained.as_ref().map(|r| r.cursor) else {
+            return self.create_node(kind, fingerprint, style, children, text);
+        };
+
+        // Default-deny: anything about this slot that is not exactly what the
+        // last build left here aborts the retained pass.
+        let reusable = self.nodes_by_index.get(cursor).copied().filter(|_| {
+            self.node_kinds.get(cursor) == Some(&kind)
+                && self.layout_fingerprints.len() > cursor
+                && self.tree.child_count(self.nodes_by_index[cursor].node_id) == children.len()
+        });
+        let Some(id) = reusable else {
+            if let Some(r) = &mut self.retained {
+                r.mismatch = true;
+                r.cursor += 1;
+            }
+            return Err(AtlasError::RetainedSlotMismatch { index: cursor });
+        };
+        debug_assert!(
+            children
+                .iter()
+                .zip(self.tree.children(id.node_id).unwrap_or_default())
+                .all(|(c, t)| c.node_id == t),
+            "retained slot {cursor} holds a different child list than the walk produced"
+        );
+
+        if self.layout_fingerprints[cursor] != fingerprint {
+            self.tree
+                .set_style(id.node_id, style)
+                .map_err(|e| AtlasError::from_taffy(&e))?;
+            self.layout_fingerprints[cursor] = fingerprint;
+            self.restyled.insert(id.node_id);
+            if let Some(spec) = text {
+                self.text_specs.insert(id.node_id, spec);
+            }
+            self.mark_layout_dirty(cursor, id);
+        }
+
+        if let Some(r) = &mut self.retained {
+            r.cursor += 1;
+        }
+        Ok(id)
+    }
+
+    /// Marks the node at build-order slot `index` dirty in Taffy and records
+    /// its [`TargetId`] for [`Self::populate_frame`].
+    fn mark_layout_dirty(&mut self, index: usize, id: AtlasNodeId) {
+        // Taffy propagates the mark up to the root itself, so a sibling that
+        // reflows because *this* node resized is recomputed without anyone
+        // here working out which siblings those are (RFC-0032 §R3 step 3).
+        let _ = self.tree.mark_dirty(id.node_id);
+        #[allow(clippy::cast_possible_truncation)]
+        let raw_index = index as u32;
+        self.layout_dirty.push(TargetId::new(
+            raw_index,
+            self.current_generation,
+            TargetKind::AtlasNode as u16,
+        ));
+    }
+
+    /// The full path: create a fresh Taffy node and append it to the
+    /// build-order tables.
+    fn create_node(
+        &mut self,
+        kind: NodeKind,
+        fingerprint: u64,
+        style: Style,
+        children: &[AtlasNodeId],
+        text: Option<TextLeaf>,
+    ) -> Result<AtlasNodeId, AtlasError> {
+        let next_index = self.next_target_index();
+        let node = if children.is_empty() && kind.is_leaf() {
+            self.tree
+                .new_leaf_with_context(style, next_index)
+                .map_err(|e| AtlasError::from_taffy(&e))?
+        } else {
+            self.children_scratch.clear();
+            self.children_scratch
+                .extend(children.iter().map(|c| c.node_id));
+            let node = self
+                .tree
+                .new_with_children(style, &self.children_scratch)
+                .map_err(|e| AtlasError::from_taffy(&e))?;
+            self.tree
+                .set_node_context(node, Some(next_index))
+                .map_err(|e| AtlasError::from_taffy(&e))?;
+            node
+        };
+        for &child in children {
+            self.parents.insert(child.node_id, node);
+        }
+        if let Some(spec) = text {
+            self.text_specs.insert(node, spec);
+        }
+        let id = AtlasNodeId {
+            node_id: node,
+            atlas_id: self.instance_id,
+        };
+        self.nodes_by_index.push(id);
+        self.node_kinds.push(kind);
+        self.layout_fingerprints.push(fingerprint);
+        Ok(id)
     }
 
     /// Adds a leaf node with an explicit size.
@@ -795,18 +1227,9 @@ impl LayoutAtlas {
             ..Default::default()
         };
 
-        let next_index = self.next_target_index();
-
-        let node = self
-            .tree
-            .new_leaf_with_context(style, next_index)
-            .map_err(|e| AtlasError::from_taffy(&e))?;
-        let id = AtlasNodeId {
-            node_id: node,
-            atlas_id: self.instance_id,
-        };
-        self.nodes_by_index.push(id);
-        Ok(id)
+        let mut fp = LayoutFingerprint::new(NodeKind::Leaf);
+        fp.f32(size.width).f32(size.height);
+        self.place(NodeKind::Leaf, fp.finish(), style, &[], None)
     }
 
     /// Adds a **flexible leaf** — a node with no intrinsic size that absorbs the
@@ -837,17 +1260,9 @@ impl LayoutAtlas {
             ..Default::default()
         };
 
-        let next_index = self.next_target_index();
-        let node = self
-            .tree
-            .new_leaf_with_context(style, next_index)
-            .map_err(|e| AtlasError::from_taffy(&e))?;
-        let id = AtlasNodeId {
-            node_id: node,
-            atlas_id: self.instance_id,
-        };
-        self.nodes_by_index.push(id);
-        Ok(id)
+        let mut fp = LayoutFingerprint::new(NodeKind::FlexLeaf);
+        fp.f32(basis.max(0.0)).f32(grow.max(0.0));
+        self.place(NodeKind::FlexLeaf, fp.finish(), style, &[], None)
     }
 
     /// Adds a **wrapping `Text` leaf** (RFC-0005 default wrap): a leaf whose size
@@ -874,18 +1289,18 @@ impl LayoutAtlas {
             ..Default::default()
         };
 
-        let next_index = self.next_target_index();
-        let node = self
-            .tree
-            .new_leaf_with_context(style, next_index)
-            .map_err(|e| AtlasError::from_taffy(&e))?;
-        let id = AtlasNodeId {
-            node_id: node,
-            atlas_id: self.instance_id,
-        };
-        self.text_specs.insert(node, spec);
-        self.nodes_by_index.push(id);
-        Ok(id)
+        // **Text content is layout-class** (RFC-0032 §R2) — the single most
+        // important row of that table. It is what lets a clean text leaf skip
+        // glyph shaping entirely, which the encode breakdown measured at
+        // 84–98 % of the frame's encode cost, and it is what would silently
+        // freeze last frame's line breaks if it were left out.
+        let mut fp = LayoutFingerprint::new(NodeKind::TextLeaf);
+        fp.str(&spec.content)
+            .f32(spec.font_size)
+            .opt_f32(spec.width)
+            .f32(spec.fallback.0)
+            .f32(spec.fallback.1);
+        self.place(NodeKind::TextLeaf, fp.finish(), style, &[], Some(spec))
     }
 
     /// Adds a container node that wraps the given children.
@@ -912,26 +1327,15 @@ impl LayoutAtlas {
         }
 
         let taffy_style = style.to_taffy();
-        self.children_scratch.clear();
-        self.children_scratch
-            .extend(children.iter().map(|c| c.node_id));
-        let next_index = self.next_target_index();
-        let node = self
-            .tree
-            .new_with_children(taffy_style, &self.children_scratch)
-            .map_err(|e| AtlasError::from_taffy(&e))?;
-        for &child in children {
-            self.parents.insert(child.node_id, node);
-        }
-        self.tree
-            .set_node_context(node, Some(next_index))
-            .map_err(|e| AtlasError::from_taffy(&e))?;
-        let id = AtlasNodeId {
-            node_id: node,
-            atlas_id: self.instance_id,
-        };
-        self.nodes_by_index.push(id);
-        Ok(id)
+        let mut fp = LayoutFingerprint::new(NodeKind::Container);
+        fp.container(&style).children(children);
+        self.place(
+            NodeKind::Container,
+            fp.finish(),
+            taffy_style,
+            children,
+            None,
+        )
     }
 
     /// Adds a **CSS-grid** container (RFC-0018 `Grid`) wrapping `children`.
@@ -993,26 +1397,14 @@ impl LayoutAtlas {
             height: LengthPercentage::from_length(row_gap),
         };
 
-        self.children_scratch.clear();
-        self.children_scratch
-            .extend(children.iter().map(|c| c.node_id));
-        let next_index = self.next_target_index();
-        let node = self
-            .tree
-            .new_with_children(taffy_style, &self.children_scratch)
-            .map_err(|e| AtlasError::from_taffy(&e))?;
-        for &child in children {
-            self.parents.insert(child.node_id, node);
-        }
-        self.tree
-            .set_node_context(node, Some(next_index))
-            .map_err(|e| AtlasError::from_taffy(&e))?;
-        let id = AtlasNodeId {
-            node_id: node,
-            atlas_id: self.instance_id,
-        };
-        self.nodes_by_index.push(id);
-        Ok(id)
+        let mut fp = LayoutFingerprint::new(NodeKind::Grid);
+        fp.container(&style)
+            .tracks(columns)
+            .tracks(rows)
+            .f32(col_gap)
+            .f32(row_gap)
+            .children(children);
+        self.place(NodeKind::Grid, fp.finish(), taffy_style, children, None)
     }
 
     /// Places an already-created grid child explicitly (RFC-0018): sets its
@@ -1035,6 +1427,20 @@ impl LayoutAtlas {
     ) -> Result<(), AtlasError> {
         self.assert_building("set_grid_item");
         self.validate_node(node)?;
+
+        // On a retained build the placement is re-applied every frame from the
+        // same source data, and `set_style` marks the node dirty in Taffy
+        // unconditionally — so re-applying an unchanged placement would
+        // recompute every grid child on every frame and quietly turn the
+        // retained path back into a full one. Skip when nothing moved *and*
+        // this node's style was not rewritten out from under the placement
+        // earlier in the same build.
+        if self.retained.is_some()
+            && self.grid_items.get(&node.node_id) == Some(&placement)
+            && !self.restyled.contains(&node.node_id)
+        {
+            return Ok(());
+        }
 
         let mut style = self
             .tree
@@ -1069,6 +1475,12 @@ impl LayoutAtlas {
         self.tree
             .set_style(node.node_id, style)
             .map_err(|e| AtlasError::from_taffy(&e))?;
+        let changed = self.grid_items.insert(node.node_id, placement) != Some(placement);
+        if self.retained.is_some() && changed {
+            if let Some(index) = self.nodes_by_index.iter().position(|n| *n == node) {
+                self.mark_layout_dirty(index, node);
+            }
+        }
         Ok(())
     }
 
@@ -1108,20 +1520,9 @@ impl LayoutAtlas {
         taffy_style.justify_items = Some(justify);
         taffy_style.align_items = Some(align_items);
 
-        self.children_scratch.clear();
-        self.children_scratch
-            .extend(children.iter().map(|c| c.node_id));
-        let next_index = self.next_target_index();
-        let node = self
-            .tree
-            .new_with_children(taffy_style, &self.children_scratch)
-            .map_err(|e| AtlasError::from_taffy(&e))?;
-        for &child in children {
-            self.parents.insert(child.node_id, node);
-        }
-        self.tree
-            .set_node_context(node, Some(next_index))
-            .map_err(|e| AtlasError::from_taffy(&e))?;
+        let mut fp = LayoutFingerprint::new(NodeKind::Stack);
+        fp.container(&style).u8(align as u8).children(children);
+        let id = self.place(NodeKind::Stack, fp.finish(), taffy_style, children, None)?;
 
         // Pin every child to the same cell (line 1, span 1 on both axes) so they
         // overlap — otherwise grid auto-placement would flow them into implicit
@@ -1132,11 +1533,6 @@ impl LayoutAtlas {
             row_start: Some(1),
             row_span: 1,
         };
-        let id = AtlasNodeId {
-            node_id: node,
-            atlas_id: self.instance_id,
-        };
-        self.nodes_by_index.push(id);
         for &child in children {
             self.set_grid_item(child, cell)?;
         }
@@ -1390,28 +1786,21 @@ impl LayoutAtlas {
     /// [`Self::mark_dirty_all`], so stale-generation targets are excluded
     /// for free — they simply will not match any live node's id.
     ///
-    /// # What the interpreter actually passes today: nothing
+    /// # What the interpreter passes
     ///
-    /// `Interpreter::render` calls this with `&[]`, so every rect it pushes
-    /// carries `dirty: false` and the atlas contributes nothing to the frame's
-    /// dirty set. That is **not** an oversight to be fixed by changing the call
-    /// site, and this paragraph exists so nobody tries: the interpreter has no
-    /// per-element change signal to pass. Element attributes are stored as raw
-    /// expressions on the render node and re-evaluated from scratch on every
-    /// frame (`eval_color_prop` and friends), so there is no reactive edge from
-    /// a signal to a box's colour and therefore no way to say *which* nodes
-    /// changed. `ReactiveCtx` knows which value **bindings** changed this tick,
-    /// but bindings cover `Text` content and `Image` sources only — not the
-    /// attribute surface — and there is no binding→node map.
+    /// The set of nodes whose **layout inputs** changed this frame, via
+    /// [`Self::populate_frame_dirty`] (RFC-0032 §R3 step 5). On a full rebuild
+    /// that is every node, because every node is new; on a retained frame it
+    /// is typically a handful, and on a paint-only frame — a recolour, an
+    /// opacity fade — it is correctly **empty**: a colour is not a layout
+    /// input, and saying otherwise here would recompute a tree that did not
+    /// move.
     ///
-    /// The same missing signal is why `Interpreter::render` calls
-    /// [`Self::clear`] every frame instead of the retained
-    /// [`Self::mark_dirty_all`] + [`Self::recompute_dirty`] path: without
-    /// knowing what changed, rebuilding is the only correct option. Closing
-    /// either one means giving the interpreter that signal, which is a design
-    /// change to the evaluation model rather than a call-site fix. See
-    /// `tests/incremental_paths.rs` in `byard-compiler` for the assertions that
-    /// pin the current behaviour and the acceptance criteria waiting on it.
+    /// This parameter was inert for several phases, called with `&[]` from the
+    /// one production call site, because the interpreter had no per-element
+    /// change signal to pass. It has one now; if this ever starts receiving
+    /// `&[]` again on a frame that changed something, the assertions in
+    /// `byard-compiler`'s `tests/incremental_paths.rs` are what will say so.
     ///
     /// The frame is **not** cleared before pushing; callers that want a
     /// fresh frame must call [`RenderFrame::clear`] first. This lets the
@@ -1439,6 +1828,40 @@ impl LayoutAtlas {
 
         let matched = self.walk_and_push(root, frame, &dirty);
         path_counters::record_populate(dirty_targets.len(), matched);
+    }
+
+    /// [`populate_frame`](Self::populate_frame) driven by this atlas's own
+    /// layout-dirty set (RFC-0032 §R3 step 5).
+    ///
+    /// `retained` says which set that is. After a **retained** build it is the
+    /// nodes whose layout inputs moved — typically a handful. After a **full
+    /// rebuild** every node is new, so every rect is reported dirty; that is
+    /// not a fallback, it is the truth about a rebuilt frame, and reporting
+    /// anything narrower would be the stale-rect hazard wearing a performance
+    /// costume.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the atlas is in the `Building` state.
+    pub fn populate_frame_dirty(&mut self, frame: &mut RenderFrame, retained: bool) {
+        if !retained {
+            self.layout_dirty.clear();
+            self.layout_dirty.reserve(self.nodes_by_index.len());
+            for index in 0..self.nodes_by_index.len() {
+                #[allow(clippy::cast_possible_truncation)]
+                let raw = index as u32;
+                self.layout_dirty.push(TargetId::new(
+                    raw,
+                    self.current_generation,
+                    TargetKind::AtlasNode as u16,
+                ));
+            }
+        }
+        // Split the borrow: `populate_frame` only reads, but the compiler
+        // cannot see that through `&mut self`, so the set moves out and back.
+        let dirty = std::mem::take(&mut self.layout_dirty);
+        self.populate_frame(frame, &dirty);
+        self.layout_dirty = dirty;
     }
 
     /// Performs spatial hit-testing to find the topmost node at the given screen coordinates.
@@ -1724,11 +2147,16 @@ impl LayoutAtlas {
     }
 
     /// Recomputes layout for the subtrees marked dirty since the last
-    /// `compute` or `recompute_dirty`.
+    /// `compute` or `recompute_dirty`, **without a text sizer**.
     ///
-    /// Taffy caches geometry that has not changed, so this is typically
-    /// much cheaper than a full [`Self::compute`]. After this call, the
-    /// atlas remains in `Computed` state.
+    /// # No production path may call this
+    ///
+    /// It runs the measure protocol with no sizer, so every wrapping `Text`
+    /// leaf Taffy happens to recompute falls back to its natural *single-line*
+    /// size — silently un-wrapping paragraphs on the frame after any retained
+    /// one. Reach for [`Self::recompute_dirty_with_text`] instead; this
+    /// variant exists for the benchmarks and for layout-only unit tests, where
+    /// there is no text to un-wrap and no sizer to pass.
     ///
     /// # Panics
     ///
@@ -1739,6 +2167,42 @@ impl LayoutAtlas {
     ///
     /// Returns [`AtlasError::Backend`] if layout computation fails.
     pub fn recompute_dirty(&mut self, viewport: Viewport) -> Result<(), AtlasError> {
+        self.recompute_dirty_inner(viewport, None)
+    }
+
+    /// Like [`recompute_dirty`](Self::recompute_dirty), but drives wrapping
+    /// `Text` leaves through `sizer` — the incremental counterpart of
+    /// [`compute_with_text`](Self::compute_with_text), and the **only** form a
+    /// production path may use (RFC-0032 §R5).
+    ///
+    /// The measure callback is invoked by Taffy only for the nodes it is
+    /// actually recomputing, so a text leaf whose content, size and offered
+    /// width are unchanged is never re-shaped. That is the principal win of
+    /// the retained path — the encode breakdown put glyph work at 84–98 % of
+    /// the frame's encode cost — and it falls out of Taffy's own dirty
+    /// propagation rather than from anything here having to be careful.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the atlas is in the `Building` state, or if no root has been
+    /// set.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AtlasError::Backend`] if layout computation fails.
+    pub fn recompute_dirty_with_text(
+        &mut self,
+        viewport: Viewport,
+        sizer: &mut dyn crate::text::TextSizer,
+    ) -> Result<(), AtlasError> {
+        self.recompute_dirty_inner(viewport, Some(sizer))
+    }
+
+    fn recompute_dirty_inner(
+        &mut self,
+        viewport: Viewport,
+        sizer: Option<&mut dyn crate::text::TextSizer>,
+    ) -> Result<(), AtlasError> {
         assert_eq!(
             self.state,
             AtlasState::Computed,
@@ -1756,11 +2220,14 @@ impl LayoutAtlas {
             height: AvailableSpace::Definite(viewport.height),
         };
 
-        // No sizer on the incremental path (the interpreter does its wrapping
-        // pass via `compute_with_text`); wrapping-`Text` leaves fall back to
-        // their natural single-line size here.
-        self.run_layout(root.node_id, available, None)?;
+        self.run_layout(root.node_id, available, sizer)?;
         path_counters::record_retained_recompute();
+        // Unconditionally rebuilt from the **resolved rects**, never from the
+        // fingerprints (RFC-0032 §R3 step 4, INV-23). A node that moved only
+        // because a sibling resized was never marked by anyone here, and the
+        // full walk is what guarantees its grid entry cannot be stale — which
+        // is the difference between a wrong pixel and an element that is
+        // tappable where it used to be.
         self.rebuild_grid();
         Ok(())
     }
@@ -3017,5 +3484,266 @@ mod tests {
         // The grow:1 spacer eats the slack, pushing the fixed leaf to the end.
         assert_f32_eq(rs.width, 160.0); // 200 - 40 fixed
         assert_f32_eq(rf.x, 160.0);
+    }
+}
+
+/// RFC-0032 §R2 / §R4: the layout fingerprints and the retained build path.
+///
+/// These are the mechanism's own tests, with nothing consuming them —
+/// `byard-compiler`'s `tests/incremental_paths.rs` covers what production does
+/// with the result.
+#[cfg(test)]
+mod retained_build_tests {
+    use super::*;
+
+    /// A two-leaf column, built in a fixed order so a retained rebuild can be
+    /// asked to reproduce it exactly.
+    fn build(atlas: &mut LayoutAtlas, first: LeafSize, second: LeafSize) {
+        let a = atlas.add_leaf(first).unwrap();
+        let b = atlas.add_leaf(second).unwrap();
+        let root = atlas
+            .add_container(ContainerStyle::new(Some(200.0), Some(200.0)), &[a, b])
+            .unwrap();
+        atlas.set_root(root).unwrap();
+    }
+
+    fn fresh(first: LeafSize, second: LeafSize) -> LayoutAtlas {
+        let mut atlas = LayoutAtlas::new();
+        build(&mut atlas, first, second);
+        atlas.compute(Viewport::new(200.0, 200.0)).unwrap();
+        atlas
+    }
+
+    #[test]
+    fn an_identical_retained_build_marks_nothing_dirty() {
+        let mut atlas = fresh(LeafSize::new(40.0, 20.0), LeafSize::new(40.0, 20.0));
+        let generation = atlas.current_generation();
+
+        atlas.begin_retained_build();
+        build(
+            &mut atlas,
+            LeafSize::new(40.0, 20.0),
+            LeafSize::new(40.0, 20.0),
+        );
+        assert!(atlas.end_retained_build(), "the build must be reusable");
+
+        assert!(
+            atlas.layout_dirty_targets().is_empty(),
+            "nothing changed, so nothing may be marked"
+        );
+        assert_eq!(
+            atlas.current_generation(),
+            generation,
+            "the retained path must not bump the view generation — that is what \
+             invalidates every outstanding TargetId and is why the dirty \
+             channel was unusable while every frame cleared"
+        );
+    }
+
+    #[test]
+    fn a_changed_leaf_size_marks_exactly_that_slot() {
+        let mut atlas = fresh(LeafSize::new(40.0, 20.0), LeafSize::new(40.0, 20.0));
+
+        atlas.begin_retained_build();
+        build(
+            &mut atlas,
+            LeafSize::new(40.0, 20.0),
+            LeafSize::new(40.0, 99.0),
+        );
+        assert!(atlas.end_retained_build());
+
+        let marked: Vec<u32> = atlas
+            .layout_dirty_targets()
+            .iter()
+            .map(|t| t.index())
+            .collect();
+        assert_eq!(marked, vec![1], "only the second leaf's inputs moved");
+    }
+
+    #[test]
+    fn ids_are_reused_rather_than_reassigned() {
+        // `next_target_index()` is `nodes_by_index.len()`, so a retained build
+        // that created nodes instead of reusing them would silently hand every
+        // element a different id — and every outstanding `TargetId`, hit-test
+        // index and router key would point at the wrong element.
+        let mut atlas = fresh(LeafSize::new(40.0, 20.0), LeafSize::new(40.0, 20.0));
+        let before: Vec<AtlasNodeId> = atlas.nodes_by_index.clone();
+
+        atlas.begin_retained_build();
+        build(
+            &mut atlas,
+            LeafSize::new(40.0, 20.0),
+            LeafSize::new(60.0, 20.0),
+        );
+        assert!(atlas.end_retained_build());
+
+        assert_eq!(before, atlas.nodes_by_index);
+        assert_eq!(atlas.node_count(), 3, "no node was added");
+    }
+
+    #[test]
+    fn a_kind_mismatch_aborts_the_retained_build() {
+        // Default-deny (RFC-0032 §R4): a slot that does not hold what the walk
+        // expects fails the whole pass rather than restyling a leaf as if it
+        // were a container.
+        let mut atlas = fresh(LeafSize::new(40.0, 20.0), LeafSize::new(40.0, 20.0));
+
+        atlas.begin_retained_build();
+        // A *text* leaf where an ordinary leaf lives.
+        let err = atlas.add_text_leaf(TextLeaf {
+            content: "x".to_string(),
+            font_size: 12.0,
+            width: None,
+            fallback: (10.0, 12.0),
+        });
+        assert!(matches!(
+            err,
+            Err(AtlasError::RetainedSlotMismatch { index: 0 })
+        ));
+        assert!(
+            !atlas.end_retained_build(),
+            "the verdict must be `rebuild`, not `usable`"
+        );
+    }
+
+    #[test]
+    fn a_short_walk_aborts_the_retained_build() {
+        // The other direction: the walk produced fewer nodes than the retained
+        // tree holds, so some slot is stale. Nothing about that is repairable
+        // in place.
+        let mut atlas = fresh(LeafSize::new(40.0, 20.0), LeafSize::new(40.0, 20.0));
+
+        atlas.begin_retained_build();
+        let _ = atlas.add_leaf(LeafSize::new(40.0, 20.0)).unwrap();
+        assert!(!atlas.end_retained_build());
+    }
+
+    // ── Fingerprint arithmetic (RFC-0032 §R2) ─────────────────────────────
+
+    #[test]
+    fn negative_zero_is_not_the_same_fingerprint_as_zero() {
+        // The dangerous one. Hashing the `f32` directly would make `-0.0` and
+        // `0.0` compare equal, so a leaf that moved between them would be
+        // reported permanently *clean* — silently, and with no way to see it.
+        let mut a = LayoutFingerprint::new(NodeKind::Leaf);
+        a.f32(0.0);
+        let mut b = LayoutFingerprint::new(NodeKind::Leaf);
+        b.f32(-0.0);
+        assert_ne!(a.finish(), b.finish());
+    }
+
+    #[test]
+    fn nan_hashes_to_itself() {
+        // The visible one. Hashing the `f32` directly would make `NaN != NaN`,
+        // so a leaf holding one would be permanently dirty and would recompute
+        // forever. Wasteful rather than wrong, but it would silently undo the
+        // entire point of the retained path on any tree containing one.
+        let mut a = LayoutFingerprint::new(NodeKind::Leaf);
+        a.f32(f32::NAN);
+        let mut b = LayoutFingerprint::new(NodeKind::Leaf);
+        b.f32(f32::NAN);
+        assert_eq!(a.finish(), b.finish());
+    }
+
+    #[test]
+    fn the_node_kind_is_part_of_the_fingerprint() {
+        let mut a = LayoutFingerprint::new(NodeKind::Leaf);
+        a.f32(1.0);
+        let mut b = LayoutFingerprint::new(NodeKind::Container);
+        b.f32(1.0);
+        assert_ne!(
+            a.finish(),
+            b.finish(),
+            "two different kinds carrying the same numbers must not collide \
+             into `unchanged`"
+        );
+    }
+
+    #[test]
+    fn text_content_is_part_of_the_layout_fingerprint() {
+        // The row the whole RFC turns on: text content is layout-class, which
+        // is what lets a clean text leaf skip glyph shaping and what makes a
+        // missed classification produce un-wrapped text.
+        let spec = |content: &str| TextLeaf {
+            content: content.to_string(),
+            font_size: 14.0,
+            width: None,
+            fallback: (10.0, 14.0),
+        };
+        let mut atlas = LayoutAtlas::new();
+        let t = atlas.add_text_leaf(spec("hello")).unwrap();
+        atlas.set_root(t).unwrap();
+        atlas.compute(Viewport::new(200.0, 200.0)).unwrap();
+
+        atlas.begin_retained_build();
+        let t2 = atlas
+            .add_text_leaf(spec("hello world, rather longer"))
+            .unwrap();
+        atlas.set_root(t2).unwrap();
+        assert!(atlas.end_retained_build());
+
+        assert_eq!(
+            atlas.layout_dirty_targets().len(),
+            1,
+            "an edited string must mark its leaf for re-measurement"
+        );
+    }
+
+    #[test]
+    fn recompute_dirty_with_text_reaches_the_sizer() {
+        // RFC-0032 §R5: the sizer-less `recompute_dirty` would size this leaf
+        // at its fallback. The whole reason `recompute_dirty_with_text` exists
+        // is that the fallback is a *single line*.
+        struct FixedSizer;
+        impl crate::text::TextSizer for FixedSizer {
+            fn measure(
+                &mut self,
+                _content: &str,
+                _font_size: f32,
+                _wrap: Option<f32>,
+            ) -> (f32, f32) {
+                (77.0, 88.0)
+            }
+        }
+
+        let mut atlas = LayoutAtlas::new();
+        let t = atlas
+            .add_text_leaf(TextLeaf {
+                content: "hello".to_string(),
+                font_size: 14.0,
+                width: None,
+                fallback: (10.0, 14.0),
+            })
+            .unwrap();
+        let root = atlas
+            .add_container(
+                // `Start`, not the default `Stretch`: a stretched child is
+                // sized by its parent and would report 200 whatever the sizer
+                // said, which would make this test pass for the wrong reason.
+                ContainerStyle::new(Some(200.0), Some(200.0)).with_align(Align::Start),
+                &[t],
+            )
+            .unwrap();
+        atlas.set_root(root).unwrap();
+        atlas
+            .compute_with_text(Viewport::new(200.0, 200.0), &mut FixedSizer)
+            .unwrap();
+
+        atlas.mark_dirty_all(&[TargetId::new(
+            0,
+            atlas.current_generation(),
+            TargetKind::AtlasNode as u16,
+        )]);
+        atlas
+            .recompute_dirty_with_text(Viewport::new(200.0, 200.0), &mut FixedSizer)
+            .unwrap();
+
+        let rect = atlas.resolved_rect(t).unwrap().unwrap();
+        assert!(
+            (rect.height - 88.0).abs() < 1.5,
+            "the retained path resolved height {} — it fell back to the \
+             single-line size instead of asking the sizer",
+            rect.height
+        );
     }
 }

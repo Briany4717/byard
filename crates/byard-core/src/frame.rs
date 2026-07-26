@@ -1345,8 +1345,20 @@ pub struct RenderFrame {
     /// `dirty[i]` is `true` when `rects[i]` changed since the previous tick.
     dirty: Vec<bool>,
 
+    /// Which layout paths the atlas took while producing this frame
+    /// (RFC-0032 §R7). Carried on the frame for the same reason the telemetry
+    /// block is: the counters are thread-local to the **logic** thread and the
+    /// readout is printed on the render thread, so the frame swap is the only
+    /// hand-off either of them needs.
+    atlas_paths: crate::atlas::layout::path_counters::Counts,
+
     /// Solid-rectangle instances populated by the Logic thread each tick.
     instances: Vec<BoxInstance>,
+
+    /// Per-instance dirty state, parallel to `instances` (RFC-0032 §R3 step 6).
+    /// `BoxInstance` is a GPU `Pod` type and has no room for the bit, so it
+    /// lives here.
+    instances_dirty: Vec<bool>,
 
     /// Decorated-box instances (M21) — boxes with border/shadow/opacity.
     decorated: Vec<DecoratedBox>,
@@ -1554,8 +1566,10 @@ impl RenderFrame {
     /// reset to zero; the Logic thread always calls [`set_version`](Self::set_version)
     /// immediately after acquiring a recycled frame.
     pub fn clear(&mut self) {
+        self.atlas_paths = crate::atlas::layout::path_counters::Counts::default();
         self.rects.clear();
         self.dirty.clear();
+        self.instances_dirty.clear();
         self.instances.clear();
         self.decorated.clear();
         self.textures.clear();
@@ -1636,12 +1650,32 @@ impl RenderFrame {
     }
 
     /// Appends a [`BoxInstance`] to the frame.
+    ///
+    /// The instance is recorded **dirty** — see
+    /// [`instances_dirty`](Self::instances_dirty) for why that is the only
+    /// safe default and what narrows it.
     pub fn push_instance(&mut self, instance: BoxInstance) {
         let d = self.next_depth();
         let c = self.active_clip();
         self.instances.push(instance);
+        self.instances_dirty.push(true);
         self.solid_depths.push(d);
         self.solid_clips.push(c);
+    }
+
+    /// Per-instance dirty state, parallel to [`instances`](Self::instances).
+    ///
+    /// [`BoxInstance`] is a pure GPU `Pod` vertex type with no room for a
+    /// dirty bit, so — unlike [`TextLine`] and friends — solid boxes carry
+    /// theirs out of band, here.
+    ///
+    /// Every entry starts `true`, because "this box may have changed" is the
+    /// only claim the frame can make on its own; [`PaintDigest::apply`]
+    /// narrows it to what actually changed by comparing each instance against
+    /// the bytes at the same position last frame.
+    #[must_use]
+    pub fn instances_dirty(&self) -> &[bool] {
+        &self.instances_dirty
     }
 
     /// Appends a [`DecoratedBox`] (border/shadow/opacity) to the frame (M21).
@@ -1956,6 +1990,374 @@ impl RenderFrame {
     #[must_use]
     pub fn telemetry(&self) -> &crate::telemetry::SampleBlock {
         &self.telemetry
+    }
+
+    /// Folds `previous`'s per-primitive dirty bits into this frame's
+    /// (RFC-0032 §R3 step 6 × RFC-0001 §5.2).
+    ///
+    /// # Why this exists
+    ///
+    /// The relay is **latest-wins**: the logic thread publishes faster than
+    /// the display refreshes, so most published frames are never rendered.
+    /// While every primitive was emitted `dirty: true` that cost nothing —
+    /// the encoder re-shaped and redrew everything on whichever frame it
+    /// happened to see. Now that a frame reports what actually changed, a
+    /// skipped frame is a **lost dirty bit**: the frame carrying "this
+    /// paragraph's text changed" is dropped, the next one truthfully reports
+    /// it clean, and the glyph cache keeps the string from before the edit.
+    ///
+    /// Merging is the fix, and it is the right one because dirtiness is
+    /// monotone: the union of "changed since frame N-1" and "changed since
+    /// frame N" *is* "changed since frame N-1". The alternative — detecting
+    /// the gap and redrawing everything — is correct too, and is what this
+    /// replaced; it just gives the whole win back on any machine whose logic
+    /// thread outruns its display, which is every machine.
+    ///
+    /// A pool whose length differs is marked dirty in full: positions no
+    /// longer mean the same thing, so there is nothing to merge index-wise.
+    pub fn merge_dirty_from(&mut self, previous: &Self) {
+        merge_flags(
+            &mut self.instances_dirty,
+            previous.instances_dirty.as_slice(),
+            |slot, prev| *slot |= prev,
+            |slot| *slot = true,
+        );
+        merge_into(
+            &mut self.texts,
+            &previous.texts,
+            |t| &mut t.dirty,
+            |t| t.dirty,
+        );
+        merge_into(
+            &mut self.decorated,
+            &previous.decorated,
+            |d| &mut d.dirty,
+            |d| d.dirty,
+        );
+        merge_into(
+            &mut self.textures,
+            &previous.textures,
+            |t| &mut t.dirty,
+            |t| t.dirty,
+        );
+        merge_into(
+            &mut self.canvas_shapes,
+            &previous.canvas_shapes,
+            |c| &mut c.dirty,
+            |c| c.dirty,
+        );
+    }
+
+    /// Records which layout paths the atlas took while producing this frame
+    /// (RFC-0032 §R7) — a **delta** for this tick, not a running total.
+    pub fn set_atlas_paths(&mut self, counts: crate::atlas::layout::path_counters::Counts) {
+        self.atlas_paths = counts;
+    }
+
+    /// Which layout paths the atlas took while producing this frame.
+    ///
+    /// This is the answer to "am I on the fast path?" being *visible* rather
+    /// than inferred. A view that rebuilds every frame is now something a
+    /// developer can see, and usually fix.
+    #[must_use]
+    pub const fn atlas_paths(&self) -> crate::atlas::layout::path_counters::Counts {
+        self.atlas_paths
+    }
+}
+
+/// `a |= b` over two parallel flag slices, or "all true" when they disagree
+/// on length.
+fn merge_flags<T>(
+    current: &mut [T],
+    previous: &[bool],
+    mut merge: impl FnMut(&mut T, bool),
+    mut set_all: impl FnMut(&mut T),
+) {
+    if current.len() != previous.len() {
+        for slot in current.iter_mut() {
+            set_all(slot);
+        }
+        return;
+    }
+    for (slot, prev) in current.iter_mut().zip(previous) {
+        merge(slot, *prev);
+    }
+}
+
+/// [`merge_flags`] for a pool whose dirty bit lives on the primitive itself.
+fn merge_into<T>(
+    current: &mut [T],
+    previous: &[T],
+    mut flag: impl FnMut(&mut T) -> &mut bool,
+    mut read: impl FnMut(&T) -> bool,
+) {
+    if current.len() != previous.len() {
+        for item in current.iter_mut() {
+            *flag(item) = true;
+        }
+        return;
+    }
+    for (item, prev) in current.iter_mut().zip(previous) {
+        let was = read(prev);
+        *flag(item) |= was;
+    }
+}
+
+/// Per-primitive paint fingerprints, retained across frames so a
+/// [`RenderFrame`]'s dirty bits can say what actually changed instead of
+/// asserting that everything did (RFC-0032 §R3 step 6).
+///
+/// # What it compares, and why that is the strong form
+///
+/// One `u64` per primitive per pool, hashed from the primitive's **resolved
+/// values** — the numbers that reached the frame, not the expressions behind
+/// them. [`apply`](Self::apply) re-hashes this frame's primitives, marks a
+/// primitive dirty exactly when its hash differs from the hash at the same
+/// pool position last frame, and keeps the new hashes for next time.
+///
+/// RFC-0032 §R1 chose value comparison over reactive attribute bindings
+/// because a reactive graph can have a *missing edge*, and a missing edge
+/// yields a false "clean" — an element that renders in its new position and
+/// answers taps in its old one. Comparing primitives closes that gap in its
+/// strongest form: the thing being compared is the pipeline's own output, so
+/// there is no attribute table to keep in sync and no classification to get
+/// wrong. An attribute added tomorrow is covered the moment it changes a
+/// pixel.
+///
+/// # Two rules
+///
+/// - **`f32`s are hashed through [`f32::to_bits`].** `NaN != NaN` would make a
+///   primitive permanently dirty (wasteful, visible); `-0.0 == 0.0` would make
+///   it permanently clean (silent, wrong). The second is the dangerous one.
+/// - **A primitive's own `dirty` bit is never hashed.** It is an output of
+///   this comparison; feeding it back in would make the answer depend on last
+///   frame's answer.
+///
+/// # Structural changes
+///
+/// Pool positions shift when the tree's shape changes, so hashes stop lining
+/// up and a wide region reports dirty. That is both the safe direction and the
+/// correct one — after a structural change the frame really has changed
+/// everywhere.
+#[derive(Debug, Default, Clone)]
+pub struct PaintDigest {
+    solid: Vec<u64>,
+    text: Vec<u64>,
+    decorated: Vec<u64>,
+    textures: Vec<u64>,
+    canvas: Vec<u64>,
+    /// Whether any frame has been digested yet. Until one has, every
+    /// primitive is reported dirty — a first frame in which nothing is dirty
+    /// would simply never be drawn.
+    primed: bool,
+}
+
+impl PaintDigest {
+    /// A digest that has seen no frames: the first [`apply`](Self::apply)
+    /// reports everything dirty.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Forgets everything, so the next [`apply`](Self::apply) reports every
+    /// primitive dirty again.
+    ///
+    /// Call after anything that invalidates the *meaning* of a pool position —
+    /// a hot reload, a new view — rather than letting positional comparison
+    /// silently equate two unrelated primitives that happen to hash the same.
+    pub fn reset(&mut self) {
+        self.solid.clear();
+        self.text.clear();
+        self.decorated.clear();
+        self.textures.clear();
+        self.canvas.clear();
+        self.primed = false;
+    }
+
+    /// Rewrites `frame`'s per-primitive dirty bits from a comparison against
+    /// the previous frame's values, and retains this frame's for the next
+    /// call.
+    ///
+    /// Ripples and backdrops are deliberately left alone: a live ripple
+    /// re-samples its own radius and alpha every tick and a backdrop pane
+    /// re-blurs whatever moved behind it, so both are always dirty by
+    /// construction and the encoder already treats them that way. Vector
+    /// glyphs are likewise untouched — a placeholder→resident atlas
+    /// transition changes their *content* without changing any value here, and
+    /// the encoder forces a draw on a fresh atlas upload for exactly that
+    /// reason.
+    pub fn apply(&mut self, frame: &mut RenderFrame) {
+        let primed = self.primed;
+
+        // Solids keep their dirty bit out of band, so they get their own loop
+        // rather than a `set` closure over the same slice.
+        self.solid
+            .resize(frame.instances.len().max(self.solid.len()), 0);
+        for (i, instance) in frame.instances.iter().enumerate() {
+            let h = paint_hash::box_instance(instance);
+            frame.instances_dirty[i] = !primed || self.solid[i] != h;
+            self.solid[i] = h;
+        }
+        self.solid.truncate(frame.instances.len());
+
+        Self::diff(
+            &mut self.text,
+            &mut frame.texts,
+            primed,
+            paint_hash::text_line,
+            |t, dirty| {
+                t.dirty = dirty;
+            },
+        );
+        Self::diff(
+            &mut self.decorated,
+            &mut frame.decorated,
+            primed,
+            paint_hash::decorated,
+            |d, dirty| d.dirty = dirty,
+        );
+        Self::diff(
+            &mut self.textures,
+            &mut frame.textures,
+            primed,
+            paint_hash::texture,
+            // The encoder sets this bit itself the frame after an async decode
+            // lands (M29), so a freshly-loaded image paints without a full
+            // redraw. Never clear a bit that is already set.
+            |t, dirty| t.dirty |= dirty,
+        );
+        Self::diff(
+            &mut self.canvas,
+            &mut frame.canvas_shapes,
+            primed,
+            paint_hash::canvas,
+            |s, dirty| s.dirty = dirty,
+        );
+        self.primed = true;
+    }
+
+    /// One pool: hash each primitive, compare against the retained hash at the
+    /// same position, write the verdict onto the primitive, and retain the new
+    /// hash for next frame.
+    fn diff<T>(
+        previous: &mut Vec<u64>,
+        items: &mut [T],
+        primed: bool,
+        hash: impl Fn(&T) -> u64,
+        set: impl Fn(&mut T, bool),
+    ) {
+        previous.resize(items.len().max(previous.len()), 0);
+        for (i, item) in items.iter_mut().enumerate() {
+            let h = hash(item);
+            let dirty = !primed || previous[i] != h;
+            previous[i] = h;
+            set(item, dirty);
+        }
+        previous.truncate(items.len());
+    }
+}
+
+/// Value hashes for the primitive types [`PaintDigest`] compares.
+///
+/// Written out per field rather than derived, for two reasons that are not
+/// stylistic: `f32` has no `Hash`, and each primitive's own `dirty` flag must
+/// be excluded because it is the *output* of the comparison these hashes feed.
+mod paint_hash {
+    use super::{BoxInstance, CanvasShape, DecoratedBox, TextLine, TextureSampler, Transform};
+    use std::hash::{Hash, Hasher};
+
+    fn hasher() -> rustc_hash::FxHasher {
+        rustc_hash::FxHasher::default()
+    }
+
+    fn f32s(h: &mut rustc_hash::FxHasher, values: &[f32]) {
+        for v in values {
+            v.to_bits().hash(h);
+        }
+    }
+
+    fn transform(h: &mut rustc_hash::FxHasher, t: &Transform) {
+        f32s(h, &t.translate);
+        f32s(h, &t.scale);
+        f32s(h, &[t.rotate]);
+        f32s(h, &t.origin);
+        f32s(h, &[t.opacity]);
+    }
+
+    fn base(h: &mut rustc_hash::FxHasher, b: &BoxInstance) {
+        f32s(h, &b.rect);
+        f32s(h, &b.color);
+        f32s(h, &b.radii);
+        transform(h, &b.transform);
+    }
+
+    pub(super) fn box_instance(b: &BoxInstance) -> u64 {
+        let mut h = hasher();
+        base(&mut h, b);
+        h.finish()
+    }
+
+    pub(super) fn text_line(t: &TextLine) -> u64 {
+        let mut h = hasher();
+        // Content first: it is the field whose change is most expensive to
+        // miss, because a stale glyph run is a stale *shape*, not a stale
+        // colour.
+        t.text.hash(&mut h);
+        f32s(&mut h, &[t.x, t.y, t.font_size]);
+        f32s(&mut h, &t.color);
+        h.finish()
+    }
+
+    pub(super) fn decorated(d: &DecoratedBox) -> u64 {
+        let mut h = hasher();
+        base(&mut h, &d.base);
+        f32s(
+            &mut h,
+            &[
+                d.border_width,
+                d.shadow_dx,
+                d.shadow_dy,
+                d.shadow_blur,
+                d.shadow_spread,
+                d.opacity,
+            ],
+        );
+        f32s(&mut h, &d.border_color);
+        f32s(&mut h, &d.shadow_color);
+        match &d.gradient {
+            Some(g) => {
+                1u8.hash(&mut h);
+                f32s(&mut h, &g.from);
+                f32s(&mut h, &g.to);
+                f32s(&mut h, &[g.angle, g.offset]);
+            }
+            None => 0u8.hash(&mut h),
+        }
+        h.finish()
+    }
+
+    pub(super) fn texture(t: &TextureSampler) -> u64 {
+        let mut h = hasher();
+        t.src.hash(&mut h);
+        (t.fit as u8).hash(&mut h);
+        f32s(&mut h, &t.rect);
+        f32s(&mut h, &t.radii);
+        f32s(&mut h, &[t.opacity]);
+        h.finish()
+    }
+
+    pub(super) fn canvas(s: &CanvasShape) -> u64 {
+        let mut h = hasher();
+        s.kind.hash(&mut h);
+        s.cap.hash(&mut h);
+        f32s(&mut h, &s.params);
+        f32s(&mut h, &s.stroke_color);
+        f32s(&mut h, &s.fill_color);
+        f32s(&mut h, &s.dash);
+        f32s(&mut h, &[s.stroke_width, s.dash_offset, s.opacity]);
+        transform(&mut h, &s.transform);
+        h.finish()
     }
 }
 
@@ -2894,5 +3296,132 @@ mod motion_tests {
         f.push_instance(box_at(1.0, 1.0));
         f.clear();
         assert!(f.layer_marks().is_empty());
+    }
+}
+
+/// RFC-0032 §R3 step 6: the per-primitive paint comparison, on its own.
+#[cfg(test)]
+mod paint_digest_tests {
+    use super::*;
+
+    fn boxed(x: f32, color: [f32; 4]) -> BoxInstance {
+        BoxInstance {
+            rect: [x, 0.0, 10.0, 10.0],
+            color,
+            radii: [0.0; 4],
+            transform: Transform::IDENTITY,
+        }
+    }
+
+    fn line(text: &str) -> TextLine {
+        TextLine {
+            x: 0.0,
+            y: 0.0,
+            text: text.to_string(),
+            font_size: 12.0,
+            color: [1.0; 4],
+            dirty: true,
+        }
+    }
+
+    /// Builds a frame carrying `boxes` and `texts`, and runs it through
+    /// `digest`.
+    fn digest_frame(
+        digest: &mut PaintDigest,
+        boxes: &[BoxInstance],
+        texts: &[TextLine],
+    ) -> RenderFrame {
+        let mut f = RenderFrame::new();
+        for b in boxes {
+            f.push_instance(*b);
+        }
+        for t in texts {
+            f.push_text(t.clone());
+        }
+        digest.apply(&mut f);
+        f
+    }
+
+    const RED: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
+    const BLUE: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
+
+    #[test]
+    fn the_first_frame_is_entirely_dirty() {
+        let mut d = PaintDigest::new();
+        let f = digest_frame(&mut d, &[boxed(0.0, RED)], &[line("a")]);
+        assert!(f.instances_dirty().iter().all(|x| *x));
+        assert!(f.texts().iter().all(|t| t.dirty));
+    }
+
+    #[test]
+    fn an_unchanged_frame_is_entirely_clean() {
+        let mut d = PaintDigest::new();
+        let _ = digest_frame(&mut d, &[boxed(0.0, RED)], &[line("a")]);
+        let f = digest_frame(&mut d, &[boxed(0.0, RED)], &[line("a")]);
+        assert!(f.instances_dirty().iter().all(|x| !x));
+        assert!(f.texts().iter().all(|t| !t.dirty));
+    }
+
+    #[test]
+    fn only_the_changed_primitive_is_dirty() {
+        let mut d = PaintDigest::new();
+        let before = [boxed(0.0, RED), boxed(20.0, RED)];
+        let _ = digest_frame(&mut d, &before, &[line("a")]);
+        let after = [boxed(0.0, RED), boxed(20.0, BLUE)];
+        let f = digest_frame(&mut d, &after, &[line("a")]);
+        assert_eq!(f.instances_dirty(), [false, true]);
+        assert!(!f.texts()[0].dirty, "the text did not change");
+    }
+
+    #[test]
+    fn a_text_edit_marks_only_that_line() {
+        let mut d = PaintDigest::new();
+        let _ = digest_frame(&mut d, &[], &[line("a"), line("b")]);
+        let f = digest_frame(&mut d, &[], &[line("a"), line("changed")]);
+        assert_eq!(
+            f.texts().iter().map(|t| t.dirty).collect::<Vec<_>>(),
+            vec![false, true]
+        );
+    }
+
+    #[test]
+    fn negative_zero_is_a_change() {
+        // `-0.0 == 0.0`, so a naive comparison reports this primitive clean —
+        // permanently, and with nothing on screen to suggest why.
+        let mut d = PaintDigest::new();
+        let _ = digest_frame(&mut d, &[boxed(0.0, RED)], &[]);
+        let f = digest_frame(&mut d, &[boxed(-0.0, RED)], &[]);
+        assert_eq!(f.instances_dirty(), [true]);
+    }
+
+    #[test]
+    fn a_nan_does_not_make_a_primitive_permanently_dirty() {
+        // `NaN != NaN`, so a naive comparison would redraw this one for ever.
+        let mut d = PaintDigest::new();
+        let nan = boxed(f32::NAN, RED);
+        let _ = digest_frame(&mut d, &[nan], &[]);
+        let f = digest_frame(&mut d, &[nan], &[]);
+        assert_eq!(f.instances_dirty(), [false]);
+    }
+
+    #[test]
+    fn a_shrinking_pool_does_not_leave_stale_hashes_behind() {
+        let mut d = PaintDigest::new();
+        let _ = digest_frame(&mut d, &[boxed(0.0, RED), boxed(20.0, RED)], &[]);
+        let _ = digest_frame(&mut d, &[boxed(0.0, RED)], &[]);
+        // Growing back to two must report the reinstated slot dirty rather
+        // than matching it against a hash from two frames ago.
+        let f = digest_frame(&mut d, &[boxed(0.0, RED), boxed(20.0, RED)], &[]);
+        assert_eq!(f.instances_dirty(), [false, true]);
+    }
+
+    #[test]
+    fn reset_makes_the_next_frame_fully_dirty_again() {
+        let mut d = PaintDigest::new();
+        let _ = digest_frame(&mut d, &[boxed(0.0, RED)], &[line("a")]);
+        d.reset();
+        let f = digest_frame(&mut d, &[boxed(0.0, RED)], &[line("a")]);
+        assert_eq!(f.instances_dirty(), [true]);
+        assert!(f.texts()[0].dirty);
     }
 }

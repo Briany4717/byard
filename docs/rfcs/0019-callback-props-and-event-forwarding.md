@@ -1,6 +1,7 @@
 # RFC-0019: Callback Props & Event Forwarding — `Fn` parameters for user Views
 
-- **Status:** Draft
+- **Status:** Active — implemented
+- **Status note (2026-07-26):** Shipped in full: `Fn`-typed parameters, callback passing, event-data callbacks, the typing rules, scope binding, invocation, validation and the hot-reload interaction.
 - **Author(s):** Briany4717
 - **Created:** 2026-07-10
 - **Last updated:** 2026-07-10

@@ -507,6 +507,7 @@ impl App {
             &cpu,
             render,
             engine.gpu_timing_available(),
+            engine.latest_atlas_paths(),
         );
         eprint!("{overlay}");
     }

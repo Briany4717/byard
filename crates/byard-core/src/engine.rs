@@ -487,7 +487,6 @@ impl Engine {
                 ReactiveLabel::new("Byard — Phase 1", 110.0, 110.0, 20.0, [1.0, 1.0, 1.0, 1.0]);
             let label_line = label.text_line()?;
             let mut frame = relay.acquire_recycled();
-            frame.set_version(0);
             for &inst in &instances {
                 frame.push_instance(inst);
             }
@@ -508,8 +507,6 @@ impl Engine {
             .spawn(move || {
                 let mut label =
                     ReactiveLabel::new("Byard — Phase 1", 110.0, 110.0, 20.0, [1.0, 1.0, 1.0, 1.0]);
-                let mut current_version: u64 = 0;
-
                 while !relay.is_shutdown() {
                     while let Ok(new_text) = label_rx.try_recv() {
                         label.set_text(new_text);
@@ -517,11 +514,10 @@ impl Engine {
                     let label_line = label
                         .text_line()
                         .expect("text_line never fails in logic loop");
-                    if label_line.dirty {
-                        current_version += 1;
-                    }
+                    // The version is the relay's publish sequence number and
+                    // is stamped by `Relay::publish` itself (RFC-0001 §5.2) —
+                    // a host cannot forget to maintain it, which is the point.
                     let mut frame = relay.acquire_recycled();
-                    frame.set_version(current_version);
                     for &inst in &instances {
                         frame.push_instance(inst);
                     }
@@ -644,6 +640,9 @@ impl Engine {
             .encoder
             .encode_frame_from_relay(&frame.texture, &relay_frame)?;
         self.encoder.submit(cmd);
+        // The frame reached the GPU: its dirty bits have been acted on, so the
+        // next publish need not carry them forward (RFC-0032 §R3 step 6).
+        self.relay.mark_rendered();
         {
             // RFC-0030 §I1: the swapchain commit. Cheap on a healthy frame and
             // the second place a compositor can charge the engine for pacing,
@@ -669,6 +668,17 @@ impl Engine {
     #[must_use]
     pub fn latest_cpu_telemetry(&self) -> Option<crate::telemetry::SampleBlock> {
         self.relay.current().map(|frame| frame.telemetry().clone())
+    }
+
+    /// Which layout paths the atlas took producing the most recently published
+    /// frame (RFC-0032 §R7), or the zero snapshot if nothing has been
+    /// published yet.
+    #[must_use]
+    pub fn latest_atlas_paths(&self) -> crate::atlas::layout::path_counters::Counts {
+        self.relay
+            .current()
+            .map(|frame| frame.atlas_paths())
+            .unwrap_or_default()
     }
 
     /// Whether GPU pass timing is active for this engine (RFC-0013 **P5**) —

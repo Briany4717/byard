@@ -1,6 +1,7 @@
 # RFC-0023: Paint Effects — ripple, blur, vibrancy, and composited visual effects
 
-- **Status:** Draft
+- **Status:** Active — implemented
+- **Status note (2026-07-26):** Shipped in full: the Material ripple (§1) and the iOS backdrop blur / vibrancy (§2), their style-property integration (§3) and the effects pipeline (§4), including the quality tiers and the anti-ghosting adaptive downsample.
 - **Author(s):** Briany4717
 - **Created:** 2026-07-10
 - **Last updated:** 2026-07-10

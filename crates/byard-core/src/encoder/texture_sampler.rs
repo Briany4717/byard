@@ -9,7 +9,6 @@ use std::any::Any;
 use std::collections::HashMap;
 
 use tokio::sync::mpsc::UnboundedSender;
-use wgpu::util::DeviceExt;
 
 use crate::ByardError;
 use crate::frame::{ImageFit, TextureSampler};
@@ -431,81 +430,95 @@ pub async fn build_pipeline(
     Ok(pipeline)
 }
 
-/// Draws every cached [`TextureSampler`]; unresolved (failed-decode) sources are
-/// skipped. Group 0 (viewport) must already be bound by the caller.
+/// One staged image: which `TextureSampler` it is, the scissor it draws
+/// under, and where its instance landed in the arena.
+#[derive(Debug, Clone, Copy)]
+pub struct StagedImage {
+    /// Index into the caller's `textures` slice.
+    pub index: usize,
+    /// Content-clip scissor (RFC-0005), resolved at staging time.
+    pub scissor: super::Scissor,
+    /// This image's single-instance region in the arena.
+    pub region: super::instance_arena::Region,
+}
+
+/// Stages every drawable image's instance into the frame's arena
+/// (RFC-0033 §G1), skipping sources that have not decoded and images
+/// scrolled fully out of their content clip.
+///
+/// One region per image rather than one for the batch: each image needs its
+/// own texture bind group, so each is its own draw call anyway.
 #[allow(clippy::too_many_arguments)]
-pub fn draw(
-    render_pass: &mut wgpu::RenderPass<'_>,
-    device: &wgpu::Device,
-    pipeline: &wgpu::RenderPipeline,
-    viewport_bind_group: &wgpu::BindGroup,
-    quad_buffer: &wgpu::Buffer,
+pub fn stage(
+    arena: &mut super::instance_arena::InstanceArena,
+    out: &mut Vec<StagedImage>,
     cache: &TextureCache,
     textures: &[TextureSampler],
     depths: &[f32],
     clip_slice: &[Option<u16>],
     ctx: super::ClipCtx<'_>,
 ) {
-    if textures.is_empty() {
+    for (i, t) in textures.iter().enumerate() {
+        let Some(entry) = cache.get(&t.src) else {
+            continue;
+        };
+        // Content clip (RFC-0005): scissor this image to its ScrollView
+        // viewport; skip it entirely if scrolled fully out of view.
+        let Some(scissor) = super::clip_scissor(ctx, clip_slice.get(i).copied().flatten()) else {
+            continue;
+        };
+        let uv_xform = uv_transform(t.fit, entry.width, entry.height, t.rect[2], t.rect[3]);
+        // misc.y carries this image's draw-order depth (NDC-z); the shader reads
+        // it as position.z. Missing depth falls back to the far plane.
+        let depth = depths
+            .get(i)
+            .copied()
+            .unwrap_or(crate::frame::DRAW_DEPTH_CLEAR);
+        let instance = TextureInstance {
+            rect: t.rect,
+            radii: t.radii,
+            uv_xform,
+            misc: [t.opacity, depth, 0.0, 0.0],
+        };
+        let region = arena.push_vertex(std::slice::from_ref(&instance));
+        out.push(StagedImage {
+            index: i,
+            scissor,
+            region,
+        });
+    }
+}
+
+/// Draws every staged image. Group 0 (viewport) must already be bound by the
+/// caller.
+#[allow(clippy::too_many_arguments)]
+pub fn draw(
+    render_pass: &mut wgpu::RenderPass<'_>,
+    arena: &super::instance_arena::InstanceArena,
+    staged: &[StagedImage],
+    pipeline: &wgpu::RenderPipeline,
+    viewport_bind_group: &wgpu::BindGroup,
+    quad_buffer: &wgpu::Buffer,
+    cache: &TextureCache,
+    textures: &[TextureSampler],
+) {
+    if staged.is_empty() {
         return;
     }
     render_pass.set_pipeline(pipeline);
     render_pass.set_bind_group(0, viewport_bind_group, &[]);
     render_pass.set_vertex_buffer(0, quad_buffer.slice(..));
 
-    // Buffer creation is hoisted out of the draw loop so the whole pipeline's
-    // GPU-allocation cost is one `encode.buffers` sample (RFC-0030 §I1)
-    // instead of one per image. That matters beyond tidiness: `self_ns`
-    // recovers a scope's direct children from a bounded scan
-    // (`MAX_DIRECT_CHILDREN`), so a per-iteration scope in a loop over an
-    // unbounded image list would make `encode.passes`' self-time wrong on
-    // exactly the frames worth reading. Same allocations, same data, same
-    // draw order — only the sample count changes.
-    let mut prepared: Vec<(usize, super::Scissor, wgpu::Buffer)> =
-        Vec::with_capacity(textures.len());
-    {
-        crate::profile_scope!("encode.buffers");
-        for (i, t) in textures.iter().enumerate() {
-            let Some(entry) = cache.get(&t.src) else {
-                continue;
-            };
-            // Content clip (RFC-0005): scissor this image to its ScrollView
-            // viewport; skip it entirely if scrolled fully out of view.
-            let Some(scissor) = super::clip_scissor(ctx, clip_slice.get(i).copied().flatten())
-            else {
-                continue;
-            };
-            let uv_xform = uv_transform(t.fit, entry.width, entry.height, t.rect[2], t.rect[3]);
-            // misc.y carries this image's draw-order depth (NDC-z); the shader reads
-            // it as position.z. Missing depth falls back to the far plane.
-            let depth = depths
-                .get(i)
-                .copied()
-                .unwrap_or(crate::frame::DRAW_DEPTH_CLEAR);
-            let instance = TextureInstance {
-                rect: t.rect,
-                radii: t.radii,
-                uv_xform,
-                misc: [t.opacity, depth, 0.0, 0.0],
-            };
-            let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("ByardCore - TextureSampler Instance Buffer"),
-                contents: bytemuck::bytes_of(&instance),
-                usage: wgpu::BufferUsages::VERTEX,
-            });
-            prepared.push((i, scissor, buffer));
-        }
-    }
-
-    for (i, (sx, sy, sw, sh), buffer) in &prepared {
-        // `cache.get` succeeded during preparation, so this lookup cannot
-        // fail — the cache is not mutated between the two loops.
-        let Some(entry) = cache.get(&textures[*i].src) else {
+    for image in staged {
+        // `cache.get` succeeded during staging and the cache is not mutated
+        // between the two passes, so this lookup cannot fail.
+        let Some(entry) = textures.get(image.index).and_then(|t| cache.get(&t.src)) else {
             continue;
         };
-        render_pass.set_scissor_rect(*sx, *sy, *sw, *sh);
+        let (sx, sy, sw, sh) = image.scissor;
+        render_pass.set_scissor_rect(sx, sy, sw, sh);
         render_pass.set_bind_group(1, &entry.bind_group, &[]);
-        render_pass.set_vertex_buffer(1, buffer.slice(..));
+        render_pass.set_vertex_buffer(1, arena.slice(image.region));
         render_pass.draw(0..4, 0..1);
     }
 }

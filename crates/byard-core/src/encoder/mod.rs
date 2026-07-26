@@ -28,9 +28,9 @@
 //!
 //! `encode.frame` used to be a single row on the `byard dev` readout, and the
 //! standing assumption about it — including in RFC-0033's summary — was that
-//! it is dominated by the per-frame `create_buffer_init` calls each pipeline
-//! makes. It is not. Measured on Apple M2, debug build with `telemetry`,
-//! steady state:
+//! it was dominated by the per-frame `create_buffer_init` calls each pipeline
+//! made. It was not. Measured before either RFC landed, on Apple M2, debug
+//! build with `telemetry`, steady state:
 //!
 //! | Scope | `examples/profiling` | 12 wrapping paragraphs |
 //! |---|---|---|
@@ -50,11 +50,15 @@
 //!
 //! Two consequences for anyone optimising here:
 //!
-//! - Removing per-frame buffer creation (RFC-0033) is worth doing on
+//! - Removing per-frame buffer creation (RFC-0033, landed) was worth doing on
 //!   determinism grounds — the engine should not allocate and free GPU
-//!   resources at the display rate — but it is a **0.1–0.2 ms** change, not a
+//!   resources at the display rate — but it was a **0.1–0.2 ms** change, not a
 //!   5 ms one. Do not cite it as a frame-time fix.
-//! - `encode.buffers` is deliberately **one sample per draw group**, not one
+//! - The 84–98 % term is now handled by RFC-0032's dirty set: a `TextLine`
+//!   that did not change is reported clean and is never re-shaped. On the
+//!   text-heavy scene above that took `encode.glyphs` from 45.1 ms to 2.0 ms.
+//! - `encode.buffers` is now a **single sample per frame** covering the whole
+//!   staging pass. It was one per draw group before the arena, and never one
 //!   per allocation: [`crate::telemetry::SampleBlock::self_ns`] recovers direct
 //!   children from a bounded scan, so a per-iteration scope inside a loop over
 //!   an unbounded primitive list would make the *parent's* self-time wrong on
@@ -64,6 +68,7 @@ pub mod backdrop;
 pub mod canvas_shape;
 pub mod decorated_box;
 pub mod gpu_timer;
+pub mod instance_arena;
 pub mod ripple;
 pub mod text_glyph;
 pub mod texture_sampler;
@@ -379,16 +384,29 @@ pub struct EncoderSubsystem {
     /// Per-`TextureSampler` bounding boxes from the previous call (M27),
     /// aligned with that call's `textures` slice.
     last_texture_bounds: Vec<Rect>,
-    /// The [`RenderFrame::version`] value from the last frame rendered via
+    /// The [`RenderFrame::version`] (the relay's publish sequence number) of
+    /// the last frame rendered via
     /// [`encode_frame_from_relay`](Self::encode_frame_from_relay).
     ///
-    /// When the relay advances beyond this version (meaning at least one
-    /// frame was published that the render thread did not process), the
-    /// encoder forces a full redraw and text reshape to ensure no content
-    /// changes are silently skipped — even if the current frame's
-    /// `TextLine::dirty` bits are all `false` because they were cleared
-    /// before the render thread read the frame.
+    /// Diagnostic only. It used to drive a forced full redraw whenever the
+    /// sequence jumped, on the reasoning that a skipped frame's dirty bits
+    /// were lost; `Relay::publish` now merges those bits forward instead, so
+    /// nothing is lost and nothing needs compensating. Kept because "which
+    /// published frame is on screen" is the first thing anyone debugging a
+    /// stale-frame report wants to know.
     last_relay_version: u64,
+    /// The one GPU buffer every instanced pipeline's per-frame data lives in
+    /// (RFC-0033).
+    arena: instance_arena::InstanceArena,
+    /// Reused per-frame staging bookkeeping for that arena.
+    staging: FrameStaging,
+    /// Whether the last encoded frame was drawn under an incremental scissor
+    /// rather than as a full redraw (RFC-0001 §3.3).
+    ///
+    /// The third of the audit's inert incremental layers, made assertable: a
+    /// frame that changed one colour must not repaint the window, and there is
+    /// no way to see that from a timing.
+    last_frame_scissored: bool,
     /// Async GPU pass timing (RFC-0013 §"GPU timing"), or `None` if the
     /// device lacks `wgpu::Features::TIMESTAMP_QUERY` (P5) — checked once at
     /// construction, never re-probed per frame.
@@ -625,6 +643,7 @@ impl EncoderSubsystem {
         let persistent_depth_view = create_depth_target(&device, width, height);
 
         let gpu_timer = GpuTimer::new(&device, &queue, &[GPU_UI_PASS_SCOPE]);
+        let arena = instance_arena::InstanceArena::new(&device);
 
         Ok(Self {
             device,
@@ -670,6 +689,9 @@ impl EncoderSubsystem {
             last_backdrop_bounds: Vec::new(),
             last_texture_bounds: Vec::new(),
             last_relay_version: 0,
+            arena,
+            staging: FrameStaging::default(),
+            last_frame_scissored: false,
             gpu_timer,
             gpu_samples_scratch: Vec::new(),
             gpu_timing_pending: false,
@@ -692,6 +714,21 @@ impl EncoderSubsystem {
     /// per-element `blur_quality: high | low` always overrides it.
     pub fn set_blur_auto_capable(&mut self, capable: bool) {
         self.blur_auto_capable = capable;
+    }
+
+    /// Whether the last encoded frame took the incremental scissored path
+    /// instead of redrawing the whole target (RFC-0001 §3.3).
+    #[must_use]
+    pub const fn last_frame_scissored(&self) -> bool {
+        self.last_frame_scissored
+    }
+
+    /// The frame's shared instance arena (RFC-0033) — for the assertions that
+    /// keep it honest: zero GPU buffer creations and zero growths on a
+    /// steady-state frame.
+    #[must_use]
+    pub const fn arena(&self) -> &instance_arena::InstanceArena {
+        &self.arena
     }
 
     /// Whether this encoder's GPU pass timing is active (RFC-0013 **P5**) —
@@ -856,6 +893,7 @@ impl EncoderSubsystem {
             (&[], &[]),
             DrawDepths::default(),
             FrameClips::default(),
+            FrameDirty::default(),
             &[],
         )
     }
@@ -880,6 +918,7 @@ impl EncoderSubsystem {
         (backdrops, backdrop_marks): (&[BackdropInstance], &[LayerMark]),
         depths: DrawDepths<'_>,
         clips: FrameClips<'_>,
+        dirty: FrameDirty<'_>,
         layers: &[crate::frame::LayerMark],
     ) -> Result<wgpu::CommandBuffer, ByardError> {
         // RFC-0030 §I1: the render thread's own frame cost — pipeline
@@ -926,14 +965,30 @@ impl EncoderSubsystem {
         // `dirty` bit and contribute to the same incremental scissor union as
         // text and solid boxes (RFC-0001 §3.3).
 
-        // Every `BoxInstance` in the frame is treated as dirty: the lowering
-        // re-emits the whole instance list each tick and `BoxInstance`
-        // is a pure GPU `Pod` type with no room for a per-instance dirty bit,
-        // so the honest, layout-safe representation of "a box may
-        // have changed" is "all of them might have." This is what fixes the M26
-        // bug: a box-only mutation (no dirty text) now always produces a
-        // non-empty scissor and reaches the screen.
-        let instances_dirty = vec![true; instances.len()];
+        // The per-instance dirty bits the frame carries (RFC-0032 §R3 step 6).
+        //
+        // This used to be `vec![true; instances.len()]`, and the comment here
+        // used to explain why that was the only honest answer: `BoxInstance`
+        // is a GPU `Pod` type with no room for a dirty bit, and the lowering
+        // re-emitted every instance each tick, so "all of them might have
+        // changed" was the truth. It is no longer — the interpreter now
+        // compares each instance's resolved values against last frame's and
+        // says which ones actually moved, so the scissor union can be the
+        // dirty region instead of the whole frame.
+        //
+        // The fallback is deliberate rather than defensive: a caller that
+        // hands over a frame whose bits were never computed (a hand-built
+        // frame in a test, a subsystem populating the pools directly) gets the
+        // old all-dirty behaviour and a correct picture, not a silently
+        // under-drawn one.
+        let frame_dirty = dirty.instances;
+        let fallback;
+        let instances_dirty: &[bool] = if frame_dirty.len() == instances.len() {
+            frame_dirty
+        } else {
+            fallback = vec![true; instances.len()];
+            &fallback
+        };
 
         // Only meaningful on a non-full-redraw frame — every primitive is
         // drawn regardless of its dirty bit when `full_redraw` is true.
@@ -943,9 +998,10 @@ impl EncoderSubsystem {
             compute_scissor(
                 &ScissorInputs {
                     texts,
+                    text_wrap: clips.text_wrap,
                     prev_texts: &self.last_text_bounds,
                     instances,
-                    instances_dirty: &instances_dirty,
+                    instances_dirty,
                     prev_boxes: &self.last_box_bounds,
                     decorated,
                     prev_decorated: &self.last_decorated_bounds,
@@ -972,6 +1028,7 @@ impl EncoderSubsystem {
         // transition changes a `VectorInstance`'s content but not its rect —
         // the scissor union (rect-based) would otherwise miss it entirely.
         let should_draw = full_redraw || scissor.is_some() || !atlas_uploads.is_empty();
+        self.last_frame_scissored = !full_redraw && scissor.is_some();
 
         // ── Pass segmentation (RFC-0017 z-layers × RFC-0023 backdrops) ────────
         let totals = LayerMark {
@@ -1069,6 +1126,9 @@ impl EncoderSubsystem {
                 &segments,
                 &mut backdrop_draw,
                 self.gpu_timer.as_ref(),
+                &mut self.arena,
+                &mut self.staging,
+                &self.queue,
             )?;
             // Only when a pass actually ran this frame — resolving an
             // untouched query set would read stale or never-written slots.
@@ -1119,20 +1179,22 @@ impl EncoderSubsystem {
         Ok(encoder.finish())
     }
 
-    /// Encodes a frame from a [`RenderFrame`] published by the Relay, with
-    /// version-based forced-redraw semantics (RFC-0001 §5.2).
+    /// Encodes a frame from a [`RenderFrame`] published by the Relay.
     ///
-    /// When `frame.version()` exceeds
-    /// [`last_relay_version`](Self::last_relay_version), the render thread
-    /// skipped at least one frame that had `TextLine::dirty = true`. To
-    /// prevent silently displaying stale glyphs this forces a full redraw and
-    /// marks all texts dirty before passing them to
-    /// [`encode_frame`](Self::encode_frame). Setting `dirty = true` on every
-    /// line guarantees glyph reshape for all lines and also satisfies the
-    /// debug-mode assertion that content-changed lines must carry a set dirty
-    /// bit — the assertion's invariant holds in the normal evaluator pipeline
-    /// but is intentionally bypassed here because the render thread may have
-    /// missed the original dirty=true frame.
+    /// # Skipped frames
+    ///
+    /// The relay is latest-wins, so most published frames never reach here.
+    /// That used to be handled at this end: [`RenderFrame::version`] carried a
+    /// counter, a gap meant "a frame with dirty text was dropped", and the
+    /// response was to force a full redraw with every line marked dirty.
+    ///
+    /// It is handled at the *other* end now. `Relay::publish` folds an
+    /// unrendered frame's dirty bits into its replacement
+    /// ([`RenderFrame::merge_dirty_from`]), so no dirty bit is ever lost and
+    /// there is nothing here to compensate for. The difference is not
+    /// cosmetic: a logic thread that outruns the display — i.e. every logic
+    /// thread — skipped frames constantly, so the old rule fired on nearly
+    /// every frame and handed back the entire benefit of RFC-0032's dirty set.
     ///
     /// # Errors
     ///
@@ -1142,40 +1204,6 @@ impl EncoderSubsystem {
         target: &wgpu::Texture,
         frame: &RenderFrame,
     ) -> Result<wgpu::CommandBuffer, ByardError> {
-        if frame.version() > self.last_relay_version {
-            self.needs_full_redraw = true;
-            // Rebuild the text list with every dirty bit set. This ensures
-            // (a) every glyph buffer is reshaped (its cached copy may reflect a
-            // stale version) and (b) the debug-only hash-change assertion in
-            // TextGlyphPipeline::prepare cannot fire on "hash changed but
-            // dirty=false" — a state that is legitimate here but would indicate
-            // a transpiler bug in the normal evaluator path.
-            let texts_dirty: Vec<TextLine> = frame
-                .texts()
-                .iter()
-                .map(|t| TextLine {
-                    dirty: true,
-                    ..t.clone()
-                })
-                .collect();
-            let cmd = self.encode_frame_with_decorations(
-                target,
-                frame.instances(),
-                &texts_dirty,
-                frame.decorated(),
-                frame.textures(),
-                frame.vector_instances(),
-                frame.canvas_shapes(),
-                frame.ripples(),
-                frame.atlas_uploads(),
-                (frame.backdrops(), frame.backdrop_marks()),
-                frame_draw_depths(frame),
-                frame_clips(frame),
-                frame.layer_marks(),
-            )?;
-            self.last_relay_version = frame.version();
-            return Ok(cmd);
-        }
         let cmd = self.encode_frame_with_decorations(
             target,
             frame.instances(),
@@ -1189,6 +1217,9 @@ impl EncoderSubsystem {
             (frame.backdrops(), frame.backdrop_marks()),
             frame_draw_depths(frame),
             frame_clips(frame),
+            FrameDirty {
+                instances: frame.instances_dirty(),
+            },
             frame.layer_marks(),
         )?;
         self.last_relay_version = frame.version();
@@ -1339,6 +1370,77 @@ pub struct DrawDepths<'a> {
     pub text: &'a [f32],
     /// Parallel to `CanvasShape`s (RFC-0020).
     pub canvas: &'a [f32],
+}
+
+/// Everything one frame stages into the [`instance_arena::InstanceArena`]
+/// before any render pass opens (RFC-0033 §G1).
+///
+/// Owned by the encoder and reused, so a steady-state frame reallocates none
+/// of it — which is the point: an arena that removed nine GPU allocations by
+/// adding nine CPU ones would not be an improvement.
+#[derive(Default)]
+pub(crate) struct FrameStaging {
+    /// One entry per pass segment, in segment order.
+    segments: Vec<SegmentStaging>,
+    /// The incremental frame's clear quad: instance + depth regions.
+    clear_quad: Option<(instance_arena::Region, instance_arena::Region)>,
+    /// One reservation per backdrop in the pool (RFC-0033 §G2's alignment
+    /// case), indexed by backdrop slot.
+    backdrops: Vec<backdrop::BackdropRegions>,
+    /// Reused conversion buffers, so the per-pipeline instance builds do not
+    /// allocate either.
+    decorated_scratch: Vec<decorated_box::DecoratedInstance>,
+    canvas_scratch: Vec<canvas_shape::CanvasShapeInstance>,
+    depth_scratch: Vec<f32>,
+}
+
+/// One pass segment's staged regions.
+#[derive(Default)]
+struct SegmentStaging {
+    solid: (instance_arena::Region, instance_arena::Region),
+    decorated: instance_arena::Region,
+    ripple: instance_arena::Region,
+    canvas: instance_arena::Region,
+    vector: instance_arena::Region,
+    textures: Vec<texture_sampler::StagedImage>,
+}
+
+impl FrameStaging {
+    /// Resets for a new frame while keeping every buffer's capacity.
+    fn begin(&mut self, segment_count: usize) {
+        self.clear_quad = None;
+        self.backdrops.clear();
+        // Grown, never shrunk, and each segment's own `Vec` is cleared in
+        // place rather than dropped — the same reasoning as the arena's
+        // grow-only policy, one layer up.
+        while self.segments.len() < segment_count {
+            self.segments.push(SegmentStaging::default());
+        }
+        for seg in &mut self.segments[..segment_count] {
+            seg.solid = Default::default();
+            seg.decorated = instance_arena::Region::default();
+            seg.ripple = instance_arena::Region::default();
+            seg.canvas = instance_arena::Region::default();
+            seg.vector = instance_arena::Region::default();
+            seg.textures.clear();
+        }
+    }
+}
+
+/// The per-primitive dirty bits a frame carries that do not fit on the
+/// primitive itself (RFC-0032 §R3 step 6) — today, solid boxes, because
+/// [`BoxInstance`] is a GPU `Pod` vertex type with nowhere to put one.
+///
+/// [`Default`] is an **empty** slice, not an all-true one: a length that does
+/// not match the instance pool is treated as "no information" by
+/// [`encode_frame_with_decorations`](EncoderSubsystem::encode_frame_with_decorations),
+/// which then falls back to redrawing everything. Erring towards over-draw is
+/// the only safe direction here — the alternative is a frame that is quietly
+/// missing pixels.
+#[derive(Clone, Copy, Default)]
+pub struct FrameDirty<'a> {
+    /// Parallel to solid `BoxInstance`s.
+    pub instances: &'a [bool],
 }
 
 /// A frame's content-clip table plus the parallel per-pool clip slices
@@ -1551,12 +1653,14 @@ fn draw_ui_pass(
     segments: &[SegmentRanges],
     bd: &mut BackdropDraw<'_>,
     gpu_timer: Option<&GpuTimer>,
+    arena: &mut instance_arena::InstanceArena,
+    staging: &mut FrameStaging,
+    queue: &wgpu::Queue,
 ) -> Result<(), ByardError> {
     // RFC-0030 §I1 sub-scope: render-pass recording and draw-call submission
-    // for every segment. Its `encode.buffers` children (one per draw group,
-    // see `profile_buffers!`) are nested inside it because that is where the
-    // per-frame `create_buffer_init` calls physically live today — RFC-0033
-    // is the change that hoists them out.
+    // for every segment. Its one `encode.buffers` child is the staging pass
+    // below — since RFC-0033 there are no per-draw buffer creations left to
+    // measure, only one arena append per pipeline and a single upload.
     crate::profile_scope!("encode.passes");
     let DrawPipelines {
         solid: render_pipeline,
@@ -1609,6 +1713,59 @@ fn draw_ui_pass(
     // pass the shared depth buffer keeps resolving paint order exactly as
     // before; across passes the depth buffer is stored and re-loaded so
     // occlusion still spans the whole frame.
+    // ── Staging (RFC-0033 §G1) ───────────────────────────────────────────────
+    //
+    // Every pipeline's instance data for every segment is appended to the one
+    // arena, and uploaded in a single `write_buffer`, **before** the first
+    // render pass opens. This ordering is a hard requirement rather than a
+    // preference: `wgpu` binds a buffer range eagerly, and growing the arena
+    // replaces the buffer, so a draw recorded before the upload could be
+    // pointing at a buffer that no longer exists.
+    {
+        crate::profile_scope!("encode.buffers");
+        arena.begin_frame();
+        staging.begin(segments.len());
+        if let Some((bounds, ..)) = scissor {
+            staging.clear_quad = Some(stage_clear_quad(arena, bounds));
+        }
+        for (seg, out) in segments.iter().zip(staging.segments.iter_mut()) {
+            out.solid = stage_solid_box_instances(
+                arena,
+                &mut staging.depth_scratch,
+                &instances[seg.solid.clone()],
+                sub_slice(solid_depths, &seg.solid),
+            );
+            out.decorated = decorated_box::stage(
+                arena,
+                &mut staging.decorated_scratch,
+                &decorated[seg.decorated.clone()],
+                sub_slice(decorated_depths, &seg.decorated),
+            );
+            out.ripple = arena.push_vertex(&ripples[seg.ripple.clone()]);
+            out.canvas = canvas_shape::stage(
+                arena,
+                &mut staging.canvas_scratch,
+                &canvas_shapes[seg.canvas.clone()],
+                sub_slice(canvas_depths, &seg.canvas),
+            );
+            out.vector = arena.push_vertex(&vectors[seg.vector.clone()]);
+            texture_sampler::stage(
+                arena,
+                &mut out.textures,
+                texture_cache,
+                &textures[seg.texture.clone()],
+                sub_slice(texture_depths, &seg.texture),
+                sub_slice(clips.texture, &seg.texture),
+                clip_ctx,
+            );
+        }
+        for _ in 0..bd.backdrops.len() {
+            let regions = backdrop::reserve(arena);
+            staging.backdrops.push(regions);
+        }
+        arena.upload(device, queue);
+    }
+
     let mut pending: Option<(usize, backdrop::PreparedBackdrop)> = None;
     let seg_count = segments.len();
     for (i, seg) in segments.iter().enumerate() {
@@ -1671,15 +1828,15 @@ fn draw_ui_pass(
         // segments keep drawing into the already-cleared region (every draw
         // below re-establishes its own scissor via the clip runs).
         if first {
-            if let Some((bounds, x, y, w, h)) = scissor {
+            if let (Some((_, x, y, w, h)), Some(regions)) = (scissor, staging.clear_quad) {
                 render_pass.set_scissor_rect(x, y, w, h);
                 draw_clear_quad(
                     &mut render_pass,
-                    device,
+                    arena,
+                    regions,
                     clear_pipeline,
                     viewport_bind_group,
                     quad_buffer,
-                    bounds,
                 );
             }
         }
@@ -1690,6 +1847,7 @@ fn draw_ui_pass(
         if let Some((bidx, prep)) = taken.as_ref() {
             backdrop::draw_composite(
                 &mut render_pass,
+                arena,
                 bd.pipes,
                 viewport_bind_group,
                 quad_buffer,
@@ -1699,6 +1857,7 @@ fn draw_ui_pass(
             );
         }
 
+        let staged = &staging.segments[i];
         let sr = &seg.solid;
         let dr = &seg.decorated;
         let tr = &seg.texture;
@@ -1716,12 +1875,12 @@ fn draw_ui_pass(
         if !sr.is_empty() {
             draw_solid_box_instances(
                 &mut render_pass,
-                device,
+                arena,
+                staged.solid,
                 render_pipeline,
                 viewport_bind_group,
                 quad_buffer,
-                &instances[sr.clone()],
-                sub_slice(solid_depths, sr),
+                sr.len(),
                 sub_slice(clips.solid, sr),
                 clip_ctx,
             );
@@ -1734,12 +1893,12 @@ fn draw_ui_pass(
         // after it, and text (below) no longer sits unconditionally on top.
         decorated_box::draw(
             &mut render_pass,
-            device,
+            arena,
+            staged.decorated,
             decorated_pipeline,
             viewport_bind_group,
             quad_buffer,
-            &decorated[dr.clone()],
-            sub_slice(decorated_depths, dr),
+            dr.len(),
             sub_slice(clips.decorated, dr),
             clip_ctx,
         );
@@ -1749,11 +1908,12 @@ fn draw_ui_pass(
         // order within the layer doesn't matter.
         ripple::draw(
             &mut render_pass,
-            device,
+            arena,
+            staged.ripple,
             ripple_pipeline,
             viewport_bind_group,
             quad_buffer,
-            &ripples[rr.clone()],
+            rr.len(),
             sub_slice(clips.ripple, rr),
             clip_ctx,
         );
@@ -1762,26 +1922,24 @@ fn draw_ui_pass(
         // the draw-order depth buffer, never writes it.
         canvas_shape::draw(
             &mut render_pass,
-            device,
+            arena,
+            staged.canvas,
             canvas_pipeline,
             viewport_bind_group,
             quad_buffer,
-            &canvas_shapes[cr.clone()],
-            sub_slice(canvas_depths, cr),
+            cr.len(),
             sub_slice(clips.canvas, cr),
             clip_ctx,
         );
         texture_sampler::draw(
             &mut render_pass,
-            device,
+            arena,
+            &staged.textures,
             texture_pipeline,
             viewport_bind_group,
             quad_buffer,
             texture_cache,
             &textures[tr.clone()],
-            sub_slice(texture_depths, tr),
-            sub_slice(clips.texture, tr),
-            clip_ctx,
         );
         // RFC-0009 §1: crisp monochrome icons, sampled from the same MSDF
         // atlas the JIT/AOT paths upload to. Each instance carries its own
@@ -1789,12 +1947,13 @@ fn draw_ui_pass(
         // honoured here too.
         vector_msdf::draw(
             &mut render_pass,
-            device,
+            arena,
+            staged.vector,
             vector_pipeline,
             viewport_bind_group,
             quad_buffer,
             vector_atlas,
-            &vectors[vr.clone()],
+            vr.len(),
             sub_slice(clips.vector, vr),
             clip_ctx,
         );
@@ -1832,6 +1991,9 @@ fn draw_ui_pass(
                 pending = backdrop::prepare(
                     encoder,
                     device,
+                    queue,
+                    arena,
+                    staging.backdrops.get(b).copied().unwrap_or_default(),
                     bd.pipes,
                     bd.scratch,
                     b,
@@ -1935,15 +2097,49 @@ fn create_depth_target(device: &wgpu::Device, width: u32, height: u32) -> wgpu::
 // exceed any real display by many orders of magnitude well before that.
 #[allow(clippy::cast_precision_loss)]
 fn text_line_bounds(line: &TextLine) -> Rect {
-    // Generous enough to cover the widest glyphs in typical Latin text.
+    text_line_bounds_wrapped(line, None)
+}
+
+/// [`text_line_bounds`] for a line that may wrap.
+///
+/// A wrapping `Text` occupies `wrap` pixels of width and *several* lines of
+/// height, and estimating it as one line leaves the tail of every paragraph
+/// outside the dirty union — stale glyphs below the first line whenever a
+/// paragraph moves or is edited. Invisible while every primitive was dirty and
+/// the union spanned the frame; a defect the moment the union is real.
+///
+/// The line-count estimate deliberately uses a **wider** per-character
+/// estimate than the width estimate does. Over-counting lines costs a slightly
+/// larger redraw; under-counting leaves pixels on screen that should not be
+/// there, and this is not a place to be precise and occasionally wrong.
+// Same rationale as `text_line_bounds`: a `TextLine` will never hold enough
+// characters (2^24) for this cast to lose precision.
+#[allow(clippy::cast_precision_loss)]
+fn text_line_bounds_wrapped(line: &TextLine, wrap: Option<f32>) -> Rect {
+    /// Generous enough to cover the widest glyphs in typical Latin text.
     const CHAR_WIDTH_FACTOR: f32 = 0.75;
-    // Generous enough to cover ascender + descender.
+    /// Deliberately above [`CHAR_WIDTH_FACTOR`]: a *narrower* assumed glyph
+    /// would under-count lines, and a paragraph one line shorter than it
+    /// really is leaves its last line outside the scissor.
+    const LINE_COUNT_CHAR_WIDTH: f32 = 0.95;
+    /// Generous enough to cover ascender + descender.
     const LINE_HEIGHT_FACTOR: f32 = 1.5;
 
     let char_count = line.text.chars().count() as f32;
-    let width = line.font_size * CHAR_WIDTH_FACTOR * char_count;
-    let height = line.font_size * LINE_HEIGHT_FACTOR;
-    Rect::new(line.x, line.y, width, height)
+    let natural_width = line.font_size * CHAR_WIDTH_FACTOR * char_count;
+    let (width, lines) = match wrap {
+        Some(w) if w > 0.0 => {
+            let wide = line.font_size * LINE_COUNT_CHAR_WIDTH * char_count;
+            (w.max(natural_width.min(w)), (wide / w).ceil().max(1.0))
+        }
+        _ => (natural_width, 1.0),
+    };
+    Rect::new(
+        line.x,
+        line.y,
+        width,
+        lines * line.font_size * LINE_HEIGHT_FACTOR,
+    )
 }
 
 /// Computes the merged bounding box — RFC §3.3's "bounding box of the
@@ -1963,13 +2159,13 @@ fn text_line_bounds(line: &TextLine) -> Rect {
 /// [`Rect::union`] rather than issued as separate scissored sub-passes —
 /// one scissor + draw call instead of N, at the cost of a marginally larger
 /// over-draw region when the dirty lines are far apart on screen.
-fn dirty_text_bounds(texts: &[TextLine], previous: &[Rect]) -> Option<Rect> {
+fn dirty_text_bounds(texts: &[TextLine], wraps: &[Option<f32>], previous: &[Rect]) -> Option<Rect> {
     texts
         .iter()
         .enumerate()
         .filter(|(_, line)| line.dirty)
         .map(|(i, line)| {
-            let current = text_line_bounds(line);
+            let current = text_line_bounds_wrapped(line, wraps.get(i).copied().flatten());
             match previous.get(i) {
                 Some(prev) => current.union(prev),
                 None => current,
@@ -2025,9 +2221,31 @@ fn dirty_decorated_bounds(
     previous: &[Rect],
 ) -> Option<Rect> {
     union_dirty_rects(
-        decorated.iter().map(|d| (rect_of(d.base.rect), d.dirty)),
+        decorated
+            .iter()
+            .map(|d| (decorated_paint_bounds(d), d.dirty)),
         previous,
     )
+}
+
+/// A decoration's **painted** bounds: its rect grown by the drop shadow's
+/// offset, spread and blur.
+///
+/// A shadow paints outside the box it belongs to by construction, so unioning
+/// `base.rect` alone leaves the shadow's outer half stale whenever the box
+/// moves. Like the wrapped-text estimate above, this only became reachable
+/// once the dirty union stopped covering the whole frame.
+fn decorated_paint_bounds(d: &crate::frame::DecoratedBox) -> Rect {
+    let rect = rect_of(d.base.rect);
+    if d.shadow_color[3] <= 0.0 {
+        return rect;
+    }
+    let reach = d.shadow_blur.max(0.0) + d.shadow_spread.max(0.0);
+    let x0 = (rect.x + d.shadow_dx.min(0.0)) - reach;
+    let y0 = (rect.y + d.shadow_dy.min(0.0)) - reach;
+    let x1 = (rect.x + rect.width + d.shadow_dx.max(0.0)) + reach;
+    let y1 = (rect.y + rect.height + d.shadow_dy.max(0.0)) + reach;
+    Rect::new(x0, y0, x1 - x0, y1 - y0).union(&rect)
 }
 
 /// `dirty_text_bounds` for the `CanvasShape` pipeline (RFC-0020); dirtiness
@@ -2088,6 +2306,9 @@ fn union_opt(a: Option<Rect>, b: Option<Rect>) -> Option<Rect> {
 /// [`union_dirty_rects`].
 struct ScissorInputs<'a> {
     texts: &'a [TextLine],
+    /// Per-line wrap width, parallel to `texts` — a wrapped paragraph is
+    /// several lines tall and its bounds must say so.
+    text_wrap: &'a [Option<f32>],
     prev_texts: &'a [Rect],
     instances: &'a [BoxInstance],
     instances_dirty: &'a [bool],
@@ -2112,6 +2333,7 @@ impl<'a> ScissorInputs<'a> {
     fn text_only(texts: &'a [TextLine], prev_texts: &'a [Rect]) -> Self {
         Self {
             texts,
+            text_wrap: &[],
             prev_texts,
             instances: &[],
             instances_dirty: &[],
@@ -2214,6 +2436,35 @@ pub(crate) fn for_each_clip_run(
 /// into free functions (see `text_glyph::needs_reshape`). Returns `None`
 /// both when nothing is dirty and when the dirty bounds degenerate to a
 /// zero-size physical rect (wgpu rejects a zero-size scissor rect).
+/// How far, in logical pixels, a primitive's paint can fall outside its own
+/// rect.
+///
+/// Every rounded/analytic pipeline in this encoder antialiases its edge with a
+/// smoothstep about half a pixel wide, so a box's paint bleeds *just* past its
+/// geometric rect. While every primitive was emitted dirty this never showed:
+/// the union spanned the whole frame and there was no boundary to fall off.
+/// With a real dirty union, a scissor cut exactly at the rect clips the
+/// antialiased fringe and leaves a one-pixel halo of the previous frame — a
+/// defect that is visible, is not the interpreter's fault, and is not
+/// something a caller can compensate for.
+///
+/// Two pixels rather than one: the fringe is under a pixel wide in logical
+/// space, and rounding to physical pixels can move the boundary by another.
+/// The cost of being generous here is a marginally larger redraw region; the
+/// cost of being exact and wrong is a stale outline around everything that
+/// moves.
+const AA_MARGIN_PX: f32 = 2.0;
+
+/// Grows `rect` by `margin` on every side.
+fn inflate(rect: Rect, margin: f32) -> Rect {
+    Rect::new(
+        rect.x - margin,
+        rect.y - margin,
+        rect.width + margin * 2.0,
+        rect.height + margin * 2.0,
+    )
+}
+
 fn compute_scissor(
     inputs: &ScissorInputs<'_>,
     scale: f32,
@@ -2223,7 +2474,7 @@ fn compute_scissor(
     let bounds = union_opt(
         union_opt(
             union_opt(
-                dirty_text_bounds(inputs.texts, inputs.prev_texts),
+                dirty_text_bounds(inputs.texts, inputs.text_wrap, inputs.prev_texts),
                 dirty_box_bounds(inputs.instances, inputs.instances_dirty, inputs.prev_boxes),
             ),
             union_opt(
@@ -2239,6 +2490,7 @@ fn compute_scissor(
             ),
         ),
     )?;
+    let bounds = inflate(bounds, AA_MARGIN_PX);
     let (x, y, w, h) = logical_rect_to_physical_scissor(bounds, scale, max_w, max_h);
     if w > 0 && h > 0 {
         Some((bounds, x, y, w, h))
@@ -2501,106 +2753,109 @@ async fn build_solid_box_pipeline(
     Ok(pipeline)
 }
 
-/// Draws a single fully transparent quad covering `bounds` (logical pixels)
-/// using `pipeline`'s no-blend state, so the fragment shader's output
-/// unconditionally **replaces** the destination instead of blending with
-/// it — see [`EncoderSubsystem::clear_pipeline`]'s doc comment for why this
-/// is required before an incremental redraw can erase stale content.
-///
-/// Must be called while `render_pass`'s active scissor rect already
-/// restricts writes to (at most) `bounds` — otherwise this would wipe
-/// unrelated content outside the dirty region.
-fn draw_clear_quad(
-    render_pass: &mut wgpu::RenderPass<'_>,
-    device: &wgpu::Device,
-    pipeline: &wgpu::RenderPipeline,
-    bind_group: &wgpu::BindGroup,
-    quad_buffer: &wgpu::Buffer,
+/// Stages the clear quad's instance and depth (RFC-0033 §G4: the "depth"
+/// buffers are ordinary per-instance vertex data, not depth attachments, so
+/// they join the same arena as another region).
+fn stage_clear_quad(
+    arena: &mut instance_arena::InstanceArena,
     bounds: Rect,
-) {
+) -> (instance_arena::Region, instance_arena::Region) {
     let clear_instance = BoxInstance {
         rect: [bounds.x, bounds.y, bounds.width, bounds.height],
         color: [0.0, 0.0, 0.0, 0.0],
         radii: [0.0; 4],
         transform: Transform::IDENTITY,
     };
-    let (instance_buffer, depth_buffer) = {
-        crate::profile_scope!("encode.buffers");
-        let instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("ByardCore - Clear Quad Instance Buffer"),
-            contents: bytemuck::bytes_of(&clear_instance),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-        // The clear pipeline shares `solid_box.wgsl`, which now reads a depth at
-        // location 9, so the clear draw must still supply the buffer. The value is
-        // irrelevant: the clear pipeline runs with depth-write disabled and an
-        // `Always` compare (see `build_solid_box_pipeline`), so it never touches the
-        // depth buffer — it only wipes colour in the scissor region.
-        let depth_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("ByardCore - Clear Quad Depth Buffer"),
-            contents: bytemuck::bytes_of(&crate::frame::DRAW_DEPTH_CLEAR),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-        (instance_buffer, depth_buffer)
-    };
-
-    render_pass.set_pipeline(pipeline);
-    render_pass.set_bind_group(0, bind_group, &[]);
-    render_pass.set_vertex_buffer(0, quad_buffer.slice(..));
-    render_pass.set_vertex_buffer(1, instance_buffer.slice(..));
-    render_pass.set_vertex_buffer(2, depth_buffer.slice(..));
-    render_pass.draw(0..4, 0..1);
+    let instance = arena.push_vertex(std::slice::from_ref(&clear_instance));
+    // The clear pipeline shares `solid_box.wgsl`, which reads a depth at
+    // location 9, so the clear draw must still supply the buffer. The value is
+    // irrelevant: the clear pipeline runs with depth-write disabled and an
+    // `Always` compare (see `build_solid_box_pipeline`), so it never touches
+    // the depth buffer — it only wipes colour in the scissor region.
+    let depth = arena.push_vertex(std::slice::from_ref(&crate::frame::DRAW_DEPTH_CLEAR));
+    (instance, depth)
 }
 
-/// Draws every `BoxInstance` in `instances` using `pipeline`'s alpha-blended
-/// state.
+/// Draws a single fully transparent quad covering the staged bounds using
+/// `pipeline`'s no-blend state, so the fragment shader's output
+/// unconditionally **replaces** the destination instead of blending with
+/// it — see [`EncoderSubsystem::clear_pipeline`]'s doc comment for why this
+/// is required before an incremental redraw can erase stale content.
 ///
-/// Extracted from [`EncoderSubsystem::encode_frame`] to keep that function
-/// under the 100-line lint threshold. On an incremental frame, the caller's
-/// active GPU scissor rect (not this function) is what actually bounds the
-/// pixels touched here, so calling this unconditionally on every
-/// `should_draw` frame is still proportional to the dirty region's
-/// bandwidth, not the full instance list's.
-#[allow(clippy::too_many_arguments)]
-fn draw_solid_box_instances(
+/// Must be called while `render_pass`'s active scissor rect already
+/// restricts writes to (at most) those bounds — otherwise this would wipe
+/// unrelated content outside the dirty region.
+fn draw_clear_quad(
     render_pass: &mut wgpu::RenderPass<'_>,
-    device: &wgpu::Device,
+    arena: &instance_arena::InstanceArena,
+    regions: (instance_arena::Region, instance_arena::Region),
     pipeline: &wgpu::RenderPipeline,
     bind_group: &wgpu::BindGroup,
     quad_buffer: &wgpu::Buffer,
-    instances: &[BoxInstance],
-    depths: &[f32],
-    clip_slice: &[Option<u16>],
-    ctx: ClipCtx<'_>,
 ) {
-    let (instance_buffer, depth_buffer) = {
-        crate::profile_scope!("encode.buffers");
-        let instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("ByardCore - SolidBox Instance Buffer"),
-            contents: bytemuck::cast_slice(instances),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-        // Draw-order depths, parallel to `instances`, fed as a second per-instance
-        // vertex buffer (shader location 9) — keeps `BoxInstance`'s Pod layout
-        // untouched. Padded to the instance count with the far plane so a
-        // length mismatch can never index out of range on the GPU.
-        let mut depth_data = depths.to_vec();
-        depth_data.resize(instances.len(), crate::frame::DRAW_DEPTH_CLEAR);
-        let depth_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("ByardCore - SolidBox Depth Buffer"),
-            contents: bytemuck::cast_slice(&depth_data),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-        (instance_buffer, depth_buffer)
-    };
-
     render_pass.set_pipeline(pipeline);
     render_pass.set_bind_group(0, bind_group, &[]);
     render_pass.set_vertex_buffer(0, quad_buffer.slice(..));
-    render_pass.set_vertex_buffer(1, instance_buffer.slice(..));
-    render_pass.set_vertex_buffer(2, depth_buffer.slice(..));
+    render_pass.set_vertex_buffer(1, arena.slice(regions.0));
+    render_pass.set_vertex_buffer(2, arena.slice(regions.1));
+    render_pass.draw(0..4, 0..1);
+}
+
+/// Stages one segment's solid boxes and their parallel draw-order depths.
+///
+/// The depths are fed as a second per-instance vertex buffer (shader location
+/// 9), which keeps `BoxInstance`'s `Pod` layout untouched, and are padded to
+/// the instance count with the far plane so a length mismatch can never index
+/// out of range on the GPU.
+fn stage_solid_box_instances(
+    arena: &mut instance_arena::InstanceArena,
+    depth_scratch: &mut Vec<f32>,
+    instances: &[BoxInstance],
+    depths: &[f32],
+) -> (instance_arena::Region, instance_arena::Region) {
+    if instances.is_empty() {
+        return (
+            instance_arena::Region::default(),
+            instance_arena::Region::default(),
+        );
+    }
+    let instance_region = arena.push_vertex(instances);
+    depth_scratch.clear();
+    depth_scratch.extend_from_slice(depths);
+    depth_scratch.resize(instances.len(), crate::frame::DRAW_DEPTH_CLEAR);
+    let depth_region = arena.push_vertex(depth_scratch);
+    (instance_region, depth_region)
+}
+
+/// Draws every `BoxInstance` staged for this segment using `pipeline`'s
+/// alpha-blended state.
+///
+/// On an incremental frame, the caller's active GPU scissor rect (not this
+/// function) is what actually bounds the pixels touched here, so calling this
+/// unconditionally on every `should_draw` frame is still proportional to the
+/// dirty region's bandwidth, not the full instance list's.
+#[allow(clippy::too_many_arguments)]
+fn draw_solid_box_instances(
+    render_pass: &mut wgpu::RenderPass<'_>,
+    arena: &instance_arena::InstanceArena,
+    regions: (instance_arena::Region, instance_arena::Region),
+    pipeline: &wgpu::RenderPipeline,
+    bind_group: &wgpu::BindGroup,
+    quad_buffer: &wgpu::Buffer,
+    count: usize,
+    clip_slice: &[Option<u16>],
+    ctx: ClipCtx<'_>,
+) {
+    if regions.0.is_empty() {
+        return;
+    }
+    render_pass.set_pipeline(pipeline);
+    render_pass.set_bind_group(0, bind_group, &[]);
+    render_pass.set_vertex_buffer(0, quad_buffer.slice(..));
+    render_pass.set_vertex_buffer(1, arena.slice(regions.0));
+    render_pass.set_vertex_buffer(2, arena.slice(regions.1));
     // Draw in content-clip runs (RFC-0005), each scissored to its viewport.
-    for_each_clip_run(render_pass, instances.len(), clip_slice, ctx, |p, s, e| {
+    for_each_clip_run(render_pass, count, clip_slice, ctx, |p, s, e| {
         p.draw(0..4, s..e);
     });
 }
@@ -3277,19 +3532,19 @@ mod tests {
             line(0.0, 0.0, "a", 16.0, false),
             line(50.0, 50.0, "b", 16.0, false),
         ];
-        assert!(dirty_text_bounds(&texts, &[]).is_none());
+        assert!(dirty_text_bounds(&texts, &[], &[]).is_none());
     }
 
     #[test]
     fn dirty_text_bounds_is_none_for_empty_slice() {
-        assert!(dirty_text_bounds(&[], &[]).is_none());
+        assert!(dirty_text_bounds(&[], &[], &[]).is_none());
     }
 
     #[test]
     fn dirty_text_bounds_ignores_non_dirty_lines() {
         let dirty_line = line(10.0, 10.0, "dirty", 16.0, true);
         let clean_line = line(1000.0, 1000.0, "clean", 16.0, false);
-        let bounds = dirty_text_bounds(&[dirty_line.clone(), clean_line], &[]).unwrap();
+        let bounds = dirty_text_bounds(&[dirty_line.clone(), clean_line], &[], &[]).unwrap();
         let expected = text_line_bounds(&dirty_line);
         assert_eq!(bounds, expected, "clean line must not widen the union");
     }
@@ -3298,7 +3553,7 @@ mod tests {
     fn dirty_text_bounds_merges_multiple_dirty_lines() {
         let a = line(0.0, 0.0, "a", 16.0, true);
         let b = line(200.0, 300.0, "b", 16.0, true);
-        let merged = dirty_text_bounds(&[a.clone(), b.clone()], &[]).unwrap();
+        let merged = dirty_text_bounds(&[a.clone(), b.clone()], &[], &[]).unwrap();
         let expected = text_line_bounds(&a).union(&text_line_bounds(&b));
         assert_eq!(merged, expected);
     }
@@ -3311,7 +3566,8 @@ mod tests {
         let shrunk = line(0.0, 0.0, "a", 16.0, true);
         let previous_bounds =
             text_line_bounds(&line(0.0, 0.0, "a much longer string", 16.0, false));
-        let bounds = dirty_text_bounds(std::slice::from_ref(&shrunk), &[previous_bounds]).unwrap();
+        let bounds =
+            dirty_text_bounds(std::slice::from_ref(&shrunk), &[], &[previous_bounds]).unwrap();
         let current = text_line_bounds(&shrunk);
         let expected = current.union(&previous_bounds);
         assert_eq!(
@@ -3332,7 +3588,8 @@ mod tests {
         // footprint).
         let grown = line(0.0, 0.0, "a much longer string", 16.0, true);
         let previous_bounds = text_line_bounds(&line(0.0, 0.0, "a", 16.0, false));
-        let bounds = dirty_text_bounds(std::slice::from_ref(&grown), &[previous_bounds]).unwrap();
+        let bounds =
+            dirty_text_bounds(std::slice::from_ref(&grown), &[], &[previous_bounds]).unwrap();
         let current = text_line_bounds(&grown);
         assert_eq!(
             bounds, current,
@@ -3347,7 +3604,8 @@ mod tests {
         // must be the bounding box that spans both, not just one of them.
         let moved = line(500.0, 500.0, "a", 16.0, true);
         let previous_bounds = text_line_bounds(&line(0.0, 0.0, "a", 16.0, false));
-        let bounds = dirty_text_bounds(std::slice::from_ref(&moved), &[previous_bounds]).unwrap();
+        let bounds =
+            dirty_text_bounds(std::slice::from_ref(&moved), &[], &[previous_bounds]).unwrap();
         let current = text_line_bounds(&moved);
         let expected = current.union(&previous_bounds);
         assert_eq!(bounds, expected);
@@ -3367,7 +3625,7 @@ mod tests {
         let existing = line(0.0, 0.0, "a", 16.0, false);
         let new_line = line(50.0, 50.0, "b", 16.0, true);
         let previous = [text_line_bounds(&existing)];
-        let bounds = dirty_text_bounds(&[existing, new_line.clone()], &previous).unwrap();
+        let bounds = dirty_text_bounds(&[existing, new_line.clone()], &[], &previous).unwrap();
         let expected = text_line_bounds(&new_line);
         assert_eq!(
             bounds, expected,
@@ -3453,9 +3711,17 @@ mod tests {
         let (bounds, x, y, w, h) =
             compute_scissor(&ScissorInputs::text_only(&texts, &[]), 2.0, 1000, 1000).unwrap();
         let expected_bounds = text_line_bounds(&texts[0]);
-        assert_eq!(bounds, expected_bounds, "logical bounds must be unscaled");
-        let (expected_x, expected_y, expected_w, expected_h) =
-            logical_rect_to_physical_scissor(expected_bounds, 2.0, 1000, 1000);
+        assert_eq!(
+            bounds,
+            inflate(expected_bounds, AA_MARGIN_PX),
+            "logical bounds must be unscaled, and grown by the antialiasing margin"
+        );
+        let (expected_x, expected_y, expected_w, expected_h) = logical_rect_to_physical_scissor(
+            inflate(expected_bounds, AA_MARGIN_PX),
+            2.0,
+            1000,
+            1000,
+        );
         assert_eq!(
             (x, y, w, h),
             (expected_x, expected_y, expected_w, expected_h)
@@ -3585,7 +3851,7 @@ mod tests {
             "a box-only mutation must produce a non-empty scissor"
         );
         let (bounds, ..) = scissor.unwrap();
-        assert_eq!(bounds, rect_of(boxes[0].rect));
+        assert_eq!(bounds, inflate(rect_of(boxes[0].rect), AA_MARGIN_PX));
     }
 
     #[test]
@@ -3601,7 +3867,79 @@ mod tests {
         };
         let (bounds, ..) = compute_scissor(&inputs, 1.0, 1000, 1000).unwrap();
         let expected = text_line_bounds(&texts[0]).union(&rect_of(boxes[0].rect));
-        assert_eq!(bounds, expected);
+        assert_eq!(bounds, inflate(expected, AA_MARGIN_PX));
+    }
+
+    #[test]
+    fn a_wrapped_line_reports_bounds_several_lines_tall() {
+        // The dirty union's height for a paragraph used to be one line's worth
+        // whatever the paragraph said, so the tail of every wrapped `Text` sat
+        // outside the scissor. Harmless while the union covered the frame; a
+        // stale-glyph defect the moment it stopped.
+        let paragraph = line(0.0, 0.0, &"word ".repeat(30), 12.0, true);
+        let single = text_line_bounds_wrapped(&paragraph, None);
+        let wrapped = text_line_bounds_wrapped(&paragraph, Some(120.0));
+        assert!(
+            wrapped.height > single.height * 2.0,
+            "a paragraph wrapped to 120px must report several lines of height, \
+             got {} vs the single-line {}",
+            wrapped.height,
+            single.height
+        );
+        assert!(
+            wrapped.width <= 120.0,
+            "and no more width than it was offered"
+        );
+    }
+
+    #[test]
+    fn a_shadow_grows_a_decorated_boxs_dirty_bounds() {
+        // A drop shadow paints outside the box it belongs to by construction,
+        // so a union over `base.rect` alone leaves the shadow's outer half on
+        // screen when the box moves.
+        let mut d = decorated_at(100.0, 100.0, 50.0, 50.0, true);
+        d.shadow_color = [0.0, 0.0, 0.0, 0.5];
+        d.shadow_dx = 4.0;
+        d.shadow_dy = 6.0;
+        d.shadow_blur = 8.0;
+        d.shadow_spread = 2.0;
+        let bounds = decorated_paint_bounds(&d);
+        assert!(
+            bounds.x <= 90.0,
+            "left edge must clear the blur: {bounds:?}"
+        );
+        assert!(
+            bounds.x + bounds.width >= 164.0,
+            "right edge must clear offset + blur + spread: {bounds:?}"
+        );
+        assert!(bounds.y + bounds.height >= 166.0, "{bounds:?}");
+    }
+
+    #[test]
+    fn a_transparent_shadow_does_not_grow_the_bounds() {
+        // The other direction: an unset shadow must not inflate every
+        // decoration's dirty region by its default blur.
+        let d = decorated_at(100.0, 100.0, 50.0, 50.0, true);
+        assert_eq!(decorated_paint_bounds(&d), rect_of(d.base.rect));
+    }
+
+    #[test]
+    fn the_scissor_covers_the_antialiased_fringe() {
+        // Every analytic pipeline here softens its edge over about half a
+        // pixel. A scissor cut exactly at a primitive's rect clips that
+        // fringe and leaves a one-pixel halo of the previous frame around
+        // anything that moves — which is what a golden-image parity run
+        // against a full redraw actually catches.
+        let boxes = [box_at(100.0, 100.0, 40.0, 40.0)];
+        let inputs = ScissorInputs {
+            instances: &boxes,
+            instances_dirty: &[true],
+            ..ScissorInputs::text_only(&[], &[])
+        };
+        let (bounds, ..) = compute_scissor(&inputs, 1.0, 1000, 1000).unwrap();
+        assert!(bounds.x < 100.0 && bounds.y < 100.0);
+        assert!(bounds.x + bounds.width > 140.0);
+        assert!(bounds.y + bounds.height > 140.0);
     }
 
     #[test]
@@ -3643,7 +3981,7 @@ mod tests {
         let (bounds, ..) = compute_scissor(&inputs, 1.0, 1000, 1000).unwrap();
         assert_eq!(
             bounds,
-            text_line_bounds(&texts[0]),
+            inflate(text_line_bounds(&texts[0]), AA_MARGIN_PX),
             "a clean decorated box must not expand the scissor"
         );
     }
@@ -3656,7 +3994,10 @@ mod tests {
             ..ScissorInputs::text_only(&[], &[])
         };
         let (bounds, ..) = compute_scissor(&inputs, 1.0, 1000, 1000).unwrap();
-        assert_eq!(bounds, rect_of(decorated[0].base.rect));
+        assert_eq!(
+            bounds,
+            inflate(rect_of(decorated[0].base.rect), AA_MARGIN_PX)
+        );
     }
 }
 

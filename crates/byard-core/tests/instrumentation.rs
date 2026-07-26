@@ -318,3 +318,100 @@ fn subtree_self_ns(block: &SampleBlock, index: usize) -> u64 {
     });
     total
 }
+
+// ── The GPU instance arena (RFC-0033 §G5) ──────────────────────────────────
+//
+// The acceptance condition is a counter, not a benchmark: a steady-state frame
+// must create **zero** GPU buffers. That is deterministic, so it is one of the
+// few performance claims that can be enforced on shared CI hardware, and it is
+// the reason this change is defensible even though the sub-scope measurement
+// put per-frame buffer creation at 0.3–3.4 % of the encode cost.
+
+#[test]
+fn a_steady_state_frame_creates_no_gpu_buffers() {
+    let Some((device, queue)) = try_device() else {
+        eprintln!("no GPU adapter available — skipping");
+        return;
+    };
+    let mut enc = pollster::block_on(EncoderSubsystem::init(
+        Arc::clone(&device),
+        Arc::clone(&queue),
+        wgpu::TextureFormat::Rgba8UnormSrgb,
+        1.0,
+        64,
+        64,
+    ))
+    .expect("encoder init");
+    enc.update_viewport(Viewport::new(64.0, 64.0), 64, 64, 1.0);
+
+    let target = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("arena counter target"),
+        size: wgpu::Extent3d {
+            width: 64,
+            height: 64,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+            | wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+
+    // A frame with something in every pool the arena serves.
+    let build_frame = |shade: f32| {
+        let mut frame = RenderFrame::new();
+        for i in 0..8 {
+            frame.push_instance(BoxInstance {
+                rect: [i as f32 * 4.0, 0.0, 4.0, 4.0],
+                color: [shade, 0.0, 0.0, 1.0],
+                radii: [0.0; 4],
+                transform: Transform::IDENTITY,
+            });
+        }
+        frame.push_text(byard_core::frame::TextLine {
+            x: 2.0,
+            y: 40.0,
+            text: "arena".to_string(),
+            font_size: 12.0,
+            color: [1.0, 1.0, 1.0, 1.0],
+            dirty: true,
+        });
+        frame
+    };
+
+    // Warm-up: the first frames may grow the arena to this scene's high-water
+    // mark, which is the whole point of a grow-only policy.
+    for i in 0..3 {
+        let frame = build_frame(i as f32 / 8.0);
+        let cmd = enc.encode_frame_from_relay(&target, &frame).unwrap();
+        queue.submit(std::iter::once(cmd));
+        device.poll(wgpu::PollType::wait_indefinitely()).ok();
+    }
+
+    let creations = enc.arena().buffer_creations();
+    let grows = enc.arena().grows_this_session();
+
+    for i in 0..10 {
+        let frame = build_frame(i as f32 / 16.0);
+        let cmd = enc.encode_frame_from_relay(&target, &frame).unwrap();
+        queue.submit(std::iter::once(cmd));
+        device.poll(wgpu::PollType::wait_indefinitely()).ok();
+    }
+
+    assert_eq!(
+        enc.arena().buffer_creations(),
+        creations,
+        "a steady-state frame created a GPU buffer — every instanced pipeline \
+         must draw from the arena, and a new `create_buffer*` on the per-frame \
+         path is the regression this counter exists to catch"
+    );
+    assert_eq!(
+        enc.arena().grows_this_session(),
+        grows,
+        "the arena grew after warm-up on a scene of constant size"
+    );
+}

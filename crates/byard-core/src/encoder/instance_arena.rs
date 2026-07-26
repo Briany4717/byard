@@ -168,6 +168,59 @@ impl InstanceArena {
         }
     }
 
+    /// Reserves `bytes` of **vertex** space without supplying the data yet.
+    ///
+    /// For the handful of regions whose contents are not known until *after*
+    /// [`upload`](Self::upload) has run — the backdrop pipeline computes its
+    /// composite quad while recording, because the pane can only be sampled
+    /// once the geometry behind it has been rasterised. Reserving keeps the
+    /// arena's single-growth-point guarantee (the buffer is still final before
+    /// any pass opens); the contents arrive later via
+    /// [`write_region`](Self::write_region).
+    pub fn reserve_vertex(&mut self, bytes: u64) -> Region {
+        self.reserve(bytes, VERTEX_ALIGNMENT)
+    }
+
+    /// [`reserve_vertex`](Self::reserve_vertex) for a **uniform** region,
+    /// padded to the device's reported alignment.
+    pub fn reserve_uniform(&mut self, bytes: u64) -> Region {
+        let alignment = self.uniform_alignment;
+        self.reserve(bytes, alignment)
+    }
+
+    fn reserve(&mut self, bytes: u64, alignment: u64) -> Region {
+        if bytes == 0 {
+            return Region::default();
+        }
+        let padding = align_padding(self.staging.len() as u64, alignment);
+        let total = usize_of(padding + bytes);
+        self.staging.resize(self.staging.len() + total, 0);
+        Region {
+            offset: self.staging.len() as u64 - bytes,
+            len: bytes,
+        }
+    }
+
+    /// Writes `bytes` into an already-reserved region.
+    ///
+    /// # Panics
+    ///
+    /// Debug builds panic if `bytes` does not fit the region — writing past it
+    /// would corrupt whichever pipeline owns the next one, which is the one
+    /// drawback a single shared arena has over per-pipeline buffers.
+    pub fn write_region(&self, queue: &wgpu::Queue, region: Region, bytes: &[u8]) {
+        debug_assert!(
+            bytes.len() as u64 <= region.len,
+            "{} bytes do not fit the {} byte region reserved for them",
+            bytes.len(),
+            region.len
+        );
+        if bytes.is_empty() {
+            return;
+        }
+        queue.write_buffer(&self.gpu, region.offset, bytes);
+    }
+
     /// Uploads this frame's staged bytes in a single `write_buffer`, growing
     /// the GPU buffer first if they no longer fit.
     ///

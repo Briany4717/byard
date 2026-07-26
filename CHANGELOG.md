@@ -12,6 +12,42 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **One GPU buffer for every pipeline's instance data (RFC-0033).** Each render
+  pipeline used to create its instance buffer from scratch on every frame —
+  nine or more `create_buffer_init` calls per frame. The correct pattern (a
+  persistent buffer written with `queue.write_buffer`) existed in the crate in
+  exactly one place, `viewport_buffer`, and there was no design reason for the
+  asymmetry. Now there is one arena: one buffer, one reused staging `Vec<u8>`,
+  one `write_buffer` per frame, per-pipeline draws reading from offsets into it.
+
+  - **Grow-only, doubling, never shrinking within a session.** Shrinking
+    recreates the buffer — the operation being removed — at the least
+    predictable moment. `grows_this_session` is exposed so a churning arena is
+    diagnosable rather than mysterious.
+  - **Uniform regions pad to `device.limits().min_uniform_buffer_offset_alignment`**,
+    read from the device rather than hardcoded to 256. It is 256 on many
+    backends, which is exactly what makes assuming it work on the machine you
+    are writing on and silently corrupt elsewhere.
+  - **Staging happens before the first render pass opens.** Not a style
+    choice: `wgpu` binds a buffer *range* eagerly and growing the arena
+    replaces the buffer, so every pipeline is split into a `stage` half and a
+    `draw` half. The backdrop pipeline — the one whose data is not known until
+    the geometry behind the pane has been rasterised — *reserves* its regions
+    up front and fills them while recording.
+  - **The acceptance condition is a counter, not a benchmark:** a steady-state
+    frame creates **zero** GPU buffers and grows the arena zero times.
+
+  **What it is worth, measured rather than projected: about 0.1 ms.** RFC-0033
+  named per-frame buffer creation as the leading suspect for `encode.frame`'s
+  ~6 ms; sub-scoping that row put every `create_buffer_init` combined at
+  0.3–3.4 % of it, and the rest was glyph shaping. The RFC reasoned from a
+  mechanism to a magnitude without measuring the magnitude, and the RFC now
+  carries an erratum saying so. It ships anyway, on the two grounds that
+  survive: RFC-0001 §2 claims *"sin spikes de VRAM"* and recreating every
+  instance buffer each frame is precisely VRAM churn; and "zero buffer
+  creations per frame" is a deterministic assertion, where a frame time on
+  shared CI hardware is not.
+
 - **Element invalidation (RFC-0032).** `support/AUDIT_incremental_paths_and_memory_model.md`
   found three incremental layers that production never took, and PR #148
   established they had one cause rather than three: the evaluation model did

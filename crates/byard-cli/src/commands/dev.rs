@@ -512,8 +512,9 @@ struct App {
     /// The `--trace <path>` writer (RFC-0030 §V5), or `None`.
     ///
     /// Both rings are streamed into it as they are drained, on the thread that
-    /// drains them — no buffering, so a session that is `Ctrl-C`'d still
-    /// leaves a file every viewer will open, which is usually the session you
+    /// drains them — nothing is held back, and the file on disk is a complete
+    /// JSON array after every frame, so a session that is `Ctrl-C`'d still
+    /// leaves a trace every viewer will open. That is usually the session you
     /// most want to look at.
     trace: Option<crate::trace::TraceWriter>,
 }
@@ -704,10 +705,8 @@ impl PlatformHost for App {
             // plain file handle and the render thread is the only one holding
             // it, which is what keeps this off any lock.
             if let Some(trace) = self.trace.as_mut() {
-                if let Some(cpu) = e.latest_cpu_telemetry() {
-                    trace.write_logic(&cpu);
-                }
-                trace.write_render(&self.last_render_telemetry);
+                let cpu = e.latest_cpu_telemetry();
+                trace.write_frame(cpu.as_ref(), &self.last_render_telemetry);
             }
             App::print_telemetry_overlay(
                 e,

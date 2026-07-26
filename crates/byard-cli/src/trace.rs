@@ -1,6 +1,6 @@
 //! Chrome Trace Event export for `byard dev --trace <path>` (RFC-0030 §V5).
 //!
-//! # Why this is thirty lines and not a viewer
+//! # Why this is a serialiser and not a viewer
 //!
 //! The profiler already produces everything a flame chart needs: a scope name,
 //! a start, an end, and — since RFC-0030 §I2 — a nesting `depth`. The Chrome
@@ -9,10 +9,10 @@
 //! Perfetto, `chrome://tracing` and `speedscope` all read this natively.
 //!
 //! It is the highest ratio of capability to code in RFC-0030, and it is worth
-//! saying why that is not luck: `depth` was added in Phase 8 for a completely
-//! different reason (a frame total that double-counted nested scopes), and it
-//! is the one field that makes nesting reconstruct here. Getting the data model
-//! right paid for a feature nobody was thinking about at the time.
+//! saying why that is not luck: `depth` was added for a completely different
+//! reason (a frame total that double-counted nested scopes), and it is the one
+//! field that makes nesting reconstruct here. Getting the data model right paid
+//! for a feature nobody was thinking about at the time.
 //!
 //! # Nesting, without emitting any structure
 //!
@@ -28,64 +28,132 @@
 //! The logic and render threads have separate sample rings and are emitted as
 //! separate `tid`s, which is what puts `interp.render` and `encode.frame` on
 //! two lanes in the viewer rather than falsely nesting one inside the other.
+//! GPU passes take a third lane: they resolve two frames later against a
+//! different clock, so placing them on the CPU timeline would draw them in the
+//! wrong place with complete confidence (RFC-0013, §Q6).
+//!
+//! # The closing bracket is written first, not last
+//!
+//! The obvious design writes `[`, streams objects, and writes `]` on drop. It
+//! produces an unparseable file for the single most important session: the one
+//! you `Ctrl-C`'d because something was wrong. `Drop` does not run on `SIGINT`
+//! — the process is terminated, not unwound — so "we close it on shutdown"
+//! quietly means "we close it except when it matters".
+//!
+//! So the terminator is maintained *continuously*. Every frame writes its
+//! events, then `]`, then flushes, then rewinds two bytes so the next frame
+//! overwrites the terminator it just wrote. The file on disk is therefore valid
+//! JSON at **every** instant, including the instant the process is killed, and
+//! including before a single sample has been written.
+//!
+//! The cost is one flush and one seek per traced frame. That is a real syscall
+//! pair, and it is affordable precisely because `--trace` is opt-in: a session
+//! that asked for a trace has already accepted that it is being instrumented,
+//! and a diagnostic that loses its data on the interesting run is not cheaper,
+//! it is worthless.
 
 use std::fmt::Write as _;
 use std::fs::File;
-use std::io::{BufWriter, Write};
+use std::io::{BufWriter, Seek, SeekFrom, Write};
 use std::path::Path;
 
 use byard_core::telemetry::{SampleBlock, ScopeKind, scope_kind, scope_name};
 
 /// Trace thread id for the logic thread's samples.
 const TID_LOGIC: u32 = 1;
-/// Trace thread id for the render thread's samples (its own `encode.*` scopes
-/// and the asynchronously-resolved `gpu.*` passes).
+/// Trace thread id for the render thread's samples (its own `encode.*` and
+/// `present.*` scopes).
 const TID_RENDER: u32 = 2;
+/// The offset applied to a lane carrying `Gpu` samples, which resolve
+/// asynchronously against a different clock and must not share a CPU lane.
+const TID_GPU_OFFSET: u32 = 100;
 
-/// A streaming Chrome Trace Event writer.
-///
-/// Opens the file, writes the opening bracket, appends one object per sample
-/// as blocks arrive, and closes the array on drop. Nothing is buffered beyond
-/// the `BufWriter`, so a long session does not grow memory and a session that
-/// is `Ctrl-C`'d still leaves a file every viewer will open.
+/// The array terminator, rewritten after every frame and rewound over by the
+/// next one.
+const TERMINATOR: &[u8] = b"]\n";
+/// How far to rewind to sit on top of [`TERMINATOR`] again. Spelled out rather
+/// than cast from `len()` so the sign is a written intention and not a
+/// conversion.
+const TERMINATOR_REWIND: i64 = -2;
+
+/// A streaming Chrome Trace Event writer whose file is valid JSON at every
+/// instant — see the module docs for why that is the whole design.
 pub struct TraceWriter {
     out: BufWriter<File>,
-    /// Whether an object has already been written, so the comma separator can
-    /// be emitted *before* each subsequent object rather than after each one —
-    /// which is what keeps the array valid if the process dies mid-session.
+    /// Whether an object has already been written, so the comma separator is
+    /// emitted *before* each subsequent object rather than after each one.
     wrote_any: bool,
     /// Reused between samples so the per-sample path performs no allocation
-    /// after the first few (§P1's spirit: a diagnostic that allocates per
-    /// sample is measuring itself).
+    /// after the first line. A diagnostic that allocates per sample is
+    /// measuring itself.
     scratch: String,
+    /// Set once if the file becomes unwritable, so the failure is reported one
+    /// time instead of once per frame for the rest of the session.
+    failed: bool,
 }
 
 impl TraceWriter {
-    /// Creates the trace file at `path`.
+    /// Creates the trace file at `path`, already containing a valid empty
+    /// array.
     ///
     /// # Errors
     ///
-    /// Returns the OS error message if the file cannot be created.
+    /// Returns the OS error message if the file cannot be created or the
+    /// initial array cannot be written.
     pub fn create(path: &Path) -> Result<Self, String> {
         let file = File::create(path).map_err(|e| format!("{}: {e}", path.display()))?;
-        let mut out = BufWriter::new(file);
-        out.write_all(b"[\n")
-            .map_err(|e| format!("{}: {e}", path.display()))?;
-        Ok(Self {
-            out,
+        let mut this = Self {
+            out: BufWriter::new(file),
             wrote_any: false,
             scratch: String::with_capacity(256),
-        })
+            failed: false,
+        };
+        this.out
+            .write_all(b"[\n")
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        this.terminate()
+            .map_err(|e| format!("{}: {e}", path.display()))?;
+        Ok(this)
     }
 
-    /// Appends one tick's worth of logic-thread samples.
-    pub fn write_logic(&mut self, block: &SampleBlock) {
-        self.write_block(block, TID_LOGIC);
+    /// Appends one frame: the logic thread's block (when one was published for
+    /// it) followed by the render thread's own, then re-terminates the array.
+    ///
+    /// Both blocks go in together because the terminator only has to be
+    /// rewritten once per frame, which halves the flush traffic — and because
+    /// they *are* one frame, so a partially-written frame is not a state worth
+    /// being able to observe.
+    pub fn write_frame(&mut self, logic: Option<&SampleBlock>, render: &SampleBlock) {
+        if self.failed {
+            return;
+        }
+        if let Some(logic) = logic {
+            self.write_block(logic, TID_LOGIC);
+        }
+        self.write_block(render, TID_RENDER);
+        if let Err(e) = self.terminate() {
+            // Report once. A dev runner must not be taken down by its own
+            // diagnostic, and must not spend the rest of the session shouting
+            // about a full disk it cannot do anything about.
+            crate::style::warn(&format!("trace file is no longer writable: {e}"));
+            self.failed = true;
+        }
     }
 
-    /// Appends one redraw's worth of render-thread samples.
-    pub fn write_render(&mut self, block: &SampleBlock) {
-        self.write_block(block, TID_RENDER);
+    /// Writes the closing bracket, flushes it to the OS, and rewinds over it so
+    /// the next frame's first event overwrites it.
+    ///
+    /// After this returns the file is a complete, parseable JSON array. The
+    /// rewind never leaves trailing garbage because every subsequent write is a
+    /// whole event object, which is far longer than the two bytes it replaces.
+    fn terminate(&mut self) -> std::io::Result<()> {
+        self.out.write_all(TERMINATOR)?;
+        self.out.flush()?;
+        // `BufWriter`'s `Seek` flushes before seeking, so the buffer and the
+        // file cursor cannot disagree here.
+        debug_assert_eq!(TERMINATOR.len(), 2, "the rewind distance is spelled out");
+        self.out.seek(SeekFrom::Current(TERMINATOR_REWIND))?;
+        Ok(())
     }
 
     // The profiler's timestamps are nanoseconds since its own epoch and a
@@ -97,12 +165,6 @@ impl TraceWriter {
         for sample in &block.samples {
             let name = scope_name(sample.scope).unwrap_or("<unknown scope>");
             let kind = scope_kind(sample.scope).unwrap_or(ScopeKind::Native);
-            // A `Gpu` sample carries a duration with no meaningful start (it
-            // resolves asynchronously two frames later — RFC-0013), so placing
-            // it on the CPU timeline would draw it in the wrong place. It is
-            // emitted on its own lane at its own origin, categorised so a
-            // reader can tell the two timelines apart rather than being
-            // silently misled by one.
             let category = match kind {
                 ScopeKind::Interpreter => "interp",
                 ScopeKind::Native => "native",
@@ -112,8 +174,11 @@ impl TraceWriter {
             // nanoseconds since its own epoch.
             let ts_us = sample.start as f64 / 1000.0;
             let dur_us = sample.duration_ns() as f64 / 1000.0;
+            // A `Gpu` sample carries a duration with no meaningful start, so it
+            // is given its own lane rather than being drawn somewhere confident
+            // and wrong on a CPU one.
             let tid = if kind == ScopeKind::Gpu {
-                tid + 100
+                tid + TID_GPU_OFFSET
             } else {
                 tid
             };
@@ -127,9 +192,8 @@ impl TraceWriter {
                 if self.wrote_any { "," } else { "" },
                 sample.depth()
             );
-            // A trace file is a diagnostic; a failed write must not take the
-            // dev runner down with it. The `BufWriter`'s own errors surface on
-            // flush at drop, where they are reported once.
+            // A failed write is reported by `terminate`, which runs at the end
+            // of every frame and cannot be skipped.
             let _ = self.out.write_all(self.scratch.as_bytes());
             self.wrote_any = true;
         }
@@ -138,13 +202,14 @@ impl TraceWriter {
 
 impl Drop for TraceWriter {
     fn drop(&mut self) {
-        // Closing the array on drop is what makes a `Ctrl-C`'d session produce
-        // a file that still parses. The alternative — closing it only on a
-        // clean shutdown — means the trace you most want (the one from the
-        // session that went wrong) is the one that is truncated.
-        let _ = self.out.write_all(b"]\n");
-        if let Err(e) = self.out.flush() {
-            crate::style::warn(&format!("trace file could not be flushed: {e}"));
+        // Nothing to close: the terminator has been on disk since `create`.
+        // All that is left is to make sure the last frame's events reached the
+        // OS, and to say so if they did not — losing the tail of a trace
+        // silently is how a developer ends up debugging their profiler.
+        if !self.failed {
+            if let Err(e) = self.out.flush() {
+                crate::style::warn(&format!("trace file could not be flushed: {e}"));
+            }
         }
     }
 }
@@ -154,13 +219,20 @@ mod tests {
     use super::*;
     use byard_core::telemetry::{Sample, ScopeId, scope_id_tagged};
 
-    fn read_back(write: impl FnOnce(&mut TraceWriter)) -> serde_json::Value {
+    /// A unique scratch directory per test, so a parallel test binary never
+    /// has two tests writing the same trace.
+    fn temp_dir(tag: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!(
-            "byard-trace-test-{}-{:?}",
+            "byard-trace-{tag}-{}-{:?}",
             std::process::id(),
             std::thread::current().id()
         ));
         std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn read_back(write: impl FnOnce(&mut TraceWriter)) -> serde_json::Value {
+        let dir = temp_dir("rt");
         let path = dir.join("trace.json");
         {
             let mut w = TraceWriter::create(&path).unwrap();
@@ -176,27 +248,86 @@ mod tests {
         scope_id_tagged(name, kind)
     }
 
+    fn block(samples: Vec<Sample>) -> SampleBlock {
+        SampleBlock {
+            samples,
+            dropped: 0,
+        }
+    }
+
     #[test]
     fn an_empty_trace_is_still_valid_json() {
-        // The `Ctrl-C`-on-startup case, and the one a naive "write the closing
-        // bracket at the end of a clean shutdown" design gets wrong.
+        // The `Ctrl-C`-during-startup case.
         let v = read_back(|_| {});
         assert_eq!(v.as_array().map(Vec::len), Some(0));
+    }
+
+    #[test]
+    fn the_file_parses_after_every_frame_without_the_writer_being_dropped() {
+        // The claim the whole design exists for: `Drop` does **not** run on
+        // `SIGINT`, so a trace that is only closed on shutdown is unparseable
+        // for exactly the session a developer most wants to read. Here the
+        // writer is deliberately never dropped before the file is read.
+        let dir = temp_dir("live");
+        let path = dir.join("trace.json");
+        let s = scope("trace.test.live", ScopeKind::Native);
+        let mut w = TraceWriter::create(&path).unwrap();
+
+        for frame in 1..=4u64 {
+            w.write_frame(
+                None,
+                &block(vec![Sample::cpu(s, 0, frame * 1_000, frame * 1_000 + 500)]),
+            );
+            let text = std::fs::read_to_string(&path).unwrap();
+            let v: serde_json::Value = serde_json::from_str(&text).unwrap_or_else(|e| {
+                panic!("the file must parse mid-session, after frame {frame}: {e}\n{text}")
+            });
+            assert_eq!(
+                v.as_array().map(Vec::len),
+                Some(usize::try_from(frame).unwrap()),
+                "every frame's events must already be on disk"
+            );
+        }
+
+        std::mem::forget(w); // the `SIGINT` shape: no `Drop`, no clean close.
+        let text = std::fs::read_to_string(&path).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&text).expect("valid without a Drop");
+        assert_eq!(v.as_array().map(Vec::len), Some(4));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn rewinding_over_the_terminator_leaves_no_trailing_bytes() {
+        // The rewind overwrites two bytes with an event object. If the file
+        // were ever left longer than what was written, the tail would be
+        // garbage — so assert the byte length exactly, not just that it parses.
+        let dir = temp_dir("len");
+        let path = dir.join("trace.json");
+        let s = scope("trace.test.len", ScopeKind::Native);
+        let mut w = TraceWriter::create(&path).unwrap();
+        w.write_frame(None, &block(vec![Sample::cpu(s, 0, 0, 1_000)]));
+        w.write_frame(None, &block(vec![Sample::cpu(s, 0, 2_000, 3_000)]));
+        drop(w);
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.ends_with("]\n"), "{text}");
+        assert_eq!(
+            text.matches("\"name\"").count(),
+            2,
+            "an overwritten terminator must not resurrect as a fragment:\n{text}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn samples_round_trip_with_their_names_and_durations() {
         let outer = scope("trace.test.outer", ScopeKind::Interpreter);
         let inner = scope("trace.test.inner", ScopeKind::Native);
-        let block = SampleBlock {
-            // Drop order: a child is pushed before its parent.
-            samples: vec![
-                Sample::cpu(inner, 1, 2_000, 5_000),
-                Sample::cpu(outer, 0, 1_000, 9_000),
-            ],
-            dropped: 0,
-        };
-        let v = read_back(|w| w.write_logic(&block));
+        // Drop order: a child is pushed before its parent.
+        let b = block(vec![
+            Sample::cpu(inner, 1, 2_000, 5_000),
+            Sample::cpu(outer, 0, 1_000, 9_000),
+        ]);
+        let v = read_back(|w| w.write_frame(Some(&b), &SampleBlock::default()));
         let events = v.as_array().unwrap();
         assert_eq!(events.len(), 2);
 
@@ -224,23 +355,15 @@ mod tests {
         // the child's and both must share a lane.
         let outer = scope("trace.test.nest.outer", ScopeKind::Native);
         let inner = scope("trace.test.nest.inner", ScopeKind::Native);
-        let block = SampleBlock {
-            samples: vec![
-                Sample::cpu(inner, 1, 2_000, 5_000),
-                Sample::cpu(outer, 0, 1_000, 9_000),
-            ],
-            dropped: 0,
-        };
-        let v = read_back(|w| w.write_logic(&block));
+        let b = block(vec![
+            Sample::cpu(inner, 1, 2_000, 5_000),
+            Sample::cpu(outer, 0, 1_000, 9_000),
+        ]);
+        let v = read_back(|w| w.write_frame(Some(&b), &SampleBlock::default()));
         let events = v.as_array().unwrap();
-        let o = events
-            .iter()
-            .find(|e| e["name"] == "trace.test.nest.outer")
-            .unwrap();
-        let i = events
-            .iter()
-            .find(|e| e["name"] == "trace.test.nest.inner")
-            .unwrap();
+        let find = |n: &str| events.iter().find(|e| e["name"] == n).unwrap();
+        let o = find("trace.test.nest.outer");
+        let i = find("trace.test.nest.inner");
 
         assert_eq!(o["tid"], i["tid"], "nesting only happens within one lane");
         let (ots, odur) = (o["ts"].as_f64().unwrap(), o["dur"].as_f64().unwrap());
@@ -259,19 +382,12 @@ mod tests {
         let logic = scope("trace.test.lane.logic", ScopeKind::Interpreter);
         let render = scope("trace.test.lane.render", ScopeKind::Native);
         let gpu = scope("trace.test.lane.gpu", ScopeKind::Gpu);
-        let v = read_back(|w| {
-            w.write_logic(&SampleBlock {
-                samples: vec![Sample::cpu(logic, 0, 0, 1_000)],
-                dropped: 0,
-            });
-            w.write_render(&SampleBlock {
-                samples: vec![
-                    Sample::cpu(render, 0, 0, 1_000),
-                    Sample::gpu_duration(gpu, 500),
-                ],
-                dropped: 0,
-            });
-        });
+        let l = block(vec![Sample::cpu(logic, 0, 0, 1_000)]);
+        let r = block(vec![
+            Sample::cpu(render, 0, 0, 1_000),
+            Sample::gpu_duration(gpu, 500),
+        ]);
+        let v = read_back(|w| w.write_frame(Some(&l), &r));
         let events = v.as_array().unwrap();
         let tid = |n: &str| events.iter().find(|e| e["name"] == n).unwrap()["tid"].clone();
         let (l, r, g) = (
@@ -281,6 +397,7 @@ mod tests {
         );
         assert_ne!(l, r);
         assert_ne!(r, g, "a GPU pass resolves on its own timeline (RFC-0013)");
+        assert_ne!(l, g);
     }
 
     #[test]
@@ -289,18 +406,14 @@ mod tests {
         // scratch `String` is the only per-sample buffer and it must stop
         // growing once it has seen a full-length line.
         let s = scope("trace.test.alloc", ScopeKind::Native);
-        let block = SampleBlock {
-            samples: vec![Sample::cpu(s, 0, 1_000, 2_000); 8],
-            dropped: 0,
-        };
-        let dir = std::env::temp_dir().join(format!("byard-trace-alloc-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let b = block(vec![Sample::cpu(s, 0, 1_000, 2_000); 8]);
+        let dir = temp_dir("alloc");
         let path = dir.join("trace.json");
         let mut w = TraceWriter::create(&path).unwrap();
-        w.write_logic(&block);
+        w.write_frame(None, &b);
         let capacity = w.scratch.capacity();
         for _ in 0..50 {
-            w.write_logic(&block);
+            w.write_frame(None, &b);
         }
         assert_eq!(
             w.scratch.capacity(),

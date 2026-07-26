@@ -64,6 +64,7 @@ pub mod backdrop;
 pub mod canvas_shape;
 pub mod decorated_box;
 pub mod gpu_timer;
+pub mod instance_arena;
 pub mod ripple;
 pub mod text_glyph;
 pub mod texture_sampler;

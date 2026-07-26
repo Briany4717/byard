@@ -1,6 +1,13 @@
 # RFC-0020: Path & Shape Primitives — arcs, circles, and custom vector drawing
 
-- **Status:** Draft
+- **Status:** Active — partially implemented. The Tier-1 analytic-stroke pipeline
+  is landed and in production use: `frame::CanvasShape`,
+  `RenderFrame::push_canvas_shape`, and `encoder/canvas_shape.{rs,wgsl}`, with
+  the `Canvas` intrinsic lowering `arc`/`circle`/`rect`/`line` to it. Tier-2
+  tessellated custom paths and clip masks remain deferred, as §"Ordering"
+  describes. The status line previously read `Draft` while the pipeline was
+  shipping, which is the kind of drift that makes every other status line
+  unreadable.
 - **Author(s):** Briany4717
 - **Created:** 2026-07-10
 - **Last updated:** 2026-07-10

@@ -47,16 +47,38 @@ Why should we *not* do this? What are the costs, risks, or trade-offs?
 What has been done in other projects (wgpu ecosystem, other UI frameworks,
 game engines, compiler toolchains)? What can we learn from them?
 
-## Unresolved questions
+## Resolved questions
 
-List every open question that must be resolved **during the RFC review**
-(before merging) and every question that can be deferred to the implementation
-phase. Be explicit about which is which.
+**An RFC ships no open questions.** Every question this design raised is
+answered here, before merge — not filed as a to-do for whoever implements it.
+A deferred question is a decision made later, by someone with less context,
+under more pressure, and usually by accident.
 
-- **Before merge:**
-  - [ ] Question one?
-- **During implementation:**
-  - [ ] Question two?
+For each one, state the question, the options that were weighed, and the
+resolution *with its reasoning*. The reasoning is the part that matters: a bare
+answer cannot be re-evaluated when circumstances change, and the act of writing
+it out is what surfaces the questions that turn out not to be details. (RFC-0030
+§Q8 is the canonical example: "do these two scopes nest?" looked like
+bookkeeping and turned out to be a bug in an accessor RFC-0013 already shipped.)
+
+If a question genuinely cannot be answered without building something first,
+that is a signal to spike it and come back — not to merge the RFC with a
+placeholder.
+
+### Q1 — one-line statement of the question
+
+**Question.** What exactly is undecided, and why it matters.
+
+**Options.** (a) …; (b) …; (c) ….
+
+**Resolution: (b).** Why, in enough detail that a reader who disagrees can tell
+which part of the argument they disagree with.
+
+---
+
+Decisions that only surface *after* merge — implementation-time trade-offs the
+design could not have anticipated — go to `support/DESICIONS.md` as `IMPL-NN`
+entries, per that file's own rule. They do not come back into the RFC.
 
 ## Future possibilities
 

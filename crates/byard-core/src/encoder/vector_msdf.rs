@@ -337,11 +337,14 @@ pub fn draw(
     if instances.is_empty() {
         return;
     }
-    let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("ByardCore - VectorMSDF Instance Buffer"),
-        contents: bytemuck::cast_slice(instances),
-        usage: wgpu::BufferUsages::VERTEX,
-    });
+    let buffer = {
+        crate::profile_scope!("encode.buffers");
+        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("ByardCore - VectorMSDF Instance Buffer"),
+            contents: bytemuck::cast_slice(instances),
+            usage: wgpu::BufferUsages::VERTEX,
+        })
+    };
     render_pass.set_pipeline(pipeline);
     render_pass.set_bind_group(0, viewport_bind_group, &[]);
     render_pass.set_bind_group(1, atlas.bind_group(), &[]);

@@ -141,11 +141,14 @@ pub fn draw(
     if ripples.is_empty() {
         return;
     }
-    let instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("ByardCore - Ripple Instance Buffer"),
-        contents: bytemuck::cast_slice(ripples),
-        usage: wgpu::BufferUsages::VERTEX,
-    });
+    let instance_buffer = {
+        crate::profile_scope!("encode.buffers");
+        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("ByardCore - Ripple Instance Buffer"),
+            contents: bytemuck::cast_slice(ripples),
+            usage: wgpu::BufferUsages::VERTEX,
+        })
+    };
 
     render_pass.set_pipeline(pipeline);
     render_pass.set_bind_group(0, bind_group, &[]);

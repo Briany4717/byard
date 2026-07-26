@@ -176,3 +176,145 @@ fn encoding_a_frame_enters_encode_frame() {
     let block = drain_samples();
     assert_entered(&block, "encode.frame");
 }
+
+// ── `encode.frame`'s sub-scopes (RFC-0030 §I1, second pass) ─────────────────
+//
+// `encode.frame` was a single ~6 ms row: the largest term in the frame and the
+// least explained one. These assertions pin the breakdown that replaced it —
+// uploads, glyphs, passes, buffers — so a sub-scope that stops being entered
+// fails here rather than quietly reading `0.000ms` in the terminal, which is
+// indistinguishable from "that work got free" (INV-18).
+//
+// `present.acquire` / `present.submit` are the two scopes this file cannot
+// cover: both live in `Engine::render_latest` and need a real window surface,
+// which no test in this workspace has. They are verified by running the
+// `profiling` example and reading the block it prints — see that example's
+// header for the exact command and what to look for.
+
+/// Encodes one frame carrying a solid box and a text line onto a 64×64 target,
+/// and returns the render thread's drained ring.
+fn encode_one_frame() -> Option<SampleBlock> {
+    let (device, queue) = try_device()?;
+    let mut enc = pollster::block_on(EncoderSubsystem::init(
+        Arc::clone(&device),
+        Arc::clone(&queue),
+        wgpu::TextureFormat::Rgba8UnormSrgb,
+        1.0,
+        64,
+        64,
+    ))
+    .expect("encoder init");
+    enc.update_viewport(Viewport::new(64.0, 64.0), 64, 64, 1.0);
+
+    let target = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("sub-scope target"),
+        size: wgpu::Extent3d {
+            width: 64,
+            height: 64,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+            | wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+
+    let mut frame = RenderFrame::new();
+    frame.push_instance(BoxInstance {
+        rect: [0.0, 0.0, 32.0, 32.0],
+        color: [1.0, 0.0, 0.0, 1.0],
+        radii: [0.0; 4],
+        transform: Transform::IDENTITY,
+    });
+    frame.push_text(byard_core::frame::TextLine {
+        x: 2.0,
+        y: 40.0,
+        text: "sub-scopes".to_string(),
+        font_size: 12.0,
+        color: [1.0, 1.0, 1.0, 1.0],
+        dirty: true,
+    });
+
+    let _ = drain_samples();
+    let cmd = enc.encode_frame_from_relay(&target, &frame).unwrap();
+    queue.submit(std::iter::once(cmd));
+    device.poll(wgpu::PollType::wait_indefinitely()).ok();
+    Some(drain_samples())
+}
+
+#[test]
+fn every_encode_sub_scope_is_entered_on_a_drawn_frame() {
+    let Some(block) = encode_one_frame() else {
+        eprintln!("no GPU adapter available — skipping");
+        return;
+    };
+    for scope in [
+        "encode.frame",
+        "encode.uploads",
+        "encode.glyphs",
+        "encode.passes",
+        "encode.buffers",
+    ] {
+        assert_entered(&block, scope);
+    }
+}
+
+#[test]
+fn the_encode_sub_scopes_nest_inside_encode_frame() {
+    let Some(block) = encode_one_frame() else {
+        eprintln!("no GPU adapter available — skipping");
+        return;
+    };
+    // `encode.frame` is the only depth-0 encode scope: a sub-scope recorded at
+    // depth 0 would be summed into the frame total a *second* time, which is
+    // the exact class of defect RFC-0030 §I2 exists to prevent.
+    for (i, sample) in block.samples.iter().enumerate() {
+        let name = scope_name(sample.scope).unwrap_or("<unknown>");
+        if !name.starts_with("encode.") || name == "encode.frame" {
+            continue;
+        }
+        assert!(
+            sample.depth() > 0,
+            "{name} (sample {i}) was recorded at depth 0 — it must nest inside \
+             encode.frame, or the frame total double-counts it"
+        );
+    }
+}
+
+#[test]
+fn encode_frame_self_times_sum_to_its_inclusive_time() {
+    let Some(block) = encode_one_frame() else {
+        eprintln!("no GPU adapter available — skipping");
+        return;
+    };
+    let root = block
+        .samples
+        .iter()
+        .position(|s| scope_name(s.scope) == Some("encode.frame"))
+        .expect("encode.frame was entered");
+
+    // Every nanosecond inside `encode.frame` is attributed to exactly one
+    // scope in its subtree. This is the property the whole breakdown rests on:
+    // if it fails, a sub-scope was mis-nested or synthesised, and the numbers
+    // in `support/PERF_encode_baseline.md` cannot be added up by a reader.
+    let total = subtree_self_ns(&block, root);
+    assert_eq!(
+        total,
+        block.samples[root].duration_ns(),
+        "self-times in the encode.frame subtree must sum to its inclusive time"
+    );
+}
+
+/// Sum of [`SampleBlock::self_ns`] over the sample at `index` and everything
+/// nested inside it.
+fn subtree_self_ns(block: &SampleBlock, index: usize) -> u64 {
+    let mut total = block.self_ns(index);
+    block.for_each_direct_child(index, |child_index, _| {
+        total += subtree_self_ns(block, child_index);
+    });
+    total
+}

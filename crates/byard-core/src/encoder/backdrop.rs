@@ -412,11 +412,14 @@ fn blur_pass(
     params: BlurParams,
     label: &str,
 ) {
-    let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("ByardCore - Blur Params"),
-        contents: bytemuck::bytes_of(&params),
-        usage: wgpu::BufferUsages::UNIFORM,
-    });
+    let uniform = {
+        crate::profile_scope!("encode.buffers");
+        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("ByardCore - Blur Params"),
+            contents: bytemuck::bytes_of(&params),
+            usage: wgpu::BufferUsages::UNIFORM,
+        })
+    };
     let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("ByardCore - Blur Pass BG"),
         layout: &pipes.blur_bgl,
@@ -649,11 +652,14 @@ fn composite_resources(
         t_rotate: b.transform.rotate,
         t_origin: b.transform.origin,
     };
-    let instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("ByardCore - Backdrop Composite Instance"),
-        contents: bytemuck::bytes_of(&quad),
-        usage: wgpu::BufferUsages::VERTEX,
-    });
+    let instance_buffer = {
+        crate::profile_scope!("encode.buffers");
+        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("ByardCore - Backdrop Composite Instance"),
+            contents: bytemuck::bytes_of(&quad),
+            usage: wgpu::BufferUsages::VERTEX,
+        })
+    };
     PreparedBackdrop {
         bind_group,
         instance_buffer,

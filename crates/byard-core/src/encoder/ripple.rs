@@ -19,8 +19,6 @@
 //! circle. Zero cost when no ripple is live — the draw call is skipped
 //! entirely on an empty pool.
 
-use wgpu::util::DeviceExt;
-
 use crate::ByardError;
 use crate::frame::RippleInstance;
 
@@ -130,32 +128,24 @@ pub async fn build_pipeline(
 #[allow(clippy::too_many_arguments)]
 pub fn draw(
     render_pass: &mut wgpu::RenderPass<'_>,
-    device: &wgpu::Device,
+    arena: &super::instance_arena::InstanceArena,
+    region: super::instance_arena::Region,
     pipeline: &wgpu::RenderPipeline,
     bind_group: &wgpu::BindGroup,
     quad_buffer: &wgpu::Buffer,
-    ripples: &[RippleInstance],
+    count: usize,
     clip_slice: &[Option<u16>],
     ctx: super::ClipCtx<'_>,
 ) {
-    if ripples.is_empty() {
+    if region.is_empty() {
         return;
     }
-    let instance_buffer = {
-        crate::profile_scope!("encode.buffers");
-        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("ByardCore - Ripple Instance Buffer"),
-            contents: bytemuck::cast_slice(ripples),
-            usage: wgpu::BufferUsages::VERTEX,
-        })
-    };
-
     render_pass.set_pipeline(pipeline);
     render_pass.set_bind_group(0, bind_group, &[]);
     render_pass.set_vertex_buffer(0, quad_buffer.slice(..));
-    render_pass.set_vertex_buffer(1, instance_buffer.slice(..));
+    render_pass.set_vertex_buffer(1, arena.slice(region));
     // Content-clip runs (RFC-0005): scissor each run to its ScrollView viewport.
-    super::for_each_clip_run(render_pass, ripples.len(), clip_slice, ctx, |p, s, e| {
+    super::for_each_clip_run(render_pass, count, clip_slice, ctx, |p, s, e| {
         p.draw(0..4, s..e);
     });
 }

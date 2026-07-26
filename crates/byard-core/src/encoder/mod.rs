@@ -28,9 +28,9 @@
 //!
 //! `encode.frame` used to be a single row on the `byard dev` readout, and the
 //! standing assumption about it — including in RFC-0033's summary — was that
-//! it is dominated by the per-frame `create_buffer_init` calls each pipeline
-//! makes. It is not. Measured on Apple M2, debug build with `telemetry`,
-//! steady state:
+//! it was dominated by the per-frame `create_buffer_init` calls each pipeline
+//! made. It was not. Measured before either RFC landed, on Apple M2, debug
+//! build with `telemetry`, steady state:
 //!
 //! | Scope | `examples/profiling` | 12 wrapping paragraphs |
 //! |---|---|---|
@@ -50,11 +50,15 @@
 //!
 //! Two consequences for anyone optimising here:
 //!
-//! - Removing per-frame buffer creation (RFC-0033) is worth doing on
+//! - Removing per-frame buffer creation (RFC-0033, landed) was worth doing on
 //!   determinism grounds — the engine should not allocate and free GPU
-//!   resources at the display rate — but it is a **0.1–0.2 ms** change, not a
+//!   resources at the display rate — but it was a **0.1–0.2 ms** change, not a
 //!   5 ms one. Do not cite it as a frame-time fix.
-//! - `encode.buffers` is deliberately **one sample per draw group**, not one
+//! - The 84–98 % term is now handled by RFC-0032's dirty set: a `TextLine`
+//!   that did not change is reported clean and is never re-shaped. On the
+//!   text-heavy scene above that took `encode.glyphs` from 45.1 ms to 2.0 ms.
+//! - `encode.buffers` is now a **single sample per frame** covering the whole
+//!   staging pass. It was one per draw group before the arena, and never one
 //!   per allocation: [`crate::telemetry::SampleBlock::self_ns`] recovers direct
 //!   children from a bounded scan, so a per-iteration scope inside a loop over
 //!   an unbounded primitive list would make the *parent's* self-time wrong on
@@ -64,6 +68,7 @@ pub mod backdrop;
 pub mod canvas_shape;
 pub mod decorated_box;
 pub mod gpu_timer;
+pub mod instance_arena;
 pub mod ripple;
 pub mod text_glyph;
 pub mod texture_sampler;
@@ -390,6 +395,18 @@ pub struct EncoderSubsystem {
     /// published frame is on screen" is the first thing anyone debugging a
     /// stale-frame report wants to know.
     last_relay_version: u64,
+    /// The one GPU buffer every instanced pipeline's per-frame data lives in
+    /// (RFC-0033).
+    arena: instance_arena::InstanceArena,
+    /// Reused per-frame staging bookkeeping for that arena.
+    staging: FrameStaging,
+    /// Whether the last encoded frame was drawn under an incremental scissor
+    /// rather than as a full redraw (RFC-0001 §3.3).
+    ///
+    /// The third of the audit's inert incremental layers, made assertable: a
+    /// frame that changed one colour must not repaint the window, and there is
+    /// no way to see that from a timing.
+    last_frame_scissored: bool,
     /// Async GPU pass timing (RFC-0013 §"GPU timing"), or `None` if the
     /// device lacks `wgpu::Features::TIMESTAMP_QUERY` (P5) — checked once at
     /// construction, never re-probed per frame.
@@ -626,6 +643,7 @@ impl EncoderSubsystem {
         let persistent_depth_view = create_depth_target(&device, width, height);
 
         let gpu_timer = GpuTimer::new(&device, &queue, &[GPU_UI_PASS_SCOPE]);
+        let arena = instance_arena::InstanceArena::new(&device);
 
         Ok(Self {
             device,
@@ -671,6 +689,9 @@ impl EncoderSubsystem {
             last_backdrop_bounds: Vec::new(),
             last_texture_bounds: Vec::new(),
             last_relay_version: 0,
+            arena,
+            staging: FrameStaging::default(),
+            last_frame_scissored: false,
             gpu_timer,
             gpu_samples_scratch: Vec::new(),
             gpu_timing_pending: false,
@@ -693,6 +714,21 @@ impl EncoderSubsystem {
     /// per-element `blur_quality: high | low` always overrides it.
     pub fn set_blur_auto_capable(&mut self, capable: bool) {
         self.blur_auto_capable = capable;
+    }
+
+    /// Whether the last encoded frame took the incremental scissored path
+    /// instead of redrawing the whole target (RFC-0001 §3.3).
+    #[must_use]
+    pub const fn last_frame_scissored(&self) -> bool {
+        self.last_frame_scissored
+    }
+
+    /// The frame's shared instance arena (RFC-0033) — for the assertions that
+    /// keep it honest: zero GPU buffer creations and zero growths on a
+    /// steady-state frame.
+    #[must_use]
+    pub const fn arena(&self) -> &instance_arena::InstanceArena {
+        &self.arena
     }
 
     /// Whether this encoder's GPU pass timing is active (RFC-0013 **P5**) —
@@ -992,6 +1028,7 @@ impl EncoderSubsystem {
         // transition changes a `VectorInstance`'s content but not its rect —
         // the scissor union (rect-based) would otherwise miss it entirely.
         let should_draw = full_redraw || scissor.is_some() || !atlas_uploads.is_empty();
+        self.last_frame_scissored = !full_redraw && scissor.is_some();
 
         // ── Pass segmentation (RFC-0017 z-layers × RFC-0023 backdrops) ────────
         let totals = LayerMark {
@@ -1089,6 +1126,9 @@ impl EncoderSubsystem {
                 &segments,
                 &mut backdrop_draw,
                 self.gpu_timer.as_ref(),
+                &mut self.arena,
+                &mut self.staging,
+                &self.queue,
             )?;
             // Only when a pass actually ran this frame — resolving an
             // untouched query set would read stale or never-written slots.
@@ -1332,6 +1372,61 @@ pub struct DrawDepths<'a> {
     pub canvas: &'a [f32],
 }
 
+/// Everything one frame stages into the [`instance_arena::InstanceArena`]
+/// before any render pass opens (RFC-0033 §G1).
+///
+/// Owned by the encoder and reused, so a steady-state frame reallocates none
+/// of it — which is the point: an arena that removed nine GPU allocations by
+/// adding nine CPU ones would not be an improvement.
+#[derive(Default)]
+pub(crate) struct FrameStaging {
+    /// One entry per pass segment, in segment order.
+    segments: Vec<SegmentStaging>,
+    /// The incremental frame's clear quad: instance + depth regions.
+    clear_quad: Option<(instance_arena::Region, instance_arena::Region)>,
+    /// One reservation per backdrop in the pool (RFC-0033 §G2's alignment
+    /// case), indexed by backdrop slot.
+    backdrops: Vec<backdrop::BackdropRegions>,
+    /// Reused conversion buffers, so the per-pipeline instance builds do not
+    /// allocate either.
+    decorated_scratch: Vec<decorated_box::DecoratedInstance>,
+    canvas_scratch: Vec<canvas_shape::CanvasShapeInstance>,
+    depth_scratch: Vec<f32>,
+}
+
+/// One pass segment's staged regions.
+#[derive(Default)]
+struct SegmentStaging {
+    solid: (instance_arena::Region, instance_arena::Region),
+    decorated: instance_arena::Region,
+    ripple: instance_arena::Region,
+    canvas: instance_arena::Region,
+    vector: instance_arena::Region,
+    textures: Vec<texture_sampler::StagedImage>,
+}
+
+impl FrameStaging {
+    /// Resets for a new frame while keeping every buffer's capacity.
+    fn begin(&mut self, segment_count: usize) {
+        self.clear_quad = None;
+        self.backdrops.clear();
+        // Grown, never shrunk, and each segment's own `Vec` is cleared in
+        // place rather than dropped — the same reasoning as the arena's
+        // grow-only policy, one layer up.
+        while self.segments.len() < segment_count {
+            self.segments.push(SegmentStaging::default());
+        }
+        for seg in &mut self.segments[..segment_count] {
+            seg.solid = Default::default();
+            seg.decorated = instance_arena::Region::default();
+            seg.ripple = instance_arena::Region::default();
+            seg.canvas = instance_arena::Region::default();
+            seg.vector = instance_arena::Region::default();
+            seg.textures.clear();
+        }
+    }
+}
+
 /// The per-primitive dirty bits a frame carries that do not fit on the
 /// primitive itself (RFC-0032 §R3 step 6) — today, solid boxes, because
 /// [`BoxInstance`] is a GPU `Pod` vertex type with nowhere to put one.
@@ -1558,12 +1653,14 @@ fn draw_ui_pass(
     segments: &[SegmentRanges],
     bd: &mut BackdropDraw<'_>,
     gpu_timer: Option<&GpuTimer>,
+    arena: &mut instance_arena::InstanceArena,
+    staging: &mut FrameStaging,
+    queue: &wgpu::Queue,
 ) -> Result<(), ByardError> {
     // RFC-0030 §I1 sub-scope: render-pass recording and draw-call submission
-    // for every segment. Its `encode.buffers` children (one per draw group,
-    // see `profile_buffers!`) are nested inside it because that is where the
-    // per-frame `create_buffer_init` calls physically live today — RFC-0033
-    // is the change that hoists them out.
+    // for every segment. Its one `encode.buffers` child is the staging pass
+    // below — since RFC-0033 there are no per-draw buffer creations left to
+    // measure, only one arena append per pipeline and a single upload.
     crate::profile_scope!("encode.passes");
     let DrawPipelines {
         solid: render_pipeline,
@@ -1616,6 +1713,59 @@ fn draw_ui_pass(
     // pass the shared depth buffer keeps resolving paint order exactly as
     // before; across passes the depth buffer is stored and re-loaded so
     // occlusion still spans the whole frame.
+    // ── Staging (RFC-0033 §G1) ───────────────────────────────────────────────
+    //
+    // Every pipeline's instance data for every segment is appended to the one
+    // arena, and uploaded in a single `write_buffer`, **before** the first
+    // render pass opens. This ordering is a hard requirement rather than a
+    // preference: `wgpu` binds a buffer range eagerly, and growing the arena
+    // replaces the buffer, so a draw recorded before the upload could be
+    // pointing at a buffer that no longer exists.
+    {
+        crate::profile_scope!("encode.buffers");
+        arena.begin_frame();
+        staging.begin(segments.len());
+        if let Some((bounds, ..)) = scissor {
+            staging.clear_quad = Some(stage_clear_quad(arena, bounds));
+        }
+        for (seg, out) in segments.iter().zip(staging.segments.iter_mut()) {
+            out.solid = stage_solid_box_instances(
+                arena,
+                &mut staging.depth_scratch,
+                &instances[seg.solid.clone()],
+                sub_slice(solid_depths, &seg.solid),
+            );
+            out.decorated = decorated_box::stage(
+                arena,
+                &mut staging.decorated_scratch,
+                &decorated[seg.decorated.clone()],
+                sub_slice(decorated_depths, &seg.decorated),
+            );
+            out.ripple = arena.push_vertex(&ripples[seg.ripple.clone()]);
+            out.canvas = canvas_shape::stage(
+                arena,
+                &mut staging.canvas_scratch,
+                &canvas_shapes[seg.canvas.clone()],
+                sub_slice(canvas_depths, &seg.canvas),
+            );
+            out.vector = arena.push_vertex(&vectors[seg.vector.clone()]);
+            texture_sampler::stage(
+                arena,
+                &mut out.textures,
+                texture_cache,
+                &textures[seg.texture.clone()],
+                sub_slice(texture_depths, &seg.texture),
+                sub_slice(clips.texture, &seg.texture),
+                clip_ctx,
+            );
+        }
+        for _ in 0..bd.backdrops.len() {
+            let regions = backdrop::reserve(arena);
+            staging.backdrops.push(regions);
+        }
+        arena.upload(device, queue);
+    }
+
     let mut pending: Option<(usize, backdrop::PreparedBackdrop)> = None;
     let seg_count = segments.len();
     for (i, seg) in segments.iter().enumerate() {
@@ -1678,15 +1828,15 @@ fn draw_ui_pass(
         // segments keep drawing into the already-cleared region (every draw
         // below re-establishes its own scissor via the clip runs).
         if first {
-            if let Some((bounds, x, y, w, h)) = scissor {
+            if let (Some((_, x, y, w, h)), Some(regions)) = (scissor, staging.clear_quad) {
                 render_pass.set_scissor_rect(x, y, w, h);
                 draw_clear_quad(
                     &mut render_pass,
-                    device,
+                    arena,
+                    regions,
                     clear_pipeline,
                     viewport_bind_group,
                     quad_buffer,
-                    bounds,
                 );
             }
         }
@@ -1697,6 +1847,7 @@ fn draw_ui_pass(
         if let Some((bidx, prep)) = taken.as_ref() {
             backdrop::draw_composite(
                 &mut render_pass,
+                arena,
                 bd.pipes,
                 viewport_bind_group,
                 quad_buffer,
@@ -1706,6 +1857,7 @@ fn draw_ui_pass(
             );
         }
 
+        let staged = &staging.segments[i];
         let sr = &seg.solid;
         let dr = &seg.decorated;
         let tr = &seg.texture;
@@ -1723,12 +1875,12 @@ fn draw_ui_pass(
         if !sr.is_empty() {
             draw_solid_box_instances(
                 &mut render_pass,
-                device,
+                arena,
+                staged.solid,
                 render_pipeline,
                 viewport_bind_group,
                 quad_buffer,
-                &instances[sr.clone()],
-                sub_slice(solid_depths, sr),
+                sr.len(),
                 sub_slice(clips.solid, sr),
                 clip_ctx,
             );
@@ -1741,12 +1893,12 @@ fn draw_ui_pass(
         // after it, and text (below) no longer sits unconditionally on top.
         decorated_box::draw(
             &mut render_pass,
-            device,
+            arena,
+            staged.decorated,
             decorated_pipeline,
             viewport_bind_group,
             quad_buffer,
-            &decorated[dr.clone()],
-            sub_slice(decorated_depths, dr),
+            dr.len(),
             sub_slice(clips.decorated, dr),
             clip_ctx,
         );
@@ -1756,11 +1908,12 @@ fn draw_ui_pass(
         // order within the layer doesn't matter.
         ripple::draw(
             &mut render_pass,
-            device,
+            arena,
+            staged.ripple,
             ripple_pipeline,
             viewport_bind_group,
             quad_buffer,
-            &ripples[rr.clone()],
+            rr.len(),
             sub_slice(clips.ripple, rr),
             clip_ctx,
         );
@@ -1769,26 +1922,24 @@ fn draw_ui_pass(
         // the draw-order depth buffer, never writes it.
         canvas_shape::draw(
             &mut render_pass,
-            device,
+            arena,
+            staged.canvas,
             canvas_pipeline,
             viewport_bind_group,
             quad_buffer,
-            &canvas_shapes[cr.clone()],
-            sub_slice(canvas_depths, cr),
+            cr.len(),
             sub_slice(clips.canvas, cr),
             clip_ctx,
         );
         texture_sampler::draw(
             &mut render_pass,
-            device,
+            arena,
+            &staged.textures,
             texture_pipeline,
             viewport_bind_group,
             quad_buffer,
             texture_cache,
             &textures[tr.clone()],
-            sub_slice(texture_depths, tr),
-            sub_slice(clips.texture, tr),
-            clip_ctx,
         );
         // RFC-0009 §1: crisp monochrome icons, sampled from the same MSDF
         // atlas the JIT/AOT paths upload to. Each instance carries its own
@@ -1796,12 +1947,13 @@ fn draw_ui_pass(
         // honoured here too.
         vector_msdf::draw(
             &mut render_pass,
-            device,
+            arena,
+            staged.vector,
             vector_pipeline,
             viewport_bind_group,
             quad_buffer,
             vector_atlas,
-            &vectors[vr.clone()],
+            vr.len(),
             sub_slice(clips.vector, vr),
             clip_ctx,
         );
@@ -1839,6 +1991,9 @@ fn draw_ui_pass(
                 pending = backdrop::prepare(
                     encoder,
                     device,
+                    queue,
+                    arena,
+                    staging.backdrops.get(b).copied().unwrap_or_default(),
                     bd.pipes,
                     bd.scratch,
                     b,
@@ -2598,106 +2753,109 @@ async fn build_solid_box_pipeline(
     Ok(pipeline)
 }
 
-/// Draws a single fully transparent quad covering `bounds` (logical pixels)
-/// using `pipeline`'s no-blend state, so the fragment shader's output
-/// unconditionally **replaces** the destination instead of blending with
-/// it — see [`EncoderSubsystem::clear_pipeline`]'s doc comment for why this
-/// is required before an incremental redraw can erase stale content.
-///
-/// Must be called while `render_pass`'s active scissor rect already
-/// restricts writes to (at most) `bounds` — otherwise this would wipe
-/// unrelated content outside the dirty region.
-fn draw_clear_quad(
-    render_pass: &mut wgpu::RenderPass<'_>,
-    device: &wgpu::Device,
-    pipeline: &wgpu::RenderPipeline,
-    bind_group: &wgpu::BindGroup,
-    quad_buffer: &wgpu::Buffer,
+/// Stages the clear quad's instance and depth (RFC-0033 §G4: the "depth"
+/// buffers are ordinary per-instance vertex data, not depth attachments, so
+/// they join the same arena as another region).
+fn stage_clear_quad(
+    arena: &mut instance_arena::InstanceArena,
     bounds: Rect,
-) {
+) -> (instance_arena::Region, instance_arena::Region) {
     let clear_instance = BoxInstance {
         rect: [bounds.x, bounds.y, bounds.width, bounds.height],
         color: [0.0, 0.0, 0.0, 0.0],
         radii: [0.0; 4],
         transform: Transform::IDENTITY,
     };
-    let (instance_buffer, depth_buffer) = {
-        crate::profile_scope!("encode.buffers");
-        let instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("ByardCore - Clear Quad Instance Buffer"),
-            contents: bytemuck::bytes_of(&clear_instance),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-        // The clear pipeline shares `solid_box.wgsl`, which now reads a depth at
-        // location 9, so the clear draw must still supply the buffer. The value is
-        // irrelevant: the clear pipeline runs with depth-write disabled and an
-        // `Always` compare (see `build_solid_box_pipeline`), so it never touches the
-        // depth buffer — it only wipes colour in the scissor region.
-        let depth_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("ByardCore - Clear Quad Depth Buffer"),
-            contents: bytemuck::bytes_of(&crate::frame::DRAW_DEPTH_CLEAR),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-        (instance_buffer, depth_buffer)
-    };
-
-    render_pass.set_pipeline(pipeline);
-    render_pass.set_bind_group(0, bind_group, &[]);
-    render_pass.set_vertex_buffer(0, quad_buffer.slice(..));
-    render_pass.set_vertex_buffer(1, instance_buffer.slice(..));
-    render_pass.set_vertex_buffer(2, depth_buffer.slice(..));
-    render_pass.draw(0..4, 0..1);
+    let instance = arena.push_vertex(std::slice::from_ref(&clear_instance));
+    // The clear pipeline shares `solid_box.wgsl`, which reads a depth at
+    // location 9, so the clear draw must still supply the buffer. The value is
+    // irrelevant: the clear pipeline runs with depth-write disabled and an
+    // `Always` compare (see `build_solid_box_pipeline`), so it never touches
+    // the depth buffer — it only wipes colour in the scissor region.
+    let depth = arena.push_vertex(std::slice::from_ref(&crate::frame::DRAW_DEPTH_CLEAR));
+    (instance, depth)
 }
 
-/// Draws every `BoxInstance` in `instances` using `pipeline`'s alpha-blended
-/// state.
+/// Draws a single fully transparent quad covering the staged bounds using
+/// `pipeline`'s no-blend state, so the fragment shader's output
+/// unconditionally **replaces** the destination instead of blending with
+/// it — see [`EncoderSubsystem::clear_pipeline`]'s doc comment for why this
+/// is required before an incremental redraw can erase stale content.
 ///
-/// Extracted from [`EncoderSubsystem::encode_frame`] to keep that function
-/// under the 100-line lint threshold. On an incremental frame, the caller's
-/// active GPU scissor rect (not this function) is what actually bounds the
-/// pixels touched here, so calling this unconditionally on every
-/// `should_draw` frame is still proportional to the dirty region's
-/// bandwidth, not the full instance list's.
-#[allow(clippy::too_many_arguments)]
-fn draw_solid_box_instances(
+/// Must be called while `render_pass`'s active scissor rect already
+/// restricts writes to (at most) those bounds — otherwise this would wipe
+/// unrelated content outside the dirty region.
+fn draw_clear_quad(
     render_pass: &mut wgpu::RenderPass<'_>,
-    device: &wgpu::Device,
+    arena: &instance_arena::InstanceArena,
+    regions: (instance_arena::Region, instance_arena::Region),
     pipeline: &wgpu::RenderPipeline,
     bind_group: &wgpu::BindGroup,
     quad_buffer: &wgpu::Buffer,
-    instances: &[BoxInstance],
-    depths: &[f32],
-    clip_slice: &[Option<u16>],
-    ctx: ClipCtx<'_>,
 ) {
-    let (instance_buffer, depth_buffer) = {
-        crate::profile_scope!("encode.buffers");
-        let instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("ByardCore - SolidBox Instance Buffer"),
-            contents: bytemuck::cast_slice(instances),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-        // Draw-order depths, parallel to `instances`, fed as a second per-instance
-        // vertex buffer (shader location 9) — keeps `BoxInstance`'s Pod layout
-        // untouched. Padded to the instance count with the far plane so a
-        // length mismatch can never index out of range on the GPU.
-        let mut depth_data = depths.to_vec();
-        depth_data.resize(instances.len(), crate::frame::DRAW_DEPTH_CLEAR);
-        let depth_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("ByardCore - SolidBox Depth Buffer"),
-            contents: bytemuck::cast_slice(&depth_data),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-        (instance_buffer, depth_buffer)
-    };
-
     render_pass.set_pipeline(pipeline);
     render_pass.set_bind_group(0, bind_group, &[]);
     render_pass.set_vertex_buffer(0, quad_buffer.slice(..));
-    render_pass.set_vertex_buffer(1, instance_buffer.slice(..));
-    render_pass.set_vertex_buffer(2, depth_buffer.slice(..));
+    render_pass.set_vertex_buffer(1, arena.slice(regions.0));
+    render_pass.set_vertex_buffer(2, arena.slice(regions.1));
+    render_pass.draw(0..4, 0..1);
+}
+
+/// Stages one segment's solid boxes and their parallel draw-order depths.
+///
+/// The depths are fed as a second per-instance vertex buffer (shader location
+/// 9), which keeps `BoxInstance`'s `Pod` layout untouched, and are padded to
+/// the instance count with the far plane so a length mismatch can never index
+/// out of range on the GPU.
+fn stage_solid_box_instances(
+    arena: &mut instance_arena::InstanceArena,
+    depth_scratch: &mut Vec<f32>,
+    instances: &[BoxInstance],
+    depths: &[f32],
+) -> (instance_arena::Region, instance_arena::Region) {
+    if instances.is_empty() {
+        return (
+            instance_arena::Region::default(),
+            instance_arena::Region::default(),
+        );
+    }
+    let instance_region = arena.push_vertex(instances);
+    depth_scratch.clear();
+    depth_scratch.extend_from_slice(depths);
+    depth_scratch.resize(instances.len(), crate::frame::DRAW_DEPTH_CLEAR);
+    let depth_region = arena.push_vertex(depth_scratch);
+    (instance_region, depth_region)
+}
+
+/// Draws every `BoxInstance` staged for this segment using `pipeline`'s
+/// alpha-blended state.
+///
+/// On an incremental frame, the caller's active GPU scissor rect (not this
+/// function) is what actually bounds the pixels touched here, so calling this
+/// unconditionally on every `should_draw` frame is still proportional to the
+/// dirty region's bandwidth, not the full instance list's.
+#[allow(clippy::too_many_arguments)]
+fn draw_solid_box_instances(
+    render_pass: &mut wgpu::RenderPass<'_>,
+    arena: &instance_arena::InstanceArena,
+    regions: (instance_arena::Region, instance_arena::Region),
+    pipeline: &wgpu::RenderPipeline,
+    bind_group: &wgpu::BindGroup,
+    quad_buffer: &wgpu::Buffer,
+    count: usize,
+    clip_slice: &[Option<u16>],
+    ctx: ClipCtx<'_>,
+) {
+    if regions.0.is_empty() {
+        return;
+    }
+    render_pass.set_pipeline(pipeline);
+    render_pass.set_bind_group(0, bind_group, &[]);
+    render_pass.set_vertex_buffer(0, quad_buffer.slice(..));
+    render_pass.set_vertex_buffer(1, arena.slice(regions.0));
+    render_pass.set_vertex_buffer(2, arena.slice(regions.1));
     // Draw in content-clip runs (RFC-0005), each scissored to its viewport.
-    for_each_clip_run(render_pass, instances.len(), clip_slice, ctx, |p, s, e| {
+    for_each_clip_run(render_pass, count, clip_slice, ctx, |p, s, e| {
         p.draw(0..4, s..e);
     });
 }

@@ -1,6 +1,7 @@
 # RFC-0022: Theme Runtime & Asset Distribution — Pillar D complete
 
-- **Status:** Draft
+- **Status:** Active — implemented; §5 dynamic colour (Material You) deferred
+- **Status note (2026-07-26):** Shipped: manifest tokens, the reactive scheme signal, the provider model, asset loading, `Typo` token resolution and `byard-base`. Deferred: §5's dynamic colour extraction from a source image, which needs a quantisation step nothing else in the engine has.
 - **Author(s):** Briany4717
 - **Created:** 2026-07-10
 - **Last updated:** 2026-07-10

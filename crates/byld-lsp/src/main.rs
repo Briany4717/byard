@@ -1,11 +1,7 @@
-//! Production-grade LSP server for the Byld (.byd) language files.
+//! High-performance, ultra-resilient Language Server Protocol (LSP) server for Byld (`.byd`).
 //!
-//! Provides document synchronization, hover details (for variables and intrinsics),
-//! and compile/type-check diagnostics in real time.
-//!
-//! `byld-lsp` is an in-progress crate, out of the Phase-3 milestone scope (it
-//! participates only as a diagnostics consumer). These pedantic allows keep the
-//! workspace clippy gate honest for the in-scope crates without churning WIP code.
+//! Architected with modularity, zero-copy index structures, and thread-safe lock-free state (`DashMap`).
+
 #![allow(
     clippy::needless_pass_by_value,
     clippy::mutable_key_type,
@@ -16,148 +12,203 @@
     clippy::format_push_string
 )]
 
-use std::collections::HashMap;
+/// LSP Capabilities implementation.
+pub mod capabilities;
+/// Semantic symbol index and resolution.
+pub mod semantic;
+/// Concurrent document state store.
+pub mod state;
+/// AST syntax tools and line indexing.
+pub mod syntax;
 
-use byard_compiler::diagnostics::Span;
-use byard_compiler::interp::eval::Interpreter;
-use byard_compiler::parser::ast::{AttrKind, Expr, Member, StrPart, UseDecl, ViewDecl};
-use byard_compiler::parser::parse;
-use lsp_server::{Connection, Message, Notification, Request, Response};
+use lsp_server::{Connection, ErrorCode, Message, Notification, Request, Response};
 use lsp_types::notification::{
-    DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument, Notification as _,
-    PublishDiagnostics,
+    DidChangeTextDocument, DidCloseTextDocument, DidOpenTextDocument, DidSaveTextDocument,
+    Notification as _, PublishDiagnostics,
 };
-use lsp_types::request::{Completion, GotoDefinition, HoverRequest, Request as _};
+use lsp_types::request::{
+    CodeActionRequest, Completion, DocumentSymbolRequest, Formatting, GotoDefinition,
+    HoverRequest, PrepareRenameRequest, Rename, SemanticTokensFullRequest, Request as _,
+};
 use lsp_types::{
-    CompletionItem, CompletionItemKind, CompletionResponse, Diagnostic, DiagnosticSeverity,
-    GotoDefinitionResponse, Hover, HoverContents, HoverProviderCapability, MarkupContent,
-    MarkupKind, OneOf, Position, Range, ServerCapabilities, TextDocumentSyncCapability,
-    TextDocumentSyncKind, Uri,
+    CodeActionOptions, CodeActionProviderCapability, CompletionOptions, HoverProviderCapability,
+    OneOf, PublishDiagnosticsParams, RenameOptions, SemanticTokensFullOptions,
+    SemanticTokensOptions, SemanticTokensServerCapabilities, ServerCapabilities,
+    TextDocumentSyncCapability, TextDocumentSyncKind,
 };
+
+use state::document::DocumentStore;
 
 fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // Set up communication channel
+    eprintln!("[byld-lsp] Starting Byld Language Server...");
+
+    // Set up communication channel over stdio
     let (connection, io_threads) = Connection::stdio();
 
-    // Register capabilities
-    let server_capabilities = serde_json::to_value(&ServerCapabilities {
-        text_document_sync: Some(TextDocumentSyncCapability::Kind(TextDocumentSyncKind::FULL)),
-        hover_provider: Some(HoverProviderCapability::Simple(true)),
-        completion_provider: Some(lsp_types::CompletionOptions {
-            resolve_provider: Some(false),
-            trigger_characters: Some(vec![
-                "#".to_string(),
-                "[".to_string(),
-                ":".to_string(),
-                ".".to_string(),
-                " ".to_string(),
-            ]),
+    // Register full LSP capabilities inside InitializeResult
+    let initialize_result = serde_json::to_value(&lsp_types::InitializeResult {
+        capabilities: ServerCapabilities {
+            text_document_sync: Some(TextDocumentSyncCapability::Kind(TextDocumentSyncKind::FULL)),
+            hover_provider: Some(HoverProviderCapability::Simple(true)),
+            completion_provider: Some(CompletionOptions {
+                resolve_provider: Some(false),
+                trigger_characters: Some(vec![
+                    "#".to_string(),
+                    "[".to_string(),
+                    ":".to_string(),
+                    ".".to_string(),
+                    " ".to_string(),
+                ]),
+                ..Default::default()
+            }),
+            definition_provider: Some(OneOf::Left(true)),
+            document_symbol_provider: Some(OneOf::Left(true)),
+            document_formatting_provider: Some(OneOf::Left(true)),
+            rename_provider: Some(OneOf::Right(RenameOptions {
+                prepare_provider: Some(true),
+                work_done_progress_options: lsp_types::WorkDoneProgressOptions::default(),
+            })),
+            semantic_tokens_provider: Some(
+                SemanticTokensServerCapabilities::SemanticTokensOptions(SemanticTokensOptions {
+                    legend: capabilities::semantic_tokens::get_legend(),
+                    full: Some(SemanticTokensFullOptions::Bool(true)),
+                    range: None,
+                    work_done_progress_options: lsp_types::WorkDoneProgressOptions::default(),
+                }),
+            ),
+            code_action_provider: Some(CodeActionProviderCapability::Options(CodeActionOptions {
+                code_action_kinds: Some(vec![
+                    lsp_types::CodeActionKind::QUICKFIX,
+                    lsp_types::CodeActionKind::REFACTOR_REWRITE,
+                ]),
+                resolve_provider: None,
+                work_done_progress_options: lsp_types::WorkDoneProgressOptions::default(),
+            })),
             ..Default::default()
+        },
+        server_info: Some(lsp_types::ServerInfo {
+            name: "byld-lsp".to_string(),
+            version: Some(env!("CARGO_PKG_VERSION").to_string()),
         }),
-        definition_provider: Some(OneOf::Left(true)),
-        ..Default::default()
     })?;
 
-    let initialization_params = connection.initialize(server_capabilities)?;
-    main_loop(connection, initialization_params)?;
+    let (id, params) = match connection.initialize_start() {
+        Ok(res) => res,
+        Err(e) => {
+            eprintln!("[byld-lsp] Error during initialize_start: {e}");
+            return Err(e.into());
+        }
+    };
+
+    if let Ok(init_p) = serde_json::from_value::<lsp_types::InitializeParams>(params) {
+        eprintln!(
+            "[byld-lsp] Client connected: {:?}",
+            init_p.client_info.map(|c| c.name)
+        );
+    } else {
+        eprintln!("[byld-lsp] Could not parse client InitializeParams, proceeding safely.");
+    }
+
+    if let Err(e) = connection.initialize_finish(id, initialize_result) {
+        eprintln!("[byld-lsp] Error during initialize_finish: {e}");
+        return Err(e.into());
+    }
+
+    eprintln!("[byld-lsp] Handshake complete. Running main loop...");
+    main_loop(connection)?;
 
     io_threads.join()?;
+    eprintln!("[byld-lsp] Server shut down cleanly.");
     Ok(())
 }
 
-fn main_loop(
-    connection: Connection,
-    _params: serde_json::Value,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let mut documents: HashMap<Uri, String> = HashMap::new();
+#[allow(clippy::unnecessary_wraps)]
+fn main_loop(connection: Connection) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let document_store = DocumentStore::new();
 
     for msg in &connection.receiver {
         match msg {
             Message::Request(req) => {
-                if connection.handle_shutdown(&req)? {
+                if connection.handle_shutdown(&req).unwrap_or(false) {
+                    eprintln!("[byld-lsp] Shutdown request received.");
                     return Ok(());
                 }
 
-                if req.method == HoverRequest::METHOD {
-                    if let Ok((id, params)) = cast_request::<HoverRequest>(req) {
-                        let uri = params.text_document_position_params.text_document.uri;
-                        let pos = params.text_document_position_params.position;
-
-                        let response = if let Some(content) = documents.get(&uri) {
-                            let hover_info = handle_hover(content, pos);
-                            Response::new_ok(id, hover_info)
-                        } else {
-                            Response::new_ok(id, None::<Hover>)
-                        };
-                        let _ = connection.sender.send(Message::Response(response));
-                    }
-                } else if req.method == Completion::METHOD {
-                    if let Ok((id, params)) = cast_request::<Completion>(req) {
-                        let uri = params.text_document_position.text_document.uri;
-                        let pos = params.text_document_position.position;
-
-                        let response = if let Some(content) = documents.get(&uri) {
-                            // The document's path anchors the RFC-0008 package
-                            // index (walk up to byard.toml → [dependencies]).
-                            let doc_path = url::Url::parse(uri.as_str())
-                                .ok()
-                                .and_then(|u| u.to_file_path().ok());
-                            let completion_info =
-                                handle_completion(content, pos, doc_path.as_deref());
-                            Response::new_ok(id, completion_info)
-                        } else {
-                            Response::new_ok(id, None::<CompletionResponse>)
-                        };
-                        let _ = connection.sender.send(Message::Response(response));
-                    }
-                } else if req.method == GotoDefinition::METHOD {
-                    if let Ok((id, params)) = cast_request::<GotoDefinition>(req) {
-                        let uri = params
-                            .text_document_position_params
-                            .text_document
-                            .uri
-                            .clone();
-                        let pos = params.text_document_position_params.position;
-
-                        let response = if let Some(content) = documents.get(&uri) {
-                            let definition_info = handle_definition(content, pos, uri);
-                            Response::new_ok(id, definition_info)
-                        } else {
-                            Response::new_ok(id, None::<GotoDefinitionResponse>)
-                        };
-                        let _ = connection.sender.send(Message::Response(response));
-                    }
-                }
+                dispatch_request(&connection, &document_store, req);
             }
             Message::Notification(not) => {
-                if not.method == DidOpenTextDocument::METHOD {
-                    if let Ok(params) = cast_notification::<DidOpenTextDocument>(not) {
-                        let uri = params.text_document.uri;
-                        let text = params.text_document.text;
-                        validate_and_publish(&connection, uri.clone(), &text)?;
-                        documents.insert(uri, text);
-                    }
-                } else if not.method == DidChangeTextDocument::METHOD {
-                    if let Ok(params) = cast_notification::<DidChangeTextDocument>(not) {
-                        let uri = params.text_document.uri;
-                        if let Some(change) = params.content_changes.into_iter().next() {
-                            validate_and_publish(&connection, uri.clone(), &change.text)?;
-                            documents.insert(uri, change.text);
+                match not.method.as_str() {
+                    DidOpenTextDocument::METHOD => {
+                        if let Ok(params) =
+                            serde_json::from_value::<lsp_types::DidOpenTextDocumentParams>(not.params)
+                        {
+                            let doc = document_store.insert(
+                                params.text_document.uri,
+                                Some(params.text_document.version),
+                                params.text_document.text,
+                            );
+                            publish_diagnostics_safe(&connection, &doc);
+                        } else {
+                            eprintln!("[byld-lsp] Failed to parse DidOpenTextDocument params");
                         }
                     }
-                } else if not.method == DidCloseTextDocument::METHOD {
-                    if let Ok(params) = cast_notification::<DidCloseTextDocument>(not) {
-                        let uri = params.text_document.uri;
-                        // Clear diagnostics on document close
-                        let clear_params = lsp_types::PublishDiagnosticsParams {
-                            uri: uri.clone(),
-                            diagnostics: Vec::new(),
-                            version: None,
-                        };
-                        let notification =
-                            Notification::new(PublishDiagnostics::METHOD.to_string(), clear_params);
-                        let _ = connection.sender.send(Message::Notification(notification));
-                        documents.remove(&uri);
+                    DidChangeTextDocument::METHOD => {
+                        if let Ok(params) =
+                            serde_json::from_value::<lsp_types::DidChangeTextDocumentParams>(
+                                not.params,
+                            )
+                        {
+                            if let Some(change) = params.content_changes.into_iter().next() {
+                                let doc = document_store.insert(
+                                    params.text_document.uri,
+                                    Some(params.text_document.version),
+                                    change.text,
+                                );
+                                publish_diagnostics_safe(&connection, &doc);
+                            }
+                        } else {
+                            eprintln!("[byld-lsp] Failed to parse DidChangeTextDocument params");
+                        }
+                    }
+                    DidSaveTextDocument::METHOD => {
+                        if let Ok(params) =
+                            serde_json::from_value::<lsp_types::DidSaveTextDocumentParams>(not.params)
+                        {
+                            if let Some(doc) = document_store.get(&params.text_document.uri) {
+                                publish_diagnostics_safe(&connection, &doc);
+                            }
+                        }
+                    }
+                    DidCloseTextDocument::METHOD => {
+                        if let Ok(params) =
+                            serde_json::from_value::<lsp_types::DidCloseTextDocumentParams>(
+                                not.params,
+                            )
+                        {
+                            let uri = params.text_document.uri;
+                            document_store.remove(&uri);
+
+                            let clear_params = PublishDiagnosticsParams {
+                                uri,
+                                diagnostics: Vec::new(),
+                                version: None,
+                            };
+                            let notification = Notification::new(
+                                PublishDiagnostics::METHOD.to_string(),
+                                clear_params,
+                            );
+                            let _ = connection.sender.send(Message::Notification(notification));
+                        }
+                    }
+                    "initialized" => {
+                        eprintln!("[byld-lsp] Client initialized notification received.");
+                    }
+                    "exit" => {
+                        eprintln!("[byld-lsp] Exit notification received.");
+                        return Ok(());
+                    }
+                    _ => {
+                        eprintln!("[byld-lsp] Ignored notification: {}", not.method);
                     }
                 }
             }
@@ -168,1528 +219,201 @@ fn main_loop(
     Ok(())
 }
 
-fn cast_request<R>(req: Request) -> Result<(lsp_server::RequestId, R::Params), Request>
+fn dispatch_request(connection: &Connection, document_store: &DocumentStore, req: Request) {
+    match req.method.as_str() {
+        HoverRequest::METHOD => {
+            let (id, params) = match cast_request::<HoverRequest>(req) {
+                Ok(res) => res,
+                Err((id, err)) => return send_invalid_params(connection, id, HoverRequest::METHOD, err),
+            };
+            let uri = params.text_document_position_params.text_document.uri;
+            let pos = params.text_document_position_params.position;
+
+            let hover_info = document_store
+                .get(&uri)
+                .and_then(|doc| capabilities::hover::handle_hover(&doc, pos));
+            send_response(connection, Response::new_ok(id, hover_info));
+        }
+        Completion::METHOD => {
+            let (id, params) = match cast_request::<Completion>(req) {
+                Ok(res) => res,
+                Err((id, err)) => return send_invalid_params(connection, id, Completion::METHOD, err),
+            };
+            let uri = params.text_document_position.text_document.uri;
+            let pos = params.text_document_position.position;
+
+            let completion_info = document_store
+                .get(&uri)
+                .and_then(|doc| capabilities::completion::handle_completion(&doc, pos));
+            send_response(connection, Response::new_ok(id, completion_info));
+        }
+        GotoDefinition::METHOD => {
+            let (id, params) = match cast_request::<GotoDefinition>(req) {
+                Ok(res) => res,
+                Err((id, err)) => {
+                    return send_invalid_params(connection, id, GotoDefinition::METHOD, err)
+                }
+            };
+            let uri = params.text_document_position_params.text_document.uri;
+            let pos = params.text_document_position_params.position;
+
+            let def_info = document_store
+                .get(&uri)
+                .and_then(|doc| capabilities::definition::handle_definition(&doc, pos));
+            send_response(connection, Response::new_ok(id, def_info));
+        }
+        DocumentSymbolRequest::METHOD => {
+            let (id, params) = match cast_request::<DocumentSymbolRequest>(req) {
+                Ok(res) => res,
+                Err((id, err)) => {
+                    return send_invalid_params(connection, id, DocumentSymbolRequest::METHOD, err)
+                }
+            };
+            let uri = params.text_document.uri;
+
+            let symbol_info = document_store
+                .get(&uri)
+                .and_then(|doc| capabilities::document_symbol::handle_document_symbol(&doc));
+            send_response(connection, Response::new_ok(id, symbol_info));
+        }
+        Formatting::METHOD => {
+            let (id, params) = match cast_request::<Formatting>(req) {
+                Ok(res) => res,
+                Err((id, err)) => return send_invalid_params(connection, id, Formatting::METHOD, err),
+            };
+            let uri = params.text_document.uri;
+            let options = params.options;
+
+            let edits = document_store
+                .get(&uri)
+                .and_then(|doc| capabilities::formatting::handle_formatting(&doc, options));
+            send_response(connection, Response::new_ok(id, edits));
+        }
+        PrepareRenameRequest::METHOD => {
+            let (id, params) = match cast_request::<PrepareRenameRequest>(req) {
+                Ok(res) => res,
+                Err((id, err)) => {
+                    return send_invalid_params(connection, id, PrepareRenameRequest::METHOD, err)
+                }
+            };
+            let uri = params.text_document.uri;
+            let pos = params.position;
+
+            let prepare = document_store
+                .get(&uri)
+                .and_then(|doc| capabilities::rename::handle_prepare_rename(&doc, pos));
+            send_response(connection, Response::new_ok(id, prepare));
+        }
+        Rename::METHOD => {
+            let (id, params) = match cast_request::<Rename>(req) {
+                Ok(res) => res,
+                Err((id, err)) => return send_invalid_params(connection, id, Rename::METHOD, err),
+            };
+            let uri = params.text_document_position.text_document.uri;
+            let pos = params.text_document_position.position;
+
+            let edit = document_store
+                .get(&uri)
+                .and_then(|doc| capabilities::rename::handle_rename(&doc, pos, params.new_name));
+            send_response(connection, Response::new_ok(id, edit));
+        }
+        SemanticTokensFullRequest::METHOD => {
+            let (id, params) = match cast_request::<SemanticTokensFullRequest>(req) {
+                Ok(res) => res,
+                Err((id, err)) => {
+                    return send_invalid_params(connection, id, SemanticTokensFullRequest::METHOD, err)
+                }
+            };
+            let uri = params.text_document.uri;
+
+            let tokens = document_store
+                .get(&uri)
+                .and_then(|doc| capabilities::semantic_tokens::handle_semantic_tokens(&doc));
+            send_response(connection, Response::new_ok(id, tokens));
+        }
+        CodeActionRequest::METHOD => {
+            let (id, params) = match cast_request::<CodeActionRequest>(req) {
+                Ok(res) => res,
+                Err((id, err)) => {
+                    return send_invalid_params(connection, id, CodeActionRequest::METHOD, err)
+                }
+            };
+            let uri = params.text_document.uri.clone();
+
+            let actions = document_store
+                .get(&uri)
+                .and_then(|doc| capabilities::code_actions::handle_code_action(&doc, params));
+            send_response(connection, Response::new_ok(id, actions));
+        }
+        unhandled_method => {
+            eprintln!("[byld-lsp] Unhandled request method: {unhandled_method}");
+            let err_response = Response::new_err(
+                req.id,
+                ErrorCode::MethodNotFound as i32,
+                format!("Method '{unhandled_method}' is not supported by byld-lsp"),
+            );
+            send_response(connection, err_response);
+        }
+    }
+}
+
+fn publish_diagnostics_safe(connection: &Connection, doc: &state::document::Document) {
+    let params = capabilities::diagnostics::compute_diagnostics(doc);
+    let notification = Notification::new(PublishDiagnostics::METHOD.to_string(), params);
+    if let Err(e) = connection.sender.send(Message::Notification(notification)) {
+        eprintln!("[byld-lsp] Error sending PublishDiagnostics notification: {e}");
+    }
+}
+
+fn send_response(connection: &Connection, res: Response) {
+    if let Err(e) = connection.sender.send(Message::Response(res)) {
+        eprintln!("[byld-lsp] Error sending response over STDIO: {e}");
+    }
+}
+
+fn send_invalid_params(
+    connection: &Connection,
+    id: lsp_server::RequestId,
+    method: &str,
+    err: serde_json::Error,
+) {
+    eprintln!("[byld-lsp] Invalid params for method {method}: {err}");
+    let err_response = Response::new_err(
+        id,
+        ErrorCode::InvalidParams as i32,
+        format!("Invalid params for method {method}: {err}"),
+    );
+    send_response(connection, err_response);
+}
+
+fn cast_request<R>(
+    req: Request,
+) -> Result<(lsp_server::RequestId, R::Params), (lsp_server::RequestId, serde_json::Error)>
 where
     R: lsp_types::request::Request,
     R::Params: serde::de::DeserializeOwned,
 {
-    if req.method == R::METHOD {
-        let id = req.id.clone();
-        match serde_json::from_value(req.params) {
-            Ok(params) => Ok((id, params)),
-            Err(_) => Err(Request {
-                id,
-                method: req.method,
-                params: serde_json::Value::Null,
-            }),
-        }
-    } else {
-        Err(req)
+    let id = req.id.clone();
+    match serde_json::from_value(req.params) {
+        Ok(params) => Ok((id, params)),
+        Err(err) => Err((id, err)),
     }
-}
-
-fn cast_notification<N>(not: Notification) -> Result<N::Params, Notification>
-where
-    N: lsp_types::notification::Notification,
-    N::Params: serde::de::DeserializeOwned,
-{
-    if not.method == N::METHOD {
-        match serde_json::from_value(not.params) {
-            Ok(params) => Ok(params),
-            Err(_) => Err(Notification {
-                method: not.method,
-                params: serde_json::Value::Null,
-            }),
-        }
-    } else {
-        Err(not)
-    }
-}
-
-fn validate_and_publish(
-    connection: &Connection,
-    uri: Uri,
-    content: &str,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let parsed = parse(content);
-    let mut errors = parsed.errors;
-
-    // Type checking
-    let inference = byard_compiler::infer::check_views(&parsed.views);
-    errors.extend(inference.errors);
-
-    // Element & Intrinsic validation
-    let mut interp = Interpreter::new();
-    interp.load_views(&parsed.views);
-    let known_views: Vec<&str> = parsed.views.iter().map(|v| v.name.as_str()).collect();
-    for view in &parsed.views {
-        let _ = interp.lower_view(view, &known_views);
-    }
-    errors.extend(interp.errors().iter().cloned());
-
-    let mut diagnostics = Vec::new();
-    for err in errors {
-        let span = err.span();
-        let range = Range::new(
-            byte_offset_to_lsp_pos(content, span.start as usize),
-            byte_offset_to_lsp_pos(content, span.end as usize),
-        );
-        diagnostics.push(Diagnostic {
-            range,
-            severity: Some(DiagnosticSeverity::ERROR),
-            code: None,
-            code_description: None,
-            source: Some("byld-compiler".to_string()),
-            message: err.headline(),
-            related_information: None,
-            tags: None,
-            data: None,
-        });
-    }
-
-    let params = lsp_types::PublishDiagnosticsParams {
-        uri,
-        diagnostics,
-        version: None,
-    };
-
-    let notification = Notification::new(PublishDiagnostics::METHOD.to_string(), params);
-    connection
-        .sender
-        .send(Message::Notification(notification))?;
-    Ok(())
-}
-
-fn lsp_pos_to_byte_offset(source: &str, line: u32, character: u32) -> Option<usize> {
-    let mut offset = 0;
-    for (i, current_line) in source.lines().enumerate() {
-        if i == line as usize {
-            let mut char_count = 0;
-            for (byte_idx, _) in current_line.char_indices() {
-                if char_count == character as usize {
-                    return Some(offset + byte_idx);
-                }
-                char_count += 1;
-            }
-            return Some(offset + current_line.len());
-        }
-        offset += current_line.len() + 1; // +1 for the newline
-    }
-    None
-}
-
-fn byte_offset_to_lsp_pos(source: &str, offset: usize) -> Position {
-    let offset = offset.min(source.len());
-    let mut line = 0;
-    let mut char_idx = 0;
-    let mut current_offset = 0;
-    for c in source.chars() {
-        if current_offset >= offset {
-            break;
-        }
-        if c == '\n' {
-            line += 1;
-            char_idx = 0;
-        } else {
-            char_idx += 1;
-        }
-        current_offset += c.len_utf8();
-    }
-    Position::new(line, char_idx)
-}
-
-#[allow(dead_code)]
-enum HoverTarget {
-    Intrinsic {
-        name: String,
-    },
-    Attribute {
-        element_name: String,
-        attr_name: String,
-    },
-    VarIdent {
-        name: String,
-        span: Span,
-    },
-}
-
-fn handle_hover(content: &str, pos: Position) -> Option<Hover> {
-    let offset = lsp_pos_to_byte_offset(content, pos.line, pos.character)?;
-    let parsed = parse(content);
-
-    let target = find_hover_target(&parsed.views, offset)?;
-    let docs = match target {
-        HoverTarget::Intrinsic { name } => intrinsic_hover_docs(&name)?,
-        HoverTarget::Attribute {
-            element_name,
-            attr_name,
-        } => attribute_hover_docs(&element_name, &attr_name)?,
-        HoverTarget::VarIdent { name, .. } => {
-            let inference = byard_compiler::infer::check_views(&parsed.views);
-            var_hover_docs(&name, &inference)
-        }
-    };
-
-    Some(Hover {
-        contents: HoverContents::Markup(MarkupContent {
-            kind: MarkupKind::Markdown,
-            value: docs,
-        }),
-        range: None,
-    })
-}
-
-fn find_hover_target(views: &[ViewDecl], offset: usize) -> Option<HoverTarget> {
-    for view in views {
-        if !span_contains(view.span, offset) {
-            continue;
-        }
-        for param in &view.params {
-            if span_contains(param.span, offset) {
-                return Some(HoverTarget::VarIdent {
-                    name: param.name.to_string(),
-                    span: param.span,
-                });
-            }
-        }
-        if let Some(target) = find_in_members(&view.body, offset, None) {
-            return Some(target);
-        }
-    }
-    None
-}
-
-fn span_contains(span: Span, offset: usize) -> bool {
-    offset >= span.start as usize && offset < span.end as usize
-}
-
-fn find_in_members(
-    members: &[Member],
-    offset: usize,
-    parent_element: Option<&str>,
-) -> Option<HoverTarget> {
-    for member in members {
-        match member {
-            Member::Var {
-                name, init, span, ..
-            } if span_contains(*span, offset) => {
-                if offset >= span.start as usize
-                    && offset < span.start as usize + name.as_str().len()
-                {
-                    return Some(HoverTarget::VarIdent {
-                        name: name.to_string(),
-                        span: *span,
-                    });
-                }
-                return find_in_expr(init, offset);
-            }
-            Member::Let {
-                name, init, span, ..
-            } if span_contains(*span, offset) => {
-                if offset >= span.start as usize
-                    && offset < span.start as usize + name.as_str().len()
-                {
-                    return Some(HoverTarget::VarIdent {
-                        name: name.to_string(),
-                        span: *span,
-                    });
-                }
-                return find_in_expr(init, offset);
-            }
-            Member::Fn {
-                name,
-                params,
-                body,
-                span,
-                ..
-            } if span_contains(*span, offset) => {
-                if offset >= span.start as usize
-                    && offset < span.start as usize + name.as_str().len()
-                {
-                    return Some(HoverTarget::VarIdent {
-                        name: name.to_string(),
-                        span: *span,
-                    });
-                }
-                for param in params {
-                    if span_contains(param.span, offset) {
-                        return Some(HoverTarget::VarIdent {
-                            name: param.name.to_string(),
-                            span: param.span,
-                        });
-                    }
-                }
-                if span_contains(body.span(), offset) {
-                    return find_in_expr(body, offset);
-                }
-            }
-            Member::Element(el) if span_contains(el.span, offset) => {
-                let name_start = el.span.start as usize;
-                let name_end = name_start + el.name.as_str().len();
-                if offset >= name_start && offset < name_end {
-                    return Some(HoverTarget::Intrinsic {
-                        name: el.name.to_string(),
-                    });
-                }
-                for arg in &el.content {
-                    if let Some(target) = find_in_expr(&arg.value, offset) {
-                        return Some(target);
-                    }
-                }
-                for attr in &el.attrs {
-                    if span_contains(attr.span, offset) {
-                        let attr_name_start = attr.span.start as usize;
-                        let attr_name_end = attr_name_start + attr.name.as_str().len();
-                        if offset >= attr_name_start && offset < attr_name_end {
-                            return Some(HoverTarget::Attribute {
-                                element_name: el.name.to_string(),
-                                attr_name: attr.name.to_string(),
-                            });
-                        }
-                        match &attr.kind {
-                            AttrKind::Prop { value } | AttrKind::Spread { value } => {
-                                if let Some(target) = find_in_expr(value, offset) {
-                                    return Some(target);
-                                }
-                            }
-                            AttrKind::Event { action, .. } => {
-                                if let Some(target) = find_in_expr(action, offset) {
-                                    return Some(target);
-                                }
-                            }
-                        }
-                    }
-                }
-                if let Some(action) = &el.action {
-                    if let Some(target) = find_in_expr(action, offset) {
-                        return Some(target);
-                    }
-                }
-                if let Some(target) = find_in_members(&el.children, offset, Some(el.name.as_str()))
-                {
-                    return Some(target);
-                }
-            }
-            Member::For {
-                var,
-                index,
-                iter,
-                body,
-                span,
-            } if span_contains(*span, offset) => {
-                // `for item in …` puts the item name right after "for "; the
-                // `for i, item in …` form (RFC-0025) puts the index there and
-                // the item after ", ".
-                let var_start =
-                    span.start as usize + 4 + index.as_ref().map_or(0, |i| i.as_str().len() + 2);
-                let var_end = var_start + var.as_str().len();
-                if offset >= var_start && offset < var_end {
-                    return Some(HoverTarget::VarIdent {
-                        name: var.to_string(),
-                        span: Span::new(var_start as u32, var_end as u32),
-                    });
-                }
-                if let Some(target) = find_in_expr(iter, offset) {
-                    return Some(target);
-                }
-                if let Some(target) = find_in_members(body, offset, parent_element) {
-                    return Some(target);
-                }
-            }
-            // RFC-0026: a `route`/`tab` body holds ordinary members.
-            Member::Route { body, span, .. } if span_contains(*span, offset) => {
-                if let Some(target) = find_in_members(body, offset, parent_element) {
-                    return Some(target);
-                }
-            }
-            Member::When {
-                cond,
-                then,
-                els,
-                span,
-            } if span_contains(*span, offset) => {
-                if let Some(target) = find_in_expr(cond, offset) {
-                    return Some(target);
-                }
-                if let Some(target) = find_in_members(then, offset, parent_element) {
-                    return Some(target);
-                }
-                if let Some(els_members) = els {
-                    if let Some(target) = find_in_members(els_members, offset, parent_element) {
-                        return Some(target);
-                    }
-                }
-            }
-            Member::Expr(expr) => {
-                if let Some(target) = find_in_expr(expr, offset) {
-                    return Some(target);
-                }
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
-fn find_in_expr(expr: &Expr, offset: usize) -> Option<HoverTarget> {
-    if !span_contains(expr.span(), offset) {
-        return None;
-    }
-    match expr {
-        Expr::Ident(sym, span) => Some(HoverTarget::VarIdent {
-            name: sym.to_string(),
-            span: *span,
-        }),
-        Expr::Array(items, _) => {
-            for item in items {
-                if let Some(target) = find_in_expr(item, offset) {
-                    return Some(target);
-                }
-            }
-            None
-        }
-        Expr::Tuple(args, _) => {
-            for arg in args {
-                if let Some(target) = find_in_expr(&arg.value, offset) {
-                    return Some(target);
-                }
-            }
-            None
-        }
-        Expr::Member { base, field, span } => {
-            if span_contains(base.span(), offset) {
-                return find_in_expr(base, offset);
-            }
-            let field_start = span.end as usize - field.as_str().len();
-            if offset >= field_start && offset < span.end as usize {
-                return Some(HoverTarget::VarIdent {
-                    name: field.to_string(),
-                    span: Span::new(field_start as u32, span.end),
-                });
-            }
-            None
-        }
-        Expr::Call { callee, args, .. } => {
-            if span_contains(callee.span(), offset) {
-                return find_in_expr(callee, offset);
-            }
-            for arg in args {
-                if span_contains(arg.value.span(), offset) {
-                    return find_in_expr(&arg.value, offset);
-                }
-            }
-            None
-        }
-        Expr::Lambda { body, .. } => {
-            if span_contains(body.span(), offset) {
-                return find_in_expr(body, offset);
-            }
-            None
-        }
-        // RFC-0019 callback block: descend into the action statements so hover
-        // works inside `on_tap: { count++ }`.
-        Expr::Block(stmts, _) => {
-            for stmt in stmts {
-                if span_contains(stmt.span(), offset) {
-                    return find_in_expr(stmt, offset);
-                }
-            }
-            None
-        }
-        Expr::StrLit(parts, _) => {
-            for part in parts {
-                if let StrPart::Interp(expr) = part {
-                    if let Some(target) = find_in_expr(expr, offset) {
-                        return Some(target);
-                    }
-                }
-            }
-            None
-        }
-        _ => None,
-    }
-}
-
-fn intrinsic_hover_docs(name: &str) -> Option<String> {
-    let info = byard_compiler::interp::intrinsics::lookup(name)?;
-    let mut doc = format!("### Intrinsic `{name}`\n\n");
-    if info.children {
-        doc.push_str("- **Children**: Yes (expects `{ ... }`)\n");
-    } else {
-        doc.push_str("- **Children**: No\n");
-    }
-    if info.focusable {
-        doc.push_str("- **Focusable**: Yes\n");
-    }
-    if info.interactive {
-        doc.push_str("- **Interactive**: Yes\n");
-    }
-    doc.push_str("\n#### Accepted Properties:\n");
-    let mut props: Vec<_> = info.properties().collect();
-    props.sort_by_key(|(k, _)| *k);
-    for (prop, ty) in props {
-        doc.push_str(&format!("* `{prop}`: `{ty:?}`\n"));
-    }
-    doc.push_str("\n#### Accepted Events:\n");
-    let mut events: Vec<_> = info.events().collect();
-    events.sort_unstable();
-    for event in events {
-        doc.push_str(&format!("* `{event}`\n"));
-    }
-    Some(doc)
-}
-
-fn attribute_hover_docs(element_name: &str, attr_name: &str) -> Option<String> {
-    let info = byard_compiler::interp::intrinsics::lookup(element_name)?;
-    let mut doc = format!("### Attribute `{attr_name}` on `{element_name}`\n\n");
-    if let Some(prop_ty) = info.property_type(attr_name) {
-        doc.push_str(&format!("Type: Property (`{prop_ty:?}`)\n"));
-    } else if info.has_event(attr_name) {
-        doc.push_str("Type: Event Callback (`=>`)\n");
-    } else {
-        return None;
-    }
-    Some(doc)
-}
-
-fn var_hover_docs(name: &str, inference: &byard_compiler::infer::Inference) -> String {
-    let var_symbol = byard_compiler::Symbol::intern(name);
-    if let Some((_, ty)) = inference
-        .bindings
-        .iter()
-        .find(|(sym, _)| *sym == var_symbol)
-    {
-        format!("```byld\nvar {name}: {}\n```", format_ty(ty))
-    } else {
-        format!("```byld\nvar {name}\n```")
-    }
-}
-
-fn format_ty(ty: &byard_compiler::infer::Ty) -> String {
-    use byard_compiler::infer::Ty;
-    match ty {
-        Ty::Int => "Int".to_string(),
-        Ty::Float => "Float".to_string(),
-        Ty::Bool => "Bool".to_string(),
-        Ty::Str => "Str".to_string(),
-        Ty::List(inner) => format!("List<{}>", format_ty(inner)),
-        Ty::Fn(params, ret) => {
-            let params_str: Vec<String> = params.iter().map(format_ty).collect();
-            let ret_str = match ret {
-                Some(r) => format!(" -> {}", format_ty(r)),
-                None => String::new(),
-            };
-            format!("Fn({}){}", params_str.join(", "), ret_str)
-        }
-        Ty::Named(sym) => sym.as_str().to_string(),
-        Ty::Unknown => "Unknown".to_string(),
-    }
-}
-
-const STYLE_PROPS: &[(&str, &str)] = &[
-    ("width", "Int (logical pixels)"),
-    ("height", "Int (logical pixels)"),
-    ("gap", "Int (logical pixels spacing)"),
-    ("p", "Len (padding on all sides)"),
-    ("m", "Len (margin on all sides)"),
-    ("px", "Len (horizontal padding)"),
-    ("py", "Len (vertical padding)"),
-    ("pt", "Len (top padding)"),
-    ("pr", "Len (right padding)"),
-    ("pb", "Len (bottom padding)"),
-    ("pl", "Len (left padding)"),
-    ("mx", "Len (horizontal margin)"),
-    ("my", "Len (vertical margin)"),
-    ("mt", "Len (top margin)"),
-    ("mr", "Len (right margin)"),
-    ("mb", "Len (bottom margin)"),
-    ("ml", "Len (left margin)"),
-    ("align", "Enum: start | center | end | stretch | justify"),
-    (
-        "justify",
-        "Enum: start | center | end | between | around | evenly",
-    ),
-    ("grow", "Int (flex grow factor)"),
-    ("basis", "Int (flex basis size)"),
-    ("bg", "Color (background color hex)"),
-    ("radius", "Len (border radius)"),
-    ("opacity", "Float (0.0 to 1.0)"),
-    ("border", "Color (border color)"),
-    ("shadow", "Str (shadow specification)"),
-    ("ripple", "Color (ripple ink color, RFC-0023)"),
-    ("ripple_active", "Bool (triggers the ripple, RFC-0023)"),
-    (
-        "ripple_radius",
-        "Float (max ripple radius override, RFC-0023)",
-    ),
-    (
-        "ripple_duration",
-        "Int (ripple fade-out ms, default 300, RFC-0023)",
-    ),
-    (
-        "blur",
-        "Float (backdrop blur radius in px, max 40, RFC-0023)",
-    ),
-    (
-        "backdrop_tint",
-        "Color (tint over the blurred backdrop, RFC-0023)",
-    ),
-    (
-        "blur_saturation",
-        "Float (vibrancy boost, default 1.8, RFC-0023)",
-    ),
-    ("blur_quality", "Enum: auto | high | low (RFC-0023)"),
-];
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum AttributeContext {
-    StyleRule,
-    Element(String),
-}
-
-fn is_style_rule_before_attr(content: &str, attr_start: usize) -> bool {
-    let bytes = content.as_bytes();
-    let mut i = attr_start;
-    while i > 0 && bytes[i - 1].is_ascii_whitespace() {
-        i -= 1;
-    }
-    if i == 0 {
-        return false;
-    }
-    while i > 0 && (bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'_') {
-        i -= 1;
-    }
-    if i > 0 && bytes[i - 1] == b'.' {
-        // `.card #[…]` is a style rule, but `m.Card #[…]` is a
-        // package-qualified element (RFC-0008 Pillar B), a style rule's dot
-        // is never preceded by an identifier character.
-        let qualified = i >= 2 && (bytes[i - 2].is_ascii_alphanumeric() || bytes[i - 2] == b'_');
-        return !qualified;
-    }
-    false
-}
-
-fn find_element_name_before_attr(content: &str, attr_start: usize) -> Option<String> {
-    let bytes = content.as_bytes();
-    let mut i = attr_start;
-    while i > 0 && bytes[i - 1].is_ascii_whitespace() {
-        i -= 1;
-    }
-    if i == 0 {
-        return None;
-    }
-    if bytes[i - 1] == b')' {
-        i -= 1;
-        let mut paren_depth = 1;
-        while i > 0 && paren_depth > 0 {
-            i -= 1;
-            if i >= bytes.len() {
-                break;
-            }
-            if bytes[i] == b')' {
-                paren_depth += 1;
-            } else if bytes[i] == b'(' {
-                paren_depth -= 1;
-            }
-        }
-        while i > 0 && bytes[i - 1].is_ascii_whitespace() {
-            i -= 1;
-        }
-    }
-    if i == 0 {
-        return None;
-    }
-    let name_end = i;
-    while i > 0 && (bytes[i - 1].is_ascii_alphanumeric() || bytes[i - 1] == b'_') {
-        i -= 1;
-    }
-    // A package-qualified reference (`m.Card`, RFC-0008 Pillar B): include
-    // the alias prefix so completions can resolve through the import.
-    if i > 1 && bytes[i - 1] == b'.' {
-        let mut j = i - 1;
-        while j > 0 && (bytes[j - 1].is_ascii_alphanumeric() || bytes[j - 1] == b'_') {
-            j -= 1;
-        }
-        if j < i - 1 {
-            i = j;
-        }
-    }
-    if i < name_end {
-        let name = &content[i..name_end];
-        if name.starts_with(|c: char| c.is_ascii_alphabetic()) {
-            return Some(name.to_string());
-        }
-    }
-    None
-}
-
-fn find_active_attribute_context(content: &str, offset: usize) -> Option<AttributeContext> {
-    let mut bracket_depth = 0;
-    let mut found_attr_start = None;
-    let mut i = offset;
-    let bytes = content.as_bytes();
-    while i > 0 {
-        i -= 1;
-        if i >= bytes.len() {
-            continue;
-        }
-        let c = bytes[i];
-        if c == b']' {
-            bracket_depth += 1;
-        } else if c == b'[' && i > 0 && bytes[i - 1] == b'#' {
-            if bracket_depth == 0 {
-                found_attr_start = Some(i - 1);
-                break;
-            }
-            bracket_depth -= 1;
-        }
-    }
-
-    let start_offset = found_attr_start?;
-
-    if is_style_rule_before_attr(content, start_offset) {
-        return Some(AttributeContext::StyleRule);
-    }
-
-    if let Some(el_name) = find_element_name_before_attr(content, start_offset) {
-        return Some(AttributeContext::Element(el_name));
-    }
-
-    let parsed = parse(content);
-    for view in &parsed.views {
-        if !span_contains(view.span, start_offset) {
-            continue;
-        }
-        for member in &view.body {
-            if let Member::Style { rules, span } = member {
-                if span_contains(*span, start_offset) {
-                    for rule in rules {
-                        if span_contains(rule.span, start_offset) {
-                            return Some(AttributeContext::StyleRule);
-                        }
-                    }
-                }
-            }
-        }
-        if let Some(name) = find_element_at_offset(&view.body, start_offset) {
-            return Some(AttributeContext::Element(name));
-        }
-    }
-    None
-}
-
-fn find_element_at_offset(members: &[Member], offset: usize) -> Option<String> {
-    for member in members {
-        match member {
-            Member::Element(el) if span_contains(el.span, offset) => {
-                if let Some(child_name) = find_element_at_offset(&el.children, offset) {
-                    return Some(child_name);
-                }
-                return Some(el.name.to_string());
-            }
-            Member::For { body, span, .. } | Member::Route { body, span, .. }
-                if span_contains(*span, offset) =>
-            {
-                if let Some(name) = find_element_at_offset(body, offset) {
-                    return Some(name);
-                }
-            }
-            Member::When {
-                then, els, span, ..
-            } if span_contains(*span, offset) => {
-                if let Some(name) = find_element_at_offset(then, offset) {
-                    return Some(name);
-                }
-                if let Some(els_members) = els {
-                    if let Some(name) = find_element_at_offset(els_members, offset) {
-                        return Some(name);
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
-fn collect_locals_in_members(
-    members: &[Member],
-    offset: usize,
-    locals: &mut Vec<(String, CompletionItemKind, String)>,
-) {
-    for member in members {
-        match member {
-            Member::Var { name, .. } => {
-                locals.push((
-                    name.to_string(),
-                    CompletionItemKind::VARIABLE,
-                    "Variable (Signal)".to_string(),
-                ));
-            }
-            Member::Let { name, .. } => {
-                locals.push((
-                    name.to_string(),
-                    CompletionItemKind::VARIABLE,
-                    "Computed Value (Memo)".to_string(),
-                ));
-            }
-            Member::Fn { name, .. } => {
-                locals.push((
-                    name.to_string(),
-                    CompletionItemKind::FUNCTION,
-                    "Helper Function".to_string(),
-                ));
-            }
-            Member::Inject { name, ty, .. } => {
-                locals.push((
-                    name.to_string(),
-                    CompletionItemKind::VARIABLE,
-                    format!("Injected Value: {ty:?}"),
-                ));
-            }
-            Member::For {
-                var, body, span, ..
-            } if span_contains(*span, offset) => {
-                locals.push((
-                    var.to_string(),
-                    CompletionItemKind::VARIABLE,
-                    "Loop Item".to_string(),
-                ));
-                collect_locals_in_members(body, offset, locals);
-            }
-            // RFC-0026: inside a route body, `route` and the optional
-            // `{|params| … }` binding are in scope.
-            Member::Route {
-                params, body, span, ..
-            } if span_contains(*span, offset) => {
-                locals.push((
-                    "route".to_string(),
-                    CompletionItemKind::VARIABLE,
-                    "Route".to_string(),
-                ));
-                if let Some(params) = params {
-                    locals.push((
-                        params.to_string(),
-                        CompletionItemKind::VARIABLE,
-                        "Route Params".to_string(),
-                    ));
-                }
-                collect_locals_in_members(body, offset, locals);
-            }
-            Member::When {
-                then, els, span, ..
-            } if span_contains(*span, offset) => {
-                collect_locals_in_members(then, offset, locals);
-                if let Some(els_members) = els {
-                    collect_locals_in_members(els_members, offset, locals);
-                }
-            }
-            Member::Element(el) if span_contains(el.span, offset) => {
-                collect_locals_in_members(&el.children, offset, locals);
-            }
-            _ => {}
-        }
-    }
-}
-
-// ── RFC-0008 package index (editor support for `use`) ────────────────────────
-
-/// The exported views of every package the document's manifest declares,
-/// what powers `m.<TAB>` completions and package-view parameter completions.
-///
-/// Resolution is a light, per-request re-read (files are small and completion
-/// is human-paced). `path` dependencies resolve directly; git dependencies
-/// resolve only after `byard get` put them in the cache and require the CLI's
-/// cache-key, the LSP skips them for now (roadmap: share the provider).
-#[derive(Default)]
-struct PackageIndex {
-    /// package name → its exported views.
-    exports: std::collections::HashMap<String, Vec<ViewDecl>>,
-    /// Every declared dependency name (even unresolvable ones), for
-    /// `use <TAB>` completions.
-    declared: Vec<String>,
-}
-
-impl PackageIndex {
-    /// Builds the index for the document at `doc_path` by walking up to its
-    /// `byard.toml` and reading `[dependencies]`.
-    fn build(doc_path: Option<&std::path::Path>) -> Self {
-        let Some(doc_path) = doc_path else {
-            return Self::default();
-        };
-        let Some(manifest_dir) = doc_path
-            .ancestors()
-            .skip(1)
-            .find(|d| d.join("byard.toml").exists())
-        else {
-            return Self::default();
-        };
-        let Ok(src) = std::fs::read_to_string(manifest_dir.join("byard.toml")) else {
-            return Self::default();
-        };
-        let Ok(table) = src.parse::<toml::Table>() else {
-            return Self::default();
-        };
-        let Some(deps) = table.get("dependencies").and_then(|d| d.as_table()) else {
-            return Self::default();
-        };
-
-        let mut index = Self::default();
-        for (name, spec) in deps {
-            index.declared.push(name.clone());
-            let Some(rel) = spec.get("path").and_then(|p| p.as_str()) else {
-                continue; // git deps: cache-key lives in the CLI (see docs above)
-            };
-            let root = manifest_dir.join(rel);
-            let scan = if root.join("src").is_dir() {
-                root.join("src")
-            } else {
-                root.clone()
-            };
-            let mut views = Vec::new();
-            collect_package_views(&scan, &mut views);
-            index.exports.insert(name.clone(), views);
-        }
-        index
-    }
-
-    /// The exported view named `view` of package `pkg`, if indexed.
-    fn view(&self, pkg: &str, view: &str) -> Option<&ViewDecl> {
-        self.exports
-            .get(pkg)?
-            .iter()
-            .find(|v| v.name.as_str() == view)
-    }
-}
-
-/// Recursively parses every `.byd` under `dir` and collects its views.
-fn collect_package_views(dir: &std::path::Path, out: &mut Vec<ViewDecl>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    let mut paths: Vec<std::path::PathBuf> = entries.flatten().map(|e| e.path()).collect();
-    paths.sort();
-    for path in paths {
-        let name = path.file_name().map(|n| n.to_string_lossy().into_owned());
-        if path.is_dir() {
-            if name
-                .as_deref()
-                .is_some_and(|n| n.starts_with('.') || n == "target")
-            {
-                continue;
-            }
-            collect_package_views(&path, out);
-        } else if path.extension().is_some_and(|e| e == "byd") {
-            if let Ok(src) = std::fs::read_to_string(&path) {
-                out.extend(parse(&src).views);
-            }
-        }
-    }
-}
-
-/// Resolves an element name to a package-exported view through this file's
-/// imports: `m.Card` through an alias import, bare `Card` through a selective
-/// one (RFC-0008 Pillar B).
-fn resolve_package_view<'i>(
-    el_name: &str,
-    imports: &[UseDecl],
-    index: &'i PackageIndex,
-) -> Option<&'i ViewDecl> {
-    if let Some((head, rest)) = el_name.split_once('.') {
-        let import = imports.iter().find(|i| {
-            i.symbols.is_none()
-                && i.alias
-                    .as_ref()
-                    .map_or(i.package.as_str(), byard_compiler::Symbol::as_str)
-                    == head
-        })?;
-        return index.view(import.package.as_str(), rest);
-    }
-    imports.iter().find_map(|i| {
-        i.symbols.as_ref().and_then(|symbols| {
-            symbols
-                .iter()
-                .find(|(s, _)| s.as_str() == el_name)
-                .and_then(|_| index.view(i.package.as_str(), el_name))
-        })
-    })
-}
-
-/// Whether the cursor sits on a `use` line, after the keyword, the position
-/// where a dependency name completes.
-fn in_use_decl(content: &str, offset: usize) -> bool {
-    let line_start = content[..offset.min(content.len())]
-        .rfind('\n')
-        .map_or(0, |i| i + 1);
-    let line = &content[line_start..offset.min(content.len())];
-    let trimmed = line.trim_start();
-    trimmed == "use" || (trimmed.starts_with("use ") && !trimmed.contains('.'))
-}
-
-fn handle_completion(
-    content: &str,
-    pos: Position,
-    doc_path: Option<&std::path::Path>,
-) -> Option<CompletionResponse> {
-    let offset = lsp_pos_to_byte_offset(content, pos.line, pos.character)?;
-    let index = PackageIndex::build(doc_path);
-
-    // `use <TAB>` → the manifest's declared dependencies (RFC-0008).
-    if in_use_decl(content, offset) {
-        let items = index
-            .declared
-            .iter()
-            .map(|name| CompletionItem {
-                label: name.clone(),
-                kind: Some(CompletionItemKind::MODULE),
-                detail: Some("Package (byard.toml [dependencies])".to_string()),
-                ..Default::default()
-            })
-            .collect();
-        return Some(CompletionResponse::Array(items));
-    }
-
-    if let Some(attr_context) = find_active_attribute_context(content, offset) {
-        let mut items = Vec::new();
-        match attr_context {
-            AttributeContext::StyleRule => {
-                for &(prop, desc) in STYLE_PROPS {
-                    items.push(CompletionItem {
-                        label: prop.to_string(),
-                        kind: Some(CompletionItemKind::PROPERTY),
-                        detail: Some(desc.to_string()),
-                        insert_text: Some(format!("{prop}: ")),
-                        ..Default::default()
-                    });
-                }
-            }
-            AttributeContext::Element(el_name) => {
-                if let Some(info) = byard_compiler::interp::intrinsics::lookup(&el_name) {
-                    for (prop, ty) in info.properties() {
-                        items.push(CompletionItem {
-                            label: prop.to_string(),
-                            kind: Some(CompletionItemKind::PROPERTY),
-                            detail: Some(format!("Property ({ty:?})")),
-                            insert_text: Some(format!("{prop}: ")),
-                            ..Default::default()
-                        });
-                    }
-                    for event in info.events() {
-                        items.push(CompletionItem {
-                            label: event.to_string(),
-                            kind: Some(CompletionItemKind::EVENT),
-                            detail: Some("Event Callback".to_string()),
-                            insert_text: Some(format!("{event} => ")),
-                            ..Default::default()
-                        });
-                    }
-                } else {
-                    let parsed = parse(content);
-                    let pkg_view = resolve_package_view(&el_name, &parsed.imports, &index);
-                    let local_view = parsed.views.iter().find(|v| v.name.as_str() == el_name);
-                    if let Some(view) = pkg_view.or(local_view) {
-                        for param in &view.params {
-                            items.push(CompletionItem {
-                                label: param.name.to_string(),
-                                kind: Some(CompletionItemKind::PROPERTY),
-                                detail: Some("View Parameter".to_string()),
-                                insert_text: Some(format!("{}: ", param.name)),
-                                ..Default::default()
-                            });
-                        }
-                    }
-                }
-            }
-        }
-        return Some(CompletionResponse::Array(items));
-    }
-
-    let mut items = Vec::new();
-
-    // `route`/`tab` are contextual (RFC-0026) rather than reserved, but they
-    // open a block like the rest, so they belong in the same completion set.
-    let keywords = &[
-        "use", "var", "let", "fn", "inject", "for", "in", "when", "else", "style", "route", "tab",
-    ];
-    for kw in keywords {
-        items.push(CompletionItem {
-            label: kw.to_string(),
-            kind: Some(CompletionItemKind::KEYWORD),
-            ..Default::default()
-        });
-    }
-
-    for intrinsic in byard_compiler::interp::intrinsics::INTRINSIC_NAMES {
-        items.push(CompletionItem {
-            label: intrinsic.to_string(),
-            kind: Some(CompletionItemKind::CLASS),
-            detail: Some("Intrinsic Component".to_string()),
-            ..Default::default()
-        });
-    }
-
-    let parsed = parse(content);
-
-    for view in &parsed.views {
-        items.push(CompletionItem {
-            label: view.name.to_string(),
-            kind: Some(CompletionItemKind::INTERFACE),
-            detail: Some("User View".to_string()),
-            ..Default::default()
-        });
-    }
-
-    // Imported package views (RFC-0008 Pillars A/B): one item per export,
-    // spelled the way this file can reach it (`m.Card` under an alias,
-    // bare `Card` under a selective import).
-    for import in &parsed.imports {
-        let pkg = import.package.as_str();
-        let Some(exports) = index.exports.get(pkg) else {
-            continue;
-        };
-        if let Some(symbols) = &import.symbols {
-            for (sym, _) in symbols {
-                if let Some(view) = index.view(pkg, sym.as_str()) {
-                    items.push(CompletionItem {
-                        label: view.name.to_string(),
-                        kind: Some(CompletionItemKind::INTERFACE),
-                        detail: Some(format!("View · package `{pkg}`")),
-                        ..Default::default()
-                    });
-                }
-            }
-        } else {
-            let alias = import
-                .alias
-                .as_ref()
-                .map_or(pkg, byard_compiler::Symbol::as_str);
-            for view in exports {
-                items.push(CompletionItem {
-                    label: format!("{alias}.{}", view.name.as_str()),
-                    kind: Some(CompletionItemKind::INTERFACE),
-                    detail: Some(format!("View · package `{pkg}`")),
-                    ..Default::default()
-                });
-            }
-        }
-    }
-
-    if let Some(active_view) = parsed.views.iter().find(|v| span_contains(v.span, offset)) {
-        let mut locals = Vec::new();
-        for param in &active_view.params {
-            locals.push((
-                param.name.to_string(),
-                CompletionItemKind::VARIABLE,
-                "Parameter".to_string(),
-            ));
-        }
-        collect_locals_in_members(&active_view.body, offset, &mut locals);
-
-        for (name, kind, detail) in locals {
-            items.push(CompletionItem {
-                label: name,
-                kind: Some(kind),
-                detail: Some(detail),
-                ..Default::default()
-            });
-        }
-    }
-
-    Some(CompletionResponse::Array(items))
-}
-
-fn find_element_ref_at_offset(views: &[ViewDecl], offset: usize) -> Option<String> {
-    for view in views {
-        if !span_contains(view.span, offset) {
-            continue;
-        }
-        if let Some(name) = find_element_ref_in_members(&view.body, offset) {
-            return Some(name);
-        }
-    }
-    None
-}
-
-fn find_element_ref_in_members(members: &[Member], offset: usize) -> Option<String> {
-    for member in members {
-        match member {
-            Member::Element(el) => {
-                let name_len = el.name.as_str().len();
-                let name_span = Span::new(el.span.start, el.span.start + name_len as u32);
-                if span_contains(name_span, offset) {
-                    return Some(el.name.to_string());
-                }
-                if let Some(name) = find_element_ref_in_members(&el.children, offset) {
-                    return Some(name);
-                }
-            }
-            Member::For { body, span, .. } | Member::Route { body, span, .. }
-                if span_contains(*span, offset) =>
-            {
-                if let Some(name) = find_element_ref_in_members(body, offset) {
-                    return Some(name);
-                }
-            }
-            Member::When {
-                then, els, span, ..
-            } if span_contains(*span, offset) => {
-                if let Some(name) = find_element_ref_in_members(then, offset) {
-                    return Some(name);
-                }
-                if let Some(els_members) = els {
-                    if let Some(name) = find_element_ref_in_members(els_members, offset) {
-                        return Some(name);
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
-fn find_local_declaration_span(members: &[Member], var_name: &str, offset: usize) -> Option<Span> {
-    for member in members {
-        match member {
-            Member::Var { name, span, .. } if name.as_str() == var_name => {
-                return Some(*span);
-            }
-            Member::Let { name, span, .. } if name.as_str() == var_name => {
-                return Some(*span);
-            }
-            Member::Fn { name, span, .. } if name.as_str() == var_name => {
-                return Some(*span);
-            }
-            Member::Inject { name, span, .. } if name.as_str() == var_name => {
-                return Some(*span);
-            }
-            Member::For {
-                var, body, span, ..
-            } if span_contains(*span, offset) => {
-                if var.as_str() == var_name {
-                    return Some(Span::new(
-                        span.start,
-                        span.start + 4 + var.as_str().len() as u32,
-                    ));
-                }
-                if let Some(s) = find_local_declaration_span(body, var_name, offset) {
-                    return Some(s);
-                }
-            }
-            Member::Route { body, span, .. } if span_contains(*span, offset) => {
-                if let Some(s) = find_local_declaration_span(body, var_name, offset) {
-                    return Some(s);
-                }
-            }
-            Member::When {
-                then, els, span, ..
-            } if span_contains(*span, offset) => {
-                if let Some(s) = find_local_declaration_span(then, var_name, offset) {
-                    return Some(s);
-                }
-                if let Some(els_members) = els {
-                    if let Some(s) = find_local_declaration_span(els_members, var_name, offset) {
-                        return Some(s);
-                    }
-                }
-            }
-            Member::Element(el) if span_contains(el.span, offset) => {
-                if let Some(s) = find_local_declaration_span(&el.children, var_name, offset) {
-                    return Some(s);
-                }
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
-fn find_class_ref_at_offset(views: &[ViewDecl], offset: usize) -> Option<String> {
-    for view in views {
-        if !span_contains(view.span, offset) {
-            continue;
-        }
-        if let Some(name) = find_class_ref_in_members(&view.body, offset) {
-            return Some(name);
-        }
-    }
-    None
-}
-
-fn find_class_ref_in_members(members: &[Member], offset: usize) -> Option<String> {
-    for member in members {
-        match member {
-            Member::Element(el) => {
-                for attr in &el.attrs {
-                    match &attr.kind {
-                        AttrKind::Prop { value } | AttrKind::Spread { value } => {
-                            if let Some(name) = find_class_ref_in_expr(value, offset) {
-                                return Some(name);
-                            }
-                        }
-                        AttrKind::Event { action, .. } => {
-                            if let Some(name) = find_class_ref_in_expr(action, offset) {
-                                return Some(name);
-                            }
-                        }
-                    }
-                }
-                if let Some(action) = &el.action {
-                    if let Some(name) = find_class_ref_in_expr(action, offset) {
-                        return Some(name);
-                    }
-                }
-                if let Some(name) = find_class_ref_in_members(&el.children, offset) {
-                    return Some(name);
-                }
-            }
-            Member::Var { init, .. } | Member::Let { init, .. } => {
-                if let Some(name) = find_class_ref_in_expr(init, offset) {
-                    return Some(name);
-                }
-            }
-            Member::Fn { body, .. } => {
-                if let Some(name) = find_class_ref_in_expr(body, offset) {
-                    return Some(name);
-                }
-            }
-            Member::For {
-                iter, body, span, ..
-            } if span_contains(*span, offset) => {
-                if let Some(name) = find_class_ref_in_expr(iter, offset) {
-                    return Some(name);
-                }
-                if let Some(name) = find_class_ref_in_members(body, offset) {
-                    return Some(name);
-                }
-            }
-            Member::Route { body, span, .. } if span_contains(*span, offset) => {
-                if let Some(name) = find_class_ref_in_members(body, offset) {
-                    return Some(name);
-                }
-            }
-            Member::When {
-                cond,
-                then,
-                els,
-                span,
-            } if span_contains(*span, offset) => {
-                if let Some(name) = find_class_ref_in_expr(cond, offset) {
-                    return Some(name);
-                }
-                if let Some(name) = find_class_ref_in_members(then, offset) {
-                    return Some(name);
-                }
-                if let Some(els_members) = els {
-                    if let Some(name) = find_class_ref_in_members(els_members, offset) {
-                        return Some(name);
-                    }
-                }
-            }
-            Member::Expr(expr) => {
-                if let Some(name) = find_class_ref_in_expr(expr, offset) {
-                    return Some(name);
-                }
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
-fn find_class_ref_in_expr(expr: &Expr, offset: usize) -> Option<String> {
-    if !span_contains(expr.span(), offset) {
-        return None;
-    }
-    match expr {
-        Expr::ClassRef(sym, span) => {
-            if span_contains(*span, offset) {
-                return Some(sym.as_str().to_string());
-            }
-            None
-        }
-        Expr::Array(items, _) => {
-            for item in items {
-                if let Some(name) = find_class_ref_in_expr(item, offset) {
-                    return Some(name);
-                }
-            }
-            None
-        }
-        Expr::Tuple(args, _) => {
-            for arg in args {
-                if let Some(name) = find_class_ref_in_expr(&arg.value, offset) {
-                    return Some(name);
-                }
-            }
-            None
-        }
-        Expr::Member { base, .. } => find_class_ref_in_expr(base, offset),
-        Expr::Call { callee, args, .. } => {
-            if let Some(name) = find_class_ref_in_expr(callee, offset) {
-                return Some(name);
-            }
-            for arg in args {
-                if let Some(name) = find_class_ref_in_expr(&arg.value, offset) {
-                    return Some(name);
-                }
-            }
-            None
-        }
-        Expr::Lambda { body, .. } => find_class_ref_in_expr(body, offset),
-        Expr::Block(stmts, _) => {
-            for stmt in stmts {
-                if let Some(name) = find_class_ref_in_expr(stmt, offset) {
-                    return Some(name);
-                }
-            }
-            None
-        }
-        Expr::Assign { target, value, .. } => {
-            if let Some(name) = find_class_ref_in_expr(target, offset) {
-                return Some(name);
-            }
-            find_class_ref_in_expr(value, offset)
-        }
-        Expr::Postfix { target, .. } => find_class_ref_in_expr(target, offset),
-        Expr::Ternary {
-            cond, then, els, ..
-        } => {
-            if let Some(name) = find_class_ref_in_expr(cond, offset) {
-                return Some(name);
-            }
-            if let Some(name) = find_class_ref_in_expr(then, offset) {
-                return Some(name);
-            }
-            find_class_ref_in_expr(els, offset)
-        }
-        _ => None,
-    }
-}
-
-fn handle_definition(
-    content: &str,
-    pos: Position,
-    uri: Uri,
-) -> Option<lsp_types::GotoDefinitionResponse> {
-    let offset = lsp_pos_to_byte_offset(content, pos.line, pos.character)?;
-    let parsed = parse(content);
-
-    if let Some(view_ref_name) = find_element_ref_at_offset(&parsed.views, offset) {
-        if let Some(target_view) = parsed
-            .views
-            .iter()
-            .find(|v| v.name.as_str() == view_ref_name)
-        {
-            let range = Range::new(
-                byte_offset_to_lsp_pos(content, target_view.span.start as usize),
-                byte_offset_to_lsp_pos(content, target_view.span.end as usize),
-            );
-            return Some(lsp_types::GotoDefinitionResponse::Scalar(
-                lsp_types::Location::new(uri, range),
-            ));
-        }
-    }
-
-    let target = find_hover_target(&parsed.views, offset)?;
-    match target {
-        HoverTarget::VarIdent { name, .. } => {
-            let enclosing_view = parsed
-                .views
-                .iter()
-                .find(|v| span_contains(v.span, offset))?;
-
-            for param in &enclosing_view.params {
-                if param.name.as_str() == name {
-                    let range = Range::new(
-                        byte_offset_to_lsp_pos(content, param.span.start as usize),
-                        byte_offset_to_lsp_pos(content, param.span.end as usize),
-                    );
-                    return Some(lsp_types::GotoDefinitionResponse::Scalar(
-                        lsp_types::Location::new(uri, range),
-                    ));
-                }
-            }
-
-            if let Some(def_span) = find_local_declaration_span(&enclosing_view.body, &name, offset)
-            {
-                let range = Range::new(
-                    byte_offset_to_lsp_pos(content, def_span.start as usize),
-                    byte_offset_to_lsp_pos(content, def_span.end as usize),
-                );
-                return Some(lsp_types::GotoDefinitionResponse::Scalar(
-                    lsp_types::Location::new(uri, range),
-                ));
-            }
-
-            if let Some(target_view) = parsed.views.iter().find(|v| v.name.as_str() == name) {
-                let range = Range::new(
-                    byte_offset_to_lsp_pos(content, target_view.span.start as usize),
-                    byte_offset_to_lsp_pos(content, target_view.span.end as usize),
-                );
-                return Some(lsp_types::GotoDefinitionResponse::Scalar(
-                    lsp_types::Location::new(uri, range),
-                ));
-            }
-        }
-        HoverTarget::Attribute {
-            element_name,
-            attr_name,
-        } => {
-            let target_view = parsed
-                .views
-                .iter()
-                .find(|v| v.name.as_str() == element_name)?;
-            let param = target_view
-                .params
-                .iter()
-                .find(|p| p.name.as_str() == attr_name)?;
-            let range = Range::new(
-                byte_offset_to_lsp_pos(content, param.span.start as usize),
-                byte_offset_to_lsp_pos(content, param.span.end as usize),
-            );
-            return Some(lsp_types::GotoDefinitionResponse::Scalar(
-                lsp_types::Location::new(uri, range),
-            ));
-        }
-        HoverTarget::Intrinsic { .. } => {}
-    }
-
-    if let Some(class_name) = find_class_ref_at_offset(&parsed.views, offset) {
-        let enclosing_view = parsed
-            .views
-            .iter()
-            .find(|v| span_contains(v.span, offset))?;
-        for member in &enclosing_view.body {
-            if let Member::Style { rules, .. } = member {
-                for rule in rules {
-                    if rule.class.as_str() == class_name {
-                        let range = Range::new(
-                            byte_offset_to_lsp_pos(content, rule.span.start as usize),
-                            byte_offset_to_lsp_pos(content, rule.span.end as usize),
-                        );
-                        return Some(lsp_types::GotoDefinitionResponse::Scalar(
-                            lsp_types::Location::new(uri, range),
-                        ));
-                    }
-                }
-            }
-        }
-    }
-
-    None
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lsp_types::{CompletionResponse, GotoDefinitionResponse, Position, Uri};
+    use state::document::Document;
 
     #[test]
-    fn test_completion_keywords_and_intrinsics() {
-        let content = "View Main {\n  Column {\n  }\n}";
-        // Position at line 2, character 2 (inside the Column children area)
+    fn test_completion_capabilities() {
+        let uri: Uri = "file:///test.byd".parse().unwrap();
+        let content = "View Main {\n  Column {\n  }\n}".to_string();
+        let doc = Document::new(uri, Some(1), content);
+
         let pos = Position::new(2, 2);
-        let resp = handle_completion(content, pos, None).unwrap();
+        let resp = capabilities::completion::handle_completion(&doc, pos).unwrap();
         if let CompletionResponse::Array(items) = resp {
             assert!(items.iter().any(|item| item.label == "Column"));
             assert!(items.iter().any(|item| item.label == "Button"));
@@ -1701,62 +425,30 @@ mod tests {
     }
 
     #[test]
-    fn test_completion_attributes_intrinsic() {
-        let content = "View Main {\n  Column #[wi] {\n  }\n}";
-        // Position inside `#[wi]`
-        let pos = Position::new(1, 11);
-        let resp = handle_completion(content, pos, None).unwrap();
-        if let CompletionResponse::Array(items) = resp {
-            assert!(items.iter().any(|item| item.label == "width"));
-            assert!(items.iter().any(|item| item.label == "height"));
-            assert!(items.iter().any(|item| item.label == "align"));
-            assert!(!items.iter().any(|item| item.label == "var")); // shouldn't show keywords
+    fn test_hover_capabilities() {
+        let uri: Uri = "file:///test.byd".parse().unwrap();
+        let content = "View Main {\n  Column {\n  }\n}".to_string();
+        let doc = Document::new(uri, Some(1), content);
+
+        let pos = Position::new(1, 4); // on `Column`
+        let hover = capabilities::hover::handle_hover(&doc, pos).unwrap();
+        if let lsp_types::HoverContents::Markup(markup) = hover.contents {
+            assert!(markup.value.contains("Intrinsic `Column`"));
         } else {
-            panic!("Expected Array completion response");
+            panic!("Expected Markup hover content");
         }
     }
 
     #[test]
-    fn test_completion_attributes_style_rule() {
-        let content = "View Main {\n  style {\n    .title #[ra] {}\n  }\n}";
-        // Position inside `#[ra]`
-        let pos = Position::new(2, 13);
-        let resp = handle_completion(content, pos, None).unwrap();
-        if let CompletionResponse::Array(items) = resp {
-            assert!(items.iter().any(|item| item.label == "radius"));
-            assert!(items.iter().any(|item| item.label == "bg"));
-            assert!(items.iter().any(|item| item.label == "width"));
-            assert!(!items.iter().any(|item| item.label == "Button")); // no elements/intrinsics in styling rules
-        } else {
-            panic!("Expected Array completion response");
-        }
-    }
+    fn test_definition_capabilities() {
+        let uri: Uri = "file:///test.byd".parse().unwrap();
+        let content = "View Main {\n  var my_var = 10\n  Text(my_var)\n}".to_string();
+        let doc = Document::new(uri.clone(), Some(1), content);
 
-    #[test]
-    fn test_completion_locals() {
-        let content = "View Main(title: Str) {\n  var my_var = 10\n  let my_let = \"hello\"\n  \n}";
-        // Position in view body
-        let pos = Position::new(3, 2);
-        let resp = handle_completion(content, pos, None).unwrap();
-        if let CompletionResponse::Array(items) = resp {
-            assert!(items.iter().any(|item| item.label == "title"));
-            assert!(items.iter().any(|item| item.label == "my_var"));
-            assert!(items.iter().any(|item| item.label == "my_let"));
-        } else {
-            panic!("Expected Array completion response");
-        }
-    }
-
-    #[test]
-    fn test_definition_local_variable() {
-        let content = "View Main {\n  var my_var = 10\n  Text(my_var)\n}";
-        // Position on the usage of my_var inside Text (line 2, char 8)
-        let pos = Position::new(2, 8);
-        let uri: Uri = "file:///dummy.byd".parse().unwrap();
-        let resp = handle_definition(content, pos, uri.clone()).unwrap();
+        let pos = Position::new(2, 8); // on my_var reference
+        let resp = capabilities::definition::handle_definition(&doc, pos).unwrap();
         if let GotoDefinitionResponse::Scalar(loc) = resp {
             assert_eq!(loc.uri, uri);
-            // Definition of my_var is on line 1: `var my_var = 10`
             assert_eq!(loc.range.start.line, 1);
         } else {
             panic!("Expected Scalar definition response");
@@ -1764,18 +456,66 @@ mod tests {
     }
 
     #[test]
-    fn test_definition_user_view() {
-        let content = "View Child {}\nView Main {\n  Child {}\n}";
-        // Position on the Child tag inside Main (line 2, char 3)
-        let pos = Position::new(2, 3);
-        let uri: Uri = "file:///dummy.byd".parse().unwrap();
-        let resp = handle_definition(content, pos, uri.clone()).unwrap();
-        if let GotoDefinitionResponse::Scalar(loc) = resp {
-            assert_eq!(loc.uri, uri);
-            // Definition of View Child is on line 0
-            assert_eq!(loc.range.start.line, 0);
+    fn test_document_symbol_capabilities() {
+        let uri: Uri = "file:///test.byd".parse().unwrap();
+        let content = "View Main(title: Str) {\n  var count = 0\n}".to_string();
+        let doc = Document::new(uri, Some(1), content);
+
+        let resp = capabilities::document_symbol::handle_document_symbol(&doc).unwrap();
+        if let lsp_types::DocumentSymbolResponse::Nested(symbols) = resp {
+            assert_eq!(symbols.len(), 1);
+            assert_eq!(symbols[0].name, "Main");
+            let children = symbols[0].children.as_ref().unwrap();
+            assert!(children.iter().any(|s| s.name == "title"));
+            assert!(children.iter().any(|s| s.name == "count"));
         } else {
-            panic!("Expected Scalar definition response");
+            panic!("Expected Nested DocumentSymbolResponse");
+        }
+    }
+
+    #[test]
+    fn test_formatting_capabilities() {
+        let uri: Uri = "file:///test.byd".parse().unwrap();
+        let content = "View Main{\nColumn{\nText(\"hello\")\n}\n}".to_string();
+        let doc = Document::new(uri, Some(1), content);
+
+        let options = lsp_types::FormattingOptions {
+            tab_size: 2,
+            insert_spaces: true,
+            ..Default::default()
+        };
+        let edits = capabilities::formatting::handle_formatting(&doc, options).unwrap();
+        assert_eq!(edits.len(), 1);
+        assert!(edits[0].new_text.contains("  Column{\n    Text(\"hello\")"));
+    }
+
+    #[test]
+    fn test_rename_capabilities() {
+        let uri: Uri = "file:///test.byd".parse().unwrap();
+        let content = "View Main {\n  var my_var = 10\n  Text(my_var)\n}".to_string();
+        let doc = Document::new(uri.clone(), Some(1), content);
+
+        let pos = Position::new(1, 8); // on `my_var` declaration
+        let prepare = capabilities::rename::handle_prepare_rename(&doc, pos);
+        assert!(prepare.is_some());
+
+        let edit = capabilities::rename::handle_rename(&doc, pos, "new_var".to_string()).unwrap();
+        let changes = edit.changes.unwrap();
+        let edits = changes.get(&uri).unwrap();
+        assert_eq!(edits.len(), 2); // declaration + usage
+    }
+
+    #[test]
+    fn test_semantic_tokens_capabilities() {
+        let uri: Uri = "file:///test.byd".parse().unwrap();
+        let content = "View Main {\n  var count = 10\n}".to_string();
+        let doc = Document::new(uri, Some(1), content);
+
+        let result = capabilities::semantic_tokens::handle_semantic_tokens(&doc).unwrap();
+        if let lsp_types::SemanticTokensResult::Tokens(tokens) = result {
+            assert!(!tokens.data.is_empty());
+        } else {
+            panic!("Expected SemanticTokensResult::Tokens");
         }
     }
 }

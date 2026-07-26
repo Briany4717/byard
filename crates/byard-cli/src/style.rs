@@ -273,7 +273,22 @@ pub fn fact(key: &str, value: &str) {
 /// The shared line shape: a 5-column prefix, the message, and — when a
 /// duration is given — a right-aligned duration column.
 fn line(colour: &str, glyph: &str, message: &str, duration: Option<std::time::Duration>) {
-    let p = palette();
+    println!("{}", compose(palette(), colour, glyph, message, duration));
+}
+
+/// Composes one grammar line, so the shape is testable without capturing
+/// stdout.
+///
+/// Every command routes through here, which is what makes "the duration column
+/// is at the same place in `new` as in `build`" a property of the module rather
+/// than a coincidence maintained by seven call sites.
+fn compose(
+    p: &Palette,
+    colour: &str,
+    glyph: &str,
+    message: &str,
+    duration: Option<std::time::Duration>,
+) -> String {
     let prefix = format!("{colour}{glyph}{}", p.reset);
     // Padding is computed on the *glyph*, not the coloured prefix: the escape
     // sequences occupy no columns, and counting them would misalign every line
@@ -284,12 +299,12 @@ fn line(colour: &str, glyph: &str, message: &str, duration: Option<std::time::Du
             let right = format_duration(d);
             let used = 5 + display_width(message);
             let gap = WIDTH.saturating_sub(used + right.len()).max(1);
-            println!(
+            format!(
                 "{prefix}{:pad$}{message}{:gap$}{}{right}{}",
                 "", "", p.metric, p.reset
-            );
+            )
         }
-        None => println!("{prefix}{:pad$}{message}", ""),
+        None => format!("{prefix}{:pad$}{message}", ""),
     }
 }
 
@@ -456,6 +471,115 @@ mod tests {
         assert_eq!(display_width("\x1b[32mok\x1b[0m"), 2);
         assert_eq!(display_width("\x1b[1m\x1b[31merr\x1b[0m"), 3);
         assert_eq!(display_width("·"), 1);
+    }
+
+    /// The seven commands' prefixes, in the shape each of them uses them.
+    fn every_prefix(g: &Glyphs) -> [&'static str; 7] {
+        [g.ok, g.err, g.warn, g.info, g.action, g.reload, g.fact]
+    }
+
+    #[test]
+    fn the_duration_column_is_at_the_same_place_on_every_line() {
+        // `new`, `check`, `build`, `get` and `dev` all emit completion lines
+        // with different prefixes and different message lengths. If the column
+        // moved between them the eye would have to re-find it per line, which
+        // is the entire reason the grammar exists.
+        use std::time::Duration;
+        let p = Palette::plain();
+        let g = Glyphs::unicode();
+        let mut columns = Vec::new();
+        for (glyph, message, ms) in [
+            (g.ok, "3 files", 4u64),
+            (g.ok, "0 errors", 24),
+            (g.ok, "2 packages, byard.lock written", 999),
+            (g.warn, "1 deprecated attribute", 7),
+            (g.err, "2 errors", 120),
+            (g.reload, "reloaded 12 view(s)", 3),
+        ] {
+            let out = compose(&p, "", glyph, message, Some(Duration::from_millis(ms)));
+            let right = format_duration(Duration::from_millis(ms));
+            let end = display_width(&out);
+            assert!(
+                out.ends_with(&right),
+                "the duration must be the last thing on the line: {out:?}"
+            );
+            columns.push(end);
+        }
+        for (i, w) in columns.iter().enumerate() {
+            assert_eq!(
+                *w, WIDTH,
+                "line {i} composed to {w} columns, not {WIDTH} — the duration column moved"
+            );
+        }
+    }
+
+    #[test]
+    fn colour_never_moves_a_single_column() {
+        // The property that makes the alignment above survive `CLICOLOR_FORCE`:
+        // escapes occupy no columns, so the coloured and uncoloured renderings
+        // of the same line must have identical *display* widths — and stripping
+        // the escapes must give back the plain line byte for byte.
+        use std::time::Duration;
+        let g = Glyphs::unicode();
+        for glyph in every_prefix(&g) {
+            for duration in [None, Some(Duration::from_millis(42))] {
+                let plain = compose(&Palette::plain(), "", glyph, "a message", duration);
+                let ansi = compose(
+                    &Palette::ansi(),
+                    Palette::ansi().ok,
+                    glyph,
+                    "a message",
+                    duration,
+                );
+                assert_eq!(
+                    display_width(&plain),
+                    display_width(&ansi),
+                    "colour changed the width of a {glyph:?} line"
+                );
+                assert_eq!(strip_escapes(&ansi), plain, "colour changed the text");
+            }
+        }
+    }
+
+    #[test]
+    fn no_color_and_a_pipe_produce_byte_identical_output() {
+        // Two different reasons to turn colour off must not produce two
+        // different renderings — a diff of two logs should be empty, not full
+        // of invisible bytes.
+        use std::time::Duration;
+        let piped = resolve_palette(&FakeEnv::new(false));
+        let refused = resolve_palette(&FakeEnv::new(true).with("NO_COLOR", "1"));
+        let dumb = resolve_palette(&FakeEnv::new(true).with("TERM", "dumb"));
+        let render = |p: &Palette| {
+            compose(
+                p,
+                p.ok,
+                Glyphs::unicode().ok,
+                "0 errors",
+                Some(Duration::from_millis(24)),
+            )
+        };
+        assert_eq!(render(&piped), render(&refused));
+        assert_eq!(render(&piped), render(&dumb));
+        assert!(!render(&piped).contains('\x1b'));
+    }
+
+    /// Removes every CSI sequence — the test-side inverse of the palette.
+    fn strip_escapes(s: &str) -> String {
+        let mut out = String::with_capacity(s.len());
+        let mut chars = s.chars();
+        while let Some(c) = chars.next() {
+            if c == '\x1b' {
+                for c in chars.by_ref() {
+                    if c.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+                continue;
+            }
+            out.push(c);
+        }
+        out
     }
 
     #[test]

@@ -11,12 +11,21 @@
 //! With the `telemetry` Cargo feature off, [`profile_scope!`] expands to a
 //! no-op statement — zero cost in a build that disables it (e.g. release).
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
 /// Fixed capacity of each thread's sample ring (RFC-0013 **P1**).
 pub const RING_CAPACITY: usize = 4096;
+
+/// How many direct children of one scope
+/// [`SampleBlock::for_each_direct_child`] will report.
+///
+/// Bounded so the traversal stays allocation-free on what is a display path.
+/// The engine's whole scope set is six (RFC-0030 §I1); a scope with more than
+/// 32 *direct* children is a loop that should have been one scope, not a
+/// reading anybody is going to sit and read.
+pub const MAX_DIRECT_CHILDREN: usize = 32;
 
 /// A compile-time-interned scope identifier.
 ///
@@ -129,20 +138,31 @@ pub fn now_ns() -> u64 {
     epoch().elapsed().as_nanos() as u64
 }
 
-/// One CPU scope timing: a scope identifier and its start/end timestamps in
-/// nanoseconds since the telemetry [`epoch`].
+/// One CPU scope timing: a scope identifier, its nesting depth, and its
+/// start/end timestamps in nanoseconds since the telemetry [`epoch`].
 ///
 /// `#[repr(C)]` with explicit padding fields (no implicit tail/interior
 /// padding) so the type is a clean `bytemuck::Pod` — required to pack a flat
 /// byte block that can cross the frame swap as `Send` data (RFC-0013
 /// "Hand-off").
+///
+/// `depth` (RFC-0030 §I2) occupies the low byte of what used to be a `u16`
+/// of explicit padding, so [`size_of::<Sample>()`](std::mem::size_of) is
+/// unchanged and the block still crosses the frame boundary as plain data.
+/// It is what makes a *correct* frame total possible: without it, summing a
+/// nested scope set double-counts every child inside its parent and reports
+/// an 8 ms total for a 4 ms frame.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Sample {
     /// Which scope this sample belongs to.
     pub scope: ScopeId,
+    /// How deeply this scope was nested inside other scopes on the same
+    /// thread when it was entered: `0` for a top-level scope, `1` for a
+    /// scope opened inside one, and so on. Read it via [`Sample::depth`].
+    depth: u8,
     /// Explicit padding to keep the layout free of compiler-inserted gaps.
-    _reserved_a: u16,
+    _reserved_a: u8,
     /// Explicit padding to align `start`/`end` on an 8-byte boundary.
     _reserved_b: u32,
     /// Scope entry time, nanoseconds since the telemetry epoch.
@@ -151,7 +171,32 @@ pub struct Sample {
     pub end: u64,
 }
 
+/// `depth` must cost nothing: it lives in padding that was already reserved,
+/// so the frame-boundary contract (RFC-0001 §5: only `Send` PODs cross) and
+/// every existing byte-level consumer are unaffected.
+const _: () = assert!(
+    std::mem::size_of::<Sample>() == 24,
+    "Sample must stay 24 bytes — `depth` lives in existing padding, not in a new word"
+);
+
 impl Sample {
+    /// Builds a CPU sample at an explicit nesting `depth`.
+    ///
+    /// [`Guard`] is the normal producer (it maintains `depth` itself); this
+    /// exists for consumers that reconstruct a block from an external source
+    /// — a trace importer, a test — without going through the ring.
+    #[must_use]
+    pub const fn cpu(scope: ScopeId, depth: u8, start: u64, end: u64) -> Self {
+        Self {
+            scope,
+            depth,
+            _reserved_a: 0,
+            _reserved_b: 0,
+            start,
+            end,
+        }
+    }
+
     /// Builds a `Gpu`-tagged sample from an already-resolved pass duration
     /// (RFC-0013 "GPU timing") rather than two wall-clock timestamps: GPU
     /// passes are timed by the device's own timestamp queries, resolved
@@ -159,21 +204,29 @@ impl Sample {
     /// By convention `start` is `0` and `end` is the duration itself, so
     /// `end - start` (the quantity every consumer actually wants) is still
     /// the pass duration in nanoseconds.
+    ///
+    /// `depth` is set to `0` explicitly rather than left to the default
+    /// (RFC-0030 §Q6): a GPU pass resolves two frames later on a different
+    /// timeline and does not nest inside any CPU scope, so the value is
+    /// intentional at the construction site rather than incidental.
     #[must_use]
-    pub fn gpu_duration(scope: ScopeId, duration_ns: u64) -> Self {
-        Self {
-            scope,
-            _reserved_a: 0,
-            _reserved_b: 0,
-            start: 0,
-            end: duration_ns,
-        }
+    pub const fn gpu_duration(scope: ScopeId, duration_ns: u64) -> Self {
+        Self::cpu(scope, 0, 0, duration_ns)
     }
 
-    /// This sample's duration (`end - start`) in nanoseconds.
+    /// This sample's *inclusive* duration (`end - start`) in nanoseconds —
+    /// its own work plus everything nested inside it. See
+    /// [`SampleBlock::self_ns`] for the exclusive counterpart.
     #[must_use]
-    pub fn duration_ns(&self) -> u64 {
+    pub const fn duration_ns(&self) -> u64 {
         self.end.saturating_sub(self.start)
+    }
+
+    /// This sample's nesting depth: `0` for a top-level scope, `1` for a
+    /// scope opened inside one, and so on (RFC-0030 §I2).
+    #[must_use]
+    pub const fn depth(&self) -> u8 {
+        self.depth
     }
 }
 
@@ -192,8 +245,14 @@ pub struct SampleBlock {
 }
 
 impl SampleBlock {
-    /// Sums the duration of every sample whose scope is tagged `kind`
-    /// (RFC-0013 "the interpreter tax segmentation").
+    /// Sums the *inclusive* duration of every sample whose scope is tagged
+    /// `kind` (RFC-0013 "the interpreter tax segmentation").
+    ///
+    /// Inclusive means nested scopes are counted inside their parent, so this
+    /// double-counts across a nesting boundary. It is the right measure for a
+    /// disjoint bucket (`Gpu` passes never nest — RFC-0030 §Q6) and the wrong
+    /// one for `Interpreter`, which contains `Native` layout work; use
+    /// [`Self::sum_self_by_kind`] there. [`Self::interpreter_tax_ns`] does.
     #[must_use]
     pub fn sum_by_kind(&self, kind: ScopeKind) -> u64 {
         // Locks the registry once for the whole sum rather than once per
@@ -213,12 +272,138 @@ impl SampleBlock {
             .sum()
     }
 
+    /// The *self*-time of the sample at `index`: its inclusive duration minus
+    /// the inclusive duration of its direct children (RFC-0030 §I2b).
+    ///
+    /// Direct children are recoverable from the flat block without building a
+    /// tree, because samples are pushed in `Drop` order: a child always
+    /// precedes its parent, and the run immediately before a sample at depth
+    /// `d` — up to the first sample at depth `≤ d` — is exactly that sample's
+    /// subtree. Scanning it backwards and taking only the `d + 1` entries
+    /// yields the direct children; deeper entries are grandchildren, already
+    /// counted inside a child. One reverse linear pass, no allocation.
+    ///
+    /// Returns `0` for an out-of-range `index`.
+    #[must_use]
+    pub fn self_ns(&self, index: usize) -> u64 {
+        let Some(sample) = self.samples.get(index) else {
+            return 0;
+        };
+        let mut children_ns: u64 = 0;
+        self.for_each_direct_child(index, |_, child| {
+            children_ns = children_ns.saturating_add(child.duration_ns());
+        });
+        sample.duration_ns().saturating_sub(children_ns)
+    }
+
+    /// Calls `f(child_index, child)` for each direct child of the sample at
+    /// `index`, in **chronological** (entry) order.
+    ///
+    /// See [`Self::self_ns`] for why one reverse scan is enough to recover
+    /// them; this collects the indices into a small stack buffer and replays
+    /// them forwards, so a consumer that renders a tree gets parents before
+    /// children without the block ever being reordered or copied. A scope with
+    /// more direct children than the buffer holds reports the first
+    /// [`MAX_DIRECT_CHILDREN`] of them — enough for any scope set a human
+    /// reads, and a bounded, allocation-free failure mode rather than a
+    /// growing `Vec` on a display path.
+    pub fn for_each_direct_child(&self, index: usize, mut f: impl FnMut(usize, &Sample)) {
+        let Some(sample) = self.samples.get(index) else {
+            return;
+        };
+        let depth = sample.depth();
+        // A saturated depth cannot have distinguishable children: `Guard`
+        // clamps at `u8::MAX`, so everything below it was recorded at the same
+        // value and is indistinguishable from a sibling. Bail rather than
+        // guess — over-attributing here would make `self_ns` negative-ish
+        // (clamped to zero) and silently hide a runaway recursion.
+        if depth == u8::MAX {
+            return;
+        }
+        let mut found = [0usize; MAX_DIRECT_CHILDREN];
+        let mut count = 0;
+        for (i, prev) in self.samples[..index].iter().enumerate().rev() {
+            if prev.depth() <= depth {
+                break;
+            }
+            if prev.depth() == depth + 1 {
+                if count == MAX_DIRECT_CHILDREN {
+                    break;
+                }
+                found[count] = i;
+                count += 1;
+            }
+        }
+        // `found` is newest-first; replay it oldest-first.
+        for &i in found[..count].iter().rev() {
+            f(i, &self.samples[i]);
+        }
+    }
+
+    /// Calls `f(index, sample)` for each **top-level** (depth-0) sample, in
+    /// entry order — the roots of the block's scope forest.
+    pub fn for_each_root(&self, mut f: impl FnMut(usize, &Sample)) {
+        for (i, sample) in self.samples.iter().enumerate() {
+            if sample.depth() == 0 {
+                f(i, sample);
+            }
+        }
+    }
+
+    /// Sums the [self-time](Self::self_ns) of every sample tagged `kind`.
+    ///
+    /// Unlike [`Self::sum_by_kind`] this is safe across nesting boundaries:
+    /// each nanosecond of the tick is attributed to exactly one scope, so
+    /// summing every kind reproduces [`Self::total_ns`] rather than exceeding
+    /// it.
+    #[must_use]
+    pub fn sum_self_by_kind(&self, kind: ScopeKind) -> u64 {
+        let names = registry()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        (0..self.samples.len())
+            .filter(|&i| {
+                names
+                    .get(usize::from(self.samples[i].scope.0))
+                    .is_some_and(|e| e.kind == kind)
+            })
+            .map(|i| self.self_ns(i))
+            .sum()
+    }
+
+    /// The block's total wall-clock cost: the sum of the *inclusive*
+    /// durations of its **depth-0** samples only.
+    ///
+    /// Summing every sample instead would count a nested scope twice — once
+    /// on its own row and once inside its parent — and report a total larger
+    /// than the frame it measures. A profiler that overstates the frame it
+    /// measures destroys the credibility of every other number the project
+    /// publishes (RFC-0030 §I2), so this is the accessor consumers should
+    /// reach for.
+    #[must_use]
+    pub fn total_ns(&self) -> u64 {
+        self.samples
+            .iter()
+            .filter(|s| s.depth() == 0)
+            .map(Sample::duration_ns)
+            .sum()
+    }
+
     /// The total `Interpreter`-tagged time this tick — the tax an AOT release
     /// build does not pay. Overlay/CLI consumers sum this bucket separately
     /// from the rest of `frame.total` (RFC-0013 "the honest number").
+    ///
+    /// This is **self**-time, not inclusive time (RFC-0030 §I2b). The
+    /// distinction is load-bearing rather than pedantic: `layout.taffy` is
+    /// `Native` and nests strictly inside `interp.render`, which is
+    /// `Interpreter`, so an inclusive sum bills Taffy to the interpreter —
+    /// and an AOT build still pays for layout in full. [`project_aot`] would
+    /// then return an estimate optimistic by the entire cost of layout, and
+    /// would push the RFC-0014 JIT decision towards "the interpreter is the
+    /// problem", which is the expensive direction to be wrong in.
     #[must_use]
     pub fn interpreter_tax_ns(&self) -> u64 {
-        self.sum_by_kind(ScopeKind::Interpreter)
+        self.sum_self_by_kind(ScopeKind::Interpreter)
     }
 }
 
@@ -372,19 +557,51 @@ pub fn project_aot(total_ns: u64, interpreter_ns: u64, calibration: &Calibration
     }
 }
 
+thread_local! {
+    /// How many [`Guard`]s are currently live on this thread — the depth the
+    /// *next* one records. Maintained by `Guard::new`/`Guard::drop` only.
+    static DEPTH: Cell<u8> = const { Cell::new(0) };
+}
+
+/// The nesting depth the next scope entered on this thread would record.
+///
+/// Exposed for tests and for consumers that construct samples by hand; the
+/// profiler maintains it internally and no hot path needs to read it.
+#[must_use]
+pub fn current_depth() -> u8 {
+    DEPTH.with(Cell::get)
+}
+
 /// RAII guard produced by [`profile_scope!`]; writes one [`Sample`] to the
 /// calling thread's ring when dropped.
+///
+/// The guard also maintains the thread's nesting depth (RFC-0030 §I2). It
+/// *restores* the entry value on drop rather than decrementing a counter, so
+/// an unbalanced sequence — a guard leaked with `mem::forget`, an unwind
+/// across a scope — cannot leave the depth permanently skewed: the next outer
+/// guard to drop resets it to a known-correct value.
 pub struct Guard {
     scope: ScopeId,
+    depth: u8,
     start: u64,
 }
 
 impl Guard {
-    /// Starts timing `scope` now.
+    /// Starts timing `scope` now, at the calling thread's current nesting
+    /// depth.
     #[must_use]
     pub fn new(scope: ScopeId) -> Self {
+        let depth = DEPTH.with(|d| {
+            let entry = d.get();
+            // Saturating rather than wrapping: a runaway recursion must not
+            // make a depth-256 scope look like a top-level one and get summed
+            // into the frame total a second time.
+            d.set(entry.saturating_add(1));
+            entry
+        });
         Self {
             scope,
+            depth,
             start: now_ns(),
         }
     }
@@ -392,13 +609,8 @@ impl Guard {
 
 impl Drop for Guard {
     fn drop(&mut self) {
-        push_sample(Sample {
-            scope: self.scope,
-            _reserved_a: 0,
-            _reserved_b: 0,
-            start: self.start,
-            end: now_ns(),
-        });
+        DEPTH.with(|d| d.set(self.depth));
+        push_sample(Sample::cpu(self.scope, self.depth, self.start, now_ns()));
     }
 }
 
@@ -412,23 +624,41 @@ impl Drop for Guard {
 /// }
 /// ```
 ///
-/// Expands to a no-op when the `telemetry` feature is off — zero cost in a
-/// build that disables it.
+/// Expands to a no-op when `byard-core`'s `telemetry` feature is off — zero
+/// cost in a build that disables it. The feature is resolved **here**, at the
+/// definition site, by selecting between two macro definitions: a
+/// `#[cfg(feature = "telemetry")]` inside the expansion would be evaluated
+/// against the *calling* crate's feature set instead, so the macro would
+/// silently compile to nothing in every crate but this one.
+#[cfg(feature = "telemetry")]
 #[macro_export]
 macro_rules! profile_scope {
     ($name:expr) => {
         $crate::profile_scope!($name, $crate::telemetry::ScopeKind::Native);
     };
     ($name:expr, $kind:expr) => {
-        #[cfg(feature = "telemetry")]
         let _guard = {
             static SCOPE: ::std::sync::OnceLock<$crate::telemetry::ScopeId> =
                 ::std::sync::OnceLock::new();
             let id = *SCOPE.get_or_init(|| $crate::telemetry::scope_id_tagged($name, $kind));
             $crate::telemetry::Guard::new(id)
         };
-        #[cfg(not(feature = "telemetry"))]
-        let _ = ();
+    };
+}
+
+/// The `telemetry`-off definition: the scope name and kind are still
+/// type-checked (so a stale scope cannot rot behind the feature gate), but
+/// nothing is evaluated and no guard is constructed.
+#[cfg(not(feature = "telemetry"))]
+#[macro_export]
+macro_rules! profile_scope {
+    ($name:expr) => {
+        $crate::profile_scope!($name, $crate::telemetry::ScopeKind::Native);
+    };
+    ($name:expr, $kind:expr) => {
+        if false {
+            let _: (&'static str, $crate::telemetry::ScopeKind) = ($name, $kind);
+        }
     };
 }
 
@@ -441,13 +671,7 @@ mod tests {
         // Isolate from other tests sharing the same thread-local ring by
         // draining first.
         let _ = drain_samples();
-        push_sample(Sample {
-            scope: ScopeId(1),
-            _reserved_a: 0,
-            _reserved_b: 0,
-            start: 1,
-            end: 2,
-        });
+        push_sample(Sample::cpu(ScopeId(1), 0, 1, 2));
         assert_eq!(ring_len(), 1);
         let block = drain_samples();
         assert_eq!(block.samples.len(), 1);
@@ -459,25 +683,13 @@ mod tests {
         let _ = drain_samples();
         for i in 0..RING_CAPACITY {
             #[allow(clippy::cast_possible_truncation)]
-            push_sample(Sample {
-                scope: ScopeId(0),
-                _reserved_a: 0,
-                _reserved_b: 0,
-                start: i as u64,
-                end: i as u64,
-            });
+            push_sample(Sample::cpu(ScopeId(0), 0, i as u64, i as u64));
         }
         assert_eq!(ring_len(), RING_CAPACITY);
         assert_eq!(ring_dropped(), 0);
 
         // One more push once full: dropped, not overwriting slot 0.
-        push_sample(Sample {
-            scope: ScopeId(99),
-            _reserved_a: 0,
-            _reserved_b: 0,
-            start: 999,
-            end: 999,
-        });
+        push_sample(Sample::cpu(ScopeId(99), 0, 999, 999));
         assert_eq!(
             ring_len(),
             RING_CAPACITY,
@@ -565,28 +777,10 @@ mod tests {
         let gpu = scope_id_tagged("telemetry.test.tax.gpu", ScopeKind::Gpu);
         let block = SampleBlock {
             samples: vec![
-                Sample {
-                    scope: interp,
-                    _reserved_a: 0,
-                    _reserved_b: 0,
-                    start: 0,
-                    end: 100,
-                },
-                Sample {
-                    scope: native,
-                    _reserved_a: 0,
-                    _reserved_b: 0,
-                    start: 0,
-                    end: 50,
-                },
+                Sample::cpu(interp, 0, 0, 100),
+                Sample::cpu(native, 0, 0, 50),
                 Sample::gpu_duration(gpu, 30),
-                Sample {
-                    scope: interp,
-                    _reserved_a: 0,
-                    _reserved_b: 0,
-                    start: 100,
-                    end: 175,
-                },
+                Sample::cpu(interp, 0, 100, 175),
             ],
             dropped: 0,
         };
@@ -647,18 +841,223 @@ mod tests {
         assert_send::<SampleBlock>();
         assert_send::<Sample>();
 
-        let sample = Sample {
-            scope: ScopeId(3),
-            _reserved_a: 0,
-            _reserved_b: 0,
-            start: 10,
-            end: 20,
-        };
+        let sample = Sample::cpu(ScopeId(3), 0, 10, 20);
         // Round-trips as raw bytes, as it will across the frame swap.
         let bytes: &[u8] = bytemuck::bytes_of(&sample);
         let back: Sample = bytemuck::pod_read_unaligned(bytes);
         assert_eq!(back, sample);
         assert_eq!(std::mem::size_of::<Sample>(), 24, "no implicit padding");
+    }
+
+    // ── Nesting depth and self-time (RFC-0030 §I2 / §I2b) ──────────────────
+
+    /// Builds a block from `(name, kind, depth, duration_ns)` rows given in
+    /// push (i.e. `Drop`) order, so a child always precedes its parent — the
+    /// exact shape the ring produces.
+    fn block(rows: &[(&'static str, ScopeKind, u8, u64)]) -> SampleBlock {
+        SampleBlock {
+            samples: rows
+                .iter()
+                .map(|&(name, kind, depth, dur)| {
+                    Sample::cpu(scope_id_tagged(name, kind), depth, 0, dur)
+                })
+                .collect(),
+            dropped: 0,
+        }
+    }
+
+    #[test]
+    fn a_nested_guard_records_one_deeper_than_its_parent() {
+        let _ = drain_samples();
+        {
+            crate::profile_scope!("telemetry.test.depth.outer");
+            assert_eq!(current_depth(), 1, "one guard is live");
+            {
+                crate::profile_scope!("telemetry.test.depth.inner");
+                assert_eq!(current_depth(), 2, "two guards are live");
+            }
+            assert_eq!(current_depth(), 1, "the inner guard restored the depth");
+        }
+        assert_eq!(current_depth(), 0, "the outer guard restored the depth");
+
+        let block = drain_samples();
+        assert_eq!(block.samples.len(), 2);
+        // Drop order: the inner guard drops first, so it is pushed first.
+        assert_eq!(block.samples[0].depth(), 1);
+        assert_eq!(block.samples[1].depth(), 0);
+        assert_eq!(
+            scope_name(block.samples[0].scope),
+            Some("telemetry.test.depth.inner")
+        );
+    }
+
+    #[test]
+    fn self_time_subtracts_direct_children_and_the_block_total_is_the_parent() {
+        // A 10 ms parent containing a 4 ms child: parent inclusive 10 ms,
+        // parent self 6 ms, block total 10 ms — never 14 ms.
+        let b = block(&[
+            ("telemetry.test.self.child", ScopeKind::Native, 1, 4_000_000),
+            (
+                "telemetry.test.self.parent",
+                ScopeKind::Native,
+                0,
+                10_000_000,
+            ),
+        ]);
+        assert_eq!(b.samples[1].duration_ns(), 10_000_000, "inclusive");
+        assert_eq!(b.self_ns(1), 6_000_000, "self");
+        assert_eq!(b.self_ns(0), 4_000_000, "a leaf's self time is its own");
+        assert_eq!(b.total_ns(), 10_000_000, "the total is the frame, not 14ms");
+    }
+
+    #[test]
+    fn a_grandchild_is_counted_once_inside_its_own_parent() {
+        // P(0) ⊃ { A(1) ⊃ A1(2), B(1) }. Push order is A1, A, B, P.
+        let b = block(&[
+            ("telemetry.test.gc.a1", ScopeKind::Native, 2, 1_000_000),
+            ("telemetry.test.gc.a", ScopeKind::Native, 1, 3_000_000),
+            ("telemetry.test.gc.b", ScopeKind::Native, 1, 2_000_000),
+            ("telemetry.test.gc.p", ScopeKind::Native, 0, 10_000_000),
+        ]);
+        assert_eq!(b.self_ns(0), 1_000_000, "A1 is a leaf");
+        assert_eq!(b.self_ns(1), 2_000_000, "A minus A1");
+        assert_eq!(b.self_ns(2), 2_000_000, "B is a leaf");
+        assert_eq!(b.self_ns(3), 5_000_000, "P minus A and B, not minus A1");
+        // Every nanosecond is attributed exactly once.
+        let total_self: u64 = (0..b.samples.len()).map(|i| b.self_ns(i)).sum();
+        assert_eq!(total_self, b.total_ns());
+    }
+
+    #[test]
+    fn a_preceding_sibling_subtree_is_not_mistaken_for_a_child() {
+        // Two independent depth-0 scopes, the first with a child. The second
+        // must not absorb the first one's subtree.
+        let b = block(&[
+            ("telemetry.test.sib.child", ScopeKind::Native, 1, 4_000_000),
+            ("telemetry.test.sib.first", ScopeKind::Native, 0, 6_000_000),
+            ("telemetry.test.sib.second", ScopeKind::Native, 0, 3_000_000),
+        ]);
+        assert_eq!(b.self_ns(1), 2_000_000);
+        assert_eq!(b.self_ns(2), 3_000_000, "no children to subtract");
+        assert_eq!(b.total_ns(), 9_000_000);
+    }
+
+    #[test]
+    fn the_interpreter_tax_excludes_a_native_child_of_an_interpreter_parent() {
+        // The RFC-0030 §I2b case: `layout.taffy` is Native and nests inside
+        // `interp.render`, which is Interpreter. An AOT build still pays for
+        // Taffy, so the tax must be 10ms − 4ms.
+        let b = block(&[
+            (
+                "telemetry.test.taxnest.layout",
+                ScopeKind::Native,
+                1,
+                4_000_000,
+            ),
+            (
+                "telemetry.test.taxnest.render",
+                ScopeKind::Interpreter,
+                0,
+                10_000_000,
+            ),
+        ]);
+        assert_eq!(b.interpreter_tax_ns(), 6_000_000);
+        assert_eq!(
+            b.sum_by_kind(ScopeKind::Interpreter),
+            10_000_000,
+            "the inclusive accessor still reports inclusive time"
+        );
+        assert_eq!(b.sum_self_by_kind(ScopeKind::Native), 4_000_000);
+    }
+
+    #[test]
+    fn an_interpreter_child_of_an_interpreter_parent_is_still_fully_taxed() {
+        // `interp.tick` re-pulled inside `interp.render`: both are interpreter
+        // work, so splitting them between self and inclusive must not lose
+        // any of it.
+        let b = block(&[
+            (
+                "telemetry.test.taxsame.tick",
+                ScopeKind::Interpreter,
+                1,
+                4_000_000,
+            ),
+            (
+                "telemetry.test.taxsame.render",
+                ScopeKind::Interpreter,
+                0,
+                10_000_000,
+            ),
+        ]);
+        assert_eq!(b.interpreter_tax_ns(), 10_000_000);
+    }
+
+    #[test]
+    fn gpu_samples_are_depth_zero_and_unaffected_by_the_cpu_nesting() {
+        let gpu = scope_id_tagged("telemetry.test.depth.gpu", ScopeKind::Gpu);
+        let sample = Sample::gpu_duration(gpu, 700_000);
+        assert_eq!(sample.depth(), 0, "RFC-0030 Q6: set explicitly, not left");
+        let b = SampleBlock {
+            samples: vec![sample],
+            dropped: 0,
+        };
+        assert_eq!(b.self_ns(0), 700_000);
+        assert_eq!(b.sum_by_kind(ScopeKind::Gpu), 700_000);
+    }
+
+    #[test]
+    fn direct_children_are_replayed_in_entry_order_not_drop_order() {
+        // P(0) ⊃ { A(1) ⊃ A1(2), B(1) }, stored A1, A, B, P. A consumer
+        // rendering a tree needs A before B (they were entered in that order)
+        // even though the block holds them the other way round relative to
+        // their parent.
+        let b = block(&[
+            ("telemetry.test.order.a1", ScopeKind::Native, 2, 1_000_000),
+            ("telemetry.test.order.a", ScopeKind::Native, 1, 3_000_000),
+            ("telemetry.test.order.b", ScopeKind::Native, 1, 2_000_000),
+            ("telemetry.test.order.p", ScopeKind::Native, 0, 10_000_000),
+        ]);
+        let mut seen = Vec::new();
+        b.for_each_direct_child(3, |i, s| seen.push((i, scope_name(s.scope).unwrap())));
+        assert_eq!(
+            seen,
+            vec![(1, "telemetry.test.order.a"), (2, "telemetry.test.order.b")],
+            "direct children only, in entry order"
+        );
+
+        let mut grandchildren = Vec::new();
+        b.for_each_direct_child(1, |i, _| grandchildren.push(i));
+        assert_eq!(grandchildren, vec![0], "A's only child is A1");
+
+        let mut roots = Vec::new();
+        b.for_each_root(|i, _| roots.push(i));
+        assert_eq!(roots, vec![3]);
+    }
+
+    #[test]
+    fn a_leaf_reports_no_children() {
+        let b = block(&[("telemetry.test.leaf.only", ScopeKind::Native, 0, 1_000)]);
+        let mut any = false;
+        b.for_each_direct_child(0, |_, _| any = true);
+        assert!(!any);
+    }
+
+    #[test]
+    fn self_ns_is_zero_for_an_index_past_the_end() {
+        assert_eq!(SampleBlock::default().self_ns(7), 0);
+    }
+
+    #[test]
+    fn a_dropped_parent_never_makes_a_child_negative() {
+        // Ring overflow can leave a child whose parent was dropped, or a
+        // parent whose measured span is shorter than the children attributed
+        // to it (clock granularity at sub-microsecond scopes). Saturating
+        // subtraction must clamp at zero rather than wrap to ~18 exaseconds.
+        let b = block(&[
+            ("telemetry.test.sat.child", ScopeKind::Native, 1, 9_000_000),
+            ("telemetry.test.sat.parent", ScopeKind::Native, 0, 1_000_000),
+        ]);
+        assert_eq!(b.self_ns(1), 0);
     }
 
     // ── Allocation-free push (RFC-0013 P1: "no allocation in push") ────────

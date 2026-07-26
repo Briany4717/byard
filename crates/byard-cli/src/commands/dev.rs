@@ -97,7 +97,7 @@ pub fn run(file: Option<&Path>, deep_link: Option<&str>) -> Result<(), String> {
         initial_errors,
         initial_theme: manifest.theme.clone(),
         deep_link: deep_link.map(str::to_string),
-        last_gpu_telemetry: byard_core::telemetry::SampleBlock::default(),
+        last_render_telemetry: byard_core::telemetry::SampleBlock::default(),
         last_telemetry_print: std::time::Instant::now(),
     })
     .map_err(|e| format!("event loop error: {e}"))
@@ -469,32 +469,33 @@ struct App {
     /// A `--deep-link <url>` handed in at startup (RFC-0026): delivered to the
     /// interpreter once the tree is lowered, exactly as an OS intent would be.
     deep_link: Option<String>,
-    /// This (render/main) thread's GPU telemetry ring, drained on **every**
-    /// redraw — not just when about to print — so it only ever holds
-    /// samples produced since the *previous redraw*. `byard dev`'s Poll-mode
-    /// loop redraws far more often than once a second; draining only at
-    /// print time would let a whole second's worth of `gpu.ui_pass` samples
-    /// pile up into one inflated, unreadable dump (RFC-0013's overlay is
-    /// meant to be a per-frame snapshot, not an accumulator).
-    last_gpu_telemetry: byard_core::telemetry::SampleBlock,
+    /// This (render/main) thread's telemetry ring — its own `encode.frame`
+    /// scope (RFC-0030 §I1) plus the asynchronously-resolved `gpu.*` pass
+    /// samples — drained on **every** redraw, not just when about to print,
+    /// so it only ever holds samples produced since the *previous redraw*.
+    /// `byard dev`'s Poll-mode loop redraws far more often than once a
+    /// second; draining only at print time would let a whole second's worth
+    /// of samples pile up into one inflated, unreadable dump (RFC-0013's
+    /// overlay is meant to be a per-frame snapshot, not an accumulator).
+    last_render_telemetry: byard_core::telemetry::SampleBlock,
     /// Last time the telemetry overlay was printed (RFC-0013 "Overlay
     /// format"), throttled to roughly once a second so `byard dev` doesn't
     /// spam a line for every redraw. Printing is throttled; draining
-    /// `last_gpu_telemetry` (above) is not.
+    /// `last_render_telemetry` (above) is not.
     last_telemetry_print: std::time::Instant,
 }
 
 impl App {
-    /// Prints the flat telemetry overlay (RFC-0013 "Overlay format") to
-    /// stderr, throttled to roughly once a second. Combines the last
-    /// published frame's CPU samples (drained on the logic thread at publish
-    /// time) with `gpu`, this thread's most recent single-redraw GPU
-    /// samples — see `telemetry_overlay`'s module docs for why the two live
-    /// on separate rings, and [`App::last_gpu_telemetry`]'s doc comment for
-    /// why `gpu` must be drained every redraw rather than only here.
+    /// Prints the per-scope telemetry overlay (RFC-0013 "Overlay format",
+    /// RFC-0030 §I2) to stderr, throttled to roughly once a second. Combines
+    /// the last published frame's CPU samples (drained on the logic thread at
+    /// publish time) with `render`, this thread's most recent single-redraw
+    /// ring — see `telemetry_overlay`'s module docs for why the two live on
+    /// separate rings, and [`App::last_render_telemetry`]'s doc comment for
+    /// why `render` must be drained every redraw rather than only here.
     fn print_telemetry_overlay(
         engine: &Engine,
-        gpu: &byard_core::telemetry::SampleBlock,
+        render: &byard_core::telemetry::SampleBlock,
         last_print: &mut std::time::Instant,
     ) {
         if last_print.elapsed() < std::time::Duration::from_secs(1) {
@@ -504,7 +505,7 @@ impl App {
         let cpu = engine.latest_cpu_telemetry().unwrap_or_default();
         let overlay = crate::telemetry_overlay::format_telemetry_overlay(
             &cpu,
-            gpu,
+            render,
             engine.gpu_timing_available(),
         );
         eprint!("{overlay}");
@@ -659,12 +660,12 @@ impl PlatformHost for App {
     fn on_redraw(&mut self) -> Result<(), ByardError> {
         if let Some(e) = self.engine.as_mut() {
             e.render_latest()?;
-            // Drained every redraw (see `last_gpu_telemetry`'s doc comment),
+            // Drained every redraw (see `last_render_telemetry`'s doc comment),
             // independent of the print throttle below.
-            self.last_gpu_telemetry = byard_core::telemetry::drain_samples();
+            self.last_render_telemetry = byard_core::telemetry::drain_samples();
             App::print_telemetry_overlay(
                 e,
-                &self.last_gpu_telemetry,
+                &self.last_render_telemetry,
                 &mut self.last_telemetry_print,
             );
         }

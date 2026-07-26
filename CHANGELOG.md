@@ -12,6 +12,43 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Real frame instrumentation (RFC-0030 §I1–§I3).** RFC-0013's zero-allocation
+  profiler shipped complete and then went unused: `profile_scope!` had exactly
+  one call site in the whole engine, and it was inside a `#[cfg(test)]` block,
+  so `byard dev`'s telemetry block printed a header and a GPU row and nothing
+  else. Six scopes now cover a frame end to end, each declared inside the
+  subsystem it measures so no dependency edge moves:
+  `interp.dispatch_events`, `interp.tick`, `interp.render` (`Interpreter`),
+  `layout.taffy`, `encode.frame`, `relay.publish` (`Native`).
+
+  - **`Sample` carries a nesting `depth`**, maintained by the RAII guard in the
+    low byte of padding the type already reserved — `size_of::<Sample>()` is
+    unchanged, so the block still crosses the frame boundary as plain `Pod`
+    data (RFC-0001 §5). The guard *restores* the entry depth on drop rather
+    than decrementing, so a leaked or unwound-through scope cannot skew the
+    counter permanently. GPU samples set depth `0` explicitly: a pass resolves
+    two frames later on a different timeline and does not nest in a CPU scope.
+  - **New `SampleBlock` accessors:** `total_ns` (depth-0 inclusive — the frame),
+    `self_ns` (inclusive minus direct children, recovered from the flat block in
+    one reverse pass with no allocation), `sum_self_by_kind`, and
+    `for_each_root`/`for_each_direct_child` for consumers rendering the scope
+    forest.
+  - **The `byard dev` block** now prints the scopes as an indented tree, parents
+    first, with self-time as each row's headline number and inclusive time
+    beside it where the two differ. `encode.frame` shares the render thread's
+    ring with the `gpu.*` rows but is ordinary CPU wall-clock, so it is listed
+    plainly, counted in the CPU total, and shown even where `TIMESTAMP_QUERY` is
+    unavailable. Durations moved to three decimals: at two, a scope costing a
+    few microseconds and a scope that had stopped being entered printed
+    identically.
+  - **Integration assertions** (`byard-core/tests/instrumentation.rs`,
+    `byard-compiler/tests/instrumentation.rs`) fail if production stops entering
+    a scope. A benchmark proves a path is fast, not that anyone walks it.
+  - **`byard-compiler` gains a `telemetry` feature** (default on) forwarding to
+    `byard-core`'s, so `--no-default-features` turns both off together.
+
+  Example: `crates/byard-cli/examples/profiling`.
+
 - **Navigation & routing (RFC-0026).** Two new intrinsics — `NavStack(path: navPath)`
   and `NavHost(active: tab)` — plus a `route "/detail/:id" {|params| … }` /
   `tab "home" { … }` sub-syntax, and the `navigate`/`back`/`replace` actions.
@@ -163,6 +200,24 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Example: `crates/byard-cli/examples/ripple`.
 
 ### Changed
+
+- **`SampleBlock::interpreter_tax_ns` is now self-time, not inclusive time
+  (RFC-0030 §I2b).** `layout.taffy` is `Native` and nests strictly inside
+  `interp.render`, which is `Interpreter`, so summing the interpreter bucket
+  inclusively billed Taffy to the interpreter — and an AOT build still pays for
+  layout in full. `project_aot`, which computes
+  `total − interpreter + interpreter × ratio`, therefore returned a projection
+  optimistic by the entire cost of layout, and would have pushed the RFC-0014
+  JIT decision towards "the interpreter is the problem". This is a behavioural
+  change to a public accessor; `sum_by_kind` is unchanged and still reports
+  inclusive time, which remains correct for the disjoint `Gpu` bucket. Nothing
+  could have observed the old value in practice, because nothing was
+  instrumented — the fix lands before the bug could ever have been read.
+- **`profile_scope!` now works outside `byard-core`.** The macro tested
+  `#[cfg(feature = "telemetry")]` inside its own expansion, which is evaluated
+  against the *calling* crate's feature set — so it silently compiled to nothing
+  in every crate but the one that defined it. The feature is now resolved at the
+  definition site by selecting between two macro definitions.
 
 - **Text now wraps to its parent's width by default (RFC-0005).** A `Text` with
   no explicit `width` reflows to the width its container offers — like a block of

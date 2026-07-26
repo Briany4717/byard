@@ -839,6 +839,12 @@ impl EncoderSubsystem {
         clips: FrameClips<'_>,
         layers: &[crate::frame::LayerMark],
     ) -> Result<wgpu::CommandBuffer, ByardError> {
+        // RFC-0030 §I1: the render thread's own frame cost — pipeline
+        // preparation, the scissor decision, glyph shaping and command
+        // encoding — as distinct from the GPU pass timings resolved
+        // asynchronously two frames later by `gpu_timer.rs`. Both land on
+        // this thread's ring; the overlay separates them by `ScopeKind`.
+        crate::profile_scope!("encode.frame");
         // RFC-0009 §2-C / INV-8: the single place this atlas is ever written
         // to. Applied unconditionally (not gated on `should_draw` below) so a
         // pending upload is never silently dropped on a skip-frame.

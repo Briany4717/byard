@@ -745,6 +745,8 @@ pub mod path_counters {
         static CLEARS: Cell<u64> = const { Cell::new(0) };
         static FULL_COMPUTES: Cell<u64> = const { Cell::new(0) };
         static RETAINED_RECOMPUTES: Cell<u64> = const { Cell::new(0) };
+        static RETAINED_ATTEMPTS: Cell<u64> = const { Cell::new(0) };
+        static RETAINED_ROLLBACKS: Cell<u64> = const { Cell::new(0) };
         static POPULATE_CALLS: Cell<u64> = const { Cell::new(0) };
         static POPULATE_DIRTY_TARGETS: Cell<u64> = const { Cell::new(0) };
         static POPULATE_DIRTY_MATCHED: Cell<u64> = const { Cell::new(0) };
@@ -760,6 +762,26 @@ pub mod path_counters {
         pub full_computes: u64,
         /// Retained layout passes (`recompute_dirty`).
         pub retained_recomputes: u64,
+        /// Retained builds **opened** (`begin_retained_build`) — i.e. frames the
+        /// caller's RFC-0032 §R4 whitelist judged eligible.
+        ///
+        /// This is what separates "the whitelist rejected this frame" from "the
+        /// whitelist let it through and the atlas rolled it back". The two are
+        /// indistinguishable in [`clears`](Self::clears) and
+        /// [`full_computes`](Self::full_computes), because a rollback ends in
+        /// exactly the same `clear` + full pass — so without this counter every
+        /// clause of the whitelist can be deleted with the suite still green,
+        /// while production quietly pays for a failed attempt before every
+        /// rebuild (INV-18).
+        pub retained_attempts: u64,
+        /// Retained builds opened and then **discarded** (`end_retained_build`
+        /// returned `false`).
+        ///
+        /// Correct — the default-deny verdict is what keeps a half-applied
+        /// build off the screen — and pure waste: the walk ran twice. In steady
+        /// state this must be `0`; a non-zero count means the whitelist and the
+        /// atlas disagree about what is retainable.
+        pub retained_rollbacks: u64,
         /// `populate_frame` calls.
         pub populate_calls: u64,
         /// Total `TargetId`s handed to `populate_frame` across those calls —
@@ -778,6 +800,8 @@ pub mod path_counters {
             clears: CLEARS.with(Cell::get),
             full_computes: FULL_COMPUTES.with(Cell::get),
             retained_recomputes: RETAINED_RECOMPUTES.with(Cell::get),
+            retained_attempts: RETAINED_ATTEMPTS.with(Cell::get),
+            retained_rollbacks: RETAINED_ROLLBACKS.with(Cell::get),
             populate_calls: POPULATE_CALLS.with(Cell::get),
             populate_dirty_targets: POPULATE_DIRTY_TARGETS.with(Cell::get),
             populate_dirty_matched: POPULATE_DIRTY_MATCHED.with(Cell::get),
@@ -790,6 +814,8 @@ pub mod path_counters {
         CLEARS.with(|c| c.set(0));
         FULL_COMPUTES.with(|c| c.set(0));
         RETAINED_RECOMPUTES.with(|c| c.set(0));
+        RETAINED_ATTEMPTS.with(|c| c.set(0));
+        RETAINED_ROLLBACKS.with(|c| c.set(0));
         POPULATE_CALLS.with(|c| c.set(0));
         POPULATE_DIRTY_TARGETS.with(|c| c.set(0));
         POPULATE_DIRTY_MATCHED.with(|c| c.set(0));
@@ -805,6 +831,26 @@ pub mod path_counters {
 
     pub(super) fn record_retained_recompute() {
         RETAINED_RECOMPUTES.with(|c| c.set(c.get() + 1));
+    }
+
+    /// Records a retained build the **caller** discarded after the atlas had
+    /// accepted it.
+    ///
+    /// [`LayoutAtlas::end_retained_build`](super::LayoutAtlas::end_retained_build)
+    /// counts its own `false` verdicts, but the caller layers its own checks on
+    /// top of that verdict (RFC-0032 §R4 keeps the redundant `flat_ids`
+    /// comparison deliberately). A discard for one of those reasons costs
+    /// exactly as much as the atlas's own and must not read as `0`.
+    pub fn note_retained_rollback() {
+        record_retained_rollback();
+    }
+
+    pub(super) fn record_retained_attempt() {
+        RETAINED_ATTEMPTS.with(|c| c.set(c.get() + 1));
+    }
+
+    pub(super) fn record_retained_rollback() {
+        RETAINED_ROLLBACKS.with(|c| c.set(c.get() + 1));
     }
 
     pub(super) fn record_populate(targets: usize, matched: usize) {
@@ -832,6 +878,10 @@ pub mod path_counters {
         /// Always `0` without the `telemetry` feature.
         pub retained_recomputes: u64,
         /// Always `0` without the `telemetry` feature.
+        pub retained_attempts: u64,
+        /// Always `0` without the `telemetry` feature.
+        pub retained_rollbacks: u64,
+        /// Always `0` without the `telemetry` feature.
         pub populate_calls: u64,
         /// Always `0` without the `telemetry` feature.
         pub populate_dirty_targets: u64,
@@ -846,6 +896,8 @@ pub mod path_counters {
             clears: 0,
             full_computes: 0,
             retained_recomputes: 0,
+            retained_attempts: 0,
+            retained_rollbacks: 0,
             populate_calls: 0,
             populate_dirty_targets: 0,
             populate_dirty_matched: 0,
@@ -855,9 +907,14 @@ pub mod path_counters {
     /// No-op without the `telemetry` feature.
     pub const fn reset() {}
 
+    /// No-op without the `telemetry` feature.
+    pub const fn note_retained_rollback() {}
+
     pub(super) const fn record_clear() {}
     pub(super) const fn record_full_compute() {}
     pub(super) const fn record_retained_recompute() {}
+    pub(super) const fn record_retained_attempt() {}
+    pub(super) const fn record_retained_rollback() {}
     pub(super) const fn record_populate(_targets: usize, _matched: usize) {}
 }
 
@@ -1046,6 +1103,7 @@ impl LayoutAtlas {
             "LayoutAtlas::begin_retained_build called on an empty atlas — \
              the full build path is the only correct one for the first frame"
         );
+        path_counters::record_retained_attempt();
         self.state = AtlasState::Building;
         self.root = None;
         self.children_scratch.clear();
@@ -1076,6 +1134,11 @@ impl LayoutAtlas {
             self.state = AtlasState::Computed;
             return true;
         }
+        // The verdict is correct and the walk was still wasted: the caller now
+        // has to clear and build the same tree a second time. Counted so a
+        // whitelist that has stopped rejecting what it should is visible as a
+        // number rather than as an unexplained frame cost.
+        path_counters::record_retained_rollback();
         false
     }
 

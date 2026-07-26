@@ -180,13 +180,35 @@ fn the_counters_do_not_fire_when_nothing_renders() {
 // that does not ship: "if any eligibility condition proves hard to test,
 // remove it from the whitelist rather than shipping it untested."
 
-/// Asserts that `frame_fn` produced a full rebuild rather than a retained pass.
+/// Asserts that `frame_fn` produced a full rebuild rather than a retained pass,
+/// and that the **whitelist** is what produced it.
+///
+/// The last assertion is the one with teeth, and it was missing. A frame the
+/// whitelist wrongly admits is not wrong on screen — `end_retained_build`
+/// refuses it and the caller clears and rebuilds — so it lands on exactly the
+/// same `clears: 1, full_computes: 1, retained_recomputes: 0` as a frame the
+/// whitelist rejected outright. Every §R4 clause could therefore be deleted
+/// with this file still green, while production walked the tree twice on every
+/// overlay toggle and every route change. `retained_attempts` is what tells the
+/// two apart (INV-18: the assertion must fail when production stops taking the
+/// cheaper path — here, the cheap *early-out*).
 fn assert_rebuilt(counts: &path_counters::Counts, why: &str) {
     assert_eq!(counts.clears, 1, "{why} must force a full rebuild");
     assert_eq!(counts.full_computes, 1, "{why} must run a full layout pass");
     assert_eq!(
         counts.retained_recomputes, 0,
         "{why} must not take the retained path"
+    );
+    assert_eq!(
+        counts.retained_attempts, 0,
+        "{why} must be rejected by the §R4 whitelist before the atlas is \
+         touched — this frame was admitted and then rolled back, which costs \
+         the whole build walk twice and is invisible in every other counter"
+    );
+    assert_eq!(
+        counts.retained_rollbacks, 0,
+        "{why} produced a rolled-back retained build rather than a clean \
+         rejection"
     );
 }
 
@@ -331,6 +353,75 @@ View Probe() {
     interp.write_var(sig, Value::Str("/detail".to_string()));
     let (_f, counts) = frame(&mut interp, &tree);
     assert_rebuilt(&counts, "a route push");
+}
+
+#[test]
+fn unmounting_an_overlay_forces_a_full_rebuild() {
+    // §R4 names "no overlay or route **mount/unmount**", and the two halves are
+    // not the same clause running twice. A mount adds nodes, so a length check
+    // catches it even if the overlay clause were missing; an unmount *removes*
+    // them, which is the direction where a surviving stale entry is a rect the
+    // spatial grid still answers from — a dismissed dialog that keeps eating
+    // taps over the screen behind it (INV-23's failure mode, and invisible in a
+    // screenshot).
+    const OVERLAY_SRC: &str = r"
+View Probe() {
+    var open = true
+    Column #[width: 400, height: 300] {
+        Box #[width: 100, height: 40, bg: 0x0000FF] {}
+        when open {
+            Overlay #[modal: true] {
+                Box #[width: 80, height: 80, bg: 0xFF0000] {}
+            }
+        }
+    }
+}
+";
+    let (mut interp, tree) = build_from(OVERLAY_SRC);
+    let _warmup = frame(&mut interp, &tree);
+    let _settle = frame(&mut interp, &tree);
+
+    // `open` starts *true*, so this flip is the dismissal.
+    flip_bool(&mut interp, "open");
+    let (_f, counts) = frame(&mut interp, &tree);
+    assert_rebuilt(&counts, "dismissing an overlay");
+}
+
+#[test]
+fn a_route_pop_forces_a_full_rebuild() {
+    // The other half of §R4's "mount/unmount" clause, on the navigation pool.
+    // A pop is the case that cannot be caught by a `flat_ids` length check
+    // alone: RFC-0026 keeps the popped screen's subtree alive underneath for
+    // state preservation, so the walk can come back the same length as a frame
+    // that changed nothing.
+    const NAV_SRC: &str = r#"
+View Probe() {
+    var path = "/"
+    NavStack(path: path) #[width: 400, height: 300] {
+        route "/" {
+            Box #[width: 100, height: 40, bg: 0x0000FF] {}
+        }
+        route "/detail" {
+            Box #[width: 100, height: 40, bg: 0xFF0000] {}
+        }
+    }
+}
+"#;
+    let (mut interp, tree) = build_from(NAV_SRC);
+    let sig = interp
+        .var_signal(&Symbol::intern("path"))
+        .expect("`path` is declared");
+
+    // Push, and let the transition settle, so the frame under test is a pop and
+    // nothing else.
+    interp.write_var(sig, Value::Str("/detail".to_string()));
+    for _ in 0..32 {
+        let _pushing = frame(&mut interp, &tree);
+    }
+
+    interp.write_var(sig, Value::Str("/".to_string()));
+    let (_f, counts) = frame(&mut interp, &tree);
+    assert_rebuilt(&counts, "a route pop");
 }
 
 // ── 3. Wrapping text still wraps across a retained frame (RFC-0032 §R5) ────

@@ -59,6 +59,7 @@ pub fn format_telemetry_overlay(
     cpu: &SampleBlock,
     render: &SampleBlock,
     gpu_available: bool,
+    atlas: byard_core::atlas::layout::path_counters::Counts,
 ) -> String {
     // Depth-0 inclusive on each CPU ring; `Gpu` samples are a separate
     // timeline (they resolve two frames later) and are totalled apart, per
@@ -78,6 +79,7 @@ pub fn format_telemetry_overlay(
 
     write_scope_tree(&mut out, cpu);
     write_scope_tree(&mut out, render);
+    write_atlas_line(&mut out, atlas);
 
     if gpu_available {
         for (i, sample) in render.samples.iter().enumerate() {
@@ -101,6 +103,34 @@ pub fn format_telemetry_overlay(
     }
 
     out
+}
+
+/// One line naming which layout path the frame took (RFC-0032 §R7).
+///
+/// The answer to "am I on the fast path?" belongs on the readout, not in an
+/// inference from a timing that got smaller. `rebuild` on a frame where
+/// nothing structural happened is the thing a developer wants to see and can
+/// usually fix; `retained` with a handful of marked nodes is the healthy
+/// steady state.
+fn write_atlas_line(out: &mut String, atlas: byard_core::atlas::layout::path_counters::Counts) {
+    if atlas.populate_calls == 0 {
+        // Nothing rendered this tick — say nothing rather than print a row of
+        // zeros that reads like "the fast path did nothing".
+        return;
+    }
+    let path = if atlas.clears > 0 {
+        "rebuild"
+    } else {
+        "retained"
+    };
+    let _ = writeln!(
+        out,
+        "  {:<NAME_WIDTH$} {path} · {} node(s) marked · {}/{} matched",
+        "atlas",
+        atlas.populate_dirty_targets,
+        atlas.populate_dirty_matched,
+        atlas.populate_dirty_targets,
+    );
 }
 
 /// Writes `block`'s non-`Gpu` samples as an indented tree, parents first.
@@ -180,6 +210,7 @@ fn fmt_ms(ns: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use byard_core::atlas::layout::path_counters::Counts;
     use byard_core::telemetry::{ScopeId, scope_id_tagged};
 
     fn sample(scope: ScopeId, duration_ns: u64) -> Sample {
@@ -190,6 +221,60 @@ mod tests {
         Sample::cpu(scope, depth, start, end)
     }
 
+    /// A snapshot describing a retained frame that marked `marked` nodes.
+    fn retained(marked: u64) -> Counts {
+        Counts {
+            clears: 0,
+            full_computes: 0,
+            retained_recomputes: 1,
+            populate_calls: 1,
+            populate_dirty_targets: marked,
+            populate_dirty_matched: marked,
+        }
+    }
+
+    #[test]
+    fn the_atlas_line_names_the_path_the_frame_took() {
+        let out = format_telemetry_overlay(
+            &SampleBlock::default(),
+            &SampleBlock::default(),
+            true,
+            retained(3),
+        );
+        assert!(out.contains("atlas"), "{out}");
+        assert!(out.contains("retained"), "{out}");
+        assert!(out.contains("3 node(s) marked"), "{out}");
+    }
+
+    #[test]
+    fn the_atlas_line_says_rebuild_when_the_tree_was_torn_down() {
+        let counts = Counts {
+            clears: 1,
+            full_computes: 1,
+            ..retained(0)
+        };
+        let out = format_telemetry_overlay(
+            &SampleBlock::default(),
+            &SampleBlock::default(),
+            true,
+            counts,
+        );
+        assert!(out.contains("rebuild"), "{out}");
+    }
+
+    #[test]
+    fn a_tick_that_rendered_nothing_prints_no_atlas_line() {
+        // A row of zeros reads like "the fast path did nothing", which is a
+        // different — and alarming — statement from "nothing rendered".
+        let out = format_telemetry_overlay(
+            &SampleBlock::default(),
+            &SampleBlock::default(),
+            true,
+            Counts::default(),
+        );
+        assert!(!out.contains("atlas"), "{out}");
+    }
+
     #[test]
     fn lists_every_cpu_scope_with_its_duration() {
         let native = scope_id_tagged("overlay.test.native_scope", ScopeKind::Native);
@@ -197,7 +282,7 @@ mod tests {
             samples: vec![sample(native, 1_500_000)],
             dropped: 0,
         };
-        let out = format_telemetry_overlay(&cpu, &SampleBlock::default(), true);
+        let out = format_telemetry_overlay(&cpu, &SampleBlock::default(), true, Counts::default());
         assert!(out.contains("overlay.test.native_scope"));
         assert!(out.contains("1.500ms"));
     }
@@ -209,7 +294,7 @@ mod tests {
             samples: vec![sample(interp, 2_000_000)],
             dropped: 0,
         };
-        let out = format_telemetry_overlay(&cpu, &SampleBlock::default(), true);
+        let out = format_telemetry_overlay(&cpu, &SampleBlock::default(), true, Counts::default());
         assert!(out.contains("[INTERPRETER — 0 in release]"));
         assert!(out.contains("interp tax 2.000ms"));
     }
@@ -221,7 +306,7 @@ mod tests {
             samples: vec![Sample::gpu_duration(gpu_scope, 900_000)],
             dropped: 0,
         };
-        let out = format_telemetry_overlay(&SampleBlock::default(), &gpu, true);
+        let out = format_telemetry_overlay(&SampleBlock::default(), &gpu, true, Counts::default());
         assert!(out.contains("overlay.test.gpu_scope"));
         assert!(out.contains("(async, -2f)"));
     }
@@ -233,7 +318,7 @@ mod tests {
             samples: vec![Sample::gpu_duration(gpu_scope, 900_000)],
             dropped: 0,
         };
-        let out = format_telemetry_overlay(&SampleBlock::default(), &gpu, false);
+        let out = format_telemetry_overlay(&SampleBlock::default(), &gpu, false, Counts::default());
         assert!(out.contains("GPU timing unavailable"));
         assert!(
             !out.contains("overlay.test.gpu_scope_unavailable"),
@@ -251,7 +336,7 @@ mod tests {
             samples: vec![],
             dropped: 2,
         };
-        let out = format_telemetry_overlay(&cpu, &gpu, true);
+        let out = format_telemetry_overlay(&cpu, &gpu, true, Counts::default());
         assert!(out.contains("5 sample(s) dropped"));
     }
 
@@ -260,7 +345,12 @@ mod tests {
         // RFC-0013 P3: the projection is opt-in; this formatter never calls
         // `project_aot` itself, so its output must never claim a projected
         // number unless a caller appends one explicitly (out of scope here).
-        let out = format_telemetry_overlay(&SampleBlock::default(), &SampleBlock::default(), true);
+        let out = format_telemetry_overlay(
+            &SampleBlock::default(),
+            &SampleBlock::default(),
+            true,
+            Counts::default(),
+        );
         assert!(!out.to_lowercase().contains("proj"));
     }
 
@@ -281,7 +371,7 @@ mod tests {
             ],
             dropped: 0,
         };
-        let out = format_telemetry_overlay(&cpu, &SampleBlock::default(), true);
+        let out = format_telemetry_overlay(&cpu, &SampleBlock::default(), true, Counts::default());
         assert!(
             out.contains("measured total 10.000ms"),
             "expected a 10ms frame total, got:\n{out}"
@@ -300,7 +390,7 @@ mod tests {
             ],
             dropped: 0,
         };
-        let out = format_telemetry_overlay(&cpu, &SampleBlock::default(), true);
+        let out = format_telemetry_overlay(&cpu, &SampleBlock::default(), true, Counts::default());
         assert!(
             out.contains("overlay.test.rows.parent") && out.contains("6.000ms  (10.000ms incl.)"),
             "expected 6ms self / 10ms inclusive, got:\n{out}"
@@ -329,7 +419,7 @@ mod tests {
             ],
             dropped: 0,
         };
-        let out = format_telemetry_overlay(&cpu, &SampleBlock::default(), true);
+        let out = format_telemetry_overlay(&cpu, &SampleBlock::default(), true, Counts::default());
         assert!(
             out.contains("interp tax 6.000ms"),
             "expected the tax to exclude the nested native child, got:\n{out}"
@@ -351,7 +441,8 @@ mod tests {
             ],
             dropped: 0,
         };
-        let out = format_telemetry_overlay(&SampleBlock::default(), &render, false);
+        let out =
+            format_telemetry_overlay(&SampleBlock::default(), &render, false, Counts::default());
         assert!(
             out.contains("overlay.test.render.encode"),
             "a render-thread CPU scope must survive an unavailable GPU timer:\n{out}"
@@ -386,7 +477,7 @@ mod tests {
             ],
             dropped: 0,
         };
-        let out = format_telemetry_overlay(&cpu, &SampleBlock::default(), true);
+        let out = format_telemetry_overlay(&cpu, &SampleBlock::default(), true, Counts::default());
         let row = |name: &str| out.lines().position(|l| l.contains(name)).expect(name);
         assert!(
             row("overlay.test.order.parent") < row("overlay.test.order.child"),
@@ -408,7 +499,7 @@ mod tests {
             samples: vec![sample(alive, 4_000)],
             dropped: 0,
         };
-        let out = format_telemetry_overlay(&cpu, &SampleBlock::default(), true);
+        let out = format_telemetry_overlay(&cpu, &SampleBlock::default(), true, Counts::default());
         assert!(
             out.contains("0.004ms"),
             "expected µs resolution, got:\n{out}"
@@ -429,7 +520,7 @@ mod tests {
             )],
             dropped: 0,
         };
-        let out = format_telemetry_overlay(&cpu, &render, true);
+        let out = format_telemetry_overlay(&cpu, &render, true, Counts::default());
         assert!(out.contains("measured total 2.000ms"), "{out}");
         assert!(out.contains("gpu total      0.700ms"), "{out}");
     }

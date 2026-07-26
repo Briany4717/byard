@@ -79,6 +79,48 @@ pub enum PropType {
     Spring,
 }
 
+/// Which half of the frame an attribute can change (RFC-0032 §R2).
+///
+/// This is **not** a lookup table bolted on beside the attribute catalogue:
+/// it is a required field of every attribute definition, so an attribute
+/// added without a class does not compile. RFC-0032 lists an unclassified
+/// attribute as one of its named drawbacks, and this is the mitigation it
+/// promised — a maintenance surface that the type system maintains.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AttrClass {
+    /// Feeds the layout tree: changing it can move or resize something,
+    /// including something that is not this element.
+    Layout,
+    /// Only changes pixels inside a rect layout has already decided.
+    Paint,
+}
+
+/// One attribute's definition: the value type it accepts **and** the half of
+/// the frame it can change.
+#[derive(Debug, Clone, Copy)]
+pub struct PropDef {
+    /// Accepted value type, used for the lower-time type check.
+    pub ty: PropType,
+    /// Whether this attribute can move geometry (RFC-0032 §R2).
+    pub class: AttrClass,
+}
+
+/// A layout-class attribute: it reaches the layout tree.
+const fn lay(ty: PropType) -> PropDef {
+    PropDef {
+        ty,
+        class: AttrClass::Layout,
+    }
+}
+
+/// A paint-class attribute: it changes pixels and nothing else.
+const fn pnt(ty: PropType) -> PropDef {
+    PropDef {
+        ty,
+        class: AttrClass::Paint,
+    }
+}
+
 const ALIGN: &[&str] = &["start", "center", "end", "stretch", "justify"];
 const JUSTIFY: &[&str] = &["start", "center", "end", "between", "around", "evenly"];
 const WEIGHT: &[&str] = &["thin", "regular", "medium", "bold"];
@@ -116,40 +158,40 @@ const ALIGN2D: &[&str] = &[
     "end",
 ];
 
-const LAYOUT: &[(&str, PropType)] = &[
-    ("width", PropType::Int),
-    ("height", PropType::Int),
-    ("gap", PropType::Int),
-    ("p", PropType::Len),
-    ("m", PropType::Len),
-    ("pt", PropType::Len),
-    ("pr", PropType::Len),
-    ("pb", PropType::Len),
-    ("pl", PropType::Len),
-    ("mx", PropType::Len),
-    ("my", PropType::Len),
-    ("mt", PropType::Len),
-    ("mr", PropType::Len),
-    ("mb", PropType::Len),
-    ("ml", PropType::Len),
-    ("align", PropType::Enum(ALIGN)),
-    ("justify", PropType::Enum(JUSTIFY)),
-    ("grow", PropType::Int),
-    ("basis", PropType::Int),
+const LAYOUT: &[(&str, PropDef)] = &[
+    ("width", lay(PropType::Int)),
+    ("height", lay(PropType::Int)),
+    ("gap", lay(PropType::Int)),
+    ("p", lay(PropType::Len)),
+    ("m", lay(PropType::Len)),
+    ("pt", lay(PropType::Len)),
+    ("pr", lay(PropType::Len)),
+    ("pb", lay(PropType::Len)),
+    ("pl", lay(PropType::Len)),
+    ("mx", lay(PropType::Len)),
+    ("my", lay(PropType::Len)),
+    ("mt", lay(PropType::Len)),
+    ("mr", lay(PropType::Len)),
+    ("mb", lay(PropType::Len)),
+    ("ml", lay(PropType::Len)),
+    ("align", lay(PropType::Enum(ALIGN))),
+    ("justify", lay(PropType::Enum(JUSTIFY))),
+    ("grow", lay(PropType::Int)),
+    ("basis", lay(PropType::Int)),
 ];
-const DECORATION: &[(&str, PropType)] = &[
-    ("bg", PropType::Color),
-    ("radius", PropType::Len),
-    ("opacity", PropType::Float),
-    ("border", PropType::Color),
-    ("border_width", PropType::Int),
-    ("shadow", PropType::Str),
+const DECORATION: &[(&str, PropDef)] = &[
+    ("bg", pnt(PropType::Color)),
+    ("radius", pnt(PropType::Len)),
+    ("opacity", pnt(PropType::Float)),
+    ("border", pnt(PropType::Color)),
+    ("border_width", pnt(PropType::Int)),
+    ("shadow", pnt(PropType::Str)),
     // RFC-0001 §3.1: the `DecoratedBox` pipeline's declared remit includes
     // gradients. `gradient` is a named tuple (validated at lower time, like
     // `shadow`); `gradient_offset` is an ordinary number, so it animates through
     // the RFC-0010/RFC-0025 chokepoints for free.
-    ("gradient", PropType::Str),
-    ("gradient_offset", PropType::Float),
+    ("gradient", pnt(PropType::Str)),
+    ("gradient_offset", pnt(PropType::Float)),
 ];
 /// Paint-time transform props (RFC-0011). `opacity` is deliberately **not**
 /// repeated here — it already lives in [`DECORATION`] and is wired end to
@@ -161,11 +203,11 @@ const DECORATION: &[(&str, PropType)] = &[
 /// `TextField`/`Toggle`/`Slider`/`ScrollView`) — **not** `Text`/`Image`,
 /// whose engine primitives (`TextLine`/`TextureSampler`) have no `Transform`
 /// field yet (see the RFC-0011 engine-slice decision log).
-const TRANSFORM: &[(&str, PropType)] = &[
-    ("translate", PropType::Vec2),
-    ("scale", PropType::Vec2),
-    ("rotate", PropType::Angle),
-    ("origin", PropType::Vec2),
+const TRANSFORM: &[(&str, PropDef)] = &[
+    ("translate", pnt(PropType::Vec2)),
+    ("scale", pnt(PropType::Vec2)),
+    ("rotate", pnt(PropType::Angle)),
+    ("origin", pnt(PropType::Vec2)),
 ];
 /// Paint-time visual effects (RFC-0023). Like [`TRANSFORM`], these are
 /// paint-only: they never affect layout. `ripple` is the Material ink reveal —
@@ -186,24 +228,24 @@ const TRANSFORM: &[(&str, PropType)] = &[
 /// 0.25× on software ones), `high` forces the finest 0.75×, `low` the
 /// cheapest 0.25×.
 const BLUR_QUALITY: &[&str] = &["auto", "high", "low"];
-const EFFECTS: &[(&str, PropType)] = &[
-    ("ripple", PropType::Color),
-    ("ripple_active", PropType::Bool),
-    ("ripple_radius", PropType::Float),
-    ("ripple_duration", PropType::Int),
-    ("blur", PropType::Float),
-    ("backdrop_tint", PropType::Color),
-    ("blur_saturation", PropType::Float),
-    ("blur_quality", PropType::Enum(BLUR_QUALITY)),
+const EFFECTS: &[(&str, PropDef)] = &[
+    ("ripple", pnt(PropType::Color)),
+    ("ripple_active", pnt(PropType::Bool)),
+    ("ripple_radius", pnt(PropType::Float)),
+    ("ripple_duration", pnt(PropType::Int)),
+    ("blur", pnt(PropType::Float)),
+    ("backdrop_tint", pnt(PropType::Color)),
+    ("blur_saturation", pnt(PropType::Float)),
+    ("blur_quality", pnt(PropType::Enum(BLUR_QUALITY))),
 ];
-const TEXT_PROPS: &[(&str, PropType)] = &[
-    ("typo", PropType::Typo),
-    ("color", PropType::Color),
-    ("size", PropType::Int),
-    ("weight", PropType::Enum(WEIGHT)),
-    ("align", PropType::Enum(ALIGN)),
-    ("lines", PropType::Int),
-    ("wrap", PropType::Bool),
+const TEXT_PROPS: &[(&str, PropDef)] = &[
+    ("typo", lay(PropType::Typo)),
+    ("color", pnt(PropType::Color)),
+    ("size", lay(PropType::Int)),
+    ("weight", pnt(PropType::Enum(WEIGHT))),
+    ("align", lay(PropType::Enum(ALIGN))),
+    ("lines", lay(PropType::Int)),
+    ("wrap", lay(PropType::Bool)),
 ];
 
 const POINTER_EVENTS: &[&str] = &[
@@ -241,7 +283,7 @@ pub struct Intrinsic {
     pub focusable: bool,
     /// Whether attaching a pointer/keyboard listener registers a hit rect.
     pub interactive: bool,
-    props: HashMap<&'static str, PropType>,
+    props: HashMap<&'static str, PropDef>,
     events: HashSet<&'static str>,
 }
 
@@ -249,7 +291,14 @@ impl Intrinsic {
     /// Returns the type of property `name`, if recognized.
     #[must_use]
     pub fn property_type(&self, name: &str) -> Option<PropType> {
-        self.props.get(name).copied()
+        self.props.get(name).map(|d| d.ty)
+    }
+
+    /// Returns which half of the frame property `name` can change
+    /// (RFC-0032 §R2), if recognized.
+    #[must_use]
+    pub fn property_class(&self, name: &str) -> Option<AttrClass> {
+        self.props.get(name).map(|d| d.class)
     }
 
     /// Returns `true` if `name` is a recognized event.
@@ -260,7 +309,7 @@ impl Intrinsic {
 
     /// Returns an iterator over all recognized property names and their types.
     pub fn properties(&self) -> impl Iterator<Item = (&'static str, PropType)> + '_ {
-        self.props.iter().map(|(&k, &v)| (k, v))
+        self.props.iter().map(|(&k, v)| (k, v.ty))
     }
 
     /// Returns an iterator over all recognized event names.
@@ -269,20 +318,21 @@ impl Intrinsic {
     }
 }
 
-fn props_from(groups: &[&[(&'static str, PropType)]]) -> HashMap<&'static str, PropType> {
+fn props_from(groups: &[&[(&'static str, PropDef)]]) -> HashMap<&'static str, PropDef> {
     let mut m = HashMap::new();
     for g in groups {
         for &(k, v) in *g {
             m.insert(k, v);
         }
     }
-    // Universal props.
-    m.insert("style", PropType::Class);
+    // Universal props. A style class can carry anything, so it is classified
+    // by its most consequential possibility rather than its most common one.
+    m.insert("style", lay(PropType::Class));
     // RFC-0024: `selected`/`invalid` are universal opt-in pseudo-state props —
     // any element can drive the `selected`/`invalid` style states (nav items,
     // tabs, chips, form fields).
-    m.insert("selected", PropType::Bool);
-    m.insert("invalid", PropType::Bool);
+    m.insert("selected", pnt(PropType::Bool));
+    m.insert("invalid", pnt(PropType::Bool));
     m
 }
 
@@ -354,21 +404,21 @@ pub fn lookup(name: &str) -> Option<Intrinsic> {
     let container = |dir_default: bool| {
         let mut props = props_from(&[LAYOUT, DECORATION, EFFECTS, TRANSFORM]);
         if dir_default {
-            props.insert("direction", PropType::Enum(DIRECTION));
+            props.insert("direction", lay(PropType::Enum(DIRECTION)));
         }
-        props.insert("focused", PropType::Bool);
-        props.insert("disabled", PropType::Bool);
+        props.insert("focused", pnt(PropType::Bool));
+        props.insert("disabled", pnt(PropType::Bool));
         // RFC-0017: a child of an `Overlay` may carry an `anchor` placing it
         // within the viewport. Harmless outside an overlay (no-op in normal
         // flow), so it lives on every container rather than a special case.
-        props.insert("anchor", PropType::Enum(ANCHOR));
+        props.insert("anchor", lay(PropType::Enum(ANCHOR)));
         // RFC-0018: grid child-placement props. Valid on any container child of a
         // `Grid`; harmless (no-op) outside a grid, like `anchor` — so they live on
         // every container rather than being special-cased.
-        props.insert("col", PropType::Int);
-        props.insert("row", PropType::Int);
-        props.insert("col_span", PropType::Int);
-        props.insert("row_span", PropType::Int);
+        props.insert("col", lay(PropType::Int));
+        props.insert("row", lay(PropType::Int));
+        props.insert("col_span", lay(PropType::Int));
+        props.insert("row_span", lay(PropType::Int));
         Intrinsic {
             arity: 0,
             content: None,
@@ -388,7 +438,7 @@ pub fn lookup(name: &str) -> Option<Intrinsic> {
             children: false,
             focusable: false,
             interactive: false,
-            props: props_from(&[&[("grow", PropType::Int), ("basis", PropType::Int)]]),
+            props: props_from(&[&[("grow", lay(PropType::Int)), ("basis", lay(PropType::Int))]]),
             events: HashSet::new(),
         },
         "Text" => Intrinsic {
@@ -399,14 +449,14 @@ pub fn lookup(name: &str) -> Option<Intrinsic> {
             interactive: true,
             props: props_from(&[
                 TEXT_PROPS,
-                &[("m", PropType::Len), ("width", PropType::Int)],
+                &[("m", lay(PropType::Len)), ("width", lay(PropType::Int))],
             ]),
             events: events_from(false, &[]),
         },
         "Button" => {
             let mut props = props_from(&[LAYOUT, DECORATION, EFFECTS, TEXT_PROPS, TRANSFORM]);
-            props.insert("focused", PropType::Bool);
-            props.insert("disabled", PropType::Bool);
+            props.insert("focused", pnt(PropType::Bool));
+            props.insert("disabled", pnt(PropType::Bool));
             Intrinsic {
                 arity: 1,
                 content: Some(PropType::Str),
@@ -419,11 +469,11 @@ pub fn lookup(name: &str) -> Option<Intrinsic> {
         }
         "TextField" => {
             let mut props = props_from(&[LAYOUT, DECORATION, EFFECTS, TEXT_PROPS, TRANSFORM]);
-            props.insert("placeholder", PropType::Str);
-            props.insert("value", PropType::Str);
-            props.insert("bind", PropType::Str);
-            props.insert("focused", PropType::Bool);
-            props.insert("disabled", PropType::Bool);
+            props.insert("placeholder", lay(PropType::Str));
+            props.insert("value", lay(PropType::Str));
+            props.insert("bind", lay(PropType::Str));
+            props.insert("focused", pnt(PropType::Bool));
+            props.insert("disabled", pnt(PropType::Bool));
             Intrinsic {
                 arity: 0,
                 content: None,
@@ -436,10 +486,10 @@ pub fn lookup(name: &str) -> Option<Intrinsic> {
         }
         "Toggle" => {
             let mut props = props_from(&[LAYOUT, DECORATION, EFFECTS, TRANSFORM]);
-            props.insert("value", PropType::Bool);
-            props.insert("bind", PropType::Bool);
-            props.insert("focused", PropType::Bool);
-            props.insert("disabled", PropType::Bool);
+            props.insert("value", lay(PropType::Bool));
+            props.insert("bind", lay(PropType::Bool));
+            props.insert("focused", pnt(PropType::Bool));
+            props.insert("disabled", pnt(PropType::Bool));
             Intrinsic {
                 arity: 0,
                 content: None,
@@ -453,12 +503,12 @@ pub fn lookup(name: &str) -> Option<Intrinsic> {
         "Slider" => {
             let mut props = props_from(&[LAYOUT, DECORATION, EFFECTS, TRANSFORM]);
             for k in ["min", "max", "step"] {
-                props.insert(k, PropType::Float);
+                props.insert(k, pnt(PropType::Float));
             }
-            props.insert("value", PropType::Float);
-            props.insert("bind", PropType::Float);
-            props.insert("focused", PropType::Bool);
-            props.insert("disabled", PropType::Bool);
+            props.insert("value", lay(PropType::Float));
+            props.insert("bind", lay(PropType::Float));
+            props.insert("focused", pnt(PropType::Bool));
+            props.insert("disabled", pnt(PropType::Bool));
             Intrinsic {
                 arity: 0,
                 content: None,
@@ -477,11 +527,11 @@ pub fn lookup(name: &str) -> Option<Intrinsic> {
         // checked accent, not a full-rect slab — mirrors `Toggle`'s model.
         "Checkbox" => {
             let mut props = props_from(&[LAYOUT, DECORATION, EFFECTS, TRANSFORM]);
-            props.insert("value", PropType::Bool);
-            props.insert("bind", PropType::Bool);
-            props.insert("indeterminate", PropType::Bool);
-            props.insert("focused", PropType::Bool);
-            props.insert("disabled", PropType::Bool);
+            props.insert("value", lay(PropType::Bool));
+            props.insert("bind", lay(PropType::Bool));
+            props.insert("indeterminate", lay(PropType::Bool));
+            props.insert("focused", pnt(PropType::Bool));
+            props.insert("disabled", pnt(PropType::Bool));
             Intrinsic {
                 arity: 0,
                 content: None,
@@ -501,10 +551,10 @@ pub fn lookup(name: &str) -> Option<Intrinsic> {
         // visuals (outer ring + inner dot), so `bg` is the selected accent.
         "RadioButton" => {
             let mut props = props_from(&[LAYOUT, DECORATION, EFFECTS, TRANSFORM]);
-            props.insert("value", PropType::Str);
-            props.insert("bind", PropType::Str);
-            props.insert("focused", PropType::Bool);
-            props.insert("disabled", PropType::Bool);
+            props.insert("value", lay(PropType::Str));
+            props.insert("bind", lay(PropType::Str));
+            props.insert("focused", pnt(PropType::Bool));
+            props.insert("disabled", pnt(PropType::Bool));
             Intrinsic {
                 arity: 0,
                 content: None,
@@ -517,9 +567,9 @@ pub fn lookup(name: &str) -> Option<Intrinsic> {
         }
         "Image" => {
             let mut props = props_from(&[LAYOUT]);
-            props.insert("radius", PropType::Len);
-            props.insert("opacity", PropType::Float);
-            props.insert("fit", PropType::Enum(FIT));
+            props.insert("radius", pnt(PropType::Len));
+            props.insert("opacity", pnt(PropType::Float));
+            props.insert("fit", lay(PropType::Enum(FIT)));
             Intrinsic {
                 arity: 1,
                 content: Some(PropType::Str),
@@ -532,8 +582,8 @@ pub fn lookup(name: &str) -> Option<Intrinsic> {
         }
         "ScrollView" => {
             let mut props = props_from(&[LAYOUT, DECORATION, EFFECTS, TRANSFORM]);
-            props.insert("axis", PropType::Enum(AXIS));
-            props.insert("offset", PropType::Vec2);
+            props.insert("axis", lay(PropType::Enum(AXIS)));
+            props.insert("offset", lay(PropType::Vec2));
             // RFC-0005 windowed layout: opt-in list virtualization. `windowed`
             // materialises only the visible slice of a uniform-height vertical
             // list; `row_height` is that fixed per-row **stride** the window math
@@ -543,21 +593,21 @@ pub fn lookup(name: &str) -> Option<Intrinsic> {
             // (its `height` or a `mb` margin), not the container's `gap`. A
             // `row_height` that disagrees with the real stride makes the content
             // jump as rows scroll past the edge.
-            props.insert("windowed", PropType::Bool);
-            props.insert("row_height", PropType::Int);
+            props.insert("windowed", lay(PropType::Bool));
+            props.insert("row_height", lay(PropType::Int));
             // RFC-0021 advanced scroll behaviours (all default to off — a plain
             // `ScrollView` is unchanged).
-            props.insert("snap", PropType::Enum(SNAP));
-            props.insert("snap_align", PropType::Enum(SNAP_ALIGN));
-            props.insert("snap_spring", PropType::Spring);
-            props.insert("pull_refresh", PropType::Bool);
-            props.insert("refreshing", PropType::Bool);
-            props.insert("collapse_header", PropType::Bool);
-            props.insert("collapse_min", PropType::Int);
-            props.insert("collapse_parallax", PropType::Float);
-            props.insert("page", PropType::Int);
-            props.insert("page_count", PropType::Int);
-            props.insert("end_threshold", PropType::Float);
+            props.insert("snap", lay(PropType::Enum(SNAP)));
+            props.insert("snap_align", lay(PropType::Enum(SNAP_ALIGN)));
+            props.insert("snap_spring", lay(PropType::Spring));
+            props.insert("pull_refresh", lay(PropType::Bool));
+            props.insert("refreshing", lay(PropType::Bool));
+            props.insert("collapse_header", lay(PropType::Bool));
+            props.insert("collapse_min", lay(PropType::Int));
+            props.insert("collapse_parallax", lay(PropType::Float));
+            props.insert("page", lay(PropType::Int));
+            props.insert("page_count", lay(PropType::Int));
+            props.insert("end_threshold", lay(PropType::Float));
             Intrinsic {
                 arity: 0,
                 content: None,
@@ -583,12 +633,12 @@ pub fn lookup(name: &str) -> Option<Intrinsic> {
         // universal `style`; pointer events match `Image`. No children. Routes to
         // the `VectorMSDF` pipeline.
         "VectorIcon" => {
-            let mut props: HashMap<&'static str, PropType> = HashMap::new();
-            props.insert("size", PropType::Int);
-            props.insert("color", PropType::Color);
-            props.insert("m", PropType::Len);
-            props.insert("opacity", PropType::Float);
-            props.insert("style", PropType::Class);
+            let mut props: HashMap<&'static str, PropDef> = HashMap::new();
+            props.insert("size", lay(PropType::Int));
+            props.insert("color", pnt(PropType::Color));
+            props.insert("m", lay(PropType::Len));
+            props.insert("opacity", pnt(PropType::Float));
+            props.insert("style", lay(PropType::Class));
             Intrinsic {
                 arity: 1,
                 content: Some(PropType::Str),
@@ -608,14 +658,14 @@ pub fn lookup(name: &str) -> Option<Intrinsic> {
         // against the canvas rect only (individual shapes are not hit-testable;
         // RFC-0020 resolved question).
         "Canvas" => {
-            let mut props: HashMap<&'static str, PropType> = HashMap::new();
-            props.insert("width", PropType::Int);
-            props.insert("height", PropType::Int);
-            props.insert("bg", PropType::Color);
-            props.insert("grow", PropType::Int);
-            props.insert("m", PropType::Len);
-            props.insert("opacity", PropType::Float);
-            props.insert("style", PropType::Class);
+            let mut props: HashMap<&'static str, PropDef> = HashMap::new();
+            props.insert("width", lay(PropType::Int));
+            props.insert("height", lay(PropType::Int));
+            props.insert("bg", pnt(PropType::Color));
+            props.insert("grow", lay(PropType::Int));
+            props.insert("m", lay(PropType::Len));
+            props.insert("opacity", pnt(PropType::Float));
+            props.insert("style", lay(PropType::Class));
             Intrinsic {
                 arity: 0,
                 content: None,
@@ -634,10 +684,10 @@ pub fn lookup(name: &str) -> Option<Intrinsic> {
         // route to their own pipelines. The `dismiss` event fires when a modal
         // overlay's scrim is tapped or `Escape` is pressed.
         "Overlay" => {
-            let mut props: HashMap<&'static str, PropType> = HashMap::new();
-            props.insert("modal", PropType::Bool);
-            props.insert("dismiss_on_outside", PropType::Bool);
-            props.insert("style", PropType::Class);
+            let mut props: HashMap<&'static str, PropDef> = HashMap::new();
+            props.insert("modal", lay(PropType::Bool));
+            props.insert("dismiss_on_outside", lay(PropType::Bool));
+            props.insert("style", lay(PropType::Class));
             Intrinsic {
                 arity: 0,
                 content: None,
@@ -656,19 +706,19 @@ pub fn lookup(name: &str) -> Option<Intrinsic> {
         // generic `DecoratedBox` background, same as `Box`.
         "Grid" => {
             let mut props = props_from(&[LAYOUT, DECORATION, EFFECTS, TRANSFORM]);
-            props.insert("focused", PropType::Bool);
-            props.insert("disabled", PropType::Bool);
-            props.insert("anchor", PropType::Enum(ANCHOR));
+            props.insert("focused", pnt(PropType::Bool));
+            props.insert("disabled", pnt(PropType::Bool));
+            props.insert("anchor", lay(PropType::Enum(ANCHOR)));
             // A Grid can itself be a grid child, so it carries the placement props.
-            props.insert("col", PropType::Int);
-            props.insert("row", PropType::Int);
-            props.insert("col_span", PropType::Int);
-            props.insert("row_span", PropType::Int);
+            props.insert("col", lay(PropType::Int));
+            props.insert("row", lay(PropType::Int));
+            props.insert("col_span", lay(PropType::Int));
+            props.insert("row_span", lay(PropType::Int));
             // Grid-container props.
-            props.insert("columns", PropType::Str);
-            props.insert("rows", PropType::Str);
-            props.insert("col_gap", PropType::Int);
-            props.insert("row_gap", PropType::Int);
+            props.insert("columns", lay(PropType::Str));
+            props.insert("rows", lay(PropType::Str));
+            props.insert("col_gap", lay(PropType::Int));
+            props.insert("row_gap", lay(PropType::Int));
             Intrinsic {
                 arity: 0,
                 content: None,
@@ -686,15 +736,15 @@ pub fn lookup(name: &str) -> Option<Intrinsic> {
         // Pipeline: the generic `DecoratedBox` background, same as `Box`.
         "ZStack" => {
             let mut props = props_from(&[LAYOUT, DECORATION, EFFECTS, TRANSFORM]);
-            props.insert("focused", PropType::Bool);
-            props.insert("disabled", PropType::Bool);
-            props.insert("anchor", PropType::Enum(ANCHOR));
+            props.insert("focused", pnt(PropType::Bool));
+            props.insert("disabled", pnt(PropType::Bool));
+            props.insert("anchor", lay(PropType::Enum(ANCHOR)));
             // A ZStack can itself be a grid child.
-            props.insert("col", PropType::Int);
-            props.insert("row", PropType::Int);
-            props.insert("col_span", PropType::Int);
-            props.insert("row_span", PropType::Int);
-            props.insert("alignment", PropType::Enum(ALIGN2D));
+            props.insert("col", lay(PropType::Int));
+            props.insert("row", lay(PropType::Int));
+            props.insert("col_span", lay(PropType::Int));
+            props.insert("row_span", lay(PropType::Int));
+            props.insert("alignment", lay(PropType::Enum(ALIGN2D)));
             Intrinsic {
                 arity: 0,
                 content: None,
@@ -717,15 +767,15 @@ pub fn lookup(name: &str) -> Option<Intrinsic> {
         // with per-screen transform/opacity.
         "NavStack" => {
             let mut props = props_from(&[LAYOUT, DECORATION, EFFECTS, TRANSFORM]);
-            props.insert("transition", PropType::Enum(TRANSITION));
-            props.insert("swipe_back", PropType::Bool);
-            props.insert("deep_link", PropType::Bool);
-            props.insert("max_depth", PropType::Int);
-            props.insert("anchor", PropType::Enum(ANCHOR));
-            props.insert("col", PropType::Int);
-            props.insert("row", PropType::Int);
-            props.insert("col_span", PropType::Int);
-            props.insert("row_span", PropType::Int);
+            props.insert("transition", lay(PropType::Enum(TRANSITION)));
+            props.insert("swipe_back", lay(PropType::Bool));
+            props.insert("deep_link", lay(PropType::Bool));
+            props.insert("max_depth", lay(PropType::Int));
+            props.insert("anchor", lay(PropType::Enum(ANCHOR)));
+            props.insert("col", lay(PropType::Int));
+            props.insert("row", lay(PropType::Int));
+            props.insert("col_span", lay(PropType::Int));
+            props.insert("row_span", lay(PropType::Int));
             Intrinsic {
                 // The navigation state is the container's content — `NavStack(
                 // path: navPath)`. It is *required*: a navigation container with
@@ -745,12 +795,12 @@ pub fn lookup(name: &str) -> Option<Intrinsic> {
         // defaults to `fade`, since a tab switch has no push direction.
         "NavHost" => {
             let mut props = props_from(&[LAYOUT, DECORATION, EFFECTS, TRANSFORM]);
-            props.insert("transition", PropType::Enum(TRANSITION));
-            props.insert("anchor", PropType::Enum(ANCHOR));
-            props.insert("col", PropType::Int);
-            props.insert("row", PropType::Int);
-            props.insert("col_span", PropType::Int);
-            props.insert("row_span", PropType::Int);
+            props.insert("transition", lay(PropType::Enum(TRANSITION)));
+            props.insert("anchor", lay(PropType::Enum(ANCHOR)));
+            props.insert("col", lay(PropType::Int));
+            props.insert("row", lay(PropType::Int));
+            props.insert("col_span", lay(PropType::Int));
+            props.insert("row_span", lay(PropType::Int));
             Intrinsic {
                 // `NavHost(active: activeTab)` — the visible tab's name.
                 arity: 1,
@@ -919,7 +969,8 @@ pub fn validate_element(
     for attr in attrs {
         let an = attr.name.as_str();
         let is_prop = matches!(attr.kind, AttrKind::Prop { .. });
-        let prop_ty = info.props.get(an).copied();
+        let prop_def = info.props.get(an).copied();
+        let prop_ty = prop_def.map(|d| d.ty);
         let is_event = info.events.contains(an);
 
         if prop_ty.is_none() && !is_event {
@@ -959,14 +1010,20 @@ pub fn validate_element(
         }
 
         // Rule 6 — attribute value type.
-        if let (AttrKind::Prop { value }, Some(ty)) = (&attr.kind, prop_ty) {
+        if let (AttrKind::Prop { value }, Some(def)) = (&attr.kind, prop_def) {
+            let ty = def.ty;
+            // RFC-0032 §Q8 / RFC-0010 INV-8: the class comes from *this*
+            // intrinsic's own definition, not from a global name list, so
+            // `align` on a `Column` and `align` on a `Text` are answered
+            // separately and an attribute cannot be added without an answer.
+            let is_layout = def.class == AttrClass::Layout;
             // RFC-0010: `value with anim.*(…)` — reject an animation on a layout
             // property (it can't animate on the GPU), otherwise validate every
             // curve in the (possibly nested) chain and type-check the innermost
             // target value. The chain walk matters: `(x with a) with b` must not
             // let its inner curve or value slip past unchecked.
             if let Expr::Animated { span, .. } = value {
-                if is_layout_prop(an) {
+                if is_layout {
                     errs.push(CompileError::LayoutPropNotAnimatable {
                         span: *span,
                         prop: an.to_string(),
@@ -991,11 +1048,12 @@ pub fn validate_element(
                     }
                 }
             } else if let Some(track) = crate::interp::anim::resolve_keyframes(value) {
+                // Same rule for the keyframe form (RFC-0025 §3).
                 // RFC-0025 §3: `anim.keyframes(…)` stands in value position. It
                 // is rejected on a layout property for the same reason `with`
                 // is (a relayout every frame, INV-8), and each step's value is
                 // type-checked against the property like any other value.
-                if is_layout_prop(an) {
+                if is_layout {
                     errs.push(CompileError::LayoutPropNotAnimatable {
                         span: value.span(),
                         prop: an.to_string(),
@@ -1023,10 +1081,6 @@ pub fn validate_element(
 /// Whether `name` is a layout-affecting attribute — one whose value feeds Taffy
 /// and so cannot be GPU-animated (RFC-0010 §"Layout properties"). Covers the
 /// [`LAYOUT`] group plus the container `direction`.
-fn is_layout_prop(name: &str) -> bool {
-    name == "direction" || LAYOUT.iter().any(|(k, _)| *k == name)
-}
-
 /// Light, false-positive-averse type check: only clear scalar-literal
 /// mismatches and unknown enum tokens are flagged; identifiers/members (which
 /// may resolve to a reactive `var`) are accepted.
@@ -1609,6 +1663,58 @@ mod tests {
             &e[0],
             CompileError::UnknownAnimation { hint: Some(h), .. } if h == "spring"
         ));
+    }
+
+    #[test]
+    fn every_attribute_carries_a_class_and_it_is_per_intrinsic() {
+        // RFC-0032 §R2: the class is a required field of the attribute
+        // definition, so this is really asserting that the definition
+        // *compiles* — but it also pins the two answers that are easy to get
+        // backwards, and the fact that the same name can differ per element.
+        let col = lookup("Column").expect("Column is an intrinsic");
+        assert_eq!(col.property_class("width"), Some(AttrClass::Layout));
+        assert_eq!(col.property_class("bg"), Some(AttrClass::Paint));
+        assert_eq!(
+            col.property_class("rotate"),
+            Some(AttrClass::Paint),
+            "a transform is the *supported alternative* to animating layout \
+             (RFC-0032 §Q8), so it had better not be layout-class itself"
+        );
+        let text = lookup("Text").expect("Text is an intrinsic");
+        assert_eq!(
+            text.property_class("size"),
+            Some(AttrClass::Layout),
+            "font size feeds the text measure protocol"
+        );
+        assert_eq!(text.property_class("color"), Some(AttrClass::Paint));
+        assert_eq!(col.property_class("not_a_real_attribute"), None);
+    }
+
+    #[test]
+    fn animating_a_text_size_is_rejected_and_names_transform() {
+        // The class table is what makes this reachable at all: `size` is not
+        // in the historical layout-name list, so before RFC-0032 an animated
+        // font size compiled and quietly relayed out the tree every frame —
+        // the exact thing RFC-0010 INV-8 forbids in prose and nothing checked.
+        let e = errs(r#"View V() { Text("hi") #[size: 20 with anim.spring()] {} }"#);
+        assert!(
+            matches!(&e[0], CompileError::LayoutPropNotAnimatable { prop, .. } if prop == "size"),
+            "expected LayoutPropNotAnimatable on `size`, got {e:?}"
+        );
+        let message = e[0].headline();
+        assert!(
+            message.contains("transform"),
+            "the diagnostic must name the supported alternative; got: {message}"
+        );
+    }
+
+    #[test]
+    fn animating_a_paint_prop_is_still_allowed() {
+        // The other half: making the rule stricter must not make it universal.
+        assert!(
+            errs("View V() { Box #[bg: 0xFF0000 with anim.spring()] {} }").is_empty(),
+            "a colour is paint-class and animates on the GPU"
+        );
     }
 
     #[test]

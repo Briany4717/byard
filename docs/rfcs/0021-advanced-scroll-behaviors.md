@@ -1,6 +1,7 @@
 # RFC-0021: Advanced Scroll Behaviors — snap, pull-to-refresh, collapsing headers, pagination
 
-- **Status:** Draft
+- **Status:** Active — implemented
+- **Status note (2026-07-26):** Shipped in full: snap scrolling (item and page) with its physics, pull-to-refresh, the collapsing header, pagination, and `on_end_reached`/`end_threshold`.
 - **Author(s):** Briany4717
 - **Created:** 2026-07-10
 - **Last updated:** 2026-07-10

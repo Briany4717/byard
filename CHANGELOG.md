@@ -12,6 +12,122 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A steady-state frame budget, enforced on every PR (INV-21).**
+  `crates/byard-platform/tests/frame_budget.rs` drives a checked-in reference
+  scene and asserts recorded ceilings: heap allocations per frame, GPU buffer
+  creations (zero), atlas rebuilds (zero), the encoder taking its scissored
+  path, `populate_frame` receiving real targets on a layout-affecting frame,
+  and an idle frame marking nothing at all.
+
+  The last three are the three incremental layers the audit found inert. They
+  had unit tests and they had benchmarks; what none of them had was an
+  assertion that fails when production stops taking the path, which is why they
+  stayed inert for several phases with everything green. Each ceiling was
+  demonstrated red by deliberately regressing what it guards before being
+  trusted.
+
+  **The ratchet rule** is in the file's own header: a ceiling may be lowered by
+  any PR that improves things, and raised only by one whose description states
+  the old value, the new value, and why the regression is acceptable.
+
+### Changed
+
+- **The PR template asks one new question**, answered even when the answer is
+  no: *"Does this add or modify a path that exists to be cheaper than an
+  alternative? If yes, which assertion fails when production stops taking it?"*
+  INV-18 already required this; there was nowhere anyone was asked.
+- **RFC-0017, 0019, 0021, 0022, 0023, 0025 and 0027 read `Active`, not
+  `Draft`.** All seven were shipped. Each was checked against what actually
+  landed rather than assumed, and each carries a status note recording what
+  shipped and — for RFC-0017's coordinate anchoring and RFC-0022's dynamic
+  colour — what did not.
+
+- **One GPU buffer for every pipeline's instance data (RFC-0033).** Each render
+  pipeline used to create its instance buffer from scratch on every frame —
+  nine or more `create_buffer_init` calls per frame. The correct pattern (a
+  persistent buffer written with `queue.write_buffer`) existed in the crate in
+  exactly one place, `viewport_buffer`, and there was no design reason for the
+  asymmetry. Now there is one arena: one buffer, one reused staging `Vec<u8>`,
+  one `write_buffer` per frame, per-pipeline draws reading from offsets into it.
+
+  - **Grow-only, doubling, never shrinking within a session.** Shrinking
+    recreates the buffer — the operation being removed — at the least
+    predictable moment. `grows_this_session` is exposed so a churning arena is
+    diagnosable rather than mysterious.
+  - **Uniform regions pad to `device.limits().min_uniform_buffer_offset_alignment`**,
+    read from the device rather than hardcoded to 256. It is 256 on many
+    backends, which is exactly what makes assuming it work on the machine you
+    are writing on and silently corrupt elsewhere.
+  - **Staging happens before the first render pass opens.** Not a style
+    choice: `wgpu` binds a buffer *range* eagerly and growing the arena
+    replaces the buffer, so every pipeline is split into a `stage` half and a
+    `draw` half. The backdrop pipeline — the one whose data is not known until
+    the geometry behind the pane has been rasterised — *reserves* its regions
+    up front and fills them while recording.
+  - **The acceptance condition is a counter, not a benchmark:** a steady-state
+    frame creates **zero** GPU buffers and grows the arena zero times.
+
+  **What it is worth, measured rather than projected: about 0.1 ms.** RFC-0033
+  named per-frame buffer creation as the leading suspect for `encode.frame`'s
+  ~6 ms; sub-scoping that row put every `create_buffer_init` combined at
+  0.3–3.4 % of it, and the rest was glyph shaping. The RFC reasoned from a
+  mechanism to a magnitude without measuring the magnitude, and the RFC now
+  carries an erratum saying so. It ships anyway, on the two grounds that
+  survive: RFC-0001 §2 claims *"sin spikes de VRAM"* and recreating every
+  instance buffer each frame is precisely VRAM churn; and "zero buffer
+  creations per frame" is a deterministic assertion, where a frame time on
+  shared CI hardware is not.
+
+- **Element invalidation (RFC-0032).** `support/AUDIT_incremental_paths_and_memory_model.md`
+  found three incremental layers that production never took, and PR #148
+  established they had one cause rather than three: the evaluation model did
+  not produce the signal the invalidation model consumed. It does now, and the
+  three layers are live.
+
+  - **Two value fingerprints per element**, hashed from the *resolved* values
+    the render walk already computes — never from a dependency graph. RFC-0032
+    §R1 rejects reactive attribute bindings for one reason: a missing edge
+    yields a false "clean", and a false clean is an element that renders in its
+    new position and answers taps in its old one. A value comparison has no
+    edge to miss. Every `f32` is hashed through `to_bits`, because `NaN != NaN`
+    makes an element permanently dirty and `-0.0 == 0.0` makes it permanently
+    clean — and the second one is silent.
+  - **The retained layout path.** A frame with no structural change, no
+    resize, no hot reload, no theme flip and no overlay/route movement restyles
+    the Taffy tree in place instead of tearing it down, keeping its cached
+    geometry, its parent map, its spatial grid and its view generation. The
+    eligibility list is a **default-deny whitelist** and every clause has its
+    own test.
+  - **`recompute_dirty_with_text`** — the incremental pass, with a text sizer.
+    The sizer-less `recompute_dirty` sizes every wrapping `Text` it touches at
+    its natural *single-line* width, which would silently un-wrap every
+    paragraph on the frame after any retained one; it is now documented as
+    benchmark-only.
+  - **A real dirty set, end to end.** `populate_frame` receives the
+    layout-dirty targets, every primitive carries a `dirty` bit derived from
+    comparing its resolved values against the same pool position last frame,
+    and the encoder's scissor union is built from those instead of
+    `vec![true; …]`.
+  - **`AttrClass` is a required field of every attribute definition**, so an
+    attribute cannot be added without saying whether it can move geometry, and
+    the class is answered per intrinsic (`align` on a `Column` and `align` on a
+    `Text` are different questions). RFC-0010's INV-8 — "an animated property
+    must never trigger relayout" — becomes a lower-time diagnostic rather than
+    a sentence in an RFC: `#[size: 20 with anim.spring()]` on a `Text` is now a
+    compile error naming `transform` as the alternative, where before it
+    compiled and relaid out the tree every frame.
+  - **`byard dev` prints which path each frame took** —
+    `atlas  retained · 3 node(s) marked · 3/3 matched`. The answer to "am I on
+    the fast path?" is on the readout instead of inferred from a timing that
+    got smaller.
+
+  Measured on a scene of twelve wrapping paragraphs under one spinning icon
+  (Apple M2, debug build): `encode.glyphs` 45.1 ms → 2.0 ms, `layout.taffy`
+  0.19 ms → 0.01 ms, frame total 46.4 ms → 17.1 ms, i.e. from ~21 fps to a
+  vsync-locked 60 with 13 ms of headroom to spare.
+
+  Example: `crates/byard-cli/examples/incremental`.
+
 - **The encode breakdown (RFC-0030 §I1, second pass).** `encode.frame` was a
   single ~6 ms row — the largest term in the frame and the least explained
   one. It now has five sub-scopes whose self-times add up to it exactly:
@@ -287,6 +403,22 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `text::TextSizer` trait.
 
 ### Fixed
+
+- **Dirty bits survive a skipped frame.** The relay is latest-wins, so a logic
+  thread that outruns the display — every logic thread — has most of its
+  frames dropped. That cost nothing while every primitive was emitted dirty;
+  with a real dirty set it meant the frame carrying "this paragraph changed"
+  could be dropped and the next one would truthfully report it clean.
+  `Relay::publish` now merges an unrendered frame's dirty bits into its
+  replacement. The previous mechanism — detect the version gap, force a full
+  redraw — was correct but fired on nearly every frame, which handed back the
+  entire benefit.
+- **The incremental scissor no longer under-covers three kinds of primitive.**
+  Each was unreachable while the dirty union spanned the whole frame: the
+  antialiased fringe every analytic pipeline paints just outside its rect (a
+  one-pixel halo of the previous frame around anything that moved), a wrapping
+  `Text`'s true line count (stale glyphs below the first line), and a drop
+  shadow's reach outside the box it belongs to.
 
 - **A settled app now genuinely idles at zero frames (RFC-0010 / RFC-0025 §2).**
   `Interpreter::has_active_animations()` existed and **nothing consulted it**:

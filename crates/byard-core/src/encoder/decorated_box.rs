@@ -6,8 +6,6 @@
 //! only when one of those decoration fields is non-trivial; plain solid fills
 //! (radius alone included) stay on the cheaper `SolidBox` pipeline.
 
-use wgpu::util::DeviceExt;
-
 use crate::ByardError;
 use crate::frame::DecoratedBox;
 
@@ -203,51 +201,57 @@ pub async fn build_pipeline(
 /// in a later pass — most visibly all the app text beneath an overlay scrim or a
 /// shadow's halo, which would simply vanish (RFC-0017). Opaque fills never reach
 /// this pass; the compiler routes them to `SolidBox`, which occludes correctly.
-#[allow(clippy::too_many_arguments)]
-pub fn draw(
-    render_pass: &mut wgpu::RenderPass<'_>,
-    device: &wgpu::Device,
-    pipeline: &wgpu::RenderPipeline,
-    bind_group: &wgpu::BindGroup,
-    quad_buffer: &wgpu::Buffer,
+/// Stages this batch's instances into the frame's arena (RFC-0033 §G1).
+///
+/// Split from [`draw`] because `wgpu` binds a buffer *range* eagerly: the
+/// arena's GPU buffer has to be final — and therefore fully staged and
+/// uploaded — before the first render pass opens.
+pub fn stage(
+    arena: &mut super::instance_arena::InstanceArena,
+    scratch: &mut Vec<DecoratedInstance>,
     boxes: &[DecoratedBox],
     depths: &[f32],
-    clip_slice: &[Option<u16>],
-    ctx: super::ClipCtx<'_>,
-) {
+) -> super::instance_arena::Region {
     if boxes.is_empty() {
-        return;
+        return super::instance_arena::Region::default();
     }
     // Stamp each instance's draw-order depth into `misc.y` (the shader reads it
     // as NDC-z). `depths` is parallel to `boxes`; a short/empty slice falls back
     // to the far plane so a missing depth can't push a box in front of others.
-    let instances: Vec<DecoratedInstance> = boxes
-        .iter()
-        .enumerate()
-        .map(|(i, b)| {
-            let mut inst = DecoratedInstance::from(b);
-            inst.misc[1] = depths
-                .get(i)
-                .copied()
-                .unwrap_or(crate::frame::DRAW_DEPTH_CLEAR);
-            inst
-        })
-        .collect();
-    let instance_buffer = {
-        crate::profile_scope!("encode.buffers");
-        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("ByardCore - DecoratedBox Instance Buffer"),
-            contents: bytemuck::cast_slice(&instances),
-            usage: wgpu::BufferUsages::VERTEX,
-        })
-    };
+    scratch.clear();
+    scratch.extend(boxes.iter().enumerate().map(|(i, b)| {
+        let mut inst = DecoratedInstance::from(b);
+        inst.misc[1] = depths
+            .get(i)
+            .copied()
+            .unwrap_or(crate::frame::DRAW_DEPTH_CLEAR);
+        inst
+    }));
+    arena.push_vertex(scratch)
+}
 
+/// Draws this segment's staged decorations, in content-clip runs (RFC-0005).
+#[allow(clippy::too_many_arguments)]
+pub fn draw(
+    render_pass: &mut wgpu::RenderPass<'_>,
+    arena: &super::instance_arena::InstanceArena,
+    region: super::instance_arena::Region,
+    pipeline: &wgpu::RenderPipeline,
+    bind_group: &wgpu::BindGroup,
+    quad_buffer: &wgpu::Buffer,
+    count: usize,
+    clip_slice: &[Option<u16>],
+    ctx: super::ClipCtx<'_>,
+) {
+    if region.is_empty() {
+        return;
+    }
     render_pass.set_pipeline(pipeline);
     render_pass.set_bind_group(0, bind_group, &[]);
     render_pass.set_vertex_buffer(0, quad_buffer.slice(..));
-    render_pass.set_vertex_buffer(1, instance_buffer.slice(..));
+    render_pass.set_vertex_buffer(1, arena.slice(region));
     // Content-clip runs (RFC-0005): scissor each run to its ScrollView viewport.
-    super::for_each_clip_run(render_pass, instances.len(), clip_slice, ctx, |p, s, e| {
+    super::for_each_clip_run(render_pass, count, clip_slice, ctx, |p, s, e| {
         p.draw(0..4, s..e);
     });
 }

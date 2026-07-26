@@ -266,6 +266,15 @@ impl Relay {
     /// [`Relay::spawn_logic_from_view`] alike — piggybacks CPU samples on
     /// this same atomic exchange with no per-call-site wiring.
     pub fn publish(&self, mut frame: RenderFrame) {
+        // RFC-0030 §I1. This scope's own sample is written when the guard
+        // drops — after `drain_telemetry` below — so it rides along with the
+        // *next* tick's block rather than the one it timed. That one-tick lag
+        // is inherent to measuring the hand-off from inside the hand-off, and
+        // is preferable to the alternatives: hoisting the drain out of
+        // `publish` would move telemetry wiring back to every call site
+        // (RFC-0013 "Hand-off"), and timing only the swap would exclude the
+        // drain, which is the part that can actually cost something.
+        crate::profile_scope!("relay.publish");
         frame.drain_telemetry();
         let previous = self.latest.swap(Some(Arc::new(frame)));
         if let Some(arc) = previous {

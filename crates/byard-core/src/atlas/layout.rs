@@ -1179,6 +1179,13 @@ impl LayoutAtlas {
         available: Size<AvailableSpace>,
         sizer: Option<&mut dyn crate::text::TextSizer>,
     ) -> Result<(), AtlasError> {
+        // RFC-0030 §I1: the one scope that isolates Taffy's cost from the
+        // interpreter work around it. Declared here rather than at the caller
+        // so both the full (`compute`/`compute_with_text`) and the
+        // incremental (`recompute_dirty`) paths are measured by construction
+        // — a future call site cannot forget to wrap it, and the two paths'
+        // costs are directly comparable because they carry the same label.
+        crate::profile_scope!("layout.taffy");
         if self.text_specs.is_empty() {
             return self
                 .tree

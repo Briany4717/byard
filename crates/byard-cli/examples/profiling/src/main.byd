@@ -1,0 +1,165 @@
+// RFC-0030 §I1/§I2/§I2b — real instrumentation: six scopes, honest totals,
+// and an interpreter tax that does not bill layout to the interpreter.
+//
+// This example is a *driver for the terminal readout*, not a picture. The
+// thing being demonstrated is the once-a-second block `byard dev` prints to
+// stderr; the window exists to give it something true to report. Each control
+// below moves one scope and, ideally, only one.
+//
+// Run it (from the repo root):
+//   cd crates/byard-cli/examples/profiling
+//   cargo run -p byard-cli -- dev
+//
+// You should see a block like this appear once a second:
+//
+//   measured total 1.42ms  (interp tax 0.71ms)
+//   gpu total      0.28ms  (async, -2f)
+//     interp.dispatch_events       0.01ms  [INTERPRETER — 0 in release]
+//     interp.tick                  0.09ms  [INTERPRETER — 0 in release]
+//     interp.render                0.62ms  (1.31ms incl.)  [INTERPRETER — 0 in release]
+//       interp.tick                0.02ms  [INTERPRETER — 0 in release]
+//       layout.taffy               0.67ms
+//     relay.publish                0.01ms
+//     encode.frame                 0.13ms
+//     gpu.ui_pass                  0.28ms  (async, -2f)
+//
+// What to verify, in the terminal:
+//
+//   1. ALL SIX SCOPES REPORT. `interp.dispatch_events`, `interp.tick`,
+//      `interp.render`, `layout.taffy`, `encode.frame` and `relay.publish` all
+//      appear with non-zero values. A zero anywhere means a scope stopped
+//      being entered — which is exactly the failure this example exists to
+//      make visible, because before RFC-0030 the profiler had *one* call site
+//      in the whole engine and it was inside a test.
+//
+//   2. LAYOUT IS INDENTED UNDER RENDER. `layout.taffy` is printed one level in
+//      because it runs *inside* `interp.render` — the interpreter owns the
+//      layout atlas and drives it from there. That nesting is structural, and
+//      it is why the tax is self-time (point 4).
+//
+//   3. THE TOTAL IS THE FRAME. `measured total` is the sum of the *depth-0*
+//      rows only. Add every printed row by hand and you will get a larger
+//      number: the difference is `layout.taffy`, counted once in the total via
+//      its parent instead of twice. A profiler that reports 8 ms for a 4 ms
+//      frame is worse than no profiler.
+//
+//   4. THE TAX EXCLUDES LAYOUT. `interp tax` counts the *self*-time of the
+//      interpreter-tagged rows. `layout.taffy` is native work — an AOT build
+//      pays for Taffy in full — so it is not in the tax even though its parent
+//      is interpreter-tagged. Press "dense tree" (below) and watch
+//      `layout.taffy` climb while `interp tax` stays roughly flat: that is the
+//      correction working. Before it, growing the layout would have inflated
+//      the apparent cost of the interpreter, and the AOT projection with it.
+//
+//   5. A PARENT SHOWS BOTH READINGS. `interp.render` prints its self-time,
+//      then its inclusive time in parentheses. The two are never confusable
+//      and neither has to be reconstructed by the reader.
+//
+//   6. `encode.frame` IS NOT LABELLED A GPU PASS. It shares the render
+//      thread's ring with the `gpu.*` rows but it is ordinary CPU wall-clock,
+//      so it is listed plainly, counted in the CPU total, and shown even on a
+//      device with no timestamp query (where the `gpu.*` rows are replaced by
+//      a notice rather than fabricated).
+//
+// And the four controls that drive it:
+//
+//   • "dense tree" — mounts a 16 × 16 grid of boxes. `layout.taffy` and
+//     `encode.frame` rise sharply; `interp.dispatch_events` does not move.
+//   • "animate" — starts an endless animation, so frames keep being produced.
+//     Turn it off with a still scene and the block stops printing entirely:
+//     the loop parks, nothing renders, and nothing is measured, which is the
+//     honest reading of a static frame's cost (RFC-0010).
+//   • "long text" — mounts a wrapping paragraph, so the text measure protocol
+//     runs *inside* layout. `layout.taffy` rises; nothing else does.
+//   • tapping the big button — one dispatch's worth of `interp.dispatch_events`
+//     on the frame it lands.
+View Main() {
+    var dense = false
+    var animate = true
+    var longText = false
+    var taps = 0
+
+    // Sixteen cells, used as both rows and columns to build a 256-node grid
+    // without needing 256 lines of source.
+    let cells = ["1", "2", "3", "4", "5", "6", "7", "8",
+                 "9", "10", "11", "12", "13", "14", "15", "16"]
+
+    let chip = style { radius: 20, p: (vertical: 9, horizontal: 18), color: 0xE6E1E5 }
+
+    Column #[bg: 0x101014, p: 26, gap: 18, width: 720] {
+        Text("RFC-0030 — instrumentation") #[color: 0xFFFFFF, size: 24, weight: bold]
+        Text("The demo is the block in your terminal. Move one control at a time and watch which row responds.")
+            #[color: 0x9AA0AC, size: 13]
+
+        // ── the controls ──────────────────────────────────────────────────
+        Row #[gap: 10, align: center] {
+            Button(dense ? "dense tree ON" : "dense tree") #[..chip,
+                bg: dense ? 0x6750A4 : 0x2B2930] => dense = !dense
+            Button(animate ? "animate ON" : "animate") #[..chip,
+                bg: animate ? 0x6750A4 : 0x2B2930] => animate = !animate
+            Button(longText ? "long text ON" : "long text") #[..chip,
+                bg: longText ? 0x6750A4 : 0x2B2930] => longText = !longText
+        }
+
+        // ── interp.dispatch_events ────────────────────────────────────────
+        //
+        // A hit test, a gesture, one handler. Nothing else in the frame
+        // changes shape, so this is the only row that should move when you
+        // press it.
+        Row #[gap: 14, align: center] {
+            Button("tap me") #[bg: 0x4A4458, radius: 12, p: (vertical: 14, horizontal: 34),
+                               color: 0xE6E1E5, size: 16] => taps++
+            Text("{taps} taps dispatched") #[color: 0x938F99, size: 14]
+        }
+
+        // ── interp.tick + interp.render + encode.frame ────────────────────
+        //
+        // An endless animation is what keeps frames flowing at all: with it
+        // off and the scene still, the runner parks and the telemetry block
+        // stops appearing — a frame that is not drawn costs nothing, and the
+        // readout says so rather than reporting a comfortable number for work
+        // that never happened.
+        Row #[gap: 20, align: center] {
+            when animate {
+                Box #[width: 46, height: 46, origin: center,
+                      rotate: 360deg with anim.linear(1200ms, from: 0deg, repeat: infinite)] {
+                    Canvas #[width: 46, height: 46] {
+                        arc(cx: 23, cy: 23, r: 18, stroke: 0x36323C, stroke_width: 4)
+                        arc(cx: 23, cy: 23, r: 18, start: -90, sweep: 240,
+                            stroke: 0xD0BCFF, stroke_width: 4, cap: round)
+                    }
+                }
+            }
+            Text(animate ? "frames are being produced — the block prints once a second"
+                         : "parked: no frames, no samples, no block")
+                #[color: 0x938F99, size: 13]
+        }
+
+        // ── layout.taffy, via the text measure protocol ───────────────────
+        when longText {
+            Box #[bg: 0x1B1B22, radius: 10, p: 16, width: 668] {
+                Text("Wrapping text is measured inside layout, not before it: Taffy calls back into the shaper with the width the parent is offering, and the paragraph's height falls out of that. Mounting this block therefore moves layout.taffy and nothing else — the interpreter did no more work than it did a frame ago, and the tax row shows that, which is the whole point of separating self-time from inclusive time.")
+                    #[color: 0xCCD2E0, size: 14]
+            }
+        }
+
+        // ── layout.taffy + encode.frame, via sheer node count ─────────────
+        //
+        // 256 leaves under 16 containers. The atlas is rebuilt from scratch
+        // every frame, so this is a direct reading of how the current layout
+        // path scales with node count.
+        when dense {
+            Column #[gap: 3] {
+                Text("256 nodes mounted — watch layout.taffy and encode.frame")
+                    #[color: 0x938F99, size: 12]
+                for r in cells {
+                    Row #[gap: 3] {
+                        for c in cells {
+                            Box #[width: 38, height: 12, radius: 3, bg: 0x2B2930] {}
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

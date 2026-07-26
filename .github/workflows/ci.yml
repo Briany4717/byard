@@ -3,8 +3,14 @@ name: CI
 on:
   push:
     branches: [main]
+  # Every pull request, not only the ones targeting `main`.
+  #
+  # A stacked PR — one whose base is the branch below it — got no checks at
+  # all under a `branches: [main]` filter, so a whole series could be reviewed
+  # and merged without clippy or the test suite ever running on it. That is the
+  # same shape as the defect this phase is about: a gate that silently does not
+  # apply is worse than no gate, because everyone believes it applied.
   pull_request:
-    branches: [main]
 
 env:
   CARGO_TERM_COLOR: always

@@ -425,6 +425,46 @@ View Probe() {
 }
 
 // ── 3. Wrapping text still wraps across a retained frame (RFC-0032 §R5) ────
+//
+// RFC-0005 lowers `Text` to three different layout shapes, and they are three
+// different measurements rather than one with a parameter:
+//
+//   * no `width`, `wrap` defaulting to `true` — a measured leaf the atlas sizes
+//     to whatever width its parent offers, resolved *inside* layout;
+//   * an explicit `width` — a measured leaf with a fixed wrap width, the same
+//     protocol against a different bound;
+//   * `wrap: false` — not a measured leaf at all, but a plain fixed leaf at the
+//     natural single-line size, which never reaches the sizer.
+//
+// The retained path can break the first two by losing the sizer and the third
+// by reusing the wrong build-order slot, so each gets its own test.
+
+/// One paragraph, shared by every wrap-mode fixture, so the three modes are
+/// measurements of the *same string* and their heights can be compared.
+const PARAGRAPH: &str = "A paragraph long enough that it must wrap onto several \
+     lines when it is offered only the width of a narrow column, which is the \
+     whole point of measuring it inside layout.";
+
+/// A column holding a box, one `Text` carrying `text_attrs`, and a trailing box
+/// whose `y` is the observable.
+///
+/// `col_width` and `text_attrs` may both read the `narrow` var, which is what
+/// [`text_layout_across_a_retained_frame`] flips — so each mode can be given
+/// the change that actually forces *its* leaf to be re-measured.
+fn wrap_fixture(col_width: &str, text_attrs: &str) -> String {
+    format!(
+        r#"
+View Probe() {{
+    var narrow = false
+    Column #[width: {col_width}, height: 600] {{
+        Box #[width: 40, height: 20, bg: 0x0000FF] {{}}
+        Text("{PARAGRAPH}") #[{text_attrs}]
+        Box #[width: 40, height: 20, bg: 0x00FF00] {{}}
+    }}
+}}
+"#
+    )
+}
 
 const WRAP_SRC: &str = r#"
 View Probe() {
@@ -453,6 +493,70 @@ fn last_box_y(f: &RenderFrame) -> f32 {
         .fold(f32::MIN, f32::max)
 }
 
+/// One line of the fixtures' 14 px text (`cosmic-text`'s 1.2× line height).
+const LINE_H: f32 = 14.0 * 1.2;
+
+/// The height of the box the wrap fixtures put *above* the paragraph, so the
+/// trailing box's `y` can be turned back into the paragraph's own height.
+const TOP_BOX_H: f32 = 20.0;
+
+/// Drives one wrap-mode fixture through a full frame and then a **retained**
+/// one with `narrow` flipped, and returns the **paragraph's height** on each.
+///
+/// The flip is the load-bearing part of this helper. Taffy invokes the measure
+/// callback only for leaves it is actually recomputing, so a retained frame
+/// that changes something *unrelated* to the paragraph never re-measures it —
+/// and a test built on one passes whether or not the sizer is there at all.
+/// (It did: the original §R5 test flipped a colour, and stayed green with
+/// `recompute_dirty_with_text` swapped back to the sizer-less
+/// `recompute_dirty`.) Each fixture therefore binds `narrow` to the bound that
+/// governs *its* mode's wrap width, so the retained frame has no choice but to
+/// re-measure the leaf through the protocol under test.
+fn text_layout_across_a_retained_frame(src: &str) -> (f32, f32) {
+    let (mut interp, tree) = build_from(src);
+    let (full, first) = frame(&mut interp, &tree);
+    assert_eq!(first.full_computes, 1, "the first frame is the full one");
+    let full_h = last_box_y(&full) - TOP_BOX_H;
+
+    flip_bool(&mut interp, "narrow");
+    let (retained, counts) = frame(&mut interp, &tree);
+    assert_eq!(counts.retained_recomputes, 1, "this frame must be retained");
+    assert_eq!(counts.clears, 0);
+    (full_h, last_box_y(&retained) - TOP_BOX_H)
+}
+
+/// Asserts that narrowing a wrapping leaf's bound made it **taller** on the
+/// retained frame — i.e. that it re-wrapped rather than collapsing.
+///
+/// The failure mode this names is one-directional and worth stating: without
+/// the sizer the leaf reports its natural *single-line* size, so the paragraph
+/// gets **shorter**. Asserting "grew by at least one line" catches that with no
+/// dependence on the exact font metrics of the machine running it.
+fn assert_rewrapped(mode: &str, full_h: f32, retained_h: f32) {
+    assert!(
+        retained_h >= full_h + LINE_H,
+        "{mode}: narrowing the wrap width did not add a line on the retained \
+         frame — the paragraph went from {full_h} px tall to {retained_h}. \
+         Anything at or below the starting height means it collapsed towards \
+         its natural single line, which is the retained path having lost its \
+         text sizer (RFC-0032 §R5)"
+    );
+}
+
+/// The three modes, as they are written in `.byd`. Each binds `narrow` to the
+/// bound that governs its own wrap width — the column's for the available-width
+/// mode, the attribute's for the fixed one — except `wrap: false`, which has no
+/// wrap width to govern and is pinned as unchanging instead.
+fn available_width_fixture() -> String {
+    wrap_fixture("narrow ? 200 : 400", "size: 14")
+}
+fn fixed_width_fixture() -> String {
+    wrap_fixture("400", "size: 14, width: narrow ? 100 : 200")
+}
+fn no_wrap_fixture() -> String {
+    wrap_fixture("narrow ? 200 : 400", "size: 14, wrap: false")
+}
+
 #[test]
 fn wrapping_text_still_wraps_across_a_retained_frame() {
     // The trap this guards: `recompute_dirty` runs the measure protocol with
@@ -460,30 +564,73 @@ fn wrapping_text_still_wraps_across_a_retained_frame() {
     // single-line size and every paragraph silently un-wraps on the frame
     // after any retained one. `recompute_dirty_with_text` exists solely for
     // this, and this test is what stops someone "simplifying" it away.
-    let (mut interp, tree) = build_from(WRAP_SRC);
-    let (full, first) = frame(&mut interp, &tree);
-    assert_eq!(first.full_computes, 1);
-    let wrapped_y = last_box_y(&full);
+    //
+    // Mode 1: no `width`, so the leaf wraps to whatever the parent offers and
+    // the column's own width is what moves.
+    let (full_h, retained_h) = text_layout_across_a_retained_frame(&available_width_fixture());
     assert!(
-        wrapped_y > 60.0,
-        "the fixture's paragraph must actually wrap for this test to mean \
-         anything; the trailing box sits at y={wrapped_y}"
+        full_h > LINE_H,
+        "the fixture's paragraph must already wrap at 400 px for this test to \
+         mean anything; it is {full_h} px tall, i.e. one line"
     );
+    assert_rewrapped("wrap to the available width", full_h, retained_h);
+}
 
-    // Force the paragraph to be re-measured on the retained frame by changing
-    // something above it, so this is not passing merely because Taffy skipped
-    // the leaf entirely.
-    change_one_colour(&mut interp);
-    let (retained, counts) = frame(&mut interp, &tree);
-    assert_eq!(counts.retained_recomputes, 1, "this frame must be retained");
-    assert_eq!(counts.clears, 0);
-
+#[test]
+fn a_fixed_wrap_width_still_wraps_across_a_retained_frame() {
+    // Mode 2, a different branch of the same protocol: an explicit `width`
+    // fixes the wrap width, so `TextLeaf.width` is `Some(_)` and the leaf wraps
+    // to *that* rather than to what the parent offers. It reaches the sizer by
+    // the same route and un-wraps by the same failure, and nothing asserted it.
+    let (full_h, retained_h) = text_layout_across_a_retained_frame(&fixed_width_fixture());
     assert!(
-        (last_box_y(&retained) - wrapped_y).abs() < 0.5,
-        "the paragraph collapsed across a retained frame — the trailing box \
-         moved from y={wrapped_y} to y={} because the retained path lost its \
-         text sizer",
-        last_box_y(&retained)
+        full_h > LINE_H,
+        "the fixture must already wrap at its 200 px fixed width; it is \
+         {full_h} px tall, i.e. one line"
+    );
+    assert_rewrapped("wrap to a fixed width", full_h, retained_h);
+}
+
+#[test]
+fn a_non_wrapping_run_keeps_its_single_line_across_a_retained_frame() {
+    // Mode 3, and the one that does *not* go through the sizer at all:
+    // `wrap: false` lowers to a plain fixed leaf at the natural single-line
+    // size. It cannot un-wrap — which is exactly why it is worth pinning,
+    // because it is the mode a retained pass must leave *alone*. Its column is
+    // narrowed by the same flip the wrapping modes re-wrap on: the run must
+    // overflow rather than reflow, and a build-order slot reused by the wrong
+    // leaf shows up here as a run that suddenly acquires a paragraph's height.
+    let (full_h, retained_h) = text_layout_across_a_retained_frame(&no_wrap_fixture());
+    assert!(
+        full_h < 2.0 * LINE_H,
+        "`wrap: false` must stay on one line; the run measured {full_h} px \
+         tall, which is more than one"
+    );
+    assert!(
+        (retained_h - full_h).abs() < 0.5,
+        "`wrap: false`: a run that opted out of wrapping reflowed anyway when \
+         its column narrowed — it went from {full_h} px tall to {retained_h}"
+    );
+}
+
+#[test]
+fn the_three_wrap_modes_measure_three_different_things() {
+    // The guard over the three tests above. Each of them asserts something
+    // about how *its* mode responds to a narrower bound, and all three would
+    // still pass if the modes had quietly collapsed into a single
+    // implementation with the same measurement behind it.
+    //
+    // Same paragraph, three modes, three heights, in the order the widths
+    // dictate: 200 px wraps onto the most lines, the column's 400 px onto
+    // fewer, and the opted-out run onto exactly one.
+    let (fixed, _) = text_layout_across_a_retained_frame(&fixed_width_fixture());
+    let (available, _) = text_layout_across_a_retained_frame(&available_width_fixture());
+    let (nowrap, _) = text_layout_across_a_retained_frame(&no_wrap_fixture());
+    assert!(
+        fixed > available && available > nowrap,
+        "the three wrap modes must be three distinct measurements of the same \
+         string; the paragraph measured {fixed} px tall (fixed 200 px), \
+         {available} (the column's 400 px) and {nowrap} (`wrap: false`)"
     );
 }
 

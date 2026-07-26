@@ -12,6 +12,34 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **The encode breakdown (RFC-0030 §I1, second pass).** `encode.frame` was a
+  single ~6 ms row — the largest term in the frame and the least explained
+  one. It now has five sub-scopes whose self-times add up to it exactly:
+  `encode.uploads` (vector atlas + texture cache), `encode.glyphs` (shaping and
+  atlas residency), `encode.passes` (render-pass recording) with nested
+  `encode.buffers` children (one per draw group), and `encode.submit` on the
+  queue submission.
+
+  - **`present.acquire` and `present.submit`** wrap the swapchain acquire and
+    commit in `Engine::render_latest`. Both previously sat outside every scope,
+    which meant **vsync backpressure was invisible**: a frame that was slow and
+    a frame that was well paced and waiting printed the same `measured total`,
+    and nothing on the readout could tell them apart.
+  - **What the breakdown found:** `encode.frame` is glyph shaping, not GPU
+    buffer creation. `encode.glyphs` is 84 % of it on the `profiling` example
+    and 98 % on a text-heavy scene; every `create_buffer_init` in the encoder
+    combined is 0.3–3.4 %. Text is re-shaped every frame whether or not it
+    changed, because every `TextLine` is emitted `dirty: true`. Both scenes'
+    numbers and what they mean for what gets optimised next are in the
+    `encoder` module docs.
+  - **Assertions, not just rows** (INV-18): `byard-core/tests/instrumentation.rs`
+    fails if a sub-scope stops being entered, if one is recorded at depth 0
+    (which would double-count it into the frame total), or if the subtree's
+    self-times stop summing to `encode.frame`'s inclusive time.
+
+  Example: `crates/byard-cli/examples/profiling` — run it and read points 7–9
+  of its header.
+
 - **Real frame instrumentation (RFC-0030 §I1–§I3).** RFC-0013's zero-allocation
   profiler shipped complete and then went unused: `profile_scope!` had exactly
   one call site in the whole engine, and it was inside a `#[cfg(test)]` block,

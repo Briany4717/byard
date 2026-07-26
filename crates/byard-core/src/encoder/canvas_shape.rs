@@ -201,11 +201,14 @@ pub fn draw(
             CanvasShapeInstance::new(s, depth)
         })
         .collect();
-    let instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("ByardCore - CanvasShape Instance Buffer"),
-        contents: bytemuck::cast_slice(&instances),
-        usage: wgpu::BufferUsages::VERTEX,
-    });
+    let instance_buffer = {
+        crate::profile_scope!("encode.buffers");
+        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("ByardCore - CanvasShape Instance Buffer"),
+            contents: bytemuck::cast_slice(&instances),
+            usage: wgpu::BufferUsages::VERTEX,
+        })
+    };
 
     render_pass.set_pipeline(pipeline);
     render_pass.set_bind_group(0, bind_group, &[]);

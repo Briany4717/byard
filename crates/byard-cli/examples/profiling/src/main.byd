@@ -12,16 +12,24 @@
 //
 // You should see a block like this appear once a second:
 //
-//   measured total 1.42ms  (interp tax 0.71ms)
-//   gpu total      0.28ms  (async, -2f)
-//     interp.dispatch_events       0.01ms  [INTERPRETER — 0 in release]
-//     interp.tick                  0.09ms  [INTERPRETER — 0 in release]
-//     interp.render                0.62ms  (1.31ms incl.)  [INTERPRETER — 0 in release]
-//       interp.tick                0.02ms  [INTERPRETER — 0 in release]
-//       layout.taffy               0.67ms
-//     relay.publish                0.01ms
-//     encode.frame                 0.13ms
-//     gpu.ui_pass                  0.28ms  (async, -2f)
+//   measured total 17.24ms  (interp tax 0.23ms)
+//   gpu total      0.25ms  (async, -2f)
+//     relay.publish                0.00ms
+//     interp.dispatch_events       0.00ms  [INTERPRETER — 0 in release]
+//     interp.tick                  0.00ms  [INTERPRETER — 0 in release]
+//     interp.render                0.23ms  (0.63ms incl.)  [INTERPRETER — 0 in release]
+//       layout.taffy               0.40ms
+//     present.acquire              9.92ms
+//     encode.frame                 0.60ms  (6.55ms incl.)
+//       encode.uploads             0.00ms
+//       encode.glyphs              5.69ms
+//       encode.passes              0.03ms  (0.25ms incl.)
+//         encode.buffers           0.10ms
+//         encode.buffers           0.09ms
+//         encode.buffers           0.04ms
+//     encode.submit                0.12ms
+//     present.submit               0.02ms
+//     gpu.ui_pass                  0.25ms  (async, -2f)
 //
 // What to verify, in the terminal:
 //
@@ -60,6 +68,30 @@
 //      so it is listed plainly, counted in the CPU total, and shown even on a
 //      device with no timestamp query (where the `gpu.*` rows are replaced by
 //      a notice rather than fabricated).
+//
+//   7. `encode.frame` IS BROKEN DOWN, AND THE BREAKDOWN IS SURPRISING.
+//      `encode.uploads`, `encode.glyphs`, `encode.passes` and its nested
+//      `encode.buffers` rows are indented under it and their self-times add up
+//      to its inclusive time exactly. `encode.frame` used to be one ~6ms row
+//      that everyone assumed was GPU buffer creation. It is not: the
+//      `encode.buffers` rows are ~0.2ms combined, and `encode.glyphs` — text
+//      shaping — is nearly all of it. Press "long text" and watch which row
+//      moves.
+//
+//   8. GLYPHS ARE RE-SHAPED FOR TEXT THAT DID NOT CHANGE. With "long text"
+//      on and nothing else touched, `encode.glyphs` stays high frame after
+//      frame even though the paragraph is byte-identical to the one shaped a
+//      frame ago. Only the rotation angle changes, and an angle is not text.
+//      That is the cost of the dirty set not existing yet, and it is the
+//      largest single number on this readout.
+//
+//   9. VSYNC IS VISIBLE NOW. `present.acquire` sits at ~10ms of a ~17ms
+//      frame with the default controls: the engine finished early and the
+//      display made it wait. That is health, not cost — turn "long text" and
+//      "dense tree" both on and watch `present.acquire` collapse towards zero
+//      as the engine's own work overruns the frame budget. Before these two
+//      scopes existed, both states printed the same `measured total` and
+//      nothing on screen could tell them apart.
 //
 // And the four controls that drive it:
 //

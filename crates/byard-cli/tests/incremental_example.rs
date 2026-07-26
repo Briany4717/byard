@@ -26,8 +26,11 @@ fn incremental_example_checks_clean() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(out.status.success(), "check failed:\n{stdout}\n{stderr}");
+    // The prefix and the count, not the sentence between them: RFC-0030 §P4
+    // owns the line's shape, and a test that pins the exact rendering makes
+    // every future grammar change look like a regression in this example.
     assert!(
-        stdout.contains("ok (0 errors)"),
+        stdout.contains("ok") && stdout.contains("0 errors"),
         "expected a clean check, got:\n{stdout}"
     );
 }

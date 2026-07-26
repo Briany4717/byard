@@ -24,5 +24,13 @@ pollster       = "0.3"
 wgpu           = "29.0"
 crossbeam-channel = "0.5"
 
+# Test-only, and only to *parse* what `trace.rs` writes. Hand-rolling a JSON
+# reader to validate a JSON writer is the classic version of this mistake: the
+# reader would share every assumption the writer made, so the test would pass
+# for exactly the inputs it should have caught. `serde_json` is already in the
+# workspace's dependency graph, so this costs no additional build.
+[dev-dependencies]
+serde_json = "1"
+
 [lints]
 workspace = true

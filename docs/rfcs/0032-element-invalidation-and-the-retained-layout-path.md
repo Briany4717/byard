@@ -259,6 +259,26 @@ retained path **must reuse the stored `AtlasNodeId`s** — `next_target_index()`
 `nodes_by_index.len()`, so ids are assigned in build order and re-deriving them
 would silently reassign.
 
+> **Erratum, added while closing the phase.** Two corrections to this section,
+> both found by asking the question INV-18 asks — *which assertion fails when
+> production stops taking this path?* — of the whitelist itself.
+>
+> 1. **The overlay/route clause is defence in depth, not the sole guard.** It
+>    was justified on the grounds that those pools do not travel through
+>    `reconcile_structure`. They do: `reconcile_structure` descends into
+>    `RenderNode::Nav`, and an overlay mounts behind a `when`. Every case the
+>    suite can construct is rejected by both clauses, so neither is individually
+>    necessary — and both stay, because a *deny* clause that fires redundantly
+>    costs a rebuild, while removing one costs correctness.
+> 2. **A frame this whitelist wrongly admits was indistinguishable from one it
+>    rejected.** `end_retained_build` refuses the build and the caller clears
+>    and rebuilds, landing on exactly the same `clears` / `full_computes` /
+>    `retained_recomputes` as a clean rejection — so every clause here could be
+>    deleted with the suite still green, while production walked the tree twice
+>    on every overlay toggle. `path_counters` now records
+>    `retained_attempts` and `retained_rollbacks`, and the eligibility tests
+>    assert the first is zero. That is what makes this list load-bearing.
+
 Anything not on this list forces the full path. New conditions are added one at a
 time, each with its own test. **A condition may never be added because a
 benchmark improved.**
@@ -280,6 +300,20 @@ rather than from anything we have to be careful about.
 
 The existing sizer-less `recompute_dirty` is retained for the benches and marked
 `#[doc(hidden)]`-adjacent with a note that no production path may call it.
+
+> **Erratum, added while closing the phase.** The clause above — "the measure
+> callback is only invoked for nodes Taffy is actually recomputing" — is exactly
+> why the first test written for this section did not test it. That test flipped
+> a **colour** on a sibling and asserted the paragraph's height was unchanged;
+> Taffy never re-measured the paragraph, so the assertion held with
+> `recompute_dirty_with_text` swapped back for the sizer-less `recompute_dirty`.
+> The RFC's own most-likely-visible-bug was unguarded.
+>
+> A retained frame only exercises this section if it changes the bound that
+> governs the leaf's wrap width — the column's width for an available-width
+> leaf, the attribute for a fixed-width one. The tests now do, and each is
+> demonstrated red by restoring the sizer-less call: the paragraph collapses
+> from 84 px and 50 px to 17, its natural single line.
 
 ### R6 — What the fingerprint is computed *from*
 

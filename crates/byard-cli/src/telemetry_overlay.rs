@@ -227,6 +227,8 @@ mod tests {
             clears: 0,
             full_computes: 0,
             retained_recomputes: 1,
+            retained_attempts: 1,
+            retained_rollbacks: 0,
             populate_calls: 1,
             populate_dirty_targets: marked,
             populate_dirty_matched: marked,

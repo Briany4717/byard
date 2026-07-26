@@ -1,6 +1,7 @@
 # RFC-0026: Navigation & Routing — stacks, transitions, deep linking
 
-- **Status:** Draft
+- **Status:** Active — implemented; §6's system back button awaits a mobile platform host
+- **Status note (2026-07-26):** Shipped: both intrinsics (`NavStack`, `NavHost`), the `route "/detail/:id"` / `tab "home"` sub-syntax with compile-time pattern validation, the `navigate`/`back`/`replace` actions over a reactive `var`, the four transitions, state preservation, `max_depth` guarding, `route_change`, Cupertino `swipe_back`, and deep linking via `Interpreter::apply_deep_link` (`byard dev --deep-link <url>`). §6's *system* back button is the one deferral and it is not a design gap: the `back` action it would call exists and `swipe_back` already drives it — what is missing is a platform host that delivers an Android hardware/gesture back event, and the only host today is desktop `winit`. Shared-element transitions remain where RFC-0026 put them, under future possibilities.
 - **Author(s):** Briany4717
 - **Created:** 2026-07-10
 - **Last updated:** 2026-07-10

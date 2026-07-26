@@ -93,6 +93,18 @@ const MAX_GPU_BUFFER_CREATIONS_PER_FRAME: u32 = 0;
 /// in `byard-compiler`'s `incremental_paths.rs` that will say which.
 const MAX_FULL_COMPUTES_PER_FRAME: u64 = 0;
 
+/// Retained builds opened and then discarded, per steady-state frame
+/// (RFC-0032 §R4).
+///
+/// Zero, and it measures something none of the counters above can. A frame the
+/// §R4 whitelist wrongly admits is refused by `end_retained_build` and rebuilt,
+/// which is *correct* — and lands on exactly the same `clears`,
+/// `full_computes` and `retained_recomputes` as a frame the whitelist rejected
+/// outright. The only difference is that the build walk ran twice. Without this
+/// ceiling that difference is invisible, which is how a whitelist can quietly
+/// stop rejecting anything.
+const MAX_RETAINED_ROLLBACKS_PER_FRAME: u64 = 0;
+
 const W: f32 = 640.0;
 const H: f32 = 480.0;
 const PHYS_W: u32 = 640;
@@ -413,6 +425,16 @@ fn a_steady_state_frame_never_rebuilds_the_layout_tree() {
         );
         assert_eq!(counts.clears, 0, "frame {i} tore the atlas down");
         assert_eq!(counts.retained_recomputes, 1, "frame {i} skipped layout");
+        assert_eq!(
+            counts.retained_rollbacks, MAX_RETAINED_ROLLBACKS_PER_FRAME,
+            "frame {i} opened a retained build and then threw it away, so the \
+             tree was walked twice. The frame is correct and costs double; the \
+             §R4 whitelist admitted something it should have rejected."
+        );
+        assert_eq!(
+            counts.retained_attempts, 1,
+            "frame {i} never opened a retained build at all"
+        );
     }
 }
 

@@ -1172,8 +1172,17 @@ struct RetainedLayout {
     /// Viewport of the last successful build — a resize forces a rebuild.
     viewport: Option<(f32, f32)>,
     /// How many overlays and how deep each navigation container was, so an
-    /// overlay or route mount/unmount forces a rebuild even though it does not
-    /// travel through `reconcile_structure`.
+    /// overlay or route mount/unmount forces a rebuild.
+    ///
+    /// RFC-0032 §R4 justified this clause by saying those pools do not travel
+    /// through `reconcile_structure`. They do: `reconcile_structure` descends
+    /// into `RenderNode::Nav` via `reconcile_nav`, and an overlay mounts behind
+    /// a `when`. Measured on every case the suite can construct, `shape` and
+    /// `structure_changed` reject the same frames — so this is defence in
+    /// depth, not the sole guard the RFC described, and it is kept as such: it
+    /// is a *deny* clause, and the direction that costs a rebuild is the safe
+    /// one. Deleting `structure_changed` leaves the overlay and route tests
+    /// green on this clause alone, and vice versa.
     shape: Option<(usize, Vec<usize>)>,
     /// Active colour scheme at the last successful build. A flip changes
     /// nearly every resolved value at once, so it forces a rebuild (RFC-0032
@@ -1301,6 +1310,12 @@ fn path_delta(
         retained_recomputes: after
             .retained_recomputes
             .saturating_sub(before.retained_recomputes),
+        retained_attempts: after
+            .retained_attempts
+            .saturating_sub(before.retained_attempts),
+        retained_rollbacks: after
+            .retained_rollbacks
+            .saturating_sub(before.retained_rollbacks),
         populate_calls: after.populate_calls.saturating_sub(before.populate_calls),
         populate_dirty_targets: after
             .populate_dirty_targets
@@ -3574,12 +3589,20 @@ impl Interpreter {
             // comparison is redundant given that, and kept anyway — this is the
             // path where being wrong is invisible on screen and answers taps
             // from the wrong element.
-            retained_used = self.atlas.end_retained_build()
-                && root_ids.is_some()
-                && flat_ids == self.retained.flat_ids;
+            let retained_ok = self.atlas.end_retained_build();
+            retained_used = retained_ok && root_ids.is_some() && flat_ids == self.retained.flat_ids;
             if !retained_used {
                 // Discard wholesale. A half-applied retained build is not a
                 // thing this code will ever try to repair in place.
+                //
+                // `end_retained_build` counts its own `false` verdicts; the two
+                // extra checks above are the caller's, so their discards are
+                // noted here. Otherwise a whitelist that let an ineligible
+                // frame through would look free: the rebuild that follows is
+                // indistinguishable from a frame the whitelist rejected outright.
+                if retained_ok {
+                    byard_core::atlas::layout::path_counters::note_retained_rollback();
+                }
                 self.atlas.clear();
                 flat_ids.clear();
                 overlay_layouts.clear();

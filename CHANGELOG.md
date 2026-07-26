@@ -36,11 +36,11 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   no: *"Does this add or modify a path that exists to be cheaper than an
   alternative? If yes, which assertion fails when production stops taking it?"*
   INV-18 already required this; there was nowhere anyone was asked.
-- **RFC-0017, 0019, 0021, 0022, 0023, 0025 and 0027 read `Active`, not
-  `Draft`.** All seven were shipped. Each was checked against what actually
+- **RFC-0017, 0019, 0021, 0022, 0023, 0025, 0026 and 0027 read `Active`, not
+  `Draft`.** All eight were shipped. Each was checked against what actually
   landed rather than assumed, and each carries a status note recording what
-  shipped and — for RFC-0017's coordinate anchoring and RFC-0022's dynamic
-  colour — what did not.
+  shipped and — for RFC-0017's coordinate anchoring, RFC-0022's dynamic colour
+  and RFC-0026's system back button — what did not.
 
 - **One GPU buffer for every pipeline's instance data (RFC-0033).** Each render
   pipeline used to create its instance buffer from scratch on every frame —
@@ -342,6 +342,34 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Live ripples participate in the RFC-0010 active-animation set (frames keep
   flowing until the ink fades) and in the incremental dirty-scissor union.
   Example: `crates/byard-cli/examples/ripple`.
+
+### Fixed
+
+- **Three assertions that could not fail, in the suite written to stop exactly
+  that.** Phase 9's own thesis is that a path nothing asserts is a path nobody
+  notices going inert; the same question, asked of the phase's own tests, found
+  three of them proving less than they claimed.
+
+  - **The retained-path eligibility tests passed with the whitelist deleted.**
+    A frame RFC-0032 §R4 wrongly admits is refused by `end_retained_build` and
+    rebuilt — correct, and indistinguishable in every counter from a frame the
+    whitelist rejected outright, differing only in that the build walk ran
+    twice. `path_counters` gains `retained_attempts` and `retained_rollbacks`;
+    the eligibility tests now assert the frame was rejected *before* the atlas
+    was touched, and the frame budget pins rollbacks at zero.
+  - **The wrapping-text test passed with the text sizer removed.** It provoked
+    its retained frame with a colour change, and Taffy re-measures only the
+    leaves it recomputes — so the paragraph was never measured and the
+    assertion held either way, on the hazard RFC-0032 itself called the most
+    likely visible bug in the phase. The retained frame now changes the bound
+    that governs the leaf's wrap width, and each of RFC-0005's three wrap modes
+    (available width, fixed `width`, `wrap: false`) has its own test; restoring
+    the sizer-less call collapses two of them from 84 px and 50 px to 17.
+  - **The RFC-0032 example was the only example with no `byard check` guard**,
+    so the scene the retained path is demonstrated on was the one a grammar
+    change could break silently. It has one, plus a test that the seven
+    numbered checks in its header still describe what a reader is asked to
+    verify.
 
 ### Changed
 

@@ -53,6 +53,43 @@ pub struct Dependency {
     pub source: DepSource,
 }
 
+/// The `[dev]` table (RFC-0030 §V2) — dev-runner surface only.
+///
+/// Every field has a default and an absent `[dev]` table is not an error, so a
+/// manifest written before this existed keeps working unchanged. Nothing here
+/// reaches a shipped application.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DevConfig {
+    /// `frame_budget = "8ms"` — what the profile block's bars and the
+    /// statusline's sparkline are drawn against.
+    ///
+    /// `None` means "the display's refresh interval", which is the default and
+    /// the right one: the budget answers *"will this app drop frames on this
+    /// machine"*, and on a 120 Hz panel that threshold is 8.3 ms. Bars drawn
+    /// against a fixed 16.7 ms there would report a comfortable frame for one
+    /// that visibly stutters — lying on exactly the hardware where the frame
+    /// budget matters most (§Q3).
+    ///
+    /// Cross-machine comparability is a different job, served by `--trace` and
+    /// by pinning this value in CI. Both are explicit, which is the point.
+    pub frame_budget_ns: Option<u64>,
+    /// `hud = true` — start with the in-window HUD visible.
+    pub hud: bool,
+    /// `statusline = false` — suppress the anchored line even on a TTY, for a
+    /// terminal that renders it badly.
+    pub statusline: bool,
+}
+
+impl Default for DevConfig {
+    fn default() -> Self {
+        Self {
+            frame_budget_ns: None,
+            hud: false,
+            statusline: true,
+        }
+    }
+}
+
 /// Parsed project manifest (or a synthetic one for bare-file usage).
 pub struct Manifest {
     pub project_root: PathBuf,
@@ -73,6 +110,8 @@ pub struct Manifest {
     /// with any `[theme]` / `[assets.fonts]` declarations from `byard.toml`
     /// layered on top. Bare-file usage gets `byard-base` unchanged.
     pub theme: Theme,
+    /// The `[dev]` table (RFC-0030 §V2).
+    pub dev: DevConfig,
 }
 
 impl Manifest {
@@ -135,6 +174,7 @@ impl Manifest {
                 single_file: false,
                 vector_includes: Vec::new(),
                 theme: Theme::byard_base(),
+                dev: DevConfig::default(),
             });
         }
 
@@ -161,6 +201,7 @@ impl Manifest {
             single_file: true,
             vector_includes: Vec::new(),
             theme: Theme::byard_base(),
+            dev: DevConfig::default(),
         }
     }
 
@@ -178,7 +219,7 @@ impl Manifest {
         for key in table.keys() {
             if !matches!(
                 key.as_str(),
-                "project" | "dependencies" | "package" | "assets" | "theme"
+                "project" | "dependencies" | "package" | "assets" | "theme" | "dev"
             ) {
                 eprintln!("byard.toml: warning: unknown key `{key}` (ignored)");
             }
@@ -231,6 +272,8 @@ impl Manifest {
 
         // RFC-0022: `[theme]` tokens + `[assets.fonts]` layer onto `byard-base`.
         let theme = parse_theme(&table)?;
+        // RFC-0030 §V2: the dev runner's own surface.
+        let dev = parse_dev(&table)?;
 
         Ok(Self {
             project_root,
@@ -240,8 +283,77 @@ impl Manifest {
             single_file: false,
             vector_includes,
             theme,
+            dev,
         })
     }
+}
+
+/// Parses the `[dev]` table (RFC-0030 §V2).
+///
+/// Strict, like `[dependencies]` and unlike the forward-compatible top level: a
+/// misspelt `frame_bugdet` that was silently ignored would leave a developer
+/// staring at bars drawn against a budget they thought they had changed, which
+/// is worse than a config error.
+fn parse_dev(table: &toml::Table) -> Result<DevConfig, String> {
+    let mut dev = DevConfig::default();
+    let Some(tbl) = table.get("dev").and_then(toml::Value::as_table) else {
+        return Ok(dev);
+    };
+    for (key, value) in tbl {
+        match key.as_str() {
+            "frame_budget" => {
+                let s = value.as_str().ok_or_else(|| {
+                    "byard.toml: [dev] `frame_budget` must be a string like \"8ms\"".to_string()
+                })?;
+                dev.frame_budget_ns = Some(parse_duration_ns(s).ok_or_else(|| {
+                    format!(
+                        "byard.toml: [dev] `frame_budget = {s:?}` is not a duration \
+                         (use `\"8ms\"`, `\"16.7ms\"`, `\"8300us\"` or `\"0.008s\"`)"
+                    )
+                })?);
+            }
+            "hud" => {
+                dev.hud = value
+                    .as_bool()
+                    .ok_or_else(|| "byard.toml: [dev] `hud` must be a boolean".to_string())?;
+            }
+            "statusline" => {
+                dev.statusline = value.as_bool().ok_or_else(|| {
+                    "byard.toml: [dev] `statusline` must be a boolean".to_string()
+                })?;
+            }
+            other => {
+                return Err(format!("byard.toml: [dev]: unknown key `{other}`"));
+            }
+        }
+    }
+    Ok(dev)
+}
+
+/// Parses `"8ms"` / `"16.7ms"` / `"8300us"` / `"0.008s"` into nanoseconds.
+///
+/// A hand-rolled parser rather than a duration crate, for the same reason
+/// `style.rs` has no colour crate: this is one function over four suffixes, and
+/// the dependency budget is better spent elsewhere.
+fn parse_duration_ns(s: &str) -> Option<u64> {
+    let s = s.trim();
+    let (number, scale) = if let Some(n) = s.strip_suffix("ms") {
+        (n, 1_000_000.0)
+    } else if let Some(n) = s.strip_suffix("us").or_else(|| s.strip_suffix("\u{b5}s")) {
+        (n, 1_000.0)
+    } else if let Some(n) = s.strip_suffix("ns") {
+        (n, 1.0)
+    } else if let Some(n) = s.strip_suffix('s') {
+        (n, 1_000_000_000.0)
+    } else {
+        return None;
+    };
+    let value: f64 = number.trim().parse().ok()?;
+    if !value.is_finite() || value <= 0.0 {
+        return None;
+    }
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    Some((value * scale).round() as u64)
 }
 
 /// Parses the `[theme]` table and `[assets.fonts]` into a [`Theme`] layered over
@@ -615,6 +727,70 @@ mod tests {
             theme_of("[assets.fonts]\nroboto = \"assets/fonts/Roboto-Regular.ttf\"\n").unwrap();
         assert!(theme.has_font("roboto"));
         assert!(!theme.has_font("sfpro"));
+    }
+
+    // ── RFC-0030 §V2: the [dev] table ─────────────────────────────────────
+
+    fn dev_of(src: &str) -> Result<DevConfig, String> {
+        let table: toml::Table = src.parse().unwrap();
+        parse_dev(&table)
+    }
+
+    #[test]
+    fn an_absent_dev_table_changes_nothing() {
+        // A manifest written before `[dev]` existed must keep working, and the
+        // budget must stay "ask the display" rather than becoming a number.
+        let dev = dev_of("[project]\nname = \"x\"\n").unwrap();
+        assert_eq!(dev, DevConfig::default());
+        assert_eq!(dev.frame_budget_ns, None);
+        assert!(dev.statusline);
+        assert!(!dev.hud);
+    }
+
+    #[test]
+    fn frame_budget_parses_every_unit_it_documents() {
+        let ns = |src: &str| dev_of(src).unwrap().frame_budget_ns.unwrap();
+        assert_eq!(ns("[dev]\nframe_budget = \"8ms\"\n"), 8_000_000);
+        assert_eq!(ns("[dev]\nframe_budget = \"16.7ms\"\n"), 16_700_000);
+        assert_eq!(ns("[dev]\nframe_budget = \"8300us\"\n"), 8_300_000);
+        assert_eq!(ns("[dev]\nframe_budget = \"0.008s\"\n"), 8_000_000);
+        assert_eq!(ns("[dev]\nframe_budget = \"500000ns\"\n"), 500_000);
+    }
+
+    #[test]
+    fn a_misspelt_dev_key_is_an_error_not_a_shrug() {
+        // The one place the forward-compatible warn-and-ignore policy would do
+        // real harm: a developer who wrote `frame_bugdet` and had it silently
+        // dropped is staring at bars drawn against a budget they believe they
+        // changed.
+        let err = dev_of("[dev]\nframe_bugdet = \"8ms\"\n").unwrap_err();
+        assert!(err.contains("frame_bugdet"), "{err}");
+
+        let err = dev_of("[dev]\nframe_budget = \"soon\"\n").unwrap_err();
+        assert!(err.contains("duration"), "{err}");
+
+        let err = dev_of("[dev]\nframe_budget = 8\n").unwrap_err();
+        assert!(err.contains("string"), "{err}");
+
+        let err = dev_of("[dev]\nstatusline = \"yes\"\n").unwrap_err();
+        assert!(err.contains("boolean"), "{err}");
+    }
+
+    #[test]
+    fn a_zero_or_negative_budget_is_rejected() {
+        // Zero would make every bar full and every frame 100 % over budget,
+        // which is a readout that is wrong rather than merely unhelpful.
+        assert!(parse_duration_ns("0ms").is_none());
+        assert!(parse_duration_ns("-8ms").is_none());
+        assert!(parse_duration_ns("8").is_none());
+        assert!(parse_duration_ns("").is_none());
+    }
+
+    #[test]
+    fn dev_flags_round_trip() {
+        let dev = dev_of("[dev]\nhud = true\nstatusline = false\n").unwrap();
+        assert!(dev.hud);
+        assert!(!dev.statusline);
     }
 
     #[test]

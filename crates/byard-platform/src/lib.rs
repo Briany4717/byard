@@ -13,13 +13,13 @@
 use std::sync::Arc;
 
 use byard_core::relay::FrameWaker;
-use byard_core::{ByardError, PlatformHost, PointerButton, PointerState, WindowSize};
+use byard_core::{ByardError, KeyModifiers, PlatformHost, PointerButton, PointerState, WindowSize};
 use std::sync::Mutex;
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalSize};
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
-use winit::keyboard::{Key, NamedKey};
+use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::{Window, WindowId};
 
 /// The control flow a poll-mode loop should adopt for the next iteration:
@@ -134,6 +134,7 @@ impl WinitHost {
             cursor_pos: (0.0, 0.0),
             poll: self.poll,
             waker,
+            modifiers: KeyModifiers::default(),
         };
 
         event_loop
@@ -171,6 +172,9 @@ struct WinitApp<H: PlatformHost> {
     /// Frame waker installed on the host's `Engine` in `resumed`; fired by the
     /// logic thread to wake this loop when a changed frame is ready.
     waker: FrameWaker,
+    /// Latest modifier state, tracked so a key event can be offered to the host
+    /// as a chord before it reaches the router (RFC-0030 §V3).
+    modifiers: KeyModifiers,
 }
 
 impl<H: PlatformHost> WinitApp<H> {
@@ -217,7 +221,14 @@ impl<H: PlatformHost> ApplicationHandler<FramePublished> for WinitApp<H> {
             }
         };
 
-        let size = to_window_size(window.inner_size(), window.scale_factor());
+        let mut size = to_window_size(window.inner_size(), window.scale_factor());
+        // The frame budget the dev runner charts against (RFC-0030 §Q3). Read
+        // once here rather than per frame: it is a property of the display, and
+        // a window dragged to a second monitor mid-session is a rarer event
+        // than sixty redraws a second.
+        size.refresh_rate_mhz = window
+            .current_monitor()
+            .and_then(|m| m.refresh_rate_millihertz());
 
         if let Err(e) = self
             .host
@@ -302,9 +313,23 @@ impl<H: PlatformHost> ApplicationHandler<FramePublished> for WinitApp<H> {
                 window.request_redraw();
             }
 
+            WindowEvent::ModifiersChanged(state) => {
+                self.modifiers = to_key_modifiers(state.state());
+            }
+
             WindowEvent::KeyboardInput { event, .. } => {
                 let pressed = event.state == ElementState::Pressed;
                 let key_str = key_to_str(&event.logical_key);
+                // The host gets first refusal with the modifier state. A dev
+                // chord that reached the router would be indistinguishable from
+                // the user typing, so a consumed chord stops here — no
+                // `on_key`, no `on_text` (RFC-0030 §V3).
+                let consumed =
+                    !key_str.is_empty() && self.host.on_chord(&key_str, pressed, self.modifiers);
+                if consumed {
+                    window.request_redraw();
+                    return;
+                }
                 if !key_str.is_empty() {
                     self.host.on_key(&key_str, pressed);
                 }
@@ -413,6 +438,18 @@ fn to_window_size(size: PhysicalSize<u32>, scale_factor: f64) -> WindowSize {
         width: size.width,
         height: size.height,
         scale_factor,
+        refresh_rate_mhz: None,
+    }
+}
+
+/// Converts `winit`'s modifier state into the windowing-crate-agnostic
+/// [`KeyModifiers`] that crosses into `byard-core`.
+fn to_key_modifiers(state: ModifiersState) -> KeyModifiers {
+    KeyModifiers {
+        shift: state.shift_key(),
+        ctrl: state.control_key(),
+        alt: state.alt_key(),
+        meta: state.super_key(),
     }
 }
 

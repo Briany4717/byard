@@ -10,6 +10,7 @@ use std::path::PathBuf;
 mod commands;
 mod deps;
 mod manifest;
+mod statusline;
 mod style;
 mod telemetry_overlay;
 mod trace;
@@ -45,6 +46,11 @@ enum Command {
         /// Perfetto, `chrome://tracing` or speedscope for a flame chart.
         #[arg(long, value_name = "PATH")]
         trace: Option<PathBuf>,
+        /// Start with the expanded per-scope profile block instead of the
+        /// one-line statusline (RFC-0030 §V1). Toggle at runtime with
+        /// `Mod+Shift+P`.
+        #[arg(long)]
+        profile: bool,
     },
     /// Parse and validate without opening a window (CI-friendly).
     Check {
@@ -91,7 +97,13 @@ fn main() {
             file,
             deep_link,
             trace,
-        } => commands::dev::run(file.as_deref(), deep_link.as_deref(), trace.as_deref()),
+            profile,
+        } => commands::dev::run(commands::dev::Options {
+            file: file.as_deref(),
+            deep_link: deep_link.as_deref(),
+            trace: trace.as_deref(),
+            profile,
+        }),
         Command::Check { file } => commands::check::run(file.as_deref()),
         Command::Build { file } => commands::build::run(file.as_deref()),
         Command::Clean { file } => commands::clean::run(file.as_deref()),

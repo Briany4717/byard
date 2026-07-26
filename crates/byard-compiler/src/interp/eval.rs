@@ -1146,6 +1146,45 @@ pub struct Interpreter {
     /// group pattern). `Rc`/`RefCell` are sound here: the interpreter and its
     /// event closures are single-threaded logic-thread state (`!Send`).
     radio_groups: std::collections::HashMap<SignalId, std::rc::Rc<std::cell::RefCell<Vec<String>>>>,
+    /// RFC-0032 §R4 retained-path state.
+    retained: RetainedLayout,
+    /// RFC-0032 §R3 step 6: the hash of every primitive this frame emitted, in
+    /// pool order, kept so the next frame can answer "did this primitive
+    /// change?" by comparing resolved values rather than by asserting `true`.
+    paint: byard_core::frame::PaintDigest,
+}
+
+/// What [`Interpreter::render`] remembers between frames so it can decide
+/// whether the layout tree may be retained (RFC-0032 §R4).
+///
+/// Every field here exists to answer *one* eligibility question, and the
+/// default answer is always "rebuild": a `None`/`false`/mismatched value takes
+/// the full path. New structural mutations that nobody classified therefore
+/// fall on the safe side by construction rather than by review.
+#[derive(Default)]
+struct RetainedLayout {
+    /// The atlas node ids the last successful build produced, in build order.
+    /// Retained rather than local (it was `let flat_ids = Vec::new()` inside
+    /// `render`) because the retained path **must reuse the stored ids**:
+    /// `next_target_index()` is `nodes_by_index.len()`, so re-deriving them
+    /// would silently reassign every id.
+    flat_ids: Vec<byard_core::atlas::layout::AtlasNodeId>,
+    /// Viewport of the last successful build — a resize forces a rebuild.
+    viewport: Option<(f32, f32)>,
+    /// How many overlays and how deep each navigation container was, so an
+    /// overlay or route mount/unmount forces a rebuild even though it does not
+    /// travel through `reconcile_structure`.
+    shape: Option<(usize, Vec<usize>)>,
+    /// Active colour scheme at the last successful build. A flip changes
+    /// nearly every resolved value at once, so it forces a rebuild (RFC-0032
+    /// §Q6) — compared here rather than hooked onto the setter, because
+    /// `theme.dark = …`, `bind: theme.dark` and the programmatic setter are
+    /// three different write paths into the same signal and a hook would have
+    /// to catch all three.
+    dark: Option<bool>,
+    /// Set by [`Interpreter::reload`] and [`Interpreter::set_theme`]; cleared
+    /// by the next render, which is forced to be a full one.
+    invalidated: bool,
 }
 
 /// One axis of a live [`ScrollDrag`]: the signal to write and its value at the
@@ -1245,6 +1284,31 @@ pub enum PerfWarning {
         /// The path that could not be pushed.
         path: String,
     },
+}
+
+/// The per-frame delta between two atlas path-counter snapshots (RFC-0032 §R7).
+///
+/// The counters are cumulative for the life of the thread; what a reader wants
+/// is "what did *this* frame do", and subtracting is cheaper and less invasive
+/// than resetting a global that tests also read.
+fn path_delta(
+    before: byard_core::atlas::layout::path_counters::Counts,
+    after: byard_core::atlas::layout::path_counters::Counts,
+) -> byard_core::atlas::layout::path_counters::Counts {
+    byard_core::atlas::layout::path_counters::Counts {
+        clears: after.clears.saturating_sub(before.clears),
+        full_computes: after.full_computes.saturating_sub(before.full_computes),
+        retained_recomputes: after
+            .retained_recomputes
+            .saturating_sub(before.retained_recomputes),
+        populate_calls: after.populate_calls.saturating_sub(before.populate_calls),
+        populate_dirty_targets: after
+            .populate_dirty_targets
+            .saturating_sub(before.populate_dirty_targets),
+        populate_dirty_matched: after
+            .populate_dirty_matched
+            .saturating_sub(before.populate_dirty_matched),
+    }
 }
 
 /// The largest overlap cluster among `rects` (`[x, y, w, h]` each): the
@@ -1530,6 +1594,9 @@ impl Interpreter {
     pub fn set_theme(&mut self, theme: super::theme::Theme) {
         let dark = theme.active_dark;
         self.theme = theme;
+        // A whole new token set: every resolved colour, size and typo scale
+        // may differ, so the next frame rebuilds (RFC-0032 §Q6).
+        self.invalidate_retained_layout();
         let sig = if let Some(sig) = self.theme_scheme {
             sig
         } else {
@@ -1550,6 +1617,11 @@ impl Interpreter {
     /// dark-mode observer) equivalent to `theme.dark = <dark>` in `byld`.
     pub fn set_theme_dark(&mut self, dark: bool) {
         self.theme.active_dark = dark;
+        // RFC-0032 §Q6: a scheme flip changes nearly every resolved value, so
+        // marking would visit the whole tree and then recompute the whole tree.
+        // It is also rare and user-initiated, so one rebuilt frame is
+        // imperceptible — and it is the honest default for a change this wide.
+        self.invalidate_retained_layout();
         if let Some(sig) = self.theme_scheme {
             self.ctx.write_signal(sig, Value::Bool(dark));
         }
@@ -1584,6 +1656,9 @@ impl Interpreter {
     /// either way — read-tracking re-derives the dependency graph (§11).
     pub fn reload(&mut self, new_view: &ViewDecl, kind: super::reload::ReloadKind) {
         use super::reload::ReloadKind;
+        // The tree is about to be re-lowered from a different AST, so nothing
+        // about last frame's build order can be assumed (RFC-0032 §R4).
+        self.invalidate_retained_layout();
         let old = std::mem::take(&mut self.var_sigs);
         self.env = Env::new();
         for member in &new_view.body {
@@ -3366,6 +3441,11 @@ impl Interpreter {
             byard_core::telemetry::ScopeKind::Interpreter
         );
 
+        // RFC-0032 §R7: which layout paths this frame takes, as a delta rather
+        // than a running total, so the `byard dev` readout can answer "am I on
+        // the fast path?" for *this* frame.
+        let paths_before = byard_core::atlas::layout::path_counters::snapshot();
+
         // Recomputed every frame: an animation re-marks itself active below if it
         // sampled without having settled this tick (RFC-0010).
         self.any_active = false;
@@ -3382,7 +3462,11 @@ impl Interpreter {
         // the passes that record them (reconcile can raise one too — RFC-0026's
         // stack-depth guard fires while navigation is being reconciled).
         self.perf_warnings.clear();
-        self.atlas.clear();
+        // The atlas is **not** torn down here any more (RFC-0032 §R3). Whether
+        // it can be retained is not knowable until `reconcile_structure` has
+        // run, so the decision — and the `clear()` that follows from it — moves
+        // below, next to the build it governs. Nothing between here and there
+        // touches the atlas.
         // Rebuild the handler set from the fresh layout, but keep the in-flight
         // gesture state (a pending `down`, the focused element) so a tap that
         // spans this re-render is still recognized (RFC-0003 E4).
@@ -3428,7 +3512,9 @@ impl Interpreter {
         // re-reconcile until nothing new mounts. Bounded by the reconcile depth
         // guard, so a runaway recursion still terminates (with a diagnostic).
         let mut passes = 0;
+        let mut structure_changed = false;
         while self.reconcile_structure(tree, 0) && passes <= MAX_INSTANCE_DEPTH {
+            structure_changed = true;
             let epoch = self.ctx.begin_tick();
             self.ctx.pull(epoch);
             passes += 1;
@@ -3444,10 +3530,6 @@ impl Interpreter {
             navs: &nav_pools,
         };
 
-        let mut flat_ids = Vec::new();
-        // Expand reactive `when`/`for` at the root, then build each concrete node.
-        let root_children = self.build_children(tree, pools, &mut flat_ids);
-
         // RFC-0017: collect every mounted `Overlay` (pre-order = declaration =
         // mount order) and build each into the *same* atlas as an absolutely
         // positioned wrapper floating over the main tree. Nothing is built when
@@ -3455,63 +3537,117 @@ impl Interpreter {
         // render root stays the plain main container it always was.
         let mut overlays: Vec<&RenderNode> = Vec::new();
         self.collect_overlays(tree, pools, &mut overlays);
+
+        // ── RFC-0032 §R4: may this frame retain the layout tree? ──────────────
+        //
+        // A default-deny whitelist. Every clause below is a reason the build
+        // order could differ from last frame's, and anything not on the list
+        // takes the full rebuild — so a future structural mutation that nobody
+        // classified is safe by omission rather than by review.
+        let shape = Self::layout_shape(overlays.len(), pools);
+        let eligible = !structure_changed
+            && !self.retained.invalidated
+            && self.retained.viewport == Some((width, height))
+            && self.retained.shape.as_ref() == Some(&shape)
+            && self.retained.dark == Some(self.theme_is_dark())
+            && !self.retained.flat_ids.is_empty();
+        self.retained.invalidated = false;
+
+        let mut flat_ids = Vec::new();
         let mut overlay_layouts: Vec<OverlayLayout<'_>> = Vec::new();
-        for ov in overlays {
-            if let Some(layout) = self.build_overlay_layout(ov, pools) {
-                overlay_layouts.push(layout);
+        let mut root_ids = None;
+        let mut retained_used = false;
+
+        if eligible {
+            self.atlas.begin_retained_build();
+            root_ids = self.build_layout_pass(
+                tree,
+                pools,
+                (width, height),
+                &mut flat_ids,
+                &overlays,
+                &mut overlay_layouts,
+            );
+            // `end_retained_build` is the load-bearing check: it fails unless
+            // every build-order slot was reused *and* the walk produced exactly
+            // as many nodes as the retained tree holds. The `flat_ids`
+            // comparison is redundant given that, and kept anyway — this is the
+            // path where being wrong is invisible on screen and answers taps
+            // from the wrong element.
+            retained_used = self.atlas.end_retained_build()
+                && root_ids.is_some()
+                && flat_ids == self.retained.flat_ids;
+            if !retained_used {
+                // Discard wholesale. A half-applied retained build is not a
+                // thing this code will ever try to repair in place.
+                self.atlas.clear();
+                flat_ids.clear();
+                overlay_layouts.clear();
+                root_ids = None;
             }
         }
 
-        // The main content container (viewport-sized, column). `None` when the
-        // whole view is nothing but overlays.
-        let main_id = if root_children.is_empty() {
-            None
-        } else {
-            let root_style =
-                byard_core::atlas::layout::ContainerStyle::new(Some(width), Some(height))
-                    .with_direction(byard_core::atlas::layout::FlexDir::Column);
-            self.atlas.add_container(root_style, &root_children).ok()
-        };
-
-        // The render root: with no overlay it is the main container itself (the
-        // pre-RFC-0017 shape, unchanged). With overlays it is a super-root
-        // holding the main content plus each overlay wrapper as an absolute
-        // sibling that neither displaces nor is displaced by the main tree.
-        let root_id = if overlay_layouts.is_empty() {
-            main_id
-        } else {
-            let mut super_children = Vec::new();
-            if let Some(m) = main_id {
-                super_children.push(m);
+        if !retained_used {
+            if !eligible {
+                self.atlas.clear();
             }
-            for ol in &overlay_layouts {
-                super_children.push(ol.wrapper_id);
-            }
-            let super_style =
-                byard_core::atlas::layout::ContainerStyle::new(Some(width), Some(height))
-                    .with_direction(byard_core::atlas::layout::FlexDir::Column);
-            self.atlas.add_container(super_style, &super_children).ok()
-        };
+            root_ids = self.build_layout_pass(
+                tree,
+                pools,
+                (width, height),
+                &mut flat_ids,
+                &overlays,
+                &mut overlay_layouts,
+            );
+        }
 
-        let Some(root_id) = root_id else {
+        let Some((main_id, _root_id)) = root_ids else {
             // Nothing to lay out (an empty tree). Still restore the pools taken
             // out above, or the next frame would see them empty (RFC-0018).
             self.for_pools = for_pools;
             self.when_pools = when_pools;
             self.nav_pools = nav_pools;
+            self.retained.flat_ids.clear();
+            self.retained.viewport = None;
+            self.retained.shape = None;
+            frame.set_atlas_paths(path_delta(
+                paths_before,
+                byard_core::atlas::layout::path_counters::snapshot(),
+            ));
             return;
         };
-        self.atlas.set_root(root_id).unwrap();
         // Drive layout with the shared text measurer so wrapping `Text` leaves
         // reflow to their parent's width (RFC-0005 default wrap). Disjoint field
         // borrows: `self.atlas` and `self.text_measurer`.
         let measurer = self
             .text_measurer
             .get_or_insert_with(byard_core::text::TextMeasurer::new);
-        self.atlas
-            .compute_with_text(Viewport::new(width, height), measurer)
-            .unwrap();
-        self.atlas.populate_frame(frame, &[]);
+        if retained_used {
+            // **`_with_text`, always.** The sizer-less `recompute_dirty` runs
+            // the measure protocol with no sizer, so every wrapping `Text` leaf
+            // Taffy touches would fall back to its natural single-line size and
+            // silently un-wrap (RFC-0032 §R5). Taffy invokes the callback only
+            // for nodes it is actually recomputing, so a clean paragraph is
+            // never re-shaped — which is where this whole path's win comes from.
+            self.atlas
+                .recompute_dirty_with_text(Viewport::new(width, height), measurer)
+                .unwrap();
+        } else {
+            self.atlas
+                .compute_with_text(Viewport::new(width, height), measurer)
+                .unwrap();
+        }
+        // RFC-0032 §R3 step 5. On the retained path this is the set of nodes
+        // whose layout *inputs* moved; on a full rebuild every node is new, so
+        // the atlas reports the whole tree and the frame is dirty everywhere —
+        // which is the truth about a rebuilt frame.
+        self.atlas.populate_frame_dirty(frame, retained_used);
+
+        self.retained.flat_ids.clear();
+        self.retained.flat_ids.extend_from_slice(&flat_ids);
+        self.retained.viewport = Some((width, height));
+        self.retained.shape = Some(shape);
+        self.retained.dark = Some(self.theme_is_dark());
 
         let parent_rect = crate::interp::intrinsics::Rect::new(0.0, 0.0, width, height);
 
@@ -3557,11 +3693,25 @@ impl Interpreter {
             self.emit_overlay(ol, frame, width, height, pools);
         }
 
+        // RFC-0032 §R3 step 6, and the last thing this frame does before its
+        // primitives leave the interpreter: replace the blanket `dirty: true`
+        // every emission site writes with what actually changed, by comparing
+        // each primitive's resolved values against the same position last
+        // frame. Runs after the overlay phase because overlays push into the
+        // same pools, and one comparison over the finished frame is both
+        // cheaper and harder to get wrong than a per-site bookkeeping scheme.
+        self.paint.apply(frame);
+
         // RFC-0018/RFC-0026: return the (possibly grown) pools taken out for the
         // read-only build/paint phase.
         self.for_pools = for_pools;
         self.when_pools = when_pools;
         self.nav_pools = nav_pools;
+
+        frame.set_atlas_paths(path_delta(
+            paths_before,
+            byard_core::atlas::layout::path_counters::snapshot(),
+        ));
 
         // RFC-0023 performance diagnostic: ≥ 3 stacked frosted-glass panes in
         // one frame means each upper pane re-blurs the output of the lower
@@ -3574,6 +3724,109 @@ impl Interpreter {
             self.perf_warnings
                 .push(PerfWarning::OverlappingBlurs { count: deepest });
         }
+    }
+
+    /// The structural shape a retained build must match (RFC-0032 §R4): how
+    /// many overlays are mounted, and how deep / how many screens live each
+    /// navigation container holds.
+    ///
+    /// Overlay mount/unmount and route push/pop change the node sequence
+    /// without ever travelling through `reconcile_structure` — they are pools
+    /// of their own — so they need their own clause rather than being covered
+    /// by the structural signal that already exists.
+    fn layout_shape(overlays: usize, pools: Pools<'_>) -> (usize, Vec<usize>) {
+        let navs = pools
+            .navs
+            .iter()
+            .flat_map(|p| [p.entries.len(), p.live.len()])
+            .collect();
+        (overlays, navs)
+    }
+
+    /// Builds this frame's layout tree into the atlas and returns
+    /// `(main container, render root)`, or `None` when there is nothing to lay
+    /// out.
+    ///
+    /// Called with the atlas either freshly [`clear`](byard_core::atlas::LayoutAtlas::clear)ed
+    /// (full path) or opened for a retained build — the walk is **identical**
+    /// either way, which is the property that makes the retained path safe to
+    /// reason about: there is no second implementation to drift.
+    fn build_layout_pass<'a>(
+        &mut self,
+        tree: &'a [RenderNode],
+        pools: Pools<'a>,
+        viewport: (f32, f32),
+        flat_ids: &mut Vec<byard_core::atlas::layout::AtlasNodeId>,
+        overlays: &[&'a RenderNode],
+        overlay_layouts: &mut Vec<OverlayLayout<'a>>,
+    ) -> Option<(
+        Option<byard_core::atlas::layout::AtlasNodeId>,
+        byard_core::atlas::layout::AtlasNodeId,
+    )> {
+        let (width, height) = viewport;
+        // Expand reactive `when`/`for` at the root, then build each concrete node.
+        let root_children = self.build_children(tree, pools, flat_ids);
+
+        for ov in overlays {
+            if let Some(layout) = self.build_overlay_layout(ov, pools) {
+                overlay_layouts.push(layout);
+            }
+        }
+
+        // The main content container (viewport-sized, column). `None` when the
+        // whole view is nothing but overlays.
+        let main_id = if root_children.is_empty() {
+            None
+        } else {
+            let root_style =
+                byard_core::atlas::layout::ContainerStyle::new(Some(width), Some(height))
+                    .with_direction(byard_core::atlas::layout::FlexDir::Column);
+            self.atlas.add_container(root_style, &root_children).ok()
+        };
+
+        // The render root: with no overlay it is the main container itself (the
+        // pre-RFC-0017 shape, unchanged). With overlays it is a super-root
+        // holding the main content plus each overlay wrapper as an absolute
+        // sibling that neither displaces nor is displaced by the main tree.
+        let root_id = if overlay_layouts.is_empty() {
+            main_id
+        } else {
+            let mut super_children = Vec::new();
+            if let Some(m) = main_id {
+                super_children.push(m);
+            }
+            for ol in overlay_layouts.iter() {
+                super_children.push(ol.wrapper_id);
+            }
+            let super_style =
+                byard_core::atlas::layout::ContainerStyle::new(Some(width), Some(height))
+                    .with_direction(byard_core::atlas::layout::FlexDir::Column);
+            self.atlas.add_container(super_style, &super_children).ok()
+        };
+
+        // Set while the atlas is still `Building` — on the retained path
+        // `end_retained_build` flips it to `Computed` immediately afterwards,
+        // and `set_root` refuses to run in that state.
+        let root = root_id?;
+        self.atlas.set_root(root).ok()?;
+        Some((main_id, root))
+    }
+
+    /// Forces the next [`render`](Self::render) onto the full rebuild path
+    /// (RFC-0032 §R4).
+    ///
+    /// Called by every mutation that can change the *shape* of the tree
+    /// without going through `reconcile_structure`: a hot reload re-lowers the
+    /// view, and a theme flip changes nearly every resolved value at once, so
+    /// marking would visit everything and then recompute everything — strictly
+    /// more expensive than the rebuild it replaced (RFC-0032 §Q6).
+    pub fn invalidate_retained_layout(&mut self) {
+        self.retained.invalidated = true;
+        // A pool *position* is about to stop meaning what it meant, so the
+        // positional paint comparison has to forget too — otherwise two
+        // unrelated primitives that happen to hash alike would be equated
+        // across the discontinuity (RFC-0032 §R3 step 6).
+        self.paint.reset();
     }
 
     /// Runtime performance diagnostics recomputed by the last

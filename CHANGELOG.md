@@ -12,6 +12,56 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Element invalidation (RFC-0032).** `support/AUDIT_incremental_paths_and_memory_model.md`
+  found three incremental layers that production never took, and PR #148
+  established they had one cause rather than three: the evaluation model did
+  not produce the signal the invalidation model consumed. It does now, and the
+  three layers are live.
+
+  - **Two value fingerprints per element**, hashed from the *resolved* values
+    the render walk already computes — never from a dependency graph. RFC-0032
+    §R1 rejects reactive attribute bindings for one reason: a missing edge
+    yields a false "clean", and a false clean is an element that renders in its
+    new position and answers taps in its old one. A value comparison has no
+    edge to miss. Every `f32` is hashed through `to_bits`, because `NaN != NaN`
+    makes an element permanently dirty and `-0.0 == 0.0` makes it permanently
+    clean — and the second one is silent.
+  - **The retained layout path.** A frame with no structural change, no
+    resize, no hot reload, no theme flip and no overlay/route movement restyles
+    the Taffy tree in place instead of tearing it down, keeping its cached
+    geometry, its parent map, its spatial grid and its view generation. The
+    eligibility list is a **default-deny whitelist** and every clause has its
+    own test.
+  - **`recompute_dirty_with_text`** — the incremental pass, with a text sizer.
+    The sizer-less `recompute_dirty` sizes every wrapping `Text` it touches at
+    its natural *single-line* width, which would silently un-wrap every
+    paragraph on the frame after any retained one; it is now documented as
+    benchmark-only.
+  - **A real dirty set, end to end.** `populate_frame` receives the
+    layout-dirty targets, every primitive carries a `dirty` bit derived from
+    comparing its resolved values against the same pool position last frame,
+    and the encoder's scissor union is built from those instead of
+    `vec![true; …]`.
+  - **`AttrClass` is a required field of every attribute definition**, so an
+    attribute cannot be added without saying whether it can move geometry, and
+    the class is answered per intrinsic (`align` on a `Column` and `align` on a
+    `Text` are different questions). RFC-0010's INV-8 — "an animated property
+    must never trigger relayout" — becomes a lower-time diagnostic rather than
+    a sentence in an RFC: `#[size: 20 with anim.spring()]` on a `Text` is now a
+    compile error naming `transform` as the alternative, where before it
+    compiled and relaid out the tree every frame.
+  - **`byard dev` prints which path each frame took** —
+    `atlas  retained · 3 node(s) marked · 3/3 matched`. The answer to "am I on
+    the fast path?" is on the readout instead of inferred from a timing that
+    got smaller.
+
+  Measured on a scene of twelve wrapping paragraphs under one spinning icon
+  (Apple M2, debug build): `encode.glyphs` 45.1 ms → 2.0 ms, `layout.taffy`
+  0.19 ms → 0.01 ms, frame total 46.4 ms → 17.1 ms, i.e. from ~21 fps to a
+  vsync-locked 60 with 13 ms of headroom to spare.
+
+  Example: `crates/byard-cli/examples/incremental`.
+
 - **The encode breakdown (RFC-0030 §I1, second pass).** `encode.frame` was a
   single ~6 ms row — the largest term in the frame and the least explained
   one. It now has five sub-scopes whose self-times add up to it exactly:
@@ -287,6 +337,22 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `text::TextSizer` trait.
 
 ### Fixed
+
+- **Dirty bits survive a skipped frame.** The relay is latest-wins, so a logic
+  thread that outruns the display — every logic thread — has most of its
+  frames dropped. That cost nothing while every primitive was emitted dirty;
+  with a real dirty set it meant the frame carrying "this paragraph changed"
+  could be dropped and the next one would truthfully report it clean.
+  `Relay::publish` now merges an unrendered frame's dirty bits into its
+  replacement. The previous mechanism — detect the version gap, force a full
+  redraw — was correct but fired on nearly every frame, which handed back the
+  entire benefit.
+- **The incremental scissor no longer under-covers three kinds of primitive.**
+  Each was unreachable while the dirty union spanned the whole frame: the
+  antialiased fringe every analytic pipeline paints just outside its rect (a
+  one-pixel halo of the previous frame around anything that moved), a wrapping
+  `Text`'s true line count (stale glyphs below the first line), and a drop
+  shadow's reach outside the box it belongs to.
 
 - **A settled app now genuinely idles at zero frames (RFC-0010 / RFC-0025 §2).**
   `Interpreter::has_active_animations()` existed and **nothing consulted it**:

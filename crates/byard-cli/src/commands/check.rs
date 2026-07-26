@@ -4,36 +4,43 @@
 
 use crate::deps::resolve_project;
 use crate::manifest::Manifest;
+use crate::style;
 use byard_compiler::CompileError;
 use byard_compiler::interp::eval::Interpreter;
 use byard_compiler::resolve::{ResolvedProgram, SourceMap};
 use std::path::Path;
 
 pub fn run(file: Option<&Path>) -> Result<(), String> {
+    let started = std::time::Instant::now();
     let manifest = Manifest::discover(file)?;
 
-    println!("Checking {}…", manifest.entry.display());
+    style::action(&format!("checking {}", manifest.entry.display()));
 
     let (program, _provider) = resolve_project(&manifest)?;
     let n_files = program.source_map.files().count();
     let n_pkgs = program.packages.len().saturating_sub(1);
     if n_files > 1 || n_pkgs > 0 {
-        println!("  {n_files} file(s), {n_pkgs} package(s)");
+        style::info(&format!("{n_files} file(s), {n_pkgs} package(s)"));
     }
 
     let errors = check_program_with_theme(&program, manifest.theme);
 
     if errors.is_empty() {
-        println!("  ok (0 errors)");
+        style::ok("0 errors", Some(started.elapsed()));
         Ok(())
     } else {
         for err in &errors {
             // rustc-compatible format: file:line:col: error[kind]: message (C7),
             // located through the program-wide source map (RFC-0008).
+            //
+            // **This line is not styled and its shape is not negotiable.**
+            // Editor problem matchers parse it, and colouring or reformatting
+            // it would break integrations that then go quiet rather than
+            // failing — which nobody notices for a long time.
             eprintln!("{}", program.source_map.render_line(err));
         }
         let n = errors.len();
-        eprintln!("{n} error{}.", if n == 1 { "" } else { "s" });
+        style::err(&format!("{n} error{}", if n == 1 { "" } else { "s" }));
         // Signal failure to the caller (main.rs maps Err → exit 1).
         Err(String::new())
     }

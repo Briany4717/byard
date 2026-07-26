@@ -1,5 +1,6 @@
 //! `byard new <name>` — scaffold a new Byard project (RFC-0006 §4, decision C6).
 
+use crate::style;
 use std::path::{Path, PathBuf};
 
 pub fn run(name: &str) -> Result<(), String> {
@@ -25,11 +26,11 @@ pub fn run(name: &str) -> Result<(), String> {
         return Err(e);
     }
 
-    println!("  Created {name}/");
+    style::info(&format!("created {name}/"));
     for f in &created {
-        println!("  Created {}", f.display());
+        style::info(&format!("created {}", f.display()));
     }
-    println!("\nRun `cd {name} && byard dev` to start.");
+    style::ok(&format!("run `cd {name} && byard dev` to start"), None);
     Ok(())
 }
 

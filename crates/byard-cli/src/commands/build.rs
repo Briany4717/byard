@@ -18,11 +18,12 @@ use byard_compiler::vector::{BakedVectorAtlas, bake_atlas, collect_static_vector
 
 use crate::deps::resolve_project;
 use crate::manifest::Manifest;
+use crate::style;
 
 pub fn run(file: Option<&Path>) -> Result<(), String> {
     let manifest = Manifest::discover(file)?;
-    println!("  Byard 0.0.0 — build (AOT vector atlas)");
-    println!("  Entry: {}", manifest.entry.display());
+    style::fact("Byard", "0.0.0 — build (AOT vector atlas)");
+    style::fact("Entry", &manifest.entry.display().to_string());
 
     let (program, _provider) = resolve_project(&manifest)?;
     if !program.errors.is_empty() {

@@ -11,6 +11,7 @@
 //!   registry (deferred by D-H) exists. The resolved git source is written
 //!   into `byard.toml` explicitly, so the manifest never depends on the index.
 
+use crate::style;
 use std::path::Path;
 
 use crate::manifest::Manifest;
@@ -61,7 +62,10 @@ pub fn run(args: &AddArgs) -> Result<(), String> {
                     args.name, args.name, args.name
                 ));
             };
-            println!("  `{}` resolved via the built-in index → {url}", args.name);
+            style::info(&format!(
+                "`{}` resolved via the built-in index -> {url}",
+                args.name
+            ));
             git_entry(url, args.tag, args.rev)?
         }
     };
@@ -86,10 +90,13 @@ pub fn run(args: &AddArgs) -> Result<(), String> {
 
     std::fs::write(&manifest_path, doc.to_string())
         .map_err(|e| format!("{}: {e}", manifest_path.display()))?;
-    println!(
-        "  {} `{}` in byard.toml → {entry_toml}",
-        if already { "Updated" } else { "Added" },
-        args.name
+    style::ok(
+        &format!(
+            "{} `{}` in byard.toml -> {entry_toml}",
+            if already { "updated" } else { "added" },
+            args.name
+        ),
+        None,
     );
 
     // ── Fetch + lock (the `get` pass) ─────────────────────────────────────────
@@ -120,7 +127,9 @@ fn git_entry(url: &str, tag: Option<&str>, rev: Option<&str>) -> Result<String, 
                 .split_whitespace()
                 .next()
                 .ok_or("git ls-remote returned nothing; pin with `--tag`/`--rev`")?;
-            println!("  Pinned to current HEAD {rev} (D-H: refs are always exact)");
+            style::info(&format!(
+                "pinned to current HEAD {rev} (refs are always exact)"
+            ));
             Ok(format!("{{ git = {url:?}, rev = {rev:?} }}"))
         }
     }

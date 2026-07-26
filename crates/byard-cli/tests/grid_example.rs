@@ -22,7 +22,7 @@ fn grid_example_checks_clean() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(out.status.success(), "check failed:\n{stdout}\n{stderr}");
     assert!(
-        stdout.contains("ok (0 errors)"),
+        stdout.contains("0 errors"),
         "expected a clean check, got:\n{stdout}"
     );
 }

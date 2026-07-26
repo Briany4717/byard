@@ -595,21 +595,34 @@ impl Engine {
             return Ok(());
         };
 
-        let frame = match self.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(f)
-            | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
-            wgpu::CurrentSurfaceTexture::Lost | wgpu::CurrentSurfaceTexture::Outdated => {
-                self.surface
-                    .configure(self.encoder.device(), &self.surface_config);
-                return Ok(());
-            }
-            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
-                return Ok(());
-            }
-            wgpu::CurrentSurfaceTexture::Validation => {
-                return Err(ByardError::RenderSurface(
-                    "GPU validation error during surface texture acquire".to_string(),
-                ));
+        // RFC-0030 §I1: swapchain acquire, timed on its own.
+        //
+        // Under FIFO this is where vsync backpressure lands — the driver
+        // parks the caller here until a swapchain image is free. Left
+        // unscoped (as it was) that wait is invisible, and a frame that is
+        // simply *well paced* reads identically to one that is slow, which
+        // makes every other number on the readout unfalsifiable. It is
+        // deliberately a top-level scope and deliberately not inside
+        // `encode.frame`: it is wall-clock the engine spends waiting, not
+        // work it performs.
+        let frame = {
+            crate::profile_scope!("present.acquire");
+            match self.surface.get_current_texture() {
+                wgpu::CurrentSurfaceTexture::Success(f)
+                | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
+                wgpu::CurrentSurfaceTexture::Lost | wgpu::CurrentSurfaceTexture::Outdated => {
+                    self.surface
+                        .configure(self.encoder.device(), &self.surface_config);
+                    return Ok(());
+                }
+                wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
+                    return Ok(());
+                }
+                wgpu::CurrentSurfaceTexture::Validation => {
+                    return Err(ByardError::RenderSurface(
+                        "GPU validation error during surface texture acquire".to_string(),
+                    ));
+                }
             }
         };
 
@@ -631,7 +644,15 @@ impl Engine {
             .encoder
             .encode_frame_from_relay(&frame.texture, &relay_frame)?;
         self.encoder.submit(cmd);
-        frame.present();
+        {
+            // RFC-0030 §I1: the swapchain commit. Cheap on a healthy frame and
+            // the second place a compositor can charge the engine for pacing,
+            // so it is measured rather than assumed — the pair
+            // (`present.acquire`, `present.submit`) is what distinguishes "the
+            // frame was slow" from "the frame was on time and waited".
+            crate::profile_scope!("present.submit");
+            frame.present();
+        }
         Ok(())
     }
 

@@ -23,6 +23,42 @@
 //! `ErrorFilter::Validation`. Failures are surfaced as
 //! [`ByardError::PipelineCompilation`](crate::ByardError::PipelineCompilation)
 //! — the engine never panics on a GPU error.
+//!
+//! # Where the encode time actually goes (RFC-0030 §I1)
+//!
+//! `encode.frame` used to be a single row on the `byard dev` readout, and the
+//! standing assumption about it — including in RFC-0033's summary — was that
+//! it is dominated by the per-frame `create_buffer_init` calls each pipeline
+//! makes. It is not. Measured on Apple M2, debug build with `telemetry`,
+//! steady state:
+//!
+//! | Scope | `examples/profiling` | 12 wrapping paragraphs |
+//! |---|---|---|
+//! | `encode.frame` (inclusive) | 6.55 ms | 45.78 ms |
+//! | ↳ `encode.glyphs` | **5.69 ms (84 %)** | **45.13 ms (98 %)** |
+//! | ↳ `encode.passes` (inclusive) | 0.25 ms | 0.17 ms |
+//! | ↳↳ `encode.buffers` (Σ) | 0.23 ms (3.4 %) | 0.15 ms (0.3 %) |
+//! | ↳ `encode.uploads` | 0.00 ms | 0.00 ms |
+//!
+//! **The encoder's cost is glyph shaping.** And it is paid for text that did
+//! not change: the second scene alters exactly one value per frame — a
+//! rotation angle, which touches no text at all — yet every paragraph is
+//! re-shaped, because the interpreter emits every [`TextLine`] with
+//! `dirty: true` and the text pipeline has no other signal to go on. That is
+//! the encoder-side price of the dirty set described in RFC-0001 §2.2 not
+//! existing yet (see `0001-erratum-memory-and-dirty-model.md` and RFC-0032).
+//!
+//! Two consequences for anyone optimising here:
+//!
+//! - Removing per-frame buffer creation (RFC-0033) is worth doing on
+//!   determinism grounds — the engine should not allocate and free GPU
+//!   resources at the display rate — but it is a **0.1–0.2 ms** change, not a
+//!   5 ms one. Do not cite it as a frame-time fix.
+//! - `encode.buffers` is deliberately **one sample per draw group**, not one
+//!   per allocation: [`crate::telemetry::SampleBlock::self_ns`] recovers direct
+//!   children from a bounded scan, so a per-iteration scope inside a loop over
+//!   an unbounded primitive list would make the *parent's* self-time wrong on
+//!   exactly the frames worth reading.
 
 pub mod backdrop;
 pub mod canvas_shape;
@@ -676,6 +712,13 @@ impl EncoderSubsystem {
     /// buffer that writes the mapped buffer has actually been submitted
     /// (see [`GpuTimer::resolve_and_copy`]'s doc comment).
     pub(crate) fn submit(&mut self, buffer: wgpu::CommandBuffer) {
+        // RFC-0030 §I1: a top-level scope rather than a child of
+        // `encode.frame`, because the submission happens after that scope has
+        // closed — the caller owns the command buffer in between. It is also
+        // where `queue.write_buffer` traffic staged during encoding is
+        // flushed, so a rise here is the honest place to look for upload cost
+        // that the pipelines themselves do not pay.
+        crate::profile_scope!("encode.submit");
         self.queue.submit(std::iter::once(buffer));
         if self.gpu_timing_pending {
             self.gpu_timing_pending = false;
@@ -845,20 +888,29 @@ impl EncoderSubsystem {
         // asynchronously two frames later by `gpu_timer.rs`. Both land on
         // this thread's ring; the overlay separates them by `ScopeKind`.
         crate::profile_scope!("encode.frame");
-        // RFC-0009 §2-C / INV-8: the single place this atlas is ever written
-        // to. Applied unconditionally (not gated on `should_draw` below) so a
-        // pending upload is never silently dropped on a skip-frame.
-        let applied = self.vector_atlas.apply_uploads(&self.queue, atlas_uploads);
-        if let Some(tx) = &self.vector_ack_tx {
-            for id in applied {
-                // The dev JIT cache may have already dropped this entry (a
-                // hot-reload invalidated it); a disconnected/full receiver is
-                // not this encoder's problem, so ignore the send result.
-                let _ = tx.send(id);
+        {
+            // RFC-0030 §I1 sub-scope: everything this frame hands to the GPU
+            // that is *not* instance data — the vector MSDF atlas layers and
+            // the texture cache's decoded images. Both are texture writes, so
+            // they scale with content churn rather than with node count, and
+            // separating them is what tells a one-off upload spike apart from
+            // a steady per-frame cost.
+            crate::profile_scope!("encode.uploads");
+            // RFC-0009 §2-C / INV-8: the single place this atlas is ever written
+            // to. Applied unconditionally (not gated on `should_draw` below) so a
+            // pending upload is never silently dropped on a skip-frame.
+            let applied = self.vector_atlas.apply_uploads(&self.queue, atlas_uploads);
+            if let Some(tx) = &self.vector_ack_tx {
+                for id in applied {
+                    // The dev JIT cache may have already dropped this entry (a
+                    // hot-reload invalidated it); a disconnected/full receiver is
+                    // not this encoder's problem, so ignore the send result.
+                    let _ = tx.send(id);
+                }
             }
-        }
 
-        self.request_textures(textures);
+            self.request_textures(textures);
+        }
 
         self.drain_gpu_samples_into_telemetry();
 
@@ -936,6 +988,11 @@ impl EncoderSubsystem {
 
         // ── Text prepare (before the render pass) ─────────────────────────────
         if should_draw {
+            // RFC-0030 §I1 sub-scope: glyph shaping, atlas residency and the
+            // text pipeline's own vertex staging. It is the term RFC-0032
+            // exists to skip for clean subtrees, so it has to be readable on
+            // its own rather than folded into the pass recording next to it.
+            crate::profile_scope!("encode.glyphs");
             let viewport_dirty = self.viewport_dirty;
             // One glyph batch per pass segment (z-layer batches, further split
             // at backdrop barriers) — shaping inside `prepare` stays global,
@@ -1495,6 +1552,12 @@ fn draw_ui_pass(
     bd: &mut BackdropDraw<'_>,
     gpu_timer: Option<&GpuTimer>,
 ) -> Result<(), ByardError> {
+    // RFC-0030 §I1 sub-scope: render-pass recording and draw-call submission
+    // for every segment. Its `encode.buffers` children (one per draw group,
+    // see `profile_buffers!`) are nested inside it because that is where the
+    // per-frame `create_buffer_init` calls physically live today — RFC-0033
+    // is the change that hoists them out.
+    crate::profile_scope!("encode.passes");
     let DrawPipelines {
         solid: render_pipeline,
         clear: clear_pipeline,
@@ -2069,7 +2132,7 @@ impl<'a> ScissorInputs<'a> {
 
 /// A physical-pixel scissor tuple `(x, y, w, h)` as
 /// `wgpu::RenderPass::set_scissor_rect` expects.
-type Scissor = (u32, u32, u32, u32);
+pub(crate) type Scissor = (u32, u32, u32, u32);
 
 /// The per-frame context a clipped draw needs (RFC-0005 `ScrollView`): the clip
 /// table, the frame's base scissor (the dirty region on an incremental frame,
@@ -2461,21 +2524,25 @@ fn draw_clear_quad(
         radii: [0.0; 4],
         transform: Transform::IDENTITY,
     };
-    let instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("ByardCore - Clear Quad Instance Buffer"),
-        contents: bytemuck::bytes_of(&clear_instance),
-        usage: wgpu::BufferUsages::VERTEX,
-    });
-    // The clear pipeline shares `solid_box.wgsl`, which now reads a depth at
-    // location 9, so the clear draw must still supply the buffer. The value is
-    // irrelevant: the clear pipeline runs with depth-write disabled and an
-    // `Always` compare (see `build_solid_box_pipeline`), so it never touches the
-    // depth buffer — it only wipes colour in the scissor region.
-    let depth_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("ByardCore - Clear Quad Depth Buffer"),
-        contents: bytemuck::bytes_of(&crate::frame::DRAW_DEPTH_CLEAR),
-        usage: wgpu::BufferUsages::VERTEX,
-    });
+    let (instance_buffer, depth_buffer) = {
+        crate::profile_scope!("encode.buffers");
+        let instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("ByardCore - Clear Quad Instance Buffer"),
+            contents: bytemuck::bytes_of(&clear_instance),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        // The clear pipeline shares `solid_box.wgsl`, which now reads a depth at
+        // location 9, so the clear draw must still supply the buffer. The value is
+        // irrelevant: the clear pipeline runs with depth-write disabled and an
+        // `Always` compare (see `build_solid_box_pipeline`), so it never touches the
+        // depth buffer — it only wipes colour in the scissor region.
+        let depth_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("ByardCore - Clear Quad Depth Buffer"),
+            contents: bytemuck::bytes_of(&crate::frame::DRAW_DEPTH_CLEAR),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        (instance_buffer, depth_buffer)
+    };
 
     render_pass.set_pipeline(pipeline);
     render_pass.set_bind_group(0, bind_group, &[]);
@@ -2506,22 +2573,26 @@ fn draw_solid_box_instances(
     clip_slice: &[Option<u16>],
     ctx: ClipCtx<'_>,
 ) {
-    let instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("ByardCore - SolidBox Instance Buffer"),
-        contents: bytemuck::cast_slice(instances),
-        usage: wgpu::BufferUsages::VERTEX,
-    });
-    // Draw-order depths, parallel to `instances`, fed as a second per-instance
-    // vertex buffer (shader location 9) — keeps `BoxInstance`'s Pod layout
-    // untouched. Padded to the instance count with the far plane so a
-    // length mismatch can never index out of range on the GPU.
-    let mut depth_data = depths.to_vec();
-    depth_data.resize(instances.len(), crate::frame::DRAW_DEPTH_CLEAR);
-    let depth_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("ByardCore - SolidBox Depth Buffer"),
-        contents: bytemuck::cast_slice(&depth_data),
-        usage: wgpu::BufferUsages::VERTEX,
-    });
+    let (instance_buffer, depth_buffer) = {
+        crate::profile_scope!("encode.buffers");
+        let instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("ByardCore - SolidBox Instance Buffer"),
+            contents: bytemuck::cast_slice(instances),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        // Draw-order depths, parallel to `instances`, fed as a second per-instance
+        // vertex buffer (shader location 9) — keeps `BoxInstance`'s Pod layout
+        // untouched. Padded to the instance count with the far plane so a
+        // length mismatch can never index out of range on the GPU.
+        let mut depth_data = depths.to_vec();
+        depth_data.resize(instances.len(), crate::frame::DRAW_DEPTH_CLEAR);
+        let depth_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("ByardCore - SolidBox Depth Buffer"),
+            contents: bytemuck::cast_slice(&depth_data),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        (instance_buffer, depth_buffer)
+    };
 
     render_pass.set_pipeline(pipeline);
     render_pass.set_bind_group(0, bind_group, &[]);
@@ -3586,5 +3657,65 @@ mod tests {
         };
         let (bounds, ..) = compute_scissor(&inputs, 1.0, 1000, 1000).unwrap();
         assert_eq!(bounds, rect_of(decorated[0].base.rect));
+    }
+}
+
+/// `encode.submit` lives on `submit`, which is `pub(crate)` — reachable from
+/// `Engine` but not from an integration test, so its INV-18 assertion has to
+/// live in-crate. Everything else about the encode breakdown is covered by
+/// `tests/instrumentation.rs`.
+#[cfg(all(test, feature = "telemetry"))]
+mod submit_scope_tests {
+    use super::*;
+
+    fn try_device() -> Option<(std::sync::Arc<wgpu::Device>, std::sync::Arc<wgpu::Queue>)> {
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let adapter =
+            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+                .ok()?;
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("ByardCore - encode.submit Test Device"),
+            required_features: wgpu::Features::empty(),
+            required_limits: adapter.limits(),
+            memory_hints: wgpu::MemoryHints::Performance,
+            ..Default::default()
+        }))
+        .ok()?;
+        Some((std::sync::Arc::new(device), std::sync::Arc::new(queue)))
+    }
+
+    #[test]
+    fn submitting_a_command_buffer_enters_encode_submit() {
+        let Some((device, queue)) = try_device() else {
+            eprintln!("no GPU adapter available — skipping");
+            return;
+        };
+        let mut enc = pollster::block_on(EncoderSubsystem::init(
+            std::sync::Arc::clone(&device),
+            std::sync::Arc::clone(&queue),
+            wgpu::TextureFormat::Rgba8UnormSrgb,
+            1.0,
+            32,
+            32,
+        ))
+        .expect("encoder init");
+
+        let empty = device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None })
+            .finish();
+        let _ = crate::telemetry::drain_samples();
+        enc.submit(empty);
+        device.poll(wgpu::PollType::wait_indefinitely()).ok();
+
+        let block = crate::telemetry::drain_samples();
+        assert!(
+            block
+                .samples
+                .iter()
+                .any(|s| crate::telemetry::scope_name(s.scope) == Some("encode.submit")),
+            "encode.submit was never entered — the queue submission has stopped \
+             being measured, so upload cost flushed at submit time is invisible"
+        );
     }
 }

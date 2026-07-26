@@ -453,35 +453,57 @@ pub fn draw(
     render_pass.set_bind_group(0, viewport_bind_group, &[]);
     render_pass.set_vertex_buffer(0, quad_buffer.slice(..));
 
-    for (i, t) in textures.iter().enumerate() {
-        let Some(entry) = cache.get(&t.src) else {
+    // Buffer creation is hoisted out of the draw loop so the whole pipeline's
+    // GPU-allocation cost is one `encode.buffers` sample (RFC-0030 §I1)
+    // instead of one per image. That matters beyond tidiness: `self_ns`
+    // recovers a scope's direct children from a bounded scan
+    // (`MAX_DIRECT_CHILDREN`), so a per-iteration scope in a loop over an
+    // unbounded image list would make `encode.passes`' self-time wrong on
+    // exactly the frames worth reading. Same allocations, same data, same
+    // draw order — only the sample count changes.
+    let mut prepared: Vec<(usize, super::Scissor, wgpu::Buffer)> =
+        Vec::with_capacity(textures.len());
+    {
+        crate::profile_scope!("encode.buffers");
+        for (i, t) in textures.iter().enumerate() {
+            let Some(entry) = cache.get(&t.src) else {
+                continue;
+            };
+            // Content clip (RFC-0005): scissor this image to its ScrollView
+            // viewport; skip it entirely if scrolled fully out of view.
+            let Some(scissor) = super::clip_scissor(ctx, clip_slice.get(i).copied().flatten())
+            else {
+                continue;
+            };
+            let uv_xform = uv_transform(t.fit, entry.width, entry.height, t.rect[2], t.rect[3]);
+            // misc.y carries this image's draw-order depth (NDC-z); the shader reads
+            // it as position.z. Missing depth falls back to the far plane.
+            let depth = depths
+                .get(i)
+                .copied()
+                .unwrap_or(crate::frame::DRAW_DEPTH_CLEAR);
+            let instance = TextureInstance {
+                rect: t.rect,
+                radii: t.radii,
+                uv_xform,
+                misc: [t.opacity, depth, 0.0, 0.0],
+            };
+            let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("ByardCore - TextureSampler Instance Buffer"),
+                contents: bytemuck::bytes_of(&instance),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+            prepared.push((i, scissor, buffer));
+        }
+    }
+
+    for (i, (sx, sy, sw, sh), buffer) in &prepared {
+        // `cache.get` succeeded during preparation, so this lookup cannot
+        // fail — the cache is not mutated between the two loops.
+        let Some(entry) = cache.get(&textures[*i].src) else {
             continue;
         };
-        // Content clip (RFC-0005): scissor this image to its ScrollView
-        // viewport; skip it entirely if scrolled fully out of view.
-        let Some((sx, sy, sw, sh)) = super::clip_scissor(ctx, clip_slice.get(i).copied().flatten())
-        else {
-            continue;
-        };
-        render_pass.set_scissor_rect(sx, sy, sw, sh);
-        let uv_xform = uv_transform(t.fit, entry.width, entry.height, t.rect[2], t.rect[3]);
-        // misc.y carries this image's draw-order depth (NDC-z); the shader reads
-        // it as position.z. Missing depth falls back to the far plane.
-        let depth = depths
-            .get(i)
-            .copied()
-            .unwrap_or(crate::frame::DRAW_DEPTH_CLEAR);
-        let instance = TextureInstance {
-            rect: t.rect,
-            radii: t.radii,
-            uv_xform,
-            misc: [t.opacity, depth, 0.0, 0.0],
-        };
-        let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("ByardCore - TextureSampler Instance Buffer"),
-            contents: bytemuck::bytes_of(&instance),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
+        render_pass.set_scissor_rect(*sx, *sy, *sw, *sh);
         render_pass.set_bind_group(1, &entry.bind_group, &[]);
         render_pass.set_vertex_buffer(1, buffer.slice(..));
         render_pass.draw(0..4, 0..1);

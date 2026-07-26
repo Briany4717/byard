@@ -40,24 +40,27 @@ pub fn run(file: Option<&Path>, deep_link: Option<&str>) -> Result<(), String> {
     let (program, provider) = resolve_project(&manifest)?;
 
     let title = format!("Byard dev — {}", manifest.name);
-    println!("  Byard 0.0.0 — dev mode");
-    println!("  Entry: {}", manifest.entry.display());
+    crate::style::fact("Byard", "0.0.0 — dev mode");
+    crate::style::fact("Entry", &manifest.entry.display().to_string());
     let n_pkgs = program.packages.len().saturating_sub(1);
     if n_pkgs > 0 {
-        println!("  Packages: {}", program.packages[1..].join(", "));
+        crate::style::fact("Packages", &program.packages[1..].join(", "));
     }
-    println!("  Watching for changes…");
     if program.errors.is_empty() {
-        println!("  Loaded ({} views, 0 errors)", program.views.len());
-    } else {
-        println!(
-            "  Loaded with {} error(s) — see overlay",
-            program.errors.len()
+        crate::style::ok(
+            &format!("loaded {} view(s), 0 errors", program.views.len()),
+            None,
         );
+    } else {
+        crate::style::err(&format!(
+            "loaded with {} error(s) — see overlay",
+            program.errors.len()
+        ));
         for err in &program.errors {
-            eprintln!("  {}", program.source_map.render_line(err));
+            eprintln!("{}", program.source_map.render_line(err));
         }
     }
+    crate::style::action("watching for changes");
 
     // Watch the project source directory plus every resolved `path`
     // dependency (D-J); cache checkouts are pinned/immutable → not watched.
@@ -152,6 +155,10 @@ struct ByldRuntime {
     /// e.g. overlapping blurs), so each distinct warning prints once instead
     /// of every frame.
     reported_perf: std::collections::HashSet<String>,
+    /// How many hot reloads have been applied this session — the statusline's
+    /// `↻N` field, and the cheapest possible confirmation that the watcher is
+    /// alive at all (RFC-0030 §P6).
+    reload_count: u32,
     /// The RFC-0010 active-animation set, published for the render thread
     /// (`AtomicBool` because that is the only way it may cross — INV-2).
     ///
@@ -215,6 +222,8 @@ impl ByldRuntime {
         }
         self.current_views = new_views.to_vec();
         self.error_state = None;
+        self.reload_count = self.reload_count.saturating_add(1);
+        crate::style::reload(&format!("reloaded {} view(s)", new_views.len()));
     }
 }
 
@@ -326,7 +335,7 @@ impl LogicRuntime for ByldRuntime {
                     }
                 };
                 if self.reported_perf.insert(text.clone()) {
-                    eprintln!("  {text}");
+                    crate::style::warn(&text);
                 }
             }
             // RFC-0026 deep linking: the host's whole job is to hand the URL
@@ -337,7 +346,9 @@ impl LogicRuntime for ByldRuntime {
                     self.interp.tick();
                     self.wake_render_loop();
                 } else {
-                    eprintln!("  no route matches the deep link `{url}` — ignoring it");
+                    crate::style::warn(&format!(
+                        "no route matches the deep link `{url}` — ignoring it"
+                    ));
                 }
             }
         }
@@ -619,6 +630,7 @@ impl PlatformHost for App {
                 height_bits: h_clone,
                 start: std::time::Instant::now(),
                 reported_perf: std::collections::HashSet::new(),
+                reload_count: 0,
                 animating: animating_logic,
                 waker: waker_for_logic,
                 pending_deep_link: deep_link,

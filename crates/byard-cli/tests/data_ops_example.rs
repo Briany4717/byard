@@ -30,7 +30,7 @@ fn data_ops_example_checks_clean() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(out.status.success(), "check failed:\n{stdout}\n{stderr}");
-    assert!(stdout.contains("ok (0 errors)"), "got:\n{stdout}");
+    assert!(stdout.contains("0 errors"), "got:\n{stdout}");
 }
 
 fn texts(interp: &mut Interpreter, tree: &[RenderNode]) -> Vec<String> {

@@ -10,6 +10,7 @@ use std::path::PathBuf;
 mod commands;
 mod deps;
 mod manifest;
+mod style;
 mod telemetry_overlay;
 
 #[derive(Parser)]
@@ -106,7 +107,7 @@ fn main() {
         // An empty message is a silent failure sentinel (e.g. `check` already
         // printed rustc-style diagnostics) — just set the exit code.
         if !e.is_empty() {
-            eprintln!("error: {e}");
+            style::err(&e);
         }
         std::process::exit(1);
     }

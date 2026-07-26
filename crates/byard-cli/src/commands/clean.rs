@@ -3,6 +3,7 @@
 //! output under `.byard/`. Lock-pinned package checkouts are left alone (they
 //! are immutable and expensive to re-fetch).
 
+use crate::style;
 use std::path::Path;
 
 use crate::manifest::Manifest;
@@ -21,12 +22,12 @@ pub fn run(file: Option<&Path>) -> Result<(), String> {
         let dir = byard.join(sub);
         if dir.exists() {
             std::fs::remove_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-            println!("  removed {}", dir.display());
+            style::info(&format!("removed {}", dir.display()));
             removed += 1;
         }
     }
     if removed == 0 {
-        println!("  nothing to clean");
+        style::info("nothing to clean");
     }
     Ok(())
 }

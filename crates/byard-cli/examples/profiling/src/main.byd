@@ -93,6 +93,31 @@
 //      scopes existed, both states printed the same `measured total` and
 //      nothing on screen could tell them apart.
 //
+// ── The terminal grammar (RFC-0030 §P1–P4) ────────────────────────────────
+//
+// Every command now shares one shape: a 5-column prefix, the message, and a
+// right-aligned duration. Verify it against this project, from the repo root:
+//
+//   cargo run -p byard-cli -- check crates/byard-cli/examples/profiling
+//
+// You should get a coloured `ok  0 errors` with the duration flush right.
+// Then check the three ways colour turns itself off — all three must produce
+// byte-identical, escape-free output:
+//
+//   NO_COLOR=1  cargo run -p byard-cli -- check crates/byard-cli/examples/profiling
+//   TERM=dumb   cargo run -p byard-cli -- check crates/byard-cli/examples/profiling
+//               cargo run -p byard-cli -- check crates/byard-cli/examples/profiling | cat
+//
+// and that forcing it back on works even through a pipe:
+//
+//   CLICOLOR_FORCE=1 cargo run -p byard-cli -- check crates/byard-cli/examples/profiling | cat -v
+//
+// (`cat -v` makes the escapes visible: `^[[32mok^[[0m`.) Finally, the ASCII
+// fallback, for a terminal that has not said it speaks UTF-8 — no multi-byte
+// glyph may appear:
+//
+//   LC_ALL=C LANG=C cargo run -p byard-cli -- check crates/byard-cli/examples/profiling
+//
 // And the four controls that drive it:
 //
 //   • "dense tree" — mounts a 16 × 16 grid of boxes. `layout.taffy` and

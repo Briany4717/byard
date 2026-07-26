@@ -24,7 +24,7 @@ fn workspace_example_checks_clean() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(out.status.success(), "check failed:\n{stdout}\n{stderr}");
     assert!(
-        stdout.contains("1 package(s)") && stdout.contains("ok (0 errors)"),
+        stdout.contains("1 package(s)") && stdout.contains("0 errors"),
         "expected a 1-package clean check, got:\n{stdout}"
     );
 }
@@ -42,5 +42,5 @@ fn checking_the_manifest_path_is_equivalent() {
         "{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    assert!(String::from_utf8_lossy(&out.stdout).contains("ok (0 errors)"));
+    assert!(String::from_utf8_lossy(&out.stdout).contains("0 errors"));
 }

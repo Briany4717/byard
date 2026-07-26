@@ -5,6 +5,7 @@
 //! graph transitively (path deps in place, git deps into `~/.byard/cache`
 //! pinned by `rev`/`tag`), content-hashes every package, and writes the pins.
 
+use crate::style;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
@@ -15,7 +16,8 @@ use crate::manifest::{DepSource, Dependency, Manifest, parse_dependencies};
 
 pub fn run() -> Result<(), String> {
     let manifest = Manifest::discover(None)?;
-    println!("Resolving dependencies of `{}`…", manifest.name);
+    let started = std::time::Instant::now();
+    style::action(&format!("resolving dependencies of `{}`", manifest.name));
 
     let mut locked: Vec<LockedPackage> = Vec::new();
     let mut seen: BTreeSet<String> = BTreeSet::new();
@@ -29,12 +31,12 @@ pub fn run() -> Result<(), String> {
             }
             let (root, commit) = ensure_present(&declarer_root, &dep)?;
             let checksum = package_checksum(&root)?;
-            println!(
-                "  {} {} ({})",
+            style::info(&format!(
+                "{} {} ({})",
                 if commit.is_empty() { "path" } else { "git " },
                 dep.name,
                 checksum.split(':').nth(1).map_or("", |h| &h[..12])
-            );
+            ));
             locked.push(LockedPackage {
                 name: dep.name.clone(),
                 source: source_string(&dep),
@@ -47,9 +49,12 @@ pub fn run() -> Result<(), String> {
 
     let n = locked.len();
     Lockfile { packages: locked }.write(&manifest.project_root)?;
-    println!(
-        "  Locked {n} package{} → byard.lock",
-        if n == 1 { "" } else { "s" }
+    style::ok(
+        &format!(
+            "locked {n} package{} -> byard.lock",
+            if n == 1 { "" } else { "s" }
+        ),
+        Some(started.elapsed()),
     );
     Ok(())
 }
@@ -70,7 +75,11 @@ fn ensure_present(declarer_root: &Path, dep: &Dependency) -> Result<(PathBuf, St
                     .map_err(|e| format!("failed to run git: {e}"))?;
                 String::from_utf8_lossy(&out.stdout).trim().to_string()
             } else {
-                println!("  Fetching {} ({url}#{})…", dep.name, reference.as_str());
+                style::action(&format!(
+                    "fetching {} ({url}#{})",
+                    dep.name,
+                    reference.as_str()
+                ));
                 fetch_git(url, reference, &dest)?
             };
             Ok((dest, commit))

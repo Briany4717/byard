@@ -400,6 +400,13 @@ pub struct EncoderSubsystem {
     arena: instance_arena::InstanceArena,
     /// Reused per-frame staging bookkeeping for that arena.
     staging: FrameStaging,
+    /// Whether the last encoded frame was drawn under an incremental scissor
+    /// rather than as a full redraw (RFC-0001 §3.3).
+    ///
+    /// The third of the audit's inert incremental layers, made assertable: a
+    /// frame that changed one colour must not repaint the window, and there is
+    /// no way to see that from a timing.
+    last_frame_scissored: bool,
     /// Async GPU pass timing (RFC-0013 §"GPU timing"), or `None` if the
     /// device lacks `wgpu::Features::TIMESTAMP_QUERY` (P5) — checked once at
     /// construction, never re-probed per frame.
@@ -684,6 +691,7 @@ impl EncoderSubsystem {
             last_relay_version: 0,
             arena,
             staging: FrameStaging::default(),
+            last_frame_scissored: false,
             gpu_timer,
             gpu_samples_scratch: Vec::new(),
             gpu_timing_pending: false,
@@ -706,6 +714,13 @@ impl EncoderSubsystem {
     /// per-element `blur_quality: high | low` always overrides it.
     pub fn set_blur_auto_capable(&mut self, capable: bool) {
         self.blur_auto_capable = capable;
+    }
+
+    /// Whether the last encoded frame took the incremental scissored path
+    /// instead of redrawing the whole target (RFC-0001 §3.3).
+    #[must_use]
+    pub const fn last_frame_scissored(&self) -> bool {
+        self.last_frame_scissored
     }
 
     /// The frame's shared instance arena (RFC-0033) — for the assertions that
@@ -1013,6 +1028,7 @@ impl EncoderSubsystem {
         // transition changes a `VectorInstance`'s content but not its rect —
         // the scissor union (rect-based) would otherwise miss it entirely.
         let should_draw = full_redraw || scissor.is_some() || !atlas_uploads.is_empty();
+        self.last_frame_scissored = !full_redraw && scissor.is_some();
 
         // ── Pass segmentation (RFC-0017 z-layers × RFC-0023 backdrops) ────────
         let totals = LayerMark {

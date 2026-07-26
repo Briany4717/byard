@@ -1,6 +1,7 @@
 # RFC-0027: Data & Collection Operations — comparison, logic, string and list expressions
 
-- **Status:** Draft
+- **Status:** Active — implemented
+- **Status note (2026-07-26):** Shipped in full: comparison and short-circuiting logical operators, string concatenation and interpolation, the pure list operations, lambdas in value position, records, and the inference and diagnostics that go with them.
 - **Author(s):** Briany4717
 - **Created:** 2026-07-17
 - **Last updated:** 2026-07-17

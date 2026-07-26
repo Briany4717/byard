@@ -559,6 +559,107 @@ impl From<TaffyError> for AtlasError {
     }
 }
 
+/// Which of the atlas's paths a frame actually took (RFC-0001 §4.1).
+///
+/// The atlas offers a full path (`clear` → rebuild → [`LayoutAtlas::compute`])
+/// and a retained one ([`LayoutAtlas::mark_dirty_all`] →
+/// [`LayoutAtlas::recompute_dirty`]), and a dirty-target channel to the frame.
+/// All three were validated in isolation — unit tests, benchmarks — and none of
+/// them had an assertion that fails when *production* stops taking them. This
+/// is that assertion's raw material: integration tests read these counters
+/// after a real frame and check which path was walked.
+///
+/// **Gated on the `telemetry` feature**, so the counters do not exist in a
+/// shipped build. They are thread-local: the atlas lives on the logic thread
+/// (INV-2) and a process-wide counter would be polluted by the other tests
+/// `cargo test` runs concurrently.
+#[cfg(feature = "telemetry")]
+pub mod path_counters {
+    use std::cell::Cell;
+
+    thread_local! {
+        static CLEARS: Cell<u64> = const { Cell::new(0) };
+        static FULL_COMPUTES: Cell<u64> = const { Cell::new(0) };
+        static RETAINED_RECOMPUTES: Cell<u64> = const { Cell::new(0) };
+        static POPULATE_CALLS: Cell<u64> = const { Cell::new(0) };
+        static POPULATE_DIRTY_TARGETS: Cell<u64> = const { Cell::new(0) };
+        static POPULATE_DIRTY_MATCHED: Cell<u64> = const { Cell::new(0) };
+    }
+
+    /// A snapshot of this thread's atlas path counters.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    pub struct Counts {
+        /// `clear()` calls — each one tears the Taffy tree down and bumps the
+        /// view generation, invalidating every previously-issued `TargetId`.
+        pub clears: u64,
+        /// Full layout passes (`compute` / `compute_with_text`).
+        pub full_computes: u64,
+        /// Retained layout passes (`recompute_dirty`).
+        pub retained_recomputes: u64,
+        /// `populate_frame` calls.
+        pub populate_calls: u64,
+        /// Total `TargetId`s handed to `populate_frame` across those calls —
+        /// **including** stale-generation ones, which is the point: a caller
+        /// passing last frame's targets is not the same as passing none.
+        pub populate_dirty_targets: u64,
+        /// How many of those targets actually matched a live node and marked
+        /// something dirty in the frame.
+        pub populate_dirty_matched: u64,
+    }
+
+    /// Reads this thread's counters.
+    #[must_use]
+    pub fn snapshot() -> Counts {
+        Counts {
+            clears: CLEARS.with(Cell::get),
+            full_computes: FULL_COMPUTES.with(Cell::get),
+            retained_recomputes: RETAINED_RECOMPUTES.with(Cell::get),
+            populate_calls: POPULATE_CALLS.with(Cell::get),
+            populate_dirty_targets: POPULATE_DIRTY_TARGETS.with(Cell::get),
+            populate_dirty_matched: POPULATE_DIRTY_MATCHED.with(Cell::get),
+        }
+    }
+
+    /// Resets this thread's counters, so a test can measure one frame rather
+    /// than a session.
+    pub fn reset() {
+        CLEARS.with(|c| c.set(0));
+        FULL_COMPUTES.with(|c| c.set(0));
+        RETAINED_RECOMPUTES.with(|c| c.set(0));
+        POPULATE_CALLS.with(|c| c.set(0));
+        POPULATE_DIRTY_TARGETS.with(|c| c.set(0));
+        POPULATE_DIRTY_MATCHED.with(|c| c.set(0));
+    }
+
+    pub(super) fn record_clear() {
+        CLEARS.with(|c| c.set(c.get() + 1));
+    }
+
+    pub(super) fn record_full_compute() {
+        FULL_COMPUTES.with(|c| c.set(c.get() + 1));
+    }
+
+    pub(super) fn record_retained_recompute() {
+        RETAINED_RECOMPUTES.with(|c| c.set(c.get() + 1));
+    }
+
+    pub(super) fn record_populate(targets: usize, matched: usize) {
+        POPULATE_CALLS.with(|c| c.set(c.get() + 1));
+        POPULATE_DIRTY_TARGETS.with(|c| c.set(c.get() + targets as u64));
+        POPULATE_DIRTY_MATCHED.with(|c| c.set(c.get() + matched as u64));
+    }
+}
+
+/// The `telemetry`-off stand-ins: every recording call compiles to nothing, so
+/// a shipped build carries no counters at all.
+#[cfg(not(feature = "telemetry"))]
+mod path_counters {
+    pub(super) const fn record_clear() {}
+    pub(super) const fn record_full_compute() {}
+    pub(super) const fn record_retained_recompute() {}
+    pub(super) const fn record_populate(_targets: usize, _matched: usize) {}
+}
+
 /// Two-phase lifecycle state of a [`LayoutAtlas`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AtlasState {
@@ -660,6 +761,7 @@ impl LayoutAtlas {
     /// surviving that long is statistically negligible (see project notes
     /// on `TargetId` packing).
     pub fn clear(&mut self) {
+        path_counters::record_clear();
         self.tree.clear();
         self.root = None;
         self.state = AtlasState::Building;
@@ -1165,6 +1267,7 @@ impl LayoutAtlas {
         };
 
         self.run_layout(root.node_id, available, sizer)?;
+        path_counters::record_full_compute();
         self.state = AtlasState::Computed;
         self.rebuild_grid();
         Ok(())
@@ -1280,12 +1383,35 @@ impl LayoutAtlas {
     /// to the Encoder without either subsystem importing from the other —
     /// the frame is the shared boundary defined in RFC-0001 §9.
     ///
-    /// `dirty_targets` is typically the output of
+    /// `dirty_targets` is intended to be the output of
     /// [`EvaluatorTick::collect_dirty`](crate::evaluator::EvaluatorTick::collect_dirty)
     /// for this tick. Each node's own `TargetId` (kind, generation, index)
     /// is reconstructed using the same scheme as [`Self::rebuild_grid`] and
     /// [`Self::mark_dirty_all`], so stale-generation targets are excluded
     /// for free — they simply will not match any live node's id.
+    ///
+    /// # What the interpreter actually passes today: nothing
+    ///
+    /// `Interpreter::render` calls this with `&[]`, so every rect it pushes
+    /// carries `dirty: false` and the atlas contributes nothing to the frame's
+    /// dirty set. That is **not** an oversight to be fixed by changing the call
+    /// site, and this paragraph exists so nobody tries: the interpreter has no
+    /// per-element change signal to pass. Element attributes are stored as raw
+    /// expressions on the render node and re-evaluated from scratch on every
+    /// frame (`eval_color_prop` and friends), so there is no reactive edge from
+    /// a signal to a box's colour and therefore no way to say *which* nodes
+    /// changed. `ReactiveCtx` knows which value **bindings** changed this tick,
+    /// but bindings cover `Text` content and `Image` sources only — not the
+    /// attribute surface — and there is no binding→node map.
+    ///
+    /// The same missing signal is why `Interpreter::render` calls
+    /// [`Self::clear`] every frame instead of the retained
+    /// [`Self::mark_dirty_all`] + [`Self::recompute_dirty`] path: without
+    /// knowing what changed, rebuilding is the only correct option. Closing
+    /// either one means giving the interpreter that signal, which is a design
+    /// change to the evaluation model rather than a call-site fix. See
+    /// `tests/incremental_paths.rs` in `byard-compiler` for the assertions that
+    /// pin the current behaviour and the acceptance criteria waiting on it.
     ///
     /// The frame is **not** cleared before pushing; callers that want a
     /// fresh frame must call [`RenderFrame::clear`] first. This lets the
@@ -1311,7 +1437,8 @@ impl LayoutAtlas {
 
         let dirty: HashSet<u64> = dirty_targets.iter().map(|t| t.as_raw()).collect();
 
-        self.walk_and_push(root, frame, &dirty);
+        let matched = self.walk_and_push(root, frame, &dirty);
+        path_counters::record_populate(dirty_targets.len(), matched);
     }
 
     /// Performs spatial hit-testing to find the topmost node at the given screen coordinates.
@@ -1391,7 +1518,19 @@ impl LayoutAtlas {
     /// from its Taffy node-context index, the atlas's current generation,
     /// and `TargetKind::AtlasNode` — the same triple `rebuild_grid` uses —
     /// so the lookup is exact and stale generations never match.
-    fn walk_and_push(&self, root: AtlasNodeId, frame: &mut RenderFrame, dirty: &HashSet<u64>) {
+    ///
+    /// Returns how many pushed nodes matched a target in `dirty` — the
+    /// quantity that distinguishes "the caller passed no dirty set" from "the
+    /// caller passed a dirty set from a generation this atlas has already
+    /// invalidated". Both produce an all-`false` frame; only one is a bug in
+    /// the caller.
+    fn walk_and_push(
+        &self,
+        root: AtlasNodeId,
+        frame: &mut RenderFrame,
+        dirty: &HashSet<u64>,
+    ) -> usize {
+        let mut matched = 0;
         let mut stack = vec![root];
         while let Some(node) = stack.pop() {
             if let Some(rect) = self.resolved_rect_internal(node) {
@@ -1399,6 +1538,7 @@ impl LayoutAtlas {
                 let target =
                     TargetId::new(index, self.current_generation, TargetKind::AtlasNode as u16);
                 let is_dirty = dirty.contains(&target.as_raw());
+                matched += usize::from(is_dirty);
                 frame.push_rect(rect, is_dirty);
             }
             if let Ok(children) = self.tree.children(node.node_id) {
@@ -1412,6 +1552,7 @@ impl LayoutAtlas {
                 }
             }
         }
+        matched
     }
 
     /// Rebuilds the hit-testing spatial grid from the current layout.
@@ -1619,6 +1760,7 @@ impl LayoutAtlas {
         // pass via `compute_with_text`); wrapping-`Text` leaves fall back to
         // their natural single-line size here.
         self.run_layout(root.node_id, available, None)?;
+        path_counters::record_retained_recompute();
         self.rebuild_grid();
         Ok(())
     }

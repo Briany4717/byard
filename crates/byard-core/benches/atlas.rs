@@ -239,6 +239,243 @@ fn bench_grid_dirty_scaling(mid: u32, per_mid: u32, iters: u64) {
     );
 }
 
+// ── The sequence the interpreter actually runs ──────────────────────────────
+//
+// Every benchmark above measures a *fresh* `LayoutAtlas` (`compute` on a
+// newly-built tree) or `recompute_dirty` on a retained one. Production runs
+// neither: `Interpreter::render` calls `clear()` on the atlas it already owns,
+// rebuilds every node into it, `set_root`s, and runs a full
+// `compute_with_text` — every frame. That sequence is strictly more expensive
+// than `recompute_dirty` (it adds constructing each Taffy node and repopulating
+// `nodes_by_index`, `parents` and `text_specs`) and had never been measured, so
+// the "layout is cheap" figure the project cites described a path the engine
+// does not take.
+//
+// These benchmarks measure that path, on a **reused** atlas, so the capacity
+// retention `clear()` is documented to provide is part of what is being timed.
+
+/// One production-shaped frame: `clear` → rebuild every node → `set_root` →
+/// full `compute`.
+///
+/// Shape is two levels of flex (`root → mid containers → per_mid leaves`), the
+/// same as `build_flex_tree_computed`, so the numbers are directly comparable
+/// with the `recompute_dirty` figures below them.
+/// `mids`/`leaves` are caller-owned scratch buffers, reused across calls and
+/// cleared here. The interpreter's equivalents are reused too, and — more to
+/// the point — the allocation counter below must measure what the *atlas and
+/// Taffy* allocate per frame, not what the benchmark's own bookkeeping does.
+fn production_rebuild(
+    atlas: &mut LayoutAtlas,
+    mid: u32,
+    per_mid: u32,
+    mids: &mut Vec<AtlasNodeId>,
+    leaves: &mut Vec<AtlasNodeId>,
+) {
+    atlas.clear();
+    mids.clear();
+    for _ in 0..mid {
+        leaves.clear();
+        for _ in 0..per_mid {
+            leaves.push(atlas.add_leaf(LeafSize::new(10.0, 10.0)).unwrap());
+        }
+        mids.push(
+            atlas
+                .add_container(ContainerStyle::new(None, None), leaves)
+                .unwrap(),
+        );
+    }
+    let root = atlas
+        .add_container(ContainerStyle::new(Some(1024.0), Some(768.0)), mids)
+        .unwrap();
+    atlas.set_root(root).unwrap();
+    atlas.compute(Viewport::new(1024.0, 768.0)).unwrap();
+}
+
+/// Times the full production rebuild against `recompute_dirty` with a single
+/// dirty leaf on the *same* tree, and prints the ratio — i.e. exactly what the
+/// incremental path would save if the interpreter took it.
+fn bench_production_vs_incremental(mid: u32, per_mid: u32, iters: u64) {
+    let leaves = mid * per_mid;
+
+    // The atlas is created once and reused across every iteration, as the
+    // interpreter's is: measuring a fresh `LayoutAtlas` each time would
+    // attribute one-time allocation to the per-frame cost.
+    let mut atlas = LayoutAtlas::new();
+    let (mut mid_buf, mut leaf_buf) = (Vec::new(), Vec::new());
+    for _ in 0..100 {
+        production_rebuild(&mut atlas, mid, per_mid, &mut mid_buf, &mut leaf_buf);
+    }
+    let mut total = std::time::Duration::ZERO;
+    for _ in 0..iters {
+        let start = Instant::now();
+        production_rebuild(&mut atlas, mid, per_mid, &mut mid_buf, &mut leaf_buf);
+        total += start.elapsed();
+        black_box(&atlas);
+    }
+    let full_ns = total.as_nanos() as f64 / iters as f64;
+    println!(
+        "{:60} {:>10.3} µs/op   ({iters} iters)",
+        format!("atlas: PRODUCTION rebuild ({leaves} leaves, clear+build+compute)"),
+        full_ns / 1000.0
+    );
+
+    // The same tree, one dirty leaf, through the incremental path.
+    let dirty = TargetId::new(0, atlas.current_generation(), TargetKind::AtlasNode as u16);
+    for _ in 0..100 {
+        atlas.mark_dirty_all(&[dirty]);
+        atlas.recompute_dirty(Viewport::new(1024.0, 768.0)).unwrap();
+    }
+    let mut total = std::time::Duration::ZERO;
+    for _ in 0..iters {
+        let start = Instant::now();
+        atlas.mark_dirty_all(&[dirty]);
+        atlas.recompute_dirty(Viewport::new(1024.0, 768.0)).unwrap();
+        total += start.elapsed();
+        black_box(&atlas);
+    }
+    let incr_ns = total.as_nanos() as f64 / iters as f64;
+    println!(
+        "{:60} {:>10.3} µs/op   ({iters} iters)",
+        format!("atlas: retained recompute ({leaves} leaves, 1 dirty leaf)"),
+        incr_ns / 1000.0
+    );
+    println!(
+        "{:60} {:>10.2}×  ({:.2}% of a 8.3ms frame)",
+        format!("  → what the retained path would save ({leaves} leaves)"),
+        full_ns / incr_ns.max(1.0),
+        full_ns / 8_300_000.0 * 100.0
+    );
+}
+
+// ── Does `TaffyTree::clear()` retain capacity? ──────────────────────────────
+//
+// The most urgent question of the three, and the cheapest to answer. If it does
+// not, there is heap allocation on the hot path every frame, which contradicts
+// "no garbage collector, no pauses, no spikes" directly — and no amount of
+// layout being *fast* would compensate for it.
+
+#[allow(unsafe_code)] // SAFETY: thin passthrough wrapper around `System`, bench-only.
+mod counting_alloc {
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static ALLOCS: AtomicUsize = AtomicUsize::new(0);
+    static BYTES: AtomicUsize = AtomicUsize::new(0);
+
+    /// `(allocations, bytes)` observed since process start. The bench is
+    /// single-threaded, so a process-wide counter is exact here.
+    pub fn counts() -> (usize, usize) {
+        (
+            ALLOCS.load(Ordering::Relaxed),
+            BYTES.load(Ordering::Relaxed),
+        )
+    }
+
+    pub struct CountingAllocator;
+
+    // SAFETY: forwards every call unchanged to `System`, which is itself a
+    // valid `GlobalAlloc`; the only addition is two relaxed counter bumps,
+    // which have no effect on the allocation contract.
+    unsafe impl GlobalAlloc for CountingAllocator {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            ALLOCS.fetch_add(1, Ordering::Relaxed);
+            BYTES.fetch_add(layout.size(), Ordering::Relaxed);
+            // SAFETY: `layout` is passed through unchanged from the caller.
+            unsafe { System.alloc(layout) }
+        }
+
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            // SAFETY: `ptr`/`layout` are passed through unchanged from the caller.
+            unsafe { System.dealloc(ptr, layout) }
+        }
+    }
+}
+
+#[global_allocator]
+static GLOBAL: counting_alloc::CountingAllocator = counting_alloc::CountingAllocator;
+
+/// Counts allocations across `cycles` consecutive production rebuilds on one
+/// retained atlas, after a warm-up long enough for every internal collection to
+/// have reached its steady-state capacity.
+fn bench_rebuild_allocations(mid: u32, per_mid: u32, cycles: usize) {
+    let leaves = mid * per_mid;
+    let mut atlas = LayoutAtlas::new();
+    let (mut mid_buf, mut leaf_buf) = (Vec::new(), Vec::new());
+    // Warm up: whatever the first rebuilds allocate is one-time growth, not a
+    // per-frame cost, and counting it would answer a different question. The
+    // scratch buffers reach their final capacity here too, so nothing the
+    // benchmark itself owns allocates inside the counted region.
+    for _ in 0..200 {
+        production_rebuild(&mut atlas, mid, per_mid, &mut mid_buf, &mut leaf_buf);
+    }
+
+    let (allocs_before, bytes_before) = counting_alloc::counts();
+    for _ in 0..cycles {
+        production_rebuild(&mut atlas, mid, per_mid, &mut mid_buf, &mut leaf_buf);
+    }
+    let (allocs_after, bytes_after) = counting_alloc::counts();
+
+    let allocs = allocs_after - allocs_before;
+    let bytes = bytes_after - bytes_before;
+    println!(
+        "{:60} {:>10.1} allocs/frame, {:.0} B/frame",
+        format!("atlas: steady-state allocation ({leaves} leaves, {cycles} frames)"),
+        allocs as f64 / cycles as f64,
+        bytes as f64 / cycles as f64,
+    );
+
+    // Split the same total between the two halves of the rebuild, so the
+    // finding is actionable rather than just alarming: "the tree teardown and
+    // reconstruction allocates" and "Taffy's layout algorithm allocates
+    // scratch" are different problems with different fixes, and only the first
+    // one is avoidable by retaining the tree.
+    let (a0, b0) = counting_alloc::counts();
+    for _ in 0..cycles {
+        atlas.clear();
+        mid_buf.clear();
+        for _ in 0..mid {
+            leaf_buf.clear();
+            for _ in 0..per_mid {
+                leaf_buf.push(atlas.add_leaf(LeafSize::new(10.0, 10.0)).unwrap());
+            }
+            mid_buf.push(
+                atlas
+                    .add_container(ContainerStyle::new(None, None), &leaf_buf)
+                    .unwrap(),
+            );
+        }
+        let root = atlas
+            .add_container(ContainerStyle::new(Some(1024.0), Some(768.0)), &mid_buf)
+            .unwrap();
+        atlas.set_root(root).unwrap();
+        // Leave the atlas Computed so the next iteration's `clear()` is legal
+        // and the loop stays a faithful repeat of the production cycle.
+        atlas.compute(Viewport::new(1024.0, 768.0)).unwrap();
+    }
+    let (a1, b1) = counting_alloc::counts();
+
+    // Now the same number of `compute`s with no teardown/rebuild between them,
+    // via the retained path — whatever is left is the layout algorithm's own
+    // scratch, which retaining the tree would not remove.
+    let dirty = TargetId::new(0, atlas.current_generation(), TargetKind::AtlasNode as u16);
+    let (c0, _) = counting_alloc::counts();
+    for _ in 0..cycles {
+        atlas.mark_dirty_all(&[dirty]);
+        atlas.recompute_dirty(Viewport::new(1024.0, 768.0)).unwrap();
+    }
+    let (c1, _) = counting_alloc::counts();
+
+    let rebuild = (a1 - a0) as f64 / cycles as f64;
+    let retained = (c1 - c0) as f64 / cycles as f64;
+    println!(
+        "{:60} {:>10.1} allocs/frame retained  ({:.1} avoidable, {:.0} B)",
+        format!("  → of which the teardown+rebuild is responsible for"),
+        retained,
+        rebuild - retained,
+        (b1 - b0) as f64 / cycles as f64,
+    );
+}
+
 fn bench_with_setup<S, F, T>(name: &str, iters: u64, mut setup: S, mut measure: F)
 where
     S: FnMut() -> T,
@@ -313,6 +550,17 @@ fn main() {
         10_000,
     );
     bench_deep_incremental("atlas: 125-leaf incremental 1 dirty leaf", 3, 5, 10_000);
+
+    println!("\n── The sequence the interpreter actually runs, 50 / 200 / 800 leaves ──");
+    println!("   (clear + rebuild every node + set_root + full compute, on a reused atlas)\n");
+    bench_production_vs_incremental(5, 10, 2_000);
+    bench_production_vs_incremental(10, 20, 1_000);
+    bench_production_vs_incremental(20, 40, 500);
+
+    println!("\n── Is the per-frame rebuild allocation-free at steady state? ──\n");
+    bench_rebuild_allocations(5, 10, 1_000);
+    bench_rebuild_allocations(10, 20, 1_000);
+    bench_rebuild_allocations(20, 40, 1_000);
 
     println!("\n── M28: spatial-grid rebuild cost, 1-dirty vs all-dirty (200 leaves) ──");
     // root → 10 flex containers → 20 leaves each = 200 leaves, 211 nodes.

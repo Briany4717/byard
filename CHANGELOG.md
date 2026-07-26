@@ -201,6 +201,31 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **RFC-0001's memory and invalidation model, corrected to what runs
+  (`docs/rfcs/0001-erratum-memory-and-dirty-model.md`).** §2 describes per-view
+  arenas, signal-carried dirty flags and a minimal dirty-rectangle scissor in
+  the present tense. All three mechanisms exist and are correct; none of them is
+  on the per-frame path. Measured rather than asserted: the layout rebuild the
+  interpreter runs every frame costs ~30/112/424 µs at 50/200/800 leaves and
+  performs 111/270/664 heap allocations (~134 KB/562 KB/2.3 MB) at steady state,
+  because `TaffyTree::clear()` drops each node's children storage rather than
+  retaining it. "No garbage collector, no pauses" stands; "allocation-free hot
+  path" does not, and was never measured. `ViewArena` is real, correct and
+  unused per frame. §2.2's dirty flags have no producer: element attributes are
+  raw expressions re-evaluated every frame, so the interpreter cannot say which
+  nodes changed — which is why `populate_frame` receives an empty dirty set, why
+  the atlas is cleared every frame, and why the encoder's scissor decides by an
+  instance-count heuristic. One missing mechanism, three symptoms; closing it is
+  a design change and gets its own RFC. `cargo bench --bench atlas` reproduces
+  every number.
+- **RFC-0020 status corrected** from `Draft` to `Active — partially
+  implemented`: its Tier-1 `CanvasShape` pipeline has been landed and in use
+  since RFC-0020's own implementation. Tier-2 tessellated paths remain deferred.
+- **The RFC template now teaches `## Resolved questions`.** It carried an
+  `## Unresolved questions` section with a "before merge / during
+  implementation" split — the exact opposite of the house rule that an RFC ships
+  no open questions.
+
 - **`SampleBlock::interpreter_tax_ns` is now self-time, not inclusive time
   (RFC-0030 §I2b).** `layout.taffy` is `Native` and nests strictly inside
   `interp.render`, which is `Interpreter`, so summing the interpreter bucket

@@ -48,10 +48,11 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Drawn by the engine from an embedded `.byd` source, in its own interpreter, as
   an ordinary z-layer with an ordinary backdrop blur and an ordinary `Canvas`
   sparkline. It is a permanent, self-executing test that the framework can
-  render a non-trivial animated overlay inside its own frame budget — and it
-  currently **fails** that test at ~12 % of budget against a 5 % bar, so it
-  renders its own cost in red rather than hiding it. The cost is the
-  interpreter's render walk, not the HUD's design; see `support/DESICIONS.md`.
+  render a non-trivial animated overlay inside its own frame budget, and it
+  passes: `hud.render` is 0.60 ms p50 against a 16.667 ms budget — 3.6 %,
+  inside RFC-0030 §V4's 5 % bar. It displays and colours its own cost, so the
+  reading is checkable rather than quoted, and `hud.render` is a row in the
+  `--profile` block for an out-of-band confirmation.
 
 - **A reload flash (RFC-0030 §V6).** A 2 px inset border, green for a reactive
   reload and amber for one that waited behind the gesture gate. Never suppressed
@@ -75,6 +76,22 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and `--profile`.
 
 ### Fixed
+
+- **The in-window HUD no longer leaves stale text on screen.** The encoder's
+  glyph cache is index-addressed and assumes a single producer; the HUD is a
+  second interpreter appending after the app, so index `i` can hold the HUD's
+  line where it held the app's, with both producers truthfully reporting
+  themselves unchanged. The first fix marked the HUD's primitives dirty only
+  when the app's cursor had moved or the HUD had re-lowered — a condition that
+  cannot be proved from where it was made, and a real session tripped the
+  encoder's debug assertion two seconds in. It is now unconditional.
+
+- **A panic can no longer be erased by the statusline.** The painter erases by
+  walking the cursor up over as many lines as its last block occupied. That is
+  valid only while the painter was the last thing to write to the terminal — and
+  a panic breaks the assumption, then runs the drop guard that depends on it,
+  erasing the crash message. A panic hook now retires the statusline first, so
+  the message lands on a clean line.
 
 - **A trace file no longer ends mid-object when the session is interrupted.**
   `Drop` does not run on `SIGINT`, so "closed on shutdown" meant "closed except

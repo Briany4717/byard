@@ -12,6 +12,84 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **The dev loop is something you can see (RFC-0030).** `byard dev` spent every
+  session dumping a multi-line telemetry block to stderr once a second — three
+  hundred of them in five minutes — whose practical effect was to bury the parse
+  errors a developer actually needed to read. It now prints a startup header, a
+  log that scrolls, and one line anchored to the bottom that redraws in place:
+
+  ```
+   ● 60fps  work 3.4ms · idle 15.0ms  ▁▂▁▂▃▁▂  264 boxes  ↻0  retained 64/64
+  ```
+
+  `Mod+Shift+P` (or `--profile`) swaps it for the full per-scope breakdown,
+  charted against the frame budget in fixed execution order and redrawn with the
+  cursor rather than by scrolling. The budget defaults to the display's refresh
+  interval — on a 120 Hz panel that threshold is 8.3 ms, and bars drawn against
+  16.7 ms there would report a comfortable frame for one that visibly stutters —
+  and is printed in the header so it is never ambiguous which number a bar is
+  drawn against. `[dev] frame_budget = "8ms"` pins it for CI.
+
+- **One output grammar for all seven commands (RFC-0030 §P1–§P4).** A 5-column
+  prefix, a message, and a right-aligned duration, in ~80 lines with no
+  dependency. Roles rather than colours, the 16 base ANSI colours rather than
+  truecolor — a terminal's palette is a preference the user set deliberately —
+  and `Palette::plain()` empty throughout, so there is no `if colour` at any
+  call site. The rustc-compatible diagnostic first line is untouched.
+
+- **`byard dev --trace out.json` (RFC-0030 §V5).** Chrome Trace Event format, so
+  Perfetto, `chrome://tracing` and speedscope all read it natively and Byard
+  never has to build a flame-graph viewer. The array terminator is maintained
+  continuously rather than written on shutdown, so the file parses at every
+  instant — including the one where you `Ctrl-C`'d, which is usually the session
+  you most want to look at.
+
+- **An in-window HUD, written in `byld` (RFC-0030 §V3–§V4).** `Mod+Shift+D`.
+  Drawn by the engine from an embedded `.byd` source, in its own interpreter, as
+  an ordinary z-layer with an ordinary backdrop blur and an ordinary `Canvas`
+  sparkline. It is a permanent, self-executing test that the framework can
+  render a non-trivial animated overlay inside its own frame budget — and it
+  currently **fails** that test at ~12 % of budget against a 5 % bar, so it
+  renders its own cost in red rather than hiding it. The cost is the
+  interpreter's render walk, not the HUD's design; see `support/DESICIONS.md`.
+
+- **A reload flash (RFC-0030 §V6).** A 2 px inset border, green for a reactive
+  reload and amber for one that waited behind the gesture gate. Never suppressed
+  on a save that changed nothing visible — the only case it exists for.
+
+- **A `Canvas` can draw a chart (RFC-0020 erratum).** `for` and `when` are
+  admitted inside a shape body, so a canvas's shape *count* can come from data.
+  Previously a canvas could animate every coordinate, colour and sweep from live
+  values and still could not draw `n` bars for `n` data points.
+
+### Changed
+
+- **RFC-0006's three outstanding commitments are closed (RFC-0030 §C1–§C3).**
+  The error overlay renders the last good view beneath a blurred backdrop
+  instead of an opaque field; a reload held behind an in-flight gesture shows
+  `↻ pending` instead of looking like a dead watcher; and diagnostics carry a
+  caret-anchored block beneath their machine-readable first line, with `--short`
+  restoring the one-line form for scripts.
+
+- **`byard check` gained `--short`**, and `byard dev` gained `--trace <path>`
+  and `--profile`.
+
+### Fixed
+
+- **A trace file no longer ends mid-object when the session is interrupted.**
+  `Drop` does not run on `SIGINT`, so "closed on shutdown" meant "closed except
+  when it matters".
+
+- **A second interpreter drawing into a frame no longer risks stale glyphs.**
+  The encoder's glyph cache is index-addressed and assumes a single producer;
+  an overlay appended after the app moves its own indices whenever the app's
+  counts change. `RenderFrame::mark_dirty_since` lets the frame — the only thing
+  that sees both producers — resolve it.
+
+- **The error overlay's mount and dismiss force a full redraw.** Both change the
+  whole composition at once, while the encoder's scissor union is derived from
+  what changed between two frames.
+
 - **A steady-state frame budget, enforced on every PR (INV-21).**
   `crates/byard-platform/tests/frame_budget.rs` drives a checked-in reference
   scene and asserts recorded ceilings: heap allocations per frame, GPU buffer

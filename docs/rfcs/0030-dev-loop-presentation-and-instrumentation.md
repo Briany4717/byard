@@ -1,9 +1,23 @@
 # RFC-0030: Dev-Loop Presentation & Instrumentation — terminal style, live statusline, real scopes, and the in-window HUD
 
-- **Status:** Draft
+- **Status:** Active — implemented. Instrumentation (§I1–§I3), the output
+  grammar (§P1–§P4), the statusline (§P5–§P6), the expanded block and the frame
+  budget (§V1–§V2), the in-window HUD and the reload flash (§V3–§V4, §V6), trace
+  export (§V5) and RFC-0006's three commitments (§C1–§C3) have all landed.
+  **Two amendments** carry what implementation found:
+  [`0030-erratum-statusline-field-set.md`](0030-erratum-statusline-field-set.md)
+  (the field set predates the `present.*` scopes and was unreadable as
+  specified) and, because §V3 requires the HUD to use no privileged syntax,
+  [`0020-erratum-canvas-shape-generators.md`](0020-erratum-canvas-shape-generators.md)
+  (a `Canvas` body could not generate shapes from data).
+  §V4's acceptance condition — `hud.render` ≤ 5 % of the frame budget — is
+  **not met**: it measures ~12 %, dominated by the interpreter's own render
+  walk rather than by anything the HUD does. That finding is recorded rather
+  than mitigated away, per §V4's own instruction, and the HUD renders its
+  verdict on itself.
 - **Author(s):** Briany4717
 - **Created:** 2026-07-25
-- **Last updated:** 2026-07-25
+- **Last updated:** 2026-07-27
 - **Depends on:**
   - RFC-0006 (`byard` CLI and dev runner — every command whose output this RFC re-specifies; §3.4 error overlay; the two promises §"`byard dev`" makes that were never implemented)
   - RFC-0013 (zero-allocation telemetry — `profile_scope!`, `Sample`, `SampleBlock`, `ScopeId`, GPU timestamp queries, **P2**–**P5**; this RFC is the consumer that finally gives it data)

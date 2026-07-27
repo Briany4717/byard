@@ -189,6 +189,65 @@
 //   J. THE GPU ROW SAYS `unknown`, NEVER `0`, ON A DEVICE WITHOUT TIMESTAMP
 //      QUERY. A fabricated measurement is worse than a missing one.
 //
+// ── The in-window HUD (RFC-0030 §V3–§V4) ──────────────────────────────────
+//
+// Press `Mod+Shift+D` (`Cmd` on macOS, `Ctrl` elsewhere), or start with
+// `[dev] hud = true` in `byard.toml`. A frosted panel appears in the top-right
+// corner, drawn by the engine, from a `.byd` source that lives in the CLI —
+// not from Rust. That is the point of it: a Rust HUD would be easier to write
+// and would prove nothing, while this one is a permanent, self-executing test
+// that the framework can render a non-trivial, continuously-updating, blurred,
+// animated overlay inside its own frame budget.
+//
+//   K. IT IS AN ORDINARY OVERLAY. A z-layer (RFC-0017), a backdrop blur
+//      (RFC-0023), a `Canvas` sparkline (RFC-0020). Nothing about the HUD is
+//      special-cased anywhere in the renderer, and it is parsed into its *own*
+//      interpreter — so a view of yours named `__ByardDevHud` cannot collide
+//      with it, because there is nothing to collide with.
+//
+//   L. IT REPORTS ITS OWN COST, AND CURRENTLY FAILS ITS OWN TEST. The last
+//      line reads `hud cost N ms (excluded)`, and it is *red*: on this
+//      reference machine `hud.render` sits around 2.0ms against a 16.7ms
+//      budget — about 12%, where §V4 sets the bar at 5%. The HUD says so
+//      rather than hiding it, which is the entire reason that line exists.
+//
+//      Press `Mod+Shift+P` and read the `hud.render` row for an out-of-band
+//      confirmation that does not depend on the HUD's own arithmetic.
+//
+//      The breakdown is the interesting part: the HUD's own `layout.taffy` is
+//      0.03ms and its `interp.tick` is 0.003ms — the mitigations worked — while
+//      its `interp.render` is 1.73ms. The HUD's cost *is* the interpreter tax,
+//      measured on a tree of forty primitives. An AOT build pays none of it.
+//
+//   M. IT DOES NOT PUSH THE APP OFF THE FAST PATH (INV-24). With the HUD open,
+//      press `Mod+Shift+P` and check the `layout path` row still reads
+//      `retained`. That is not automatic: the HUD runs its own layout atlas on
+//      the same thread, into the same thread-local counters, so the app's
+//      reading is captured before the HUD renders and restored afterwards.
+//      Without it the HUD would report *your* app as rebuilding every frame.
+//
+//   N. THE NUMBERS UPDATE AT 10 Hz, NOT PER FRAME. Deliberate: the eye cannot
+//      read a 60Hz counter, and it leaves five of six frames with the HUD's
+//      text entirely clean. Watch the sparkline — geometry, not text — move
+//      smoothly while the digits step.
+//
+// ── The reload flash (RFC-0030 §V6) ───────────────────────────────────────
+//
+// Save this file without changing anything meaningful — add a space to a
+// comment. A 2px inset border pulses green over 120ms.
+//
+//   O. IT IS NEVER SUPPRESSED ON A NO-OP RELOAD. That is its only justifying
+//      case: a save that changed a colour announces itself, and a save that
+//      changed a handler or a comment does not — which is precisely when a
+//      developer cannot tell whether hot reload is working at all. Firing only
+//      when it is redundant would be the useless half of the feature.
+//
+//   P. AMBER MEANS IT WAITED. Hold the mouse down on "tap me" and save a
+//      structural change (delete the `when longText` block). The border pulses
+//      *amber* when you release, because that reload was deferred behind the
+//      gesture gate — the same event the statusline's `↻ pending` was showing
+//      while you held.
+//
 // ── The frame budget (RFC-0030 §V2) ───────────────────────────────────────
 //
 // The budget defaults to the display's refresh interval and is printed in the

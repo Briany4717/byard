@@ -44,6 +44,66 @@ pub struct WindowSize {
     pub height: u32,
     /// OS DPI scale factor (`1.0` on non-`HiDPI`, `2.0` on Retina, etc.).
     pub scale_factor: f64,
+    /// The display's refresh rate in millihertz, when the host knows it.
+    ///
+    /// This is the frame budget (RFC-0030 §Q3, §V2). It is adaptive rather
+    /// than a fixed 16.7 ms on purpose: the budget answers "will this app drop
+    /// frames on *this* machine", and on a 120 Hz panel that threshold is
+    /// 8.3 ms. A tool that drew its bars against 16.7 ms there would report a
+    /// comfortable frame for one that visibly stutters — lying on exactly the
+    /// hardware where the frame budget matters most.
+    ///
+    /// `None` when the platform cannot report it, in which case the consumer
+    /// falls back to 60 Hz and says so.
+    pub refresh_rate_mhz: Option<u32>,
+}
+
+/// Keyboard modifier state accompanying a key event.
+///
+/// Separate from [`InputEvent`] because it exists for exactly one consumer —
+/// the dev runner's chords (RFC-0030 §Q1) — and those are consumed *before*
+/// `dispatch_events`, so the app under test never sees them. Putting modifiers
+/// into the router's event payload would be a language-visible change made for
+/// a dev-only feature.
+// Four `bool`s is the shape of the thing being modelled — a keyboard has four
+// modifier keys and they are independent. A bitflags type would satisfy the
+// lint and make every call site less readable than `mods.shift`.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct KeyModifiers {
+    /// Shift.
+    pub shift: bool,
+    /// Control.
+    pub ctrl: bool,
+    /// Alt / Option.
+    pub alt: bool,
+    /// Command / Super / Windows.
+    pub meta: bool,
+}
+
+impl KeyModifiers {
+    /// Whether the platform's "Mod" key is held: `Cmd` on macOS, `Ctrl`
+    /// everywhere else.
+    ///
+    /// A chord rather than a bare function key because bare F-keys are
+    /// unusable as a default — macOS maps them to media controls unless the
+    /// user flipped a preference, several are claimed by Linux window
+    /// managers, and, critically, a bare key *can* collide with text entry in
+    /// the app under test while a `Mod+Shift` chord cannot (§Q1).
+    #[must_use]
+    pub const fn mod_held(self) -> bool {
+        if cfg!(target_os = "macos") {
+            self.meta
+        } else {
+            self.ctrl
+        }
+    }
+
+    /// Whether this is the `Mod+Shift` prefix every dev chord uses.
+    #[must_use]
+    pub const fn is_dev_chord(self) -> bool {
+        self.mod_held() && self.shift
+    }
 }
 
 /// A mouse/pointer button, expressed without depending on any windowing
@@ -262,6 +322,20 @@ pub trait PlatformHost {
     /// Defaults to a no-op.
     fn on_key(&mut self, _key: &str, _pressed: bool) {}
 
+    /// Called before [`on_key`](Self::on_key) with the modifier state, so a
+    /// host can claim a chord for itself.
+    ///
+    /// Returning `true` **consumes** the event: `on_key` is not called and the
+    /// app under test never sees it. That is the whole point — a dev chord
+    /// that reached the router would be indistinguishable from the user typing
+    /// (RFC-0030 §V3).
+    ///
+    /// The default ignores every chord, so a host that does not opt in behaves
+    /// exactly as before.
+    fn on_chord(&mut self, _key: &str, _pressed: bool, _mods: KeyModifiers) -> bool {
+        false
+    }
+
     /// Called when printable text is committed (character keys, IME commit).
     ///
     /// `text` is the committed string (usually one character but may be more
@@ -349,11 +423,33 @@ mod tests {
     }
 
     #[test]
+    fn a_dev_chord_is_mod_plus_shift_and_mod_is_platform_specific() {
+        // The chord exists so it cannot collide with text entry in the app
+        // under test, which a bare function key can.
+        let mods = KeyModifiers {
+            shift: true,
+            meta: cfg!(target_os = "macos"),
+            ctrl: !cfg!(target_os = "macos"),
+            alt: false,
+        };
+        assert!(mods.is_dev_chord());
+        assert!(
+            !KeyModifiers {
+                shift: false,
+                ..mods
+            }
+            .is_dev_chord()
+        );
+        assert!(!KeyModifiers::default().is_dev_chord());
+    }
+
+    #[test]
     fn window_size_is_copy_clone_eq_and_debug() {
         let a = WindowSize {
             width: 800,
             height: 600,
             scale_factor: 2.0,
+            refresh_rate_mhz: Some(120_000),
         };
         let b = a; // Copy
         assert_eq!(a, b);

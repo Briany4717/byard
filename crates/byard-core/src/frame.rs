@@ -1889,6 +1889,43 @@ impl RenderFrame {
         &self.atlas_uploads
     }
 
+    // ── Census (RFC-0030 §P6) ──────────────────────────────────────────────
+    //
+    // Three `len()` reads over data that already crosses the frame boundary.
+    // No new field, no new traffic, and nothing retained between frames — the
+    // statusline's "382 boxes" is a measurement of the frame in hand, which is
+    // the only reading that cannot drift out of date.
+
+    /// How many box-class draw instances this frame carries.
+    ///
+    /// Every pool the encoder rasterises as a quad: solid rectangles,
+    /// decorated boxes, sampled textures, `Canvas` shapes, ripples and
+    /// backdrops. Text and vector glyphs are counted separately because they
+    /// are a different order of cost — a text line becomes as many quads as it
+    /// has glyphs, and conflating the two would make the number unreadable in
+    /// the direction that matters.
+    #[must_use]
+    pub fn instance_count(&self) -> usize {
+        self.instances.len()
+            + self.decorated.len()
+            + self.textures.len()
+            + self.canvas_shapes.len()
+            + self.ripples.len()
+            + self.backdrops.len()
+    }
+
+    /// How many text **lines** this frame carries (not glyphs).
+    #[must_use]
+    pub fn text_count(&self) -> usize {
+        self.texts.len()
+    }
+
+    /// How many MSDF vector-glyph instances this frame carries (RFC-0009 §1).
+    #[must_use]
+    pub fn vector_count(&self) -> usize {
+        self.vector_instances.len()
+    }
+
     /// Draw-order depths parallel to [`instances`](Self::instances).
     #[must_use]
     pub fn solid_depths(&self) -> &[f32] {

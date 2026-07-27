@@ -45,6 +45,21 @@ use crate::evaluator::{EvaluatorTick, Signal, ViewArena};
 use crate::frame::{BoxInstance, TargetId, TargetKind, TextLine, Viewport};
 use crate::relay::Relay;
 
+/// The instance census of one frame (RFC-0030 §P6).
+///
+/// A snapshot, not a counter: it describes the frame it was read from and
+/// nothing else, which is why it can be handed across the boundary as a plain
+/// POD without any of the staleness questions a running total would raise.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Census {
+    /// Box-class draw instances — see [`crate::frame::RenderFrame::instance_count`].
+    pub instances: usize,
+    /// Text lines (not glyphs).
+    pub texts: usize,
+    /// MSDF vector-glyph instances.
+    pub vectors: usize,
+}
+
 /// The Byard rendering engine for a single window surface.
 ///
 /// Owns the GPU device, queue, compiled pipelines, the `wgpu` surface, and the
@@ -679,6 +694,23 @@ impl Engine {
             .current()
             .map(|frame| frame.atlas_paths())
             .unwrap_or_default()
+    }
+
+    /// The instance census of the most recently published frame (RFC-0030
+    /// §P6): box-class instances, text lines, vector glyphs.
+    ///
+    /// Three `Vec::len` reads on data that already crossed the frame boundary
+    /// — no new field, no new traffic, and nothing that survives the frame it
+    /// describes.
+    #[must_use]
+    pub fn latest_census(&self) -> Census {
+        self.relay
+            .current()
+            .map_or_else(Census::default, |frame| Census {
+                instances: frame.instance_count(),
+                texts: frame.text_count(),
+                vectors: frame.vector_count(),
+            })
     }
 
     /// Whether GPU pass timing is active for this engine (RFC-0013 **P5**) —

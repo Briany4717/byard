@@ -134,6 +134,28 @@ fn needs_reshape(viewport_dirty: bool, line_dirty: bool) -> bool {
     viewport_dirty || line_dirty
 }
 
+/// Whether index `i` refers to the same *element* it referred to last frame.
+///
+/// The whole incremental scheme is index-addressed — `texts[i]` compared
+/// against what was shaped for `texts[i]`, with `TextLine::dirty` trusted to say
+/// when they differ — and that is sound only while this holds.
+///
+/// It stops holding when the pool's length changes. Mount a paragraph in the
+/// middle of a column and every line after it shifts down one index: each of
+/// those indices now holds a different element whose producer has truthfully
+/// reported it unchanged, because it *is* unchanged at its own position in the
+/// tree. Index-wise it is entirely different text.
+///
+/// "Which index shifted" is not knowable from two lengths, so a length change
+/// invalidates all of them. That costs a reshape of the whole pool on such a
+/// frame — which is already a full-redraw frame
+/// (`needs_full_redraw_this_frame` includes exactly this condition), so it adds
+/// no cost class that was not being paid.
+#[must_use]
+const fn index_is_identity_stable(is_new: bool, length_changed: bool) -> bool {
+    !is_new && !length_changed
+}
+
 /// Debug-only safety net: panics if a line's content actually changed
 /// (`hash_changed`) but the upstream dirty flag (`line_dirty`) was not set.
 ///
@@ -317,6 +339,34 @@ impl TextGlyphPipeline {
         // resize_with so the closure does not need to capture &mut font_system
         // at the same time as &mut cache — which would be a double borrow.
         let preexisting_len = self.cache.len();
+        // # A pool whose length changed is not index-comparable
+        //
+        // The whole incremental scheme is index-addressed: `texts[i]` is
+        // compared against what was shaped for `texts[i]` last frame, and
+        // `TextLine::dirty` is trusted to say when they differ. That is sound
+        // only while index `i` means the same *element* on both frames.
+        //
+        // A length change breaks it. Mount a paragraph in the middle of a
+        // column and every line after it shifts down one index: each of those
+        // indices now holds a different element, whose producer has truthfully
+        // reported it unchanged — because it *is* unchanged, at its own
+        // position in the tree. Index-wise it is entirely different text, and
+        // the cached buffer at that index would be drawn as-is.
+        //
+        // This is latent rather than new. Before an overlay lengthened the
+        // pool, the shifted indices usually landed beyond the cache and were
+        // taken as `is_new`, which reshapes unconditionally and hides it. The
+        // in-window HUD made the cache long enough for them to land *inside*
+        // it, which is how it surfaced — as an intermittent debug assertion,
+        // and in release as silently stale text.
+        //
+        // So a length change reshapes everything. The frame is being fully
+        // redrawn anyway on such a frame (`needs_full_redraw_this_frame`
+        // includes exactly this condition), so this adds no cost class that
+        // was not already being paid — and it is the only answer available
+        // here, because "which index shifted" is not knowable from two
+        // lengths.
+        let length_changed = preexisting_len != text_lines.len();
         while self.cache.len() < text_lines.len() {
             let metrics = Metrics::new(12.0, 14.0); // placeholder; overwritten below
             let buffer = Buffer::new(&mut self.font_system, metrics);
@@ -346,13 +396,20 @@ impl TextGlyphPipeline {
                     line.color,
                     wraps.get(i).copied().flatten(),
                 );
-                if !is_new {
+                // Not asserted on a length-changed frame: the premise of the
+                // check — "this line would have been left stale" — is false
+                // there, because every line is being reshaped below. Asserting
+                // anyway would report a dirty-tracking bug for a producer that
+                // tracked its own element correctly.
+                if index_is_identity_stable(is_new, length_changed) {
                     assert_dirty_flag_consistency(hash != entry.content_hash, line.dirty);
                 }
                 entry.content_hash = hash;
             }
 
-            if !is_new && !needs_reshape(viewport_dirty, line.dirty) {
+            if index_is_identity_stable(is_new, length_changed)
+                && !needs_reshape(viewport_dirty, line.dirty)
+            {
                 continue; // unchanged — skip re-shaping
             }
 
@@ -594,6 +651,33 @@ mod tests {
     #[test]
     fn needs_reshape_true_when_both_are_dirty() {
         assert!(needs_reshape(true, true));
+    }
+
+    // ── index_is_identity_stable: when index-wise comparison is legal ──────
+
+    #[test]
+    fn a_length_change_makes_every_index_unstable() {
+        // Mounting a paragraph mid-column shifts every line after it down one
+        // index. Each of those indices now holds a different element whose
+        // producer truthfully reports it unchanged — it *is* unchanged at its
+        // own position in the tree — so index-wise comparison would draw the
+        // previous occupant's shaped buffer.
+        assert!(!index_is_identity_stable(false, true));
+        assert!(!index_is_identity_stable(true, true));
+    }
+
+    #[test]
+    fn a_brand_new_index_is_never_compared_against_a_previous_occupant() {
+        assert!(!index_is_identity_stable(true, false));
+    }
+
+    #[test]
+    fn a_stable_pool_is_compared_index_wise() {
+        // The common case, and the one the whole incremental scheme exists
+        // for: same length, same elements, so `dirty` is the only signal
+        // needed and an unchanged line is not reshaped.
+        assert!(index_is_identity_stable(false, false));
+        assert!(!needs_reshape(false, false));
     }
 
     // ── assert_dirty_flag_consistency: the debug-only safety net ───────────

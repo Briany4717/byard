@@ -1392,6 +1392,22 @@ pub struct RenderFrame {
     /// pool".
     backdrop_marks: Vec<LayerMark>,
 
+    /// The frame asked the encoder for a full, unscissored redraw
+    /// (RFC-0006 §3.4 / RFC-0030 §C2).
+    ///
+    /// The incremental scissor union is derived from what *changed* between
+    /// two frames. That is correct for an app mutating in place, and wrong at
+    /// the two instants where the whole composition changes underneath it: the
+    /// frame an overlay mounts over a previously clean scene, and the frame it
+    /// dismisses. On the mount frame the app beneath is drawn for the first
+    /// time in a while, so a union computed from a clean previous frame would
+    /// leave the overlay — and the view under it — partially painted.
+    ///
+    /// This is an explicit request rather than a consequence of the instance
+    /// and text counts happening to change, because "the counts happened to
+    /// differ" is a coincidence that holds today and is nobody's invariant.
+    full_redraw: bool,
+
     /// Pending MSDF-atlas uploads recorded by the logic thread this tick
     /// (RFC-0009 §2-C / INV-8). Applied by the render thread via a single
     /// `Queue::write_texture` each, during frame application, before the draw.
@@ -1567,6 +1583,7 @@ impl RenderFrame {
     /// immediately after acquiring a recycled frame.
     pub fn clear(&mut self) {
         self.atlas_paths = crate::atlas::layout::path_counters::Counts::default();
+        self.full_redraw = false;
         self.rects.clear();
         self.dirty.clear();
         self.instances_dirty.clear();
@@ -2053,6 +2070,13 @@ impl RenderFrame {
     /// A pool whose length differs is marked dirty in full: positions no
     /// longer mean the same thing, so there is nothing to merge index-wise.
     pub fn merge_dirty_from(&mut self, previous: &Self) {
+        // A full-redraw request is monotone in exactly the same way a dirty
+        // bit is: if the frame that mounted an overlay was published and never
+        // rendered, its request is still owed. Dropping it here would make the
+        // overlay's correctness depend on the display keeping up with the
+        // logic thread, which is the one thing this whole merge exists because
+        // it does not.
+        self.full_redraw |= previous.full_redraw;
         merge_flags(
             &mut self.instances_dirty,
             previous.instances_dirty.as_slice(),
@@ -2083,6 +2107,23 @@ impl RenderFrame {
             |c| &mut c.dirty,
             |c| c.dirty,
         );
+    }
+
+    /// Asks the encoder to redraw the whole surface this frame rather than
+    /// only the dirty union (RFC-0006 §3.4).
+    ///
+    /// See [`Self::full_redraw`] for the two instants that need it. Cleared by
+    /// [`clear`](Self::clear), so it never leaks into the next frame — a
+    /// sticky full redraw would silently disable the incremental path for the
+    /// rest of the session, which is the expensive way to be wrong here.
+    pub fn request_full_redraw(&mut self) {
+        self.full_redraw = true;
+    }
+
+    /// Whether this frame asked for a full, unscissored redraw.
+    #[must_use]
+    pub const fn wants_full_redraw(&self) -> bool {
+        self.full_redraw
     }
 
     /// Records which layout paths the atlas took while producing this frame

@@ -76,11 +76,8 @@ pub fn run(opts: Options<'_>) -> Result<(), String> {
         entry: manifest.entry.display().to_string(),
         packages: program.packages[1..].join(", "),
         views: program.views.len(),
-        errors: program
-            .errors
-            .iter()
-            .map(|e| program.source_map.render_line(e))
-            .collect(),
+        errors: program.errors.clone(),
+        source_map: program.source_map,
         started,
     };
 
@@ -178,6 +175,61 @@ fn now_ms() -> u64 {
         .map_or(0, |d| d.as_secs() * 1000 + u64::from(d.subsec_millis()))
 }
 
+// ── The deferred-reload gate (RFC-0006 §3.5 / C1) ────────────────────────────
+
+/// A structure-incompatible reload held until the in-flight gesture ends, and
+/// the flag the statusline reads to say so.
+///
+/// The two live in one type because the failure they exist to prevent is the
+/// two of them *disagreeing*. A developer holding a drag while a save waits
+/// behind the gate sees an application that has silently stopped responding to
+/// their edits — indistinguishable from a broken watcher, and the most alarming
+/// thing a dev runner can do without saying anything. An indicator that can be
+/// left on after the reload landed, or off while one waits, is worse than none.
+///
+/// Here the slot and the flag cannot drift: nothing sets one without the other,
+/// because nothing can reach either directly.
+struct PendingReload {
+    slot: Option<(Vec<ViewDecl>, ReloadKind)>,
+    /// Mirrored to the render thread as an `AtomicBool` — the only way state
+    /// may cross (INV-2).
+    published: Arc<AtomicBool>,
+}
+
+impl PendingReload {
+    fn new(published: Arc<AtomicBool>) -> Self {
+        Self {
+            slot: None,
+            published,
+        }
+    }
+
+    /// Holds `views` behind the gate. Returns `true` on the rising edge, so the
+    /// caller can wake an idle render loop for the frame that shows the
+    /// indicator — the wait has no input behind it and would otherwise not be
+    /// drawn until something unrelated happened.
+    fn defer(&mut self, views: Vec<ViewDecl>, kind: ReloadKind) -> bool {
+        let was = self.published.swap(true, Ordering::Relaxed);
+        // A newer save supersedes an older deferred one: applying the stale
+        // views afterwards would undo an edit the developer already made.
+        self.slot = Some((views, kind));
+        !was
+    }
+
+    /// Releases the held reload once the gesture is over, clearing the flag in
+    /// the same step.
+    fn take_if_released(&mut self, pointer_pressed: bool) -> Option<(Vec<ViewDecl>, ReloadKind)> {
+        if pointer_pressed {
+            return None;
+        }
+        let taken = self.slot.take();
+        if taken.is_some() {
+            self.published.store(false, Ordering::Relaxed);
+        }
+        taken
+    }
+}
+
 // ── Logic runtime ─────────────────────────────────────────────────────────────
 
 struct ByldRuntime {
@@ -188,8 +240,9 @@ struct ByldRuntime {
     /// Changed `.svg` paths from the file watcher: each is invalidated in the
     /// vector JIT so the field regenerates live (RFC-0009 §3, M47).
     asset_changes: crossbeam_channel::Receiver<std::path::PathBuf>,
-    /// A structure-incompatible reload held during an in-flight gesture (E5).
-    pending_reload: Option<(Vec<ViewDecl>, ReloadKind)>,
+    /// A structure-incompatible reload held during an in-flight gesture (E5),
+    /// together with the indicator that says so (RFC-0006 C1).
+    pending_reload: PendingReload,
     /// Parse errors from the last file save (drives error overlay, RFC-0006 §3.4).
     error_state: Option<Vec<CompileError>>,
     width_bits: Arc<AtomicU32>,
@@ -208,14 +261,6 @@ struct ByldRuntime {
     reload_count: u32,
     /// The render thread's mirror of `reload_count`.
     reloads_pub: Arc<AtomicU32>,
-    /// The render thread's mirror of `pending_reload.is_some()` (RFC-0006 C1).
-    ///
-    /// Without it, a developer holding a drag while a structure-incompatible
-    /// save waits behind the gate sees an application that has silently stopped
-    /// responding to their edits — which is indistinguishable from a broken
-    /// watcher, and is the single most alarming thing a dev runner can do
-    /// without saying anything.
-    reload_pending_pub: Arc<AtomicBool>,
     /// The RFC-0010 active-animation set, published for the render thread
     /// (`AtomicBool` because that is the only way it may cross — INV-2).
     ///
@@ -232,6 +277,10 @@ struct ByldRuntime {
     /// the rising edge only, so a steadily animating scene (already spinning)
     /// posts nothing.
     waker: byard_core::relay::FrameWaker,
+    /// Whether the error overlay was up on the previous tick, so the two
+    /// frames that change the composition wholesale can ask for a full redraw
+    /// and no others do.
+    overlay_was_up: bool,
     /// A `--deep-link <url>` waiting to be delivered (RFC-0026), applied after
     /// the first render. It waits because a navigation container only exists
     /// once the frame that mounts it has been reconciled — a stack nested in a
@@ -247,16 +296,6 @@ impl ByldRuntime {
     fn publish_animating(&self, active: bool) {
         let was = self.animating.swap(active, Ordering::Relaxed);
         if active && !was {
-            self.wake_render_loop();
-        }
-    }
-
-    /// Publishes whether a reload is waiting behind the gesture gate, waking
-    /// an idle loop on the rising edge so the indicator appears without needing
-    /// an unrelated frame to carry it.
-    fn publish_reload_pending(&self, pending: bool) {
-        let was = self.reload_pending_pub.swap(pending, Ordering::Relaxed);
-        if pending && !was {
             self.wake_render_loop();
         }
     }
@@ -325,8 +364,11 @@ impl LogicRuntime for ByldRuntime {
                         self.wake_render_loop();
                     }
                     Gated::Defer => {
-                        self.pending_reload = Some((parsed.views, worst));
-                        self.publish_reload_pending(true);
+                        if self.pending_reload.defer(parsed.views, worst) {
+                            // The indicator appearing is itself a frame change
+                            // with no input behind it.
+                            self.wake_render_loop();
+                        }
                     }
                 }
             } else {
@@ -336,16 +378,10 @@ impl LogicRuntime for ByldRuntime {
         }
 
         // ── Step 0b: apply deferred reload once pointer released ───────────────
-        if let Some((new_views, kind)) = self.pending_reload.take() {
-            if self.interp.router.is_pointer_pressed() {
-                self.pending_reload = Some((new_views, kind));
-            } else {
-                self.apply_reload(&new_views, kind);
-                // Cleared exactly where the deferred reload is consumed, so the
-                // indicator and the gate can never disagree (RFC-0006 C1).
-                self.publish_reload_pending(false);
-                self.wake_render_loop();
-            }
+        let pressed = self.interp.router.is_pointer_pressed();
+        if let Some((new_views, kind)) = self.pending_reload.take_if_released(pressed) {
+            self.apply_reload(&new_views, kind);
+            self.wake_render_loop();
         }
 
         // ── Step 0c: invalidate hot-reloaded vector assets (RFC-0009 §3) ──────
@@ -370,14 +406,34 @@ impl LogicRuntime for ByldRuntime {
         let w = f32::from_bits(self.width_bits.load(Ordering::Relaxed));
         let h = f32::from_bits(self.height_bits.load(Ordering::Relaxed));
 
+        // Mounting and dismissing the overlay both change the entire
+        // composition at once, and the encoder's scissor union is derived from
+        // what changed *between two frames*. On the mount frame the last-good
+        // view underneath is being drawn again after a gap, so a union computed
+        // from a clean previous frame would leave both it and the overlay
+        // partially painted. Ask for a full redraw on exactly those two frames
+        // — not on every frame the overlay is up, which would hand back the
+        // incremental path for as long as a file stays broken.
+        let overlay_now = self.error_state.is_some();
+        if overlay_now != self.overlay_was_up {
+            frame.request_full_redraw();
+            self.overlay_was_up = overlay_now;
+        }
+
         if let Some(errors) = &self.error_state {
-            // Render *only* the overlay — deliberately NOT the last-good view
-            // underneath it. Text is drawn in a single global pass after every
-            // box (the flat 4-pass encoder order), so any app text painted here
-            // would bleed *over* the overlay's scrim. Drawing the overlay alone
-            // on an opaque background sidesteps that and reads as a dedicated
-            // "fix your file" error screen (C4: overlay path is independent of
-            // the interpreter).
+            // RFC-0006 §3.4 promised the last successfully-rendered view stays
+            // as a blurred background, and the original implementation
+            // deliberately painted an opaque field instead. The comment
+            // explaining why was honest and correct at the time: the flat
+            // four-pass encoder drew all text in one global pass after every
+            // box, so the app's text bled *over* the scrim.
+            //
+            // RFC-0017's z-layers and RFC-0023's backdrop blur removed that
+            // constraint. The app renders normally, `begin_layer` closes it,
+            // and the overlay composites after it — text included — so the
+            // promise can finally be kept as written.
+            self.interp.render(&self.tree, frame, w, h);
+            frame.begin_layer();
             render_error_overlay(frame, errors, w, h);
             // An error overlay is static: nothing to animate, so the loop may
             // sleep until the next save.
@@ -427,30 +483,73 @@ impl LogicRuntime for ByldRuntime {
     }
 }
 
-/// Max errors shown in the overlay before truncating (Phase 2 heuristic).
-const OVERLAY_MAX_ERRORS: usize = 3;
+/// Max errors listed in the overlay.
+///
+/// Three was a Phase-2 heuristic forced by the overlay having to fit in a
+/// hand-placed column on an opaque field. It is now a real layer over a real
+/// view, so the panel sizes itself to what it holds and the limit exists only
+/// to stop a cascade of two hundred errors from running off the bottom of the
+/// window — which is a different, much larger number.
+const OVERLAY_MAX_ERRORS: usize = 12;
 /// Max chars per headline before adding "…" (avoids horizontal overflow).
-const OVERLAY_MAX_HEADLINE_CHARS: usize = 60;
+const OVERLAY_MAX_HEADLINE_CHARS: usize = 78;
+/// Backdrop blur σ, in logical pixels (RFC-0023).
+///
+/// Enough that no word of the app underneath is readable — a legible
+/// background competes with the error text for the same attention — and little
+/// enough that the layout, the colours and *where you were* all survive, which
+/// is the entire reason the last good view is shown at all.
+const OVERLAY_BLUR: f32 = 18.0;
 
-/// Renders a semi-transparent error overlay directly into `frame` without
-/// going through the interpreter (RFC-0006 §3.4, decision C4).
+/// Renders the error overlay as an RFC-0017 layer over a blurred backdrop of
+/// the last good view (RFC-0006 §3.4).
 ///
 /// Truncates to [`OVERLAY_MAX_ERRORS`] errors and [`OVERLAY_MAX_HEADLINE_CHARS`]
-/// chars per headline to keep the overlay bounded without needing Taffy layout.
+/// chars per headline to keep the overlay bounded without needing Taffy layout
+/// — this path is deliberately independent of the interpreter, since the
+/// interpreter is what just failed.
 fn render_error_overlay(frame: &mut RenderFrame, errors: &[CompileError], w: f32, h: f32) {
-    // Opaque dark background covering the full viewport. Opaque (not a scrim)
-    // because the underlying view is intentionally not drawn while errors are
-    // shown — see the call site in `App::render`.
-    frame.push_instance(BoxInstance {
+    // The frosted pane: the whole viewport, blurred, with a dark tint over it.
+    // Not an opaque fill, and not a plain translucent scrim either — a scrim
+    // leaves the app's own contrast fighting the error text, while a blur
+    // removes the detail and keeps the shape.
+    frame.push_backdrop(byard_core::frame::BackdropInstance {
         rect: [0.0, 0.0, w, h],
-        color: [0.09, 0.09, 0.11, 1.0],
         radii: [0.0; 4],
+        blur: OVERLAY_BLUR,
+        tint: [0.05, 0.05, 0.07, 0.82],
+        saturation: 0.35,
+        quality: byard_core::frame::BLUR_QUALITY_HIGH,
+        opacity: 1.0,
         transform: byard_core::frame::Transform::IDENTITY,
+        depth: 0.0,
     });
 
     let padding = 32.0;
     let line_height = 22.0;
-    let mut y = padding + line_height;
+    let shown = errors.len().min(OVERLAY_MAX_ERRORS);
+    let truncated = errors.len() > OVERLAY_MAX_ERRORS;
+
+    // The panel is sized to its contents rather than filling the viewport, so
+    // the blurred view is visible around it and the overlay reads as something
+    // *in front of* the app rather than instead of it.
+    let rows = 1.5
+        + f32::from(u16::try_from(shown).unwrap_or(u16::MAX)) * 1.2
+        + if truncated { 1.3 } else { 0.0 }
+        + 1.6;
+    let panel_h = (padding * 2.0 + line_height * rows).min(h - 32.0);
+    let panel_w = (w - 64.0).clamp(240.0, 880.0);
+    let panel_x = ((w - panel_w) / 2.0).max(0.0);
+    let panel_y = ((h - panel_h) / 2.0).max(0.0);
+    frame.push_instance(BoxInstance {
+        rect: [panel_x, panel_y, panel_w, panel_h],
+        color: [0.11, 0.11, 0.14, 0.96],
+        radii: [14.0; 4],
+        transform: byard_core::frame::Transform::IDENTITY,
+    });
+
+    let x = panel_x + padding;
+    let mut y = panel_y + padding + line_height;
 
     let title = if errors.len() == 1 {
         "Parse error".to_string()
@@ -458,21 +557,19 @@ fn render_error_overlay(frame: &mut RenderFrame, errors: &[CompileError], w: f32
         format!("Parse errors ({})", errors.len())
     };
     frame.push_text(TextLine {
-        x: padding,
+        x,
         y,
         text: title,
         font_size: 18.0,
-        color: [1.0, 0.4, 0.4, 1.0],
+        color: [1.0, 0.42, 0.42, 1.0],
         dirty: true,
     });
     y += line_height * 1.5;
 
-    // Show at most OVERLAY_MAX_ERRORS errors; truncate each headline.
-    let shown = errors.len().min(OVERLAY_MAX_ERRORS);
     for err in &errors[..shown] {
         let headline = truncate_str(&err.headline(), OVERLAY_MAX_HEADLINE_CHARS);
         frame.push_text(TextLine {
-            x: padding,
+            x,
             y,
             text: headline,
             font_size: 15.0,
@@ -482,10 +579,10 @@ fn render_error_overlay(frame: &mut RenderFrame, errors: &[CompileError], w: f32
         y += line_height * 1.2;
     }
 
-    if errors.len() > OVERLAY_MAX_ERRORS {
+    if truncated {
         y += line_height * 0.3;
         frame.push_text(TextLine {
-            x: padding,
+            x,
             y,
             text: format!("… and {} more error(s)", errors.len() - OVERLAY_MAX_ERRORS),
             font_size: 13.0,
@@ -496,11 +593,11 @@ fn render_error_overlay(frame: &mut RenderFrame, errors: &[CompileError], w: f32
     }
 
     frame.push_text(TextLine {
-        x: padding,
-        y: y + line_height,
-        text: "Fix the file and save to dismiss.".to_string(),
+        x,
+        y: y + line_height * 0.6,
+        text: "Fix the file and save to dismiss — the last good view is behind this.".to_string(),
         font_size: 13.0,
-        color: [0.5, 0.5, 0.5, 1.0],
+        color: [0.55, 0.55, 0.58, 1.0],
         dirty: true,
     });
 }
@@ -681,7 +778,9 @@ struct Header {
     views: usize,
     /// Pre-rendered diagnostic first lines (RFC-0006 **C7**), if the initial
     /// resolve failed.
-    errors: Vec<String>,
+    errors: Vec<CompileError>,
+    /// The source map they point into, so the header can draw caret blocks.
+    source_map: byard_compiler::resolve::SourceMap,
     started: std::time::Instant,
 }
 
@@ -719,9 +818,7 @@ impl Header {
                 Some(self.started.elapsed()),
             );
         } else {
-            for line in &self.errors {
-                crate::statusline::log_stderr(line);
-            }
+            crate::commands::check::print_diagnostics(&self.errors, &self.source_map, false);
             crate::style::err(&format!(
                 "{} error(s) — see the overlay in the window",
                 self.errors.len()
@@ -783,6 +880,10 @@ impl PlatformHost for App {
         } else {
             Some(self.initial_errors.clone())
         };
+        // Seeded to match, so a session that starts broken does not spend its
+        // first frame asking for a redraw it does not need — and a session that
+        // starts clean still gets one the moment it breaks.
+        let initial_errors_present = initial_errors.is_some();
 
         let mut engine = pollster::block_on(Engine::init(
             instance,
@@ -833,7 +934,7 @@ impl PlatformHost for App {
                 current_views,
                 reload_channel,
                 asset_changes: asset_rx,
-                pending_reload: None,
+                pending_reload: PendingReload::new(reload_pending_logic),
                 error_state: initial_errors,
                 width_bits: w_clone,
                 height_bits: h_clone,
@@ -841,9 +942,9 @@ impl PlatformHost for App {
                 reported_perf: std::collections::HashSet::new(),
                 reload_count: 0,
                 reloads_pub: reloads_logic,
-                reload_pending_pub: reload_pending_logic,
                 animating: animating_logic,
                 waker: waker_for_logic,
+                overlay_was_up: initial_errors_present,
                 pending_deep_link: deep_link,
             })
         })?;
@@ -1063,5 +1164,110 @@ impl PlatformHost for App {
                 time_ms: now_ms(),
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn views(name: &str) -> Vec<ViewDecl> {
+        vec![ViewDecl {
+            name: byard_compiler::Symbol::intern(name),
+            params: Vec::new(),
+            body: Vec::new(),
+            span: byard_compiler::Span::new(0, 0),
+        }]
+    }
+
+    /// RFC-0006 **C1**. The indicator and the gate are one type precisely so
+    /// they cannot disagree; these are the transitions that would let them.
+    #[test]
+    fn the_pending_flag_is_set_and_cleared_around_a_gated_reload() {
+        let flag = Arc::new(AtomicBool::new(false));
+        let mut gate = PendingReload::new(Arc::clone(&flag));
+
+        // Nothing waiting: no flag, nothing to take.
+        assert!(!flag.load(Ordering::Relaxed));
+        assert!(gate.take_if_released(false).is_none());
+        assert!(!flag.load(Ordering::Relaxed));
+
+        // A save lands mid-gesture.
+        assert!(
+            gate.defer(views("A"), ReloadKind::StructureIncompatible),
+            "the first defer is a rising edge and must wake an idle loop"
+        );
+        assert!(flag.load(Ordering::Relaxed));
+
+        // Still holding the pointer: the reload stays behind the gate and the
+        // indicator stays up.
+        assert!(gate.take_if_released(true).is_none());
+        assert!(
+            flag.load(Ordering::Relaxed),
+            "the indicator must not clear while the reload is still waiting"
+        );
+
+        // Released: the reload comes out and the indicator goes down in the
+        // same step.
+        let taken = gate.take_if_released(false).expect("the deferred reload");
+        assert_eq!(taken.0[0].name.as_str(), "A");
+        assert!(
+            !flag.load(Ordering::Relaxed),
+            "the indicator must clear exactly where the reload is consumed"
+        );
+        assert!(gate.take_if_released(false).is_none());
+    }
+
+    #[test]
+    fn a_second_defer_supersedes_the_first_and_is_not_a_second_rising_edge() {
+        // Applying the older views afterwards would undo an edit the developer
+        // has already made — the gate holds the *latest* save, like the
+        // latest-wins channel feeding it.
+        let flag = Arc::new(AtomicBool::new(false));
+        let mut gate = PendingReload::new(Arc::clone(&flag));
+        assert!(gate.defer(views("old"), ReloadKind::StructureIncompatible));
+        assert!(
+            !gate.defer(views("new"), ReloadKind::StructureIncompatible),
+            "the indicator is already up; waking the loop again is noise"
+        );
+        let taken = gate.take_if_released(false).expect("the deferred reload");
+        assert_eq!(taken.0[0].name.as_str(), "new");
+        assert!(!flag.load(Ordering::Relaxed));
+    }
+
+    /// RFC-0030 §Q3. The budget is what every bar is drawn against, so where it
+    /// came from has to be unambiguous — and a pinned value has to win, or
+    /// pinning it in CI would do nothing.
+    #[test]
+    fn the_frame_budget_prefers_a_pin_then_the_display_then_says_it_guessed() {
+        let pinned = crate::manifest::DevConfig {
+            frame_budget_ns: Some(8_000_000),
+            ..Default::default()
+        };
+        assert_eq!(
+            resolve_budget(&pinned, Some(120_000)),
+            (8_000_000, "byard.toml [dev] frame_budget")
+        );
+
+        // 120 Hz is 8.33ms. A tool that drew bars against 16.7ms here would
+        // report a comfortable frame for one that visibly stutters.
+        let (ns, source) = resolve_budget(&crate::manifest::DevConfig::default(), Some(120_000));
+        assert_eq!(ns, 8_333_333);
+        assert_eq!(source, "display refresh");
+
+        let (ns, source) = resolve_budget(&crate::manifest::DevConfig::default(), Some(60_000));
+        assert_eq!(ns, 16_666_666);
+        assert_eq!(source, "display refresh");
+
+        // No refresh rate reported: fall back, and *say so*, so a developer on
+        // a 120 Hz panel is not quietly told their 12ms frame is comfortable.
+        let (ns, source) = resolve_budget(&crate::manifest::DevConfig::default(), None);
+        assert_eq!(ns, DEFAULT_FRAME_BUDGET_NS);
+        assert!(source.contains("assumed"), "{source}");
+        assert_eq!(
+            resolve_budget(&crate::manifest::DevConfig::default(), Some(0)).0,
+            DEFAULT_FRAME_BUDGET_NS,
+            "a zero refresh rate is not a budget of infinity"
+        );
     }
 }

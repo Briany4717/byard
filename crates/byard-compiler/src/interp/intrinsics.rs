@@ -1258,7 +1258,20 @@ pub fn validate_canvas(el: &ElementNode, attrs: &[Attr]) -> Vec<CompileError> {
         errs.push(CompileError::CanvasMissingSize { span: el.span });
     }
 
-    for member in &el.children {
+    validate_canvas_body(&el.children, &mut errs);
+    errs
+}
+
+/// Validates a `Canvas` body: shape commands, and the `for`/`when` that
+/// generate them (RFC-0020 §1).
+///
+/// `for` and `when` are admitted because a drawing surface whose shape count
+/// cannot come from data cannot draw a chart, which is the thing a drawing
+/// surface is for. Everything else stays rejected: a `var` or a `style` block
+/// inside a canvas has no meaning to give it, and silently ignoring one is how
+/// a developer spends an afternoon on a shape that was never going to appear.
+fn validate_canvas_body(members: &[Member], errs: &mut Vec<CompileError>) {
+    for member in members {
         match member {
             Member::Element(child) if is_shape_command(child.name.as_str()) => {
                 errs.extend(validate_shape(child));
@@ -1272,21 +1285,24 @@ pub fn validate_canvas(el: &ElementNode, attrs: &[Attr]) -> Vec<CompileError> {
                         .map(str::to_string),
                 });
             }
-            // Declarations, control flow, and style blocks are not shape
-            // commands (RFC-0020 §1). Reported with the member keyword so the
-            // message reads naturally.
-            Member::Var { span, .. } => push_non_shape(&mut errs, *span, "var"),
-            Member::Let { span, .. } => push_non_shape(&mut errs, *span, "let"),
-            Member::Fn { span, .. } => push_non_shape(&mut errs, *span, "fn"),
-            Member::Inject { span, .. } => push_non_shape(&mut errs, *span, "inject"),
-            Member::For { span, .. } => push_non_shape(&mut errs, *span, "for"),
-            Member::When { span, .. } => push_non_shape(&mut errs, *span, "when"),
-            Member::Style { span, .. } => push_non_shape(&mut errs, *span, "style"),
-            Member::Route { kind, span, .. } => push_non_shape(&mut errs, *span, kind.as_str()),
-            Member::Expr(e) => push_non_shape(&mut errs, e.span(), "an expression"),
+            Member::For { body, .. } => validate_canvas_body(body, errs),
+            Member::When { then, els, .. } => {
+                validate_canvas_body(then, errs);
+                if let Some(els) = els {
+                    validate_canvas_body(els, errs);
+                }
+            }
+            // Declarations and style blocks are not shape commands. Reported
+            // with the member keyword so the message reads naturally.
+            Member::Var { span, .. } => push_non_shape(errs, *span, "var"),
+            Member::Let { span, .. } => push_non_shape(errs, *span, "let"),
+            Member::Fn { span, .. } => push_non_shape(errs, *span, "fn"),
+            Member::Inject { span, .. } => push_non_shape(errs, *span, "inject"),
+            Member::Style { span, .. } => push_non_shape(errs, *span, "style"),
+            Member::Route { kind, span, .. } => push_non_shape(errs, *span, kind.as_str()),
+            Member::Expr(e) => push_non_shape(errs, e.span(), "an expression"),
         }
     }
-    errs
 }
 
 /// Helper for [`validate_canvas`]: a non-element member inside a `Canvas`.
@@ -2198,7 +2214,7 @@ mod tests {
 
     #[test]
     fn non_shape_children_inside_canvas_are_rejected() {
-        // An intrinsic view child is not a shape command…
+        // An intrinsic view child is not a shape command.
         let e = canvas_errs("View V() { Canvas #[width: 10, height: 10] { Text(\"no\") } }");
         assert!(
             e.iter().any(
@@ -2206,13 +2222,66 @@ mod tests {
             ),
             "{e:?}"
         );
-        // …and neither is control flow.
+        // Nor is a declaration: there is nothing for a `var` inside a canvas
+        // to mean, and silently ignoring one is how a developer spends an
+        // afternoon on a shape that was never going to appear.
+        let e = canvas_errs("View V() { Canvas #[width: 10, height: 10] { var n = 1 } }");
+        assert!(
+            e.iter().any(
+                |x| matches!(x, CompileError::UnknownShapeCommand { name, .. } if name == "var")
+            ),
+            "{e:?}"
+        );
+        let e = canvas_errs("View V() { Canvas #[width: 10, height: 10] { let n = 1 } }");
+        assert!(
+            e.iter().any(
+                |x| matches!(x, CompileError::UnknownShapeCommand { name, .. } if name == "let")
+            ),
+            "{e:?}"
+        );
+    }
+
+    /// RFC-0020 §1 as amended: `for` and `when` are shape *generators*, so a
+    /// canvas body admits them.
+    ///
+    /// Without this a drawing surface cannot draw a chart — the one thing a
+    /// drawing surface is for — because the shape count cannot come from data.
+    #[test]
+    fn control_flow_inside_a_canvas_is_accepted_and_its_body_still_validated() {
         let e = canvas_errs(
-            "View V() { Canvas #[width: 10, height: 10] { when x { circle(cx: 1, cy: 1, r: 1) } } }",
+            "View V() { Canvas #[width: 10, height: 10] { \
+             for b in bars { rect(x: b.x, y: 0, w: 2, h: b.h) } } }",
+        );
+        assert!(e.is_empty(), "a data-driven canvas must validate: {e:?}");
+
+        let e = canvas_errs(
+            "View V() { Canvas #[width: 10, height: 10] { \
+             when on { circle(cx: 1, cy: 1, r: 1) } else { line(x1: 0, y1: 0, x2: 1, y2: 1) } } }",
+        );
+        assert!(e.is_empty(), "{e:?}");
+
+        // Admitting the control flow must not stop validating what is inside
+        // it: a bad shape in a loop body is still a bad shape.
+        let e = canvas_errs(
+            "View V() { Canvas #[width: 10, height: 10] { \
+             for b in bars { Text(\"no\") } } }",
         );
         assert!(
             e.iter().any(
-                |x| matches!(x, CompileError::UnknownShapeCommand { name, .. } if name == "when")
+                |x| matches!(x, CompileError::UnknownShapeCommand { name, .. } if name == "Text")
+            ),
+            "a loop body is not an escape hatch: {e:?}"
+        );
+
+        // Including in an `else` branch, which is the one a recursive walk
+        // written in a hurry forgets.
+        let e = canvas_errs(
+            "View V() { Canvas #[width: 10, height: 10] { \
+             when on { circle(cx: 1, cy: 1, r: 1) } else { Text(\"no\") } } }",
+        );
+        assert!(
+            e.iter().any(
+                |x| matches!(x, CompileError::UnknownShapeCommand { name, .. } if name == "Text")
             ),
             "{e:?}"
         );

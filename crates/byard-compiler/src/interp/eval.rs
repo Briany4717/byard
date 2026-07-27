@@ -138,6 +138,95 @@ fn members_span(members: &[Member]) -> Span {
     }
 }
 
+/// One item in a `Canvas` body (RFC-0020 §1): a shape command, or the control
+/// flow that generates them.
+///
+/// # Why control flow belongs here at all
+///
+/// A `Canvas` body was shape commands and nothing else, which made the one
+/// thing a drawing surface is *for* — a chart, a sparkline, anything whose
+/// shape count comes from data — inexpressible. You could draw twenty-four
+/// bars by writing twenty-four `rect(…)` lines against twenty-four separately
+/// named fields, and that is not a language feature, it is a workaround for
+/// the absence of one.
+///
+/// # Why it expands at emit time and not at lowering
+///
+/// Everything else in the language lowers `for` and `when` into reactive pools
+/// (`ForPool` / `WhenPool`), because their bodies are *elements* with layout,
+/// identity and mountable state, and re-deriving them per frame would throw all
+/// three away.
+///
+/// A canvas body has none of that. Shape commands carry no layout, no identity
+/// and no state; the render walk already re-evaluates every one of their
+/// parameter expressions every tick, which is exactly what makes them reactive
+/// without any pooling. Expanding the loop in the same walk is therefore the
+/// *consistent* choice rather than the cheap one: it makes the shape count as
+/// reactive as the coordinates already were, and it adds no node, no pool and
+/// no per-frame allocation beyond the bindings it pushes and pops.
+#[derive(Clone, Debug, PartialEq)]
+pub enum CanvasItem {
+    /// A validated shape command (`rect`, `arc`, `circle`, `line`, `text`,
+    /// `path`).
+    Shape(ElementNode),
+    /// `for item in items { … }`, expanded against the environment each tick.
+    For {
+        /// Loop variable.
+        var: Symbol,
+        /// The optional index variable of the `for i, item in items` form.
+        index: Option<Symbol>,
+        /// Iterable expression, evaluated per tick.
+        iter: Expr,
+        /// Body items.
+        body: Vec<CanvasItem>,
+    },
+    /// `when cond { … } else { … }`.
+    When {
+        /// Condition, evaluated per tick.
+        cond: Expr,
+        /// Then-branch items.
+        then: Vec<CanvasItem>,
+        /// Else-branch items.
+        els: Vec<CanvasItem>,
+    },
+}
+
+/// Collects a `Canvas` body into [`CanvasItem`]s, keeping declaration order.
+///
+/// Anything that is neither a shape command nor `for`/`when` has already been
+/// reported by `validate_canvas`, so it is dropped here rather than diagnosed
+/// twice.
+fn lower_canvas_items(members: &[Member]) -> Vec<CanvasItem> {
+    members
+        .iter()
+        .filter_map(|m| match m {
+            Member::Element(c) if super::intrinsics::is_shape_command(c.name.as_str()) => {
+                Some(CanvasItem::Shape(c.clone()))
+            }
+            Member::For {
+                var,
+                index,
+                iter,
+                body,
+                ..
+            } => Some(CanvasItem::For {
+                var: var.clone(),
+                index: index.clone(),
+                iter: iter.clone(),
+                body: lower_canvas_items(body),
+            }),
+            Member::When {
+                cond, then, els, ..
+            } => Some(CanvasItem::When {
+                cond: cond.clone(),
+                then: lower_canvas_items(then),
+                els: els.as_deref().map(lower_canvas_items).unwrap_or_default(),
+            }),
+            _ => None,
+        })
+        .collect()
+}
+
 /// A fingerprint of a repeating animation's endpoints, used to notice a
 /// retarget (RFC-0025 §5).
 ///
@@ -281,11 +370,11 @@ pub enum RenderNode {
         attrs: Vec<Attr>,
         /// `on <state> { … }` blocks (RFC-0016) overlaid at render time.
         state_blocks: Vec<StateBlock>,
-        /// The validated shape-command elements, in declaration order. Kept
-        /// as AST elements — their named args are ordinary `Expr`s evaluated
-        /// per tick through `eval_pure`, which is what makes every parameter
-        /// reactive and `with`-animatable (RFC-0010) without extra plumbing.
-        shapes: Vec<ElementNode>,
+        /// The validated canvas body, in declaration order. Kept as AST —
+        /// named args are ordinary `Expr`s evaluated per tick through
+        /// `eval_pure`, which is what makes every parameter reactive and
+        /// `with`-animatable (RFC-0010) without extra plumbing.
+        shapes: Vec<CanvasItem>,
         /// The `=> action` tap shorthand.
         action: Option<Expr>,
         /// The instance environment captured at lower time (RFC-0019 §2), so
@@ -2270,18 +2359,7 @@ impl Interpreter {
             "Canvas" => {
                 self.errors
                     .extend(super::intrinsics::validate_canvas(el, &to_validate));
-                let shapes = el
-                    .children
-                    .iter()
-                    .filter_map(|m| match m {
-                        Member::Element(c)
-                            if super::intrinsics::is_shape_command(c.name.as_str()) =>
-                        {
-                            Some(c.clone())
-                        }
-                        _ => None, // rejected by validate_canvas above
-                    })
-                    .collect();
+                let shapes = lower_canvas_items(&el.children);
                 RenderNode::Canvas {
                     attrs,
                     state_blocks,
@@ -4382,6 +4460,64 @@ impl Interpreter {
     /// `bezier` flattened to line segments) goes to the `CanvasShape`
     /// pipeline; `path` rasterizes through `VectorMSDF` (Tier 2); `text`
     /// lowers to a `TextLine`.
+    /// Emits a canvas body, expanding `for`/`when` against the current
+    /// environment.
+    ///
+    /// Bindings are pushed and truncated per iteration rather than snapshotted,
+    /// because the whole body runs inside the canvas's already-restored
+    /// instance environment — the loop variable is the only thing that changes.
+    fn emit_canvas_items(
+        &mut self,
+        items: &[CanvasItem],
+        canvas: crate::interp::intrinsics::Rect,
+        opacity: f32,
+        transform: byard_core::frame::Transform,
+        frame: &mut byard_core::frame::RenderFrame,
+    ) {
+        for item in items {
+            match item {
+                CanvasItem::Shape(el) => {
+                    self.emit_canvas_shape(el, canvas, opacity, transform, frame);
+                }
+                CanvasItem::For {
+                    var,
+                    index,
+                    iter,
+                    body,
+                } => {
+                    // Cloned because the body's expressions are evaluated with
+                    // `&mut self`, and the list lives in the environment the
+                    // evaluation may touch. A canvas's data is a handful of
+                    // records, not an app-state list.
+                    let Some(items) = self.eval_pure(iter).as_list().map(<[Value]>::to_vec) else {
+                        continue;
+                    };
+                    let base = self.env.len();
+                    for (i, value) in items.into_iter().enumerate() {
+                        self.env.truncate(base);
+                        if let Some(index) = index {
+                            self.env.push(
+                                index.clone(),
+                                Value::Int(i64::try_from(i).unwrap_or(i64::MAX)),
+                            );
+                        }
+                        self.env.push(var.clone(), value);
+                        self.emit_canvas_items(body, canvas, opacity, transform, frame);
+                    }
+                    self.env.truncate(base);
+                }
+                CanvasItem::When { cond, then, els } => {
+                    let taken = if self.eval_pure(cond).as_bool().unwrap_or(false) {
+                        then
+                    } else {
+                        els
+                    };
+                    self.emit_canvas_items(taken, canvas, opacity, transform, frame);
+                }
+            }
+        }
+    }
+
     fn emit_canvas_shape(
         &mut self,
         el: &ElementNode,
@@ -6155,15 +6291,13 @@ impl Interpreter {
                     // Shape commands, in declaration order (painter's order —
                     // each `push_canvas_shape` advances the global emission
                     // depth, RFC-0011).
-                    for shape in shapes {
-                        self.emit_canvas_shape(
-                            shape,
-                            canvas_rect,
-                            opacity,
-                            inherited_transform,
-                            frame,
-                        );
-                    }
+                    self.emit_canvas_items(
+                        shapes,
+                        canvas_rect,
+                        opacity,
+                        inherited_transform,
+                        frame,
+                    );
 
                     // Events: the canvas rect only — individual shapes are not
                     // hit-testable (RFC-0020 resolved question). Shifted to
@@ -11203,8 +11337,97 @@ mod tests {
             panic!("Canvas lowers to RenderNode::Canvas, got {:?}", tree[0]);
         };
         assert_eq!(shapes.len(), 2);
-        assert_eq!(shapes[0].name.as_str(), "arc");
-        assert_eq!(shapes[1].name.as_str(), "circle");
+        let shape_name = |i: usize| match &shapes[i] {
+            CanvasItem::Shape(el) => el.name.as_str().to_string(),
+            other => panic!("expected a shape command, got {other:?}"),
+        };
+        assert_eq!(shape_name(0), "arc");
+        assert_eq!(shape_name(1), "circle");
+    }
+
+    /// RFC-0020 §1 as amended: a canvas's *shape count* comes from data.
+    ///
+    /// Without this, the one thing a drawing surface is for — a chart — is
+    /// inexpressible: you write twenty-four `rect(…)` lines against twenty-four
+    /// separately named fields, which is a workaround for a missing feature
+    /// rather than a use of the language.
+    #[test]
+    fn a_for_inside_a_canvas_emits_one_shape_per_item() {
+        let (mut interp, tree) = lower_named(
+            "View App() {                let bars = [{ x: 0.0, h: 4.0 }, { x: 6.0, h: 12.0 }, { x: 12.0, h: 8.0 }]                Canvas #[width: 100, height: 20] {                  for b in bars { rect(x: b.x, y: 0, w: 4, h: b.h, fill: 0xD0BCFF) } } }",
+            "App",
+        );
+        assert!(interp.errors().is_empty(), "{:?}", interp.errors());
+        interp.tick();
+        let mut frame = byard_core::frame::RenderFrame::new();
+        interp.render(&tree, &mut frame, 400.0, 300.0);
+
+        let shapes = frame.canvas_shapes();
+        assert_eq!(shapes.len(), 3, "one rect per item");
+        // Each shape reads *its own* item, in order — the failure mode of a
+        // binding that is pushed but never popped is three identical bars.
+        let heights: Vec<f32> = shapes.iter().map(|s| s.params[3]).collect();
+        assert!(
+            (heights[0] - 4.0).abs() < 0.01
+                && (heights[1] - 12.0).abs() < 0.01
+                && (heights[2] - 8.0).abs() < 0.01,
+            "each iteration must see its own binding, got {heights:?}"
+        );
+        // And the loop leaves nothing behind: `b` must not still be in scope.
+        let mut second = byard_core::frame::RenderFrame::new();
+        interp.render(&tree, &mut second, 400.0, 300.0);
+        assert_eq!(
+            second.canvas_shapes().len(),
+            3,
+            "a second render must not accumulate bindings or shapes"
+        );
+    }
+
+    #[test]
+    fn a_for_inside_a_canvas_binds_the_index_when_the_two_variable_form_is_used() {
+        let (mut interp, tree) = lower_named(
+            "View App() {                let bars = [3.0, 6.0, 9.0]                Canvas #[width: 100, height: 20] {                  for i, h in bars { rect(x: i * 10, y: 0, w: 4, h: h, fill: 0xD0BCFF) } } }",
+            "App",
+        );
+        assert!(interp.errors().is_empty(), "{:?}", interp.errors());
+        interp.tick();
+        let mut frame = byard_core::frame::RenderFrame::new();
+        interp.render(&tree, &mut frame, 400.0, 300.0);
+        let xs: Vec<f32> = frame.canvas_shapes().iter().map(|s| s.params[0]).collect();
+        assert_eq!(xs.len(), 3);
+        assert!(
+            (xs[1] - xs[0] - 10.0).abs() < 0.01 && (xs[2] - xs[1] - 10.0).abs() < 0.01,
+            "the index must advance per iteration, got {xs:?}"
+        );
+    }
+
+    #[test]
+    fn a_when_inside_a_canvas_takes_one_branch() {
+        let (mut interp, tree) = lower_named(
+            "View App() { let on = false                Canvas #[width: 100, height: 100] {                  when on { circle(cx: 5, cy: 5, r: 2, fill: 0xFF0000) }                  else { line(x1: 0, y1: 0, x2: 9, y2: 9, stroke: 0x00FF00) } } }",
+            "App",
+        );
+        assert!(interp.errors().is_empty(), "{:?}", interp.errors());
+        interp.tick();
+        let mut frame = byard_core::frame::RenderFrame::new();
+        interp.render(&tree, &mut frame, 400.0, 300.0);
+        let shapes = frame.canvas_shapes();
+        assert_eq!(shapes.len(), 1, "exactly one branch, never both");
+        assert_eq!(shapes[0].kind, byard_core::frame::CANVAS_SHAPE_LINE);
+    }
+
+    #[test]
+    fn an_empty_list_in_a_canvas_for_emits_nothing_rather_than_failing() {
+        // The first frame of any data-driven chart, before the data arrives.
+        let (mut interp, tree) = lower_named(
+            "View App() { let bars = []                Canvas #[width: 100, height: 20] {                  for b in bars { rect(x: 0, y: 0, w: 4, h: 4, fill: 0xD0BCFF) } } }",
+            "App",
+        );
+        assert!(interp.errors().is_empty(), "{:?}", interp.errors());
+        interp.tick();
+        let mut frame = byard_core::frame::RenderFrame::new();
+        interp.render(&tree, &mut frame, 400.0, 300.0);
+        assert!(frame.canvas_shapes().is_empty());
     }
 
     #[test]

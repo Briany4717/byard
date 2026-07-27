@@ -635,6 +635,31 @@ impl StatusLine {
         self.paint();
     }
 
+    /// The resolved frame budget in nanoseconds.
+    #[must_use]
+    pub const fn budget_ns(&self) -> u64 {
+        self.budget_ns
+    }
+
+    /// The fields the in-window HUD shares with the statusline: `retained`,
+    /// its window, fps, and the work ring.
+    ///
+    /// Shared rather than recomputed so the two surfaces cannot disagree. Two
+    /// readouts of the same session showing different numbers is worse than
+    /// either of them being wrong, because it makes both unusable.
+    #[must_use]
+    pub fn hud_fields(&self) -> (u32, u32, u32, [u16; 24]) {
+        let mut spark = [0u16; 24];
+        let tail = &self.frames[self.frames.len() - spark.len()..];
+        spark.copy_from_slice(tail);
+        (
+            self.fields.retained,
+            self.fields.window,
+            self.fields.fps,
+            spark,
+        )
+    }
+
     /// Whether the expanded block is showing.
     #[must_use]
     pub const fn is_profiling(&self) -> bool {

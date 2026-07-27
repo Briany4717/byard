@@ -121,6 +121,9 @@ pub fn run(opts: Options<'_>) -> Result<(), String> {
     // thread, so they cross as atomics — the only way anything may (INV-2).
     let reloads = Arc::new(AtomicU32::new(0));
     let reload_pending = Arc::new(AtomicBool::new(false));
+    // `Mod+Shift+D` (or `[dev] hud`): written by the render thread, read by
+    // the logic thread, so it crosses as an atomic (INV-2).
+    let hud_visible = Arc::new(AtomicBool::new(manifest.dev.hud));
 
     let host = WinitHost::new(&title, 1280, 720).with_poll();
     host.run(App {
@@ -144,6 +147,8 @@ pub fn run(opts: Options<'_>) -> Result<(), String> {
         trace,
         reloads,
         reload_pending,
+        hud_visible,
+        hud_telemetry: None,
         last_frame: std::time::Instant::now(),
     })
     .map_err(|e| format!("event loop error: {e}"))
@@ -230,6 +235,109 @@ impl PendingReload {
     }
 }
 
+// ── The reload flash (RFC-0030 §V6) ──────────────────────────────────────────
+
+/// A 2 px inset border that pulses once when a hot reload lands.
+///
+/// Green for a reactive-compatible reload, amber for a deferred
+/// structure-incompatible one that has just come out from behind the gate.
+///
+/// # Never suppressed on a no-visible-diff reload (§Q9)
+///
+/// That is its *only* justifying case. A save that changed a colour announces
+/// itself; a save that changed a handler, a comment, or a value that happens to
+/// render identically does not — and that is precisely the situation in which a
+/// developer cannot tell whether hot reload is working at all. Suppressing the
+/// flash there would remove the feature from the one case it exists for and
+/// leave it firing only when it is redundant.
+#[derive(Default)]
+struct ReloadFlash {
+    /// When the flash started, on the interpreter's animation clock, or `None`.
+    started_ms: Option<u32>,
+    /// Amber rather than green: a deferred, structure-incompatible reload.
+    deferred: bool,
+}
+
+impl ReloadFlash {
+    /// How long the pulse lasts.
+    const DURATION_MS: u32 = 120;
+    /// Peak alpha.
+    const PEAK: f32 = 0.9;
+    /// Border thickness in logical pixels.
+    const WIDTH: f32 = 2.0;
+
+    fn trigger(&mut self, now_ms: u32, deferred: bool) {
+        self.started_ms = Some(now_ms);
+        self.deferred = deferred;
+    }
+
+    /// Whether the flash still has frames to draw.
+    fn is_active(&self, now_ms: u32) -> bool {
+        self.started_ms
+            .is_some_and(|start| now_ms.saturating_sub(start) < Self::DURATION_MS)
+    }
+
+    /// Alpha at `now_ms`: 0 → peak → 0, triangular over the duration.
+    ///
+    /// A triangle rather than an ease: the whole event is 120 ms, which is
+    /// about seven frames, and the difference between a curve and a ramp is not
+    /// perceivable across seven frames. Spending a `Motion` on it would add
+    /// state to something whose entire lifetime is shorter than a keypress.
+    fn alpha(&self, now_ms: u32) -> f32 {
+        let Some(start) = self.started_ms else {
+            return 0.0;
+        };
+        let elapsed = now_ms.saturating_sub(start);
+        if elapsed >= Self::DURATION_MS {
+            return 0.0;
+        }
+        #[allow(clippy::cast_precision_loss)]
+        let t = elapsed as f32 / Self::DURATION_MS as f32;
+        let ramp = if t < 0.5 { t * 2.0 } else { (1.0 - t) * 2.0 };
+        ramp * Self::PEAK
+    }
+
+    /// Draws the inset border, if the flash is running.
+    ///
+    /// One `DecoratedBox` — a transparent fill with a border — on top of
+    /// everything else. No new pipeline, and no state beyond the trigger.
+    fn render(&mut self, frame: &mut RenderFrame, w: f32, h: f32, now_ms: u32) {
+        let alpha = self.alpha(now_ms);
+        if alpha <= 0.0 {
+            // Released rather than left set, so `is_active` stays a cheap
+            // answer to "does this still need frames?".
+            self.started_ms = None;
+            return;
+        }
+        let colour = if self.deferred {
+            [0.91, 0.73, 0.19, alpha] // warn amber
+        } else {
+            [0.49, 0.83, 0.66, alpha] // ok green
+        };
+        // Its own layer, above the app *and* the HUD: the flash is a statement
+        // about the session, not about anything in the scene.
+        frame.begin_layer();
+        frame.push_decorated(byard_core::frame::DecoratedBox {
+            base: BoxInstance {
+                rect: [
+                    Self::WIDTH * 0.5,
+                    Self::WIDTH * 0.5,
+                    (w - Self::WIDTH).max(0.0),
+                    (h - Self::WIDTH).max(0.0),
+                ],
+                color: [0.0; 4],
+                radii: [0.0; 4],
+                transform: byard_core::frame::Transform::IDENTITY,
+            },
+            border_width: Self::WIDTH,
+            border_color: colour,
+            opacity: 1.0,
+            dirty: true,
+            ..Default::default()
+        });
+    }
+}
+
 // ── Logic runtime ─────────────────────────────────────────────────────────────
 
 struct ByldRuntime {
@@ -277,6 +385,16 @@ struct ByldRuntime {
     /// the rising edge only, so a steadily animating scene (already spinning)
     /// posts nothing.
     waker: byard_core::relay::FrameWaker,
+    /// The reload flash (RFC-0030 §V6).
+    flash: ReloadFlash,
+    /// The in-window HUD (RFC-0030 §V3), or `None` if the embedded source
+    /// failed to parse — which is a defect in this repository, reported once
+    /// rather than taking a developer's session down with it.
+    hud: Option<crate::hud::DevHud>,
+    /// The render thread's `Mod+Shift+D` toggle.
+    hud_visible: Arc<AtomicBool>,
+    /// Fresh HUD readings from the render thread, latest wins.
+    hud_telemetry: crossbeam_channel::Receiver<crate::hud::HudTelemetry>,
     /// Whether the error overlay was up on the previous tick, so the two
     /// frames that change the composition wholesale can ask for a full redraw
     /// and no others do.
@@ -307,7 +425,14 @@ impl ByldRuntime {
         (self.waker)();
     }
 
-    fn apply_reload(&mut self, new_views: &[ViewDecl], _kind: ReloadKind) {
+    fn apply_reload(&mut self, new_views: &[ViewDecl], kind: ReloadKind) {
+        // The flash is triggered here rather than at the call sites so it
+        // cannot be forgotten by one of them — and so it fires on *every*
+        // applied reload, including the ones that changed nothing visible,
+        // which is the only case it exists for (§Q9).
+        let now = u32::try_from(self.start.elapsed().as_millis()).unwrap_or(u32::MAX);
+        self.flash
+            .trigger(now, kind == ReloadKind::StructureIncompatible);
         // The rendered root is the first tracked view. Editing any view it
         // transitively instantiates must re-derive its tree, so compute the
         // affected set (changed views ∪ transitive callers, RFC-0007 §5) and
@@ -436,13 +561,15 @@ impl LogicRuntime for ByldRuntime {
             frame.begin_layer();
             render_error_overlay(frame, errors, w, h);
             // An error overlay is static: nothing to animate, so the loop may
-            // sleep until the next save.
-            self.publish_animating(false);
+            // sleep until the next save — unless a flash is still running.
+            self.publish_animating(self.flash.is_active(elapsed));
         } else {
             self.interp.render(&self.tree, frame, w, h);
             // RFC-0010/RFC-0025: publish whether anything is still in motion, so
             // the event loop can stop requesting frames once it all settles.
-            self.publish_animating(self.interp.has_active_animations());
+            self.publish_animating(
+                self.interp.has_active_animations() || self.flash.is_active(elapsed),
+            );
             // RFC-0023 runtime perf diagnostics (e.g. ≥ 3 stacked frosted-glass
             // panes): surface each distinct warning once on the terminal.
             for warning in self.interp.perf_warnings() {
@@ -480,6 +607,38 @@ impl LogicRuntime for ByldRuntime {
                 }
             }
         }
+
+        // ── Step 4: the dev-only surfaces (RFC-0030 §V3–§V4, §V6) ────────────
+        self.render_dev_surfaces(frame, w, h, elapsed);
+    }
+}
+
+impl ByldRuntime {
+    /// Draws the in-window HUD and the reload flash, above everything the app
+    /// emitted.
+    ///
+    /// Both are dev-only overlays; neither may change what the app's own
+    /// measurement says about it (INV-24).
+    fn render_dev_surfaces(&mut self, frame: &mut RenderFrame, w: f32, h: f32, elapsed: u32) {
+        if self.hud_visible.load(Ordering::Relaxed) {
+            // Captured *before* the HUD renders: the HUD runs its own
+            // `LayoutAtlas` on this thread, so its layout activity lands in the
+            // same thread-local counters the statusline reads. Without
+            // restoring this, the HUD would report the app as rebuilding every
+            // frame — the observer effect in its most embarrassing form.
+            let app_paths = frame.atlas_paths();
+            while let Ok(t) = self.hud_telemetry.try_recv() {
+                if let Some(hud) = self.hud.as_mut() {
+                    hud.accept(t);
+                }
+            }
+            if let Some(hud) = self.hud.as_mut() {
+                hud.render(frame, w, h);
+            }
+            frame.set_atlas_paths(app_paths);
+        }
+
+        self.flash.render(frame, w, h, elapsed);
     }
 }
 
@@ -682,6 +841,10 @@ struct App {
     /// A structure-incompatible reload held behind the gesture gate
     /// (RFC-0006 C1), published by the logic thread.
     reload_pending: Arc<AtomicBool>,
+    /// The `Mod+Shift+D` toggle, mirrored to the logic thread.
+    hud_visible: Arc<AtomicBool>,
+    /// The sender half of the HUD's telemetry feed, taken in `on_resume`.
+    hud_telemetry: Option<crossbeam_channel::Sender<crate::hud::HudTelemetry>>,
     /// When the previous redraw happened, so the sparkline plots the frame
     /// *period* — which is what a developer sees — rather than the sum of the
     /// scopes that happened to be instrumented.
@@ -697,6 +860,41 @@ struct App {
 }
 
 impl App {
+    /// Starts the file watcher and returns the two channels the logic thread
+    /// drains: the latest-wins reload channel and the vector-asset changes.
+    ///
+    /// Extracted from `on_resume` to keep it under the line-count lint, and
+    /// because it is the one part of resume that has nothing to do with the
+    /// GPU.
+    fn start_file_watcher(
+        &self,
+    ) -> Result<
+        (
+            Arc<LatestWins<ParsedFile>>,
+            crossbeam_channel::Receiver<std::path::PathBuf>,
+        ),
+        ByardError,
+    > {
+        // Hot-reload channel (RFC-0006 §3.5, D10).
+        let reload_channel = Arc::new(LatestWins::<ParsedFile>::new());
+        // Watcher lifetime tied to App; Arc shared with logic thread (C5).
+        let watcher_channel = Arc::clone(&reload_channel);
+        // Vector-asset (`.svg`) change channel: the watcher forwards changed
+        // paths, the logic thread drains them each tick and invalidates the
+        // matching MSDF field so it regenerates live (RFC-0009 §3, M47).
+        let (asset_tx, asset_rx) = crossbeam_channel::unbounded::<std::path::PathBuf>();
+        let file_override = self.file_override.clone();
+        let watcher = start_watcher(&self.watch_paths, watcher_channel, asset_tx, move || {
+            reresolve(file_override.as_deref())
+        })
+        .map_err(|e| ByardError::RenderSurface(format!("file watcher error: {e}")))?;
+        // Keep the watcher alive for the entire process lifetime. Intentional:
+        // file watching must persist even if the logic thread is restarted by
+        // a structure-incompatible reload.
+        std::mem::forget(watcher);
+        Ok((reload_channel, asset_rx))
+    }
+
     /// The non-TTY fallback for the statusline: **one plain line** per second
     /// (RFC-0030 §"The statusline").
     ///
@@ -736,6 +934,59 @@ impl App {
             },
         ));
     }
+}
+
+/// Builds one HUD reading from the frame that just presented (RFC-0030 §V4).
+///
+/// # The subtraction, in one place
+///
+/// `hud.render` is a depth-0 sibling of the app's scopes on the logic thread's
+/// ring, so it does not inflate `interp.render` — but it *is* part of that
+/// thread's total, and therefore of `work`. Every figure the HUD displays is
+/// computed net of it here, and the subtracted amount is shipped alongside so
+/// the HUD can print it. A HUD that hides its own overhead is worse than no
+/// HUD; one that merely claims to subtract it is not much better.
+///
+/// The reading is one frame behind, which is what §V4 specifies: the cost of
+/// drawing the HUD is not known until it has been drawn.
+fn hud_reading(
+    logic: &byard_core::telemetry::SampleBlock,
+    render: &byard_core::telemetry::SampleBlock,
+    statusline: &StatusLine,
+    engine: &Engine,
+    frame_ns: u64,
+) -> crate::hud::HudTelemetry {
+    let hud_cost_ns = scope_total(logic, "hud.render");
+    let idle_ns = crate::statusline::idle_ns(logic, render);
+    let census = engine.latest_census();
+    let (retained, window, fps, spark) = statusline.hud_fields();
+    crate::hud::HudTelemetry {
+        fps,
+        frame_ns,
+        budget_ns: statusline.budget_ns(),
+        work_ns: crate::statusline::work_ns(logic, render, idle_ns).saturating_sub(hud_cost_ns),
+        interp_ns: scope_total(logic, "interp.render").saturating_sub(hud_cost_ns),
+        layout_ns: scope_total(logic, "layout.taffy"),
+        encode_ns: scope_total(render, "encode.frame"),
+        gpu_ns: render.sum_by_kind(byard_core::telemetry::ScopeKind::Gpu),
+        boxes: census.instances,
+        texts: census.texts,
+        vectors: census.vectors,
+        retained,
+        window,
+        spark,
+        hud_cost_ns,
+    }
+}
+
+/// Total inclusive time of every depth-0 sample named `scope`.
+fn scope_total(block: &byard_core::telemetry::SampleBlock, scope: &str) -> u64 {
+    block
+        .samples
+        .iter()
+        .filter(|s| s.depth() == 0 && byard_core::telemetry::scope_name(s.scope) == Some(scope))
+        .map(byard_core::telemetry::Sample::duration_ns)
+        .sum()
 }
 
 /// Nanoseconds as milliseconds. Frame times never approach `f64`'s limit.
@@ -810,7 +1061,10 @@ impl Header {
             "budget",
             &format!("{:.1}ms  ({budget_source})", ns_ms(budget_ns)),
         );
-        crate::style::fact("keys", "Mod+Shift+P  expanded profile block");
+        crate::style::fact(
+            "keys",
+            "Mod+Shift+D  in-window HUD  ·  Mod+Shift+P  expanded profile block",
+        );
 
         if self.errors.is_empty() {
             crate::style::ok(
@@ -850,28 +1104,13 @@ impl PlatformHost for App {
         let animating_logic = Arc::clone(&animating);
         let reloads_logic = Arc::clone(&self.reloads);
         let reload_pending_logic = Arc::clone(&self.reload_pending);
+        let hud_visible_logic = Arc::clone(&self.hud_visible);
+        // Bounded at one, latest-wins: the HUD wants the newest reading, and a
+        // queue of stale ones would only delay it.
+        let (hud_tx, hud_rx) = crossbeam_channel::bounded(1);
+        self.hud_telemetry = Some(hud_tx);
 
-        // Hot-reload channel (RFC-0006 §3.5, D10).
-        let reload_channel = Arc::new(LatestWins::<ParsedFile>::new());
-        // Watcher lifetime tied to App; Arc shared with logic thread (C5).
-        let watcher_channel = Arc::clone(&reload_channel);
-        // _watcher is held in the App (C5) — store via engine field workaround:
-        // we drop the watcher when the engine drops. We keep it in a Box::leak
-        // for now so the OS thread stays alive for the session.
-        // TODO: store in App struct properly once Engine exposes a cleanup hook.
-        // Vector-asset (`.svg`) change channel: the watcher forwards changed
-        // paths, the logic thread drains them each tick and invalidates the
-        // matching MSDF field so it regenerates live (RFC-0009 §3, M47).
-        let (asset_tx, asset_rx) = crossbeam_channel::unbounded::<std::path::PathBuf>();
-        let file_override = self.file_override.clone();
-        let watcher = start_watcher(&self.watch_paths, watcher_channel, asset_tx, move || {
-            reresolve(file_override.as_deref())
-        })
-        .map_err(|e| ByardError::RenderSurface(format!("file watcher error: {e}")))?;
-        // Keep the watcher alive for the entire process lifetime.
-        // This is intentional: we want file watching to persist even if the
-        // logic thread is restarted due to a structure-incompatible reload.
-        std::mem::forget(watcher);
+        let (reload_channel, asset_rx) = self.start_file_watcher()?;
 
         let initial_views = self.initial_views.clone();
         let initial_theme = self.initial_theme.clone();
@@ -944,6 +1183,23 @@ impl PlatformHost for App {
                 reloads_pub: reloads_logic,
                 animating: animating_logic,
                 waker: waker_for_logic,
+                flash: ReloadFlash::default(),
+                // Built here rather than handed in: the HUD owns an
+                // `Interpreter`, which is `!Send` by design (RFC-0001 §5), so
+                // it is constructed on the thread that will drive it. A HUD
+                // that fails to parse is a defect in *this* repository, so it
+                // is reported once and the session continues without it — a
+                // developer should never lose their dev runner to a broken
+                // diagnostic.
+                hud: match crate::hud::DevHud::new() {
+                    Ok(hud) => Some(hud),
+                    Err(e) => {
+                        crate::style::warn(&format!("the in-window HUD is unavailable: {e}"));
+                        None
+                    }
+                },
+                hud_visible: hud_visible_logic,
+                hud_telemetry: hud_rx,
                 overlay_was_up: initial_errors_present,
                 pending_deep_link: deep_link,
             })
@@ -1036,6 +1292,24 @@ impl PlatformHost for App {
                 });
             }
 
+            if self.hud_visible.load(Ordering::Relaxed) {
+                if let (Some(tx), Some(sl)) =
+                    (self.hud_telemetry.as_ref(), self.statusline.as_ref())
+                {
+                    // `try_send` on a bounded(1) channel: if the logic thread
+                    // has not taken the previous reading yet, this one is
+                    // dropped rather than queued. The HUD wants the newest
+                    // number, and a backlog of stale ones would only delay it.
+                    let _ = tx.try_send(hud_reading(
+                        &logic,
+                        &self.last_render_telemetry,
+                        sl,
+                        e,
+                        frame_ns,
+                    ));
+                }
+            }
+
             if !self.statusline.as_ref().is_some_and(StatusLine::is_enabled) {
                 App::print_plain_summary(
                     e,
@@ -1070,6 +1344,25 @@ impl PlatformHost for App {
             // land back where it started, which reads as the chord not working.
             if pressed {
                 sl.set_profile(!sl.is_profiling());
+            }
+            return true;
+        }
+        if key.eq_ignore_ascii_case("d") {
+            if pressed {
+                let now = !self.hud_visible.load(Ordering::Relaxed);
+                self.hud_visible.store(now, Ordering::Relaxed);
+                // The logic thread may be parked with nothing to animate, and
+                // the chord is not an input event it will ever see — so the
+                // frame that mounts or dismisses the HUD has to be asked for.
+                if let Some(e) = self.engine.as_ref() {
+                    e.push_input(byard_core::platform::InputEvent {
+                        kind: byard_core::platform::EventKind::PointerMove,
+                        pos: (-1.0, -1.0),
+                        delta: (0.0, 0.0),
+                        payload: None,
+                        time_ms: now_ms(),
+                    });
+                }
             }
             return true;
         }

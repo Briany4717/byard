@@ -92,6 +92,11 @@ const ROWS: &[(&str, u8)] = &[
     ("encode.submit", 0),
     ("present.submit", 0),
     ("gpu.ui_pass", 0),
+    // The dev surfaces' own cost, so a developer who distrusts the HUD's
+    // self-accounting has an out-of-band reading available at all times
+    // (RFC-0030 §V4). Zero when the HUD is closed, which is the honest
+    // rendering of "it cost nothing because it did not run".
+    ("hud.render", 0),
 ];
 
 /// How many terminal lines [`format_profile_block`] always produces: the

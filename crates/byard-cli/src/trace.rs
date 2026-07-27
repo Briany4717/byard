@@ -57,7 +57,7 @@ use std::fs::File;
 use std::io::{BufWriter, Seek, SeekFrom, Write};
 use std::path::Path;
 
-use byard_core::telemetry::{SampleBlock, ScopeKind, scope_kind, scope_name};
+use byard_core::telemetry::{Owner, SampleBlock, ScopeKind, scope_kind, scope_name};
 
 /// Trace thread id for the logic thread's samples.
 const TID_LOGIC: u32 = 1;
@@ -165,10 +165,28 @@ impl TraceWriter {
         for sample in &block.samples {
             let name = scope_name(sample.scope).unwrap_or("<unknown scope>");
             let kind = scope_kind(sample.scope).unwrap_or(ScopeKind::Native);
-            let category = match kind {
-                ScopeKind::Interpreter => "interp",
-                ScopeKind::Native => "native",
-                ScopeKind::Gpu => "gpu",
+            // Chrome Trace categories are comma-separated, and every viewer
+            // filters on them. Tagging the dev runner's own scopes makes "hide
+            // the profiler's overhead" a checkbox in Perfetto rather than a
+            // reading a human has to do by name — and keeps them on the lane
+            // where their containment is still true, which a separate `tid`
+            // would destroy (`encode.glyphs.dev` really does nest inside
+            // `encode.glyphs`).
+            //
+            // Spelled out as six `&'static str`s rather than composed: a
+            // diagnostic that allocates per sample is measuring itself.
+            let owner = sample.owner();
+            let category = match (kind, owner) {
+                (ScopeKind::Interpreter, Owner::App) => "interp",
+                (ScopeKind::Interpreter, Owner::DevTools) => "interp,dev",
+                (ScopeKind::Native, Owner::App) => "native",
+                (ScopeKind::Native, Owner::DevTools) => "native,dev",
+                (ScopeKind::Gpu, Owner::App) => "gpu",
+                (ScopeKind::Gpu, Owner::DevTools) => "gpu,dev",
+            };
+            let owner_arg = match owner {
+                Owner::App => "app",
+                Owner::DevTools => "dev",
             };
             // Trace timestamps are microseconds; the profiler's are
             // nanoseconds since its own epoch.
@@ -188,7 +206,7 @@ impl TraceWriter {
                 self.scratch,
                 "{}{{\"name\":\"{name}\",\"cat\":\"{category}\",\"ph\":\"X\",\
                  \"ts\":{ts_us:.3},\"dur\":{dur_us:.3},\"pid\":1,\"tid\":{tid},\
-                 \"args\":{{\"depth\":{}}}}}",
+                 \"args\":{{\"depth\":{},\"owner\":\"{owner_arg}\"}}}}",
                 if self.wrote_any { "," } else { "" },
                 sample.depth()
             );
@@ -346,6 +364,33 @@ mod tests {
         assert!((o["dur"].as_f64().unwrap() - 8.0).abs() < 1e-6);
         assert_eq!(o["args"]["depth"], 0);
         assert_eq!(i["args"]["depth"], 1);
+        assert_eq!(o["args"]["owner"], "app");
+    }
+
+    #[test]
+    fn a_dev_owned_scope_is_filterable_and_stays_on_its_parents_lane() {
+        // Two properties, both load-bearing. The `dev` category makes "hide
+        // the profiler's own overhead" a checkbox in Perfetto. Keeping the
+        // lane is what preserves containment: `encode.glyphs.dev` really does
+        // run inside `encode.glyphs`, and moving it to its own `tid` would
+        // break the nesting the whole format choice rests on.
+        let app = scope("trace.test.owner.glyphs", ScopeKind::Native);
+        let dev = scope("trace.test.owner.glyphs.dev", ScopeKind::Native);
+        let b = block(vec![
+            Sample::owned(dev, Owner::DevTools, 1, 2_000, 5_000),
+            Sample::cpu(app, 0, 1_000, 9_000),
+        ]);
+        let v = read_back(|w| w.write_frame(None, &b));
+        let events = v.as_array().unwrap();
+        let find = |n: &str| events.iter().find(|e| e["name"] == n).unwrap();
+        let a = find("trace.test.owner.glyphs");
+        let d = find("trace.test.owner.glyphs.dev");
+
+        assert_eq!(d["cat"], "native,dev");
+        assert_eq!(d["args"]["owner"], "dev");
+        assert_eq!(a["cat"], "native");
+        assert_eq!(a["args"]["owner"], "app");
+        assert_eq!(a["tid"], d["tid"], "containment must survive the tagging");
     }
 
     #[test]

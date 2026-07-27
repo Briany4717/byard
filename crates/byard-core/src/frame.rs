@@ -1484,6 +1484,11 @@ pub struct RenderFrame {
     /// force a full redraw + text reshape to avoid displaying stale glyphs.
     version: u64,
 
+    /// Where the dev runner's own surfaces begin in every pool, or `None` on a
+    /// frame that carries none (RFC-0030 erratum "self-accounting"). See
+    /// [`set_dev_base`](Self::set_dev_base).
+    dev_base: Option<LayerMark>,
+
     /// This tick's CPU scope samples (RFC-0013 "Hand-off"), piggybacked on
     /// the existing atomic frame swap instead of a dedicated channel. Empty
     /// when the `telemetry` feature is off or nothing was profiled this tick.
@@ -1622,6 +1627,7 @@ impl RenderFrame {
         self.backdrop_clips.clear();
         self.text_wrap.clear();
         self.layer_marks.clear();
+        self.dev_base = None;
         self.draw_seq = 0;
         self.version = 0;
         // `Vec::clear` only, not `SampleBlock::default()` — the latter would
@@ -1876,6 +1882,53 @@ impl RenderFrame {
     #[must_use]
     pub fn layer_marks(&self) -> &[LayerMark] {
         &self.layer_marks
+    }
+
+    /// Records where the **dev runner's own surfaces** begin in every pool.
+    ///
+    /// # Why the frame carries this and not just the profiler
+    ///
+    /// A dev overlay's cost on the *logic* thread is bounded by a scope the
+    /// overlay itself opens, so a thread-local owner (`telemetry::attribute_to`)
+    /// captures all of it. Its cost on the *render* thread is not: by the time
+    /// the encoder runs, the overlay's primitives are anonymous entries in the
+    /// same pools as the app's, and the single largest term in the frame —
+    /// glyph shaping — is charged per text line. Without a partition the
+    /// encoder cannot tell which lines it is shaping on the app's behalf, so
+    /// the overlay's shaping is billed to the app and §V4's self-accounting
+    /// under-reports by most of its real cost.
+    ///
+    /// The partition is a cursor rather than a per-primitive tag because dev
+    /// surfaces are always emitted **last**, after the whole app tree: one
+    /// `LayerMark` answers "is this one theirs?" for every pool at once and
+    /// costs nothing per primitive. `None` — the default — means the frame
+    /// carries no dev surfaces at all, which is every frame of a shipped app.
+    ///
+    /// Call it with a [`cursor`](Self::cursor) taken **before** the first dev
+    /// surface emits, once per frame.
+    pub fn set_dev_base(&mut self, base: LayerMark) {
+        self.dev_base = Some(base);
+    }
+
+    /// Where the dev runner's surfaces begin in every pool, if this frame
+    /// carries any. See [`set_dev_base`](Self::set_dev_base).
+    #[must_use]
+    pub const fn dev_base(&self) -> Option<LayerMark> {
+        self.dev_base
+    }
+
+    /// The index of the first text line owned by a dev surface, or
+    /// `texts().len()` when the frame carries none.
+    ///
+    /// Clamped to the pool's length, so a stale or malformed base can only ever
+    /// mean "no dev text" — never an out-of-range split in the encoder.
+    #[must_use]
+    pub fn dev_text_start(&self) -> usize {
+        self.dev_base
+            .map_or(self.texts.len(), |b| {
+                usize::try_from(b.text).unwrap_or(usize::MAX)
+            })
+            .min(self.texts.len())
     }
 
     /// Sets the frame's version counter.
@@ -3430,6 +3483,73 @@ mod motion_tests {
         f.push_instance(box_at(1.0, 1.0));
         f.clear();
         assert!(f.layer_marks().is_empty());
+    }
+
+    // ── The dev-surface partition (RFC-0030 erratum "self-accounting") ─────
+
+    fn line(text: &str) -> TextLine {
+        TextLine {
+            x: 0.0,
+            y: 0.0,
+            text: text.to_string(),
+            font_size: 14.0,
+            color: [1.0; 4],
+            dirty: true,
+        }
+    }
+
+    #[test]
+    fn a_frame_with_no_dev_surfaces_reports_none_and_a_split_past_every_line() {
+        // Every frame of a shipped app. "No dev text" has to be the default
+        // reading, or the encoder would attribute the app's own shaping to a
+        // profiler that is not running.
+        let mut f = RenderFrame::new();
+        f.push_text(line("the app"));
+        assert_eq!(f.dev_base(), None);
+        assert_eq!(
+            f.dev_text_start(),
+            f.text_count(),
+            "the dev range is empty, not the whole pool"
+        );
+    }
+
+    #[test]
+    fn the_dev_base_splits_the_text_pool_where_the_overlay_started() {
+        let mut f = RenderFrame::new();
+        f.push_text(line("the app"));
+        f.push_text(line("the app again"));
+        let base = f.cursor();
+        f.push_text(line("hud fps  60"));
+        f.set_dev_base(base);
+        assert_eq!(f.dev_text_start(), 2);
+        assert_eq!(f.texts()[f.dev_text_start()..].len(), 1);
+    }
+
+    #[test]
+    fn a_stale_dev_base_can_only_ever_mean_no_dev_text() {
+        // The base is taken on the logic thread and read on the render thread
+        // one pool-population later. A base past the end must degrade to "the
+        // app owns everything" — the reading that cannot invent overhead —
+        // rather than panicking on an out-of-range split.
+        let mut f = RenderFrame::new();
+        f.push_text(line("the app"));
+        let mut past_the_end = f.cursor();
+        past_the_end.text = 99;
+        f.set_dev_base(past_the_end);
+        assert_eq!(f.dev_text_start(), 1);
+    }
+
+    #[test]
+    fn clear_forgets_the_dev_base_so_a_recycled_frame_never_inherits_one() {
+        // Frames are recycled. A base surviving into a frame the HUD did not
+        // draw on would silently bill the app's own tail to the profiler.
+        let mut f = RenderFrame::new();
+        let base = f.cursor();
+        f.push_text(line("hud"));
+        f.set_dev_base(base);
+        assert_eq!(f.dev_base(), Some(base));
+        f.clear();
+        assert_eq!(f.dev_base(), None);
     }
 }
 

@@ -12,6 +12,39 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A telemetry sample now carries who it belongs to (RFC-0030 self-accounting
+  erratum).** The dev HUD runs a second interpreter, so when it was open two
+  `interp.render` samples and two `layout.taffy` samples arrived in one frame.
+  The profile block merged them by name and printed `×2` — honest that a merge
+  had happened, silently wrong about whose time it was, and enough to make the
+  HUD look like it cost a tenth of what it did. It is the same class of defect
+  as the nested double-count §I2b fixed, one level out: there a parent and a
+  child were summed, here two peers were summed and billed to one of them.
+
+  Every sample is now stamped `App` or `DevTools` at scope entry, from a
+  thread-local set at the boundary — so the interpreter, the layout atlas and
+  the shaper are all attributed correctly without any of them knowing that
+  owners exist. `Sample` is still 24 bytes: the owner lives in padding that was
+  already reserved. Consequences a developer sees: the block's scope rows are
+  the app's alone and do not move when the HUD opens, the `hud.render` row is
+  what the dev surfaces cost *on every thread*, the statusline's `work` and the
+  interpreter tax exclude the profiler, and `--trace` tags dev-owned events so
+  hiding them is a checkbox in Perfetto.
+
+- **The render thread's half of the same problem.** A logic-thread scope cannot
+  enclose the encoder — it has been dropped by the time the frame is encoded —
+  so `RenderFrame` carries a cursor marking where the dev runner's primitives
+  begin, and the encoder charges their shaping, staging and pass recording to
+  `encode.glyphs.dev`, `encode.buffers.dev` and `encode.passes.dev`.
+
+- **`encode.frame`'s breakdown now adds up to something readable.** Three new
+  rows: `encode.scissor` (the dirty-region scan over every pool),
+  `encode.bookkeeping` (its matched pair, recording this frame's bounds for the
+  next one) and `encode.finish` (`wgpu` assembling the command buffer). On a
+  text-heavy frame two of the three largest terms inside `encode.frame` were in
+  no sub-scope at all, so they appeared only as self-time that no row explained.
+
+
 - **The dev loop is something you can see (RFC-0030).** `byard dev` spent every
   session dumping a multi-line telemetry block to stderr once a second — three
   hundred of them in five minutes — whose practical effect was to bury the parse
@@ -49,10 +82,10 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   an ordinary z-layer with an ordinary backdrop blur and an ordinary `Canvas`
   sparkline. It is a permanent, self-executing test that the framework can
   render a non-trivial animated overlay inside its own frame budget, and it
-  passes: `hud.render` is 0.60 ms p50 against a 16.667 ms budget — 3.6 %,
-  inside RFC-0030 §V4's 5 % bar. It displays and colours its own cost, so the
-  reading is checkable rather than quoted, and `hud.render` is a row in the
-  `--profile` block for an out-of-band confirmation.
+  passes: 0.104 ms against a 16.667 ms budget — 0.6 %, well inside RFC-0030
+  §V4's 5 % bar. It displays and colours its own cost, so the reading is
+  checkable rather than quoted, and it is a row in the `--profile` block for an
+  out-of-band confirmation.
 
 - **A reload flash (RFC-0030 §V6).** A 2 px inset border, green for a reactive
   reload and amber for one that waited behind the gesture gate. Never suppressed
@@ -64,6 +97,35 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   values and still could not draw `n` bars for `n` data points.
 
 ### Changed
+
+- **Glyph shaping is content-addressed.** A text line is re-shaped when the run
+  it would produce actually differs — `(text, font_size, wrap)` — not when its
+  upstream `dirty` flag says so. That flag's producer is the interpreter, which
+  re-walks the tree every tick with no per-element change signal, so it set
+  `dirty: true` on every line of every frame: "trust the flag, hash nothing"
+  bought zero skips in a real `byld` app and degenerated to *re-shape
+  everything, every frame*. Hashing a short string is tens of nanoseconds and
+  shaping it is tens of microseconds, so the trade was the wrong way round.
+
+  It is also strictly more robust. A producer that changed a line and forgot to
+  set `dirty` used to render stale glyphs in release, in silence; now it renders
+  correctly, because the key is derived from the content rather than asserted
+  about it. Colour and position stay out of the key — neither reaches the
+  shaper, so folding either in would re-shape a run for a change that provably
+  cannot alter a glyph.
+
+  The `encode.glyphs` row carries `N/M re-shaped`, read rather than inferred:
+  "is the cache working" and "was the frame fast" are different questions and
+  only one of them is answerable from a duration.
+
+- **The profile block's header colours on `work`, not on the frame period.**
+  Under FIFO a frame that misses a vsync waits for the next one, so its period
+  is two intervals — ~200 % of budget — while the engine used a fraction of a
+  millisecond. That rendered in `err`, reporting a compositor event as an app
+  regression. `err` now means the engine overran; a late frame whose engine
+  work fit says `waited` in amber instead. The period and its percentage are
+  printed unchanged — only the verdict on them moved.
+
 
 - **RFC-0006's three outstanding commitments are closed (RFC-0030 §C1–§C3).**
   The error overlay renders the last good view beneath a blurred backdrop

@@ -42,10 +42,44 @@ fn the_example_header_names_every_instrumented_scope() {
         "layout.taffy",
         "encode.frame",
         "relay.publish",
+        // Added by the self-accounting erratum: `encode.frame`'s breakdown had
+        // two of its three largest terms in no sub-scope at all, so they showed
+        // up only as self-time nothing explained.
+        "encode.scissor",
+        "encode.bookkeeping",
+        "encode.finish",
     ] {
         assert!(
             source.contains(scope),
-            "the example must document {scope} — it is one of the six scopes it exists to drive"
+            "the example must document {scope} — it is one of the scopes it exists to drive"
+        );
+    }
+}
+
+/// The two findings a developer can only confirm by *running* this, and which
+/// no unit test can reach: that opening the HUD does not move the app's rows,
+/// and that a re-shape count is printed rather than left to be timed.
+///
+/// Pinned here because the header is the only place the procedure is written
+/// down, and a procedure nobody can find is a procedure nobody follows.
+#[test]
+fn the_header_tells_a_reader_how_to_check_the_hud_pays_for_itself() {
+    let source = std::fs::read_to_string(example_dir().join("src/main.byd")).expect("example");
+    for phrase in [
+        // §A1: the attribution, checkable from the block itself.
+        "dev, all threads",
+        "no longer read `×2`",
+        // §A2: the re-shape count, read rather than inferred.
+        "re-shaped",
+        // §A4: a missed vsync is not an over-budget frame.
+        "waited",
+        // The residual, named rather than hidden.
+        "encode.finish",
+    ] {
+        assert!(
+            source.contains(phrase),
+            "the header must tell a reader to look for {phrase:?} — it is one \
+             of the things only a real session can confirm"
         );
     }
 }

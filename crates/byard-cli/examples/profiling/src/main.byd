@@ -20,13 +20,14 @@
 //     interp.render                0.23ms  (0.63ms incl.)  [INTERPRETER — 0 in release]
 //       layout.taffy               0.40ms
 //     present.acquire              9.92ms
-//     encode.frame                 0.60ms  (6.55ms incl.)
+//     encode.frame                 0.01ms  (6.55ms incl.)
+//       encode.scissor             0.01ms
 //       encode.uploads             0.00ms
 //       encode.glyphs              5.69ms
 //       encode.passes              0.03ms  (0.25ms incl.)
-//         encode.buffers           0.10ms
-//         encode.buffers           0.09ms
-//         encode.buffers           0.04ms
+//         encode.buffers           0.23ms
+//       encode.bookkeeping         0.00ms
+//       encode.finish              0.59ms
 //     encode.submit                0.12ms
 //     present.submit               0.02ms
 //     gpu.ui_pass                  0.25ms  (async, -2f)
@@ -78,12 +79,20 @@
 //      shaping — is nearly all of it. Press "long text" and watch which row
 //      moves.
 //
-//   8. GLYPHS ARE RE-SHAPED FOR TEXT THAT DID NOT CHANGE. With "long text"
-//      on and nothing else touched, `encode.glyphs` stays high frame after
-//      frame even though the paragraph is byte-identical to the one shaped a
-//      frame ago. Only the rotation angle changes, and an angle is not text.
-//      That is the cost of the dirty set not existing yet, and it is the
-//      largest single number on this readout.
+//   8. GLYPHS ARE NOT RE-SHAPED FOR TEXT THAT DID NOT CHANGE — AND THE BLOCK
+//      SAYS SO RATHER THAN LEAVING YOU TO TIME IT. The `encode.glyphs` row
+//      carries `N/M shaped`. Turn "long text" on and leave everything else
+//      alone: the paragraph is byte-identical frame after frame, only the
+//      rotation angle changes, and an angle is not text — so after the frame
+//      it mounts, that field reads `0/M` and `encode.glyphs` collapses.
+//
+//      This used to be the largest single number on the readout, and the
+//      reason was not the shaper. The re-shape decision consulted each line's
+//      upstream `dirty` flag, and the interpreter re-walks the tree every tick
+//      with no per-element change signal, so it sets that flag on every line
+//      of every frame. The gate is content-addressed now: a line is re-shaped
+//      when the run it would produce differs, not when somebody claims it
+//      does.
 //
 //   9. VSYNC IS VISIBLE NOW. `present.acquire` sits at ~10ms of a ~17ms
 //      frame with the default controls: the engine finished early and the
@@ -165,8 +174,10 @@
 //   interp.render              3.014ms ███░░░░░░░░░░░░░░░░░  (3.076ms incl.)
 //     layout.taffy             0.062ms ░░░░░░░░░░░░░░░░░░░░
 //   present.acquire           15.355ms ██████████████████░░  idle
-//   encode.frame               0.557ms ░░░░░░░░░░░░░░░░░░░░  (1.129ms incl.)
-//     encode.glyphs            0.433ms ░░░░░░░░░░░░░░░░░░░░
+//   encode.frame               0.012ms ░░░░░░░░░░░░░░░░░░░░  (1.129ms incl.)
+//     encode.glyphs            0.433ms ░░░░░░░░░░░░░░░░░░░░  0/38 shaped
+//     encode.finish            0.560ms ░░░░░░░░░░░░░░░░░░░░
+//   hud.render                 0.000ms ░░░░░░░░░░░░░░░░░░░░
 //   …
 //   interpreter tax            3.019ms  self-time, 3 scope(s) — 0 in release
 //   layout path               retained  0 marked · 0/0 matched
@@ -189,6 +200,31 @@
 //   J. THE GPU ROW SAYS `unknown`, NEVER `0`, ON A DEVICE WITHOUT TIMESTAMP
 //      QUERY. A fabricated measurement is worse than a missing one.
 //
+//   K1. `encode.frame`'s BREAKDOWN ADDS UP, INCLUDING THE PARTS NOBODY WAS
+//      LOOKING AT. `encode.scissor` (the dirty-region scan), `encode.bookkeeping`
+//      (recording this frame's bounds for the next one's scan) and
+//      `encode.finish` (`wgpu` assembling the command buffer) used to be
+//      invisible: they lived directly in `encode.frame`, so their cost showed
+//      up only as self-time that no row explained. `encode.frame`'s own
+//      self-time should now be a few microseconds. Press "dense tree" and
+//      watch `encode.scissor` climb with the node count while `encode.glyphs`
+//      does not — the scan considers every primitive whether or not it moved.
+//
+//   K2. A MISSED VSYNC IS NOT AN OVER-BUDGET FRAME, AND ORDINARY JITTER IS
+//      NEITHER. Leave the app idle at 60 fps: the header sits at `100%`, in
+//      green, with nothing after it. That is the case to check first — the
+//      period straddles the budget by tens of microseconds on about half of a
+//      perfectly healthy app's frames, so a marker keyed on "over budget"
+//      would be on permanently and would be lying while it was.
+//
+//      Now drag another window across this one, or move it between displays,
+//      until a frame reports ~200 %. The header stays out of red and says
+//      `waited` in amber: the engine's own `work` was well inside the budget
+//      and the wait was the compositor's. Finally turn "dense tree" and "long
+//      text" both on until the engine really does overrun — the header turns
+//      red and `waited` disappears. Three states, three readings; before this
+//      the last two printed identically.
+//
 // ── The in-window HUD (RFC-0030 §V3–§V4) ──────────────────────────────────
 //
 // Press `Mod+Shift+D` (`Cmd` on macOS, `Ctrl` elsewhere), or start with
@@ -205,14 +241,39 @@
 //      interpreter — so a view of yours named `__ByardDevHud` cannot collide
 //      with it, because there is nothing to collide with.
 //
-//   L. IT REPORTS ITS OWN COST. The last line reads `hud cost N ms (excluded)`,
-//      and it turns red if that ever exceeds 5% of the budget — §V4's bar. On
-//      this reference machine it sits around 0.60ms against 16.7ms, or 3.6%,
-//      so it should read grey. The line exists so the subtraction is auditable
-//      rather than a claim.
+//   L. IT REPORTS ITS OWN COST, AND THE FIGURE IS NOW THE WHOLE OF IT. The
+//      last line reads `hud cost N ms (excluded)`, and it turns red if that
+//      ever exceeds 5% of the budget — §V4's bar. It should read grey: on this
+//      reference machine the HUD costs ~0.10ms of 16.7ms in a release build,
+//      or 0.6%.
 //
-//      Press `Mod+Shift+P` and read the `hud.render` row for an out-of-band
-//      confirmation that does not depend on the HUD's own arithmetic.
+//      That number used to be the inclusive time of the `hud.render` scope,
+//      and it under-reported by several times over. The HUD runs a second
+//      interpreter, so its `interp.render` and `layout.taffy` carry the same
+//      scope *names* as your app's and were merged into your app's rows — the
+//      `×2` markers were honest that a merge had happened and silently wrong
+//      about whose time it was. And the HUD's text is shaped on the *render*
+//      thread, long after `hud.render` has been dropped, so that half could
+//      not have been inside the scope at all.
+//
+//      Every sample now carries an owner. Press `Mod+Shift+P` with the HUD
+//      open and check three things:
+//
+//        • `interp.tick` and `layout.taffy` no longer read `×2`. One
+//          interpreter is yours; the other is the profiler's, and it is no
+//          longer in your rows.
+//        • The `hud.render` row says `dev, all threads` and is larger
+//          than it used to be. It is not one scope's span — it is everything
+//          the dev surfaces cost this frame, on every thread.
+//        • Every other row reads what it read with the HUD closed. That is the
+//          property that matters: asking to see the numbers must not move
+//          them.
+//
+//      One term is knowingly left with the app and named rather than hidden:
+//      `encode.finish` is a single `wgpu` call that assembles the whole
+//      frame's command buffer, so it grows with the HUD's extra passes and
+//      cannot be split without splitting the command buffer. It has its own
+//      row, so you can watch it move instead of guessing.
 //
 //      **If you take this measurement yourself, keep the window visible.** An
 //      occluded window on macOS stops vsync-blocking, the loop free-runs, and
@@ -227,10 +288,17 @@
 //      reading is captured before the HUD renders and restored afterwards.
 //      Without it the HUD would report *your* app as rebuilding every frame.
 //
-//   N. THE NUMBERS UPDATE AT 10 Hz, NOT PER FRAME. Deliberate: the eye cannot
-//      read a 60Hz counter, and it leaves five of six frames with the HUD's
-//      text entirely clean. Watch the sparkline — geometry, not text — move
-//      smoothly while the digits step.
+//   N. THE NUMBERS UPDATE AT 10 Hz, NOT PER FRAME, AND FIVE OF SIX FRAMES NOW
+//      COST NOTHING. Deliberate: the eye cannot read a 60Hz counter. Watch the
+//      sparkline — geometry, not text — move smoothly while the digits step.
+//
+//      With `Mod+Shift+P` open at the same time, watch the `N/M shaped`
+//      field on `encode.glyphs`: it sits at `0/M` and ticks up to `1/M` or
+//      `2/M` ten times a second, as one field's digits change. The HUD's
+//      numbers are formatted to a fixed width on the host so ` 3.4` and `12.7`
+//      occupy the same columns — that mitigation was in place from the start
+//      and bought nothing until the shaper began comparing content instead of
+//      trusting a flag. It is what makes the HUD nearly free now.
 //
 // ── The reload flash (RFC-0030 §V6) ───────────────────────────────────────
 //

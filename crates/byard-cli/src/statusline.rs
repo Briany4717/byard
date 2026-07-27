@@ -235,6 +235,36 @@ pub fn log_stderr(message: &str) {
     p.draw();
 }
 
+/// Retires the statusline before a panic message reaches the terminal.
+///
+/// # Why this exists, and why it is not optional
+///
+/// The painter erases what it drew by walking the cursor **up** over as many
+/// lines as its last block occupied — seventeen, for the `--profile` block. That
+/// arithmetic is only valid while the painter is the last thing to have written
+/// to the terminal.
+///
+/// A panic breaks that assumption and then invokes the exact code that depends
+/// on it: the message prints, `App` unwinds, `StatusLine::drop` runs, and the
+/// guard walks up seventeen lines erasing — **over the panic message**. A dev
+/// runner that swallows its own crash is worse than one that never had a
+/// statusline, and it is precisely the "the readout buries the error" failure
+/// this whole module exists to fix, reintroduced one layer down.
+///
+/// So the statusline retires itself *first*, while its cursor assumption still
+/// holds, and the default hook then prints onto a clean line. Installed once,
+/// and it chains to whatever hook was already there rather than replacing it.
+fn install_panic_hook() {
+    static INSTALLED: std::sync::Once = std::sync::Once::new();
+    INSTALLED.call_once(|| {
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |info| {
+            retire();
+            previous(info);
+        }));
+    });
+}
+
 /// Erases the statusline for the rest of the process.
 ///
 /// Called from [`StatusLine`]'s `Drop`. Not the thing correctness depends on —
@@ -595,6 +625,7 @@ impl StatusLine {
         let enabled = enabled && std::io::stderr().is_terminal();
         if enabled {
             painter().active = true;
+            install_panic_hook();
         }
         Self {
             enabled,
@@ -878,6 +909,56 @@ mod tests {
         let mut out = String::new();
         compose(&mut out, f, spark, BUDGET, width, p, &Glyphs::unicode());
         out
+    }
+
+    #[test]
+    fn a_retired_statusline_can_never_walk_the_cursor_over_someone_elses_output() {
+        // The painter erases by walking the cursor *up* over as many lines as
+        // its last block occupied — seventeen, for the profile block. That
+        // arithmetic is valid only while the painter was the last thing to
+        // write to the terminal.
+        //
+        // A panic breaks that and then runs the code that depends on it: the
+        // message prints, `App` unwinds, `StatusLine::drop` fires, and the
+        // guard walks up seventeen lines erasing — over the panic. A dev runner
+        // that swallows its own crash is the "the readout buries the error"
+        // failure this module exists to fix, one layer down.
+        //
+        // `retire()` is what the panic hook calls first, and after it the
+        // painter must be inert: no height, so nothing to walk over.
+        {
+            let mut p = painter();
+            p.active = true;
+            p.drawn.clear();
+            p.drawn.push_str(
+                "one
+two
+three",
+            );
+            assert_eq!(p.height(), 3);
+        }
+        retire();
+        let p = painter();
+        assert_eq!(
+            p.height(),
+            0,
+            "a retired painter must have nothing to erase, or a later Drop              erases whatever printed after it"
+        );
+        assert!(!p.active);
+        assert!(p.drawn.is_empty());
+    }
+
+    #[test]
+    fn installing_the_panic_hook_twice_does_not_stack_it() {
+        // `StatusLine::new` may run more than once in a process (a test binary,
+        // a future multi-window host). A hook installed per call would chain to
+        // itself and retire the statusline once per layer — harmless today,
+        // and the kind of thing that stops being harmless silently.
+        install_panic_hook();
+        install_panic_hook();
+        install_panic_hook();
+        // Nothing to assert beyond "it did not deadlock or recurse"; the
+        // `Once` is the mechanism and this is its regression test.
     }
 
     #[test]

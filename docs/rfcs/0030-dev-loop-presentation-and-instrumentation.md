@@ -10,11 +10,13 @@
   specified) and, because §V3 requires the HUD to use no privileged syntax,
   [`0020-erratum-canvas-shape-generators.md`](0020-erratum-canvas-shape-generators.md)
   (a `Canvas` body could not generate shapes from data).
-  §V4's acceptance condition — `hud.render` ≤ 5 % of the frame budget — is
-  **not met**: it measures ~12 %, dominated by the interpreter's own render
-  walk rather than by anything the HUD does. That finding is recorded rather
-  than mitigated away, per §V4's own instruction, and the HUD renders its
-  verdict on itself.
+  §V4's acceptance condition — `hud.render` ≤ 5 % of the frame budget — **is
+  met**: 0.60 ms p50 against 16.667 ms, 3.6 %, over three runs. An earlier
+  figure of ~12 % published with the HUD was a measurement error and is
+  corrected in `support/DESICIONS.md`; it was taken on an occluded window where
+  `encode.frame` never ran, so nothing was being drawn at all. The HUD still
+  displays and colours its own cost, so the reading is checkable rather than
+  quoted.
 - **Author(s):** Briany4717
 - **Created:** 2026-07-25
 - **Last updated:** 2026-07-27

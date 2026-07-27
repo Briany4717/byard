@@ -137,14 +137,6 @@ pub struct DevHud {
     /// Viewport width the tree was last lowered against, so a resize re-anchors
     /// the HUD to the corner rather than leaving it mid-screen.
     lowered_width: f32,
-    /// Where the app's primitives ended on the previous frame.
-    ///
-    /// The HUD is emitted after the app, by a different interpreter, into the
-    /// same index-addressed pools. When this moves, every one of the HUD's
-    /// indices holds something else than it did a frame ago, and neither
-    /// producer can see that on its own — see
-    /// [`RenderFrame::mark_dirty_since`].
-    last_base: byard_core::frame::LayerMark,
 }
 
 impl DevHud {
@@ -181,7 +173,6 @@ impl DevHud {
                 .checked_sub(UPDATE_INTERVAL)
                 .unwrap_or_else(std::time::Instant::now),
             lowered_width: f32::NAN,
-            last_base: byard_core::frame::LayerMark::default(),
         })
     }
 
@@ -209,8 +200,7 @@ impl DevHud {
     pub fn render(&mut self, frame: &mut RenderFrame, width: f32, height: f32) {
         byard_core::profile_scope!("hud.render");
 
-        let relowered = self.due(width);
-        if relowered {
+        if self.due(width) {
             self.last_update = std::time::Instant::now();
             self.lowered_width = width;
             let record = self.build_record(width);
@@ -219,13 +209,9 @@ impl DevHud {
         }
         self.interp.tick();
 
-        // Where the app's primitives ended. If this moved since last frame,
-        // every index the HUD is about to write held something else a frame
-        // ago, and the encoder's index-addressed glyph cache would draw the
-        // old shaped buffer at the new content's index.
+        // Where the app's primitives end. Everything the HUD writes from here
+        // on is marked dirty, unconditionally — see below.
         let base = frame.cursor();
-        let shifted = base != self.last_base;
-        self.last_base = base;
 
         // RFC-0017: the HUD composites after the app and cannot be occluded by
         // it. This is an ordinary layer — nothing about the HUD is
@@ -233,12 +219,23 @@ impl DevHud {
         frame.begin_layer();
         self.interp.render(&self.tree, frame, width, height);
 
-        if shifted || relowered {
-            // Only on the frames that need it — five of six frames the HUD is
-            // as clean as anything else on screen, which is the whole of
-            // INV-24's mitigation 1.
-            frame.mark_dirty_since(base);
-        }
+        // # Why this is unconditional
+        //
+        // The first cut marked only on frames where the app's cursor had moved
+        // or the HUD had re-lowered, on the reasoning that nothing else could
+        // change what sits at a given index. That reasoning was wrong in
+        // practice and, more importantly, **unprovable from here**: the HUD's
+        // text is re-evaluated against the injected record on every render, and
+        // the two producers' indices interleave in ways neither can see. The
+        // failure it allowed was a debug assertion on a frame two seconds in —
+        // and in release, silently stale text on screen.
+        //
+        // An overlay that cannot prove its indices are stable does not get to
+        // assume they are. The cost is bounded and known: ~25 fixed-width text
+        // leaves re-shaped per frame the HUD is open, measured and reported in
+        // the HUD's own `hud cost` field, where a developer can see what their
+        // diagnostic is charging them.
+        frame.mark_dirty_since(base);
     }
 
     /// Builds the `DevTelemetry` record the HUD injects.
@@ -529,21 +526,31 @@ mod tests {
     }
 
     #[test]
-    fn the_hud_marks_its_own_primitives_dirty_when_the_pool_beneath_it_shifts() {
+    fn the_hud_marks_its_own_primitives_dirty_on_every_frame() {
         // The encoder's glyph cache is index-addressed: it compares `texts[i]`
         // against what it shaped for `texts[i]` last frame. The HUD is a second
-        // interpreter emitting after the app into the same pools, so its
-        // indices move whenever the app's counts change — and on such a frame
-        // index `i` holds the HUD's line where it held the app's. Both
-        // producers truthfully report their own primitives unchanged; the cache
-        // would draw last frame's shaped buffer, in release, silently.
+        // interpreter emitting after the app into the same pools, so index `i`
+        // can hold the HUD's line where it held the app's. Both producers
+        // truthfully report their own primitives unchanged; the cache would
+        // draw last frame's shaped buffer, in release, silently.
+        //
+        // The first cut marked only when the app's cursor had moved or the HUD
+        // had re-lowered. That was unprovable from here and wrong in practice —
+        // a real session tripped the debug assertion two seconds in. An overlay
+        // that cannot prove its indices are stable does not get to assume they
+        // are, so this is unconditional and the test says so.
         let mut hud = DevHud::new().unwrap();
 
-        // Frame 1: no app content beneath.
+        // A frame where nothing beneath the HUD moved at all: same app content,
+        // no re-lower due. The old conditional passed this and should not have.
         let mut first = RenderFrame::new();
         hud.render(&mut first, 1280.0, 720.0);
+        let base_first = 0;
+        assert!(
+            first.texts()[base_first..].iter().all(|t| t.dirty),
+            "the HUD must mark its own text even when nothing beneath it moved"
+        );
 
-        // Frame 2: the app now emits text, so every HUD index shifted.
         let mut second = RenderFrame::new();
         second.push_text(byard_core::frame::TextLine {
             x: 0.0,
@@ -561,8 +568,8 @@ mod tests {
         );
         assert!(
             second.texts()[base..].iter().all(|t| t.dirty),
-            "every HUD line must be dirty on the frame its index moved, or the \
-             glyph cache draws the previous occupant's shaped buffer"
+            "every HUD line must be dirty, or the glyph cache draws the \
+             previous occupant's shaped buffer at that index"
         );
         // That `mark_dirty_since` leaves everything *before* the mark alone is
         // asserted where the mechanism lives, in `byard-core`'s frame tests —

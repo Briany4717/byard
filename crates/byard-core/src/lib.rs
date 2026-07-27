@@ -34,9 +34,10 @@ pub mod text;
 
 pub use encoder::BoxInstance;
 pub use encoder::text_glyph::TextLine;
-pub use engine::Engine;
+pub use engine::{Census, Engine};
 pub use platform::{
-    EventKind, InputEvent, InputPayload, PlatformHost, PointerButton, PointerState, WindowSize,
+    EventKind, InputEvent, InputPayload, KeyModifiers, PlatformHost, PointerButton, PointerState,
+    WindowSize,
 };
 
 /// Trait representing a logic tick execution runner.

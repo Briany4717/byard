@@ -23,6 +23,8 @@ use byard_core::{
     ByardError, Engine, LogicRuntime, PlatformHost, PointerButton, PointerState, WindowSize,
 };
 use byard_platform::WinitHost;
+
+use crate::statusline::StatusLine;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -31,11 +33,30 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::deps::{cache_dir, resolve_project};
 use crate::manifest::Manifest;
 
-pub fn run(
-    file: Option<&Path>,
-    deep_link: Option<&str>,
-    trace: Option<&Path>,
-) -> Result<(), String> {
+/// Everything `byard dev` was invoked with.
+///
+/// A struct rather than four positional parameters: three of them are optional
+/// paths and strings, and a call site that swaps two of those compiles.
+#[derive(Clone, Copy)]
+pub struct Options<'a> {
+    /// The `[file]` override.
+    pub file: Option<&'a Path>,
+    /// `--deep-link <url>` (RFC-0026).
+    pub deep_link: Option<&'a str>,
+    /// `--trace <path>` (RFC-0030 §V5).
+    pub trace: Option<&'a Path>,
+    /// `--profile` (RFC-0030 §V1).
+    pub profile: bool,
+}
+
+pub fn run(opts: Options<'_>) -> Result<(), String> {
+    let started = std::time::Instant::now();
+    let Options {
+        file,
+        deep_link,
+        trace,
+        profile,
+    } = opts;
     let manifest = Manifest::discover(file)?;
 
     // Initial resolve on the main thread: catch errors before opening the
@@ -43,28 +64,25 @@ pub fn run(
     // entry file.
     let (program, provider) = resolve_project(&manifest)?;
 
+    // The startup header is four facts, a rule, a result and a duration
+    // (RFC-0030 §"Starting the dev runner"). Two of the facts — the adapter and
+    // the frame budget — do not exist until the window and device do, so the
+    // *whole* header is deferred to `on_resume` rather than half-printed here
+    // and finished later, which would put "watching for changes" above the
+    // facts it is meant to introduce.
     let title = format!("Byard dev — {}", manifest.name);
-    crate::style::fact("Byard", "0.0.0 — dev mode");
-    crate::style::fact("Entry", &manifest.entry.display().to_string());
-    let n_pkgs = program.packages.len().saturating_sub(1);
-    if n_pkgs > 0 {
-        crate::style::fact("Packages", &program.packages[1..].join(", "));
-    }
-    if program.errors.is_empty() {
-        crate::style::ok(
-            &format!("loaded {} view(s), 0 errors", program.views.len()),
-            None,
-        );
-    } else {
-        crate::style::err(&format!(
-            "loaded with {} error(s) — see overlay",
-            program.errors.len()
-        ));
-        for err in &program.errors {
-            eprintln!("{}", program.source_map.render_line(err));
-        }
-    }
-    crate::style::action("watching for changes");
+    let header = Header {
+        project: manifest.name.clone(),
+        entry: manifest.entry.display().to_string(),
+        packages: program.packages[1..].join(", "),
+        views: program.views.len(),
+        errors: program
+            .errors
+            .iter()
+            .map(|e| program.source_map.render_line(e))
+            .collect(),
+        started,
+    };
 
     // Watch the project source directory plus every resolved `path`
     // dependency (D-J); cache checkouts are pinned/immutable → not watched.
@@ -101,9 +119,19 @@ pub fn run(
         None => None,
     };
 
+    // RFC-0030 §P6: the counters the statusline reads. `reloads` and
+    // `reload_pending` are written by the logic thread and read by the render
+    // thread, so they cross as atomics — the only way anything may (INV-2).
+    let reloads = Arc::new(AtomicU32::new(0));
+    let reload_pending = Arc::new(AtomicBool::new(false));
+
     let host = WinitHost::new(&title, 1280, 720).with_poll();
     host.run(App {
         engine: None,
+        header: Some(header),
+        dev: manifest.dev.clone(),
+        want_profile: profile,
+        statusline: None,
         width_bits: None,
         height_bits: None,
         animating: None,
@@ -117,6 +145,9 @@ pub fn run(
         last_render_telemetry: byard_core::telemetry::SampleBlock::default(),
         last_telemetry_print: std::time::Instant::now(),
         trace,
+        reloads,
+        reload_pending,
+        last_frame: std::time::Instant::now(),
     })
     .map_err(|e| format!("event loop error: {e}"))
 }
@@ -172,8 +203,19 @@ struct ByldRuntime {
     reported_perf: std::collections::HashSet<String>,
     /// How many hot reloads have been applied this session — the statusline's
     /// `↻N` field, and the cheapest possible confirmation that the watcher is
-    /// alive at all (RFC-0030 §P6).
+    /// alive at all (RFC-0030 §P6). Published to the render thread through
+    /// `reloads_pub`.
     reload_count: u32,
+    /// The render thread's mirror of `reload_count`.
+    reloads_pub: Arc<AtomicU32>,
+    /// The render thread's mirror of `pending_reload.is_some()` (RFC-0006 C1).
+    ///
+    /// Without it, a developer holding a drag while a structure-incompatible
+    /// save waits behind the gate sees an application that has silently stopped
+    /// responding to their edits — which is indistinguishable from a broken
+    /// watcher, and is the single most alarming thing a dev runner can do
+    /// without saying anything.
+    reload_pending_pub: Arc<AtomicBool>,
     /// The RFC-0010 active-animation set, published for the render thread
     /// (`AtomicBool` because that is the only way it may cross — INV-2).
     ///
@@ -209,6 +251,16 @@ impl ByldRuntime {
         }
     }
 
+    /// Publishes whether a reload is waiting behind the gesture gate, waking
+    /// an idle loop on the rising edge so the indicator appears without needing
+    /// an unrelated frame to carry it.
+    fn publish_reload_pending(&self, pending: bool) {
+        let was = self.reload_pending_pub.swap(pending, Ordering::Relaxed);
+        if pending && !was {
+            self.wake_render_loop();
+        }
+    }
+
     /// Asks the render loop to present the next frame, for the changes that have
     /// no input event behind them (a hot reload, a fresh error overlay, an
     /// animation that just started).
@@ -238,6 +290,7 @@ impl ByldRuntime {
         self.current_views = new_views.to_vec();
         self.error_state = None;
         self.reload_count = self.reload_count.saturating_add(1);
+        self.reloads_pub.store(self.reload_count, Ordering::Relaxed);
         crate::style::reload(&format!("reloaded {} view(s)", new_views.len()));
     }
 }
@@ -273,6 +326,7 @@ impl LogicRuntime for ByldRuntime {
                     }
                     Gated::Defer => {
                         self.pending_reload = Some((parsed.views, worst));
+                        self.publish_reload_pending(true);
                     }
                 }
             } else {
@@ -287,6 +341,9 @@ impl LogicRuntime for ByldRuntime {
                 self.pending_reload = Some((new_views, kind));
             } else {
                 self.apply_reload(&new_views, kind);
+                // Cleared exactly where the deferred reload is consumed, so the
+                // indicator and the gate can never disagree (RFC-0006 C1).
+                self.publish_reload_pending(false);
                 self.wake_render_loop();
             }
         }
@@ -509,6 +566,29 @@ struct App {
     /// spam a line for every redraw. Printing is throttled; draining
     /// `last_render_telemetry` (above) is not.
     last_telemetry_print: std::time::Instant,
+    /// The startup header, taken and printed once the device exists so the
+    /// adapter and the frame budget can be part of it.
+    header: Option<Header>,
+    /// The `[dev]` table (RFC-0030 §V2).
+    dev: crate::manifest::DevConfig,
+    /// Whether `--profile` asked for the expanded block up front.
+    want_profile: bool,
+    /// The anchored statusline (RFC-0030 §P5–P6). Inert when stderr is not a
+    /// terminal, in which case the per-second summary below takes over.
+    ///
+    /// Built in `on_resume`, not before: the frame budget it charts against is
+    /// the display's refresh interval, and there is no display until the window
+    /// exists (§Q3).
+    statusline: Option<crate::statusline::StatusLine>,
+    /// Hot reloads applied this session, published by the logic thread.
+    reloads: Arc<AtomicU32>,
+    /// A structure-incompatible reload held behind the gesture gate
+    /// (RFC-0006 C1), published by the logic thread.
+    reload_pending: Arc<AtomicBool>,
+    /// When the previous redraw happened, so the sparkline plots the frame
+    /// *period* — which is what a developer sees — rather than the sum of the
+    /// scopes that happened to be instrumented.
+    last_frame: std::time::Instant,
     /// The `--trace <path>` writer (RFC-0030 §V5), or `None`.
     ///
     /// Both rings are streamed into it as they are drained, on the thread that
@@ -520,30 +600,134 @@ struct App {
 }
 
 impl App {
-    /// Prints the per-scope telemetry overlay (RFC-0013 "Overlay format",
-    /// RFC-0030 §I2) to stderr, throttled to roughly once a second. Combines
-    /// the last published frame's CPU samples (drained on the logic thread at
-    /// publish time) with `render`, this thread's most recent single-redraw
-    /// ring — see `telemetry_overlay`'s module docs for why the two live on
-    /// separate rings, and [`App::last_render_telemetry`]'s doc comment for
-    /// why `render` must be drained every redraw rather than only here.
-    fn print_telemetry_overlay(
+    /// The non-TTY fallback for the statusline: **one plain line** per second
+    /// (RFC-0030 §"The statusline").
+    ///
+    /// `byard dev 2>&1 | tee log` has to produce a readable log, and the
+    /// multi-line block this replaces did the opposite — three hundred blocks
+    /// in a five-minute session, whose practical effect was to bury the parse
+    /// errors a developer actually needed to read. One line per second is
+    /// greppable, diffable, and still carries the split that matters.
+    ///
+    /// The full per-scope breakdown is not gone; it moves behind `--profile`.
+    fn print_plain_summary(
         engine: &Engine,
+        logic: &byard_core::telemetry::SampleBlock,
         render: &byard_core::telemetry::SampleBlock,
+        frame_ns: u64,
         last_print: &mut std::time::Instant,
     ) {
         if last_print.elapsed() < std::time::Duration::from_secs(1) {
             return;
         }
         *last_print = std::time::Instant::now();
-        let cpu = engine.latest_cpu_telemetry().unwrap_or_default();
-        let overlay = crate::telemetry_overlay::format_telemetry_overlay(
-            &cpu,
-            render,
-            engine.gpu_timing_available(),
-            engine.latest_atlas_paths(),
+        let census = engine.latest_census();
+        let atlas = engine.latest_atlas_paths();
+        let idle_ns = crate::statusline::idle_ns(logic, render);
+        crate::style::info(&format!(
+            "frame {:.1}ms · work {:.1}ms · idle {:.1}ms · {} boxes · layout {}",
+            ns_ms(frame_ns),
+            ns_ms(crate::statusline::work_ns(logic, render, idle_ns)),
+            ns_ms(idle_ns),
+            census.instances,
+            if atlas.populate_calls == 0 {
+                "idle"
+            } else if atlas.clears > 0 {
+                "rebuild"
+            } else {
+                "retained"
+            },
+        ));
+    }
+}
+
+/// Nanoseconds as milliseconds. Frame times never approach `f64`'s limit.
+#[allow(clippy::cast_precision_loss)]
+fn ns_ms(ns: u64) -> f64 {
+    ns as f64 / 1_000_000.0
+}
+
+/// The frame budget when nothing better is known: 60 Hz.
+const DEFAULT_FRAME_BUDGET_NS: u64 = 16_667_000;
+
+/// Resolves the frame budget and says where it came from (RFC-0030 §Q3).
+///
+/// A pinned `[dev] frame_budget` wins — that is what pinning is for, and CI
+/// needs a value that does not depend on the runner's panel. Otherwise the
+/// display's refresh interval, because the budget answers "will this app drop
+/// frames on *this* machine". The 60 Hz fallback is last and says so, so a
+/// developer on a 120 Hz panel whose platform could not report the rate is not
+/// quietly told their 12 ms frame is comfortable.
+fn resolve_budget(
+    dev: &crate::manifest::DevConfig,
+    refresh_mhz: Option<u32>,
+) -> (u64, &'static str) {
+    if let Some(ns) = dev.frame_budget_ns {
+        return (ns, "byard.toml [dev] frame_budget");
+    }
+    match refresh_mhz {
+        // millihertz → nanoseconds per frame.
+        Some(mhz) if mhz > 0 => (1_000_000_000_000 / u64::from(mhz), "display refresh"),
+        _ => (DEFAULT_FRAME_BUDGET_NS, "60Hz assumed — display unknown"),
+    }
+}
+
+/// Everything the startup header says, held until the device exists.
+struct Header {
+    project: String,
+    entry: String,
+    /// Comma-joined package names, empty when there are none.
+    packages: String,
+    views: usize,
+    /// Pre-rendered diagnostic first lines (RFC-0006 **C7**), if the initial
+    /// resolve failed.
+    errors: Vec<String>,
+    started: std::time::Instant,
+}
+
+impl Header {
+    /// Four facts, a result and a duration (RFC-0030 §"Starting the dev
+    /// runner").
+    ///
+    /// The `gpu` fact answers up front the question a developer would otherwise
+    /// ask twenty minutes in — *why is there no GPU timing?* — instead of
+    /// printing "GPU timing unavailable" on every subsequent readout. The
+    /// `budget` fact removes any ambiguity about which number the bars and the
+    /// sparkline are drawn against. The `keys` fact makes the dev chords
+    /// discoverable without documentation.
+    fn print(self, budget_ns: u64, budget_source: &str, engine: &Engine) {
+        crate::style::fact("project", &self.project);
+        crate::style::fact("entry", &self.entry);
+        if !self.packages.is_empty() {
+            crate::style::fact("packages", &self.packages);
+        }
+        let gpu = if engine.gpu_timing_available() {
+            "timestamp-query ✓".to_string()
+        } else {
+            "timestamp-query unavailable — gpu rows read `unknown`, never `0`".to_string()
+        };
+        crate::style::fact("gpu", &gpu);
+        crate::style::fact(
+            "budget",
+            &format!("{:.1}ms  ({budget_source})", ns_ms(budget_ns)),
         );
-        eprint!("{overlay}");
+        crate::style::fact("keys", "Mod+Shift+P  expanded profile block");
+
+        if self.errors.is_empty() {
+            crate::style::ok(
+                &format!("{} view(s), 0 errors", self.views),
+                Some(self.started.elapsed()),
+            );
+        } else {
+            for line in &self.errors {
+                crate::statusline::log_stderr(line);
+            }
+            crate::style::err(&format!(
+                "{} error(s) — see the overlay in the window",
+                self.errors.len()
+            ));
+        }
+        crate::style::action("watching for changes");
     }
 }
 
@@ -567,6 +751,8 @@ impl PlatformHost for App {
         // takes over the moment it has rendered once.
         let animating = Arc::new(AtomicBool::new(true));
         let animating_logic = Arc::clone(&animating);
+        let reloads_logic = Arc::clone(&self.reloads);
+        let reload_pending_logic = Arc::clone(&self.reload_pending);
 
         // Hot-reload channel (RFC-0006 §3.5, D10).
         let reload_channel = Arc::new(LatestWins::<ParsedFile>::new());
@@ -654,11 +840,27 @@ impl PlatformHost for App {
                 start: std::time::Instant::now(),
                 reported_perf: std::collections::HashSet::new(),
                 reload_count: 0,
+                reloads_pub: reloads_logic,
+                reload_pending_pub: reload_pending_logic,
                 animating: animating_logic,
                 waker: waker_for_logic,
                 pending_deep_link: deep_link,
             })
         })?;
+
+        // RFC-0030 §Q3/§V2: the budget is the display's refresh interval unless
+        // `[dev] frame_budget` pinned one, and it is printed in the startup
+        // header so it is never ambiguous which number a bar is drawn against.
+        let (budget_ns, budget_source) = resolve_budget(&self.dev, size.refresh_rate_mhz);
+        if let Some(header) = self.header.take() {
+            header.print(budget_ns, budget_source, &engine);
+        }
+
+        let mut statusline = StatusLine::new(self.dev.statusline, budget_ns);
+        if self.want_profile {
+            statusline.set_profile(true);
+        }
+        self.statusline = Some(statusline);
 
         self.engine = Some(engine);
         self.width_bits = Some(width_bits);
@@ -697,24 +899,80 @@ impl PlatformHost for App {
         if let Some(e) = self.engine.as_mut() {
             e.render_latest()?;
             // Drained every redraw (see `last_render_telemetry`'s doc comment),
-            // independent of the print throttle below.
+            // independent of any print throttle.
             self.last_render_telemetry = byard_core::telemetry::drain_samples();
+            let logic = e.latest_cpu_telemetry().unwrap_or_default();
             // RFC-0030 §V5: stream both rings into the trace as they are
             // drained. The logic thread's block rides in on the frame it was
             // captured with, so it is written from here too — the writer is a
             // plain file handle and the render thread is the only one holding
             // it, which is what keeps this off any lock.
             if let Some(trace) = self.trace.as_mut() {
-                let cpu = e.latest_cpu_telemetry();
-                trace.write_frame(cpu.as_ref(), &self.last_render_telemetry);
+                trace.write_frame(Some(&logic), &self.last_render_telemetry);
             }
-            App::print_telemetry_overlay(
-                e,
-                &self.last_render_telemetry,
-                &mut self.last_telemetry_print,
-            );
+
+            // The frame *period*, which is what a developer perceives — not the
+            // sum of whichever scopes happen to be instrumented, which would
+            // quietly shrink every time a scope was removed.
+            let frame_ns = u64::try_from(self.last_frame.elapsed().as_nanos()).unwrap_or(u64::MAX);
+            self.last_frame = std::time::Instant::now();
+
+            let animating = self
+                .animating
+                .as_ref()
+                .is_none_or(|f| f.load(Ordering::Relaxed));
+            if let Some(sl) = self.statusline.as_mut() {
+                sl.on_frame(crate::statusline::FrameInputs {
+                    frame_ns,
+                    logic: &logic,
+                    render: &self.last_render_telemetry,
+                    census: e.latest_census(),
+                    atlas: e.latest_atlas_paths(),
+                    animating,
+                    reloads: self.reloads.load(Ordering::Relaxed),
+                    reload_pending: self.reload_pending.load(Ordering::Relaxed),
+                    gpu_available: e.gpu_timing_available(),
+                });
+            }
+
+            if !self.statusline.as_ref().is_some_and(StatusLine::is_enabled) {
+                App::print_plain_summary(
+                    e,
+                    &logic,
+                    &self.last_render_telemetry,
+                    frame_ns,
+                    &mut self.last_telemetry_print,
+                );
+            }
         }
         Ok(())
+    }
+
+    /// Dev chords, consumed before the router ever sees them (RFC-0030 §V3).
+    ///
+    /// A chord that reached `dispatch_events` would be indistinguishable from
+    /// the user typing into the app under test, which is exactly why it is a
+    /// `Mod+Shift` chord and not a bare function key (§Q1).
+    fn on_chord(&mut self, key: &str, pressed: bool, mods: byard_core::KeyModifiers) -> bool {
+        if !mods.is_dev_chord() {
+            return false;
+        }
+        // Matched case-insensitively: `Shift` is part of the chord, so the
+        // platform reports the character as `P` on some layouts and `p` on
+        // others, and a chord that works on one keyboard and not another is
+        // worse than no chord.
+        let Some(sl) = self.statusline.as_mut() else {
+            return false;
+        };
+        if key.eq_ignore_ascii_case("p") {
+            // Only on press: acting on the release too would toggle twice and
+            // land back where it started, which reads as the chord not working.
+            if pressed {
+                sl.set_profile(!sl.is_profiling());
+            }
+            return true;
+        }
+        false
     }
 
     fn on_pointer_input(&mut self, button: PointerButton, state: PointerState, x: f32, y: f32) {

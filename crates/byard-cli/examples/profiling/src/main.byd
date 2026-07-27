@@ -93,6 +93,117 @@
 //      scopes existed, both states printed the same `measured total` and
 //      nothing on screen could tell them apart.
 //
+// ── The live terminal surface (RFC-0030 §P5–P6, §V1–V2) ───────────────────
+//
+// The once-a-second block above is gone from an interactive session. Continuous
+// metrics and discrete events cannot share a scroll region without one
+// destroying the other, and what the block actually did was bury the parse
+// errors a developer needed to read. Instead:
+//
+//   cd crates/byard-cli/examples/profiling
+//   cargo run -p byard-cli -- dev
+//
+// A startup header, then a log that scrolls, and one line anchored to the
+// bottom that redraws in place:
+//
+//   ▏ project    profiling
+//   ▏ entry      .../examples/profiling/src/main.byd
+//   ▏ gpu        timestamp-query ✓
+//   ▏ budget     16.7ms  (display refresh)
+//   ▏ keys       Mod+Shift+P  expanded profile block
+//   ok   1 view(s), 0 errors                                            766ms
+//   →    watching for changes
+//    ● 60fps  work 3.4ms · idle 15.0ms  ▁▂▁▂▃▁▂  264 boxes  ↻0  retained 64/64
+//
+// What to verify:
+//
+//   A. `work` AND `idle` SPLIT THE FRAME, AND `work` IS THE ONE THAT MOVES.
+//      Press "dense tree" and watch `work` climb while `idle` falls by roughly
+//      the same amount — the engine is eating into the wait, not into a bigger
+//      total. Under vsync the total cannot move, which is why it is not the
+//      headline. Turn "dense tree" and "long text" both on and `idle` collapses
+//      towards zero: that is the moment the app stops fitting in its frame.
+//
+//   B. THE SPARKLINE HAS HEADROOM WHEN THE APP IS HEALTHY. It plots *work*
+//      against the budget, not the frame period. Plotting the period looks
+//      obviously right and is useless: under vsync the period *is* the budget,
+//      so a perfectly healthy app would draw a permanently full, permanently
+//      red bar. Turn "dense tree" on and watch the bars climb; the moment a
+//      frame reaches the budget the rest of the line turns red and stays red,
+//      so the eye lands on where the trouble started.
+//
+//   C. `retained 64/64` IS READ, NOT INFERRED. It counts how many of the last
+//      64 rendered frames took the retained layout path. Save the file to force
+//      a reload and watch a rebuild appear as a missing frame, then heal.
+//
+//   D. THE LOG NEVER LANDS ON TOP OF THE STATUSLINE. Save the file: the `↻`
+//      line scrolls above the anchored line, which reappears underneath it. The
+//      reload count beside it increments.
+//
+//   E. THE TWO STREAMS ARE SEPARABLE. `byard dev > session.log` gives a
+//      readable, control-character-free log with the live display still on
+//      screen; `byard dev 2>/dev/null` gives the log alone. Redirect stderr to
+//      a file and the statusline is not emitted at all — a per-second plain
+//      line takes its place, because control sequences in a redirected stream
+//      are debris rather than a display.
+//
+//   F. Ctrl-C LEAVES A USABLE TERMINAL. Nothing here hides the cursor, touches
+//      the scroll region, or takes the alternate screen buffer — a `Drop` guard
+//      does not run on `SIGINT`, so the only state that is safe to write is
+//      state already scoped to the line being drawn. Try it under `tmux` too.
+//
+// ── The expanded block (RFC-0030 §V1) ─────────────────────────────────────
+//
+//   cargo run -p byard-cli -- dev --profile
+//
+// or press `Mod+Shift+P` at any time (`Cmd` on macOS, `Ctrl` elsewhere). The
+// one-line display is replaced by the full breakdown, charted against the
+// budget, redrawn in place:
+//
+//   frame  16.640ms ▏ budget  16.667ms    99%
+//   relay.publish              0.003ms ░░░░░░░░░░░░░░░░░░░░
+//   interp.render              3.014ms ███░░░░░░░░░░░░░░░░░  (3.076ms incl.)
+//     layout.taffy             0.062ms ░░░░░░░░░░░░░░░░░░░░
+//   present.acquire           15.355ms ██████████████████░░  idle
+//   encode.frame               0.557ms ░░░░░░░░░░░░░░░░░░░░  (1.129ms incl.)
+//     encode.glyphs            0.433ms ░░░░░░░░░░░░░░░░░░░░
+//   …
+//   interpreter tax            3.019ms  self-time, 3 scope(s) — 0 in release
+//   layout path               retained  0 marked · 0/0 matched
+//
+//   G. ROWS NEVER MOVE. They are in execution order, never sorted by duration.
+//      Press every control in turn: `present.acquire` stays where it is even as
+//      it becomes the largest row and then the smallest. A profiler whose rows
+//      swap places ten times a second cannot be read.
+//
+//   H. THE BLOCK REDRAWS IN PLACE AND EATS NO SCROLLBACK. Scroll up after a
+//      minute: the log above it is intact. That works only because the row
+//      count is constant — which is why a scope that did not run this frame
+//      still gets a row showing `0.000ms`, and why the several `encode.buffers`
+//      samples fold into one row carrying `×N`.
+//
+//   I. A SCOPE THAT STOPPED BEING ENTERED IS VISIBLE. A row at a flat
+//      `0.000ms` is the failure the instrumentation exists to reveal. A row
+//      that silently vanished would communicate it to nobody.
+//
+//   J. THE GPU ROW SAYS `unknown`, NEVER `0`, ON A DEVICE WITHOUT TIMESTAMP
+//      QUERY. A fabricated measurement is worse than a missing one.
+//
+// ── The frame budget (RFC-0030 §V2) ───────────────────────────────────────
+//
+// The budget defaults to the display's refresh interval and is printed in the
+// header, so it is never ambiguous which number the bars are drawn against. Pin
+// it — for CI, or to see what a 120 Hz panel would demand — by adding to
+// `byard.toml`:
+//
+//   [dev]
+//   frame_budget = "8ms"
+//
+// Re-run and the header reads `8.0ms  (byard.toml [dev] frame_budget)`, every
+// bar doubles, and rows that were comfortable turn red. A misspelt key is an
+// error rather than a shrug: a silently-ignored `frame_bugdet` would leave you
+// reading bars drawn against a budget you believe you changed.
+//
 // ── The flame chart (RFC-0030 §V5) ────────────────────────────────────────
 //
 // The block above is a *snapshot*: it tells you what one second looked like

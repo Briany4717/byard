@@ -106,6 +106,10 @@ pub struct Glyphs {
     pub reload: &'static str,
     /// A key/value fact in a startup header.
     pub fact: &'static str,
+    /// The statusline's "something is animating" indicator.
+    pub dot_filled: &'static str,
+    /// The statusline's "the scene has settled" indicator.
+    pub dot_hollow: &'static str,
     /// The eight block-eighths, for the sparkline. Index 0 is the shortest.
     pub bars: [&'static str; 8],
 }
@@ -122,6 +126,8 @@ impl Glyphs {
             action: "→",
             reload: "↻",
             fact: "▏",
+            dot_filled: "●",
+            dot_hollow: "○",
             bars: ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"],
         }
     }
@@ -139,6 +145,8 @@ impl Glyphs {
             action: ">",
             reload: "~",
             fact: "|",
+            dot_filled: "*",
+            dot_hollow: "o",
             bars: ["_", "_", ".", ".", "-", "-", "=", "#"],
         }
     }
@@ -260,20 +268,24 @@ pub fn reload(message: &str) {
 /// A key/value fact in a startup header: `▏ Entry  src/main.byd`.
 pub fn fact(key: &str, value: &str) {
     let p = palette();
-    println!(
+    crate::statusline::log(&format!(
         "{}{}{} {}{key:<10}{} {value}",
         p.dim,
         glyphs().fact,
         p.reset,
         p.dim,
         p.reset
-    );
+    ));
 }
 
 /// The shared line shape: a 5-column prefix, the message, and — when a
 /// duration is given — a right-aligned duration column.
 fn line(colour: &str, glyph: &str, message: &str, duration: Option<std::time::Duration>) {
-    println!("{}", compose(palette(), colour, glyph, message, duration));
+    // Through the statusline, not `println!` directly: a log write has to erase
+    // the anchored line before it scrolls and repaint it afterwards, or the two
+    // land on top of each other. With no statusline installed this *is* a
+    // `println!` (RFC-0030 §P5).
+    crate::statusline::log(&compose(palette(), colour, glyph, message, duration));
 }
 
 /// Composes one grammar line, so the shape is testable without capturing
@@ -448,7 +460,17 @@ mod tests {
     #[test]
     fn the_ascii_fallback_is_single_byte_throughout() {
         let g = Glyphs::ascii();
-        let mut all: Vec<&str> = vec![g.ok, g.err, g.warn, g.info, g.action, g.reload, g.fact];
+        let mut all: Vec<&str> = vec![
+            g.ok,
+            g.err,
+            g.warn,
+            g.info,
+            g.action,
+            g.reload,
+            g.fact,
+            g.dot_filled,
+            g.dot_hollow,
+        ];
         all.extend_from_slice(&g.bars);
         for s in all {
             assert!(

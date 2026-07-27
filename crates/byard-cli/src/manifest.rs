@@ -337,17 +337,17 @@ fn parse_dev(table: &toml::Table) -> Result<DevConfig, String> {
 /// the dependency budget is better spent elsewhere.
 fn parse_duration_ns(s: &str) -> Option<u64> {
     let s = s.trim();
-    let (number, scale) = if let Some(n) = s.strip_suffix("ms") {
-        (n, 1_000_000.0)
-    } else if let Some(n) = s.strip_suffix("us").or_else(|| s.strip_suffix("\u{b5}s")) {
-        (n, 1_000.0)
-    } else if let Some(n) = s.strip_suffix("ns") {
-        (n, 1.0)
-    } else if let Some(n) = s.strip_suffix('s') {
-        (n, 1_000_000_000.0)
-    } else {
-        return None;
-    };
+    // Longest suffix first: `ms` and `ns` both end in `s`, so a bare `s` arm
+    // that ran earlier would parse `"8ms"` as `8m` seconds.
+    let (number, scale) = [
+        ("ms", 1_000_000.0),
+        ("us", 1_000.0),
+        ("\u{b5}s", 1_000.0),
+        ("ns", 1.0),
+        ("s", 1_000_000_000.0),
+    ]
+    .into_iter()
+    .find_map(|(suffix, scale)| s.strip_suffix(suffix).map(|n| (n, scale)))?;
     let value: f64 = number.trim().parse().ok()?;
     if !value.is_finite() || value <= 0.0 {
         return None;

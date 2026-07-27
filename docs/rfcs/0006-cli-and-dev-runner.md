@@ -1,6 +1,16 @@
 # RFC-0006: `byard` CLI and Dev Runner — Project Scaffolding, Live Reload, and the Developer Loop
 
-- **Status:** Active — implemented (M25 dev runner, `byard new/dev/check/build/add/get/clean` all landed in `byard-cli`). Hot-reload, error overlay, manifest parsing, and dependency commands operational.
+- **Status:** Active — implemented, and its three outstanding commitments are
+  now **closed**. `byard new/dev/check/build/add/get/clean` all landed in
+  `byard-cli`; hot-reload, error overlay, manifest parsing and dependency
+  commands are operational. The three things this document described in the
+  present tense and the implementation did not do —
+  the `⟳ reload pending` indicator (§"`byard dev`"), the blurred last-good
+  backdrop behind the error overlay (§3.4), and caret-anchored source context
+  in diagnostics (**C3**, whose renderer shipped under `#[allow(dead_code)]`) —
+  are all implemented, per RFC-0030 §C1–C3. **C7**'s rustc-compatible
+  diagnostic first line is unchanged and asserted byte-for-byte, including
+  under `CLICOLOR_FORCE=1`.
 - **Author(s):** Briany4717
 - **Created:** 2026-06-21
 - **Last updated:** 2026-06-21

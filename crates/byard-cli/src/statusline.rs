@@ -966,7 +966,11 @@ mod tests {
         // a wrapped statusline breaks the in-place redraw *permanently* —
         // every later repaint erases one line of a two-line display.
         for width in [24usize, 40, 60, 72, 79, 80, 100, 200] {
-            for fps in [0u32, 60, 9999] {
+            // Six digits, not four. An occluded window on macOS stops
+            // vsync-blocking, and a real session left running under `script`
+            // reported `26847fps` — an honest reading of a free-running loop,
+            // and two digits wider than this test used to admit.
+            for fps in [0u32, 60, 9999, 999_999] {
                 for instances in [0usize, 382, 999_999] {
                     for reloads in [0u32, 14, 99_999] {
                         for pending in [false, true] {
@@ -995,6 +999,33 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn a_free_running_loop_reports_its_real_rate_without_breaking_the_line() {
+        // Found by running it: an occluded window stops vsync-blocking, the
+        // loop free-runs, and the honest reading is five or six digits. The
+        // field is padded to three, so the *number* widens the line — which is
+        // correct (a truncated fps would be a lie) as long as the line still
+        // fits, and the drop order is what makes that true.
+        let f = Fields {
+            fps: 26_847,
+            work_ns: 200_000,
+            idle_ns: 0,
+            ..fields()
+        };
+        for width in [60usize, 80, 111, 200] {
+            let out = render(&f, &ring(200), width, &Palette::plain());
+            assert!(
+                display_width(&out) <= width,
+                "{} columns into {width}: {out:?}",
+                display_width(&out)
+            );
+            assert!(
+                out.contains("26847fps"),
+                "the rate must be reported in full, not truncated into a                  different number: {out:?}"
+            );
         }
     }
 

@@ -93,6 +93,35 @@
 //      scopes existed, both states printed the same `measured total` and
 //      nothing on screen could tell them apart.
 //
+// ── The flame chart (RFC-0030 §V5) ────────────────────────────────────────
+//
+// The block above is a *snapshot*: it tells you what one second looked like
+// on average and nothing about the frame that hitched. `--trace` writes every
+// sample to a Chrome Trace Event file instead, which Perfetto,
+// `chrome://tracing` and speedscope all read natively:
+//
+//   cd crates/byard-cli/examples/profiling
+//   cargo run -p byard-cli -- dev --trace /tmp/byard.json
+//
+// Drive the controls for a few seconds, then Ctrl-C and open /tmp/byard.json
+// at https://ui.perfetto.dev. What to verify there:
+//
+//   • THE FILE PARSES EVEN THOUGH YOU KILLED IT. The array is closed on drop,
+//     not on a clean shutdown. The session you most want to look at is
+//     usually the one that went wrong, so it must not be the one that is
+//     truncated.
+//   • `layout.taffy` IS DRAWN INSIDE `interp.render`. Nothing about that
+//     nesting is serialised — the viewer infers it from containment on a
+//     lane, and containment already holds because a child's guard is created
+//     after its parent's and dropped before it.
+//   • THREE LANES, NOT ONE. The logic thread, the render thread and the GPU
+//     each get their own `tid`. `interp.render` and `encode.frame` run
+//     concurrently on different threads; on one lane the viewer would draw
+//     one inside the other purely because their timestamps overlap.
+//   • THE HITCH IS FINDABLE. Turn "dense tree" and "long text" on together,
+//     then look for the widest `encode.glyphs` box in the trace. That is the
+//     specific frame, not the second it happened in.
+//
 // ── The terminal grammar (RFC-0030 §P1–P4) ────────────────────────────────
 //
 // Every command now shares one shape: a 5-column prefix, the message, and a

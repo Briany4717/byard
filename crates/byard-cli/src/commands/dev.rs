@@ -31,7 +31,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::deps::{cache_dir, resolve_project};
 use crate::manifest::Manifest;
 
-pub fn run(file: Option<&Path>, deep_link: Option<&str>) -> Result<(), String> {
+pub fn run(
+    file: Option<&Path>,
+    deep_link: Option<&str>,
+    trace: Option<&Path>,
+) -> Result<(), String> {
     let manifest = Manifest::discover(file)?;
 
     // Initial resolve on the main thread: catch errors before opening the
@@ -87,6 +91,16 @@ pub fn run(file: Option<&Path>, deep_link: Option<&str>) -> Result<(), String> {
 
     // Poll mode: the event loop spins continuously so file-change frames
     // appear without waiting for the next mouse event (RFC-0006 §3.2).
+    // Opened before the window so a bad path fails immediately rather than
+    // after the event loop has taken over the process.
+    let trace = match trace {
+        Some(path) => {
+            crate::style::fact("Trace", &path.display().to_string());
+            Some(crate::trace::TraceWriter::create(path)?)
+        }
+        None => None,
+    };
+
     let host = WinitHost::new(&title, 1280, 720).with_poll();
     host.run(App {
         engine: None,
@@ -102,6 +116,7 @@ pub fn run(file: Option<&Path>, deep_link: Option<&str>) -> Result<(), String> {
         deep_link: deep_link.map(str::to_string),
         last_render_telemetry: byard_core::telemetry::SampleBlock::default(),
         last_telemetry_print: std::time::Instant::now(),
+        trace,
     })
     .map_err(|e| format!("event loop error: {e}"))
 }
@@ -494,6 +509,14 @@ struct App {
     /// spam a line for every redraw. Printing is throttled; draining
     /// `last_render_telemetry` (above) is not.
     last_telemetry_print: std::time::Instant,
+    /// The `--trace <path>` writer (RFC-0030 §V5), or `None`.
+    ///
+    /// Both rings are streamed into it as they are drained, on the thread that
+    /// drains them — nothing is held back, and the file on disk is a complete
+    /// JSON array after every frame, so a session that is `Ctrl-C`'d still
+    /// leaves a trace every viewer will open. That is usually the session you
+    /// most want to look at.
+    trace: Option<crate::trace::TraceWriter>,
 }
 
 impl App {
@@ -676,6 +699,15 @@ impl PlatformHost for App {
             // Drained every redraw (see `last_render_telemetry`'s doc comment),
             // independent of the print throttle below.
             self.last_render_telemetry = byard_core::telemetry::drain_samples();
+            // RFC-0030 §V5: stream both rings into the trace as they are
+            // drained. The logic thread's block rides in on the frame it was
+            // captured with, so it is written from here too — the writer is a
+            // plain file handle and the render thread is the only one holding
+            // it, which is what keeps this off any lock.
+            if let Some(trace) = self.trace.as_mut() {
+                let cpu = e.latest_cpu_telemetry();
+                trace.write_frame(cpu.as_ref(), &self.last_render_telemetry);
+            }
             App::print_telemetry_overlay(
                 e,
                 &self.last_render_telemetry,

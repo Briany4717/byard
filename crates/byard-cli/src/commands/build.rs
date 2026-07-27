@@ -27,9 +27,7 @@ pub fn run(file: Option<&Path>) -> Result<(), String> {
 
     let (program, _provider) = resolve_project(&manifest)?;
     if !program.errors.is_empty() {
-        for err in &program.errors {
-            eprintln!("{}", program.source_map.render_line(err));
-        }
+        crate::commands::check::print_diagnostics(&program.errors, &program.source_map, false);
         return Err(format!(
             "{} error(s) — fix them before building",
             program.errors.len()
@@ -39,9 +37,7 @@ pub fn run(file: Option<&Path>) -> Result<(), String> {
     // Stage 1: close the icon set (tree-shake) with the RFC-0009 §4 guard.
     let (refs, errors) = collect_static_vector_refs(&program.views, &manifest.vector_includes);
     if !errors.is_empty() {
-        for err in &errors {
-            eprintln!("{}", program.source_map.render_line(err));
-        }
+        crate::commands::check::print_diagnostics(&errors, &program.source_map, false);
         return Err(format!(
             "{} vector asset error(s) — a partial atlas is never shipped",
             errors.len()
@@ -57,9 +53,7 @@ pub fn run(file: Option<&Path>) -> Result<(), String> {
         .join("cache")
         .join("vectors");
     let baked = bake_atlas(&refs, &manifest.project_root, Some(&cache_dir)).map_err(|errs| {
-        for err in &errs {
-            eprintln!("{}", program.source_map.render_line(err));
-        }
+        crate::commands::check::print_diagnostics(&errs, &program.source_map, false);
         format!("{} vector bake error(s)", errs.len())
     })?;
 

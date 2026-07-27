@@ -54,6 +54,10 @@ enum Command {
     },
     /// Parse and validate without opening a window (CI-friendly).
     Check {
+        /// One line per diagnostic, with no caret block beneath it — the
+        /// pre-RFC-0030 shape, for scripts (RFC-0006 C3).
+        #[arg(long)]
+        short: bool,
         /// Path to a `.byd` file. Defaults to `entry` in `byard.toml`.
         file: Option<PathBuf>,
     },
@@ -104,7 +108,7 @@ fn main() {
             trace: trace.as_deref(),
             profile,
         }),
-        Command::Check { file } => commands::check::run(file.as_deref()),
+        Command::Check { file, short } => commands::check::run(file.as_deref(), short),
         Command::Build { file } => commands::build::run(file.as_deref()),
         Command::Clean { file } => commands::clean::run(file.as_deref()),
         Command::Add {

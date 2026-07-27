@@ -12,6 +12,7 @@ mod deps;
 mod manifest;
 mod style;
 mod telemetry_overlay;
+mod trace;
 
 #[derive(Parser)]
 #[command(
@@ -40,6 +41,10 @@ enum Command {
         /// (RFC-0026): `--deep-link byard://item/42`.
         #[arg(long, value_name = "URL")]
         deep_link: Option<String>,
+        /// Write a Chrome Trace Event file (RFC-0030 §V5). Open it in
+        /// Perfetto, `chrome://tracing` or speedscope for a flame chart.
+        #[arg(long, value_name = "PATH")]
+        trace: Option<PathBuf>,
     },
     /// Parse and validate without opening a window (CI-friendly).
     Check {
@@ -82,9 +87,11 @@ fn main() {
     let cli = Cli::parse();
     let result = match cli.command {
         Command::New { name } => commands::new::run(&name),
-        Command::Dev { file, deep_link } => {
-            commands::dev::run(file.as_deref(), deep_link.as_deref())
-        }
+        Command::Dev {
+            file,
+            deep_link,
+            trace,
+        } => commands::dev::run(file.as_deref(), deep_link.as_deref(), trace.as_deref()),
         Command::Check { file } => commands::check::run(file.as_deref()),
         Command::Build { file } => commands::build::run(file.as_deref()),
         Command::Clean { file } => commands::clean::run(file.as_deref()),

@@ -20,6 +20,11 @@
 View Main() {
     var percent: Float = 65.0
 
+    // Twelve samples, so the chart below has a shape count that comes from a
+    // list rather than from twelve hand-written `rect(…)` lines.
+    let samples = [40.0, 62.0, 55.0, 78.0, 91.0, 70.0,
+                   48.0, 83.0, 96.0, 61.0, 74.0, 52.0]
+
     Column #[bg: 0x14141C, p: 32, gap: 24, width: 560] {
         Text("Canvas — path & shape primitives") #[color: 0xE6E1E5, size: 20]
 
@@ -76,8 +81,41 @@ View Main() {
                    stroke: 0x7DD3A8, stroke_width: 3)
         }
 
+        // ── A data-driven chart: `for` inside a `Canvas` ──────────────────
+        //
+        // The shape *count* comes from the data, not from the source. Before
+        // this a canvas could animate every coordinate, colour and sweep from
+        // live values and still could not draw `n` bars for `n` data points —
+        // which excludes charts, sparklines, histograms and legends, i.e. most
+        // of what a drawing surface is for. The workaround was to write twelve
+        // `rect(…)` lines against twelve separately named fields, and a
+        // workaround that obvious is usually a missing feature.
+        //
+        // Drag the slider: every bar's height is derived from it, so the whole
+        // chart is reactive with no reconciliation and no per-frame node. The
+        // `when` picks the palette out of the same expression.
+        Text("A chart, from data — `for` and `when` inside a Canvas")
+            #[color: 0xE6E1E5, size: 15]
+        Canvas #[width: 496, height: 96, bg: 0x1C1B22] {
+            for i, s in samples {
+                rect(x: 16 + i * 40, y: 88 - s * percent * 0.008 * 88,
+                     w: 24, h: s * percent * 0.008 * 88,
+                     radius: 3, fill: 0x6750A4)
+            }
+            when percent > 80 {
+                line(x1: 8, y1: 8, x2: 488, y2: 8,
+                     stroke: 0xF2B8B5, stroke_width: 2, dash: (6, 4))
+            }
+            else {
+                line(x1: 8, y1: 88, x2: 488, y2: 88, stroke: 0x49454F)
+            }
+        }
+        Text(percent > 80 ? "over the line — the `else` branch swapped out"
+                          : "drag past 80 to swap the `when` branch")
+            #[color: 0x938F99, size: 12]
+
         Slider #[bind: percent, min: 0.0, max: 100.0, step: 1.0, width: 496, height: 26]
-        Text("drag to drive sweep, label, needle, and dash phase")
+        Text("drag to drive sweep, label, needle, dash phase, and the chart")
             #[color: 0x938F99, size: 12]
     }
 }

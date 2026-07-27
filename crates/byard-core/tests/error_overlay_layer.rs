@@ -297,3 +297,86 @@ fn both_transitions_ask_and_the_frames_between_them_do_not() {
         "exactly the mount frame and the dismiss frame"
     );
 }
+
+// ── Two producers, one index-addressed pool (RFC-0030 §V3) ─────────────────
+
+#[test]
+fn mark_dirty_since_marks_forward_and_leaves_everything_before_it_alone() {
+    // The encoder's glyph cache is index-addressed: it compares `texts[i]`
+    // against what it shaped for `texts[i]` last frame and trusts
+    // `TextLine::dirty`. That contract holds while one producer owns the pool,
+    // because an element keeping its index keeps its identity.
+    //
+    // A dev overlay drawn by a *second* interpreter, appended after the app's
+    // primitives, breaks it: its indices move whenever the app's counts change,
+    // so index `i` holds the overlay's line where it held the app's a frame
+    // ago. Both producers truthfully report their own primitives unchanged.
+    // Only the frame sees both, so only the frame can resolve it.
+    let mut f = RenderFrame::new();
+    let line = |text: &str| byard_core::frame::TextLine {
+        x: 0.0,
+        y: 0.0,
+        text: text.to_string(),
+        font_size: 14.0,
+        color: [1.0; 4],
+        dirty: false,
+    };
+    f.push_text(line("app 0"));
+    f.push_text(line("app 1"));
+    f.push_instance(BoxInstance {
+        rect: [0.0, 0.0, 1.0, 1.0],
+        color: [1.0; 4],
+        radii: [0.0; 4],
+        transform: Transform::IDENTITY,
+    });
+
+    let mark = f.cursor();
+    assert_eq!(mark.text, 2);
+    assert_eq!(mark.solid, 1);
+
+    f.push_text(line("overlay 0"));
+    f.push_text(line("overlay 1"));
+    f.push_instance(BoxInstance {
+        rect: [0.0, 0.0, 1.0, 1.0],
+        color: [1.0; 4],
+        radii: [0.0; 4],
+        transform: Transform::IDENTITY,
+    });
+
+    f.mark_dirty_since(mark);
+
+    let dirty: Vec<bool> = f.texts().iter().map(|t| t.dirty).collect();
+    assert_eq!(
+        dirty,
+        vec![false, false, true, true],
+        "everything at or after the mark is dirty; everything before it is \
+         exactly as its own producer reported it"
+    );
+    // Solids are pushed dirty by default — a `BoxInstance` is a GPU `Pod` with
+    // no room for the flag, so the parallel vector is seeded `true` and cleared
+    // by whoever can prove otherwise. Marking forward is therefore a no-op
+    // here, which is the correct outcome and not evidence of anything.
+    assert!(f.instances_dirty().iter().all(|d| *d));
+}
+
+#[test]
+fn mark_dirty_since_a_cursor_past_the_end_is_a_no_op() {
+    // The overlay emitted nothing this frame. Nothing to mark, and nothing to
+    // panic about — an overlay that draws conditionally must not have to guard
+    // the call site.
+    let mut f = RenderFrame::new();
+    let mark = f.cursor();
+    f.mark_dirty_since(mark);
+    assert!(f.texts().is_empty());
+    f.push_text(byard_core::frame::TextLine {
+        x: 0.0,
+        y: 0.0,
+        text: "after".to_string(),
+        font_size: 14.0,
+        color: [1.0; 4],
+        dirty: false,
+    });
+    // A stale mark from before the push still only marks forward from it.
+    f.mark_dirty_since(f.cursor());
+    assert!(!f.texts()[0].dirty);
+}

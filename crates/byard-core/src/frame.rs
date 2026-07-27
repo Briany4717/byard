@@ -1548,6 +1548,14 @@ pub struct LayerMark {
     pub backdrop: u32,
 }
 
+/// Applies `set` to every element of `pool` from index `from` onward.
+fn mark_from<T>(pool: &mut [T], from: u32, mut set: impl FnMut(&mut T)) {
+    let start = usize::try_from(from).unwrap_or(usize::MAX).min(pool.len());
+    for item in &mut pool[start..] {
+        set(item);
+    }
+}
+
 /// NDC far-plane depth the shared draw-order depth buffer is cleared to at the
 /// start of every frame. Every drawable's [`draw_depth`] is strictly nearer, so
 /// it passes the `LessEqual` test against this cleared value.
@@ -1813,6 +1821,54 @@ impl RenderFrame {
             return; // empty layer — dedup, an overlay that emitted nothing is free
         }
         self.layer_marks.push(mark);
+    }
+
+    /// The current cursor into every pool, without recording a layer boundary.
+    ///
+    /// Paired with [`mark_dirty_since`](Self::mark_dirty_since) by an overlay
+    /// that is emitted *after* content whose length it does not control.
+    #[must_use]
+    pub fn cursor(&self) -> LayerMark {
+        LayerMark {
+            solid: u32::try_from(self.instances.len()).unwrap_or(u32::MAX),
+            decorated: u32::try_from(self.decorated.len()).unwrap_or(u32::MAX),
+            texture: u32::try_from(self.textures.len()).unwrap_or(u32::MAX),
+            vector: u32::try_from(self.vector_instances.len()).unwrap_or(u32::MAX),
+            text: u32::try_from(self.texts.len()).unwrap_or(u32::MAX),
+            canvas: u32::try_from(self.canvas_shapes.len()).unwrap_or(u32::MAX),
+            ripple: u32::try_from(self.ripples.len()).unwrap_or(u32::MAX),
+            backdrop: u32::try_from(self.backdrops.len()).unwrap_or(u32::MAX),
+        }
+    }
+
+    /// Marks every primitive emitted at or after `mark` as dirty.
+    ///
+    /// # Why an overlay sometimes has to do this
+    ///
+    /// The encoder's incremental machinery is **index-addressed**: the glyph
+    /// cache compares `texts[i]` against what it shaped for `texts[i]` last
+    /// frame, and trusts `TextLine::dirty` to say when they differ. That
+    /// contract holds as long as one producer owns the pool, because an
+    /// element that keeps its index keeps its identity.
+    ///
+    /// A dev overlay — the in-window HUD — is emitted *after* the app, by a
+    /// different interpreter, into the same pools. Its indices therefore move
+    /// whenever the app's counts change, and on such a frame index `i` holds
+    /// the overlay's line where it held the app's a frame ago. Both producers
+    /// truthfully report their own primitives unchanged, and the glyph cache
+    /// would draw last frame's shaped buffer at that index — stale text, in
+    /// release, silently.
+    ///
+    /// Neither producer can see that on its own, so the frame — which is the
+    /// only thing that sees both — resolves it. Called only on frames where
+    /// the base actually shifted, so the overlay costs nothing on the frames
+    /// in between.
+    pub fn mark_dirty_since(&mut self, mark: LayerMark) {
+        mark_from(&mut self.instances_dirty, mark.solid, |slot| *slot = true);
+        mark_from(&mut self.decorated, mark.decorated, |d| d.dirty = true);
+        mark_from(&mut self.textures, mark.texture, |t| t.dirty = true);
+        mark_from(&mut self.texts, mark.text, |t| t.dirty = true);
+        mark_from(&mut self.canvas_shapes, mark.canvas, |c| c.dirty = true);
     }
 
     /// The z-layer boundaries recorded this frame (RFC-0017 layered draw

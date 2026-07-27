@@ -1,0 +1,113 @@
+// The in-window dev HUD (RFC-0030 §V3–V4), drawn by the engine, from `byld`.
+//
+// This file is not an example. It is the project's most demanding dogfooding
+// test, run on every developer's machine, every session they press the chord.
+// A Rust HUD would be easier to write and would prove nothing; this one is a
+// permanent, self-executing check that the framework can render a non-trivial,
+// continuously-updating, blurred, animated overlay inside its own frame budget.
+// If it cannot, the project needs to know that immediately, and this is the
+// cheapest possible way to find out.
+//
+// It uses no privileged syntax. `for` inside a `Canvas` did not exist when this
+// was written; the answer was to add it to the language rather than special-case
+// the HUD (RFC-0020 erratum).
+//
+// ── Why every number here arrives pre-formatted ───────────────────────────
+//
+// The HUD's text changes every frame, so its text leaves would be layout-dirty
+// every frame, so they would be re-shaped every frame — exactly the cost the
+// retained layout path removed, reintroduced by the tool that reports on it
+// (INV-24). Three mitigations, all of them here rather than in the engine:
+//
+//   1. The host updates these fields at 10 Hz, not per frame. The eye cannot
+//      read a 60 Hz counter anyway, and it leaves five of six frames clean.
+//   2. The sparkline is `Canvas` geometry, never text. A shape parameter is a
+//      paint-class change, so it never touches layout at all.
+//   3. Every numeric field arrives as a **fixed-width string**, formatted on
+//      the host. `" 3.4"` and `"12.7"` occupy the same columns, so the text's
+//      *layout* fingerprint is stable even when its content changes and only
+//      the paint half dirties.
+//
+// Formatting on the host rather than in `byld` is the point of (3): a
+// `"{t.work}ms"` interpolation would produce a different string length as the
+// number crosses 10, and the HUD would re-measure itself at exactly the moment
+// something interesting was happening.
+View __ByardDevHud() {
+    inject DevTelemetry as t
+
+    let label = style { color: 0x938F99, size: 11 }
+    let value = style { color: 0xE6E1E5, size: 12 }
+
+    // An RFC-0017 overlay layer over an RFC-0023 frosted backdrop. It is an
+    // ordinary layer and an ordinary backdrop — nothing about the HUD is
+    // special-cased anywhere in the renderer.
+    Box #[width: 252, radius: 12, p: 12,
+          blur: 24, backdrop_tint: 0x1418206E, blur_saturation: 1.4] {
+        Column #[gap: 7] {
+            // ── the headline ─────────────────────────────────────────────
+            Row #[gap: 8, align: center] {
+                Text(t.fps) #[color: t.over ? 0xF2B8B5 : 0x7DD3A8, size: 20, weight: bold]
+                Text("fps") #[..label]
+                Spacer
+                Text(t.frame) #[..value, color: t.over ? 0xF2B8B5 : 0xE6E1E5]
+                Text("/") #[..label]
+                Text(t.budget) #[..label]
+                Text("ms") #[..label]
+            }
+
+            // ── the sparkline ────────────────────────────────────────────
+            //
+            // Geometry, not text (mitigation 2). Each bar's height is the
+            // frame's *work* as a fraction of the budget: plotting the frame
+            // period instead would draw a permanently full bar on any
+            // vsync-bound app, since under vsync the period *is* the budget.
+            Canvas #[width: 228, height: 30, bg: 0x0E121A] {
+                line(x1: 0, y1: 29, x2: 228, y2: 29, stroke: 0x2A303C)
+                for b in t.spark {
+                    rect(x: b.x, y: b.y, w: 6, h: b.h, radius: 1,
+                         fill: b.over ? 0xF2B8B5 : 0x6750A4)
+                }
+            }
+
+            // ── the breakdown ────────────────────────────────────────────
+            Row #[gap: 10] {
+                Column #[gap: 4] {
+                    Row #[gap: 6] { Text("interp") #[..label] Text(t.interp) #[..value] }
+                    Row #[gap: 6] { Text("encode") #[..label] Text(t.encode) #[..value] }
+                }
+                Column #[gap: 4] {
+                    Row #[gap: 6] { Text("layout") #[..label] Text(t.layout) #[..value] }
+                    Row #[gap: 6] { Text("gpu   ") #[..label] Text(t.gpu) #[..value] }
+                }
+            }
+
+            // ── the census and the layout path ───────────────────────────
+            Row #[gap: 6, align: center] {
+                Text(t.boxes) #[..value]
+                Text("box") #[..label]
+                Text(t.texts) #[..value]
+                Text("text") #[..label]
+                Text(t.vectors) #[..value]
+                Text("vec") #[..label]
+            }
+            Row #[gap: 6, align: center] {
+                Box #[width: 7, height: 7, radius: 4,
+                      bg: t.retainedOk ? 0x7DD3A8 : 0xE8B931] {}
+                Text(t.retained) #[..label]
+            }
+
+            // ── the observer effect, disclosed (RFC-0030 §V4) ────────────
+            //
+            // Not decoration. The HUD competes for the frame it reports on, so
+            // it runs inside its own `hud.render` scope, that scope is
+            // subtracted from every number above, and the subtracted amount is
+            // printed *here* — so the subtraction is auditable rather than a
+            // claim. A HUD that hides its own overhead is worse than no HUD.
+            Row #[gap: 6, align: center] {
+                Text("hud cost") #[..label]
+                Text(t.hudCost) #[..value, color: t.hudOk ? 0x938F99 : 0xF2B8B5]
+                Text("ms (excluded)") #[..label]
+            }
+        }
+    }
+}

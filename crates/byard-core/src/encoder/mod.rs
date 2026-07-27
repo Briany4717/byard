@@ -954,7 +954,7 @@ impl EncoderSubsystem {
         self.drain_gpu_samples_into_telemetry();
 
         let full_redraw = needs_full_redraw_this_frame(
-            self.needs_full_redraw,
+            self.needs_full_redraw || dirty.full,
             self.last_instance_count,
             instances.len(),
             self.last_text_count,
@@ -1219,6 +1219,7 @@ impl EncoderSubsystem {
             frame_clips(frame),
             FrameDirty {
                 instances: frame.instances_dirty(),
+                full: frame.wants_full_redraw(),
             },
             frame.layer_marks(),
         )?;
@@ -1441,6 +1442,9 @@ impl FrameStaging {
 pub struct FrameDirty<'a> {
     /// Parallel to solid `BoxInstance`s.
     pub instances: &'a [bool],
+    /// The frame asked for a full, unscissored redraw
+    /// ([`RenderFrame::request_full_redraw`]).
+    pub full: bool,
 }
 
 /// A frame's content-clip table plus the parallel per-pool clip slices
@@ -2543,10 +2547,11 @@ fn logical_rect_to_physical_scissor(
 /// project's established pattern of extracting CPU-mirror decision logic
 /// into free functions (see `text_glyph::needs_reshape`).
 ///
-/// A full redraw is forced by `sticky` (set on construction and after a
-/// resize — see [`EncoderSubsystem::needs_full_redraw`]) OR by a structural
-/// change in the instance/text counts since the previous frame, since
-/// neither `BoxInstance` nor `TextLine` carries an "added this frame" bit.
+/// A full redraw is forced by `sticky` (set on construction, after a resize —
+/// see [`EncoderSubsystem::needs_full_redraw`] — and when the frame itself
+/// asked for one via [`RenderFrame::request_full_redraw`]) OR by a structural
+/// change in the instance/text counts since the previous frame, since neither
+/// `BoxInstance` nor `TextLine` carries an "added this frame" bit.
 fn needs_full_redraw_this_frame(
     sticky: bool,
     prev_instance_count: usize,

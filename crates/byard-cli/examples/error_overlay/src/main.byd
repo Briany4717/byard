@@ -1,0 +1,141 @@
+// RFC-0006 §3.4 / §3.5 — the two promises `byard dev` made and did not keep:
+// the last good view stays behind a blurred error overlay, and a reload held
+// behind an in-flight gesture says so instead of looking broken.
+//
+// This example exists to be *broken on purpose*. It is a scene with enough
+// colour and structure that you can tell whether it is still there behind the
+// overlay, and a drag handle you can hold to make the gate fire.
+//
+// Run it (from the repo root):
+//   cd crates/byard-cli/examples/error_overlay
+//   cargo run -p byard-cli -- dev
+//
+// ── 1. THE BLURRED BACKDROP (RFC-0006 §3.4) ───────────────────────────────
+//
+// With the window open, introduce a **parse** error — delete a closing brace,
+// or truncate the file mid-attribute — and save. (An *unknown attribute* is a
+// semantic error found during lowering, not a parse error, so it is reported by
+// `byard check` rather than by the overlay; §3 below is where you see that one.)
+//
+//   • THE SCENE IS STILL THERE. Blurred, darkened, desaturated, but the
+//     layout, the colours and *where you were* all survive. That was the
+//     promise; the implementation painted an opaque field instead, and the
+//     comment explaining why was honest and correct at the time — the flat
+//     four-pass encoder drew all text in one global pass after every box, so
+//     the app's text bled over the scrim. Z-layers and backdrop blur removed
+//     that constraint.
+//
+//   • NOTHING UNDERNEATH IS READABLE. That is the other half of the design: a
+//     legible background competes with the error text for the same attention.
+//     You should be able to see *that* your app is there and not read a word
+//     of it.
+//
+//   • THE PANEL DOES NOT FILL THE WINDOW. It floats, so the overlay reads as
+//     something in front of the app rather than instead of it.
+//
+//   • THE CENSUS SAYS THE VIEW IS STILL THERE. Watch the `N boxes` field on
+//     the statusline as the overlay mounts: it *rises* — the app's boxes plus
+//     the backdrop pane plus the error panel. Under the old implementation it
+//     collapsed to one, because the app was not drawn at all. That is the
+//     single cheapest confirmation that this promise is being kept, and it
+//     does not depend on your eyes.
+//
+//   • THE MOUNT AND THE DISMISS ARE BOTH CLEAN. Watch the edges carefully as
+//     the overlay appears, and again as you fix the file and it goes away.
+//     Neither transition may leave a band of stale pixels anywhere. This is
+//     the one to look at: the encoder's scissor union is computed from what
+//     changed between two frames, and these are the two frames where the whole
+//     composition changes at once. Both ask for a full redraw; nothing in
+//     between does.
+//
+//   • FIX IT AND SAVE. The overlay goes; the scene comes back sharp, with its
+//     state intact — the counter below has not reset.
+//
+// ── 2. `↻ pending` (RFC-0006 §3.5, the gate) ──────────────────────────────
+//
+// A structure-incompatible reload cannot be applied mid-gesture: remounting a
+// tree under a pointer that is holding one of its elements would drop the
+// gesture on the floor. So it waits. Before this, it waited *silently*, and a
+// developer holding a drag while a save queued behind the gate saw an
+// application that had simply stopped responding to their edits.
+//
+//   • Press and HOLD the mouse button on the drag strip below.
+//   • While holding, save a structure-incompatible change — add or remove a
+//     whole element, e.g. delete the `Text("hold me")` line.
+//   • The statusline shows `↻ pending` in amber. Nothing else changes: the
+//     gate is doing its job, and now it says so.
+//   • Release. The reload lands, `↻ pending` clears in the same step, and the
+//     reload count beside it increments.
+//
+// The indicator and the gate are one type in the implementation for exactly
+// this reason — an indicator that can be left on after the reload landed, or
+// off while one waits, is worse than no indicator.
+//
+// ── 3. CARET DIAGNOSTICS (RFC-0006 §C3) ───────────────────────────────────
+//
+// The same broken file, checked from the terminal:
+//
+//   cargo run -p byard-cli -- check crates/byard-cli/examples/error_overlay
+//
+//   error is printed as:
+//     main.byd:12:15: error[UnknownAttribute]: unknown attribute `bgg` …
+//       |
+//    12 |         Box #[bgg: 0x6750A4] {}
+//       |               ^^^
+//
+// The first line is byte-identical to what it has always been and carries no
+// escapes at all, even with `CLICOLOR_FORCE=1` — editor problem matchers parse
+// it, and breaking one makes an integration go *quiet* rather than fail. The
+// colour is on the block beneath it. `--short` drops the block entirely, for
+// scripts:
+//
+//   cargo run -p byard-cli -- check --short crates/byard-cli/examples/error_overlay
+View Main() {
+    var drags = 0
+
+    // `on pressed` is the engine's live interaction state, so the strip
+    // visibly reacts while you hold it — which matters here, because holding
+    // it is the whole instruction.
+    let strip = style {
+        bg: 0x2B2930, radius: 12, p: (vertical: 22, horizontal: 24), color: 0xE6E1E5
+        on hover   { bg: 0x36323C }
+        on pressed { bg: 0x4A4458 }
+    }
+
+    Column #[bg: 0x101014, p: 28, gap: 20, width: 760] {
+        Text("RFC-0006 — the dev runner's three promises")
+            #[color: 0xFFFFFF, size: 24, weight: bold]
+        Text("Break this file and save. The scene should still be here, blurred, behind the overlay.")
+            #[color: 0x9AA0AC, size: 13]
+
+        // Deliberately colourful and structured: a blurred field of one flat
+        // colour would prove nothing about whether the view is really behind
+        // the overlay.
+        Row #[gap: 12] {
+            Box #[width: 150, height: 90, radius: 14, bg: 0x6750A4] {}
+            Box #[width: 150, height: 90, radius: 14, bg: 0x386A20] {}
+            Box #[width: 150, height: 90, radius: 14, bg: 0xB3261E] {}
+            Box #[width: 150, height: 90, radius: 14, bg: 0xE8B931] {}
+        }
+
+        Box #[bg: 0x1B1B22, radius: 12, p: 18, width: 704] {
+            Column #[gap: 8] {
+                Text("Readable text, so you can check you cannot read it through the blur.")
+                    #[color: 0xCCD2E0, size: 15]
+                Text("If any of this is legible behind the overlay the backdrop is too weak: a readable background competes with the error text for the same attention.")
+                    #[color: 0x938F99, size: 13]
+            }
+        }
+
+        // ── the hold target, for the `↻ pending` gate ─────────────────────
+        //
+        // Press and HOLD here, save a structure-incompatible change, and watch
+        // the statusline rather than the window. The reload waits behind the
+        // gate for as long as the pointer is down.
+        Button("hold me — then save a structural change") #[..strip, width: 704]
+            => drags++
+
+        Text("{drags} gesture(s) completed — and the count survives every reload")
+            #[color: 0x938F99, size: 13]
+    }
+}

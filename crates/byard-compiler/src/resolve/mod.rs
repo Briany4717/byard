@@ -130,6 +130,46 @@ impl SourceMap {
         }
     }
 
+    /// The source context needed to draw a caret block beneath a diagnostic's
+    /// machine-readable first line (RFC-0006 **C3**).
+    ///
+    /// Structured rather than pre-rendered, because the colouring belongs to
+    /// whoever is doing the printing. `byard check` writes a palette-aware
+    /// block; a future editor integration or a JSON formatter wants the same
+    /// numbers and none of the escapes. Putting a `Palette` in the compiler to
+    /// avoid one struct would be the wrong direction for a dev-only concern.
+    ///
+    /// Returns `None` for a diagnostic whose span belongs to no registered
+    /// file — a project-level error, for instance, which has a headline and no
+    /// source to point at.
+    #[must_use]
+    pub fn caret(&self, err: &CompileError) -> Option<CaretContext> {
+        let (entry, local) = self.locate(err.span())?;
+        let start = (local.start as usize).min(entry.source.len());
+        let end = (local.end as usize).min(entry.source.len()).max(start);
+
+        let line_start = entry.source[..start].rfind('\n').map_or(0, |i| i + 1);
+        let line_end = entry.source[start..]
+            .find('\n')
+            .map_or(entry.source.len(), |i| start + i);
+        let (line, column) = line_col(&entry.source, start);
+
+        Some(CaretContext {
+            file: entry.file.clone(),
+            line,
+            column,
+            text: entry.source[line_start..line_end].to_string(),
+            // Character offsets, not byte offsets: the caret is placed against
+            // rendered columns, and a span after a multi-byte character would
+            // otherwise point somewhere to its right.
+            caret_start: entry.source[line_start..start].chars().count(),
+            caret_len: entry.source[start..end.min(line_end)]
+                .chars()
+                .count()
+                .max(1),
+        })
+    }
+
     /// Renders `err` with caret-anchored source context against its own file.
     #[must_use]
     pub fn render(&self, err: &CompileError) -> String {
@@ -147,6 +187,25 @@ impl SourceMap {
     pub fn files(&self) -> impl Iterator<Item = &MapEntry> + '_ {
         self.entries.iter()
     }
+}
+
+/// Where a diagnostic points, in a form a caller can draw a caret from.
+///
+/// See [`SourceMap::caret`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CaretContext {
+    /// The file the span belongs to.
+    pub file: String,
+    /// 1-based line number.
+    pub line: usize,
+    /// 1-based column, in characters.
+    pub column: usize,
+    /// The full source line, without its newline.
+    pub text: String,
+    /// 0-based character offset of the first caret within [`Self::text`].
+    pub caret_start: usize,
+    /// How many characters the caret run covers; at least one.
+    pub caret_len: usize,
 }
 
 /// Converts a byte offset to 1-based (line, col) within `src`.

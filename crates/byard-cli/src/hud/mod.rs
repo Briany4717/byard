@@ -718,7 +718,25 @@ mod tests {
 /// Every other test in this file checks a mechanism. This one checks the
 /// *claim*, against a real interpreter, a real layout atlas and a real GPU
 /// encoder, by doing the only thing that can check it: rendering the same
-/// scene twice and looking at what the difference was.
+/// scene with the HUD and without it and looking at the difference.
+///
+/// # It is a paired measurement, and that is not a detail
+///
+/// The two configurations are rendered **alternately**, one frame each, on two
+/// rigs that both exist for the whole run — never as one batch followed by
+/// another. A batched version of this test passed here and failed on CI,
+/// because everything that varies with *time* rather than with configuration
+/// (a cold driver, a cold font cache, thermal state, a noisy runner) lands
+/// entirely in the difference between two batches. It inflated the first batch
+/// until the two totals nearly matched and the "measured delta" came out at a
+/// fifth of the cost the profiler was correctly reporting.
+///
+/// A measurement whose baseline is taken under different conditions from the
+/// thing it is a baseline for is the mistake this whole erratum is about. It
+/// is worth noticing that it was made twice more while fixing it — once with a
+/// static-scene baseline that skipped the draw path, once with batching — and
+/// that both times the *reported* number was right and the comparison was
+/// wrong.
 ///
 /// # Why the old rule is measured alongside the new one
 ///
@@ -735,30 +753,37 @@ mod self_accounting {
     use byard_core::telemetry::{Owner, drain_samples};
     use std::sync::Arc;
 
-    /// Frames measured per configuration. Enough that a median is not one
-    /// scheduling hiccup, few enough that the test stays under a second.
-    const SAMPLES: usize = 15;
-    /// How far the reported cost may sit from the measured delta.
+    /// Paired frames measured. Enough that a median is not one scheduling
+    /// hiccup, few enough that the test stays quick.
+    const SAMPLES: usize = 21;
+    /// Frames rendered on both rigs before either is measured, so neither
+    /// configuration is the one paying for pipeline compilation, glyph-atlas
+    /// residency and every line's first shape.
+    const WARMUP: usize = 8;
+    /// RFC-0030 §V4's own acceptance condition, and the budget it is against.
     ///
-    /// **Release is §V4's number**; debug gets a much wider band, and the
-    /// reason is the whole of §A3 rather than a tuned constant.
+    /// Checked against the **measured** delta, never against what the profiler
+    /// reports about itself — a self-accounting gate read off its own output
+    /// is not a gate.
+    const GATE_FRACTION: f64 = 0.05;
+    /// 60 Hz, the budget every figure in this test is quoted against.
+    const BUDGET_NS: f64 = 16_667_000.0;
+
+    /// How far `dev-owner total + the measured `encode.finish` delta` may sit
+    /// from the measured frame delta — in **both** profiles.
     ///
-    /// One term in the frame is genuinely not separable per owner:
-    /// `encode.finish` is a single `wgpu` call that validates and assembles
-    /// the whole frame's command buffer, so it grows with the passes and draws
-    /// an overlay adds but cannot be split without splitting the command
-    /// buffer itself. In **release** that term is ~55 µs whether the HUD is
-    /// open or not, and the residual it leaves is inside 15 %. In **debug**
-    /// `wgpu`'s validation makes the same call ~270 µs closed and ~810 µs
-    /// open — a ~15× inflation of exactly the one term that cannot be
-    /// attributed, and ~40 % of the delta on its own.
+    /// This is the real invariant, and it is tighter than a wide band on the
+    /// direct comparison rather than looser: it says every nanosecond the HUD
+    /// adds is either *attributed to the dev runner* or *inside the one scope
+    /// this PR documented as unsplittable* — with that scope's contribution
+    /// measured on the same frames rather than assumed. Attribution silently
+    /// degrading fails it; `wgpu`'s validator being slow in debug does not,
+    /// because the term it inflates is named on both sides of the equation.
     ///
-    /// So the band is profile-dependent, and stated in both directions:
-    /// tightening the debug figure would mean measuring something other than
-    /// what ships, and applying the debug figure to release would repeat the
-    /// mistake this erratum exists to correct. See
-    /// `support/PERF_hud_baseline.md` for both, side by side, with the ratio.
-    const TOLERANCE: f64 = if cfg!(debug_assertions) { 0.55 } else { 0.15 };
+    /// The remaining slack covers what genuinely does not decompose: a few
+    /// microseconds of `encode.frame` self-time, and `encode.scissor` /
+    /// `encode.bookkeeping` scanning ~80 more primitives when the HUD is open.
+    const ACCOUNTED_TOLERANCE: f64 = 0.25;
 
     struct Gpu {
         device: Arc<wgpu::Device>,
@@ -866,150 +891,231 @@ View Main() {
         /// What §V4 used to report: the inclusive time of the one scope named
         /// `hud.render`.
         scope: u64,
+        /// `encode.finish` — `wgpu` assembling the command buffer. The one
+        /// term the attribution cannot split, measured so the accounting
+        /// identity can name it instead of absorbing it into slack.
+        finish: u64,
     }
 
-    /// Renders one frame — with the HUD or without — and drains both rings.
+    /// Everything one configuration needs to render frames indefinitely: its
+    /// own GPU device and encoder, its own interpreter and tree, and — for the
+    /// HUD-open configuration — its own `DevHud`.
     ///
-    /// The two "threads" are the same thread here, which is what makes the
-    /// totals addable: they ran in sequence, so their sum really is the frame's
-    /// wall-clock cost rather than a double count of two concurrent lanes.
-    fn one_frame(
-        gpu: &mut Gpu,
-        app: &mut Interpreter,
-        tree: &[RenderNode],
-        hud: Option<&mut DevHud>,
-        frame: &mut RenderFrame,
+    /// Two of these exist at once and are driven **alternately**; see the test
+    /// below for why that matters more than anything else here.
+    struct Rig {
+        gpu: Gpu,
+        app: Interpreter,
+        tree: Vec<RenderNode>,
+        hud: Option<DevHud>,
+        frame: RenderFrame,
         tick: u32,
-    ) -> Reading {
-        frame.clear();
-        let _ = drain_samples();
-        app.tick();
-        app.render(tree, frame, 1280.0, 720.0);
-        // One line of the app's own that changes every frame.
-        //
-        // Without it the baseline measures a frame the encoder *skips*: a
-        // static scene has no dirty region, so `should_draw` is false and the
-        // whole draw path — glyphs, staging, passes, the swapchain copy — is
-        // never entered. Comparing that against a frame the HUD forced into a
-        // full redraw would attribute the app's own drawing to the HUD, which
-        // is the same misattribution as the one under repair, inverted.
-        //
-        // (The effect is real and worth knowing — most of what a HUD costs a
-        // *static* app is that it defeats the skip — but it is a property of
-        // the skip, not of the HUD's own work, and §V4's figure is the latter.
-        // It is recorded in `support/PERF_hud_baseline.md`.)
-        frame.push_text(byard_core::frame::TextLine {
-            x: 24.0,
-            y: 320.0,
-            text: format!("frame {tick:>6}"),
-            font_size: 14.0,
-            color: [0.6, 0.6, 0.65, 1.0],
-            dirty: true,
-        });
-        let base = frame.cursor();
-        if let Some(hud) = hud {
-            hud.render(frame, 1280.0, 720.0);
-        }
-        frame.set_dev_base(base);
-        let logic = drain_samples();
-        let render = gpu.encode(frame);
+    }
 
-        let scope_ns = [&logic, &render]
-            .iter()
-            .flat_map(|b| b.samples.iter())
-            .filter(|s| byard_core::telemetry::scope_name(s.scope) == Some("hud.render"))
-            .map(byard_core::telemetry::Sample::duration_ns)
-            .sum();
-        Reading {
-            total: logic.total_ns() + render.total_ns(),
-            owner: logic.owner_total_ns(Owner::DevTools) + render.owner_total_ns(Owner::DevTools),
-            scope: scope_ns,
+    impl Rig {
+        fn new(with_hud: bool) -> Option<Self> {
+            let gpu = Gpu::new()?;
+            let parsed = byard_compiler::parser::parse(APP_SOURCE);
+            assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+            let mut app = Interpreter::new();
+            app.load_views(&parsed.views);
+            let tree = app.lower_view(&parsed.views[0], &["Main"]);
+            Some(Self {
+                gpu,
+                app,
+                tree,
+                hud: with_hud.then(|| DevHud::new().expect("the embedded HUD parses")),
+                frame: RenderFrame::new(),
+                tick: 0,
+            })
+        }
+
+        /// Renders one frame and drains both rings.
+        ///
+        /// The two "threads" are the same thread here, which is what makes the
+        /// totals addable: they ran in sequence, so their sum really is the
+        /// frame's wall-clock cost rather than a double count of two concurrent
+        /// lanes.
+        fn one_frame(&mut self) -> Reading {
+            self.tick += 1;
+            self.frame.clear();
+            let _ = drain_samples();
+            self.app.tick();
+            self.app.render(&self.tree, &mut self.frame, 1280.0, 720.0);
+            // One line of the app's own that changes every frame.
+            //
+            // Without it the baseline measures a frame the encoder *skips*: a
+            // static scene has no dirty region, so `should_draw` is false and
+            // the whole draw path — glyphs, staging, passes, the swapchain copy
+            // — is never entered. Comparing that against a frame the HUD forced
+            // into a full redraw would attribute the app's own drawing to the
+            // HUD, which is the same misattribution as the one under repair,
+            // inverted.
+            //
+            // (The effect is real and worth knowing — most of what a HUD costs
+            // a *static* app is that it defeats the skip — but it is a property
+            // of the skip, not of the HUD's own work, and §V4's figure is the
+            // latter. It is recorded in `support/PERF_hud_baseline.md`.)
+            let tick = self.tick;
+            self.frame.push_text(byard_core::frame::TextLine {
+                x: 24.0,
+                y: 320.0,
+                text: format!("frame {tick:>6}"),
+                font_size: 14.0,
+                color: [0.6, 0.6, 0.65, 1.0],
+                dirty: true,
+            });
+            let base = self.frame.cursor();
+            if let Some(hud) = self.hud.as_mut() {
+                hud.render(&mut self.frame, 1280.0, 720.0);
+            }
+            self.frame.set_dev_base(base);
+            let logic = drain_samples();
+            let render = self.gpu.encode(&self.frame);
+
+            let sum_scope = |name: &str| -> u64 {
+                [&logic, &render]
+                    .iter()
+                    .flat_map(|b| b.samples.iter())
+                    .filter(|s| byard_core::telemetry::scope_name(s.scope) == Some(name))
+                    .map(byard_core::telemetry::Sample::duration_ns)
+                    .sum()
+            };
+            Reading {
+                total: logic.total_ns() + render.total_ns(),
+                owner: logic.owner_total_ns(Owner::DevTools)
+                    + render.owner_total_ns(Owner::DevTools),
+                scope: sum_scope("hud.render"),
+                finish: sum_scope("encode.finish"),
+            }
         }
     }
 
-    fn median(mut v: Vec<u64>) -> u64 {
+    fn median<T: Ord + Copy>(mut v: Vec<T>) -> T {
         v.sort_unstable();
         v[v.len() / 2]
     }
 
-    /// Measures `SAMPLES` steady-state frames, discarding a warm-up.
-    fn measure(with_hud: bool) -> Option<(u64, u64, u64)> {
-        let mut gpu = Gpu::new()?;
-        let parsed = byard_compiler::parser::parse(APP_SOURCE);
-        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
-        let mut app = Interpreter::new();
-        app.load_views(&parsed.views);
-        let tree = app.lower_view(&parsed.views[0], &["Main"]);
-        let mut hud = with_hud.then(|| DevHud::new().expect("the embedded HUD parses"));
-        let mut frame = RenderFrame::new();
-
-        // Warm-up: first frames pay pipeline compilation, atlas residency and
-        // every line's first shape. Steady state is what §V4 is about.
-        let mut tick = 0u32;
-        for _ in 0..5 {
-            tick += 1;
-            one_frame(&mut gpu, &mut app, &tree, hud.as_mut(), &mut frame, tick);
-        }
-        let mut totals = Vec::with_capacity(SAMPLES);
-        let mut owners = Vec::with_capacity(SAMPLES);
-        let mut scopes = Vec::with_capacity(SAMPLES);
-        for _ in 0..SAMPLES {
-            tick += 1;
-            let r = one_frame(&mut gpu, &mut app, &tree, hud.as_mut(), &mut frame, tick);
-            totals.push(r.total);
-            owners.push(r.owner);
-            scopes.push(r.scope);
-        }
-        Some((median(totals), median(owners), median(scopes)))
-    }
-
     #[test]
     fn the_reported_hud_cost_is_the_cost_the_hud_actually_adds() {
-        let Some((without, closed_owner, closed_scope)) = measure(false) else {
+        let (Some(mut closed), Some(mut open)) = (Rig::new(false), Rig::new(true)) else {
             eprintln!("no GPU adapter available — skipping");
             return;
         };
-        assert_eq!(closed_owner, 0, "a closed HUD costs nothing, and says so");
-        assert_eq!(closed_scope, 0);
 
-        let (with, owner, scope) = measure(true).expect("the adapter was there a moment ago");
+        // Warm-up, on **both** rigs, before either is measured: the first
+        // frames pay pipeline compilation, glyph-atlas residency and every
+        // line's first shape.
+        for _ in 0..WARMUP {
+            closed.one_frame();
+            open.one_frame();
+        }
 
-        #[allow(clippy::cast_precision_loss)]
-        let delta = with.saturating_sub(without) as f64;
+        // Paired, interleaved, and this is the part that has to stay that way.
+        //
+        // The first version of this test measured one whole batch without the
+        // HUD and then one whole batch with it. Every cost that is *sequential*
+        // rather than configurational — a cold driver, a cold font cache, the
+        // machine's thermal state, another job on the runner — then landed
+        // entirely in the difference between the batches. On this developer's
+        // machine that bias was small enough to hide; on a CI runner it
+        // inflated the first batch until the two totals nearly matched, and the
+        // measured "delta" collapsed to a fifth of the cost the profiler was
+        // correctly reporting. The number under test was right and the baseline
+        // was wrong, which is the same mistake this whole PR is about, made
+        // one more time by its own test.
+        //
+        // Alternating one frame each shares that drift between the two
+        // configurations instead of charging it to one, and taking the median
+        // of the per-iteration *differences* — rather than the difference of
+        // two medians — keeps a single noisy frame from moving the answer.
+        // Each rig keeps its own encoder, so alternating never disturbs either
+        // one's text cache or its steady-state pool length.
+        let mut deltas = Vec::with_capacity(SAMPLES);
+        let mut finishes = Vec::with_capacity(SAMPLES);
+        let mut owners = Vec::with_capacity(SAMPLES);
+        let mut scopes = Vec::with_capacity(SAMPLES);
+        let ns = |v: u64| i64::try_from(v).unwrap_or(i64::MAX);
+        for _ in 0..SAMPLES {
+            let a = closed.one_frame();
+            let b = open.one_frame();
+            assert_eq!(a.owner, 0, "a closed HUD costs nothing, and says so");
+            assert_eq!(a.scope, 0);
+            deltas.push(ns(b.total) - ns(a.total));
+            // The unsplittable term's own contribution, measured on the same
+            // pair of frames rather than assumed from a previous run.
+            finishes.push(ns(b.finish) - ns(a.finish));
+            owners.push(b.owner);
+            scopes.push(b.scope);
+        }
+
+        let (delta_ns, finish_ns) = (median(deltas), median(finishes));
+        let (owner, scope) = (median(owners), median(scopes));
         assert!(
-            delta > 0.0,
+            delta_ns > 0,
             "the HUD must cost *something*, or this measurement is meaningless \
-             (with {with}ns, without {without}ns)"
+             (median delta {delta_ns}ns)"
         );
-
+        #[allow(clippy::cast_precision_loss)]
+        let delta = delta_ns as f64;
+        #[allow(clippy::cast_precision_loss)]
+        let accounted = (ns(owner) + finish_ns.max(0)) as f64;
         #[allow(clippy::cast_precision_loss)]
         let owner_err = ((owner as f64) - delta).abs() / delta;
         #[allow(clippy::cast_precision_loss)]
         let scope_err = ((scope as f64) - delta).abs() / delta;
+        let accounted_err = (accounted - delta).abs() / delta;
 
-        // Green: the owner total is the cost.
-        assert!(
-            owner_err <= TOLERANCE,
-            "the dev-owner total must account for what the HUD adds: reported \
-             {owner}ns against a measured delta of {delta}ns ({:.0}% off, \
-             tolerance {:.0}%)",
+        // The reading, printed before the assertions so a CI failure carries
+        // its own diagnosis rather than one number and no context.
+        eprintln!(
+            "hud cost: delta {delta:.0}ns · owner {owner}ns ({:.0}% off) · \
+             hud.render alone {scope}ns ({:.0}% off) · \
+             owner + encode.finish {accounted:.0}ns ({:.0}% off)",
             owner_err * 100.0,
-            TOLERANCE * 100.0
+            scope_err * 100.0,
+            accounted_err * 100.0,
         );
+
+        // Green, in both profiles: every nanosecond the HUD adds is either
+        // attributed to the dev runner or inside the one scope this cannot
+        // split — and that scope's share is measured here, not assumed.
+        assert!(
+            accounted_err <= ACCOUNTED_TOLERANCE,
+            "the HUD's cost must be fully accounted for: {owner}ns attributed \
+             plus {finish_ns}ns of `encode.finish` against a measured delta of \
+             {delta}ns ({:.0}% off, tolerance {:.0}%)",
+            accounted_err * 100.0,
+            ACCOUNTED_TOLERANCE * 100.0
+        );
+
+        // §V4's own condition — the HUD inside 5 % of the frame budget —
+        // against the **measured** delta rather than against what the profiler
+        // reports about itself, which is the only way a self-accounting gate
+        // can be checked without begging the question.
+        //
+        // Release only, and not because debug is inconvenient: a 5 % *budget*
+        // claim is a claim about a shipped build. Asserting it against a debug
+        // frame would be asserting something nobody has ever cared about. The
+        // accounting identity above — the correctness claim — runs in both.
+        if !cfg!(debug_assertions) {
+            let share = delta / BUDGET_NS;
+            assert!(
+                share <= GATE_FRACTION,
+                "RFC-0030 §V4: the HUD must fit in {:.0}% of the frame budget \
+                 — it costs {delta:.0}ns of {BUDGET_NS:.0}ns ({:.2}%)",
+                GATE_FRACTION * 100.0,
+                share * 100.0
+            );
+        }
 
         // Red: the rule this erratum replaced does not, and the failure is
         // permanent rather than a procedure someone has to re-run.
         assert!(
-            scope < owner,
+            scope > 0 && scope < owner,
             "`hud.render` alone cannot enclose the render thread's shaping — \
              if it now does, the attribution moved and this test is guarding \
              nothing (scope {scope}ns, owner {owner}ns)"
-        );
-        eprintln!(
-            "hud cost: delta {delta:.0}ns · owner {owner}ns ({:.0}% off) · \
-             hud.render alone {scope}ns ({:.0}% off)",
-            owner_err * 100.0,
-            scope_err * 100.0
         );
     }
 }

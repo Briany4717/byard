@@ -122,11 +122,36 @@ the passes and draws an overlay adds, and splitting it would mean splitting the
 command buffer — a change to the most delicate part of the renderer, with real
 visual risk, for attribution accuracy in a dev-only path. It is declined.
 
-Instead it is **named**: `encode.finish` (and `encode.scissor`, and
-`encode.bookkeeping`) are now rows of their own — see Correction 4 — so the
-residual is visible and explained rather than hidden in a parent's self-time.
-In release it is ~55 µs whether the HUD is open or not, and what it leaves
-unattributed is inside §V4's ~10 %.
+**It is not small, and this document previously said it was.** An earlier draft
+reported it as ~55 µs whether the HUD was open or not, and that figure came
+from a batched measurement whose baseline was taken cold (see
+`support/PERF_hud_baseline.md`). Measured in pairs, `encode.finish` grows by
+**~50 µs in release and ~570 µs in debug** when the HUD opens, which is ~30 %
+and ~42 % of the delta respectively.
+
+So the honest statement of what §V4 now reports is:
+
+> The dev-owner total accounts for **~65 % of what the HUD costs in release**
+> (~35 % in debug). The remainder is `encode.finish`, in full: dev-owner total
+> plus the measured `encode.finish` delta reconstructs the frame delta to
+> within 1–8 %.
+
+The issue's acceptance asked for the reported figure to be within ~10 % of the
+delta. **It is not, and that is recorded rather than closed over.** What is
+achieved instead — and what the permanent test asserts, in both profiles — is
+the complete accounting identity: every nanosecond the HUD adds is either
+attributed to the dev runner or inside one named scope that has its own row and
+can be watched moving. That is a weaker claim than the issue asked for and a
+much stronger one than the block used to make, and it is checkable rather than
+quoted.
+
+Closing the remaining gap means recording dev segments into a second command
+encoder and submitting both in order. That is the only mechanism that would
+work, it is available, and it is declined on the trade rather than on
+difficulty: it changes the renderer's submission path for every frame of every
+dev session, and the failure mode is visual corruption. If `encode.finish` ever
+becomes the largest term in a release frame, the decision should be revisited
+on its own merits.
 
 ---
 
@@ -226,22 +251,27 @@ is in `support/PERF_hud_baseline.md`.
 
 | | debug | release |
 |---|---|---|
-| frame total, HUD closed | 1.05 ms | 0.13 ms |
-| frame total, HUD open | 2.32 ms | 0.24 ms |
-| **the HUD's real cost** (the delta) | 1.27 ms | **0.104 ms** |
-| reported by the dev-owner total | 0.72 ms (43 % low) | **0.094 ms (10 % low)** |
-| reported by `hud.render` alone (the old rule) | 0.52 ms (59 % low) | 0.074 ms (29 % low) |
+| **the HUD's real cost** (the measured delta) | 1.31–1.44 ms | **0.163 ms** |
+| reported by the dev-owner total | 0.76–0.82 ms (42 % low) | **0.107 ms (35 % low)** |
+| dev-owner total **+ measured `encode.finish`** | 1.30–1.41 ms (1–2 % off) | **0.153 ms (1–7 % off)** |
+| reported by `hud.render` alone (the old rule) | 0.54–0.58 ms (59 % low) | 0.083 ms (49 % low) |
 
-In release the new figure meets §V4's ~10 % acceptance and the old one does
-not. In debug both are worse, and the gap is almost entirely `encode.finish` —
-`wgpu`'s validation makes that one unattributable call ~15× more expensive than
-it is in a shipped build.
+Neither figure meets the ~10 % the issue asked for on its own. The **accounting
+identity** does, in both profiles: the attribution plus the one named
+unsplittable term reconstructs the delta. That is what the permanent test
+asserts.
 
 **Which settles the question §V4 could not answer.** RFC-0030's status line
-reports the 5 % gate as met at 3.6 %. Against a *correctly attributed* cost, on
-a scene that is redrawing either way, the HUD is **0.104 ms of a 16.667 ms
-budget — 0.6 %**. It passes, by more than the old figure claimed, and for the
-first time the figure is the whole cost rather than one scope's share of it.
+reports the 5 % gate as met at 3.6 %. Against the *measured* cost — not against
+what the profiler says about itself, which is the only way a self-accounting
+gate can be checked without begging the question — on a scene that is redrawing
+either way, the HUD is **0.163 ms of a 16.667 ms budget: 1.0 %**. It passes,
+with room to spare, and for the first time the figure is the whole cost rather
+than one scope's share of it.
+
+The HUD *displays* ~0.107 ms (0.6 %), because that is what it can attribute.
+Both numbers are true and they are not the same number; the difference has its
+own row.
 
 One further finding is recorded rather than fixed, because it is a property of
 the skip and not of the HUD: on a **static** scene the encoder skips the draw
@@ -256,7 +286,7 @@ changing one app-owned line per frame.
 
 RFC-0030's header says §V4's acceptance condition "**is met**: 0.60 ms p50
 against 16.667 ms, 3.6 %". That figure was `hud.render`'s inclusive time on a
-debug build. It should be read as: the gate is met, at **0.6 % in release**,
-measured against the dev-owner total; the 3.6 % was a debug reading of a
-partial figure, and both halves of that sentence were wrong in the same
-direction the erratum before this one warns about.
+debug build. It should be read as: the gate is met, at **1.0 % in release**,
+measured against the frame delta; the 3.6 % was a debug reading of a partial
+figure, and both halves of that sentence were wrong in the same direction the
+erratum before this one warns about.

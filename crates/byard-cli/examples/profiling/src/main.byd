@@ -244,8 +244,11 @@
 //   L. IT REPORTS ITS OWN COST, AND THE FIGURE IS NOW THE WHOLE OF IT. The
 //      last line reads `hud cost N ms (excluded)`, and it turns red if that
 //      ever exceeds 5% of the budget — §V4's bar. It should read grey: on this
-//      reference machine the HUD costs ~0.10ms of 16.7ms in a release build,
-//      or 0.6%.
+//      reference machine it reads ~0.11ms of 16.7ms in a release build, or
+//      0.7%. The HUD's *true* cost is ~0.16ms (1.0%) — the difference is
+//      `encode.finish`, one `wgpu` call per frame that cannot be split by
+//      owner and so is left with the app, in a row of its own where you can
+//      watch it move.
 //
 //      That number used to be the inclusive time of the `hud.render` scope,
 //      and it under-reported by several times over. The HUD runs a second

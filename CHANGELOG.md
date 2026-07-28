@@ -82,10 +82,11 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   an ordinary z-layer with an ordinary backdrop blur and an ordinary `Canvas`
   sparkline. It is a permanent, self-executing test that the framework can
   render a non-trivial animated overlay inside its own frame budget, and it
-  passes: 0.104 ms against a 16.667 ms budget — 0.6 %, well inside RFC-0030
-  §V4's 5 % bar. It displays and colours its own cost, so the reading is
-  checkable rather than quoted, and it is a row in the `--profile` block for an
-  out-of-band confirmation.
+  passes: 0.163 ms against a 16.667 ms budget — 1.0 %, well inside RFC-0030
+  §V4's 5 % bar, measured against the frame delta rather than against what the
+  profiler says about itself. It displays and colours its own cost (0.107 ms of
+  that 0.163 ms — the rest is `encode.finish`, which has its own row), so the
+  reading is checkable rather than quoted.
 
 - **A reload flash (RFC-0030 §V6).** A 2 px inset border, green for a reactive
   reload and amber for one that waited behind the gesture gate. Never suppressed

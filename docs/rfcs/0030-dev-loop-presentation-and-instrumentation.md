@@ -15,8 +15,11 @@
   [`0020-erratum-canvas-shape-generators.md`](0020-erratum-canvas-shape-generators.md)
   (a `Canvas` body could not generate shapes from data).
   §V4's acceptance condition — the HUD ≤ 5 % of the frame budget — **is met**,
-  at **0.6 % in release** (0.104 ms against 16.667 ms), measured against the
-  dev-owner total across both threads. Two earlier figures are superseded: ~12 %
+  at **1.0 % in release** (0.163 ms against 16.667 ms), measured against the
+  frame delta rather than against what the profiler reports about itself. The
+  dev-owner total it displays covers 0.107 ms of that; the rest is
+  `encode.finish`, which is not separable per owner and has its own row. Two
+  earlier figures are superseded: ~12 %
   was taken on an occluded window where `encode.frame` never ran (corrected in
   `support/DESICIONS.md`), and 3.6 % was `hud.render`'s inclusive time on a
   **debug** build — a partial figure from the wrong profile. Both, and the

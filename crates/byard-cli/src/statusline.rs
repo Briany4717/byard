@@ -556,6 +556,10 @@ pub struct FrameInputs<'a> {
     pub reload_pending: bool,
     /// Whether the device can time GPU passes (RFC-0013 **P5**).
     pub gpu_available: bool,
+    /// How many text lines the encoder re-shaped for this frame
+    /// (`Engine::last_text_reshapes`) — read on the `encode.glyphs` row of the
+    /// expanded block rather than inferred from its duration.
+    pub text_reshapes: usize,
 }
 
 /// The `byard dev` statusline: owns the ring buffers, decides when to repaint,
@@ -611,6 +615,8 @@ struct LastFrame {
     render: SampleBlock,
     frame_ns: u64,
     gpu_available: bool,
+    text_reshapes: usize,
+    text_lines: usize,
     atlas: byard_core::atlas::layout::path_counters::Counts,
 }
 
@@ -716,6 +722,7 @@ impl StatusLine {
             reloads,
             reload_pending,
             gpu_available,
+            text_reshapes,
         } = f;
         self.fps_frames = self.fps_frames.saturating_add(1);
 
@@ -768,6 +775,8 @@ impl StatusLine {
                 render: render.clone(),
                 frame_ns,
                 gpu_available,
+                text_reshapes,
+                text_lines: census.texts,
                 atlas,
             };
         }
@@ -798,6 +807,12 @@ impl StatusLine {
                     crate::telemetry_overlay::ProfileContext {
                         budget_ns: self.budget_ns,
                         frame_ns: self.last.frame_ns,
+                        // The same `work` the one-line form charts, so the two
+                        // displays cannot disagree about whether this frame was
+                        // the engine's fault.
+                        work_ns: self.fields.work_ns,
+                        text_reshapes: self.last.text_reshapes,
+                        text_lines: self.last.text_lines,
                         gpu_available: self.last.gpu_available,
                         atlas: self.last.atlas,
                     },
@@ -864,19 +879,29 @@ pub fn idle_ns(logic: &SampleBlock, render: &SampleBlock) -> u64 {
 /// path is the honest single figure: it moves when the interpreter gets slower
 /// and when the encoder does, and it never claims more work than the frame
 /// contained.
+///
+/// **App-owned only** (RFC-0030 §V4 / the self-accounting erratum). This is the
+/// headline number a developer optimises their app against, so it must not move
+/// when they open the HUD: `work` climbing by two milliseconds the moment you
+/// ask to see it is the observer effect reported as an app regression. The dev
+/// runner's own cost is a separate, displayed figure — never a silent addend
+/// here.
 #[must_use]
 pub fn work_ns(logic: &SampleBlock, render: &SampleBlock, idle_ns: u64) -> u64 {
-    logic
-        .total_ns()
-        .max(render.total_ns().saturating_sub(idle_ns))
+    let app = |b: &SampleBlock| b.owner_total_ns(byard_core::telemetry::Owner::App);
+    app(logic).max(app(render).saturating_sub(idle_ns))
 }
 
-/// Total inclusive time of every depth-0 sample naming `scope`.
+/// Total inclusive time of every depth-0, app-owned sample naming `scope`.
 fn sum_scope(block: &SampleBlock, scope: &str) -> u64 {
     block
         .samples
         .iter()
-        .filter(|s| s.depth() == 0 && scope_name(s.scope) == Some(scope))
+        .filter(|s| {
+            s.depth() == 0
+                && s.owner() == byard_core::telemetry::Owner::App
+                && scope_name(s.scope) == Some(scope)
+        })
         .map(byard_core::telemetry::Sample::duration_ns)
         .sum()
 }
@@ -1190,6 +1215,7 @@ three",
                 reloads: 0,
                 reload_pending: false,
                 gpu_available: true,
+                text_reshapes: 0,
             });
         }
         let spark = &s.frames[s.frames.len() - SPARK_MAX..];
@@ -1265,6 +1291,7 @@ three",
                 reloads: 0,
                 reload_pending: false,
                 gpu_available: true,
+                text_reshapes: 0,
             });
         };
         for _ in 0..10 {
@@ -1298,6 +1325,7 @@ three",
                 reloads: 0,
                 reload_pending: false,
                 gpu_available: true,
+                text_reshapes: 0,
             });
         }
         assert_eq!((s.fields.retained, s.fields.window), (0, 0));
@@ -1330,6 +1358,7 @@ three",
             reloads: 0,
             reload_pending: false,
             gpu_available: true,
+            text_reshapes: 0,
         });
         assert_eq!(s.fields.idle_ns, 13_500_000);
         assert_eq!(s.fields.work_ns, 3_400_000);

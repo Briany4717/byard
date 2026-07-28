@@ -620,6 +620,13 @@ impl ByldRuntime {
     /// Both are dev-only overlays; neither may change what the app's own
     /// measurement says about it (INV-24).
     fn render_dev_surfaces(&mut self, frame: &mut RenderFrame, w: f32, h: f32, elapsed: u32) {
+        // Where the app's primitives end and the dev runner's begin, recorded
+        // unconditionally — including on frames that emit no dev surface at
+        // all, where it resolves to "the dev range is empty" rather than to
+        // "unknown". The render thread reads it to charge the shaping of these
+        // lines to the profiler rather than to the app (RFC-0030 §V4).
+        let dev_base = frame.cursor();
+
         if self.hud_visible.load(Ordering::Relaxed) {
             // Captured *before* the HUD renders: the HUD runs its own
             // `LayoutAtlas` on this thread, so its layout activity lands in the
@@ -638,7 +645,14 @@ impl ByldRuntime {
             frame.set_atlas_paths(app_paths);
         }
 
+        // The flash is a dev surface too — it draws over the app and the app
+        // never asked for it — so it sits inside the same partition. It emits
+        // one `DecoratedBox` and no text, so in practice it contributes
+        // nothing; recording it anyway keeps the rule "everything after this
+        // cursor belongs to the dev runner" true without exceptions.
         self.flash.render(frame, w, h, elapsed);
+
+        frame.set_dev_base(dev_base);
     }
 }
 
@@ -940,12 +954,17 @@ impl App {
 ///
 /// # The subtraction, in one place
 ///
-/// `hud.render` is a depth-0 sibling of the app's scopes on the logic thread's
-/// ring, so it does not inflate `interp.render` — but it *is* part of that
-/// thread's total, and therefore of `work`. Every figure the HUD displays is
-/// computed net of it here, and the subtracted amount is shipped alongside so
-/// the HUD can print it. A HUD that hides its own overhead is worse than no
-/// HUD; one that merely claims to subtract it is not much better.
+/// The HUD's cost is **not** the inclusive time of the `hud.render` scope. That
+/// scope bounds the HUD's work on the logic thread and cannot bound its work on
+/// the render thread, where its text is shaped — it has been dropped by then.
+/// Reporting it as the HUD's cost under-reported by most of the real figure and
+/// let §V4's own 5 % gate read as comfortably passed.
+///
+/// So the cost is `owner_total_ns(DevTools)` across **both** threads: every
+/// nanosecond any scope spent on the dev runner's behalf, wherever in the scope
+/// forest it landed. And, symmetrically, every figure the HUD publishes about
+/// the *app* is built from `Owner::App` samples only, so the app's rows do not
+/// silently absorb the profiler's second interpreter.
 ///
 /// The reading is one frame behind, which is what §V4 specifies: the cost of
 /// drawing the HUD is not known until it has been drawn.
@@ -956,7 +975,9 @@ fn hud_reading(
     engine: &Engine,
     frame_ns: u64,
 ) -> crate::hud::HudTelemetry {
-    let hud_cost_ns = scope_total(logic, "hud.render");
+    use byard_core::telemetry::Owner;
+    let hud_cost_ns =
+        logic.owner_total_ns(Owner::DevTools) + render.owner_total_ns(Owner::DevTools);
     let idle_ns = crate::statusline::idle_ns(logic, render);
     let census = engine.latest_census();
     let (retained, window, fps, spark) = statusline.hud_fields();
@@ -964,8 +985,10 @@ fn hud_reading(
         fps,
         frame_ns,
         budget_ns: statusline.budget_ns(),
-        work_ns: crate::statusline::work_ns(logic, render, idle_ns).saturating_sub(hud_cost_ns),
-        interp_ns: scope_total(logic, "interp.render").saturating_sub(hud_cost_ns),
+        // No `saturating_sub` anywhere below: `work_ns` and the per-scope
+        // totals are already app-only, because the samples say so.
+        work_ns: crate::statusline::work_ns(logic, render, idle_ns),
+        interp_ns: scope_total(logic, "interp.render"),
         layout_ns: scope_total(logic, "layout.taffy"),
         encode_ns: scope_total(render, "encode.frame"),
         gpu_ns: render.sum_by_kind(byard_core::telemetry::ScopeKind::Gpu),
@@ -979,12 +1002,19 @@ fn hud_reading(
     }
 }
 
-/// Total inclusive time of every depth-0 sample named `scope`.
+/// Total inclusive time of every depth-0, **app-owned** sample named `scope`.
+///
+/// The owner filter is what stops the HUD's own `interp.render` from being
+/// added to the app's when both ran on this thread this frame (RFC-0030 §V4).
 fn scope_total(block: &byard_core::telemetry::SampleBlock, scope: &str) -> u64 {
     block
         .samples
         .iter()
-        .filter(|s| s.depth() == 0 && byard_core::telemetry::scope_name(s.scope) == Some(scope))
+        .filter(|s| {
+            s.depth() == 0
+                && s.owner() == byard_core::telemetry::Owner::App
+                && byard_core::telemetry::scope_name(s.scope) == Some(scope)
+        })
         .map(byard_core::telemetry::Sample::duration_ns)
         .sum()
 }
@@ -1289,6 +1319,7 @@ impl PlatformHost for App {
                     reloads: self.reloads.load(Ordering::Relaxed),
                     reload_pending: self.reload_pending.load(Ordering::Relaxed),
                     gpu_available: e.gpu_timing_available(),
+                    text_reshapes: e.last_text_reshapes(),
                 });
             }
 

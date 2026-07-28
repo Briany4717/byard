@@ -713,6 +713,13 @@ impl Engine {
             })
     }
 
+    /// How many text lines the last encoded frame re-shaped — see
+    /// [`crate::encoder::EncoderSubsystem::last_text_reshapes`].
+    #[must_use]
+    pub const fn last_text_reshapes(&self) -> usize {
+        self.encoder.last_text_reshapes()
+    }
+
     /// Whether GPU pass timing is active for this engine (RFC-0013 **P5**) —
     /// see [`crate::encoder::EncoderSubsystem::gpu_timing_available`].
     #[must_use]

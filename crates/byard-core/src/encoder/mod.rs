@@ -740,6 +740,18 @@ impl EncoderSubsystem {
         self.gpu_timer.is_some()
     }
 
+    /// How many text lines the last encoded frame actually re-shaped
+    /// (RFC-0032's win, made readable).
+    ///
+    /// Glyph shaping is the largest per-primitive term in the frame, and the
+    /// only honest answer to "did the cache help this frame" is a count of what
+    /// it skipped. Timing it says how long the frame took, which is a different
+    /// question with a dozen other inputs.
+    #[must_use]
+    pub const fn last_text_reshapes(&self) -> usize {
+        self.text_pipeline.reshaped_lines()
+    }
+
     /// Submits a command buffer to the GPU queue.
     ///
     /// Thin wrapper around `queue.submit` so that callers outside this module
@@ -895,6 +907,9 @@ impl EncoderSubsystem {
             FrameClips::default(),
             FrameDirty::default(),
             &[],
+            // This convenience path has no `RenderFrame` and therefore no dev
+            // surfaces: every primitive in it is the caller's own.
+            None,
         )
     }
 
@@ -920,6 +935,13 @@ impl EncoderSubsystem {
         clips: FrameClips<'_>,
         dirty: FrameDirty<'_>,
         layers: &[crate::frame::LayerMark],
+        // Where the dev runner's own surfaces begin in every pool
+        // (`RenderFrame::dev_base`); `None` for a frame that carries none,
+        // which is every frame of a shipped app. Passed explicitly rather than
+        // folded into one of the bundles above because it is the one thing
+        // here that answers a question about *ownership* rather than about
+        // geometry (RFC-0030 erratum "self-accounting").
+        dev_base: Option<LayerMark>,
     ) -> Result<wgpu::CommandBuffer, ByardError> {
         // RFC-0030 §I1: the render thread's own frame cost — pipeline
         // preparation, the scissor decision, glyph shaping and command
@@ -992,9 +1014,21 @@ impl EncoderSubsystem {
 
         // Only meaningful on a non-full-redraw frame — every primitive is
         // drawn regardless of its dirty bit when `full_redraw` is true.
+        //
+        // RFC-0030 §I1 sub-scope. This is a linear scan of **every** pool,
+        // unioning the bounds of everything dirty with where it was last
+        // frame, and it was previously invisible: it lives directly in
+        // `encode.frame`, so its cost showed up only as self-time that no row
+        // explained. §I1's own standard — a breakdown whose parts add up to
+        // its parent — was not being met, and the gap was large enough to
+        // matter (it is the second-largest term in the frame on a text-heavy
+        // scene). Naming it is what makes "the frame got slower because there
+        // are more primitives to *consider*, not more to draw" a readable
+        // sentence rather than an inference.
         let scissor = if full_redraw {
             None
         } else {
+            crate::profile_scope!("encode.scissor");
             compute_scissor(
                 &ScissorInputs {
                     texts,
@@ -1043,6 +1077,25 @@ impl EncoderSubsystem {
         };
         let segments = compute_segments(layers, backdrop_marks, &totals);
 
+        // ── Who owns what, for the rest of this frame ─────────────────────────
+        //
+        // Dev surfaces are always emitted last and always open their own
+        // z-layer, so in every pool they are a *suffix* — and so, therefore,
+        // are the segments that draw them. Two indices are all the attribution
+        // below needs, and both degrade to "there are none" when the frame
+        // carries no dev surfaces.
+        let dev_text_start = dev_base.map_or(texts.len(), |b| {
+            usize::try_from(b.text)
+                .unwrap_or(usize::MAX)
+                .min(texts.len())
+        });
+        let dev_segment_start = dev_base.map_or(segments.len(), |b| {
+            segments
+                .iter()
+                .position(|s| segment_belongs_to(s, b))
+                .unwrap_or(segments.len())
+        });
+
         // ── Text prepare (before the render pass) ─────────────────────────────
         if should_draw {
             // RFC-0030 §I1 sub-scope: glyph shaping, atlas residency and the
@@ -1068,6 +1121,7 @@ impl EncoderSubsystem {
                 clips.text,
                 clips.text_wrap,
                 &text_ranges,
+                dev_text_start,
             )?;
         }
         self.viewport_dirty = false;
@@ -1124,6 +1178,7 @@ impl EncoderSubsystem {
                     clips,
                 },
                 &segments,
+                dev_segment_start,
                 &mut backdrop_draw,
                 self.gpu_timer.as_ref(),
                 &mut self.arena,
@@ -1165,17 +1220,31 @@ impl EncoderSubsystem {
             },
         );
 
-        update_frame_bookkeeping(
-            self,
-            instances,
-            texts,
-            decorated,
-            textures,
-            canvas_shapes,
-            ripples,
-            backdrops,
-        );
+        // RFC-0030 §I1 sub-scope. Recording every primitive's bounds for next
+        // frame's scissor is another whole-pool linear pass that used to sit
+        // in `encode.frame`'s unexplained self-time, next to `encode.scissor`
+        // — the two are a matched pair, one reading last frame's record and
+        // one writing this frame's, and neither was visible.
+        {
+            crate::profile_scope!("encode.bookkeeping");
+            update_frame_bookkeeping(
+                self,
+                instances,
+                texts,
+                decorated,
+                textures,
+                canvas_shapes,
+                ripples,
+                backdrops,
+            );
+        }
 
+        // RFC-0030 §I1 sub-scope. `finish` is where `wgpu` validates and
+        // assembles the whole command buffer, so it scales with how many
+        // passes and draws the frame recorded — which is precisely what an
+        // overlay with its own layer and its own blurred pane adds. It was the
+        // single largest unexplained term in `encode.frame`.
+        crate::profile_scope!("encode.finish");
         Ok(encoder.finish())
     }
 
@@ -1222,6 +1291,7 @@ impl EncoderSubsystem {
                 full: frame.wants_full_redraw(),
             },
             frame.layer_marks(),
+            frame.dev_base(),
         )?;
         self.last_relay_version = frame.version();
         Ok(cmd)
@@ -1390,9 +1460,18 @@ pub(crate) struct FrameStaging {
     backdrops: Vec<backdrop::BackdropRegions>,
     /// Reused conversion buffers, so the per-pipeline instance builds do not
     /// allocate either.
-    decorated_scratch: Vec<decorated_box::DecoratedInstance>,
-    canvas_scratch: Vec<canvas_shape::CanvasShapeInstance>,
-    depth_scratch: Vec<f32>,
+    scratch: StagingScratch,
+}
+
+/// The reusable conversion buffers, grouped so one segment's staging can take
+/// them as a single `&mut` alongside a `&mut` into `FrameStaging::segments` —
+/// which is what lets [`stage_segment`] be a free function shared by the app's
+/// and the dev runner's halves of the staging loop.
+#[derive(Default)]
+pub(crate) struct StagingScratch {
+    decorated: Vec<decorated_box::DecoratedInstance>,
+    canvas: Vec<canvas_shape::CanvasShapeInstance>,
+    depth: Vec<f32>,
 }
 
 /// One pass segment's staged regions.
@@ -1558,6 +1637,85 @@ struct SegmentRanges {
     backdrop_after: Option<usize>,
 }
 
+/// The scope charged with a dev surface's own render pass, interned once.
+///
+/// Cached exactly as [`profile_scope!`](crate::profile_scope) caches its own:
+/// the scope registry is a mutex, and a per-segment loop is not the place to
+/// lock it.
+static DEV_SEGMENT_SCOPE: std::sync::OnceLock<crate::telemetry::ScopeId> =
+    std::sync::OnceLock::new();
+
+/// Appends one pass segment's instance data to the arena (RFC-0033 §G1).
+///
+/// A free function rather than an inlined loop body so the app's segments and
+/// the dev runner's can go through *identical* code under different
+/// attribution. Nothing here knows about owners; the caller opens the
+/// attribution, which is what makes it impossible for the two halves to drift.
+fn stage_segment(
+    seg: &SegmentRanges,
+    out: &mut SegmentStaging,
+    arena: &mut instance_arena::InstanceArena,
+    scratch: &mut StagingScratch,
+    primitives: &DrawPrimitives<'_>,
+    clip_ctx: ClipCtx<'_>,
+) {
+    out.solid = stage_solid_box_instances(
+        arena,
+        &mut scratch.depth,
+        &primitives.instances[seg.solid.clone()],
+        sub_slice(primitives.solid_depths, &seg.solid),
+    );
+    out.decorated = decorated_box::stage(
+        arena,
+        &mut scratch.decorated,
+        &primitives.decorated[seg.decorated.clone()],
+        sub_slice(primitives.decorated_depths, &seg.decorated),
+    );
+    out.ripple = arena.push_vertex(&primitives.ripples[seg.ripple.clone()]);
+    out.canvas = canvas_shape::stage(
+        arena,
+        &mut scratch.canvas,
+        &primitives.canvas_shapes[seg.canvas.clone()],
+        sub_slice(primitives.canvas_depths, &seg.canvas),
+    );
+    out.vector = arena.push_vertex(&primitives.vectors[seg.vector.clone()]);
+    texture_sampler::stage(
+        arena,
+        &mut out.textures,
+        primitives.texture_cache,
+        &primitives.textures[seg.texture.clone()],
+        sub_slice(primitives.texture_depths, &seg.texture),
+        sub_slice(primitives.clips.texture, &seg.texture),
+        clip_ctx,
+    );
+}
+
+/// Whether every primitive this segment draws sits at or after `base` in its
+/// own pool — i.e. whether the segment belongs entirely to the dev runner
+/// (RFC-0030 erratum "self-accounting").
+///
+/// Dev surfaces open their own z-layer (RFC-0017) before emitting anything, so
+/// a segment boundary always falls exactly on `base` and no segment is ever
+/// half one owner's. A frosted pane inside a dev surface splits that layer
+/// further, and both halves still start at or after `base` — which is why this
+/// is a per-pool comparison rather than a layer-index one.
+///
+/// The conservative direction is deliberate: a segment that fails this test is
+/// left with the app. Over-attributing to the dev runner would let a profiler
+/// hide the app's cost inside its own row, which is the failure this whole
+/// erratum exists to remove — in the opposite direction.
+fn segment_belongs_to(seg: &SegmentRanges, base: LayerMark) -> bool {
+    let at_or_after =
+        |start: usize, cursor: u32| start >= usize::try_from(cursor).unwrap_or(usize::MAX);
+    at_or_after(seg.solid.start, base.solid)
+        && at_or_after(seg.decorated.start, base.decorated)
+        && at_or_after(seg.texture.start, base.texture)
+        && at_or_after(seg.vector.start, base.vector)
+        && at_or_after(seg.text.start, base.text)
+        && at_or_after(seg.canvas.start, base.canvas)
+        && at_or_after(seg.ripple.start, base.ripple)
+}
+
 /// Field-wise clamp of a pool-cursor snapshot into `[lo, hi]` — the same
 /// monotonic-degrade contract as the old per-pool range partitioning: a
 /// decreasing or overshooting cursor (a logic-thread bug) collapses to an
@@ -1655,6 +1813,10 @@ fn draw_ui_pass(
     // The pass segmentation (z-layers × backdrop barriers) computed by
     // `encode_frame_with_decorations` — also the text batch partition.
     segments: &[SegmentRanges],
+    // The first segment that belongs to the dev runner; `segments.len()` when
+    // none do. Dev surfaces are a suffix of every pool, so this is a split
+    // point rather than a per-segment predicate.
+    dev_segment_start: usize,
     bd: &mut BackdropDraw<'_>,
     gpu_timer: Option<&GpuTimer>,
     arena: &mut instance_arena::InstanceArena,
@@ -1675,20 +1837,15 @@ fn draw_ui_pass(
         canvas: canvas_pipeline,
         ripple: ripple_pipeline,
     } = *pipelines;
+    // Only what the *recording* half still reads directly. The pools and their
+    // depth slices are consumed by `stage_segment`, which takes `primitives`
+    // whole so the two owner-split staging loops share one body.
     let DrawPrimitives {
-        instances,
-        decorated,
         textures,
         texture_cache,
-        vectors,
         vector_atlas,
-        canvas_shapes,
-        ripples,
-        solid_depths,
-        decorated_depths,
-        texture_depths,
-        canvas_depths,
         clips,
+        ..
     } = *primitives;
     // The base scissor every clipped draw intersects with: the dirty region on
     // an incremental frame, or the whole physical target on a full redraw.
@@ -1732,36 +1889,28 @@ fn draw_ui_pass(
         if let Some((bounds, ..)) = scissor {
             staging.clear_quad = Some(stage_clear_quad(arena, bounds));
         }
-        for (seg, out) in segments.iter().zip(staging.segments.iter_mut()) {
-            out.solid = stage_solid_box_instances(
-                arena,
-                &mut staging.depth_scratch,
-                &instances[seg.solid.clone()],
-                sub_slice(solid_depths, &seg.solid),
-            );
-            out.decorated = decorated_box::stage(
-                arena,
-                &mut staging.decorated_scratch,
-                &decorated[seg.decorated.clone()],
-                sub_slice(decorated_depths, &seg.decorated),
-            );
-            out.ripple = arena.push_vertex(&ripples[seg.ripple.clone()]);
-            out.canvas = canvas_shape::stage(
-                arena,
-                &mut staging.canvas_scratch,
-                &canvas_shapes[seg.canvas.clone()],
-                sub_slice(canvas_depths, &seg.canvas),
-            );
-            out.vector = arena.push_vertex(&vectors[seg.vector.clone()]);
-            texture_sampler::stage(
-                arena,
-                &mut out.textures,
-                texture_cache,
-                &textures[seg.texture.clone()],
-                sub_slice(texture_depths, &seg.texture),
-                sub_slice(clips.texture, &seg.texture),
-                clip_ctx,
-            );
+        // Two halves, split at the dev boundary, running identical code — the
+        // second under `Owner::DevTools`, so a dev overlay's instance staging
+        // is charged to the dev runner instead of to the app's row. The guard
+        // is entered once rather than per segment, and the shared body is a
+        // free function so the two halves cannot drift apart.
+        for (seg, out) in segments
+            .iter()
+            .zip(staging.segments.iter_mut())
+            .take(dev_segment_start)
+        {
+            stage_segment(seg, out, arena, &mut staging.scratch, primitives, clip_ctx);
+        }
+        if dev_segment_start < segments.len() {
+            let _dev = crate::telemetry::attribute_to(crate::telemetry::Owner::DevTools);
+            crate::profile_scope!("encode.buffers.dev");
+            for (seg, out) in segments
+                .iter()
+                .zip(staging.segments.iter_mut())
+                .skip(dev_segment_start)
+            {
+                stage_segment(seg, out, arena, &mut staging.scratch, primitives, clip_ctx);
+            }
         }
         for _ in 0..bd.backdrops.len() {
             let regions = backdrop::reserve(arena);
@@ -1773,6 +1922,17 @@ fn draw_ui_pass(
     let mut pending: Option<(usize, backdrop::PreparedBackdrop)> = None;
     let seg_count = segments.len();
     for (i, seg) in segments.iter().enumerate() {
+        // A dev surface's segment records its own pass — including, for the
+        // HUD, the copy/blur/composite of its frosted pane, which is by far
+        // the largest thing it asks the GPU to do. Charging that to the app
+        // was most of what §V4 was under-reporting after the glyph half was
+        // fixed. The loop body is untouched: only who it is billed to moves.
+        let _dev = (i >= dev_segment_start).then(|| {
+            crate::telemetry::attributed_scope(
+                *DEV_SEGMENT_SCOPE.get_or_init(|| crate::telemetry::scope_id("encode.passes.dev")),
+                crate::telemetry::Owner::DevTools,
+            )
+        });
         let first = i == 0;
         let last = i + 1 == seg_count;
         // Composite prepared between the previous segment and this one; held

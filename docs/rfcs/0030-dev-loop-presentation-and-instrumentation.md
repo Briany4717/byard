@@ -4,17 +4,26 @@
   grammar (§P1–§P4), the statusline (§P5–§P6), the expanded block and the frame
   budget (§V1–§V2), the in-window HUD and the reload flash (§V3–§V4, §V6), trace
   export (§V5) and RFC-0006's three commitments (§C1–§C3) have all landed.
-  **Two amendments** carry what implementation found:
+  **Three amendments** carry what implementation found:
   [`0030-erratum-statusline-field-set.md`](0030-erratum-statusline-field-set.md)
   (the field set predates the `present.*` scopes and was unreadable as
-  specified) and, because §V3 requires the HUD to use no privileged syntax,
+  specified);
+  [`0030-erratum-self-accounting-and-owner-attribution.md`](0030-erratum-self-accounting-and-owner-attribution.md)
+  (§V4's subtraction was by scope name, which merges two producers' samples and
+  cannot reach the render thread at all — a sample now carries its owner); and,
+  because §V3 requires the HUD to use no privileged syntax,
   [`0020-erratum-canvas-shape-generators.md`](0020-erratum-canvas-shape-generators.md)
   (a `Canvas` body could not generate shapes from data).
-  §V4's acceptance condition — `hud.render` ≤ 5 % of the frame budget — **is
-  met**: 0.60 ms p50 against 16.667 ms, 3.6 %, over three runs. An earlier
-  figure of ~12 % published with the HUD was a measurement error and is
-  corrected in `support/DESICIONS.md`; it was taken on an occluded window where
-  `encode.frame` never ran, so nothing was being drawn at all. The HUD still
+  §V4's acceptance condition — the HUD ≤ 5 % of the frame budget — **is met**,
+  at **1.0 % in release** (0.163 ms against 16.667 ms), measured against the
+  frame delta rather than against what the profiler reports about itself. The
+  dev-owner total it displays covers 0.107 ms of that; the rest is
+  `encode.finish`, which is not separable per owner and has its own row. Two
+  earlier figures are superseded: ~12 %
+  was taken on an occluded window where `encode.frame` never ran (corrected in
+  `support/DESICIONS.md`), and 3.6 % was `hud.render`'s inclusive time on a
+  **debug** build — a partial figure from the wrong profile. Both, and the
+  debug/release ratio, are in `support/PERF_hud_baseline.md`. The HUD still
   displays and colours its own cost, so the reading is checkable rather than
   quoted.
 - **Author(s):** Briany4717

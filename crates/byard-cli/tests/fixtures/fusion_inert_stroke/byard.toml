@@ -1,0 +1,3 @@
+[project]
+name = "fusion_inert_stroke"
+entry = "src/main.byd"

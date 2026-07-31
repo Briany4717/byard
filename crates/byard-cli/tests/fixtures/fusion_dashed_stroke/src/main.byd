@@ -1,0 +1,12 @@
+// RFC-0031 §Q6 — the *error* case, kept as a fixture beside the warning one so
+// the two severities are compared through the real binary.
+//
+// There is no closed form for arc length along the union of arbitrary SDFs, so
+// a fused stroke cannot be dashed. An approximation would make the dashes crawl
+// as the fusion changes, which is worse than a clear refusal.
+View Main() {
+    Canvas #[width: 140, height: 60, fuse: 16] {
+        circle(cx: 40, cy: 30, r: 20, fill: 0x6750A4, dash: (6, 4))
+        circle(cx: 90, cy: 30, r: 16, fill: 0xEF5350)
+    }
+}

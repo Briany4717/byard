@@ -374,6 +374,166 @@ fn a_morph_reaches_its_endpoints_blends_between_them_and_wraps() {
     );
 }
 
+/// §S7–§S8: two circles that bridge as they approach, blending colour by the
+/// same factor that produced the geometry.
+///
+/// Four claims, in the order they can go wrong:
+///
+/// 1. **`fuse: 0` is ungrouped.** A zero smoothing radius degenerates to a hard
+///    union, which is exactly the two shapes drawn separately (INV-22).
+/// 2. **Far apart, nothing bridges.** Fusion is local; two circles at opposite
+///    ends of a canvas must not grow a bar between them.
+/// 3. **Close, they bridge.** The midpoint between two shapes that neither
+///    touches becomes solid.
+/// 4. **Colour crosses the bridge.** Differently-coloured members blend through
+///    it, which is what makes fusion look deliberate rather than like
+///    z-fighting.
+#[test]
+#[allow(clippy::many_single_char_names)]
+fn fusion_bridges_nearby_shapes_and_carries_their_colours_across() {
+    let Some((device, queue)) = try_device() else {
+        eprintln!("no GPU adapter — skipping canvas-shape readback");
+        return;
+    };
+    let (w, h) = (240.0_f32, 120.0_f32);
+    let disc = |cx: f32, fill: [f32; 4]| {
+        byard_core::frame::ShapeRecord::from_shape(&CanvasShape {
+            kind: CANVAS_SHAPE_CIRCLE,
+            params: [cx, 60.0, 24.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            fill_color: fill,
+            ..CanvasShape::default()
+        })
+    };
+    let red = [1.0, 0.0, 0.0, 1.0];
+    let blue = [0.0, 0.0, 1.0, 1.0];
+    let fused = |left: f32, right: f32, k: f32| {
+        let mut frame = RenderFrame::new();
+        frame.push_shape_group(
+            CanvasShape {
+                kind: CANVAS_SHAPE_RECT,
+                params: [0.0, 0.0, 240.0, 120.0, 0.0, 0.0, 0.0, 0.0],
+                fill_color: red,
+                stroke_color: [0.0; 4],
+                group_mode: byard_core::frame::GROUP_FUSE,
+                group_param: k,
+                ..CanvasShape::default()
+            },
+            &[disc(left, red), disc(right, blue)],
+        );
+        render(&device, &queue, &frame, w, h)
+    };
+
+    // 1. `fuse: 0` — the gap between two separated circles stays empty.
+    let unfused = fused(70.0, 170.0, 0.0);
+    assert!(
+        unfused.at(120.0, 60.0).3 < 20,
+        "fuse: 0 must be the plain union, got alpha {}",
+        unfused.at(120.0, 60.0).3
+    );
+    assert!(unfused.at(70.0, 60.0).3 > 200 && unfused.at(170.0, 60.0).3 > 200);
+
+    // 2. The same generous `k`, but the shapes are far apart: still no bridge.
+    //    Fusion is local, and a group that bridged across a whole canvas would
+    //    be unusable.
+    let distant = fused(40.0, 200.0, 32.0);
+    assert!(
+        distant.at(120.0, 60.0).3 < 20,
+        "widely separated shapes must not fuse, got alpha {}",
+        distant.at(120.0, 60.0).3
+    );
+
+    // 3. Brought within reach of a `k` that spans the gap, the midpoint fills
+    //    — although neither circle covers it: their edges are 12 px apart.
+    let (left, right) = (90.0_f32, 150.0);
+    let bridged = fused(left, right, 32.0);
+    let mid = bridged.at(120.0, 60.0);
+    assert!(
+        mid.3 > 200,
+        "shapes within the smoothing radius must bridge, got alpha {}",
+        mid.3
+    );
+    // The same pair unfused leaves that point empty, so the bridge is the
+    // fusion's doing and not the circles overlapping.
+    assert!(
+        fused(left, right, 0.0).at(120.0, 60.0).3 < 20,
+        "the test point must be outside both circles"
+    );
+
+    // 4. …and the bridge carries the colour across. Red on the left, blue on
+    //    the right, something between them in the middle.
+    let (lb, _, lr, _) = bridged.at(left, 60.0);
+    let (rb, _, rr, _) = bridged.at(right, 60.0);
+    let (mb, _, mr, _) = mid;
+    assert!(lr > 200 && lb < 60, "the left body stays red");
+    assert!(rb > 200 && rr < 60, "the right body stays blue");
+    assert!(
+        i32::from(mr) < i32::from(lr) && i32::from(mb) > i32::from(lb),
+        "the bridge must blend towards the far member (BGR mid = ({mb}, _, {mr}))"
+    );
+}
+
+/// §S8: a fused stroke is the outline of the **union**, not a union of the
+/// members' outlines.
+///
+/// The difference is the whole point: per-member strokes would draw the seams
+/// through the interior of a body whose entire purpose is not to have any.
+#[test]
+#[allow(clippy::many_single_char_names)]
+fn a_fused_stroke_outlines_the_union_and_not_its_members() {
+    let Some((device, queue)) = try_device() else {
+        eprintln!("no GPU adapter — skipping canvas-shape readback");
+        return;
+    };
+    let (w, h) = (240.0_f32, 120.0_f32);
+    // Two circles that genuinely overlap, so each one's own outline would run
+    // straight through the other's interior.
+    let disc = |cx: f32| {
+        byard_core::frame::ShapeRecord::from_shape(&CanvasShape {
+            kind: CANVAS_SHAPE_CIRCLE,
+            params: [cx, 60.0, 30.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            fill_color: [0.0; 4],
+            stroke_color: [1.0, 1.0, 1.0, 1.0],
+            stroke_width: 4.0,
+            ..CanvasShape::default()
+        })
+    };
+    let mut frame = RenderFrame::new();
+    frame.push_shape_group(
+        CanvasShape {
+            kind: CANVAS_SHAPE_RECT,
+            params: [0.0, 0.0, 240.0, 120.0, 0.0, 0.0, 0.0, 0.0],
+            fill_color: [0.0; 4],
+            stroke_color: [1.0, 1.0, 1.0, 1.0],
+            stroke_width: 4.0,
+            group_mode: byard_core::frame::GROUP_FUSE,
+            group_param: 10.0,
+            ..CanvasShape::default()
+        },
+        &[disc(100.0), disc(140.0)],
+    );
+    let rb = render(&device, &queue, &frame, w, h);
+
+    // The outer boundary of the union is stroked.
+    assert!(
+        rb.at(100.0 - 30.0 + 1.0, 60.0).3 > 150,
+        "the union's left edge must be stroked"
+    );
+    // The interior — where each member's own circle would have run — is not.
+    // (140 − 30 = 110 is the right circle's left edge, deep inside the left
+    // circle, which reaches 130.)
+    let seam = rb.at(110.0, 60.0);
+    assert!(
+        seam.3 < 40,
+        "a member's own outline must not run through the fused body, got alpha {}",
+        seam.3
+    );
+    // …and neither is the centre.
+    assert!(
+        rb.at(120.0, 60.0).3 < 40,
+        "the fused body is hollow, not seamed"
+    );
+}
+
 /// §Q8: a morph's colour blends in **`OKLab`**, matching RFC-0025's keyframes and
 /// RFC-0010's `bg`/`color` transitions.
 ///

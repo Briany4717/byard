@@ -4572,6 +4572,7 @@ impl Interpreter {
             opacity: shape_opacity,
             transform,
             dirty: true,
+            ..CanvasShape::default()
         };
 
         match name {

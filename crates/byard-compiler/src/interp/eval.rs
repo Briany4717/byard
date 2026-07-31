@@ -227,6 +227,63 @@ fn lower_canvas_items(members: &[Member]) -> Vec<CanvasItem> {
         .collect()
 }
 
+/// What a persisted animation belongs to: the `with` node that wrote it, **and
+/// the element instance it is running on**.
+///
+/// The span alone is not an identity. A `for` body is lowered once per pooled
+/// slot but written once, so ten rows animating a property share one source
+/// span — and, before this key existed, one `Motion` and one `LoopClock`. Two
+/// rows heading for *different* targets therefore fought over the same state:
+/// each retarget reseeded the other's `from` and restarted its clock, and both
+/// stalled near `t ≈ 0`. Anyone with a list of animated components was affected.
+///
+/// `slot` is the instance. It is the per-slot element signal a `for` pool
+/// creates for each of its indices, which is unique across the whole program by
+/// construction: a nested `for` is lowered once per *outer* slot and gets its
+/// own pool with its own fresh signals, so the innermost binding already
+/// distinguishes every instance without a path to fold. `0` is "no enclosing
+/// loop" — the top level, where the span was always enough.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) struct AnimKey {
+    /// Source range of the `with`/keyframes node.
+    span: Span,
+    /// The element instance, or `0` outside any `for` body.
+    slot: u32,
+}
+
+impl AnimKey {
+    /// The key for `span` on the instance currently being rendered.
+    const fn new(span: Span, slot: u32) -> Self {
+        Self { span, slot }
+    }
+}
+
+/// Every `for` pool reachable from `nodes` without leaving them, in any order.
+fn collect_pools(nodes: &[RenderNode], out: &mut Vec<usize>) {
+    for n in nodes {
+        match n {
+            RenderNode::For { pool, .. } => out.push(*pool),
+            RenderNode::Box { children, .. } | RenderNode::Overlay { children, .. } => {
+                collect_pools(children, out);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// One concrete node produced by expanding `when`/`for`, and the animation slot
+/// it belongs to (RFC-0025 × M71).
+///
+/// The slot travels *with the node* rather than being recomputed by each
+/// walker, because the expansion is the only place that knows it: after
+/// flattening, a row of a `for` is indistinguishable from a node written
+/// literally at that position.
+#[derive(Clone, Copy)]
+pub(crate) struct Concrete<'a> {
+    node: &'a RenderNode,
+    slot: u32,
+}
+
 /// A fingerprint of a repeating animation's endpoints, used to notice a
 /// retarget (RFC-0025 §5).
 ///
@@ -1110,23 +1167,25 @@ pub struct Interpreter {
     /// instantly.
     clock_set: bool,
     /// Persisted per-property animation state (RFC-0010), keyed by the `with`
-    /// node's source span so it survives the whole-tree re-render each frame.
+    /// node's source span **and the element instance running it** ([`AnimKey`])
+    /// so it survives the whole-tree re-render each frame without ten `for`
+    /// rows sharing one `Motion`.
     /// A mid-flight target change reseeds `from` to the current sampled value
     /// (interruptible springs).
-    animations: std::collections::HashMap<Span, byard_core::frame::Motion>,
+    animations: std::collections::HashMap<AnimKey, byard_core::frame::Motion>,
     /// Persisted colour-animation state (RFC-0010 A3): one `Motion` per OKLab
     /// channel (`L`, `a`, `b`) plus one for the alpha byte, so a
     /// `bg`/`color`/`border`/`backdrop_tint` transition interpolates in a
     /// perceptually-uniform space — no muddy mid-points — with translucency
     /// animating alongside (RFC-0023: a tint fading in is an alpha ramp), and
     /// is interruptible like the scalar props. Keyed by the `with` node's span.
-    color_animations: std::collections::HashMap<Span, [byard_core::frame::Motion; 4]>,
+    color_animations: std::collections::HashMap<AnimKey, [byard_core::frame::Motion; 4]>,
     /// Loop clocks for repeating, delayed and keyframed animations (RFC-0025),
     /// keyed by the animation node's span like the two maps above. A repeating
     /// animation cannot sample against `now − start_ms` the way a one-shot does:
     /// it needs its own timeline, which is what a [`LoopClock`] carries — plus
     /// the last-sampled stamp that implements §2's offscreen pause.
-    anim_clocks: std::collections::HashMap<Span, LoopClock>,
+    anim_clocks: std::collections::HashMap<AnimKey, LoopClock>,
     /// Live ripple ink reveals (RFC-0023), spawned by a press gesture over an
     /// element whose resolved `ripple_active` is true. Gesture-like state: it
     /// persists across renders (a ripple keeps fading after release) and is
@@ -1144,6 +1203,13 @@ pub struct Interpreter {
     /// currently the overlapping-blurs stack check, run over the frame's
     /// emitted backdrops at the end of [`render`](Self::render).
     perf_warnings: Vec<PerfWarning>,
+    /// The element instance the render walk is currently inside — the `slot`
+    /// half of an [`AnimKey`] (M71).
+    ///
+    /// Set from the expansion, which is the only place that knows it: after
+    /// `when`/`for` are flattened, a row of a `for` is indistinguishable from a
+    /// node written literally at that position. `0` outside any `for` body.
+    anim_slot: u32,
     /// Set true during a render whenever an animation sampled this frame has not
     /// yet settled — the runner reads it (via [`has_active_animations`]) to keep
     /// requesting frames until motion stops (idle → 0 frames).
@@ -3587,6 +3653,10 @@ impl Interpreter {
         self.nav_targets.clear();
         // RFC-0018 radio groups are rebuilt from the fresh layout each render.
         self.radio_groups.clear();
+        // M71: the walk starts outside every `for`. Reset rather than assume,
+        // so a frame that ends deep inside a list cannot leak that row's
+        // identity into the next frame's top-level animations.
+        self.anim_slot = 0;
 
         // Drain any MSDF generations that finished since the last tick,
         // before the tree walk below, so a freshly-resident glyph is visible
@@ -3757,10 +3827,11 @@ impl Interpreter {
         // the flat-id cursor stays in lockstep (RFC-0018).
         if main_id.is_some() {
             let mut flat_idx = 0;
-            for node in self.expand_concrete(tree, pools) {
+            for concrete in self.expand_concrete(tree, pools) {
                 let node_id = flat_ids[flat_idx];
+                self.anim_slot = concrete.slot;
                 self.render_node_with_atlas(
-                    node,
+                    concrete.node,
                     node_id,
                     frame,
                     &flat_ids,
@@ -3791,6 +3862,11 @@ impl Interpreter {
         // renders through the exact single-layer draw stream.
         for ol in &overlay_layouts {
             frame.begin_layer();
+            // M71: an overlay leaves the layout flow, and its animation
+            // identity leaves the walk with it — it is emitted here rather than
+            // where it was written, so whatever row the main pass finished
+            // inside must not carry over into it.
+            self.anim_slot = 0;
             self.emit_overlay(ol, frame, width, height, pools);
         }
 
@@ -3944,11 +4020,22 @@ impl Interpreter {
     /// children are expanded when it is built/walked, not here. Build, paint,
     /// `flat_len`, and overlay collection all funnel through this one function, so
     /// they agree on the exact node sequence and the flat-id cursor stays aligned.
-    fn expand_concrete<'a>(
+    fn expand_concrete<'a>(&self, nodes: &'a [RenderNode], pools: Pools<'a>) -> Vec<Concrete<'a>> {
+        self.expand_concrete_in(nodes, pools, self.anim_slot)
+    }
+
+    /// [`expand_concrete`](Self::expand_concrete) with the enclosing animation
+    /// slot passed explicitly, so a `for` can stamp its rows with theirs.
+    ///
+    /// A node passes through carrying whatever slot it inherited; a `for` body
+    /// replaces it with that slot's own element signal. `when` is transparent —
+    /// a branch is not an instance, it is the same one under a condition.
+    fn expand_concrete_in<'a>(
         &self,
         nodes: &'a [RenderNode],
         pools: Pools<'a>,
-    ) -> Vec<&'a RenderNode> {
+        slot: u32,
+    ) -> Vec<Concrete<'a>> {
         let mut out = Vec::new();
         for n in nodes {
             match n {
@@ -3966,18 +4053,22 @@ impl Interpreter {
                             p.els.as_ref()
                         };
                         if let Some(branch) = branch {
-                            out.extend(self.expand_concrete(branch, pools));
+                            out.extend(self.expand_concrete_in(branch, pools, slot));
                         }
                     }
                 }
                 RenderNode::For { pool, .. } => {
                     if let Some(p) = pools.fors.get(*pool) {
-                        for body in p.bodies.iter().take(p.len) {
-                            out.extend(self.expand_concrete(body, pools));
+                        for (i, body) in p.bodies.iter().take(p.len).enumerate() {
+                            // The slot's own element signal — unique across the
+                            // program, because a nested `for` is lowered once
+                            // per outer slot and gets its own fresh signals.
+                            let row = p.item_slots.get(i).map_or(slot, |s| s.0);
+                            out.extend(self.expand_concrete_in(body, pools, row));
                         }
                     }
                 }
-                other => out.push(other),
+                other => out.push(Concrete { node: other, slot }),
             }
         }
         out
@@ -4130,6 +4221,18 @@ impl Interpreter {
                             dirtied = true;
                         }
                     }
+                    // RFC-0025: an animation lives and dies with its element,
+                    // so a row that just left the list drops its state — a
+                    // re-grown row starts fresh rather than resuming a stale
+                    // timeline. The pool's *bodies* are grow-only (index `i`
+                    // reuses its lowered nodes and its element signal), which is
+                    // exactly why the state has to be dropped explicitly: it
+                    // would otherwise be waiting there for the next occupant.
+                    let previous_len = self.for_pools[*pool].len;
+                    if new_len < previous_len {
+                        self.drop_slot_state(*pool, new_len, previous_len);
+                        dirtied = true;
+                    }
                     self.for_pools[*pool].len = new_len;
                     // Reconcile nested loops inside the live bodies. Take the
                     // bodies out so nested growth (which mutates `self.for_pools`)
@@ -4167,8 +4270,8 @@ impl Interpreter {
         // stays free for `build_layout_tree` below.
         let concrete = self.expand_concrete(nodes, pools);
         let mut ids = Vec::with_capacity(concrete.len());
-        for node in concrete {
-            if let Ok(id) = self.build_layout_tree(node, pools, flat_ids) {
+        for c in concrete {
+            if let Ok(id) = self.build_layout_tree(c.node, pools, flat_ids) {
                 ids.push(id);
             }
         }
@@ -4187,7 +4290,7 @@ impl Interpreter {
                 1 + self
                     .expand_concrete(children, pools)
                     .iter()
-                    .map(|c| self.flat_len(c, pools))
+                    .map(|c| self.flat_len(c.node, pools))
                     .sum::<usize>()
             }
             // RFC-0026: the container itself, plus — per live screen — that
@@ -4203,7 +4306,7 @@ impl Interpreter {
                         1 + self
                             .expand_concrete(&p.entries[screen.entry].nodes, pools)
                             .iter()
-                            .map(|c| self.flat_len(c, pools))
+                            .map(|c| self.flat_len(c.node, pools))
                             .sum::<usize>()
                     })
                     .sum::<usize>()
@@ -4223,10 +4326,10 @@ impl Interpreter {
         pools: Pools<'a>,
         out: &mut Vec<&'a RenderNode>,
     ) {
-        for node in self.expand_concrete(nodes, pools) {
-            match node {
+        for concrete in self.expand_concrete(nodes, pools) {
+            match concrete.node {
                 RenderNode::Overlay { children, .. } => {
-                    out.push(node);
+                    out.push(concrete.node);
                     self.collect_overlays(children, pools, out);
                 }
                 RenderNode::Box { children, .. } => {
@@ -4265,7 +4368,8 @@ impl Interpreter {
         let concrete = self.expand_concrete(children, pools);
         let mut anchor_ids = Vec::with_capacity(concrete.len());
         let mut slots = Vec::with_capacity(concrete.len());
-        for child in concrete {
+        for c in concrete {
+            let child = c.node;
             let mut cflat = Vec::new();
             let Ok(cid) = self.build_layout_tree(child, pools, &mut cflat) else {
                 continue;
@@ -5071,9 +5175,9 @@ impl Interpreter {
             byard_core::atlas::GridItemPlacement,
         )> = Vec::new();
         let mut temp_flat = Vec::new();
-        for child in concrete {
-            if let Ok(cid) = self.build_layout_tree(child, pools, &mut temp_flat) {
-                if let Some(p) = self.grid_child_placement(child) {
+        for c in concrete {
+            if let Ok(cid) = self.build_layout_tree(c.node, pools, &mut temp_flat) {
+                if let Some(p) = self.grid_child_placement(c.node) {
                     placements.push((cid, p));
                 }
                 child_ids.push(cid);
@@ -5197,8 +5301,8 @@ impl Interpreter {
         let concrete = self.expand_concrete(children, pools);
         let mut child_ids = Vec::with_capacity(concrete.len());
         let mut temp_flat = Vec::new();
-        for child in concrete {
-            if let Ok(cid) = self.build_layout_tree(child, pools, &mut temp_flat) {
+        for c in concrete {
+            if let Ok(cid) = self.build_layout_tree(c.node, pools, &mut temp_flat) {
                 child_ids.push(cid);
             }
         }
@@ -5252,7 +5356,7 @@ impl Interpreter {
         &mut self,
         list_name: &Symbol,
         list_attrs: &[Attr],
-        rows: &[&RenderNode],
+        rows: &[Concrete<'_>],
         win: WindowSpec,
         pools: Pools<'_>,
         flat_ids: &mut Vec<byard_core::atlas::layout::AtlasNodeId>,
@@ -5268,8 +5372,8 @@ impl Interpreter {
         let top = self.atlas.add_leaf(LeafSize::new(0.0, top_h))?;
         temp.push(top);
         child_ids.push(top);
-        for &row in &rows[win.start..win.end] {
-            let id = self.build_layout_tree(row, pools, &mut temp)?;
+        for row in &rows[win.start..win.end] {
+            let id = self.build_layout_tree(row.node, pools, &mut temp)?;
             child_ids.push(id);
         }
         let bottom = self.atlas.add_leaf(LeafSize::new(0.0, bottom_h))?;
@@ -5928,9 +6032,14 @@ impl Interpreter {
                     None
                 };
                 let render_child = |this: &mut Self,
-                                    child: &RenderNode,
+                                    child: Concrete<'_>,
                                     frame: &mut byard_core::frame::RenderFrame,
                                     flat_idx: &mut usize| {
+                    // M71: the instance this child belongs to, so every `with`
+                    // it evaluates keys to its own row rather than to the
+                    // written span shared by all of them.
+                    this.anim_slot = child.slot;
+                    let child = child.node;
                     let child_id = flat_ids[*flat_idx];
                     // RFC-0005 emission culling (north star): a child the
                     // scroll has pushed entirely out of the viewport is never
@@ -5982,8 +6091,8 @@ impl Interpreter {
                     let concrete = self.expand_concrete(children, pools);
                     if let Some((&header, rest)) = concrete.split_first() {
                         let header_start = *flat_idx;
-                        *flat_idx += self.flat_len(header, pools);
-                        for child in rest {
+                        *flat_idx += self.flat_len(header.node, pools);
+                        for &child in rest {
                             render_child(self, child, frame, flat_idx);
                         }
                         let after = *flat_idx;
@@ -6001,8 +6110,9 @@ impl Interpreter {
                             self.env
                                 .push(Symbol::intern("scroll_fraction"), Value::Signal(fs));
                         }
+                        self.anim_slot = header.slot;
                         self.render_node_with_atlas(
-                            header,
+                            header.node,
                             child_id,
                             frame,
                             flat_ids,
@@ -6117,8 +6227,9 @@ impl Interpreter {
                         });
                     for child in self.expand_concrete(&p.entries[screen.entry].nodes, pools) {
                         let child_id = flat_ids[*flat_idx];
+                        self.anim_slot = child.slot;
                         self.render_node_with_atlas(
-                            child,
+                            child.node,
                             child_id,
                             frame,
                             flat_ids,
@@ -7074,7 +7185,7 @@ impl Interpreter {
             span,
         } = value
         {
-            return Some(self.eval_animated_color(target, anim, *span));
+            return Some(self.eval_animated_color(target, anim, self.anim_key(*span)));
         }
         // A keyframed colour (RFC-0025 §3) blends its two surrounding steps in
         // the same perceptual space, for the same reason.
@@ -7107,7 +7218,7 @@ impl Interpreter {
     /// consumer's alpha auto-detect reads as the same opaque colour.
     ///
     /// [`Motion`]: byard_core::frame::Motion
-    fn eval_animated_color(&mut self, target: &Expr, anim: &Expr, key: Span) -> i64 {
+    fn eval_animated_color(&mut self, target: &Expr, anim: &Expr, key: AnimKey) -> i64 {
         let target_int = self.eval_pure(target).as_int().unwrap_or(0);
         // Without an advancing clock, jump straight to the target (mirrors the
         // scalar path — never latch `has_active_animations` on t=0).
@@ -7164,7 +7275,7 @@ impl Interpreter {
         &mut self,
         target_int: i64,
         spec: &crate::interp::anim::MotionSpec<'_>,
-        key: Span,
+        key: AnimKey,
     ) -> i64 {
         let from_int = spec.from.map_or(target_int, |expr| {
             self.eval_pure(expr).as_int().unwrap_or(target_int)
@@ -8061,7 +8172,7 @@ impl Interpreter {
                 value: target,
                 anim,
                 span,
-            } => self.eval_animated_color(target, anim, *span),
+            } => self.eval_animated_color(target, anim, self.anim_key(*span)),
             other if crate::interp::anim::is_keyframes_call(other) => {
                 self.eval_keyframe_color(other).unwrap_or(0)
             }
@@ -9052,7 +9163,7 @@ impl Interpreter {
         // rotate — all of which resolve through `eval_pure`) animates without
         // per-prop plumbing. A non-animated value takes the ordinary path.
         if let Expr::Animated { value, anim, span } = expr {
-            return self.eval_animated(value, anim, *span);
+            return self.eval_animated(value, anim, self.anim_key(*span));
         }
         // An `anim.keyframes(…)` sequence (RFC-0025 §3) *is* the property value,
         // so it is driven at the same chokepoint: every animatable scalar (and
@@ -9070,7 +9181,7 @@ impl Interpreter {
     /// keyed by `key`, and returns the value sampled at the current engine time.
     /// A target change reseeds `from` to the current on-screen value so a
     /// mid-flight reversal is continuous.
-    fn eval_animated(&mut self, target: &Expr, anim: &Expr, key: Span) -> Value {
+    fn eval_animated(&mut self, target: &Expr, anim: &Expr, key: AnimKey) -> Value {
         let target_value = self.eval_pure(target);
         // No advancing clock (a host that never calls `set_now_ms`, e.g. a
         // non-animating test path): resolve straight to the target so an
@@ -9155,7 +9266,7 @@ impl Interpreter {
         &mut self,
         target_val: f32,
         spec: &crate::interp::anim::MotionSpec<'_>,
-        key: Span,
+        key: AnimKey,
     ) -> f32 {
         let from_val = spec
             .from
@@ -9180,7 +9291,7 @@ impl Interpreter {
         &mut self,
         items: &[(Option<Symbol>, Value)],
         spec: &crate::interp::anim::MotionSpec<'_>,
-        key: Span,
+        key: AnimKey,
     ) -> Value {
         let Some(targets) = items
             .iter()
@@ -9244,7 +9355,7 @@ impl Interpreter {
         &mut self,
         motions: &[byard_core::frame::Motion],
         spec: &crate::interp::anim::MotionSpec<'_>,
-        key: Span,
+        key: AnimKey,
     ) -> Option<f32> {
         use byard_core::frame::{Motion, loop_phase};
 
@@ -9312,7 +9423,7 @@ impl Interpreter {
         use byard_core::frame::{MAX_KEYFRAME_STEPS, MotionCurve, keyframe_cursor, loop_phase};
 
         let track = crate::interp::anim::resolve_keyframes(expr)?.ok()?;
-        let key = expr.span();
+        let key = self.anim_key(expr.span());
         // Without an advancing clock, resolve to the sequence's first value —
         // mirrors the `with` path, and never latches the active set at `t = 0`.
         if !self.clock_set {
@@ -9414,6 +9525,50 @@ impl Interpreter {
         }
     }
 
+    /// Forgets the animation state of the rows `from..to` of `pool`, and of
+    /// everything nested inside them (M71 × RFC-0025).
+    ///
+    /// A nested `for` is lowered once per *outer* row, so the pools inside a
+    /// vanished row belong to that row alone: walking its lowered nodes for
+    /// them, and dropping their slots too, is exact rather than approximate.
+    /// Doing it any other way would either leave a nested row's timeline behind
+    /// (it resumes mid-flight under whatever takes its place) or drop a live
+    /// sibling's (it restarts for no reason the author can see).
+    fn drop_slot_state(&mut self, pool: usize, from: usize, to: usize) {
+        let mut dead: Vec<u32> = Vec::new();
+        let mut queue: Vec<(usize, usize, usize)> = vec![(pool, from, to)];
+        while let Some((p, lo, hi)) = queue.pop() {
+            let Some(entry) = self.for_pools.get(p) else {
+                continue;
+            };
+            let hi = hi.min(entry.bodies.len()).min(entry.item_slots.len());
+            for i in lo..hi {
+                dead.push(entry.item_slots[i].0);
+                // Descend into the row's own nested pools, whole: every one of
+                // their rows is going away with it.
+                let mut nested = Vec::new();
+                collect_pools(&entry.bodies[i], &mut nested);
+                for q in nested {
+                    let len = self.for_pools.get(q).map_or(0, |n| n.bodies.len());
+                    queue.push((q, 0, len));
+                }
+            }
+        }
+        if dead.is_empty() {
+            return;
+        }
+        let dead: std::collections::HashSet<u32> = dead.into_iter().collect();
+        self.animations.retain(|k, _| !dead.contains(&k.slot));
+        self.color_animations.retain(|k, _| !dead.contains(&k.slot));
+        self.anim_clocks.retain(|k, _| !dead.contains(&k.slot));
+    }
+
+    /// The animation key for `span` on the instance currently being rendered
+    /// (M71).
+    const fn anim_key(&self, span: Span) -> AnimKey {
+        AnimKey::new(span, self.anim_slot)
+    }
+
     /// Forgets every animation whose source node lies inside `range` — what an
     /// unmounted `when` branch takes with it (RFC-0025: "no separate stop
     /// animation API — the animation lives and dies with its element").
@@ -9426,7 +9581,7 @@ impl Interpreter {
         if range.end <= range.start {
             return;
         }
-        let inside = |key: &Span| key.start >= range.start && key.end <= range.end;
+        let inside = |key: &AnimKey| key.span.start >= range.start && key.span.end <= range.end;
         self.animations.retain(|key, _| !inside(key));
         self.color_animations.retain(|key, _| !inside(key));
         self.anim_clocks.retain(|key, _| !inside(key));
@@ -9446,7 +9601,7 @@ impl Interpreter {
     /// - restarts the timeline when the endpoints change (§5). A restart drops a
     ///   `cancellable` delay so the property heads for its new target at once,
     ///   and keeps a stagger's, so the cascade replays in order.
-    fn loop_elapsed(&mut self, key: Span, endpoints: u64, cancellable: bool) -> (u32, bool) {
+    fn loop_elapsed(&mut self, key: AnimKey, endpoints: u64, cancellable: bool) -> (u32, bool) {
         let (now, seq) = (self.now_ms, self.frame_seq);
         let clock = self.anim_clocks.entry(key).or_insert(LoopClock {
             start_ms: now,
@@ -13037,11 +13192,160 @@ mod tests {
 
     #[test]
     fn an_animation_that_stops_being_drawn_pauses_and_resumes_in_phase() {
-        // RFC-0025 §2, the *other* case: the element is still mounted, it just
-        // is not being painted (here a list that empties and refills — the same
-        // thing viewport culling does to a windowed row). That is a **pause**:
-        // the app idles while it is away and the motion continues exactly where
-        // it stopped, with no jump.
+        // RFC-0025 §2: the element is still mounted, it just is not being
+        // *painted* — here a windowed `ScrollView` row scrolled out of the
+        // window and back. That is a **pause**: the app idles while the row is
+        // away and the motion continues exactly where it stopped, with no jump.
+        //
+        // The mechanism matters, and this test used to use the wrong one. It
+        // emptied the list, which is an *unmount*, not an element that is
+        // merely off-screen — and RFC-0025 is explicit that an animation lives
+        // and dies with its element. Scrolling is the case §2 describes: the
+        // pool keeps its rows and their state, only the emission stops.
+        let src = "View V() { var y: Float = 0.0 \
+                   ScrollView #[width: 40, height: 20, row_height: 20, \
+                                windowed: true, offset: (0, y)] { \
+                     Column { for row in [1, 2, 3, 4, 5, 6, 7, 8] { \
+                       Box #[bg: 0x808080, width: 10, height: 20, \
+                             translate: (100, 0) with anim.linear(400ms, from: 0, \
+                             repeat: infinite)] {} \
+                     } } } }";
+        let (mut interp, tree) = lower_named(src, "V");
+        assert!(interp.errors().is_empty(), "{:?}", interp.errors());
+        interp.tick();
+        let render = |interp: &mut Interpreter, ms: u32| {
+            interp.set_now_ms(ms);
+            let mut frame = byard_core::frame::RenderFrame::new();
+            interp.render(&tree, &mut frame, 400.0, 300.0);
+            frame.instances().first().map(|b| b.transform.translate[0])
+        };
+        let scroll_to = |interp: &mut Interpreter, y: f64| {
+            let sig = interp.var_signal(&Symbol::intern("y")).unwrap();
+            interp.write_var(sig, Value::Float(y));
+            interp.tick();
+        };
+
+        render(&mut interp, 0);
+        let x = render(&mut interp, 100);
+        assert!((x.unwrap() - 25.0).abs() < 2.0, "a quarter in, got {x:?}");
+
+        // Scroll the first row out of the window. It is still mounted; it is
+        // simply not drawn, so its timeline pauses.
+        scroll_to(&mut interp, 120.0);
+        for step in 2..10 {
+            render(&mut interp, step * 100);
+        }
+
+        // Back to the top: the row resumes where it stopped rather than
+        // jumping to where a wall clock would have carried it.
+        scroll_to(&mut interp, 0.0);
+        let x = render(&mut interp, 900);
+        assert!(
+            (x.unwrap() - 25.0).abs() < 4.0,
+            "resumes in phase, got {x:?}"
+        );
+    }
+
+    /// **The defect M71 exists for.** Two `for` rows heading for *different*
+    /// targets each reach their own.
+    ///
+    /// Before the animation key carried an instance, the two rows shared one
+    /// `Motion`: every frame, row A retargeted it to A's goal and row B
+    /// immediately retargeted it to B's, each reseeding `from` to the current
+    /// sampled value and restarting the clock. The pair stalled near `t = 0`
+    /// and neither arrived. Anyone with a list of animated components was
+    /// affected, and the symptom — "my springs are sluggish in a list" — points
+    /// nowhere near the cause.
+    #[test]
+    fn two_for_rows_with_different_targets_each_reach_their_own() {
+        let src = "View V() { var rows = [{ w: 40 }, { w: 200 }] \
+                   Column { for row in rows { \
+                       Box #[bg: 0x808080, width: 10, height: 10, \
+                             translate: (row.w, 0) with anim.linear(200ms, from: 0)] {} \
+                   } } }";
+        let (mut interp, tree) = lower_named(src, "V");
+        assert!(interp.errors().is_empty(), "{:?}", interp.errors());
+        interp.tick();
+        let render = |interp: &mut Interpreter, ms: u32| -> Vec<f32> {
+            interp.set_now_ms(ms);
+            let mut frame = byard_core::frame::RenderFrame::new();
+            interp.render(&tree, &mut frame, 400.0, 300.0);
+            frame
+                .instances()
+                .iter()
+                .map(|b| b.transform.translate[0])
+                .collect()
+        };
+
+        render(&mut interp, 0);
+        // Mid-flight the two rows are already apart, in proportion to their
+        // own targets — a shared `Motion` could only ever produce one value.
+        let mid = render(&mut interp, 100);
+        assert_eq!(mid.len(), 2, "two rows");
+        assert!(
+            mid[1] > mid[0] * 2.0,
+            "the rows must animate independently, got {mid:?}"
+        );
+        // …and each settles on its own target rather than fighting to a stall.
+        let settled = render(&mut interp, 400);
+        assert!(
+            (settled[0] - 40.0).abs() < 1.0 && (settled[1] - 200.0).abs() < 1.0,
+            "each row must reach its own target, got {settled:?}"
+        );
+        assert!(
+            !interp.has_active_animations(),
+            "both arrived, so nothing is still in motion"
+        );
+    }
+
+    /// Nested loops distinguish instances too, and without a path to fold: a
+    /// `for` inside a `for` body is lowered once per *outer* row, so its pool —
+    /// and every element signal in it — belongs to that row alone.
+    #[test]
+    fn nested_for_rows_animate_independently() {
+        let src = "View V() { var groups = [{ items: [{ w: 30 }] }, { items: [{ w: 180 }] }] \
+                   Column { for g in groups { \
+                     Column { for item in g.items { \
+                       Box #[bg: 0x808080, width: 10, height: 10, \
+                             translate: (item.w, 0) with anim.linear(200ms, from: 0)] {} \
+                     } } \
+                   } } }";
+        let (mut interp, tree) = lower_named(src, "V");
+        assert!(interp.errors().is_empty(), "{:?}", interp.errors());
+        interp.tick();
+        let render = |interp: &mut Interpreter, ms: u32| -> Vec<f32> {
+            interp.set_now_ms(ms);
+            let mut frame = byard_core::frame::RenderFrame::new();
+            interp.render(&tree, &mut frame, 400.0, 300.0);
+            frame
+                .instances()
+                .iter()
+                .map(|b| b.transform.translate[0])
+                .filter(|x| *x > 0.0)
+                .collect()
+        };
+        render(&mut interp, 0);
+        render(&mut interp, 100);
+        let settled = render(&mut interp, 400);
+        assert_eq!(settled.len(), 2, "two innermost rows, got {settled:?}");
+        assert!(
+            (settled[0] - 30.0).abs() < 1.0 && (settled[1] - 180.0).abs() < 1.0,
+            "each nested row must reach its own target, got {settled:?}"
+        );
+    }
+
+    /// The other side of the same coin, and what M71 changed: a row that leaves
+    /// the *list* is unmounted, and an unmount takes its animation with it
+    /// (RFC-0025: "no separate stop-animation API — the animation lives and
+    /// dies with its element").
+    ///
+    /// This is not a preference between two readings. A `for` pool's bodies are
+    /// grow-only, so index 0 keeps its lowered nodes and its element signal
+    /// across a shrink; without dropping the state, a re-grown row would resume
+    /// **a different element's** timeline. Starting fresh is the only answer
+    /// that describes something real.
+    #[test]
+    fn a_row_that_leaves_the_list_drops_its_animation() {
         let src = "View V() { var rows: List<Int> = [1] \
                    Column { for row in rows { \
                        Box #[bg: 0x808080, width: 10, height: 10, \
@@ -13068,16 +13372,15 @@ mod tests {
         interp.write_var(rows, Value::List(vec![]));
         interp.tick();
         let (x, active) = render(&mut interp, 900);
-        assert_eq!(x, None, "nothing is drawn while it is away");
+        assert_eq!(x, None, "nothing is drawn while it is gone");
         assert!(!active, "and it costs no frames");
 
+        // A new row in the same pool slot is a new element, not the old one
+        // resuming: it starts at the beginning of its own timeline.
         interp.write_var(rows, Value::List(vec![Value::Int(1)]));
         interp.tick();
         let (x, _) = render(&mut interp, 900);
-        assert!(
-            (x.unwrap() - 25.0).abs() < 3.0,
-            "resumes in phase, got {x:?}"
-        );
+        assert!(x.unwrap() < 5.0, "a re-grown row starts fresh, got {x:?}");
     }
 
     #[test]

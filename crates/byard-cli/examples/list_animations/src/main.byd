@@ -1,0 +1,87 @@
+// RFC-0010 / RFC-0025 — animations inside a `for`, one timeline per row.
+//
+// Run it (from the repo root):
+//   cd crates/byard-cli/examples/list_animations
+//   cargo run -p byard-cli -- dev
+//
+// An animation's persisted state is keyed by the `with` node that wrote it —
+// and by the element *instance* running it. That second half is what this
+// example exists to show, because without it none of the motion below works: a
+// `for` body is lowered once per row but *written* once, so every row's `with`
+// clause shares one source span.
+//
+// What to verify:
+//   1. Press "Shuffle". Every bar springs to a different angle, and each one
+//      arrives at *its own*. Sharing one spring across the rows would mean each
+//      row retargets it to its own goal every frame, reseeding the others'
+//      start value — the whole set stalls near zero and creeps. That is not a
+//      subtle difference; it is the difference between a list that animates and
+//      a list that does not.
+//   2. Press "Remove" to drop the last row, then "Add" to bring it back. The
+//      new row enters from the beginning rather than resuming the timeline of
+//      whatever used to occupy that slot: an animation lives and dies with its
+//      element (RFC-0025).
+//   3. The dots inside each bar animate independently too. A `for` inside a
+//      `for` body is lowered once per outer row, so each dot belongs to exactly
+//      one bar.
+//   4. Press "Replay". One written animation — `anim.stagger(…, 80ms, i)` — and
+//      the rows cascade in index order. Per-row state is what lets the same
+//      clause hold a different delay and a different phase for each of them.
+View Main() {
+    var shuffled = false
+    var count = 5
+    var entrance = 0
+
+    // A different target per row. `shuffled` flips them all at the same moment,
+    // so any state they shared would be visible immediately.
+    let rows = [
+        { tilt: -14deg, dim: 0.35 },
+        { tilt: 22deg,  dim: 0.85 },
+        { tilt: -6deg,  dim: 0.55 },
+        { tilt: 30deg,  dim: 0.95 },
+        { tilt: 10deg,  dim: 0.45 },
+        { tilt: -25deg, dim: 0.75 },
+        { tilt: 17deg,  dim: 0.65 },
+    ]
+
+    Column #[bg: 0x14161C, p: 28, gap: 20, width: 640] {
+        Text("one written animation, one timeline per row")
+            #[color: 0xF2F3F5, size: 20, weight: bold]
+
+        Row #[gap: 10] {
+            Button("Shuffle") #[bg: 0x5B8DEF, color: 0xFFFFFF, radius: 8, p: (8, 14)]
+                => shuffled = !shuffled
+            Button("Add") #[bg: 0x2B2F3A, color: 0xE6E1E5, radius: 8, p: (8, 14)]
+                => count = count + 1
+            Button("Remove") #[bg: 0x2B2F3A, color: 0xE6E1E5, radius: 8, p: (8, 14)]
+                => count = count - 1
+            Button("Replay") #[bg: 0x2B2F3A, color: 0xE6E1E5, radius: 8, p: (8, 14)]
+                => entrance = entrance + 1
+        }
+
+        Column #[gap: 10] {
+            for i, row in rows {
+                when i < count {
+                    // 4. One stagger clause, `i` rows apart.
+                    Row #[gap: 10, align: center, height: 26,
+                          opacity: 1.0 with anim.stagger(anim.spring(from: 0.0), 80ms, i,
+                                                         restart: entrance)] {
+                        Text("{i}") #[color: 0x8A90A0, size: 12, width: 14]
+                        // 1. Each bar heads for its own target, on its own spring.
+                        Row #[bg: 0x5B8DEF, width: 120, height: 22, radius: 11,
+                              p: (0, 10), gap: 6, align: center,
+                              rotate: shuffled ? row.tilt : 0deg with anim.spring(
+                                  stiffness: 140, damping: 0.8)] {
+                            // 3. A nested `for`: these dots are this bar's.
+                            for d in [0, 1, 2] {
+                                Box #[bg: 0xFFFFFF, width: 6, height: 6, radius: 3,
+                                      opacity: shuffled ? row.dim : 1.0 with anim.spring(
+                                          stiffness: 90, damping: 0.7)] {}
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

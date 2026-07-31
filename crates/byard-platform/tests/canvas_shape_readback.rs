@@ -145,6 +145,64 @@ fn render(
     Readback { data, bpr, scale }
 }
 
+/// RFC-0031 §S4: a group head draws from the **shape-record pool**, not from
+/// its own `params`.
+///
+/// The load-bearing claim of the structural milestone, and the one no CPU test
+/// can make: the records have to reach the GPU, at the right element index, and
+/// be readable from the fragment stage. The head is given deliberately absurd
+/// `params` — a zero-radius circle at the origin — so anything that painted
+/// from the instance instead of from the buffer would paint nothing at all.
+#[test]
+#[allow(clippy::many_single_char_names)]
+fn a_group_head_draws_its_member_record_and_not_its_own_params() {
+    let Some((device, queue)) = try_device() else {
+        eprintln!("no GPU adapter — skipping canvas-shape readback");
+        return;
+    };
+
+    let (w, h) = (200.0_f32, 200.0_f32);
+    let member = byard_core::frame::ShapeRecord::from_shape(&CanvasShape {
+        kind: CANVAS_SHAPE_CIRCLE,
+        params: [100.0, 100.0, 50.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+        fill_color: [0.0, 1.0, 0.0, 1.0],
+        ..CanvasShape::default()
+    });
+    let mut frame = RenderFrame::new();
+    frame.push_shape_group(
+        CanvasShape {
+            kind: CANVAS_SHAPE_CIRCLE,
+            // §S4: a head's `params` size its *quad*, not its shape — here the
+            // union of its members' bounds, ten px larger than the member and
+            // in a colour the member does not use, so painting from the head
+            // instead of from the record is visible twice over.
+            params: [100.0, 100.0, 60.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            group_mode: byard_core::frame::GROUP_FUSE,
+            group_param: 0.0,
+            fill_color: [1.0, 0.0, 1.0, 1.0],
+            stroke_color: [0.0; 4],
+            ..CanvasShape::default()
+        },
+        &[member],
+    );
+    let rb = render(&device, &queue, &frame, w, h);
+
+    // Inside the member circle: filled, in the *member's* colour.
+    let (b, g, r, a) = rb.at(100.0, 100.0);
+    assert!(a > 200, "the member's fill must paint, got alpha {a}");
+    assert!(
+        g > 200 && r < 60 && b < 60,
+        "the colour must come from the record, not from the head, got BGR=({b},{g},{r})"
+    );
+    // Between the member's radius (50) and the head's (60): inside the quad,
+    // outside the shape. A head painting itself would fill this magenta.
+    let (_, _, _, oa) = rb.at(100.0, 45.0);
+    assert!(
+        oa < 10,
+        "the head's own geometry must not paint, got alpha {oa}"
+    );
+}
+
 /// A stroked circle paints its ring and leaves its interior untouched.
 #[test]
 #[allow(clippy::many_single_char_names)]

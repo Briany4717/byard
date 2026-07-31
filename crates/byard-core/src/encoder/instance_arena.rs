@@ -122,6 +122,7 @@ impl InstanceArena {
             size,
             usage: wgpu::BufferUsages::VERTEX
                 | wgpu::BufferUsages::UNIFORM
+                | wgpu::BufferUsages::STORAGE
                 | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         })
@@ -145,6 +146,28 @@ impl InstanceArena {
     pub fn push_uniform<T: bytemuck::Pod>(&mut self, value: &T) -> Region {
         let alignment = self.uniform_alignment;
         self.push_bytes(bytemuck::bytes_of(value), alignment, true)
+    }
+
+    /// Appends `data` as a **storage** region, aligned to `T`'s own size, and
+    /// returns the index of its first element in an `array<T>` view of the
+    /// whole buffer.
+    ///
+    /// Element-aligned rather than device-aligned on purpose: a shader indexes
+    /// a runtime-sized array by element, so an offset that is an exact multiple
+    /// of the stride lets the binding cover the entire buffer at offset zero
+    /// and the index arrive as ordinary per-instance data. That removes the
+    /// dynamic offset, and with it the per-frame bind group a dynamic offset
+    /// would otherwise need whenever the region moved — which is the property
+    /// RFC-0033 exists to keep.
+    ///
+    /// Returns `None` for an empty slice: there is nothing to index.
+    pub fn push_storage<T: bytemuck::Pod>(&mut self, data: &[T]) -> Option<u32> {
+        if data.is_empty() {
+            return None;
+        }
+        let stride = std::mem::size_of::<T>() as u64;
+        let region = self.push_bytes(bytemuck::cast_slice(data), stride, false);
+        u32::try_from(region.offset / stride).ok()
     }
 
     fn push_bytes(&mut self, bytes: &[u8], alignment: u64, pad_len: bool) -> Region {
@@ -355,6 +378,45 @@ mod tests {
         }))
         .ok()?;
         Some((Arc::new(device), Arc::new(queue)))
+    }
+
+    /// RFC-0031 §S4: a storage region's returned index must be an *exact*
+    /// element index into an `array<T>` view of the whole buffer, whatever was
+    /// staged before it — that exactness is what lets the shape-record binding
+    /// cover the buffer at offset zero and stay stable across frames.
+    /// A stand-in for `frame::ShapeRecord`: the same 80-byte, `Pod`, 16-byte
+    /// aligned shape, without the dependency direction that would make the
+    /// arena know about a specific pipeline's payload.
+    #[repr(C)]
+    #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
+    struct Rec {
+        v: [f32; 20],
+    }
+
+    #[test]
+    fn a_storage_region_returns_an_exact_element_index() {
+        let Some((device, _queue)) = try_device() else {
+            eprintln!("no GPU adapter — skipping arena test");
+            return;
+        };
+        let mut arena = InstanceArena::new(&device);
+        arena.begin_frame();
+        // Stage something awkward first, so the region cannot land at zero by
+        // luck: 12 bytes is 4-byte aligned and not a multiple of 80.
+        let _ = arena.push_vertex(&[1.0_f32, 2.0, 3.0]);
+        let base = arena
+            .push_storage(&[Rec { v: [7.0; 20] }, Rec { v: [9.0; 20] }])
+            .expect("a non-empty slice has a base");
+        let stride = std::mem::size_of::<Rec>() as u64;
+        let offset = u64::from(base) * stride;
+        assert_eq!(offset % stride, 0, "the index must be exact, not rounded");
+        let staged: &[u8] = &arena.staging[usize_of(offset)..usize_of(offset) + 80];
+        assert_eq!(
+            bytemuck::cast_slice::<u8, f32>(staged)[0].to_bits(),
+            7.0_f32.to_bits(),
+            "element {base} is not where the region was written"
+        );
+        assert_eq!(arena.push_storage::<Rec>(&[]), None, "nothing to index");
     }
 
     #[test]

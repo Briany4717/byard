@@ -1103,6 +1103,79 @@ pub const CANVAS_SHAPE_LINE: u32 = 2;
 /// RFC-0031 §S1 corner profile (`0` = the circular arc).
 pub const CANVAS_SHAPE_RECT: u32 = 3;
 
+/// [`CanvasShape`] combine mode (RFC-0031 §S4): the shape stands alone. Every
+/// shape emitted before RFC-0031 is this, and this mode's rendering path is the
+/// one that existed then.
+pub const GROUP_NONE: u32 = 0;
+/// [`CanvasShape`] combine mode: organic fusion (RFC-0031 §S7) — the members'
+/// fields are unioned by a polynomial smooth-minimum whose blend factor also
+/// mixes their colours, so the surface bridge and the colour transition are one
+/// event.
+pub const GROUP_FUSE: u32 = 1;
+/// [`CanvasShape`] combine mode: sequence morphing (RFC-0031 §S10) — the
+/// members are a *sequence*, indexed by an animatable scalar that blends
+/// `floor(phase)` into `floor(phase) + 1` and wraps at the member count.
+pub const GROUP_MORPH: u32 = 2;
+
+/// The most members one shape group may carry (RFC-0031 §S5/§Q3).
+///
+/// Eight, matching RFC-0025's keyframe cap and chosen the same way: it is the
+/// point past which the per-fragment loop stops being free, and past which a
+/// designer is describing something a group is the wrong tool for. Four cannot
+/// express the seven-shape Material 3 Expressive loader — the RFC's motivating
+/// use case — and sixteen doubles the worst-case fragment loop for cases better
+/// written as several groups. Exceeding it is a compile-time diagnostic naming
+/// the ninth shape, never a silent truncation.
+pub const MAX_GROUP_MEMBERS: usize = 8;
+
+/// One member of a shape group (RFC-0031 §S4): exactly the fields
+/// `eval_shape` consumes, as a POD record in the per-frame shape storage
+/// buffer.
+///
+/// A group *head* is an ordinary [`CanvasShape`] instance whose `group_mode` is
+/// not [`GROUP_NONE`]; its members are the `group_count` records starting at
+/// `group_first` in [`RenderFrame::shape_records`]. That indirection is the one
+/// structural change RFC-0031 makes, and it exists because instanced rendering
+/// otherwise gives each fragment sight of exactly one shape.
+///
+/// `#[repr(C)]` + `bytemuck`, uploaded as a storage buffer with no per-frame
+/// allocation: the backing `Vec` is cleared and refilled like every other frame
+/// vector.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct ShapeRecord {
+    /// Shape params, first half — the same layout per kind as
+    /// [`CanvasShape::params`]`[0..4]`.
+    pub params0: [f32; 4],
+    /// Shape params, second half — [`CanvasShape::params`]`[4..8]`.
+    pub params1: [f32; 4],
+    /// Fill colour `[r, g, b, a]`.
+    pub fill_color: [f32; 4],
+    /// Stroke colour `[r, g, b, a]`.
+    pub stroke_color: [f32; 4],
+    /// `[kind, cap, 0, 0]` — small integers carried exactly in `f32`, matching
+    /// how [`CanvasShape`]'s own instance carries them.
+    pub misc: [f32; 4],
+}
+
+impl ShapeRecord {
+    /// The record form of `shape`, dropping the fields a member does not own:
+    /// a group's stroke width, dashes, opacity and transform are the head's
+    /// (RFC-0031 §S8), and its bounds are folded into the head's quad.
+    #[must_use]
+    #[allow(clippy::cast_precision_loss)]
+    pub fn from_shape(shape: &CanvasShape) -> Self {
+        let p = shape.params;
+        Self {
+            params0: [p[0], p[1], p[2], p[3]],
+            params1: [p[4], p[5], p[6], p[7]],
+            fill_color: shape.fill_color,
+            stroke_color: shape.stroke_color,
+            misc: [shape.kind as f32, shape.cap as f32, 0.0, 0.0],
+        }
+    }
+}
+
 /// [`CanvasShape`] line-cap style (RFC-0020 §"Stroke and fill"): flat end
 /// exactly at the path endpoint.
 pub const CANVAS_CAP_BUTT: u32 = 0;
@@ -1152,6 +1225,36 @@ pub struct CanvasShape {
     /// ancestors. `transform.opacity` is **not** consulted — `opacity` above
     /// is authoritative, mirroring [`DecoratedBox`]'s contract.
     pub transform: Transform,
+    /// Combine mode (RFC-0031 §S4): [`GROUP_NONE`], [`GROUP_FUSE`] or
+    /// [`GROUP_MORPH`]. Anything but `NONE` makes this instance a **group
+    /// head**: its own `params` are ignored and its `rect` is the union of its
+    /// members' bounds.
+    pub group_mode: u32,
+    /// The combine mode's parameter: the smoothing radius `k` for
+    /// [`GROUP_FUSE`], the sequence position `phase` for [`GROUP_MORPH`].
+    /// Ignored when the mode is [`GROUP_NONE`].
+    pub group_param: f32,
+    /// Index of this group's first member in [`RenderFrame::shape_records`].
+    pub group_first: u32,
+    /// How many members this group has (`<=` [`MAX_GROUP_MEMBERS`]).
+    pub group_count: u32,
+    /// Hash of this group's member records — **INV-26**.
+    ///
+    /// [`PaintDigest`] compares a primitive by its own bytes at its own pool
+    /// position, and a group head's bytes are its mode, its parameter, its
+    /// colours and its rect. Its *members* live outside it, in the storage
+    /// buffer. Without this field a fusion group whose head is unchanged while
+    /// a member's centre moved would be judged clean and would render the
+    /// previous frame's shape.
+    ///
+    /// A `morph` group happens to escape that by accident, because its
+    /// parameter is the phase and the phase moves. The accident is not
+    /// something to rely on: it is exactly the kind of thing that works in the
+    /// example and fails in an app, so the head folds a hash of its members and
+    /// obeys the same rule as every other primitive.
+    ///
+    /// Written by [`RenderFrame::push_shape_group`]; zero for a non-group.
+    pub member_hash: u64,
     /// Whether this shape changed since the last tick — the [`CanvasShape`]
     /// analogue of [`TextLine::dirty`] (RFC-0001 §3.3), consumed by the
     /// Encoder's incremental scissor union.
@@ -1171,6 +1274,11 @@ impl Default for CanvasShape {
             dash_offset: 0.0,
             opacity: 1.0,
             transform: Transform::IDENTITY,
+            group_mode: GROUP_NONE,
+            group_param: 0.0,
+            group_first: 0,
+            group_count: 0,
+            member_hash: 0,
             dirty: false,
         }
     }
@@ -1426,6 +1534,11 @@ pub struct RenderFrame {
     /// the `CanvasShape` analytic-SDF pipeline (the sixth pipeline).
     canvas_shapes: Vec<CanvasShape>,
 
+    /// The per-frame shape-record pool every group head indexes into
+    /// (RFC-0031 §S4). Cleared and refilled exactly like every other frame
+    /// vector: no allocation on the steady-state path, no `Box`, no lifetime.
+    shape_records: Vec<ShapeRecord>,
+
     /// In-flight ripple ink reveals (RFC-0023): one entry per live ripple,
     /// re-sampled and re-emitted each tick while it expands and fades. Carries
     /// its own draw-order depth (stamped at push, like `vector_instances`).
@@ -1656,6 +1769,7 @@ impl RenderFrame {
         self.texts.clear();
         self.vector_instances.clear();
         self.canvas_shapes.clear();
+        self.shape_records.clear();
         self.ripples.clear();
         self.backdrops.clear();
         self.backdrop_marks.clear();
@@ -1844,6 +1958,40 @@ impl RenderFrame {
         self.canvas_shapes.push(s);
         self.canvas_depths.push(d);
         self.canvas_clips.push(c);
+    }
+
+    /// Appends a **shape group** (RFC-0031 §S4): `members` are copied into this
+    /// frame's shape-record pool and `head` is pushed as the one instance that
+    /// draws them, with its member range and member hash filled in here.
+    ///
+    /// Filling those three fields here rather than at the call site is the
+    /// point of the method. `group_first`/`group_count` are pool positions only
+    /// this type knows, and `member_hash` is **INV-26**: a shader reading data
+    /// that lives outside the primitive makes that data part of the primitive's
+    /// dirtiness, or a member moves and the head is judged clean. Computing it
+    /// on the same pass that appends the members means there is no way to add a
+    /// member and forget the hash.
+    ///
+    /// `members` beyond [`MAX_GROUP_MEMBERS`] are refused rather than
+    /// truncated: the compiler diagnoses the ninth shape (§S5), so reaching
+    /// here with more than eight is a bug, and drawing seven of eight members
+    /// would hide it.
+    ///
+    /// # Panics
+    ///
+    /// Debug builds panic if `members` exceeds [`MAX_GROUP_MEMBERS`].
+    pub fn push_shape_group(&mut self, mut head: CanvasShape, members: &[ShapeRecord]) {
+        debug_assert!(
+            members.len() <= MAX_GROUP_MEMBERS,
+            "a shape group may carry at most {MAX_GROUP_MEMBERS} members, got {}",
+            members.len()
+        );
+        let members = &members[..members.len().min(MAX_GROUP_MEMBERS)];
+        head.group_first = u32::try_from(self.shape_records.len()).unwrap_or(u32::MAX);
+        head.group_count = u32::try_from(members.len()).unwrap_or(0);
+        head.member_hash = shape_record_hash(members);
+        self.shape_records.extend_from_slice(members);
+        self.push_canvas_shape(head);
     }
 
     /// Records a pending [`AtlasUpload`] for the render thread to apply before
@@ -2038,6 +2186,13 @@ impl RenderFrame {
     #[must_use]
     pub fn canvas_shapes(&self) -> &[CanvasShape] {
         &self.canvas_shapes
+    }
+
+    /// This frame's shape-record pool — the members every group head indexes
+    /// into (RFC-0031 §S4).
+    #[must_use]
+    pub fn shape_records(&self) -> &[ShapeRecord] {
+        &self.shape_records
     }
 
     /// Returns the live ripple ink reveals in this frame (RFC-0023).
@@ -2495,6 +2650,23 @@ impl PaintDigest {
     }
 }
 
+/// Hashes a group's member records by their **bits** (RFC-0031, INV-26).
+///
+/// `f32::to_bits`, not `f32`, for the reason the digest's own header gives and
+/// RFC-0032's fingerprints already documented: `NaN != NaN` makes a group
+/// permanently dirty — wasteful and visible — while `-0.0 == 0.0` makes it
+/// permanently *clean*, which is silent and wrong. The second is the dangerous
+/// one, and hashing the record's raw bytes is immune to both.
+#[must_use]
+pub fn shape_record_hash(members: &[ShapeRecord]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = rustc_hash::FxHasher::default();
+    // `ShapeRecord` is `Pod`, so its bytes *are* its value — there is no
+    // padding to leak and no float comparison to get wrong.
+    bytemuck::cast_slice::<ShapeRecord, u8>(members).hash(&mut h);
+    h.finish()
+}
+
 /// Value hashes for the primitive types [`PaintDigest`] compares.
 ///
 /// Written out per field rather than derived, for two reasons that are not
@@ -2595,6 +2767,19 @@ mod paint_hash {
         f32s(&mut h, &s.dash);
         f32s(&mut h, &[s.stroke_width, s.dash_offset, s.opacity]);
         transform(&mut h, &s.transform);
+        // INV-26 (RFC-0031): the group members live outside this primitive and
+        // the shader reads them, so they are part of what decides its pixels.
+        // `member_hash` is that data, folded in.
+        //
+        // `group_first` is deliberately *not* hashed. It is a pool position,
+        // not a value: a group whose members shifted to a different offset but
+        // hashed the same reads the same records and paints the same pixels, so
+        // hashing it would report a false dirty on every frame that added a
+        // group earlier in the list.
+        s.group_mode.hash(&mut h);
+        s.group_count.hash(&mut h);
+        s.member_hash.hash(&mut h);
+        f32s(&mut h, &[s.group_param]);
         h.finish()
     }
 }
@@ -3514,6 +3699,188 @@ mod motion_tests {
         let lb = l.bounds();
         assert!(lb.x <= 7.0 && lb.x + lb.width >= 93.0);
         assert!(lb.y <= 7.0 && lb.y + lb.height >= 13.0);
+    }
+
+    // ── Shape groups (RFC-0031 §S4–§S6) ──────────────────────────────────
+
+    /// A circle record at `(cx, cy)` with radius `r`.
+    fn circle_record(cx: f32, cy: f32, r: f32) -> ShapeRecord {
+        ShapeRecord::from_shape(&CanvasShape {
+            kind: CANVAS_SHAPE_CIRCLE,
+            params: [cx, cy, r, 0.0, 0.0, 0.0, 0.0, 0.0],
+            fill_color: [1.0, 0.0, 0.0, 1.0],
+            ..CanvasShape::default()
+        })
+    }
+
+    /// A group head in `FUSE` mode with smoothing radius `k`.
+    fn group_head(k: f32) -> CanvasShape {
+        CanvasShape {
+            kind: CANVAS_SHAPE_CIRCLE,
+            group_mode: GROUP_FUSE,
+            group_param: k,
+            fill_color: [1.0, 0.0, 0.0, 1.0],
+            ..CanvasShape::default()
+        }
+    }
+
+    #[test]
+    fn shape_group_member_ranges_round_trip_and_never_overlap() {
+        let mut f = RenderFrame::new();
+        f.push_shape_group(group_head(16.0), &[circle_record(10.0, 10.0, 8.0)]);
+        f.push_shape_group(
+            group_head(4.0),
+            &[
+                circle_record(40.0, 10.0, 6.0),
+                circle_record(52.0, 10.0, 6.0),
+                circle_record(64.0, 10.0, 6.0),
+            ],
+        );
+
+        let heads = f.canvas_shapes();
+        assert_eq!(heads.len(), 2, "each group is exactly one instance");
+        assert_eq!((heads[0].group_first, heads[0].group_count), (0, 1));
+        assert_eq!((heads[1].group_first, heads[1].group_count), (1, 3));
+        assert_eq!(f.shape_records().len(), 4);
+        // The ranges are contiguous and disjoint — the property the shader's
+        // `first + i` indexing depends on.
+        assert_eq!(
+            f.shape_records()[heads[1].group_first as usize].params0[0].to_bits(),
+            40.0_f32.to_bits(),
+        );
+
+        f.clear();
+        assert!(
+            f.shape_records().is_empty(),
+            "the record pool is a per-frame vector like every other one"
+        );
+    }
+
+    #[test]
+    fn a_frame_with_no_groups_produces_no_records() {
+        // INV-22: nothing about RFC-0031 may cost a frame that does not use it.
+        let mut f = RenderFrame::new();
+        f.push_canvas_shape(CanvasShape {
+            kind: CANVAS_SHAPE_CIRCLE,
+            params: [10.0, 10.0, 5.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            ..CanvasShape::default()
+        });
+        assert!(f.shape_records().is_empty());
+        let s = &f.canvas_shapes()[0];
+        assert_eq!(s.group_mode, GROUP_NONE);
+        assert_eq!((s.group_first, s.group_count, s.member_hash), (0, 0, 0));
+    }
+
+    /// **INV-26.** A group's members live outside the primitive `PaintDigest`
+    /// compares, and the shader reads them — so they are part of what decides
+    /// its pixels, and the head folds a hash of them.
+    ///
+    /// The failure this prevents is not hypothetical and not loud: a fusion
+    /// group with a static `k` whose member circle moves has an *unchanged
+    /// head*, would be judged clean, and would render the previous frame's
+    /// shape. A `morph` group escapes it only by accident, because its
+    /// parameter is the phase and the phase moves.
+    #[test]
+    fn a_group_whose_only_change_is_a_member_is_dirty() {
+        let members_a = [
+            circle_record(10.0, 10.0, 8.0),
+            circle_record(30.0, 10.0, 8.0),
+        ];
+        // Only the second member moved. The head — mode, `k`, colours, rect —
+        // is identical.
+        let members_b = [
+            circle_record(10.0, 10.0, 8.0),
+            circle_record(24.0, 10.0, 8.0),
+        ];
+
+        let mut digest = PaintDigest::new();
+        let mut first = RenderFrame::new();
+        first.push_shape_group(group_head(16.0), &members_a);
+        digest.apply(&mut first);
+
+        let mut second = RenderFrame::new();
+        second.push_shape_group(group_head(16.0), &members_b);
+        digest.apply(&mut second);
+        assert!(
+            second.canvas_shapes()[0].dirty,
+            "a moved member must repaint its group"
+        );
+
+        // Demonstrated red: with the member hash taken back out of the head,
+        // the two frames' heads are byte-identical and the digest reports the
+        // group clean — the silent stale-shape bug this field exists to stop.
+        let mut without = PaintDigest::new();
+        let mut a = RenderFrame::new();
+        a.push_shape_group(group_head(16.0), &members_a);
+        a.canvas_shapes[0].member_hash = 0;
+        without.apply(&mut a);
+        let mut b = RenderFrame::new();
+        b.push_shape_group(group_head(16.0), &members_b);
+        b.canvas_shapes[0].member_hash = 0;
+        without.apply(&mut b);
+        assert!(
+            !b.canvas_shapes()[0].dirty,
+            "the assertion above must be measuring the member hash and nothing else"
+        );
+    }
+
+    #[test]
+    fn a_group_that_did_not_change_stays_clean() {
+        // The other half: the hash must not report dirty every frame, or it
+        // would hand back the whole benefit of the digest for any app that
+        // draws a group.
+        let members = [circle_record(10.0, 10.0, 8.0)];
+        let mut digest = PaintDigest::new();
+        for frame in 0..3 {
+            let mut f = RenderFrame::new();
+            f.push_shape_group(group_head(16.0), &members);
+            digest.apply(&mut f);
+            if frame > 0 {
+                assert!(
+                    !f.canvas_shapes()[0].dirty,
+                    "frame {frame}: nothing moved, so nothing repaints"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_member_hash_compares_bits_not_floats() {
+        // The same trap RFC-0032's fingerprints documented, one construct
+        // down. `-0.0 == 0.0` would make a changed group permanently *clean*,
+        // which is the silent direction; `NaN != NaN` would make it
+        // permanently dirty, which is merely wasteful.
+        let positive = [circle_record(0.0, 10.0, 8.0)];
+        let negative = [circle_record(-0.0, 10.0, 8.0)];
+        assert_ne!(
+            shape_record_hash(&positive),
+            shape_record_hash(&negative),
+            "-0.0 and 0.0 are different bytes and must hash differently"
+        );
+        let nan = [circle_record(f32::NAN, 10.0, 8.0)];
+        assert_eq!(
+            shape_record_hash(&nan),
+            shape_record_hash(&nan),
+            "the same NaN bits must hash the same, or the group is never clean"
+        );
+        assert_eq!(shape_record_hash(&[]), shape_record_hash(&[]));
+    }
+
+    #[test]
+    fn a_group_never_carries_more_members_than_the_cap() {
+        // The compiler diagnoses the ninth shape (§S5), so reaching here with
+        // nine is a bug — and drawing eight of nine would hide it. Release
+        // builds clamp rather than index out of range; debug builds assert.
+        let members: Vec<ShapeRecord> = (0..MAX_GROUP_MEMBERS)
+            .map(|i| {
+                #[allow(clippy::cast_precision_loss)]
+                circle_record(i as f32 * 10.0, 10.0, 8.0)
+            })
+            .collect();
+        let mut f = RenderFrame::new();
+        f.push_shape_group(group_head(16.0), &members);
+        assert_eq!(f.canvas_shapes()[0].group_count as usize, MAX_GROUP_MEMBERS);
+        assert_eq!(f.shape_records().len(), MAX_GROUP_MEMBERS);
     }
 
     #[test]

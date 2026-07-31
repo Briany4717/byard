@@ -189,6 +189,50 @@ impl BoxInstance {
     }
 }
 
+/// The `CanvasShape` pipeline's shape-record binding (RFC-0031 §S4).
+///
+/// The pool lives in the instance arena, bound whole at offset zero, so a group
+/// head's member index is an element index into the entire buffer. That keeps
+/// the bind group *stable*: it only has to be rebuilt when the arena replaces
+/// its buffer, which RFC-0033 bounds to a handful of times per session. A
+/// dynamic offset would instead have meant a fresh bind group on every frame
+/// whose staging order shifted — a per-frame GPU allocation, which is the exact
+/// thing RFC-0033 removed from this encoder.
+struct CanvasRecordBinding {
+    layout: wgpu::BindGroupLayout,
+    bind_group: wgpu::BindGroup,
+    /// The arena's `buffer_creations` count when `bind_group` was built. Not a
+    /// pointer comparison: `buffer_creations` is the arena's own public record
+    /// of "the buffer you were given is no longer the buffer I have".
+    creations: u32,
+}
+
+impl CanvasRecordBinding {
+    fn new(
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        arena: &instance_arena::InstanceArena,
+    ) -> Self {
+        let bind_group = canvas_shape::records_bind_group(device, layout, arena.buffer());
+        Self {
+            layout: layout.clone(),
+            bind_group,
+            creations: arena.buffer_creations(),
+        }
+    }
+
+    /// Rebuilds the bind group iff the arena replaced its buffer since the last
+    /// call. Must run **after** `arena.upload`, which is where a growth
+    /// happens, and before any draw binds it.
+    fn refresh(&mut self, device: &wgpu::Device, arena: &instance_arena::InstanceArena) {
+        if self.creations != arena.buffer_creations() {
+            self.bind_group =
+                canvas_shape::records_bind_group(device, &self.layout, arena.buffer());
+            self.creations = arena.buffer_creations();
+        }
+    }
+}
+
 /// Vertices of the shared unit quad (two triangles via `TriangleStrip`).
 ///
 /// All rectangle instances share this single buffer. The vertex shader scales
@@ -253,6 +297,8 @@ pub struct EncoderSubsystem {
     /// viewport bind group (group 0); transparent geometry, so it tests but
     /// never writes the draw-order depth buffer (RFC-0017 split).
     canvas_pipeline: wgpu::RenderPipeline,
+    /// The `CanvasShape` pipeline's shape-record binding (RFC-0031 §S4).
+    canvas_records: CanvasRecordBinding,
     /// `Ripple` pipeline (RFC-0023, the seventh pipeline) — the Material ink
     /// reveal: an expanding, fading circle clipped in-shader to its element's
     /// rounded rect, composited with premultiplied-alpha "over" blending (so
@@ -578,9 +624,11 @@ impl EncoderSubsystem {
         // `CanvasShape` pipeline (RFC-0020, the sixth pipeline). Transparent
         // geometry (AA strokes/fills), so it uses the no-write depth state —
         // the same opaque/transparent split as `DecoratedBox` (RFC-0017).
+        let canvas_records_layout = canvas_shape::records_bind_group_layout(&device);
         let canvas_pipeline = canvas_shape::build_pipeline(
             &device,
             &bind_group_layout,
+            &canvas_records_layout,
             wgpu::VertexBufferLayout {
                 array_stride: 8,
                 step_mode: wgpu::VertexStepMode::Vertex,
@@ -651,6 +699,7 @@ impl EncoderSubsystem {
 
         let gpu_timer = GpuTimer::new(&device, &queue, &[GPU_UI_PASS_SCOPE]);
         let arena = instance_arena::InstanceArena::new(&device);
+        let canvas_records = CanvasRecordBinding::new(&device, &canvas_records_layout, &arena);
 
         Ok(Self {
             device,
@@ -668,6 +717,7 @@ impl EncoderSubsystem {
             texture_cache: texture_sampler::TextureCache::default(),
             vector_pipeline,
             canvas_pipeline,
+            canvas_records,
             ripple_pipeline,
             backdrop_pipelines,
             blur_scratch: backdrop::ScratchCache::new(),
@@ -906,7 +956,7 @@ impl EncoderSubsystem {
             &[],
             &[],
             &[],
-            &[],
+            (&[], &[]),
             &[],
             &[],
             (&[], &[]),
@@ -932,7 +982,13 @@ impl EncoderSubsystem {
         decorated: &[crate::frame::DecoratedBox],
         textures: &[crate::frame::TextureSampler],
         vectors: &[VectorInstance],
-        canvas_shapes: &[crate::frame::CanvasShape],
+        // The `Canvas` pool and the shape-record pool its group heads index
+        // into (RFC-0031 §S4), bundled because one is meaningless without the
+        // other — a head whose members were not uploaded draws nothing.
+        (canvas_shapes, shape_records): (
+            &[crate::frame::CanvasShape],
+            &[crate::frame::ShapeRecord],
+        ),
         ripples: &[RippleInstance],
         atlas_uploads: &[AtlasUpload],
         // The backdrop pool and its parallel barrier snapshots (RFC-0023 §2),
@@ -1177,6 +1233,7 @@ impl EncoderSubsystem {
                     vectors,
                     vector_atlas: &self.vector_atlas,
                     canvas_shapes,
+                    shape_records,
                     ripples,
                     solid_depths: depths.solid,
                     decorated_depths: depths.decorated,
@@ -1189,6 +1246,7 @@ impl EncoderSubsystem {
                 &mut backdrop_draw,
                 self.gpu_timer.as_ref(),
                 &mut self.arena,
+                &mut self.canvas_records,
                 &mut self.staging,
                 &self.queue,
             )?;
@@ -1287,7 +1345,7 @@ impl EncoderSubsystem {
             frame.decorated(),
             frame.textures(),
             frame.vector_instances(),
-            frame.canvas_shapes(),
+            (frame.canvas_shapes(), frame.shape_records()),
             frame.ripples(),
             frame.atlas_uploads(),
             (frame.backdrops(), frame.backdrop_marks()),
@@ -1602,6 +1660,10 @@ struct DrawPrimitives<'a> {
     vector_atlas: &'a VectorAtlas,
     /// `Canvas` shape primitives (RFC-0020, the sixth pipeline).
     canvas_shapes: &'a [crate::frame::CanvasShape],
+    /// This frame's shape-record pool (RFC-0031 §S4) — staged once, whole,
+    /// before any segment, because a group head's member index is global to
+    /// the frame rather than to its segment.
+    shape_records: &'a [crate::frame::ShapeRecord],
     /// Ripple ink reveals (RFC-0023, the seventh pipeline); depth is a field
     /// on `RippleInstance` itself (stamped by `RenderFrame::push_ripple`),
     /// like `vectors`.
@@ -1664,6 +1726,10 @@ fn stage_segment(
     arena: &mut instance_arena::InstanceArena,
     scratch: &mut StagingScratch,
     primitives: &DrawPrimitives<'_>,
+    // Where this frame's shape records landed in the arena, as an element
+    // index (RFC-0031 §S4). Added to each group head's own member offset, so
+    // the shader indexes the whole buffer without a dynamic offset.
+    record_base: u32,
     clip_ctx: ClipCtx<'_>,
 ) {
     out.solid = stage_solid_box_instances(
@@ -1684,6 +1750,7 @@ fn stage_segment(
         &mut scratch.canvas,
         &primitives.canvas_shapes[seg.canvas.clone()],
         sub_slice(primitives.canvas_depths, &seg.canvas),
+        record_base,
     );
     out.vector = arena.push_vertex(&primitives.vectors[seg.vector.clone()]);
     texture_sampler::stage(
@@ -1827,6 +1894,7 @@ fn draw_ui_pass(
     bd: &mut BackdropDraw<'_>,
     gpu_timer: Option<&GpuTimer>,
     arena: &mut instance_arena::InstanceArena,
+    records: &mut CanvasRecordBinding,
     staging: &mut FrameStaging,
     queue: &wgpu::Queue,
 ) -> Result<(), ByardError> {
@@ -1893,6 +1961,11 @@ fn draw_ui_pass(
         crate::profile_scope!("encode.buffers");
         arena.begin_frame();
         staging.begin(segments.len());
+        // RFC-0031 §S4: the shape-record pool, staged whole and first. First
+        // because every canvas instance's member index is relative to this
+        // base, and whole because a group's members are frame-global — a head
+        // in segment 3 may index records appended while walking segment 1.
+        let record_base = arena.push_storage(primitives.shape_records).unwrap_or(0);
         if let Some((bounds, ..)) = scissor {
             staging.clear_quad = Some(stage_clear_quad(arena, bounds));
         }
@@ -1906,7 +1979,15 @@ fn draw_ui_pass(
             .zip(staging.segments.iter_mut())
             .take(dev_segment_start)
         {
-            stage_segment(seg, out, arena, &mut staging.scratch, primitives, clip_ctx);
+            stage_segment(
+                seg,
+                out,
+                arena,
+                &mut staging.scratch,
+                primitives,
+                record_base,
+                clip_ctx,
+            );
         }
         if dev_segment_start < segments.len() {
             let _dev = crate::telemetry::attribute_to(crate::telemetry::Owner::DevTools);
@@ -1916,7 +1997,15 @@ fn draw_ui_pass(
                 .zip(staging.segments.iter_mut())
                 .skip(dev_segment_start)
             {
-                stage_segment(seg, out, arena, &mut staging.scratch, primitives, clip_ctx);
+                stage_segment(
+                    seg,
+                    out,
+                    arena,
+                    &mut staging.scratch,
+                    primitives,
+                    record_base,
+                    clip_ctx,
+                );
             }
         }
         for _ in 0..bd.backdrops.len() {
@@ -1924,6 +2013,10 @@ fn draw_ui_pass(
             staging.backdrops.push(regions);
         }
         arena.upload(device, queue);
+        // After the upload, because that is where a growth replaces the buffer
+        // the bind group points at — and before the first pass opens, because
+        // `wgpu` resolves a binding eagerly.
+        records.refresh(device, arena);
     }
 
     let mut pending: Option<(usize, backdrop::PreparedBackdrop)> = None;
@@ -2097,6 +2190,7 @@ fn draw_ui_pass(
             staged.canvas,
             canvas_pipeline,
             viewport_bind_group,
+            &records.bind_group,
             quad_buffer,
             cr.len(),
             sub_slice(clips.canvas, cr),

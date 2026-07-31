@@ -24,14 +24,29 @@ pub fn run(file: Option<&Path>, short: bool) -> Result<(), String> {
         style::info(&format!("{n_files} file(s), {n_pkgs} package(s)"));
     }
 
-    let errors = check_program_with_theme(&program, manifest.theme);
+    let diagnostics = check_program_with_theme(&program, manifest.theme);
+    // A warning is printed and does not fail the check (RFC-0031 §Q5: failing a
+    // build over an inert attribute is disproportionate). It is still printed
+    // in full, with its caret block, because a diagnostic nobody sees is one
+    // that was not worth raising.
+    let n = diagnostics.iter().filter(|d| !d.is_warning()).count();
+    let warnings = diagnostics.len() - n;
 
-    if errors.is_empty() {
-        style::ok("0 errors", Some(started.elapsed()));
+    if !diagnostics.is_empty() {
+        print_diagnostics(&diagnostics, &program.source_map, short);
+    }
+    if n == 0 {
+        let summary = if warnings == 0 {
+            "0 errors".to_string()
+        } else {
+            format!(
+                "0 errors, {warnings} warning{}",
+                if warnings == 1 { "" } else { "s" }
+            )
+        };
+        style::ok(&summary, Some(started.elapsed()));
         Ok(())
     } else {
-        print_diagnostics(&errors, &program.source_map, short);
-        let n = errors.len();
         style::err(&format!("{n} error{}", if n == 1 { "" } else { "s" }));
         // Signal failure to the caller (main.rs maps Err → exit 1).
         Err(String::new())

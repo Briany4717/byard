@@ -289,6 +289,43 @@ pub enum CompileError {
         /// How many shapes the group actually holds.
         found: usize,
     },
+    /// Both `fuse:` and `morph:` were set on one `Canvas` (RFC-0031 §Q4).
+    ///
+    /// Mutually exclusive by construction rather than by preference: morphing
+    /// between two *fused* sub-groups needs a member to itself be a group head,
+    /// which turns a flat contiguous range into a tree and the unrolled
+    /// per-fragment loop into recursion. The flat, bounded, single-level group
+    /// is what keeps the fragment cost provable.
+    ConflictingGroupMode {
+        /// Source range of the second mode attribute.
+        span: Span,
+    },
+    /// A shape after the first inside a fusion group carried its own stroke
+    /// properties (RFC-0031 §Q5) — **a warning**.
+    ///
+    /// The fused outline is the boundary of the union, drawn once; a per-member
+    /// stroke would run an outline through the interior of the body the fusion
+    /// exists to make seamless. The group's one outline comes from the first
+    /// shape's stroke properties — the only place they can come from — so a
+    /// later shape's are inert. The shape still renders correctly and only the
+    /// property is ignored, and failing a build over an inert attribute is
+    /// disproportionate.
+    StrokeInFusionGroup {
+        /// Source range of the offending stroke parameter.
+        span: Span,
+        /// The parameter name.
+        param: String,
+    },
+    /// A fused stroke was given a dash pattern (RFC-0031 §Q6).
+    ///
+    /// There is no closed form for arc length along the union of arbitrary
+    /// SDFs, and any approximation makes dash positions shift unpredictably as
+    /// the fusion parameter animates — dashes that crawl for no reason the
+    /// author can see, which is worse than a clear refusal.
+    DashOnFusedStroke {
+        /// Source range of the dash parameter.
+        span: Span,
+    },
     /// A property that has no continuous interpolation was given a `with`
     /// clause (RFC-0031 §Q10).
     ///
@@ -640,6 +677,9 @@ impl CompileError {
             | Self::MissingShapeParam { span, .. }
             | Self::CanvasMissingSize { span }
             | Self::TooManyGroupMembers { span, .. }
+            | Self::ConflictingGroupMode { span }
+            | Self::StrokeInFusionGroup { span, .. }
+            | Self::DashOnFusedStroke { span }
             | Self::NotAnimatable { span, .. }
             | Self::PathStrokeUnsupported { span }
             | Self::DynamicStyleForbidden { span }
@@ -709,6 +749,9 @@ impl CompileError {
             | Self::MissingShapeParam { span, .. }
             | Self::CanvasMissingSize { span }
             | Self::TooManyGroupMembers { span, .. }
+            | Self::ConflictingGroupMode { span }
+            | Self::StrokeInFusionGroup { span, .. }
+            | Self::DashOnFusedStroke { span }
             | Self::NotAnimatable { span, .. }
             | Self::PathStrokeUnsupported { span }
             | Self::DynamicStyleForbidden { span }
@@ -780,6 +823,9 @@ impl CompileError {
             Self::MissingShapeParam { .. } => "MissingShapeParam",
             Self::CanvasMissingSize { .. } => "CanvasMissingSize",
             Self::TooManyGroupMembers { .. } => "TooManyGroupMembers",
+            Self::ConflictingGroupMode { .. } => "ConflictingGroupMode",
+            Self::StrokeInFusionGroup { .. } => "StrokeInFusionGroup",
+            Self::DashOnFusedStroke { .. } => "DashOnFusedStroke",
             Self::NotAnimatable { .. } => "NotAnimatable",
             Self::PathStrokeUnsupported { .. } => "PathStrokeUnsupported",
             Self::DynamicStyleForbidden { .. } => "DynamicStyleForbidden",
@@ -814,6 +860,22 @@ impl CompileError {
             Self::EffectInPureLambda { .. } => "EffectInPureLambda",
             Self::UnknownMethod { .. } => "UnknownMethod",
         }
+    }
+
+    /// Whether this diagnostic is advisory rather than fatal.
+    ///
+    /// Byard's diagnostics have been uniformly fatal until now, and one of them
+    /// should not be: RFC-0031 §Q5 asks for a *warning* on a per-member stroke
+    /// inside a fusion group, because the shape still renders correctly and the
+    /// property is merely inert. Failing a build over an inert attribute is
+    /// disproportionate; saying nothing at all is how a developer spends an
+    /// afternoon on an outline that was never going to appear.
+    ///
+    /// The default is `false`, so a diagnostic added without a thought about
+    /// severity stays fatal — which is the safe direction.
+    #[must_use]
+    pub const fn is_warning(&self) -> bool {
+        matches!(self, Self::StrokeInFusionGroup { .. })
     }
 
     /// The one-line headline for this error (no source context).
@@ -921,6 +983,23 @@ impl CompileError {
             }
             Self::CanvasMissingSize { .. } => {
                 "`Canvas` requires explicit `width` and `height` props".to_string()
+            }
+            Self::ConflictingGroupMode { .. } => {
+                "`fuse` and `morph` are mutually exclusive on one `Canvas`; a \
+                 morph between fused sub-groups would need nested groups"
+                    .to_string()
+            }
+            Self::StrokeInFusionGroup { param, .. } => {
+                format!(
+                    "`{param}` is ignored here: a fused `Canvas` has one outline, \
+                     drawn from the first shape's stroke, not one per shape"
+                )
+            }
+            Self::DashOnFusedStroke { .. } => {
+                "a fused stroke cannot be dashed: there is no arc length along \
+                 the union of two shapes, and an approximation would make the \
+                 dashes crawl as the fusion changes"
+                    .to_string()
             }
             Self::TooManyGroupMembers { max, found, .. } => {
                 format!(

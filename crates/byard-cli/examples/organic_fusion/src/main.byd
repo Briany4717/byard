@@ -1,0 +1,107 @@
+// RFC-0031 §S7–§S8 — organic fusion (metaball / blob merging).
+//
+// Run it (from the repo root):
+//   cd crates/byard-cli/examples/organic_fusion
+//   cargo run -p byard-cli -- dev
+//
+// `fuse: <px>` is the smoothing radius: the distance over which two surfaces
+// bridge into one. It is a polynomial smooth-minimum over the group's members,
+// and the blend factor that produced the geometry is the same one that mixes
+// their colours — so the surface bridge and the colour transition are one
+// event, which is what makes differently-coloured fusion read as deliberate.
+//
+// `fuse: 0`, and an absent `fuse`, are exactly today's behaviour: each shape is
+// its own instance, unchanged.
+//
+// What to look for:
+//   1. The k ramp: the same three circles at four smoothing radii. At 0 they
+//      are three discs; by 28 they are one body with no seam.
+//   2. The approach: a circle sliding towards a fixed one. Far apart, nothing
+//      happens — fusion is local. As it arrives, a bridge grows between them
+//      *before* the shapes touch, and the colours cross it.
+//   3. The fused outline: a stroked group is the boundary of the union, not a
+//      union of the members' outlines. There are no seams through the interior,
+//      which is the whole reason to fuse in the first place.
+//   4. Fusion composes with everything else the pipeline does: these are
+//      `ngon`s, and the whole group carries a paint-time transform.
+//
+// Two things the compiler will tell you about, and why:
+//   - a fused group has one outline, drawn from the *first* shape's stroke.
+//     A `stroke:` on a later shape is a **warning**: the property is inert, the
+//     shape still renders correctly, and so it does not fail the build.
+//   - `dash:` on a fused stroke is an **error**: there is no arc length along
+//     the union of two shapes, and an approximation would make the dashes crawl
+//     as the fusion changes.
+View Main() {
+    Column #[bg: 0x14161C, p: 32, gap: 26, width: 760] {
+        Text("fuse — surfaces that bridge, and colours that cross the bridge")
+            #[color: 0xF2F3F5, size: 20, weight: bold]
+
+        // ── 1. The smoothing radius ──────────────────────────────────────
+        Text("the same three circles at fuse 0, 10, 20, 28")
+            #[color: 0x8A90A0, size: 13]
+        Row #[gap: 12] {
+            Canvas #[width: 168, height: 96, bg: 0x1C1F27, fuse: 0] {
+                circle(cx: 46, cy: 48, r: 22, fill: 0x5B8DEF)
+                circle(cx: 90, cy: 48, r: 18, fill: 0x4CC38A)
+                circle(cx: 128, cy: 48, r: 14, fill: 0xE8B54A)
+            }
+            Canvas #[width: 168, height: 96, bg: 0x1C1F27, fuse: 10] {
+                circle(cx: 46, cy: 48, r: 22, fill: 0x5B8DEF)
+                circle(cx: 90, cy: 48, r: 18, fill: 0x4CC38A)
+                circle(cx: 128, cy: 48, r: 14, fill: 0xE8B54A)
+            }
+            Canvas #[width: 168, height: 96, bg: 0x1C1F27, fuse: 20] {
+                circle(cx: 46, cy: 48, r: 22, fill: 0x5B8DEF)
+                circle(cx: 90, cy: 48, r: 18, fill: 0x4CC38A)
+                circle(cx: 128, cy: 48, r: 14, fill: 0xE8B54A)
+            }
+            Canvas #[width: 168, height: 96, bg: 0x1C1F27, fuse: 28] {
+                circle(cx: 46, cy: 48, r: 22, fill: 0x5B8DEF)
+                circle(cx: 90, cy: 48, r: 18, fill: 0x4CC38A)
+                circle(cx: 128, cy: 48, r: 14, fill: 0xE8B54A)
+            }
+        }
+
+        // ── 2. The approach: an animated member, a static smoothing radius ─
+        //
+        // Note that it is the *member* that moves here, not the head. That is
+        // the case RFC-0031's INV-26 exists for: the head's own bytes never
+        // change, and without the member hash folded into it the group would be
+        // judged clean and would paint last frame's shape forever.
+        Text("an approaching member — fusion is local, and the bridge grows before contact")
+            #[color: 0x8A90A0, size: 13]
+        Canvas #[width: 340, height: 110, bg: 0x1C1F27, fuse: 22] {
+            circle(cx: 70, cy: 55, r: 26, fill: 0x5B8DEF)
+            circle(cx: 250 with anim.ease_in_out(1800ms, from: 130,
+                                                 repeat: infinite, reverse: true),
+                   cy: 55, r: 20, fill: 0xE8734A)
+        }
+
+        Row #[gap: 20] {
+            // ── 3. The fused outline is the union's boundary ─────────────
+            Column #[gap: 10] {
+                Text("a stroked group: one outline, no seams")
+                    #[color: 0x8A90A0, size: 13]
+                Canvas #[width: 220, height: 120, bg: 0x1C1F27, fuse: 18] {
+                    // The first shape's stroke is the *group's* outline.
+                    circle(cx: 80, cy: 60, r: 34, stroke: 0xE6E1E5, stroke_width: 3)
+                    circle(cx: 140, cy: 60, r: 28)
+                }
+            }
+
+            // ── 4. It composes ──────────────────────────────────────────
+            Column #[gap: 10] {
+                Text("ngons, fused, under a paint-time transform")
+                    #[color: 0x8A90A0, size: 13]
+                Box #[rotate: 8deg, scale: (0.95, 0.95)] {
+                    Canvas #[width: 220, height: 120, bg: 0x1C1F27, fuse: 24] {
+                        ngon(cx: 78, cy: 60, r: 32, n: 6, corner: 6, fill: 0x4CC38A)
+                        ngon(cx: 140, cy: 60, r: 28, n: 5, corner: 4, inner: 0.6,
+                             fill: 0xE8B54A)
+                    }
+                }
+            }
+        }
+    }
+}

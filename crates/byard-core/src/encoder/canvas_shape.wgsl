@@ -391,6 +391,23 @@ fn mix_oklab(a: vec4<f32>, b: vec4<f32>, t: f32) -> vec4<f32> {
     return vec4<f32>(oklab_to_linear(lab), mix(a.a, b.a, t));
 }
 
+/// Polynomial smooth-minimum (RFC-0031 §S7), returning both the blended
+/// distance **and** the blend weight.
+///
+/// The `.y` component is what makes differently-coloured fusion look
+/// deliberate rather than like a z-fighting bug: colour is mixed by the same
+/// factor that produced the geometry, so the surface bridge and the colour
+/// transition are the same event.
+fn smin(a: f32, b: f32, k: f32) -> vec2<f32> {
+    let h = max(k - abs(a - b), 0.0) / k;
+    let m = h * h * 0.25;
+    // `.y` is the weight *towards `b`*, so it must be small where `a` is the
+    // closer surface. WGSL's `select(false_value, true_value, condition)`
+    // reverses GLSL's ternary, and getting that backwards inverts every fused
+    // colour — the far member's colour would paint the near member's body.
+    return vec2<f32>(min(a, b) - m * k, select(1.0 - m, m, a < b));
+}
+
 /// One member record, evaluated at `p`.
 fn eval_record(rec: ShapeRecord, p: vec2<f32>, half_w: f32) -> ShapeDist {
     return eval_shape(
@@ -440,6 +457,43 @@ fn resolve(in: VertexOutput, kind: u32, cap: u32, half_w: f32) -> Resolved {
         out.stroke = FAR;
         out.fill = FAR;
         out.t = 0.0;
+        return out;
+    }
+
+    if (mode == GROUP_FUSE) {
+        // §S7: a smooth-minimum union over the members, with colour carried by
+        // the same blend factor. `k <= 0` degenerates to a hard `min`, which is
+        // the plain union — `fuse: 0` is exactly "these shapes, unfused".
+        let k = max(in.group.y, 1e-4);
+        var d_fill = FAR;
+        var col = vec4<f32>(0.0);
+        for (var i = 0u; i < MAX_GROUP_MEMBERS; i = i + 1u) {
+            if (i >= count) { break; }
+            let rec = shape_records[first + i];
+            let s = eval_record(rec, in.world_pos, half_w);
+            if (i == 0u) {
+                d_fill = s.fill;
+                col = rec.fill_color;
+            } else {
+                let r = smin(d_fill, s.fill, k);
+                d_fill = r.x;
+                col = mix(col, rec.fill_color, r.y);
+            }
+        }
+        out.fill = d_fill;
+        // §S8: the fused outline is the boundary of the *union*, not a union of
+        // the members' own outlines — which would draw seams through the
+        // interior of a body whose entire purpose is not to have any. The
+        // head's stroke width and colour govern; per-member strokes are inert
+        // and diagnosed at compile time.
+        out.stroke = abs(d_fill) - half_w;
+        // §Q6: the dash parameter is not defined on a fused boundary (there is
+        // no closed-form arc length for the union of arbitrary SDFs), so it
+        // stays 0 — which the dash mask reads as a solid stroke. Asking for
+        // dashes here is a compile-time error rather than a crawling
+        // approximation.
+        out.t = 0.0;
+        out.fill_color = col;
         return out;
     }
 

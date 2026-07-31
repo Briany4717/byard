@@ -116,17 +116,20 @@ impl SourceMap {
     /// rustc-compatible shape `byard check` prints).
     #[must_use]
     pub fn render_line(&self, err: &CompileError) -> String {
+        // Advisory diagnostics say so on their own first line, or a reader has
+        // to know the code to know whether the build failed.
+        let level = if err.is_warning() { "warning" } else { "error" };
         match self.locate(err.span()) {
             Some((entry, local)) => {
                 let (line, col) = line_col(&entry.source, local.start as usize);
                 format!(
-                    "{}:{line}:{col}: error[{}]: {}",
+                    "{}:{line}:{col}: {level}[{}]: {}",
                     entry.file,
                     err.kind(),
                     err.headline()
                 )
             }
-            None => format!("error[{}]: {}", err.kind(), err.headline()),
+            None => format!("{level}[{}]: {}", err.kind(), err.headline()),
         }
     }
 

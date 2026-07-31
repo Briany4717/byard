@@ -81,6 +81,7 @@ const KIND_ARC: u32 = 0u;
 const KIND_CIRCLE: u32 = 1u;
 const KIND_LINE: u32 = 2u;
 const KIND_RECT: u32 = 3u;
+const KIND_NGON: u32 = 4u;
 
 const GROUP_NONE: u32 = 0u;
 const GROUP_FUSE: u32 = 1u;
@@ -284,6 +285,59 @@ fn eval_shape(p: vec2<f32>, kind: u32, cap: u32, half_w: f32,
         return out;
     }
 
+        if (kind == KIND_NGON) {
+        // KIND_NGON (RFC-0031 §"`ngon`"): an n-fold symmetric rounded polygon
+        // or star. params0 = (cx, cy, r, corner), params1 = (inner, rotate, n).
+        //
+        // Built by folding the angle into one 2·an sector and mirroring it, so
+        // the whole boundary is a single segment: from the outer point at the
+        // sector's axis to the inner notch at its edge. That fold is exact for
+        // an *integer* n and only for an integer n — a fractional one leaves a
+        // partial final sector whose seam sweeps the shape, which is §Q10's
+        // reason `n` is not animatable and §S9's reason morphing interpolates
+        // fields instead.
+        let c = params0.xy;
+        let r = max(params0.z, 0.0);
+        let corner = clamp(params0.w, 0.0, r);
+        let inner = clamp(params1.x, 0.0, 1.0);
+        let n = max(floor(params1.z + 0.5), 3.0);
+        let an = PI / n;
+
+        // Into the shape's own axis, with an outer point at the top.
+        let rot = -params1.y;
+        let rc = cos(rot);
+        let rs = sin(rot);
+        let rel0 = p - c;
+        let rel = vec2<f32>(rel0.x * rc - rel0.y * rs, rel0.x * rs + rel0.y * rc);
+
+        let len = length(rel);
+        // Angle from straight up, folded into [-an, an) and then mirrored.
+        let ang = atan2(rel.x, -rel.y);
+        let fold = ang - 2.0 * an * floor((ang + an) / (2.0 * an));
+        let q = vec2<f32>(len * abs(sin(fold)), len * cos(fold));
+
+        // `corner` is applied by building the sharp shape one `corner`
+        // smaller and inflating the field by the same amount — so the outer
+        // point lands back at exactly `r`, whatever the rounding.
+        let r_out = max(r - corner, 0.0);
+        let r_in = max(r * inner * cos(an) - corner, 0.0);
+        let a_pt = vec2<f32>(0.0, r_out);
+        let b_pt = vec2<f32>(r_in * sin(an), r_in * cos(an));
+        let e = b_pt - a_pt;
+        let w = q - a_pt;
+        let h = clamp(dot(w, e) / max(dot(e, e), 1e-6), 0.0, 1.0);
+        // The origin is always on the negative side of this edge (`e.x >= 0`
+        // and `a_pt.y >= 0`), so a negative cross product is "inside".
+        let cross = e.x * w.y - e.y * w.x;
+        let sd_ngon = length(w - e * h) * sign(cross) - corner;
+
+        out.stroke = abs(sd_ngon) - half_w;
+        out.fill = sd_ngon;
+        // Dashes along an ngon perimeter are not defined in v1, as for rects:
+        // `t` stays 0 and the dash mask reads that as a solid stroke.
+        return out;
+    }
+
     // KIND_RECT: params0 = (x, y, w, h), params1.x = corner radius,
     // params1.y = corner smoothing 0..1 (RFC-0031 §S1/§S3).
     let half_size = max(params0.zw * 0.5, vec2<f32>(0.0));
@@ -296,6 +350,57 @@ fn eval_shape(p: vec2<f32>, kind: u32, cap: u32, half_w: f32,
     // Dashes are not defined along a rect perimeter in v1 (RFC-0020): `t`
     // stays 0, which the dash mask treats as "always on" → a solid stroke.
     return out;
+}
+
+/// Linear sRGB → OKLab (RFC-0031 §Q8). Same coefficients RFC-0025's keyframe
+/// blending and RFC-0010's `bg`/`color` transitions use, so a morph blending
+/// two colours beside a `with` clause blending the same two does not visibly
+/// disagree inside one frame.
+fn linear_to_oklab(c: vec3<f32>) -> vec3<f32> {
+    let l = 0.4122214708 * c.r + 0.5363325363 * c.g + 0.0514459929 * c.b;
+    let m = 0.2119034982 * c.r + 0.6806995451 * c.g + 0.1073969566 * c.b;
+    let s = 0.0883024619 * c.r + 0.2817188376 * c.g + 0.6299787005 * c.b;
+    let l_ = pow(max(l, 0.0), 1.0 / 3.0);
+    let m_ = pow(max(m, 0.0), 1.0 / 3.0);
+    let s_ = pow(max(s, 0.0), 1.0 / 3.0);
+    return vec3<f32>(
+        0.2104542553 * l_ + 0.7936177850 * m_ - 0.0040720468 * s_,
+        1.9779984951 * l_ - 2.4285922050 * m_ + 0.4505937099 * s_,
+        0.0259040371 * l_ + 0.7827717662 * m_ - 0.8086757660 * s_,
+    );
+}
+
+/// OKLab → linear sRGB.
+fn oklab_to_linear(c: vec3<f32>) -> vec3<f32> {
+    let l_ = c.x + 0.3963377774 * c.y + 0.2158037573 * c.z;
+    let m_ = c.x - 0.1055613458 * c.y - 0.0638541728 * c.z;
+    let s_ = c.x - 0.0894841775 * c.y - 1.2914855480 * c.z;
+    let l = l_ * l_ * l_;
+    let m = m_ * m_ * m_;
+    let s = s_ * s_ * s_;
+    return vec3<f32>(
+        max(4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s, 0.0),
+        max(-1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s, 0.0),
+        max(-0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s, 0.0),
+    );
+}
+
+/// Blends two straight-alpha linear colours in OKLab (§Q8), alpha linearly.
+fn mix_oklab(a: vec4<f32>, b: vec4<f32>, t: f32) -> vec4<f32> {
+    let lab = mix(linear_to_oklab(a.rgb), linear_to_oklab(b.rgb), t);
+    return vec4<f32>(oklab_to_linear(lab), mix(a.a, b.a, t));
+}
+
+/// One member record, evaluated at `p`.
+fn eval_record(rec: ShapeRecord, p: vec2<f32>, half_w: f32) -> ShapeDist {
+    return eval_shape(
+        p,
+        u32(rec.misc.x + 0.5),
+        u32(rec.misc.y + 0.5),
+        half_w,
+        rec.params0,
+        rec.params1,
+    );
 }
 
 /// What one fragment resolves a shape — or a whole group — to: the two signed
@@ -338,18 +443,40 @@ fn resolve(in: VertexOutput, kind: u32, cap: u32, half_w: f32) -> Resolved {
         return out;
     }
 
-    // A group with no combine implemented yet still resolves to its first
-    // member, so an unknown mode degrades to "draw the first shape" rather
-    // than to a hole in the frame.
+    if (mode == GROUP_MORPH) {
+        // §S10: the group is a *sequence*, and `phase` indexes it.
+        // `fract` before scaling handles negative phases as well as
+        // overshooting ones, so the wrap is total: sweeping 0 → count returns
+        // to the first shape with no discontinuity, which is what makes the
+        // Material 3 loader a loop rather than a stall (§Q9).
+        let cf = f32(count);
+        let ph = fract(in.group.y / cf) * cf;
+        let i0 = min(u32(floor(ph)), count - 1u);
+        let i1 = (i0 + 1u) % count;
+        let t = ph - floor(ph);
+
+        // §S9: interpolate the *fields*, not the vertex counts. `mix` of two
+        // evaluated distances has no seam, works between any two kinds — a
+        // circle can morph to a seven-pointed star — and asks nothing of the
+        // shapes being related.
+        let ra = shape_records[first + i0];
+        let rb = shape_records[first + i1];
+        let da = eval_record(ra, in.world_pos, half_w);
+        let db = eval_record(rb, in.world_pos, half_w);
+        out.stroke = mix(da.stroke, db.stroke, t);
+        out.fill = mix(da.fill, db.fill, t);
+        out.t = mix(da.t, db.t, t);
+        // Colour rides the same scalar, so a morph that also changes colour is
+        // one animation rather than two that can desynchronise.
+        out.fill_color = mix_oklab(ra.fill_color, rb.fill_color, t);
+        out.stroke_color = mix_oklab(ra.stroke_color, rb.stroke_color, t);
+        return out;
+    }
+
+    // An unrecognised mode resolves to its first member rather than to a hole
+    // in the frame.
     let rec = shape_records[first];
-    let d = eval_shape(
-        in.world_pos,
-        u32(rec.misc.x + 0.5),
-        u32(rec.misc.y + 0.5),
-        half_w,
-        rec.params0,
-        rec.params1,
-    );
+    let d = eval_record(rec, in.world_pos, half_w);
     out.stroke = d.stroke;
     out.fill = d.fill;
     out.t = d.t;

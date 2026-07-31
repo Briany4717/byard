@@ -1102,6 +1102,25 @@ pub const CANVAS_SHAPE_LINE: u32 = 2;
 /// `params = [x, y, w, h, radius, smooth, 0, 0]`, where `smooth` is the
 /// RFC-0031 §S1 corner profile (`0` = the circular arc).
 pub const CANVAS_SHAPE_RECT: u32 = 3;
+/// [`CanvasShape`] kind: an *n*-fold symmetric rounded polygon or star
+/// (RFC-0031 §"`ngon`"). `params = [cx, cy, r, corner, inner, rotate, n, 0]`.
+///
+/// One kind covers the great majority of the Material 3 Expressive shape
+/// vocabulary, because those shapes are overwhelmingly *n*-fold rotationally
+/// symmetric rounded polygons and stars: `inner: 0.8, n: 8` is a scallop,
+/// `inner: 0.4, n: 5` a burst, `n: 4, corner: r` a circle approached from the
+/// other direction.
+///
+/// - `r` is the circumradius — the distance to an outer point, exactly, whatever
+///   `corner` is. That exactness is what makes two `ngon`s of the same `r`
+///   morph into each other without the pair appearing to breathe.
+/// - `corner` rounds every vertex *and* every inner notch by that radius.
+/// - `inner` is normalised so `1.0` is the convex regular polygon and lower
+///   values pull the notches in towards the centre.
+/// - `n` is an integer ≥ 3 and is **not** animatable (§Q10): a fractional `n`
+///   leaves a partial sector, whose seam sweeps the shape *while animating* —
+///   the only time the feature is used. Changing shape is what `morph` is for.
+pub const CANVAS_SHAPE_NGON: u32 = 4;
 
 /// [`CanvasShape`] combine mode (RFC-0031 §S4): the shape stands alone. Every
 /// shape emitted before RFC-0031 is this, and this mode's rendering path is the
@@ -1305,7 +1324,8 @@ impl CanvasShape {
                 Rect::new(x0 - m, y0 - m, (x1 - x0) + m * 2.0, (y1 - y0) + m * 2.0)
             }
             CANVAS_SHAPE_RECT => Rect::new(p0 - m, p1 - m, p2 + m * 2.0, p3 + m * 2.0),
-            // Arc and circle: the full circle's box. An arc's true box is a
+            // Arc, circle and ngon: the circumscribed circle's box. An arc's
+            // true box is a
             // subset, but sweep-dependent tightening is not worth the CPU per
             // frame — the quad is still tiny.
             _ => {

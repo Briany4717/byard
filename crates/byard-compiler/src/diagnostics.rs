@@ -274,6 +274,37 @@ pub enum CompileError {
         /// Source range of the `Canvas` element.
         span: Span,
     },
+    /// A shape group carried more than
+    /// [`MAX_GROUP_MEMBERS`](byard_core::frame::MAX_GROUP_MEMBERS) shapes
+    /// (RFC-0031 §S5/§Q3).
+    ///
+    /// A hard cap rather than a silent truncation: the per-fragment loop's
+    /// bound is what makes a group's cost provable, and drawing eight of nine
+    /// shapes would hide the mistake instead of naming it.
+    TooManyGroupMembers {
+        /// Source range of the shape that exceeded the cap — the ninth one.
+        span: Span,
+        /// The cap.
+        max: usize,
+        /// How many shapes the group actually holds.
+        found: usize,
+    },
+    /// A property that has no continuous interpolation was given a `with`
+    /// clause (RFC-0031 §Q10).
+    ///
+    /// Distinct from [`LayoutPropNotAnimatable`](Self::LayoutPropNotAnimatable),
+    /// and the distinction is the whole point of the diagnostic: `ngon`'s `n`
+    /// is paint-class — it moves no geometry and costs no relayout — it simply
+    /// has no meaningful value between 5 and 6. The message therefore names the
+    /// construct that *does* change shape over time rather than only refusing.
+    NotAnimatable {
+        /// Source range of the `with` clause.
+        span: Span,
+        /// The property name.
+        prop: String,
+        /// The construct that expresses this intent instead.
+        use_instead: String,
+    },
     /// A `path(d: …)` command carried stroke properties (RFC-0020 §2: Tier-2
     /// MSDF rasterization is fill-only in v1; stroke a path by using the
     /// Tier-1 commands or an outlined `d`).
@@ -608,6 +639,8 @@ impl CompileError {
             | Self::UnknownShapeParam { span, .. }
             | Self::MissingShapeParam { span, .. }
             | Self::CanvasMissingSize { span }
+            | Self::TooManyGroupMembers { span, .. }
+            | Self::NotAnimatable { span, .. }
             | Self::PathStrokeUnsupported { span }
             | Self::DynamicStyleForbidden { span }
             | Self::ConflictingSpacingField { span, .. }
@@ -675,6 +708,8 @@ impl CompileError {
             | Self::UnknownShapeParam { span, .. }
             | Self::MissingShapeParam { span, .. }
             | Self::CanvasMissingSize { span }
+            | Self::TooManyGroupMembers { span, .. }
+            | Self::NotAnimatable { span, .. }
             | Self::PathStrokeUnsupported { span }
             | Self::DynamicStyleForbidden { span }
             | Self::ConflictingSpacingField { span, .. }
@@ -744,6 +779,8 @@ impl CompileError {
             Self::UnknownShapeParam { .. } => "UnknownShapeParam",
             Self::MissingShapeParam { .. } => "MissingShapeParam",
             Self::CanvasMissingSize { .. } => "CanvasMissingSize",
+            Self::TooManyGroupMembers { .. } => "TooManyGroupMembers",
+            Self::NotAnimatable { .. } => "NotAnimatable",
             Self::PathStrokeUnsupported { .. } => "PathStrokeUnsupported",
             Self::DynamicStyleForbidden { .. } => "DynamicStyleForbidden",
             Self::ConflictingSpacingField { .. } => "ConflictingSpacingField",
@@ -884,6 +921,18 @@ impl CompileError {
             }
             Self::CanvasMissingSize { .. } => {
                 "`Canvas` requires explicit `width` and `height` props".to_string()
+            }
+            Self::TooManyGroupMembers { max, found, .. } => {
+                format!(
+                    "a shape group holds at most {max} shapes; this one holds {found}.                      Split it into several groups, or drop a shape"
+                )
+            }
+            Self::NotAnimatable {
+                prop, use_instead, ..
+            } => {
+                format!(
+                    "`{prop}` has no value between one step and the next, so it                      cannot be animated; use `{use_instead}` to change shape over time"
+                )
             }
             Self::PathStrokeUnsupported { .. } => {
                 "`path` renders fills only; stroke it with `arc`/`line`/`bezier` \

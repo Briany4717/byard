@@ -191,6 +191,72 @@ pub enum CanvasItem {
     },
 }
 
+/// Where a canvas body's Tier-1 shapes go (RFC-0031 §S4).
+///
+/// A plain `Canvas` pushes each shape to the frame as its own instance, exactly
+/// as it always has. A `Canvas` that declares a combine mode collects them into
+/// one group instead — same walk, same per-tick re-evaluation of every
+/// parameter expression, different destination — and the head is pushed once at
+/// the end.
+///
+/// Routing this at the emission site rather than post-processing the frame's
+/// shape pool is what keeps `for`/`when` working inside a group for free: the
+/// members are whatever the walk produced, however it produced them.
+#[derive(Debug, Default)]
+pub(crate) struct ShapeGroupSink {
+    /// The members collected so far, in declaration order.
+    members: Vec<byard_core::frame::ShapeRecord>,
+    /// The union of their bounds — the head's quad (§S4).
+    bounds: Option<byard_core::frame::Rect>,
+    /// The paint parameters the head carries on the members' behalf: a group
+    /// has one stroke, one cap, one dash pattern and one opacity, taken from
+    /// the first member that contributed (§S8 makes the head's stroke govern;
+    /// there is no group-level stroke syntax, so the first shape's is it).
+    paint: Option<byard_core::frame::CanvasShape>,
+    /// Whether more shapes were offered than [`MAX_GROUP_MEMBERS`] allows.
+    ///
+    /// [`MAX_GROUP_MEMBERS`]: byard_core::frame::MAX_GROUP_MEMBERS
+    overflowed: usize,
+}
+
+impl ShapeGroupSink {
+    /// Adds one shape as a member, unioning its bounds into the head's quad.
+    fn push(&mut self, shape: &byard_core::frame::CanvasShape) {
+        let b = shape.bounds();
+        self.bounds = Some(match self.bounds {
+            Some(u) => union_rect(u, b),
+            None => b,
+        });
+        if self.paint.is_none() {
+            self.paint = Some(shape.clone());
+        }
+        if self.members.len() < byard_core::frame::MAX_GROUP_MEMBERS {
+            self.members
+                .push(byard_core::frame::ShapeRecord::from_shape(shape));
+        }
+        self.overflowed += 1;
+    }
+}
+
+/// A representative source position for a set of attributes — the first one's,
+/// or the file start when there are none. Used where a diagnostic is raised
+/// during the render walk, which has the element's attrs but not its node.
+fn attr_span(attrs: &[Attr]) -> Span {
+    attrs.first().map_or(Span::new(0, 0), |a| a.span)
+}
+
+/// The smallest rect containing both.
+fn union_rect(
+    first: byard_core::frame::Rect,
+    second: byard_core::frame::Rect,
+) -> byard_core::frame::Rect {
+    let left = first.x.min(second.x);
+    let top = first.y.min(second.y);
+    let right = (first.x + first.width).max(second.x + second.width);
+    let bottom = (first.y + first.height).max(second.y + second.height);
+    byard_core::frame::Rect::new(left, top, right - left, bottom - top)
+}
+
 /// Collects a `Canvas` body into [`CanvasItem`]s, keeping declaration order.
 ///
 /// Anything that is neither a shape command nor `for`/`when` has already been
@@ -4467,18 +4533,32 @@ impl Interpreter {
     /// Bindings are pushed and truncated per iteration rather than snapshotted,
     /// because the whole body runs inside the canvas's already-restored
     /// instance environment — the loop variable is the only thing that changes.
+    #[allow(clippy::too_many_arguments)]
     fn emit_canvas_items(
         &mut self,
         items: &[CanvasItem],
         canvas: crate::interp::intrinsics::Rect,
         opacity: f32,
         transform: byard_core::frame::Transform,
+        // `Some` while a grouped `Canvas` is collecting its members
+        // (RFC-0031 §S4); `None` for the ordinary one-instance-per-shape path.
+        group: Option<&mut ShapeGroupSink>,
         frame: &mut byard_core::frame::RenderFrame,
     ) {
+        // Reborrowed per item rather than moved, so the same sink threads
+        // through nested `for`/`when` bodies.
+        let mut group = group;
         for item in items {
             match item {
                 CanvasItem::Shape(el) => {
-                    self.emit_canvas_shape(el, canvas, opacity, transform, frame);
+                    self.emit_canvas_shape(
+                        el,
+                        canvas,
+                        opacity,
+                        transform,
+                        group.as_deref_mut(),
+                        frame,
+                    );
                 }
                 CanvasItem::For {
                     var,
@@ -4503,7 +4583,14 @@ impl Interpreter {
                             );
                         }
                         self.env.push(var.clone(), value);
-                        self.emit_canvas_items(body, canvas, opacity, transform, frame);
+                        self.emit_canvas_items(
+                            body,
+                            canvas,
+                            opacity,
+                            transform,
+                            group.as_deref_mut(),
+                            frame,
+                        );
                     }
                     self.env.truncate(base);
                 }
@@ -4513,24 +4600,47 @@ impl Interpreter {
                     } else {
                         els
                     };
-                    self.emit_canvas_items(taken, canvas, opacity, transform, frame);
+                    self.emit_canvas_items(
+                        taken,
+                        canvas,
+                        opacity,
+                        transform,
+                        group.as_deref_mut(),
+                        frame,
+                    );
                 }
             }
         }
     }
 
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     fn emit_canvas_shape(
         &mut self,
         el: &ElementNode,
         canvas: crate::interp::intrinsics::Rect,
         opacity: f32,
         transform: byard_core::frame::Transform,
+        mut group: Option<&mut ShapeGroupSink>,
         frame: &mut byard_core::frame::RenderFrame,
     ) {
         use byard_core::frame::{
             CANVAS_CAP_BUTT, CANVAS_CAP_ROUND, CANVAS_CAP_SQUARE, CANVAS_SHAPE_ARC,
-            CANVAS_SHAPE_CIRCLE, CANVAS_SHAPE_LINE, CANVAS_SHAPE_RECT, CanvasShape,
+            CANVAS_SHAPE_CIRCLE, CANVAS_SHAPE_LINE, CANVAS_SHAPE_NGON, CANVAS_SHAPE_RECT,
+            CanvasShape,
         };
+
+        /// One resolved Tier-1 shape: into the group being collected, or
+        /// straight onto the frame as its own instance.
+        fn emit(
+            group: &mut Option<&mut ShapeGroupSink>,
+            frame: &mut byard_core::frame::RenderFrame,
+            shape: CanvasShape,
+        ) {
+            match group {
+                Some(sink) => sink.push(&shape),
+                None => frame.push_canvas_shape(shape),
+            }
+        }
 
         let name = el.name.as_str();
         if name == "text" {
@@ -4591,58 +4701,101 @@ impl Interpreter {
                     self.shape_num(el, "sweep").unwrap_or(360.0)
                 };
                 let full = sweep.abs() >= 360.0;
-                frame.push_canvas_shape(CanvasShape {
-                    kind: if full {
-                        CANVAS_SHAPE_CIRCLE
-                    } else {
-                        CANVAS_SHAPE_ARC
+                emit(
+                    &mut group,
+                    frame,
+                    CanvasShape {
+                        kind: if full {
+                            CANVAS_SHAPE_CIRCLE
+                        } else {
+                            CANVAS_SHAPE_ARC
+                        },
+                        params: [
+                            cx,
+                            cy,
+                            r,
+                            start.to_radians(),
+                            sweep.to_radians(),
+                            0.0,
+                            0.0,
+                            0.0,
+                        ],
+                        ..base
                     },
-                    params: [
-                        cx,
-                        cy,
-                        r,
-                        start.to_radians(),
-                        sweep.to_radians(),
-                        0.0,
-                        0.0,
-                        0.0,
-                    ],
-                    ..base
-                });
+                );
             }
             "line" => {
-                frame.push_canvas_shape(CanvasShape {
-                    kind: CANVAS_SHAPE_LINE,
-                    params: [
-                        ox + self.shape_num(el, "x1").unwrap_or(0.0),
-                        oy + self.shape_num(el, "y1").unwrap_or(0.0),
-                        ox + self.shape_num(el, "x2").unwrap_or(0.0),
-                        oy + self.shape_num(el, "y2").unwrap_or(0.0),
-                        0.0,
-                        0.0,
-                        0.0,
-                        0.0,
-                    ],
-                    ..base
-                });
+                emit(
+                    &mut group,
+                    frame,
+                    CanvasShape {
+                        kind: CANVAS_SHAPE_LINE,
+                        params: [
+                            ox + self.shape_num(el, "x1").unwrap_or(0.0),
+                            oy + self.shape_num(el, "y1").unwrap_or(0.0),
+                            ox + self.shape_num(el, "x2").unwrap_or(0.0),
+                            oy + self.shape_num(el, "y2").unwrap_or(0.0),
+                            0.0,
+                            0.0,
+                            0.0,
+                            0.0,
+                        ],
+                        ..base
+                    },
+                );
             }
             "rect" => {
-                frame.push_canvas_shape(CanvasShape {
-                    kind: CANVAS_SHAPE_RECT,
-                    params: [
-                        ox + self.shape_num(el, "x").unwrap_or(0.0),
-                        oy + self.shape_num(el, "y").unwrap_or(0.0),
-                        self.shape_num(el, "w").unwrap_or(0.0),
-                        self.shape_num(el, "h").unwrap_or(0.0),
-                        self.shape_num(el, "radius").unwrap_or(0.0),
-                        // RFC-0031 §S3: the `rect` kind's corner smoothing,
-                        // clamped like every other consumer of the property.
-                        self.shape_num(el, "smooth").unwrap_or(0.0).clamp(0.0, 1.0),
-                        0.0,
-                        0.0,
-                    ],
-                    ..base
-                });
+                emit(
+                    &mut group,
+                    frame,
+                    CanvasShape {
+                        kind: CANVAS_SHAPE_RECT,
+                        params: [
+                            ox + self.shape_num(el, "x").unwrap_or(0.0),
+                            oy + self.shape_num(el, "y").unwrap_or(0.0),
+                            self.shape_num(el, "w").unwrap_or(0.0),
+                            self.shape_num(el, "h").unwrap_or(0.0),
+                            self.shape_num(el, "radius").unwrap_or(0.0),
+                            // RFC-0031 §S3: the `rect` kind's corner smoothing,
+                            // clamped like every other consumer of the property.
+                            self.shape_num(el, "smooth").unwrap_or(0.0).clamp(0.0, 1.0),
+                            0.0,
+                            0.0,
+                        ],
+                        ..base
+                    },
+                );
+            }
+            // RFC-0031 §"`ngon`": one parametric kind for the n-fold symmetric
+            // half of the expressive vocabulary.
+            "ngon" => {
+                #[allow(clippy::cast_precision_loss)]
+                let n = self.shape_num(el, "n").unwrap_or(3.0).round().max(3.0);
+                let r = self.shape_num(el, "r").unwrap_or(0.0).max(0.0);
+                emit(
+                    &mut group,
+                    frame,
+                    CanvasShape {
+                        kind: CANVAS_SHAPE_NGON,
+                        params: [
+                            ox + self.shape_num(el, "cx").unwrap_or(0.0),
+                            oy + self.shape_num(el, "cy").unwrap_or(0.0),
+                            r,
+                            // A corner larger than the circumradius has no
+                            // meaning; clamped at the one place it is read,
+                            // like `radius` on a box.
+                            self.shape_num(el, "corner").unwrap_or(0.0).clamp(0.0, r),
+                            // `1.0` is the convex regular polygon; below it the
+                            // notches pull in towards the centre.
+                            self.shape_num(el, "inner").unwrap_or(1.0).clamp(0.0, 1.0),
+                            // Already canonicalized to radians by the lexer.
+                            self.shape_num(el, "rotate").unwrap_or(0.0),
+                            n,
+                            0.0,
+                        ],
+                        ..base
+                    },
+                );
             }
             "bezier" => {
                 // Flattened CPU-side into round-capped line segments on the
@@ -4674,13 +4827,17 @@ impl Interpreter {
                     #[allow(clippy::cast_precision_loss)]
                     for i in 1..=segments {
                         let next = p(i as f32 / segments as f32);
-                        frame.push_canvas_shape(CanvasShape {
-                            kind: CANVAS_SHAPE_LINE,
-                            params: [prev[0], prev[1], next[0], next[1], 0.0, 0.0, 0.0, 0.0],
-                            cap: CANVAS_CAP_ROUND,
-                            fill_color: [0.0; 4],
-                            ..base.clone()
-                        });
+                        emit(
+                            &mut group,
+                            frame,
+                            CanvasShape {
+                                kind: CANVAS_SHAPE_LINE,
+                                params: [prev[0], prev[1], next[0], next[1], 0.0, 0.0, 0.0, 0.0],
+                                cap: CANVAS_CAP_ROUND,
+                                fill_color: [0.0; 4],
+                                ..base.clone()
+                            },
+                        );
                         prev = next;
                     }
                 }
@@ -6317,14 +6474,30 @@ impl Interpreter {
 
                     // Shape commands, in declaration order (painter's order —
                     // each `push_canvas_shape` advances the global emission
-                    // depth, RFC-0011).
+                    // depth, RFC-0011). A `Canvas` that declares a combine mode
+                    // (RFC-0031 §S4) collects them into one group instead, and
+                    // pushes its head once at the end.
+                    let combine = self.resolve_group_mode(paint_attrs);
+                    let mut sink = combine.map(|_| ShapeGroupSink::default());
                     self.emit_canvas_items(
                         shapes,
                         canvas_rect,
                         opacity,
                         inherited_transform,
+                        sink.as_mut(),
                         frame,
                     );
+                    if let (Some((mode, param)), Some(sink)) = (combine, sink) {
+                        self.push_shape_group(
+                            mode,
+                            param,
+                            sink,
+                            opacity,
+                            inherited_transform,
+                            attr_span(attrs),
+                            frame,
+                        );
+                    }
 
                     // Events: the canvas rect only — individual shapes are not
                     // hit-testable (RFC-0020 resolved question). Shifted to
@@ -8128,6 +8301,92 @@ impl Interpreter {
     fn eval_shadow_color(&mut self, e: &Expr) -> [f32; 4] {
         let packed = self.eval_pure(e).as_int().unwrap_or(DEFAULT_SHADOW_COLOR);
         super::intrinsics::color_to_rgba(packed, true)
+    }
+
+    /// The combine mode a `Canvas` declares, and its parameter (RFC-0031 §S4).
+    ///
+    /// `morph: <scalar>` is the sequence mode: the canvas's shapes become an
+    /// ordered set and the scalar indexes it. Reading it through
+    /// `eval_float_prop` puts it on the RFC-0010 animation chokepoint, which is
+    /// the whole design — the Material 3 loader is seven shapes and *one*
+    /// animated scalar, driven by machinery RFC-0025 already ships.
+    fn resolve_group_mode(&mut self, attrs: &[Attr]) -> Option<(u32, f32)> {
+        #[allow(clippy::cast_possible_truncation)]
+        self.eval_float_prop(attrs, "morph")
+            .map(|phase| (byard_core::frame::GROUP_MORPH, phase as f32))
+    }
+
+    /// Pushes a collected shape group's head (RFC-0031 §S4).
+    ///
+    /// The head's `params` are the union of its members' bounds expressed as a
+    /// rect, because `CanvasShape::bounds` is what sizes the instance quad and
+    /// §S4 makes a head's quad the union rather than its own geometry. Its
+    /// stroke, cap, dash and opacity come from the first member: a group has
+    /// one outline (§S8) and there is no group-level stroke syntax, so the
+    /// first shape's paint is the group's.
+    #[allow(clippy::too_many_arguments)]
+    fn push_shape_group(
+        &mut self,
+        mode: u32,
+        param: f32,
+        sink: ShapeGroupSink,
+        opacity: f32,
+        transform: byard_core::frame::Transform,
+        span: Span,
+        frame: &mut byard_core::frame::RenderFrame,
+    ) {
+        use byard_core::frame::{CANVAS_SHAPE_RECT, CanvasShape, MAX_GROUP_MEMBERS};
+        let (Some(bounds), Some(paint)) = (sink.bounds, sink.paint) else {
+            return; // an empty group draws nothing
+        };
+        // The written-shape count is diagnosed with a source position by
+        // `validate_canvas`. This is the other half: a `for` inside the body
+        // can generate members from data, and how many is only knowable here.
+        // Deduped, because the render walk runs every tick and a diagnostic
+        // that repeats sixty times a second is noise rather than information.
+        if sink.overflowed > MAX_GROUP_MEMBERS
+            && !self
+                .errors
+                .iter()
+                .any(|e| matches!(e, CompileError::TooManyGroupMembers { .. }))
+        {
+            self.errors.push(CompileError::TooManyGroupMembers {
+                span,
+                max: MAX_GROUP_MEMBERS,
+                found: sink.overflowed,
+            });
+        }
+        frame.push_shape_group(
+            CanvasShape {
+                // The head's own kind is never evaluated — the shader branches
+                // on the combine mode first — but `bounds()` is, so a rect
+                // carrying the union is exactly the quad §S4 asks for.
+                kind: CANVAS_SHAPE_RECT,
+                params: [
+                    bounds.x,
+                    bounds.y,
+                    bounds.width,
+                    bounds.height,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                ],
+                stroke_color: paint.stroke_color,
+                fill_color: paint.fill_color,
+                stroke_width: paint.stroke_width,
+                cap: paint.cap,
+                dash: paint.dash,
+                dash_offset: paint.dash_offset,
+                opacity,
+                transform,
+                group_mode: mode,
+                group_param: param,
+                dirty: true,
+                ..CanvasShape::default()
+            },
+            &sink.members,
+        );
     }
 
     /// The element's corner smoothing (RFC-0031 §S1), clamped to `0..=1`.
@@ -11534,6 +11793,122 @@ mod tests {
         let d = frame.canvas_depths();
         assert_eq!(d.len(), 3);
         assert!(d[0] > d[1] && d[1] > d[2]);
+    }
+
+    /// RFC-0031 §S4/§S10: a `Canvas` with `morph:` lowers to **one** instance
+    /// and N member records, not N instances.
+    #[test]
+    fn a_morph_canvas_lowers_to_one_head_and_its_members() {
+        let (mut interp, tree) = lower_named(
+            "View App() { var phase = 1.5 \
+               Canvas #[width: 100, height: 100, morph: phase] { \
+                 ngon(cx: 50, cy: 50, r: 40, n: 4, corner: 8, fill: 0x6750A4) \
+                 ngon(cx: 50, cy: 50, r: 40, n: 6, inner: 0.85, fill: 0x6750A4) \
+                 ngon(cx: 50, cy: 50, r: 40, n: 7, inner: 0.75, fill: 0x6750A4) } }",
+            "App",
+        );
+        assert!(interp.errors().is_empty(), "{:?}", interp.errors());
+        interp.tick();
+        let mut frame = byard_core::frame::RenderFrame::new();
+        interp.render(&tree, &mut frame, 400.0, 300.0);
+
+        let shapes = frame.canvas_shapes();
+        assert_eq!(shapes.len(), 1, "a group is one draw, one instance");
+        let head = &shapes[0];
+        assert_eq!(head.group_mode, byard_core::frame::GROUP_MORPH);
+        assert_eq!(head.group_count, 3);
+        assert!(
+            (head.group_param - 1.5).abs() < 1e-6,
+            "the phase reaches the head, got {}",
+            head.group_param
+        );
+        assert_ne!(head.member_hash, 0, "INV-26: the members are hashed in");
+        assert_eq!(frame.shape_records().len(), 3);
+
+        // §S4: the head's quad is the union of its members' bounds, not its own
+        // geometry — every member must fit inside it.
+        let quad = head.bounds();
+        for rec in frame.shape_records() {
+            let (cx, cy, r) = (rec.params0[0], rec.params0[1], rec.params0[2]);
+            assert!(
+                cx - r >= quad.x - 0.01 && cx + r <= quad.x + quad.width + 0.01,
+                "a member reaches outside the head's quad horizontally"
+            );
+            assert!(
+                cy - r >= quad.y - 0.01 && cy + r <= quad.y + quad.height + 0.01,
+                "a member reaches outside the head's quad vertically"
+            );
+        }
+
+        // The vertex counts survived as integers, in declaration order.
+        let counts: Vec<f32> = frame.shape_records().iter().map(|r| r.params1[2]).collect();
+        assert_eq!(
+            counts.iter().map(|n| *n as i32).collect::<Vec<_>>(),
+            [4, 6, 7]
+        );
+    }
+
+    /// The same body without `morph:` is unchanged: three ordinary instances
+    /// and no records. RFC-0031 costs nothing to a canvas that does not use it.
+    #[test]
+    fn a_canvas_without_a_combine_mode_is_untouched() {
+        let (mut interp, tree) = lower_named(
+            "View App() { Canvas #[width: 100, height: 100] { \
+                 ngon(cx: 50, cy: 50, r: 40, n: 4, fill: 0x6750A4) \
+                 ngon(cx: 50, cy: 50, r: 40, n: 6, fill: 0x6750A4) \
+                 ngon(cx: 50, cy: 50, r: 40, n: 7, fill: 0x6750A4) } }",
+            "App",
+        );
+        assert!(interp.errors().is_empty(), "{:?}", interp.errors());
+        interp.tick();
+        let mut frame = byard_core::frame::RenderFrame::new();
+        interp.render(&tree, &mut frame, 400.0, 300.0);
+        assert_eq!(frame.canvas_shapes().len(), 3);
+        assert!(frame.shape_records().is_empty());
+        assert!(
+            frame
+                .canvas_shapes()
+                .iter()
+                .all(|s| s.group_mode == byard_core::frame::GROUP_NONE)
+        );
+    }
+
+    /// A `for` inside a grouped canvas can generate more members than the cap
+    /// allows, and how many is only knowable at render time. The static check
+    /// cannot see it; this one can, and it diagnoses rather than truncating in
+    /// silence.
+    #[test]
+    fn a_for_that_overruns_the_group_cap_is_diagnosed_at_render_time() {
+        let (mut interp, tree) = lower_named(
+            "View App() { var xs = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9] \
+               Canvas #[width: 200, height: 100, morph: 0.0] { \
+                 for x in xs { ngon(cx: 50, cy: 50, r: 40, n: 5, fill: 0x6750A4) } } }",
+            "App",
+        );
+        assert!(interp.errors().is_empty(), "{:?}", interp.errors());
+        interp.tick();
+        let mut frame = byard_core::frame::RenderFrame::new();
+        interp.render(&tree, &mut frame, 400.0, 300.0);
+        assert!(
+            interp
+                .errors()
+                .iter()
+                .any(|e| matches!(e, CompileError::TooManyGroupMembers { found: 10, .. })),
+            "expected a cap diagnostic, got {:?}",
+            interp.errors()
+        );
+        assert_eq!(
+            frame.shape_records().len(),
+            byard_core::frame::MAX_GROUP_MEMBERS,
+            "and the group is bounded rather than overflowing the shader's loop"
+        );
+
+        // Rendering again must not re-report it: a diagnostic that repeats
+        // sixty times a second is noise, not information.
+        let before = interp.errors().len();
+        let mut frame2 = byard_core::frame::RenderFrame::new();
+        interp.render(&tree, &mut frame2, 400.0, 300.0);
+        assert_eq!(interp.errors().len(), before);
     }
 
     #[test]

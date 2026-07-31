@@ -673,6 +673,11 @@ pub fn lookup(name: &str) -> Option<Intrinsic> {
             props.insert("grow", lay(PropType::Int));
             props.insert("m", lay(PropType::Len));
             props.insert("opacity", pnt(PropType::Float));
+            // RFC-0031 §S10: `morph: <scalar>` reinterprets the canvas's shapes
+            // as a *sequence* and indexes it. Paint-class, so it animates
+            // through the ordinary chokepoint — a morph that relaid out the
+            // tree at the display rate is precisely what INV-8 forbids.
+            props.insert("morph", pnt(PropType::Float));
             props.insert("style", lay(PropType::Class));
             Intrinsic {
                 arity: 0,
@@ -1147,8 +1152,9 @@ fn check_value_type(ty: PropType, value: &Expr) -> Option<CompileError> {
 
 /// The closed set of shape-command names valid inside a `Canvas` body
 /// (RFC-0020 §"Shape commands").
-pub const SHAPE_COMMAND_NAMES: &[&str] =
-    &["arc", "circle", "line", "rect", "path", "bezier", "text"];
+pub const SHAPE_COMMAND_NAMES: &[&str] = &[
+    "arc", "circle", "line", "rect", "ngon", "path", "bezier", "text",
+];
 
 /// Whether `name` is one of the RFC-0020 shape commands.
 #[must_use]
@@ -1220,6 +1226,23 @@ fn shape_geometry(name: &str) -> (ShapeParams, ShapeParams) {
             // same 0..1 scalar the box intrinsics take.
             &[("radius", PropType::Float), ("smooth", PropType::Float)],
         ),
+        // RFC-0031 §"`ngon`": one parametric kind covering the great majority
+        // of the Material 3 Expressive vocabulary. `n` is an integer literal
+        // and is *not* animatable (§Q10) — `morph` is what changes shape over
+        // time.
+        "ngon" => (
+            &[
+                ("cx", PropType::Float),
+                ("cy", PropType::Float),
+                ("r", PropType::Float),
+                ("n", PropType::Int),
+            ],
+            &[
+                ("corner", PropType::Float),
+                ("inner", PropType::Float),
+                ("rotate", PropType::Angle),
+            ],
+        ),
         "path" => (&[("d", PropType::Str)], &[]),
         "bezier" => (
             &[
@@ -1269,7 +1292,60 @@ pub fn validate_canvas(el: &ElementNode, attrs: &[Attr]) -> Vec<CompileError> {
     }
 
     validate_canvas_body(&el.children, &mut errs);
+    validate_group_cap(el, attrs, &mut errs);
     errs
+}
+
+/// RFC-0031 §S5/§Q3: a `Canvas` that declares a combine mode turns its shapes
+/// into one group's members, and a group holds at most
+/// [`MAX_GROUP_MEMBERS`](byard_core::frame::MAX_GROUP_MEMBERS) of them.
+///
+/// Counted over the *written* shape commands. A `for` inside the body can
+/// generate members from data, and how many is not knowable here — that case is
+/// caught where it becomes knowable, at lowering, against the same cap. This
+/// check is the one that names a source position, which is what makes it the
+/// useful half.
+fn validate_group_cap(el: &ElementNode, attrs: &[Attr], errs: &mut Vec<CompileError>) {
+    let grouped = attrs.iter().any(|a| {
+        GROUP_MODE_PROPS.contains(&a.name.as_str()) && matches!(a.kind, AttrKind::Prop { .. })
+    });
+    if !grouped {
+        return;
+    }
+    let mut shapes = Vec::new();
+    collect_group_members(&el.children, &mut shapes);
+    if shapes.len() > byard_core::frame::MAX_GROUP_MEMBERS {
+        errs.push(CompileError::TooManyGroupMembers {
+            // The shape that broke the cap, not the canvas: the author needs to
+            // know *which* one to move.
+            span: shapes[byard_core::frame::MAX_GROUP_MEMBERS],
+            max: byard_core::frame::MAX_GROUP_MEMBERS,
+            found: shapes.len(),
+        });
+    }
+}
+
+/// The `Canvas` attributes that declare a combine mode (RFC-0031 §S4).
+const GROUP_MODE_PROPS: &[&str] = &["morph"];
+
+/// Collects the spans of the shape commands a grouped `Canvas` body writes
+/// literally, in order. `when` branches are both walked — either can be the one
+/// that is taken — and `for` bodies are skipped, since their count is data.
+fn collect_group_members(members: &[Member], out: &mut Vec<crate::diagnostics::Span>) {
+    for member in members {
+        match member {
+            Member::Element(child) if is_shape_command(child.name.as_str()) => {
+                out.push(child.span);
+            }
+            Member::When { then, els, .. } => {
+                collect_group_members(then, out);
+                if let Some(els) = els {
+                    collect_group_members(els, out);
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 /// Validates a `Canvas` body: shape commands, and the `for`/`when` that
@@ -1411,6 +1487,23 @@ pub fn validate_shape(el: &ElementNode) -> Vec<CompileError> {
                 hint: closest_match(pname, candidates).map(str::to_string),
             });
         } else if let Some(ty) = param_type(pname) {
+            // RFC-0031 §Q10: `ngon`'s `n` is paint-class — it moves no
+            // geometry — and still cannot animate, because there is no shape
+            // between a pentagon and a hexagon. A fractional `n` leaves a
+            // partial sector whose seam sweeps the shape *while animating*,
+            // which is the only time the feature would be used. The diagnostic
+            // names `morph`, so it teaches the right construct rather than
+            // only refusing; it is deliberately *not* `LayoutPropNotAnimatable`,
+            // whose reason (and whose remedy) are different ones.
+            if shape == "ngon" && pname == "n" {
+                if let Expr::Animated { span, .. } = &arg.value {
+                    errs.push(CompileError::NotAnimatable {
+                        span: *span,
+                        prop: "n".to_string(),
+                        use_instead: "morph".to_string(),
+                    });
+                }
+            }
             // Same literal-level check as attribute values, including the
             // RFC-0010 `with` animation chain walk.
             let mut target = &arg.value;
@@ -2207,6 +2300,130 @@ mod tests {
         let mut e = validate_element(&el, &el.attrs, &[]);
         e.extend(validate_canvas(&el, &el.attrs));
         e
+    }
+
+    // ── RFC-0031 §S9–§S10: `ngon` and sequence morphing ───────────────────
+
+    #[test]
+    fn ngon_is_a_shape_command_with_its_own_parameter_contract() {
+        assert!(is_shape_command("ngon"));
+        let e = canvas_errs(
+            "View V() { Canvas #[width: 48, height: 48] { \
+               ngon(cx: 24, cy: 24, r: 20, n: 7, corner: 5, inner: 0.75, \
+                    rotate: 15deg, fill: 0x6750A4) } }",
+        );
+        assert!(
+            e.is_empty(),
+            "a fully-specified ngon must check clean: {e:?}"
+        );
+
+        // `n` and `r` are required; the rest have defaults.
+        let missing =
+            canvas_errs("View V() { Canvas #[width: 48, height: 48] { ngon(cx: 1, cy: 1) } }");
+        let names: Vec<&str> = missing
+            .iter()
+            .filter_map(|x| match x {
+                CompileError::MissingShapeParam { name, .. } => Some(name.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert!(names.contains(&"r") && names.contains(&"n"), "{missing:?}");
+    }
+
+    /// §Q10. The diagnostic must be `NotAnimatable`, **not**
+    /// `LayoutPropNotAnimatable`: `n` moves no geometry and costs no relayout,
+    /// it simply has no value between a pentagon and a hexagon. Conflating the
+    /// two would tell the author to reach for a transform, which is the wrong
+    /// advice — the right one is `morph`.
+    #[test]
+    fn animating_ngons_vertex_count_is_refused_and_names_morph() {
+        let e = canvas_errs(
+            "View V() { Canvas #[width: 48, height: 48] { \
+               ngon(cx: 24, cy: 24, r: 20, n: 5 with anim.spring(), fill: 0x6750A4) } }",
+        );
+        let found = e
+            .iter()
+            .find(|x| matches!(x, CompileError::NotAnimatable { .. }))
+            .unwrap_or_else(|| panic!("expected NotAnimatable, got {e:?}"));
+        assert!(
+            found.headline().contains("morph"),
+            "the error must teach the right construct: {}",
+            found.headline()
+        );
+        assert!(
+            !e.iter()
+                .any(|x| matches!(x, CompileError::LayoutPropNotAnimatable { .. })),
+            "`n` is paint-class; the layout diagnostic would be the wrong reason"
+        );
+    }
+
+    /// The other side: everything else about an `ngon` animates, because the
+    /// shape's *proportions* are continuous even though its vertex count is not.
+    #[test]
+    fn an_ngons_continuous_parameters_still_animate() {
+        let e = canvas_errs(
+            "View V() { Canvas #[width: 48, height: 48] { \
+               ngon(cx: 24, cy: 24, r: 20, n: 5, inner: 0.4 with anim.spring(), \
+                    corner: 2 with anim.spring(), fill: 0x6750A4) } }",
+        );
+        assert!(e.is_empty(), "inner/corner must animate: {e:?}");
+    }
+
+    /// §S5/§Q3. The cap is diagnosed at the **ninth shape**, not at the canvas:
+    /// the author needs to know which one to move.
+    #[test]
+    fn a_ninth_shape_in_a_group_is_an_error_naming_that_shape() {
+        let members = (0..9)
+            .map(|i| format!("ngon(cx: {}, cy: 24, r: 8, n: 5, fill: 0x6750A4)", i * 10))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let src =
+            format!("View V() {{ Canvas #[width: 200, height: 48, morph: 0.0] {{ {members} }} }}");
+        let el = first_element(&src);
+        let e = validate_canvas(&el, &el.attrs);
+        let CompileError::TooManyGroupMembers { span, max, found } = e
+            .iter()
+            .find(|x| matches!(x, CompileError::TooManyGroupMembers { .. }))
+            .unwrap_or_else(|| panic!("expected TooManyGroupMembers, got {e:?}"))
+        else {
+            unreachable!()
+        };
+        assert_eq!((*max, *found), (8, 9));
+        // The span is the ninth shape's, which begins after the eighth ends.
+        let ninth = src.rfind("ngon(").expect("nine ngons were written");
+        assert_eq!(
+            span.start as usize, ninth,
+            "the error must point at the ninth shape"
+        );
+
+        // Eight is fine, and the same body without a combine mode is fine at
+        // any count — the cap belongs to the group, not to the canvas.
+        let eight = members.rsplit_once(" ngon(").expect("nine members").0;
+        let ok =
+            format!("View V() {{ Canvas #[width: 200, height: 48, morph: 0.0] {{ {eight} }} }}");
+        let el = first_element(&ok);
+        assert!(validate_canvas(&el, &el.attrs).is_empty());
+        let ungrouped = format!("View V() {{ Canvas #[width: 200, height: 48] {{ {members} }} }}");
+        let el = first_element(&ungrouped);
+        assert!(
+            validate_canvas(&el, &el.attrs).is_empty(),
+            "an ungrouped canvas has no member cap"
+        );
+    }
+
+    #[test]
+    fn morph_is_a_paint_class_canvas_attribute() {
+        let canvas = lookup("Canvas").expect("Canvas is an intrinsic");
+        assert_eq!(canvas.property_class("morph"), Some(AttrClass::Paint));
+        // §S10 × INV-8: the whole point is that the Material 3 loader is one
+        // animated scalar. A layout classification would refuse it.
+        let e = canvas_errs(
+            "View V() { Canvas #[width: 48, height: 48, \
+               morph: 7.0 with anim.linear(4550ms, from: 0.0, repeat: infinite)] { \
+               ngon(cx: 24, cy: 24, r: 20, n: 4, fill: 0x6750A4) \
+               ngon(cx: 24, cy: 24, r: 20, n: 7, fill: 0x6750A4) } }",
+        );
+        assert!(e.is_empty(), "morph must animate: {e:?}");
     }
 
     #[test]

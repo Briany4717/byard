@@ -477,6 +477,7 @@ fn content_clip_scissors_overflow_to_the_viewport() {
         color: c,
         radii: [0.0; 4],
         transform: Transform::IDENTITY,
+        smooth: 0.0,
     };
 
     // Scene: a dark full-frame background, then a 200×140 "scroll window" clip

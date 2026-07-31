@@ -152,6 +152,7 @@ fn solid(rect: [f32; 4], color: [f32; 4]) -> BoxInstance {
         color,
         radii: [0.0; 4],
         transform: Transform::IDENTITY,
+        smooth: 0.0,
     }
 }
 

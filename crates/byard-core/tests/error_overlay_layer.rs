@@ -159,6 +159,7 @@ fn app_frame(color: [f32; 4]) -> RenderFrame {
         color,
         radii: [0.0; 4],
         transform: Transform::IDENTITY,
+        smooth: 0.0,
     });
     f
 }
@@ -177,6 +178,7 @@ fn push_overlay(f: &mut RenderFrame) {
         opacity: 1.0,
         transform: Transform::IDENTITY,
         depth: 0.0,
+        smooth: 0.0,
     });
 }
 
@@ -328,6 +330,7 @@ fn mark_dirty_since_marks_forward_and_leaves_everything_before_it_alone() {
         color: [1.0; 4],
         radii: [0.0; 4],
         transform: Transform::IDENTITY,
+        smooth: 0.0,
     });
 
     let mark = f.cursor();
@@ -341,6 +344,7 @@ fn mark_dirty_since_marks_forward_and_leaves_everything_before_it_alone() {
         color: [1.0; 4],
         radii: [0.0; 4],
         transform: Transform::IDENTITY,
+        smooth: 0.0,
     });
 
     f.mark_dirty_since(mark);

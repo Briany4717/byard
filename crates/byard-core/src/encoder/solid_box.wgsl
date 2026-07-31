@@ -12,6 +12,8 @@ struct InstanceInput {
     @location(6) t_rotate: f32,
     @location(7) t_origin: vec2<f32>,
     @location(8) t_opacity: f32,
+    // Corner smoothing 0..1 (RFC-0031 §S1); 0 is the historical circular arc.
+    @location(10) smooth_amount: f32,
 };
 
 // Draw-order depth (NDC-z), fed from a separate per-instance vertex buffer so
@@ -39,6 +41,10 @@ struct VertexOutput {
     @location(2) color: vec4<f32>,
     @location(3) radii: vec4<f32>,
     @location(4) opacity: f32,
+    /// Lⁿ corner exponent (RFC-0031 §S1), `2 + smooth * 4`. Flat, because it is
+    /// constant per instance and interpolating it would be a lie about the
+    /// shape's own profile.
+    @location(5) @interpolate(flat) corner_n: f32,
 };
 
 @group(0) @binding(0) var<uniform> viewport_size: vec2<f32>;
@@ -118,7 +124,32 @@ fn vs_main(vertex: VertexInput, instance: InstanceInput, depth: DepthInput) -> V
     out.color = instance.color;
     out.radii = instance.radii;
     out.opacity = instance.t_opacity;
+    // RFC-0031 §S1: `smooth: 0` must land on exactly 2.0 so the field below
+    // takes its bit-identical short-circuit.
+    out.corner_n = 2.0 + clamp(instance.smooth_amount, 0.0, 1.0) * 4.0;
     return out;
+}
+
+/// Lⁿ norm of a **non-negative** 2-vector, paired with the magnitude of its own
+/// gradient (RFC-0031 §S1–S2).
+///
+/// `n == 2` is the Euclidean norm and its gradient is exactly 1 — the circular
+/// corner every pipeline drew before RFC-0031. Above 2 the norm is *not* a true
+/// signed distance: on the corner diagonal its gradient is `2^(1/n - 1/2)`,
+/// which falls to ≈0.79 at `n = 6`, so the corner's anti-aliased fringe would
+/// come out ~26 % wider than the edge's — a smeared corner on exactly the
+/// shapes the property exists to sharpen the *profile* of. Returning the
+/// gradient alongside the value lets the caller normalise the field once, at
+/// the source, so *every* consumer of it (edge coverage, the border band,
+/// shadow blur falloff, clip masks) is corrected by the same division.
+fn lp_norm(v: vec2<f32>, n: f32) -> vec2<f32> {
+    let a = pow(v.x, n) + pow(v.y, n);
+    if (a <= 0.0) {
+        return vec2<f32>(0.0, 1.0);
+    }
+    let f = pow(a, 1.0 / n);
+    let g = vec2<f32>(pow(v.x / f, n - 1.0), pow(v.y / f, n - 1.0));
+    return vec2<f32>(f, max(length(g), 1e-4));
 }
 
 /// SDF for a rounded rectangle with per-corner radii.
@@ -133,7 +164,7 @@ fn vs_main(vertex: VertexInput, instance: InstanceInput, depth: DepthInput) -> V
 ///
 /// The default case (p.x <= 0 && p.y <= 0) covers the top-left quadrant and
 /// the coordinate axes, where the top-left radius applies.
-fn sd_rounded_box(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>) -> f32 {
+fn sd_rounded_box(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>, n: f32) -> f32 {
     var r_corner = r.x; // Top-Left (default — also covers axes p.x == 0 or p.y == 0)
     if (p.x > 0.0 && p.y < 0.0) { r_corner = r.y; } // Top-Right
     if (p.x > 0.0 && p.y > 0.0) { r_corner = r.z; } // Bottom-Right
@@ -144,15 +175,26 @@ fn sd_rounded_box(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>) -> f32 {
     // field folds in on itself and the corners visibly deform — a `radius: 20`
     // pill on a 33px-tall button is the everyday case). Clamping here, at the
     // one place the radius is consumed, keeps every pipeline honest and matches
-    // the CSS rule that an over-large radius is reduced to fit.
+    // the CSS rule that an over-large radius is reduced to fit. The clamp is
+    // norm-independent: the fold happens past half the extent whatever `n` is.
     r_corner = min(r_corner, min(b.x, b.y));
     let q = abs(p) - b + vec2<f32>(r_corner);
-    return min(max(q.x, q.y), 0.0) + length(max(q, vec2<f32>(0.0))) - r_corner;
+    let corner = max(q, vec2<f32>(0.0));
+    let inner = min(max(q.x, q.y), 0.0);
+    // RFC-0031 §S1: the L² path, verbatim and unconditional at `smooth: 0`.
+    if (n == 2.0) {
+        return inner + length(corner) - r_corner;
+    }
+    // `inner` is non-zero only where one of `corner`'s components is zero, and
+    // there `lp.y == 1` — so dividing the whole expression normalises exactly
+    // the corner arc and leaves the straight edges untouched.
+    let lp = lp_norm(corner, n);
+    return (inner + lp.x - r_corner) / lp.y;
 }
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let distance = sd_rounded_box(in.local_pos, in.half_size, in.radii);
+    let distance = sd_rounded_box(in.local_pos, in.half_size, in.radii, in.corner_n);
 
     // Anti-alias the edge over one pixel using the Euclidean gradient magnitude.
     // We use length([dpdx, dpdy]) instead of fwidth (Manhattan norm) to get a

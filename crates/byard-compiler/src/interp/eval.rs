@@ -272,7 +272,7 @@ fn collect_pools(nodes: &[RenderNode], out: &mut Vec<usize>) {
 }
 
 /// One concrete node produced by expanding `when`/`for`, and the animation slot
-/// it belongs to (RFC-0025 × M71).
+/// it belongs to (RFC-0025).
 ///
 /// The slot travels *with the node* rather than being recomputed by each
 /// walker, because the expansion is the only place that knows it: after
@@ -1204,7 +1204,7 @@ pub struct Interpreter {
     /// emitted backdrops at the end of [`render`](Self::render).
     perf_warnings: Vec<PerfWarning>,
     /// The element instance the render walk is currently inside — the `slot`
-    /// half of an [`AnimKey`] (M71).
+    /// half of an [`AnimKey`].
     ///
     /// Set from the expansion, which is the only place that knows it: after
     /// `when`/`for` are flattened, a row of a `for` is indistinguishable from a
@@ -3653,7 +3653,7 @@ impl Interpreter {
         self.nav_targets.clear();
         // RFC-0018 radio groups are rebuilt from the fresh layout each render.
         self.radio_groups.clear();
-        // M71: the walk starts outside every `for`. Reset rather than assume,
+        // The walk starts outside every `for`. Reset rather than assume,
         // so a frame that ends deep inside a list cannot leak that row's
         // identity into the next frame's top-level animations.
         self.anim_slot = 0;
@@ -3862,7 +3862,7 @@ impl Interpreter {
         // renders through the exact single-layer draw stream.
         for ol in &overlay_layouts {
             frame.begin_layer();
-            // M71: an overlay leaves the layout flow, and its animation
+            // An overlay leaves the layout flow, and its animation
             // identity leaves the walk with it — it is emitted here rather than
             // where it was written, so whatever row the main pass finished
             // inside must not carry over into it.
@@ -6035,7 +6035,7 @@ impl Interpreter {
                                     child: Concrete<'_>,
                                     frame: &mut byard_core::frame::RenderFrame,
                                     flat_idx: &mut usize| {
-                    // M71: the instance this child belongs to, so every `with`
+                    // The instance this child belongs to, so every `with`
                     // it evaluates keys to its own row rather than to the
                     // written span shared by all of them.
                     this.anim_slot = child.slot;
@@ -9526,7 +9526,7 @@ impl Interpreter {
     }
 
     /// Forgets the animation state of the rows `from..to` of `pool`, and of
-    /// everything nested inside them (M71 × RFC-0025).
+    /// everything nested inside them (RFC-0025).
     ///
     /// A nested `for` is lowered once per *outer* row, so the pools inside a
     /// vanished row belong to that row alone: walking its lowered nodes for
@@ -9563,8 +9563,7 @@ impl Interpreter {
         self.anim_clocks.retain(|k, _| !dead.contains(&k.slot));
     }
 
-    /// The animation key for `span` on the instance currently being rendered
-    /// (M71).
+    /// The animation key for `span` on the instance currently being rendered.
     const fn anim_key(&self, span: Span) -> AnimKey {
         AnimKey::new(span, self.anim_slot)
     }
@@ -13246,8 +13245,8 @@ mod tests {
         );
     }
 
-    /// **The defect M71 exists for.** Two `for` rows heading for *different*
-    /// targets each reach their own.
+    /// **The defect the instance half of the key exists for.** Two `for` rows
+    /// heading for *different* targets each reach their own.
     ///
     /// Before the animation key carried an instance, the two rows shared one
     /// `Motion`: every frame, row A retargeted it to A's goal and row B
@@ -13334,9 +13333,9 @@ mod tests {
         );
     }
 
-    /// The other side of the same coin, and what M71 changed: a row that leaves
-    /// the *list* is unmounted, and an unmount takes its animation with it
-    /// (RFC-0025: "no separate stop-animation API — the animation lives and
+    /// The other side of the same coin, and what the instance key changed: a row
+    /// that leaves the *list* is unmounted, and an unmount takes its animation
+    /// with it (RFC-0025: "no separate stop-animation API — the animation lives and
     /// dies with its element").
     ///
     /// This is not a preference between two readings. A `for` pool's bodies are

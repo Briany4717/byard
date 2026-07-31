@@ -131,6 +131,7 @@ fn frame_with(app_lines: &[String], hud_fields: Option<&[String]>) -> RenderFram
         color: [0.1, 0.1, 0.12, 1.0],
         radii: [0.0; 4],
         transform: Transform::IDENTITY,
+        smooth: 0.0,
     });
     for (i, text) in app_lines.iter().enumerate() {
         #[allow(clippy::cast_precision_loss)]

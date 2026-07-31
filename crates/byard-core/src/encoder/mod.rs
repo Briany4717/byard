@@ -177,6 +177,13 @@ impl BoxInstance {
                     shader_location: 8,
                     format: wgpu::VertexFormat::Float32,
                 },
+                // smooth (RFC-0031 §S1). Location 10, not 9: the parallel
+                // draw-order depth buffer already owns 9 (`solid_depth_layout`).
+                wgpu::VertexAttribute {
+                    offset: 80,
+                    shader_location: 10,
+                    format: wgpu::VertexFormat::Float32,
+                },
             ],
         }
     }
@@ -2930,6 +2937,7 @@ fn stage_clear_quad(
         color: [0.0, 0.0, 0.0, 0.0],
         radii: [0.0; 4],
         transform: Transform::IDENTITY,
+        smooth: 0.0,
     };
     let instance = arena.push_vertex(std::slice::from_ref(&clear_instance));
     // The clear pipeline shares `solid_box.wgsl`, which reads a depth at
@@ -3204,12 +3212,12 @@ mod tests {
     #[test]
     fn box_instance_size_and_alignment() {
         // 3 fields × [f32; 4] × 4 bytes = 48, + Transform's 8 × f32 × 4 bytes
-        // = 32, for 80 bytes total (RFC-0011). The GPU stride declaration in
-        // `layout()` hardcodes this value.
+        // = 32, + `smooth`'s 4 (RFC-0031 §S1), for 84 bytes total. The GPU
+        // stride declaration in `layout()` hardcodes this value.
         assert_eq!(
             std::mem::size_of::<BoxInstance>(),
-            80,
-            "BoxInstance must be exactly 80 bytes"
+            84,
+            "BoxInstance must be exactly 84 bytes"
         );
         // f32 requires 4-byte alignment; wgpu vertex attributes assume this.
         assert_eq!(std::mem::align_of::<BoxInstance>(), 4);
@@ -3224,6 +3232,9 @@ mod tests {
         assert_eq!(std::mem::offset_of!(BoxInstance, color), 16);
         assert_eq!(std::mem::offset_of!(BoxInstance, radii), 32);
         assert_eq!(std::mem::offset_of!(BoxInstance, transform), 48);
+        // `smooth` is declared *after* `transform` precisely so the four
+        // offsets above are the ones they have always been (RFC-0031 §S1).
+        assert_eq!(std::mem::offset_of!(BoxInstance, smooth), 80);
         assert_eq!(std::mem::offset_of!(Transform, translate), 0);
         assert_eq!(std::mem::offset_of!(Transform, scale), 8);
         assert_eq!(std::mem::offset_of!(Transform, rotate), 16);
@@ -3236,7 +3247,7 @@ mod tests {
         let layout = BoxInstance::layout();
 
         assert_eq!(
-            layout.array_stride, 80,
+            layout.array_stride, 84,
             "stride must equal size_of::<BoxInstance>()"
         );
         assert_eq!(
@@ -3247,7 +3258,7 @@ mod tests {
 
         // Verify each attribute's (shader_location, offset) pair.
         let attrs = layout.attributes;
-        assert_eq!(attrs.len(), 8);
+        assert_eq!(attrs.len(), 9);
 
         assert_eq!(attrs[0].shader_location, 1); // rect
         assert_eq!(attrs[0].offset, 0);
@@ -3280,6 +3291,12 @@ mod tests {
         assert_eq!(attrs[7].shader_location, 8); // transform.opacity
         assert_eq!(attrs[7].offset, 76);
         assert_eq!(attrs[7].format, wgpu::VertexFormat::Float32);
+
+        // Location 9 is the parallel draw-order depth buffer's, so `smooth`
+        // takes 10 (RFC-0031 §S1).
+        assert_eq!(attrs[8].shader_location, 10); // smooth
+        assert_eq!(attrs[8].offset, 80);
+        assert_eq!(attrs[8].format, wgpu::VertexFormat::Float32);
     }
 
     #[test]
@@ -3292,16 +3309,18 @@ mod tests {
                 color: [1.0, 0.0, 0.5, 1.0],
                 radii: [8.0, 8.0, 8.0, 8.0],
                 transform: Transform::IDENTITY,
+                smooth: 0.0,
             },
             BoxInstance {
                 rect: [10.0, 20.0, 200.0, 80.0],
                 color: [0.0, 1.0, 0.0, 0.8],
                 radii: [0.0; 4],
                 transform: Transform::IDENTITY,
+                smooth: 0.0,
             },
         ];
         let bytes: &[u8] = bytemuck::cast_slice(&instances);
-        assert_eq!(bytes.len(), 2 * 80, "2 instances × 80 bytes each");
+        assert_eq!(bytes.len(), 2 * 84, "2 instances × 84 bytes each");
     }
 
     #[test]
@@ -3456,6 +3475,7 @@ mod tests {
             color: [0.25, 0.5, 0.75, 1.0],
             radii: [8.0, 16.0, 24.0, 32.0],
             transform: Transform::IDENTITY,
+            smooth: 0.0,
         };
 
         let bytes: &[u8] = bytemuck::bytes_of(&original);
@@ -3570,6 +3590,213 @@ mod tests {
         assert!(cpu_sd_rounded_box([100.0, 100.0], half, r_big).is_finite());
     }
 
+    // ── SDF: superelliptical corners (RFC-0031 §S1–S3) ────────────────────────
+
+    /// CPU twin of the WGSL `lp_norm`: the Lⁿ norm of a non-negative 2-vector
+    /// and the magnitude of its own gradient.
+    fn cpu_lp_norm(v: [f32; 2], n: f32) -> (f32, f32) {
+        let a = v[0].powf(n) + v[1].powf(n);
+        if a <= 0.0 {
+            return (0.0, 1.0);
+        }
+        let f = a.powf(1.0 / n);
+        let gx = (v[0] / f).powf(n - 1.0);
+        let gy = (v[1] / f).powf(n - 1.0);
+        (f, (gx * gx + gy * gy).sqrt().max(1e-4))
+    }
+
+    /// CPU twin of the WGSL `sd_rounded_box` **with** the RFC-0031 corner
+    /// exponent, structured exactly as the shader is — including the `n == 2`
+    /// short-circuit, which is the claim [`smooth_zero_is_the_historical_field`]
+    /// checks.
+    #[allow(clippy::many_single_char_names)]
+    // The `n == 2.0` test is the shader's, verbatim: RFC-0031 §S1 makes an
+    // exact comparison a *correctness* requirement, because `pow(x, 2)` and
+    // `x * x` differ in the last ULP and an epsilon here would let the
+    // approximate path run on the default profile.
+    #[allow(clippy::float_cmp)]
+    fn cpu_sd_rounded_box_n(p: [f32; 2], b: [f32; 2], r: [f32; 4], n: f32) -> f32 {
+        let mut r_corner = r[0];
+        if p[0] > 0.0 && p[1] < 0.0 {
+            r_corner = r[1];
+        }
+        if p[0] > 0.0 && p[1] > 0.0 {
+            r_corner = r[2];
+        }
+        if p[0] < 0.0 && p[1] > 0.0 {
+            r_corner = r[3];
+        }
+        let q = [p[0].abs() - b[0] + r_corner, p[1].abs() - b[1] + r_corner];
+        let corner = [q[0].max(0.0), q[1].max(0.0)];
+        let inner = q[0].max(q[1]).min(0.0);
+        if n == 2.0 {
+            return inner + (corner[0] * corner[0] + corner[1] * corner[1]).sqrt() - r_corner;
+        }
+        let (value, grad) = cpu_lp_norm(corner, n);
+        (inner + value - r_corner) / grad
+    }
+
+    /// INV-22, and the load-bearing test of RFC-0031 §S1: at `smooth: 0` the
+    /// field is the one that existed before the property did — **bitwise**, not
+    /// approximately. `pow(x, 2)` and `x * x` differ in the last ULP, and every
+    /// golden image in the repo would move with them, so the short-circuit is a
+    /// correctness requirement rather than an optimisation.
+    #[test]
+    fn smooth_zero_is_the_historical_field() {
+        let half = [60.0_f32, 34.0];
+        let radii = [16.0_f32, 4.0, 28.0, 0.0];
+        let n = crate::frame::corner_exponent(0.0);
+        assert_eq!(
+            n.to_bits(),
+            2.0_f32.to_bits(),
+            "smooth: 0 must land on n = 2"
+        );
+        for iy in -50_i16..=50 {
+            for ix in -80_i16..=80 {
+                let p = [f32::from(ix), f32::from(iy)];
+                let before = cpu_sd_rounded_box(p, half, radii);
+                let after = cpu_sd_rounded_box_n(p, half, radii, n);
+                assert_eq!(
+                    before.to_bits(),
+                    after.to_bits(),
+                    "field moved at {p:?}: {before} → {after}"
+                );
+            }
+        }
+    }
+
+    /// §S1: above `n = 2` the corner bulges *outward* — a point that the
+    /// circular arc excludes is inside the squircle — and it does so
+    /// monotonically in `smooth`, which is what makes the property a slider
+    /// rather than a switch (§Q1).
+    #[test]
+    fn smoothing_pushes_the_corner_outward_monotonically() {
+        let half = [50.0_f32, 50.0];
+        let radii = [40.0_f32; 4];
+        // On the corner diagonal, just outside the circular arc.
+        let p = [50.0 - 40.0 + 40.0 / 2.0_f32.sqrt() + 1.0; 2];
+        let mut previous = f32::INFINITY;
+        for step in 0..=10 {
+            #[allow(clippy::cast_precision_loss)]
+            let smooth = step as f32 / 10.0;
+            let d = cpu_sd_rounded_box_n(p, half, radii, crate::frame::corner_exponent(smooth));
+            assert!(d < previous, "smooth {smooth} did not extend the corner");
+            previous = d;
+        }
+        assert!(
+            cpu_sd_rounded_box_n(p, half, radii, 2.0) > 0.0,
+            "the reference point must start outside the circular corner"
+        );
+        assert!(
+            cpu_sd_rounded_box_n(p, half, radii, crate::frame::corner_exponent(1.0)) < 0.0,
+            "and end inside the squircle"
+        );
+    }
+
+    /// §S2's reason for existing — with the sign of the artefact corrected.
+    /// On the corner diagonal the Lⁿ field's gradient is `2^(1/n - 1/2)`, which
+    /// *falls* to ≈0.79 at `n = 6`, so an uncorrected field draws the corner's
+    /// anti-aliased fringe ~26 % **wider** than the edge's: a smear at exactly
+    /// the corners the property exists to give a crisper profile. Normalising by
+    /// the analytic gradient inside the field restores unit slope, so one
+    /// screen-space coverage rule stays correct everywhere.
+    #[test]
+    fn the_corner_fringe_is_as_wide_as_the_edge_fringe() {
+        let half = [50.0_f32, 50.0];
+        let radii = [40.0_f32; 4];
+        let n = crate::frame::corner_exponent(1.0);
+        let slope = |p: [f32; 2]| {
+            let h = 0.05_f32;
+            let dx = (cpu_sd_rounded_box_n([p[0] + h, p[1]], half, radii, n)
+                - cpu_sd_rounded_box_n([p[0] - h, p[1]], half, radii, n))
+                / (2.0 * h);
+            let dy = (cpu_sd_rounded_box_n([p[0], p[1] + h], half, radii, n)
+                - cpu_sd_rounded_box_n([p[0], p[1] - h], half, radii, n))
+                / (2.0 * h);
+            (dx * dx + dy * dy).sqrt()
+        };
+        // A point on the straight edge, and one on the corner diagonal.
+        let edge = slope([50.0, 0.0]);
+        let corner = slope([46.0, 46.0]);
+        assert!(
+            (edge - 1.0).abs() < 0.02,
+            "the straight edge must keep unit slope: {edge}"
+        );
+        assert!(
+            (corner - 1.0).abs() < 0.05,
+            "the corner's slope drives the fringe width: {corner}"
+        );
+
+        // And the uncorrected field is what that correction is *for*: without
+        // the division the same point overshoots unit slope well past tolerance.
+        let raw = |p: [f32; 2]| {
+            let q = [
+                p[0].abs() - half[0] + radii[0],
+                p[1].abs() - half[1] + radii[0],
+            ];
+            cpu_lp_norm([q[0].max(0.0), q[1].max(0.0)], n).0 - radii[0]
+        };
+        let h = 0.05_f32;
+        let dx = (raw([46.0 + h, 46.0]) - raw([46.0 - h, 46.0])) / (2.0 * h);
+        let dy = (raw([46.0, 46.0 + h]) - raw([46.0, 46.0 - h])) / (2.0 * h);
+        let uncorrected = (dx * dx + dy * dy).sqrt();
+        // 2^(1/6 − 1/2) ≈ 0.7937 — a 26 % wide fringe if left alone.
+        assert!(
+            uncorrected < 0.85,
+            "the uncorrected Lⁿ field should undershoot unit slope: {uncorrected}"
+        );
+    }
+
+    /// §Q2: a shadow uses its caster's exponent. The comparison that means
+    /// something is *shape*, not distance — a spread shadow is a bigger box, so
+    /// its absolute field differs by construction. What must match is the
+    /// silhouette: the boundary's reach along the corner diagonal relative to
+    /// its reach along the axis. That ratio is what the eye reads as "corner
+    /// profile", and a shadow whose profile differs from its caster's reads as a
+    /// rendering error.
+    #[test]
+    fn a_shadow_keeps_its_casters_corner_profile() {
+        let half = [50.0_f32, 50.0];
+        let radii = [24.0_f32; 4];
+        let spread = 6.0_f32;
+        let s_half = [half[0] + spread, half[1] + spread];
+        let s_radii = [radii[0] + spread; 4];
+
+        // Where the field crosses zero along `dir`, by bisection.
+        let reach = |b: [f32; 2], r: [f32; 4], n: f32, dir: [f32; 2]| {
+            let (mut lo, mut hi) = (0.0_f32, 400.0_f32);
+            for _ in 0..60 {
+                let mid = f32::midpoint(lo, hi);
+                if cpu_sd_rounded_box_n([dir[0] * mid, dir[1] * mid], b, r, n) < 0.0 {
+                    lo = mid;
+                } else {
+                    hi = mid;
+                }
+            }
+            f32::midpoint(lo, hi)
+        };
+        let diagonal = [0.5_f32.sqrt(); 2];
+        let profile = |b: [f32; 2], r: [f32; 4], n: f32| {
+            reach(b, r, n, diagonal) / reach(b, r, n, [1.0, 0.0])
+        };
+
+        let n = crate::frame::corner_exponent(0.8);
+        let caster = profile(half, radii, n);
+        let shadow = profile(s_half, s_radii, n);
+        assert!(
+            (caster - shadow).abs() < 0.01,
+            "shadow profile {shadow} does not match its caster's {caster}"
+        );
+
+        // And the assertion is discriminating: had the shadow silently kept the
+        // circular corner, the same comparison would have separated them.
+        let circular = profile(s_half, s_radii, 2.0);
+        assert!(
+            (caster - circular).abs() > 0.02,
+            "the test cannot tell n = {n} from n = 2 ({caster} vs {circular})"
+        );
+    }
+
     // ── bytemuck: empty slice and non-finite values ───────────────────────────
 
     #[test]
@@ -3593,9 +3820,10 @@ mod tests {
             color: [f32::NAN; 4],
             radii: [f32::INFINITY; 4],
             transform: Transform::IDENTITY,
+            smooth: 0.0,
         };
         let bytes = bytemuck::bytes_of(&inst);
-        assert_eq!(bytes.len(), 80, "NaN/inf must not change struct size");
+        assert_eq!(bytes.len(), 84, "NaN/inf must not change struct size");
     }
 
     // ── QUAD_VERTICES: TriangleStrip geometry ────────────────────────────────
@@ -3946,6 +4174,7 @@ mod tests {
             color: [0.0; 4],
             radii: [0.0; 4],
             transform: Transform::IDENTITY,
+            smooth: 0.0,
         }
     }
 
@@ -3965,6 +4194,7 @@ mod tests {
             radii: [0.0; 4],
             opacity: 1.0,
             dirty,
+            smooth: 0.0,
         }
     }
 

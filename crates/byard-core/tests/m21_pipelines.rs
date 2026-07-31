@@ -204,6 +204,7 @@ fn solid_and_decorated_boxes_actually_paint_pixels() {
         color: [1.0, 0.0, 0.0, 1.0],
         radii: [0.0; 4],
         transform: Transform::IDENTITY,
+        smooth: 0.0,
     });
     frame.push_decorated(DecoratedBox {
         base: BoxInstance {
@@ -211,6 +212,7 @@ fn solid_and_decorated_boxes_actually_paint_pixels() {
             color: [0.0, 0.0, 1.0, 1.0],
             radii: [0.0; 4],
             transform: Transform::IDENTITY,
+            smooth: 0.0,
         },
         border_width: 3.0,
         border_color: [1.0, 1.0, 1.0, 1.0],

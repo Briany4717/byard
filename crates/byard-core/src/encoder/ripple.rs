@@ -38,6 +38,7 @@ impl RippleInstance {
             7 => Float32,   // transform.rotate
             8 => Float32x2, // transform.origin
             9 => Float32,   // draw-order depth
+            10 => Float32,  // corner smoothing (RFC-0031 §S1)
         ];
         wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<RippleInstance>() as wgpu::BufferAddress,

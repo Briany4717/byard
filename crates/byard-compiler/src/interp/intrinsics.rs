@@ -182,6 +182,12 @@ const LAYOUT: &[(&str, PropDef)] = &[
 const DECORATION: &[(&str, PropDef)] = &[
     ("bg", pnt(PropType::Color)),
     ("radius", pnt(PropType::Len)),
+    // RFC-0031 §S1: the corner *profile* `radius` is measured with — `0.0`
+    // (the default) is the circular arc every box drew before, `1.0` a
+    // pronounced squircle. Paint-class: it changes the shape of the pixels
+    // inside a rect layout has already decided, and nothing else, so it
+    // animates under `with` like any other paint scalar.
+    ("smooth", pnt(PropType::Float)),
     ("opacity", pnt(PropType::Float)),
     ("border", pnt(PropType::Color)),
     ("border_width", pnt(PropType::Int)),
@@ -568,6 +574,8 @@ pub fn lookup(name: &str) -> Option<Intrinsic> {
         "Image" => {
             let mut props = props_from(&[LAYOUT]);
             props.insert("radius", pnt(PropType::Len));
+            // RFC-0031 §S3: `smooth` goes wherever `radius` goes.
+            props.insert("smooth", pnt(PropType::Float));
             props.insert("opacity", pnt(PropType::Float));
             props.insert("fit", lay(PropType::Enum(FIT)));
             Intrinsic {
@@ -1208,7 +1216,9 @@ fn shape_geometry(name: &str) -> (ShapeParams, ShapeParams) {
                 ("w", PropType::Float),
                 ("h", PropType::Float),
             ],
-            &[("radius", PropType::Float)],
+            // `smooth` (RFC-0031 §S3): the `rect` kind's corner profile, the
+            // same 0..1 scalar the box intrinsics take.
+            &[("radius", PropType::Float), ("smooth", PropType::Float)],
         ),
         "path" => (&[("d", PropType::Str)], &[]),
         "bezier" => (
@@ -1704,6 +1714,29 @@ mod tests {
         );
         assert_eq!(text.property_class("color"), Some(AttrClass::Paint));
         assert_eq!(col.property_class("not_a_real_attribute"), None);
+        // RFC-0031 §S1: `smooth` changes the corner *profile* the radius is
+        // measured with — the same rect, different pixels — so it is
+        // paint-class and therefore animatable. Classifying it as layout would
+        // make `radius: 16, smooth: 0.6 with anim.spring()` a compile error for
+        // no reason; classifying `radius` as paint is a separate question this
+        // RFC does not reopen.
+        assert_eq!(col.property_class("smooth"), Some(AttrClass::Paint));
+        assert_eq!(
+            lookup("Image")
+                .expect("Image is an intrinsic")
+                .property_class("smooth"),
+            Some(AttrClass::Paint),
+            "`smooth` goes wherever `radius` goes (RFC-0031 §S3)"
+        );
+    }
+
+    /// RFC-0031 §S1 × RFC-0010: `smooth` reaching the animation chokepoint is
+    /// the whole point of it being paint-class. A layout classification would
+    /// have produced `LayoutPropNotAnimatable` here instead.
+    #[test]
+    fn corner_smoothing_animates() {
+        let e = errs("View V() { Column #[radius: 16, smooth: 0.6 with anim.spring()] {} }");
+        assert!(e.is_empty(), "smooth must animate: {e:?}");
     }
 
     #[test]

@@ -804,6 +804,74 @@ fn an_unchanged_frame_marks_nothing_dirty_at_all() {
     );
 }
 
+/// RFC-0031 §S1 × RFC-0010 INV-8: an animating `smooth` is paint, and the
+/// layout tree must never hear about it.
+///
+/// This is the assertion that makes the property's `AttrClass::Paint`
+/// classification mean something at runtime. A corner profile animating at the
+/// display rate that relaid out the tree on every frame is precisely the shape
+/// of defect INV-8 exists to forbid, and it would be invisible in a screenshot:
+/// the picture would be right and the frame cost wrong.
+#[test]
+fn an_animating_corner_profile_never_reaches_layout() {
+    const SRC: &str = r"
+View Probe() {
+    var on = false
+    Column #[padding: 16, width: 400, height: 300] {
+        Box #[width: 100, height: 40, bg: 0x3355FF, radius: 16,
+              smooth: on ? 1.0 : 0.0 with anim.spring()] {}
+    }
+}
+";
+    let (mut interp, tree) = build_from(SRC);
+    interp.set_now_ms(0);
+    let _warmup = frame(&mut interp, &tree);
+    let (settled, _) = frame(&mut interp, &tree);
+    let rect_before = settled.instances()[0].rect;
+    let smooth_before = settled.instances()[0].smooth;
+
+    flip_bool(&mut interp, "on");
+
+    // Sample the spring mid-flight, several frames in a row.
+    let mut moved = false;
+    let mut previous = smooth_before;
+    for step in 1..=6 {
+        interp.set_now_ms(step * 16);
+        let (f, counts) = frame(&mut interp, &tree);
+        assert_eq!(
+            counts.populate_dirty_targets, 0,
+            "frame {step}: a corner profile is not a layout input"
+        );
+        assert_eq!(
+            counts.full_computes, 0,
+            "frame {step}: `smooth` must not force a full layout pass"
+        );
+        assert_eq!(
+            f.instances()[0].rect.map(f32::to_bits),
+            rect_before.map(f32::to_bits),
+            "frame {step}: the box moved"
+        );
+        let now = f.instances()[0].smooth;
+        if now.to_bits() != previous.to_bits() {
+            moved = true;
+            // The other half of INV-26's rule, one primitive down: a value the
+            // shader reads must reach the digest, or a corner profile animates
+            // on the CPU and never repaints.
+            assert!(
+                f.instances_dirty()[0],
+                "frame {step}: `smooth` moved {previous} → {now} without \
+                 marking the box dirty"
+            );
+        }
+        previous = now;
+    }
+    assert!(
+        moved,
+        "the animation never produced a new `smooth` — the test would pass on \
+         a property that does nothing"
+    );
+}
+
 #[test]
 fn the_first_frame_reports_everything_dirty() {
     // The mirror image, and the reason the digest carries a `primed` flag: a

@@ -15,7 +15,11 @@ struct InstanceInput {
     @location(5) shadow_color: vec4<f32>,
     // (border_width, shadow_dx, shadow_dy, shadow_blur)
     @location(6) params: vec4<f32>,
-    // (opacity, _, _, _)
+    // (opacity, depth, shadow_spread, smooth) — `misc.w` is the RFC-0031 §S1
+    // corner smoothing. It used to be a gradient present/absent flag; that
+    // question is now answered by `grad_axis.xy`, which is a unit direction
+    // vector for a real ramp and all-zero otherwise, so the flag was redundant
+    // and its lane was the spare one the RFC asked for.
     @location(7) misc: vec4<f32>,
     // Paint-time transform (RFC-0011); identity is a free no-op below.
     // `opacity` isn't part of this block — `misc.x` above stays authoritative.
@@ -23,7 +27,8 @@ struct InstanceInput {
     @location(9) t_scale: vec2<f32>,
     @location(10) t_rotate: f32,
     @location(11) t_origin: vec2<f32>,
-    // Linear gradient (RFC-0001 §3.1), active only when `misc.w > 0.5`.
+    // Linear gradient (RFC-0001 §3.1), active only when `grad_axis.xy` is a
+    // real direction vector (see `has_gradient` in the fragment stage).
     @location(12) grad_from: vec4<f32>,
     @location(13) grad_mid: vec4<f32>,
     @location(14) grad_to: vec4<f32>,
@@ -139,7 +144,29 @@ fn gradient_color(in: VertexOutput) -> vec4<f32> {
     return mix(in.grad_mid, in.grad_to, (t - mid_pos) / max(1.0 - mid_pos, 1e-5));
 }
 
-fn sd_rounded_box(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>) -> f32 {
+/// Lⁿ norm of a **non-negative** 2-vector, paired with the magnitude of its own
+/// gradient (RFC-0031 §S1–S2).
+///
+/// `n == 2` is the Euclidean norm and its gradient is exactly 1 — the circular
+/// corner every pipeline drew before RFC-0031. Above 2 the norm is *not* a true
+/// signed distance: on the corner diagonal its gradient is `2^(1/n - 1/2)`,
+/// which falls to ≈0.79 at `n = 6`, so the corner's anti-aliased fringe would
+/// come out ~26 % wider than the edge's — a smeared corner on exactly the
+/// shapes the property exists to sharpen the *profile* of. Returning the
+/// gradient alongside the value lets the caller normalise the field once, at
+/// the source, so *every* consumer of it (edge coverage, the border band,
+/// shadow blur falloff) is corrected by the same division.
+fn lp_norm(v: vec2<f32>, n: f32) -> vec2<f32> {
+    let a = pow(v.x, n) + pow(v.y, n);
+    if (a <= 0.0) {
+        return vec2<f32>(0.0, 1.0);
+    }
+    let f = pow(a, 1.0 / n);
+    let g = vec2<f32>(pow(v.x / f, n - 1.0), pow(v.y / f, n - 1.0));
+    return vec2<f32>(f, max(length(g), 1e-4));
+}
+
+fn sd_rounded_box(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>, n: f32) -> f32 {
     var r_corner = r.x;
     if (p.x > 0.0 && p.y < 0.0) { r_corner = r.y; }
     if (p.x > 0.0 && p.y > 0.0) { r_corner = r.z; }
@@ -150,10 +177,21 @@ fn sd_rounded_box(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>) -> f32 {
     // field folds in on itself and the corners visibly deform — a `radius: 20`
     // pill on a 33px-tall button is the everyday case). Clamping here, at the
     // one place the radius is consumed, keeps every pipeline honest and matches
-    // the CSS rule that an over-large radius is reduced to fit.
+    // the CSS rule that an over-large radius is reduced to fit. The clamp is
+    // norm-independent: the fold happens past half the extent whatever `n` is.
     r_corner = min(r_corner, min(b.x, b.y));
     let q = abs(p) - b + vec2<f32>(r_corner);
-    return min(max(q.x, q.y), 0.0) + length(max(q, vec2<f32>(0.0))) - r_corner;
+    let corner = max(q, vec2<f32>(0.0));
+    let inner = min(max(q.x, q.y), 0.0);
+    // RFC-0031 §S1: the L² path, verbatim and unconditional at `smooth: 0`.
+    if (n == 2.0) {
+        return inner + length(corner) - r_corner;
+    }
+    // `inner` is non-zero only where one of `corner`'s components is zero, and
+    // there `lp.y == 1` — so dividing the whole expression normalises exactly
+    // the corner arc and leaves the straight edges untouched.
+    let lp = lp_norm(corner, n);
+    return (inner + lp.x - r_corner) / lp.y;
 }
 
 @fragment
@@ -163,6 +201,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let shadow_blur = in.params.w;
     let shadow_spread = in.misc.z;
     let opacity = in.misc.x;
+    // RFC-0031 §S1. Clamped here (rather than trusted) for the same reason the
+    // corner radius is: one consumption site, one rule.
+    let corner_n = 2.0 + clamp(in.misc.w, 0.0, 1.0) * 4.0;
+    // A ramp's axis is `(cos θ, sin θ)` — always unit length — and an absent
+    // ramp leaves `grad_axis` all-zero, so the direction vector *is* the
+    // present/absent answer. That is what freed `misc.w` for `smooth`.
+    let has_gradient = dot(in.grad_axis.xy, in.grad_axis.xy) > 0.25;
 
     // ── Drop shadow (drawn beneath the surface) ───────────────────────────
     // `spread` grows/shrinks the shadow shape (and its corner radii) before the
@@ -172,13 +217,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         || abs(shadow_offset.x) > 0.0 || abs(shadow_offset.y) > 0.0)) {
         let s_half = max(in.half_size + vec2<f32>(shadow_spread), vec2<f32>(0.0));
         let s_radii = max(in.radii + vec4<f32>(shadow_spread), vec4<f32>(0.0));
-        let sdist = sd_rounded_box(in.local_pos - shadow_offset, s_half, s_radii);
+        // §Q2: a shadow uses the same `n` as its caster — a shadow with a
+        // different corner profile than the shape casting it reads as a bug.
+        let sdist = sd_rounded_box(in.local_pos - shadow_offset, s_half, s_radii, corner_n);
         let soft = max(shadow_blur, 0.5);
         shadow_a = (1.0 - smoothstep(0.0, soft, sdist)) * in.shadow_color.a;
     }
 
     // ── Surface fill + inner border ───────────────────────────────────────
-    let fdist = sd_rounded_box(in.local_pos, in.half_size, in.radii);
+    let fdist = sd_rounded_box(in.local_pos, in.half_size, in.radii, corner_n);
     let edge_softness = max(length(vec2<f32>(dpdx(fdist), dpdy(fdist))), 1e-5);
     let fill_cov = smoothstep(edge_softness, 0.0, fdist);
 
@@ -191,7 +238,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // The ramp composites over the element's own fill (straight-alpha src-over),
     // so a translucent ramp brightens/darkens the surface instead of replacing
     // it — the shimmer case — while an opaque one paints the surface outright.
-    if (in.misc.w > 0.5) {
+    if (has_gradient) {
         let g = gradient_color(in);
         let a = g.a + surface.a * (1.0 - g.a);
         if (a > 0.0) {

@@ -158,6 +158,7 @@ fn ripple(rect: [f32; 4], params: [f32; 4], color: [f32; 4], radii: [f32; 4]) ->
         t_rotate: t.rotate,
         t_origin: t.origin,
         depth: 0.0, // stamped by `push_ripple`
+        smooth: 0.0,
     }
 }
 
@@ -186,6 +187,7 @@ fn ripple_ink_composites_over_light_and_dark_and_clips_to_the_rounded_corner() {
         color: [0.15, 0.05, 0.3, 1.0],
         radii,
         transform: Transform::IDENTITY,
+        smooth: 0.0,
     });
     // Mid-flight ripple from the element centre: 60px radius, full fade
     // alpha, 50% white ink.
@@ -220,6 +222,7 @@ fn ripple_ink_composites_over_light_and_dark_and_clips_to_the_rounded_corner() {
         color: [0.98, 0.96, 1.0, 1.0],
         radii,
         transform: Transform::IDENTITY,
+        smooth: 0.0,
     });
     light.push_ripple(ripple(
         rect,
@@ -283,6 +286,7 @@ fn ripple_depth_keeps_children_crisp_above_the_ink() {
         color: [0.1, 0.1, 0.1, 1.0],
         radii: [0.0; 4],
         transform: Transform::IDENTITY,
+        smooth: 0.0,
     });
     // Ripple over the whole element (emitted second = between).
     frame.push_ripple(ripple(
@@ -297,6 +301,7 @@ fn ripple_depth_keeps_children_crisp_above_the_ink() {
         color: [0.0, 0.0, 1.0, 1.0],
         radii: [0.0; 4],
         transform: Transform::IDENTITY,
+        smooth: 0.0,
     });
     let rb = render(&device, &queue, &frame, w, h);
 

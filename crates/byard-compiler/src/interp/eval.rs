@@ -914,6 +914,7 @@ fn push_stroke_quad(
             color,
             radii: [t / 2.0; 4],
             transform: transform.compose(&seg),
+            smooth: 0.0,
         },
         dirty: true,
         ..Default::default()
@@ -4633,7 +4634,9 @@ impl Interpreter {
                         self.shape_num(el, "w").unwrap_or(0.0),
                         self.shape_num(el, "h").unwrap_or(0.0),
                         self.shape_num(el, "radius").unwrap_or(0.0),
-                        0.0,
+                        // RFC-0031 §S3: the `rect` kind's corner smoothing,
+                        // clamped like every other consumer of the property.
+                        self.shape_num(el, "smooth").unwrap_or(0.0).clamp(0.0, 1.0),
                         0.0,
                         0.0,
                     ],
@@ -5504,6 +5507,13 @@ impl Interpreter {
                     child_transform = transform;
                     let bg = self.eval_color_prop(paint_attrs, "bg");
                     let radii = self.resolve_radii(paint_attrs, "radius");
+                    // RFC-0031 §S1: the corner profile `radii` are measured
+                    // with. Paint-class, so it never touches layout, and it
+                    // reaches the fill, the border, every shadow, the backdrop
+                    // pane and the ripple clip from this one read — §Q2's
+                    // "a shadow with a different corner profile than its caster
+                    // reads as a rendering bug", applied to the whole element.
+                    let smooth = self.resolve_smooth(paint_attrs);
                     // `border` is a Color (catalog DECORATION); a present border
                     // draws a 2px ring of that colour.
                     let border_color = self.eval_color_prop(paint_attrs, "border");
@@ -5555,6 +5565,7 @@ impl Interpreter {
                                 .map_or([0.0; 4], |c| super::intrinsics::color_to_rgba(c, false)),
                             radii,
                             transform,
+                            smooth,
                         };
                         let border_rgba = border_color
                             .map_or([0.0; 4], |c| super::intrinsics::color_to_rgba(c, false));
@@ -5609,7 +5620,15 @@ impl Interpreter {
                     // element's background (the §4 compositing slot), so the
                     // pane samples everything painted behind it, its own
                     // background included, and its children render on top.
-                    self.emit_backdrop(paint_attrs, current_rect, radii, transform, opacity, frame);
+                    self.emit_backdrop(
+                        paint_attrs,
+                        current_rect,
+                        radii,
+                        smooth,
+                        transform,
+                        opacity,
+                        frame,
+                    );
 
                     // RFC-0023: ripple ink — emitted after this element's
                     // background and before its children, which stamps its
@@ -5620,6 +5639,7 @@ impl Interpreter {
                         elem_idx,
                         current_rect,
                         radii,
+                        smooth,
                         transform,
                         opacity,
                         scroll_shift,
@@ -6070,6 +6090,7 @@ impl Interpreter {
                         color: dim_alpha(super::intrinsics::color_to_rgba(bg, false), opacity),
                         radii: self.resolve_radii(paint_attrs, "radius"),
                         transform,
+                        smooth: self.resolve_smooth(paint_attrs),
                     });
                 }
                 // `route_change` and any pointer handlers on the container.
@@ -6166,6 +6187,7 @@ impl Interpreter {
                         .unwrap_or_default();
                     let fit = self.eval_fit_prop(attrs);
                     let radii = self.resolve_radii(attrs, "radius");
+                    let smooth = self.resolve_smooth(attrs);
                     let opacity = inherited_opacity
                         * self
                             .eval_float_prop(attrs, "opacity")
@@ -6183,6 +6205,9 @@ impl Interpreter {
                         src: src_val,
                         fit,
                         radii,
+                        // RFC-0031 §S3: an image's rounded clip follows the same
+                        // corner profile as the boxes around it.
+                        smooth,
                         opacity,
                         // Re-emitted every tick; mirror Text's
                         // always-dirty lowering.
@@ -6285,6 +6310,7 @@ impl Interpreter {
                             color: dim_alpha(super::intrinsics::color_to_rgba(bg, false), opacity),
                             radii: [0.0; 4],
                             transform: inherited_transform,
+                            smooth: 0.0,
                         });
                     }
 
@@ -6377,6 +6403,7 @@ impl Interpreter {
             color: dim_alpha(track_color, opacity),
             radii: [radius; 4],
             transform,
+            smooth: 0.0,
         });
 
         // Thumb: a white circle inset from the track edges, sliding L↔R.
@@ -6393,6 +6420,7 @@ impl Interpreter {
             color: dim_alpha([1.0, 1.0, 1.0, 1.0], opacity),
             radii: [thumb_size / 2.0; 4],
             transform,
+            smooth: 0.0,
         });
 
         // Tap handler to flip the bool (M16).
@@ -6474,6 +6502,7 @@ impl Interpreter {
                 color: fill,
                 radii: [radius; 4],
                 transform,
+                smooth: 0.0,
             },
             border_width,
             border_color: border_rgba,
@@ -6500,6 +6529,7 @@ impl Interpreter {
                     color: mark,
                     radii: [bar_h / 2.0; 4],
                     transform,
+                    smooth: 0.0,
                 },
                 dirty: true,
                 ..Default::default()
@@ -6613,6 +6643,7 @@ impl Interpreter {
                 color: dim_alpha(accent_rgba, opacity),
                 radii: [dot / 2.0; 4],
                 transform,
+                smooth: 0.0,
             });
         }
 
@@ -6625,6 +6656,7 @@ impl Interpreter {
                 color: [0.0; 4],
                 radii: [r; 4],
                 transform,
+                smooth: 0.0,
             },
             border_width: ring_w,
             border_color: dim_alpha(ring_color, opacity),
@@ -6749,6 +6781,7 @@ impl Interpreter {
             color: dim_alpha([0.40, 0.42, 0.48, 1.0], opacity),
             radii: [track_r; 4],
             transform,
+            smooth: 0.0,
         });
 
         // Fill up to the thumb.
@@ -6759,6 +6792,7 @@ impl Interpreter {
                 color: dim_alpha(accent_rgba, opacity),
                 radii: [track_r; 4],
                 transform,
+                smooth: 0.0,
             });
         }
 
@@ -6772,6 +6806,7 @@ impl Interpreter {
             color: dim_alpha(accent_rgba, opacity),
             radii: [thumb_size / 2.0; 4],
             transform,
+            smooth: 0.0,
         });
         let inner = thumb_size - 5.0;
         frame.push_instance(byard_core::BoxInstance {
@@ -6779,6 +6814,7 @@ impl Interpreter {
             color: dim_alpha([1.0, 1.0, 1.0, 1.0], opacity),
             radii: [inner / 2.0; 4],
             transform,
+            smooth: 0.0,
         });
 
         // Handlers: PointerDown + PointerDrag (M16).
@@ -6867,6 +6903,7 @@ impl Interpreter {
                 ),
                 radii: [0.0; 4],
                 transform,
+                smooth: 0.0,
             });
         }
 
@@ -6900,6 +6937,7 @@ impl Interpreter {
                 color: dim_alpha([1.0, 1.0, 1.0, 1.0], opacity),
                 radii: [0.0; 4],
                 transform,
+                smooth: 0.0,
             });
         }
 
@@ -7356,6 +7394,7 @@ impl Interpreter {
         attrs: &[Attr],
         rect: crate::interp::intrinsics::Rect,
         radii: [f32; 4],
+        smooth: f32,
         transform: byard_core::frame::Transform,
         opacity: f32,
         frame: &mut byard_core::frame::RenderFrame,
@@ -7383,6 +7422,7 @@ impl Interpreter {
                         color: tint_rgba,
                         radii,
                         transform,
+                        smooth,
                     },
                     opacity,
                     dirty: true,
@@ -7411,6 +7451,7 @@ impl Interpreter {
         frame.push_backdrop(BackdropInstance {
             rect: [rect.x, rect.y, rect.w, rect.h],
             radii,
+            smooth,
             blur,
             tint: tint_rgba,
             saturation,
@@ -7446,6 +7487,7 @@ impl Interpreter {
         elem_idx: Option<u32>,
         rect: crate::interp::intrinsics::Rect,
         radii: [f32; 4],
+        smooth: f32,
         transform: byard_core::frame::Transform,
         opacity: f32,
         // Accumulated scroll displacement (RFC-0005): the press position is
@@ -7537,6 +7579,7 @@ impl Interpreter {
                 ],
                 color: r.color,
                 radii,
+                smooth,
                 t_translate: transform.translate,
                 t_scale: transform.scale,
                 t_rotate: transform.rotate,
@@ -8084,6 +8127,21 @@ impl Interpreter {
     fn eval_shadow_color(&mut self, e: &Expr) -> [f32; 4] {
         let packed = self.eval_pure(e).as_int().unwrap_or(DEFAULT_SHADOW_COLOR);
         super::intrinsics::color_to_rgba(packed, true)
+    }
+
+    /// The element's corner smoothing (RFC-0031 §S1), clamped to `0..=1`.
+    ///
+    /// It resolves through `eval_float_prop`, so it passes the RFC-0010
+    /// animation chokepoint like every other paint scalar: `smooth: 0.6 with
+    /// anim.spring()` interpolates with no plumbing of its own, and — being
+    /// paint-class — never marks the layout tree.
+    ///
+    /// Absent means `0.0`, which the shaders short-circuit to the L² field they
+    /// evaluated before this property existed.
+    #[allow(clippy::cast_possible_truncation)]
+    fn resolve_smooth(&mut self, attrs: &[Attr]) -> f32 {
+        self.eval_float_prop(attrs, "smooth")
+            .map_or(0.0, |v| (v as f32).clamp(0.0, 1.0))
     }
 
     fn resolve_radii(&mut self, attrs: &[Attr], name: &str) -> [f32; 4] {
@@ -10047,6 +10105,7 @@ impl Interpreter {
                 color: [0.0; 4],
                 radii: [r; 4],
                 transform: byard_core::frame::Transform::IDENTITY,
+                smooth: 0.0,
             },
             border_width: 2.0,
             border_color: [0.85, 0.84, 0.88, 1.0],

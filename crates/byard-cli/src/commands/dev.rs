@@ -328,6 +328,7 @@ impl ReloadFlash {
                 color: [0.0; 4],
                 radii: [0.0; 4],
                 transform: byard_core::frame::Transform::IDENTITY,
+                smooth: 0.0,
             },
             border_width: Self::WIDTH,
             border_color: colour,
@@ -696,6 +697,7 @@ fn render_error_overlay(frame: &mut RenderFrame, errors: &[CompileError], w: f32
         opacity: 1.0,
         transform: byard_core::frame::Transform::IDENTITY,
         depth: 0.0,
+        smooth: 0.0,
     });
 
     let padding = 32.0;
@@ -719,6 +721,7 @@ fn render_error_overlay(frame: &mut RenderFrame, errors: &[CompileError], w: f32
         color: [0.11, 0.11, 0.14, 0.96],
         radii: [14.0; 4],
         transform: byard_core::frame::Transform::IDENTITY,
+        smooth: 0.0,
     });
 
     let x = panel_x + padding;

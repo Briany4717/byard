@@ -20,7 +20,8 @@ struct InstanceInput {
     @location(2) radii: vec4<f32>,
     // backdrop_tint colour; `a = 0` disables.
     @location(3) tint: vec4<f32>,
-    // (saturation, opacity, depth, unused)
+    // (saturation, opacity, depth, smooth) — `params.w` is the RFC-0031 §S1
+    // corner smoothing, so the pane's clip follows the element's own profile.
     @location(4) params: vec4<f32>,
     // Copied region mapping: (origin_x, origin_y, 1/width, 1/height), all in
     // physical pixels of the colour target.
@@ -100,7 +101,24 @@ fn vs_main(vertex: VertexInput, instance: InstanceInput) -> VertexOutput {
 }
 
 // Rounded-box SDF, shared shape with `decorated_box.wgsl` / `ripple.wgsl`.
-fn sd_rounded_box(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>) -> f32 {
+/// Lⁿ norm of a **non-negative** 2-vector, paired with the magnitude of its own
+/// gradient (RFC-0031 §S1–S2). `n == 2` is the Euclidean norm, whose gradient is
+/// exactly 1 — the circular corner this pipeline clipped to before RFC-0031, and
+/// the reason an unset `smooth` is bit-identical. Above 2 the norm is not a true
+/// signed distance: on the corner diagonal its gradient is `2^(1/n - 1/2)`,
+/// ≈0.79 at `n = 6`. Normalising by the returned gradient keeps the clip's
+/// anti-aliased fringe the same width at the corners as along the edges.
+fn lp_norm(v: vec2<f32>, n: f32) -> vec2<f32> {
+    let a = pow(v.x, n) + pow(v.y, n);
+    if (a <= 0.0) {
+        return vec2<f32>(0.0, 1.0);
+    }
+    let f = pow(a, 1.0 / n);
+    let g = vec2<f32>(pow(v.x / f, n - 1.0), pow(v.y / f, n - 1.0));
+    return vec2<f32>(f, max(length(g), 1e-4));
+}
+
+fn sd_rounded_box(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>, n: f32) -> f32 {
     var r_corner = r.x;
     if (p.x > 0.0 && p.y < 0.0) { r_corner = r.y; }
     if (p.x > 0.0 && p.y > 0.0) { r_corner = r.z; }
@@ -114,7 +132,17 @@ fn sd_rounded_box(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>) -> f32 {
     // the CSS rule that an over-large radius is reduced to fit.
     r_corner = min(r_corner, min(b.x, b.y));
     let q = abs(p) - b + vec2<f32>(r_corner);
-    return min(max(q.x, q.y), 0.0) + length(max(q, vec2<f32>(0.0))) - r_corner;
+    let corner = max(q, vec2<f32>(0.0));
+    let inner = min(max(q.x, q.y), 0.0);
+    // RFC-0031 §S1: the L² path, verbatim and unconditional at `smooth: 0`.
+    if (n == 2.0) {
+        return inner + length(corner) - r_corner;
+    }
+    // `inner` is non-zero only where one of `corner`'s components is zero, and
+    // there `lp.y == 1` — so dividing the whole expression normalises exactly
+    // the corner arc and leaves the straight edges untouched.
+    let lp = lp_norm(corner, n);
+    return (inner + lp.x - r_corner) / lp.y;
 }
 
 @fragment
@@ -124,7 +152,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // trick) — descending edges are undefined per the spec and DX12/HLSL
     // resolves them differently from Metal/Vulkan. The `!(x > y)` form of
     // the discard is deliberate: it also discards on NaN.
-    let dist = sd_rounded_box(in.local_pos, in.half_size, in.radii);
+    let dist = sd_rounded_box(
+        in.local_pos,
+        in.half_size,
+        in.radii,
+        2.0 + clamp(in.params.w, 0.0, 1.0) * 4.0,
+    );
     let soft = max(length(vec2<f32>(dpdx(dist), dpdy(dist))), 1e-5);
     let coverage = 1.0 - smoothstep(0.0, soft, dist);
     if (!(coverage > 0.001)) {

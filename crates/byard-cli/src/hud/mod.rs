@@ -409,6 +409,7 @@ mod tests {
             color: [1.0; 4],
             radii: [0.0; 4],
             transform: byard_core::frame::Transform::IDENTITY,
+            smooth: 0.0,
         });
         hud.render(&mut frame, 1280.0, 720.0);
         assert!(

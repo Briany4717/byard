@@ -57,7 +57,8 @@ pub struct TextureInstance {
     pub radii: [f32; 4],
     /// `[uv_scale_x, uv_scale_y, uv_offset_x, uv_offset_y]` — the `fit` transform.
     pub uv_xform: [f32; 4],
-    /// `[opacity, 0, 0, 0]`.
+    /// `[opacity, depth, smooth, 0]` — `misc.z` is the RFC-0031 §S1 corner
+    /// smoothing of the image's rounded clip.
     pub misc: [f32; 4],
 }
 
@@ -478,7 +479,7 @@ pub fn stage(
             rect: t.rect,
             radii: t.radii,
             uv_xform,
-            misc: [t.opacity, depth, 0.0, 0.0],
+            misc: [t.opacity, depth, t.smooth, 0.0],
         };
         let region = arena.push_vertex(std::slice::from_ref(&instance));
         out.push(StagedImage {

@@ -166,6 +166,7 @@ fn encoding_a_frame_enters_encode_frame() {
         color: [1.0, 0.0, 0.0, 1.0],
         radii: [0.0; 4],
         transform: Transform::IDENTITY,
+        smooth: 0.0,
     });
 
     let _ = drain_samples();
@@ -229,6 +230,7 @@ fn encode_one_frame() -> Option<SampleBlock> {
         color: [1.0, 0.0, 0.0, 1.0],
         radii: [0.0; 4],
         transform: Transform::IDENTITY,
+        smooth: 0.0,
     });
     frame.push_text(byard_core::frame::TextLine {
         x: 2.0,
@@ -370,6 +372,7 @@ fn a_steady_state_frame_creates_no_gpu_buffers() {
                 color: [shade, 0.0, 0.0, 1.0],
                 radii: [0.0; 4],
                 transform: Transform::IDENTITY,
+                smooth: 0.0,
             });
         }
         frame.push_text(byard_core::frame::TextLine {

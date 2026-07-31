@@ -162,6 +162,7 @@ fn an_over_large_radius_is_reduced_to_a_pill_not_a_deformed_box() {
         color: [1.0, 1.0, 1.0, 1.0],
         radii: [20.0; 4],
         transform: Transform::IDENTITY,
+        smooth: 0.0,
     });
     let rb = render(&device, &queue, &frame);
 
@@ -215,6 +216,7 @@ fn shimmer_frame(offset: Option<f32>) -> RenderFrame {
             color: [0.05, 0.05, 0.05, 1.0],
             radii: [4.0; 4],
             transform: Transform::IDENTITY,
+            smooth: 0.0,
         },
         opacity: 1.0,
         gradient: offset.map(|offset| Gradient {

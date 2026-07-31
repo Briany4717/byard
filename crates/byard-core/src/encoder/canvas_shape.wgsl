@@ -116,12 +116,43 @@ fn wrap_angle(a: f32) -> f32 {
     return a - TAU * round(a / TAU);
 }
 
-fn sd_rounded_box(p: vec2<f32>, b: vec2<f32>, r: f32) -> f32 {
+/// Lⁿ norm of a **non-negative** 2-vector, paired with the magnitude of its own
+/// gradient (RFC-0031 §S1–S2).
+///
+/// `n == 2` is the Euclidean norm and its gradient is exactly 1 — the circular
+/// corner this pipeline drew before RFC-0031. Above 2 the norm is *not* a true
+/// signed distance: on the corner diagonal its gradient is `2^(1/n - 1/2)`,
+/// which falls to ≈0.79 at `n = 6`, so the corner's fringe would come out ~26 %
+/// wider than the edge's. Returning the gradient alongside the value lets
+/// `sd_rounded_box` normalise the field once, at the source, so the fragment
+/// stage's screen-space `aa` stays the single coverage rule for every shape
+/// kind.
+fn lp_norm(v: vec2<f32>, n: f32) -> vec2<f32> {
+    let a = pow(v.x, n) + pow(v.y, n);
+    if (a <= 0.0) {
+        return vec2<f32>(0.0, 1.0);
+    }
+    let f = pow(a, 1.0 / n);
+    let g = vec2<f32>(pow(v.x / f, n - 1.0), pow(v.y / f, n - 1.0));
+    return vec2<f32>(f, max(length(g), 1e-4));
+}
+
+fn sd_rounded_box(p: vec2<f32>, b: vec2<f32>, r: f32, n: f32) -> f32 {
     // Clamped for the same reason as the box pipelines: past half the extent the
     // rounded-rect field folds in on itself (RFC-0001 §3.1).
     let rc = min(r, min(b.x, b.y));
     let q = abs(p) - b + vec2<f32>(rc);
-    return min(max(q.x, q.y), 0.0) + length(max(q, vec2<f32>(0.0))) - rc;
+    let corner = max(q, vec2<f32>(0.0));
+    let inner = min(max(q.x, q.y), 0.0);
+    // RFC-0031 §S1: the L² path, verbatim and unconditional at `smooth: 0`.
+    if (n == 2.0) {
+        return inner + length(corner) - rc;
+    }
+    // `inner` is non-zero only where one of `corner`'s components is zero, and
+    // there `lp.y == 1` — so dividing the whole expression normalises exactly
+    // the corner arc and leaves the straight edges untouched.
+    let lp = lp_norm(corner, n);
+    return (inner + lp.x - rc) / lp.y;
 }
 
 // Per-fragment shape evaluation: signed stroke distance (< 0 inside the
@@ -222,11 +253,13 @@ fn eval_shape(p: vec2<f32>, kind: u32, cap: u32, half_w: f32,
         return out;
     }
 
-    // KIND_RECT: params0 = (x, y, w, h), params1.x = corner radius.
+    // KIND_RECT: params0 = (x, y, w, h), params1.x = corner radius,
+    // params1.y = corner smoothing 0..1 (RFC-0031 §S1/§S3).
     let half_size = max(params0.zw * 0.5, vec2<f32>(0.0));
     let center = params0.xy + half_size;
     let radius = clamp(params1.x, 0.0, min(half_size.x, half_size.y));
-    let sd = sd_rounded_box(p - center, half_size, radius);
+    let corner_n = 2.0 + clamp(params1.y, 0.0, 1.0) * 4.0;
+    let sd = sd_rounded_box(p - center, half_size, radius, corner_n);
     out.stroke = abs(sd) - half_w;
     out.fill = sd;
     // Dashes are not defined along a rect perimeter in v1 (RFC-0020): `t`

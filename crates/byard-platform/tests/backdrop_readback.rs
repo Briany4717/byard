@@ -162,6 +162,7 @@ fn solid(rect: [f32; 4], color: [f32; 4]) -> BoxInstance {
         color,
         radii: [0.0; 4],
         transform: Transform::IDENTITY,
+        smooth: 0.0,
     }
 }
 
@@ -177,6 +178,7 @@ fn pane(rect: [f32; 4], radii: [f32; 4], blur: f32, tint: [f32; 4]) -> BackdropI
         opacity: 1.0,
         transform: Transform::IDENTITY,
         depth: 0.0, // stamped by `push_backdrop`
+        smooth: 0.0,
     }
 }
 

@@ -686,7 +686,7 @@ fn composite_resources(
         rect: b.rect,
         radii: b.radii,
         tint: b.tint,
-        params: [b.saturation, b.opacity, b.depth, 0.0],
+        params: [b.saturation, b.opacity, b.depth, b.smooth],
         region: [
             x0 as f32,
             y0 as f32,

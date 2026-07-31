@@ -787,6 +787,41 @@ pub struct BoxInstance {
     /// Paint-time transform (RFC-0011); `Transform::IDENTITY` for an
     /// untransformed box.
     pub transform: Transform,
+    /// Corner smoothing `0.0..=1.0` (RFC-0031 §S1): how far the corner profile
+    /// travels from a circular arc (`0.0`, the default and the historical
+    /// behaviour) towards a squircle (`1.0`). The shaders read it as the
+    /// exponent of an Lⁿ norm, `n = 2 + smooth * 4`, and **short-circuit to the
+    /// existing L² expression at `n == 2`** — so an unset `smooth` produces
+    /// bit-identical pixels to before the property existed.
+    ///
+    /// Declared last so the earlier fields keep their byte offsets, which the
+    /// hand-written [`BoxInstance::layout`](crate::encoder::BoxInstance::layout)
+    /// states literally.
+    pub smooth: f32,
+}
+
+impl Default for BoxInstance {
+    /// A transparent, square-cornered, untransformed unit-less box: every
+    /// numeric field zero except `transform`, which is the identity.
+    fn default() -> Self {
+        Self {
+            rect: [0.0; 4],
+            color: [0.0; 4],
+            radii: [0.0; 4],
+            transform: Transform::IDENTITY,
+            smooth: 0.0,
+        }
+    }
+}
+
+/// Maps the authored corner smoothing (`0..=1`) onto the Lⁿ exponent the
+/// rounded-box fields use (RFC-0031 §S1): `0.0 → 2` (the circular arc every
+/// pipeline drew before this property existed) through `1.0 → 6` (a pronounced
+/// squircle). Out-of-range input is clamped rather than rejected — an exponent
+/// below 2 produces concave corners nobody wants (RFC-0031 §Q1).
+#[must_use]
+pub fn corner_exponent(smooth: f32) -> f32 {
+    2.0 + smooth.clamp(0.0, 1.0) * 4.0
 }
 
 /// How an image is scaled/positioned inside its bounding rect.
@@ -857,6 +892,7 @@ impl Default for DecoratedBox {
                 color: [0.0; 4],
                 radii: [0.0; 4],
                 transform: Transform::IDENTITY,
+                smooth: 0.0,
             },
             border_width: 0.0,
             border_color: [0.0; 4],
@@ -976,6 +1012,11 @@ pub struct RippleInstance {
     /// [`VectorInstance::depth`] — between the element background's depth and
     /// its children's.
     pub depth: f32,
+    /// Corner smoothing `0.0..=1.0` of the clipping element (RFC-0031 §S1).
+    /// The ink is always clipped to its element's outline (RFC-0023), so the
+    /// clip has to follow the *same* corner profile — a squircle button whose
+    /// ripple squares off at the corners reads as a rendering error.
+    pub smooth: f32,
 }
 
 /// [`BackdropInstance::quality`] tier: auto-select from the GPU capability
@@ -1044,6 +1085,10 @@ pub struct BackdropInstance {
     /// [`RenderFrame::push_backdrop`] — after the element's background,
     /// before its ripple and children.
     pub depth: f32,
+    /// Corner smoothing `0.0..=1.0` of the element the pane sits behind
+    /// (RFC-0031 §S1/§Q2). The pane clips to the element's own outline, so it
+    /// must use the element's own corner profile.
+    pub smooth: f32,
 }
 
 /// Shape-kind discriminant for a [`CanvasShape`] (RFC-0020 §2, Tier 1): a
@@ -1054,7 +1099,8 @@ pub const CANVAS_SHAPE_CIRCLE: u32 = 1;
 /// [`CanvasShape`] kind: a line segment. `params = [x1, y1, x2, y2, 0, 0, 0, 0]`.
 pub const CANVAS_SHAPE_LINE: u32 = 2;
 /// [`CanvasShape`] kind: a (rounded) rectangle.
-/// `params = [x, y, w, h, radius, 0, 0, 0]`.
+/// `params = [x, y, w, h, radius, smooth, 0, 0]`, where `smooth` is the
+/// RFC-0031 §S1 corner profile (`0` = the circular arc).
 pub const CANVAS_SHAPE_RECT: u32 = 3;
 
 /// [`CanvasShape`] line-cap style (RFC-0020 §"Stroke and fill"): flat end
@@ -1175,6 +1221,10 @@ pub struct TextureSampler {
     pub fit: ImageFit,
     /// Per-corner border radii.
     pub radii: [f32; 4],
+    /// Corner smoothing `0.0..=1.0` (RFC-0031 §S1): the image's rounded clip
+    /// follows the same profile as the boxes around it, so an avatar inside a
+    /// squircle card is not the one square-ish corner in the layout.
+    pub smooth: f32,
     /// Opacity `0.0–1.0`.
     pub opacity: f32,
     /// Whether this image primitive changed since the last tick.
@@ -2476,6 +2526,7 @@ mod paint_hash {
         f32s(h, &b.rect);
         f32s(h, &b.color);
         f32s(h, &b.radii);
+        f32s(h, &[b.smooth]);
         transform(h, &b.transform);
     }
 
@@ -2530,7 +2581,7 @@ mod paint_hash {
         (t.fit as u8).hash(&mut h);
         f32s(&mut h, &t.rect);
         f32s(&mut h, &t.radii);
-        f32s(&mut h, &[t.opacity]);
+        f32s(&mut h, &[t.smooth, t.opacity]);
         h.finish()
     }
 
@@ -3217,6 +3268,7 @@ mod motion_tests {
             color: [1.0; 4],
             radii: [0.0; 4],
             transform: Transform::IDENTITY,
+            smooth: 0.0,
         }
     }
 
@@ -3374,6 +3426,7 @@ mod motion_tests {
             t_rotate: 0.0,
             t_origin: [0.0, 0.0],
             depth: 123.0, // overwritten by the push
+            smooth: 0.0,
         });
         f.end_clip();
         assert_eq!(f.ripples().len(), 1);
@@ -3410,6 +3463,7 @@ mod motion_tests {
             opacity: 1.0,
             transform: Transform::IDENTITY,
             depth: 123.0, // overwritten by the push
+            smooth: 0.0,
         });
         f.end_clip();
         f.push_instance(box_at(2.0, 2.0));
@@ -3564,6 +3618,7 @@ mod paint_digest_tests {
             color,
             radii: [0.0; 4],
             transform: Transform::IDENTITY,
+            smooth: 0.0,
         }
     }
 

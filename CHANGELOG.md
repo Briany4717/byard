@@ -12,6 +12,68 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Corners with continuous curvature, on every box the framework draws
+  (RFC-0031 §S1–§S3).** `radius` gains a companion `smooth: 0…1` — the corner
+  *profile* the radius is measured with. `0` is the circular arc every surface
+  drew before and remains the default; `≈0.6` is the Apple continuous-corner
+  profile; `1.0` a pronounced squircle. A circular corner meets its straight
+  edge at a curvature discontinuity, and that discontinuity is the single
+  strongest reason a UI reads as "web" rather than "native" at a glance.
+
+  It is one substitution in the rounded-box field — the L² norm becomes an Lⁿ
+  norm — with `n = 2` short-circuiting to the historical expression verbatim, so
+  a view that does not set `smooth` produces bit-identical pixels. One read per
+  element reaches the fill, the border, every shadow it casts, the backdrop pane
+  and ripple ink clipped to its outline, a rounded `Image`, and the `Canvas`
+  `rect` kind: a shadow whose corner differs from its caster's reads as a
+  rendering bug, and so does a blur pane. `smooth` is paint-class, so it
+  animates and moves no layout.
+
+- **`ngon`, and morphing between shapes from one animated scalar (RFC-0031
+  §S9–§S10).** `ngon(n, r, corner, inner, rotate)` is one parametric shape kind
+  covering the n-fold symmetric half of Material 3 Expressive's vocabulary —
+  `inner: 0.82, n: 8` is a scallop, `inner: 0.42, n: 5` a burst — with no asset
+  pipeline. `morph: <scalar>` on a `Canvas` reinterprets its shapes as a
+  sequence and indexes it, wrapping at the end.
+
+  Because the scalar is an ordinary animatable one, the M3E loading indicator is
+  seven shapes and *one* `anim.linear(4550ms, repeat: infinite)`, and an
+  interaction-state shape change is two shapes and a spring — the same code
+  path. The morph interpolates the shapes' *fields* rather than their vertex
+  counts, so it has no seam and works between any two kinds: a circle morphs to
+  a seven-pointed star. Colour rides the same scalar, blended in OKLab.
+
+- **Organic fusion (RFC-0031 §S7–§S8).** `fuse: <px>` on a `Canvas` unions its
+  shapes by a polynomial smooth minimum — metaball and blob merging — with the
+  colour blended by the same factor that produced the geometry, so the surface
+  bridge and the colour transition are one event. `fuse: 0` and an absent `fuse`
+  are exactly the previous behaviour. A fused group draws one outline, the
+  boundary of the union, rather than one per shape.
+
+- **Diagnostics can be advisory.** Every diagnostic in the compiler was fatal.
+  A stroke on a member of a fused group is inert rather than wrong — the shape
+  still renders correctly — so it is now a *warning*: `byard check` prints it in
+  full, counts it separately (`0 errors, 1 warning`), and exits 0. The default
+  is still fatal, so a diagnostic added without a thought about severity stays
+  an error.
+
+### Fixed
+
+- **An animation belongs to an element, not to the line that wrote it.**
+  Animation state was keyed by the source span of the `with` node alone, and a
+  `for` body is lowered once per row but *written* once — so every row in a list
+  shared one `Motion`, one set of OKLab channels and one `LoopClock`. Each
+  frame, row A retargeted the shared state to its own goal (reseeding `from` and
+  restarting the clock) and row B immediately retargeted it back. Neither
+  advanced: the set stalled near the start and crept. Anyone with a list of
+  animated components was affected, and "my springs are sluggish in a list"
+  points nowhere near the cause.
+
+  The key now carries the element instance as well. A row that leaves the list
+  drops its animation and a re-grown row starts fresh — which is forced rather
+  than chosen, because a pool's slots are reused, so state left behind would be
+  inherited by a *different* element.
+
 - **A telemetry sample now carries who it belongs to (RFC-0030 self-accounting
   erratum).** The dev HUD runs a second interpreter, so when it was open two
   `interp.render` samples and two `layout.taffy` samples arrived in one frame.

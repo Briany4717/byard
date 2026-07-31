@@ -678,6 +678,12 @@ pub fn lookup(name: &str) -> Option<Intrinsic> {
             // through the ordinary chokepoint — a morph that relaid out the
             // tree at the display rate is precisely what INV-8 forbids.
             props.insert("morph", pnt(PropType::Float));
+            // RFC-0031 §S7: `fuse: <px>` is the smoothing radius — the distance
+            // over which two surfaces bridge into one. Paint-class and
+            // animatable for the same reason `morph` is: `k` is an ordinary
+            // scalar, and an animating fusion is new per-instance data rather
+            // than a re-tessellation.
+            props.insert("fuse", pnt(PropType::Float));
             props.insert("style", lay(PropType::Class));
             Intrinsic {
                 arity: 0,
@@ -1293,7 +1299,84 @@ pub fn validate_canvas(el: &ElementNode, attrs: &[Attr]) -> Vec<CompileError> {
 
     validate_canvas_body(&el.children, &mut errs);
     validate_group_cap(el, attrs, &mut errs);
+    validate_group_mode(el, attrs, &mut errs);
     errs
+}
+
+/// RFC-0031 §Q4/§Q5/§Q6: the rules a *combine mode* imposes on a `Canvas`.
+///
+/// - `fuse` and `morph` are mutually exclusive ([`ConflictingGroupMode`]). Not a
+///   preference: morphing between fused sub-groups needs a member to itself be
+///   a group head, which turns a flat contiguous range into a tree and the
+///   unrolled fragment loop into recursion.
+/// - A fused group has **one** outline — the fused boundary — and it is drawn
+///   with the first shape's stroke properties, since that is the only place
+///   they can come from. A stroke on any *later* member is therefore inert
+///   ([`StrokeInFusionGroup`] — a *warning*, since the shape still renders
+///   correctly and only the property is ignored).
+/// - A fused stroke cannot be dashed ([`DashOnFusedStroke`] — an error, since
+///   there is no arc length to dash along and an approximation would crawl).
+///
+/// [`ConflictingGroupMode`]: CompileError::ConflictingGroupMode
+/// [`StrokeInFusionGroup`]: CompileError::StrokeInFusionGroup
+/// [`DashOnFusedStroke`]: CompileError::DashOnFusedStroke
+/// Walks a fused `Canvas` body reporting the stroke properties a member
+/// cannot own (RFC-0031 §Q5/§Q6). `seen` counts the shapes walked so far: the
+/// first shape's paint *is* the group's, so only a later shape's stroke is
+/// genuinely inert.
+fn walk_fused_members(members: &[Member], seen: &mut usize, errs: &mut Vec<CompileError>) {
+    for member in members {
+        match member {
+            Member::Element(child) if is_shape_command(child.name.as_str()) => {
+                let first = *seen == 0;
+                *seen += 1;
+                for arg in &child.content {
+                    let Some(name) = arg.name.as_ref().map(crate::symbol::Symbol::as_str) else {
+                        continue;
+                    };
+                    // A dash is refused on any member, first included:
+                    // there is no arc length along a fused boundary to dash
+                    // along, whichever shape asked for it.
+                    if name == "dash" || name == "dash_offset" {
+                        errs.push(CompileError::DashOnFusedStroke {
+                            span: arg.value.span(),
+                        });
+                    } else if !first && matches!(name, "stroke" | "stroke_width" | "cap" | "join") {
+                        errs.push(CompileError::StrokeInFusionGroup {
+                            span: arg.value.span(),
+                            param: name.to_string(),
+                        });
+                    }
+                }
+            }
+            Member::For { body, .. } => walk_fused_members(body, seen, errs),
+            Member::When { then, els, .. } => {
+                walk_fused_members(then, seen, errs);
+                if let Some(els) = els {
+                    walk_fused_members(els, seen, errs);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn validate_group_mode(el: &ElementNode, attrs: &[Attr], errs: &mut Vec<CompileError>) {
+    let mode_attr = |name: &str| {
+        attrs
+            .iter()
+            .find(|a| a.name.as_str() == name && matches!(a.kind, AttrKind::Prop { .. }))
+    };
+    let fuse = mode_attr("fuse");
+    if let (Some(_), Some(morph)) = (fuse, mode_attr("morph")) {
+        errs.push(CompileError::ConflictingGroupMode { span: morph.span });
+    }
+    let Some(_) = fuse else { return };
+
+    // Per-member stroke properties inside a fusion group. `seen` counts the
+    // shapes walked so far: the first one's paint *is* the group's, so only a
+    // later shape's stroke is genuinely inert.
+    walk_fused_members(&el.children, &mut 0, errs);
 }
 
 /// RFC-0031 §S5/§Q3: a `Canvas` that declares a combine mode turns its shapes
@@ -1326,7 +1409,7 @@ fn validate_group_cap(el: &ElementNode, attrs: &[Attr], errs: &mut Vec<CompileEr
 }
 
 /// The `Canvas` attributes that declare a combine mode (RFC-0031 §S4).
-const GROUP_MODE_PROPS: &[&str] = &["morph"];
+const GROUP_MODE_PROPS: &[&str] = &["fuse", "morph"];
 
 /// Collects the spans of the shape commands a grouped `Canvas` body writes
 /// literally, in order. `when` branches are both walked — either can be the one
@@ -2424,6 +2507,107 @@ mod tests {
                ngon(cx: 24, cy: 24, r: 20, n: 7, fill: 0x6750A4) } }",
         );
         assert!(e.is_empty(), "morph must animate: {e:?}");
+    }
+
+    // ── RFC-0031 §S7–§S8: organic fusion ──────────────────────────────────
+
+    #[test]
+    fn fuse_and_morph_are_mutually_exclusive() {
+        // §Q4. Not a preference: morphing between fused sub-groups needs a
+        // member to itself be a group head, which turns a flat contiguous range
+        // into a tree and the unrolled fragment loop into recursion.
+        let e = canvas_errs(
+            "View V() { Canvas #[width: 140, height: 48, fuse: 16, morph: 0.5] { \
+               circle(cx: 24, cy: 24, r: 18, fill: 0x6750A4) } }",
+        );
+        assert!(
+            e.iter()
+                .any(|x| matches!(x, CompileError::ConflictingGroupMode { .. })),
+            "expected ConflictingGroupMode, got {e:?}"
+        );
+        // Either one alone is fine.
+        for mode in ["fuse: 16", "morph: 0.5"] {
+            let ok = canvas_errs(&format!(
+                "View V() {{ Canvas #[width: 140, height: 48, {mode}] {{ \
+                   circle(cx: 24, cy: 24, r: 18, fill: 0x6750A4) }} }}"
+            ));
+            assert!(ok.is_empty(), "`{mode}` alone must check clean: {ok:?}");
+        }
+    }
+
+    /// §Q5. A *warning*, not an error: the shape still renders correctly and
+    /// the property is merely inert, so failing a build over it would be
+    /// disproportionate — but saying nothing is how a developer spends an
+    /// afternoon on an outline that was never going to appear.
+    #[test]
+    fn a_per_member_stroke_inside_a_fusion_group_warns_without_failing() {
+        // The *first* shape's stroke is the group's outline, so it is silent.
+        let first_only = canvas_errs(
+            "View V() { Canvas #[width: 140, height: 48, fuse: 16] { \
+               circle(cx: 24, cy: 24, r: 18, stroke: 0xFFFFFF, stroke_width: 2) \
+               circle(cx: 60, cy: 24, r: 14, fill: 0x6750A4) } }",
+        );
+        assert!(
+            first_only.is_empty(),
+            "the group's outline comes from the first shape: {first_only:?}"
+        );
+
+        // A *later* shape's stroke is the one that is genuinely inert.
+        let e = canvas_errs(
+            "View V() { Canvas #[width: 140, height: 48, fuse: 16] { \
+               circle(cx: 24, cy: 24, r: 18, fill: 0x6750A4) \
+               circle(cx: 60, cy: 24, r: 14, fill: 0x6750A4, stroke: 0xFFFFFF, \
+                      stroke_width: 2) } }",
+        );
+        let strokes: Vec<&CompileError> = e
+            .iter()
+            .filter(|x| matches!(x, CompileError::StrokeInFusionGroup { .. }))
+            .collect();
+        assert_eq!(strokes.len(), 2, "both stroke params are inert: {e:?}");
+        assert!(
+            strokes.iter().all(|x| x.is_warning()),
+            "an inert property must not fail the build"
+        );
+        assert!(
+            e.iter().all(CompileError::is_warning),
+            "nothing here is fatal: {e:?}"
+        );
+        // The same shape outside a fusion group is silent — the stroke works.
+        let ungrouped = canvas_errs(
+            "View V() { Canvas #[width: 140, height: 48] { \
+               circle(cx: 24, cy: 24, r: 18, stroke: 0xFFFFFF, stroke_width: 2) } }",
+        );
+        assert!(ungrouped.is_empty(), "{ungrouped:?}");
+    }
+
+    /// §Q6. An error, not an approximation: there is no closed form for arc
+    /// length along the union of arbitrary SDFs, and any approximation makes
+    /// dashes crawl as the fusion animates — for no reason the author can see.
+    #[test]
+    fn dashes_on_a_fused_stroke_are_refused() {
+        let e = canvas_errs(
+            "View V() { Canvas #[width: 140, height: 48, fuse: 16] { \
+               circle(cx: 24, cy: 24, r: 18, dash: (6, 4), fill: 0x6750A4) } }",
+        );
+        let dash = e
+            .iter()
+            .find(|x| matches!(x, CompileError::DashOnFusedStroke { .. }))
+            .unwrap_or_else(|| panic!("expected DashOnFusedStroke, got {e:?}"));
+        assert!(!dash.is_warning(), "a dash that cannot be drawn is fatal");
+    }
+
+    #[test]
+    fn fuse_is_a_paint_class_canvas_attribute() {
+        let canvas = lookup("Canvas").expect("Canvas is an intrinsic");
+        assert_eq!(canvas.property_class("fuse"), Some(AttrClass::Paint));
+        // §S7's cost model: an animating `k` is new per-instance data, never a
+        // re-tessellation, so it belongs on the ordinary animation chokepoint.
+        let e = canvas_errs(
+            "View V() { Canvas #[width: 140, height: 48, \
+               fuse: 16 with anim.spring()] { \
+               circle(cx: 24, cy: 24, r: 18, fill: 0x6750A4) } }",
+        );
+        assert!(e.is_empty(), "fuse must animate: {e:?}");
     }
 
     #[test]

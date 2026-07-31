@@ -1,0 +1,12 @@
+// RFC-0031 §Q5 — the *warning* case, kept as a fixture so the severity split
+// is exercised through the real binary.
+//
+// A fused `Canvas` has one outline, drawn from the first shape's stroke. The
+// second shape's `stroke:` is therefore inert — worth a word, not a failed
+// build, because the shape still renders correctly.
+View Main() {
+    Canvas #[width: 140, height: 60, fuse: 16] {
+        circle(cx: 40, cy: 30, r: 20, fill: 0x6750A4)
+        circle(cx: 90, cy: 30, r: 16, fill: 0xEF5350, stroke: 0xFFFFFF)
+    }
+}

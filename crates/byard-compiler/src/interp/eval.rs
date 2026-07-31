@@ -8305,12 +8305,22 @@ impl Interpreter {
 
     /// The combine mode a `Canvas` declares, and its parameter (RFC-0031 §S4).
     ///
-    /// `morph: <scalar>` is the sequence mode: the canvas's shapes become an
-    /// ordered set and the scalar indexes it. Reading it through
-    /// `eval_float_prop` puts it on the RFC-0010 animation chokepoint, which is
-    /// the whole design — the Material 3 loader is seven shapes and *one*
-    /// animated scalar, driven by machinery RFC-0025 already ships.
+    /// `fuse: <px>` is the smoothing radius — the distance over which two
+    /// surfaces bridge into one. `morph: <scalar>` is the sequence mode: the
+    /// canvas's shapes become an ordered set and the scalar indexes it. They
+    /// are mutually exclusive (§Q4, diagnosed at check time); `fuse` wins here
+    /// so a source that slipped past the check still renders one thing rather
+    /// than something mode-dependent.
+    ///
+    /// Both read through `eval_float_prop`, which puts them on the RFC-0010
+    /// animation chokepoint — the whole design. The Material 3 loader is seven
+    /// shapes and *one* animated scalar; an animating fusion is new
+    /// per-instance data and never a re-tessellation.
     fn resolve_group_mode(&mut self, attrs: &[Attr]) -> Option<(u32, f32)> {
+        #[allow(clippy::cast_possible_truncation)]
+        if let Some(k) = self.eval_float_prop(attrs, "fuse") {
+            return Some((byard_core::frame::GROUP_FUSE, (k as f32).max(0.0)));
+        }
         #[allow(clippy::cast_possible_truncation)]
         self.eval_float_prop(attrs, "morph")
             .map(|phase| (byard_core::frame::GROUP_MORPH, phase as f32))
@@ -8339,6 +8349,21 @@ impl Interpreter {
         let (Some(bounds), Some(paint)) = (sink.bounds, sink.paint) else {
             return; // an empty group draws nothing
         };
+        // §S4: fusion bulges *outward* by up to the smoothing radius, so the
+        // union quad is inflated by `k` — an under-inflated quad clips exactly
+        // the bridge the feature exists to draw. Morphing never leaves its
+        // members' union, so it pays nothing for this.
+        let inflate = if mode == byard_core::frame::GROUP_FUSE {
+            param.max(0.0)
+        } else {
+            0.0
+        };
+        let bounds = byard_core::frame::Rect::new(
+            bounds.x - inflate,
+            bounds.y - inflate,
+            bounds.width + inflate * 2.0,
+            bounds.height + inflate * 2.0,
+        );
         // The written-shape count is diagnosed with a source position by
         // `validate_canvas`. This is the other half: a `for` inside the body
         // can generate members from data, and how many is only knowable here.
@@ -11871,6 +11896,144 @@ mod tests {
                 .iter()
                 .all(|s| s.group_mode == byard_core::frame::GROUP_NONE)
         );
+    }
+
+    /// RFC-0031 §S4: a fusion group's quad is inflated by `k`, because fusion
+    /// bulges *outward* by up to the smoothing radius.
+    ///
+    /// An under-inflated quad clips exactly the bridge the feature exists to
+    /// draw, and it does so only when the shapes are close enough to fuse —
+    /// i.e. only in the screenshot the author took to show it off. A morph
+    /// never leaves its members' union and must not pay for this.
+    #[test]
+    fn a_fusion_groups_quad_is_inflated_by_its_smoothing_radius() {
+        let body = "circle(cx: 30, cy: 30, r: 20, fill: 0x6750A4) \
+                    circle(cx: 70, cy: 30, r: 20, fill: 0xEF5350)";
+        let quad_of = |attrs: &str| {
+            let (mut interp, tree) = lower_named(
+                &format!("View App() {{ Canvas #[width: 100, height: 60, {attrs}] {{ {body} }} }}"),
+                "App",
+            );
+            assert!(interp.errors().is_empty(), "{:?}", interp.errors());
+            interp.tick();
+            let mut frame = byard_core::frame::RenderFrame::new();
+            interp.render(&tree, &mut frame, 400.0, 300.0);
+            let head = frame.canvas_shapes()[0].clone();
+            assert_eq!(head.group_count, 2);
+            head.bounds()
+        };
+
+        let plain = quad_of("morph: 0.0");
+        let fused = quad_of("fuse: 16");
+        assert!(
+            fused.width >= plain.width + 31.0 && fused.height >= plain.height + 31.0,
+            "a `fuse: 16` quad must grow by 16 on every side: {plain:?} → {fused:?}"
+        );
+        assert!(
+            fused.x <= plain.x - 15.9 && fused.y <= plain.y - 15.9,
+            "…on the near sides too: {plain:?} → {fused:?}"
+        );
+        // `fuse: 0` bulges by nothing, so it must not grow the quad either —
+        // INV-22 for the degenerate case.
+        let zero = quad_of("fuse: 0");
+        assert!(
+            (zero.width - plain.width).abs() < 0.01,
+            "fuse: 0 must not inflate: {plain:?} → {zero:?}"
+        );
+    }
+
+    #[test]
+    fn a_fuse_canvas_lowers_to_a_fusion_group() {
+        let (mut interp, tree) = lower_named(
+            "View App() { var k = 12.0 \
+               Canvas #[width: 140, height: 60, fuse: k] { \
+                 circle(cx: 30, cy: 30, r: 18, fill: 0x6750A4) \
+                 circle(cx: 70, cy: 30, r: 14, fill: 0xEF5350) \
+                 circle(cx: 110, cy: 30, r: 10, fill: 0x4CC38A) } }",
+            "App",
+        );
+        assert!(interp.errors().is_empty(), "{:?}", interp.errors());
+        interp.tick();
+        let mut frame = byard_core::frame::RenderFrame::new();
+        interp.render(&tree, &mut frame, 400.0, 300.0);
+        let head = &frame.canvas_shapes()[0];
+        assert_eq!(frame.canvas_shapes().len(), 1, "a group is one draw");
+        assert_eq!(head.group_mode, byard_core::frame::GROUP_FUSE);
+        assert_eq!(head.group_count, 3);
+        assert!((head.group_param - 12.0).abs() < 1e-6, "k reaches the head");
+        assert_eq!(frame.shape_records().len(), 3);
+        // Each member keeps its own colour: fusion blends them per fragment
+        // rather than flattening them at lowering.
+        let reds: Vec<f32> = frame
+            .shape_records()
+            .iter()
+            .map(|r| r.fill_color[0])
+            .collect();
+        assert!(
+            reds.windows(2).any(|w| (w[0] - w[1]).abs() > 0.1),
+            "the members' colours must survive individually, got {reds:?}"
+        );
+    }
+
+    /// **INV-26, end to end.** A fusion group whose *member* moves while its
+    /// head does not must repaint.
+    ///
+    /// This is the case the invariant exists for and the one an example would
+    /// never catch: the head's own bytes — mode, `k`, colours, quad — are
+    /// identical frame to frame, so without the member hash folded into the
+    /// digest the group is judged clean and paints last frame's shape forever.
+    /// `morph` escapes it by accident, because its parameter is the phase.
+    /// `fuse` with a static `k` does not.
+    #[test]
+    fn an_animated_member_repaints_its_fusion_group() {
+        // The moving circle stays *inside* the union the two fixed ones already
+        // span, so the head's quad — and therefore every byte of the head — is
+        // identical frame to frame. That is what makes this test about the
+        // member hash and nothing else.
+        let (mut interp, tree) = lower_named(
+            "View App() { \
+               Canvas #[width: 340, height: 120, fuse: 22] { \
+                 circle(cx: 60, cy: 60, r: 30, fill: 0x5B8DEF) \
+                 circle(cx: 280, cy: 60, r: 30, fill: 0x5B8DEF) \
+                 circle(cx: 220 with anim.linear(1800ms, from: 120, repeat: infinite), \
+                        cy: 60, r: 18, fill: 0xE8734A) } }",
+            "App",
+        );
+        assert!(interp.errors().is_empty(), "{:?}", interp.errors());
+        interp.set_now_ms(0);
+        let mut digest = byard_core::frame::PaintDigest::new();
+        let mut previous_head: Option<[u32; 8]> = None;
+        let mut previous_member = 0.0_f32;
+
+        for step in 0..6_u32 {
+            interp.set_now_ms(step * 100);
+            interp.tick();
+            let mut frame = byard_core::frame::RenderFrame::new();
+            interp.render(&tree, &mut frame, 400.0, 300.0);
+            digest.apply(&mut frame);
+
+            let head = &frame.canvas_shapes()[0];
+            let member = frame.shape_records()[2].params0[0];
+            let bytes = head.params.map(f32::to_bits);
+            if let Some(before) = previous_head {
+                assert!(
+                    (member - previous_member).abs() > 0.5,
+                    "frame {step}: the member must actually be moving"
+                );
+                assert_eq!(
+                    bytes, before,
+                    "frame {step}: the head must be byte-identical, or this \
+                     test proves nothing about its members"
+                );
+                assert!(
+                    head.dirty,
+                    "frame {step}: an unchanged head with a moved member must \
+                     still repaint (INV-26)"
+                );
+            }
+            previous_head = Some(bytes);
+            previous_member = member;
+        }
     }
 
     /// A `for` inside a grouped canvas can generate more members than the cap

@@ -31,6 +31,11 @@ struct InstanceInput {
     @location(9) t_scale: vec2<f32>,
     @location(10) t_rotate: f32,
     @location(11) t_origin: vec2<f32>,
+    // Shape group (RFC-0031 §S4): (mode, param, first_member, member_count).
+    // `mode == GROUP_NONE` is every shape that existed before RFC-0031 and
+    // takes the identical path below. `first_member` indexes `shape_records`
+    // directly, so a group's records are ordinary per-instance data.
+    @location(12) group: vec4<f32>,
 };
 
 struct VertexOutput {
@@ -45,9 +50,27 @@ struct VertexOutput {
     @location(4) fill_color: vec4<f32>,
     @location(5) stroke_dash: vec4<f32>,
     @location(6) misc: vec4<f32>,
+    // Flat: a group's mode and member range are per-instance integers, and
+    // interpolating them would address records that do not exist.
+    @location(7) @interpolate(flat) group: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> viewport_size: vec2<f32>;
+
+/// One member of a shape group (RFC-0031 §S4) — exactly the fields
+/// `eval_shape` consumes. Mirrors `frame::ShapeRecord` field for field.
+struct ShapeRecord {
+    params0: vec4<f32>,
+    params1: vec4<f32>,
+    fill_color: vec4<f32>,
+    stroke_color: vec4<f32>,
+    // (kind, cap, 0, 0)
+    misc: vec4<f32>,
+};
+
+/// This frame's shape-record pool, bound whole at offset zero — a group's
+/// `first_member` is an index into it.
+@group(1) @binding(0) var<storage, read> shape_records: array<ShapeRecord>;
 
 const PI: f32 = 3.14159265358979;
 const TAU: f32 = 6.28318530717959;
@@ -58,6 +81,13 @@ const KIND_ARC: u32 = 0u;
 const KIND_CIRCLE: u32 = 1u;
 const KIND_LINE: u32 = 2u;
 const KIND_RECT: u32 = 3u;
+
+const GROUP_NONE: u32 = 0u;
+const GROUP_FUSE: u32 = 1u;
+const GROUP_MORPH: u32 = 2u;
+// RFC-0031 §S5: a literal bound, so the loop unrolls and the per-fragment cost
+// is provable rather than data-dependent.
+const MAX_GROUP_MEMBERS: u32 = 8u;
 
 const CAP_BUTT: u32 = 0u;
 const CAP_ROUND: u32 = 1u;
@@ -108,6 +138,7 @@ fn vs_main(vertex: VertexInput, instance: InstanceInput) -> VertexOutput {
     out.fill_color = instance.fill_color;
     out.stroke_dash = instance.stroke_dash;
     out.misc = instance.misc;
+    out.group = instance.group;
     return out;
 }
 
@@ -267,6 +298,66 @@ fn eval_shape(p: vec2<f32>, kind: u32, cap: u32, half_w: f32,
     return out;
 }
 
+/// What one fragment resolves a shape — or a whole group — to: the two signed
+/// fields, the dash parameter, and the fill colour, which a group may have
+/// *computed* rather than simply carried (RFC-0031 §S7/§S10 blend colours by
+/// the same factor that produced the geometry).
+struct Resolved {
+    stroke: f32,
+    fill: f32,
+    t: f32,
+    fill_color: vec4<f32>,
+    stroke_color: vec4<f32>,
+};
+
+/// Evaluates this instance: one shape, or the group it heads (RFC-0031 §S4).
+///
+/// `GROUP_NONE` is every shape that existed before RFC-0031 and is the branch
+/// taken by every shape that does not opt in — one `eval_shape` call and the
+/// instance's own colours, exactly as before.
+fn resolve(in: VertexOutput, kind: u32, cap: u32, half_w: f32) -> Resolved {
+    var out: Resolved;
+    out.fill_color = in.fill_color;
+    out.stroke_color = in.stroke_color;
+
+    let mode = u32(in.group.x + 0.5);
+    if (mode == GROUP_NONE) {
+        let d = eval_shape(in.world_pos, kind, cap, half_w, in.params0, in.params1);
+        out.stroke = d.stroke;
+        out.fill = d.fill;
+        out.t = d.t;
+        return out;
+    }
+
+    let first = u32(in.group.z + 0.5);
+    let count = min(u32(in.group.w + 0.5), MAX_GROUP_MEMBERS);
+    if (count == 0u) {
+        out.stroke = FAR;
+        out.fill = FAR;
+        out.t = 0.0;
+        return out;
+    }
+
+    // A group with no combine implemented yet still resolves to its first
+    // member, so an unknown mode degrades to "draw the first shape" rather
+    // than to a hole in the frame.
+    let rec = shape_records[first];
+    let d = eval_shape(
+        in.world_pos,
+        u32(rec.misc.x + 0.5),
+        u32(rec.misc.y + 0.5),
+        half_w,
+        rec.params0,
+        rec.params1,
+    );
+    out.stroke = d.stroke;
+    out.fill = d.fill;
+    out.t = d.t;
+    out.fill_color = rec.fill_color;
+    out.stroke_color = rec.stroke_color;
+    return out;
+}
+
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let opacity = in.misc.x;
@@ -289,7 +380,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let half_w_eff = max(half_w, aa);
     let thin_alpha = clamp(half_w / half_w_eff, 0.0, 1.0);
 
-    let d = eval_shape(in.world_pos, kind, cap, half_w_eff, in.params0, in.params1);
+    let d = resolve(in, kind, cap, half_w_eff);
 
     // ── Coverages ─────────────────────────────────────────────────────────
     var stroke_cov = 1.0 - smoothstep(0.0, aa, d.stroke);
@@ -305,12 +396,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     }
 
     // ── Composite: stroke over fill ───────────────────────────────────────
-    let a_stroke = stroke_cov * in.stroke_color.a * thin_alpha;
-    let a_fill = fill_cov * in.fill_color.a * (1.0 - a_stroke);
+    let a_stroke = stroke_cov * d.stroke_color.a * thin_alpha;
+    let a_fill = fill_cov * d.fill_color.a * (1.0 - a_stroke);
     let out_a = a_stroke + a_fill;
     if (out_a <= 0.001) {
         discard;
     }
-    let rgb = (in.stroke_color.rgb * a_stroke + in.fill_color.rgb * a_fill) / out_a;
+    let rgb = (d.stroke_color.rgb * a_stroke + d.fill_color.rgb * a_fill) / out_a;
     return vec4<f32>(rgb, out_a * opacity);
 }

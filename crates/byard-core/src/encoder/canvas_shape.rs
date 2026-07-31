@@ -46,6 +46,11 @@ pub struct CanvasShapeInstance {
     pub t_rotate: f32,
     /// Paint-time transform pivot (RFC-0011).
     pub t_origin: [f32; 2],
+    /// Shape group (RFC-0031 §S4): `[mode, param, first_member, member_count]`.
+    /// Mode/first/count are small integers carried exactly in `f32`, like
+    /// `misc`'s kind and cap. `[0, 0, 0, 0]` is a shape that heads no group,
+    /// which is every shape the pipeline drew before RFC-0031.
+    pub group: [f32; 4],
 }
 
 impl CanvasShapeInstance {
@@ -67,10 +72,16 @@ impl CanvasShapeInstance {
             t_scale: s.transform.scale,
             t_rotate: s.transform.rotate,
             t_origin: s.transform.origin,
+            group: [
+                s.group_mode as f32,
+                s.group_param,
+                s.group_first as f32,
+                s.group_count as f32,
+            ],
         }
     }
 
-    /// Vertex buffer layout for the per-instance step (locations 1..=11; the
+    /// Vertex buffer layout for the per-instance step (locations 1..=12; the
     /// static quad occupies location 0).
     #[must_use]
     pub fn layout() -> wgpu::VertexBufferLayout<'static> {
@@ -86,6 +97,7 @@ impl CanvasShapeInstance {
             9 => Float32x2, // transform.scale
             10 => Float32, // transform.rotate
             11 => Float32x2, // transform.origin
+            12 => Float32x4, // shape group (RFC-0031 §S4)
         ];
         wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<CanvasShapeInstance>() as wgpu::BufferAddress,
@@ -93,6 +105,49 @@ impl CanvasShapeInstance {
             attributes: ATTRS,
         }
     }
+}
+
+/// Bind-group layout for the per-frame shape-record pool (RFC-0031 §S4): one
+/// read-only storage buffer at `@group(1) @binding(0)`.
+///
+/// Bound whole, at offset zero, with no dynamic offset — a group's
+/// `first_member` is an element index into the entire buffer
+/// ([`InstanceArena::push_storage`](super::instance_arena::InstanceArena::push_storage)
+/// aligns each region to the record stride so that index is exact). The bind
+/// group therefore only has to be rebuilt when the arena replaces its buffer,
+/// which RFC-0033 already bounds to a handful of times per session.
+#[must_use]
+pub fn records_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("ByardCore - CanvasShape Records Layout"),
+        entries: &[wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        }],
+    })
+}
+
+/// Binds `buffer` whole as the shape-record pool.
+#[must_use]
+pub fn records_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    buffer: &wgpu::Buffer,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("ByardCore - CanvasShape Records"),
+        layout,
+        entries: &[wgpu::BindGroupEntry {
+            binding: 0,
+            resource: buffer.as_entire_binding(),
+        }],
+    })
 }
 
 /// Compiles the WGSL shader and assembles the `CanvasShape` pipeline, wrapping
@@ -105,6 +160,7 @@ impl CanvasShapeInstance {
 pub async fn build_pipeline(
     device: &wgpu::Device,
     bind_group_layout: &wgpu::BindGroupLayout,
+    records_layout: &wgpu::BindGroupLayout,
     quad_layout: wgpu::VertexBufferLayout<'static>,
     surface_format: wgpu::TextureFormat,
     depth_stencil: wgpu::DepthStencilState,
@@ -113,7 +169,7 @@ pub async fn build_pipeline(
 
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("ByardCore - CanvasShape Pipeline Layout"),
-        bind_group_layouts: &[Some(bind_group_layout)],
+        bind_group_layouts: &[Some(bind_group_layout), Some(records_layout)],
         immediate_size: 0,
     });
 
@@ -172,11 +228,19 @@ pub async fn build_pipeline(
 ///
 /// `depths` is parallel to `shapes`; a short/empty slice falls back to the far
 /// plane so a missing depth can't push a shape in front of others.
+///
+/// `record_base` is where the frame's shape-record pool landed in the arena, as
+/// an element index (RFC-0031 §S4). A group head stores its member offset
+/// relative to that pool; adding the base here — once, on the CPU, at the one
+/// place the arena's layout is known — is what lets the shader index the whole
+/// buffer with no dynamic offset and no per-frame bind group.
+#[allow(clippy::cast_precision_loss)]
 pub fn stage(
     arena: &mut super::instance_arena::InstanceArena,
     scratch: &mut Vec<CanvasShapeInstance>,
     shapes: &[CanvasShape],
     depths: &[f32],
+    record_base: u32,
 ) -> super::instance_arena::Region {
     if shapes.is_empty() {
         return super::instance_arena::Region::default();
@@ -187,7 +251,11 @@ pub fn stage(
             .get(i)
             .copied()
             .unwrap_or(crate::frame::DRAW_DEPTH_CLEAR);
-        CanvasShapeInstance::new(s, depth)
+        let mut inst = CanvasShapeInstance::new(s, depth);
+        if s.group_mode != crate::frame::GROUP_NONE {
+            inst.group[2] = (record_base + s.group_first) as f32;
+        }
+        inst
     }));
     arena.push_vertex(scratch)
 }
@@ -202,6 +270,7 @@ pub fn draw(
     region: super::instance_arena::Region,
     pipeline: &wgpu::RenderPipeline,
     bind_group: &wgpu::BindGroup,
+    records_bind_group: &wgpu::BindGroup,
     quad_buffer: &wgpu::Buffer,
     count: usize,
     clip_slice: &[Option<u16>],
@@ -212,6 +281,10 @@ pub fn draw(
     }
     render_pass.set_pipeline(pipeline);
     render_pass.set_bind_group(0, bind_group, &[]);
+    // RFC-0031 §S4: the shape-record pool. Bound for every canvas batch, group
+    // or not — a pipeline layout is not conditional, and an instance that heads
+    // no group never reads it.
+    render_pass.set_bind_group(1, records_bind_group, &[]);
     render_pass.set_vertex_buffer(0, quad_buffer.slice(..));
     render_pass.set_vertex_buffer(1, arena.slice(region));
     // Content-clip runs (RFC-0005): scissor each run to its ScrollView viewport.
@@ -376,6 +449,7 @@ mod tests {
             transform: Transform::IDENTITY,
             fill_color: [0.0; 4],
             dirty: true,
+            ..CanvasShape::default()
         };
         let inst = CanvasShapeInstance::new(&s, 0.5);
         // misc = [opacity, depth, kind (ARC = 0), cap (ROUND = 1)]. The

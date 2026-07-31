@@ -1,11 +1,21 @@
 # RFC-0031: Extended Shape System — superelliptical corners, shape groups, organic fusion, and morphing
 
-- **Status:** Draft
+- **Status:** Active — **partially implemented**. §S1–§S10 have landed:
+  superelliptical corners across every pipeline that clips to a rounded rect,
+  the shape group and its storage buffer, `ngon`, sequence morphing, and
+  organic fusion. §S11's general path morphing — compile-time feature
+  correspondence plus the analytic cubic-path pipeline needed to render its
+  output — is **deferred**, as §S11 itself proposes.
+
+  Eight corrections were found while implementing it and are recorded in
+  [the erratum](0031-erratum-implementation-deltas.md); the body below has been
+  corrected in place, because this RFC was Draft while that work landed. The
+  erratum is where the *reasons* are.
 - **Author(s):** Briany4717
 - **Created:** 2026-07-25
-- **Last updated:** 2026-07-25
+- **Last updated:** 2026-07-31
 - **Depends on:**
-  - RFC-0020 (`Canvas`, `CanvasShape`, the analytic per-fragment SDF evaluator in `canvas_shape.wgsl` — this RFC extends that shader rather than adding a pipeline). *Note: RFC-0020's status line still reads `Draft`; the Tier-1 pipeline is in fact landed (`frame::CanvasShape`, `RenderFrame::push_canvas_shape`, `encoder/canvas_shape.{rs,wgsl}`). That status line should be corrected when this RFC merges.*
+  - RFC-0020 (`Canvas`, `CanvasShape`, the analytic per-fragment SDF evaluator in `canvas_shape.wgsl` — this RFC extends that shader rather than adding a pipeline). *RFC-0020's status line has since been corrected to `Active — partially implemented`, and its Tier-2 deferral re-checked against what this RFC added to Tier-1.*
   - RFC-0001 (§3.1 render pipelines and the rounded-box field clamp; `frame.rs` as the sole cross-subsystem boundary)
   - RFC-0010 / RFC-0025 (animatable scalars, `Motion`, `anim.keyframes` with its 8-step cap, `anim.spring`, `repeat`/`reverse`/`restart`)
   - RFC-0011 (paint-time transforms — inherited unchanged by every construct here)
@@ -88,13 +98,16 @@ The smooth-minimum union that produces metaball and blob effects is six lines:
 fn smin(a: f32, b: f32, k: f32) -> vec2<f32> {
     let h = max(k - abs(a - b), 0.0) / k;
     let m = h * h * 0.25;
-    return vec2<f32>(min(a, b) - m * k, select(m, 1.0 - m, a < b));
+    return vec2<f32>(min(a, b) - m * k, select(1.0 - m, m, a < b));
 }
 ```
 
-The `.y` component is the blend weight, which means fused shapes of *different*
-fill colours composite correctly for free rather than being restricted to a
-shared colour. The stroke case is free too: the outline of a fused union is
+The `.y` component is the blend weight *towards `b`*, which means fused shapes
+of *different* fill colours composite correctly for free rather than being
+restricted to a shared colour. Note the `select` arms: WGSL's
+`select(false_value, true_value, cond)` reverses GLSL's ternary, and getting it
+backwards inverts every fused colour while leaving the geometry perfectly
+correct. See the erratum, correction 5. The stroke case is free too: the outline of a fused union is
 `abs(d_union) - half_w`, which is what one visually wants.
 
 What blocks it is that each `CanvasShape` is one instance with its own quad, so a
@@ -162,10 +175,13 @@ Because `phase` is an ordinary animatable scalar, every RFC-0010/0025 modifier
 applies with no new surface:
 
 ```byld
-var phase = 0.0
 // The Material 3 Expressive loading indicator: 7 shapes, 650ms each.
-phase = 7.0 with anim.linear(4550ms, from: 0.0, repeat: infinite)
+Canvas #[width: 48, height: 48,
+         morph: 7.0 with anim.linear(4550ms, from: 0.0, repeat: infinite)] { … }
 ```
+
+(`with` lives in attribute position; there is no statement-level form. See the
+erratum, correction 7.)
 
 A spring gives the overshoot-and-settle character M3E uses for state changes:
 
@@ -229,35 +245,60 @@ The existing clamp (`r_corner = min(r_corner, min(b.x, b.y))`, RFC-0001 §3.1)
 is unchanged and still required — the field folds in on itself past half the box
 regardless of the norm.
 
-#### S2 — the antialiasing correction
+#### S2 — the field is normalised, not the coverage
 
-For `n ≠ 2` the result is no longer a true signed distance: the gradient
-magnitude deviates from 1 near the corner, reaching roughly 1.15 at `n = 6`. The
-`fwidth`-based coverage would therefore produce a corner fringe slightly narrower
-than the edge fringe — subtle, but visible as a hardening at the corners on a
-large radius, which is the opposite of the effect being pursued.
+For `n ≠ 2` the result is no longer a true signed distance. On the corner
+diagonal the Lⁿ norm's gradient magnitude is exactly `2^(1/n − 1/2)`: 1 at
+`n = 2`, **falling** to ≈0.79 at `n = 6`. An uncorrected field therefore draws
+the corner's anti-aliased fringe about 26 % *wider* than the edge's — a smeared
+corner on exactly the shapes this property exists to give a cleaner profile.
 
-The correction is to normalise by the analytic gradient rather than to raise the
-sample count:
+The correction is to compute the gradient analytically alongside the norm and
+normalise the field by it **inside `sd_rounded_box`**, rather than to correct
+coverage in the fragment stage:
 
 ```wgsl
-let g = max(length(vec2<f32>(dpdx(d), dpdy(d))), 1e-6);
-let coverage = clamp(0.5 - d / g, 0.0, 1.0);
+fn lp_norm(v: vec2<f32>, n: f32) -> vec2<f32> {   // (value, |gradient|)
+    let a = pow(v.x, n) + pow(v.y, n);
+    if (a <= 0.0) { return vec2<f32>(0.0, 1.0); }
+    let f = pow(a, 1.0 / n);
+    let g = vec2<f32>(pow(v.x / f, n - 1.0), pow(v.y / f, n - 1.0));
+    return vec2<f32>(f, max(length(g), 1e-4));
+}
 ```
 
-This is one extra pair of derivatives on a path that already computes `fwidth`,
-and it is correct for `n = 2` as well, so it replaces rather than branches
-against the existing path.
+One division, at the source, corrects every consumer together: edge coverage,
+the border band, shadow blur falloff and the clip masks. Correcting coverage
+instead would fix anti-aliasing and leave the other four reading an unnormalised
+field. It is free on the default path, because the `n == 2` short-circuit
+returns before it, and it is a no-op along the straight edges, where one of the
+corner components is zero and the gradient is 1 by construction.
+
+See the erratum, correction 1.
 
 #### S3 — where it lands
 
 `smooth` is a style property (RFC-0016), inherited nowhere and defaulting to
-`0.0`. It occupies the spare `w` lane of an existing per-instance `vec4` on both
-box pipelines — no new vertex attribute, no instance-size growth. `CanvasShape`'s
-`rect` kind reads it from `params[4]`, which is currently unused for that kind.
+`0.0`.
+
+There was no spare `vec4` lane on either box pipeline. `DecoratedBox` gets one
+*back*: its gradient present/absent flag was redundant, because `grad_axis` is a
+unit direction vector for a real ramp and all-zero without one, so the shader
+answers the same question from data it already reads and `misc.w` carries
+`smooth` at no cost. `BoxInstance` grows by one `f32`, declared last so every
+existing offset is unchanged — cheaper than promoting every smoothed box to the
+`DecoratedBox` pipeline. `CanvasShape`'s `rect` kind reads it from `params[5]`,
+beside that kind's corner radius.
 
 Shadows use the same `n` as the shape that casts them, since a shadow with a
-different corner profile than its caster reads as a rendering error.
+different corner profile than its caster reads as a rendering error. That
+argument does not stop at shadows: a backdrop pane, an ink ripple and a rounded
+image all clip to an element's outline, so `smooth` reaches six shaders. It does
+**not** reach widget-owned geometry (a `Toggle` track, a `Slider` thumb, a
+`RadioButton` dot), which derives its own radii — the rule is that `smooth`
+applies wherever the *author* controls the radius.
+
+See the erratum, corrections 2 and 3.
 
 ### 2. The shape group (S4–S6)
 
@@ -270,11 +311,28 @@ pub struct CanvasShape {
     // … existing fields unchanged …
     /// Combine mode: `GROUP_NONE`, `GROUP_FUSE`, or `GROUP_MORPH`.
     pub group_mode: u32,
-    /// `(param, member_count)` — smoothing radius `k` for `FUSE`,
-    /// sequence position for `MORPH`; ignored when `NONE`.
-    pub group: [f32; 2],
+    /// Smoothing radius `k` for `FUSE`, sequence position for `MORPH`;
+    /// ignored when `NONE`.
+    pub group_param: f32,
+    /// Index of this group's first member in `RenderFrame::shape_records`.
+    pub group_first: u32,
+    /// How many members it has (`<= MAX_GROUP_MEMBERS`).
+    pub group_count: u32,
+    /// Hash of the member records — INV-26, see below.
+    pub member_hash: u64,
 }
 ```
+
+(A packed `group: [f32; 2]` was the original sketch. The member *offset* has to
+live somewhere too, and named fields on a CPU-side struct cost nothing: the GPU
+instance packs them into one `vec4` as `(mode, param, first, count)` at staging
+time, which is the only place the packing matters.)
+
+The head also carries a `member_hash`: a hash of its members' bytes, folded in
+by `push_shape_group` on the same pass that appends them. It is **INV-26**, and
+without it a fusion group with a static `k` whose member moves would be judged
+clean by `PaintDigest` — whose comparison is over a primitive's *own* bytes —
+and would render the previous frame's shape. See the erratum, correction 4.
 
 When `group_mode != GROUP_NONE`, the instance is the **group head**: its
 `params` are ignored and its `rect` is the union of its members' bounds, inflated
@@ -352,10 +410,12 @@ d_stroke = abs(d_fill) - half_w;
 ```
 
 **Decision:** when `group_mode == GROUP_FUSE`, the stroke is derived from the
-fused fill field and members' individual stroke widths are ignored; the head's
-`stroke_width`, `stroke_color`, `cap` and dash parameters govern. Per-member
-strokes inside a fusion group are a `StrokeInFusionGroup` warning (not an error —
-the shape still renders correctly, the property is simply inert).
+fused fill field and the group draws **one** outline. There is no group-level
+stroke syntax to write it in, so that outline comes from the *first* shape's
+`stroke_width`, `stroke_color` and `cap` — the only place it can come from — and
+a **later** member's stroke properties are inert, diagnosed as a
+`StrokeInFusionGroup` warning (not an error — the shape still renders correctly,
+the property is simply ignored). See the erratum, correction 6.
 
 The dash arc-length parameter `t` is not defined on a fused boundary — there is
 no closed-form arc length for the union of arbitrary SDFs. Dashes are therefore
@@ -390,7 +450,7 @@ implementation.
 
 #### S10 — sequence indexing
 
-`group[0]` carries `phase`. With `count` members:
+`group_param` carries `phase`. With `count` members:
 
 ```wgsl
 let ph = fract(phase / f32(count)) * f32(count);   // wraps; negatives handled
@@ -693,10 +753,17 @@ artefact settles it. `n` is an integer literal; changing shape is what `morph`
 is for. Attempting `with` on `n` is a `NotAnimatable` diagnostic pointing at
 `morph`, so the error teaches the correct construct rather than merely refusing.
 
+`NotAnimatable` is deliberately **not** the existing `LayoutPropNotAnimatable`.
+`n` is paint-class — it moves no geometry and costs no relayout — it simply has
+no value between a pentagon and a hexagon, and the layout diagnostic would send
+an author towards a transform, which is unhelpful advice for a vertex count. See
+the erratum, correction 8.
+
 ---
 
-Implementation-time decisions that surface after merge go to
-`support/DESICIONS.md` as `IMPL-NN` entries. This RFC carries no open questions.
+Implementation-time findings are recorded in
+[the erratum](0031-erratum-implementation-deltas.md). This RFC carries no open
+questions.
 
 ---
 

@@ -3,14 +3,24 @@
 - **Status:** Active — partially implemented. The Tier-1 analytic-stroke pipeline
   is landed and in production use: `frame::CanvasShape`,
   `RenderFrame::push_canvas_shape`, and `encoder/canvas_shape.{rs,wgsl}`, with
-  the `Canvas` intrinsic lowering `arc`/`circle`/`rect`/`line` to it. Tier-2
-  tessellated custom paths and clip masks remain deferred, as §"Ordering"
-  describes. The status line previously read `Draft` while the pipeline was
-  shipping, which is the kind of drift that makes every other status line
-  unreadable.
+  the `Canvas` intrinsic lowering `arc`/`circle`/`rect`/`line`/`ngon` to it.
+  Tier-2 tessellated custom paths and clip masks remain deferred, as
+  §"Ordering" describes. The status line previously read `Draft` while the
+  pipeline was shipping, which is the kind of drift that makes every other
+  status line unreadable.
+
+  **The Tier-2 deferral has been re-checked** (2026-07-31) now that RFC-0031 has
+  grown Tier-1 by three constructs — `ngon`, sequence morphing and organic
+  fusion — and it stands, for a reason that got *stronger* rather than weaker:
+  `ngon` plus field interpolation covers the shape vocabulary the deferral was
+  blocking (Material 3 Expressive's set is overwhelmingly n-fold symmetric), so
+  the demand that would have justified a tessellator has been answered
+  analytically. What Tier-2 is still needed for is author-supplied arbitrary
+  paths and clip masks, and neither has a caller. RFC-0031 §S11 restates the
+  same conclusion from the morphing side.
 - **Author(s):** Briany4717
 - **Created:** 2026-07-10
-- **Last updated:** 2026-07-10
+- **Last updated:** 2026-07-31
 - **Depends on:** RFC-0001 (§3.1 render pipelines, `frame.rs`), RFC-0005 (intrinsic catalog), RFC-0009 (VectorMSDF pipeline, MSDF atlas), RFC-0010 (animations — animatable path properties), RFC-0011 (transforms).
 - **Extends:** RFC-0009 (the VectorMSDF pipeline gains programmatic shape support beyond SVG-file icons).
 - **Enables:** Circular progress indicators, loading spinners, arc-based gauges, custom shape decorations, clip masks. Unblocks `byard-material` circular progress and `byard-cupertino` activity indicators.

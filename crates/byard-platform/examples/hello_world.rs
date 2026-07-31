@@ -68,6 +68,7 @@ impl PlatformHost for App {
                 color: [0.18, 0.55, 1.0, 1.0],
                 radii: [16.0; 4],
                 transform: byard_core::frame::Transform::IDENTITY,
+                smooth: 0.0,
             },
             // Semi-transparent orange rectangle with asymmetric radii (logical).
             BoxInstance {
@@ -75,6 +76,7 @@ impl PlatformHost for App {
                 color: [1.0, 0.42, 0.18, 0.9],
                 radii: [0.0, 32.0, 0.0, 32.0],
                 transform: byard_core::frame::Transform::IDENTITY,
+                smooth: 0.0,
             },
             // White circle: radius == half of the square side (40 logical px).
             BoxInstance {
@@ -82,6 +84,7 @@ impl PlatformHost for App {
                 color: [1.0, 1.0, 1.0, 0.85],
                 radii: [40.0; 4],
                 transform: byard_core::frame::Transform::IDENTITY,
+                smooth: 0.0,
             },
         ];
 

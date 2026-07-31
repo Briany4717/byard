@@ -1,0 +1,3 @@
+[project]
+name = "corner_smoothing"
+entry = "src/main.byd"

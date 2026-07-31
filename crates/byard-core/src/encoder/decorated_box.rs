@@ -26,7 +26,12 @@ pub struct DecoratedInstance {
     pub shadow_color: [f32; 4],
     /// `[border_width, shadow_dx, shadow_dy, shadow_blur]`.
     pub params: [f32; 4],
-    /// `[opacity, 0, 0, 0]`.
+    /// `[opacity, depth, shadow_spread, smooth]` — `misc.w` is the RFC-0031
+    /// §S1 corner smoothing, carried in the lane a gradient present/absent flag
+    /// used to occupy. The flag was redundant: `grad_axis` is `(cos θ, sin θ,
+    /// …)` for a real ramp and all-zero without one, so the shader answers the
+    /// same question from data it already reads, and the lane became the spare
+    /// one RFC-0031 §S3 asked for.
     pub misc: [f32; 4],
     /// Paint-time transform translate (RFC-0011), from `d.base.transform`.
     /// Only the geometric fields (`translate`/`scale`/`rotate`/`origin`) are
@@ -61,14 +66,9 @@ impl From<&DecoratedBox> for DecoratedInstance {
             shadow_color: d.shadow_color,
             params: [d.border_width, d.shadow_dx, d.shadow_dy, d.shadow_blur],
             // misc.y (depth) is stamped per-instance in `draw`; misc.z carries
-            // the shadow spread (RFC-0011) and misc.w flags a gradient, so the
-            // shader pays nothing for the (overwhelmingly common) flat fill.
-            misc: [
-                d.opacity,
-                0.0,
-                d.shadow_spread,
-                if d.gradient.is_some() { 1.0 } else { 0.0 },
-            ],
+            // the shadow spread (RFC-0011) and misc.w the corner smoothing
+            // (RFC-0031 §S1), which the shader turns into the Lⁿ exponent.
+            misc: [d.opacity, 0.0, d.shadow_spread, d.base.smooth],
             t_translate: d.base.transform.translate,
             t_scale: d.base.transform.scale,
             t_rotate: d.base.transform.rotate,

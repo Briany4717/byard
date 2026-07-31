@@ -131,6 +131,7 @@ fn a_translated_box_paints_at_its_transformed_position_not_its_layout_rect() {
             translate: [40.0, 40.0],
             ..Transform::IDENTITY
         },
+        smooth: 0.0,
     });
 
     // Its own (untransformed) layout rect must be empty — the transform
@@ -182,6 +183,7 @@ fn identity_transform_matches_untransformed_output_byte_for_byte() {
             color: [0.0, 1.0, 0.0, 1.0],
             radii: [0.0; 4],
             transform,
+            smooth: 0.0,
         });
         frame
     };

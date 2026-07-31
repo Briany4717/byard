@@ -32,6 +32,9 @@ struct InstanceInput {
     @location(8) t_origin: vec2<f32>,
     // Draw-order depth (NDC-z), stamped by `RenderFrame::push_ripple`.
     @location(9) depth: f32,
+    // Corner smoothing 0..1 (RFC-0031 §S1) — the ink's clip must follow the
+    // element's own corner profile, not a circular approximation of it.
+    @location(10) smooth_amount: f32,
 };
 
 struct VertexOutput {
@@ -42,6 +45,7 @@ struct VertexOutput {
     @location(3) radius_alpha: vec2<f32>,
     @location(4) color: vec4<f32>,
     @location(5) radii: vec4<f32>,
+    @location(6) @interpolate(flat) corner_n: f32,
 };
 
 @group(0) @binding(0) var<uniform> viewport_size: vec2<f32>;
@@ -103,13 +107,31 @@ fn vs_main(vertex: VertexInput, instance: InstanceInput) -> VertexOutput {
     out.radius_alpha = instance.params.zw;
     out.color = instance.color;
     out.radii = instance.radii;
+    out.corner_n = 2.0 + clamp(instance.smooth_amount, 0.0, 1.0) * 4.0;
     return out;
 }
 
 // Rounded-box SDF, shared shape with `decorated_box.wgsl` — the clip must
 // match the element's own outline exactly or the ink visibly bleeds past (or
 // falls short of) a rounded corner.
-fn sd_rounded_box(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>) -> f32 {
+/// Lⁿ norm of a **non-negative** 2-vector, paired with the magnitude of its own
+/// gradient (RFC-0031 §S1–S2). `n == 2` is the Euclidean norm, whose gradient is
+/// exactly 1 — the circular corner this pipeline clipped to before RFC-0031, and
+/// the reason an unset `smooth` is bit-identical. Above 2 the norm is not a true
+/// signed distance: on the corner diagonal its gradient is `2^(1/n - 1/2)`,
+/// ≈0.79 at `n = 6`. Normalising by the returned gradient keeps the clip's
+/// anti-aliased fringe the same width at the corners as along the edges.
+fn lp_norm(v: vec2<f32>, n: f32) -> vec2<f32> {
+    let a = pow(v.x, n) + pow(v.y, n);
+    if (a <= 0.0) {
+        return vec2<f32>(0.0, 1.0);
+    }
+    let f = pow(a, 1.0 / n);
+    let g = vec2<f32>(pow(v.x / f, n - 1.0), pow(v.y / f, n - 1.0));
+    return vec2<f32>(f, max(length(g), 1e-4));
+}
+
+fn sd_rounded_box(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>, n: f32) -> f32 {
     var r_corner = r.x;
     if (p.x > 0.0 && p.y < 0.0) { r_corner = r.y; }
     if (p.x > 0.0 && p.y > 0.0) { r_corner = r.z; }
@@ -123,7 +145,17 @@ fn sd_rounded_box(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>) -> f32 {
     // the CSS rule that an over-large radius is reduced to fit.
     r_corner = min(r_corner, min(b.x, b.y));
     let q = abs(p) - b + vec2<f32>(r_corner);
-    return min(max(q.x, q.y), 0.0) + length(max(q, vec2<f32>(0.0))) - r_corner;
+    let corner = max(q, vec2<f32>(0.0));
+    let inner = min(max(q.x, q.y), 0.0);
+    // RFC-0031 §S1: the L² path, verbatim and unconditional at `smooth: 0`.
+    if (n == 2.0) {
+        return inner + length(corner) - r_corner;
+    }
+    // `inner` is non-zero only where one of `corner`'s components is zero, and
+    // there `lp.y == 1` — so dividing the whole expression normalises exactly
+    // the corner arc and leaves the straight edges untouched.
+    let lp = lp_norm(corner, n);
+    return (inner + lp.x - r_corner) / lp.y;
 }
 
 @fragment
@@ -132,7 +164,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // `smoothstep` edges stay in ascending order — descending edges are
     // undefined per the spec and DX12/HLSL resolves them differently from
     // Metal/Vulkan — and the `!(x > y)` discard also fires on NaN.
-    let box_dist = sd_rounded_box(in.local_pos, in.half_size, in.radii);
+    let box_dist = sd_rounded_box(
+        in.local_pos,
+        in.half_size,
+        in.radii,
+        in.corner_n,
+    );
     let box_soft = max(length(vec2<f32>(dpdx(box_dist), dpdy(box_dist))), 1e-5);
     let box_cov = 1.0 - smoothstep(0.0, box_soft, box_dist);
 

@@ -10,6 +10,12 @@
 // `for` body is lowered once per row but *written* once, so every row's `with`
 // clause shares one source span.
 //
+// The rows are also filtered by a `when`, which is how lists are really written
+// — and which is the other half of a row knowing who it is: a `when` branch is
+// lowered lazily, away from the scope it was written in, so everything inside it
+// has to carry that scope with it. A row that has lost it reads `0` for `row`
+// and `i` alike, and the list below renders perfectly and never moves.
+//
 // What to verify:
 //   1. Press "Shuffle". Every bar springs to a different angle, and each one
 //      arrives at *its own*. Sharing one spring across the rows would mean each
@@ -20,7 +26,9 @@
 //   2. Press "Remove" to drop the last row, then "Add" to bring it back. The
 //      new row enters from the beginning rather than resuming the timeline of
 //      whatever used to occupy that slot: an animation lives and dies with its
-//      element (RFC-0025).
+//      element (RFC-0025). "Add" runs out at the seventh row and "Remove" at the
+//      empty list; both dim there, because a button that cannot do anything
+//      should not look like one that can.
 //   3. The dots inside each bar animate independently too. A `for` inside a
 //      `for` body is lowered once per outer row, so each dot belongs to exactly
 //      one bar.
@@ -48,15 +56,23 @@ View Main() {
         Text("one written animation, one timeline per row")
             #[color: 0xF2F3F5, size: 20, weight: bold]
 
-        Row #[gap: 10] {
+        Row #[gap: 10, align: center] {
             Button("Shuffle") #[bg: 0x5B8DEF, color: 0xFFFFFF, radius: 8, p: (8, 14)]
                 => shuffled = !shuffled
-            Button("Add") #[bg: 0x2B2F3A, color: 0xE6E1E5, radius: 8, p: (8, 14)]
-                => count = count + 1
-            Button("Remove") #[bg: 0x2B2F3A, color: 0xE6E1E5, radius: 8, p: (8, 14)]
-                => count = count - 1
+            // The list has as many rows as `rows` has entries, so "Add" runs out
+            // of rows to add. A button that is out of range says so — it dims,
+            // rather than staying lit and quietly doing nothing when pressed.
+            Button("Add") #[bg: count < rows.len ? 0x2B2F3A : 0x1E212A,
+                            color: count < rows.len ? 0xE6E1E5 : 0x555B66,
+                            radius: 8, p: (8, 14)]
+                => count = count < rows.len ? count + 1 : count
+            Button("Remove") #[bg: count > 0 ? 0x2B2F3A : 0x1E212A,
+                               color: count > 0 ? 0xE6E1E5 : 0x555B66,
+                               radius: 8, p: (8, 14)]
+                => count = count > 0 ? count - 1 : count
             Button("Replay") #[bg: 0x2B2F3A, color: 0xE6E1E5, radius: 8, p: (8, 14)]
                 => entrance = entrance + 1
+            Text("{count} / {rows.len}") #[color: 0x8A90A0, size: 12]
         }
 
         Column #[gap: 10] {
@@ -71,12 +87,12 @@ View Main() {
                         Row #[bg: 0x5B8DEF, width: 120, height: 22, radius: 11,
                               p: (0, 10), gap: 6, align: center,
                               rotate: shuffled ? row.tilt : 0deg with anim.spring(
-                                  stiffness: 140, damping: 0.8)] {
+                                  stiffness: 140, damping: 18)] {
                             // 3. A nested `for`: these dots are this bar's.
                             for d in [0, 1, 2] {
                                 Box #[bg: 0xFFFFFF, width: 6, height: 6, radius: 3,
                                       opacity: shuffled ? row.dim : 1.0 with anim.spring(
-                                          stiffness: 90, damping: 0.7)] {}
+                                          stiffness: 90, damping: 16)] {}
                             }
                         }
                     }

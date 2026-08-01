@@ -1116,6 +1116,14 @@ pub struct Interpreter {
     /// persistent View env afterwards — so anything re-lowered at render time
     /// must capture them in its env snapshot.
     nav_depth: u32,
+    /// Current depth of a *restored* environment: a pooled body being lowered
+    /// at render time with a captured snapshot pushed back onto `self.env`
+    /// (a lazily-lowered `when` branch). The bindings it restores — a loop
+    /// element, an instance param — are truncated out again the moment the
+    /// body is lowered, so anything inside it that will be re-lowered or
+    /// re-evaluated later must capture them now, exactly as it would inside the
+    /// `for` body or route body the snapshot came from.
+    restored_depth: u32,
     /// Stack of caller-supplied child-block slots, one frame per active
     /// user-view instance (RFC-0007 D-A). The block is
     /// pre-lowered in the *caller* scope so a `content` element reference inside
@@ -2516,7 +2524,11 @@ impl Interpreter {
     /// against the persistent root env, exactly as before, so its snapshot stays
     /// empty and render behaviour is unchanged.
     fn capture_env_snapshot(&self) -> Vec<(Symbol, Value)> {
-        if self.instance_depth == 0 && self.for_depth == 0 && self.nav_depth == 0 {
+        if self.instance_depth == 0
+            && self.for_depth == 0
+            && self.nav_depth == 0
+            && self.restored_depth == 0
+        {
             Vec::new()
         } else {
             self.env.snapshot()
@@ -4146,7 +4158,18 @@ impl Interpreter {
                             self.env.push(k.clone(), v.clone());
                         }
                         let known_refs: Vec<&str> = known.iter().map(String::as_str).collect();
+                        // A branch lowered here is lowered *away from where it
+                        // was written*: the scope it belongs to exists only as
+                        // the snapshot just pushed, and it is truncated again
+                        // below. Anything inside the branch that resolves later
+                        // — an event action, an animated attribute reading the
+                        // row it belongs to, a nested `for`/`when` pool — has to
+                        // capture that scope now, or it will look for the row in
+                        // an environment that no longer has one.
+                        let restored = !env_snap.is_empty();
+                        self.restored_depth += u32::from(restored);
                         let nodes = self.lower_members(&ast, &known_refs);
+                        self.restored_depth -= u32::from(restored);
                         self.env.truncate(env_base);
                         if take {
                             self.when_pools[*pool].then = Some(nodes);
@@ -13380,6 +13403,116 @@ mod tests {
         interp.tick();
         let (x, _) = render(&mut interp, 900);
         assert!(x.unwrap() < 5.0, "a re-grown row starts fresh, got {x:?}");
+    }
+
+    /// A `when` inside a `for` — the shape every real list has, because rows are
+    /// filtered — must not cost the row its identity.
+    ///
+    /// A `when` branch is lowered **lazily, at render time**, with the scope it
+    /// was written in restored from a snapshot and truncated again immediately.
+    /// Anything inside it that resolves later — an animated attribute reading
+    /// `row`, an event action, a nested pool — has to capture that scope while it
+    /// is briefly back. Without it, `row` resolves to nothing at render time and
+    /// every animated target in the branch silently reads `0`: the list looks
+    /// mounted and correct, and none of it moves.
+    #[test]
+    fn a_row_inside_a_when_still_knows_which_row_it_is() {
+        let src = "View V() { var count = 2 let rows = [{ w: 40 }, { w: 200 }] \
+                   Column { for i, row in rows { when i < count { \
+                       Box #[bg: 0x808080, width: 10, height: 10, \
+                             translate: (row.w, 0) with anim.linear(200ms, from: 0)] {} \
+                   } } } }";
+        let (mut interp, tree) = lower_named(src, "V");
+        assert!(interp.errors().is_empty(), "{:?}", interp.errors());
+        interp.tick();
+        let render = |interp: &mut Interpreter, ms: u32| -> Vec<f32> {
+            interp.set_now_ms(ms);
+            let mut frame = byard_core::frame::RenderFrame::new();
+            interp.render(&tree, &mut frame, 400.0, 300.0);
+            frame
+                .instances()
+                .iter()
+                .map(|b| b.transform.translate[0])
+                .collect()
+        };
+        render(&mut interp, 0);
+        let settled = render(&mut interp, 400);
+        assert_eq!(settled.len(), 2, "two rows, got {settled:?}");
+        assert!(
+            (settled[0] - 40.0).abs() < 1.0 && (settled[1] - 200.0).abs() < 1.0,
+            "each filtered row must reach its own target, got {settled:?}"
+        );
+    }
+
+    /// The same loss, seen through the other thing a row knows about itself: its
+    /// index. A stagger's delay is `step × i`, so a branch that forgot `i` gives
+    /// every row a delay of zero and the cascade arrives as one flash.
+    #[test]
+    fn a_stagger_inside_a_when_still_cascades_by_index() {
+        let src = "View V() { var count = 3 let rows = [1, 2, 3] \
+                   Column { for i, row in rows { when i < count { \
+                       Box #[bg: 0x808080, width: 10, height: 10, \
+                             translate: (100, 0) with anim.stagger(linear(100ms, from: 0), \
+                             200ms, i)] {} \
+                   } } } }";
+        let (mut interp, tree) = lower_named(src, "V");
+        assert!(interp.errors().is_empty(), "{:?}", interp.errors());
+        interp.tick();
+        let render = |interp: &mut Interpreter, ms: u32| -> Vec<f32> {
+            interp.set_now_ms(ms);
+            let mut frame = byard_core::frame::RenderFrame::new();
+            interp.render(&tree, &mut frame, 400.0, 300.0);
+            frame
+                .instances()
+                .iter()
+                .map(|b| b.transform.translate[0])
+                .collect()
+        };
+        render(&mut interp, 0);
+        // 250ms in: row 0 has played out, row 1 is halfway through its own play,
+        // row 2 has not started. One clause, three phases.
+        let mid = render(&mut interp, 250);
+        assert_eq!(mid.len(), 3, "three rows, got {mid:?}");
+        assert!(
+            (mid[0] - 100.0).abs() < 1.0 && (mid[1] - 50.0).abs() < 5.0 && mid[2] < 1.0,
+            "the cascade must run in index order, got {mid:?}"
+        );
+    }
+
+    /// The loss compounds: a pool lowered *inside* a lazily-lowered branch
+    /// inherits that branch's scope, so a nested `for` whose body reads the
+    /// **outer** row — a per-row detail on each of a row's children — needs the
+    /// capture to have happened one level up before it can capture it in turn.
+    #[test]
+    fn a_nested_for_inside_a_when_still_reads_its_outer_row() {
+        let src = "View V() { var count = 2 \
+                   let groups = [{ w: 30, items: [1] }, { w: 180, items: [1] }] \
+                   Column { for i, g in groups { when i < count { \
+                     Column { for item in g.items { \
+                       Box #[bg: 0x808080, width: 10, height: 10, \
+                             translate: (g.w, 0) with anim.linear(200ms, from: 0)] {} \
+                     } } \
+                   } } } }";
+        let (mut interp, tree) = lower_named(src, "V");
+        assert!(interp.errors().is_empty(), "{:?}", interp.errors());
+        interp.tick();
+        let render = |interp: &mut Interpreter, ms: u32| -> Vec<f32> {
+            interp.set_now_ms(ms);
+            let mut frame = byard_core::frame::RenderFrame::new();
+            interp.render(&tree, &mut frame, 400.0, 300.0);
+            frame
+                .instances()
+                .iter()
+                .map(|b| b.transform.translate[0])
+                .collect()
+        };
+        render(&mut interp, 0);
+        let settled = render(&mut interp, 400);
+        assert_eq!(settled.len(), 2, "one box per nested row, got {settled:?}");
+        assert!(
+            (settled[0] - 30.0).abs() < 1.0 && (settled[1] - 180.0).abs() < 1.0,
+            "each nested row must reach its own target, got {settled:?}"
+        );
     }
 
     #[test]

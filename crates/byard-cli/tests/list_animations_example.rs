@@ -19,9 +19,12 @@ use byard_core::{EventKind, InputEvent};
 const LIST: &str = include_str!("../examples/list_animations/src/main.byd");
 const W: f32 = 700.0;
 const H: f32 = 500.0;
-/// The bar inside each row, by its written width — the element whose `rotate`
-/// the shuffle drives.
-const BAR_WIDTH: f32 = 120.0;
+/// The bar inside each row, by its written height — the element whose `rotate`
+/// the shuffle drives. Its *width* is per-row (`width: row.bar`), which is
+/// precisely what a bar must not be identified by here.
+const BAR_HEIGHT: f32 = 22.0;
+/// The bar widths the rows are written with, in row order.
+const BAR_WIDTHS: [f32; 7] = [120.0, 168.0, 96.0, 200.0, 144.0, 112.0, 184.0];
 
 fn example_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/list_animations")
@@ -91,17 +94,38 @@ fn bar_rotations(interp: &mut Interpreter, tree: &[RenderNode], ms: u32) -> Vec<
     let solid = f
         .instances()
         .iter()
-        .filter(|b| (b.rect[2] - BAR_WIDTH).abs() < 0.5)
+        .filter(|b| (b.rect[3] - BAR_HEIGHT).abs() < 0.5)
         .map(|b| (b.rect[1], b.transform.rotate));
     let decorated = f
         .decorated()
         .iter()
-        .filter(|d| (d.base.rect[2] - BAR_WIDTH).abs() < 0.5)
+        .filter(|d| (d.base.rect[3] - BAR_HEIGHT).abs() < 0.5)
         .map(|d| (d.base.rect[1], d.base.transform.rotate));
     let mut bars: Vec<(f32, f32)> = solid.chain(decorated).collect();
     // Top to bottom is row order; the two paints arrive in separate pools.
     bars.sort_by(|a, b| a.0.total_cmp(&b.0));
     bars.into_iter().map(|(_, rot)| rot).collect()
+}
+
+/// Every bar's laid-out width this frame, in row order.
+fn bar_widths(interp: &mut Interpreter, tree: &[RenderNode], ms: u32) -> Vec<f32> {
+    interp.tick();
+    interp.set_now_ms(ms);
+    let mut f = RenderFrame::new();
+    interp.render(tree, &mut f, W, H);
+    let solid = f
+        .instances()
+        .iter()
+        .filter(|b| (b.rect[3] - BAR_HEIGHT).abs() < 0.5)
+        .map(|b| (b.rect[1], b.rect[2]));
+    let decorated = f
+        .decorated()
+        .iter()
+        .filter(|d| (d.base.rect[3] - BAR_HEIGHT).abs() < 0.5)
+        .map(|d| (d.base.rect[1], d.base.rect[2]));
+    let mut bars: Vec<(f32, f32)> = solid.chain(decorated).collect();
+    bars.sort_by(|a, b| a.0.total_cmp(&b.0));
+    bars.into_iter().map(|(_, w)| w).collect()
 }
 
 /// The rows' entrance opacities this frame, in row order — what the stagger
@@ -114,7 +138,7 @@ fn row_opacities(interp: &mut Interpreter, tree: &[RenderNode], ms: u32) -> Vec<
     let mut rows: Vec<(f32, f32)> = f
         .decorated()
         .iter()
-        .filter(|d| (d.base.rect[2] - BAR_WIDTH).abs() < 0.5)
+        .filter(|d| (d.base.rect[3] - BAR_HEIGHT).abs() < 0.5)
         .map(|d| (d.base.rect[1], d.opacity))
         .collect();
     rows.sort_by(|a, b| a.0.total_cmp(&b.0));
@@ -181,6 +205,27 @@ fn shuffle_sends_every_row_to_its_own_angle() {
         assert!(
             (got - expect).abs() < 0.02,
             "row {row} must reach its own tilt {expect}, got {got} (all: {settled:?})"
+        );
+    }
+}
+
+/// Each bar is laid out at the width its own row carries (`width: row.bar`).
+///
+/// Layout is a separate pass over the same tree, one ahead of paint, and it has
+/// to know which row it is in for the same reason paint does. When it did not,
+/// `row.bar` resolved to nothing there — and a `width` that resolves to nothing
+/// is a box with no width, so every bar stretched to fill the column while the
+/// paint pass, which *had* the row, coloured and rotated each one correctly.
+#[test]
+fn each_bar_is_laid_out_at_its_own_rows_width() {
+    let (mut interp, tree) = load();
+    frame(&mut interp, &tree, &[], 0);
+    let widths = bar_widths(&mut interp, &tree, 3_000);
+    assert_eq!(widths.len(), 5, "five rows are mounted, got {widths:?}");
+    for (row, (got, expect)) in widths.iter().zip(BAR_WIDTHS).enumerate() {
+        assert!(
+            (got - expect).abs() < 0.5,
+            "row {row} must be laid out at its own width {expect}, got {got} (all: {widths:?})"
         );
     }
 }

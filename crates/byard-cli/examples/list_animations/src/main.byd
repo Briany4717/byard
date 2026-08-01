@@ -35,6 +35,10 @@
 //   4. Press "Replay". One written animation — `anim.stagger(…, 80ms, i)` — and
 //      the rows cascade in index order. Per-row state is what lets the same
 //      clause hold a different delay and a different phase for each of them.
+//   5. The bars are different lengths, and that is a layout value: `width:
+//      row.bar`. Layout is a separate pass over the same tree, so it has to
+//      know which row it is in too — a list of equal, full-width bars is that
+//      pass having lost the row while paint still had it.
 View Main() {
     var shuffled = false
     var count = 5
@@ -42,14 +46,19 @@ View Main() {
 
     // A different target per row. `shuffled` flips them all at the same moment,
     // so any state they shared would be visible immediately.
+    // `bar` is each row's own width — a *layout* value read from the element
+    // the row is bound to. Layout runs a pass ahead of paint over the same
+    // tree, so it has to resolve `row` there too; a row that cannot has no
+    // width at all and stretches to fill, which is a full-width column that
+    // still paints every colour correctly.
     let rows = [
-        { tilt: -14deg, dim: 0.35 },
-        { tilt: 22deg,  dim: 0.85 },
-        { tilt: -6deg,  dim: 0.55 },
-        { tilt: 30deg,  dim: 0.95 },
-        { tilt: 10deg,  dim: 0.45 },
-        { tilt: -25deg, dim: 0.75 },
-        { tilt: 17deg,  dim: 0.65 },
+        { tilt: -14deg, dim: 0.35, bar: 120 },
+        { tilt: 22deg,  dim: 0.85, bar: 168 },
+        { tilt: -6deg,  dim: 0.55, bar: 96  },
+        { tilt: 30deg,  dim: 0.95, bar: 200 },
+        { tilt: 10deg,  dim: 0.45, bar: 144 },
+        { tilt: -25deg, dim: 0.75, bar: 112 },
+        { tilt: 17deg,  dim: 0.65, bar: 184 },
     ]
 
     Column #[bg: 0x14161C, p: 28, gap: 20, width: 640] {
@@ -84,7 +93,7 @@ View Main() {
                                                          restart: entrance)] {
                         Text("{i}") #[color: 0x8A90A0, size: 12, width: 14]
                         // 1. Each bar heads for its own target, on its own spring.
-                        Row #[bg: 0x5B8DEF, width: 120, height: 22, radius: 11,
+                        Row #[bg: 0x5B8DEF, width: row.bar, height: 22, radius: 11,
                               p: (0, 10), gap: 6, align: center,
                               rotate: shuffled ? row.tilt : 0deg with anim.spring(
                                   stiffness: 140, damping: 18)] {

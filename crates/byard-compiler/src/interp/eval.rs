@@ -4293,11 +4293,21 @@ impl Interpreter {
         // stays free for `build_layout_tree` below.
         let concrete = self.expand_concrete(nodes, pools);
         let mut ids = Vec::with_capacity(concrete.len());
+        // The instance each child belongs to, exactly as the paint walk does it:
+        // a `with` on a *layout* prop is sampled here, one pass before paint, and
+        // must key to the same row there and here or the two passes drive two
+        // different animations off one written clause.
+        let enclosing = self.anim_slot;
         for c in concrete {
+            self.anim_slot = c.slot;
             if let Ok(id) = self.build_layout_tree(c.node, pools, flat_ids) {
                 ids.push(id);
             }
         }
+        // The caller's own style (`gap`, `p`, …) is evaluated *after* this
+        // returns, so the walk owes it the slot it came in with rather than
+        // whichever row happened to be last.
+        self.anim_slot = enclosing;
         ids
     }
 
@@ -4391,7 +4401,12 @@ impl Interpreter {
         let concrete = self.expand_concrete(children, pools);
         let mut anchor_ids = Vec::with_capacity(concrete.len());
         let mut slots = Vec::with_capacity(concrete.len());
+        // An overlay is emitted away from where it was written, and the render
+        // pass resets the slot to 0 for that reason; its *own* rows still have
+        // one, so lay each out as itself.
+        let enclosing = self.anim_slot;
         for c in concrete {
+            self.anim_slot = c.slot;
             let child = c.node;
             let mut cflat = Vec::new();
             let Ok(cid) = self.build_layout_tree(child, pools, &mut cflat) else {
@@ -4409,6 +4424,7 @@ impl Interpreter {
                 flat_ids: cflat,
             });
         }
+        self.anim_slot = enclosing;
         let wrapper_style =
             byard_core::atlas::layout::ContainerStyle::default().with_absolute(true);
         let wrapper_id = self.atlas.add_container(wrapper_style, &anchor_ids).ok()?;
@@ -5021,9 +5037,20 @@ impl Interpreter {
             // dimensions are required (enforced by `validate_canvas`); the 0
             // fallback keeps a mis-declared canvas laid out (collapsed) rather
             // than aborting the whole tree.
-            RenderNode::Canvas { attrs, .. } => {
+            RenderNode::Canvas {
+                attrs,
+                env_snapshot,
+                ..
+            } => {
+                // Sized from the scope it was instantiated in, like any other
+                // element (see the `Box` arm below).
+                let env_base = self.env.len();
+                for (k, v) in env_snapshot {
+                    self.env.push(k.clone(), v.clone());
+                }
                 let w = self.eval_int_prop(attrs, "width").unwrap_or(0) as f32;
                 let h = self.eval_int_prop(attrs, "height").unwrap_or(0) as f32;
+                self.env.truncate(env_base);
                 let id = self.atlas.add_leaf(LeafSize::new(w, h))?;
                 flat_ids.push(id);
                 Ok(id)
@@ -5075,107 +5102,136 @@ impl Interpreter {
                 name,
                 attrs,
                 children,
+                env_snapshot,
                 ..
             } => {
-                // Value widgets are leaf nodes with intrinsic default sizes (M16/M19).
-                match name.as_str() {
-                    "Toggle" => {
-                        let w = self.eval_int_prop(attrs, "width").unwrap_or(50) as f32;
-                        let h = self.eval_int_prop(attrs, "height").unwrap_or(30) as f32;
-                        let id = self.atlas.add_leaf(LeafSize::new(w, h))?;
-                        flat_ids.push(id);
-                        return Ok(id);
-                    }
-                    "Slider" => {
-                        let w = self.eval_int_prop(attrs, "width").unwrap_or(200) as f32;
-                        let h = self.eval_int_prop(attrs, "height").unwrap_or(24) as f32;
-                        let id = self.atlas.add_leaf(LeafSize::new(w, h))?;
-                        flat_ids.push(id);
-                        return Ok(id);
-                    }
-                    // RFC-0018 Checkbox: an 18×18 square by default; `width`/
-                    // `height` override. Sized square unless overridden so the
-                    // container and checkmark geometry stay proportional.
-                    "Checkbox" => {
-                        let w = self.eval_int_prop(attrs, "width").unwrap_or(18) as f32;
-                        let h = self.eval_int_prop(attrs, "height").unwrap_or(18) as f32;
-                        let id = self.atlas.add_leaf(LeafSize::new(w, h))?;
-                        flat_ids.push(id);
-                        return Ok(id);
-                    }
-                    // RFC-0018 RadioButton: a 20×20 circle by default.
-                    "RadioButton" => {
-                        let w = self.eval_int_prop(attrs, "width").unwrap_or(20) as f32;
-                        let h = self.eval_int_prop(attrs, "height").unwrap_or(20) as f32;
-                        let id = self.atlas.add_leaf(LeafSize::new(w, h))?;
-                        flat_ids.push(id);
-                        return Ok(id);
-                    }
-                    "TextField" => {
-                        let w = self.eval_int_prop(attrs, "width").unwrap_or(200) as f32;
-                        let h = self.eval_int_prop(attrs, "height").unwrap_or(36) as f32;
-                        let id = self.atlas.add_leaf(LeafSize::new(w, h))?;
-                        flat_ids.push(id);
-                        return Ok(id);
-                    }
-                    _ => {}
+                // The same restore the paint walk does, for the same reason and
+                // one pass earlier: a box's *size* is as much a function of the
+                // scope it was instantiated in as its colour is. `width: row.w`
+                // inside a `for`, a user view's `width: size` — layout reads
+                // those attrs through the ordinary prop path, so without the
+                // instance environment they resolve to nothing and the element
+                // silently falls back to its default (a `width`-less box fills
+                // its parent). Empty at the top level (no-op).
+                let env_base = self.env.len();
+                for (k, v) in env_snapshot {
+                    self.env.push(k.clone(), v.clone());
                 }
-                // RFC-0005 windowed ScrollView: when opted in, build only the
-                // visible slice of a single uniform-height list child, bracketed
-                // by spacer leaves for the elided rows — so layout is O(visible),
-                // not O(list). The same window is recomputed in the render pass.
-                if name.as_str() == "ScrollView" {
-                    if let [
-                        RenderNode::Box {
-                            name: list_name,
-                            attrs: list_attrs,
-                            children: rows_raw,
-                            ..
-                        },
-                    ] = children.as_slice()
-                    {
-                        // RFC-0018: expand a reactive `for` (or literal rows) to
-                        // the concrete row nodes, then window over them — so
-                        // virtualization still lays out only the visible slice.
-                        let rows = self.expand_concrete(rows_raw, pools);
-                        if let Some(win) = self.scroll_window(attrs, rows.len()) {
-                            let mut temp_flat = Vec::new();
-                            let list_id = self.build_windowed_list(
-                                list_name,
-                                list_attrs,
-                                &rows,
-                                win,
-                                pools,
-                                &mut temp_flat,
-                            )?;
-                            let style = self.eval_container_style(name.as_str(), attrs);
-                            let id = self.atlas.add_container(style, &[list_id])?;
-                            flat_ids.push(id);
-                            flat_ids.extend(temp_flat);
-                            return Ok(id);
-                        }
-                    }
-                }
-                // RFC-0018 `Grid`: a CSS-grid container. Built via its own path so
-                // the parent gets grid tracks/gaps and each child can carry an
-                // explicit placement.
-                if name.as_str() == "Grid" {
-                    return self.build_grid(attrs, children, pools, flat_ids);
-                }
-                // RFC-0018 `ZStack`: overlapping children — a single-cell grid.
-                if name.as_str() == "ZStack" {
-                    return self.build_zstack(attrs, children, pools, flat_ids);
-                }
-                let mut temp_flat = Vec::new();
-                // RFC-0018: expand reactive `when`/`for` children before layout.
-                let child_ids = self.build_children(children, pools, &mut temp_flat);
-                let style = self.eval_container_style(name.as_str(), attrs);
-                let id = self.atlas.add_container(style, &child_ids)?;
-                flat_ids.push(id);
-                flat_ids.extend(temp_flat);
-                Ok(id)
+                let out = self.build_box_layout(name, attrs, children, pools, flat_ids);
+                self.env.truncate(env_base);
+                out
             }
         }
+    }
+
+    /// The `Box`-family layout body, split out so its one caller can bracket it
+    /// with the box's restored instance environment across every early return.
+    fn build_box_layout(
+        &mut self,
+        name: &Symbol,
+        attrs: &[Attr],
+        children: &[RenderNode],
+        pools: Pools<'_>,
+        flat_ids: &mut Vec<byard_core::atlas::layout::AtlasNodeId>,
+    ) -> Result<byard_core::atlas::layout::AtlasNodeId, byard_core::atlas::AtlasError> {
+        use byard_core::atlas::layout::LeafSize;
+        // Value widgets are leaf nodes with intrinsic default sizes (M16/M19).
+        match name.as_str() {
+            "Toggle" => {
+                let w = self.eval_int_prop(attrs, "width").unwrap_or(50) as f32;
+                let h = self.eval_int_prop(attrs, "height").unwrap_or(30) as f32;
+                let id = self.atlas.add_leaf(LeafSize::new(w, h))?;
+                flat_ids.push(id);
+                return Ok(id);
+            }
+            "Slider" => {
+                let w = self.eval_int_prop(attrs, "width").unwrap_or(200) as f32;
+                let h = self.eval_int_prop(attrs, "height").unwrap_or(24) as f32;
+                let id = self.atlas.add_leaf(LeafSize::new(w, h))?;
+                flat_ids.push(id);
+                return Ok(id);
+            }
+            // RFC-0018 Checkbox: an 18×18 square by default; `width`/
+            // `height` override. Sized square unless overridden so the
+            // container and checkmark geometry stay proportional.
+            "Checkbox" => {
+                let w = self.eval_int_prop(attrs, "width").unwrap_or(18) as f32;
+                let h = self.eval_int_prop(attrs, "height").unwrap_or(18) as f32;
+                let id = self.atlas.add_leaf(LeafSize::new(w, h))?;
+                flat_ids.push(id);
+                return Ok(id);
+            }
+            // RFC-0018 RadioButton: a 20×20 circle by default.
+            "RadioButton" => {
+                let w = self.eval_int_prop(attrs, "width").unwrap_or(20) as f32;
+                let h = self.eval_int_prop(attrs, "height").unwrap_or(20) as f32;
+                let id = self.atlas.add_leaf(LeafSize::new(w, h))?;
+                flat_ids.push(id);
+                return Ok(id);
+            }
+            "TextField" => {
+                let w = self.eval_int_prop(attrs, "width").unwrap_or(200) as f32;
+                let h = self.eval_int_prop(attrs, "height").unwrap_or(36) as f32;
+                let id = self.atlas.add_leaf(LeafSize::new(w, h))?;
+                flat_ids.push(id);
+                return Ok(id);
+            }
+            _ => {}
+        }
+        // RFC-0005 windowed ScrollView: when opted in, build only the
+        // visible slice of a single uniform-height list child, bracketed
+        // by spacer leaves for the elided rows — so layout is O(visible),
+        // not O(list). The same window is recomputed in the render pass.
+        if name.as_str() == "ScrollView" {
+            if let [
+                RenderNode::Box {
+                    name: list_name,
+                    attrs: list_attrs,
+                    children: rows_raw,
+                    ..
+                },
+            ] = children
+            {
+                // RFC-0018: expand a reactive `for` (or literal rows) to
+                // the concrete row nodes, then window over them — so
+                // virtualization still lays out only the visible slice.
+                let rows = self.expand_concrete(rows_raw, pools);
+                if let Some(win) = self.scroll_window(attrs, rows.len()) {
+                    let mut temp_flat = Vec::new();
+                    let list_id = self.build_windowed_list(
+                        list_name,
+                        list_attrs,
+                        &rows,
+                        win,
+                        pools,
+                        &mut temp_flat,
+                    )?;
+                    let style = self.eval_container_style(name.as_str(), attrs);
+                    let id = self.atlas.add_container(style, &[list_id])?;
+                    flat_ids.push(id);
+                    flat_ids.extend(temp_flat);
+                    return Ok(id);
+                }
+            }
+        }
+        // RFC-0018 `Grid`: a CSS-grid container. Built via its own path so
+        // the parent gets grid tracks/gaps and each child can carry an
+        // explicit placement.
+        if name.as_str() == "Grid" {
+            return self.build_grid(attrs, children, pools, flat_ids);
+        }
+        // RFC-0018 `ZStack`: overlapping children — a single-cell grid.
+        if name.as_str() == "ZStack" {
+            return self.build_zstack(attrs, children, pools, flat_ids);
+        }
+        let mut temp_flat = Vec::new();
+        // RFC-0018: expand reactive `when`/`for` children before layout.
+        let child_ids = self.build_children(children, pools, &mut temp_flat);
+        let style = self.eval_container_style(name.as_str(), attrs);
+        let id = self.atlas.add_container(style, &child_ids)?;
+        flat_ids.push(id);
+        flat_ids.extend(temp_flat);
+        Ok(id)
     }
 
     /// Builds the atlas subtree for a `Grid` (RFC-0018). Children are expanded
@@ -5198,7 +5254,9 @@ impl Interpreter {
             byard_core::atlas::GridItemPlacement,
         )> = Vec::new();
         let mut temp_flat = Vec::new();
+        let enclosing = self.anim_slot;
         for c in concrete {
+            self.anim_slot = c.slot;
             if let Ok(cid) = self.build_layout_tree(c.node, pools, &mut temp_flat) {
                 if let Some(p) = self.grid_child_placement(c.node) {
                     placements.push((cid, p));
@@ -5206,6 +5264,7 @@ impl Interpreter {
                 child_ids.push(cid);
             }
         }
+        self.anim_slot = enclosing;
         let base = self.eval_container_style("Grid", attrs);
         let (cols, rows) = self.eval_grid_templates(attrs);
         let (col_gap, row_gap) = self.eval_grid_gaps(attrs);
@@ -5324,11 +5383,14 @@ impl Interpreter {
         let concrete = self.expand_concrete(children, pools);
         let mut child_ids = Vec::with_capacity(concrete.len());
         let mut temp_flat = Vec::new();
+        let enclosing = self.anim_slot;
         for c in concrete {
+            self.anim_slot = c.slot;
             if let Ok(cid) = self.build_layout_tree(c.node, pools, &mut temp_flat) {
                 child_ids.push(cid);
             }
         }
+        self.anim_slot = enclosing;
         let base = self.eval_container_style("ZStack", attrs);
         let align = self.eval_stack_align(attrs);
         let id = self.atlas.add_stack_container(base, align, &child_ids)?;
@@ -5395,10 +5457,13 @@ impl Interpreter {
         let top = self.atlas.add_leaf(LeafSize::new(0.0, top_h))?;
         temp.push(top);
         child_ids.push(top);
+        let enclosing = self.anim_slot;
         for row in &rows[win.start..win.end] {
+            self.anim_slot = row.slot;
             let id = self.build_layout_tree(row.node, pools, &mut temp)?;
             child_ids.push(id);
         }
+        self.anim_slot = enclosing;
         let bottom = self.atlas.add_leaf(LeafSize::new(0.0, bottom_h))?;
         temp.push(bottom);
         child_ids.push(bottom);
@@ -13476,6 +13541,35 @@ mod tests {
         assert!(
             (mid[0] - 100.0).abs() < 1.0 && (mid[1] - 50.0).abs() < 5.0 && mid[2] < 1.0,
             "the cascade must run in index order, got {mid:?}"
+        );
+    }
+
+    /// A row's *size* comes from the same scope its colour does.
+    ///
+    /// Layout runs one pass ahead of paint over the same tree, and paint
+    /// restores each box's captured instance environment before reading its
+    /// attrs. The layout pass did not, so every dimension written in terms of
+    /// the element it belongs to — `width: row.w` in a list, `width: size` in a
+    /// user view — resolved to nothing there. Nothing reported it: a `width`
+    /// that resolves to nothing is a box with no width, which is a box that
+    /// fills its parent. So the list laid out as one full-width column and
+    /// painted the colours perfectly.
+    #[test]
+    fn a_row_is_laid_out_from_its_own_scope() {
+        let src = "View V() { let rows = [{ w: 60 }, { w: 220 }] \
+                   Column { for row in rows { \
+                       Row #[bg: 0x808080, height: 10, width: row.w] {} \
+                   } } }";
+        let (mut interp, tree) = lower_named(src, "V");
+        assert!(interp.errors().is_empty(), "{:?}", interp.errors());
+        interp.tick();
+        let mut frame = byard_core::frame::RenderFrame::new();
+        interp.render(&tree, &mut frame, 700.0, 300.0);
+        let widths: Vec<f32> = frame.instances().iter().map(|b| b.rect[2]).collect();
+        assert_eq!(
+            widths,
+            vec![60.0, 220.0],
+            "each row is laid out at its own width, not stretched to the viewport"
         );
     }
 

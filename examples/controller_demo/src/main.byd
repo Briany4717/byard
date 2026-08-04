@@ -1,0 +1,67 @@
+// RFC-0028, the controller boundary: a view that asks Rust a question.
+//
+// Run it (from the repo root):
+//   cargo run -p controller-demo
+//
+// `inject Greeter as greeter` resolves the handle the Rust half registered
+// with `App::provide`. The call inside the button's action does not block: it
+// packages the argument, hands it to the async pool, and returns, so the
+// window keeps responding while the controller takes its half second.
+//
+// The answer comes back on the logic thread and runs one of the two arms:
+//
+//   • `ok reply => …` binds the returned record;
+//   • `err e   => …` binds the error record.
+//
+// Both are ordinary actions. They write a `var`, and everything after that is
+// the reactive path this framework already had.
+View Main() {
+    inject Greeter as greeter
+
+    var name: Str = "world"
+    var status: Str = "idle"
+    var answer: Str = ""
+    var detail: Str = ""
+
+    // The screen introduces itself the moment it appears (RFC-0028 §4b): no
+    // input needed, which is exactly what a data-backed screen wants.
+    on mount => { status = "ready" }
+
+    Column #[bg: 0x14141C, p: 32, gap: 20, width: 640] {
+        Text("RFC-0028, a view calling Rust") #[color: 0xFFFFFF, size: 24, weight: bold]
+        Text("status: {status}") #[color: 0x9AA0AC, size: 14]
+
+        Row #[gap: 12] {
+            TextField #[value: name, placeholder: "who to greet…", grow: 1,
+                        bg: 0x1E1E2A, radius: 8, p: (horizontal: 12), height: 40,
+                        color: 0xFFFFFF]
+            Button("Greet") #[bg: 0x477A96, radius: 10, color: 0xFFFFFF,
+                              p: (vertical: 10, horizontal: 18)]
+                => {
+                    status = "waiting…"
+                    answer = ""
+                    detail = ""
+                    greeter.greet(name)
+                        ok reply => {
+                            status = "ok"
+                            answer = reply.text
+                            detail = "the controller counted {reply.length} characters"
+                        }
+                        err e => {
+                            status = "error"
+                            answer = e.message
+                            detail = "kind: {e.kind}"
+                        }
+                }
+        }
+
+        // Clear the field and press Greet: the controller answers with an
+        // error, and the `err` arm is what runs.
+        when answer != "" {
+            Column #[bg: 0x1E1E2A, radius: 12, p: 20, gap: 8] {
+                Text("{answer}") #[color: 0xFFFFFF, size: 20]
+                Text("{detail}") #[color: 0x9AA0AC, size: 13]
+            }
+        }
+    }
+}

@@ -201,6 +201,23 @@ pub enum Member {
         /// Source span.
         span: Span,
     },
+    /// `on mount => action` / `on unmount => action`, a lifecycle effect
+    /// (RFC-0028 §4b).
+    ///
+    /// The entry point a data-backed screen needs: something has to ask for
+    /// the data when the screen appears, and every other action position in
+    /// `byld` is driven by an input the user has to perform first. It is a
+    /// structural effect (RFC-0018), so it mounts and unmounts with its
+    /// enclosing scope, and a `when` that brings a screen back runs `on mount`
+    /// again rather than showing whatever the previous mount had loaded.
+    Lifecycle {
+        /// `true` for `on mount`, `false` for `on unmount`.
+        on_mount: bool,
+        /// The action to run at that edge.
+        action: Expr,
+        /// Source span.
+        span: Span,
+    },
     /// `style { .class #[...] ... }`, scoped style rules (static; D5).
     Style {
         /// The style rules.
@@ -210,6 +227,23 @@ pub enum Member {
     },
     /// A bare expression statement (e.g. a call).
     Expr(Expr),
+}
+
+/// One result arm of an async controller call (RFC-0028 §4):
+/// `ok report => { … }`.
+///
+/// The binding is exactly RFC-0019's callback-prop shape, one parameter bound
+/// over an action body, which is why an arm needs no new evaluation machinery:
+/// the reply is delivered as the arm's payload, the same way an event payload
+/// reaches an `#[pointer_move(e) => …]` handler.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ResultArm {
+    /// The name the reply (or error record) binds to inside the body.
+    pub binding: Symbol,
+    /// The arm's action body.
+    pub action: Box<Expr>,
+    /// Source span.
+    pub span: Span,
 }
 
 /// Which navigation keyword introduced a [`Member::Route`] (RFC-0026).
@@ -533,6 +567,33 @@ pub enum Expr {
         /// Source span.
         span: Span,
     },
+    /// An async controller call with result arms (RFC-0028 §4):
+    /// `api.forecast("Tokyo") ok r => { … } err e => { … }`.
+    ///
+    /// A **statement**, not a value: evaluating it packages the arguments,
+    /// schedules the method on the async pool and returns immediately, so it
+    /// is legal only in action position. In a `let`/memo or any other pure
+    /// context it is
+    /// [`EffectInPureContext`](crate::diagnostics::CompileError::EffectInPureContext),
+    /// which is what keeps a projection a pure function of its reads.
+    ///
+    /// The no-arm form (`api.ping()`, fire-and-forget) is *not* parsed as this
+    /// node: it is an ordinary [`Expr::Call`] whose callee resolves to a
+    /// controller handle at lower time, so one lowering path serves both and a
+    /// call cannot mean different things depending on whether anyone read its
+    /// answer.
+    ControllerCall {
+        /// The call itself (`api.forecast("Tokyo")`), an [`Expr::Call`] whose
+        /// callee is a [`Expr::Member`] on the injected handle.
+        call: Box<Expr>,
+        /// `ok name => action`: the success arm and the name its payload binds
+        /// to.
+        ok: Option<ResultArm>,
+        /// `err name => action`: the failure arm.
+        err: Option<ResultArm>,
+        /// Source span.
+        span: Span,
+    },
     /// A lambda `|p| e` or `(p) => e`.
     Lambda {
         /// Parameter names (types inferred from the use site; E2).
@@ -700,6 +761,7 @@ impl Expr {
             | Self::ClassRef(_, span)
             | Self::Member { span, .. }
             | Self::Call { span, .. }
+            | Self::ControllerCall { span, .. }
             | Self::Lambda { span, .. }
             | Self::Block(_, span)
             | Self::Assign { span, .. }

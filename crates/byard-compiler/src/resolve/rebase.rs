@@ -145,6 +145,10 @@ fn shift_member(member: &mut Member, delta: u32) {
                 shift_style_rule(rule, delta);
             }
         }
+        Member::Lifecycle { action, span, .. } => {
+            shift(span, delta);
+            shift_expr(action, delta);
+        }
         Member::Expr(expr) => shift_expr(expr, delta),
     }
 }
@@ -325,6 +329,19 @@ fn shift_expr(expr: &mut Expr, delta: u32) {
             shift_expr(value, delta);
             if let Some((_, easing_span)) = easing {
                 shift(easing_span, delta);
+            }
+        }
+        Expr::ControllerCall {
+            call,
+            ok,
+            err,
+            span,
+        } => {
+            shift(span, delta);
+            shift_expr(call, delta);
+            for arm in [ok, err].into_iter().flatten() {
+                shift(&mut arm.span, delta);
+                shift_expr(&mut arm.action, delta);
             }
         }
     }

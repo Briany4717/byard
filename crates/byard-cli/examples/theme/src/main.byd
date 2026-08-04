@@ -1,4 +1,4 @@
-// RFC-0022 — theme runtime: manifest-declared reactive design tokens.
+// RFC-0022, theme runtime: manifest-declared reactive design tokens.
 //
 // Run it (from the repo root):
 //   cargo run -p byard-cli -- dev crates/byard-cli/examples/theme
@@ -7,14 +7,14 @@
 // `[theme]`, not from hex literals in this file. `inject Theme as t` binds the
 // engine-resolved theme; `t.primary`, `t.titleLarge`, `t.cornerLg` resolve
 // against the *active* scheme. Tapping either control flips `t.dark`, which is a
-// single reactive write that recolours the entire tree in one tick — every `bg`
+// single reactive write that recolours the entire tree in one tick, every `bg`
 // / `color` that reads a token animates via `with anim` (RFC-0010).
 View Main() {
     inject Theme as t
 
     Column #[bg: t.surface with anim.spring(), p: 32, gap: 20, width: 520] {
         Text("Theme runtime") #[typo: t.headlineLarge, color: t.onSurface]
-        Text("Colour, type, and shape from the manifest — no hex literals here.")
+        Text("Colour, type, and shape from the manifest, no hex literals here.")
             #[typo: t.bodyLarge, color: t.onSurfaceVariant]
 
         // A filled card painted entirely from tokens.

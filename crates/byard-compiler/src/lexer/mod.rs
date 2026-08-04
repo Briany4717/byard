@@ -10,7 +10,7 @@
 //! [`CompileError::StringNestingTooDeep`] (D12).
 //!
 //! The driver ([`lex`]) wraps every `logos` lex failure as a [`CompileError`]
-//! with a [`Span`] — there are no silent failures (INV-4).
+//! with a [`Span`], there are no silent failures (INV-4).
 
 use logos::{Lexer, Logos};
 
@@ -32,7 +32,7 @@ pub enum LexError {
 }
 
 /// Bit 32 of a [`Token::IntLit`], set at lex time on a hex literal written
-/// with **more than six digits** — the RFC-0005 §1 alpha-first `0xAARRGGBB`
+/// with **more than six digits**, the RFC-0005 §1 alpha-first `0xAARRGGBB`
 /// colour form. The tag is what lets a colour consumer distinguish
 /// `0x00FFFFFF` (transparent white, alpha byte explicitly written as zero)
 /// from `0xFFFFFF` (opaque white): the two are the same `i64` value.
@@ -85,7 +85,7 @@ pub enum Token {
     /// `style`
     #[token("style")]
     Style,
-    /// `untrack` (reserved intrinsic; D2 — parsed as a call, dispatched in the
+    /// `untrack` (reserved intrinsic; D2, parsed as a call, dispatched in the
     /// interpreter).
     #[token("untrack")]
     Untrack,
@@ -95,11 +95,11 @@ pub enum Token {
     /// value position.
     #[token("with")]
     With,
-    /// `merge` (RFC-0016 M3): the infix style-composition operator —
+    /// `merge` (RFC-0016 M3): the infix style-composition operator,
     /// `base merge overrides` produces a new `Style` whose right operand wins.
     #[token("merge")]
     Merge,
-    /// `use` (RFC-0008 D-F): a package-qualified symbol import at file top —
+    /// `use` (RFC-0008 D-F): a package-qualified symbol import at file top,
     /// `use material`, `use material as m`, `use material.{Card}`. The name
     /// is resolved by the module resolver against the *manifest-declared*
     /// dependency set; no path string ever appears in `byld` source (the
@@ -114,12 +114,12 @@ pub enum Token {
     /// An angle literal with a unit suffix (RFC-0011 T1: `360deg`, `1.5rad`).
     /// Listed before [`Token::FloatLit`]/[`Token::IntLit`] so `logos`'s
     /// longest-match prefers the suffixed form over a bare number followed by
-    /// an `Ident` — same principle as hex-before-decimal below. The value is
+    /// an `Ident`, same principle as hex-before-decimal below. The value is
     /// canonicalized to **radians** right here at lex time: the deg→rad
     /// conversion is a pure, infallible numeric transform (nothing here can
     /// fail the way string/number parsing can), so there is no benefit to
     /// deferring it to a later compiler pass the way D9 defers *type*
-    /// inference — this is unit normalization, not semantic analysis.
+    /// inference, this is unit normalization, not semantic analysis.
     #[regex(r"[0-9]+(\.[0-9]+)?deg", |lex| {
         let s = lex.slice();
         s[..s.len() - 3].parse::<f64>().ok().map(f64::to_radians)
@@ -129,8 +129,8 @@ pub enum Token {
         s[..s.len() - 3].parse::<f64>().ok()
     })]
     AngleLit(f64),
-    /// A duration literal — `200ms` (RFC-0010) or the seconds form `1.5s` /
-    /// `2s` (RFC-0025 §4) — value always in **milliseconds**.
+    /// A duration literal, `200ms` (RFC-0010) or the seconds form `1.5s` /
+    /// `2s` (RFC-0025 §4), value always in **milliseconds**.
     ///
     /// Listed before the plain number rules so `logos`'s longest-match prefers
     /// `200ms` over `200` + `ms`. The seconds form is canonicalized to ms right
@@ -147,13 +147,13 @@ pub enum Token {
             .ok()
             .map(|secs| (secs * 1000.0).round())
             // The regex admits no sign, so the range check is purely the upper
-            // bound — but it is what makes the cast below lossless.
+            // bound, but it is what makes the cast below lossless.
             .filter(|ms| *ms >= 0.0 && *ms <= f64::from(u32::MAX))
             .map(|ms| ms as u32)
     })]
     DurationLit(u32),
     /// A percentage literal (RFC-0025 §4: `anim.keyframes(0%: …, 50%: …)`),
-    /// canonicalized at lex time to the **fraction** `0.5` — again the
+    /// canonicalized at lex time to the **fraction** `0.5`, again the
     /// [`Token::AngleLit`] precedent (a pure, infallible unit transform). `%` is
     /// not an operator in `byld`, so the suffix is unambiguous. Listed before
     /// the plain number rules for longest-match.
@@ -171,7 +171,7 @@ pub enum Token {
     /// followed by an identifier.
     ///
     /// A hex literal with **more than six digits** is, per the RFC-0005 §1
-    /// colour contract, alpha-first `0xAARRGGBB` — and the written width is
+    /// colour contract, alpha-first `0xAARRGGBB`, and the written width is
     /// semantic: `0x00FFFFFF` (transparent white) and `0xFFFFFF` (opaque
     /// white) are the same `i64`, so the value alone cannot carry "the alpha
     /// byte was written". Such literals are tagged with
@@ -214,7 +214,7 @@ pub enum Token {
     /// `]` (closes an attribute block or array)
     #[token("]")]
     RBracket,
-    /// `#[` (opens an attribute block) — one token.
+    /// `#[` (opens an attribute block), one token.
     #[token("#[")]
     HashBracket,
 
@@ -265,47 +265,47 @@ pub enum Token {
     /// `?` (ternary)
     #[token("?")]
     Question,
-    /// `-` — the sign of a negative numeric literal (`translate: (-8, 0)`)
+    /// `-`, the sign of a negative numeric literal (`translate: (-8, 0)`)
     /// *or* binary subtraction (part of the minimal arithmetic surface, see
     /// [`Token::Star`]). Longest-match keeps `->`, `-=` and `--` as their own
     /// tokens.
     #[token("-")]
     Minus,
-    /// `+` — binary addition. Part of the minimal arithmetic surface
+    /// `+`, binary addition. Part of the minimal arithmetic surface
     /// (`+ - * /`) required by RFC-0020's reactive shape parameters
     /// (`sweep: percent * 3.6`). Longest-match keeps `+=` and `++` as their
     /// own tokens.
     #[token("+")]
     Plus,
-    /// `*` — binary multiplication (see [`Token::Plus`]).
+    /// `*`, binary multiplication (see [`Token::Plus`]).
     #[token("*")]
     Star,
-    /// `/` — binary division (see [`Token::Plus`]). A `//` comment still wins
+    /// `/`, binary division (see [`Token::Plus`]). A `//` comment still wins
     /// over two `/` tokens through the skip rule's longest match.
     #[token("/")]
     Slash,
-    /// `==` — equality comparison (RFC-0027 §1). Longest-match keeps this
+    /// `==`, equality comparison (RFC-0027 §1). Longest-match keeps this
     /// distinct from a single `=` (assignment).
     #[token("==")]
     EqEq,
-    /// `!=` — inequality comparison (RFC-0027 §1).
+    /// `!=`, inequality comparison (RFC-0027 §1).
     #[token("!=")]
     BangEq,
-    /// `!` — boolean negation (RFC-0027 §2). Longest-match keeps `!=` its own
+    /// `!`, boolean negation (RFC-0027 §2). Longest-match keeps `!=` its own
     /// token.
     #[token("!")]
     Bang,
-    /// `<=` — less-than-or-equal (RFC-0027 §1). Longest-match prefers this over
+    /// `<=`, less-than-or-equal (RFC-0027 §1). Longest-match prefers this over
     /// `<` (generic open / less-than).
     #[token("<=")]
     LtEq,
-    /// `>=` — greater-than-or-equal (RFC-0027 §1).
+    /// `>=`, greater-than-or-equal (RFC-0027 §1).
     #[token(">=")]
     GtEq,
-    /// `&&` — short-circuiting logical AND (RFC-0027 §2).
+    /// `&&`, short-circuiting logical AND (RFC-0027 §2).
     #[token("&&")]
     AmpAmp,
-    /// `||` — short-circuiting logical OR (RFC-0027 §2). Longest-match keeps a
+    /// `||`, short-circuiting logical OR (RFC-0027 §2). Longest-match keeps a
     /// single `|` (lambda delimiter) distinct.
     #[token("||")]
     PipePipe,
@@ -343,7 +343,7 @@ fn lex_string(lex: &mut Lexer<Token>) -> Result<(), LexError> {
     for c in lex.remainder().chars() {
         consumed += c.len_utf8();
         // Escapes are honored in *both* states: a `\"` inside an interpolation
-        // (which is itself inside this string) is an escaped quote, a literal —
+        // (which is itself inside this string) is an escaped quote, a literal,
         // it must not toggle string/brace state. D12's nesting cap still counts
         // genuinely nested *un-escaped* strings via the two-state stack below.
         if escaped {
@@ -400,7 +400,7 @@ pub type SpannedToken = (Token, Span);
 
 /// The result of lexing a source file: the token stream plus any diagnostics.
 ///
-/// Lexing never aborts on the first error — it records a [`CompileError`] and
+/// Lexing never aborts on the first error, it records a [`CompileError`] and
 /// continues, so one pass surfaces multiple problems (INV-4).
 #[derive(Debug, Default)]
 pub struct LexedFile {
@@ -522,7 +522,7 @@ mod tests {
 
     #[test]
     fn hash_bracket_is_one_token() {
-        // `#[gap: 12]` — `#[` must be a single HashBracket, not `#` + `[`.
+        // `#[gap: 12]`, `#[` must be a single HashBracket, not `#` + `[`.
         assert_eq!(
             kinds("#[gap: 12]"),
             vec![
@@ -556,7 +556,7 @@ mod tests {
         };
         assert!((half_turn - std::f64::consts::PI).abs() < 1e-9);
 
-        // `rad` is already radians — passed through unchanged.
+        // `rad` is already radians, passed through unchanged.
         assert_eq!(toks[2], Token::AngleLit(1.5));
     }
 
@@ -601,7 +601,7 @@ mod tests {
 
     #[test]
     fn three_levels_of_interpolation_lex_ok() {
-        // "L1 { "L2 { "L3" }" }" — exactly the D12 boundary, must pass.
+        // "L1 { "L2 { "L3" }" }", exactly the D12 boundary, must pass.
         let src = "\"L1 { \"L2 { \"L3\" }\" }\"";
         let lexed = lex(src);
         assert!(

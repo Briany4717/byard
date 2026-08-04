@@ -9,7 +9,7 @@
 //! existing atomic frame swap instead of opening a new channel.
 //!
 //! With the `telemetry` Cargo feature off, [`profile_scope!`] expands to a
-//! no-op statement — zero cost in a build that disables it (e.g. release).
+//! no-op statement, zero cost in a build that disables it (e.g. release).
 
 use std::cell::{Cell, RefCell};
 use std::sync::{Mutex, OnceLock};
@@ -39,8 +39,8 @@ pub struct ScopeId(pub u16);
 /// "self-accounting and owner attribution").
 ///
 /// A scope name says *what kind of work* ran. It does not say *whose*. When two
-/// producers run the same scope in one frame — the app's interpreter and the
-/// dev HUD's, both entering `interp.render`, both entering `layout.taffy` — a
+/// producers run the same scope in one frame, the app's interpreter and the
+/// dev HUD's, both entering `interp.render`, both entering `layout.taffy`, a
 /// consumer that aggregates by name alone merges them and bills all of it to
 /// the app. The merge is not hidden (the block prints `×2`), but the
 /// attribution is silently wrong, which is worse: the reader is told two
@@ -50,7 +50,7 @@ pub struct ScopeId(pub u16);
 /// So the owner travels **with the sample**, stamped at entry from a
 /// thread-local set by [`attribute_to`], and every consumer that attributes
 /// cost filters on it. This is the same class of correction as RFC-0030 §I2b's
-/// self-time — there, a parent and child were summed and exceeded the frame;
+/// self-time, there, a parent and child were summed and exceeded the frame;
 /// here, two peers are summed and attributed to one of them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[repr(u8)]
@@ -59,7 +59,7 @@ pub enum Owner {
     /// default: nothing has to opt in to being the app.
     #[default]
     App = 0,
-    /// The dev runner's own diagnostic surfaces — the in-window HUD and
+    /// The dev runner's own diagnostic surfaces, the in-window HUD and
     /// everything the engine does *because* the HUD is open, including its
     /// interpreter, its layout and the shaping of its text on the render
     /// thread.
@@ -94,7 +94,7 @@ impl Owner {
 /// CPU wall-clock at all.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ScopeKind {
-    /// Tree-walking eval, dynamic dispatch, env lookups — the cost an AOT
+    /// Tree-walking eval, dynamic dispatch, env lookups, the cost an AOT
     /// (transpiled) build does not pay.
     Interpreter,
     /// Ordinary CPU work that costs the same in dev and in an AOT release.
@@ -118,7 +118,7 @@ fn registry() -> &'static Mutex<Vec<ScopeEntry>> {
 /// Looks up (or registers, on first touch) the [`ScopeId`] for a scope name,
 /// tagged `Native` (see [`scope_id_tagged`] for `Interpreter`/`Gpu` scopes).
 ///
-/// Backed by a small `Mutex<Vec<_>>` registry — touched once per unique call
+/// Backed by a small `Mutex<Vec<_>>` registry, touched once per unique call
 /// site, never on the per-sample hot path.
 #[must_use]
 pub fn scope_id(name: &'static str) -> ScopeId {
@@ -127,13 +127,13 @@ pub fn scope_id(name: &'static str) -> ScopeId {
 
 /// Looks up (or registers, on first touch) the [`ScopeId`] for a scope name
 /// tagged with `kind`. Re-registering an existing name with a different
-/// `kind` is a programming error and panics — a scope's cost bucket is
+/// `kind` is a programming error and panics, a scope's cost bucket is
 /// determined once, at its call site, and must not drift.
 ///
 /// # Panics
 ///
 /// Panics if more than `u16::MAX` distinct scope names are ever registered
-/// (a build-time authoring error, not something user input can trigger) —
+/// (a build-time authoring error, not something user input can trigger),
 /// silently wrapping the index would alias two unrelated scopes under the
 /// same `ScopeId` and corrupt profiling data. Also panics if `name` was
 /// already registered under a different `kind`.
@@ -161,7 +161,7 @@ pub fn scope_kind(id: ScopeId) -> Option<ScopeKind> {
     names.get(usize::from(id.0)).map(|e| e.kind)
 }
 
-/// Returns the name a [`ScopeId`] was registered with — the overlay/CLI's
+/// Returns the name a [`ScopeId`] was registered with, the overlay/CLI's
 /// only way to turn a `Sample` back into a human-readable scope label.
 #[must_use]
 pub fn scope_name(id: ScopeId) -> Option<&'static str> {
@@ -184,7 +184,7 @@ fn epoch() -> Instant {
 /// Nanoseconds elapsed since the engine's telemetry epoch.
 ///
 /// Backed by `std::time::Instant` (portable, correct everywhere) rather than
-/// an always-on `rdtsc` fast path — see RFC-0013 "Rationale and alternatives".
+/// an always-on `rdtsc` fast path, see RFC-0013 "Rationale and alternatives".
 #[must_use]
 #[allow(clippy::cast_possible_truncation)] // u64 ns covers ~584 years; never truncates in practice
 pub fn now_ns() -> u64 {
@@ -195,7 +195,7 @@ pub fn now_ns() -> u64 {
 /// start/end timestamps in nanoseconds since the telemetry [`epoch`].
 ///
 /// `#[repr(C)]` with explicit padding fields (no implicit tail/interior
-/// padding) so the type is a clean `bytemuck::Pod` — required to pack a flat
+/// padding) so the type is a clean `bytemuck::Pod`, required to pack a flat
 /// byte block that can cross the frame swap as `Send` data (RFC-0013
 /// "Hand-off").
 ///
@@ -235,7 +235,7 @@ pub struct Sample {
 /// every existing byte-level consumer are unaffected.
 const _: () = assert!(
     std::mem::size_of::<Sample>() == 24,
-    "Sample must stay 24 bytes — `depth` and `owner` live in existing padding, not in a new word"
+    "Sample must stay 24 bytes, `depth` and `owner` live in existing padding, not in a new word"
 );
 
 impl Sample {
@@ -244,8 +244,8 @@ impl Sample {
     ///
     /// [`Guard`] is the normal producer (it maintains `depth` and reads the
     /// thread's current owner itself); this exists for consumers that
-    /// reconstruct a block from an external source — a trace importer, a test
-    /// — without going through the ring. See [`Sample::owned`] to build one
+    /// reconstruct a block from an external source, a trace importer, a test
+    ///, without going through the ring. See [`Sample::owned`] to build one
     /// for another owner.
     #[must_use]
     pub const fn cpu(scope: ScopeId, depth: u8, start: u64, end: u64) -> Self {
@@ -282,7 +282,7 @@ impl Sample {
         Self::cpu(scope, 0, 0, duration_ns)
     }
 
-    /// This sample's *inclusive* duration (`end - start`) in nanoseconds —
+    /// This sample's *inclusive* duration (`end - start`) in nanoseconds,
     /// its own work plus everything nested inside it. See
     /// [`SampleBlock::self_ns`] for the exclusive counterpart.
     #[must_use]
@@ -307,7 +307,7 @@ impl Sample {
 /// A flat, `Send` snapshot of one thread's ring for a single tick.
 ///
 /// Attached to the [`crate::frame::RenderFrame`] on the existing atomic
-/// frame swap (RFC-0013 "Hand-off") — no new channel, no new lock. `samples`
+/// frame swap (RFC-0013 "Hand-off"), no new channel, no new lock. `samples`
 /// holds only [`Sample`], a `Pod` type, so the block is plain data end to
 /// end even though the `Vec` wrapper itself isn't `Pod`.
 #[derive(Debug, Clone, Default)]
@@ -324,13 +324,13 @@ impl SampleBlock {
     ///
     /// Inclusive means nested scopes are counted inside their parent, so this
     /// double-counts across a nesting boundary. It is the right measure for a
-    /// disjoint bucket (`Gpu` passes never nest — RFC-0030 §Q6) and the wrong
+    /// disjoint bucket (`Gpu` passes never nest, RFC-0030 §Q6) and the wrong
     /// one for `Interpreter`, which contains `Native` layout work; use
     /// [`Self::sum_self_by_kind`] there. [`Self::interpreter_tax_ns`] does.
     #[must_use]
     pub fn sum_by_kind(&self, kind: ScopeKind) -> u64 {
         // Locks the registry once for the whole sum rather than once per
-        // sample (`scope_kind` per element would re-lock on every call —
+        // sample (`scope_kind` per element would re-lock on every call,
         // needless contention for a consumer aggregating many samples).
         let names = registry()
             .lock()
@@ -352,7 +352,7 @@ impl SampleBlock {
     /// Direct children are recoverable from the flat block without building a
     /// tree, because samples are pushed in `Drop` order: a child always
     /// precedes its parent, and the run immediately before a sample at depth
-    /// `d` — up to the first sample at depth `≤ d` — is exactly that sample's
+    /// `d`, up to the first sample at depth `≤ d`, is exactly that sample's
     /// subtree. Scanning it backwards and taking only the `d + 1` entries
     /// yields the direct children; deeper entries are grandchildren, already
     /// counted inside a child. One reverse linear pass, no allocation.
@@ -378,7 +378,7 @@ impl SampleBlock {
     /// them forwards, so a consumer that renders a tree gets parents before
     /// children without the block ever being reordered or copied. A scope with
     /// more direct children than the buffer holds reports the first
-    /// [`MAX_DIRECT_CHILDREN`] of them — enough for any scope set a human
+    /// [`MAX_DIRECT_CHILDREN`] of them, enough for any scope set a human
     /// reads, and a bounded, allocation-free failure mode rather than a
     /// growing `Vec` on a display path.
     pub fn for_each_direct_child(&self, index: usize, mut f: impl FnMut(usize, &Sample)) {
@@ -389,7 +389,7 @@ impl SampleBlock {
         // A saturated depth cannot have distinguishable children: `Guard`
         // clamps at `u8::MAX`, so everything below it was recorded at the same
         // value and is indistinguishable from a sibling. Bail rather than
-        // guess — over-attributing here would make `self_ns` negative-ish
+        // guess, over-attributing here would make `self_ns` negative-ish
         // (clamped to zero) and silently hide a runaway recursion.
         if depth == u8::MAX {
             return;
@@ -415,7 +415,7 @@ impl SampleBlock {
     }
 
     /// Calls `f(index, sample)` for each **top-level** (depth-0) sample, in
-    /// entry order — the roots of the block's scope forest.
+    /// entry order, the roots of the block's scope forest.
     pub fn for_each_root(&self, mut f: impl FnMut(usize, &Sample)) {
         for (i, sample) in self.samples.iter().enumerate() {
             if sample.depth() == 0 {
@@ -448,8 +448,8 @@ impl SampleBlock {
     /// The block's total wall-clock cost: the sum of the *inclusive*
     /// durations of its **depth-0** samples only.
     ///
-    /// Summing every sample instead would count a nested scope twice — once
-    /// on its own row and once inside its parent — and report a total larger
+    /// Summing every sample instead would count a nested scope twice, once
+    /// on its own row and once inside its parent, and report a total larger
     /// than the frame it measures. A profiler that overstates the frame it
     /// measures destroys the credibility of every other number the project
     /// publishes (RFC-0030 §I2), so this is the accessor consumers should
@@ -464,14 +464,14 @@ impl SampleBlock {
     }
 
     /// The self-time of every sample that is both tagged `kind` and stamped
-    /// `owner` — [`sum_self_by_kind`](Self::sum_self_by_kind) narrowed to one
+    /// `owner`, [`sum_self_by_kind`](Self::sum_self_by_kind) narrowed to one
     /// producer.
     ///
     /// The interpreter tax is the motivating case. It answers "what would an
     /// AOT build of *this app* stop paying", and the dev HUD is written in
     /// `byld` too, so its interpreter cost is real interpreter cost belonging
     /// to somebody else. Without the narrowing, opening the HUD raises the
-    /// developer's tax figure by the HUD's own tree — an observer effect
+    /// developer's tax figure by the HUD's own tree, an observer effect
     /// reported as an app regression (RFC-0030 INV-24).
     #[must_use]
     pub fn owner_kind_self_ns(&self, owner: Owner, kind: ScopeKind) -> u64 {
@@ -498,7 +498,7 @@ impl SampleBlock {
     /// added here exactly once; an app-owned scope nested inside a dev-owned
     /// parent would behave symmetrically. Consequently
     /// `owner_total_ns(App) + owner_total_ns(DevTools) == total_ns()` for any
-    /// well-formed block — every nanosecond of the tick is attributed to
+    /// well-formed block, every nanosecond of the tick is attributed to
     /// exactly one owner, and the two buckets reconstruct the frame rather than
     /// exceeding it.
     ///
@@ -514,14 +514,14 @@ impl SampleBlock {
             .sum()
     }
 
-    /// The total `Interpreter`-tagged time this tick — the tax an AOT release
+    /// The total `Interpreter`-tagged time this tick, the tax an AOT release
     /// build does not pay. Overlay/CLI consumers sum this bucket separately
     /// from the rest of `frame.total` (RFC-0013 "the honest number").
     ///
     /// This is **self**-time, not inclusive time (RFC-0030 §I2b). The
     /// distinction is load-bearing rather than pedantic: `layout.taffy` is
     /// `Native` and nests strictly inside `interp.render`, which is
-    /// `Interpreter`, so an inclusive sum bills Taffy to the interpreter —
+    /// `Interpreter`, so an inclusive sum bills Taffy to the interpreter,
     /// and an AOT build still pays for layout in full. [`project_aot`] would
     /// then return an estimate optimistic by the entire cost of layout, and
     /// would push the RFC-0014 JIT decision towards "the interpreter is the
@@ -544,7 +544,7 @@ struct Ring {
 impl Ring {
     fn new() -> Self {
         Self {
-            // Built directly on the heap (never as a stack array first) —
+            // Built directly on the heap (never as a stack array first),
             // `RING_CAPACITY * size_of::<Sample>()` is too large to build on
             // the stack before boxing.
             buf: vec![Sample::default(); RING_CAPACITY].into_boxed_slice(),
@@ -614,7 +614,7 @@ pub fn ring_dropped() -> u64 {
 /// Drains the calling thread's ring into `out`, resetting the ring for the
 /// next tick and reusing `out`'s existing `Vec` allocation.
 ///
-/// This is the hot path — [`crate::frame::RenderFrame::drain_telemetry`]
+/// This is the hot path, [`crate::frame::RenderFrame::drain_telemetry`]
 /// calls this on the logic thread right before [`crate::relay::Relay::publish`]
 /// swaps the frame in, so a recycled frame's `SampleBlock` never reallocates
 /// once it has grown to fit a typical tick.
@@ -635,11 +635,11 @@ pub fn drain_samples() -> SampleBlock {
 
 /// A calibrated interpreter-vs-native cost ratio (RFC-0013 **P4**): a fixed
 /// set of microbenchmarks (e.g. `byard-core/benches/telemetry_calibration.rs`,
-/// signal read / element construct / memo eval), refreshed per release —
+/// signal read / element construct / memo eval), refreshed per release,
 /// never measured live, which would re-add observer overhead.
 #[derive(Debug, Clone, Copy)]
 pub struct Calibration {
-    /// Where this ratio came from — always shown alongside a projection so
+    /// Where this ratio came from, always shown alongside a projection so
     /// the number is legible as an estimate, never a hard promise (P3).
     pub basis: &'static str,
     /// `native_ns ≈ interpreter_ns * ratio` for representative interpreter
@@ -663,7 +663,7 @@ pub struct Projection {
 /// segmentation"): `native ≈ total − interp_measured + interp_native_equiv`,
 /// where `interp_native_equiv` comes from `calibration`.
 ///
-/// Never called implicitly — a caller opts in by calling this and choosing to
+/// Never called implicitly, a caller opts in by calling this and choosing to
 /// display the result (P3: "opt-in, always shown with its basis").
 #[must_use]
 #[allow(
@@ -683,7 +683,7 @@ pub fn project_aot(total_ns: u64, interpreter_ns: u64, calibration: &Calibration
 }
 
 thread_local! {
-    /// How many [`Guard`]s are currently live on this thread — the depth the
+    /// How many [`Guard`]s are currently live on this thread, the depth the
     /// *next* one records. Maintained by `Guard::new`/`Guard::drop` only.
     static DEPTH: Cell<u8> = const { Cell::new(0) };
 }
@@ -726,7 +726,7 @@ impl Drop for OwnerGuard {
 }
 
 /// Attributes every scope entered on this thread, for as long as the returned
-/// guard lives, to `owner` — including scopes entered by code that has never
+/// guard lives, to `owner`, including scopes entered by code that has never
 /// heard of [`Owner`].
 ///
 /// That last property is the whole point. The dev HUD's cost is not a call it
@@ -758,8 +758,8 @@ pub fn attribute_to(owner: Owner) -> OwnerGuard {
 ///
 /// The guard also maintains the thread's nesting depth (RFC-0030 §I2). It
 /// *restores* the entry value on drop rather than decrementing a counter, so
-/// an unbalanced sequence — a guard leaked with `mem::forget`, an unwind
-/// across a scope — cannot leave the depth permanently skewed: the next outer
+/// an unbalanced sequence, a guard leaked with `mem::forget`, an unwind
+/// across a scope, cannot leave the depth permanently skewed: the next outer
 /// guard to drop resets it to a known-correct value.
 pub struct Guard {
     scope: ScopeId,
@@ -810,7 +810,7 @@ impl Drop for Guard {
 /// A [`Guard`] and an [`OwnerGuard`] taken together, for a region that is only
 /// *sometimes* somebody else's.
 ///
-/// [`profile_scope!`] is a statement, so it cannot be opened conditionally —
+/// [`profile_scope!`] is a statement, so it cannot be opened conditionally,
 /// and the encoder needs exactly that: one iteration of a loop is the dev
 /// runner's and the next is the app's, with the loop body identical. Holding
 /// both guards in one value makes `cond.then(|| attributed_scope(..))` express
@@ -830,14 +830,14 @@ pub struct AttributedScope {
 /// Opens `scope` attributed to `owner`, until the returned value is dropped.
 ///
 /// The scope id is taken rather than a name so the caller can cache it in a
-/// call-site `OnceLock`, exactly as [`profile_scope!`] does — the registry is a
+/// call-site `OnceLock`, exactly as [`profile_scope!`] does, the registry is a
 /// mutex, and a loop is not the place to lock it.
 #[must_use = "the scope closes when the returned value is dropped"]
 pub fn attributed_scope(scope: ScopeId, owner: Owner) -> AttributedScope {
     #[cfg(feature = "telemetry")]
     {
         // The owner is set *before* the guard is constructed, because `Guard`
-        // reads it at entry — the order here is the whole mechanism.
+        // reads it at entry, the order here is the whole mechanism.
         let owner_guard = attribute_to(owner);
         AttributedScope {
             _scope: Guard::new(scope),
@@ -861,7 +861,7 @@ pub fn attributed_scope(scope: ScopeId, owner: Owner) -> AttributedScope {
 /// }
 /// ```
 ///
-/// Expands to a no-op when `byard-core`'s `telemetry` feature is off — zero
+/// Expands to a no-op when `byard-core`'s `telemetry` feature is off, zero
 /// cost in a build that disables it. The feature is resolved **here**, at the
 /// definition site, by selecting between two macro definitions: a
 /// `#[cfg(feature = "telemetry")]` inside the expansion would be evaluated
@@ -1089,7 +1089,7 @@ mod tests {
     // ── Nesting depth and self-time (RFC-0030 §I2 / §I2b) ──────────────────
 
     /// Builds a block from `(name, kind, depth, duration_ns)` rows given in
-    /// push (i.e. `Drop`) order, so a child always precedes its parent — the
+    /// push (i.e. `Drop`) order, so a child always precedes its parent, the
     /// exact shape the ring produces.
     fn block(rows: &[(&'static str, ScopeKind, u8, u64)]) -> SampleBlock {
         SampleBlock {
@@ -1104,7 +1104,7 @@ mod tests {
     }
 
     #[test]
-    // With the feature off, `profile_scope!` constructs no guard at all — so
+    // With the feature off, `profile_scope!` constructs no guard at all, so
     // there is no depth to nest and nothing to record. The assertions below
     // are about the guard's behaviour, not about the macro's, and asserting
     // them against a no-op is asserting that the no-op is not one.
@@ -1136,7 +1136,7 @@ mod tests {
     #[test]
     fn self_time_subtracts_direct_children_and_the_block_total_is_the_parent() {
         // A 10 ms parent containing a 4 ms child: parent inclusive 10 ms,
-        // parent self 6 ms, block total 10 ms — never 14 ms.
+        // parent self 6 ms, block total 10 ms, never 14 ms.
         let b = block(&[
             ("telemetry.test.self.child", ScopeKind::Native, 1, 4_000_000),
             (
@@ -1376,7 +1376,7 @@ mod tests {
             b.owner_total_ns(Owner::DevTools),
             1_200_000,
             "the dev bucket is its own depth-0 scope *plus* its share of a \
-             scope the app owns — which is the whole point"
+             scope the app owns, which is the whole point"
         );
         assert_eq!(b.owner_total_ns(Owner::App), 1_100_000);
         assert_eq!(

@@ -1,6 +1,6 @@
 //! Guards the committed RFC-0027 todo example: the whole app is pure `byld`
-//! (no `.rs`), so it must (1) `byard check` clean and (2) actually run — add 3
-//! tasks, toggle 1, remove 1 — driven headlessly through the real interpreter,
+//! (no `.rs`), so it must (1) `byard check` clean and (2) actually run, add 3
+//! tasks, toggle 1, remove 1, driven headlessly through the real interpreter,
 //! proving `push`/`filter`/`map` + records reach the reactive tree end to end.
 
 use std::path::PathBuf;

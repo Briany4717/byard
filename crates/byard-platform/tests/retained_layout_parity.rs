@@ -3,12 +3,12 @@
 //! The retained path is not intended to change a single pixel: it reuses the
 //! Taffy tree instead of rebuilding it, and recomputes only what a changed
 //! input can have moved. So the honest acceptance criterion for it is not "the
-//! numbers went down" — it is **byte-identical output**.
+//! numbers went down", it is **byte-identical output**.
 //!
 //! `byard-compiler`'s `tests/incremental_paths.rs` already compares the emitted
 //! primitives, which is exact and cheap. This file closes the remaining gap:
 //! primitives are what the interpreter *says*, pixels are what the user
-//! *sees*, and the two are separated by the encoder's scissor — which RFC-0032
+//! *sees*, and the two are separated by the encoder's scissor, which RFC-0032
 //! also changed, from "the whole frame, every frame" to a real dirty union. A
 //! scissor that is too small produces a frame that is missing an update while
 //! every primitive in it is correct, and only a pixel comparison can catch
@@ -199,7 +199,7 @@ fn diff(a: &[u8], b: &[u8]) -> (usize, Option<(u32, u32)>) {
 #[test]
 fn a_retained_frame_paints_the_same_pixels_as_a_rebuilt_one() {
     let Some((device, queue)) = try_device() else {
-        eprintln!("no GPU adapter — skipping retained-layout parity");
+        eprintln!("no GPU adapter, skipping retained-layout parity");
         return;
     };
 
@@ -242,7 +242,7 @@ fn a_retained_frame_paints_the_same_pixels_as_a_rebuilt_one() {
             n, 0,
             "frame {i}: {n} pixels differ between the retained and rebuilt \
              paths, first at {first:?}. The retained path is a pure refactor \
-             of *when* layout runs — any pixel difference is a bug, not a \
+             of *when* layout runs, any pixel difference is a bug, not a \
              tolerance to widen."
         );
     }

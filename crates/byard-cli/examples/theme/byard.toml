@@ -2,7 +2,7 @@
 name = "theme"
 entry = "src/main.byd"
 
-# RFC-0022 — a package/project declares design tokens here; the engine resolves
+# RFC-0022, a package/project declares design tokens here; the engine resolves
 # them into a reactive `Theme`, and `src/main.byd` references them as `t.token`.
 # Tokens are snake_case here and camelCase in byld (primary_container → t.primaryContainer).
 [theme]

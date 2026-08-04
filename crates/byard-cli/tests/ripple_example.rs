@@ -1,6 +1,6 @@
 //! Guards the committed RFC-0023 ripple example through the real `byard`
-//! binary: the `ripple` project — `ripple`/`ripple_active`/`ripple_radius`/
-//! `ripple_duration` props across styles with `on pressed` triggers — must
+//! binary: the `ripple` project, `ripple`/`ripple_active`/`ripple_radius`/
+//! `ripple_duration` props across styles with `on pressed` triggers, must
 //! check clean (parse, type-check, lower, validate with no diagnostics).
 
 use std::path::PathBuf;

@@ -1,4 +1,4 @@
-//! M26/M27 — incremental render correctness on a real GPU (RFC-0001 §3.3).
+//! M26/M27, incremental render correctness on a real GPU (RFC-0001 §3.3).
 //!
 //! These mirror `m21_pipelines.rs`'s GPU-dependent style: they request a real
 //! adapter and **skip gracefully** when none is available (headless CI). They
@@ -128,11 +128,11 @@ fn init_encoder(device: Arc<wgpu::Device>, queue: Arc<wgpu::Queue>, size: u32) -
 ///
 /// Before M26, the second (incremental) frame produced `scissor == None`
 /// (no dirty text) so `should_draw == false`, and the swapchain composite
-/// blitted the *stale* `persistent_color` — the new colour never appeared.
+/// blitted the *stale* `persistent_color`, the new colour never appeared.
 #[test]
 fn textless_box_colour_mutation_reaches_the_screen_on_an_incremental_frame() {
     let Some((device, queue)) = try_device() else {
-        eprintln!("no GPU adapter — skipping textless box mutation test");
+        eprintln!("no GPU adapter, skipping textless box mutation test");
         return;
     };
     let size = 64;
@@ -159,13 +159,13 @@ fn textless_box_colour_mutation_reaches_the_screen_on_an_incremental_frame() {
 }
 
 /// M27: a static (clean) `DecoratedBox` plus a mutating `TextLine` must keep
-/// the decoration on screen across incremental frames — the clear-quad +
+/// the decoration on screen across incremental frames, the clear-quad +
 /// scissor union, now driven by the text alone, must never wipe the
 /// decoration's retained pixels in `persistent_color`.
 #[test]
 fn static_decorated_box_survives_unrelated_incremental_text_frames() {
     let Some((device, queue)) = try_device() else {
-        eprintln!("no GPU adapter — skipping decorated-box persistence test");
+        eprintln!("no GPU adapter, skipping decorated-box persistence test");
         return;
     };
     let size = 64;

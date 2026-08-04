@@ -47,7 +47,7 @@ struct FreeRect {
 /// used, or `None` if any single box is larger than a whole layer (unplaceable).
 ///
 /// Placements never overlap and always lie fully within `[0, bin_w) × [0,
-/// bin_h)` on their layer — both are property-checked in the tests.
+/// bin_h)` on their layer, both are property-checked in the tests.
 #[must_use]
 pub fn pack_layers(sizes: &[Size], bin_w: u32, bin_h: u32) -> Option<(Vec<Placement>, u32)> {
     if sizes
@@ -78,7 +78,7 @@ pub fn pack_layers(sizes: &[Size], bin_w: u32, bin_h: u32) -> Option<(Vec<Placem
         let size = sizes[i];
         let mut spot = find_best(&free, size);
         if spot.is_none() {
-            // Current layer is full for this box — open the next one.
+            // Current layer is full for this box, open the next one.
             layer += 1;
             free = vec![FreeRect {
                 x: 0,

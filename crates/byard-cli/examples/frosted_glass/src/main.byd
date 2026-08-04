@@ -1,4 +1,4 @@
-// RFC-0023 §2 — backdrop blur & vibrancy: the iOS frosted-glass effect.
+// RFC-0023 §2, backdrop blur & vibrancy: the iOS frosted-glass effect.
 //
 // Run it (from the repo root):
 //   cd crates/byard-cli/examples/frosted_glass
@@ -6,16 +6,16 @@
 //
 // What to verify:
 //   1. The top bar is frosted glass: the colorful tiles are visibly blurred
-//      *through* it, saturated (vibrancy) and tinted white. Scroll the list —
+//      *through* it, saturated (vibrancy) and tinted white. Scroll the list, 
 //      the blur re-samples live as tiles slide beneath the bar.
 //   2. The bar's rounded corners clip the glass exactly (no square bleed).
 //   3. Hover the "Hover me" card: blur and tint spring in smoothly
 //      (`blur: 0 with anim.spring()` + `on hover { blur: 16 }`).
-//   4. The bottom-left chip forces `blur_quality: low` (quarter-resolution —
+//   4. The bottom-left chip forces `blur_quality: low` (quarter-resolution, 
 //      cheapest, visibly softer/blockier); the bottom-right forces `high`
 //      (0.75× resolution, the finest frost). Same Gaussian, different cost.
-//   5. Text on every pane stays crisp — children render above the glass.
-//   6. Tint without blur (the amber wash) is just a translucent overlay —
+//   5. Text on every pane stays crisp, children render above the glass.
+//   6. Tint without blur (the amber wash) is just a translucent overlay, 
 //      no frost, no extra GPU cost.
 View Main() {
     var scroll = 0
@@ -44,7 +44,7 @@ View Main() {
                     Box #[bg: 0xFFC107, radius: 12, width: 120, height: 90] {}
                 }
                 Box #[..hover_glass, width: 388] {
-                    Text("Hover me — the glass springs in") #[color: 0xFFFFFF, size: 14]
+                    Text("Hover me, the glass springs in") #[color: 0xFFFFFF, size: 14]
                 }
                 Row #[gap: 14] {
                     Box #[bg: 0x4CAF50, radius: 12, width: 187, height: 90] {}
@@ -75,7 +75,7 @@ View Main() {
         // ── The frosted navigation bar, floating over the content ──
         Column #[width: 440, height: 560, p: 12] {
             Row #[..glass, width: 416, height: 44, align: center] {
-                Text("Frosted glass — RFC-0023") #[color: 0x1D1B20, size: 16, weight: medium]
+                Text("Frosted glass, RFC-0023") #[color: 0x1D1B20, size: 16, weight: medium]
             }
             Spacer
         }

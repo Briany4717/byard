@@ -4,7 +4,7 @@
 //!
 //! Each file is parsed in isolation (spans start at 0); the resolver then
 //! rebases the whole tree by the file's base offset. Every match here is
-//! **exhaustive on purpose** — when the AST grows a new node the compiler
+//! **exhaustive on purpose**, when the AST grows a new node the compiler
 //! forces this walker to acknowledge it, so a span can never silently stay
 //! file-relative and point diagnostics at the wrong file.
 

@@ -1,4 +1,4 @@
-//! `byard new <name>` — scaffold a new Byard project (RFC-0006 §4, decision C6).
+//! `byard new <name>`, scaffold a new Byard project (RFC-0006 §4, decision C6).
 
 use crate::style;
 use std::path::{Path, PathBuf};
@@ -58,14 +58,14 @@ fn write_project_files(dir: &Path, name: &str, created: &mut Vec<PathBuf>) -> Re
 
 fn starter_view(name: &str) -> String {
     format!(
-        r#"// {name} — starter view
+        r#"// {name}, starter view
 // Edit and save; the window updates instantly.
 View Main() {{
     var count = 0
     var label = "hello"
 
     Column #[gap: 20, p: 32, align: center, justify: center] {{
-        Text("{{label}} — tapped {{count}} times") #[size: 24, color: 0xFFFFFF]
+        Text("{{label}}, tapped {{count}} times") #[size: 24, color: 0xFFFFFF]
 
         Button("Tap me") #[bg: 0x3B82F6, radius: 8, p: (vertical: 10, horizontal: 20),
                            color: 0xFFFFFF, weight: bold] => count++

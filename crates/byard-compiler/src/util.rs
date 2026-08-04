@@ -20,7 +20,7 @@ pub fn levenshtein(a: &str, b: &str) -> usize {
 }
 
 /// Returns the candidate closest to `name` (by edit distance), if one is within
-/// a small threshold scaled to the name length — otherwise `None`, so an
+/// a small threshold scaled to the name length, otherwise `None`, so an
 /// unrelated typo does not produce a misleading suggestion.
 #[must_use]
 pub fn closest_match<'a>(

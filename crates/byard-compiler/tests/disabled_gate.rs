@@ -61,7 +61,7 @@ fn a_disabled_button_does_not_fire_its_tap() {
     assert_eq!(tap_count(enabled), 1, "an enabled button taps");
 
     // A `disabled: true` button lays out and registers its handler, but the tap
-    // is gated — `count` stays 0.
+    // is gated, `count` stays 0.
     let disabled = "View V() { var count: Int = 0 \
          Button(\"nope\") #[bg: 0x6495ED, width: 120, height: 44, disabled: true] => count++ }";
     assert_eq!(tap_count(disabled), 0, "a disabled button ignores the tap");

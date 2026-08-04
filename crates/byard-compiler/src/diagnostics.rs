@@ -1,7 +1,7 @@
 //! Shared error and span primitives (RFC-0002 §"Data structures", D6; INV-4/5).
 //!
 //! [`CompileError`] lives **only** here. Per D6 (and INV-1/INV-5), `byard-core`'s
-//! `ByardError` gains no compiler variant — unifying the two is the job of the
+//! `ByardError` gains no compiler variant, unifying the two is the job of the
 //! application crate one layer up, so the dependency edge stays
 //! `byard-compiler → byard-core` and never the reverse.
 //!
@@ -136,14 +136,14 @@ pub enum CompileError {
         /// The closest recognized attribute, if any.
         hint: Option<String>,
     },
-    /// An attribute used the wrong separator for its kind — a property given
+    /// An attribute used the wrong separator for its kind, a property given
     /// `=>`, or an event given `:` (RFC-0003 D4-bis).
     WrongAttributeSeparator {
         /// Source range of the attribute.
         span: Span,
         /// The attribute name.
         name: String,
-        /// Whether the attribute *should* be a property (`:`) — else an event.
+        /// Whether the attribute *should* be a property (`:`), else an event.
         expected_property: bool,
     },
     /// An intrinsic received the wrong number of positional `(...)` content
@@ -167,7 +167,7 @@ pub enum CompileError {
         expected: String,
     },
     /// Children were given to a childless intrinsic (`Text`, `Spacer`, `Image`,
-    /// `TextField`, `Toggle`, `Slider`) — RFC-0005 §5 rule 8.
+    /// `TextField`, `Toggle`, `Slider`), RFC-0005 §5 rule 8.
     UnexpectedChildren {
         /// Source range of the element.
         span: Span,
@@ -203,7 +203,7 @@ pub enum CompileError {
     },
     /// A navigation container holds something other than its own cases
     /// (RFC-0026: a `NavStack`'s children are `route` blocks, a `NavHost`'s are
-    /// `tab` blocks — nothing else).
+    /// `tab` blocks, nothing else).
     NavCaseRequired {
         /// Source range of the offending child.
         span: Span,
@@ -226,8 +226,8 @@ pub enum CompileError {
         reason: String,
     },
     /// A navigation container was pointed at a path no `route` in its table
-    /// matches (RFC-0026 §"Route matching"). A *runtime* condition — the
-    /// container keeps showing the last matched route — reported once per
+    /// matches (RFC-0026 §"Route matching"). A *runtime* condition, the
+    /// container keeps showing the last matched route, reported once per
     /// distinct path rather than every frame.
     UnmatchedRoute {
         /// Source range of the navigation container.
@@ -236,7 +236,7 @@ pub enum CompileError {
         path: String,
     },
     /// A `Canvas` child is not a recognized shape command (RFC-0020 §1:
-    /// `Canvas` children are shape commands only — intrinsics, user views,
+    /// `Canvas` children are shape commands only, intrinsics, user views,
     /// declarations, and control flow are all rejected).
     UnknownShapeCommand {
         /// Source range of the offending child.
@@ -282,7 +282,7 @@ pub enum CompileError {
     /// bound is what makes a group's cost provable, and drawing eight of nine
     /// shapes would hide the mistake instead of naming it.
     TooManyGroupMembers {
-        /// Source range of the shape that exceeded the cap — the ninth one.
+        /// Source range of the shape that exceeded the cap, the ninth one.
         span: Span,
         /// The cap.
         max: usize,
@@ -301,12 +301,12 @@ pub enum CompileError {
         span: Span,
     },
     /// A shape after the first inside a fusion group carried its own stroke
-    /// properties (RFC-0031 §Q5) — **a warning**.
+    /// properties (RFC-0031 §Q5), **a warning**.
     ///
     /// The fused outline is the boundary of the union, drawn once; a per-member
     /// stroke would run an outline through the interior of the body the fusion
     /// exists to make seamless. The group's one outline comes from the first
-    /// shape's stroke properties — the only place they can come from — so a
+    /// shape's stroke properties, the only place they can come from, so a
     /// later shape's are inert. The shape still renders correctly and only the
     /// property is ignored, and failing a build over an inert attribute is
     /// disproportionate.
@@ -320,7 +320,7 @@ pub enum CompileError {
     ///
     /// There is no closed form for arc length along the union of arbitrary
     /// SDFs, and any approximation makes dash positions shift unpredictably as
-    /// the fusion parameter animates — dashes that crawl for no reason the
+    /// the fusion parameter animates, dashes that crawl for no reason the
     /// author can see, which is worse than a clear refusal.
     DashOnFusedStroke {
         /// Source range of the dash parameter.
@@ -331,7 +331,7 @@ pub enum CompileError {
     ///
     /// Distinct from [`LayoutPropNotAnimatable`](Self::LayoutPropNotAnimatable),
     /// and the distinction is the whole point of the diagnostic: `ngon`'s `n`
-    /// is paint-class — it moves no geometry and costs no relayout — it simply
+    /// is paint-class, it moves no geometry and costs no relayout, it simply
     /// has no meaningful value between 5 and 6. The message therefore names the
     /// construct that *does* change shape over time rather than only refusing.
     NotAnimatable {
@@ -398,7 +398,7 @@ pub enum CompileError {
         /// The callee view name.
         callee: String,
     },
-    /// The same callee parameter was bound twice — positional + named, or named
+    /// The same callee parameter was bound twice, positional + named, or named
     /// twice (RFC-0007 §6).
     DuplicateParam {
         /// Source range of the offending argument.
@@ -461,13 +461,13 @@ pub enum CompileError {
         message: String,
     },
     /// A `..` spread's operand did not resolve to a `style { … }` value
-    /// (RFC-0016) — e.g. `..x` where `x` is not a `let`-bound style.
+    /// (RFC-0016), e.g. `..x` where `x` is not a `let`-bound style.
     NotAStyle {
         /// Source range of the offending spread.
         span: Span,
     },
     /// An `on <state> { … }` block named a state that isn't one of the four
-    /// engine-owned interaction states (RFC-0016) — `hover`/`pressed`/
+    /// engine-owned interaction states (RFC-0016), `hover`/`pressed`/
     /// `focused`/`disabled`.
     UnknownStyleState {
         /// Source range of the offending state name.
@@ -477,7 +477,7 @@ pub enum CompileError {
         /// The closest known state, if one is near (D4-style suggestion).
         hint: Option<String>,
     },
-    /// A `use` declaration appeared after the first `View` — imports are legal
+    /// A `use` declaration appeared after the first `View`, imports are legal
     /// only at file top (RFC-0008 Pillar A).
     ImportAfterView {
         /// Source range of the offending `use` declaration.
@@ -506,7 +506,7 @@ pub enum CompileError {
         /// The closest exported name, if any.
         hint: Option<String>,
     },
-    /// A name became ambiguous — two imports (or an import and a local view)
+    /// A name became ambiguous, two imports (or an import and a local view)
     /// bind the same bare name. Resolution is deterministic and
     /// order-independent, so ambiguity is an error demanding an explicit
     /// alias (RFC-0008 D-G).
@@ -520,7 +520,7 @@ pub enum CompileError {
         /// The second origin.
         second: String,
     },
-    /// The package dependency graph contains a cycle (RFC-0008 Pillar A —
+    /// The package dependency graph contains a cycle (RFC-0008 Pillar A,
     /// module-graph cycle detection, one level above RFC-0007 §4's intra-file
     /// call cycles).
     PackageCycle {
@@ -530,7 +530,7 @@ pub enum CompileError {
         path: String,
     },
     /// The same `View` name is declared twice within one package namespace
-    /// (across its files) — exports must be unambiguous (RFC-0008 Pillar B).
+    /// (across its files), exports must be unambiguous (RFC-0008 Pillar B).
     DuplicateViewName {
         /// Source range of the second declaration.
         span: Span,
@@ -540,17 +540,17 @@ pub enum CompileError {
         /// root package).
         package: String,
     },
-    /// A project-level failure outside any single source file — a broken
+    /// A project-level failure outside any single source file, a broken
     /// `byard.toml`, an unreadable dependency, a corrupt lockfile. Carried as
     /// a `CompileError` so the dev overlay and `check` report it through the
     /// same channel as source diagnostics (RFC-0008 Pillar C).
     Project {
-        /// Anchor span (typically zero — there is no source to point at).
+        /// Anchor span (typically zero, there is no source to point at).
         span: Span,
         /// The failure, human-readable.
         message: String,
     },
-    /// A `VectorIcon`'s SVG paints with a gradient, pattern, or filter — the
+    /// A `VectorIcon`'s SVG paints with a gradient, pattern, or filter, the
     /// MSDF pipeline supports flat monochrome fills only (RFC-0009 §2).
     SvgUnsupportedFeatures {
         /// Anchor span of the `VectorIcon` content argument.
@@ -574,7 +574,7 @@ pub enum CompileError {
         span: Span,
     },
     /// A callback prop (`Fn(...)` parameter) was invoked with the wrong number
-    /// of arguments (RFC-0019 §4) — e.g. `on_change()` where the parameter is
+    /// of arguments (RFC-0019 §4), e.g. `on_change()` where the parameter is
     /// declared `Fn(Str)`.
     CallbackArityMismatch {
         /// Source range of the invocation.
@@ -587,7 +587,7 @@ pub enum CompileError {
         found: usize,
     },
     /// A callback prop (`Fn(...)` parameter) was referenced somewhere other than
-    /// an invocation (RFC-0019 §4) — callbacks are fire-and-forget action
+    /// an invocation (RFC-0019 §4), callbacks are fire-and-forget action
     /// handlers, not first-class values, so `on_tap` may only appear as
     /// `on_tap(...)` in an event handler.
     CallbackNotInvocable {
@@ -624,7 +624,7 @@ pub enum CompileError {
         /// Source range of the predicate.
         span: Span,
     },
-    /// A collection lambda (`map`/`filter` argument) performed a side effect —
+    /// A collection lambda (`map`/`filter` argument) performed a side effect,
     /// an assignment or event action (RFC-0027 §5). Collection lambdas must be
     /// pure so a reactive pull can re-run them safely.
     EffectInPureLambda {
@@ -716,7 +716,7 @@ impl CompileError {
         }
     }
 
-    /// Shifts this error's span by `delta` bytes (may be negative) — used by
+    /// Shifts this error's span by `delta` bytes (may be negative), used by
     /// the module resolver to rebase per-file spans into the program-wide
     /// source map and back (RFC-0008).
     #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
@@ -872,7 +872,7 @@ impl CompileError {
     /// afternoon on an outline that was never going to appear.
     ///
     /// The default is `false`, so a diagnostic added without a thought about
-    /// severity stays fatal — which is the safe direction.
+    /// severity stays fatal, which is the safe direction.
     #[must_use]
     pub const fn is_warning(&self) -> bool {
         matches!(self, Self::StrokeInFusionGroup { .. })
@@ -1089,7 +1089,7 @@ impl CompileError {
                 second,
                 ..
             } => format!(
-                "`{name}` is ambiguous — bound by both {first} and {second}; \
+                "`{name}` is ambiguous, bound by both {first} and {second}; \
                  disambiguate with an explicit alias (`use <pkg> as <alias>`)"
             ),
             Self::PackageCycle { path, .. } => {
@@ -1100,16 +1100,16 @@ impl CompileError {
             }
             Self::SvgUnsupportedFeatures { .. } => {
                 "SVG uses a gradient, pattern, or filter; the MSDF vector pipeline only \
-                 supports flat monochrome fills — use `Image` instead"
+                 supports flat monochrome fills, use `Image` instead"
                     .to_string()
             }
             Self::SvgTooComplexForMssdf { found_nodes, .. } => format!(
                 "SVG has {found_nodes} path segments, exceeding the MSDF complexity budget \
-                 (500) — simplify the artwork or use `Image` instead"
+                 (500), simplify the artwork or use `Image` instead"
             ),
             Self::VectorAssetNotStatic { .. } => {
                 "VectorIcon asset is not a compile-time-constant path; `byard build` cannot \
-                 statically close the icon set — use a string literal, or list the assets in \
+                 statically close the icon set, use a string literal, or list the assets in \
                  `byard.toml` under `[assets.vectors] include`"
                     .to_string()
             }
@@ -1134,7 +1134,7 @@ impl CompileError {
             } => format!("operator `{op}` cannot compare `{lhs_ty}` with `{rhs_ty}`"),
             Self::PredicateNotBool { .. } => "this predicate must evaluate to `Bool`".to_string(),
             Self::EffectInPureLambda { .. } => {
-                "a `map`/`filter` lambda must be a pure expression — no assignment or action \
+                "a `map`/`filter` lambda must be a pure expression, no assignment or action \
                  (it may re-run during a reactive pull)"
                     .to_string()
             }

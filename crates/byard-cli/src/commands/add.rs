@@ -1,12 +1,12 @@
-//! `byard add <name>` (alias: `byard install`) — record a dependency in
+//! `byard add <name>` (alias: `byard install`), record a dependency in
 //! `byard.toml`, then fetch and lock it (RFC-0008 Pillar C).
 //!
 //! Sources, in order of preference:
 //!
-//! - `byard add kit --path ../kit` — a local package (cooperative dev);
-//! - `byard add material --git <url> --tag v0.1.0` (or `--rev <hash>`) —
+//! - `byard add kit --path ../kit`, a local package (cooperative dev);
+//! - `byard add material --git <url> --tag v0.1.0` (or `--rev <hash>`),
 //!   a pinned git source (D-H);
-//! - `byard add material` — bare names resolve through a small **built-in
+//! - `byard add material`, bare names resolve through a small **built-in
 //!   index** of well-known packages, a deliberate stopgap until the hosted
 //!   registry (deferred by D-H) exists. The resolved git source is written
 //!   into `byard.toml` explicitly, so the manifest never depends on the index.

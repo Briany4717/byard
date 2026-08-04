@@ -1,4 +1,4 @@
-// RFC-0024 — extended style states (`checked`, `selected`, `invalid`,
+// RFC-0024, extended style states (`checked`, `selected`, `invalid`,
 // `indeterminate`, `dragging`) and combined selectors (`on focused+hover`).
 //
 // Run it (from the repo root):
@@ -6,13 +6,13 @@
 //   cargo run -p byard-cli -- dev
 //
 // What to verify:
-//   1. `checked` — tap the checkbox: its fill switches to purple via
+//   1. `checked`, tap the checkbox: its fill switches to purple via
 //      `on checked`, with no `when/else` duplication of the element.
-//   2. `selected` — the first card is statically `selected: true` and styles
+//   2. `selected`, the first card is statically `selected: true` and styles
 //      itself via `on selected`; hovering any card adds the `on hover` tint.
-//   3. Combined `on focused+hover` — focus the field (click it) and hover it:
+//   3. Combined `on focused+hover`, focus the field (click it) and hover it:
 //      the outline is brighter than focused-only or hovered-only.
-//   4. `invalid` — the second field has `invalid: true`, so `on invalid`
+//   4. `invalid`, the second field has `invalid: true`, so `on invalid`
 //      paints an error outline and text colour.
 View Main() {
     var accept = true
@@ -25,7 +25,7 @@ View Main() {
         on disabled { opacity: 0.38 }
     }
 
-    // Spread onto a `Box`, so only Box/Decoration props here (no `color` — that
+    // Spread onto a `Box`, so only Box/Decoration props here (no `color`, that
     // belongs to the Text child).
     let card_style = style {
         bg: 0x1E1E2A, radius: 12, p: 16
@@ -43,12 +43,12 @@ View Main() {
     }
 
     Column #[bg: 0x14141C, p: 32, gap: 18, width: 380] {
-        Text("Extended style states — RFC-0024") #[color: 0xE6E1E5, size: 18]
+        Text("Extended style states, RFC-0024") #[color: 0xE6E1E5, size: 18]
 
         // `checked` (driven by the bound value).
         Row #[gap: 12, align: center] {
             Checkbox #[..check_style, bind: accept, width: 22, height: 22]
-            Text("Tap the box — the fill switches via `on checked`")
+            Text("Tap the box, the fill switches via `on checked`")
                 #[color: 0xCAC4D0, size: 14]
         }
 

@@ -3,7 +3,7 @@
 //! # Why this is a serialiser and not a viewer
 //!
 //! The profiler already produces everything a flame chart needs: a scope name,
-//! a start, an end, and — since RFC-0030 §I2 — a nesting `depth`. The Chrome
+//! a start, an end, and, since RFC-0030 §I2, a nesting `depth`. The Chrome
 //! Trace Event format is a JSON array of exactly those fields. So the entire
 //! feature is a serialiser, and Byard never has to build a flame-graph viewer:
 //! Perfetto, `chrome://tracing` and `speedscope` all read this natively.
@@ -17,7 +17,7 @@
 //! # Nesting, without emitting any structure
 //!
 //! `ph: "X"` is a *complete* event: a start and a duration. The viewer nests
-//! events purely by containment on one `tid` — B contains C when B's
+//! events purely by containment on one `tid`, B contains C when B's
 //! `[ts, ts+dur)` contains C's. Our samples already satisfy that, because a
 //! child scope's guard is created after its parent's and dropped before it. So
 //! no tree is serialised and none has to be reconstructed; `depth` is carried
@@ -37,7 +37,7 @@
 //! The obvious design writes `[`, streams objects, and writes `]` on drop. It
 //! produces an unparseable file for the single most important session: the one
 //! you `Ctrl-C`'d because something was wrong. `Drop` does not run on `SIGINT`
-//! — the process is terminated, not unwound — so "we close it on shutdown"
+//!, the process is terminated, not unwound, so "we close it on shutdown"
 //! quietly means "we close it except when it matters".
 //!
 //! So the terminator is maintained *continuously*. Every frame writes its
@@ -77,7 +77,7 @@ const TERMINATOR: &[u8] = b"]\n";
 const TERMINATOR_REWIND: i64 = -2;
 
 /// A streaming Chrome Trace Event writer whose file is valid JSON at every
-/// instant — see the module docs for why that is the whole design.
+/// instant, see the module docs for why that is the whole design.
 pub struct TraceWriter {
     out: BufWriter<File>,
     /// Whether an object has already been written, so the comma separator is
@@ -120,7 +120,7 @@ impl TraceWriter {
     /// it) followed by the render thread's own, then re-terminates the array.
     ///
     /// Both blocks go in together because the terminator only has to be
-    /// rewritten once per frame, which halves the flush traffic — and because
+    /// rewritten once per frame, which halves the flush traffic, and because
     /// they *are* one frame, so a partially-written frame is not a state worth
     /// being able to observe.
     pub fn write_frame(&mut self, logic: Option<&SampleBlock>, render: &SampleBlock) {
@@ -158,7 +158,7 @@ impl TraceWriter {
 
     // The profiler's timestamps are nanoseconds since its own epoch and a
     // session would have to run for 52 days before a `u64`→`f64` conversion
-    // lost a microsecond of resolution — which is the unit the trace format
+    // lost a microsecond of resolution, which is the unit the trace format
     // uses anyway.
     #[allow(clippy::cast_precision_loss)]
     fn write_block(&mut self, block: &SampleBlock, tid: u32) {
@@ -168,7 +168,7 @@ impl TraceWriter {
             // Chrome Trace categories are comma-separated, and every viewer
             // filters on them. Tagging the dev runner's own scopes makes "hide
             // the profiler's overhead" a checkbox in Perfetto rather than a
-            // reading a human has to do by name — and keeps them on the lane
+            // reading a human has to do by name, and keeps them on the lane
             // where their containment is still true, which a separate `tid`
             // would destroy (`encode.glyphs.dev` really does nest inside
             // `encode.glyphs`).
@@ -222,7 +222,7 @@ impl Drop for TraceWriter {
     fn drop(&mut self) {
         // Nothing to close: the terminator has been on disk since `create`.
         // All that is left is to make sure the last frame's events reached the
-        // OS, and to say so if they did not — losing the tail of a trace
+        // OS, and to say so if they did not, losing the tail of a trace
         // silently is how a developer ends up debugging their profiler.
         if !self.failed {
             if let Err(e) = self.out.flush() {
@@ -318,7 +318,7 @@ mod tests {
     fn rewinding_over_the_terminator_leaves_no_trailing_bytes() {
         // The rewind overwrites two bytes with an event object. If the file
         // were ever left longer than what was written, the tail would be
-        // garbage — so assert the byte length exactly, not just that it parses.
+        // garbage, so assert the byte length exactly, not just that it parses.
         let dir = temp_dir("len");
         let path = dir.join("trace.json");
         let s = scope("trace.test.len", ScopeKind::Native);

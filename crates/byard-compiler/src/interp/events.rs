@@ -4,7 +4,7 @@
 //! [`EventRouter`] drains a tick's [`InputEvent`]s in FIFO order, coalescing
 //! continuous events (E7), recognizing taps by threshold (E4, `pointer_up` then
 //! `tap`), reflecting two-way writes back with value-dedup (E1), and stealing
-//! keyboard focus (E3). Crucially, **dispatch only marks** — the single
+//! keyboard focus (E3). Crucially, **dispatch only marks**, the single
 //! [`ReactiveCtx::pull`] happens once, after all events settle (§8), so no
 //! handler observes a half-updated view.
 //!
@@ -58,11 +58,11 @@ pub enum EventKind {
     Secondary,
     // ── RFC-0012 §A: `focus =>`/`blur =>` sugar ──────────────────────────
     /// An element's focus state rose (RFC-0012 S2). **Internal-only**: never
-    /// produced by a raw [`InputEvent`] — fired directly by
+    /// produced by a raw [`InputEvent`], fired directly by
     /// [`EventRouter::steal_focus`] on the rising edge of `focused_sig`.
     Focus,
     /// An element's focus state fell (RFC-0012 S2). **Internal-only**: never
-    /// produced by a raw [`InputEvent`] — fired directly by
+    /// produced by a raw [`InputEvent`], fired directly by
     /// [`EventRouter::steal_focus`] on the falling edge of `focused_sig`.
     Blur,
     // ── RFC-0021 advanced scroll behaviours ──────────────────────────────
@@ -122,13 +122,13 @@ impl InputEvent {
     }
 }
 
-/// Tap displacement threshold (logical px) — E4.
+/// Tap displacement threshold (logical px), E4.
 pub const TAP_SLOP: f32 = 8.0;
-/// Tap interval upper bound (ms) — E4.
+/// Tap interval upper bound (ms), E4.
 pub const TAP_MS: u64 = 500;
-/// Long-press hold threshold (ms) — M24.
+/// Long-press hold threshold (ms), M24.
 pub const LONG_PRESS_MS: u64 = 500;
-/// Double-tap interval upper bound (ms) — M24 E4.
+/// Double-tap interval upper bound (ms), M24 E4.
 pub const DOUBLE_TAP_MS: u64 = 300;
 
 thread_local! {
@@ -219,7 +219,7 @@ impl StyleState {
         self.0
     }
 
-    /// The number of active states — a combined selector's *specificity*
+    /// The number of active states, a combined selector's *specificity*
     /// (RFC-0024 §2): a block with more required states wins over one with fewer.
     #[must_use]
     pub const fn count(self) -> u32 {
@@ -285,7 +285,7 @@ impl EventRouter {
 
     /// Clears the registered handlers and focusables (so they can be rebuilt
     /// from a fresh layout each tick) while **preserving** the transient gesture
-    /// state — the in-flight `down` press and the current `focused` element.
+    /// state, the in-flight `down` press and the current `focused` element.
     /// A `tap` spans two ticks (down then up) with a re-render between, so that
     /// state must survive the rebuild (RFC-0003 E4).
     pub fn clear_handlers(&mut self) {
@@ -304,7 +304,7 @@ impl EventRouter {
     /// overlay's own content handlers are registered, so the scrim sits below
     /// the content (content wins where it overlaps) but above the whole main
     /// tree. Raising [`modal_floor`](Self::modal_floor) to the scrim's index
-    /// excludes every earlier handler from hit-testing — that is the modality:
+    /// excludes every earlier handler from hit-testing, that is the modality:
     /// input can no longer reach anything beneath the overlay. `dismiss` is the
     /// action run when the scrim is tapped or `Escape` is pressed; a modal
     /// overlay with no `dismiss` still blocks input but cannot be dismissed by
@@ -372,7 +372,7 @@ impl EventRouter {
     }
 
     /// Whether a pointer press at `pos` lands on an element that claims the
-    /// gesture — one carrying a tap/press/drag/change handler. A `ScrollView`
+    /// gesture, one carrying a tap/press/drag/change handler. A `ScrollView`
     /// consults this to defer drag-to-scroll to interactive children (buttons,
     /// sliders) while still scrolling when the press lands on inert content
     /// (RFC-0005). Style-only hover/press regions do not claim the gesture.
@@ -412,7 +412,7 @@ impl EventRouter {
         self.steal_focus(ctx, Some(elem));
     }
 
-    /// Fires the handler of `kind` registered on `elem`, if any — the engine's
+    /// Fires the handler of `kind` registered on `elem`, if any, the engine's
     /// path for delivering *synthesized* events like RFC-0021's
     /// `end_reached`/`page_change`/`scroll_end`, which have no `InputEvent`. A
     /// no-op when the element has no such handler (or is disabled).
@@ -427,7 +427,7 @@ impl EventRouter {
     }
 
     /// Drains one tick's events: coalesces continuous ones (E7), dispatches in
-    /// order (E4 ordering, E1 write-back, E3 focus) — marking only. The caller
+    /// order (E4 ordering, E1 write-back, E3 focus), marking only. The caller
     /// runs the single pull afterwards (§8).
     pub fn dispatch_tick(
         &mut self,
@@ -435,7 +435,7 @@ impl EventRouter {
         atlas: Option<&byard_core::atlas::layout::LayoutAtlas>,
         events: Vec<InputEvent>,
     ) {
-        // E7 — coalesce continuous events per (kind, element); keep discrete in
+        // E7, coalesce continuous events per (kind, element); keep discrete in
         // FIFO order.
         let mut ordered: Vec<InputEvent> = Vec::new();
         // (kind, elem) → index into `ordered` for the coalesced event.
@@ -482,7 +482,7 @@ impl EventRouter {
                     time_ms: ev.time_ms,
                     secondary,
                 });
-                // A fresh press starts a new gesture — not yet a drag (RFC-0024).
+                // A fresh press starts a new gesture, not yet a drag (RFC-0024).
                 self.dragging = None;
                 if secondary {
                     self.fire(ctx, atlas, EventKind::Secondary, ev.pos, None);
@@ -497,7 +497,7 @@ impl EventRouter {
             EventKind::PointerUp => {
                 // E4 precedence: pointer_up fires before tap.
                 self.fire(ctx, atlas, EventKind::PointerUp, ev.pos, None);
-                // The gesture ends — clear the drag latch (RFC-0024).
+                // The gesture ends, clear the drag latch (RFC-0024).
                 self.dragging = None;
                 if let Some(down) = self.down.take() {
                     let up_elem = self.hit_any(atlas, ev.pos);
@@ -616,7 +616,7 @@ impl EventRouter {
             EventKind::TextInput => {
                 self.fire_focused(ctx, EventKind::TextInput, ev.value.as_ref());
             }
-            // Never produced as a raw `InputEvent` — these are fired directly by
+            // Never produced as a raw `InputEvent`, these are fired directly by
             // the engine via `fire_on_elem`/`fire_event` (`steal_focus` for
             // focus/blur; the scroll machinery for RFC-0021's scroll events).
             // Present only so this match stays exhaustive as the enum grows.
@@ -705,7 +705,7 @@ impl EventRouter {
 
     /// Finds the topmost handler of `kind` whose registered (inflated, E8) hit
     /// rect contains `pos`. The inflated rects are the authoritative hit areas
-    /// (RFC-0003 §4.2/E8) — there is **no** ancestor bubbling (§7) and no
+    /// (RFC-0003 §4.2/E8), there is **no** ancestor bubbling (§7) and no
     /// catch-all fallback, so a click outside every handler's rect fires
     /// nothing.
     fn hit(
@@ -739,7 +739,7 @@ impl EventRouter {
             .map(|(_, h)| h.elem)
             // Fall back to declarative hover/press regions (RFC-0016) for
             // elements that style interaction states but register no handler.
-            // Suppressed under a modal overlay — nothing beneath the scrim may
+            // Suppressed under a modal overlay, nothing beneath the scrim may
             // report hover/press either.
             .or_else(|| {
                 if self.modal_floor > 0 {
@@ -798,7 +798,7 @@ impl EventRouter {
     fn tab_focus(&mut self, ctx: &mut ReactiveCtx, reverse: bool) {
         // RFC-0017 focus trap: when a modal overlay is mounted, cycle only within
         // its scope (`focusables[focusable_floor..]`), wrapping last→first inside
-        // it. Outside a modal overlay, `focusable_floor` is 0 — the whole set.
+        // it. Outside a modal overlay, `focusable_floor` is 0, the whole set.
         let floor = self.focusable_floor;
         let scope = &self.focusables[floor..];
         if scope.is_empty() {
@@ -858,7 +858,7 @@ impl EventRouter {
 
     /// The in-flight press gesture targeting `elem`, if any: the pointer-down
     /// position (logical px, the RFC-0023 ripple origin) and the press
-    /// timestamp, which doubles as the gesture's identity — two rapid taps on
+    /// timestamp, which doubles as the gesture's identity, two rapid taps on
     /// the same element are two distinct `(pos, time)` gestures, so the
     /// evaluator can spawn one ripple per press without extra bookkeeping.
     #[must_use]
@@ -1202,7 +1202,7 @@ mod tests {
         );
         assert_eq!(ctx.peek_signal(doubles), Value::Int(1), "double-tap fired");
 
-        // Third tap — gap since last confirmed single tap, reset tracker.
+        // Third tap, gap since last confirmed single tap, reset tracker.
         // last_tap was cleared after double, so next tap is a fresh single.
         router.dispatch_tick(
             &mut ctx,
@@ -1274,7 +1274,7 @@ mod tests {
         assert_eq!(ctx.peek_signal(enters), Value::Int(1), "entered");
         assert_eq!(ctx.peek_signal(exits), Value::Int(0));
 
-        // Move to a different spot inside — no new enter/exit.
+        // Move to a different spot inside, no new enter/exit.
         router.dispatch_tick(
             &mut ctx,
             None,

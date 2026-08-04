@@ -28,7 +28,7 @@ fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>, bool)> {
     let info = adapter.get_info();
     // Microsoft's WARP (the DX12 software rasteriser) exhibits a readback
     // anomaly on the barrier-split pass sequence: pixels in *one* corner of a
-    // discarded composite region come back as (0,0,0,0) — an alpha-0 write
+    // discarded composite region come back as (0,0,0,0), an alpha-0 write
     // that is impossible through the pipeline's own ALPHA_BLENDING (out.a can
     // never drop below dst.a), while the three symmetric corners are correct.
     // Every hardware driver and lavapipe (Linux's software Vulkan) render it
@@ -183,12 +183,12 @@ fn pane(rect: [f32; 4], radii: [f32; 4], blur: f32, tint: [f32; 4]) -> BackdropI
 }
 
 /// The pane softens a hard black/white edge behind it while the same edge
-/// stays crisp outside the pane — proof the pass split, region copy, and
+/// stays crisp outside the pane, proof the pass split, region copy, and
 /// blur actually ran and stayed inside the pane.
 #[test]
 fn the_pane_blurs_the_edge_behind_it_and_only_there() {
     let Some((device, queue, _is_warp)) = try_device() else {
-        eprintln!("no GPU adapter — skipping backdrop readback");
+        eprintln!("no GPU adapter, skipping backdrop readback");
         return;
     };
 
@@ -213,7 +213,7 @@ fn the_pane_blurs_the_edge_behind_it_and_only_there() {
         "outside the pane, right of edge stays white: {r_white}"
     );
 
-    // Inside the pane (y = 100): the same offsets read intermediate — white
+    // Inside the pane (y = 100): the same offsets read intermediate, white
     // has bled left and black has bled right through the blur.
     let (_, _, in_black, _) = rb.at(92.0, 100.0);
     let (_, _, in_white, _) = rb.at(108.0, 100.0);
@@ -236,7 +236,7 @@ fn the_pane_blurs_the_edge_behind_it_and_only_there() {
 #[test]
 fn tint_corner_clip_and_children_compose_over_the_glass() {
     let Some((device, queue, is_warp)) = try_device() else {
-        eprintln!("no GPU adapter — skipping backdrop readback");
+        eprintln!("no GPU adapter, skipping backdrop readback");
         return;
     };
 
@@ -266,10 +266,10 @@ fn tint_corner_clip_and_children_compose_over_the_glass() {
 
     // Just inside the square corner but outside the 30px round: the glass
     // clips to the border radius, so the pixel reads as the *bare*
-    // background — compare against the outside sample rather than an
+    // background, compare against the outside sample rather than an
     // absolute (0.05 linear encodes to ~63/255 in sRGB, not "near zero").
     // On failure, dump enough neighbourhood to see *what* was written: all
-    // four rounded corners (BGRA, alpha included — an exact 0 smells like a
+    // four rounded corners (BGRA, alpha included, an exact 0 smells like a
     // cleared/NaN write, a bright value like a failed clip) and an r-channel
     // grid marching diagonally out of the top-left corner arc.
     let (_, _, corner_r, _) = rb.at(44.0, 44.0);
@@ -277,8 +277,8 @@ fn tint_corner_clip_and_children_compose_over_the_glass() {
         // See `try_device`: WARP zeroes one discarded corner of the split-pass
         // sequence in a way its own blend state cannot produce; every real
         // driver (and lavapipe) clips correctly, so only this sub-assertion
-        // is skipped there — the tint and child checks above/below still run.
-        eprintln!("WARP adapter — skipping the corner-clip sub-assertion");
+        // is skipped there, the tint and child checks above/below still run.
+        eprintln!("WARP adapter, skipping the corner-clip sub-assertion");
     } else if (i32::from(corner_r) - i32::from(bare_r)).abs() > 8 {
         let grid: Vec<String> = (0..8u8)
             .map(|i| {

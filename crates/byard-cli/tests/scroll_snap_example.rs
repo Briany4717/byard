@@ -1,6 +1,6 @@
 //! Guards the committed RFC-0021 advanced-scroll example through the real
-//! `byard` binary: the `scroll_snap` project — a `snap: page` carousel with a
-//! reflected `page:` var and an infinite-scroll list with `end_reached` — must
+//! `byard` binary: the `scroll_snap` project, a `snap: page` carousel with a
+//! reflected `page:` var and an infinite-scroll list with `end_reached`, must
 //! check clean (parse, type-check, lower, validate with no diagnostics).
 
 use std::path::PathBuf;

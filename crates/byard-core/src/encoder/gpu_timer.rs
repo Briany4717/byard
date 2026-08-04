@@ -5,12 +5,12 @@
 //! timestamps are resolved into one of a small ring of readback buffers and
 //! `map_async`'d; [`GpuTimer::drain_ready`] only ever polls
 //! [`wgpu::PollType::Poll`] (non-blocking) and reports whichever slots have
-//! already completed — by construction that is always at least
+//! already completed, by construction that is always at least
 //! [`READBACK_LAG`] frames after the frame that produced them (RFC-0013:
 //! "read it two frames later").
 //!
 //! Degrades to `None` from [`GpuTimer::new`] when the device lacks
-//! [`wgpu::Features::TIMESTAMP_QUERY`] — GPU timing is reported as
+//! [`wgpu::Features::TIMESTAMP_QUERY`], GPU timing is reported as
 //! unavailable rather than fabricated (RFC-0013 **P5**).
 
 use std::sync::Arc;
@@ -59,11 +59,11 @@ pub struct GpuTimer {
 impl GpuTimer {
     /// Builds a timer for `scope_names`, one GPU pass each. Returns `None`
     /// if `device` lacks [`wgpu::Features::TIMESTAMP_QUERY`] (RFC-0013
-    /// **P5**) — the caller keeps rendering with GPU timing simply absent.
+    /// **P5**), the caller keeps rendering with GPU timing simply absent.
     ///
     /// # Panics
     ///
-    /// Panics if `scope_names` has more than `u32::MAX / 2` entries — this
+    /// Panics if `scope_names` has more than `u32::MAX / 2` entries, this
     /// codebase never registers more than a handful of named GPU passes.
     #[must_use]
     pub fn new(
@@ -134,13 +134,13 @@ impl GpuTimer {
     /// buffer. Call once per frame, after every timestamp-writing pass has
     /// been recorded on `encoder`, and before the command buffer is
     /// finished. Pair with [`GpuTimer::request_map`] once that command
-    /// buffer has actually been submitted — `wgpu` rejects a submission that
+    /// buffer has actually been submitted, `wgpu` rejects a submission that
     /// writes into a buffer already under an active `map_async` request, so
     /// the two must not be merged into one call.
     pub fn resolve_and_copy(&mut self, encoder: &mut wgpu::CommandEncoder) {
         let slot_idx = self.frame_index % SLOTS;
         // A slot still holding an unread mapping from an earlier lap of the
-        // ring is reclaimed here rather than overwritten silently — its
+        // ring is reclaimed here rather than overwritten silently, its
         // (stale) result is simply dropped, since a caller that never called
         // `drain_ready` in `READBACK_LAG` frames wasn't going to read it.
         //
@@ -150,7 +150,7 @@ impl GpuTimer {
         // point (its completion is entirely GPU-driven, outside our control).
         // If we reused the same `Arc`, that stale callback could later flip
         // this *new* lap's state to READY/FAILED behind `drain_ready`'s back
-        // — e.g. right after `request_map` below sets it to PENDING — making
+        //, e.g. right after `request_map` below sets it to PENDING, making
         // `drain_ready` read an unmapped buffer or clobber an in-flight map.
         // A fresh `Arc` makes the old callback write into an orphaned cell
         // nobody reads anymore.
@@ -178,7 +178,7 @@ impl GpuTimer {
     ///
     /// # Panics
     ///
-    /// Panics if called before [`GpuTimer::resolve_and_copy`] has ever run —
+    /// Panics if called before [`GpuTimer::resolve_and_copy`] has ever run,
     /// `frame_index` would underflow and silently map the wrong slot in a
     /// release build otherwise (a caller-ordering bug, not a runtime
     /// condition; fail fast rather than map garbage deterministically).
@@ -267,7 +267,7 @@ mod tests {
         // device requests `Features::empty()`) degrades to unavailable
         // rather than fabricating GPU timings.
         let Some((device, queue)) = try_device() else {
-            eprintln!("no GPU adapter — skipping GpuTimer capability test");
+            eprintln!("no GPU adapter, skipping GpuTimer capability test");
             return;
         };
         assert!(
@@ -302,7 +302,7 @@ mod tests {
     #[test]
     fn new_succeeds_and_tags_scopes_gpu_when_the_feature_is_available() {
         let Some((device, queue)) = try_timestamp_device() else {
-            eprintln!("no TIMESTAMP_QUERY-capable adapter — skipping GpuTimer availability test");
+            eprintln!("no TIMESTAMP_QUERY-capable adapter, skipping GpuTimer availability test");
             return;
         };
 
@@ -372,7 +372,7 @@ mod tests {
         // writes, resolve + request its readback, then poll non-blockingly
         // (RFC-0013: never `PollType::Wait`) until the async map completes.
         let Some((device, queue)) = try_timestamp_device() else {
-            eprintln!("no TIMESTAMP_QUERY-capable adapter — skipping GpuTimer round-trip test");
+            eprintln!("no TIMESTAMP_QUERY-capable adapter, skipping GpuTimer round-trip test");
             return;
         };
         let mut timer = GpuTimer::new(&device, &queue, &["gpu.test_pass"])
@@ -405,7 +405,7 @@ mod tests {
         // resolve them, forces every slot to be reclaimed at least once
         // while a previous mapping may still be in flight.
         let Some((device, queue)) = try_timestamp_device() else {
-            eprintln!("no TIMESTAMP_QUERY-capable adapter — skipping GpuTimer stress test");
+            eprintln!("no TIMESTAMP_QUERY-capable adapter, skipping GpuTimer stress test");
             return;
         };
         let mut timer = GpuTimer::new(&device, &queue, &["gpu.test_pass"])
@@ -418,7 +418,7 @@ mod tests {
         }
 
         // Drain until every lap's result has either arrived or been
-        // superseded by a later reclaim — bounded, never `PollType::Wait`.
+        // superseded by a later reclaim, bounded, never `PollType::Wait`.
         let mut samples = Vec::new();
         for _ in 0..500 {
             timer.drain_ready(&device, &mut samples);
@@ -431,7 +431,7 @@ mod tests {
         );
         assert!(
             samples.len() <= STRESS_TEST_LAPS,
-            "never more samples than passes recorded — no state corruption fabricating extras"
+            "never more samples than passes recorded, no state corruption fabricating extras"
         );
         for sample in &samples {
             assert_eq!(scope_kind(sample.scope), Some(ScopeKind::Gpu));

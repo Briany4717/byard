@@ -3,11 +3,11 @@
 // independent monochrome glyphs at any scale.
 //
 // Two byard corrections to the RFC draft are baked in here:
-//   §2-D — no `discard` by default: the fragment outputs premultiplied alpha and
+//   §2-D, no `discard` by default: the fragment outputs premultiplied alpha and
 //          relies on blending, so a transparent fragment costs nothing on the
 //          TBDR mobile GPUs RFC-0001 §3.1 targets (a `discard` would defeat
 //          early-Z there).
-//   §2-E — anti-aliasing from the baked `px_range` and the screen-space
+//   §2-E, anti-aliasing from the baked `px_range` and the screen-space
 //          derivative of the sampled UV, not an unspecified helper.
 
 struct VertexInput {
@@ -59,7 +59,7 @@ fn vs_main(vertex: VertexInput, instance: InstanceInput) -> VertexOutput {
     return out;
 }
 
-// Median of three channels — the MSDF reconstruction of the true signed distance
+// Median of three channels, the MSDF reconstruction of the true signed distance
 // (Chlumský 2015). Sharp corners survive because the median of the three field
 // channels keeps the discontinuity a single triangle pair cannot represent.
 fn median3(r: f32, g: f32, b: f32) -> f32 {

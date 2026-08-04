@@ -1,17 +1,17 @@
-// RFC-0010 / RFC-0025 — animations inside a `for`, one timeline per row.
+// RFC-0010 / RFC-0025, animations inside a `for`, one timeline per row.
 //
 // Run it (from the repo root):
 //   cd crates/byard-cli/examples/list_animations
 //   cargo run -p byard-cli -- dev
 //
-// An animation's persisted state is keyed by the `with` node that wrote it —
+// An animation's persisted state is keyed by the `with` node that wrote it, 
 // and by the element *instance* running it. That second half is what this
 // example exists to show, because without it none of the motion below works: a
 // `for` body is lowered once per row but *written* once, so every row's `with`
 // clause shares one source span.
 //
 // The rows are also filtered by a `when`, which is how lists are really written
-// — and which is the other half of a row knowing who it is: a `when` branch is
+//, and which is the other half of a row knowing who it is: a `when` branch is
 // lowered lazily, away from the scope it was written in, so everything inside it
 // has to carry that scope with it. A row that has lost it reads `0` for `row`
 // and `i` alike, and the list below renders perfectly and never moves.
@@ -20,7 +20,7 @@
 //   1. Press "Shuffle". Every bar springs to a different angle, and each one
 //      arrives at *its own*. Sharing one spring across the rows would mean each
 //      row retargets it to its own goal every frame, reseeding the others'
-//      start value — the whole set stalls near zero and creeps. That is not a
+//      start value, the whole set stalls near zero and creeps. That is not a
 //      subtle difference; it is the difference between a list that animates and
 //      a list that does not.
 //   2. Press "Remove" to drop the last row, then "Add" to bring it back. The
@@ -32,12 +32,12 @@
 //   3. The dots inside each bar animate independently too. A `for` inside a
 //      `for` body is lowered once per outer row, so each dot belongs to exactly
 //      one bar.
-//   4. Press "Replay". One written animation — `anim.stagger(…, 80ms, i)` — and
+//   4. Press "Replay". One written animation, `anim.stagger(…, 80ms, i)`, and
 //      the rows cascade in index order. Per-row state is what lets the same
 //      clause hold a different delay and a different phase for each of them.
 //   5. The bars are different lengths, and that is a layout value: `width:
 //      row.bar`. Layout is a separate pass over the same tree, so it has to
-//      know which row it is in too — a list of equal, full-width bars is that
+//      know which row it is in too, a list of equal, full-width bars is that
 //      pass having lost the row while paint still had it.
 View Main() {
     var shuffled = false
@@ -46,7 +46,7 @@ View Main() {
 
     // A different target per row. `shuffled` flips them all at the same moment,
     // so any state they shared would be visible immediately.
-    // `bar` is each row's own width — a *layout* value read from the element
+    // `bar` is each row's own width, a *layout* value read from the element
     // the row is bound to. Layout runs a pass ahead of paint over the same
     // tree, so it has to resolve `row` there too; a row that cannot has no
     // width at all and stretches to fill, which is a full-width column that
@@ -69,7 +69,7 @@ View Main() {
             Button("Shuffle") #[bg: 0x5B8DEF, color: 0xFFFFFF, radius: 8, p: (8, 14)]
                 => shuffled = !shuffled
             // The list has as many rows as `rows` has entries, so "Add" runs out
-            // of rows to add. A button that is out of range says so — it dims,
+            // of rows to add. A button that is out of range says so, it dims,
             // rather than staying lit and quietly doing nothing when pressed.
             Button("Add") #[bg: count < rows.len ? 0x2B2F3A : 0x1E212A,
                             color: count < rows.len ? 0xE6E1E5 : 0x555B66,

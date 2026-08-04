@@ -4,12 +4,12 @@
 //!
 //! This subsystem owns:
 //!
-//! - **Taffy integration** — All layout is delegated to
+//! - **Taffy integration**, All layout is delegated to
 //!   [`taffy`](https://github.com/DioxusLabs/taffy). The engine never
 //!   computes box geometry itself. [`LayoutAtlas`] initialises the Taffy
 //!   tree, feeds it node constraints, and reads back resolved rectangles.
 //!
-//! - **Spatial hash grid** *(future sub-issue)* — A partitioned data
+//! - **Spatial hash grid** *(future sub-issue)*, A partitioned data
 //!   structure that indexes a mapping between 2D screen coordinates and
 //!   event descriptors.
 //!
@@ -22,10 +22,10 @@
 //!
 //! [`LayoutAtlas`] enforces a strict lifecycle with two states:
 //!
-//! 1. **Building** — nodes can be added (`add_leaf`, `add_container`) and
+//! 1. **Building**, nodes can be added (`add_leaf`, `add_container`) and
 //!    the root can be set. Querying resolved geometry or marking nodes
 //!    dirty panics.
-//! 2. **Computed** — `compute(viewport)` transitions here. Resolved
+//! 2. **Computed**, `compute(viewport)` transitions here. Resolved
 //!    geometry is accessible via `resolved_rect` and `populate_frame`.
 //!    Dirty subtrees can be re-laid out incrementally via
 //!    `mark_dirty_all` + `recompute_dirty`. Adding or modifying nodes
@@ -33,8 +33,8 @@
 //!
 //! ## Transitions
 //!
-//! - `compute(viewport)` — Building → Computed.
-//! - `clear()` — Computed → Building. Preserves internal capacity and
+//! - `compute(viewport)`, Building → Computed.
+//! - `clear()`, Computed → Building. Preserves internal capacity and
 //!   increments the view generation so any
 //!   [`TargetId`](crate::frame::TargetId)s from the previous view are
 //!   silently rejected by future `mark_dirty_all` calls.
@@ -49,14 +49,14 @@
 //! structural change, no resize, no hot reload, no theme flip and no
 //! overlay/route movement calls [`LayoutAtlas::begin_retained_build`] instead
 //! of [`LayoutAtlas::clear`]: the Taffy tree, its cached geometry, the parent
-//! map, the spatial grid and — critically — the **view generation** all
+//! map, the spatial grid and, critically, the **view generation** all
 //! survive. Nodes are restyled in place, and only the ones whose resolved
 //! layout inputs actually changed are marked dirty.
 //!
 //! That last one is why the dirty channel works at all now. `clear()` bumps
 //! the generation, which invalidates every outstanding [`layout::TargetId`],
 //! and while every frame cleared, the generation counter distinguished one
-//! *frame* from another rather than one *view* from another — so a caller
+//! *frame* from another rather than one *view* from another, so a caller
 //! could not have passed a valid dirty set even if it had one.
 //!
 //! **The rule that keeps this sound** (RFC-0032 §R3, INV-23):
@@ -67,7 +67,7 @@
 //!
 //! A node that moved only because a sibling resized is recomputed by Taffy's
 //! own dirty propagation and re-indexed by the full `rebuild_grid` walk. No
-//! code here ever concludes that a rect is still valid — which is the only
+//! code here ever concludes that a rect is still valid, which is the only
 //! reason a stale-but-tappable element is impossible rather than unlikely.
 //!
 //! **Two traps, both of which have a test:**
@@ -84,7 +84,7 @@
 //! **How to check you are still on the expected path:**
 //! `crates/byard-compiler/tests/incremental_paths.rs` reads the
 //! `telemetry`-gated counters in [`layout::path_counters`] after a real frame
-//! and asserts which path was walked — including one test per eligibility
+//! and asserts which path was walked, including one test per eligibility
 //! clause, because a fast path whose *deny* conditions are untested is not a
 //! fast path, it is a hazard. `byard dev` prints the same answer once a
 //! second as an `atlas retained · N node(s) marked` line.
@@ -111,7 +111,7 @@
 //! ```
 //!
 //! `LayoutAtlasBuilder::leaf` / `container` only build an [`AtlasNodeSpec`]
-//! description — a plain value, no Taffy or atlas access — which
+//! description, a plain value, no Taffy or atlas access, which
 //! `LayoutAtlas::build` / `build_root` then commits in one depth-first
 //! pass via the same low-level methods, in the same order an equivalent
 //! imperative call sequence would use. The low-level API from PR #14 is
@@ -135,7 +135,7 @@
 //!                              per-target `dirty` bit, read off the
 //!                              resolved [`TargetId`] and copied onto the
 //!                              matching `TextLine`/`BoxInstance` in
-//!                              `RenderFrame` — the Atlas is the only
+//!                              `RenderFrame`, the Atlas is the only
 //!                              subsystem that calls `mark_dirty_all`; the
 //!                              encoder never broadcasts, it only reads the
 //!                              dirty bit already attached to each primitive.

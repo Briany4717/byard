@@ -112,7 +112,7 @@ impl<'a> EvaluatorTick<'a> {
     /// # Duplicate registration
     ///
     /// In debug builds, a `debug_assert!` fires if `signal` is registered
-    /// twice. In release builds, duplicates are accepted silently —
+    /// twice. In release builds, duplicates are accepted silently,
     /// `collect_dirty` deduplicates the output, so correctness is
     /// preserved at the cost of one wasted slot per duplicate.
     pub fn register<T: 'static>(&mut self, signal: Signal<'a, T>) {
@@ -123,7 +123,7 @@ impl<'a> EvaluatorTick<'a> {
                 .sources
                 .iter()
                 .any(|s| std::ptr::addr_eq(s.slot_ptr, slot_ptr)),
-            "Signal registered twice on the same EvaluatorTick — likely a \
+            "Signal registered twice on the same EvaluatorTick, likely a \
              byld transpiler bug. The engine will deduplicate dirty \
              targets at collect time, so this is not a correctness issue, \
              but each duplicate wastes a tracking slot.",
@@ -150,7 +150,7 @@ impl<'a> EvaluatorTick<'a> {
     /// version has not advanced contribute nothing. The returned `Vec` is
     /// sorted and deduplicated, so each `TargetId` appears at most once.
     ///
-    /// The internal scratch buffer is reused across calls — subsequent
+    /// The internal scratch buffer is reused across calls, subsequent
     /// ticks of similar size allocate nothing.
     pub fn collect_dirty(&mut self) -> Vec<TargetId> {
         self.scratch.clear();

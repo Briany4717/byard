@@ -4,7 +4,7 @@
 //! # What this replaces
 //!
 //! Every render pipeline in this encoder used to create its instance buffer
-//! from scratch on every frame — nine or more `create_buffer_init` calls per
+//! from scratch on every frame, nine or more `create_buffer_init` calls per
 //! frame, more with multiple draw batches. The correct pattern (a persistent
 //! buffer written with `queue.write_buffer`) existed in the crate in exactly
 //! one place: `viewport_buffer`. There was no design reason for the asymmetry;
@@ -16,12 +16,12 @@
 //! the measurement disagreed. The `encode.frame` sub-scopes added in RFC-0030
 //! §I1's second pass put every `create_buffer_init` in the encoder combined at
 //! **0.3–3.4 %** of the encode cost; the rest was glyph shaping. So the case
-//! for this is not the microseconds — it is that a framework whose central
+//! for this is not the microseconds, it is that a framework whose central
 //! claim is deterministic memory (RFC-0001 §2, *"sin spikes de VRAM"*) should
 //! not be allocating and freeing GPU resources at the display rate. Each
 //! `create_buffer_init` is a device allocation, a validation pass, a staging
 //! allocation, a copy, and a tracker registration the driver reclaims at an
-//! unpredictable time — which is precisely the class of non-deterministic
+//! unpredictable time, which is precisely the class of non-deterministic
 //! pause the project exists to avoid.
 //!
 //! The second reason is testability: "zero buffer creations per steady-state
@@ -36,7 +36,7 @@
 //! [`upload`](InstanceArena::upload) → each draw binds its own slice.
 //!
 //! **The ordering is not a style choice.** `wgpu` binds a buffer *range*
-//! eagerly, so the GPU buffer must be final before any draw is recorded — and
+//! eagerly, so the GPU buffer must be final before any draw is recorded, and
 //! growing it replaces it. Every append therefore happens before the first
 //! render pass opens, which is why the pipelines in this module are split into
 //! a `stage` half and a `draw` half.
@@ -55,7 +55,7 @@ pub struct Region {
 }
 
 impl Region {
-    /// Whether this region carries no data — an empty draw batch.
+    /// Whether this region carries no data, an empty draw batch.
     #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.len == 0
@@ -74,7 +74,7 @@ const VERTEX_ALIGNMENT: u64 = 4;
 /// Small on purpose (RFC-0033 §G3): the arena sizes itself from the first
 /// frames' actual usage, so a small app never reserves for a large one. The
 /// cost of starting too small is a handful of growths in the first second and
-/// then never again — which is exactly what `grows_this_session` is there to
+/// then never again, which is exactly what `grows_this_session` is there to
 /// confirm.
 const INITIAL_CAPACITY: usize = 64 * 1024;
 
@@ -83,7 +83,7 @@ pub struct InstanceArena {
     gpu: wgpu::Buffer,
     /// Reused between frames; cleared, never reallocated in steady state.
     staging: Vec<u8>,
-    /// Size of `gpu` in bytes — the session high-water mark.
+    /// Size of `gpu` in bytes, the session high-water mark.
     capacity: u64,
     /// How many times the GPU buffer has been reallocated this session.
     /// Nonzero after warm-up means something is churning (RFC-0033 §G5).
@@ -96,7 +96,7 @@ pub struct InstanceArena {
     ///
     /// **Never hardcoded to 256.** It is 256 on many backends, which is
     /// exactly what makes hardcoding it work on the development machine and
-    /// fail — or silently corrupt — elsewhere.
+    /// fail, or silently corrupt, elsewhere.
     uniform_alignment: u64,
 }
 
@@ -157,7 +157,7 @@ impl InstanceArena {
     /// of the stride lets the binding cover the entire buffer at offset zero
     /// and the index arrive as ordinary per-instance data. That removes the
     /// dynamic offset, and with it the per-frame bind group a dynamic offset
-    /// would otherwise need whenever the region moved — which is the property
+    /// would otherwise need whenever the region moved, which is the property
     /// RFC-0033 exists to keep.
     ///
     /// Returns `None` for an empty slice: there is nothing to index.
@@ -183,7 +183,7 @@ impl InstanceArena {
     /// Reserves `bytes` of **vertex** space without supplying the data yet.
     ///
     /// For the handful of regions whose contents are not known until *after*
-    /// [`upload`](Self::upload) has run — the backdrop pipeline computes its
+    /// [`upload`](Self::upload) has run, the backdrop pipeline computes its
     /// composite quad while recording, because the pane can only be sampled
     /// once the geometry behind it has been rasterised. Reserving keeps the
     /// arena's single-growth-point guarantee (the buffer is still final before
@@ -210,7 +210,7 @@ impl InstanceArena {
     /// Aligning the offset is the part RFC-0033 §G2 names, and it is not
     /// sufficient. D3D12 describes a constant-buffer view with a `SizeInBytes`
     /// that must itself be a multiple of 256, so a 32-byte binding is widened
-    /// by the backend — and a 32-byte region sitting near the end of the
+    /// by the backend, and a 32-byte region sitting near the end of the
     /// buffer is then described as reaching past it. On Metal and Vulkan
     /// nothing happens; on DX12 it is an out-of-bounds descriptor, which
     /// surfaced as a hard `STATUS_ACCESS_VIOLATION` in the backdrop readback
@@ -244,7 +244,7 @@ impl InstanceArena {
     ///
     /// # Panics
     ///
-    /// Debug builds panic if `bytes` does not fit the region — writing past it
+    /// Debug builds panic if `bytes` does not fit the region, writing past it
     /// would corrupt whichever pipeline owns the next one, which is the one
     /// drawback a single shared arena has over per-pipeline buffers.
     pub fn write_region(&self, queue: &wgpu::Queue, region: Region, bytes: &[u8]) {
@@ -270,7 +270,7 @@ impl InstanceArena {
         let needed = self.staging.len() as u64;
         if needed > self.capacity {
             // Grow-only, doubling, never shrinking (RFC-0033 §G3). Shrinking
-            // would recreate the buffer — the operation being eliminated — at
+            // would recreate the buffer, the operation being eliminated, at
             // the least predictable moment, and a UI's instance high-water
             // mark is bounded by the UI rather than by an unbounded workload.
             let mut capacity = self.capacity.max(1);
@@ -291,14 +291,14 @@ impl InstanceArena {
     ///
     /// # Panics
     ///
-    /// Debug builds panic if the region falls outside the uploaded range —
+    /// Debug builds panic if the region falls outside the uploaded range,
     /// which means either that it was staged after [`upload`](Self::upload),
     /// or that the arena grew between staging and binding.
     #[must_use]
     pub fn slice(&self, region: Region) -> wgpu::BufferSlice<'_> {
         debug_assert!(
             region.offset + region.len <= self.capacity,
-            "instance arena region {region:?} is outside the {} byte buffer — \
+            "instance arena region {region:?} is outside the {} byte buffer, \
              it was staged after `upload`, or the arena grew in between",
             self.capacity
         );
@@ -318,7 +318,7 @@ impl InstanceArena {
         self.staging.len() as u64
     }
 
-    /// Current GPU buffer size in bytes — the session high-water mark.
+    /// Current GPU buffer size in bytes, the session high-water mark.
     #[must_use]
     pub const fn capacity(&self) -> u64 {
         self.capacity
@@ -331,7 +331,7 @@ impl InstanceArena {
         self.grows_this_session
     }
 
-    /// How many GPU buffers this arena has created, ever — one at
+    /// How many GPU buffers this arena has created, ever, one at
     /// construction plus one per growth. The counter the frame budget suite
     /// asserts is stationary across a steady-state frame.
     #[must_use]
@@ -382,7 +382,7 @@ mod tests {
 
     /// RFC-0031 §S4: a storage region's returned index must be an *exact*
     /// element index into an `array<T>` view of the whole buffer, whatever was
-    /// staged before it — that exactness is what lets the shape-record binding
+    /// staged before it, that exactness is what lets the shape-record binding
     /// cover the buffer at offset zero and stay stable across frames.
     /// A stand-in for `frame::ShapeRecord`: the same 80-byte, `Pod`, 16-byte
     /// aligned shape, without the dependency direction that would make the
@@ -396,7 +396,7 @@ mod tests {
     #[test]
     fn a_storage_region_returns_an_exact_element_index() {
         let Some((device, _queue)) = try_device() else {
-            eprintln!("no GPU adapter — skipping arena test");
+            eprintln!("no GPU adapter, skipping arena test");
             return;
         };
         let mut arena = InstanceArena::new(&device);
@@ -431,7 +431,7 @@ mod tests {
     #[test]
     fn appended_regions_are_contiguous_and_aligned() {
         let Some((device, _queue)) = try_device() else {
-            eprintln!("no GPU adapter — skipping");
+            eprintln!("no GPU adapter, skipping");
             return;
         };
         let mut arena = InstanceArena::new(&device);
@@ -452,7 +452,7 @@ mod tests {
         // *the* value, and assuming it is the least useful thing to assume
         // because it works on the machine you are writing on.
         let Some((device, _queue)) = try_device() else {
-            eprintln!("no GPU adapter — skipping");
+            eprintln!("no GPU adapter, skipping");
             return;
         };
         let mut arena = InstanceArena::new(&device);
@@ -475,7 +475,7 @@ mod tests {
         assert_eq!(
             uniform.len % alignment,
             0,
-            "and its *length* must be a multiple of it too — D3D12 widens a \
+            "and its *length* must be a multiple of it too, D3D12 widens a \
              constant-buffer view's size to the same granularity, so a short \
              region near the end of the buffer is described as reaching past it"
         );
@@ -490,7 +490,7 @@ mod tests {
         // The reservation path is the one the backdrop takes, and it is the
         // one that crashed on DX12 while passing everywhere else.
         let Some((device, queue)) = try_device() else {
-            eprintln!("no GPU adapter — skipping");
+            eprintln!("no GPU adapter, skipping");
             return;
         };
         let mut arena = InstanceArena::new(&device);
@@ -510,7 +510,7 @@ mod tests {
     #[test]
     fn an_empty_push_costs_nothing_and_returns_an_empty_region() {
         let Some((device, _queue)) = try_device() else {
-            eprintln!("no GPU adapter — skipping");
+            eprintln!("no GPU adapter, skipping");
             return;
         };
         let mut arena = InstanceArena::new(&device);
@@ -523,7 +523,7 @@ mod tests {
     #[test]
     fn growth_doubles_and_never_shrinks() {
         let Some((device, queue)) = try_device() else {
-            eprintln!("no GPU adapter — skipping");
+            eprintln!("no GPU adapter, skipping");
             return;
         };
         let mut arena = InstanceArena::new(&device);
@@ -539,7 +539,7 @@ mod tests {
         let grown = arena.capacity();
         assert_eq!(grown, initial * 2, "growth doubles");
 
-        // A tiny frame afterwards must not give the memory back — shrinking
+        // A tiny frame afterwards must not give the memory back, shrinking
         // recreates the buffer, which is the operation being removed.
         arena.begin_frame();
         let _ = arena.push_vertex(&[1u32]);
@@ -554,7 +554,7 @@ mod tests {
         // benchmarked: after warm-up a frame of the same shape must create
         // zero GPU buffers and must not grow the staging `Vec` either.
         let Some((device, queue)) = try_device() else {
-            eprintln!("no GPU adapter — skipping");
+            eprintln!("no GPU adapter, skipping");
             return;
         };
         let mut arena = InstanceArena::new(&device);
@@ -593,7 +593,7 @@ mod tests {
         let Some((device, _queue)) = try_device() else {
             // `should_panic` needs a panic even on the skip path, or the test
             // fails for the wrong reason on a machine with no GPU.
-            panic!("outside the — no GPU adapter, skipping");
+            panic!("outside the, no GPU adapter, skipping");
         };
         let arena = InstanceArena::new(&device);
         let _ = arena.slice(Region {

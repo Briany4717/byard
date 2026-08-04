@@ -1,4 +1,4 @@
-// RFC-0031 §S7–§S8 — organic fusion (metaball / blob merging).
+// RFC-0031 §S7–§S8, organic fusion (metaball / blob merging).
 //
 // Run it (from the repo root):
 //   cd crates/byard-cli/examples/organic_fusion
@@ -7,7 +7,7 @@
 // `fuse: <px>` is the smoothing radius: the distance over which two surfaces
 // bridge into one. It is a polynomial smooth-minimum over the group's members,
 // and the blend factor that produced the geometry is the same one that mixes
-// their colours — so the surface bridge and the colour transition are one
+// their colours, so the surface bridge and the colour transition are one
 // event, which is what makes differently-coloured fusion read as deliberate.
 //
 // `fuse: 0`, and an absent `fuse`, are exactly today's behaviour: each shape is
@@ -17,7 +17,7 @@
 //   1. The k ramp: the same three circles at four smoothing radii. At 0 they
 //      are three discs; by 28 they are one body with no seam.
 //   2. The approach: a circle sliding towards a fixed one. Far apart, nothing
-//      happens — fusion is local. As it arrives, a bridge grows between them
+//      happens, fusion is local. As it arrives, a bridge grows between them
 //      *before* the shapes touch, and the colours cross it.
 //   3. The fused outline: a stroked group is the boundary of the union, not a
 //      union of the members' outlines. There are no seams through the interior,
@@ -34,7 +34,7 @@
 //     as the fusion changes.
 View Main() {
     Column #[bg: 0x14161C, p: 32, gap: 26, width: 760] {
-        Text("fuse — surfaces that bridge, and colours that cross the bridge")
+        Text("fuse, surfaces that bridge, and colours that cross the bridge")
             #[color: 0xF2F3F5, size: 20, weight: bold]
 
         // ── 1. The smoothing radius ──────────────────────────────────────
@@ -69,7 +69,7 @@ View Main() {
         // the case RFC-0031's INV-26 exists for: the head's own bytes never
         // change, and without the member hash folded into it the group would be
         // judged clean and would paint last frame's shape forever.
-        Text("an approaching member — fusion is local, and the bridge grows before contact")
+        Text("an approaching member, fusion is local, and the bridge grows before contact")
             #[color: 0x8A90A0, size: 13]
         Canvas #[width: 340, height: 110, bg: 0x1C1F27, fuse: 22] {
             circle(cx: 70, cy: 55, r: 26, fill: 0x5B8DEF)

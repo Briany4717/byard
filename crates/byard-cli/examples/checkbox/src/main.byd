@@ -1,4 +1,4 @@
-// RFC-0018 — the `Checkbox` intrinsic.
+// RFC-0018, the `Checkbox` intrinsic.
 //
 // Run it (from the repo root):
 //   cd crates/byard-cli/examples/checkbox
@@ -7,7 +7,7 @@
 // What to verify visually:
 //   1. Each row's box is a rounded square: an empty 2px ring when unchecked,
 //      a filled accent square with a crisp white checkmark when checked.
-//   2. Click a box (or Tab to it and press Space) — it flips, and the live
+//   2. Click a box (or Tab to it and press Space), it flips, and the live
 //      status line below reacts (Mark-and-Pull), with no manual wiring.
 //   3. The top box is a standalone sample of the `indeterminate` mixed state:
 //      a filled square with a single horizontal dash instead of a check.
@@ -19,7 +19,7 @@ View Main() {
     var location = false
 
     Column #[bg: 0x14141C, p: 32, gap: 18, width: 380] {
-        Text("Checkbox — RFC-0018") #[color: 0xE6E1E5, size: 20]
+        Text("Checkbox, RFC-0018") #[color: 0xE6E1E5, size: 20]
 
         // A standalone sample of the mixed ("indeterminate") visual state.
         // No `bind:`, so it is a display sample rather than a control.
@@ -43,10 +43,10 @@ View Main() {
 
         // Reactive status: a live `when` re-derives the line each frame.
         when wifi {
-            Text("Wi-Fi is ON — tap the green box to turn it off")
+            Text("Wi-Fi is ON, tap the green box to turn it off")
                 #[color: 0x7DD3A8, size: 13, wrap: true, width: 316]
         } else {
-            Text("Wi-Fi is OFF — tap the green box to turn it on")
+            Text("Wi-Fi is OFF, tap the green box to turn it on")
                 #[color: 0x938F99, size: 13, wrap: true, width: 316]
         }
     }

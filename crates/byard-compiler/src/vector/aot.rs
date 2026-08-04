@@ -2,17 +2,17 @@
 //!
 //! `byard build` closes the set of icons an app actually instantiates, bakes
 //! only those into one **tightest-fit** immutable atlas, and emits a fixed
-//! coordinate table — so a shipped binary uploads one small texture and indexes
+//! coordinate table, so a shipped binary uploads one small texture and indexes
 //! a `[BakedGlyph; N]` with no runtime SVG parsing or coordinate math. The atlas
 //! is sized to the packing (theoretical-minimum VRAM), not to a fixed sheet.
 //! Dev/prod render parity (INV-7) holds because the baked **field bytes** are
-//! identical to dev's — the UV only addresses them, and a self-describing atlas
+//! identical to dev's, the UV only addresses them, and a self-describing atlas
 //! `size` travels with the table, so a smaller sheet changes addressing, never
 //! the sampled texels.
 //!
 //! Three stages, each independently testable:
 //!
-//! 1. [`collect_static_vector_refs`] — a static traversal of the resolved view
+//! 1. [`collect_static_vector_refs`], a static traversal of the resolved view
 //!    graph collecting every `VectorIcon("literal")`, with the RFC-0009 §4
 //!    dynamic-reference guard ([`CompileError::VectorAssetNotStatic`]).
 //! 2. generation (reusing [`super::generate`]) + dedup of identical handles.
@@ -41,7 +41,7 @@ pub struct StaticVectorRef {
     pub span: Span,
 }
 
-/// One baked glyph's coordinate-table entry — the AOT counterpart of a dev
+/// One baked glyph's coordinate-table entry, the AOT counterpart of a dev
 /// [`super::ResidentGlyph`]. Serialized into the generated `[BakedGlyph; N]`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct BakedGlyph {
@@ -75,7 +75,7 @@ pub struct BakedVectorAtlas {
 /// reference (RFC-0009 §4 tree-shake). A non-literal asset argument (derived
 /// from a `var`, a `match`, or string interpolation) cannot be closed at build
 /// time: unless the developer declared an explicit inclusion list (`include`
-/// non-empty — the `byard.toml` `[assets.vectors] include` escape hatch), each
+/// non-empty, the `byard.toml` `[assets.vectors] include` escape hatch), each
 /// such site is a [`CompileError::VectorAssetNotStatic`], never a silently
 /// partial atlas.
 ///
@@ -112,7 +112,7 @@ pub fn collect_static_vector_refs(
                     handle,
                     span: el.span,
                 }),
-                Some(_) => {} // empty literal — the INV-9 placeholder, not an asset.
+                Some(_) => {} // empty literal, the INV-9 placeholder, not an asset.
                 None if allow_dynamic => {}
                 None => errors.push(CompileError::VectorAssetNotStatic { span: el.span }),
             }
@@ -125,7 +125,7 @@ pub fn collect_static_vector_refs(
 /// Generates, dedups, and MaxRects-packs `refs` into a [`BakedVectorAtlas`].
 /// Handles are resolved relative to `base` (the project directory) for reading,
 /// exactly as the dev runner resolves them relative to the working directory.
-/// Every generation/read failure is collected — the whole set is reported at
+/// Every generation/read failure is collected, the whole set is reported at
 /// once rather than aborting on the first bad icon.
 ///
 /// # Errors
@@ -175,7 +175,7 @@ pub fn bake_atlas(
 
     // Pack into the *tightest* square atlas (the north star: theoretical-minimum
     // VRAM). Unlike the dev atlas, the AOT set is fully known, so we size the
-    // texture to the packing instead of always allocating `ATLAS_SIZE`² — a
+    // texture to the packing instead of always allocating `ATLAS_SIZE`², a
     // 5-icon app ships a 64² atlas (~16 KB), not a 2048² one (~16 MB). The baked
     // atlas is self-describing (`size` travels with the table), so a smaller
     // atlas changes the UV *addressing*, never the sampled texels: dev/prod
@@ -223,7 +223,7 @@ pub fn bake_atlas(
 
 /// Smallest power-of-two square atlas that packs `sizes` at minimum total VRAM
 /// (`edge² · layers`). Grows the bin by powers of two up to the [`ATLAS_SIZE`]
-/// cap and keeps whichever edge minimises the allocated texels — a small icon
+/// cap and keeps whichever edge minimises the allocated texels, a small icon
 /// set collapses to a tiny sheet instead of always paying for `ATLAS_SIZE`².
 /// Returns `(edge, placements, layers)`, or `None` if a glyph exceeds the cap.
 fn pack_minimal(sizes: &[Size]) -> Option<(u32, Vec<Placement>, u32)> {
@@ -247,7 +247,7 @@ fn pack_minimal(sizes: &[Size]) -> Option<(u32, Vec<Placement>, u32)> {
 /// The normalized `(u0, v0, u1, v1)` corners of a cell at pixel `(x, y)` sized
 /// `w × h` within an `atlas_size`² sheet. Self-consistent with the baked atlas
 /// (the runtime uploads `atlas_size` and indexes these UVs together), so the
-/// sampled texels — and thus the render — match dev regardless of the size.
+/// sampled texels, and thus the render, match dev regardless of the size.
 #[must_use]
 #[allow(clippy::many_single_char_names)] // x/y/w/h/s are the natural rect names
 fn cell_uv(atlas_size: u32, x: u32, y: u32, w: u32, h: u32) -> [f32; 4] {
@@ -410,7 +410,7 @@ mod tests {
             baked.atlas.len(),
             (baked.size as usize).pow(2) * 4 * baked.layers as usize
         );
-        // Distinct cells for distinct icons (bit comparison — exact by cell math).
+        // Distinct cells for distinct icons (bit comparison, exact by cell math).
         assert_ne!(
             baked.table[0].uv_rect.map(f32::to_bits),
             baked.table[1].uv_rect.map(f32::to_bits)
@@ -426,7 +426,7 @@ mod tests {
         // they no longer equal dev's corners. Parity now rests on two facts,
         // both asserted here: (a) the baked field texels are byte-identical to
         // what the generator produces for the dev path, and (b) the UV addresses
-        // exactly that field's cell within the baked atlas — so the sampled
+        // exactly that field's cell within the baked atlas, so the sampled
         // texels, and thus the render, are identical.
         let dir = std::env::temp_dir().join(format!("byard_aot_parity_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -480,7 +480,7 @@ mod tests {
     #[test]
     fn a_small_icon_set_bakes_a_tiny_atlas_not_the_full_sheet() {
         // The north star: theoretical-minimum VRAM. Two 32px icons must not ship
-        // a 2048² (~16 MB) sheet — they collapse to a 64² one (~16 KB).
+        // a 2048² (~16 MB) sheet, they collapse to a 64² one (~16 KB).
         let dir = std::env::temp_dir().join(format!("byard_aot_vram_{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("square.svg"), SQUARE).unwrap();

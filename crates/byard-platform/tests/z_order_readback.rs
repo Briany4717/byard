@@ -157,13 +157,13 @@ fn solid(rect: [f32; 4], color: [f32; 4]) -> BoxInstance {
 }
 
 /// A later-emitted child box that overlaps its container's border must paint
-/// *over* the border — the exact "cards draw under the container border" bug.
+/// *over* the border, the exact "cards draw under the container border" bug.
 /// The container border is bright red; the child is bright green and is emitted
 /// after it, straddling the top border ring. The overlap pixel must read green.
 #[test]
 fn later_child_paints_over_container_border() {
     let Some((device, queue)) = try_device() else {
-        eprintln!("no GPU adapter — skipping z-order readback");
+        eprintln!("no GPU adapter, skipping z-order readback");
         return;
     };
 
@@ -173,7 +173,7 @@ fn later_child_paints_over_container_border() {
     // 1. Container fill (solid, dark), emitted first.
     frame.push_instance(solid([50.0, 50.0, 200.0, 150.0], [0.1, 0.1, 0.12, 1.0]));
     // 2. Container border (decorated overlay, transparent interior, red ring),
-    //    emitted second — the pass that used to sit unconditionally on top.
+    //    emitted second, the pass that used to sit unconditionally on top.
     frame.push_decorated(DecoratedBox {
         base: solid([50.0, 50.0, 200.0, 150.0], [0.0, 0.0, 0.0, 0.0]),
         border_width: 10.0,
@@ -201,12 +201,12 @@ fn later_child_paints_over_container_border() {
 /// Text is depth-sorted like every other primitive: a later-emitted opaque box
 /// occludes earlier text instead of the text drawing on top. We first render
 /// text alone to locate a glyph pixel (a strongly red one), then render the same
-/// text with a green box emitted *after* it covering that spot — the pixel must
+/// text with a green box emitted *after* it covering that spot, the pixel must
 /// flip from red (glyph) to green (box).
 #[test]
 fn later_box_occludes_earlier_text() {
     let Some((device, queue)) = try_device() else {
-        eprintln!("no GPU adapter — skipping z-order readback");
+        eprintln!("no GPU adapter, skipping z-order readback");
         return;
     };
 
@@ -289,7 +289,7 @@ fn reddest_glyph(rb: &Readback) -> Option<((f32, f32), i32)> {
 /// RFC-0017 regression: **transparent geometry never writes draw-order depth**,
 /// so text emitted before it survives. The decorated pass (shadows, borders,
 /// translucent fills) only *tests* depth; if it wrote its nearer z, every
-/// earlier glyph beneath it — drawn in the later text pass at a farther depth —
+/// earlier glyph beneath it, drawn in the later text pass at a farther depth,
 /// would fail `LessEqual` and vanish. This is the "all app text disappears under
 /// a modal scrim (or a shadow halo)" bug.
 ///
@@ -301,7 +301,7 @@ fn reddest_glyph(rb: &Readback) -> Option<((f32, f32), i32)> {
 #[test]
 fn transparent_geometry_over_text_does_not_cull_it() {
     let Some((device, queue)) = try_device() else {
-        eprintln!("no GPU adapter — skipping z-order readback");
+        eprintln!("no GPU adapter, skipping z-order readback");
         return;
     };
 
@@ -367,7 +367,7 @@ fn transparent_geometry_over_text_does_not_cull_it() {
 
 /// RFC-0017 layered draw batches: a translucent scrim in a **later z-layer**
 /// (`begin_layer` between the text and the scrim) must genuinely alpha-blend
-/// *over* the earlier layer's text — the glyph pixel reads as a true mix of
+/// *over* the earlier layer's text, the glyph pixel reads as a true mix of
 /// glyph red and scrim green, proving the text is neither culled (the depth
 /// bug: red would vanish entirely) nor drawn on top undimmed (the old
 /// frame-final text batch: red would stay pure and green-free). Contrast with
@@ -376,7 +376,7 @@ fn transparent_geometry_over_text_does_not_cull_it() {
 #[test]
 fn scrim_in_a_later_layer_dims_text_beneath_it() {
     let Some((device, queue)) = try_device() else {
-        eprintln!("no GPU adapter — skipping z-order readback");
+        eprintln!("no GPU adapter, skipping z-order readback");
         return;
     };
 
@@ -440,7 +440,7 @@ fn scrim_in_a_later_layer_dims_text_beneath_it() {
 #[test]
 fn wrapped_text_renders_multiple_lines() {
     let Some((device, queue)) = try_device() else {
-        eprintln!("no GPU adapter — skipping z-order readback");
+        eprintln!("no GPU adapter, skipping z-order readback");
         return;
     };
 

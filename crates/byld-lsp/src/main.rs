@@ -761,7 +761,7 @@ fn is_style_rule_before_attr(content: &str, attr_start: usize) -> bool {
     }
     if i > 0 && bytes[i - 1] == b'.' {
         // `.card #[…]` is a style rule, but `m.Card #[…]` is a
-        // package-qualified element (RFC-0008 Pillar B) — a style rule's dot
+        // package-qualified element (RFC-0008 Pillar B), a style rule's dot
         // is never preceded by an identifier character.
         let qualified = i >= 2 && (bytes[i - 2].is_ascii_alphanumeric() || bytes[i - 2] == b'_');
         return !qualified;
@@ -994,13 +994,13 @@ fn collect_locals_in_members(
 
 // ── RFC-0008 package index (editor support for `use`) ────────────────────────
 
-/// The exported views of every package the document's manifest declares —
+/// The exported views of every package the document's manifest declares,
 /// what powers `m.<TAB>` completions and package-view parameter completions.
 ///
 /// Resolution is a light, per-request re-read (files are small and completion
 /// is human-paced). `path` dependencies resolve directly; git dependencies
 /// resolve only after `byard get` put them in the cache and require the CLI's
-/// cache-key — the LSP skips them for now (roadmap: share the provider).
+/// cache-key, the LSP skips them for now (roadmap: share the provider).
 #[derive(Default)]
 struct PackageIndex {
     /// package name → its exported views.
@@ -1115,7 +1115,7 @@ fn resolve_package_view<'i>(
     })
 }
 
-/// Whether the cursor sits on a `use` line, after the keyword — the position
+/// Whether the cursor sits on a `use` line, after the keyword, the position
 /// where a dependency name completes.
 fn in_use_decl(content: &str, offset: usize) -> bool {
     let line_start = content[..offset.min(content.len())]

@@ -1,14 +1,14 @@
-// RFC-0027 — Data & collection operations: a real todo app with NO `.rs`.
+// RFC-0027, Data & collection operations: a real todo app with NO `.rs`.
 //
 // Run it (from the repo root):
 //   cd crates/byard-cli/examples/todo
 //   cargo run -p byard-cli -- dev
 //
 // This is the proof of RFC-0027 (IMPLEMENTATION_7 M58-cap): the whole app is
-// pure `byld`. It *derives* state instead of replacing it wholesale —
+// pure `byld`. It *derives* state instead of replacing it wholesale, 
 //
 //   • `todos = todos.push({ id: nextId, text: draft, done: false })` grows the
-//     list immutably (a new list, written back to the `var` — the E1 path);
+//     list immutably (a new list, written back to the `var`, the E1 path);
 //   • `todos.filter(t => !t.done).len` derives the remaining count reactively;
 //   • toggling maps the list, flipping one record via `{ ..t, done: !t.done }`;
 //   • removing filters that record out by `id`.
@@ -21,12 +21,12 @@ View Main() {
     var draft: Str = ""
     var nextId = 0
 
-    // Derived, memoized counts — re-pulled only when `todos` changes.
+    // Derived, memoized counts, re-pulled only when `todos` changes.
     let remaining = todos.filter(t => !t.done).len
     let done = todos.filter(t => t.done).len
 
     Column #[bg: 0x14141C, p: 32, gap: 16, width: 560] {
-        Text("RFC-0027 — todo") #[color: 0xFFFFFF, size: 24, weight: bold]
+        Text("RFC-0027, todo") #[color: 0xFFFFFF, size: 24, weight: bold]
         Text("{remaining} of {todos.len} left · {done} done")
             #[color: 0x9AA0AC, size: 14]
 

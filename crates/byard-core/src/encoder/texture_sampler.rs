@@ -15,13 +15,13 @@ use crate::frame::{ImageFit, TextureSampler};
 
 /// Type-erased I/O result channel sender, structurally identical to
 /// `relay::IoResult`'s sender. Spelled out here (rather than imported from
-/// `relay`) so the encoder never gains a dependency on the relay subsystem —
+/// `relay`) so the encoder never gains a dependency on the relay subsystem,
 /// the async-decode result flows through the existing type-erased channel,
 /// not a new cross-module call (RFC-0001 §9 / INV-11).
 pub type IoResultSender = UnboundedSender<Box<dyn Any + Send>>;
 
 /// Raw decoded RGBA8 pixels produced off the render thread by the I/O pool
-/// (M29). Carries no `wgpu` handles — `Device`/`Queue` are used only on their
+/// (M29). Carries no `wgpu` handles, `Device`/`Queue` are used only on their
 /// owning (render) thread, where [`TextureCache::apply_decoded`] performs the
 /// upload.
 #[derive(Debug)]
@@ -36,7 +36,7 @@ pub struct DecodedRgba {
 
 /// The result of one async decode, sent back through the I/O channel and
 /// drained on the render thread. `result` is `Err(message)` on a missing or
-/// corrupt file — the message is logged once when the entry transitions to
+/// corrupt file, the message is logged once when the entry transitions to
 /// [`TextureState::Failed`].
 #[derive(Debug)]
 pub struct DecodedImage {
@@ -55,9 +55,9 @@ pub struct TextureInstance {
     pub rect: [f32; 4],
     /// Per-corner radii `[tl, tr, br, bl]`.
     pub radii: [f32; 4],
-    /// `[uv_scale_x, uv_scale_y, uv_offset_x, uv_offset_y]` — the `fit` transform.
+    /// `[uv_scale_x, uv_scale_y, uv_offset_x, uv_offset_y]`, the `fit` transform.
     pub uv_xform: [f32; 4],
-    /// `[opacity, depth, smooth, 0]` — `misc.z` is the RFC-0031 §S1 corner
+    /// `[opacity, depth, smooth, 0]`, `misc.z` is the RFC-0031 §S1 corner
     /// smoothing of the image's rounded clip.
     pub misc: [f32; 4],
 }
@@ -109,7 +109,7 @@ enum TextureState {
 /// Path-keyed cache of decoded textures so a static image uploads once.
 ///
 /// Decode is **asynchronous** (RFC-0001 §5.1): [`ensure`](Self::ensure)
-/// never touches the filesystem on the calling (render) thread — it inserts a
+/// never touches the filesystem on the calling (render) thread, it inserts a
 /// [`TextureState::Pending`] marker and spawns the blocking `image::open` decode
 /// on the relay's I/O runtime. The decoded pixels return through the type-erased
 /// I/O channel and are uploaded by [`apply_decoded`](Self::apply_decoded), which
@@ -122,7 +122,7 @@ pub struct TextureCache {
 impl TextureCache {
     /// Requests `src` without blocking: if unseen, inserts a `Pending` marker
     /// and spawns the decode on `io_handle`, returning immediately. A second
-    /// call for a still-`Pending` (or already-resolved) `src` is a no-op — the
+    /// call for a still-`Pending` (or already-resolved) `src` is a no-op, the
     /// `contains_key` guard ensures exactly one decode task per source.
     ///
     /// Decode happens entirely off the calling thread (INV-12); only the cheap
@@ -143,7 +143,7 @@ impl TextureCache {
         io_handle.spawn(async move {
             let result = decode_rgba(&src_owned);
             // The receiver (the render thread) may already be gone on shutdown;
-            // a dropped send is fine — nothing left to paint into.
+            // a dropped send is fine, nothing left to paint into.
             let _ = tx.send(Box::new(DecodedImage {
                 src: src_owned,
                 result,
@@ -179,7 +179,7 @@ impl TextureCache {
     }
 
     /// Looks up a `Ready` entry. Returns `None` for both `Pending` and
-    /// `Failed` — a not-yet-loaded image draws nothing, exactly like a missing
+    /// `Failed`, a not-yet-loaded image draws nothing, exactly like a missing
     /// one, so callers need no new pending-state handling.
     #[must_use]
     pub fn get(&self, src: &str) -> Option<&TextureEntry> {
@@ -531,7 +531,7 @@ mod tests {
     use std::time::{Duration, Instant};
 
     /// Builds a multi-threaded Tokio runtime mirroring `Relay`'s (no time/io
-    /// drivers — decode is pure compute, results travel a plain channel).
+    /// drivers, decode is pure compute, results travel a plain channel).
     fn io_runtime() -> tokio::runtime::Runtime {
         tokio::runtime::Builder::new_multi_thread()
             .build()
@@ -552,19 +552,19 @@ mod tests {
         path
     }
 
-    /// INV-12: `ensure` must return without doing the decode itself — the
+    /// INV-12: `ensure` must return without doing the decode itself, the
     /// blocking `image::open` runs on the I/O pool, not the calling thread.
     #[test]
     fn ensure_does_not_block_when_decoding_a_slow_fixture() {
         let rt = io_runtime();
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Box<dyn Any + Send>>();
         // A 1024×1024 PNG: its decode (inflate + unfilter) takes many
-        // milliseconds — far longer than the microseconds `ensure` needs just
+        // milliseconds, far longer than the microseconds `ensure` needs just
         // to spawn the task and return.
         let path = write_png_fixture("inv12", 1024, 1024);
         let src = path.to_str().unwrap();
 
-        // Warm the pool so its worker threads are already running — we are
+        // Warm the pool so its worker threads are already running, we are
         // timing `ensure`'s enqueue, not Tokio's one-time lazy thread spin-up.
         rt.block_on(async {
             tokio::runtime::Handle::current()
@@ -612,7 +612,7 @@ mod tests {
     }
 
     /// `ensure` called twice for the same still-`Pending` path must spawn only
-    /// one decode task (the `contains_key` guard) — so exactly one result lands
+    /// one decode task (the `contains_key` guard), so exactly one result lands
     /// on the channel.
     #[test]
     fn ensure_called_twice_for_the_same_pending_path_spawns_one_decode_task() {
@@ -626,7 +626,7 @@ mod tests {
         cache.ensure(rt.handle(), &tx, src);
 
         // Block until the (single) task completes, then assert the channel is
-        // empty — the second `ensure` provably never spawned, since the first
+        // empty, the second `ensure` provably never spawned, since the first
         // inserted `Pending` synchronously before either task could run.
         let _first = rt.block_on(rx.recv()).expect("one decode result");
         assert!(
@@ -656,7 +656,7 @@ mod tests {
     #[test]
     fn texture_becomes_ready_after_io_result_drain() {
         let Some((device, queue)) = try_device() else {
-            eprintln!("no GPU adapter — skipping texture-ready drain test");
+            eprintln!("no GPU adapter, skipping texture-ready drain test");
             return;
         };
         let layout = bind_group_layout(&device);
@@ -688,7 +688,7 @@ mod tests {
     #[test]
     fn missing_image_resolves_to_failed_not_panic() {
         let Some((device, queue)) = try_device() else {
-            eprintln!("no GPU adapter — skipping failed-decode test");
+            eprintln!("no GPU adapter, skipping failed-decode test");
             return;
         };
         let layout = bind_group_layout(&device);

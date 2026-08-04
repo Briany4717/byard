@@ -3,10 +3,10 @@
 //! Two small, pure pieces, kept out of the interpreter so they can be reasoned
 //! about (and tested) on their own:
 //!
-//! * [`RoutePattern`] — a `route "/user/:uid/post/:pid"` pattern compiled once,
+//! * [`RoutePattern`], a `route "/user/:uid/post/:pid"` pattern compiled once,
 //!   at mount time, into a segment vector, plus the `O(depth)` match that walks
 //!   a concrete path against it and extracts the dynamic segments.
-//! * [`NavTransition`] — the built-in transition family and the closed-form
+//! * [`NavTransition`], the built-in transition family and the closed-form
 //!   [`screen_motion`](NavTransition::screen_motion) that places each of the two
 //!   simultaneously-live screens for a given progress. No per-frame state lives
 //!   here: the interpreter samples one `Motion` for the progress and asks this
@@ -18,11 +18,11 @@ use crate::diagnostics::{CompileError, Span};
 /// One compiled segment of a [`RoutePattern`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum RouteSegment {
-    /// A literal segment (`detail`) — matches itself.
+    /// A literal segment (`detail`), matches itself.
     Literal(String),
-    /// A dynamic `:name` segment — matches any one segment, bound to `name`.
+    /// A dynamic `:name` segment, matches any one segment, bound to `name`.
     Param(String),
-    /// The `*` catch-all — matches every remaining segment (including none).
+    /// The `*` catch-all, matches every remaining segment (including none).
     Wildcard,
 }
 
@@ -34,7 +34,7 @@ const PARALLAX: f32 = 0.3;
 /// A route pattern compiled from its source spelling (RFC-0026 §"Route
 /// matching"). Matching is `O(path depth)` against the segment vector; the
 /// table is scanned in declaration order so the RFC's "routes are matched
-/// top-to-bottom" rule is exactly what the code does — the first pattern that
+/// top-to-bottom" rule is exactly what the code does, the first pattern that
 /// matches wins, and a `*` written last is the catch-all it looks like.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RoutePattern {
@@ -58,7 +58,7 @@ impl RoutePattern {
     ///
     /// Returns [`CompileError::InvalidRoutePattern`] for an unnamed `:`
     /// segment, a `*` that is not the final segment, or a repeated parameter
-    /// name — each of which would otherwise match in a way the author did not
+    /// name, each of which would otherwise match in a way the author did not
     /// write (INV-4: never a silent surprise).
     pub fn compile(raw: &str, span: Span) -> Result<Self, CompileError> {
         let bad = |reason: &str| CompileError::InvalidRoutePattern {
@@ -102,7 +102,7 @@ impl RoutePattern {
 
     /// Matches `path` against this pattern, returning the extracted parameters
     /// (in pattern order) or `None` if the pattern does not apply. Parameters
-    /// are `Str` in v1 (RFC-0026 resolved question) — the receiving View parses
+    /// are `Str` in v1 (RFC-0026 resolved question), the receiving View parses
     /// what it needs.
     #[must_use]
     pub fn match_path(&self, path: &str) -> Option<Vec<(String, String)>> {
@@ -135,7 +135,7 @@ pub enum NavTransition {
     /// reversed on a pop. The default, and the iOS/Material push idiom.
     #[default]
     Slide,
-    /// Incoming rises from the bottom over a stationary outgoing — the
+    /// Incoming rises from the bottom over a stationary outgoing, the
     /// modal-style push.
     SlideUp,
     /// Cross-fade.
@@ -178,7 +178,7 @@ impl NavTransition {
         }
     }
 
-    /// How long one transition lasts, in ms — the duration of the fade, and the
+    /// How long one transition lasts, in ms, the duration of the fade, and the
     /// natural settling time budgeted for the positional springs.
     #[must_use]
     pub const fn duration_ms(self) -> u32 {

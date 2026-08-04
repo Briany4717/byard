@@ -5,7 +5,7 @@
 //! gives two properties the rest of the compiler relies on:
 //!
 //! - **Pointer-equality comparison.** Equal text always interns to the same
-//!   `Arc`, so [`Symbol`] equality is an `Arc::ptr_eq` — the fast path the
+//!   `Arc`, so [`Symbol`] equality is an `Arc::ptr_eq`, the fast path the
 //!   hot-reload structural diff (RFC-0002 §"Hot-reload boundary") needs.
 //! - **`Send`.** `CompiledView` must cross the file-watcher → logic-thread
 //!   channel (RFC-0002 §"Integration with Engine", INV-6), and every `Symbol`
@@ -67,7 +67,7 @@ impl Symbol {
 }
 
 impl PartialEq for Symbol {
-    /// Pointer equality — sound because interning guarantees one `Arc` per
+    /// Pointer equality, sound because interning guarantees one `Arc` per
     /// distinct text.
     fn eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
@@ -117,7 +117,7 @@ mod tests {
 
     #[test]
     fn identity_stable_across_reinterning() {
-        // Interning unrelated text in between must not disturb identity — this
+        // Interning unrelated text in between must not disturb identity, this
         // is the property hot-reload diffing depends on.
         let first = Symbol::intern("clicks");
         let _ = Symbol::intern("unrelated");

@@ -1,6 +1,6 @@
 //! Guards the committed RFC-0030 §I1 example through the real `byard` binary:
-//! the `profiling` project — the driver for the terminal telemetry block, with
-//! toggles that move one scope at a time — must check clean (parse,
+//! the `profiling` project, the driver for the terminal telemetry block, with
+//! toggles that move one scope at a time, must check clean (parse,
 //! type-check, lower, validate every intrinsic with no diagnostics).
 
 use std::path::PathBuf;
@@ -51,7 +51,7 @@ fn the_example_header_names_every_instrumented_scope() {
     ] {
         assert!(
             source.contains(scope),
-            "the example must document {scope} — it is one of the scopes it exists to drive"
+            "the example must document {scope}, it is one of the scopes it exists to drive"
         );
     }
 }
@@ -78,7 +78,7 @@ fn the_header_tells_a_reader_how_to_check_the_hud_pays_for_itself() {
     ] {
         assert!(
             source.contains(phrase),
-            "the header must tell a reader to look for {phrase:?} — it is one \
+            "the header must tell a reader to look for {phrase:?}, it is one \
              of the things only a real session can confirm"
         );
     }

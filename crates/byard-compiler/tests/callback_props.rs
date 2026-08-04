@@ -1,4 +1,4 @@
-//! RFC-0019 — callback props & event forwarding.
+//! RFC-0019, callback props & event forwarding.
 //!
 //! A user `View` declares an `Fn(...)` parameter and forwards an inner
 //! intrinsic's event to it; the caller passes an inline action block that is
@@ -105,7 +105,7 @@ View TappableCard(on_tap: Fn() = {}) {
     assert_eq!(interp.peek(count), Value::Int(2));
 }
 
-/// Two instances of the same wrapper carry independent caller actions — each
+/// Two instances of the same wrapper carry independent caller actions, each
 /// mutates the caller `var` its own block names (`inc` vs `reset`).
 #[test]
 fn distinct_callbacks_per_instance() {
@@ -137,7 +137,7 @@ View ActionButton(label: Str, on_tap: Fn() = {}) {
     interp.tick();
     assert_eq!(interp.peek(count), Value::Int(2));
 
-    // Tap the second (reset) once — a different action on the same caller var.
+    // Tap the second (reset) once, a different action on the same caller var.
     interp.dispatch_events(&[ev(EventKind::Tap, taps[1])]);
     interp.tick();
     assert_eq!(interp.peek(count), Value::Int(0));
@@ -248,7 +248,7 @@ View Inner(on_tap: Fn() = {}) {
 /// End-to-end guard on the committed visual example: it renders without any
 /// diagnostic, registers a tap handler per `ActionButton` (four in `Main` plus
 /// two inside `Stepper`), and every one of those taps forwards to a caller
-/// block that mutates `count` — proving the reusable wrappers really drive the
+/// block that mutates `count`, proving the reusable wrappers really drive the
 /// caller's state on screen.
 #[test]
 fn visual_example_forwards_every_button() {
@@ -268,7 +268,7 @@ fn visual_example_forwards_every_button() {
     assert_eq!(taps.len(), 6, "one tap handler per ActionButton instance");
 
     // Every button's action is live: tapping each one changes `count` (each
-    // block differs, so the exact value isn't asserted — only that the caller
+    // block differs, so the exact value isn't asserted, only that the caller
     // state moved off its initial 0 through a forwarded callback).
     let mut moved = false;
     for t in &taps {
@@ -288,7 +288,7 @@ fn visual_example_forwards_every_button() {
 }
 
 /// The wrappers' `on hover` style state re-tints the button from its `accent`
-/// to its `hover` colour — both param-driven, so this also proves a
+/// to its `hover` colour, both param-driven, so this also proves a
 /// param-dependent style resolves at render time (RFC-0019 §2 env snapshot).
 /// Moving the pointer onto a button must change at least one rendered fill.
 #[test]

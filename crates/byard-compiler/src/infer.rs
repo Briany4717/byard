@@ -28,7 +28,7 @@ const LIST_METHODS: [&str; 5] = ["push", "removeAt", "contains", "map", "filter"
 /// An inferred / resolved type. Distinct from the syntactic [`Type`] AST node:
 /// `Ty` is normalized (e.g. `List<Str>` ⇒ `List(Str)`), and `Unknown` covers
 /// the cases Phase 2 cannot resolve without controller metadata or a method
-/// catalog (member access, most method calls) — those are not errors, since the
+/// catalog (member access, most method calls), those are not errors, since the
 /// Dev interpreter is dynamically evaluated.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Ty {
@@ -36,7 +36,7 @@ pub enum Ty {
     Int,
     /// `Float` (`f64`).
     Float,
-    /// `Str` — the scalar string type.
+    /// `Str`, the scalar string type.
     Str,
     /// `Bool`.
     Bool,
@@ -195,7 +195,7 @@ impl Checker<'_> {
     fn infer_binding(&mut self, annot: Option<&Type>, init: &Expr, span: Span) -> Ty {
         if let Some(ty) = annot {
             // Still walk the initializer for operator/collection diagnostics,
-            // but the annotation — not inference — decides the binding type, so
+            // but the annotation, not inference, decides the binding type, so
             // an empty/heterogeneous array never trips `CannotInfer` here.
             self.check_expr(init);
             return self.resolve_type(ty);
@@ -210,7 +210,7 @@ impl Checker<'_> {
     /// `PredicateNotBool`, `EffectInPureLambda`, `UnknownMethod`), recursing
     /// into subexpressions, and returns its best-effort inferred [`Ty`].
     /// Operands of type [`Ty::Unknown`] never trigger a diagnostic (the Dev
-    /// interpreter is dynamically evaluated — INV-4 keeps runtime lenient).
+    /// interpreter is dynamically evaluated, INV-4 keeps runtime lenient).
     fn check_expr(&mut self, expr: &Expr) -> Ty {
         match expr {
             Expr::IntLit(..) => Ty::Int,
@@ -230,7 +230,7 @@ impl Checker<'_> {
                     self.env.get(sym).cloned().unwrap_or(Ty::Unknown)
                 }
             }
-            // A nested array only *checks* its elements — the homogeneity
+            // A nested array only *checks* its elements, the homogeneity
             // `CannotInfer` fires only for an unannotated top-level binding
             // (handled in `infer_binding`), never deep inside an expression.
             Expr::Array(elems, _) => {

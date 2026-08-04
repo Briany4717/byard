@@ -4,7 +4,7 @@
 //! be checked from inside the crate: they are about what a script and an
 //! editor's problem matcher see. So this drives the binary.
 //!
-//! - The machine-readable first line — `file:line:col: error[kind]: message` —
+//! - The machine-readable first line, `file:line:col: error[kind]: message`,
 //!   is unchanged and unstyled. Editor integrations parse it, and breaking one
 //!   makes it go *quiet* rather than fail, which nobody notices for a long time.
 //! - `--short` produces exactly that and nothing else, so a script that grew up
@@ -42,7 +42,7 @@ fn check(dir: &Path, args: &[&str]) -> (String, String, bool) {
         .args(args)
         .arg(dir)
         // Forced on so the test proves the *first line* stays unstyled even
-        // when everything around it is coloured — the interesting case, and the
+        // when everything around it is coloured, the interesting case, and the
         // one a piped CI run would never exercise.
         .env("CLICOLOR_FORCE", "1")
         .output()
@@ -54,7 +54,7 @@ fn check(dir: &Path, args: &[&str]) -> (String, String, bool) {
     )
 }
 
-/// The diagnostic lines on stderr — the ones an editor parses — with the
+/// The diagnostic lines on stderr, the ones an editor parses, with the
 /// caret block, if any, left in place.
 fn stderr_lines(stderr: &str) -> Vec<String> {
     stderr.lines().map(str::to_string).collect()

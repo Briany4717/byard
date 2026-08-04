@@ -1,4 +1,4 @@
-// RFC-0031 §Q6 — the *error* case, kept as a fixture beside the warning one so
+// RFC-0031 §Q6, the *error* case, kept as a fixture beside the warning one so
 // the two severities are compared through the real binary.
 //
 // There is no closed form for arc length along the union of arbitrary SDFs, so

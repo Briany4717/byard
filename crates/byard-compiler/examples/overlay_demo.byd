@@ -1,16 +1,16 @@
-// overlay_demo.byd — RFC-0017 Overlay & Z-Layer System.
+// overlay_demo.byd, RFC-0017 Overlay & Z-Layer System.
 //
 // Demonstrates the overlay layer end to end: a subtree escapes the normal
 // layout flow and composites *above* everything else, laid out against the
 // viewport by an `anchor`. Three overlays are mounted over the base app to show
 // the whole feature at a glance:
 //
-//   1. a MODAL dialog        — `anchor: center`, dims the app behind a scrim,
+//   1. a MODAL dialog, `anchor: center`, dims the app behind a scrim,
 //                              captures all input, dismisses on outside tap /
 //                              Escape (`dismiss => …`).
-//   2. a NON-MODAL snackbar  — `anchor: bottom`, floats over the app without a
+//   2. a NON-MODAL snackbar, `anchor: bottom`, floats over the app without a
 //                              scrim, so the app stays interactive beneath it.
-//   3. stacking              — the dialog is mounted after the snackbar, so it
+//   3. stacking, the dialog is mounted after the snackbar, so it
 //                              composites on top (mount-order z-stacking).
 //
 // The `when open { Overlay … }` guard is how an overlay mounts and unmounts
@@ -22,7 +22,7 @@
 //   cargo run -p byard-cli -- dev crates/byard-compiler/examples/overlay_demo.byd
 
 View Main() {
-    // Overlay visibility is declarative — a `var` per overlay, flipped by the
+    // Overlay visibility is declarative, a `var` per overlay, flipped by the
     // overlay's own `dismiss` action (RFC-0003 reference-free model).
     var dialogOpen: Bool = true
     var snackOpen: Bool = true
@@ -37,7 +37,7 @@ View Main() {
         Text("The dialog floats above this screen, centred, behind a scrim.")
             #[color: 0x9A94A4, size: 15]
 
-        // Live status line. `pokes` only advances when the app is reachable —
+        // Live status line. `pokes` only advances when the app is reachable, 
         // i.e. NOT while the modal dialog is up. `deleted` flips when the
         // dialog's "Delete" fires, proving the overlay content is interactive
         // even as the app behind it is blocked (value reactivity is live; only
@@ -78,10 +78,10 @@ View Main() {
 
     // ══ MODAL DIALOG ═══════════════════════════════════════════════════════
     // `modal: true` (the default) captures all input behind a scrim. The scrim
-    // is the first child — a translucent full-viewport box. `dismiss => …` fires
+    // is the first child, a translucent full-viewport box. `dismiss => …` fires
     // on an outside tap or Escape, flipping the guard `var`. With RFC-0018
     // structural reactivity the `when` now unmounts the overlay *live* on that
-    // flip — tap the scrim (or press Escape) and the dialog vanishes at runtime.
+    // flip, tap the scrim (or press Escape) and the dialog vanishes at runtime.
     when dialogOpen {
         Overlay #[modal: true, dismiss => dialogOpen = false] {
             // Scrim: a dim, semi-transparent sheet filling the viewport (grow).

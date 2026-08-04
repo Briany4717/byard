@@ -2,7 +2,7 @@
 //! recursion/cycle detection (RFC-0007 §4) and reload blast-radius (RFC-0007 §5).
 //!
 //! Lowering needs more than the names-only `known_views: &[&str]` slice the
-//! interpreter historically threaded for validation — to *instantiate* a call it
+//! interpreter historically threaded for validation, to *instantiate* a call it
 //! needs the callee's [`ViewDecl`]. [`ViewTable`] owns its `ViewDecl`s (INV-3,
 //! `Send`), maps each name to a dense [`ViewId`], and is built once per program
 //! load from `ParsedFile::views`. The intrinsic catalog (RFC-0005) stays closed

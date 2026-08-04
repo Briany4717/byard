@@ -1,4 +1,4 @@
-// RFC-0018 — the `Grid` intrinsic (CSS-grid layout via Taffy).
+// RFC-0018, the `Grid` intrinsic (CSS-grid layout via Taffy).
 //
 // Run it (from the repo root):
 //   cd crates/byard-cli/examples/grid
@@ -15,7 +15,7 @@
 //      grid tracks are fractional, not fixed.
 View Main() {
     Column #[bg: 0x14141C, p: 24, gap: 16, width: 520] {
-        Text("Grid — RFC-0018") #[color: 0xE6E1E5, size: 20]
+        Text("Grid, RFC-0018") #[color: 0xE6E1E5, size: 20]
 
         Grid #[columns: "1fr 1fr 1fr", gap: 12, width: 472, height: 300] {
             Box #[bg: 0x381E72, radius: 12, col_span: 2, p: 16] {

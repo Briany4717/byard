@@ -187,7 +187,10 @@ impl Checker<'_> {
             }
             // A lifecycle effect's body is an action, checked like any other
             // action expression; it declares no bindings of its own.
-            Member::Lifecycle { .. } | Member::Style { .. } | Member::Expr(_) => {}
+            Member::Lifecycle { .. }
+            | Member::Timer { .. }
+            | Member::Style { .. }
+            | Member::Expr(_) => {}
         }
     }
 
@@ -622,6 +625,7 @@ fn member_span(member: &Member) -> Span {
         | Member::When { span, .. }
         | Member::Route { span, .. }
         | Member::Lifecycle { span, .. }
+        | Member::Timer { span, .. }
         | Member::Style { span, .. } => *span,
         Member::Element(el) => el.span,
         Member::Expr(e) => e.span(),

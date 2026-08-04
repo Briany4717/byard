@@ -1,10 +1,10 @@
-//! M51 — Ecosystem wrapper proof (RFC-0009 §"Ecosystem Model", IMPL-67).
+//! M51, Ecosystem wrapper proof (RFC-0009 §"Ecosystem Model", IMPL-67).
 //!
 //! Proves the agnosticism contract end to end: a *downstream package* exposes
 //! typed `View` wrappers (e.g. `SearchIcon`, `HomeIcon`) that compile down to
 //! `VectorIcon(asset(...))`, with **zero design knowledge** in the engine core
 //! or compiler. The core/compiler never see the strings "search", "home", or
-//! "material" — those live exclusively in the package.
+//! "material", those live exclusively in the package.
 //!
 //! Three assertions:
 //! 1. A consumer `.byd` using the package resolves wrapper calls to real
@@ -40,7 +40,7 @@ View StarIcon(size, color) {
 }
 "#;
 
-/// The consumer app — uses only `SearchIcon` and `HomeIcon` (not `StarIcon`).
+/// The consumer app, uses only `SearchIcon` and `HomeIcon` (not `StarIcon`).
 const APP_MAIN: &str = r"
 use material as m
 
@@ -53,7 +53,7 @@ View Main() {
 }
 ";
 
-/// In-memory [`PackageProvider`] for the test — returns the material package's
+/// In-memory [`PackageProvider`] for the test, returns the material package's
 /// source when asked for `"material"`.
 struct FixtureProvider;
 
@@ -109,7 +109,7 @@ fn package_wrapper_resolves_to_vector_icon_in_the_view_table() {
         "package view missing (even unused, it's declared): {names:?}"
     );
 
-    // Lower Main through the interpreter — user-view instantiation (RFC-0007)
+    // Lower Main through the interpreter, user-view instantiation (RFC-0007)
     // should expand `m.SearchIcon(...)` → `VectorIcon(...)`.
     let mut interp = Interpreter::new();
     let load_errs = interp.load_views(&resolved.views);
@@ -142,7 +142,7 @@ fn aot_collects_all_vector_handles_from_resolved_views() {
     let handles: Vec<&str> = refs.iter().map(|r| r.handle.as_str()).collect();
 
     // `collect_static_vector_refs` walks ALL resolved views (no view-level
-    // dead-code elimination yet), so all three package icons appear — even
+    // dead-code elimination yet), so all three package icons appear, even
     // StarIcon, which Main never instantiates. The bake step dedups; a
     // future view-DCE pass could prune unreachable views before collection.
     assert!(
@@ -160,7 +160,7 @@ fn aot_collects_all_vector_handles_from_resolved_views() {
 
     // The important structural assertion: the package's VectorIcon handles
     // are opaque path strings that the compiler collected without knowing
-    // they represent "search" or "home" — the agnosticism contract holds.
+    // they represent "search" or "home", the agnosticism contract holds.
     assert_eq!(
         refs.len(),
         3,

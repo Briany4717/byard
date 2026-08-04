@@ -1,9 +1,9 @@
 //! The engine-side half of the instrumentation floor (RFC-0030 §I1).
 //!
 //! `byard-compiler`'s `tests/instrumentation.rs` covers the logic thread's
-//! four scopes; this covers the two that live in `byard-core` — `layout.taffy`
+//! four scopes; this covers the two that live in `byard-core`, `layout.taffy`
 //! (entered by both the full and the incremental layout path) and
-//! `encode.frame` — plus `relay.publish`, which is the scope that carries every
+//! `encode.frame`, plus `relay.publish`, which is the scope that carries every
 //! other one across the frame boundary.
 //!
 //! Same rationale as the compiler-side file: a benchmark proves a path is
@@ -33,7 +33,7 @@ fn names(block: &SampleBlock) -> Vec<&'static str> {
 fn assert_entered(block: &SampleBlock, name: &str) {
     assert!(
         names(block).contains(&name),
-        "scope {name:?} was never entered — production has stopped taking the \
+        "scope {name:?} was never entered, production has stopped taking the \
          instrumented path. Scopes seen: {:?}",
         names(block)
     );
@@ -87,8 +87,8 @@ fn publish_enters_relay_publish() {
     let _ = drain_samples();
     let relay = Relay::new().expect("relay");
 
-    // The scope's sample is written when its guard drops — after the drain
-    // inside `publish` — so it rides along with the *next* publish. Two
+    // The scope's sample is written when its guard drops, after the drain
+    // inside `publish`, so it rides along with the *next* publish. Two
     // publishes, then read what the second one drained.
     relay.publish(RenderFrame::new());
     relay.publish(RenderFrame::new());
@@ -129,7 +129,7 @@ fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>)> {
 #[test]
 fn encoding_a_frame_enters_encode_frame() {
     let Some((device, queue)) = try_device() else {
-        eprintln!("no GPU adapter available — skipping");
+        eprintln!("no GPU adapter available, skipping");
         return;
     };
     let mut enc = pollster::block_on(EncoderSubsystem::init(
@@ -181,15 +181,15 @@ fn encoding_a_frame_enters_encode_frame() {
 // ── `encode.frame`'s sub-scopes (RFC-0030 §I1, second pass) ─────────────────
 //
 // `encode.frame` was a single ~6 ms row: the largest term in the frame and the
-// least explained one. These assertions pin the breakdown that replaced it —
-// uploads, glyphs, passes, buffers — so a sub-scope that stops being entered
+// least explained one. These assertions pin the breakdown that replaced it,
+// uploads, glyphs, passes, buffers, so a sub-scope that stops being entered
 // fails here rather than quietly reading `0.000ms` in the terminal, which is
 // indistinguishable from "that work got free" (INV-18).
 //
 // `present.acquire` / `present.submit` are the two scopes this file cannot
 // cover: both live in `Engine::render_latest` and need a real window surface,
 // which no test in this workspace has. They are verified by running the
-// `profiling` example and reading the block it prints — see that example's
+// `profiling` example and reading the block it prints, see that example's
 // header for the exact command and what to look for.
 
 /// Encodes one frame carrying a solid box and a text line onto a 64×64 target,
@@ -251,7 +251,7 @@ fn encode_one_frame() -> Option<SampleBlock> {
 #[test]
 fn every_encode_sub_scope_is_entered_on_a_drawn_frame() {
     let Some(block) = encode_one_frame() else {
-        eprintln!("no GPU adapter available — skipping");
+        eprintln!("no GPU adapter available, skipping");
         return;
     };
     for scope in [
@@ -268,7 +268,7 @@ fn every_encode_sub_scope_is_entered_on_a_drawn_frame() {
 #[test]
 fn the_encode_sub_scopes_nest_inside_encode_frame() {
     let Some(block) = encode_one_frame() else {
-        eprintln!("no GPU adapter available — skipping");
+        eprintln!("no GPU adapter available, skipping");
         return;
     };
     // `encode.frame` is the only depth-0 encode scope: a sub-scope recorded at
@@ -281,7 +281,7 @@ fn the_encode_sub_scopes_nest_inside_encode_frame() {
         }
         assert!(
             sample.depth() > 0,
-            "{name} (sample {i}) was recorded at depth 0 — it must nest inside \
+            "{name} (sample {i}) was recorded at depth 0, it must nest inside \
              encode.frame, or the frame total double-counts it"
         );
     }
@@ -290,7 +290,7 @@ fn the_encode_sub_scopes_nest_inside_encode_frame() {
 #[test]
 fn encode_frame_self_times_sum_to_its_inclusive_time() {
     let Some(block) = encode_one_frame() else {
-        eprintln!("no GPU adapter available — skipping");
+        eprintln!("no GPU adapter available, skipping");
         return;
     };
     let root = block
@@ -332,7 +332,7 @@ fn subtree_self_ns(block: &SampleBlock, index: usize) -> u64 {
 #[test]
 fn a_steady_state_frame_creates_no_gpu_buffers() {
     let Some((device, queue)) = try_device() else {
-        eprintln!("no GPU adapter available — skipping");
+        eprintln!("no GPU adapter available, skipping");
         return;
     };
     let mut enc = pollster::block_on(EncoderSubsystem::init(
@@ -408,7 +408,7 @@ fn a_steady_state_frame_creates_no_gpu_buffers() {
     assert_eq!(
         enc.arena().buffer_creations(),
         creations,
-        "a steady-state frame created a GPU buffer — every instanced pipeline \
+        "a steady-state frame created a GPU buffer, every instanced pipeline \
          must draw from the arena, and a new `create_buffer*` on the per-frame \
          path is the regression this counter exists to catch"
     );

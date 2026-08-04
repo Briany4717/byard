@@ -13,22 +13,22 @@
 // The scene exists to make one frame's cost measurable, so it holds one of
 // everything the per-frame path can be made to do wrong:
 //
-//   • a value-driven colour   — a paint-only change, which must produce a
+//   • a value-driven colour, a paint-only change, which must produce a
 //                               scissored redraw and *no* layout work at all;
-//   • a value-driven height   — a layout-affecting change, which must reflow
+//   • a value-driven height, a layout-affecting change, which must reflow
 //                               the siblings below it without marking them;
-//   • wrapping paragraphs     — the text measure protocol, and the leaves that
+//   • wrapping paragraphs, the text measure protocol, and the leaves that
 //                               must never be re-shaped while their content is
 //                               unchanged. Four of them, because one would let
 //                               a per-leaf regression hide inside the noise;
-//   • a `Canvas`             — the analytic-SDF pipeline, so the arena serves
+//   • a `Canvas`, the analytic-SDF pipeline, so the arena serves
 //                               more than one instance format;
-//   • a `for` loop           — so the pool machinery is exercised and a
+//   • a `for` loop, so the pool machinery is exercised and a
 //                               structural-reconcile regression shows up as a
 //                               rebuild rather than as nothing.
 //
 // It deliberately does **not** animate. The budget is about what a frame costs
-// when the app is idle and one value moves — that is the case a real app
+// when the app is idle and one value moves, that is the case a real app
 // spends its life in, and the case every one of these ceilings was inert for.
 View Budget() {
     var hot = false

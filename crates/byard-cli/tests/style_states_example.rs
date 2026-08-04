@@ -1,6 +1,6 @@
 //! Guards the committed RFC-0024 extended-style-states example through the real
-//! `byard` binary: the `style_states` project — `on checked`/`selected`/
-//! `invalid` blocks and a combined `on focused+hover` selector — must check
+//! `byard` binary: the `style_states` project, `on checked`/`selected`/
+//! `invalid` blocks and a combined `on focused+hover` selector, must check
 //! clean (parse, type-check, lower, validate with no diagnostics).
 
 use std::path::PathBuf;

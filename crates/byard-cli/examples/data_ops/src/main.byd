@@ -1,4 +1,4 @@
-// RFC-0027 — a live, interactive showcase of EVERY data/collection operation.
+// RFC-0027, a live, interactive showcase of EVERY data/collection operation.
 //
 // Run it (from the repo root):
 //   cd crates/byard-cli/examples/data_ops
@@ -9,7 +9,7 @@
 //   • the "push n" / "drop first" buttons grow/shrink a list `xs`;
 //   • the "score +10" button updates a record immutably.
 // Every readout to the right of a label is a *derived* value that recomputes
-// reactively the instant you touch a control — proving comparison, logic,
+// reactively the instant you touch a control, proving comparison, logic,
 // string concat, indexing, `len`, `contains`, `map`, `filter`, records, and
 // record spread all evaluate correctly and stay live.
 View Main() {
@@ -17,13 +17,13 @@ View Main() {
     var xs = [1, 2, 3]
     var user = { name: "Ada", score: 0 }
 
-    // Derived memos — recomputed on every dependency change (RFC-0027 §3).
+    // Derived memos, recomputed on every dependency change (RFC-0027 §3).
     let inRange = n > 0 && n < 10
     let doubled = xs.map(x => x * 2)
     let big = xs.filter(x => x > 2)
 
     Column #[bg: 0x14141C, p: 28, gap: 6, width: 620] {
-        Text("RFC-0027 — live data ops") #[color: 0xFFFFFF, size: 24, weight: bold]
+        Text("RFC-0027, live data ops") #[color: 0xFFFFFF, size: 24, weight: bold]
         Text("Touch the controls; every value on the right recomputes reactively.")
             #[color: 0x9AA0AC, size: 13]
 

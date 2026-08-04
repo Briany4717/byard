@@ -1,4 +1,4 @@
-// RFC-0030 §I1/§I2/§I2b — real instrumentation: six scopes, honest totals,
+// RFC-0030 §I1/§I2/§I2b, real instrumentation: six scopes, honest totals,
 // and an interpreter tax that does not bill layout to the interpreter.
 //
 // This example is a *driver for the terminal readout*, not a picture. The
@@ -15,9 +15,9 @@
 //   measured total 17.24ms  (interp tax 0.23ms)
 //   gpu total      0.25ms  (async, -2f)
 //     relay.publish                0.00ms
-//     interp.dispatch_events       0.00ms  [INTERPRETER — 0 in release]
-//     interp.tick                  0.00ms  [INTERPRETER — 0 in release]
-//     interp.render                0.23ms  (0.63ms incl.)  [INTERPRETER — 0 in release]
+//     interp.dispatch_events       0.00ms  [INTERPRETER, 0 in release]
+//     interp.tick                  0.00ms  [INTERPRETER, 0 in release]
+//     interp.render                0.23ms  (0.63ms incl.)  [INTERPRETER, 0 in release]
 //       layout.taffy               0.40ms
 //     present.acquire              9.92ms
 //     encode.frame                 0.01ms  (6.55ms incl.)
@@ -37,12 +37,12 @@
 //   1. ALL SIX SCOPES REPORT. `interp.dispatch_events`, `interp.tick`,
 //      `interp.render`, `layout.taffy`, `encode.frame` and `relay.publish` all
 //      appear with non-zero values. A zero anywhere means a scope stopped
-//      being entered — which is exactly the failure this example exists to
+//      being entered, which is exactly the failure this example exists to
 //      make visible, because before RFC-0030 the profiler had *one* call site
 //      in the whole engine and it was inside a test.
 //
 //   2. LAYOUT IS INDENTED UNDER RENDER. `layout.taffy` is printed one level in
-//      because it runs *inside* `interp.render` — the interpreter owns the
+//      because it runs *inside* `interp.render`, the interpreter owns the
 //      layout atlas and drives it from there. That nesting is structural, and
 //      it is why the tax is self-time (point 4).
 //
@@ -53,8 +53,8 @@
 //      frame is worse than no profiler.
 //
 //   4. THE TAX EXCLUDES LAYOUT. `interp tax` counts the *self*-time of the
-//      interpreter-tagged rows. `layout.taffy` is native work — an AOT build
-//      pays for Taffy in full — so it is not in the tax even though its parent
+//      interpreter-tagged rows. `layout.taffy` is native work, an AOT build
+//      pays for Taffy in full, so it is not in the tax even though its parent
 //      is interpreter-tagged. Press "dense tree" (below) and watch
 //      `layout.taffy` climb while `interp tax` stays roughly flat: that is the
 //      correction working. Before it, growing the layout would have inflated
@@ -75,15 +75,15 @@
 //      `encode.buffers` rows are indented under it and their self-times add up
 //      to its inclusive time exactly. `encode.frame` used to be one ~6ms row
 //      that everyone assumed was GPU buffer creation. It is not: the
-//      `encode.buffers` rows are ~0.2ms combined, and `encode.glyphs` — text
-//      shaping — is nearly all of it. Press "long text" and watch which row
+//      `encode.buffers` rows are ~0.2ms combined, and `encode.glyphs`, text
+//      shaping, is nearly all of it. Press "long text" and watch which row
 //      moves.
 //
-//   8. GLYPHS ARE NOT RE-SHAPED FOR TEXT THAT DID NOT CHANGE — AND THE BLOCK
+//   8. GLYPHS ARE NOT RE-SHAPED FOR TEXT THAT DID NOT CHANGE, AND THE BLOCK
 //      SAYS SO RATHER THAN LEAVING YOU TO TIME IT. The `encode.glyphs` row
 //      carries `N/M shaped`. Turn "long text" on and leave everything else
 //      alone: the paragraph is byte-identical frame after frame, only the
-//      rotation angle changes, and an angle is not text — so after the frame
+//      rotation angle changes, and an angle is not text, so after the frame
 //      it mounts, that field reads `0/M` and `encode.glyphs` collapses.
 //
 //      This used to be the largest single number on the readout, and the
@@ -96,7 +96,7 @@
 //
 //   9. VSYNC IS VISIBLE NOW. `present.acquire` sits at ~10ms of a ~17ms
 //      frame with the default controls: the engine finished early and the
-//      display made it wait. That is health, not cost — turn "long text" and
+//      display made it wait. That is health, not cost, turn "long text" and
 //      "dense tree" both on and watch `present.acquire` collapse towards zero
 //      as the engine's own work overruns the frame budget. Before these two
 //      scopes existed, both states printed the same `measured total` and
@@ -128,7 +128,7 @@
 //
 //   A. `work` AND `idle` SPLIT THE FRAME, AND `work` IS THE ONE THAT MOVES.
 //      Press "dense tree" and watch `work` climb while `idle` falls by roughly
-//      the same amount — the engine is eating into the wait, not into a bigger
+//      the same amount, the engine is eating into the wait, not into a bigger
 //      total. Under vsync the total cannot move, which is why it is not the
 //      headline. Turn "dense tree" and "long text" both on and `idle` collapses
 //      towards zero: that is the moment the app stops fitting in its frame.
@@ -152,12 +152,12 @@
 //   E. THE TWO STREAMS ARE SEPARABLE. `byard dev > session.log` gives a
 //      readable, control-character-free log with the live display still on
 //      screen; `byard dev 2>/dev/null` gives the log alone. Redirect stderr to
-//      a file and the statusline is not emitted at all — a per-second plain
+//      a file and the statusline is not emitted at all, a per-second plain
 //      line takes its place, because control sequences in a redirected stream
 //      are debris rather than a display.
 //
 //   F. Ctrl-C LEAVES A USABLE TERMINAL. Nothing here hides the cursor, touches
-//      the scroll region, or takes the alternate screen buffer — a `Drop` guard
+//      the scroll region, or takes the alternate screen buffer, a `Drop` guard
 //      does not run on `SIGINT`, so the only state that is safe to write is
 //      state already scoped to the line being drawn. Try it under `tmux` too.
 //
@@ -179,7 +179,7 @@
 //     encode.finish            0.560ms ░░░░░░░░░░░░░░░░░░░░
 //   hud.render                 0.000ms ░░░░░░░░░░░░░░░░░░░░
 //   …
-//   interpreter tax            3.019ms  self-time, 3 scope(s) — 0 in release
+//   interpreter tax            3.019ms  self-time, 3 scope(s), 0 in release
 //   layout path               retained  0 marked · 0/0 matched
 //
 //   G. ROWS NEVER MOVE. They are in execution order, never sorted by duration.
@@ -189,7 +189,7 @@
 //
 //   H. THE BLOCK REDRAWS IN PLACE AND EATS NO SCROLLBACK. Scroll up after a
 //      minute: the log above it is intact. That works only because the row
-//      count is constant — which is why a scope that did not run this frame
+//      count is constant, which is why a scope that did not run this frame
 //      still gets a row showing `0.000ms`, and why the several `encode.buffers`
 //      samples fold into one row carrying `×N`.
 //
@@ -208,11 +208,11 @@
 //      up only as self-time that no row explained. `encode.frame`'s own
 //      self-time should now be a few microseconds. Press "dense tree" and
 //      watch `encode.scissor` climb with the node count while `encode.glyphs`
-//      does not — the scan considers every primitive whether or not it moved.
+//      does not, the scan considers every primitive whether or not it moved.
 //
 //   K2. A MISSED VSYNC IS NOT AN OVER-BUDGET FRAME, AND ORDINARY JITTER IS
 //      NEITHER. Leave the app idle at 60 fps: the header sits at `100%`, in
-//      green, with nothing after it. That is the case to check first — the
+//      green, with nothing after it. That is the case to check first, the
 //      period straddles the budget by tens of microseconds on about half of a
 //      perfectly healthy app's frames, so a marker keyed on "over budget"
 //      would be on permanently and would be lying while it was.
@@ -221,7 +221,7 @@
 //      until a frame reports ~200 %. The header stays out of red and says
 //      `waited` in amber: the engine's own `work` was well inside the budget
 //      and the wait was the compositor's. Finally turn "dense tree" and "long
-//      text" both on until the engine really does overrun — the header turns
+//      text" both on until the engine really does overrun, the header turns
 //      red and `waited` disappears. Three states, three readings; before this
 //      the last two printed identically.
 //
@@ -229,7 +229,7 @@
 //
 // Press `Mod+Shift+D` (`Cmd` on macOS, `Ctrl` elsewhere), or start with
 // `[dev] hud = true` in `byard.toml`. A frosted panel appears in the top-right
-// corner, drawn by the engine, from a `.byd` source that lives in the CLI —
+// corner, drawn by the engine, from a `.byd` source that lives in the CLI, 
 // not from Rust. That is the point of it: a Rust HUD would be easier to write
 // and would prove nothing, while this one is a permanent, self-executing test
 // that the framework can render a non-trivial, continuously-updating, blurred,
@@ -238,14 +238,14 @@
 //   K. IT IS AN ORDINARY OVERLAY. A z-layer (RFC-0017), a backdrop blur
 //      (RFC-0023), a `Canvas` sparkline (RFC-0020). Nothing about the HUD is
 //      special-cased anywhere in the renderer, and it is parsed into its *own*
-//      interpreter — so a view of yours named `__ByardDevHud` cannot collide
+//      interpreter, so a view of yours named `__ByardDevHud` cannot collide
 //      with it, because there is nothing to collide with.
 //
 //   L. IT REPORTS ITS OWN COST, AND THE FIGURE IS NOW THE WHOLE OF IT. The
 //      last line reads `hud cost N ms (excluded)`, and it turns red if that
-//      ever exceeds 5% of the budget — §V4's bar. It should read grey: on this
+//      ever exceeds 5% of the budget, §V4's bar. It should read grey: on this
 //      reference machine it reads ~0.11ms of 16.7ms in a release build, or
-//      0.7%. The HUD's *true* cost is ~0.16ms (1.0%) — the difference is
+//      0.7%. The HUD's *true* cost is ~0.16ms (1.0%), the difference is
 //      `encode.finish`, one `wgpu` call per frame that cannot be split by
 //      owner and so is left with the app, in a row of its own where you can
 //      watch it move.
@@ -253,7 +253,7 @@
 //      That number used to be the inclusive time of the `hud.render` scope,
 //      and it under-reported by several times over. The HUD runs a second
 //      interpreter, so its `interp.render` and `layout.taffy` carry the same
-//      scope *names* as your app's and were merged into your app's rows — the
+//      scope *names* as your app's and were merged into your app's rows, the
 //      `×2` markers were honest that a merge had happened and silently wrong
 //      about whose time it was. And the HUD's text is shaped on the *render*
 //      thread, long after `hud.render` has been dropped, so that half could
@@ -266,7 +266,7 @@
 //          interpreter is yours; the other is the profiler's, and it is no
 //          longer in your rows.
 //        • The `hud.render` row says `dev, all threads` and is larger
-//          than it used to be. It is not one scope's span — it is everything
+//          than it used to be. It is not one scope's span, it is everything
 //          the dev surfaces cost this frame, on every thread.
 //        • Every other row reads what it read with the HUD closed. That is the
 //          property that matters: asking to see the numbers must not move
@@ -281,7 +281,7 @@
 //      **If you take this measurement yourself, keep the window visible.** An
 //      occluded window on macOS stops vsync-blocking, the loop free-runs, and
 //      the per-tick cost of a HUD in a saturated loop that is drawing nothing
-//      is not the cost of a HUD. The tell is `encode.frame` at zero — check it
+//      is not the cost of a HUD. The tell is `encode.frame` at zero, check it
 //      before believing any number from that session.
 //
 //   M. IT DOES NOT PUSH THE APP OFF THE FAST PATH (INV-24). With the HUD open,
@@ -293,38 +293,38 @@
 //
 //   N. THE NUMBERS UPDATE AT 10 Hz, NOT PER FRAME, AND FIVE OF SIX FRAMES NOW
 //      COST NOTHING. Deliberate: the eye cannot read a 60Hz counter. Watch the
-//      sparkline — geometry, not text — move smoothly while the digits step.
+//      sparkline, geometry, not text, move smoothly while the digits step.
 //
 //      With `Mod+Shift+P` open at the same time, watch the `N/M shaped`
 //      field on `encode.glyphs`: it sits at `0/M` and ticks up to `1/M` or
 //      `2/M` ten times a second, as one field's digits change. The HUD's
 //      numbers are formatted to a fixed width on the host so ` 3.4` and `12.7`
-//      occupy the same columns — that mitigation was in place from the start
+//      occupy the same columns, that mitigation was in place from the start
 //      and bought nothing until the shaper began comparing content instead of
 //      trusting a flag. It is what makes the HUD nearly free now.
 //
 // ── The reload flash (RFC-0030 §V6) ───────────────────────────────────────
 //
-// Save this file without changing anything meaningful — add a space to a
+// Save this file without changing anything meaningful, add a space to a
 // comment. A 2px inset border pulses green over 120ms.
 //
 //   O. IT IS NEVER SUPPRESSED ON A NO-OP RELOAD. That is its only justifying
 //      case: a save that changed a colour announces itself, and a save that
-//      changed a handler or a comment does not — which is precisely when a
+//      changed a handler or a comment does not, which is precisely when a
 //      developer cannot tell whether hot reload is working at all. Firing only
 //      when it is redundant would be the useless half of the feature.
 //
 //   P. AMBER MEANS IT WAITED. Hold the mouse down on "tap me" and save a
 //      structural change (delete the `when longText` block). The border pulses
 //      *amber* when you release, because that reload was deferred behind the
-//      gesture gate — the same event the statusline's `↻ pending` was showing
+//      gesture gate, the same event the statusline's `↻ pending` was showing
 //      while you held.
 //
 // ── The frame budget (RFC-0030 §V2) ───────────────────────────────────────
 //
 // The budget defaults to the display's refresh interval and is printed in the
 // header, so it is never ambiguous which number the bars are drawn against. Pin
-// it — for CI, or to see what a 120 Hz panel would demand — by adding to
+// it, for CI, or to see what a 120 Hz panel would demand, by adding to
 // `byard.toml`:
 //
 //   [dev]
@@ -353,7 +353,7 @@
 //     usually the one that went wrong, so it must not be the one that is
 //     truncated.
 //   • `layout.taffy` IS DRAWN INSIDE `interp.render`. Nothing about that
-//     nesting is serialised — the viewer infers it from containment on a
+//     nesting is serialised, the viewer infers it from containment on a
 //     lane, and containment already holds because a child's guard is created
 //     after its parent's and dropped before it.
 //   • THREE LANES, NOT ONE. The logic thread, the render thread and the GPU
@@ -372,7 +372,7 @@
 //   cargo run -p byard-cli -- check crates/byard-cli/examples/profiling
 //
 // You should get a coloured `ok  0 errors` with the duration flush right.
-// Then check the three ways colour turns itself off — all three must produce
+// Then check the three ways colour turns itself off, all three must produce
 // byte-identical, escape-free output:
 //
 //   NO_COLOR=1  cargo run -p byard-cli -- check crates/byard-cli/examples/profiling
@@ -384,22 +384,22 @@
 //   CLICOLOR_FORCE=1 cargo run -p byard-cli -- check crates/byard-cli/examples/profiling | cat -v
 //
 // (`cat -v` makes the escapes visible: `^[[32mok^[[0m`.) Finally, the ASCII
-// fallback, for a terminal that has not said it speaks UTF-8 — no multi-byte
+// fallback, for a terminal that has not said it speaks UTF-8, no multi-byte
 // glyph may appear:
 //
 //   LC_ALL=C LANG=C cargo run -p byard-cli -- check crates/byard-cli/examples/profiling
 //
 // And the four controls that drive it:
 //
-//   • "dense tree" — mounts a 16 × 16 grid of boxes. `layout.taffy` and
+//   • "dense tree", mounts a 16 × 16 grid of boxes. `layout.taffy` and
 //     `encode.frame` rise sharply; `interp.dispatch_events` does not move.
-//   • "animate" — starts an endless animation, so frames keep being produced.
+//   • "animate", starts an endless animation, so frames keep being produced.
 //     Turn it off with a still scene and the block stops printing entirely:
 //     the loop parks, nothing renders, and nothing is measured, which is the
 //     honest reading of a static frame's cost (RFC-0010).
-//   • "long text" — mounts a wrapping paragraph, so the text measure protocol
+//   • "long text", mounts a wrapping paragraph, so the text measure protocol
 //     runs *inside* layout. `layout.taffy` rises; nothing else does.
-//   • tapping the big button — one dispatch's worth of `interp.dispatch_events`
+//   • tapping the big button, one dispatch's worth of `interp.dispatch_events`
 //     on the frame it lands.
 View Main() {
     var dense = false
@@ -415,7 +415,7 @@ View Main() {
     let chip = style { radius: 20, p: (vertical: 9, horizontal: 18), color: 0xE6E1E5 }
 
     Column #[bg: 0x101014, p: 26, gap: 18, width: 720] {
-        Text("RFC-0030 — instrumentation") #[color: 0xFFFFFF, size: 24, weight: bold]
+        Text("RFC-0030, instrumentation") #[color: 0xFFFFFF, size: 24, weight: bold]
         Text("The demo is the block in your terminal. Move one control at a time and watch which row responds.")
             #[color: 0x9AA0AC, size: 13]
 
@@ -444,7 +444,7 @@ View Main() {
         //
         // An endless animation is what keeps frames flowing at all: with it
         // off and the scene still, the runner parks and the telemetry block
-        // stops appearing — a frame that is not drawn costs nothing, and the
+        // stops appearing, a frame that is not drawn costs nothing, and the
         // readout says so rather than reporting a comfortable number for work
         // that never happened.
         Row #[gap: 20, align: center] {
@@ -458,7 +458,7 @@ View Main() {
                     }
                 }
             }
-            Text(animate ? "frames are being produced — the block prints once a second"
+            Text(animate ? "frames are being produced, the block prints once a second"
                          : "parked: no frames, no samples, no block")
                 #[color: 0x938F99, size: 13]
         }
@@ -466,7 +466,7 @@ View Main() {
         // ── layout.taffy, via the text measure protocol ───────────────────
         when longText {
             Box #[bg: 0x1B1B22, radius: 10, p: 16, width: 668] {
-                Text("Wrapping text is measured inside layout, not before it: Taffy calls back into the shaper with the width the parent is offering, and the paragraph's height falls out of that. Mounting this block therefore moves layout.taffy and nothing else — the interpreter did no more work than it did a frame ago, and the tax row shows that, which is the whole point of separating self-time from inclusive time.")
+                Text("Wrapping text is measured inside layout, not before it: Taffy calls back into the shaper with the width the parent is offering, and the paragraph's height falls out of that. Mounting this block therefore moves layout.taffy and nothing else, the interpreter did no more work than it did a frame ago, and the tax row shows that, which is the whole point of separating self-time from inclusive time.")
                     #[color: 0xCCD2E0, size: 14]
             }
         }
@@ -478,7 +478,7 @@ View Main() {
         // path scales with node count.
         when dense {
             Column #[gap: 3] {
-                Text("256 nodes mounted — watch layout.taffy and encode.frame")
+                Text("256 nodes mounted, watch layout.taffy and encode.frame")
                     #[color: 0x938F99, size: 12]
                 for r in cells {
                     Row #[gap: 3] {

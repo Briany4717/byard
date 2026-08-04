@@ -1,11 +1,11 @@
-# RFC-0031: Extended Shape System — superelliptical corners, shape groups, organic fusion, and morphing
+# RFC-0031: Extended Shape System, superelliptical corners, shape groups, organic fusion, and morphing
 
-- **Status:** Active — **partially implemented**. §S1–§S10 have landed:
+- **Status:** Active, **partially implemented**. §S1–§S10 have landed:
   superelliptical corners across every pipeline that clips to a rounded rect,
   the shape group and its storage buffer, `ngon`, sequence morphing, and
-  organic fusion. §S11's general path morphing — compile-time feature
+  organic fusion. §S11's general path morphing, compile-time feature
   correspondence plus the analytic cubic-path pipeline needed to render its
-  output — is **deferred**, as §S11 itself proposes.
+  output, is **deferred**, as §S11 itself proposes.
 
   Eight corrections were found while implementing it and are recorded in
   [the erratum](0031-erratum-implementation-deltas.md); the body below has been
@@ -15,15 +15,15 @@
 - **Created:** 2026-07-25
 - **Last updated:** 2026-07-31
 - **Depends on:**
-  - RFC-0020 (`Canvas`, `CanvasShape`, the analytic per-fragment SDF evaluator in `canvas_shape.wgsl` — this RFC extends that shader rather than adding a pipeline). *RFC-0020's status line has since been corrected to `Active — partially implemented`, and its Tier-2 deferral re-checked against what this RFC added to Tier-1.*
+  - RFC-0020 (`Canvas`, `CanvasShape`, the analytic per-fragment SDF evaluator in `canvas_shape.wgsl`, this RFC extends that shader rather than adding a pipeline). *RFC-0020's status line has since been corrected to `Active, partially implemented`, and its Tier-2 deferral re-checked against what this RFC added to Tier-1.*
   - RFC-0001 (§3.1 render pipelines and the rounded-box field clamp; `frame.rs` as the sole cross-subsystem boundary)
   - RFC-0010 / RFC-0025 (animatable scalars, `Motion`, `anim.keyframes` with its 8-step cap, `anim.spring`, `repeat`/`reverse`/`restart`)
-  - RFC-0011 (paint-time transforms — inherited unchanged by every construct here)
-  - RFC-0016 (style system — `radius` is a style property and `smooth` joins it)
-  - RFC-0023 (paint effects — `blur`; fusion composes with it but does not depend on it)
+  - RFC-0011 (paint-time transforms, inherited unchanged by every construct here)
+  - RFC-0016 (style system, `radius` is a style property and `smooth` joins it)
+  - RFC-0023 (paint effects, `blur`; fusion composes with it but does not depend on it)
 - **Extends:** `encoder/canvas_shape.wgsl`, `encoder/decorated_box.wgsl`, `encoder/solid_box.wgsl`, `frame::{DecoratedBox, BoxInstance, CanvasShape}`, the `byld` `Canvas` block grammar.
 - **Enables:** Material 3 Expressive's shape vocabulary and its morphing loading indicator; interaction-state shape transitions (square → circle on selection); metaball/blob effects; continuous-curvature corners across every box in the framework.
-- **Explicitly out of scope:** backdrop refraction (a separate RFC — it belongs to the paint-effect stack of RFC-0023, not to shape definition) and layout-level motion (a separate RFC — it changes the layout/arena contract, which nothing here touches).
+- **Explicitly out of scope:** backdrop refraction (a separate RFC, it belongs to the paint-effect stack of RFC-0023, not to shape definition) and layout-level motion (a separate RFC, it changes the layout/arena contract, which nothing here touches).
 
 ---
 
@@ -33,7 +33,7 @@ Three additions that share one shader and one new frame primitive:
 
 1. **Superelliptical corners (S1–S3).** `radius` gains a companion `smooth: 0…1`
    on every box-path intrinsic. Implementation is a single substitution in the
-   rounded-box SDF — the L² norm becomes an Lⁿ norm — which is *exactly*
+   rounded-box SDF, the L² norm becomes an Lⁿ norm, which is *exactly*
    backward-compatible: `smooth: 0` yields `n = 2` and reproduces today's field
    bit-for-bit.
 2. **The shape group (S4–S6).** One `CanvasShape` instance may now reference a
@@ -54,8 +54,8 @@ subsystem; both are blocked only by the fact that instanced rendering gives each
 fragment sight of exactly one shape. §2 removes that constraint, and does so once
 for both.
 
-Material 3 Expressive's loading indicator — seven shapes, 650 ms each, spring
-`stiffness 200 / damping 0.6` — falls out as a group of seven shape records and
+Material 3 Expressive's loading indicator, seven shapes, 650 ms each, spring
+`stiffness 200 / damping 0.6`, falls out as a group of seven shape records and
 **one** animated scalar driven by machinery RFC-0025 already ships.
 
 ---
@@ -66,7 +66,7 @@ Material 3 Expressive's loading indicator — seven shapes, 650 ms each, spring
 
 Every surface the framework draws terminates in `sd_rounded_box`, whose corner is
 a circular arc. A circular corner has discontinuous curvature at the point where
-it meets the straight edge, and that discontinuity is visible — it is the single
+it meets the straight edge, and that discontinuity is visible, it is the single
 strongest reason a UI reads as "web" rather than "native" at a glance. Apple's
 platforms, Figma's shape tools, and Material 3's shape library all use
 continuous-curvature corners instead.
@@ -78,15 +78,15 @@ than to an opt-in primitive.
 
 ### The expressive shape vocabulary is unreachable
 
-Material 3 Expressive shipped ~35 shapes — squircles, scallops, clovers, bursts,
-pills — and built shape morphing into the system as a communicative device:
+Material 3 Expressive shipped ~35 shapes, squircles, scallops, clovers, bursts,
+pills, and built shape morphing into the system as a communicative device:
 interaction states change shape, and the loading indicator is a continuous morph
 through seven of them. Its implementation feature-matches two `RoundedPolygon`s
 of cubic Béziers, aligning convex corners, concave corners, and flat edges, then
 subdividing both to equal segment counts before interpolating control points.
 
-Byard can express none of this. `CanvasShape` has four kinds — arc, circle, line,
-rect — and no way to blend between them. Any design system built on Byard
+Byard can express none of this. `CanvasShape` has four kinds, arc, circle, line,
+rect, and no way to blend between them. Any design system built on Byard
 (`byard-material` in particular, whose gap analysis already blocked on arc
 drawing) is limited to the shapes a rounded rectangle can express.
 
@@ -137,8 +137,8 @@ Column #[bg: surface, radius: 24, smooth: 0.6, p: 20] { … }
 so no existing view changes. `0.6` is approximately the Apple continuous-corner
 profile. `1.0` is a pronounced squircle.
 
-It applies wherever `radius` applies — `BoxInstance`, `DecoratedBox`, and the
-`rect` shape kind — including shadows, borders, gradients, and backdrop clipping,
+It applies wherever `radius` applies, `BoxInstance`, `DecoratedBox`, and the
+`rect` shape kind, including shadows, borders, gradients, and backdrop clipping,
 because all of them already derive from the same field.
 
 ### 2. Shape groups
@@ -154,7 +154,7 @@ Canvas #[width: 140, height: 48, fuse: 16] {
 ```
 
 `fuse: <px>` is the smoothing radius: the distance over which two surfaces bridge
-into one. `fuse: 0` or an absent `fuse` is exactly today's behaviour — each shape
+into one. `fuse: 0` or an absent `fuse` is exactly today's behaviour, each shape
 is its own instance, unchanged.
 
 ### 3. Morphing
@@ -189,7 +189,7 @@ A spring gives the overshoot-and-settle character M3E uses for state changes:
 phase = selected ? 1.0 : 0.0 with anim.spring(stiffness: 200, damping: 0.6)
 ```
 
-### 4. `ngon` — the parametric shape kind
+### 4. `ngon`, the parametric shape kind
 
 One new shape kind covers the great majority of the expressive vocabulary,
 because those shapes are overwhelmingly *n*-fold rotationally symmetric rounded
@@ -217,7 +217,7 @@ ngon(n: 6, r: 20, corner: 4, inner: 0.8, rotate: 15deg)
 
 ### 1. Superelliptical corners (S1–S3)
 
-#### S1 — the substitution
+#### S1, the substitution
 
 Today's rounded-box field (`decorated_box.wgsl:142`) ends with:
 
@@ -242,15 +242,15 @@ fn lp_norm(v: vec2<f32>, n: f32) -> f32 {
 output to today**, which is what makes this safe to apply framework-wide.
 
 The existing clamp (`r_corner = min(r_corner, min(b.x, b.y))`, RFC-0001 §3.1)
-is unchanged and still required — the field folds in on itself past half the box
+is unchanged and still required, the field folds in on itself past half the box
 regardless of the norm.
 
-#### S2 — the field is normalised, not the coverage
+#### S2, the field is normalised, not the coverage
 
 For `n ≠ 2` the result is no longer a true signed distance. On the corner
 diagonal the Lⁿ norm's gradient magnitude is exactly `2^(1/n − 1/2)`: 1 at
 `n = 2`, **falling** to ≈0.79 at `n = 6`. An uncorrected field therefore draws
-the corner's anti-aliased fringe about 26 % *wider* than the edge's — a smeared
+the corner's anti-aliased fringe about 26 % *wider* than the edge's, a smeared
 corner on exactly the shapes this property exists to give a cleaner profile.
 
 The correction is to compute the gradient analytically alongside the norm and
@@ -276,7 +276,7 @@ corner components is zero and the gradient is 1 by construction.
 
 See the erratum, correction 1.
 
-#### S3 — where it lands
+#### S3, where it lands
 
 `smooth` is a style property (RFC-0016), inherited nowhere and defaulting to
 `0.0`.
@@ -286,7 +286,7 @@ There was no spare `vec4` lane on either box pipeline. `DecoratedBox` gets one
 unit direction vector for a real ramp and all-zero without one, so the shader
 answers the same question from data it already reads and `misc.w` carries
 `smooth` at no cost. `BoxInstance` grows by one `f32`, declared last so every
-existing offset is unchanged — cheaper than promoting every smoothed box to the
+existing offset is unchanged, cheaper than promoting every smoothed box to the
 `DecoratedBox` pipeline. `CanvasShape`'s `rect` kind reads it from `params[5]`,
 beside that kind's corner radius.
 
@@ -295,14 +295,14 @@ different corner profile than its caster reads as a rendering error. That
 argument does not stop at shadows: a backdrop pane, an ink ripple and a rounded
 image all clip to an element's outline, so `smooth` reaches six shaders. It does
 **not** reach widget-owned geometry (a `Toggle` track, a `Slider` thumb, a
-`RadioButton` dot), which derives its own radii — the rule is that `smooth`
+`RadioButton` dot), which derives its own radii, the rule is that `smooth`
 applies wherever the *author* controls the radius.
 
 See the erratum, corrections 2 and 3.
 
 ### 2. The shape group (S4–S6)
 
-#### S4 — representation
+#### S4, representation
 
 `CanvasShape` gains two fields:
 
@@ -318,7 +318,7 @@ pub struct CanvasShape {
     pub group_first: u32,
     /// How many members it has (`<= MAX_GROUP_MEMBERS`).
     pub group_count: u32,
-    /// Hash of the member records — INV-26, see below.
+    /// Hash of the member records, INV-26, see below.
     pub member_hash: u64,
 }
 ```
@@ -331,7 +331,7 @@ time, which is the only place the packing matters.)
 The head also carries a `member_hash`: a hash of its members' bytes, folded in
 by `push_shape_group` on the same pass that appends them. It is **INV-26**, and
 without it a fusion group with a static `k` whose member moves would be judged
-clean by `PaintDigest` — whose comparison is over a primitive's *own* bytes —
+clean by `PaintDigest`, whose comparison is over a primitive's *own* bytes, 
 and would render the previous frame's shape. See the erratum, correction 4.
 
 When `group_mode != GROUP_NONE`, the instance is the **group head**: its
@@ -343,12 +343,12 @@ in a per-frame shape storage buffer, appended contiguously by
 
 The storage buffer is a `Vec<ShapeRecord>` on `RenderFrame`, cleared and refilled
 each frame exactly as the existing instance vectors are. `ShapeRecord` is a POD
-of the fields `eval_shape` already consumes — `kind`, `params0`, `params1`,
-`stroke_color`, `fill_color`, `stroke_dash`, `misc` — so it crosses the RFC-0001
+of the fields `eval_shape` already consumes, `kind`, `params0`, `params1`,
+`stroke_color`, `fill_color`, `stroke_dash`, `misc`, so it crosses the RFC-0001
 §5 boundary under the same rules as everything else in `frame.rs`. No new
 lifetime, no allocation per shape, no `Box`.
 
-#### S5 — the cap
+#### S5, the cap
 
 `MAX_GROUP_MEMBERS = 8`, matching RFC-0025's keyframe cap and chosen the same
 way: it is the point past which the per-fragment loop stops being free, and past
@@ -365,7 +365,7 @@ for (var i = 0u; i < 8u; i = i + 1u) {
 }
 ```
 
-#### S6 — why one instance and not an off-screen field pass
+#### S6, why one instance and not an off-screen field pass
 
 The alternative is to render each member's distance into an `R16Float` target and
 resolve in a second pass. It generalises past 8 members and past a single quad.
@@ -377,7 +377,7 @@ generality nothing has asked for. Rejected.
 
 ### 3. Fusion (S7–S8)
 
-#### S7 — the combine
+#### S7, the combine
 
 ```wgsl
 var d_fill = FAR;
@@ -399,10 +399,10 @@ Colour follows the same blend factor that produced the geometry, so the colour
 transition and the surface bridge are the same event. This is what makes
 differently-coloured fusion look deliberate rather than like a z-fighting bug.
 
-#### S8 — strokes under fusion
+#### S8, strokes under fusion
 
 A per-member stroke minimum (above) draws each member's own outline, including
-the parts now interior to the union — visually wrong. The correct fused outline
+the parts now interior to the union, visually wrong. The correct fused outline
 is the boundary of the union:
 
 ```wgsl
@@ -412,12 +412,12 @@ d_stroke = abs(d_fill) - half_w;
 **Decision:** when `group_mode == GROUP_FUSE`, the stroke is derived from the
 fused fill field and the group draws **one** outline. There is no group-level
 stroke syntax to write it in, so that outline comes from the *first* shape's
-`stroke_width`, `stroke_color` and `cap` — the only place it can come from — and
+`stroke_width`, `stroke_color` and `cap`, the only place it can come from, and
 a **later** member's stroke properties are inert, diagnosed as a
-`StrokeInFusionGroup` warning (not an error — the shape still renders correctly,
+`StrokeInFusionGroup` warning (not an error, the shape still renders correctly,
 the property is simply ignored). See the erratum, correction 6.
 
-The dash arc-length parameter `t` is not defined on a fused boundary — there is
+The dash arc-length parameter `t` is not defined on a fused boundary, there is
 no closed-form arc length for the union of arbitrary SDFs. Dashes are therefore
 unsupported on a fused stroke, diagnosed as `DashOnFusedStroke`. Approximating
 `t` would produce dashes that slide unpredictably as the fusion changes, which is
@@ -425,7 +425,7 @@ worse than not offering it.
 
 ### 4. Morphing (S9–S11)
 
-#### S9 — SDF interpolation, not vertex correspondence
+#### S9, SDF interpolation, not vertex correspondence
 
 Two designs were evaluated.
 
@@ -443,12 +443,12 @@ shapes being related.
 **Decision: (B).** Its known weakness is that for two shapes of very different
 scale or position the intermediate reads as a melt rather than as a
 shape-interpolation, because the linear blend of two distance fields is not the
-distance field of any intermediate shape. For the actual use — same-centre,
-same-scale members of a design system's shape set — it is indistinguishable from
+distance field of any intermediate shape. For the actual use, same-centre,
+same-scale members of a design system's shape set, it is indistinguishable from
 correspondence morphing, and it is roughly two orders of magnitude less
 implementation.
 
-#### S10 — sequence indexing
+#### S10, sequence indexing
 
 `group_param` carries `phase`. With `count` members:
 
@@ -471,20 +471,20 @@ blending and RFC-0010's `bg`/`color` transitions. A morph that blended colour in
 sRGB while an adjacent `with` clause blended the same two colours in OKLab would
 be a visible inconsistency inside one frame.
 
-#### S11 — why not compile-time feature correspondence
+#### S11, why not compile-time feature correspondence
 
-The Material 3 approach — feature-match, align, subdivide, interpolate control
-points — is more faithful and would morph arbitrary author-supplied paths, not
+The Material 3 approach, feature-match, align, subdivide, interpolate control
+points, is more faithful and would morph arbitrary author-supplied paths, not
 just `ngon`s. The Byard-shaped version of it is appealing: run the correspondence
 in `byard build`, emit fixed-length control-point arrays exactly as
 `vector_atlas.rs` already emits `[BakedGlyph; N]`, and reduce runtime to a lerp
-of `[f32; N]` — the same "expensive at build, arithmetic at runtime" posture as
+of `[f32; N]`, the same "expensive at build, arithmetic at runtime" posture as
 `#[byard_controller]`.
 
 It is deferred, not rejected, for one specific reason: the morphed path cannot be
 rendered through the Tier-2 VectorMSDF pipeline, because regenerating an MSDF
 field every frame is precisely the cost RFC-0009 exists to avoid. It needs a new
-analytic closed-cubic-path SDF — a Tier-1.5 pipeline — which is a larger piece of
+analytic closed-cubic-path SDF, a Tier-1.5 pipeline, which is a larger piece of
 work than everything else in this RFC combined and which nothing currently
 demands. `ngon` plus field interpolation covers the M3E vocabulary; the general
 case can be built when a real use case names it, and S9's grammar accommodates it
@@ -504,8 +504,8 @@ style_prop   := … | "smooth" ":" float
 ```
 
 `fuse` and `morph` are mutually exclusive on one `Canvas`
-(`ConflictingGroupMode`). A nested group is not expressible — `Canvas` blocks do
-not nest — which bounds the design at one level by construction rather than by a
+(`ConflictingGroupMode`). A nested group is not expressible, `Canvas` blocks do
+not nest, which bounds the design at one level by construction rather than by a
 check.
 
 ### 6. Cost
@@ -524,7 +524,7 @@ append. There is no allocation on the per-frame path: the shape buffer is a
 state after the first few frames and never grows again.
 
 The animation cost is zero by construction. `fuse`'s `k` and `morph`'s `phase`
-are ordinary animatable scalars — the same `Motion` values RFC-0010 already
+are ordinary animatable scalars, the same `Motion` values RFC-0010 already
 samples on the CPU each frame. An animating morph produces new per-instance data
 and never a re-tessellation, re-rasterisation, or cache invalidation. This is the
 property `canvas_shape.wgsl`'s header comment already claims for `sweep` and
@@ -536,8 +536,8 @@ property `canvas_shape.wgsl`'s header comment already claims for `sweep` and
 
 **`mix` of two SDFs is not the SDF of an intermediate shape.** S9 accepts this
 knowingly. Between dissimilar shapes the intermediate can bulge or thin in ways a
-true correspondence morph would not. It is bounded — both operands are valid
-fields, so the result stays continuous and never self-intersects — but it is an
+true correspondence morph would not. It is bounded, both operands are valid
+fields, so the result stays continuous and never self-intersects, but it is an
 approximation and a designer working outside the same-centre/same-scale case will
 notice.
 
@@ -599,25 +599,25 @@ platforms it competes with abandoned.
 
 ## Prior art
 
-- **Inigo Quilez's 2D distance-function catalogue** — the source of the
+- **Inigo Quilez's 2D distance-function catalogue**, the source of the
   polynomial `smin` in S7 (including the blend-factor return used for colour) and
   of the rounded-polygon formulation `ngon` follows.
-- **Material 3 Expressive** — the ~35-shape library, and the morphing
+- **Material 3 Expressive**, the ~35-shape library, and the morphing
   `LoadingIndicator` / `ContainedLoadingIndicator`. Its `androidx.graphics.shapes`
   implementation is the correspondence-morph approach S11 defers: `RoundedPolygon`
   of cubic Béziers, `Morph` feature-matching convex corners, concave corners and
-  flat edges, subdividing to equal segment counts. Its timing — 650 ms per shape,
-  spring `stiffness 200 / damping 0.6` — is reproducible exactly with S10 plus
+  flat edges, subdividing to equal segment counts. Its timing, 650 ms per shape,
+  spring `stiffness 200 / damping 0.6`, is reproducible exactly with S10 plus
   RFC-0025.
-- **Apple's continuous corners** — the superellipse corner profile S1 targets;
+- **Apple's continuous corners**, the superellipse corner profile S1 targets;
   the `n ≈ 4`–`5` region of the family.
-- **Figma's corner smoothing** — the same superellipse family exposed as a 0–100 %
+- **Figma's corner smoothing**, the same superellipse family exposed as a 0–100 %
   slider, which is the precedent for `smooth` being a normalised scalar rather
   than a raw exponent.
-- **Flutter's `ShapeBorder` / `MorphableShape`** — the counter-example: morphing
+- **Flutter's `ShapeBorder` / `MorphableShape`**, the counter-example: morphing
   by path interpolation on the CPU, re-tessellating per frame. Expressive, and
   the exact cost model this RFC exists to avoid.
-- **Metaball / blob rendering in demoscene and TouchDesigner work** — decades of
+- **Metaball / blob rendering in demoscene and TouchDesigner work**, decades of
   evidence that `smin` over a small bounded set is a real-time-viable technique,
   and that the interesting parameter is the smoothing radius rather than the
   member count.
@@ -626,7 +626,7 @@ platforms it competes with abandoned.
 
 ## Resolved questions
 
-### Q1 — Should `smooth` be a normalised 0–1 scalar or the raw exponent `n`?
+### Q1, Should `smooth` be a normalised 0–1 scalar or the raw exponent `n`?
 
 **Options.** (a) `smooth: 0…1` mapped to `n ∈ [2, 6]`; (b) expose `n` directly;
 (c) named presets (`circular`, `continuous`, `squircle`).
@@ -638,18 +638,18 @@ animates sensibly under `with`, and matches Figma's slider, which is the mental
 model most users arrive with. Presets were rejected because the interesting values
 are between them.
 
-### Q2 — Does `smooth` apply to shadows and borders, or only to the fill?
+### Q2, Does `smooth` apply to shadows and borders, or only to the fill?
 
 **Options.** (a) everything derived from the box field; (b) fill only; (c)
 independently controllable per layer.
 
 **Resolution: (a).** Shadow, border, gradient clip and backdrop clip all already
 derive from the same `sd_rounded_box` call, so applying `n` uniformly is both the
-smaller change and the only one that looks correct — a shadow whose corner
+smaller change and the only one that looks correct, a shadow whose corner
 profile differs from its caster's reads as a rendering bug. (c) is three more
 properties to express something no design system asks for.
 
-### Q3 — What is the group member cap?
+### Q3, What is the group member cap?
 
 **Options.** 4 / 8 / 16 / uncapped with a storage-buffer bound.
 
@@ -662,7 +662,7 @@ groups. Uncapped removes the unrolled loop bound and makes the cost unbounded on
 a per-fragment path, which is not a property this project should give up for
 generality nobody requested.
 
-### Q4 — Can `fuse` and `morph` combine on one group?
+### Q4, Can `fuse` and `morph` combine on one group?
 
 **Options.** (a) mutually exclusive; (b) morph between two *fused* sub-groups;
 (c) fuse a morphing shape with a static one.
@@ -671,13 +671,13 @@ generality nobody requested.
 
 (b) requires nested groups, which requires a member to itself be a group head,
 which turns a flat contiguous range into a tree and the unrolled loop into
-recursion — none of which a fragment shader does well. (c) is expressible today
+recursion, none of which a fragment shader does well. (c) is expressible today
 by placing a morph group and a static shape in the same `Canvas` without fusion
 between them, which covers the visual intent at no cost. The flat, bounded,
 single-level group is the property that keeps the per-fragment cost provable, and
 it is worth more than the composition.
 
-### Q5 — How do strokes behave under fusion?
+### Q5, How do strokes behave under fusion?
 
 **Options.** (a) per-member strokes, unioned; (b) the fused boundary only, from
 the head's stroke properties; (c) both, selectable.
@@ -686,12 +686,12 @@ the head's stroke properties; (c) both, selectable.
 `StrokeInFusionGroup` warning.
 
 (a) draws outlines through the interior of the fused body, which is visually
-wrong in every case — nobody fuses shapes in order to see the seams. (c) is a
+wrong in every case, nobody fuses shapes in order to see the seams. (c) is a
 mode switch for an option with no correct use. Warning rather than error because
 the shape still renders correctly; the property is merely ignored, and failing a
 build over an inert attribute is disproportionate.
 
-### Q6 — Do dashes work on a fused stroke?
+### Q6, Do dashes work on a fused stroke?
 
 **Options.** (a) yes, approximating `t`; (b) no, diagnosed; (c) yes, by
 arc-length integration along the fused boundary.
@@ -700,16 +700,16 @@ arc-length integration along the fused boundary.
 
 There is no closed form for arc length along the union of arbitrary SDFs. Any
 approximation makes dash positions shift unpredictably as the fusion parameter
-animates — dashes that crawl and jitter for no reason the author can see, which
+animates, dashes that crawl and jitter for no reason the author can see, which
 is worse than a clear diagnostic. (c) is a per-fragment integration and is not
 affordable.
 
-### Q7 — Fractional `n` or field interpolation for morphing?
+### Q7, Fractional `n` or field interpolation for morphing?
 
 **Options.** (a) continuous `n` with polar-fold; (b) `mix` of two evaluated
 fields; (c) compile-time feature correspondence, per Material 3.
 
-**Resolution: (b)** — see S9 for the seam artefact that eliminates (a), and S11
+**Resolution: (b)**, see S9 for the seam artefact that eliminates (a), and S11
 for why (c) is deferred rather than rejected.
 
 The decisive point for (b) over (a) is that (a)'s artefact appears *only while
@@ -719,7 +719,7 @@ its output at all, since re-baking an MSDF field per frame is the cost RFC-0009
 exists to eliminate. (c) remains reachable: S5's grammar admits a `path` member
 without change.
 
-### Q8 — Which colour space for morph and fusion colour blending?
+### Q8, Which colour space for morph and fusion colour blending?
 
 **Options.** (a) OKLab; (b) linear sRGB; (c) match whatever the surrounding
 animation uses.
@@ -728,10 +728,10 @@ animation uses.
 RFC-0010's `bg`/`color` transitions.
 
 A morph blending in sRGB beside a `with` clause blending the same two colours in
-OKLab would desynchronise visibly within one frame. (c) is not implementable — a
+OKLab would desynchronise visibly within one frame. (c) is not implementable, a
 shape group has no access to what its neighbours are doing, and it should not.
 
-### Q9 — Where does the morph phase wrap?
+### Q9, Where does the morph phase wrap?
 
 **Options.** (a) wrap at `count`, so the last shape morphs back to the first;
 (b) clamp at `count - 1`; (c) ping-pong.
@@ -744,7 +744,7 @@ ping-pong is expressible on top of wrapping via RFC-0025's existing
 `reverse: true`, so building it into the indexing would duplicate a modifier that
 already exists.
 
-### Q10 — Is `ngon`'s `n` animatable?
+### Q10, Is `ngon`'s `n` animatable?
 
 **Options.** (a) no, `n` is a compile-time integer; (b) yes, via fractional `n`.
 
@@ -754,7 +754,7 @@ is for. Attempting `with` on `n` is a `NotAnimatable` diagnostic pointing at
 `morph`, so the error teaches the correct construct rather than merely refusing.
 
 `NotAnimatable` is deliberately **not** the existing `LayoutPropNotAnimatable`.
-`n` is paint-class — it moves no geometry and costs no relayout — it simply has
+`n` is paint-class, it moves no geometry and costs no relayout, it simply has
 no value between a pentagon and a hexagon, and the layout diagnostic would send
 an author towards a transform, which is unhelpful advice for a vertex count. See
 the erratum, correction 8.
@@ -790,10 +790,10 @@ questions.
 
 ## Ordering
 
-1. **S1–S3** — superelliptical corners. Independent of everything else, touches
+1. **S1–S3**, superelliptical corners. Independent of everything else, touches
    the most surface, and is worth landing alone.
-2. **S4–S6** — the shape group and its storage buffer. Structural, no
+2. **S4–S6**, the shape group and its storage buffer. Structural, no
    user-visible feature by itself.
-3. **S9–S10** + `ngon` — morphing. Delivers the M3E loader.
-4. **S7–S8** — fusion. Last because it is the only piece with a real overdraw
+3. **S9–S10** + `ngon`, morphing. Delivers the M3E loader.
+4. **S7–S8**, fusion. Last because it is the only piece with a real overdraw
    cost and benefits from the group representation being settled first.

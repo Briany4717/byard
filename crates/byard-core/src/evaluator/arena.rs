@@ -21,7 +21,7 @@
 //! handles to arena-allocated values can coexist without aliasing the
 //! arena itself.
 //!
-//! `ViewArena` is `!Send` and `!Sync` — it must only be touched from the
+//! `ViewArena` is `!Send` and `!Sync`, it must only be touched from the
 //! Logic thread (see RFC-0001 5.1).
 
 #![allow(unsafe_code)]

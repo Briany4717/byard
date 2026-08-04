@@ -6,7 +6,7 @@
 - **Applies to:** RFC-0020 §1 ("the `Canvas` intrinsic"), specifically the rule
   that a canvas body is *"shape commands only"*.
 - **Authority:** RFC-0030 §V3, which requires the dev HUD to be written in
-  `byld` **with no privileged syntax** — *"if a construct the HUD needs does not
+  `byld` **with no privileged syntax**, *"if a construct the HUD needs does not
   exist, that is a gap in the language and should be filled there, not worked
   around here."*
 
@@ -15,7 +15,7 @@
 ## Why this erratum exists
 
 RFC-0020 §1 restricts a `Canvas` body to shape commands, and rejects everything
-else — including `for` and `when` — with `UnknownShapeCommand`. The restriction
+else, including `for` and `when`, with `UnknownShapeCommand`. The restriction
 is right about declarations and style blocks: there is nothing for a `var` or a
 `style { … }` inside a canvas to mean, and silently ignoring one is how a
 developer spends an afternoon on a shape that was never going to appear.
@@ -24,7 +24,7 @@ It is wrong about control flow, and the way it is wrong is easy to miss because
 nothing fails. It makes the **shape count** a compile-time constant. A canvas
 can animate every coordinate, every colour and every sweep from live data, and
 cannot draw *n* bars for *n* data points. That excludes charts, sparklines,
-histograms, waveforms and legends — which is to say, most of what a drawing
+histograms, waveforms and legends, which is to say, most of what a drawing
 surface exists for.
 
 The workaround is available and is exactly the tell: write twenty-four
@@ -32,7 +32,7 @@ The workaround is available and is exactly the tell: write twenty-four
 of the language, it is a substitute for a feature it does not have.
 
 RFC-0030's in-window HUD is what surfaced it. The HUD's sparkline is
-`CanvasShape` geometry rather than text on purpose — a paint-class change never
+`CanvasShape` geometry rather than text on purpose, a paint-class change never
 touches layout, which is what keeps the HUD from re-shaping text every frame and
 defeating the invalidation model it exists to report on (INV-24). Written
 against RFC-0020 as specified, that sparkline was inexpressible.
@@ -64,12 +64,12 @@ This is the part that is a design decision rather than a mechanical extension.
 Everywhere else in the language, `for` and `when` lower into reactive pools
 (`ForPool` / `WhenPool`). That is correct there and it is not free: those bodies
 are *elements*, with layout, identity and mountable state, and re-deriving them
-per frame would throw all three away — a text field would lose its cursor every
+per frame would throw all three away, a text field would lose its cursor every
 time its sibling list changed.
 
 A canvas body has none of those. Shape commands carry no layout, no identity and
 no state, and the render walk **already** re-evaluates every one of their
-parameter expressions every tick — that is precisely what makes `sweep: percent
+parameter expressions every tick, that is precisely what makes `sweep: percent
 * 3.6` reactive with no plumbing at all. Expanding the loop in the same walk is
 therefore the *consistent* choice, not the cheap one: it makes the shape count as
 reactive as the coordinates already were, and it introduces no render node, no

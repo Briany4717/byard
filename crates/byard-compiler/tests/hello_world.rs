@@ -1,4 +1,4 @@
-//! M14 — the end-to-end Phase-2 thesis (RFC-0001 milestone, now driven by
+//! M14, the end-to-end Phase-2 thesis (RFC-0001 milestone, now driven by
 //! `byld`): a `.byd` view renders through a `byard-core` `RenderFrame`, reacts
 //! to a click, and survives a hot-reload with its state intact.
 

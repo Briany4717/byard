@@ -56,7 +56,7 @@ impl Parser<'_> {
                 Expr::AngleLit(rad, span)
             }
             // A `200ms` duration folds to a plain integer count of milliseconds
-            // (RFC-0010) — only read inside an `anim.*` curve call, as ms.
+            // (RFC-0010), only read inside an `anim.*` curve call, as ms.
             Some(Token::DurationLit(ms)) => {
                 self.advance();
                 Expr::IntLit(i64::from(ms), span)
@@ -193,7 +193,7 @@ impl Parser<'_> {
             self.eat(&Token::Comma);
         }
         self.expect(&Token::RBrace, "'}' to close the state block");
-        // Only yield a block when every state parsed — an unknown one is dropped
+        // Only yield a block when every state parsed, an unknown one is dropped
         // (the error is already recorded) rather than silently mis-applied.
         if !all_known || states.is_empty() {
             return None;
@@ -206,8 +206,8 @@ impl Parser<'_> {
     }
 
     /// A leading `-`: the sign of a numeric literal (`translate: (-8, 0)`,
-    /// `rotate: -90deg`) folded straight into the literal, or — for any other
-    /// operand — a unary negation [`Expr::Unary`] (RFC-0027 §2, `-x`, `-count`).
+    /// `rotate: -90deg`) folded straight into the literal, or, for any other
+    /// operand, a unary negation [`Expr::Unary`] (RFC-0027 §2, `-x`, `-count`).
     fn parse_negative(&mut self) -> Expr {
         let start = self.cur_span();
         self.advance(); // '-'
@@ -348,7 +348,7 @@ impl Parser<'_> {
                 left: 18,
                 right: 19,
             }),
-            // Binary arithmetic (RFC-0020 enabler): standard precedence —
+            // Binary arithmetic (RFC-0020 enabler): standard precedence,
             // `* /` over `+ -`, both left-associative (`right = left + 1`).
             Token::Star | Token::Slash => Some(Bp {
                 left: 15,
@@ -437,7 +437,7 @@ impl Parser<'_> {
                 }
             }
             // Binary arithmetic (RFC-0020), comparison and logic (RFC-0027 §1/§2).
-            // A `-` reaching `led` is always subtraction — the numeric-sign form
+            // A `-` reaching `led` is always subtraction, the numeric-sign form
             // is consumed by `parse_negative` in `nud`, before any left operand.
             Some(
                 tok @ (Token::Plus
@@ -577,7 +577,7 @@ impl Parser<'_> {
         let args = self.parse_arg_list(&Token::RParen);
         self.expect(&Token::RParen, "')'");
 
-        // `(a, b) => body` — the items were really lambda parameters.
+        // `(a, b) => body`, the items were really lambda parameters.
         if self.eat(&Token::Arrow) {
             let params = args
                 .iter()
@@ -603,7 +603,7 @@ impl Parser<'_> {
         }
 
         if args.len() == 1 && args[0].name.is_none() {
-            // Grouped expression — unwrap to the inner node.
+            // Grouped expression, unwrap to the inner node.
             args[0].value.clone()
         } else {
             Expr::Tuple(args, self.span_from(start))
@@ -637,7 +637,7 @@ impl Parser<'_> {
     /// A callback-prop literal `{ (|params|)? stmt* }` (RFC-0019). The optional
     /// `|params|` header names the callback's arguments (`{|text| … }`, `{|_|}`);
     /// the body is a sequence of self-delimiting action statements (byld has no
-    /// statement separator — each `count++` / `x = e` / `f()` is its own node),
+    /// statement separator, each `count++` / `x = e` / `f()` is its own node),
     /// run in order when the callback fires. `{}` is the no-op default.
     ///
     /// Represented as an [`Expr::Lambda`] over an [`Expr::Block`] so invocation
@@ -719,7 +719,7 @@ impl Parser<'_> {
         args
     }
 
-    /// `keyframe_step := PERCENT ":" expr IDENT?` (RFC-0025 §4) — one timed step
+    /// `keyframe_step := PERCENT ":" expr IDENT?` (RFC-0025 §4), one timed step
     /// of an `anim.keyframes(…)` sequence, e.g. `50%: 200 ease_out`. Returns
     /// `None` (consuming nothing) when the cursor is not on a percentage, so the
     /// ordinary argument forms parse exactly as before.
@@ -737,7 +737,7 @@ impl Parser<'_> {
         self.advance(); // :
         let value = Box::new(self.parse_expr(0));
         let easing = match (self.cur().cloned(), self.peek2()) {
-            // `ease_out` — but not `ease_out:`, which is the next named argument.
+            // `ease_out`, but not `ease_out:`, which is the next named argument.
             (Some(Token::Ident(name)), next) if next != Some(Token::Colon) => {
                 let span = self.cur_span();
                 self.advance();

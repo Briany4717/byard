@@ -1,10 +1,10 @@
 # RFC-0010: Implicit Granular Animations (`with` syntax, GPU-analytic springs)
 
-- **Status:** Active — partially implemented (M35–M36 `with` grammar + `Motion` runtime + OKLab colour springs landed; M36 GPU spring + active-set settling pending). All design decisions (A1–A5) and formerly-unresolved questions resolved.
+- **Status:** Active, partially implemented (M35–M36 `with` grammar + `Motion` runtime + OKLab colour springs landed; M36 GPU spring + active-set settling pending). All design decisions (A1–A5) and formerly-unresolved questions resolved.
 - **Author(s):** Brian (byard_v2)
 - **Created:** 2026-07-01
 - **Last updated:** 2026-07-01
-- **Depends on:** RFC-0001 (§3.1 render pipelines, §5 concurrency & `!Send`/`!Sync`, `frame.rs` boundary), RFC-0002 (D1 Mark-and-Pull, D4 attribute contract, Pratt parser), RFC-0011 (transform/paint properties — the animatable set), RFC-0004 (reactive tick).
+- **Depends on:** RFC-0001 (§3.1 render pipelines, §5 concurrency & `!Send`/`!Sync`, `frame.rs` boundary), RFC-0002 (D1 Mark-and-Pull, D4 attribute contract, Pratt parser), RFC-0011 (transform/paint properties, the animatable set), RFC-0004 (reactive tick).
 - **Enables:** RFC-0012 (interactive style states animate through this).
 
 ---
@@ -24,7 +24,7 @@ The one correctness addition over the original sketch: because a spring never
 mathematically reaches rest, the engine keeps a small **active-animation set** so
 it can stop requesting frames once every animation has settled within an epsilon.
 Without it, "GPU does the interpolation" would silently pin the app at 144 Hz
-forever and burn battery — violating Byard's efficiency floor.
+forever and burn battery, violating Byard's efficiency floor.
 
 ## Motivation
 
@@ -34,7 +34,7 @@ using needs motion, but the mainstream models are bad fits for Byard:
 - **CSS `transition: all 200ms`** contaminates globally, re-runs layout, and is
   impossible to reason about for performance.
 - **Retained animation objects** (Flutter `AnimationController`, imperative
-  tweens) require a *reference* to the widget — which RFC-0003 forbids outright.
+  tweens) require a *reference* to the widget, which RFC-0003 forbids outright.
 - **CPU tween loops** spend cycles every frame per animated property and fight the
   zero-GC arena model.
 
@@ -60,16 +60,16 @@ with a spring."* When `pressed` flips, the CPU computes the new **target**
 target, is drawn by the GPU. You never hold a handle, never tick a controller,
 never write an `onFrame`.
 
-Parentheses are optional by design — `with anim.spring()` and
+Parentheses are optional by design, `with anim.spring()` and
 `with anim.spring(stiffness: 210, damping: 20)` both parse. `with` binds looser
 than the ternary `? :`, so the whole conditional is the animated value and the
 `anim.*` call is the curve.
 
-**What can be animated:** the *paint-time* set that never changes layout —
+**What can be animated:** the *paint-time* set that never changes layout, 
 `opacity`, `bg`/`color`, `radius`, and the transform props from RFC-0011
 (`translate`, `scale`, `rotate`). These are per-instance shader parameters, so
 the GPU can interpolate them for free. **Layout-affecting** props (`width`,
-`height`, `padding`, `gap`, flex) are *not* GPU-animatable in this RFC — see
+`height`, `padding`, `gap`, flex) are *not* GPU-animatable in this RFC, see
 §"Layout properties" for why and what happens if you try.
 
 **Curves:** `anim.linear(duration)`, `anim.ease(duration)` (and named easings),
@@ -90,7 +90,7 @@ prefer them for interactive UI).
   leaks `with` as a usable variable name into value position.
 
 In `parser/expr.rs::peek_led`, register `With` as an infix operator with binding
-power **`left: 3, right: 3`** — strictly *below* the ternary (`Question` is
+power **`left: 3, right: 3`**, strictly *below* the ternary (`Question` is
 `left: 4`) so `a ? b : c with k` groups as `(a ? b : c) with k`, and strictly
 *above* assignment (`left: 2`) so it never captures a `=`. In `parse_led`, on
 `With`, parse the RHS with `parse_expr(3)` (an `anim.*` call/member) and build:
@@ -129,7 +129,7 @@ is a `CompileError::UnknownAnimation` with Levenshtein suggestion (D4 style).
 An `Animated { value }` whose `value` resolves to a **layout property** is a
 `CompileError::LayoutPropNotAnimatable` (see §"Layout properties").
 
-### The animatable value model — `Motion<T>` (CPU side, zero loop)
+### The animatable value model, `Motion<T>` (CPU side, zero loop)
 
 Each animated property on an element gets a tiny per-instance record, allocated in
 the same view-scoped arena as the element (RFC-0001 arena discipline, no GC):
@@ -147,13 +147,13 @@ pub struct Motion {
 
 **Tick (CPU), on mutation only.** RFC-0004's tick recomputes the target `to`. If
 `to` changed, the engine samples the *current* on-screen value `v(now)` (closed
-form — see below), writes it into `from`, sets `start_ms = now`, and marks the
+form, see below), writes it into `from`, sets `start_ms = now`, and marks the
 element dirty. This is the "interruptible spring" behaviour: a mid-flight reversal
 starts from the real current position and velocity, not from the old endpoint.
 Cost: one closed-form evaluation, `O(1)`, only when the target actually changes.
 
 **Frame (GPU).** The `Motion` is packed into the per-instance data of its
-primitive (`BoxInstance`/`DecoratedBox`/`TextLine`/transform block — see
+primitive (`BoxInstance`/`DecoratedBox`/`TextLine`/transform block, see
 RFC-0011). The shader receives the **global engine time** as a uniform and
 evaluates the curve per vertex/fragment:
 
@@ -177,7 +177,7 @@ fn spring(from: f32, to: f32, t: f32, k: f32, c: f32) -> f32 {
 Linear/eased curves are trivial `clamp(t/ms, 0, 1)` remaps. The CPU never touches
 these; the GPU redraws the interpolated value every frame the animation is active.
 
-### The active-animation set — settling & frame scheduling (the correctness fix)
+### The active-animation set, settling & frame scheduling (the correctness fix)
 
 A spring's analytic value approaches the target asymptotically; the GPU would
 happily redraw forever. To respect the efficiency floor, the **CPU owns a
@@ -199,7 +199,7 @@ defaults chosen so settling is imperceptible (<0.5px, <0.5px/s).
 ### Threading & the `frame.rs` boundary (RFC-0001)
 
 `Motion` is `!Send` and lives on the logic thread with the arena; only the
-**packed POD** (`from,to,start_ms,curve`) crosses into `RenderFrame` — the same
+**packed POD** (`from,to,start_ms,curve`) crosses into `RenderFrame`, the same
 atomic frame hand-off already used for every primitive. The render thread reads
 the global clock uniform; it never reads a `Signal` and never writes back. This
 preserves the RFC-0001 §5 concurrency invariants (no back-dependency; only
@@ -208,10 +208,10 @@ preserves the RFC-0001 §5 concurrency invariants (no back-dependency; only
 ### Layout properties
 
 Animating `width`/`height`/`padding`/`gap`/flex would require re-running Taffy per
-frame — exactly the cost this design avoids, and a relayout cannot happen in the
+frame, exactly the cost this design avoids, and a relayout cannot happen in the
 shader. This RFC **rejects** GPU animation of layout props: `size: … with anim…`
 is a compile error `LayoutPropNotAnimatable` with a note pointing at the two
-supported alternatives — (1) animate a *transform* `scale` instead (visual size,
+supported alternatives, (1) animate a *transform* `scale` instead (visual size,
 no relayout), or (2) a future CPU-driven layout-tween (deferred; see Future).
 Being explicit here prevents the "why does animating width tank my FPS" trap.
 
@@ -246,24 +246,24 @@ already parameterize time-based effects.
 
 ## Resolved decisions (2026-07-01)
 
-- **A1 — `with` token:** reserved **`Token::With`** (contextual only inside `#[...]`).
-  Clean diagnostics; unambiguous. (Rejected: contextual `led` special-case — fragile.)
-- **A2 — default spring:** **`stiffness: 210, damping: 20`** ("snappy", iOS-feel,
+- **A1, `with` token:** reserved **`Token::With`** (contextual only inside `#[...]`).
+  Clean diagnostics; unambiguous. (Rejected: contextual `led` special-case, fragile.)
+- **A2, default spring:** **`stiffness: 210, damping: 20`** ("snappy", iOS-feel,
   good on 60/120/144 Hz) + named presets (`.gentle/.snappy/.bouncy`) as future sugar.
-- **A3 — color interpolation space:** **OKLab** — perceptually uniform transitions
+- **A3, color interpolation space:** **OKLab**, perceptually uniform transitions
   (no muddy midpoints); the GPU conversion cost is negligible. Aligns with "beautiful
   by default."
-- **A4 — `EPS_POS`/`EPS_VEL`:** **internal fixed constants per unit** (not public):
+- **A4, `EPS_POS`/`EPS_VEL`:** **internal fixed constants per unit** (not public):
   <0.5px position, <0.5px/s velocity, 1/256 per color channel. Exposing them would
   let devs break settling (battery). Revisable internally.
-- **A5 — `Motion` packing:** **inline 4 with arena spill** (the same
+- **A5, `Motion` packing:** **inline 4 with arena spill** (the same
   `SmallVec<[_;4]>` inline-capacity pattern used elsewhere on the hot path);
   covers opacity+scale+bg+radius without heap.
 
 ## Resolved questions (formerly unresolved)
 
-- [x] **OKLab↔sRGB conversion placement:** resolved as **CPU-side in the interpreter** (`interp/eval.rs::oklab_from_hex`/`hex_from_oklab`). The spring runs entirely in OKLab on the logic thread; only the final packed `0xRRGGBB` crosses to the render thread via `RenderFrame`. This is zero GPU overhead — no shader permutation, no per-fragment branching, no bandwidth cost. The GPU sees a flat hex color per frame, indistinguishable from a static prop. A round-trip test (`oklab_hex_round_trips_within_one_lsb`) verifies ≤1 LSB drift. Moving to vertex/fragment would only matter for per-pixel gradients over an animated color range — that's a future `ComputePath` concern, not a spring concern.
-- [x] **Named-preset spring constants:** deferred to sugar phase. A2's default (`stiffness: 210, damping: 20`) has been validated on-device across 60/120/144 Hz and is the shipped default. Named presets (`.gentle`/`.snappy`/`.bouncy`) remain future sugar — they're a DX convenience, not an architectural question. When added, they'll be compile-time constants in the interpreter, zero runtime cost.
+- [x] **OKLab↔sRGB conversion placement:** resolved as **CPU-side in the interpreter** (`interp/eval.rs::oklab_from_hex`/`hex_from_oklab`). The spring runs entirely in OKLab on the logic thread; only the final packed `0xRRGGBB` crosses to the render thread via `RenderFrame`. This is zero GPU overhead, no shader permutation, no per-fragment branching, no bandwidth cost. The GPU sees a flat hex color per frame, indistinguishable from a static prop. A round-trip test (`oklab_hex_round_trips_within_one_lsb`) verifies ≤1 LSB drift. Moving to vertex/fragment would only matter for per-pixel gradients over an animated color range, that's a future `ComputePath` concern, not a spring concern.
+- [x] **Named-preset spring constants:** deferred to sugar phase. A2's default (`stiffness: 210, damping: 20`) has been validated on-device across 60/120/144 Hz and is the shipped default. Named presets (`.gentle`/`.snappy`/`.bouncy`) remain future sugar, they're a DX convenience, not an architectural question. When added, they'll be compile-time constants in the interpreter, zero runtime cost.
 
 ## Future possibilities
 

@@ -1,6 +1,6 @@
 //! Scoped `style { }` resolution with three-layer precedence (RFC-0002 D5).
 //!
-//! A `style { .class #[…] }` block builds a per-`View` [`StyleMap`] — there is
+//! A `style { .class #[…] }` block builds a per-`View` [`StyleMap`], there is
 //! **no global cascade**. An element's attributes are resolved in three layers,
 //! last write wins:
 //!
@@ -42,11 +42,11 @@ impl StyleMap {
         let style_sym = Symbol::intern("style");
         let mut merged: Vec<Attr> = Vec::new();
 
-        // Layer 1 — defaults.
+        // Layer 1, defaults.
         for a in defaults {
             set_attr(&mut merged, a.clone());
         }
-        // Layer 2 — referenced classes, in element-list order.
+        // Layer 2, referenced classes, in element-list order.
         for a in element_attrs {
             if a.name == style_sym {
                 if let AttrKind::Prop {
@@ -61,7 +61,7 @@ impl StyleMap {
                 }
             }
         }
-        // Layer 3 — inline attributes (everything except the `style:` selector).
+        // Layer 3, inline attributes (everything except the `style:` selector).
         for a in element_attrs {
             if a.name != style_sym {
                 set_attr(&mut merged, a.clone());
@@ -111,7 +111,7 @@ fn reads_var(expr: &Expr, vars: &[Symbol]) -> Option<crate::diagnostics::Span> {
             .or_else(|| reads_var(then, vars))
             .or_else(|| reads_var(els, vars)),
         // Binary arithmetic (RFC-0020 enabler): `width: n * 2` reads `n` just
-        // as directly as `width: n` — recurse both operands.
+        // as directly as `width: n`, recurse both operands.
         Expr::Binary { lhs, rhs, .. } => reads_var(lhs, vars).or_else(|| reads_var(rhs, vars)),
         _ => None,
     }
@@ -220,7 +220,7 @@ mod tests {
 
     #[test]
     fn static_token_in_style_block_is_allowed() {
-        // `center` is an enum token, not a var — no error.
+        // `center` is an enum token, not a var, no error.
         let v = view("View V() {\n var c = 1\n style { .a #[align: center] }\n}");
         let mut rules = Vec::new();
         for m in &v.body {

@@ -1,19 +1,19 @@
-// user_views.byd — RFC-0007: user-view instantiation, composing `View`s within
+// user_views.byd, RFC-0007: user-view instantiation, composing `View`s within
 // one file. Parameterized views, named/positional arguments, parameter defaults,
 // reactive params, nesting, and a `content` slot. Run with:
 //   cargo run -p byard-cli -- dev crates/byard-compiler/examples/user_views.byd
 //
 // The dev runner renders the *first* `View` in the file as the root, so `Main`
 // comes first; the helper views it composes are declared below it (forward
-// references resolve — the whole file is registered before lowering).
+// references resolve, the whole file is registered before lowering).
 
 View Main() {
     // A caller-local `var` passed *into* a child view stays reactive across the
-    // call boundary (RFC-0007 §3 — arguments are memos, not snapshots).
+    // call boundary (RFC-0007 §3, arguments are memos, not snapshots).
     var errors: Int = 7
 
     Column #[bg: 0x14141C, p: 32, gap: 20, width: 560] {
-        Text("RFC-0007 — user-view instantiation") #[color: 0xFFFFFF, size: 20, weight: bold]
+        Text("RFC-0007, user-view instantiation") #[color: 0xFFFFFF, size: 20, weight: bold]
 
         Row #[gap: 16] {
             StatCard(title: "Sessions", value: "128", accent: 0x6495ED)
@@ -22,7 +22,7 @@ View Main() {
         }
 
         // The trailing block is passed to `Panel`'s `content` slot and rendered
-        // inside the panel — while capturing this caller's scope.
+        // inside the panel, while capturing this caller's scope.
         Panel("Slotted content") {
             Row #[gap: 8] {
                 Badge("reactive")
@@ -41,7 +41,7 @@ View Badge(label, tone = 0x3C3C52) {
     }
 }
 
-// Composition: `StatCard` calls `Badge` — a user view instantiating another.
+// Composition: `StatCard` calls `Badge`, a user view instantiating another.
 // Two `StatCard`s above are independent instances with their own scope.
 View StatCard(title, value, accent) {
     Column #[bg: 0x262636, radius: 16, p: 20, gap: 8, border: 0x3C3C52, width: 240] {

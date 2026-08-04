@@ -1,6 +1,6 @@
 //! Guards the committed RFC-0032 example through the real `byard` binary: the
-//! `incremental` project — twelve paragraphs that never change under one thing
-//! that changes every frame — must check clean (parse, type-check, lower,
+//! `incremental` project, twelve paragraphs that never change under one thing
+//! that changes every frame, must check clean (parse, type-check, lower,
 //! validate every intrinsic with no diagnostics).
 //!
 //! Every other example in this directory has had such a test since it landed;
@@ -42,7 +42,7 @@ fn incremental_example_checks_clean() {
 ///
 /// If someone reclassifies `rotate` as layout-class, RFC-0032 §Q8's diagnostic
 /// makes this example stop compiling and `incremental_example_checks_clean`
-/// above fails — which is the intended outcome, and worth stating here so the
+/// above fails, which is the intended outcome, and worth stating here so the
 /// next reader knows the two tests are one argument.
 #[test]
 fn the_example_animates_only_paint_class_attributes() {
@@ -53,7 +53,7 @@ fn the_example_animates_only_paint_class_attributes() {
         .collect();
     assert!(
         !animated.is_empty(),
-        "the example must animate something — it is how the scene proves a \
+        "the example must animate something, it is how the scene proves a \
          frame can change without any layout work"
     );
     for line in animated {
@@ -69,8 +69,8 @@ fn the_example_animates_only_paint_class_attributes() {
 /// The example's header is its documentation, and unusually for this repository
 /// it is also the acceptance criteria a human runs by hand: seven numbered
 /// checks, four in the terminal and three on screen. Two of them name the
-/// hazards that are invisible in a screenshot — a paragraph that silently
-/// un-wraps, and an element that answers taps where it used to be — so the
+/// hazards that are invisible in a screenshot, a paragraph that silently
+/// un-wraps, and an element that answers taps where it used to be, so the
 /// header going stale is the difference between a verifiable example and a
 /// decorative one.
 #[test]

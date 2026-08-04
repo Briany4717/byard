@@ -1,4 +1,4 @@
-// RFC-0011 — custom + layered drop shadows.
+// RFC-0011, custom + layered drop shadows.
 //
 // Run it (from the repo root):
 //   cd crates/byard-cli/examples/shadows
@@ -12,11 +12,11 @@ View Main() {
         // Preset token (unchanged sugar).
         Box #[bg: 0xFFFFFF, radius: 12, width: 440, height: 72, shadow: "md"] {}
 
-        // Named custom shadow — self-describing, any field order.
+        // Named custom shadow, self-describing, any field order.
         Box #[bg: 0xFFFFFF, radius: 12, width: 440, height: 72,
               shadow: (y: 10, blur: 24, spread: -2, color: 0x33000000)] {}
 
-        // Positional (x, y, blur, spread, color) — terse.
+        // Positional (x, y, blur, spread, color), terse.
         Box #[bg: 0xFFFFFF, radius: 12, width: 440, height: 72,
               shadow: (0, 4, 8, 0, 0x40000000)] {}
 

@@ -1,5 +1,5 @@
 //! Guards the committed RFC-0018 `Grid` example through the real `byard` binary:
-//! the `grid` project — a 3-column dashboard with `col_span`/`row` placement —
+//! the `grid` project, a 3-column dashboard with `col_span`/`row` placement,
 //! must check clean (parse, type-check, lower, validate the intrinsic contract
 //! and the grid templates with no diagnostics).
 

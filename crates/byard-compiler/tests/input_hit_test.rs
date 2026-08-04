@@ -1,4 +1,4 @@
-//! Regression: a click must respect the button's bounds — clicking outside the
+//! Regression: a click must respect the button's bounds, clicking outside the
 //! button does nothing; clicking inside it fires `count++` (RFC-0003 §4.2/E8,
 //! topmost-wins, no ancestor bubbling).
 
@@ -79,7 +79,7 @@ fn click_respects_button_bounds() {
     );
 
     // A click at the button's center fires its action (the first registered
-    // Tap button in the demo mutates `count`; sign is irrelevant here — what
+    // Tap button in the demo mutates `count`; sign is irrelevant here, what
     // matters is that an in-bounds click is delivered while the out-of-bounds
     // one above was not).
     let center = (br.x + br.w / 2.0, br.y + br.h / 2.0);

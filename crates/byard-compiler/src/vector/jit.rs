@@ -1,16 +1,16 @@
 //! Dev JIT pipeline: cache, dedup, and background dispatch for MSDF vector
 //! icons (RFC-0009 §2 as corrected by §2-B/§2-C).
 //!
-//! Generation runs on its own one-shot worker thread — never the logic or
+//! Generation runs on its own one-shot worker thread, never the logic or
 //! render thread (INV-9). Results cross a `crossbeam` channel to whoever
 //! calls [`VectorJit::drain_ready`]; that must be the **logic thread**, the
 //! only place a UV slot is allocated and an `AtlasUpload` recorded (INV-2).
-//! This module never touches a `wgpu::Queue` (INV-8) — the render thread
+//! This module never touches a `wgpu::Queue` (INV-8), the render thread
 //! alone applies the resulting uploads.
 //!
 //! The atlas allocator is a **free-cell list with LRU eviction** (M48,
 //! IMPL-64). All glyphs are uniform `GRID_SIZE × GRID_SIZE` cells, so a
-//! shelf/skyline allocator would be overkill — a simple free-cell stack is
+//! shelf/skyline allocator would be overkill, a simple free-cell stack is
 //! optimal. When the atlas is full, the least-recently-sampled glyph is
 //! evicted and its cell reused; the evicted handle falls back to the
 //! placeholder → regenerate-on-next-use path (INV-9).
@@ -24,7 +24,7 @@ use crossbeam_channel::{Receiver, Sender};
 use super::generate::{GRID_SIZE, PX_RANGE};
 use crate::diagnostics::Span;
 
-/// A resident glyph's location in the atlas — everything a `VectorInstance`
+/// A resident glyph's location in the atlas, everything a `VectorInstance`
 /// needs besides its screen rect and tint (RFC-0009 §1).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ResidentGlyph {
@@ -52,14 +52,14 @@ enum CacheEntry {
         acked: bool,
         /// Tick at which this glyph was last sampled (via `lookup_or_dispatch`).
         /// The LRU eviction policy (M48, IMPL-64) evicts the entry with the
-        /// smallest `last_used_tick` when the atlas is full — ensuring actively
+        /// smallest `last_used_tick` when the atlas is full, ensuring actively
         /// displayed icons are never evicted.
         last_used_tick: u64,
     },
     /// A hot-reload (RFC-0009 §3, M47) is regenerating this asset. The previous
     /// field's atlas cell is retained in `glyph` so the freshly generated field
-    /// lands in the **same UV slot** — the consuming `View` does not remount and
-    /// an in-flight size animation stays crisp — and a `lookup` keeps returning
+    /// lands in the **same UV slot**, the consuming `View` does not remount and
+    /// an in-flight size animation stays crisp, and a `lookup` keeps returning
     /// that old glyph so the old texels stay on screen until the new ones land.
     Regenerating {
         glyph: ResidentGlyph,
@@ -91,7 +91,7 @@ pub struct VectorJit {
     /// Free-cell stack (M48, IMPL-64). Each entry is `(pixel_x, pixel_y,
     /// layer)`. Initialized with every cell in the atlas; cells are popped on
     /// alloc and pushed back on eviction or `Failed` cleanup. Since all glyphs
-    /// are uniform `GRID_SIZE × GRID_SIZE`, a free-cell list is optimal — a
+    /// are uniform `GRID_SIZE × GRID_SIZE`, a free-cell list is optimal, a
     /// shelf/skyline allocator would add complexity with zero benefit.
     free_cells: Vec<(u32, u32, u32)>,
     next_upload_id: u64,
@@ -100,7 +100,7 @@ pub struct VectorJit {
     tick: u64,
     /// Receives the ids of uploads the render thread has actually applied
     /// (wired in by the host via [`VectorJit::set_ack_receiver`]; `None` in
-    /// contexts with no render thread, e.g. most unit tests — an upload then
+    /// contexts with no render thread, e.g. most unit tests, an upload then
     /// simply keeps resending forever, which is harmless there).
     ack_receiver: Option<Receiver<u64>>,
     /// Persistent field-cache directory (RFC-0009 §5, M52). `None` disables the
@@ -113,7 +113,7 @@ impl Default for VectorJit {
     fn default() -> Self {
         let (sender, receiver) = crossbeam_channel::unbounded();
         // Pre-populate the free-cell stack with every cell, last-to-first so
-        // the first `pop()` yields cell (0, 0, 0) — the natural fill order.
+        // the first `pop()` yields cell (0, 0, 0), the natural fill order.
         let mut free_cells = Vec::with_capacity(TOTAL_CELLS as usize);
         for layer in (0..MAX_LAYERS).rev() {
             for cy in (0..CELLS_PER_ROW).rev() {
@@ -145,7 +145,7 @@ impl VectorJit {
     /// Wires in the channel the render thread reports applied-upload ids
     /// through (see [`byard_core::encoder::EncoderSubsystem::set_vector_ack_sender`]).
     /// Without this, a resident glyph's upload is re-attached to every tick's
-    /// frame forever rather than only until acknowledged — correct but
+    /// frame forever rather than only until acknowledged, correct but
     /// wasteful, so callers with a real render thread should always wire it.
     pub fn set_ack_receiver(&mut self, rx: Receiver<u64>) {
         self.ack_receiver = Some(rx);
@@ -160,7 +160,7 @@ impl VectorJit {
 
     /// Looks up `handle` (an SVG file path). Returns its resident atlas
     /// location if already generated; otherwise dispatches a one-shot
-    /// generation task (deduped — a second miss on the same handle while one
+    /// generation task (deduped, a second miss on the same handle while one
     /// is already pending does not spawn another) and returns `None`, so the
     /// caller emits a placeholder this tick (INV-9).
     pub fn lookup_or_dispatch(&mut self, handle: &str) -> Option<ResidentGlyph> {
@@ -191,14 +191,14 @@ impl VectorJit {
 
     /// RFC-0020 §2 Tier 2: like [`lookup_or_dispatch`](Self::lookup_or_dispatch),
     /// but for a **synthetic** asset whose SVG bytes are supplied by the
-    /// caller — a `Canvas` `path(d: …)` command — instead of read from disk.
+    /// caller, a `Canvas` `path(d: …)` command, instead of read from disk.
     /// `handle` must be a stable content key (derived from the path data and
     /// canvas size), so an unchanged path re-rendered every tick is a pure
     /// cache hit and only a genuinely new `d` string dispatches a generation.
     /// `svg` is invoked only on that first miss.
     ///
-    /// Everything downstream — dedup, the free-cell allocator, LRU eviction,
-    /// re-emitted uploads until ack — is shared with the file-backed path.
+    /// Everything downstream, dedup, the free-cell allocator, LRU eviction,
+    /// re-emitted uploads until ack, is shared with the file-backed path.
     pub fn lookup_or_dispatch_svg(
         &mut self,
         handle: &str,
@@ -229,7 +229,7 @@ impl VectorJit {
 
     /// Invalidates one asset by handle (its source path string) on hot-reload
     /// (RFC-0009 §3, M47). A resident asset re-dispatches generation while
-    /// keeping its atlas cell — [`drain_ready`](Self::drain_ready) then reuses
+    /// keeping its atlas cell, [`drain_ready`](Self::drain_ready) then reuses
     /// that slot so existing `VectorInstance`s are untouched. A failed asset is
     /// cleared so the next lookup regenerates it fresh. Returns `true` if the
     /// handle was known and a regeneration was (re)started.
@@ -301,7 +301,7 @@ impl VectorJit {
     }
 
     /// [`dispatch`](Self::dispatch) for caller-supplied SVG bytes (RFC-0020
-    /// Tier 2) — same worker-thread + channel discipline (INV-9), same
+    /// Tier 2), same worker-thread + channel discipline (INV-9), same
     /// persistent field cache (the disk key hashes the bytes, so a synthetic
     /// path caches exactly like a file-backed icon).
     fn dispatch_bytes(&self, handle: String, bytes: Vec<u8>) {
@@ -322,10 +322,10 @@ impl VectorJit {
 
     /// Drains every generation that completed since the last call, allocates
     /// each a fresh atlas cell, marks it resident, and returns the
-    /// [`AtlasUpload`]s to attach to this tick's frame — plus a re-send of
+    /// [`AtlasUpload`]s to attach to this tick's frame, plus a re-send of
     /// every still-unacknowledged resident upload, so a `RenderFrame` the
     /// render thread happens to skip never permanently loses one. **Logic
-    /// thread only** (INV-2) — call once per tick, before building the frame.
+    /// thread only** (INV-2), call once per tick, before building the frame.
     pub fn drain_ready(&mut self) -> Vec<AtlasUpload> {
         self.tick += 1;
         let mut uploads = Vec::new();
@@ -388,7 +388,7 @@ impl VectorJit {
             }
         }
         // Re-attach every still-unacknowledged resident upload so a skipped
-        // RenderFrame never loses it permanently — no arbitrary time or tick
+        // RenderFrame never loses it permanently, no arbitrary time or tick
         // limit, since generation/render pacing can't be bounded in general;
         // this simply stops once the render thread confirms receipt.
         for (handle, entry) in &mut self.entries {
@@ -482,14 +482,14 @@ impl VectorJit {
     /// Pops a free cell, or LRU-evicts the least-recently-sampled **acked**
     /// resident glyph to reclaim one (M48, IMPL-64). Evicted handles are
     /// removed from `entries` so a subsequent `lookup_or_dispatch` dispatches
-    /// a fresh generation — the INV-9 placeholder path handles the one-frame
+    /// a fresh generation, the INV-9 placeholder path handles the one-frame
     /// gap transparently. Returns `None` only if every cell is occupied by a
     /// non-evictable entry (Pending, Regenerating, or unacked Resident).
     fn alloc_cell_or_evict(&mut self) -> Option<(u32, u32, u32)> {
         if let Some(cell) = self.free_cells.pop() {
             return Some(cell);
         }
-        // Atlas full — find the LRU eviction candidate. Only evict acked
+        // Atlas full, find the LRU eviction candidate. Only evict acked
         // Resident entries: an unacked entry's upload hasn't reached the
         // render thread yet (evicting it would leak a GPU cell), and
         // Pending/Regenerating entries have in-flight workers.
@@ -550,7 +550,7 @@ impl VectorJit {
 }
 
 /// The atlas cell (pixel `x`, pixel `y`, `layer`) a resident glyph occupies,
-/// recovered from its normalized UV rect — the inverse of the placement math in
+/// recovered from its normalized UV rect, the inverse of the placement math in
 /// [`VectorJit::place_glyph`]. Used to reuse a cell on regeneration and to
 /// re-address an unacknowledged upload.
 fn cell_of(glyph: &ResidentGlyph) -> (u32, u32, u32) {
@@ -644,7 +644,7 @@ mod tests {
         // through hundreds of logic ticks before the render thread's very
         // first draw (e.g. a flurry of startup/resize input keeps the logic
         // thread off the idle-park path, RFC-0001 §5.1). Since there is no
-        // time or tick limit — only "has it been acknowledged?" — no burst,
+        // time or tick limit, only "has it been acknowledged?", no burst,
         // however large, can exhaust the resend.
         let path = write_gear_fixture();
         let mut jit = VectorJit::new();
@@ -794,7 +794,7 @@ mod tests {
         assert!(jit.invalidate(&path));
 
         // Before the new field lands, the call site must still get the old
-        // glyph — never a `None` placeholder that would blink the icon out.
+        // glyph, never a `None` placeholder that would blink the icon out.
         assert_eq!(
             jit.lookup_or_dispatch(&path),
             Some(old),
@@ -837,7 +837,7 @@ mod tests {
         assert_eq!(jit.free_cell_count(), TOTAL_CELLS as usize);
     }
 
-    /// Number of cells for the tiny test atlas — small enough to fill with
+    /// Number of cells for the tiny test atlas, small enough to fill with
     /// real MSDF generations without spawning thousands of threads.
     const TINY_CELLS: u32 = 4;
 
@@ -855,7 +855,7 @@ mod tests {
             assert!(jit.lookup_or_dispatch(&path).is_none());
             paths.push(path);
         }
-        // Drain all at once — each gets a cell.
+        // Drain all at once, each gets a cell.
         loop {
             let uploads = jit.drain_ready();
             for up in &uploads {
@@ -876,7 +876,7 @@ mod tests {
             jit.lookup_or_dispatch(p);
         }
 
-        // Now add one more — it should evict the LRU (paths[0]).
+        // Now add one more, it should evict the LRU (paths[0]).
         let extra = temp_svg("lru_extra", SQUARE_SMALL);
         assert!(jit.lookup_or_dispatch(&extra).is_none());
         let uploads = wait_for_drain(&mut jit);
@@ -906,7 +906,7 @@ mod tests {
     #[test]
     fn evicted_then_recalled_glyph_resolves_correctly() {
         // A glyph that was evicted and then looked up again must dispatch a
-        // fresh generation and resolve correctly — never panic.
+        // fresh generation and resolve correctly, never panic.
         let mut jit = VectorJit::new_tiny(TINY_CELLS);
         let (ack_tx, ack_rx) = crossbeam_channel::unbounded();
         jit.set_ack_receiver(ack_rx);
@@ -952,7 +952,7 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
 
-        // paths[0] was evicted. Look it up again — must re-dispatch.
+        // paths[0] was evicted. Look it up again, must re-dispatch.
         assert!(
             jit.lookup_or_dispatch(&paths[0]).is_none(),
             "evicted glyph must return None (placeholder)"

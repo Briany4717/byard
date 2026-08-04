@@ -1,10 +1,10 @@
-// CanvasShape pipeline (RFC-0020 §2, Tier 1): programmatic 2-D shapes — arcs,
-// circles, lines, and (rounded) rectangles — rendered by evaluating each
+// CanvasShape pipeline (RFC-0020 §2, Tier 1): programmatic 2-D shapes, arcs,
+// circles, lines, and (rounded) rectangles, rendered by evaluating each
 // shape's closed-form signed-distance function analytically per fragment.
 // Resolution-independent, atlas-free, and trivially animatable: an animated
 // `sweep`/`dash_offset` is just new per-instance data, never a re-tessellation.
 //
-// Complex `path(d: …)` commands do not reach this shader — they rasterize
+// Complex `path(d: …)` commands do not reach this shader, they rasterize
 // through the VectorMSDF pipeline (RFC-0020 §2, Tier 2).
 
 struct VertexInput {
@@ -15,7 +15,7 @@ struct InstanceInput {
     // Quad bounds in logical px, already inflated to cover stroke + AA fringe
     // (`CanvasShape::bounds`).
     @location(1) rect: vec4<f32>,
-    // Shape params, absolute logical px / radians (layout per kind — see
+    // Shape params, absolute logical px / radians (layout per kind, see
     // `frame::CANVAS_SHAPE_*`).
     @location(2) params0: vec4<f32>,
     @location(3) params1: vec4<f32>,
@@ -23,7 +23,7 @@ struct InstanceInput {
     @location(5) fill_color: vec4<f32>,
     // (stroke_width, dash_len, dash_gap, dash_offset)
     @location(6) stroke_dash: vec4<f32>,
-    // (opacity, draw-order depth, kind, cap) — kind/cap are small integers
+    // (opacity, draw-order depth, kind, cap), kind/cap are small integers
     // carried exactly in f32.
     @location(7) misc: vec4<f32>,
     // Paint-time transform (RFC-0011); identity is a free no-op.
@@ -57,7 +57,7 @@ struct VertexOutput {
 
 @group(0) @binding(0) var<uniform> viewport_size: vec2<f32>;
 
-/// One member of a shape group (RFC-0031 §S4) — exactly the fields
+/// One member of a shape group (RFC-0031 §S4), exactly the fields
 /// `eval_shape` consumes. Mirrors `frame::ShapeRecord` field for field.
 struct ShapeRecord {
     params0: vec4<f32>,
@@ -68,13 +68,13 @@ struct ShapeRecord {
     misc: vec4<f32>,
 };
 
-/// This frame's shape-record pool, bound whole at offset zero — a group's
+/// This frame's shape-record pool, bound whole at offset zero, a group's
 /// `first_member` is an index into it.
 @group(1) @binding(0) var<storage, read> shape_records: array<ShapeRecord>;
 
 const PI: f32 = 3.14159265358979;
 const TAU: f32 = 6.28318530717959;
-// A distance far past any quad extent — "no coverage from this term".
+// A distance far past any quad extent, "no coverage from this term".
 const FAR: f32 = 1e6;
 
 const KIND_ARC: u32 = 0u;
@@ -151,7 +151,7 @@ fn wrap_angle(a: f32) -> f32 {
 /// Lⁿ norm of a **non-negative** 2-vector, paired with the magnitude of its own
 /// gradient (RFC-0031 §S1–S2).
 ///
-/// `n == 2` is the Euclidean norm and its gradient is exactly 1 — the circular
+/// `n == 2` is the Euclidean norm and its gradient is exactly 1, the circular
 /// corner this pipeline drew before RFC-0031. Above 2 the norm is *not* a true
 /// signed distance: on the corner diagonal its gradient is `2^(1/n - 1/2)`,
 /// which falls to ≈0.79 at `n = 6`, so the corner's fringe would come out ~26 %
@@ -181,7 +181,7 @@ fn sd_rounded_box(p: vec2<f32>, b: vec2<f32>, r: f32, n: f32) -> f32 {
         return inner + length(corner) - rc;
     }
     // `inner` is non-zero only where one of `corner`'s components is zero, and
-    // there `lp.y == 1` — so dividing the whole expression normalises exactly
+    // there `lp.y == 1`, so dividing the whole expression normalises exactly
     // the corner arc and leaves the straight edges untouched.
     let lp = lp_norm(corner, n);
     return (inner + lp.x - rc) / lp.y;
@@ -292,7 +292,7 @@ fn eval_shape(p: vec2<f32>, kind: u32, cap: u32, half_w: f32,
         // Built by folding the angle into one 2·an sector and mirroring it, so
         // the whole boundary is a single segment: from the outer point at the
         // sector's axis to the inner notch at its edge. That fold is exact for
-        // an *integer* n and only for an integer n — a fractional one leaves a
+        // an *integer* n and only for an integer n, a fractional one leaves a
         // partial final sector whose seam sweeps the shape, which is §Q10's
         // reason `n` is not animatable and §S9's reason morphing interpolates
         // fields instead.
@@ -317,7 +317,7 @@ fn eval_shape(p: vec2<f32>, kind: u32, cap: u32, half_w: f32,
         let q = vec2<f32>(len * abs(sin(fold)), len * cos(fold));
 
         // `corner` is applied by building the sharp shape one `corner`
-        // smaller and inflating the field by the same amount — so the outer
+        // smaller and inflating the field by the same amount, so the outer
         // point lands back at exactly `r`, whatever the rounding.
         let r_out = max(r - corner, 0.0);
         let r_in = max(r * inner * cos(an) - corner, 0.0);
@@ -404,7 +404,7 @@ fn smin(a: f32, b: f32, k: f32) -> vec2<f32> {
     // `.y` is the weight *towards `b`*, so it must be small where `a` is the
     // closer surface. WGSL's `select(false_value, true_value, condition)`
     // reverses GLSL's ternary, and getting that backwards inverts every fused
-    // colour — the far member's colour would paint the near member's body.
+    // colour, the far member's colour would paint the near member's body.
     return vec2<f32>(min(a, b) - m * k, select(1.0 - m, m, a < b));
 }
 
@@ -420,7 +420,7 @@ fn eval_record(rec: ShapeRecord, p: vec2<f32>, half_w: f32) -> ShapeDist {
     );
 }
 
-/// What one fragment resolves a shape — or a whole group — to: the two signed
+/// What one fragment resolves a shape, or a whole group, to: the two signed
 /// fields, the dash parameter, and the fill colour, which a group may have
 /// *computed* rather than simply carried (RFC-0031 §S7/§S10 blend colours by
 /// the same factor that produced the geometry).
@@ -435,7 +435,7 @@ struct Resolved {
 /// Evaluates this instance: one shape, or the group it heads (RFC-0031 §S4).
 ///
 /// `GROUP_NONE` is every shape that existed before RFC-0031 and is the branch
-/// taken by every shape that does not opt in — one `eval_shape` call and the
+/// taken by every shape that does not opt in, one `eval_shape` call and the
 /// instance's own colours, exactly as before.
 fn resolve(in: VertexOutput, kind: u32, cap: u32, half_w: f32) -> Resolved {
     var out: Resolved;
@@ -463,7 +463,7 @@ fn resolve(in: VertexOutput, kind: u32, cap: u32, half_w: f32) -> Resolved {
     if (mode == GROUP_FUSE) {
         // §S7: a smooth-minimum union over the members, with colour carried by
         // the same blend factor. `k <= 0` degenerates to a hard `min`, which is
-        // the plain union — `fuse: 0` is exactly "these shapes, unfused".
+        // the plain union, `fuse: 0` is exactly "these shapes, unfused".
         let k = max(in.group.y, 1e-4);
         var d_fill = FAR;
         var col = vec4<f32>(0.0);
@@ -482,14 +482,14 @@ fn resolve(in: VertexOutput, kind: u32, cap: u32, half_w: f32) -> Resolved {
         }
         out.fill = d_fill;
         // §S8: the fused outline is the boundary of the *union*, not a union of
-        // the members' own outlines — which would draw seams through the
+        // the members' own outlines, which would draw seams through the
         // interior of a body whose entire purpose is not to have any. The
         // head's stroke width and colour govern; per-member strokes are inert
         // and diagnosed at compile time.
         out.stroke = abs(d_fill) - half_w;
         // §Q6: the dash parameter is not defined on a fused boundary (there is
         // no closed-form arc length for the union of arbitrary SDFs), so it
-        // stays 0 — which the dash mask reads as a solid stroke. Asking for
+        // stays 0, which the dash mask reads as a solid stroke. Asking for
         // dashes here is a compile-time error rather than a crawling
         // approximation.
         out.t = 0.0;
@@ -510,8 +510,8 @@ fn resolve(in: VertexOutput, kind: u32, cap: u32, half_w: f32) -> Resolved {
         let t = ph - floor(ph);
 
         // §S9: interpolate the *fields*, not the vertex counts. `mix` of two
-        // evaluated distances has no seam, works between any two kinds — a
-        // circle can morph to a seven-pointed star — and asks nothing of the
+        // evaluated distances has no seam, works between any two kinds, a
+        // circle can morph to a seven-pointed star, and asks nothing of the
         // shapes being related.
         let ra = shape_records[first + i0];
         let rb = shape_records[first + i1];
@@ -549,7 +549,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let dash_gap = in.stroke_dash.z;
     let dash_offset = in.stroke_dash.w;
 
-    // Screen-space AA width in logical px (`fwidth`-based — RFC-0020 §"AA
+    // Screen-space AA width in logical px (`fwidth`-based, RFC-0020 §"AA
     // quality"), from the interpolated world position so it scales with DPI
     // and any paint-time transform.
     let aa = max(fwidth(in.world_pos.x) + fwidth(in.world_pos.y), 1e-4) * 0.5;

@@ -1,7 +1,7 @@
 //! The eval driver: walk the AST, wiring declarations to the reactive core
 //! (RFC-0002 §"Dev-mode interpreter"; RFC-0004 §3/§11).
 //!
-//! Each `byld` expression is **lowered** to a reactive computation — a
+//! Each `byld` expression is **lowered** to a reactive computation, a
 //! `FnMut(&mut ReactiveCtx) -> Value` closure that resolves identifiers against
 //! the [`Env`] *at lowering time* (capturing their `SignalId`/`ScopeId`
 //! handles) and performs its `Signal`/memo reads through the context at run
@@ -47,7 +47,7 @@ const MAX_INSTANCE_DEPTH: u32 = 64;
 
 /// Decimal places implied by `step`, via its shortest round-trip form
 /// (`0.1 → 1`, `0.25 → 2`, `1.0 → 0`). Used so a stepped slider never emits a
-/// value with more decimal places than the step itself — e.g. `step: 0.1`
+/// value with more decimal places than the step itself, e.g. `step: 0.1`
 /// landing on `6 × 0.1 = 0.6000000000000001` is rounded back to `0.6`. Capped
 /// at 10 places (any real step is far coarser).
 fn step_decimals(step: f64) -> i32 {
@@ -61,7 +61,7 @@ fn step_decimals(step: f64) -> i32 {
 ///
 /// `eval_pure` animates opacity, scale, rotate, and translate through one
 /// generic path that doesn't carry the property's unit, so the epsilons must be
-/// tight enough to be correct for the *tightest* unit (ratios, ~0..1) — which is
+/// tight enough to be correct for the *tightest* unit (ratios, ~0..1), which is
 /// simply conservative (settles a hair later) for pixels and radians. Position
 /// is the final-value accuracy gate; a tight velocity gate keeps a spring's
 /// overshoot alive rather than freezing it at the first crossing of the target.
@@ -71,7 +71,7 @@ const ANIM_SETTLE_EPS_VEL: f32 = 0.02;
 /// The private timeline of one repeating, delayed or keyframed animation
 /// (RFC-0025), kept in [`Interpreter::anim_clocks`].
 ///
-/// A one-shot `with` animation needs no clock of its own — its `Motion` carries
+/// A one-shot `with` animation needs no clock of its own, its `Motion` carries
 /// `start_ms` and the value is a function of `now − start_ms`. A repeating one
 /// does: it has to know where its *sequence* began, independently of the
 /// endpoints, and it has to survive frames on which it is not drawn at all.
@@ -81,7 +81,7 @@ struct LoopClock {
     start_ms: u32,
     /// Engine time (ms) this animation was last sampled.
     last_seen_ms: u32,
-    /// The render this animation was last sampled on — the offscreen probe. A
+    /// The render this animation was last sampled on, the offscreen probe. A
     /// *render* count, not a clock reading, so "was this drawn last frame?" is
     /// exact however fast or slow the host is pacing frames.
     last_seen_seq: u64,
@@ -90,7 +90,7 @@ struct LoopClock {
     /// the endpoints themselves having to be persisted.
     endpoints: u64,
     /// Whether this timeline still waits out its `delay` (RFC-0025 §5): true on
-    /// mount, and cleared by a retarget that cancels a `delay:` — never by one
+    /// mount, and cleared by a retarget that cancels a `delay:`, never by one
     /// that restarts a stagger.
     honor_delay: bool,
 }
@@ -99,7 +99,7 @@ struct LoopClock {
 /// the current time and the eased factor between them (RFC-0025 §3).
 ///
 /// Values stay as expressions until the caller needs them, which is what lets
-/// one blend serve both the numeric and the colour path — a colour blends in
+/// one blend serve both the numeric and the colour path, a colour blends in
 /// OKLab, a scalar numerically, and neither wants the other's interpretation.
 struct KeyframeBlend<'a> {
     /// The step being interpolated from.
@@ -110,7 +110,7 @@ struct KeyframeBlend<'a> {
     t: f32,
 }
 
-/// The source range a list of members covers, as one span — the union of their
+/// The source range a list of members covers, as one span, the union of their
 /// own spans. Used to name a `when` branch's extent so its animation state can
 /// be dropped with it.
 fn members_span(members: &[Member]) -> Span {
@@ -144,8 +144,8 @@ fn members_span(members: &[Member]) -> Span {
 /// # Why control flow belongs here at all
 ///
 /// A `Canvas` body was shape commands and nothing else, which made the one
-/// thing a drawing surface is *for* — a chart, a sparkline, anything whose
-/// shape count comes from data — inexpressible. You could draw twenty-four
+/// thing a drawing surface is *for*, a chart, a sparkline, anything whose
+/// shape count comes from data, inexpressible. You could draw twenty-four
 /// bars by writing twenty-four `rect(…)` lines against twenty-four separately
 /// named fields, and that is not a language feature, it is a workaround for
 /// the absence of one.
@@ -195,8 +195,8 @@ pub enum CanvasItem {
 ///
 /// A plain `Canvas` pushes each shape to the frame as its own instance, exactly
 /// as it always has. A `Canvas` that declares a combine mode collects them into
-/// one group instead — same walk, same per-tick re-evaluation of every
-/// parameter expression, different destination — and the head is pushed once at
+/// one group instead, same walk, same per-tick re-evaluation of every
+/// parameter expression, different destination, and the head is pushed once at
 /// the end.
 ///
 /// Routing this at the emission site rather than post-processing the frame's
@@ -206,7 +206,7 @@ pub enum CanvasItem {
 pub(crate) struct ShapeGroupSink {
     /// The members collected so far, in declaration order.
     members: Vec<byard_core::frame::ShapeRecord>,
-    /// The union of their bounds — the head's quad (§S4).
+    /// The union of their bounds, the head's quad (§S4).
     bounds: Option<byard_core::frame::Rect>,
     /// The paint parameters the head carries on the members' behalf: a group
     /// has one stroke, one cap, one dash pattern and one opacity, taken from
@@ -238,7 +238,7 @@ impl ShapeGroupSink {
     }
 }
 
-/// A representative source position for a set of attributes — the first one's,
+/// A representative source position for a set of attributes, the first one's,
 /// or the file start when there are none. Used where a diagnostic is raised
 /// during the render walk, which has the element's attrs but not its node.
 fn attr_span(attrs: &[Attr]) -> Span {
@@ -298,7 +298,7 @@ fn lower_canvas_items(members: &[Member]) -> Vec<CanvasItem> {
 ///
 /// The span alone is not an identity. A `for` body is lowered once per pooled
 /// slot but written once, so ten rows animating a property share one source
-/// span — and, before this key existed, one `Motion` and one `LoopClock`. Two
+/// span, and, before this key existed, one `Motion` and one `LoopClock`. Two
 /// rows heading for *different* targets therefore fought over the same state:
 /// each retarget reseeded the other's `from` and restarted its clock, and both
 /// stalled near `t ≈ 0`. Anyone with a list of animated components was affected.
@@ -308,7 +308,7 @@ fn lower_canvas_items(members: &[Member]) -> Vec<CanvasItem> {
 /// construction: a nested `for` is lowered once per *outer* slot and gets its
 /// own pool with its own fresh signals, so the innermost binding already
 /// distinguishes every instance without a path to fold. `0` is "no enclosing
-/// loop" — the top level, where the span was always enough.
+/// loop", the top level, where the span was always enough.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) struct AnimKey {
     /// Source range of the `with`/keyframes node.
@@ -354,7 +354,7 @@ pub(crate) struct Concrete<'a> {
 /// retarget (RFC-0025 §5).
 ///
 /// Repeating animations recompute their endpoints every frame, so nothing needs
-/// to be stored to *sample* them — only enough to answer "are these the same
+/// to be stored to *sample* them, only enough to answer "are these the same
 /// endpoints as last frame?". A hash of the raw bits answers exactly that, for
 /// one scalar or four colour channels alike.
 fn endpoint_key(motions: &[byard_core::frame::Motion]) -> u64 {
@@ -371,8 +371,8 @@ fn endpoint_key(motions: &[byard_core::frame::Motion]) -> u64 {
 ///
 /// Scalars blend numerically; a tuple blends component-wise (keeping the left
 /// operand's field names), which is what makes `translate: anim.keyframes(0%:
-/// (-100, 0), …)` mean what it reads like. Anything else — mismatched shapes
-/// included — snaps at the segment's midpoint rather than inventing a value.
+/// (-100, 0), …)` mean what it reads like. Anything else, mismatched shapes
+/// included, snaps at the segment's midpoint rather than inventing a value.
 fn lerp_value(a: &Value, b: &Value, t: f32) -> Value {
     let scalar = |v: &Value| match v {
         Value::Float(f) => Some(*f),
@@ -412,7 +412,7 @@ fn round_to_decimals(val: f64, decimals: i32) -> f64 {
 /// A resolved first-class style value (RFC-0016): a flat base attribute set
 /// plus its `on <state> { … }` interaction-state blocks. Produced by
 /// [`Interpreter::resolve_style_expr`] from a `style { … }` value, a `let`-bound
-/// style name, or a `merge` of two styles. Static and view-scoped — no cascade.
+/// style name, or a `merge` of two styles. Static and view-scoped, no cascade.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct StyleDef {
     /// The base attributes, last-write-wins in written order.
@@ -460,7 +460,7 @@ pub enum RenderNode {
     },
     /// A flexible gap (layout-only, RFC-0005): absorbs its parent's free space
     /// along the main axis. `attrs` carries `grow`/`basis`, which is why this is
-    /// not a unit variant — a `Spacer` that ignored them could not flex.
+    /// not a unit variant, a `Spacer` that ignored them could not flex.
     Spacer {
         /// `grow` (default 1) and `basis` (default 0).
         attrs: Vec<Attr>,
@@ -474,7 +474,7 @@ pub enum RenderNode {
         /// The reactive scope that evaluates to the image source path/URL.
         src: ScopeId,
     },
-    /// An MSDF vector glyph — the `VectorIcon` intrinsic (RFC-0009 §1)
+    /// An MSDF vector glyph, the `VectorIcon` intrinsic (RFC-0009 §1)
     /// routed to the `VectorMSDF` pipeline.
     Vector {
         /// Styling attributes (`size`, `color`, `m`, `opacity`, `style`).
@@ -482,7 +482,7 @@ pub enum RenderNode {
         /// The reactive scope evaluating to the asset handle (a `Str` path).
         src: ScopeId,
     },
-    /// A `Canvas` — the RFC-0020 programmatic drawing surface. A fixed-size
+    /// A `Canvas`, the RFC-0020 programmatic drawing surface. A fixed-size
     /// leaf whose children are *shape commands*, not views: each render tick
     /// re-evaluates every shape's parameter expressions (so a reactive
     /// `sweep: percent * 3.6` animates for free) and lowers Tier-1 shapes to
@@ -493,7 +493,7 @@ pub enum RenderNode {
         attrs: Vec<Attr>,
         /// `on <state> { … }` blocks (RFC-0016) overlaid at render time.
         state_blocks: Vec<StateBlock>,
-        /// The validated canvas body, in declaration order. Kept as AST —
+        /// The validated canvas body, in declaration order. Kept as AST,
         /// named args are ordinary `Expr`s evaluated per tick through
         /// `eval_pure`, which is what makes every parameter reactive and
         /// `with`-animatable (RFC-0010) without extra plumbing.
@@ -505,7 +505,7 @@ pub enum RenderNode {
         /// resolve against the scope the canvas was instantiated in.
         env_snapshot: Vec<(Symbol, super::env::Value)>,
     },
-    /// An `Overlay` — the RFC-0017 escape-hatch. Its children leave the normal
+    /// An `Overlay`, the RFC-0017 escape-hatch. Its children leave the normal
     /// layout flow and render in the overlay layer, above all main content and
     /// laid out against the viewport. In the parent tree the node occupies zero
     /// space (a 0×0 layout leaf); the render walk collects it into the overlay
@@ -524,7 +524,7 @@ pub enum RenderNode {
     /// A reactive `when cond { … } else { … }` (RFC-0018 structural reactivity).
     /// The driver re-reads `cond` every frame and expands the taken branch, so a
     /// `var` flip mounts/unmounts the subtree with no re-lowering. Each branch is
-    /// lowered **lazily** on first selection and cached (see [`WhenPool`]) — so a
+    /// lowered **lazily** on first selection and cached (see [`WhenPool`]), so a
     /// guarded recursion (`when done { … } else { Recurse() }`) only lowers the
     /// recursive branch when the guard actually reaches it, terminating finitely.
     When {
@@ -538,7 +538,7 @@ pub enum RenderNode {
     /// each frame and renders one pooled body per element. Bodies are lowered
     /// lazily into a reusable pool (grown to the high-water length, never
     /// re-lowered per frame), each reading its element from a per-slot signal the
-    /// driver updates — so list growth/shrink/value changes are reactive without
+    /// driver updates, so list growth/shrink/value changes are reactive without
     /// re-lowering or churning scopes.
     For {
         /// Index into the interpreter's `for_pools`.
@@ -548,8 +548,8 @@ pub enum RenderNode {
     },
     /// A `NavStack`/`NavHost` (RFC-0026): a stack container whose live children
     /// are the screens its navigation state selects. Unlike `When`/`For` this is
-    /// a *concrete* node — it lays out as one container so the two screens alive
-    /// during a transition overlap instead of stacking — and its children come
+    /// a *concrete* node, it lays out as one container so the two screens alive
+    /// during a transition overlap instead of stacking, and its children come
     /// from the pool, which the reconcile pass keeps in step with the driving
     /// `path`/`active` projection.
     Nav {
@@ -573,9 +573,9 @@ struct Pools<'a> {
 /// Which navigation container a [`NavPool`] backs (RFC-0026).
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum NavKind {
-    /// `NavStack` — a push/pop history stack driven by a `path` var.
+    /// `NavStack`, a push/pop history stack driven by a `path` var.
     Stack,
-    /// `NavHost` — a flat set of preserved tabs driven by an `active` var.
+    /// `NavHost`, a flat set of preserved tabs driven by an `active` var.
     Host,
 }
 
@@ -592,7 +592,7 @@ struct RouteDef {
 }
 
 /// One live screen of a navigation container: a route instance whose lowered
-/// subtree — and therefore every `var`, scroll offset and animation inside it —
+/// subtree, and therefore every `var`, scroll offset and animation inside it,
 /// stays alive while it is on the stack (RFC-0026 §4 state preservation).
 struct NavEntry {
     /// The concrete path this entry was mounted for (`/detail/42`), or the tab
@@ -621,7 +621,7 @@ struct NavAnim {
     motion: byard_core::frame::Motion,
     /// Whether progress is currently driven by an edge-swipe gesture rather
     /// than the clock (RFC-0026 §"Swipe-back gesture"). A gesture-driven
-    /// transition never settles on its own — the release decides.
+    /// transition never settles on its own, the release decides.
     gesture: bool,
     /// Gesture progress, while `gesture` is set.
     gesture_p: f32,
@@ -634,7 +634,7 @@ struct LiveScreen {
     /// Index into [`NavPool::entries`].
     entry: usize,
     /// Whether this is the screen being revealed (as opposed to the one being
-    /// covered/left) — the half of the transition geometry that is per-screen.
+    /// covered/left), the half of the transition geometry that is per-screen.
     incoming: bool,
     /// Whether this screen is the one in the container's normal flow. Exactly
     /// one is: the screen the navigation state currently names, which is what
@@ -647,8 +647,8 @@ struct LiveScreen {
 /// The slice of a navigation container's state that lowered *action closures*
 /// need at fire time (RFC-0026 §"navigation actions").
 ///
-/// An action lowers to a `FnMut(&mut ReactiveCtx)` — it never sees the
-/// interpreter — but `back(navPath)` has to know what is underneath the top of
+/// An action lowers to a `FnMut(&mut ReactiveCtx)`, it never sees the
+/// interpreter, but `back(navPath)` has to know what is underneath the top of
 /// the stack, and `replace(…)` has to tell the next reconcile not to stack. Both
 /// are answered by this one shared cell, updated whenever the stack moves. `Rc`/
 /// `RefCell` are sound here for the same reason the radio groups' are: the
@@ -671,7 +671,7 @@ struct NavShared {
 /// [`RenderNode::Nav::pool`].
 ///
 /// The whole model is: *navigation state is a reactive `var`*. This pool holds
-/// no navigation intent of its own — it observes the driving `path`/`active`
+/// no navigation intent of its own, it observes the driving `path`/`active`
 /// projection each frame and reconciles its history stack to match, which is
 /// what makes `navPath = "/detail/42"` a push and `navPath = "/"` a pop with no
 /// controller object anywhere (RFC-0003: no widget references).
@@ -690,7 +690,7 @@ struct NavPool {
     deep_link: bool,
     /// RFC-0026 `max_depth` (default 10, `0` disables): the runaway-push guard.
     max_depth: usize,
-    /// The signal behind `path:`/`active:` when it is a writable `var` — the
+    /// The signal behind `path:`/`active:` when it is a writable `var`, the
     /// engine writes it back for `back(…)`, a completed swipe-back, a rejected
     /// over-deep push, and a delivered deep link. Reflected state, never a
     /// second source of truth.
@@ -708,7 +708,7 @@ struct NavPool {
     current: usize,
     /// The in-flight transition, if any.
     anim: Option<NavAnim>,
-    /// The screens to lay out and paint this frame — one at rest, two during a
+    /// The screens to lay out and paint this frame, one at rest, two during a
     /// transition, in painter's order (the moving edge last).
     live: Vec<LiveScreen>,
     /// This frame's transition progress (`1.0` at rest).
@@ -729,7 +729,7 @@ struct NavPool {
 }
 
 /// A `when`'s lazily-lowered branch cache (RFC-0018). Each branch's AST is kept
-/// and lowered only the first time the condition selects it, then reused — so an
+/// and lowered only the first time the condition selects it, then reused, so an
 /// untaken (possibly recursive) branch costs nothing until it is actually shown.
 struct WhenPool {
     /// The `then` branch AST.
@@ -741,7 +741,7 @@ struct WhenPool {
     /// element). `(then, else)`.
     branch_spans: (Span, Span),
     /// Which branch was selected on the previous reconcile, or `None` before the
-    /// first one — the edge detector for that unmount.
+    /// first one, the edge detector for that unmount.
     last_take: Option<bool>,
     /// User-view names in scope at lower time.
     known_views: Vec<String>,
@@ -760,7 +760,7 @@ struct ForPool {
     /// The loop variable name, bound to each slot's signal when lowering a body.
     item_var: Symbol,
     /// The optional index variable (`for i, item in …`, RFC-0025). Bound to the
-    /// slot's own index as a constant while its body is lowered — a pooled slot
+    /// slot's own index as a constant while its body is lowered, a pooled slot
     /// *is* its position, so the index never needs to be reactive.
     index_var: Option<Symbol>,
     /// The loop body AST, re-lowered only when the pool grows to a new index.
@@ -774,7 +774,7 @@ struct ForPool {
     item_slots: Vec<super::env::SignalId>,
     /// One lowered body per pooled index (parallel to `item_slots`).
     bodies: Vec<Vec<RenderNode>>,
-    /// How many bodies are live (painted) this frame — the current list length.
+    /// How many bodies are live (painted) this frame, the current list length.
     len: usize,
 }
 
@@ -794,11 +794,11 @@ struct ScrollAxis {
 /// RFC-0021 `snap` mode: where a scroll settles after a fling/scroll goes quiet.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SnapMode {
-    /// Free scrolling (`snap: none`, the default) — never snaps.
+    /// Free scrolling (`snap: none`, the default), never snaps.
     None,
-    /// `snap: page` — settle to the nearest viewport-sized page.
+    /// `snap: page`, settle to the nearest viewport-sized page.
     Page,
-    /// `snap: item` — settle to the nearest direct-child boundary (the child
+    /// `snap: item`, settle to the nearest direct-child boundary (the child
     /// offsets are precomputed into [`Interpreter::scroll_item_bounds`]).
     Item,
 }
@@ -826,16 +826,16 @@ struct ScrollTarget {
     /// Vertical axis, present when `offset.y` is a writable `var`.
     y: Option<ScrollAxis>,
     /// The `ScrollView` element index, for firing engine scroll events
-    /// (`end_reached`/`page_change`/`scroll_end`) — RFC-0021.
+    /// (`end_reached`/`page_change`/`scroll_end`), RFC-0021.
     elem: Option<u32>,
     /// RFC-0021 `snap` mode (`none`/`page`/`item`). For `item`, the
     /// `snap_align`-adjusted child boundaries live in
     /// [`Interpreter::scroll_item_bounds`], keyed by [`elem`](Self::elem).
     snap: SnapMode,
-    /// RFC-0021 `snap_spring` override — the packed curve driving the snap glide,
+    /// RFC-0021 `snap_spring` override, the packed curve driving the snap glide,
     /// or `None` for the engine default spring.
     snap_spring: Option<byard_core::frame::MotionCurve>,
-    /// RFC-0021 reflected `page:` var — written the current page index on a
+    /// RFC-0021 reflected `page:` var, written the current page index on a
     /// page-snap settle; a `page_change` fires when it changes.
     page_sig: Option<SignalId>,
     /// RFC-0021 `end_threshold` (0..1): the fraction of the scrollable extent at
@@ -843,10 +843,10 @@ struct ScrollTarget {
     end_threshold: Option<f32>,
     /// RFC-0021 `pull_refresh`: overscrolling past the top drags an elastic pull
     /// region (see [`Interpreter::pull_distance`]); releasing past the threshold
-    /// fires `refresh`. A pull view needs no `offset` var — the pull region is
+    /// fires `refresh`. A pull view needs no `offset` var, the pull region is
     /// engine state, not the scroll offset.
     pull_refresh: bool,
-    /// RFC-0021 reflected `refreshing:` var — set `true` by the engine when a pull
+    /// RFC-0021 reflected `refreshing:` var, set `true` by the engine when a pull
     /// triggers a refresh; the app sets it back to `false` when its load finishes,
     /// which springs the indicator away.
     refreshing_sig: Option<SignalId>,
@@ -856,7 +856,7 @@ struct ScrollTarget {
 /// axis's offset signal to an exact page boundary. Seeded when scrolling settles
 /// (drag release or scroll-quiet), advanced each `render` from the shared engine
 /// clock, and dropped once [`Motion::is_settled_with_eps`] reports it has
-/// arrived — at which point the offset is pinned to `target` and `scroll_end`
+/// arrived, at which point the offset is pinned to `target` and `scroll_end`
 /// fires. Cancelled outright by any fresh scroll/drag on the same elem.
 #[derive(Clone, Copy)]
 struct SnapAnim {
@@ -887,7 +887,7 @@ struct WindowSpec {
 }
 
 /// One resolved drop shadow (RFC-0011 custom shadows): offset, blur, spread, and
-/// resolved RGBA colour. A box may carry several — CSS-style layered shadows —
+/// resolved RGBA colour. A box may carry several, CSS-style layered shadows,
 /// each emitted as its own shadow-only `DecoratedBox` beneath the surface.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct ShadowSpec {
@@ -912,11 +912,11 @@ const DEFAULT_NAV_MAX_DEPTH: i64 = 10;
 const NAV_SWIPE_COMMIT: f32 = 0.5;
 
 /// Width of the left-edge strip an interactive swipe-back may start in, in
-/// logical px — the iOS convention, and narrow enough that a horizontally
+/// logical px, the iOS convention, and narrow enough that a horizontally
 /// scrolling child in the middle of the screen is never stolen from.
 const NAV_SWIPE_EDGE: f32 = 24.0;
 
-/// The progress curve for the *remaining* `fraction` of a transition — what a
+/// The progress curve for the *remaining* `fraction` of a transition, what a
 /// released swipe-back hands over to (RFC-0026): the same ramp, shortened to the
 /// distance still to travel, with a floor so a hand-off at the very end is still
 /// a frame or two of motion rather than a snap.
@@ -932,7 +932,7 @@ fn nav_transition_tail(
 }
 
 /// The `0 → 1` progress curve driving a route transition (RFC-0026
-/// §"Transitions"): a **fixed-duration, monotone** ramp — decelerating into
+/// §"Transitions"): a **fixed-duration, monotone** ramp, decelerating into
 /// place for the positional transitions, symmetric for the cross-fade.
 ///
 /// Deliberately *not* a spring, even though a spring drives every other
@@ -941,7 +941,7 @@ fn nav_transition_tail(
 /// RFC-0010's default spring is underdamped (`ζ ≈ 0.69`), and a screen's
 /// arrival must not overshoot: past `p = 1` the incoming screen would slide off
 /// its own leading edge, and the undershoot that follows would walk it visibly
-/// back out again — a wobble at the exact moment the transition is meant to be
+/// back out again, a wobble at the exact moment the transition is meant to be
 /// over. Clamping `p` hides the overshoot but not the undershoot, and it makes
 /// the settle test (which reads the *unclamped* curve) disagree with what is on
 /// screen, so the engine keeps asking for frames long after the motion looks
@@ -950,8 +950,8 @@ fn nav_transition_tail(
 /// A duration ramp has none of those problems: bounded to `0..=1` by
 /// construction, monotone, and landing on exactly `1.0` at exactly
 /// [`duration_ms`](crate::interp::nav::NavTransition::duration_ms). The
-/// decelerating cubic is the shape a *critically damped* spring traces — the
-/// feel RFC-0026 asks for — without the asymptotic tail that never ends.
+/// decelerating cubic is the shape a *critically damped* spring traces, the
+/// feel RFC-0026 asks for, without the asymptotic tail that never ends.
 fn nav_progress_curve(
     transition: crate::interp::nav::NavTransition,
 ) -> byard_core::frame::MotionCurve {
@@ -972,14 +972,14 @@ fn nav_progress_curve(
 /// The navigable path inside a deep-link URL (RFC-0026 §"Deep linking"): the
 /// scheme and authority belong to the platform, the path to the route table.
 /// `byard://item/42` → `/item/42`; a bare `/item/42` passes through unchanged.
-/// A query string or fragment is dropped — v1 routes match on the path alone.
+/// A query string or fragment is dropped, v1 routes match on the path alone.
 fn deep_link_path(url: &str) -> String {
     let path = match url.split_once("://") {
         Some((scheme, rest)) => {
             // A web link's first segment is a host (`app.example/item/42`); a
             // custom app scheme has no authority, so `byard://item/42` is all
             // path. Told apart by the scheme and by the shape of that first
-            // segment — a host has a dot or a port, a route segment does not.
+            // segment, a host has a dot or a port, a route segment does not.
             let authority = rest.split('/').next().unwrap_or("");
             let has_host = matches!(scheme, "http" | "https")
                 || authority.contains('.')
@@ -1047,7 +1047,7 @@ fn push_stroke_quad(
 /// Shifts a hit rect by the accumulated scroll displacement and clips it to
 /// the enclosing scroll viewport (RFC-0005): interaction follows the content
 /// to its *on-screen* position, and content scrolled out of the viewport
-/// stops being hittable — it is not visible, so it must not be tappable.
+/// stops being hittable, it is not visible, so it must not be tappable.
 fn scrolled_hit_rect(
     r: crate::interp::intrinsics::Rect,
     shift: (f32, f32),
@@ -1111,7 +1111,7 @@ fn param_default(param: &Param) -> Option<&Expr> {
     param.default.as_ref()
 }
 
-/// Whether a parameter is a callback prop — declared with a function type
+/// Whether a parameter is a callback prop, declared with a function type
 /// `Fn(...)` (RFC-0019). Callback params bind a caller-supplied action block
 /// rather than a projected value, so they take a separate binding path and are
 /// skipped by the ordinary value-argument machinery in [`Interpreter::bind_args`].
@@ -1158,7 +1158,7 @@ pub struct Interpreter {
     /// Parameterized `fn` definitions (`fn f(params) => body`, M25) *and*
     /// callback-prop bindings (RFC-0019): stored as `(param names, body expr,
     /// is_callback)` and indexed by `AstId`. Both share the invocation path in
-    /// [`Self::lower_call`] — a callback is a caller-supplied action block
+    /// [`Self::lower_call`], a callback is a caller-supplied action block
     /// inlined at the callee's invocation site; the `is_callback` flag turns on
     /// the RFC-0019 §4 arity/invocability diagnostics that plain `fn`s don't
     /// want.
@@ -1174,19 +1174,19 @@ pub struct Interpreter {
     /// Current `for`-body lowering depth. Like `instance_depth`, a non-zero
     /// value means an event action lowered *now* must capture the live
     /// environment (the loop variable `t`) so a render-time re-lowering of the
-    /// action still resolves `t` — the loop binding is truncated out of the
+    /// action still resolves `t`, the loop binding is truncated out of the
     /// persistent View env after the body is lowered (RFC-0018 × RFC-0027).
     for_depth: u32,
     /// Current `route`/`tab` body lowering depth (RFC-0026). Like `for_depth`, a
     /// non-zero value means the body being lowered has extra bindings in scope
     /// (`route`, and the `{|params| … }` name) that are truncated out of the
-    /// persistent View env afterwards — so anything re-lowered at render time
+    /// persistent View env afterwards, so anything re-lowered at render time
     /// must capture them in its env snapshot.
     nav_depth: u32,
     /// Current depth of a *restored* environment: a pooled body being lowered
     /// at render time with a captured snapshot pushed back onto `self.env`
-    /// (a lazily-lowered `when` branch). The bindings it restores — a loop
-    /// element, an instance param — are truncated out again the moment the
+    /// (a lazily-lowered `when` branch). The bindings it restores, a loop
+    /// element, an instance param, are truncated out again the moment the
     /// body is lowered, so anything inside it that will be re-lowered or
     /// re-evaluated later must capture them now, exactly as it would inside the
     /// `for` body or route body the snapshot came from.
@@ -1219,11 +1219,11 @@ pub struct Interpreter {
     /// lowered `back`/`replace` closures, keyed by the navigation `var` that
     /// drives it. Keyed rather than indexed by pool because an action can be
     /// lowered *before* the container it drives (a back button written above its
-    /// `NavStack`) and re-lowered during a render, when the pools are lent out —
+    /// `NavStack`) and re-lowered during a render, when the pools are lent out,
     /// the `var` is the one identity both sides always agree on.
     nav_shared: std::collections::HashMap<SignalId, NavSharedCell>,
     /// RFC-0026 `swipe_back`: the viewport rect of each swipe-enabled `NavStack`
-    /// recorded during the last render, paired with its pool — the same
+    /// recorded during the last render, paired with its pool, the same
     /// render-then-dispatch handshake the scroll targets use, so the edge
     /// gesture hit-tests against what was actually painted.
     nav_targets: Vec<(crate::interp::intrinsics::Rect, usize)>,
@@ -1235,7 +1235,7 @@ pub struct Interpreter {
     /// animations (RFC-0010).
     now_ms: u32,
     /// Whether a host has ever advanced the clock. Distinguishes a real
-    /// `set_now_ms(0)` start from "the clock was never set" — without it, a host
+    /// `set_now_ms(0)` start from "the clock was never set", without it, a host
     /// that never ticks the clock would pin an animation at `t = 0` (never
     /// settling, `has_active_animations` latched true, an infinite redraw loop
     /// on a wait-based runner). Unset ⇒ animations resolve to their target
@@ -1251,14 +1251,14 @@ pub struct Interpreter {
     /// Persisted colour-animation state (RFC-0010 A3): one `Motion` per OKLab
     /// channel (`L`, `a`, `b`) plus one for the alpha byte, so a
     /// `bg`/`color`/`border`/`backdrop_tint` transition interpolates in a
-    /// perceptually-uniform space — no muddy mid-points — with translucency
+    /// perceptually-uniform space, no muddy mid-points, with translucency
     /// animating alongside (RFC-0023: a tint fading in is an alpha ramp), and
     /// is interruptible like the scalar props. Keyed by the `with` node's span.
     color_animations: std::collections::HashMap<AnimKey, [byard_core::frame::Motion; 4]>,
     /// Loop clocks for repeating, delayed and keyframed animations (RFC-0025),
     /// keyed by the animation node's span like the two maps above. A repeating
     /// animation cannot sample against `now − start_ms` the way a one-shot does:
-    /// it needs its own timeline, which is what a [`LoopClock`] carries — plus
+    /// it needs its own timeline, which is what a [`LoopClock`] carries, plus
     /// the last-sampled stamp that implements §2's offscreen pause.
     anim_clocks: std::collections::HashMap<AnimKey, LoopClock>,
     /// Live ripple ink reveals (RFC-0023), spawned by a press gesture over an
@@ -1266,10 +1266,10 @@ pub struct Interpreter {
     /// persists across renders (a ripple keeps fading after release) and is
     /// retired by time at the top of each [`render`](Self::render). An entry
     /// whose element no longer renders simply stops being emitted and ages
-    /// out the same way — hot-reload safe with no extra bookkeeping.
+    /// out the same way, hot-reload safe with no extra bookkeeping.
     ripples: Vec<ActiveRipple>,
     /// The last press gesture `(elem, press time)` that already spawned its
-    /// ripple — the rising-edge latch. A single global slot suffices because
+    /// ripple, the rising-edge latch. A single global slot suffices because
     /// there is one pointer, hence at most one in-flight press (E4): a hold
     /// never respawns (same identity, even after its ripple retires), while
     /// each new tap is a fresh identity and spawns again.
@@ -1278,7 +1278,7 @@ pub struct Interpreter {
     /// currently the overlapping-blurs stack check, run over the frame's
     /// emitted backdrops at the end of [`render`](Self::render).
     perf_warnings: Vec<PerfWarning>,
-    /// The element instance the render walk is currently inside — the `slot`
+    /// The element instance the render walk is currently inside, the `slot`
     /// half of an [`AnimKey`].
     ///
     /// Set from the expansion, which is the only place that knows it: after
@@ -1286,14 +1286,14 @@ pub struct Interpreter {
     /// node written literally at that position. `0` outside any `for` body.
     anim_slot: u32,
     /// Set true during a render whenever an animation sampled this frame has not
-    /// yet settled — the runner reads it (via [`has_active_animations`]) to keep
+    /// yet settled, the runner reads it (via [`has_active_animations`]) to keep
     /// requesting frames until motion stops (idle → 0 frames).
     ///
     /// [`has_active_animations`]: Self::has_active_animations
     any_active: bool,
     /// First-class style values (RFC-0016): `let name = style { … }` registers
     /// its base attributes and `on <state>` blocks here, and a `..name` spread
-    /// on an element splices them in at lower time. Static and view-scoped — no
+    /// on an element splices them in at lower time. Static and view-scoped, no
     /// cascade.
     styles: std::collections::HashMap<Symbol, StyleDef>,
     /// Dev-mode MSDF generation cache/dispatcher for `VectorIcon` (RFC-0009
@@ -1302,7 +1302,7 @@ pub struct Interpreter {
     vector_jit: crate::vector::VectorJit,
     /// Wheel-scroll targets recorded during the last render (RFC-0005): one per
     /// `ScrollView` whose `offset.y` is a writable signal. `dispatch_events`
-    /// reads this to convert a wheel into a clamped scroll — the same
+    /// reads this to convert a wheel into a clamped scroll, the same
     /// render-then-dispatch handshake the router's hit rects use.
     scroll_targets: Vec<ScrollTarget>,
     /// The drag-to-scroll gesture in flight, if any (RFC-0005). Set when a
@@ -1312,10 +1312,10 @@ pub struct Interpreter {
     /// RFC-0021 `on_end_reached` debounce: `ScrollView` element indices currently
     /// past their `end_threshold` and already fired. An elem re-fires only after
     /// its offset falls back below the threshold (removed here), so appending
-    /// items — which lowers the fraction — re-arms it. Persists across ticks
+    /// items, which lowers the fraction, re-arms it. Persists across ticks
     /// (gesture-like state), keyed by the stable element index.
     end_reached_fired: std::collections::HashSet<u32>,
-    /// RFC-0021 reflected `page:` — the last page value synced to the offset per
+    /// RFC-0021 reflected `page:`, the last page value synced to the offset per
     /// `ScrollView` elem. Edge-triggered: when the `page` var differs from this
     /// (the app set it), the offset scrolls to `page × viewport`; a drag never
     /// changes `page` mid-gesture, so this never fights scrolling.
@@ -1323,8 +1323,8 @@ pub struct Interpreter {
     /// RFC-0021 snap settle: the [`frame_seq`](Self::frame_seq) of the last
     /// wheel/trackpad scroll input per `snap`-enabled `ScrollView` elem. Snapping
     /// waits until an elem has been *quiet* (no scroll input) for a few frames, so
-    /// trackpad momentum — a stream of ever-smaller deltas that leaves the offset
-    /// looking briefly "still" — cannot trigger a snap mid-fling that then fights
+    /// trackpad momentum, a stream of ever-smaller deltas that leaves the offset
+    /// looking briefly "still", cannot trigger a snap mid-fling that then fights
     /// the next momentum event. Clock-independent (frame-counted), so it settles
     /// identically whether or not the host advances `now_ms`.
     scroll_quiet: std::collections::HashMap<u32, u64>,
@@ -1371,7 +1371,7 @@ pub struct Interpreter {
     /// (cleared at the top of [`render`](Self::render), appended as each radio is
     /// painted, in declaration order). Each group's ordering is shared into that
     /// group's radios' arrow-key handlers via a cheap `Rc` clone, so the handlers
-    /// — which fire *after* the full render has populated the vector — can move
+    ///, which fire *after* the full render has populated the vector, can move
     /// selection to the next/previous value with wrap-around (WAI-ARIA radio
     /// group pattern). `Rc`/`RefCell` are sound here: the interpreter and its
     /// event closures are single-threaded logic-thread state (`!Send`).
@@ -1399,7 +1399,7 @@ struct RetainedLayout {
     /// `next_target_index()` is `nodes_by_index.len()`, so re-deriving them
     /// would silently reassign every id.
     flat_ids: Vec<byard_core::atlas::layout::AtlasNodeId>,
-    /// Viewport of the last successful build — a resize forces a rebuild.
+    /// Viewport of the last successful build, a resize forces a rebuild.
     viewport: Option<(f32, f32)>,
     /// How many overlays and how deep each navigation container was, so an
     /// overlay or route mount/unmount forces a rebuild.
@@ -1408,7 +1408,7 @@ struct RetainedLayout {
     /// through `reconcile_structure`. They do: `reconcile_structure` descends
     /// into `RenderNode::Nav` via `reconcile_nav`, and an overlay mounts behind
     /// a `when`. Measured on every case the suite can construct, `shape` and
-    /// `structure_changed` reject the same frames — so this is defence in
+    /// `structure_changed` reject the same frames, so this is defence in
     /// depth, not the sole guard the RFC described, and it is kept as such: it
     /// is a *deny* clause, and the direction that costs a rebuild is the safe
     /// one. Deleting `structure_changed` leaves the overlay and route tests
@@ -1416,7 +1416,7 @@ struct RetainedLayout {
     shape: Option<(usize, Vec<usize>)>,
     /// Active colour scheme at the last successful build. A flip changes
     /// nearly every resolved value at once, so it forces a rebuild (RFC-0032
-    /// §Q6) — compared here rather than hooked onto the setter, because
+    /// §Q6), compared here rather than hooked onto the setter, because
     /// `theme.dark = …`, `bind: theme.dark` and the programmatic setter are
     /// three different write paths into the same signal and a hook would have
     /// to catch all three.
@@ -1442,7 +1442,7 @@ struct ScrollDragAxis {
 
 /// A live drag-to-scroll gesture (RFC-0005 `ScrollView`): the content follows
 /// the pointer between press and release. Captured at press so the offset is a
-/// pure function of the pointer travel — no accumulated drift (IMPL-10).
+/// pure function of the pointer travel, no accumulated drift (IMPL-10).
 #[derive(Clone, Copy)]
 struct ScrollDrag {
     /// Pointer position at the press, in logical screen px.
@@ -1465,17 +1465,17 @@ struct ScrollDrag {
 /// element whose resolved `ripple_active` is true, expanded and faded over
 /// `duration_ms`, and retired once fully faded. The snapshot model mirrors the
 /// RFC's `RippleInstance` reference: colour/duration/radius are resolved once
-/// at the spawn (the ink is a launched entity — a later style change doesn't
+/// at the spawn (the ink is a launched entity, a later style change doesn't
 /// recolour ink already in flight), while the element rect and clip radii are
 /// re-read at emission each frame so the ink tracks a moving/resizing element.
 #[derive(Clone, Copy)]
 struct ActiveRipple {
     /// The stable element index this ripple belongs to (the router's key).
-    /// The press identity that spawned it is not kept here — the rising-edge
+    /// The press identity that spawned it is not kept here, the rising-edge
     /// latch ([`Interpreter::ripple_spawned`]) is the only reader of gesture
     /// identity, and a launched ripple's lifecycle is purely time-based.
     elem: u32,
-    /// Tap point relative to the element rect's origin (RFC-0023 §1) —
+    /// Tap point relative to the element rect's origin (RFC-0023 §1),
     /// relative, so the ink stays anchored if layout shifts the element.
     center_rel: [f32; 2],
     /// Ink colour, resolved at spawn.
@@ -1505,13 +1505,13 @@ pub enum PerfWarning {
     /// upper pane re-blurs the already-blurred output of the ones below
     /// (visually correct stacked frosted glass, but each pane costs a
     /// pass-split + copy + blur). `count` is the largest overlap cluster
-    /// around a single pane — the pane itself plus every pane sharing area
-    /// with it — a deliberately conservative stack estimate.
+    /// around a single pane, the pane itself plus every pane sharing area
+    /// with it, a deliberately conservative stack estimate.
     OverlappingBlurs {
         /// The size of the largest overlap cluster.
         count: usize,
     },
-    /// A `NavStack` grew past its `max_depth` (default 10) — RFC-0026 resolved
+    /// A `NavStack` grew past its `max_depth` (default 10), RFC-0026 resolved
     /// question "memory pressure". Every entry below the top keeps its View
     /// subtree, signals and scroll offsets alive, so a stack this deep is
     /// almost always a navigation bug (a push loop, or a `back` that never
@@ -1558,9 +1558,9 @@ fn path_delta(
 
 /// The largest overlap cluster among `rects` (`[x, y, w, h]` each): the
 /// maximum, over every rect, of how many rects intersect it (itself
-/// included). A conservative estimate of blur-stack depth — a chain
+/// included). A conservative estimate of blur-stack depth, a chain
 /// `a∩b, b∩c` reports 3 around `b` even though no single point is 3 deep,
-/// which errs on the side of surfacing the diagnostic. Quadratic — fine for
+/// which errs on the side of surfacing the diagnostic. Quadratic, fine for
 /// the handful of glass panes a real frame carries.
 fn deepest_rect_overlap(rects: &[[f32; 4]]) -> usize {
     let intersects = |a: &[f32; 4], b: &[f32; 4]| {
@@ -1574,8 +1574,8 @@ fn deepest_rect_overlap(rects: &[[f32; 4]]) -> usize {
 }
 
 /// An in-flight pull-region spring (RFC-0021 pull-to-refresh): drives a
-/// `ScrollView`'s [`pull_distance`](Interpreter::pull_distance) to `target` —
-/// the indicator's rest height while refreshing, or `0` to retract it — advanced
+/// `ScrollView`'s [`pull_distance`](Interpreter::pull_distance) to `target`,
+/// the indicator's rest height while refreshing, or `0` to retract it, advanced
 /// each `render` from the engine clock like a [`SnapAnim`].
 #[derive(Clone, Copy)]
 struct PullAnim {
@@ -1607,8 +1607,8 @@ impl Interpreter {
     /// Builds the user-`View` registry (RFC-0007 §1) from a whole file's
     /// views and stores it on the interpreter, so subsequent `lower_view`/
     /// `lower_element` calls can recognize and expand user-view calls.
-    /// Returns the load-time diagnostics — `IntrinsicShadowed` and any
-    /// unguarded-cycle `RecursiveView` (RFC-0007 §4) — which are also
+    /// Returns the load-time diagnostics, `IntrinsicShadowed` and any
+    /// unguarded-cycle `RecursiveView` (RFC-0007 §4), which are also
     /// recorded in [`Interpreter::errors`].
     pub fn load_views(&mut self, views: &[ViewDecl]) -> Vec<CompileError> {
         let (table, mut diags) = super::views::ViewTable::build(views);
@@ -1783,7 +1783,7 @@ impl Interpreter {
         }
     }
 
-    /// `var x = init` — evaluate `init` once, create a reactive source from it.
+    /// `var x = init`, evaluate `init` once, create a reactive source from it.
     pub fn define_var(&mut self, name: Symbol, init: &Expr) -> SignalId {
         let initial = self.eval_pure(init);
         let sig = self.ctx.create_signal(initial);
@@ -1810,7 +1810,7 @@ impl Interpreter {
         self.ctx.peek_signal(sig)
     }
 
-    /// The number of nodes in the last-computed layout atlas — the direct
+    /// The number of nodes in the last-computed layout atlas, the direct
     /// witness that a windowed `ScrollView` lays out O(visible), not O(list)
     /// (RFC-0005 windowed layout).
     #[cfg(test)]
@@ -1853,7 +1853,7 @@ impl Interpreter {
     }
 
     /// Flips the active color scheme (RFC-0022 §1): writes the reactive scheme
-    /// signal — marking every binding that reads a theme token dirty — and
+    /// signal, marking every binding that reads a theme token dirty, and
     /// mirrors the flag into the theme's non-reactive default accessors. The
     /// next [`tick`](Self::tick) recomputes; the next [`render`](Self::render)
     /// paints the new scheme. A no-op if no theme has been installed.
@@ -1865,7 +1865,7 @@ impl Interpreter {
         // RFC-0032 §Q6: a scheme flip changes nearly every resolved value, so
         // marking would visit the whole tree and then recompute the whole tree.
         // It is also rare and user-initiated, so one rebuilt frame is
-        // imperceptible — and it is the honest default for a change this wide.
+        // imperceptible, and it is the honest default for a change this wide.
         self.invalidate_retained_layout();
         if let Some(sig) = self.theme_scheme {
             self.ctx.write_signal(sig, Value::Bool(dark));
@@ -1898,7 +1898,7 @@ impl Interpreter {
     /// existing `Signal`s are **kept** (matched by name) so state survives; on a
     /// structure-incompatible patch every `var` is re-initialized from the new
     /// AST (state resets). The reactive scopes are rebuilt from the new AST
-    /// either way — read-tracking re-derives the dependency graph (§11).
+    /// either way, read-tracking re-derives the dependency graph (§11).
     pub fn reload(&mut self, new_view: &ViewDecl, kind: super::reload::ReloadKind) {
         use super::reload::ReloadKind;
         // The tree is about to be re-lowered from a different AST, so nothing
@@ -1930,7 +1930,7 @@ impl Interpreter {
         }
     }
 
-    /// `let y = init` (and `fn`) — open a computed memo.
+    /// `let y = init` (and `fn`), open a computed memo.
     pub fn define_let(&mut self, name: Symbol, init: &Expr) -> ScopeId {
         let compute = self.lower_expr(init, None);
         let scope = self.ctx.open_memo(compute);
@@ -2069,7 +2069,7 @@ impl Interpreter {
         }
 
         // 4) Missing required parameters: an unbound parameter with no default
-        //   . The reserved `content` slot is never required — it
+        //   . The reserved `content` slot is never required, it
         //    defaults to an empty block.
         for (i, slot) in slots.iter().enumerate() {
             if slot.is_none()
@@ -2100,8 +2100,8 @@ impl Interpreter {
     /// Registers a caller-supplied callback body in the shared `fn_table`,
     /// returning its [`AstId`]. The body is the caller's action block; it is
     /// lowered later, at the callee's invocation site, against the shared flat
-    /// env — which still holds the caller's `var` bindings below the callee
-    /// frame — so writes route to the caller's signals (RFC-0019 §2/§3).
+    /// env, which still holds the caller's `var` bindings below the callee
+    /// frame, so writes route to the caller's signals (RFC-0019 §2/§3).
     fn register_callback(&mut self, params: &[Symbol], body: &Expr) -> super::env::AstId {
         let id = super::env::AstId(u32::try_from(self.fn_table.len()).unwrap_or(u32::MAX));
         self.fn_table.push((params.to_vec(), body.clone(), true));
@@ -2119,7 +2119,7 @@ impl Interpreter {
         self.register_callback(&params, &Expr::Block(Vec::new(), span))
     }
 
-    /// The caller-supplied argument expression for a named parameter — a `name:`
+    /// The caller-supplied argument expression for a named parameter, a `name:`
     /// entry in the `(...)` content or a `#[name: value]` attribute. Callback
     /// props are always passed by name.
     fn find_named_arg<'a>(&self, call: &'a ElementNode, name: &Symbol) -> Option<&'a Expr> {
@@ -2137,7 +2137,7 @@ impl Interpreter {
 
     /// Binds a callback-prop parameter (RFC-0019): pushes a `Value::Fn` naming
     /// the caller's action block (or the `= { … }` default, or a forwarded
-    /// callback already in scope). Emits the §4 diagnostics — arity mismatch
+    /// callback already in scope). Emits the §4 diagnostics, arity mismatch
     /// between the `Fn(...)` type and the block's `|params|`, a non-callback
     /// argument, or a missing required callback.
     fn bind_callback_param(&mut self, param: &Param, call: &ElementNode) {
@@ -2165,7 +2165,7 @@ impl Interpreter {
                 // in scope (a wrapper forwarding its own callback prop inward).
                 // A bare identifier that does *not* currently resolve to a
                 // callback is bound to an arity-matched no-op rather than a hard
-                // type error — a wrapper checked in isolation has its own
+                // type error, a wrapper checked in isolation has its own
                 // callback params unbound, and that must not false-positive.
                 Expr::Ident(other, span) => {
                     if let Some(&Value::Fn(id)) = self.env.lookup(other) {
@@ -2213,7 +2213,7 @@ impl Interpreter {
                         }
                     }
                     // `bind: theme.dark` binds a toggle straight to the reactive
-                    // scheme flag (RFC-0022 §1) — tapping it recolors the tree.
+                    // scheme flag (RFC-0022 §1), tapping it recolors the tree.
                     AttrKind::Prop { value } => {
                         if let Some(sig) = self.resolve_theme_scheme_target(value) {
                             return Some(sig);
@@ -2228,7 +2228,7 @@ impl Interpreter {
 
     /// Resolves *only* the `bind:` attribute of a `RadioButton` (RFC-0018) to the
     /// group `var`'s `SignalId`. Unlike [`resolve_bind_sig`], it never inspects
-    /// `value:` — for a radio, `value` is the button's literal identity string,
+    /// `value:`, for a radio, `value` is the button's literal identity string,
     /// not a signal binding. Returns `None` if `bind:` is absent or doesn't name
     /// a `var`.
     fn resolve_group_bind_sig(&self, attrs: &[Attr]) -> Option<super::env::SignalId> {
@@ -2274,7 +2274,7 @@ impl Interpreter {
     /// bound value is true), `selected` (the `selected:` prop, or a `RadioButton`
     /// whose `bind == value`), `invalid` (the `invalid:` prop), and
     /// `indeterminate` (a `Checkbox`'s mixed prop). `checked` and `indeterminate`
-    /// are mutually exclusive — `indeterminate` clears `checked` (RFC-0024).
+    /// are mutually exclusive, `indeterminate` clears `checked` (RFC-0024).
     fn prop_style_state(
         &mut self,
         attrs: &[Attr],
@@ -2294,7 +2294,7 @@ impl Interpreter {
         if indeterminate {
             s = s.union(StyleState::INDETERMINATE);
         }
-        // `checked` from a value-widget's bound bool — suppressed while mixed.
+        // `checked` from a value-widget's bound bool, suppressed while mixed.
         if matches!(name, "Checkbox" | "Toggle") && !indeterminate {
             let checked =
                 bound_sig.is_some_and(|sig| self.ctx.peek_signal(sig).as_bool().unwrap_or(false));
@@ -2316,7 +2316,7 @@ impl Interpreter {
     }
 
     /// The signals backing a `ScrollView`'s `offset.x` and `offset.y` (RFC-0005),
-    /// each present when that tuple component is a writable `var` — e.g.
+    /// each present when that tuple component is a writable `var`, e.g.
     /// `offset: (panX, scrollY)` yields both, `offset: (0, scrollY)` only the y.
     /// A component that is a literal or computed value yields `None` (that axis
     /// is inert to wheel/drag; the app drives it). Returned as `(x, y)`.
@@ -2331,7 +2331,7 @@ impl Interpreter {
         }) else {
             return (None, None);
         };
-        // `offset: (x, y)` — a component is scrollable iff it names a `var`.
+        // `offset: (x, y)`, a component is scrollable iff it names a `var`.
         let sig_at = |i: usize| -> Option<super::env::SignalId> {
             let Expr::Tuple(args, _) = value else {
                 return None;
@@ -2351,8 +2351,8 @@ impl Interpreter {
     /// when it is not `windowed`, its `row_height` is unset/≤ 0, or it has no
     /// uniform list child. The window brackets the viewport with a couple of
     /// overscan rows so a partially-scrolled row is always materialised. Computed
-    /// from the *current* `offset.y`, and — because both passes read the same
-    /// offset within one render — identically in build and render.
+    /// from the *current* `offset.y`, and, because both passes read the same
+    /// offset within one render, identically in build and render.
     fn scroll_window(&mut self, sv_attrs: &[Attr], child_count: usize) -> Option<WindowSpec> {
         // Overscan rows on each side keep a row that is only partly scrolled into
         // view fully materialised, and hide the one-frame lag between an input
@@ -2385,7 +2385,7 @@ impl Interpreter {
     }
 
     /// Whether a `ScrollView` child's laid-out rectangle, mapped through the
-    /// scroll-shifted `transform`, falls entirely outside `clip` — the emission-
+    /// scroll-shifted `transform`, falls entirely outside `clip`, the emission-
     /// culling test (RFC-0005 §3.3). All four corners are transformed so a scaled
     /// ancestor is handled; an unknown rect is conservatively kept (never culled).
     fn child_fully_clipped(
@@ -2462,7 +2462,7 @@ impl Interpreter {
             }
             // RFC-0026: a navigation container. Its children are `route`/`tab`
             // cases, not elements, so it never takes the generic container path
-            // — it compiles its route table into a pool here and lowers each
+            //, it compiles its route table into a pool here and lowers each
             // screen lazily, the first time navigation reaches it.
             "NavStack" | "NavHost" => self.lower_nav(el, &attrs, state_blocks, known_views),
             "Spacer" => RenderNode::Spacer { attrs },
@@ -2495,7 +2495,7 @@ impl Interpreter {
             }
             // RFC-0020: the `Canvas` drawing surface. Its children are shape
             // commands, validated here (never silently ignored) and carried as
-            // AST elements — the render walk re-evaluates their parameter
+            // AST elements, the render walk re-evaluates their parameter
             // expressions every tick, which is what makes them reactive.
             "Canvas" => {
                 self.errors
@@ -2511,7 +2511,7 @@ impl Interpreter {
             }
             // RFC-0017: the `Overlay` escape-hatch. Its children are lowered
             // normally, but the node itself carries them out of the parent flow
-            // — the render walk defers them to the overlay layer.
+            //, the render walk defers them to the overlay layer.
             "Overlay" => {
                 let children = self.lower_members(&el.children, known_views);
                 RenderNode::Overlay {
@@ -2536,7 +2536,7 @@ impl Interpreter {
                 }
             }
             // RFC-0018 `RadioButton`: like the value widgets, but its `value:` is a
-            // literal identity (a `Str`), not a bound signal — only `bind:` names
+            // literal identity (a `Str`), not a bound signal, only `bind:` names
             // the shared group `var`. Resolve *just* `bind` to the group signal;
             // `value` is read from the attrs at render time.
             "RadioButton" => {
@@ -2555,7 +2555,7 @@ impl Interpreter {
                 // Box / Column / Row / ScrollView and any other container.
                 // RFC-0021 collapsing header: a `collapse_header` ScrollView mints
                 // a `scroll_fraction` signal (0 = expanded, 1 = collapsed) scoped to
-                // its *first* child (the header) — the header's descendants read it
+                // its *first* child (the header), the header's descendants read it
                 // to interpolate their own size/opacity. The signal is carried on
                 // `bound_sig` (unused by a ScrollView) so `render` can drive it.
                 let collapse = el.name.as_str() == "ScrollView"
@@ -2587,7 +2587,7 @@ impl Interpreter {
 
     /// Captures the instance environment for a box being lowered (RFC-0019 §2),
     /// or an empty snapshot at the top level. Only boxes lowered *inside* a
-    /// user-view instance need one — a top-level box's event actions re-lower
+    /// user-view instance need one, a top-level box's event actions re-lower
     /// against the persistent root env, exactly as before, so its snapshot stays
     /// empty and render behaviour is unchanged.
     fn capture_env_snapshot(&self) -> Vec<(Symbol, Value)> {
@@ -2670,8 +2670,8 @@ impl Interpreter {
         let bindings = self.bind_args(&callee, el);
 
         // 2) Open the per-instance lexical frame (D-D): push each
-        //    parameter in declaration order — a bound argument's memo, else a
-        //    default evaluated in the callee scope — then the callee's
+        //    parameter in declaration order, a bound argument's memo, else a
+        //    default evaluated in the callee scope, then the callee's
         //    own declarations.
         let snapshot = self.env.len();
         for param in &callee.params {
@@ -2760,7 +2760,7 @@ impl Interpreter {
                 base: attrs.clone(),
                 states: states.clone(),
             }),
-            // `a merge b` (RFC-0016): the right style overrides the left — its
+            // `a merge b` (RFC-0016): the right style overrides the left, its
             // base attributes overlay last-write-wins, and its state blocks are
             // appended so a later block of the same state wins at resolve time.
             Expr::Merge { left, right, .. } => {
@@ -2812,7 +2812,7 @@ impl Interpreter {
                 out.push(self.lower_element(e, known_views));
             }
             // RFC-0026: a `route`/`tab` case only means something as a direct
-            // child of its container — the nav lowering consumes those without
+            // child of its container, the nav lowering consumes those without
             // ever coming through here, so anything reaching this arm is
             // misplaced. Diagnosed rather than dropped (INV-4).
             Member::Route { kind, span, .. } => {
@@ -2891,7 +2891,7 @@ impl Interpreter {
     ///
     /// No screen is lowered here. A route's View subtree is instantiated the
     /// first time navigation actually reaches it and preserved from then on, so
-    /// mounting a ten-route table costs ten compiled patterns — not ten View
+    /// mounting a ten-route table costs ten compiled patterns, not ten View
     /// trees (RFC-0026's "lazy route loading", which falls out of the
     /// entry model rather than needing a separate mechanism).
     fn lower_nav(
@@ -3023,7 +3023,7 @@ impl Interpreter {
     fn reconcile_nav(&mut self, pool: usize, path: ScopeId, depth: u32) -> bool {
         let mut dirtied = false;
         // The navigation value. Anything that is not a `Str` names no route, so
-        // fall back to the first case — a `NavStack` always shows *something*.
+        // fall back to the first case, a `NavStack` always shows *something*.
         let target = match self.binding_value(path) {
             Some(Value::Str(s)) => s,
             _ => self.nav_pools[pool]
@@ -3054,8 +3054,8 @@ impl Interpreter {
     /// changed.
     fn navigate_to(&mut self, pool: usize, target: &str) -> bool {
         // A navigation that lands mid-transition finishes the previous one
-        // outright: entry indices stay stable, and the user's latest intent —
-        // not a half-finished animation — decides what is on screen.
+        // outright: entry indices stay stable, and the user's latest intent,
+        // not a half-finished animation, decides what is on screen.
         self.finish_nav(pool);
         let kind = self.nav_pools[pool].kind;
         let from = self.nav_pools[pool].current;
@@ -3072,8 +3072,8 @@ impl Interpreter {
         }
 
         // A path already on the stack is a *pop* back to it; a tab already
-        // instantiated is simply re-shown. Either way the preserved subtree —
-        // its `var`s, scroll offsets and controllers — is reused as it stands.
+        // instantiated is simply re-shown. Either way the preserved subtree,
+        // its `var`s, scroll offsets and controllers, is reused as it stands.
         // A replace deliberately skips this: it must mint a fresh screen in the
         // slot it is taking over, not resurrect an older one.
         if !replacing {
@@ -3090,7 +3090,7 @@ impl Interpreter {
         }
 
         let Some((route, params)) = self.match_route(pool, target) else {
-            // RFC-0026: an unmatched path is a runtime warning — the container
+            // RFC-0026: an unmatched path is a runtime warning, the container
             // keeps showing the last matched route rather than blanking. Warned
             // once per path so a steady-state mismatch cannot spam the log.
             if !self.nav_pools[pool]
@@ -3115,8 +3115,8 @@ impl Interpreter {
         let max = self.nav_pools[pool].max_depth;
         if kind == NavKind::Stack && !replacing && max > 0 && depth >= max {
             // Reported on the frame the push is refused. It cannot repeat on its
-            // own — reflecting the path back means the next reconcile sees no
-            // change — so the host hears about each distinct runaway once.
+            // own, reflecting the path back means the next reconcile sees no
+            // change, so the host hears about each distinct runaway once.
             self.perf_warnings.push(PerfWarning::DeepNavStack {
                 depth,
                 path: target.to_string(),
@@ -3162,7 +3162,7 @@ impl Interpreter {
     }
 
     /// The first route whose pattern matches `path`, with its extracted
-    /// parameters — declaration order, first match wins (RFC-0026).
+    /// parameters, declaration order, first match wins (RFC-0026).
     fn match_route(&self, pool: usize, path: &str) -> Option<(usize, Vec<(String, String)>)> {
         self.nav_pools[pool]
             .routes
@@ -3174,7 +3174,7 @@ impl Interpreter {
     /// Instantiates a route's View subtree for `path` and appends it as a new
     /// entry, returning its index. The body is lowered with `route` (and the
     /// `{|params| … }` binding, if written) in scope, bound to the extracted
-    /// parameters as records — `Str`-valued in v1 (RFC-0026 resolved question).
+    /// parameters as records, `Str`-valued in v1 (RFC-0026 resolved question).
     fn mount_nav_entry(
         &mut self,
         pool: usize,
@@ -3210,7 +3210,7 @@ impl Interpreter {
         let known_refs: Vec<&str> = known.iter().map(String::as_str).collect();
         // Mark that we are inside a route body, so anything re-lowered at render
         // time (an event action, a reactive prop) captures `route`/`params` in
-        // its env snapshot — the bindings are truncated out just below.
+        // its env snapshot, the bindings are truncated out just below.
         self.nav_depth += 1;
         let nodes = self.lower_members(&body, &known_refs);
         self.nav_depth -= 1;
@@ -3282,7 +3282,7 @@ impl Interpreter {
     }
 
     /// Discards entries from `keep` upward (RFC-0026 §4: only the back target is
-    /// preserved — the routes a multi-pop skipped over are gone), dropping each
+    /// preserved, the routes a multi-pop skipped over are gone), dropping each
     /// discarded screen's animation state along with it.
     fn drop_nav_entries(&mut self, pool: usize, keep: usize) {
         while self.nav_pools[pool].entries.len() > keep {
@@ -3303,7 +3303,7 @@ impl Interpreter {
             None => (1.0, false),
             Some(anim) if anim.gesture => (anim.gesture_p, anim.pop),
             Some(anim) => {
-                // A duration ramp is *done* when its duration has elapsed —
+                // A duration ramp is *done* when its duration has elapsed,
                 // exactly, on the frame it reaches `p = 1`. Settling on the
                 // clock rather than on an epsilon around the value keeps "the
                 // motion has stopped" and "the pixels have stopped" the same
@@ -3370,7 +3370,7 @@ impl Interpreter {
     }
 
     /// Writes the current entry's path back into the navigation `var`, when it
-    /// is one (RFC-0026: `path` is *reflected* — the engine and the app share
+    /// is one (RFC-0026: `path` is *reflected*, the engine and the app share
     /// one source of truth, so an engine-side move updates it).
     fn reflect_nav_path(&mut self, pool: usize) {
         let Some(sig) = self.nav_pools[pool].path_sig else {
@@ -3413,7 +3413,7 @@ impl Interpreter {
     /// Lowers one of the RFC-0026 navigation actions to a reactive computation.
     /// Returns `None` for anything else, so ordinary calls keep their handling.
     ///
-    /// All three end in the same place — a write to the navigation `var` — which
+    /// All three end in the same place, a write to the navigation `var`, which
     /// is the whole model: navigation state *is* that `var`, so an action and an
     /// assignment are the same event downstream. What the two non-trivial
     /// actions add is the bit an assignment cannot know: `back` reads the
@@ -3455,7 +3455,7 @@ impl Interpreter {
                         .then(|| state.paths.get(state.current - 1).cloned())
                         .flatten()
                 };
-                // At the root there is nothing to pop — a no-op, not an error
+                // At the root there is nothing to pop, a no-op, not an error
                 // (RFC-0026 §6). The returned `Bool` says which happened.
                 match previous {
                     Some(path) => {
@@ -3488,7 +3488,7 @@ impl Interpreter {
     ///
     /// The gesture *is* the transition: it moves `current` to the entry below
     /// immediately and drives the same pop geometry by hand, so what the finger
-    /// drags is the real previous screen — already preserved on the stack — not
+    /// drags is the real previous screen, already preserved on the stack, not
     /// a snapshot of it. Returns `true` if a swipe began, so the caller knows
     /// the press is spoken for.
     fn begin_nav_swipe(&mut self, pos: (f32, f32)) -> bool {
@@ -3538,7 +3538,7 @@ impl Interpreter {
 
     /// Releases an edge swipe (RFC-0026): past [`NAV_SWIPE_COMMIT`] the pop
     /// completes, otherwise it springs back. Either way the hand-off is the
-    /// same — the gesture's progress becomes a spring's starting point, so the
+    /// same, the gesture's progress becomes a spring's starting point, so the
     /// screen never jumps at the moment the finger lifts.
     fn release_nav_swipe(&mut self) {
         let Some((pool, _)) = self.nav_swipe.take() else {
@@ -3571,7 +3571,7 @@ impl Interpreter {
         } else {
             // Cancel: the same two screens, run the other way. A cancelled pop
             // is a push back to where we were, resumed at the mirrored
-            // progress — which is why nothing on screen moves at the hand-off.
+            // progress, which is why nothing on screen moves at the hand-off.
             self.nav_pools[pool].current = anim.outgoing;
             self.sync_nav_shared(pool);
             self.nav_pools[pool].anim = Some(NavAnim {
@@ -3598,15 +3598,15 @@ impl Interpreter {
     /// Delivers an OS URL intent to every `deep_link: true` navigation stack
     /// whose route table matches it (RFC-0026 §"Deep linking").
     ///
-    /// The URL's *path* is what navigates — scheme and authority are the
-    /// platform's business — so `byard://item/42`, `https://app.example/item/42`
+    /// The URL's *path* is what navigates, scheme and authority are the
+    /// platform's business, so `byard://item/42`, `https://app.example/item/42`
     /// and `/item/42` all reach the same route. Returns `true` if any stack
     /// accepted the link; a URL no stack has a route for is rejected here rather
     /// than navigating something to a blank screen.
     ///
     /// This is the whole of the deep-link contract the compiler owns: the host
     /// registers the scheme with the OS and hands the URL here, and from this
-    /// point on it is an ordinary navigation — the same push, the same
+    /// point on it is an ordinary navigation, the same push, the same
     /// transition, the same `route_change`.
     ///
     /// Only *mounted* containers can receive a link: a stack nested in a tab the
@@ -3629,7 +3629,7 @@ impl Interpreter {
         accepted
     }
 
-    /// Whether any navigation container declares `deep_link: true` — what a host
+    /// Whether any navigation container declares `deep_link: true`, what a host
     /// checks before registering a URL scheme with the OS.
     #[must_use]
     pub fn accepts_deep_links(&self) -> bool {
@@ -3637,7 +3637,7 @@ impl Interpreter {
     }
 
     /// The path currently shown by each navigation container, in declaration
-    /// order — the observable navigation state, for tests and host tooling.
+    /// order, the observable navigation state, for tests and host tooling.
     #[must_use]
     pub fn nav_paths(&self) -> Vec<String> {
         self.nav_pools
@@ -3669,8 +3669,8 @@ impl Interpreter {
         use byard_core::frame::Viewport;
 
         // RFC-0030 §I1. `layout.taffy` (Native) nests strictly inside this
-        // scope — the interpreter owns the `LayoutAtlas` and drives it from
-        // here — which is exactly why the interpreter tax is self-time and
+        // scope, the interpreter owns the `LayoutAtlas` and drives it from
+        // here, which is exactly why the interpreter tax is self-time and
         // not inclusive time (RFC-0030 §I2b): an AOT build still pays for
         // Taffy in full, so billing layout to the interpreter would make the
         // AOT projection optimistic by the entire cost of layout.
@@ -3688,21 +3688,21 @@ impl Interpreter {
         // sampled without having settled this tick (RFC-0010).
         self.any_active = false;
         // RFC-0023: retire fully-faded ripples by time. Gesture-like state kept
-        // across renders, so this runs before the walk — ink whose element no
+        // across renders, so this runs before the walk, ink whose element no
         // longer renders (hot reload, `when` unmount) ages out here too.
         let now = self.now_ms;
         self.ripples
             .retain(|r| (now.saturating_sub(r.start_ms) as f32) < r.duration_ms);
-        // One monotonic tick per render — the clock-independent basis for the
+        // One monotonic tick per render, the clock-independent basis for the
         // RFC-0021 "scroll has gone quiet" snap settle.
         self.frame_seq = self.frame_seq.wrapping_add(1);
         // Runtime diagnostics are recomputed per frame, so clear them *before*
-        // the passes that record them (reconcile can raise one too — RFC-0026's
+        // the passes that record them (reconcile can raise one too, RFC-0026's
         // stack-depth guard fires while navigation is being reconciled).
         self.perf_warnings.clear();
         // The atlas is **not** torn down here any more (RFC-0032 §R3). Whether
         // it can be retained is not knowable until `reconcile_structure` has
-        // run, so the decision — and the `clear()` that follows from it — moves
+        // run, so the decision, and the `clear()` that follows from it, moves
         // below, next to the build it governs. Nothing between here and there
         // touches the atlas.
         // Rebuild the handler set from the fresh layout, but keep the in-flight
@@ -3711,9 +3711,9 @@ impl Interpreter {
         self.router.clear_handlers();
         // RFC-0021, over the previous frame's scroll targets (before they are
         // dropped, so the offset writes below are what *this* frame paints):
-        //   • reverse `page:` — honour an app-driven `page` change (edge-triggered,
+        //   • reverse `page:`, honour an app-driven `page` change (edge-triggered,
         //     never fights a drag);
-        //   • snap settle — snap a `snap: page` view once its scroll has gone quiet
+        //   • snap settle, snap a `snap: page` view once its scroll has gone quiet
         //     (works for wheel/trackpad, which has no release event).
         self.sync_page_offsets();
         self.advance_snap_anims();
@@ -3775,7 +3775,7 @@ impl Interpreter {
         // RFC-0017: collect every mounted `Overlay` (pre-order = declaration =
         // mount order) and build each into the *same* atlas as an absolutely
         // positioned wrapper floating over the main tree. Nothing is built when
-        // no overlay is mounted, so the overlay path is truly zero-cost — the
+        // no overlay is mounted, so the overlay path is truly zero-cost, the
         // render root stays the plain main container it always was.
         let mut overlays: Vec<&RenderNode> = Vec::new();
         self.collect_overlays(tree, pools, &mut overlays);
@@ -3784,7 +3784,7 @@ impl Interpreter {
         //
         // A default-deny whitelist. Every clause below is a reason the build
         // order could differ from last frame's, and anything not on the list
-        // takes the full rebuild — so a future structural mutation that nobody
+        // takes the full rebuild, so a future structural mutation that nobody
         // classified is safe by omission rather than by review.
         let shape = Self::layout_shape(overlays.len(), pools);
         let eligible = !structure_changed
@@ -3813,7 +3813,7 @@ impl Interpreter {
             // `end_retained_build` is the load-bearing check: it fails unless
             // every build-order slot was reused *and* the walk produced exactly
             // as many nodes as the retained tree holds. The `flat_ids`
-            // comparison is redundant given that, and kept anyway — this is the
+            // comparison is redundant given that, and kept anyway, this is the
             // path where being wrong is invisible on screen and answers taps
             // from the wrong element.
             let retained_ok = self.atlas.end_retained_build();
@@ -3878,7 +3878,7 @@ impl Interpreter {
             // Taffy touches would fall back to its natural single-line size and
             // silently un-wrap (RFC-0032 §R5). Taffy invokes the callback only
             // for nodes it is actually recomputing, so a clean paragraph is
-            // never re-shaped — which is where this whole path's win comes from.
+            // never re-shaped, which is where this whole path's win comes from.
             self.atlas
                 .recompute_dirty_with_text(Viewport::new(width, height), measurer)
                 .unwrap();
@@ -3889,7 +3889,7 @@ impl Interpreter {
         }
         // RFC-0032 §R3 step 5. On the retained path this is the set of nodes
         // whose layout *inputs* moved; on a full rebuild every node is new, so
-        // the atlas reports the whole tree and the frame is dirty everywhere —
+        // the atlas reports the whole tree and the frame is dirty everywhere,
         // which is the truth about a rebuilt frame.
         self.atlas.populate_frame_dirty(frame, retained_used);
 
@@ -3928,12 +3928,12 @@ impl Interpreter {
 
         // RFC-0017 overlay phase: emit each overlay's children *after* the main
         // tree, so their emission-order depth is nearer and they composite on
-        // top (the shared depth buffer resolves cross-layer order — no separate
+        // top (the shared depth buffer resolves cross-layer order, no separate
         // GPU pass needed). Emitted in mount order, so a later overlay stacks
         // over an earlier one. A modal overlay installs a scrim first.
         //
         // `begin_layer` marks the z-layer boundary: the Encoder draws each
-        // layer's pools — including its *text* — as one interleaved batch
+        // layer's pools, including its *text*, as one interleaved batch
         // inside the single render pass, so this overlay's transparent
         // geometry (scrim, shadow) alpha-blends over the text and images of
         // everything beneath it instead of being drawn before a frame-final
@@ -3942,7 +3942,7 @@ impl Interpreter {
         for ol in &overlay_layouts {
             frame.begin_layer();
             // An overlay leaves the layout flow, and its animation
-            // identity leaves the walk with it — it is emitted here rather than
+            // identity leaves the walk with it, it is emitted here rather than
             // where it was written, so whatever row the main pass finished
             // inside must not carry over into it.
             self.anim_slot = 0;
@@ -3971,7 +3971,7 @@ impl Interpreter {
 
         // RFC-0023 performance diagnostic: ≥ 3 stacked frosted-glass panes in
         // one frame means each upper pane re-blurs the output of the lower
-        // ones — visually correct, but each pane costs a pass-split + copy +
+        // ones, visually correct, but each pane costs a pass-split + copy +
         // blur. Recomputed from this frame's emitted pool; the host decides
         // how to surface it.
         let pane_rects: Vec<[f32; 4]> = frame.backdrops().iter().map(|b| b.rect).collect();
@@ -3987,8 +3987,8 @@ impl Interpreter {
     /// navigation container holds.
     ///
     /// Overlay mount/unmount and route push/pop change the node sequence
-    /// without ever travelling through `reconcile_structure` — they are pools
-    /// of their own — so they need their own clause rather than being covered
+    /// without ever travelling through `reconcile_structure`, they are pools
+    /// of their own, so they need their own clause rather than being covered
     /// by the structural signal that already exists.
     fn layout_shape(overlays: usize, pools: Pools<'_>) -> (usize, Vec<usize>) {
         let navs = pools
@@ -4004,7 +4004,7 @@ impl Interpreter {
     /// out.
     ///
     /// Called with the atlas either freshly [`clear`](byard_core::atlas::LayoutAtlas::clear)ed
-    /// (full path) or opened for a retained build — the walk is **identical**
+    /// (full path) or opened for a retained build, the walk is **identical**
     /// either way, which is the property that makes the retained path safe to
     /// reason about: there is no second implementation to drift.
     fn build_layout_pass<'a>(
@@ -4060,7 +4060,7 @@ impl Interpreter {
             self.atlas.add_container(super_style, &super_children).ok()
         };
 
-        // Set while the atlas is still `Building` — on the retained path
+        // Set while the atlas is still `Building`, on the retained path
         // `end_retained_build` flips it to `Computed` immediately afterwards,
         // and `set_root` refuses to run in that state.
         let root = root_id?;
@@ -4074,12 +4074,12 @@ impl Interpreter {
     /// Called by every mutation that can change the *shape* of the tree
     /// without going through `reconcile_structure`: a hot reload re-lowers the
     /// view, and a theme flip changes nearly every resolved value at once, so
-    /// marking would visit everything and then recompute everything — strictly
+    /// marking would visit everything and then recompute everything, strictly
     /// more expensive than the rebuild it replaced (RFC-0032 §Q6).
     pub fn invalidate_retained_layout(&mut self) {
         self.retained.invalidated = true;
         // A pool *position* is about to stop meaning what it meant, so the
-        // positional paint comparison has to forget too — otherwise two
+        // positional paint comparison has to forget too, otherwise two
         // unrelated primitives that happen to hash alike would be equated
         // across the discontinuity (RFC-0032 §R3 step 6).
         self.paint.reset();
@@ -4095,7 +4095,7 @@ impl Interpreter {
     /// Flattens a node slice into the concrete nodes to lay out/paint this frame
     /// (RFC-0018 structural reactivity): a `When` expands to its taken branch
     /// (condition re-read live), a `For` to its live pooled bodies, recursively.
-    /// A concrete node (`Box`/`Text`/…) passes through unchanged — its *own*
+    /// A concrete node (`Box`/`Text`/…) passes through unchanged, its *own*
     /// children are expanded when it is built/walked, not here. Build, paint,
     /// `flat_len`, and overlay collection all funnel through this one function, so
     /// they agree on the exact node sequence and the flat-id cursor stays aligned.
@@ -4107,7 +4107,7 @@ impl Interpreter {
     /// slot passed explicitly, so a `for` can stamp its rows with theirs.
     ///
     /// A node passes through carrying whatever slot it inherited; a `for` body
-    /// replaces it with that slot's own element signal. `when` is transparent —
+    /// replaces it with that slot's own element signal. `when` is transparent,
     /// a branch is not an instance, it is the same one under a condition.
     fn expand_concrete_in<'a>(
         &self,
@@ -4139,7 +4139,7 @@ impl Interpreter {
                 RenderNode::For { pool, .. } => {
                     if let Some(p) = pools.fors.get(*pool) {
                         for (i, body) in p.bodies.iter().take(p.len).enumerate() {
-                            // The slot's own element signal — unique across the
+                            // The slot's own element signal, unique across the
                             // program, because a nested `for` is lowered once
                             // per outer slot and gets its own fresh signals.
                             let row = p.item_slots.get(i).map_or(slot, |s| s.0);
@@ -4163,7 +4163,7 @@ impl Interpreter {
     fn reconcile_structure(&mut self, nodes: &[RenderNode], depth: u32) -> bool {
         // Bound the reconcile recursion: a guarded recursion whose guard never
         // terminates (`when go { Recurse() }` with `go` always true) lowers a new
-        // level each descent, so cap it here — the same role `instance_depth`
+        // level each descent, so cap it here, the same role `instance_depth`
         // plays at lower time (RFC-0007 §4), but for the reconcile-time expansion.
         // Truncate with a diagnostic rather than overflow the stack (D4: never a
         // silent failure); dedup so a re-render doesn't spam the error list.
@@ -4192,7 +4192,7 @@ impl Interpreter {
                         .unwrap_or(false);
                     // RFC-0025: an animation lives and dies with its element, so a
                     // branch that has just been unmounted drops its animation
-                    // state — a spinner that comes back starts its turn again
+                    // state, a spinner that comes back starts its turn again
                     // rather than resuming a stale phase. (This is the opposite of
                     // §2's *offscreen* rule, where the element is still mounted and
                     // must resume exactly where it paused.)
@@ -4229,8 +4229,8 @@ impl Interpreter {
                         // was written*: the scope it belongs to exists only as
                         // the snapshot just pushed, and it is truncated again
                         // below. Anything inside the branch that resolves later
-                        // — an event action, an animated attribute reading the
-                        // row it belongs to, a nested `for`/`when` pool — has to
+                        //, an event action, an animated attribute reading the
+                        // row it belongs to, a nested `for`/`when` pool, has to
                         // capture that scope now, or it will look for the row in
                         // an environment that no longer has one.
                         let restored = !env_snap.is_empty();
@@ -4292,7 +4292,7 @@ impl Interpreter {
                         let known_refs: Vec<&str> = known.iter().map(String::as_str).collect();
                         // Mark that we are lowering inside a `for` body so any
                         // event action captures `t` in its env snapshot (the
-                        // binding is truncated below before render — RFC-0027).
+                        // binding is truncated below before render, RFC-0027).
                         self.for_depth += 1;
                         let body_nodes = self.lower_members(&body_ast, &known_refs);
                         self.for_depth -= 1;
@@ -4312,7 +4312,7 @@ impl Interpreter {
                         }
                     }
                     // RFC-0025: an animation lives and dies with its element,
-                    // so a row that just left the list drops its state — a
+                    // so a row that just left the list drops its state, a
                     // re-grown row starts fresh rather than resuming a stale
                     // timeline. The pool's *bodies* are grow-only (index `i`
                     // reuses its lowered nodes and its element signal), which is
@@ -4393,7 +4393,7 @@ impl Interpreter {
                     .map(|c| self.flat_len(c.node, pools))
                     .sum::<usize>()
             }
-            // RFC-0026: the container itself, plus — per live screen — that
+            // RFC-0026: the container itself, plus, per live screen, that
             // screen's synthesized wrapper and its subtree.
             RenderNode::Nav { pool, .. } => {
                 let Some(p) = pools.navs.get(*pool) else {
@@ -4419,7 +4419,7 @@ impl Interpreter {
     /// declaration order), expanding reactive `when`/`for` (RFC-0018) so an
     /// overlay inside a live branch/body is found. Recurses through `Box` and an
     /// overlay's own children, so a nested overlay is collected as its own later
-    /// — hence higher — stack entry.
+    ///, hence higher, stack entry.
     fn collect_overlays<'a>(
         &self,
         nodes: &'a [RenderNode],
@@ -4620,7 +4620,7 @@ impl Interpreter {
     }
 
     /// Evaluates a shape color parameter. The alpha byte is auto-detected
-    /// (the lexer's >6-digit tag, or magnitude for computed values) —
+    /// (the lexer's >6-digit tag, or magnitude for computed values),
     /// matching every alpha-aware colour consumer (RFC-0011).
     fn shape_color(&mut self, el: &ElementNode, name: &str) -> Option<[f32; 4]> {
         let e = Self::shape_arg(el, name)?.clone();
@@ -4645,7 +4645,7 @@ impl Interpreter {
         }
     }
 
-    /// Reads a bare-token shape parameter (`cap: round`) — an enum token is a
+    /// Reads a bare-token shape parameter (`cap: round`), an enum token is a
     /// syntactic identifier, never an env lookup, mirroring how `align:` and
     /// `fit:` tokens read elsewhere.
     fn shape_token(el: &ElementNode, name: &str) -> Option<String> {
@@ -4675,7 +4675,7 @@ impl Interpreter {
     ///
     /// Bindings are pushed and truncated per iteration rather than snapshotted,
     /// because the whole body runs inside the canvas's already-restored
-    /// instance environment — the loop variable is the only thing that changes.
+    /// instance environment, the loop variable is the only thing that changes.
     #[allow(clippy::too_many_arguments)]
     fn emit_canvas_items(
         &mut self,
@@ -4796,7 +4796,7 @@ impl Interpreter {
         }
 
         // Shared paint parameters (RFC-0020 §"Stroke and fill"). A shape with
-        // neither stroke nor fill paints nothing — skip it entirely.
+        // neither stroke nor fill paints nothing, skip it entirely.
         let stroke_color = self.shape_color(el, "stroke").unwrap_or([0.0; 4]);
         let fill_color = self.shape_color(el, "fill").unwrap_or([0.0; 4]);
         if stroke_color[3] <= 0.0 && fill_color[3] <= 0.0 {
@@ -4835,7 +4835,7 @@ impl Interpreter {
                 let r = self.shape_num(el, "r").unwrap_or(0.0);
                 // Angles are authored in degrees (RFC-0020 examples:
                 // `start: -90, sweep: 270`); the GPU wants radians. An
-                // unswept `arc` defaults to a full circle — `circle` is the
+                // unswept `arc` defaults to a full circle, `circle` is the
                 // explicit sugar for exactly that (RFC-0020 §"Shape commands").
                 let start = self.shape_num(el, "start").unwrap_or(0.0);
                 let sweep = if name == "circle" {
@@ -4942,7 +4942,7 @@ impl Interpreter {
             }
             "bezier" => {
                 // Flattened CPU-side into round-capped line segments on the
-                // same Tier-1 pipeline — cheaper and *fully animatable*,
+                // same Tier-1 pipeline, cheaper and *fully animatable*,
                 // unlike an MSDF re-rasterization (see the RFC-0020 notes in
                 // the design record). Round caps hide the joints; the curve
                 // has no fill.
@@ -5049,7 +5049,7 @@ impl Interpreter {
             )
             .into_bytes()
         });
-        // Cache miss: skip this tick (INV-9 — the frame ships without
+        // Cache miss: skip this tick (INV-9, the frame ships without
         // stalling); the generated field lands via the ordinary JIT drain.
         let Some(glyph) = glyph else { return };
 
@@ -5072,7 +5072,7 @@ impl Interpreter {
     }
 
     /// A canvas `text(…)` command: a `TextLine` anchored at `(x, y)` with
-    /// optional `align` (start/center/end around `x`) — `y` is the vertical
+    /// optional `align` (start/center/end around `x`), `y` is the vertical
     /// center of the run, matching the RFC's centred-label example.
     fn emit_canvas_text(
         &mut self,
@@ -5168,7 +5168,7 @@ impl Interpreter {
                 Ok(id)
             }
             RenderNode::Spacer { attrs } => {
-                // RFC-0005: a `Spacer` is a *flexible* gap — `grow` (default 1)
+                // RFC-0005: a `Spacer` is a *flexible* gap, `grow` (default 1)
                 // is its share of the parent's free space, `basis` its size
                 // before growing. Both are read through the ordinary prop path,
                 // so they are reactive (and animatable) like any other value.
@@ -5178,7 +5178,7 @@ impl Interpreter {
                 flat_ids.push(id);
                 Ok(id)
             }
-            // RFC-0017: an `Overlay` occupies zero space in its parent's flow —
+            // RFC-0017: an `Overlay` occupies zero space in its parent's flow,
             // its children are laid out separately against the viewport in the
             // deferred overlay phase. A 0×0 leaf keeps the parallel flat-id
             // cursor aligned without displacing any sibling.
@@ -5240,7 +5240,7 @@ impl Interpreter {
                 // the width its parent offers during layout (via the shared
                 // `TextMeasurer`), so it reflows without an explicit `width`. An
                 // explicit `width` fixes the wrap width; `wrap: false` opts out to
-                // a fixed natural single-line leaf (may overflow — the caller's
+                // a fixed natural single-line leaf (may overflow, the caller's
                 // choice). `fallback` is the natural size for the no-sizer path.
                 let (nat_w, nat_h) = self.measure_text_wrapped(&text, font_size, None);
                 if self.eval_bool_prop(attrs, "wrap") == Some(false) {
@@ -5269,7 +5269,7 @@ impl Interpreter {
                 // The same restore the paint walk does, for the same reason and
                 // one pass earlier: a box's *size* is as much a function of the
                 // scope it was instantiated in as its colour is. `width: row.w`
-                // inside a `for`, a user view's `width: size` — layout reads
+                // inside a `for`, a user view's `width: size`, layout reads
                 // those attrs through the ordinary prop path, so without the
                 // instance environment they resolve to nothing and the element
                 // silently falls back to its default (a `width`-less box fills
@@ -5341,7 +5341,7 @@ impl Interpreter {
         }
         // RFC-0005 windowed ScrollView: when opted in, build only the
         // visible slice of a single uniform-height list child, bracketed
-        // by spacer leaves for the elided rows — so layout is O(visible),
+        // by spacer leaves for the elided rows, so layout is O(visible),
         // not O(list). The same window is recomputed in the render pass.
         if name.as_str() == "ScrollView" {
             if let [
@@ -5354,7 +5354,7 @@ impl Interpreter {
             ] = children
             {
                 // RFC-0018: expand a reactive `for` (or literal rows) to
-                // the concrete row nodes, then window over them — so
+                // the concrete row nodes, then window over them, so
                 // virtualization still lays out only the visible slice.
                 let rows = self.expand_concrete(rows_raw, pools);
                 if let Some(win) = self.scroll_window(attrs, rows.len()) {
@@ -5381,7 +5381,7 @@ impl Interpreter {
         if name.as_str() == "Grid" {
             return self.build_grid(attrs, children, pools, flat_ids);
         }
-        // RFC-0018 `ZStack`: overlapping children — a single-cell grid.
+        // RFC-0018 `ZStack`: overlapping children, a single-cell grid.
         if name.as_str() == "ZStack" {
             return self.build_zstack(attrs, children, pools, flat_ids);
         }
@@ -5396,8 +5396,8 @@ impl Interpreter {
     }
 
     /// Builds the atlas subtree for a `Grid` (RFC-0018). Children are expanded
-    /// (reactive `when`/`for` first), each built and — if it carries `col`/`row`/
-    /// `col_span`/`row_span` — placed explicitly; the rest auto-place. The
+    /// (reactive `when`/`for` first), each built and, if it carries `col`/`row`/
+    /// `col_span`/`row_span`, placed explicitly; the rest auto-place. The
     /// container is emitted in the same parent-then-children `flat_ids` order the
     /// generic container path uses, so the render walk's parallel cursor stays
     /// aligned.
@@ -5433,8 +5433,8 @@ impl Interpreter {
             .atlas
             .add_grid_container(base, &cols, &rows, col_gap, row_gap, &child_ids)?;
         for (cid, p) in placements {
-            // A rejected placement (e.g. a foreign node) is non-fatal — the child
-            // simply auto-places — so it never aborts the frame.
+            // A rejected placement (e.g. a foreign node) is non-fatal, the child
+            // simply auto-places, so it never aborts the frame.
             let _ = self.atlas.set_grid_item(cid, p);
         }
         flat_ids.push(id);
@@ -5652,24 +5652,24 @@ impl Interpreter {
         // Opacity inherited from ancestors (RFC-0011 T4 approximation): folded
         // into this element's own `opacity` and multiplied into the alpha of
         // every primitive it emits, so a translucent parent dims its text and
-        // widgets too — not only its own background.
+        // widgets too, not only its own background.
         inherited_opacity: f32,
         // Paint-time transform inherited from ancestors (RFC-0011 group
         // transforms): composed with this element's own transform so a scaled or
-        // translated container carries its children, text, and widgets with it —
+        // translated container carries its children, text, and widgets with it,
         // not only its own background box. `IDENTITY` at the root.
         inherited_transform: byard_core::frame::Transform,
         // The nearest enclosing `ScrollView` viewport, in screen space (RFC-0005
         // emission culling). A node whose scroll-shifted rect falls entirely
-        // outside it is skipped — the scissor already hides such fragments, so
+        // outside it is skipped, the scissor already hides such fragments, so
         // this only spares the CPU the emission. `None` outside any scroll
         // container (the whole viewport is live).
         cull_clip: Option<byard_core::frame::Rect>,
         // Accumulated scroll displacement from every enclosing `ScrollView`
         // (RFC-0005), in screen px. Paint applies it through the inherited
-        // transform; **hit-testing** cannot ride that path — RFC-0011/INV-8
+        // transform; **hit-testing** cannot ride that path, RFC-0011/INV-8
         // deliberately keeps paint transforms out of hit rects (a hover-scale
-        // must not move its own hit target) — so the scroll displacement
+        // must not move its own hit target), so the scroll displacement
         // travels separately and shifts every hit rect registered inside the
         // scrolled subtree. This is what keeps a scrolled button interactive
         // at its *on-screen* position, not its laid-out one.
@@ -5677,7 +5677,7 @@ impl Interpreter {
         // Set only on a windowed `ScrollView`'s list child (RFC-0005 windowed
         // layout): this node renders just rows `start..end`, bracketed by the two
         // spacer leaves the build pass emitted, so the flat-id cursor stays
-        // aligned. `None` everywhere else — the ordinary full child walk.
+        // aligned. `None` everywhere else, the ordinary full child walk.
         window: Option<WindowSpec>,
         // RFC-0018: the reactive `for` pools, for expanding `when`/`for` children.
         pools: Pools<'_>,
@@ -5692,7 +5692,7 @@ impl Interpreter {
                 unreachable!("when/for are expanded before render_node_with_atlas")
             }
             // A `Spacer` is layout-only. An `Overlay` renders nothing in the main
-            // flow — its 0×0 leaf holds a slot in the flat-id cursor (already
+            // flow, its 0×0 leaf holds a slot in the flat-id cursor (already
             // advanced above) while its children are emitted separately in the
             // deferred overlay phase (RFC-0017).
             RenderNode::Spacer { .. } | RenderNode::Overlay { .. } => {}
@@ -5735,7 +5735,7 @@ impl Interpreter {
                     // baseline anchor and the font size (glyph extents scale from
                     // the anchor, so this scales the run about the ancestor pivot).
                     // Rotation can't be baked per-glyph and is left to box
-                    // primitives (shader-applied) — a documented limitation.
+                    // primitives (shader-applied), a documented limitation.
                     let anchor = inherited_transform.apply_point([rect.x, rect.y]);
                     let scaled_size = size * inherited_transform.uniform_scale();
                     // RFC-0005 default text wrap: shape the run to the width layout
@@ -5860,7 +5860,7 @@ impl Interpreter {
                     // RFC-0031 §S1: the corner profile `radii` are measured
                     // with. Paint-class, so it never touches layout, and it
                     // reaches the fill, the border, every shadow, the backdrop
-                    // pane and the ripple clip from this one read — §Q2's
+                    // pane and the ripple clip from this one read, §Q2's
                     // "a shadow with a different corner profile than its caster
                     // reads as a rendering bug", applied to the whole element.
                     let smooth = self.resolve_smooth(paint_attrs);
@@ -5899,7 +5899,7 @@ impl Interpreter {
                     // exactly as a border/shadow/opacity does.
                     let gradient = self.resolve_gradient(paint_attrs);
                     // `Toggle`/`Slider` own their visuals (track/fill/thumb) and
-                    // treat `bg` as the *accent* colour, not a full-rect fill —
+                    // treat `bg` as the *accent* colour, not a full-rect fill,
                     // painting the rect here would draw a slab behind the control.
                     let owns_visuals = matches!(
                         name.as_str(),
@@ -5943,7 +5943,7 @@ impl Interpreter {
                         } else if border_color.is_some() {
                             // Paint the opaque fill on the SolidBox pass so it stays
                             // *behind* this container's children (they also paint as
-                            // solids, pushed after it — and the decorated pass runs
+                            // solids, pushed after it, and the decorated pass runs
                             // after every solid). Then add the border as a decorated
                             // overlay whose interior is transparent: it only strokes
                             // the edge, so it can never occlude the children drawn
@@ -5966,7 +5966,7 @@ impl Interpreter {
                         }
                     }
 
-                    // RFC-0023 §2: backdrop blur — emitted right after this
+                    // RFC-0023 §2: backdrop blur, emitted right after this
                     // element's background (the §4 compositing slot), so the
                     // pane samples everything painted behind it, its own
                     // background included, and its children render on top.
@@ -5980,7 +5980,7 @@ impl Interpreter {
                         frame,
                     );
 
-                    // RFC-0023: ripple ink — emitted after this element's
+                    // RFC-0023: ripple ink, emitted after this element's
                     // background and before its children, which stamps its
                     // draw-order depth into exactly the RFC's compositing slot
                     // (background → ripple → children).
@@ -6009,7 +6009,7 @@ impl Interpreter {
                     // RFC-0016: an element that styles `on hover`/`on pressed` but
                     // registers no handler still needs the engine to track the
                     // pointer over it, so register a bare hover/press hit region.
-                    // RFC-0023: same for a `ripple:` element — the press gesture
+                    // RFC-0023: same for a `ripple:` element, the press gesture
                     // must resolve to this element for the ink to spawn, even
                     // when it registers no handler of its own.
                     if let Some(idx) = elem_idx {
@@ -6148,7 +6148,7 @@ impl Interpreter {
                     child_transform.translate[0] -= ox * inherited_transform.scale[0];
                     child_transform.translate[1] -= oy * inherited_transform.scale[1];
                     // Hit rects travel with the content (paint rides the
-                    // transform above; hit-testing rides this — see the
+                    // transform above; hit-testing rides this, see the
                     // `scroll_shift` parameter docs).
                     child_scroll_shift.0 -= ox * inherited_transform.scale[0];
                     child_scroll_shift.1 -= oy * inherited_transform.scale[1];
@@ -6204,7 +6204,7 @@ impl Interpreter {
                     // these next tick (render-then-dispatch handshake).
                     let (sig_x, sig_y) = self.resolve_offset_sigs(attrs);
                     // A `pull_refresh` view needs a target even with no `offset`
-                    // var — its pull region is engine state, driven by the drag.
+                    // var, its pull region is engine state, driven by the drag.
                     let pull_refresh = self.eval_bool_prop(attrs, "pull_refresh").unwrap_or(false);
                     if sig_x.is_some() || sig_y.is_some() || pull_refresh {
                         let (content_w, content_h) = self
@@ -6278,7 +6278,7 @@ impl Interpreter {
                 };
                 // Children cull against this box's own scroll viewport when it is
                 // a `ScrollView`, otherwise against whatever viewport an ancestor
-                // `ScrollView` established — so rows nested under an inner `Column`
+                // `ScrollView` established, so rows nested under an inner `Column`
                 // are culled too, not just the `ScrollView`'s direct child.
                 let child_clip = scroll_clip.or(cull_clip);
                 // A windowed `ScrollView` hands its computed row window to its
@@ -6309,7 +6309,7 @@ impl Interpreter {
                     let child_id = flat_ids[*flat_idx];
                     // RFC-0005 emission culling (north star): a child the
                     // scroll has pushed entirely out of the viewport is never
-                    // pushed to the frame — a long list costs only its visible
+                    // pushed to the frame, a long list costs only its visible
                     // slice. Advance the cursor past the skipped subtree so the
                     // remaining children stay aligned.
                     if let Some(clip) = child_clip {
@@ -6337,7 +6337,7 @@ impl Interpreter {
                     // This box is a windowed list child (RFC-0005): the build pass
                     // wrapped its rows in a leading + trailing spacer leaf. Consume
                     // the leading spacer, render only rows `start..end`, then the
-                    // trailing spacer — keeping the flat-id cursor in lockstep.
+                    // trailing spacer, keeping the flat-id cursor in lockstep.
                     *flat_idx += 1;
                     // RFC-0018: expand a reactive `for` (or literal rows) and
                     // paint only the windowed slice, mirroring the build pass.
@@ -6350,7 +6350,7 @@ impl Interpreter {
                     // RFC-0021 collapsing header: the first child (the header) is
                     // pinned to the viewport top (its scroll translate undone on Y)
                     // *and* drawn last so it paints on top of the content that
-                    // scrolls up under it — draw-order depth is emission order, so a
+                    // scrolls up under it, draw-order depth is emission order, so a
                     // header emitted first would sit behind the content. Skip the
                     // header's flat ids, paint the rest, then rewind and paint the
                     // header over them.
@@ -6368,7 +6368,7 @@ impl Interpreter {
                         let child_id = flat_ids[*flat_idx];
                         // Bind `scroll_fraction` in the *render* env so the header's
                         // prop expressions (`opacity: 1.0 - scroll_fraction`, …)
-                        // resolve it to the live signal — `eval_pure` re-lowers
+                        // resolve it to the live signal, `eval_pure` re-lowers
                         // against the current env each frame, so the lower-time scope
                         // alone isn't enough. Truncated right after (header-only).
                         let fenv = self.env.len();
@@ -6414,7 +6414,7 @@ impl Interpreter {
             }
             // RFC-0026: a navigation container. Its own surface is an ordinary
             // background fill; the interesting part is the per-screen transform
-            // — the transition's whole cost is two `f32` offsets and an alpha,
+            //, the transition's whole cost is two `f32` offsets and an alpha,
             // composed into the transform every subtree already inherits, so a
             // screen sliding in costs no relayout and no extra pass (INV-8).
             RenderNode::Nav { pool, .. } => {
@@ -6454,7 +6454,7 @@ impl Interpreter {
                 self.register_event_attrs(&p.attrs, hit_rect, elem_idx);
 
                 // A screen mid-transition is partly outside the container, so
-                // everything it paints is clipped to the container's bounds —
+                // everything it paints is clipped to the container's bounds,
                 // otherwise a sliding screen would smear across its siblings.
                 let clip = byard_core::frame::Rect::new(
                     transform.apply_point([nav_rect.x, nav_rect.y])[0],
@@ -6476,7 +6476,7 @@ impl Interpreter {
                     screen_transform.translate[1] += motion.dy * transform.scale[1];
                     // Hit rects ride their own channel (RFC-0011/INV-8 keep
                     // paint transforms out of hit-testing), so the same offset
-                    // travels separately — a half-slid screen is tappable
+                    // travels separately, a half-slid screen is tappable
                     // exactly where it is drawn.
                     let screen_shift = (
                         scroll_shift.0 + motion.dx * transform.scale[0],
@@ -6553,7 +6553,7 @@ impl Interpreter {
                     // field, so an ancestor's scale/translate is baked into its
                     // rect (top-left through the transform, extents scaled per
                     // axis). Rotation isn't representable here and is left to box
-                    // primitives — same limitation as `Text`.
+                    // primitives, same limitation as `Text`.
                     let tl = inherited_transform.apply_point([rect.x, rect.y]);
                     let tw = rect.width * inherited_transform.scale[0];
                     let th = rect.height * inherited_transform.scale[1];
@@ -6671,7 +6671,7 @@ impl Interpreter {
                         });
                     }
 
-                    // Shape commands, in declaration order (painter's order —
+                    // Shape commands, in declaration order (painter's order,
                     // each `push_canvas_shape` advances the global emission
                     // depth, RFC-0011). A `Canvas` that declares a combine mode
                     // (RFC-0031 §S4) collects them into one group instead, and
@@ -6698,7 +6698,7 @@ impl Interpreter {
                         );
                     }
 
-                    // Events: the canvas rect only — individual shapes are not
+                    // Events: the canvas rect only, individual shapes are not
                     // hit-testable (RFC-0020 resolved question). Shifted to
                     // the on-screen position like every hit rect (RFC-0005).
                     let hit_rect = scrolled_hit_rect(
@@ -6810,10 +6810,10 @@ impl Interpreter {
     /// Renders a `Checkbox` widget (RFC-0018): a rounded square that fills with
     /// the accent colour and shows an engine-drawn checkmark when checked, a
     /// muted filled slot when unchecked, and a horizontal dash for the
-    /// `indeterminate` mixed state — all borderless SolidBoxes (a 2px ring reads
+    /// `indeterminate` mixed state, all borderless SolidBoxes (a 2px ring reads
     /// as a heavy dark outline at control sizes). Registers Tap + Space (KeyDown)
     /// to flip the bound bool, a `change` write-back (RFC-0003 E1), and a focus
-    /// target so Tab and click reach it. Like `Toggle`, it owns its visuals —
+    /// target so Tab and click reach it. Like `Toggle`, it owns its visuals,
     /// `bg` is the checked accent, never a full-rect slab.
     ///
     /// The checkmark is drawn as two rounded stroke quads rotated to each
@@ -6848,7 +6848,7 @@ impl Interpreter {
         // the checked accent (default: theme primary); when unchecked, a styled
         // `border` yields an outlined box with a transparent interior (the M3
         // look), otherwise a muted filled slot (`Toggle`'s OFF tint). The
-        // container is pushed *before* the mark — both on the decorated pipeline —
+        // container is pushed *before* the mark, both on the decorated pipeline,
         // so the white mark lands on top.
         let bg = self.eval_color_prop(attrs, "bg");
         let border = self.eval_color_prop(attrs, "border");
@@ -6963,11 +6963,11 @@ impl Interpreter {
     /// filled dot when selected. Selection is `bind == value`: the bound group
     /// `var`'s current string equals this button's `value`. Tapping writes this
     /// button's `value` to the group var, so the previously selected sibling
-    /// deselects reactively (automatic mutual exclusion — every radio in the
+    /// deselects reactively (automatic mutual exclusion, every radio in the
     /// group reads the same var). Registers the group ordering for arrow-key
     /// navigation, a Tap handler, arrow KeyDown handlers (move selection within
     /// the group, wrapping), a `change` write-back (RFC-0003 E1), and a focus
-    /// target so Tab/click reach it. Owns its visuals — `bg` is the selected
+    /// target so Tab/click reach it. Owns its visuals, `bg` is the selected
     /// accent. The ring is the radio's defining affordance (unlike `Checkbox`,
     /// whose square border was dropped); its interior is transparent so the dot
     /// shows through and it composes over any background.
@@ -7204,7 +7204,7 @@ impl Interpreter {
                             .clamp(0.0, 1.0);
                         let raw = min + t * (max - min);
                         // Quantise so the value never carries more decimals than
-                        // the step (or, with no step, a readable default) — see
+                        // the step (or, with no step, a readable default), see
                         // `step_decimals`/`SLIDER_DEFAULT_DECIMALS`.
                         let val = match step {
                             Some(s) => round_to_decimals((raw / s).round() * s, step_decimals(s)),
@@ -7285,7 +7285,7 @@ impl Interpreter {
         let text_y = rect.y + (rect.h - font_size) / 2.0;
         // NOTE: `TextLine` carries no `Transform` field (RFC-0011 engine slice:
         // only box primitives were given one), so the field's *text* does not
-        // follow `translate`/`scale`/`rotate` — the box visuals below (underline,
+        // follow `translate`/`scale`/`rotate`, the box visuals below (underline,
         // caret) and its `bg` fill do. Same limitation as the `Text` intrinsic.
         if !display_text.is_empty() {
             frame.push_text(byard_core::TextLine {
@@ -7426,7 +7426,7 @@ impl Interpreter {
                     "double_tap" => super::events::EventKind::DoubleTap,
                     "secondary" => super::events::EventKind::Secondary,
                     // RFC-0012 S2: `focus =>`/`blur =>` sugar over `focused_sig`'s
-                    // edges — registered as ordinary handlers here; `steal_focus`
+                    // edges, registered as ordinary handlers here; `steal_focus`
                     // fires them directly (see `interp::events::EventKind::Focus`).
                     "focus" => super::events::EventKind::Focus,
                     "blur" => super::events::EventKind::Blur,
@@ -7442,7 +7442,7 @@ impl Interpreter {
     }
 
     /// Registers an element as focusable if it has a `focused:` prop attr
-    /// (M16/M18), **or** a `focus =>`/`blur =>` handler (RFC-0012 S2) — the
+    /// (M16/M18), **or** a `focus =>`/`blur =>` handler (RFC-0012 S2), the
     /// sugar rides `focused_sig`'s edges, so an element that only wants the
     /// one-shot event (no bound `var`) still needs a signal for
     /// `steal_focus` to flip. That signal is a fresh internal one when
@@ -7455,7 +7455,7 @@ impl Interpreter {
         elem_idx: Option<u32>,
     ) {
         // Without an index there is nowhere to register the focusable, so a
-        // freshly created internal signal below would just be dropped —
+        // freshly created internal signal below would just be dropped,
         // bail out first rather than allocate one for nothing.
         let Some(idx) = elem_idx else {
             return;
@@ -7511,17 +7511,17 @@ impl Interpreter {
 
     /// Drives one colour `with` animation (RFC-0010 A3): interpolates from the
     /// current colour to the target in OKLab (one [`Motion`] per channel, plus
-    /// a fourth for the alpha byte — a translucent `backdrop_tint`/`bg` fades
+    /// a fourth for the alpha byte, a translucent `backdrop_tint`/`bg` fades
     /// in and out rather than popping, RFC-0023), so the transition is
     /// perceptually uniform and interruptible. Returns the current colour
-    /// packed as `0xAARRGGBB` — opaque targets carry `AA = 0xFF`, which every
+    /// packed as `0xAARRGGBB`, opaque targets carry `AA = 0xFF`, which every
     /// consumer's alpha auto-detect reads as the same opaque colour.
     ///
     /// [`Motion`]: byard_core::frame::Motion
     fn eval_animated_color(&mut self, target: &Expr, anim: &Expr, key: AnimKey) -> i64 {
         let target_int = self.eval_pure(target).as_int().unwrap_or(0);
         // Without an advancing clock, jump straight to the target (mirrors the
-        // scalar path — never latch `has_active_animations` on t=0).
+        // scalar path, never latch `has_active_animations` on t=0).
         if !self.clock_set {
             return target_int;
         }
@@ -7688,7 +7688,7 @@ impl Interpreter {
     }
 
     /// The literal keyword token of an *enum* (keyword) prop value, read straight
-    /// from the AST bareword — e.g. the `page` in `snap: page`.
+    /// from the AST bareword, e.g. the `page` in `snap: page`.
     ///
     /// Enum props (`PropType::Enum`) are a closed keyword set validated by the
     /// checker as a bare [`Expr::Ident`] (`intrinsics.rs`, `check_attr_value`),
@@ -7750,7 +7750,7 @@ impl Interpreter {
     }
 
     /// Emits the RFC-0023 §2 backdrop-blur pane for one element, called from
-    /// the `Box` paint arm right after the background push — the RFC-0023 §4
+    /// the `Box` paint arm right after the background push, the RFC-0023 §4
     /// compositing slot (background → blur → tint → ripple → children): the
     /// pane samples everything already emitted, its own background included.
     ///
@@ -7758,7 +7758,7 @@ impl Interpreter {
     /// pane; both it and `backdrop_tint` resolve through the RFC-0010
     /// animation chokepoints, so `blur: 0 with anim.spring()` +
     /// `on hover { blur: 16 }` animates the glass for free. A tint *without*
-    /// blur needs no barrier or off-screen work at all — it lowers to a plain
+    /// blur needs no barrier or off-screen work at all, it lowers to a plain
     /// translucent fill over the content behind, which is the identical
     /// composite at zero cost.
     #[allow(clippy::too_many_arguments)]
@@ -7787,7 +7787,7 @@ impl Interpreter {
 
         if blur <= 0.0 {
             // Tint-only: a translucent wash over the (unblurred) content
-            // behind — a plain alpha-blended fill composites identically.
+            // behind, a plain alpha-blended fill composites identically.
             if tint_rgba[3] > 0.0 {
                 frame.push_decorated(byard_core::frame::DecoratedBox {
                     base: byard_core::BoxInstance {
@@ -7836,7 +7836,7 @@ impl Interpreter {
     }
 
     /// Spawns and emits the RFC-0023 ripple ink for one element, called from
-    /// the `Box` paint arm between the background push and the child walk —
+    /// the `Box` paint arm between the background push and the child walk,
     /// which is exactly the RFC's compositing slot (background → ripple →
     /// children), resolved by the emission-order draw depth.
     ///
@@ -7878,7 +7878,7 @@ impl Interpreter {
             return;
         };
 
-        // Spawn on a fresh press gesture. Gated on an advancing clock — without
+        // Spawn on a fresh press gesture. Gated on an advancing clock, without
         // one a ripple could never expand, fade, or retire (mirrors
         // `eval_animated`'s inert-host rule).
         if self.clock_set && self.eval_bool_prop(attrs, "ripple_active") == Some(true) {
@@ -7898,7 +7898,7 @@ impl Interpreter {
                             (pos.0 - scroll_shift.0 - rect.x).clamp(0.0, rect.w),
                             (pos.1 - scroll_shift.1 - rect.y).clamp(0.0, rect.h),
                         ],
-                        // Alpha auto-detect (lexer tag or magnitude) — ripple
+                        // Alpha auto-detect (lexer tag or magnitude), ripple
                         // ink is typically translucent.
                         color: super::intrinsics::color_rgba_auto(color),
                         start_ms: self.now_ms,
@@ -7986,7 +7986,7 @@ impl Interpreter {
             "Row" => FlexDir::Row,
             _ => FlexDir::Column,
         };
-        // RFC-0005 `ScrollView`: a scroll container — content is measured at
+        // RFC-0005 `ScrollView`: a scroll container, content is measured at
         // natural size and overflows the fixed viewport (clipped + scrolled by
         // the renderer), rather than flex-shrunk to fit. `axis` (default
         // `vertical`) picks the overflowing axes; `both` scrolls in 2D.
@@ -8000,7 +8000,7 @@ impl Interpreter {
                 // evaluated here: layout runs in the build phase against the
                 // *base* attrs, and driving a paint prop through the RFC-0010
                 // `with` chokepoint from here would fight the paint pass's
-                // state-resolved evaluation of the same `Motion` — a
+                // state-resolved evaluation of the same `Motion`, a
                 // retarget ping-pong that freezes state-driven animations
                 // short of their target. Layout props themselves are never
                 // animatable (`LayoutPropNotAnimatable`), so skipping the
@@ -8286,22 +8286,22 @@ impl Interpreter {
     }
 
     /// Resolves a `radius`-typed attribute into per-corner radii
-    /// `[top_left, top_right, bottom_right, bottom_left]` — the exact order
+    /// `[top_left, top_right, bottom_right, bottom_left]`, the exact order
     /// `BoxInstance::radii`/`TextureSampler::radii` expect (`frame.rs`).
     ///
     /// RFC-0005 §"Decoration" documents `radius: Len` as "scalar = all, quad =
     /// per-corner". Accepted forms: a scalar (`radius: 16`, all four
     /// corners) and the positional CSS-order quad (`radius: (4, 8, 12, 16)`).
     /// Unlike `p`/`m`'s generic `Len` contract, there is no pair shorthand and
-    /// no named-field form for `radius` — the RFC documents only scalar/quad,
+    /// no named-field form for `radius`, the RFC documents only scalar/quad,
     /// so this resolver doesn't invent additional surface. A non-4 tuple
     /// arity is a `CompileError::ArityMismatch`; a non-numeric corner is an
     /// `AttributeTypeMismatch`; a named field is a `ConflictingSpacingField`
-    /// (reusing the existing diagnostic — the message states the real cause).
+    /// (reusing the existing diagnostic, the message states the real cause).
     /// Resolves the `shadow` attribute into zero or more drop shadows
     /// (RFC-0011 custom shadows). Accepts a preset token (`sm`/`md`/`lg`/`none`),
-    /// a single tuple — named `(y: 4, blur: 8, spread: 0, color: 0x…)` or
-    /// positional `(x, y, blur, spread, color)` — or an array of tuples for
+    /// a single tuple, named `(y: 4, blur: 8, spread: 0, color: 0x…)` or
+    /// positional `(x, y, blur, spread, color)`, or an array of tuples for
     /// CSS-style layered shadows.
     fn resolve_shadows(&mut self, attrs: &[Attr]) -> Vec<ShadowSpec> {
         let Some(value) = attrs.iter().find_map(|a| match (&a.name, &a.kind) {
@@ -8390,7 +8390,7 @@ impl Interpreter {
     }
 
     /// Resolves the `gradient` prop into a [`Gradient`](byard_core::frame::Gradient)
-    /// — a linear colour ramp painted over the element's fill (RFC-0001 §3.1's
+    ///, a linear colour ramp painted over the element's fill (RFC-0001 §3.1's
     /// `DecoratedBox` remit).
     ///
     /// Surface (named fields, any order, all optional):
@@ -8399,7 +8399,7 @@ impl Interpreter {
     /// expressible; omit it and the ramp is an ordinary two-stop fade. The
     /// separate `gradient_offset` prop shifts the ramp along its axis and, being
     /// an ordinary numeric prop, animates through the RFC-0010/RFC-0025
-    /// chokepoints — a looping offset is a travelling sweep.
+    /// chokepoints, a looping offset is a travelling sweep.
     fn resolve_gradient(&mut self, attrs: &[Attr]) -> Option<byard_core::frame::Gradient> {
         let value = attrs.iter().find_map(|a| match (&a.name, &a.kind) {
             (n, AttrKind::Prop { value }) if n.as_str() == "gradient" => Some(value),
@@ -8504,7 +8504,7 @@ impl Interpreter {
 
     /// The combine mode a `Canvas` declares, and its parameter (RFC-0031 §S4).
     ///
-    /// `fuse: <px>` is the smoothing radius — the distance over which two
+    /// `fuse: <px>` is the smoothing radius, the distance over which two
     /// surfaces bridge into one. `morph: <scalar>` is the sequence mode: the
     /// canvas's shapes become an ordered set and the scalar indexes it. They
     /// are mutually exclusive (§Q4, diagnosed at check time); `fuse` wins here
@@ -8512,7 +8512,7 @@ impl Interpreter {
     /// than something mode-dependent.
     ///
     /// Both read through `eval_float_prop`, which puts them on the RFC-0010
-    /// animation chokepoint — the whole design. The Material 3 loader is seven
+    /// animation chokepoint, the whole design. The Material 3 loader is seven
     /// shapes and *one* animated scalar; an animating fusion is new
     /// per-instance data and never a re-tessellation.
     fn resolve_group_mode(&mut self, attrs: &[Attr]) -> Option<(u32, f32)> {
@@ -8549,7 +8549,7 @@ impl Interpreter {
             return; // an empty group draws nothing
         };
         // §S4: fusion bulges *outward* by up to the smoothing radius, so the
-        // union quad is inflated by `k` — an under-inflated quad clips exactly
+        // union quad is inflated by `k`, an under-inflated quad clips exactly
         // the bridge the feature exists to draw. Morphing never leaves its
         // members' union, so it pays nothing for this.
         let inflate = if mode == byard_core::frame::GROUP_FUSE {
@@ -8582,8 +8582,8 @@ impl Interpreter {
         }
         frame.push_shape_group(
             CanvasShape {
-                // The head's own kind is never evaluated — the shader branches
-                // on the combine mode first — but `bounds()` is, so a rect
+                // The head's own kind is never evaluated, the shader branches
+                // on the combine mode first, but `bounds()` is, so a rect
                 // carrying the union is exactly the quad §S4 asks for.
                 kind: CANVAS_SHAPE_RECT,
                 params: [
@@ -8617,8 +8617,8 @@ impl Interpreter {
     ///
     /// It resolves through `eval_float_prop`, so it passes the RFC-0010
     /// animation chokepoint like every other paint scalar: `smooth: 0.6 with
-    /// anim.spring()` interpolates with no plumbing of its own, and — being
-    /// paint-class — never marks the layout tree.
+    /// anim.spring()` interpolates with no plumbing of its own, and, being
+    /// paint-class, never marks the layout tree.
     ///
     /// Absent means `0.0`, which the shaders short-circuit to the L² field they
     /// evaluated before this property existed.
@@ -8688,7 +8688,7 @@ impl Interpreter {
 
     /// Resolves the paint-time transform attributes (RFC-0011:
     /// `translate`/`scale`/`rotate`/`origin`; `opacity` stays on its own
-    /// existing path — see the doc comment on `DecoratedBox`/`Transform` in
+    /// existing path, see the doc comment on `DecoratedBox`/`Transform` in
     /// `frame.rs` for why). `rect` is the element's own laid-out rect,
     /// logical pixels, needed to resolve a token/fractional `origin` into an
     /// absolute pivot.
@@ -8710,12 +8710,12 @@ impl Interpreter {
         }
     }
 
-    /// Resolves a two-axis prop (`translate`/`scale`) to `(x, y)` — RFC-0011's
+    /// Resolves a two-axis prop (`translate`/`scale`) to `(x, y)`, RFC-0011's
     /// dual surface: a bare scalar fills both axes; `(a, b)` binds positionally;
     /// `(x: a, y: b)` sets any subset, order-independent, leaving the rest at
     /// `default`. The sub-property form (`name.x: v` / `name.y: v`, a separate
     /// `Attr` with `axis: Some(_)`) then overrides individual axes on top of
-    /// whatever the base `name: value` attribute (if any) already resolved —
+    /// whatever the base `name: value` attribute (if any) already resolved,
     /// so `translate.y: 2` alone is exactly `translate: (y: 2)`.
     fn resolve_axis_pair(&mut self, attrs: &[Attr], name: &str, default: (f32, f32)) -> (f32, f32) {
         let mut result = default;
@@ -8763,7 +8763,7 @@ impl Interpreter {
     }
 
     /// Parses one `translate`/`scale`-shaped [`Expr`] (scalar, positional
-    /// tuple, or named tuple) into `(x, y)` — the value-shape half of
+    /// tuple, or named tuple) into `(x, y)`, the value-shape half of
     /// [`Self::resolve_axis_pair`], factored out so [`Self::resolve_origin`]
     /// can reuse the exact same tuple grammar for its own fractional pair.
     fn resolve_axis_pair_value(&mut self, value: &Expr, default: (f32, f32)) -> (f32, f32) {
@@ -8839,7 +8839,7 @@ impl Interpreter {
                 if let Some(v) = spacing_value(&val) {
                     (v, v)
                 } else if let Some(pair) = axis_pair_of_value(&val, default) {
-                    // A *computed* pair — what keyframed coordinates resolve to
+                    // A *computed* pair, what keyframed coordinates resolve to
                     // (RFC-0025: `translate: anim.keyframes(0%: (-100, 0), …)`
                     // blends component-wise and arrives here as a tuple value).
                     pair
@@ -8855,7 +8855,7 @@ impl Interpreter {
     }
 
     /// Resolves `rotate` (RFC-0011): the terse `rotate: 90deg` form or the
-    /// verbose `rotate: (angle: 90deg)` single-field tuple — both already
+    /// verbose `rotate: (angle: 90deg)` single-field tuple, both already
     /// canonicalized to radians by the lexer's `Expr::AngleLit`. Absent →
     /// `None` (caller defaults to `0.0`, no rotation).
     fn resolve_rotate(&mut self, attrs: &[Attr]) -> Option<f32> {
@@ -8877,7 +8877,7 @@ impl Interpreter {
         let val = self.eval_pure(inner);
         let Some(rad) = spacing_value(&val) else {
             // A non-numeric `rotate` (e.g. `rotate: center`, or a reactive var
-            // that didn't resolve to a number) is a real mistake, not a no-op —
+            // that didn't resolve to a number) is a real mistake, not a no-op,
             // flag it the same way `translate`/`scale` flag theirs instead of
             // silently painting with no rotation.
             self.errors.push(CompileError::AttributeTypeMismatch {
@@ -8894,7 +8894,7 @@ impl Interpreter {
     /// four corners/edges), or a fractional `(fx, fy)` tuple relative to
     /// `rect` (positional or named, reusing [`Self::resolve_axis_pair_value`]'s
     /// tuple grammar). Absent, or an unrecognized token, defaults to `center`
-    /// — RFC-0011's own stated default — rather than hard-failing.
+    ///, RFC-0011's own stated default, rather than hard-failing.
     ///
     /// Deliberately out of scope for now: the `px` absolute-origin suffix
     /// (T2's third form) needs a new lexer literal this slice doesn't add;
@@ -8960,15 +8960,15 @@ impl Interpreter {
         // tree's pool ids are discarded with it (hot-reload re-lowers the tree).
         self.for_pools.clear();
         self.when_pools.clear();
-        // RFC-0026: likewise the navigation stacks — a re-lowered tree carries
+        // RFC-0026: likewise the navigation stacks, a re-lowered tree carries
         // fresh pool ids, and a stale pool would keep a discarded screen alive.
         self.nav_pools.clear();
         self.nav_elems.clear();
         self.nav_shared.clear();
         self.eval_view_decls(view);
         // A view that declares a `content` slot (RFC-0007 D-A) may reference it in
-        // its body. When the view is lowered *standalone* — e.g. `byard check`
-        // validates each `ViewDecl` independently, or a slot view is a root —
+        // its body. When the view is lowered *standalone*, e.g. `byard check`
+        // validates each `ViewDecl` independently, or a slot view is a root,
         // there is no calling instance, so push an empty slot frame: the bare
         // `content` reference then splices nothing instead of being mistaken for
         // an `UnknownView`. A real call (`lower_user_view_call`) pushes the
@@ -9000,7 +9000,7 @@ impl Interpreter {
                 let f = *f;
                 Box::new(move |_| Value::Float(f))
             }
-            // Already canonicalized to radians by the lexer (RFC-0011 T1) —
+            // Already canonicalized to radians by the lexer (RFC-0011 T1),
             // from here on an angle is just a plain `Float`.
             Expr::AngleLit(rad, _) => {
                 let rad = *rad;
@@ -9008,9 +9008,9 @@ impl Interpreter {
             }
             Expr::StrLit(parts, _) => self.lower_strlit(parts, payload_name),
             Expr::Ident(name, span) => {
-                // A bare reference to a callback prop (RFC-0019 §4) — reached only
+                // A bare reference to a callback prop (RFC-0019 §4), reached only
                 // when it is *not* the callee of a call (`on_tap()` is handled in
-                // `lower_call`) — is invalid: callbacks are fire-and-forget, not
+                // `lower_call`), is invalid: callbacks are fire-and-forget, not
                 // first-class values.
                 if let Some(&Value::Fn(id)) = self.env.lookup(name) {
                     if self.fn_table.get(id.0 as usize).is_some_and(|e| e.2) {
@@ -9067,7 +9067,7 @@ impl Interpreter {
                 let mut rc = self.lower_expr(rhs, payload_name);
                 match op {
                     BinOp::And => Box::new(move |ctx| {
-                        // Evaluate — and thereby read-track — the RHS only when
+                        // Evaluate, and thereby read-track, the RHS only when
                         // the LHS is true (RFC-0027 §2, mirrors `when`).
                         if lc(ctx).as_bool().unwrap_or(false) {
                             Value::Bool(rc(ctx).as_bool().unwrap_or(false))
@@ -9085,7 +9085,7 @@ impl Interpreter {
                     _ => Box::new(move |ctx| eval_binary(op, lc(ctx), rc(ctx))),
                 }
             }
-            // Prefix unary (`!b`, `-x`) — RFC-0027 §2. `!` negates a `Bool`;
+            // Prefix unary (`!b`, `-x`), RFC-0027 §2. `!` negates a `Bool`;
             // `-` negates a numeric. A type mismatch degrades to `Unit`
             // (the checker reports it, INV-4: no panic).
             Expr::Unary { op, rhs, .. } => {
@@ -9180,9 +9180,9 @@ impl Interpreter {
                     Box::new(|_| Value::Unit)
                 }
             }
-            // A `style { … }` value (RFC-0016) is consumed structurally — bound
+            // A `style { … }` value (RFC-0016) is consumed structurally, bound
             // via `let` into the style table and spliced by `..` at lower time
-            // (see `register_style`/`expand_style_spreads`) — never projected as
+            // (see `register_style`/`expand_style_spreads`), never projected as
             // a scalar. Reaching here means it was used where a value was
             // expected, which has no meaning; yield Unit.
             Expr::StyleValue { .. } | Expr::Merge { .. } => Box::new(|_| Value::Unit),
@@ -9243,7 +9243,7 @@ impl Interpreter {
     ///
     /// The returned closure reads the active-scheme signal *tracked*, so any
     /// binding that projects a token re-runs when the scheme flips. Token data
-    /// is resolved once, here, and captured by value — the closure never borrows
+    /// is resolved once, here, and captured by value, the closure never borrows
     /// the interpreter.
     fn lower_theme_member(&mut self, base: &Expr, field: &Symbol, span: Span) -> Option<Lowered> {
         let Expr::Ident(base_name, _) = base else {
@@ -9384,7 +9384,7 @@ impl Interpreter {
         if let Some(lowered) = self.lower_nav_action(callee, args, payload_name) {
             return lowered;
         }
-        // `untrack(expr)` — the reserved escape hatch (D2).
+        // `untrack(expr)`, the reserved escape hatch (D2).
         if let Expr::Ident(name, _) = callee {
             if name.as_str() == "untrack" {
                 if let Some(arg) = args.first() {
@@ -9399,7 +9399,7 @@ impl Interpreter {
             }
             // Parameterized fn call (M25) *or* callback-prop invocation
             // (RFC-0019 §3): inline the body with args bound as memos. For a
-            // callback, the body is the *caller's* action block — still resolved
+            // callback, the body is the *caller's* action block, still resolved
             // here, where the caller's `var`s remain live below the callee frame
             // in the shared flat env, so `count++` routes to the caller's signal.
             if let Some(Value::Fn(id)) = self.env.lookup(name).cloned() {
@@ -9433,7 +9433,7 @@ impl Interpreter {
             }
         }
         // Collection method calls (RFC-0027 §4): `xs.push(v)`, `.removeAt(i)`,
-        // `.contains(v)`, `.map(f)`, `.filter(f)` — each pure and value-returning.
+        // `.contains(v)`, `.map(f)`, `.filter(f)`, each pure and value-returning.
         if let Expr::Member { base, field, .. } = callee {
             if let Some(lowered) = self.lower_collection_method(base, field, args, payload_name) {
                 return lowered;
@@ -9591,7 +9591,7 @@ impl Interpreter {
     fn eval_pure(&mut self, expr: &Expr) -> Value {
         // A `with` animation (RFC-0010) is driven here, at the single evaluation
         // chokepoint, so every animatable scalar prop (opacity/scale/translate/
-        // rotate — all of which resolve through `eval_pure`) animates without
+        // rotate, all of which resolve through `eval_pure`) animates without
         // per-prop plumbing. A non-animated value takes the ordinary path.
         if let Expr::Animated { value, anim, span } = expr {
             return self.eval_animated(value, anim, self.anim_key(*span));
@@ -9636,7 +9636,7 @@ impl Interpreter {
             Value::Tuple(items) if !spec.is_plain() => {
                 return self.eval_looped_pair(items, &spec, key);
             }
-            // Anything else can't be interpolated — pass it through untouched
+            // Anything else can't be interpolated, pass it through untouched
             // (the checker already restricts `with` to numeric props).
             _ => return target_value,
         };
@@ -9670,7 +9670,7 @@ impl Interpreter {
         let sampled = motion.sample(now);
         // `Motion::DEFAULT_EPS_*` are pixel-scaled (0.5), far too loose for the
         // ratio/opacity/radian props that also animate through this one generic
-        // path — with them an ease-out could read "settled" while still visibly
+        // path, with them an ease-out could read "settled" while still visibly
         // short of the target. Use tight, unit-agnostic epsilons: position is
         // the final-value accuracy gate; the velocity gate keeps a spring's
         // overshoot alive instead of freezing it at the first target crossing.
@@ -9685,7 +9685,7 @@ impl Interpreter {
     /// (RFC-0025 §1, §5) and returns the value sampled at the current engine
     /// time.
     ///
-    /// A repeating animation needs no persisted endpoints — it is fully
+    /// A repeating animation needs no persisted endpoints, it is fully
     /// determined by `from`, `to`, the curve and its own timeline, all of which
     /// are recomputed each frame. What *is* persisted is the timeline
     /// ([`LoopClock`]), which the RFC-0025 clock reduces to an offset inside one
@@ -9776,11 +9776,11 @@ impl Interpreter {
 
     /// The shared body of every repeating animation (RFC-0025 §1, §5): advances
     /// the timeline for `key`, applies the delay, and returns the offset *inside
-    /// one iteration* at which `motions` should be sampled — or `None` while the
+    /// one iteration* at which `motions` should be sampled, or `None` while the
     /// delay is still holding the start value.
     ///
     /// All components share one period (the longest), so a multi-channel
-    /// animation — a pair of axes, a colour's four channels — completes each play
+    /// animation, a pair of axes, a colour's four channels, completes each play
     /// as a unit and alternates as a unit.
     fn loop_at(
         &mut self,
@@ -9790,20 +9790,20 @@ impl Interpreter {
     ) -> Option<f32> {
         use byard_core::frame::{Motion, loop_phase};
 
-        // A goal change restarts the sequence from its own start value — an
+        // A goal change restarts the sequence from its own start value, an
         // oscillation has two fixed endpoints, so there is nothing to reseed
         // `from` from (unlike the interruptible one-shot spring).
         // A `restart:` witness joins the endpoints in the fingerprint, so a
-        // change to it restarts the timeline exactly as a retarget would — the
+        // change to it restarts the timeline exactly as a retarget would, the
         // reference-free "play that again" (RFC-0025 §5's replay case). It is
         // never *cancellable*: a replay is meant to run its delays again.
         let restart = spec.restart.map(|expr| self.restart_key(expr));
         let fingerprint = endpoint_key(motions) ^ restart.unwrap_or(0);
         let cancellable = spec.delay.is_cancellable() && restart.is_none();
         let (elapsed, honor_delay) = self.loop_elapsed(key, fingerprint, cancellable);
-        // §5: on a *retarget* a `delay:` is cancelled — the animation heads for
+        // §5: on a *retarget* a `delay:` is cancelled, the animation heads for
         // the new target at once, so a delayed transition can never overwrite a
-        // more recent interaction — while a stagger's offset is honoured again
+        // more recent interaction, while a stagger's offset is honoured again
         // and the cascade replays in order. On the first mount both wait.
         let delay_ms = if honor_delay {
             self.eval_delay(&spec.delay)
@@ -9848,14 +9848,14 @@ impl Interpreter {
     ///
     /// Returns `None` when the sequence is malformed (the checker has already
     /// reported it) or the host never advanced the clock. Marks the animation
-    /// active unless a finite sequence has played out — the settling contract
+    /// active unless a finite sequence has played out, the settling contract
     /// the whole animation system shares.
     fn keyframe_blend<'a>(&mut self, expr: &'a Expr) -> Option<KeyframeBlend<'a>> {
         use byard_core::frame::{MAX_KEYFRAME_STEPS, MotionCurve, keyframe_cursor, loop_phase};
 
         let track = crate::interp::anim::resolve_keyframes(expr)?.ok()?;
         let key = self.anim_key(expr.span());
-        // Without an advancing clock, resolve to the sequence's first value —
+        // Without an advancing clock, resolve to the sequence's first value,
         // mirrors the `with` path, and never latches the active set at `t = 0`.
         if !self.clock_set {
             let first = track.steps.first()?.value;
@@ -9927,7 +9927,7 @@ impl Interpreter {
     /// Hashes a `restart:` witness value (RFC-0025 §5's replay case).
     ///
     /// Only *change* matters, never order or magnitude, so any value the language
-    /// can produce is usable as a replay trigger — a counter, a bool, a selected
+    /// can produce is usable as a replay trigger, a counter, a bool, a selected
     /// id, a route name.
     fn restart_key(&mut self, expr: &Expr) -> u64 {
         use std::hash::{Hash, Hasher};
@@ -9937,7 +9937,7 @@ impl Interpreter {
             Value::Float(f) => f.to_bits().hash(&mut hasher),
             Value::Bool(b) => b.hash(&mut hasher),
             Value::Str(s) => s.hash(&mut hasher),
-            // A structural value hashes through its rendering — coarse, but a
+            // A structural value hashes through its rendering, coarse, but a
             // replay trigger only needs "is this the same as last frame?".
             other => format!("{other:?}").hash(&mut hasher),
         }
@@ -9999,9 +9999,9 @@ impl Interpreter {
         AnimKey::new(span, self.anim_slot)
     }
 
-    /// Forgets every animation whose source node lies inside `range` — what an
+    /// Forgets every animation whose source node lies inside `range`, what an
     /// unmounted `when` branch takes with it (RFC-0025: "no separate stop
-    /// animation API — the animation lives and dies with its element").
+    /// animation API, the animation lives and dies with its element").
     ///
     /// Animation state is keyed by the source span of the `with`/keyframes node,
     /// so "inside this branch" is exactly "inside this source range". Rare
@@ -10021,9 +10021,8 @@ impl Interpreter {
     /// elapsed on it and whether its `delay` still applies.
     ///
     /// Three jobs, all of them about *when* rather than *what*:
-    /// - seeds the timeline the first time the animation is seen (delay honoured
-    ///   — an entrance is meant to wait);
-    /// - implements §2's offscreen pause — missing a whole render means the
+    /// - seeds the timeline the first time the animation is seen (delay honoured, an entrance is meant to wait);
+    /// - implements §2's offscreen pause, missing a whole render means the
     ///   element was not drawn (it left the viewport, or its `when` branch
     ///   collapsed), so the timeline is shifted forward by the time it was away
     ///   instead of counting it as motion: the animation resumes where it
@@ -10099,8 +10098,8 @@ impl Interpreter {
         payload_name: Option<Symbol>,
     ) -> Result<Action, CompileError> {
         // A brace action `=> { stmt* }` parses as a zero-parameter lambda over a
-        // block (RFC-0019). Lower the block body directly — its statements each
-        // lower to a signal write — so a multi-statement handler runs every
+        // block (RFC-0019). Lower the block body directly, its statements each
+        // lower to a signal write, so a multi-statement handler runs every
         // statement, not the inert lambda value (which lowers to `Unit`).
         let expr = match expr {
             Expr::Lambda { params, body, .. } if params.is_empty() => body.as_ref(),
@@ -10164,7 +10163,7 @@ impl Interpreter {
     }
 
     /// The scrollable axis of a target and its viewport extent (the one with
-    /// travel — `max > 0`), vertical preferred. RFC-0021 snap/pagination helper.
+    /// travel, `max > 0`), vertical preferred. RFC-0021 snap/pagination helper.
     fn scrollable_axis(t: &ScrollTarget) -> Option<(ScrollAxis, f32)> {
         t.y.filter(|a| a.max > 0.0)
             .map(|a| (a, t.rect.h))
@@ -10277,7 +10276,7 @@ impl Interpreter {
 
     /// The offset a settle should target, applying RFC-0021 fling projection: above
     /// the fling velocity threshold it advances one boundary in the fling direction
-    /// (clamped ±1 of the nearest — no multi-item skip); otherwise the nearest.
+    /// (clamped ±1 of the nearest, no multi-item skip); otherwise the nearest.
     /// Shares boundary geometry with [`snap_target_offset`](Self::snap_target_offset).
     fn snap_settle_target(&self, t: &ScrollTarget, axis: ScrollAxis, vp: f32) -> Option<f32> {
         /// Fling velocity (px/s) above which the settle projects rather than snaps
@@ -10360,9 +10359,9 @@ impl Interpreter {
         self.scroll_vel_last.remove(&elem);
         if (cur - target).abs() < EPS {
             self.snap_anims.remove(&elem);
-            return; // already on a boundary — nothing to glide
+            return; // already on a boundary, nothing to glide
         }
-        // Destination page is known now — reflect it immediately (fires
+        // Destination page is known now, reflect it immediately (fires
         // `page_change`) so pagination leads the glide, and settle it exactly once
         // the spring (or the instant fallback) arrives.
         self.reflect_page(t);
@@ -10404,7 +10403,7 @@ impl Interpreter {
 
     /// Advances every in-flight snap spring one `render` (RFC-0021 smooth snap):
     /// samples each [`SnapAnim`](SnapAnim) at the engine clock, writes the offset,
-    /// and — once the spring settles — pins the offset exactly on the page and
+    /// and, once the spring settles, pins the offset exactly on the page and
     /// fires `scroll_end`. A live drag on an elem cancels its glide (the finger
     /// takes over). Keeps `any_active` set while any spring is still moving so the
     /// host keeps presenting frames until it rests.
@@ -10466,10 +10465,10 @@ impl Interpreter {
         }
     }
 
-    /// RFC-0021 snap settle: once a `snap`-enabled `ScrollView` has gone quiet —
+    /// RFC-0021 snap settle: once a `snap`-enabled `ScrollView` has gone quiet,
     /// no wheel/trackpad scroll input for [`SETTLE_FRAMES`] renders (so trackpad
     /// momentum, a stream of shrinking deltas, cannot trigger a snap mid-fling
-    /// that fights the next event) — glide its offset to the nearest page via
+    /// that fights the next event), glide its offset to the nearest page via
     /// [`begin_snap`](Self::begin_snap). Frame-counted, not clock-based, so it
     /// settles identically whether or not the host advances `now_ms`. A live drag
     /// never settles on stillness (it snaps on release). Runs each `render`, over
@@ -10522,7 +10521,7 @@ impl Interpreter {
     /// `page` var, scroll the `ScrollView`'s offset to that page. Edge-triggered
     /// against [`scroll_page_last`](Self::scroll_page_last) so it fires only on an
     /// external change (a drag never writes `page` mid-gesture, and our own snap
-    /// updates the tracker), never level-triggered against the live offset — so it
+    /// updates the tracker), never level-triggered against the live offset, so it
     /// can't fight scrolling. Runs at the top of `render` over the previous
     /// frame's targets.
     fn sync_page_offsets(&mut self) {
@@ -10686,7 +10685,7 @@ impl Interpreter {
                 self.refreshing_seen.insert(elem, true);
                 self.begin_pull_settle(elem, PULL_REST);
             } else {
-                // No `refreshing` binding — a momentary trigger; retract now.
+                // No `refreshing` binding, a momentary trigger; retract now.
                 self.begin_pull_settle(elem, 0.0);
             }
         } else {
@@ -10783,7 +10782,7 @@ impl Interpreter {
         const WHEEL_LINE_PX: f32 = 40.0;
 
         // RFC-0030 §I1: hit-testing, gesture recognition and handler
-        // invocation — all interpreter work, all gone in an AOT build.
+        // invocation, all interpreter work, all gone in an AOT build.
         byard_core::profile_scope!(
             "interp.dispatch_events",
             byard_core::telemetry::ScopeKind::Interpreter
@@ -10831,7 +10830,7 @@ impl Interpreter {
         // clamped to `[0, content − viewport]`. Wheel deltas are line-based (× a
         // per-line step); trackpad `Scroll` deltas are already pixels. Done here,
         // before the render, so the same tick paints the new offset (paint-time
-        // translate, no relayout — INV-8).
+        // translate, no relayout, INV-8).
         for ev in events {
             let step = match ev.kind {
                 CoreKind::Wheel => WHEEL_LINE_PX,
@@ -10861,7 +10860,7 @@ impl Interpreter {
                 self.nudge_scroll(axis, ev.delta.1 * step);
             }
             // RFC-0021: mark this elem freshly scrolled and cancel any in-flight
-            // snap glide — the user is driving again, so `settle_snaps` restarts
+            // snap glide, the user is driving again, so `settle_snaps` restarts
             // its quiet countdown and only snaps once the fling truly ends.
             if let Some(elem) = t.elem {
                 self.scroll_quiet.insert(elem, self.frame_seq);
@@ -10875,7 +10874,7 @@ impl Interpreter {
 
         // RFC-0005 `ScrollView` drag-to-scroll: a pointer press on inert scroll
         // content starts a drag; each move slides the offset (on every writable
-        // axis) so the content tracks the pointer — a pure function of the
+        // axis) so the content tracks the pointer, a pure function of the
         // press-relative travel, no accumulated drift (IMPL-10); release ends it.
         // The press defers to interactive children via `claims_pointer`, so a
         // button or slider inside the list still wins its own gesture.
@@ -10883,7 +10882,7 @@ impl Interpreter {
             match ev.kind {
                 CoreKind::PointerDown => {
                     let (px, py) = ev.pos;
-                    // RFC-0026: an edge swipe outranks everything under it —
+                    // RFC-0026: an edge swipe outranks everything under it,
                     // that narrow strip is the platform's back gesture, and a
                     // scrollable or tappable child there must not steal it.
                     if self.begin_nav_swipe(ev.pos) {
@@ -10903,7 +10902,7 @@ impl Interpreter {
                             })
                             .copied()
                     };
-                    // A press reclaims the view — cancel any in-flight snap glide
+                    // A press reclaims the view, cancel any in-flight snap glide
                     // so the finger, not the spring, owns the offset (RFC-0021).
                     if let Some(elem) = target.and_then(|t| t.elem) {
                         self.snap_anims.remove(&elem);
@@ -10954,7 +10953,7 @@ impl Interpreter {
                 }
                 CoreKind::PointerUp | CoreKind::Tap => {
                     // RFC-0026: a released edge swipe either completes its pop
-                    // or springs back — the finger's progress hands straight
+                    // or springs back, the finger's progress hands straight
                     // over to the spring.
                     self.release_nav_swipe();
                     // RFC-0021 snap: on release, settle the offset to the nearest
@@ -11046,7 +11045,7 @@ fn spacing_value(v: &Value) -> Option<f32> {
 }
 
 /// Inserts `attr` into a resolved style set, replacing any existing attribute
-/// with the same name and sub-property axis (last-wins) or appending it — so a
+/// with the same name and sub-property axis (last-wins) or appending it, so a
 /// spread/inline override cleanly supersedes an earlier value (RFC-0016).
 fn override_attr(set: &mut Vec<Attr>, attr: Attr) {
     if let Some(existing) = set
@@ -11062,7 +11061,7 @@ fn override_attr(set: &mut Vec<Attr>, attr: Attr) {
 /// Builds a flat attribute list for *validation only* (RFC-0016): the base
 /// attributes followed by every `on <state>` block's attributes, so a state
 /// block's `bg:`/`scale:`/… is checked against the intrinsic's §5 contract just
-/// like an inline attribute. Never emitted — rendering keeps base and states
+/// like an inline attribute. Never emitted, rendering keeps base and states
 /// separate so states resolve per-frame against the live mask.
 fn attrs_with_states(base: &[Attr], states: &[StateBlock]) -> Vec<Attr> {
     if states.is_empty() {
@@ -11105,7 +11104,7 @@ fn state_block_mask(sb: &StateBlock) -> crate::interp::events::StyleState {
 /// (RFC-0016 §"Resolution order", extended by RFC-0024 §2): a block applies when
 /// its required mask is a **subset** of the live `StyleState` (all its states are
 /// active). Matching blocks overlay the base last-wins, ordered by **specificity**
-/// (number of states — a combined `on focused+hover` beats a single `on hover`)
+/// (number of states, a combined `on focused+hover` beats a single `on hover`)
 /// then **declaration order** for equal specificity.
 ///
 /// The common stateless case (no blocks) borrows the base with no allocation.
@@ -11130,7 +11129,7 @@ fn resolve_state_attrs<'a>(
         return std::borrow::Cow::Borrowed(base);
     }
     // Apply lowest-specificity first, then declaration order, so a more specific
-    // (or later) block wins on conflicting properties — the `(spec, idx)` tuples
+    // (or later) block wins on conflicting properties, the `(spec, idx)` tuples
     // sort lexicographically.
     matching.sort_unstable();
     let mut resolved = base.to_vec();
@@ -11143,12 +11142,12 @@ fn resolve_state_attrs<'a>(
 }
 
 /// Inserts a state-block attr over the resolved base set, keeping the base's
-/// `with` animation shell when the state provides a bare value — the
+/// `with` animation shell when the state provides a bare value, the
 /// RFC-0010 × RFC-0012/0016 state-driven-animation contract:
 /// `blur: 0 with anim.spring()` + `on hover { blur: 16 }` must *animate* to
 /// 16, not pop. The state changes the target; the base owns the curve. The
 /// wrapped value reuses the base `Animated` node's span, which is the
-/// persisted `Motion`'s key — so entering and leaving the state retargets
+/// persisted `Motion`'s key, so entering and leaving the state retargets
 /// one interruptible animation instead of restarting a fresh one each flip.
 fn override_state_attr(set: &mut Vec<Attr>, attr: Attr) {
     let Some(existing) = set
@@ -11183,13 +11182,13 @@ fn override_state_attr(set: &mut Vec<Attr>, attr: Attr) {
     *existing = attr;
 }
 
-/// Multiplies a colour's alpha by `opacity` — folds an element's effective
+/// Multiplies a colour's alpha by `opacity`, folds an element's effective
 /// opacity into the widget/text primitives it emits so a translucent control
 /// dims as a whole, not just its background (RFC-0011 T4 approximation).
 /// Evaluates one binary arithmetic operation (`+ - * /`, RFC-0020 enabler)
 /// with numeric promotion: Int∘Int → Int (division truncates), any Float
 /// operand → Float. Division by zero yields the zero of the promoted type and
-/// a non-numeric operand yields [`Value::Unit`] — the logic thread never
+/// a non-numeric operand yields [`Value::Unit`], the logic thread never
 /// panics on user expressions. Pure and unit-testable.
 fn eval_binary(op: BinOp, lhs: Value, rhs: Value) -> Value {
     match op {
@@ -11228,9 +11227,9 @@ fn eval_binary(op: BinOp, lhs: Value, rhs: Value) -> Value {
 /// String and list concatenation (RFC-0027 §3/§4). A `Str` on either side
 /// coerces the other operand through the shared scalar formatter
 /// ([`format_scalar`]); two `List`s concatenate; anything else is `Unit` (the
-/// checker reports the mismatch — INV-4).
+/// checker reports the mismatch, INV-4).
 fn eval_concat(a: Value, b: Value) -> Value {
-    // A `List` operand only concatenates with another `List` — it never string-
+    // A `List` operand only concatenates with another `List`, it never string-
     // coerces (RFC-0027 §3). A `Str` on either side coerces the other *scalar*.
     match (a, b) {
         (Value::List(mut xs), Value::List(ys)) => {
@@ -11250,7 +11249,7 @@ fn eval_concat(a: Value, b: Value) -> Value {
     }
 }
 
-/// Whether a value is a formattable scalar (`Int`/`Float`/`Bool`/`Str`) — the
+/// Whether a value is a formattable scalar (`Int`/`Float`/`Bool`/`Str`), the
 /// operands `Str + _` will coerce (RFC-0027 §3). `List`/`Record`/`Unit` are not.
 fn is_scalar(v: &Value) -> bool {
     matches!(
@@ -11374,7 +11373,7 @@ fn index_value(base: &Value, index: &Value) -> Value {
 }
 
 /// The Float leg of [`eval_binary`]. `x / 0.0` yields `0.0`, not an
-/// IEEE infinity/NaN — a NaN sweep or width would poison layout and paint.
+/// IEEE infinity/NaN, a NaN sweep or width would poison layout and paint.
 fn eval_binary_f(op: BinOp, a: f64, b: f64) -> Value {
     Value::Float(match op {
         BinOp::Add => a + b,
@@ -11444,7 +11443,7 @@ fn hex_from_oklab(lab: [f32; 3]) -> i64 {
 /// `(x: …, y: …)` named) as a pair, leaving unset axes at `default`.
 ///
 /// The value-level counterpart of `resolve_axis_pair_value`'s syntactic tuple
-/// handling, for pairs that only exist after evaluation — a keyframed
+/// handling, for pairs that only exist after evaluation, a keyframed
 /// `translate` (RFC-0025 §3) being the case that needs it.
 fn axis_pair_of_value(value: &Value, default: (f32, f32)) -> Option<(f32, f32)> {
     let items = value.as_tuple()?;
@@ -11732,7 +11731,7 @@ mod tests {
     // ── RFC-0027: comparison, logic, strings, collections ───────────
 
     /// Lowers `view`, ticks once, renders, and returns the first `Text`'s
-    /// resolved string — the simplest way to observe an expression's value.
+    /// resolved string, the simplest way to observe an expression's value.
     fn first_text(src: &str, view: &str) -> String {
         let (mut interp, tree) = lower_named(src, view);
         assert!(interp.errors().is_empty(), "{:?}", interp.errors());
@@ -11814,7 +11813,7 @@ mod tests {
 
     #[test]
     fn short_circuit_and_returns_false_without_evaluating_rhs() {
-        // `false && (1/0 == 0)` must not even matter — LHS false short-circuits.
+        // `false && (1/0 == 0)` must not even matter, LHS false short-circuits.
         assert_eq!(
             first_text("View V() { Text(\"{false && true}\") }", "V"),
             "false"
@@ -11933,7 +11932,7 @@ mod tests {
 
     /// RFC-0020 §1 as amended: a canvas's *shape count* comes from data.
     ///
-    /// Without this, the one thing a drawing surface is for — a chart — is
+    /// Without this, the one thing a drawing surface is for, a chart, is
     /// inexpressible: you write twenty-four `rect(…)` lines against twenty-four
     /// separately named fields, which is a workaround for a missing feature
     /// rather than a use of the language.
@@ -11950,7 +11949,7 @@ mod tests {
 
         let shapes = frame.canvas_shapes();
         assert_eq!(shapes.len(), 3, "one rect per item");
-        // Each shape reads *its own* item, in order — the failure mode of a
+        // Each shape reads *its own* item, in order, the failure mode of a
         // binding that is pushed but never popped is three identical bars.
         let heights: Vec<f32> = shapes.iter().map(|s| s.params[3]).collect();
         assert!(
@@ -12018,7 +12017,7 @@ mod tests {
 
     #[test]
     fn canvas_shapes_render_into_the_canvas_pool_with_evaluated_params() {
-        // The sweep is an expression over a view binding — proving shape
+        // The sweep is an expression over a view binding, proving shape
         // params run through the ordinary evaluator, so they are reactive.
         let (mut interp, tree) = lower_named(
             "View App() { let p = 0.5 \
@@ -12093,7 +12092,7 @@ mod tests {
         assert_eq!(frame.shape_records().len(), 3);
 
         // §S4: the head's quad is the union of its members' bounds, not its own
-        // geometry — every member must fit inside it.
+        // geometry, every member must fit inside it.
         let quad = head.bounds();
         for rec in frame.shape_records() {
             let (cx, cy, r) = (rec.params0[0], rec.params0[1], rec.params0[2]);
@@ -12144,7 +12143,7 @@ mod tests {
     /// bulges *outward* by up to the smoothing radius.
     ///
     /// An under-inflated quad clips exactly the bridge the feature exists to
-    /// draw, and it does so only when the shapes are close enough to fuse —
+    /// draw, and it does so only when the shapes are close enough to fuse,
     /// i.e. only in the screenshot the author took to show it off. A morph
     /// never leaves its members' union and must not pay for this.
     #[test]
@@ -12175,7 +12174,7 @@ mod tests {
             fused.x <= plain.x - 15.9 && fused.y <= plain.y - 15.9,
             "…on the near sides too: {plain:?} → {fused:?}"
         );
-        // `fuse: 0` bulges by nothing, so it must not grow the quad either —
+        // `fuse: 0` bulges by nothing, so it must not grow the quad either,
         // INV-22 for the degenerate case.
         let zero = quad_of("fuse: 0");
         assert!(
@@ -12221,7 +12220,7 @@ mod tests {
     /// head does not must repaint.
     ///
     /// This is the case the invariant exists for and the one an example would
-    /// never catch: the head's own bytes — mode, `k`, colours, quad — are
+    /// never catch: the head's own bytes, mode, `k`, colours, quad, are
     /// identical frame to frame, so without the member hash folded into the
     /// digest the group is judged clean and paints last frame's shape forever.
     /// `morph` escapes it by accident, because its parameter is the phase.
@@ -12229,7 +12228,7 @@ mod tests {
     #[test]
     fn an_animated_member_repaints_its_fusion_group() {
         // The moving circle stays *inside* the union the two fixed ones already
-        // span, so the head's quad — and therefore every byte of the head — is
+        // span, so the head's quad, and therefore every byte of the head, is
         // identical frame to frame. That is what makes this test about the
         // member hash and nothing else.
         let (mut interp, tree) = lower_named(
@@ -12698,7 +12697,7 @@ mod tests {
     #[test]
     fn guarded_recursion_that_terminates_is_legal() {
         // RFC-0018: `Tree` recurses only in the `else` of a guard that is true, so
-        // the recursive branch is never lowered (lazy `when`) — it renders to a
+        // the recursive branch is never lowered (lazy `when`), it renders to a
         // finite depth with no diagnostic.
         let (mut interp, tree) = lower_named(
             "View Tree() { var leaf = true\n when leaf { Text(\"x\") } else { Tree() } }\n\
@@ -12721,7 +12720,7 @@ mod tests {
     fn runaway_guarded_recursion_hits_depth_bound_without_panicking() {
         // `go` is always true, so the guard never terminates at lower time. The
         // static check does not flag it (the cycle is guarded), so the runtime
-        // depth bound must stop it with a diagnostic — not a stack overflow.
+        // depth bound must stop it with a diagnostic, not a stack overflow.
         let parsed =
             parse("View Loop() { var go = true\n when go { Loop() } }\nView App() { Loop() }");
         assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
@@ -12740,7 +12739,7 @@ mod tests {
             .find(|v| v.name.as_str() == "App")
             .unwrap();
         let tree = interp.lower_view(app, &known); // lazy: no recursion at lower
-        // RFC-0018: the recursion now unrolls at render (reconcile) time — one
+        // RFC-0018: the recursion now unrolls at render (reconcile) time, one
         // level per frame (a freshly-lowered `go` reads false until the next
         // pull), so each render is finite (no stack overflow). Over enough frames
         // the reconcile depth bound stops it with a diagnostic.
@@ -13063,7 +13062,7 @@ mod tests {
                     left: 4.0,
                 },
             ),
-            // Named top only — unspecified sides default to 0
+            // Named top only, unspecified sides default to 0
             (
                 "View C() { Column #[p: (top: 10)] {} }",
                 Spacing {
@@ -13499,7 +13498,7 @@ mod tests {
         assert!((render_scale(&mut interp, 0) - 1.0).abs() < 1e-3);
         assert!(!interp.has_active_animations());
 
-        // Flip the target to 2.0 at t=0 — the motion retargets from the current
+        // Flip the target to 2.0 at t=0, the motion retargets from the current
         // value (~1.0) and is now active.
         let sig = interp.var_signal(&Symbol::intern("on")).unwrap();
         interp.write_var(sig, Value::Bool(true));
@@ -13526,7 +13525,7 @@ mod tests {
 
     /// Drives a `on ? … : …` paint prop through a 1000 ms linear ramp and
     /// returns the value `sample` reads from the rendered frame at t = 0 (just
-    /// after the flip), 500, and 1000 ms — the shared body of the coverage tests
+    /// after the flip), 500, and 1000 ms, the shared body of the coverage tests
     /// below, which each assert a different paint prop interpolates.
     fn ramp_paint_prop(
         src: &str,
@@ -13612,7 +13611,7 @@ mod tests {
 
     /// Renders `src` at each of `times` (ms on the engine clock) and returns
     /// what `sample` reads from the frame, plus whether the animation was still
-    /// in the active set at that instant — the two things every looping test
+    /// in the active set at that instant, the two things every looping test
     /// asks about.
     fn sample_over_time(
         src: &str,
@@ -13696,7 +13695,7 @@ mod tests {
         assert!((seen[1].0).abs() < 0.01, "still held at 200ms");
         assert!(
             seen[1].1,
-            "a pending delay keeps requesting frames — otherwise it would never start"
+            "a pending delay keeps requesting frames, otherwise it would never start"
         );
         assert!((seen[2].0 - 50.0).abs() < 2.0, "halfway, got {}", seen[2].0);
         assert!((seen[3].0 - 100.0).abs() < 0.5, "arrived");
@@ -13807,7 +13806,7 @@ mod tests {
             seen[1].0 > 0.30 && seen[1].0 < 0.48,
             "the OKLab midpoint of black→white is mid *lightness*: brighter than \
              the naive channel lerp (0x7F7F7F ≈ 0.22 in linear light), and still \
-             below linear 0.5 — got {}",
+             below linear 0.5, got {}",
             seen[1].0
         );
         assert!(seen[2].0 > 0.99, "ends white, got {}", seen[2].0);
@@ -13828,7 +13827,7 @@ mod tests {
 
     #[test]
     fn an_unmounted_branch_starts_its_animation_over() {
-        // RFC-0025: "no separate stop-animation API — the animation lives and
+        // RFC-0025: "no separate stop-animation API, the animation lives and
         // dies with its element". A collapsed `when` branch really *unmounts*,
         // so its animation state goes with it: when the branch comes back the
         // spinner starts its turn again instead of resuming a stale phase.
@@ -13878,13 +13877,13 @@ mod tests {
     #[test]
     fn an_animation_that_stops_being_drawn_pauses_and_resumes_in_phase() {
         // RFC-0025 §2: the element is still mounted, it just is not being
-        // *painted* — here a windowed `ScrollView` row scrolled out of the
+        // *painted*, here a windowed `ScrollView` row scrolled out of the
         // window and back. That is a **pause**: the app idles while the row is
         // away and the motion continues exactly where it stopped, with no jump.
         //
         // The mechanism matters, and this test used to use the wrong one. It
         // emptied the list, which is an *unmount*, not an element that is
-        // merely off-screen — and RFC-0025 is explicit that an animation lives
+        // merely off-screen, and RFC-0025 is explicit that an animation lives
         // and dies with its element. Scrolling is the case §2 describes: the
         // pool keeps its rows and their state, only the emission stops.
         let src = "View V() { var y: Float = 0.0 \
@@ -13939,7 +13938,7 @@ mod tests {
     /// immediately retargeted it to B's, each reseeding `from` to the current
     /// sampled value and restarting the clock. The pair stalled near `t = 0`
     /// and neither arrived. Anyone with a list of animated components was
-    /// affected, and the symptom — "my springs are sluggish in a list" — points
+    /// affected, and the symptom, "my springs are sluggish in a list", points
     /// nowhere near the cause.
     #[test]
     fn two_for_rows_with_different_targets_each_reach_their_own() {
@@ -13964,7 +13963,7 @@ mod tests {
 
         render(&mut interp, 0);
         // Mid-flight the two rows are already apart, in proportion to their
-        // own targets — a shared `Motion` could only ever produce one value.
+        // own targets, a shared `Motion` could only ever produce one value.
         let mid = render(&mut interp, 100);
         assert_eq!(mid.len(), 2, "two rows");
         assert!(
@@ -13984,8 +13983,8 @@ mod tests {
     }
 
     /// Nested loops distinguish instances too, and without a path to fold: a
-    /// `for` inside a `for` body is lowered once per *outer* row, so its pool —
-    /// and every element signal in it — belongs to that row alone.
+    /// `for` inside a `for` body is lowered once per *outer* row, so its pool,
+    /// and every element signal in it, belongs to that row alone.
     #[test]
     fn nested_for_rows_animate_independently() {
         let src = "View V() { var groups = [{ items: [{ w: 30 }] }, { items: [{ w: 180 }] }] \
@@ -14021,7 +14020,7 @@ mod tests {
 
     /// The other side of the same coin, and what the instance key changed: a row
     /// that leaves the *list* is unmounted, and an unmount takes its animation
-    /// with it (RFC-0025: "no separate stop-animation API — the animation lives and
+    /// with it (RFC-0025: "no separate stop-animation API, the animation lives and
     /// dies with its element").
     ///
     /// This is not a preference between two readings. A `for` pool's bodies are
@@ -14068,13 +14067,13 @@ mod tests {
         assert!(x.unwrap() < 5.0, "a re-grown row starts fresh, got {x:?}");
     }
 
-    /// A `when` inside a `for` — the shape every real list has, because rows are
-    /// filtered — must not cost the row its identity.
+    /// A `when` inside a `for`, the shape every real list has, because rows are
+    /// filtered, must not cost the row its identity.
     ///
     /// A `when` branch is lowered **lazily, at render time**, with the scope it
     /// was written in restored from a snapshot and truncated again immediately.
-    /// Anything inside it that resolves later — an animated attribute reading
-    /// `row`, an event action, a nested pool — has to capture that scope while it
+    /// Anything inside it that resolves later, an animated attribute reading
+    /// `row`, an event action, a nested pool, has to capture that scope while it
     /// is briefly back. Without it, `row` resolves to nothing at render time and
     /// every animated target in the branch silently reads `0`: the list looks
     /// mounted and correct, and none of it moves.
@@ -14147,8 +14146,8 @@ mod tests {
     /// Layout runs one pass ahead of paint over the same tree, and paint
     /// restores each box's captured instance environment before reading its
     /// attrs. The layout pass did not, so every dimension written in terms of
-    /// the element it belongs to — `width: row.w` in a list, `width: size` in a
-    /// user view — resolved to nothing there. Nothing reported it: a `width`
+    /// the element it belongs to, `width: row.w` in a list, `width: size` in a
+    /// user view, resolved to nothing there. Nothing reported it: a `width`
     /// that resolves to nothing is a box with no width, which is a box that
     /// fills its parent. So the list laid out as one full-width column and
     /// painted the colours perfectly.
@@ -14173,7 +14172,7 @@ mod tests {
 
     /// The loss compounds: a pool lowered *inside* a lazily-lowered branch
     /// inherits that branch's scope, so a nested `for` whose body reads the
-    /// **outer** row — a per-row detail on each of a row's children — needs the
+    /// **outer** row, a per-row detail on each of a row's children, needs the
     /// capture to have happened one level up before it can capture it in turn.
     #[test]
     fn a_nested_for_inside_a_when_still_reads_its_outer_row() {
@@ -14210,7 +14209,7 @@ mod tests {
     #[test]
     fn a_retarget_cancels_a_pending_delay_but_never_a_stagger() {
         // RFC-0025 §5: a delayed transition must not overwrite a newer target,
-        // so a target change restarts it immediately — while a stagger's
+        // so a target change restarts it immediately, while a stagger's
         // entrance offset survives (it is sequencing, not a response).
         let delayed = "View V() { var on: Bool = false \
                        Box #[bg: 0x808080, width: 10, height: 10, \
@@ -14225,7 +14224,7 @@ mod tests {
             translate_x(&frame)
         };
         at(&mut interp, 0);
-        // Flip the target at 300 ms — inside the original delay window.
+        // Flip the target at 300 ms, inside the original delay window.
         let on = interp.var_signal(&Symbol::intern("on")).unwrap();
         interp.write_var(on, Value::Bool(true));
         interp.tick();
@@ -14239,7 +14238,7 @@ mod tests {
         );
         assert!((at(&mut interp, 500) - 100.0).abs() < 1.0, "arrived");
 
-        // A stagger, by contrast, honours its offset again — the cascade
+        // A stagger, by contrast, honours its offset again, the cascade
         // *replays* in item order instead of snapping.
         let staggered = "View V() { var on: Bool = false \
                          Column { for i, row in [1, 2] { \
@@ -14280,7 +14279,7 @@ mod tests {
     fn a_restart_witness_replays_the_animation_in_order() {
         // RFC-0025 §5's replay case: an entrance's endpoints never change, so
         // nothing would ever retarget it. `restart:` is the reference-free "play
-        // that again" — and because a replay is intentional sequencing, the
+        // that again", and because a replay is intentional sequencing, the
         // stagger offsets are honoured again rather than cancelled.
         let src = "View V() { var attempt: Int = 0 \
                    Column { for i, row in [1, 2] { \
@@ -14437,7 +14436,7 @@ mod tests {
         interp.tick();
 
         // The red content box's paint-time translate.y (where the scroll offset
-        // lives — the shader applies it, so the layout rect is untouched, i.e.
+        // lives, the shader applies it, so the layout rect is untouched, i.e.
         // no relayout on scroll), plus whether a content clip was emitted.
         let sample = |interp: &mut Interpreter| -> (f32, f32, usize) {
             let mut frame = byard_core::frame::RenderFrame::new();
@@ -14586,7 +14585,7 @@ mod tests {
         assert!(has(&mut interp, 2), "blue scrolls into view");
     }
 
-    /// RFC-0005: dragging on inert `ScrollView` content scrolls it — the content
+    /// RFC-0005: dragging on inert `ScrollView` content scrolls it, the content
     /// tracks the pointer between press and release, clamped to the extent.
     #[test]
     fn drag_on_scrollview_content_scrolls_and_clamps() {
@@ -14792,7 +14791,7 @@ mod tests {
     #[test]
     fn page_reflects_on_wheel_scroll_without_a_release() {
         use byard_core::platform::EventKind as K;
-        // A trackpad/wheel `Scroll` updates the reflected `page` continuously —
+        // A trackpad/wheel `Scroll` updates the reflected `page` continuously,
         // no drag release needed (the desktop scrolling case).
         let src = "View V() { var offX: Float = 0.0 var offY: Float = 0.0 var pg: Int = 0 \
              ScrollView #[axis: horizontal, snap: page, offset: (offX, offY), page: pg, \
@@ -14830,7 +14829,7 @@ mod tests {
     fn wheel_scroll_snaps_to_a_page_after_settling() {
         use byard_core::platform::EventKind as K;
         // Wheel-scroll 60px, then hold still: once the offset stops moving for a
-        // few frames the settle fires and snaps to page 1 — no release event, no
+        // few frames the settle fires and snaps to page 1, no release event, no
         // wall clock, just observed stillness (clock-independent settle).
         let src = "View V() { var offX: Float = 0.0 var offY: Float = 0.0 \
              ScrollView #[axis: horizontal, snap: page, offset: (offX, offY), \
@@ -14873,7 +14872,7 @@ mod tests {
     }
 
     /// RFC-0021: the stillness settle must not fire while a page is *actively*
-    /// being scrolled — the offset moving each frame restarts the settle count,
+    /// being scrolled, the offset moving each frame restarts the settle count,
     /// so a mid-scroll frame never snaps out from under the motion.
     #[test]
     fn wheel_scroll_does_not_snap_while_still_moving() {
@@ -14920,7 +14919,7 @@ mod tests {
     }
 
     /// RFC-0021: an enum keyword prop (`snap: page`) must keep working even when
-    /// the view declares a `var` of the *same name* as the keyword — the token is
+    /// the view declares a `var` of the *same name* as the keyword, the token is
     /// read from the AST, so the variable can never shadow it. This is exactly the
     /// `scroll_snap` example's shape (`var page` + `snap: page`), which silently
     /// disabled snapping before enum props stopped resolving through the env.
@@ -14980,7 +14979,7 @@ mod tests {
     }
 
     /// RFC-0021 smooth snap: with an advancing clock the offset *glides* to the
-    /// page over several frames (a spring), rather than hard-jumping — some frame
+    /// page over several frames (a spring), rather than hard-jumping, some frame
     /// must land strictly between the release offset and the page boundary.
     #[test]
     fn page_snap_glides_smoothly_when_a_clock_is_advancing() {
@@ -15029,7 +15028,7 @@ mod tests {
     }
 
     /// RFC-0021: a stream of shrinking scroll deltas (trackpad momentum) must not
-    /// trigger a snap while the fling is still delivering events — the offset
+    /// trigger a snap while the fling is still delivering events, the offset
     /// tracks the input and only snaps once the scroll goes quiet, so the snap and
     /// the scroll never fight.
     #[test]
@@ -15056,7 +15055,7 @@ mod tests {
             time_ms: 0,
         };
         // Five momentum frames (input every frame) accumulate to offset 75 without
-        // ever snapping — each event restarts the quiet countdown.
+        // ever snapping, each event restarts the quiet countdown.
         let mut acc = 0.0;
         for _ in 0..5 {
             interp.dispatch_events(&[wheel(-15.0)]);
@@ -15160,7 +15159,7 @@ mod tests {
             time_ms: t,
         };
         // Two quick flicks 20px apart in 40ms → ~500 px/s, well past 150 dp/s, but
-        // the offset only reaches 40 — short of the page-0→1 midpoint (50).
+        // the offset only reaches 40, short of the page-0→1 midpoint (50).
         interp.dispatch_events(&[wheel(-20.0, 0)]);
         interp.dispatch_events(&[wheel(-20.0, 40)]);
         assert!(
@@ -15290,7 +15289,7 @@ mod tests {
             (c1 - (c0 - 50.0)).abs() < 0.5,
             "content scrolls up by 50: {c0} → {c1}"
         );
-        // The header must paint *on top* of the content that scrolls under it —
+        // The header must paint *on top* of the content that scrolls under it,
         // draw-order depth is emission order and `draw_depth` decreases with it, so
         // the (last-emitted) header's depth is strictly nearer than the content's.
         let depth_of = |frame: &byard_core::frame::RenderFrame, rgba: [f32; 4]| -> f32 {
@@ -15308,7 +15307,7 @@ mod tests {
     }
 
     /// RFC-0021 collapsing header: the pin + `scroll_fraction` work with the
-    /// example's real shape — the ScrollView nested in an outer `Column`, and a
+    /// example's real shape, the ScrollView nested in an outer `Column`, and a
     /// header that is a `Box` wrapping a `Column` of `Text`s (not a bare box).
     #[test]
     fn collapse_header_works_nested_like_the_example() {
@@ -15564,7 +15563,7 @@ mod tests {
         // The controller finishes: clearing `refreshing` retracts the indicator.
         interp.write_var(refreshing, Value::Bool(false));
         interp.render(&tree, &mut frame, 400.0, 300.0);
-        // (no panic / clean retract — with no clock the spring resolves instantly)
+        // (no panic / clean retract, with no clock the spring resolves instantly)
     }
 
     /// RFC-0021 pull-to-refresh: a short pull that never reaches the threshold
@@ -15588,7 +15587,7 @@ mod tests {
             payload: None,
             time_ms: 0,
         };
-        // Only a 20px pull — well under the threshold.
+        // Only a 20px pull, well under the threshold.
         interp.dispatch_events(&[ev(K::PointerDown, 12.0)]);
         interp.dispatch_events(&[ev(K::PointerMove, 32.0)]);
         interp.dispatch_events(&[ev(K::PointerUp, 32.0)]);
@@ -15601,7 +15600,7 @@ mod tests {
     }
 
     /// RFC-0005: a press that lands on an interactive child (here a `Button`)
-    /// is that child's gesture — drag-to-scroll defers and the list stays put.
+    /// is that child's gesture, drag-to-scroll defers and the list stays put.
     #[test]
     fn drag_defers_to_interactive_children() {
         use byard_core::platform::EventKind as K;
@@ -15774,7 +15773,7 @@ mod tests {
     }
 
     /// RFC-0005 windowed layout: a `windowed` ScrollView lays out only the
-    /// visible slice of a long uniform list — O(visible), not O(list) — while a
+    /// visible slice of a long uniform list, O(visible), not O(list), while a
     /// plain ScrollView over the same list lays out every row.
     #[test]
     fn windowed_scrollview_lays_out_only_the_visible_window() {
@@ -15925,7 +15924,7 @@ mod tests {
 
     /// RFC-0005 windowed layout regression: with uniform rows whose stride equals
     /// `row_height`, the materialised rows must stay on an exact `row_height` grid
-    /// at every offset — including across a window-slide boundary. A spacer sized
+    /// at every offset, including across a window-slide boundary. A spacer sized
     /// off-grid would shift the whole content when `start` ticks (the "small
     /// jumps" bug), so this pins the invariant that a scroll of 1px moves the
     /// content by exactly 1px, never a row.
@@ -16035,7 +16034,7 @@ mod tests {
     #[test]
     fn animation_is_inert_until_the_clock_is_advanced() {
         // A host that never advances the clock must resolve the value to its
-        // target and never mark it active — otherwise a wait-based runner would
+        // target and never mark it active, otherwise a wait-based runner would
         // spin forever redrawing a motion pinned at t=0.
         let parsed = parse(
             "View V() { var on: Bool = true \
@@ -16061,7 +16060,7 @@ mod tests {
     #[test]
     fn opacity_dims_descendant_text_not_only_the_background() {
         // Regression: a translucent Button dims its *label* too, not just its
-        // background — `opacity` folds into the alpha of every primitive the
+        // background, `opacity` folds into the alpha of every primitive the
         // element and its descendants emit.
         let parsed = parse(
             "View V() { var c: Int = 0 \
@@ -16119,7 +16118,7 @@ mod tests {
 
     #[test]
     fn merge_composes_two_styles_right_wins() {
-        // RFC-0016: `base merge overrides` — the right style wins on conflicts,
+        // RFC-0016: `base merge overrides`, the right style wins on conflicts,
         // the left's non-conflicting attributes survive.
         let parsed = parse(
             "View V() { \
@@ -16147,7 +16146,7 @@ mod tests {
 
     #[test]
     fn parent_scale_is_inherited_by_child_text_and_boxes() {
-        // RFC-0011 group transforms: a scaled container carries its descendants —
+        // RFC-0011 group transforms: a scaled container carries its descendants,
         // the reported bug was that a scaled parent's *text* stayed the same size.
         let parsed = parse(
             "View V() {\n Column #[scale: 2.0, width: 100, height: 100, bg: 0x111111] {\n \
@@ -16323,7 +16322,7 @@ mod tests {
     #[test]
     fn hover_state_block_recolours_after_pointer_enters() {
         // RFC-0016: an `on hover { bg }` block lights up once the pointer moves
-        // over the element — even though the element registers no handler of its
+        // over the element, even though the element registers no handler of its
         // own (it is tracked as a bare hover region).
         let parsed = parse(
             "View V() { \
@@ -16405,7 +16404,7 @@ mod tests {
         // `origin` alone isn't checked against `Transform::IDENTITY`'s [0,0]:
         // the compiler defaults an unset `origin` to the element's own
         // center (RFC-0011's stated default), which is a real but *inert*
-        // difference from the engine's raw identity — pivot is irrelevant
+        // difference from the engine's raw identity, pivot is irrelevant
         // when scale = 1 and rotate = 0, so the render is pixel-identical.
         let t = frame.instances()[0].transform;
         assert_eq!(t.translate, [0.0, 0.0]);
@@ -16493,7 +16492,7 @@ mod tests {
         interp.tick();
         let mut frame = byard_core::frame::RenderFrame::new();
         interp.render(&tree, &mut frame, 400.0, 300.0);
-        // Exactly track + thumb — no extra background rectangle, no DecoratedBox.
+        // Exactly track + thumb, no extra background rectangle, no DecoratedBox.
         assert_eq!(
             frame.instances().len(),
             2,
@@ -16566,7 +16565,7 @@ mod tests {
             "toggle flipped to true"
         );
 
-        // Second tap flips back — gap > DOUBLE_TAP_MS (300ms) so it's a plain tap.
+        // Second tap flips back, gap > DOUBLE_TAP_MS (300ms) so it's a plain tap.
         interp.render(&tree, &mut frame, 400.0, 300.0);
         interp.dispatch_events(&[
             byard_core::platform::InputEvent {
@@ -16622,7 +16621,7 @@ mod tests {
 
     #[test]
     fn checked_checkbox_fills_and_draws_a_two_stroke_check() {
-        // Checked: a filled accent square + two checkmark stroke quads on top —
+        // Checked: a filled accent square + two checkmark stroke quads on top,
         // three decorated boxes (all on the decorated pipeline, in push order, so
         // the check is never hidden behind the fill).
         let frame = checkbox_frame("View C() {\n var c = true\n Checkbox #[bind: c]\n}");
@@ -16636,7 +16635,7 @@ mod tests {
             frame.decorated()[0].base.color[3] > 0.0,
             "the checked square has an opaque accent fill"
         );
-        // The two strokes rotate in opposite senses about their midpoints — proof
+        // The two strokes rotate in opposite senses about their midpoints, proof
         // the mark is angled geometry, not two axis-aligned bars.
         let r1 = frame.decorated()[1].base.transform.rotate;
         let r2 = frame.decorated()[2].base.transform.rotate;
@@ -16663,7 +16662,7 @@ mod tests {
     #[test]
     fn checkbox_bg_is_the_accent_not_a_full_rect_slab() {
         // Regression parity with Toggle/Slider: `bg` on a Checkbox is the checked
-        // accent (the box fill), never a background slab — a checked box is the
+        // accent (the box fill), never a background slab, a checked box is the
         // filled square plus the two mark strokes, nothing more.
         let frame = checkbox_frame(
             "View C() {\n var c = true\n Checkbox #[bind: c, bg: 0x10B981, width: 24, height: 24]\n}",
@@ -16831,7 +16830,7 @@ mod tests {
     #[test]
     fn radio_group_is_mutually_exclusive_via_the_shared_var() {
         // Two radios on one `var`: tapping the second selects it, which
-        // deselects the first (they read the same var — no explicit exclusion).
+        // deselects the first (they read the same var, no explicit exclusion).
         let parsed = parse(
             "View C() {\n var choice = \"home\"\n \
              Column #[gap: 40] {\n \
@@ -17072,7 +17071,7 @@ mod tests {
     #[test]
     fn text_wraps_to_parent_width_by_default() {
         // A long line in a narrow fixed-width column wraps with NO explicit
-        // `wrap`/`width` — default wrap reflows it to the column's width.
+        // `wrap`/`width`, default wrap reflows it to the column's width.
         let parsed = parse(
             "View C() {\n Column #[width: 120] {\n \
                Text(\"This is a fairly long sentence that must wrap within a narrow column.\")\n \
@@ -17370,7 +17369,7 @@ mod tests {
 
     #[test]
     fn tab_key_advances_focus_through_text_fields() {
-        // Two TextFields — Tab should cycle between them.
+        // Two TextFields, Tab should cycle between them.
         let parsed = parse(
             "View C() {\n var fa = false\n var fb = false\n TextField #[bind: fa, focused: fa]\n TextField #[bind: fb, focused: fb]\n}",
         );
@@ -17458,7 +17457,7 @@ mod tests {
 
     #[test]
     fn when_reacts_to_a_var_flip_at_runtime() {
-        // RFC-0018: the whole point — flipping the guard `var` mounts/unmounts the
+        // RFC-0018: the whole point, flipping the guard `var` mounts/unmounts the
         // subtree at runtime, with no re-lowering.
         let parsed = parse(
             "View C() {\n var show = false\n when show { Text(\"hi\") } else { Text(\"bye\") }\n}",
@@ -17502,7 +17501,7 @@ mod tests {
     #[test]
     fn for_reacts_to_list_growth_and_element_change() {
         // RFC-0018: growing the list mounts more rows; changing an element updates
-        // its row — all without re-lowering.
+        // its row, all without re-lowering.
         let parsed = parse("View C() {\n var xs = [10, 20]\n for x in xs { Text(\"{x}\") }\n}");
         assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
         let mut interp = Interpreter::new();
@@ -17678,7 +17677,7 @@ mod tests {
         // A bordered container splits into an opaque SolidBox fill
         // (so it stays behind its children, which also paint as solids) plus a
         // decorated *overlay* whose interior is transparent and only strokes the
-        // 2px border — it can't occlude the children drawn beneath it.
+        // 2px border, it can't occlude the children drawn beneath it.
         assert_eq!(
             frame.instances().len(),
             1,
@@ -17704,7 +17703,7 @@ mod tests {
         // bordered card must NOT paint over the solid boxes of the widgets it
         // contains. The card's fill is a SolidBox pushed *before*
         // the child's, and the only decorated primitive is a transparent-interior
-        // border overlay — so the child's fill is never occluded.
+        // border overlay, so the child's fill is never occluded.
         let parsed = parse(
             "View C() {\n Column #[bg: 0x222233, border: 0x445566] {\n Box #[bg: 0xFF0000, width: 20, height: 20]\n }\n}",
         );
@@ -17717,7 +17716,7 @@ mod tests {
         let mut frame = byard_core::frame::RenderFrame::new();
         interp.render(&tree, &mut frame, 400.0, 300.0);
 
-        // Two solid fills: the card, then the child — in that paint order, so
+        // Two solid fills: the card, then the child, in that paint order, so
         // the child (drawn second) lands on top of the card, not under it.
         assert_eq!(frame.instances().len(), 2, "card fill + child fill");
         assert_ne!(
@@ -17888,7 +17887,7 @@ mod tests {
             "light scheme paints the light primary"
         );
 
-        // Flip the scheme — a single reactive write — and re-render.
+        // Flip the scheme, a single reactive write, and re-render.
         interp.set_theme_dark(true);
         let mut frame2 = byard_core::frame::RenderFrame::new();
         // Re-lower against the same env so the injected `t` still resolves.
@@ -17974,7 +17973,7 @@ mod tests {
     #[test]
     fn theme_dark_is_assignable_and_bindable() {
         // `t.dark = …` (assign) and `bind: t.dark` (Toggle) must both resolve to
-        // the scheme signal — neither is `NotAssignable` (RFC-0022 §1).
+        // the scheme signal, neither is `NotAssignable` (RFC-0022 §1).
         let mut interp = Interpreter::new();
         interp.set_theme(super::super::theme::Theme::byard_base());
         let _ = theme_render(
@@ -18042,7 +18041,7 @@ mod tests {
     fn explicit_width_pins_wrap_and_yields_a_taller_leaf() {
         let long = "the quick brown fox jumps over the lazy dog again and again";
         // Same text: the first wraps to the 400px root by default, the second is
-        // pinned to width 120 (both wrap — wrap is default now).
+        // pinned to width 120 (both wrap, wrap is default now).
         let src = format!("View C() {{\n Text(\"{long}\")\n Text(\"{long}\") #[width: 120]\n}}");
         let parsed = parse(&src);
         assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
@@ -18179,7 +18178,7 @@ mod tests {
             .map(|(i, b)| (i, *b))
             .expect("overlay scrim emitted");
 
-        // Main box keeps its natural 40×40 at the origin — the overlay's 0×0
+        // Main box keeps its natural 40×40 at the origin, the overlay's 0×0
         // flow leaf did not push it down.
         assert!((red.rect[0]).abs() < 0.01 && (red.rect[1]).abs() < 0.01);
         assert!((red.rect[2] - 40.0).abs() < 0.01);
@@ -18291,7 +18290,7 @@ mod tests {
         let mut frame = byard_core::frame::RenderFrame::new();
         interp.render(&tree, &mut frame, 400.0, 300.0);
 
-        // Tap the top-left corner — over the scrim, outside the centred content.
+        // Tap the top-left corner, over the scrim, outside the centred content.
         let tap = |t: u64, p: (f32, f32)| {
             [
                 byard_core::platform::InputEvent {
@@ -18328,7 +18327,7 @@ mod tests {
     #[test]
     fn modal_overlay_content_wins_over_the_scrim() {
         // A tap on the centred confirm button fires its action, not the scrim's
-        // dismiss — the content is registered after the scrim, so it wins.
+        // dismiss, the content is registered after the scrim, so it wins.
         let src = "View C() {\n \
             var open = true\n \
             var confirmed = false\n \
@@ -18419,7 +18418,7 @@ mod tests {
     #[test]
     fn when_gated_overlay_unmounts_live_on_dismiss() {
         // RFC-0018 × RFC-0017: a `when`-gated modal overlay now dismisses at
-        // runtime — tapping the scrim flips the guard `var`, and the very next
+        // runtime, tapping the scrim flips the guard `var`, and the very next
         // render unmounts the overlay (no hot-reload needed). This is the headline
         // reactivity win: overlays are live.
         let src = "View C() {\n \
@@ -18557,7 +18556,7 @@ mod tests {
             "the modal dialog must composite above the base app"
         );
 
-        // No dialog text line may overflow the dialog surface — line wrap is not
+        // No dialog text line may overflow the dialog surface, line wrap is not
         // built yet, so the example is authored to fit. Guards the reported
         // overflow against regression: every dark-on-light label painted inside
         // the surface must end before the surface's right edge.
@@ -18626,7 +18625,7 @@ mod tests {
     // ── RFC-0023 ripple ink ─────────────────────────────────────────────
 
     /// A 200×100 box at the layout origin with a semi-transparent white
-    /// ripple, triggered by `on pressed` — the RFC-0023 guide example shape.
+    /// ripple, triggered by `on pressed`, the RFC-0023 guide example shape.
     const RIPPLE_SRC: &str = "View V() {
         let btn = style {
             bg: 0x6750A4, radius: 20, ripple: 0x80FFFFFF
@@ -18652,7 +18651,7 @@ mod tests {
 
     /// Lowers `src`, renders once at `t = 0` (registering the hit region),
     /// presses at `(x, y)` with press identity `press_t`, and renders once at
-    /// `t = 10` — the frame that spawns the ripple, so its `start_ms` is 10.
+    /// `t = 10`, the frame that spawns the ripple, so its `start_ms` is 10.
     fn pressed_ripple_named(
         src: &str,
         x: f32,
@@ -18765,7 +18764,7 @@ mod tests {
         assert_eq!(held.ripples().len(), 1, "a hold never respawns");
 
         // Release and tap again (a fresh press identity): a second ripple
-        // joins the first, still fading — their ink pools on the GPU.
+        // joins the first, still fading, their ink pools on the GPU.
         interp.dispatch_events(&[pointer(K::PointerUp, 30.0, 40.0, 60)]);
         interp.dispatch_events(&[pointer(K::PointerDown, 80.0, 50.0, 80)]);
         let both = render_at(&mut interp, &tree, 100);
@@ -18889,7 +18888,7 @@ mod tests {
         assert_eq!(taps(&interp), 1, "the on-screen position must be tappable");
 
         // …and tapping where layout *placed* it (y 110, scrolled away and
-        // outside the viewport) must not — the hit rect moved with the
+        // outside the viewport) must not, the hit rect moved with the
         // content and is clipped to the scroll viewport.
         tap_at(&mut interp, 100.0, 110.0, 200);
         assert_eq!(taps(&interp), 1, "the stale laid-out position is inert");
@@ -19160,7 +19159,7 @@ mod tests {
     fn a_state_override_retargets_the_base_with_animation() {
         use byard_core::platform::EventKind as K;
         // RFC-0010 × RFC-0012/0016: the state changes the target, the base
-        // owns the curve — `on hover { blur: 16 }` over
+        // owns the curve, `on hover { blur: 16 }` over
         // `blur: 4 with anim.linear(1000)` must ramp, not pop.
         let src = "View V() {
             let glass = style {
@@ -19200,7 +19199,7 @@ mod tests {
 
     #[test]
     fn an_animated_color_ramps_its_alpha_channel_too() {
-        // RFC-0023 regression: a translucent `backdrop_tint` fades in — the
+        // RFC-0023 regression: a translucent `backdrop_tint` fades in, the
         // alpha byte animates alongside the OKLab channels. The old 3-channel
         // path dropped alpha entirely, collapsing `0x00FFFFFF → 0x80FFFFFF`
         // into an instant opaque white.
@@ -19229,7 +19228,7 @@ mod tests {
         assert_eq!(deepest_rect_overlap(&[r(0.0), r(200.0), r(400.0)]), 1);
         // Two overlapping panes plus a distant third: the cluster is 2.
         assert_eq!(deepest_rect_overlap(&[r(0.0), r(80.0), r(400.0)]), 2);
-        // A chain a∩b, b∩c clusters to 3 around b — deliberately
+        // A chain a∩b, b∩c clusters to 3 around b, deliberately
         // conservative (see the fn docs), erring toward the diagnostic.
         assert_eq!(deepest_rect_overlap(&[r(0.0), r(80.0), r(160.0)]), 3);
         // Three co-located panes: a genuine 3-deep stack.
@@ -19250,7 +19249,7 @@ mod tests {
             &[PerfWarning::OverlappingBlurs { count: 3 }]
         );
 
-        // Two panes are fine — stacked glass only warns at three.
+        // Two panes are fine, stacked glass only warns at three.
         let (interp, _frame) = rendered_frame(
             "View V() { ZStack #[width: 200, height: 200] { \
              Box #[blur: 8, width: 180, height: 180] {} \

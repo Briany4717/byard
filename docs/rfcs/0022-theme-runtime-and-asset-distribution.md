@@ -1,11 +1,11 @@
-# RFC-0022: Theme Runtime & Asset Distribution — Pillar D complete
+# RFC-0022: Theme Runtime & Asset Distribution, Pillar D complete
 
-- **Status:** Active — implemented; §5 dynamic colour (Material You) deferred
+- **Status:** Active, implemented; §5 dynamic colour (Material You) deferred
 - **Status note (2026-07-26):** Shipped: manifest tokens, the reactive scheme signal, the provider model, asset loading, `Typo` token resolution and `byard-base`. Deferred: §5's dynamic colour extraction from a source image, which needs a quantisation step nothing else in the engine has.
 - **Author(s):** Briany4717
 - **Created:** 2026-07-10
 - **Last updated:** 2026-07-10
-- **Depends on:** RFC-0001 (§3.1 text pipeline, `inject`, two-layer rule), RFC-0002 (D5 style resolution layers, D8 dynamic styles — this lifts the theme slice), RFC-0005 (§6 theme-resolved defaults, `Typo` tokens), RFC-0008 (Pillar D design proposal — this RFC implements it), RFC-0010 (animated token transitions), RFC-0016 (style system — tokens referenced in `style {}`).
+- **Depends on:** RFC-0001 (§3.1 text pipeline, `inject`, two-layer rule), RFC-0002 (D5 style resolution layers, D8 dynamic styles, this lifts the theme slice), RFC-0005 (§6 theme-resolved defaults, `Typo` tokens), RFC-0008 (Pillar D design proposal, this RFC implements it), RFC-0010 (animated token transitions), RFC-0016 (style system, tokens referenced in `style {}`).
 - **Completes:** RFC-0008 Pillar D (asset distribution), which was left as a design proposal. Also closes RFC-0005's `Typo` token resolution and `inject`-based theme provision.
 - **Enables:** Dark/light mode switching, dynamic color (Material You), custom font loading (Roboto, SF Pro), design-system theme tokens in `byard-material` and `byard-cupertino`.
 
@@ -18,7 +18,7 @@ where design systems declare color, typography, shape, and motion tokens in thei
 manifest; the engine resolves them at mount time; and the developer references
 them in `style {}` blocks. Theme switching (light ↔ dark, dynamic color) is a
 single `var` mutation that triggers Mark-and-Pull across all token-dependent
-bindings — with animated transitions for every affected property (RFC-0010).
+bindings, with animated transitions for every affected property (RFC-0010).
 
 Separately, implement **asset distribution**: packages declare fonts and icon
 sets in their manifest; the engine loads, caches, and registers them so that
@@ -34,11 +34,11 @@ Today, `byard-material` hardcodes hex color values (`0x6750A4`) throughout 29
 and no way to load Roboto (Material's typeface) or SF Pro (Cupertino's). The
 README's gap analysis lists this as the #1 systemic blocker:
 
-- **No theme tokens runtime** — colors are literals, not semantic references.
-- **No dark scheme** — would require duplicating every component with different
+- **No theme tokens runtime**, colors are literals, not semantic references.
+- **No dark scheme**, would require duplicating every component with different
   hex values.
-- **No custom fonts** — `Text` uses whatever system font the engine loads.
-- **No `Typo` resolution** — `typo: titleLarge` is in the spec but never
+- **No custom fonts**, `Text` uses whatever system font the engine loads.
+- **No `Typo` resolution**, `typo: titleLarge` is in the spec but never
   implemented.
 
 RFC-0008 Pillar D described the *model* (packages declare assets, the engine
@@ -211,9 +211,9 @@ The `provide` / `inject` mechanism (RFC-0002) already exists. This RFC adds:
 
 1. **Automatic theme generation** from `byard.toml [theme]` → a `Theme` View
    with all `provide` bindings.
-2. **Token accessor syntax** — `theme.primary` desugars to `inject color_primary`
+2. **Token accessor syntax**, `theme.primary` desugars to `inject color_primary`
    with the package namespace prefix.
-3. **Scheme reactivity** — changing `mode` rewrites all `provide` values in one
+3. **Scheme reactivity**, changing `mode` rewrites all `provide` values in one
    tick.
 
 ### 3. Asset loading
@@ -259,7 +259,7 @@ impl MaterialTheme {
 The controller computes the scheme; the theme provider receives it as a `var`
 and updates all `provide` bindings. The byld side is unchanged.
 
-### 6. `byard-base` — the engine's built-in theme
+### 6. `byard-base`, the engine's built-in theme
 
 The engine ships a minimal `byard-base` theme with sensible defaults:
 
@@ -283,7 +283,7 @@ tokens it redefines; unset tokens fall through.
   slower. Lazy loading (load only when first referenced) is an optimization.
 - **Token explosion.** M3 has ~80 color tokens, ~15 typography tokens, ~6 shape
   tokens. Each is a reactive signal. For a large app with many theme consumers,
-  this is ~100 signals marked dirty on a theme switch — all recomputed in one
+  this is ~100 signals marked dirty on a theme switch, all recomputed in one
   tick. Profiling needed.
 - **Cross-package theme conflicts.** Two packages defining `primary` → the
   namespace prefix (`m.primary` vs `c.primary`) resolves this, but unaliased
@@ -296,7 +296,7 @@ tokens it redefines; unset tokens fall through.
 **Why manifest-declared tokens, not `.byd`-level `let` constants?** `let`
 constants (what `byard-material` does today with inline hex) are not reactive,
 not switchable, and not accessible to the engine for default resolution. Manifest
-tokens are engine-managed reactive signals — the only model that supports live
+tokens are engine-managed reactive signals, the only model that supports live
 theme switching.
 
 **Why `provide/inject`, not a global theme object?** Global state conflicts with
@@ -307,7 +307,7 @@ exists.
 **Why generate a `Theme` View from the manifest instead of a runtime API?** The
 two-layer rule: theme *configuration* is engine policy (manifest); theme *use*
 is declarative (`inject` in `.byd`). A runtime API would put theme logic in `.rs`
-files — correct by the two-layer rule, but unnecessary for the common case.
+files, correct by the two-layer rule, but unnecessary for the common case.
 The generated View is the ergonomic path; controllers handle dynamic color.
 
 ---
@@ -346,7 +346,7 @@ The generated View is the ergonomic path; controllers handle dynamic color.
     `CompileError::CircularThemeInheritance`.
   - [x] **Font subsetting.** Deferred. Full TTF/OTF files are loaded in v1.
     Font subsetting (stripping unused glyphs) is a build-time optimization
-    that requires glyph usage analysis across all `.byd` files — significant
+    that requires glyph usage analysis across all `.byd` files, significant
     toolchain work for marginal memory savings on desktop. Revisit when
     targeting WASM or memory-constrained mobile devices.
 
@@ -370,12 +370,12 @@ The generated View is the ergonomic path; controllers handle dynamic color.
 
 ## Future possibilities
 
-- **Color harmonization** — auto-adjusting a package's theme to harmonize with
+- **Color harmonization**, auto-adjusting a package's theme to harmonize with
   another package's colors (Material You's color harmonization API).
-- **Animated theme tokens** — springs on token transitions (already supported
+- **Animated theme tokens**, springs on token transitions (already supported
   via `with anim` on properties that read tokens; this is about making the
   *token transition itself* tunable).
-- **Typography responsive variants** — different type scales for phone/tablet/
+- **Typography responsive variants**, different type scales for phone/tablet/
   desktop, selected by viewport size.
-- **Icon theme** — a theme-level color applied to all `VectorIcon`s from a
+- **Icon theme**, a theme-level color applied to all `VectorIcon`s from a
   package (e.g., `theme.iconColor` that all icons inherit unless overridden).

@@ -1,11 +1,11 @@
-# RFC-0027: Data & Collection Operations — comparison, logic, string and list expressions
+# RFC-0027: Data & Collection Operations, comparison, logic, string and list expressions
 
-- **Status:** Active — implemented
+- **Status:** Active, implemented
 - **Status note (2026-07-26):** Shipped in full: comparison and short-circuiting logical operators, string concatenation and interpolation, the pure list operations, lambdas in value position, records, and the inference and diagnostics that go with them.
 - **Author(s):** Briany4717
 - **Created:** 2026-07-17
 - **Last updated:** 2026-07-17
-- **Depends on:** RFC-0002 (grammar, `Value`, reactivity D1, `Str` type D9), RFC-0003 (events / view mutation, E1 write-back, `Action`), RFC-0004 (reactive interpreter — read-tracking, memos), RFC-0018 (structural `for`/`when` in the render tree), RFC-0019 (callback props / `Fn`, lambda param inference E2).
+- **Depends on:** RFC-0002 (grammar, `Value`, reactivity D1, `Str` type D9), RFC-0003 (events / view mutation, E1 write-back, `Action`), RFC-0004 (reactive interpreter, read-tracking, memos), RFC-0018 (structural `for`/`when` in the render tree), RFC-0019 (callback props / `Fn`, lambda param inference E2).
 - **Extends:** RFC-0002 (the expression grammar and `eval_binary`), RFC-0005 (`Text` interpolation gains scalar formatting).
 - **Enables:** Todo apps, filterable/sortable lists, computed derived collections, boolean-driven `when`/ternary conditions. Unblocks every app that must *transform* state rather than replace it wholesale. Prerequisite for the data returned by RFC-0028 controllers to be useful in the view.
 
@@ -13,8 +13,8 @@
 
 ## Summary
 
-The `byld` expression language today evaluates only four operators — `+ - * /`
-on `Int`/`Float` — and has **no boolean, comparison, string, or collection
+The `byld` expression language today evaluates only four operators, `+ - * /`
+on `Int`/`Float`, and has **no boolean, comparison, string, or collection
 operations at all** (`interp/eval.rs::eval_binary`, `parser/ast.rs::BinOp`). A
 `var` can hold a `Value::List`, and `for`/`when` can render it (RFC-0018), but
 the language cannot *derive* one list from another, test `a == b`, negate a
@@ -23,8 +23,8 @@ data layer**: comparison operators, short-circuiting logic, string
 concatenation, a closed set of immutable list operations (`len`, index,
 `push`, `removeAt`, `contains`, `map`, `filter`, spread/concat), and
 **lambda expressions in value position** so `map`/`filter` can take a predicate.
-Every operation is a *pure expression that returns a new value* — nothing
-mutates in place — which keeps the Mark-and-Pull discipline (D1) and the
+Every operation is a *pure expression that returns a new value*, nothing
+mutates in place, which keeps the Mark-and-Pull discipline (D1) and the
 reference-free model (RFC-0003) intact.
 
 ```byld
@@ -67,18 +67,18 @@ Concretely, in the current tree:
 - **`eval_binary` handles only `Int`/`Float` arithmetic.** Any other operand
   combination falls through to `Value::Unit` (`interp/eval.rs:7490-7508`). So
   `"a" + "b"` is `Unit`, `todos + [x]` is `Unit`, `count == 3` is unparseable.
-- **`BinOp` has exactly four variants** — `Add`, `Sub`, `Mul`, `Div`
+- **`BinOp` has exactly four variants**, `Add`, `Sub`, `Mul`, `Div`
   (`parser/ast.rs:369-378`). There is no `==`, `!=`, `<`, `<=`, `>`, `>=`,
   `&&`, `||`, or `!`.
-- **There are no collection builtins** — no `len`, no indexing, no
+- **There are no collection builtins**, no `len`, no indexing, no
   `push`/`filter`/`map` (grep of `interp/` returns none).
 
 The smoking gun is `crates/byard-compiler/examples/reactive_demo.byd`: its
-"Add Grace" button does not append — it **replaces** the list with a hard-coded
+"Add Grace" button does not append, it **replaces** the list with a hard-coded
 literal `["Ada", "Alan", "Grace", "Katherine"]`, and its toggle writes
 `showList = showList ? false : true` instead of `!showList`, because neither
-dynamic append nor boolean negation is expressible. A todo app — the simplest
-"real" program — is impossible without this RFC.
+dynamic append nor boolean negation is expressible. A todo app, the simplest
+"real" program, is impossible without this RFC.
 
 This is deliberately the **cheapest** blocker to close: it touches only the
 interpreter's expression evaluator and the parser's operator/postfix surface. It
@@ -108,7 +108,7 @@ does not touch concurrency, the relay, or the render pipelines.
 - `a && b` evaluates `b` **only if** `a` is `true`; `a || b` evaluates `b` only
   if `a` is `false`. Short-circuit is observable through read-tracking (RFC-0004):
   a `var` read only in the non-taken branch is **not** subscribed this tick, so
-  the memo does not re-run when it changes — matching the reactive semantics of
+  the memo does not re-run when it changes, matching the reactive semantics of
   `when`.
 - `!a` negates. This finally makes `!showList` legal.
 
@@ -121,7 +121,7 @@ does not touch concurrency, the relay, or the render pipelines.
 - Non-`Str` `+` where the **left** side is a `Str` triggers coercion; a `List`
   operand to `+` follows §4 (list concat), never string coercion.
 
-### 4. List operations — pure, immutable, value-returning
+### 4. List operations, pure, immutable, value-returning
 
 Lists are values (`Value::List`). Every operation **returns a new list** and
 never mutates an alias; the caller writes the result back to a `var`
@@ -141,7 +141,7 @@ observers, so Mark-and-Pull stays correct.
 | `xs + ys` | concatenated `List` | both operands `List` |
 | `[..xs, v]` | spread literal | sugar for `xs.push(v)` at literal sites |
 
-The v1 set is deliberately closed (no `sort`/`reduce`/`find` yet — see Future
+The v1 set is deliberately closed (no `sort`/`reduce`/`find` yet, see Future
 possibilities). It is exactly what a todo/list app needs.
 
 ### 5. Lambda expressions in value position
@@ -158,13 +158,13 @@ todos.map(t => t.text)
 
 The lambda body is a pure expression evaluated once per element on the logic
 thread. It may read `var`s (tracked normally) and its parameter (`t`), but it may
-**not** perform side effects (no assignment, no event action) — enforced at
+**not** perform side effects (no assignment, no event action), enforced at
 compile time (`CompileError::EffectInPureLambda`), which keeps `map`/`filter`
 referentially transparent and safe to re-run during a pull.
 
 ### 6. Records (object literals)
 
-`{ text: draft, done: false }` in the todo example is a **record** — an ordered
+`{ text: draft, done: false }` in the todo example is a **record**, an ordered
 set of named fields, added as `Value::Record(Vec<(Symbol, Value)>)`. Records are
 values (immutable, structurally compared) with field access `r.field`. They are
 the natural element type for lists of structured data and mirror the shape a
@@ -200,7 +200,7 @@ Expr::Record  { fields: Vec<(Symbol, Expr)>, spread: Option<Box<Expr>>, span: Sp
 
 `Record` is **distinct from the existing `Tuple`**: `Tuple` is the positional,
 optionally-named aggregate produced by attribute-value syntax like `p: (vertical:
-8, horizontal: 16)` (RFC-0005 `Len` pairs) — its fields are *positional first*
+8, horizontal: 16)` (RFC-0005 `Len` pairs), its fields are *positional first*
 and it is not a general keyed data type. `Record` is a **name-keyed data
 aggregate** for app state (`{ text, done }`), always accessed by field name, and
 is the element type this RFC's list ops and RFC-0028's `HostValue` speak. Keeping
@@ -222,7 +222,7 @@ fn eval_compare(op: BinOp, a: Value, b: Value) -> Value;  // == != < <= > >=  �
 fn eval_concat(a: Value, b: Value) -> Value;              // Str+*, List+List
 ```
 
-`&&`/`||`/`!` are **not** in these tables — they are lowered as control flow in
+`&&`/`||`/`!` are **not** in these tables, they are lowered as control flow in
 the expression evaluator so the RHS is only evaluated (and only read-tracked)
 when reached. The dispatch order for `+`: both `Int`/`Float` → `eval_arith`;
 either `Str` or both `List` → `eval_concat`; else `TypeMismatch`.
@@ -231,7 +231,7 @@ Collection builtins are dispatched from `Expr::Method`/`Expr::Field` against a
 small static table keyed by `(receiver kind, name)`. `map`/`filter` evaluate the
 `Value::Fn` body per element in a child scope binding the lambda param; the
 per-element evaluation is `untrack`-neutral (reads still subscribe, so a memo
-over `xs.filter(...)` re-runs when any element changes — coarse but correct,
+over `xs.filter(...)` re-runs when any element changes, coarse but correct,
 consistent with RFC-0018 D7's "coarse first").
 
 ### 3. Reactivity interaction (RFC-0004)
@@ -240,7 +240,7 @@ All of the above are ordinary reads inside a memo or a value binding. `let
 remaining = todos.filter(t => !t.done).len` opens a memo (RFC-0004) that
 subscribes to `todos`; writing `todos` marks it dirty; it is pulled next tick.
 Short-circuit `&&`/`||` narrows the subscription set exactly like `when`, so
-no over-subscription. No new reactive machinery is required — this RFC is
+no over-subscription. No new reactive machinery is required, this RFC is
 **purely additive to the evaluator** and reuses the existing subscription store.
 
 ### 4. Type inference (RFC-0002 D9 subset)
@@ -251,12 +251,12 @@ element type; a lambda's param type is inferred from the receiver's element type
 (E2 mechanism, generalized). A `filter` predicate that does not yield `Bool` is
 `CompileError::PredicateNotBool`.
 
-### 5. Diagnostics (new `CompileError` variants — INV-5, defined in `byard-compiler`)
+### 5. Diagnostics (new `CompileError` variants, INV-5, defined in `byard-compiler`)
 
 `TypeMismatch { op, lhs_ty, rhs_ty, span }`, `PredicateNotBool { span }`,
 `EffectInPureLambda { span }`, `UnknownMethod { recv_ty, name, span }` (with
 Levenshtein suggestion, matching the D4 `UnknownAttribute` treatment). Runtime
-index/removeAt out-of-range is **not** a `CompileError` — it degrades to `Unit`/
+index/removeAt out-of-range is **not** a `CompileError`, it degrades to `Unit`/
 unchanged and emits a logic-thread diagnostic, because the index may be a runtime
 `var` (INV-4: no panic on user-derived data).
 
@@ -312,7 +312,7 @@ RFC defines the operations; RFC-0014 can later compile them faster.
 - **Swift/Kotlin collection methods** (`map`/`filter`/`contains`): the closed,
   method-call collection surface.
 - **Rust iterators:** the pure-transformation mental model (though eager here, not
-  lazy — a UI list is small and fully materialized each tick).
+  lazy, a UI list is small and fully materialized each tick).
 - **Jetpack Compose `derivedStateOf`:** the memoized-derived-collection pattern
   `let remaining = todos.filter(...)` mirrors.
 
@@ -321,7 +321,7 @@ RFC defines the operations; RFC-0014 can later compile them faster.
 ## Resolved questions
 
 - **Before merge:**
-  - [x] **Mutation model — in-place vs value-returning.** **Value-returning.**
+  - [x] **Mutation model, in-place vs value-returning.** **Value-returning.**
     See Rationale; required by reference-freedom.
   - [x] **Equality on `List`/`Record`.** **Structural (element/field-wise).**
     Ordering (`<`) on them is a `TypeMismatch`.

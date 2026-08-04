@@ -1,4 +1,4 @@
-// RFC-0025 — looping & indefinite animations: repeat, reverse, keyframes, stagger.
+// RFC-0025, looping & indefinite animations: repeat, reverse, keyframes, stagger.
 //
 // Run it (from the repo root):
 //   cd crates/byard-cli/examples/looping_animations
@@ -6,26 +6,26 @@
 //
 // What to verify visually:
 //   1. SPINNER (top left): the purple arc rotates smoothly and endlessly, one
-//      turn per second, with no seam at the wrap — `rotate: 360deg with
+//      turn per second, with no seam at the wrap, `rotate: 360deg with
 //      anim.linear(1s, from: 0deg, repeat: infinite)`.
 //   2. INDETERMINATE BAR: the purple bar sweeps left → right while its width
 //      stretches and shrinks, restarting every 2 s. Two `anim.keyframes(…)`
 //      sequences on one element (translate and scale), each with per-segment
 //      easing.
-//   3. PULSING BADGE: the red dot breathes between 1.0× and 1.4× forever —
+//   3. PULSING BADGE: the red dot breathes between 1.0× and 1.4× forever, 
 //      `repeat: infinite, reverse: true` turns one spring into an oscillation.
 //   4. COLOUR PULSE: the "LIVE" chip crossfades between purple and red
-//      *through OKLab* — the mid-points stay saturated, never muddy grey.
-//   5. SHIMMER: a highlight sweeps *through* each grey bar — a gradient inside
+//      *through OKLab*, the mid-points stay saturated, never muddy grey.
+//   5. SHIMMER: a highlight sweeps *through* each grey bar, a gradient inside
 //      the bar's own fill, slid by an animated `gradient_offset`, so it is
 //      clipped to the bar, fades at both ends, and loops with no seam.
-//   6. STAGGER: press "Replay entrance" — the five rows fade and slide up one
+//   6. STAGGER: press "Replay entrance", the five rows fade and slide up one
 //      after another, 90 ms apart, from a single written animation
 //      (`anim.stagger(…, 90ms, i, restart: entrance)` over the `for` loop's
 //      index `i`). The counter on the right shows which run you are watching.
 //   7. FINITE REPEAT: the amber square bounces exactly three times and stops,
-//      holding its final position — `repeat: 3`.
-//   8. START / STOP: press "Stop" — every endless animation unmounts with its
+//      holding its final position, `repeat: 3`.
+//   8. START / STOP: press "Stop", every endless animation unmounts with its
 //      element, the active set empties, and the event loop *parks*: the
 //      once-a-second telemetry line `byard dev` prints to the terminal stops
 //      appearing entirely, because no frames are being drawn at all. Press
@@ -43,7 +43,7 @@ View Main() {
     //
     // `angle: 180deg` points the ramp right-to-left, which with a *rising* offset
     // is what sweeps the highlight left-to-right (a rising offset moves the
-    // colours against the ramp's direction — the CSS background-position rule).
+    // colours against the ramp's direction, the CSS background-position rule).
     let bar = style {
         bg: 0x2B2930, radius: 4, height: 18
         gradient: (angle: 180deg, from: 0x00FFFFFF, mid: 0x26FFFFFF,
@@ -53,7 +53,7 @@ View Main() {
 
     Column #[bg: 0x141218, p: 28, gap: 22, width: 620] {
         Row #[gap: 12, align: center] {
-            Text("RFC-0025 — looping animations") #[color: 0xE6E1E5, size: 20]
+            Text("RFC-0025, looping animations") #[color: 0xE6E1E5, size: 20]
             Spacer
             Button(loading ? "Stop" : "Start") #[bg: 0x4A4458, color: 0xE6E1E5,
                                                 radius: 20, p: (8, 16)]
@@ -73,7 +73,7 @@ View Main() {
             when loading {
                 Row #[gap: 28, align: center] {
                     // The animation lives and dies with its element: no
-                    // start/stop API — unmounting is what stops it.
+                    // start/stop API, unmounting is what stops it.
                     Box #[width: 56, height: 56, origin: center,
                           rotate: 360deg with anim.linear(1s, from: 0deg, repeat: infinite)] {
                         Canvas #[width: 56, height: 56] {
@@ -102,7 +102,7 @@ View Main() {
                 }
             }
 
-            // 7: a *finite* repeat — three bounces, then it holds and the
+            // 7: a *finite* repeat, three bounces, then it holds and the
             // animation leaves the active set on its own, with no `when` needed.
             Box #[width: 34, height: 34, radius: 8, bg: 0xFFB300,
                   translate: (60, 0) with anim.ease_in_out(500ms, from: 0, repeat: 3)] {}
@@ -110,7 +110,7 @@ View Main() {
 
         // ── 2: Material indeterminate progress bar ────────────────────────
         Column #[gap: 8] {
-            Text("Indeterminate progress — two keyframe sequences")
+            Text("Indeterminate progress, two keyframe sequences")
                 #[color: 0x938F99, size: 12]
             when loading {
                 Box #[bg: 0x36323C, radius: 3, width: 560, height: 6] {
@@ -134,10 +134,10 @@ View Main() {
         // The highlight belongs *to each bar*, not on top of them: every bar
         // carries its own gradient (transparent → white → transparent) and slides
         // it with `gradient_offset`. A ramp inside the bar's own fill is clipped
-        // by its rounded rect for free, fades at both ends, and — because the
-        // ramp wraps — the loop has no seam.
+        // by its rounded rect for free, fades at both ends, and, because the
+        // ramp wraps, the loop has no seam.
         Column #[gap: 8] {
-            Text("Shimmer skeleton — a gradient sweeping through each bar")
+            Text("Shimmer skeleton, a gradient sweeping through each bar")
                 #[color: 0x938F99, size: 12]
             when loading {
                 Column #[gap: 10] {
@@ -150,7 +150,7 @@ View Main() {
 
         // ── 6: staggered entrance over a `for` loop's index ───────────────
         Column #[gap: 8] {
-            Text("Staggered entrance — one animation, five start times")
+            Text("Staggered entrance, one animation, five start times")
                 #[color: 0x938F99, size: 12]
             Column #[gap: 6] {
                 for i, row in rows {

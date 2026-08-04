@@ -51,7 +51,7 @@ fn build_deep_tree_building(depth: u32, branch_factor: u32) -> LayoutAtlas {
 /// along with a `TargetId` pointing at the **first leaf** created
 /// during recursive construction.
 ///
-/// The first leaf is always at index 0, regardless of tree shape — the
+/// The first leaf is always at index 0, regardless of tree shape, the
 /// recursive builder descends into the deepest leftmost branch before
 /// creating any container, so the first `add_leaf` call always runs
 /// first and receives index 0.
@@ -64,7 +64,7 @@ fn build_deep_tree_computed(depth: u32, branch_factor: u32) -> (LayoutAtlas, Tar
     let mut atlas = build_deep_tree_building(depth, branch_factor);
     atlas.compute(Viewport::new(1024.0, 768.0)).unwrap();
 
-    // Index 0 is the first leaf created — always a real leaf, never the root.
+    // Index 0 is the first leaf created, always a real leaf, never the root.
     let dirty_target = TargetId::new(0, atlas.current_generation(), TargetKind::AtlasNode as u16);
 
     (atlas, dirty_target)
@@ -245,7 +245,7 @@ fn bench_grid_dirty_scaling(mid: u32, per_mid: u32, iters: u64) {
 // newly-built tree) or `recompute_dirty` on a retained one. Production runs
 // neither: `Interpreter::render` calls `clear()` on the atlas it already owns,
 // rebuilds every node into it, `set_root`s, and runs a full
-// `compute_with_text` — every frame. That sequence is strictly more expensive
+// `compute_with_text`, every frame. That sequence is strictly more expensive
 // than `recompute_dirty` (it adds constructing each Taffy node and repopulating
 // `nodes_by_index`, `parents` and `text_specs`) and had never been measured, so
 // the "layout is cheap" figure the project cites described a path the engine
@@ -261,8 +261,8 @@ fn bench_grid_dirty_scaling(mid: u32, per_mid: u32, iters: u64) {
 /// same as `build_flex_tree_computed`, so the numbers are directly comparable
 /// with the `recompute_dirty` figures below them.
 /// `mids`/`leaves` are caller-owned scratch buffers, reused across calls and
-/// cleared here. The interpreter's equivalents are reused too, and — more to
-/// the point — the allocation counter below must measure what the *atlas and
+/// cleared here. The interpreter's equivalents are reused too, and, more to
+/// the point, the allocation counter below must measure what the *atlas and
 /// Taffy* allocate per frame, not what the benchmark's own bookkeeping does.
 fn production_rebuild(
     atlas: &mut LayoutAtlas,
@@ -292,7 +292,7 @@ fn production_rebuild(
 }
 
 /// Times the full production rebuild against `recompute_dirty` with a single
-/// dirty leaf on the *same* tree, and prints the ratio — i.e. exactly what the
+/// dirty leaf on the *same* tree, and prints the ratio, i.e. exactly what the
 /// incremental path would save if the interpreter took it.
 fn bench_production_vs_incremental(mid: u32, per_mid: u32, iters: u64) {
     let leaves = mid * per_mid;
@@ -351,7 +351,7 @@ fn bench_production_vs_incremental(mid: u32, per_mid: u32, iters: u64) {
 //
 // The most urgent question of the three, and the cheapest to answer. If it does
 // not, there is heap allocation on the hot path every frame, which contradicts
-// "no garbage collector, no pauses, no spikes" directly — and no amount of
+// "no garbage collector, no pauses, no spikes" directly, and no amount of
 // layout being *fast* would compensate for it.
 
 #[allow(unsafe_code)] // SAFETY: thin passthrough wrapper around `System`, bench-only.
@@ -455,7 +455,7 @@ fn bench_rebuild_allocations(mid: u32, per_mid: u32, cycles: usize) {
     let (a1, b1) = counting_alloc::counts();
 
     // Now the same number of `compute`s with no teardown/rebuild between them,
-    // via the retained path — whatever is left is the layout algorithm's own
+    // via the retained path, whatever is left is the layout algorithm's own
     // scratch, which retaining the tree would not remove.
     let dirty = TargetId::new(0, atlas.current_generation(), TargetKind::AtlasNode as u16);
     let (c0, _) = counting_alloc::counts();

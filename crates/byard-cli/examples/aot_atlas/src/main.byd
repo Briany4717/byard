@@ -1,4 +1,4 @@
-// RFC-0009 §4 (M49) — AOT vector-atlas bake.
+// RFC-0009 §4 (M49), AOT vector-atlas bake.
 //
 // Bake it (from the repo root):
 //   cd crates/byard-cli/examples/aot_atlas

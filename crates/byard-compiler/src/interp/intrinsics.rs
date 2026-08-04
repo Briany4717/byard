@@ -5,7 +5,7 @@
 //! A closed table maps each reserved intrinsic name to its content arity,
 //! accepted property/event vocabulary, focusability, and children policy.
 //! [`validate_element`] applies the eight §5 rules in order, each producing a
-//! precise span-anchored [`CompileError`] — no failure is ever silent (D4,
+//! precise span-anchored [`CompileError`], no failure is ever silent (D4,
 //! INV-4). Interactive elements register a hit rect inflated to a 44×44 minimum
 //! (RFC-0003 E8), computed by [`inflate_hit_rect`].
 
@@ -69,7 +69,7 @@ pub enum PropType {
     Class,
     /// A `Vec2` `(Float, Float)`.
     Vec2,
-    /// An angle (`360deg`/`1.5rad`, RFC-0011 T1) — canonicalized to radians
+    /// An angle (`360deg`/`1.5rad`, RFC-0011 T1), canonicalized to radians
     /// by the lexer.
     Angle,
     /// A function-valued callback prop.
@@ -85,7 +85,7 @@ pub enum PropType {
 /// it is a required field of every attribute definition, so an attribute
 /// added without a class does not compile. RFC-0032 lists an unclassified
 /// attribute as one of its named drawbacks, and this is the mitigation it
-/// promised — a maintenance surface that the type system maintains.
+/// promised, a maintenance surface that the type system maintains.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AttrClass {
     /// Feeds the layout tree: changing it can move or resize something,
@@ -128,7 +128,7 @@ const FIT: &[&str] = &["fill", "contain", "cover", "none"];
 const DIRECTION: &[&str] = &["row", "column"];
 const AXIS: &[&str] = &["vertical", "horizontal", "both"];
 /// RFC-0021 `ScrollView` `snap`: content snaps to discrete positions after a
-/// scroll gesture — `item` to each direct child's boundary, `page` to
+/// scroll gesture, `item` to each direct child's boundary, `page` to
 /// viewport-sized pages, `none` for free scrolling.
 const SNAP: &[&str] = &["none", "item", "page"];
 /// RFC-0021 `snap_align`: where a snapped item aligns within the viewport.
@@ -136,7 +136,7 @@ const SNAP_ALIGN: &[&str] = &["start", "center", "end"];
 /// Overlay child placement within the full-viewport coordinate space
 /// (RFC-0017 §"Positioning"). `center` centres; the edge tokens pin the child
 /// to that viewport edge, centred on the cross axis. Absolute `(x, y)` and
-/// `relative(ref)` anchoring are deferred (RFC-0017 Future possibilities) —
+/// `relative(ref)` anchoring are deferred (RFC-0017 Future possibilities),
 /// coordinate-passing covers the gap in the interim.
 const ANCHOR: &[&str] = &["center", "top", "bottom", "start", "end"];
 /// RFC-0018 `ZStack` `alignment`: how children smaller than the stack are
@@ -182,7 +182,7 @@ const LAYOUT: &[(&str, PropDef)] = &[
 const DECORATION: &[(&str, PropDef)] = &[
     ("bg", pnt(PropType::Color)),
     ("radius", pnt(PropType::Len)),
-    // RFC-0031 §S1: the corner *profile* `radius` is measured with — `0.0`
+    // RFC-0031 §S1: the corner *profile* `radius` is measured with, `0.0`
     // (the default) is the circular arc every box drew before, `1.0` a
     // pronounced squircle. Paint-class: it changes the shape of the pixels
     // inside a rect layout has already decided, and nothing else, so it
@@ -200,13 +200,13 @@ const DECORATION: &[(&str, PropDef)] = &[
     ("gradient_offset", pnt(PropType::Float)),
 ];
 /// Paint-time transform props (RFC-0011). `opacity` is deliberately **not**
-/// repeated here — it already lives in [`DECORATION`] and is wired end to
+/// repeated here, it already lives in [`DECORATION`] and is wired end to
 /// end (a non-1.0 `opacity` already promotes a box to the `DecoratedBox`
 /// pipeline); this group is only the four props that are new with this RFC.
 ///
 /// Attached everywhere [`DECORATION`] is (every intrinsic sharing the
 /// generic container/`Box` render path: `Box`/`Column`/`Row`/`Button`/
-/// `TextField`/`Toggle`/`Slider`/`ScrollView`) — **not** `Text`/`Image`,
+/// `TextField`/`Toggle`/`Slider`/`ScrollView`), **not** `Text`/`Image`,
 /// whose engine primitives (`TextLine`/`TextureSampler`) have no `Transform`
 /// field yet (see the RFC-0011 engine-slice decision log).
 const TRANSFORM: &[(&str, PropDef)] = &[
@@ -216,7 +216,7 @@ const TRANSFORM: &[(&str, PropDef)] = &[
     ("origin", pnt(PropType::Vec2)),
 ];
 /// Paint-time visual effects (RFC-0023). Like [`TRANSFORM`], these are
-/// paint-only: they never affect layout. `ripple` is the Material ink reveal —
+/// paint-only: they never affect layout. `ripple` is the Material ink reveal,
 /// setting it (a colour) enables the effect; `ripple_active` is the boolean
 /// trigger (typically flipped by an `on pressed { … }` state block);
 /// `ripple_radius` overrides the auto max radius (distance from the tap point
@@ -226,7 +226,7 @@ const TRANSFORM: &[(&str, PropDef)] = &[
 /// blurred sample (with `blur`, the vibrancy pair; alone, a plain translucent
 /// wash); `blur_saturation` is the vibrancy saturation boost (default 1.8)
 /// and `blur_quality` the tier override (`auto`/`high`/`low`). Attached
-/// everywhere [`DECORATION`] is on the box render path — effects composite
+/// everywhere [`DECORATION`] is on the box render path, effects composite
 /// against an element's background, so they follow the same prop surface.
 /// `blur_quality` tokens (RFC-0023 resolved question "blur quality tiers").
 /// The kernel is always the separable Gaussian; the tiers pick the base
@@ -269,7 +269,7 @@ const POINTER_EVENTS: &[&str] = &[
     "wheel",
     // `focus =>`/`blur =>` sugar (RFC-0012 S2) makes *any* interactive
     // element focusable on demand (`register_focusable` creates a fresh
-    // internal `focused_sig` when `focused:` wasn't given) — so, unlike
+    // internal `focused_sig` when `focused:` wasn't given), so, unlike
     // `key_down`/`key_up` below, these aren't gated behind an intrinsic's
     // *default* focusability.
     "focus",
@@ -334,7 +334,7 @@ fn props_from(groups: &[&[(&'static str, PropDef)]]) -> HashMap<&'static str, Pr
     // Universal props. A style class can carry anything, so it is classified
     // by its most consequential possibility rather than its most common one.
     m.insert("style", lay(PropType::Class));
-    // RFC-0024: `selected`/`invalid` are universal opt-in pseudo-state props —
+    // RFC-0024: `selected`/`invalid` are universal opt-in pseudo-state props,
     // any element can drive the `selected`/`invalid` style states (nav items,
     // tabs, chips, form fields).
     m.insert("selected", pnt(PropType::Bool));
@@ -355,7 +355,7 @@ fn events_from(focusable: bool, extra: &[&'static str]) -> HashSet<&'static str>
 /// grid tracks. Accepted, whitespace-separated: `Nfr` (flexible fraction), a
 /// bare number (fixed logical px), `auto`, and `repeat(N, <track>)` (expanded to
 /// `N` copies of a single inner track). Returns `None` on any malformed token or
-/// an empty template — the caller turns that into a
+/// an empty template, the caller turns that into a
 /// [`CompileError::InvalidGridTemplate`].
 ///
 /// [`CompileError::InvalidGridTemplate`]: crate::diagnostics::CompileError::InvalidGridTemplate
@@ -391,7 +391,7 @@ pub fn parse_grid_template(s: &str) -> Option<Vec<byard_core::atlas::GridTrack>>
     if out.is_empty() { None } else { Some(out) }
 }
 
-/// Parses one grid track token (`1fr`, `100`, `auto`) — the leaf of
+/// Parses one grid track token (`1fr`, `100`, `auto`), the leaf of
 /// [`parse_grid_template`].
 fn parse_grid_track(t: &str) -> Option<byard_core::atlas::GridTrack> {
     use byard_core::atlas::GridTrack;
@@ -419,7 +419,7 @@ pub fn lookup(name: &str) -> Option<Intrinsic> {
         // flow), so it lives on every container rather than a special case.
         props.insert("anchor", lay(PropType::Enum(ANCHOR)));
         // RFC-0018: grid child-placement props. Valid on any container child of a
-        // `Grid`; harmless (no-op) outside a grid, like `anchor` — so they live on
+        // `Grid`; harmless (no-op) outside a grid, like `anchor`, so they live on
         // every container rather than being special-cased.
         props.insert("col", lay(PropType::Int));
         props.insert("row", lay(PropType::Int));
@@ -525,12 +525,12 @@ pub fn lookup(name: &str) -> Option<Intrinsic> {
                 events: events_from(true, &["change"]),
             }
         }
-        // RFC-0018: `Checkbox` — a boolean toggle with a distinct square
+        // RFC-0018: `Checkbox`, a boolean toggle with a distinct square
         // identity from `Toggle`. Reflected two-way `value: Bool` (or `bind:`);
         // `true` = checked. `indeterminate: Bool` renders the mixed-state dash.
         // Focusable by default (Space toggles). Fires `change` on flip. Owns its
         // visuals (square container + engine-drawn checkmark), so `bg` is the
-        // checked accent, not a full-rect slab — mirrors `Toggle`'s model.
+        // checked accent, not a full-rect slab, mirrors `Toggle`'s model.
         "Checkbox" => {
             let mut props = props_from(&[LAYOUT, DECORATION, EFFECTS, TRANSFORM]);
             props.insert("value", lay(PropType::Bool));
@@ -548,7 +548,7 @@ pub fn lookup(name: &str) -> Option<Intrinsic> {
                 events: events_from(true, &["change"]),
             }
         }
-        // RFC-0018: `RadioButton` — single selection within a group. `value: Str`
+        // RFC-0018: `RadioButton`, single selection within a group. `value: Str`
         // is this button's own identity within the group; `bind: Str` is the
         // shared group `var`. The button is selected when `bind == value`; tapping
         // it writes its `value` to the group var, so the previously selected
@@ -597,13 +597,13 @@ pub fn lookup(name: &str) -> Option<Intrinsic> {
             // list; `row_height` is that fixed per-row **stride** the window math
             // indexes by. It MUST equal each row's laid-out outer height, because
             // windowing lays the list out gap-free (a flex `gap` can't survive
-            // virtualization) — so fold any inter-row spacing into the row itself
+            // virtualization), so fold any inter-row spacing into the row itself
             // (its `height` or a `mb` margin), not the container's `gap`. A
             // `row_height` that disagrees with the real stride makes the content
             // jump as rows scroll past the edge.
             props.insert("windowed", lay(PropType::Bool));
             props.insert("row_height", lay(PropType::Int));
-            // RFC-0021 advanced scroll behaviours (all default to off — a plain
+            // RFC-0021 advanced scroll behaviours (all default to off, a plain
             // `ScrollView` is unchanged).
             props.insert("snap", lay(PropType::Enum(SNAP)));
             props.insert("snap_align", lay(PropType::Enum(SNAP_ALIGN)));
@@ -659,8 +659,8 @@ pub fn lookup(name: &str) -> Option<Intrinsic> {
         }
         // RFC-0020: a fixed-size programmatic drawing surface. Content: none.
         // Children: shape commands only (`arc`, `circle`, `line`, `rect`,
-        // `path`, `bezier`, `text`) — validated by [`validate_canvas`], not the
-        // generic children rule. Props: `width`/`height` (required — a canvas
+        // `path`, `bezier`, `text`), validated by [`validate_canvas`], not the
+        // generic children rule. Props: `width`/`height` (required, a canvas
         // never sizes to content), `bg` (background fill), `grow`, margins,
         // `opacity`, universal `style`. Events: all pointer events, hit-tested
         // against the canvas rect only (individual shapes are not hit-testable;
@@ -675,10 +675,10 @@ pub fn lookup(name: &str) -> Option<Intrinsic> {
             props.insert("opacity", pnt(PropType::Float));
             // RFC-0031 §S10: `morph: <scalar>` reinterprets the canvas's shapes
             // as a *sequence* and indexes it. Paint-class, so it animates
-            // through the ordinary chokepoint — a morph that relaid out the
+            // through the ordinary chokepoint, a morph that relaid out the
             // tree at the display rate is precisely what INV-8 forbids.
             props.insert("morph", pnt(PropType::Float));
-            // RFC-0031 §S7: `fuse: <px>` is the smoothing radius — the distance
+            // RFC-0031 §S7: `fuse: <px>` is the smoothing radius, the distance
             // over which two surfaces bridge into one. Paint-class and
             // animatable for the same reason `morph` is: `k` is an ordinary
             // scalar, and an animating fusion is new per-instance data rather
@@ -697,7 +697,7 @@ pub fn lookup(name: &str) -> Option<Intrinsic> {
         }
         // RFC-0017: the overlay escape-hatch. Content: none. Children: the
         // overlay's floating subtree, laid out against the viewport rather than
-        // the parent's flow. Props: `modal` (default true — captures all input
+        // the parent's flow. Props: `modal` (default true, captures all input
         // behind a scrim) and `dismiss_on_outside` (default true when modal). It
         // is layout-only itself (occupies zero space in its parent); its children
         // route to their own pipelines. The `dismiss` event fires when a modal
@@ -717,7 +717,7 @@ pub fn lookup(name: &str) -> Option<Intrinsic> {
                 events: events_from(false, &["dismiss"]),
             }
         }
-        // RFC-0018: `Grid` — a CSS-grid container. Content: none. Children: any
+        // RFC-0018: `Grid`, a CSS-grid container. Content: none. Children: any
         // (auto-placed into the tracks left-to-right, top-to-bottom, or placed
         // explicitly via child `col`/`row`/`col_span`/`row_span`). Props: Layout +
         // Decoration + Transform, plus `columns`/`rows` (GridTemplate strings) and
@@ -748,7 +748,7 @@ pub fn lookup(name: &str) -> Option<Intrinsic> {
                 events: events_from(false, &[]),
             }
         }
-        // RFC-0018: `ZStack` — overlapping children within the layout tree.
+        // RFC-0018: `ZStack`, overlapping children within the layout tree.
         // Content: none. Children: any (all occupy the same rect; last on top).
         // Props: Layout + Decoration + Transform + `alignment: Align2D` (how
         // children smaller than the stack are positioned; default `center`).
@@ -774,14 +774,14 @@ pub fn lookup(name: &str) -> Option<Intrinsic> {
                 events: events_from(false, &[]),
             }
         }
-        // RFC-0026: `NavStack` — a push/pop stack of screens. Content: none.
+        // RFC-0026: `NavStack`, a push/pop stack of screens. Content: none.
         // Children: `route` blocks only (enforced by [`validate_nav`], since
         // they are not elements). Props: Layout + Decoration + Transform, plus
-        // the reflected `path` (the navigation state — an ordinary `var`, never
+        // the reflected `path` (the navigation state, an ordinary `var`, never
         // a controller object), the `transition` family, the Cupertino
         // `swipe_back` edge gesture, `deep_link` (accept OS URL intents) and
         // `max_depth` (the runaway-push guard). Event: `route_change`, fired
-        // once a navigation settles. Pipeline: a stack container — during a
+        // once a navigation settles. Pipeline: a stack container, during a
         // transition two screens are laid out in the same cell and composited
         // with per-screen transform/opacity.
         "NavStack" => {
@@ -796,7 +796,7 @@ pub fn lookup(name: &str) -> Option<Intrinsic> {
             props.insert("col_span", lay(PropType::Int));
             props.insert("row_span", lay(PropType::Int));
             Intrinsic {
-                // The navigation state is the container's content — `NavStack(
+                // The navigation state is the container's content, `NavStack(
                 // path: navPath)`. It is *required*: a navigation container with
                 // nothing driving it is a container with no navigation.
                 arity: 1,
@@ -808,7 +808,7 @@ pub fn lookup(name: &str) -> Option<Intrinsic> {
                 events: events_from(false, &["route_change"]),
             }
         }
-        // RFC-0026: `NavHost` — the flat tab container. Content: none. Children:
+        // RFC-0026: `NavHost`, the flat tab container. Content: none. Children:
         // `tab` blocks only. Props: as `NavStack` minus the stack-only ones,
         // with the reflected `active` naming the visible tab; `transition`
         // defaults to `fade`, since a tab switch has no push direction.
@@ -821,7 +821,7 @@ pub fn lookup(name: &str) -> Option<Intrinsic> {
             props.insert("col_span", lay(PropType::Int));
             props.insert("row_span", lay(PropType::Int));
             Intrinsic {
-                // `NavHost(active: activeTab)` — the visible tab's name.
+                // `NavHost(active: activeTab)`, the visible tab's name.
                 arity: 1,
                 content: Some(PropType::Str),
                 children: true,
@@ -836,7 +836,7 @@ pub fn lookup(name: &str) -> Option<Intrinsic> {
 }
 
 /// Validates a navigation container's children (RFC-0026): a `NavStack` holds
-/// `route` blocks, a `NavHost` holds `tab` blocks, and nothing else — an
+/// `route` blocks, a `NavHost` holds `tab` blocks, and nothing else, an
 /// element, a declaration, or the wrong keyword is a precise diagnostic rather
 /// than a silently ignored child. Each accepted case's pattern is compiled here
 /// too, so a malformed pattern is caught at check time, not first navigation.
@@ -866,7 +866,7 @@ pub fn validate_nav(el: &ElementNode) -> Vec<CompileError> {
                     errs.push(err);
                 }
             }
-            // The right shape, the wrong container — say so directly.
+            // The right shape, the wrong container, say so directly.
             Member::Route { kind, span, .. } => errs.push(CompileError::MisplacedNavCase {
                 span: *span,
                 keyword: kind.as_str().to_string(),
@@ -928,10 +928,10 @@ pub fn validate_element(
     let mut errs = Vec::new();
     let name = el.name.as_str();
 
-    // Rule 1 — name resolution.
+    // Rule 1, name resolution.
     let Some(info) = lookup(name) else {
         if !known_views.contains(&name) {
-            // A shape command reached the ordinary element path — it was
+            // A shape command reached the ordinary element path, it was
             // written outside a `Canvas` body (RFC-0020 §3). More precise
             // than the generic unknown-view diagnostic.
             if is_shape_command(name) {
@@ -959,7 +959,7 @@ pub fn validate_element(
         return errs;
     };
 
-    // Rule 2 — content arity.
+    // Rule 2, content arity.
     if el.content.len() != info.arity {
         errs.push(CompileError::ArityMismatch {
             span: el.span,
@@ -968,7 +968,7 @@ pub fn validate_element(
             found: el.content.len(),
         });
     } else if let Some(ty) = info.content {
-        // Rule 3 — content type.
+        // Rule 3, content type.
         for arg in &el.content {
             if let Some(err) = check_value_type(ty, &arg.value) {
                 errs.push(err);
@@ -976,7 +976,7 @@ pub fn validate_element(
         }
     }
 
-    // Rule 8 — children on a childless intrinsic.
+    // Rule 8, children on a childless intrinsic.
     if !info.children && !el.children.is_empty() {
         errs.push(CompileError::UnexpectedChildren {
             span: el.span,
@@ -984,7 +984,7 @@ pub fn validate_element(
         });
     }
 
-    // Rules 4–6 — per attribute.
+    // Rules 4–6, per attribute.
     for attr in attrs {
         let an = attr.name.as_str();
         let is_prop = matches!(attr.kind, AttrKind::Prop { .. });
@@ -993,7 +993,7 @@ pub fn validate_element(
         let is_event = info.events.contains(an);
 
         if prop_ty.is_none() && !is_event {
-            // Rule 4 — unknown attribute.
+            // Rule 4, unknown attribute.
             let hint = closest_match(
                 an,
                 info.props
@@ -1010,7 +1010,7 @@ pub fn validate_element(
             continue;
         }
 
-        // Rule 5 — separator/kind.
+        // Rule 5, separator/kind.
         if is_prop && prop_ty.is_none() && is_event {
             errs.push(CompileError::WrongAttributeSeparator {
                 span: attr.span,
@@ -1028,7 +1028,7 @@ pub fn validate_element(
             continue;
         }
 
-        // Rule 6 — attribute value type.
+        // Rule 6, attribute value type.
         if let (AttrKind::Prop { value }, Some(def)) = (&attr.kind, prop_def) {
             let ty = def.ty;
             // RFC-0032 §Q8 / RFC-0010 INV-8: the class comes from *this*
@@ -1036,15 +1036,15 @@ pub fn validate_element(
             // `align` on a `Column` and `align` on a `Text` are answered
             // separately and an attribute cannot be added without an answer.
             let is_layout = def.class == AttrClass::Layout;
-            // RFC-0010: `value with anim.*(…)` — reject an animation on a layout
+            // RFC-0010: `value with anim.*(…)`, reject an animation on a layout
             // property (it can't animate on the GPU), otherwise validate every
             // curve in the (possibly nested) chain and type-check the innermost
             // target value. The chain walk matters: `(x with a) with b` must not
             // let its inner curve or value slip past unchecked.
             // The layout half of that rule is asked of the whole expression, not
             // just its outermost node. `width: (x with anim.linear(200ms)) + 0`
-            // animates a layout property exactly as `width: x with …` does — the
-            // `with` is simply written one level in — and matching only the top
+            // animates a layout property exactly as `width: x with …` does, the
+            // `with` is simply written one level in, and matching only the top
             // node let it through to be sampled during layout, where it relaid
             // out every frame *and* resolved to a float the integer-valued
             // dimension readers drop, silently collapsing the element to its
@@ -1062,7 +1062,7 @@ pub fn validate_element(
                     } = target
                     {
                         // RFC-0025: the whole motion spec is validated, not just
-                        // the curve — a misspelt `revrse:` or an out-of-range
+                        // the curve, a misspelt `revrse:` or an out-of-range
                         // `repeat:` is a diagnostic, never a silently ignored
                         // modifier.
                         if let Err(err) = crate::interp::anim::resolve_motion(anim) {
@@ -1078,8 +1078,8 @@ pub fn validate_element(
                 // Same rule for the keyframe form (RFC-0025 §3).
                 // RFC-0025 §3: `anim.keyframes(…)` stands in value position. It
                 // is rejected on a layout property for the same reason `with`
-                // is (a relayout every frame, INV-8) — handled above, for the
-                // nested form too — and each step's value is type-checked
+                // is (a relayout every frame, INV-8), handled above, for the
+                // nested form too, and each step's value is type-checked
                 // against the property like any other value.
                 {
                     match track {
@@ -1101,16 +1101,16 @@ pub fn validate_element(
     errs
 }
 
-/// Whether `name` is a layout-affecting attribute — one whose value feeds Taffy
+/// Whether `name` is a layout-affecting attribute, one whose value feeds Taffy
 /// and so cannot be GPU-animated (RFC-0010 §"Layout properties"). Covers the
 /// [`LAYOUT`] group plus the container `direction`.
-/// Whether an animation appears **anywhere** inside `value` — a `with` clause or
+/// Whether an animation appears **anywhere** inside `value`, a `with` clause or
 /// an `anim.keyframes(…)` call, at any depth (RFC-0010 §"Layout properties").
 ///
 /// Only layout properties ask this. Everywhere else an animation is a value like
 /// any other and its position in the expression is the author's business; on a
 /// layout property it is prohibited outright, and a prohibition that only
-/// inspects the outermost node is one that anyone can step around by accident —
+/// inspects the outermost node is one that anyone can step around by accident,
 /// `(x with anim.linear(200ms)) * 2` is as animated as `x with …`.
 fn animated_anywhere(value: &Expr) -> bool {
     fn args(args: &[crate::parser::ast::Arg]) -> bool {
@@ -1173,7 +1173,7 @@ fn check_value_type(ty: PropType, value: &Expr) -> Option<CompileError> {
             mismatch("an angle (e.g. 90deg, 1.5rad)")
         }
         (PropType::Angle, Expr::Tuple(args, _)) => {
-            // Verbose `rotate: (angle: <expr>)` — recurse into the field so a
+            // Verbose `rotate: (angle: <expr>)`, recurse into the field so a
             // bare number can't slip past the terse-form rejection by hiding in
             // the tuple wrapper (which is otherwise not type-checked).
             match args.as_slice() {
@@ -1256,7 +1256,7 @@ fn shape_geometry(name: &str) -> (ShapeParams, ShapeParams) {
                 ("cy", PropType::Float),
                 ("r", PropType::Float),
             ],
-            // `start`/`sweep` default to 0°/360° — an unswept arc is a circle.
+            // `start`/`sweep` default to 0°/360°, an unswept arc is a circle.
             &[("start", PropType::Float), ("sweep", PropType::Float)],
         ),
         "circle" => (
@@ -1289,7 +1289,7 @@ fn shape_geometry(name: &str) -> (ShapeParams, ShapeParams) {
         ),
         // RFC-0031 §"`ngon`": one parametric kind covering the great majority
         // of the Material 3 Expressive vocabulary. `n` is an integer literal
-        // and is *not* animatable (§Q10) — `morph` is what changes shape over
+        // and is *not* animatable (§Q10), `morph` is what changes shape over
         // time.
         "ngon" => (
             &[
@@ -1333,7 +1333,7 @@ fn shape_geometry(name: &str) -> (ShapeParams, ShapeParams) {
 }
 
 /// Validates a `Canvas` element (RFC-0020 §1): required `width`/`height`
-/// props, and a body of shape commands only — each checked against its
+/// props, and a body of shape commands only, each checked against its
 /// geometry/paint parameter contract with the same precision as RFC-0005 §5's
 /// attribute rules. Call alongside [`validate_element`] (which covers the
 /// canvas's own attrs/events through the ordinary intrinsic contract).
@@ -1364,12 +1364,12 @@ pub fn validate_canvas(el: &ElementNode, attrs: &[Attr]) -> Vec<CompileError> {
 ///   preference: morphing between fused sub-groups needs a member to itself be
 ///   a group head, which turns a flat contiguous range into a tree and the
 ///   unrolled fragment loop into recursion.
-/// - A fused group has **one** outline — the fused boundary — and it is drawn
+/// - A fused group has **one** outline, the fused boundary, and it is drawn
 ///   with the first shape's stroke properties, since that is the only place
 ///   they can come from. A stroke on any *later* member is therefore inert
-///   ([`StrokeInFusionGroup`] — a *warning*, since the shape still renders
+///   ([`StrokeInFusionGroup`], a *warning*, since the shape still renders
 ///   correctly and only the property is ignored).
-/// - A fused stroke cannot be dashed ([`DashOnFusedStroke`] — an error, since
+/// - A fused stroke cannot be dashed ([`DashOnFusedStroke`], an error, since
 ///   there is no arc length to dash along and an approximation would crawl).
 ///
 /// [`ConflictingGroupMode`]: CompileError::ConflictingGroupMode
@@ -1439,7 +1439,7 @@ fn validate_group_mode(el: &ElementNode, attrs: &[Attr], errs: &mut Vec<CompileE
 /// [`MAX_GROUP_MEMBERS`](byard_core::frame::MAX_GROUP_MEMBERS) of them.
 ///
 /// Counted over the *written* shape commands. A `for` inside the body can
-/// generate members from data, and how many is not knowable here — that case is
+/// generate members from data, and how many is not knowable here, that case is
 /// caught where it becomes knowable, at lowering, against the same cap. This
 /// check is the one that names a source position, which is what makes it the
 /// useful half.
@@ -1467,8 +1467,8 @@ fn validate_group_cap(el: &ElementNode, attrs: &[Attr], errs: &mut Vec<CompileEr
 const GROUP_MODE_PROPS: &[&str] = &["fuse", "morph"];
 
 /// Collects the spans of the shape commands a grouped `Canvas` body writes
-/// literally, in order. `when` branches are both walked — either can be the one
-/// that is taken — and `for` bodies are skipped, since their count is data.
+/// literally, in order. `when` branches are both walked, either can be the one
+/// that is taken, and `for` bodies are skipped, since their count is data.
 fn collect_group_members(members: &[Member], out: &mut Vec<crate::diagnostics::Span>) {
     for member in members {
         match member {
@@ -1540,7 +1540,7 @@ fn push_non_shape(errs: &mut Vec<CompileError>, span: crate::diagnostics::Span, 
 
 /// Validates one shape command against its parameter contract (RFC-0020):
 /// unknown parameters (with a Levenshtein hint), missing required geometry,
-/// scalar-literal type mismatches, no attribute block, no children — and the
+/// scalar-literal type mismatches, no attribute block, no children, and the
 /// `path`-is-fill-only rule ([`CompileError::PathStrokeUnsupported`]).
 #[must_use]
 pub fn validate_shape(el: &ElementNode) -> Vec<CompileError> {
@@ -1625,8 +1625,8 @@ pub fn validate_shape(el: &ElementNode) -> Vec<CompileError> {
                 hint: closest_match(pname, candidates).map(str::to_string),
             });
         } else if let Some(ty) = param_type(pname) {
-            // RFC-0031 §Q10: `ngon`'s `n` is paint-class — it moves no
-            // geometry — and still cannot animate, because there is no shape
+            // RFC-0031 §Q10: `ngon`'s `n` is paint-class, it moves no
+            // geometry, and still cannot animate, because there is no shape
             // between a pentagon and a hexagon. A fractional `n` leaves a
             // partial sector whose seam sweeps the shape *while animating*,
             // which is the only time the feature would be used. The diagnostic
@@ -1753,8 +1753,8 @@ pub fn inflate_hit_rect(rect: Rect, parent: Rect) -> Rect {
 
 /// Whether a colour value carries an alpha byte: the lexer's >6-digit-hex
 /// tag ([`crate::lexer::COLOR_HAS_ALPHA_TAG`], which is what distinguishes
-/// `0x00FFFFFF` from `0xFFFFFF`), or — for computed/theme values that never
-/// went through a literal — the RFC-0011 magnitude heuristic (above
+/// `0x00FFFFFF` from `0xFFFFFF`), or, for computed/theme values that never
+/// went through a literal, the RFC-0011 magnitude heuristic (above
 /// `0xFFFFFF` is alpha-first `0xAARRGGBB`).
 #[must_use]
 pub fn color_has_alpha(hex: i64) -> bool {
@@ -1764,7 +1764,7 @@ pub fn color_has_alpha(hex: i64) -> bool {
 }
 
 /// [`color_to_rgba`] with the alpha byte auto-detected via
-/// [`color_has_alpha`] — the one resolver every alpha-aware colour consumer
+/// [`color_has_alpha`], the one resolver every alpha-aware colour consumer
 /// (ripple ink, `backdrop_tint`, shape colours) funnels through.
 #[must_use]
 pub fn color_rgba_auto(hex: i64) -> [f32; 4] {
@@ -1772,7 +1772,7 @@ pub fn color_rgba_auto(hex: i64) -> [f32; 4] {
 }
 
 /// Parses a `Color` integer into RGBA `[f32; 4]` (6-digit ⇒ opaque, 8-digit ⇒
-/// alpha-first `0xAARRGGBB`) — RFC-0005 §1.
+/// alpha-first `0xAARRGGBB`), RFC-0005 §1.
 #[must_use]
 pub fn color_to_rgba(hex: i64, alpha_byte: bool) -> [f32; 4] {
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -1839,7 +1839,7 @@ mod tests {
         );
 
         // `Text`/`Image` don't have a `Transform` field on their engine
-        // primitives yet (RFC-0011 engine-slice decision log) — these must
+        // primitives yet (RFC-0011 engine-slice decision log), these must
         // still report `UnknownAttribute`, not silently accept and drop.
         let e = errs("View V() { Text(\"hi\") #[rotate: 90deg] }");
         assert!(matches!(&e[0], CompileError::UnknownAttribute { .. }));
@@ -1856,7 +1856,7 @@ mod tests {
     #[test]
     fn rotate_verbose_form_still_rejects_a_bare_number() {
         // The verbose `(angle: N)` wrapper must not let a bare number bypass the
-        // deg/rad requirement — recurse into the field.
+        // deg/rad requirement, recurse into the field.
         let e = errs("View V() { Box #[rotate: (angle: 90)] {} }");
         assert!(matches!(&e[0], CompileError::AttributeTypeMismatch { .. }));
         // …but the properly-suffixed verbose form is accepted.
@@ -1926,7 +1926,7 @@ mod tests {
     fn every_attribute_carries_a_class_and_it_is_per_intrinsic() {
         // RFC-0032 §R2: the class is a required field of the attribute
         // definition, so this is really asserting that the definition
-        // *compiles* — but it also pins the two answers that are easy to get
+        // *compiles*, but it also pins the two answers that are easy to get
         // backwards, and the fact that the same name can differ per element.
         let col = lookup("Column").expect("Column is an intrinsic");
         assert_eq!(col.property_class("width"), Some(AttrClass::Layout));
@@ -1946,7 +1946,7 @@ mod tests {
         assert_eq!(text.property_class("color"), Some(AttrClass::Paint));
         assert_eq!(col.property_class("not_a_real_attribute"), None);
         // RFC-0031 §S1: `smooth` changes the corner *profile* the radius is
-        // measured with — the same rect, different pixels — so it is
+        // measured with, the same rect, different pixels, so it is
         // paint-class and therefore animatable. Classifying it as layout would
         // make `radius: 16, smooth: 0.6 with anim.spring()` a compile error for
         // no reason; classifying `radius` as paint is a separate question this
@@ -1974,7 +1974,7 @@ mod tests {
     fn animating_a_text_size_is_rejected_and_names_transform() {
         // The class table is what makes this reachable at all: `size` is not
         // in the historical layout-name list, so before RFC-0032 an animated
-        // font size compiled and quietly relayed out the tree every frame —
+        // font size compiled and quietly relayed out the tree every frame,
         // the exact thing RFC-0010 INV-8 forbids in prose and nothing checked.
         let e = errs(r#"View V() { Text("hi") #[size: 20 with anim.spring()] {} }"#);
         assert!(
@@ -1999,7 +1999,7 @@ mod tests {
 
     #[test]
     fn with_animation_on_a_layout_prop_is_rejected() {
-        // Animating `width` would relayout every frame — a compile error, not a
+        // Animating `width` would relayout every frame, a compile error, not a
         // silent slowdown (RFC-0010 §"Layout properties").
         let e = errs("View V() { Box #[width: 100 with anim.spring()] {} }");
         assert!(matches!(
@@ -2030,14 +2030,14 @@ mod tests {
     }
 
     /// The layout-property prohibition is about the *expression*, not its
-    /// outermost node — otherwise a parenthesis steps around it.
+    /// outermost node, otherwise a parenthesis steps around it.
     ///
     /// `width: (x with anim.linear(200ms)) + 0` animates a layout property just
     /// as plainly as `width: x with …`; it merely writes the `with` one level in.
     /// Letting it through was not a lenient reading of the rule, it was a
     /// silently broken element: the value reached the layout pass, relaid out
     /// every frame, and resolved to a float the integer-valued dimension reader
-    /// drops — so the box lost its width entirely and stretched to fill.
+    /// drops, so the box lost its width entirely and stretched to fill.
     #[test]
     fn an_animation_nested_inside_a_layout_expression_is_still_rejected() {
         for src in [
@@ -2463,7 +2463,7 @@ mod tests {
 
     // ── Canvas & shape commands (RFC-0020) ─────────────────────────────────────
 
-    /// `validate_element` + `validate_canvas` on the first element of `src` —
+    /// `validate_element` + `validate_canvas` on the first element of `src`,
     /// the exact pair the evaluator's `Canvas` lowering runs.
     fn canvas_errs(src: &str) -> Vec<CompileError> {
         let el = first_element(src);
@@ -2504,7 +2504,7 @@ mod tests {
     /// `LayoutPropNotAnimatable`: `n` moves no geometry and costs no relayout,
     /// it simply has no value between a pentagon and a hexagon. Conflating the
     /// two would tell the author to reach for a transform, which is the wrong
-    /// advice — the right one is `morph`.
+    /// advice, the right one is `morph`.
     #[test]
     fn animating_ngons_vertex_count_is_refused_and_names_morph() {
         let e = canvas_errs(
@@ -2567,7 +2567,7 @@ mod tests {
         );
 
         // Eight is fine, and the same body without a combine mode is fine at
-        // any count — the cap belongs to the group, not to the canvas.
+        // any count, the cap belongs to the group, not to the canvas.
         let eight = members.rsplit_once(" ngon(").expect("nine members").0;
         let ok =
             format!("View V() {{ Canvas #[width: 200, height: 48, morph: 0.0] {{ {eight} }} }}");
@@ -2624,7 +2624,7 @@ mod tests {
 
     /// §Q5. A *warning*, not an error: the shape still renders correctly and
     /// the property is merely inert, so failing a build over it would be
-    /// disproportionate — but saying nothing is how a developer spends an
+    /// disproportionate, but saying nothing is how a developer spends an
     /// afternoon on an outline that was never going to appear.
     #[test]
     fn a_per_member_stroke_inside_a_fusion_group_warns_without_failing() {
@@ -2659,7 +2659,7 @@ mod tests {
             e.iter().all(CompileError::is_warning),
             "nothing here is fatal: {e:?}"
         );
-        // The same shape outside a fusion group is silent — the stroke works.
+        // The same shape outside a fusion group is silent, the stroke works.
         let ungrouped = canvas_errs(
             "View V() { Canvas #[width: 140, height: 48] { \
                circle(cx: 24, cy: 24, r: 18, stroke: 0xFFFFFF, stroke_width: 2) } }",
@@ -2669,7 +2669,7 @@ mod tests {
 
     /// §Q6. An error, not an approximation: there is no closed form for arc
     /// length along the union of arbitrary SDFs, and any approximation makes
-    /// dashes crawl as the fusion animates — for no reason the author can see.
+    /// dashes crawl as the fusion animates, for no reason the author can see.
     #[test]
     fn dashes_on_a_fused_stroke_are_refused() {
         let e = canvas_errs(
@@ -2765,8 +2765,8 @@ mod tests {
     /// RFC-0020 §1 as amended: `for` and `when` are shape *generators*, so a
     /// canvas body admits them.
     ///
-    /// Without this a drawing surface cannot draw a chart — the one thing a
-    /// drawing surface is for — because the shape count cannot come from data.
+    /// Without this a drawing surface cannot draw a chart, the one thing a
+    /// drawing surface is for, because the shape count cannot come from data.
     #[test]
     fn control_flow_inside_a_canvas_is_accepted_and_its_body_still_validated() {
         let e = canvas_errs(

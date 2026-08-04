@@ -41,7 +41,7 @@ fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>)> {
 }
 
 /// Renders `frame` off-screen and returns the horizontal centre (in logical px)
-/// of the painted white marker — "where is the box right now?", measured in
+/// of the painted white marker, "where is the box right now?", measured in
 /// pixels rather than inferred from frame data.
 fn marker_center_x(
     device: &Arc<wgpu::Device>,
@@ -184,7 +184,7 @@ fn an_infinite_loop_moves_the_pixels_and_wraps_at_its_period() {
         marker_source("translate: (200, 0) with anim.linear(400ms, from: 0, repeat: infinite)");
     let seen = positions_over_time(&src, &[0, 200, 400, 600]);
     if seen.is_empty() {
-        eprintln!("no GPU adapter — skipping readback");
+        eprintln!("no GPU adapter, skipping readback");
         return;
     }
     assert!(
@@ -208,7 +208,7 @@ fn reverse_plays_the_second_iteration_backwards_on_screen() {
     );
     let seen = positions_over_time(&src, &[0, 200, 400, 600, 800]);
     if seen.is_empty() {
-        eprintln!("no GPU adapter — skipping readback");
+        eprintln!("no GPU adapter, skipping readback");
         return;
     }
     assert!(seen[1] > seen[0] + 90.0, "out: {seen:?}");
@@ -232,7 +232,7 @@ fn keyframes_walk_their_steps_on_screen() {
     );
     let seen = positions_over_time(&src, &[0, 100, 200, 300, 400]);
     if seen.is_empty() {
-        eprintln!("no GPU adapter — skipping readback");
+        eprintln!("no GPU adapter, skipping readback");
         return;
     }
     assert!(

@@ -3,7 +3,7 @@
 //!
 //! A `tap` is `PointerDown` on one frame and `PointerUp` on a later frame; the
 //! engine renders (and re-registers hit rects) between them, so the router's
-//! gesture state must survive a re-render — otherwise the button's `=> count++`
+//! gesture state must survive a re-render, otherwise the button's `=> count++`
 //! (a tap) never fires.
 
 use byard_compiler::interp::env::Value;
@@ -49,7 +49,7 @@ fn build() -> (Interpreter, Vec<RenderNode>, ViewDecl) {
 }
 
 /// The tap's down and up arrive on **separate** frames (as in the real app),
-/// with a render in between — the gesture must still be recognized.
+/// with a render in between, the gesture must still be recognized.
 #[test]
 fn tap_across_frames_increments_count() {
     let (mut interp, tree, _view) = build();

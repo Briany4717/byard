@@ -1,11 +1,11 @@
-# RFC-0025: Looping & Indefinite Animations — repeat, reverse, keyframes, stagger
+# RFC-0025: Looping & Indefinite Animations, repeat, reverse, keyframes, stagger
 
-- **Status:** Active — implemented
+- **Status:** Active, implemented
 - **Status note (2026-07-26):** Shipped in full: `repeat`, `reverse`, `from:`, `restart:`, `anim.keyframes` and stagger.
 - **Author(s):** Briany4717
 - **Created:** 2026-07-10
 - **Last updated:** 2026-07-10
-- **Depends on:** RFC-0001 (§5 concurrency, `frame.rs`), RFC-0010 (animation system — `with` syntax, `Motion` runtime, active-set settling), RFC-0011 (transform/paint-time properties — the animatable set), RFC-0020 (Canvas — animated shape properties like `start`/`sweep`/`dash_offset`).
+- **Depends on:** RFC-0001 (§5 concurrency, `frame.rs`), RFC-0010 (animation system, `with` syntax, `Motion` runtime, active-set settling), RFC-0011 (transform/paint-time properties, the animatable set), RFC-0020 (Canvas, animated shape properties like `start`/`sweep`/`dash_offset`).
 - **Extends:** RFC-0010 with repeat/reverse/infinite modifiers and a keyframe sequence syntax.
 - **Enables:** Indeterminate progress bars, loading spinners, shimmer/skeleton effects, pulsing badges, rotating icons. Completes the last animation gap for `byard-material` and `byard-cupertino`.
 
@@ -15,11 +15,11 @@
 
 Extend RFC-0010's `with anim.*()` system with three capabilities:
 
-1. **Repeat modifiers** — `repeat: N`, `repeat: infinite`, `reverse: true` on
+1. **Repeat modifiers**, `repeat: N`, `repeat: infinite`, `reverse: true` on
    any `anim.*()` curve.
-2. **`anim.keyframes()`** — a multi-step sequence of timed values for a single
+2. **`anim.keyframes()`**, a multi-step sequence of timed values for a single
    property, replacing the single from→to model.
-3. **`anim.stagger()`** — delay offsets for children in a `for` loop, producing
+3. **`anim.stagger()`**, delay offsets for children in a `for` loop, producing
    wave/cascade effects.
 
 All three are **declarative extensions to the `with` syntax**, GPU-evaluated
@@ -55,7 +55,7 @@ that one."
 ### Repeat and reverse
 
 ```byld
-// Pulsing badge — scales up and down forever
+// Pulsing badge, scales up and down forever
 Box #[width: 12, height: 12, radius: 6, bg: 0xB3261E,
       scale: 1.3 with anim.spring(repeat: infinite, reverse: true)]
 ```
@@ -85,7 +85,7 @@ Canvas #[width: 48, height: 48] {
 ```
 
 When `loading` becomes false, the `when` unmounts the arc, which removes the
-animation from the active set. No separate "stop animation" API — the animation
+animation from the active set. No separate "stop animation" API, the animation
 lives and dies with its element.
 
 ### Keyframes
@@ -183,8 +183,8 @@ unmounts). This means the engine continues requesting frames. To avoid burning
 CPU/GPU when the app is idle but a spinner is spinning, the active set
 distinguishes:
 
-- **Visible infinite animations** — in the viewport, requesting frames.
-- **Offscreen infinite animations** — outside the viewport or in a collapsed
+- **Visible infinite animations**, in the viewport, requesting frames.
+- **Offscreen infinite animations**, outside the viewport or in a collapsed
   `when` branch. These are **paused** (removed from the active set) and
   **resumed** when they become visible again.
 
@@ -215,7 +215,7 @@ and interpolate between their values using the segment's easing function.
 Keyframes are evaluated on the **GPU** for the paint-time animatable set
 (RFC-0011): the shader receives the keyframe steps as a small uniform buffer
 and evaluates the interpolation per fragment. For layout-affecting properties
-(width, height, padding — which RFC-0010 already rejects for spring animation),
+(width, height, padding, which RFC-0010 already rejects for spring animation),
 keyframes are also rejected with `CompileError::LayoutPropertyNotAnimatable`.
 
 ### 4. Grammar extensions
@@ -280,7 +280,7 @@ property. Extensions to `with` keep one model, one syntax, one GPU pipeline.
 
 **Why GPU-evaluated keyframes, not CPU-driven?** Consistency with RFC-0010: the
 CPU computes targets, the GPU drives curves. Keyframes are just a multi-segment
-curve — the GPU evaluates `progress → value` from the step table each frame.
+curve, the GPU evaluates `progress → value` from the step table each frame.
 Zero CPU cost per frame, same as springs.
 
 **Why no `timeline` or `animation controller`?** Those are imperative models
@@ -312,7 +312,7 @@ express the same patterns without any handles.
     above 8 steps. This covers all real-world UI patterns: M3 indeterminate
     progress uses 3–4 steps, a complex shimmer uses 4–5. The cap keeps the GPU
     uniform buffer compact (8 × `vec4` = 128 bytes per animation). If a future
-    pattern needs more, raise the cap — but 8 is the v1 contract.
+    pattern needs more, raise the cap, but 8 is the v1 contract.
   - [x] **Easing per keyframe segment.** **Per-segment.** Each keyframe step
     specifies its own easing function (the easing applies from the *previous*
     step to *this* step). Default per-segment easing is `linear`. This is
@@ -321,7 +321,7 @@ express the same patterns without any handles.
     segments to the same curve, producing incorrect motion.
   - [x] **`delay` on springs.** Yes, delay composes cleanly. The spring starts
     from rest (velocity = 0) at `t = start_time + delay`. During the delay
-    period, the property holds its initial value — no motion, no GPU cost.
+    period, the property holds its initial value, no motion, no GPU cost.
     The spring's physics are unaffected; delay is purely a time offset. This
     is the standard model (CSS `animation-delay`, SwiftUI `.delay()`).
 
@@ -346,14 +346,14 @@ express the same patterns without any handles.
 
 ## Future possibilities
 
-- **Orchestrated animations** — a `sequence { anim1 then anim2 then anim3 }`
+- **Orchestrated animations**, a `sequence { anim1 then anim2 then anim3 }`
   syntax for chaining animations across properties or elements.
-- **Physics simulations** — gravity, bounce, friction as curve types alongside
+- **Physics simulations**, gravity, bounce, friction as curve types alongside
   spring/linear/ease.
-- **Lottie/Rive import** — parse a Lottie JSON into a series of keyframe
+- **Lottie/Rive import**, parse a Lottie JSON into a series of keyframe
   animations applied to `Canvas` shapes.
-- **Enter/exit transitions** — `on mount { ... } on unmount { ... }` animation
+- **Enter/exit transitions**, `on mount { ... } on unmount { ... }` animation
   blocks that play when a `when` branch mounts or unmounts (requires deferred
   unmount lifecycle).
-- **Gesture-driven animations** — scroll position or drag distance as the
+- **Gesture-driven animations**, scroll position or drag distance as the
   animation progress input (0.0–1.0), replacing time.

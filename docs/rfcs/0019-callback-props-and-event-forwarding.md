@@ -1,12 +1,12 @@
-# RFC-0019: Callback Props & Event Forwarding — `Fn` parameters for user Views
+# RFC-0019: Callback Props & Event Forwarding, `Fn` parameters for user Views
 
-- **Status:** Active — implemented
+- **Status:** Active, implemented
 - **Status note (2026-07-26):** Shipped in full: `Fn`-typed parameters, callback passing, event-data callbacks, the typing rules, scope binding, invocation, validation and the hot-reload interaction.
 - **Author(s):** Briany4717
 - **Created:** 2026-07-10
 - **Last updated:** 2026-07-10
-- **Depends on:** RFC-0001 (§2.2 `Signal<T>`, §5.1 logic thread), RFC-0002 (D9 type inference, `Fn` type in the type table), RFC-0003 (§6 callback props — this RFC implements it), RFC-0005 (§1 `Fn(Args) -> Ret` type), RFC-0007 (user-view instantiation, parameter binding).
-- **Enables:** Interactive wrapper Views in packages — `byard-material`'s `TappableCard`, `MenuItem`, `IconButton` can accept and forward `on_tap` callbacks. Essential for any component library.
+- **Depends on:** RFC-0001 (§2.2 `Signal<T>`, §5.1 logic thread), RFC-0002 (D9 type inference, `Fn` type in the type table), RFC-0003 (§6 callback props, this RFC implements it), RFC-0005 (§1 `Fn(Args) -> Ret` type), RFC-0007 (user-view instantiation, parameter binding).
+- **Enables:** Interactive wrapper Views in packages, `byard-material`'s `TappableCard`, `MenuItem`, `IconButton` can accept and forward `on_tap` callbacks. Essential for any component library.
 
 ---
 
@@ -32,7 +32,7 @@ TappableCard(on_tap: { navigate("detail") }) {
 }
 ```
 
-Callbacks are **not closures over mutable state** — they are **action
+Callbacks are **not closures over mutable state**, they are **action
 expressions** evaluated in the caller's scope. This keeps them compatible with
 the reference-free model: the callee doesn't hold a reference to the caller's
 state, it invokes an action that the caller defined.
@@ -44,7 +44,7 @@ state, it invokes an action that the caller defined.
 Today, a user `View` that wraps an interactive intrinsic (a tappable `Box`, a
 `Button`) cannot forward the event to its caller. The only way to make
 `TappableCard` do something on tap is to hardcode the action inside the View
-body — which destroys reusability. This is the fundamental reason `byard-material`
+body, which destroys reusability. This is the fundamental reason `byard-material`
 components like `MenuItem`, `TappableElevatedCard`, and `IconButton` are
 visual-only: they look right but can't *do* anything because the caller can't
 pass an `on_tap` handler.
@@ -89,7 +89,7 @@ View App() {
 }
 ```
 
-The `{ count++ }` expression is evaluated **in the caller's scope** — it can
+The `{ count++ }` expression is evaluated **in the caller's scope**, it can
 read and write the caller's `var`s. The callee (`ActionButton`) never sees
 `count`; it just invokes `on_tap()` which triggers the caller's action.
 
@@ -149,10 +149,10 @@ scalar args. Instead, the caller's action expression AST is captured along with
 a **scope snapshot** (the caller's `Env` at the call site). When the callee
 invokes `on_tap()`, the action is evaluated against that captured scope.
 
-This is a **lexical closure over the caller's scope** — but critically, the
+This is a **lexical closure over the caller's scope**, but critically, the
 closure only captures `var` `SignalId`s, not mutable references. Writing
 `count++` inside a callback writes to the caller's `Signal` via `SignalId`,
-which is an `usize` — `Copy`, `Send`-safe, no lifetime entanglement.
+which is an `usize`, `Copy`, `Send`-safe, no lifetime entanglement.
 
 ```rust
 struct CallbackBinding {
@@ -166,7 +166,7 @@ struct CallbackBinding {
 
 When the callee's event handler runs `on_tap()`:
 
-1. Look up `on_tap` in the current scope — it resolves to a `CallbackBinding`.
+1. Look up `on_tap` in the current scope, it resolves to a `CallbackBinding`.
 2. Create a child `Env` from the callback's `scope` snapshot.
 3. Bind invocation arguments (`on_change(query)` → bind `val = query_value`).
 4. Evaluate the `body` action expressions in that child `Env`.
@@ -174,7 +174,7 @@ When the callee's event handler runs `on_tap()`:
 
 This all happens within the same tick, on the logic thread. There is no
 async boundary, no thread crossing, no `Send` requirement on the callback
-itself — it's an intra-tick scope switch.
+itself, it's an intra-tick scope switch.
 
 ### 4. Validation
 
@@ -199,7 +199,7 @@ changes, the `CallbackBinding.body` is replaced. The `scope` snapshot references
 - **Scope capture adds complexity.** The `EnvSnapshot` must be a lightweight
   copy of signal bindings, not a deep clone of the entire environment.
   Implementing this correctly requires the `Env` to support cheap snapshots.
-- **No first-class function values.** Callbacks are not general closures — they
+- **No first-class function values.** Callbacks are not general closures, they
   can't be stored in `var`s, passed through data structures, or returned. This
   is intentional (it prevents the callback-spaghetti anti-pattern) but limits
   expressiveness.
@@ -230,14 +230,14 @@ extension of the existing parameter model.
 
 ## Prior art
 
-- **React:** `onClick: () => void` props — function references passed as props.
+- **React:** `onClick: () => void` props, function references passed as props.
   Byard's model is similar but with reactive action expressions instead of JS
   closures.
 - **SwiftUI:** `action: () -> Void` initializer parameters on `Button`, etc.
   Direct precedent.
-- **Flutter:** `VoidCallback` / `ValueChanged<T>` — callback typedefs. Byard's
+- **Flutter:** `VoidCallback` / `ValueChanged<T>`, callback typedefs. Byard's
   `Fn()` / `Fn(T)` is the same concept, type-checked at compile time.
-- **Solid.js:** event handler props on components — functions passed as props
+- **Solid.js:** event handler props on components, functions passed as props
   and called from `on:click` handlers.
 
 ---
@@ -249,14 +249,14 @@ extension of the existing parameter model.
     that returns asynchronously. The callback body runs synchronously (writes
     to signals, fires the controller call); the async result arrives on the
     next tick via the relay channel (RFC-0001 §5.1), same as any controller
-    call. No special syntax needed — the callback itself returns immediately.
+    call. No special syntax needed, the callback itself returns immediately.
   - [x] **Multi-statement callbacks.** Yes. `{ a++; b = 0 }` is valid. The
     callback body is a `Vec<ActionExpr>`, identical to an event handler body.
     Statements execute sequentially within one tick.
   - [x] **Naming convention.** **Lint warning (not yet enforced).** Decision:
     the compiler should emit `Warning::CallbackNamingConvention` if a `Fn()`
     parameter does not start with `on_` (e.g., `tap: Fn()` warns, `on_tap:
-    Fn()` does not). This is a style lint, not a hard error — it does not
+    Fn()` does not). This is a style lint, not a hard error, it does not
     block compilation. The lint can be suppressed with
     `#[allow(callback_naming)]` on the View. **Status:** the lint is not yet
     implemented in `diagnostics.rs`; the convention is documented and existing
@@ -267,8 +267,8 @@ extension of the existing parameter model.
 - **During implementation:**
   - [x] **EnvSnapshot cost.** Implemented as a **shallow `Vec` clone** of the
     environment's bindings (`env.snapshot()` → `self.bindings.clone()`). Every
-    `Value` is a `SignalId`, `ScopeId`, `AstId`, or small scalar — all
-    `Copy`-cheap — so the clone is shallow and `Send`. No `Rc`/COW needed:
+    `Value` is a `SignalId`, `ScopeId`, `AstId`, or small scalar, all
+    `Copy`-cheap, so the clone is shallow and `Send`. No `Rc`/COW needed:
     the snapshot is taken once at lower time and restored during render; it is
     never mutated in place. Profiling confirmed the cost is negligible for
     typical Views (5–20 bindings, ~160–640 bytes per snapshot).
@@ -282,9 +282,9 @@ extension of the existing parameter model.
 
 ## Future possibilities
 
-- **Typed event callbacks** — `Fn(TapEvent)` that receive the full event payload
+- **Typed event callbacks**, `Fn(TapEvent)` that receive the full event payload
   (coordinates, modifiers) from the intrinsic.
-- **Callback chains** — multiple callbacks on the same event
-  (`on_tap: { a() }, on_tap: { b() }` — or a dedicated `also` combinator).
-- **Generic callbacks** for controller method references — `on_tap: ctrl.save`
+- **Callback chains**, multiple callbacks on the same event
+  (`on_tap: { a() }, on_tap: { b() }`, or a dedicated `also` combinator).
+- **Generic callbacks** for controller method references, `on_tap: ctrl.save`
   where `ctrl` is an injected controller.

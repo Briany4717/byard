@@ -19,7 +19,7 @@ walked past. They stayed inert for several phases and nothing complained.
 
 A benchmark proves a path is fast. Only an integration assertion proves anyone
 takes it. If this PR adds one and cannot name such an assertion, that is the
-thing to fix before merging — not after.
+thing to fix before merging, not after.
 
 If a ceiling in `crates/byard-platform/tests/frame_budget.rs` is being
 **raised**, say so here: the old value, the new value, and why the regression

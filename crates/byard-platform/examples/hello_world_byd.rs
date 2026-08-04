@@ -33,7 +33,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 fn main() {
     // Sized for the demo's two-column ~16:9 landscape layout (two 560-wide
     // columns + gaps + margin), so neither column clips off the window.
-    let host = WinitHost::new("Byard — hello_world.byd", 1280, 720);
+    let host = WinitHost::new("Byard, hello_world.byd", 1280, 720);
     host.run(App::default()).expect("event loop error");
 }
 

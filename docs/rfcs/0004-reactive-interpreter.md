@@ -1,6 +1,6 @@
-# RFC-0004: Reactive Interpreter (`interp/reactive.rs`) — read-tracking, pull-based memos, structural effects
+# RFC-0004: Reactive Interpreter (`interp/reactive.rs`), read-tracking, pull-based memos, structural effects
 
-- **Status:** Active — implemented (M8 reactive core, all 10 fixtures + proptest green). Mark-and-Pull, memos, structural effects, `untrack` landed in `interp/reactive.rs`.
+- **Status:** Active, implemented (M8 reactive core, all 10 fixtures + proptest green). Mark-and-Pull, memos, structural effects, `untrack` landed in `interp/reactive.rs`.
 - **Author(s):** Briany4717
 - **Created:** 2026-06-20
 - **Last updated:** 2026-06-20
@@ -20,7 +20,7 @@ implementation.
 The design rests on one load-bearing observation from RFC-0002: **RFC-0001's
 `Signal<T>` already is a subscription mechanism.** §2.2 defines a `Signal` as a
 value plus "a vector of atomic dirty flags pointing to specific render or spatial
-subsystem entries." Automatic reactivity does not add a new graph type — it adds
+subsystem entries." Automatic reactivity does not add a new graph type, it adds
 a **read-tracking layer** that *fills in* those subscriber links by observing
 which `Signal`s each expression reads, and a **Mark-and-Pull** update discipline
 (D1) over them. Three scope kinds sit on top: **value bindings** (an intrinsic
@@ -79,7 +79,7 @@ Nobody declared an edge. Each edge exists because, while evaluating `filtered`,
 the interpreter saw it read `query` and `items`; while evaluating the
 `Text("Found {count()}")` binding, it saw it read `count`, which read `filtered`.
 Mutating `query` marks `filtered` dirty, which marks `count` and the two
-structural effects, which mark the bindings — and the next tick pulls exactly the
+structural effects, which mark the bindings, and the next tick pulls exactly the
 affected ones.
 
 ---
@@ -89,7 +89,7 @@ affected ones.
 ### 1. Core types
 
 All scope state lives in the owning `View`'s `ViewArena` (RFC-0001 §2.1), so it is
-reclaimed in one linear pass on unmount — reactivity adds no separate lifetime
+reclaimed in one linear pass on unmount, reactivity adds no separate lifetime
 management.
 
 ```rust
@@ -130,7 +130,7 @@ pub enum Scope {
 
 A `Signal` (RFC-0001 §2.2) is extended only in interpretation: its dirty-flag
 vector holds `ScopeId`s (value bindings, memos, and structural effects are all
-valid subscribers). No change to the `Signal` memory layout is required — a
+valid subscribers). No change to the `Signal` memory layout is required, a
 `ScopeId` is exactly the "specific render or spatial subsystem entry" §2.2 already
 points at, generalized to also name memos and effects.
 
@@ -160,7 +160,7 @@ impl<T> Signal<T> {
 ```
 
 Reading outside any scope (e.g. inside an event handler body, which mutates but is
-not itself a tracked projection) simply does not subscribe — correct, because a
+not itself a tracked projection) simply does not subscribe, correct, because a
 handler is an action, not a binding.
 
 ### 3. Scope evaluation with dynamic-dependency clearing
@@ -183,7 +183,7 @@ fn evaluate_scope(s: ScopeId) -> Value {
 `clear_deps` walks `scope[s].deps`, removes `s` from each `Signal`'s subscriber
 vector, then empties `deps`. `walk_expr` repopulates `deps` via `read`.
 
-### 4. Mark phase (synchronous, idempotent) — D1
+### 4. Mark phase (synchronous, idempotent), D1
 
 A `var` mutation runs a synchronous mark cascade. It **never computes a value**;
 it only sets dirty bits and enqueues work.
@@ -196,7 +196,7 @@ fn mark(sig: SignalId) {
 }
 
 fn mark_scope(s: ScopeId) {
-    if scope[s].dirty { return; }        // IDEMPOTENT — stop re-traversal (D1)
+    if scope[s].dirty { return; }        // IDEMPOTENT, stop re-traversal (D1)
     scope[s].dirty = true;
     match scope[s] {
         ValueBinding { .. } => tick.dirty_bindings.push(s),
@@ -206,21 +206,21 @@ fn mark_scope(s: ScopeId) {
 }
 ```
 
-The idempotent guard is not an optimization — without it, a wide diamond (one
+The idempotent guard is not an optimization, without it, a wide diamond (one
 source feeding *k* memos that all feed one binding) degrades the cascade from
 `O(nodes)` to `O(paths)`, which is exponential. Memos propagate the mark to their
 subscribers but are **not** recomputed here; their recompute is deferred to a
 lazy pull (§6).
 
-Mutations from all three sources — event handlers (RFC-0003 step 2), async
+Mutations from all three sources, event handlers (RFC-0003 step 2), async
 controller results (RFC-0001 §5.1, step 3), and hot-reload value patches
-(RFC-0002, step 1) — funnel through `mark`. Because every source only *marks*
+(RFC-0002, step 1), funnel through `mark`. Because every source only *marks*
 during its step and the single pull is step 4, **the tick is the consistency
 boundary** (D1): every pull observes a fully-settled mark set, so no scope can
 read a half-updated graph. This is the glitch-freedom guarantee, and it is a
 property of the *ordering*, not of any per-node cleverness.
 
-### 5. Pull phase (tick step 4) — D1
+### 5. Pull phase (tick step 4), D1
 
 ```rust
 fn pull(frame: &mut RenderFrame, epoch: u32) {
@@ -242,7 +242,7 @@ arena creates new value bindings that must also be evaluated this tick. The epoc
 guard ensures each binding evaluates **at most once per tick** even when reached
 through several dirty paths.
 
-### 6. Pull-based memos (the diamond solution) — D1
+### 6. Pull-based memos (the diamond solution), D1
 
 A memo is recomputed **only when read while dirty**, never eagerly:
 
@@ -268,7 +268,7 @@ fn read_memo(m: ScopeId) -> Value {
 (second arrival is the idempotent no-op). Pull evaluates `d`: walking `b + c`
 reads `b` (dirty → recompute against the *settled* `a`, cache, clear) then `c`
 (same). `d` computes once, from two fresh operands. No double-compute, no stale
-read — and no runtime topological scheduler, exactly as D1 promised. The
+read, and no runtime topological scheduler, exactly as D1 promised. The
 `evaluating` flag is a debug-only cycle trip-wire; the Phase 2 grammar cannot
 express a reactive cycle, but a future `fn` amendment could, and this catches it
 loudly instead of hanging.
@@ -281,7 +281,7 @@ still be re-evaluated, because the mark cascade fires before any value is known.
 This is bounded and acceptable:
 
 - It causes at most one extra **evaluation** (an AST re-walk), never an extra
-  **GPU command** — the frame write in §5 is value-equality–gated (the same cut
+  **GPU command**, the frame write in §5 is value-equality–gated (the same cut
   RFC-0003 E1 relies on), so an unchanged projected value writes nothing and
   emits no draw call (RFC-0001 §3.3 produces no dirty rect).
 - Dev mode is explicitly not the throughput path (RFC-0002), so a few redundant
@@ -292,7 +292,7 @@ This is bounded and acceptable:
 
 A future optional refinement (memo value-versioning: a memo that recomputes to an
 equal value bumps no version, and readers comparing versions skip) is noted in
-*Future possibilities* — deliberately **not** in Phase 2, to keep the scheme
+*Future possibilities*, deliberately **not** in Phase 2, to keep the scheme
 small and obviously correct.
 
 ### 8. Structural effects: `when` and `for`
@@ -325,11 +325,11 @@ fn reconcile_structural(s: ScopeId, frame: &mut RenderFrame) {
 Mounting a branch/child runs that body's declarations, which open their own value
 bindings and memos (self-registering against their child `ViewArena`). Unmounting
 drops the child arena (RFC-0001 §2), which removes its scopes, its `Signal`
-subscriptions, and its §4.2 grid entries in the same linear pass — so a structural
+subscriptions, and its §4.2 grid entries in the same linear pass, so a structural
 change cannot leak a subscription or a stale hit-test rect. The `for` upgrade to
 keyed reconciliation is gated exactly by RFC-0002 D7's churn/FPS triggers.
 
-### 9. `untrack` — D2
+### 9. `untrack`, D2
 
 ```rust
 pub fn untrack<R>(thunk: impl FnOnce() -> R) -> R {
@@ -351,7 +351,7 @@ without creating a permanent edge.
 ### 10. D3 reactivity metadata (no AST mutation)
 
 Whether a `let`/`fn` is reactive (reads ≥1 `Signal`) is observed during its first
-`evaluate_scope` — if its `deps` is non-empty, it is reactive. Per D3 this is
+`evaluate_scope`, if its `deps` is non-empty, it is reactive. Per D3 this is
 **not** written back onto the AST node (the AST stays immutable owned data so
 hot-reload diffing is clean); it is recorded in `ResolvedView.reactive:
 HashSet<Symbol>` and emitted to the LSP JSON. `interp/reactive.rs` exposes
@@ -364,7 +364,7 @@ unchanged, only expressions/elements differ), `interp/reload.rs` keeps the live
 `Signal`s and asks `reactive.rs` to **rebuild the scope set from the new AST** and
 re-point it at the existing `Signal`s (matched by `(position, name)`). Because
 every scope re-evaluates and re-tracks from scratch (§3), the dependency graph is
-re-derived automatically — there is no separate "patch the graph" path. On a
+re-derived automatically, there is no separate "patch the graph" path. On a
 **structure-incompatible** patch (case 2), the arena drops and remounts, taking
 all scopes with it. RFC-0003 E5 gates structural patches behind an in-flight
 gesture.
@@ -396,15 +396,15 @@ This is the entire surface the rest of the interpreter (`eval.rs`,
 
 ---
 
-## Test fixtures (required before implementation — D1 mandate)
+## Test fixtures (required before implementation, D1 mandate)
 
 Each is a deterministic unit/property test exercising one invariant. They are the
 acceptance criteria for the module.
 
-1. **Diamond — single compute.** `a → b,c → d=b+c`. Mutate `a`; assert `d`
+1. **Diamond, single compute.** `a → b,c → d=b+c`. Mutate `a`; assert `d`
    evaluates exactly once, equals the value computed from the post-mutation `a`,
    and `b`/`c` each recompute once.
-2. **Idempotent marking — wide diamond.** `a → m1..m50 → d`. Mutate `a`; assert
+2. **Idempotent marking, wide diamond.** `a → m1..m50 → d`. Mutate `a`; assert
    the mark cascade visits each node once (instrument a counter) and `d`
    evaluates once (epoch guard).
 3. **Dynamic dependencies.** Binding reads `a` when `flag` else `b`. With
@@ -442,7 +442,7 @@ everything every tick), backstops the hand-written fixtures.
   harbor a reactivity bug.
 - **Over-marking** can re-evaluate bindings whose value did not change (§7). Bounded
   to wasted AST walks (never wasted GPU work), accepted for Dev, eliminated in
-  Prod — but real.
+  Prod, but real.
 - **Coarse `for`** (drop-and-rebuild) loses child state across list changes until
   the D7-gated keyed upgrade lands.
 - **`SmallVec` sizing** for `deps`/`subs` is a guess (inline 4); pathological
@@ -478,7 +478,7 @@ is sound here because §5.1 already confines all of this to one thread.
 ## Prior art
 
 - **Solid.js / reactively / Leptos.** Read-tracking via a current-computation
-  pointer, pull-based memos, clear-and-retrack dynamic deps — the direct model.
+  pointer, pull-based memos, clear-and-retrack dynamic deps, the direct model.
 - **RFC-0001 §2.2 / §3.3.** The dirty-flag vector and dirty-rectangle machinery
   this layer drives.
 - **MobX (derivations).** The "derived values recompute lazily on read" lineage
@@ -491,15 +491,15 @@ is sound here because §5.1 already confines all of this to one thread.
 ## Unresolved questions
 
 - **During implementation:**
-  - [ ] **`SmallVec` inline sizes** for `deps`/`subs` — pick after measuring real
+  - [ ] **`SmallVec` inline sizes** for `deps`/`subs`, pick after measuring real
     `byld` views.
-  - [ ] **Memo value-versioning** (§7 over-mark cut) — confirm it stays out of
+  - [ ] **Memo value-versioning** (§7 over-mark cut), confirm it stays out of
     Phase 2 and lands (if ever) as a measured optimization, not speculatively.
-  - [ ] **Effect ordering within structural reconciliation** — when a single tick
+  - [ ] **Effect ordering within structural reconciliation**, when a single tick
     both toggles a `when` and dirties a binding inside the branch being mounted,
     confirm the "structural before bindings" order in §5 fully covers it, or
     specify a fixed-point loop bound.
-  - [ ] **`for` child identity for the coarse path** — define what "child state"
+  - [ ] **`for` child identity for the coarse path**, define what "child state"
     (e.g. an inner `var`) is expected to survive a coarse rebuild (answer for
     Phase 2: none; documented so it is not a surprise).
 
@@ -513,6 +513,6 @@ is sound here because §5.1 already confines all of this to one thread.
   scope with child-arena preservation.
 - **Phase 4 transpiler** lowering this exact graph to static Rust: discovered
   subscriptions become const wiring, pull-memos become const-folded computations,
-  structural effects become generated mount/unmount code — zero runtime tracking.
+  structural effects become generated mount/unmount code, zero runtime tracking.
 - **Async/suspense scopes** (a binding awaiting a controller result showing a
   fallback) as a fourth scope kind, once Phase 4 and the async story are firm.

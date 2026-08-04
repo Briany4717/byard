@@ -1,8 +1,8 @@
-// RFC-0032 — element invalidation: the retained layout path and a real dirty
+// RFC-0032, element invalidation: the retained layout path and a real dirty
 // set.
 //
 // Like the `profiling` example, the demo here is partly the block in your
-// terminal — but this one you can also *see*, because the change it makes is
+// terminal, but this one you can also *see*, because the change it makes is
 // the difference between a frame that costs 45 ms and one that costs 3 ms on
 // the same content.
 //
@@ -20,21 +20,21 @@
 //
 // ── What to verify, in the terminal ───────────────────────────────────────
 //
-//   1. `atlas  retained · N node(s) marked` — the new line. It says which
+//   1. `atlas  retained · N node(s) marked`, the new line. It says which
 //      path the frame took. In steady state it must read `retained`; a
 //      `rebuild` every frame is the thing this example exists to make
 //      visible.
 //
 //   2. `layout.taffy` is ~0.01 ms, not ~0.2 ms. Nothing about the paragraphs
-//      changed, so Taffy recomputes nothing and — this is the part that
-//      matters — the text measure protocol is never invoked for them.
+//      changed, so Taffy recomputes nothing and, this is the part that
+//      matters, the text measure protocol is never invoked for them.
 //
 //   3. `encode.glyphs` is ~2 ms, not ~45 ms. This is the same fact one layer
 //      down: the paragraphs' `TextLine`s are reported clean, so the glyph
 //      cache is not asked to re-shape them.
 //
 //   4. `present.acquire` is large (~13 ms of a 16.7 ms frame). That is the
-//      engine finishing early and waiting for the display — the healthy
+//      engine finishing early and waiting for the display, the healthy
 //      state. On this same scene before RFC-0032 it was 0.06 ms, because the
 //      engine had nothing left over.
 //
@@ -43,15 +43,15 @@
 //   5. THE PARAGRAPHS ARE STILL WRAPPED. This is the whole hazard of the
 //      retained path in one line. The incremental layout pass runs the
 //      measure protocol, and a version of it without a text sizer would size
-//      every wrapping `Text` at its natural *single-line* width — silently
+//      every wrapping `Text` at its natural *single-line* width, silently
 //      un-wrapping every paragraph on the frame after any retained one.
 //      If you ever see these paragraphs collapse into long single lines
 //      running off the right edge, that is the bug (RFC-0032 §R5).
 //
 //   6. TAPPING THE COUNTER STILL LANDS ON THE COUNTER. Press "grow" a few
 //      times: the top box gets taller and everything below it moves down.
-//      Nothing marked those paragraphs dirty — they were pushed by a sibling
-//      — and the tap targets move with them anyway, because the spatial grid
+//      Nothing marked those paragraphs dirty, they were pushed by a sibling
+//, and the tap targets move with them anyway, because the spatial grid
 //      is rebuilt from resolved rects rather than from anything this RFC
 //      computes. An element that looks like it moved but answers taps where
 //      it used to be is invisible in a screenshot; this button is how you
@@ -71,13 +71,13 @@ View Main() {
     let chip = style { radius: 18, p: (vertical: 8, horizontal: 16), color: 0xE6E1E5 }
 
     Column #[bg: 0x101014, p: 20, gap: 12, width: 760] {
-        Text("RFC-0032 — element invalidation") #[color: 0xFFFFFF, size: 24, weight: bold]
+        Text("RFC-0032, element invalidation") #[color: 0xFFFFFF, size: 24, weight: bold]
         Text("Twelve paragraphs that never change, under one thing that changes every frame.")
             #[color: 0x9AA0AC, size: 13]
 
         Row #[gap: 20, align: center] {
             // The only thing in the frame that changes on its own. `rotate` is
-            // a paint-class attribute, so it never marks layout dirty — which
+            // a paint-class attribute, so it never marks layout dirty, which
             // is the invariant RFC-0010 asserted in prose and RFC-0032 turned
             // into a compile error.
             Box #[width: 44, height: 44, origin: center,
@@ -101,11 +101,11 @@ View Main() {
 
         Column #[gap: 8] {
             Text(longer
-                ? "Text content is layout-class, and this is the row the whole RFC turns on: the string that reaches the frame is hashed alongside the font size and the offered width, so an edit marks this leaf and Taffy re-measures it — and only it. Everything below moves; nothing above is touched; no other paragraph is re-shaped."
+                ? "Text content is layout-class, and this is the row the whole RFC turns on: the string that reaches the frame is hashed alongside the font size and the offered width, so an edit marks this leaf and Taffy re-measures it, and only it. Everything below moves; nothing above is touched; no other paragraph is re-shaped."
                 : "Text content is layout-class. Press \"longer\".")
                 #[color: 0xCCD2E0, size: 14]
             for p in paras {
-                Text("Paragraph {p} — this text never changes. It is measured once, shaped once, and then skipped on every frame after that, which is where the twenty-fold difference on this scene comes from. It wraps, and it must stay wrapped across a retained frame.")
+                Text("Paragraph {p}, this text never changes. It is measured once, shaped once, and then skipped on every frame after that, which is where the twenty-fold difference on this scene comes from. It wraps, and it must stay wrapped across a retained frame.")
                     #[color: 0x8E8B94, size: 13]
             }
         }

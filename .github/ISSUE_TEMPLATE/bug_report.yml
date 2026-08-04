@@ -6,7 +6,7 @@ body:
     attributes:
       value: |
         Thanks for taking the time to report a bug.
-        Please fill in as much as you can — GPU bugs are notoriously
+        Please fill in as much as you can, GPU bugs are notoriously
         environment-sensitive and every field here matters.
 
   - type: textarea

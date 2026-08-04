@@ -122,8 +122,8 @@ fn line(y: f32, text: &str) -> TextLine {
     }
 }
 
-/// A frame shaped like a real `byard dev` frame: an app tree, then — when
-/// `hud_fields` is `Some` — the dev runner's own layer behind a `dev_base`.
+/// A frame shaped like a real `byard dev` frame: an app tree, then, when
+/// `hud_fields` is `Some`, the dev runner's own layer behind a `dev_base`.
 fn frame_with(app_lines: &[String], hud_fields: Option<&[String]>) -> RenderFrame {
     let mut f = RenderFrame::new();
     f.push_instance(BoxInstance {
@@ -155,7 +155,7 @@ fn app_lines() -> Vec<String> {
 
 /// The HUD's field set, formatted the way `hud::fixed_ms` formats it: a
 /// value-independent width, so a changing number keeps a stable string
-/// *length* and — with the content-addressed cache — an identical string
+/// *length* and, with the content-addressed cache, an identical string
 /// whenever the value has not moved.
 fn hud_fields(work_ms: f64) -> Vec<String> {
     let mut v: Vec<String> = (0..20).map(|i| format!("hud label {i:>3}")).collect();
@@ -168,7 +168,7 @@ fn hud_fields(work_ms: f64) -> Vec<String> {
 #[test]
 fn a_frame_with_no_dev_surfaces_produces_no_dev_owned_samples() {
     let Some(mut h) = Harness::new() else {
-        eprintln!("no GPU adapter available — skipping");
+        eprintln!("no GPU adapter available, skipping");
         return;
     };
     let f = frame_with(&app_lines(), None);
@@ -197,7 +197,7 @@ fn a_frame_with_no_dev_surfaces_produces_no_dev_owned_samples() {
 #[test]
 fn the_dev_half_of_glyph_shaping_is_charged_to_the_dev_runner() {
     let Some(mut h) = Harness::new() else {
-        eprintln!("no GPU adapter available — skipping");
+        eprintln!("no GPU adapter available, skipping");
         return;
     };
     // Fresh strings each frame on both sides, so shaping actually happens and
@@ -233,7 +233,7 @@ fn the_dev_half_of_glyph_shaping_is_charged_to_the_dev_runner() {
 #[test]
 fn the_apps_glyph_row_excludes_what_the_dev_runner_shaped() {
     let Some(mut h) = Harness::new() else {
-        eprintln!("no GPU adapter available — skipping");
+        eprintln!("no GPU adapter available, skipping");
         return;
     };
     let f = frame_with(&app_lines(), Some(&hud_fields(3.4)));
@@ -259,7 +259,7 @@ fn the_apps_glyph_row_excludes_what_the_dev_runner_shaped() {
     );
 
     // And the two owner buckets still reconstruct the frame rather than
-    // exceeding it — the §I2b property, one level out.
+    // exceeding it, the §I2b property, one level out.
     assert_eq!(
         block.owner_total_ns(Owner::App) + block.owner_total_ns(Owner::DevTools),
         block.total_ns(),
@@ -272,7 +272,7 @@ fn the_apps_glyph_row_excludes_what_the_dev_runner_shaped() {
 #[test]
 fn a_steady_scene_re_shapes_nothing_after_the_first_frame() {
     let Some(mut h) = Harness::new() else {
-        eprintln!("no GPU adapter available — skipping");
+        eprintln!("no GPU adapter available, skipping");
         return;
     };
     let app = app_lines();
@@ -285,7 +285,7 @@ fn a_steady_scene_re_shapes_nothing_after_the_first_frame() {
         "every line is new on the first frame"
     );
 
-    // Same content, `dirty: true` throughout — exactly what the interpreter
+    // Same content, `dirty: true` throughout, exactly what the interpreter
     // emits. The old gate re-shaped all of it, every frame, forever.
     for _ in 0..3 {
         h.encode(&f);
@@ -305,7 +305,7 @@ fn opening_the_hud_on_a_steady_scene_re_shapes_nothing() {
     // were re-shaped sixty times a second. The fields have always been
     // fixed-width; what was missing was a shaper that looked.
     let Some(mut h) = Harness::new() else {
-        eprintln!("no GPU adapter available — skipping");
+        eprintln!("no GPU adapter available, skipping");
         return;
     };
     let app = app_lines();
@@ -324,7 +324,7 @@ fn opening_the_hud_on_a_steady_scene_re_shapes_nothing() {
 fn only_the_field_that_moved_is_re_shaped_when_the_hud_updates() {
     // The tenth-of-a-second update. One number changes; one line re-shapes.
     let Some(mut h) = Harness::new() else {
-        eprintln!("no GPU adapter available — skipping");
+        eprintln!("no GPU adapter available, skipping");
         return;
     };
     let app = app_lines();
@@ -345,16 +345,16 @@ fn losing_the_fixed_width_padding_re_shapes_the_whole_pool() {
     // "Demonstrated red by removing the padding", as an assertion rather than
     // a procedure. Without a value-independent width the string's *length*
     // changes as a number crosses ten, the text pool's length is unaffected
-    // but every field's own key moves — and worse, a HUD that interpolated
+    // but every field's own key moves, and worse, a HUD that interpolated
     // widths into `byld` would change the pool length itself, which makes
     // every index in the frame incomparable and re-shapes the app's text too.
     let Some(mut h) = Harness::new() else {
-        eprintln!("no GPU adapter available — skipping");
+        eprintln!("no GPU adapter available, skipping");
         return;
     };
     let app = app_lines();
     // The unpadded form: one field per value, split into two lines once the
-    // number needs an extra column — the shape an interpolated `"{t.work}ms"`
+    // number needs an extra column, the shape an interpolated `"{t.work}ms"`
     // produces.
     let ragged = |v: f64| {
         let mut fields: Vec<String> = (0..20).map(|i| format!("hud label {i:>3}")).collect();

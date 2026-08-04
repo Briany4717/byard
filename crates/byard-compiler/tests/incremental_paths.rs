@@ -1,13 +1,13 @@
-//! Which incremental path production takes — asserted, at the integration
+//! Which incremental path production takes, asserted, at the integration
 //! point, on a real frame.
 //!
 //! # Why this file exists
 //!
 //! Byard built incremental machinery in three layers: `mark_dirty_all` +
 //! `recompute_dirty` in layout, the dirty-target set at the atlas→frame
-//! boundary, and the encoder's scissor. Each was validated **in isolation** —
+//! boundary, and the encoder's scissor. Each was validated **in isolation**,
 //! `recompute_dirty` has benchmarks, `TargetId` has generation tests, the
-//! scissor has `tests/m26_m27_incremental.rs` — and none of them had an
+//! scissor has `tests/m26_m27_incremental.rs`, and none of them had an
 //! assertion that fails when production takes the slow path instead. So when
 //! the interpreter was built taking the simple path, nothing protested, and
 //! nothing kept protesting for several phases afterwards.
@@ -22,7 +22,7 @@
 //! `#[ignore]`d acceptance criteria for behaviour that was blocked on a signal
 //! the interpreter did not produce. RFC-0032 produces it, so the acceptance
 //! criteria are now ordinary tests and the pins that described the *old*
-//! behaviour are gone — they said "the atlas is torn down every frame", which
+//! behaviour are gone, they said "the atlas is torn down every frame", which
 //! is no longer true and must not become true again.
 //!
 //! What the tests are pinning now, in order of how badly it hurts to get it
@@ -59,7 +59,7 @@ use byard_core::frame::RenderFrame;
 const W: f32 = 800.0;
 const H: f32 = 600.0;
 
-/// A view whose only reactive input is a **colour** — no layout consequence at
+/// A view whose only reactive input is a **colour**, no layout consequence at
 /// all. This is the cheapest possible frame: nothing moved, nothing was
 /// mounted, one box is a different shade. If any incremental path is ever going
 /// to be taken, it is on a frame like this one.
@@ -184,14 +184,14 @@ fn the_counters_do_not_fire_when_nothing_renders() {
 /// and that the **whitelist** is what produced it.
 ///
 /// The last assertion is the one with teeth, and it was missing. A frame the
-/// whitelist wrongly admits is not wrong on screen — `end_retained_build`
-/// refuses it and the caller clears and rebuilds — so it lands on exactly the
+/// whitelist wrongly admits is not wrong on screen, `end_retained_build`
+/// refuses it and the caller clears and rebuilds, so it lands on exactly the
 /// same `clears: 1, full_computes: 1, retained_recomputes: 0` as a frame the
 /// whitelist rejected outright. Every §R4 clause could therefore be deleted
 /// with this file still green, while production walked the tree twice on every
 /// overlay toggle and every route change. `retained_attempts` is what tells the
 /// two apart (INV-18: the assertion must fail when production stops taking the
-/// cheaper path — here, the cheap *early-out*).
+/// cheaper path, here, the cheap *early-out*).
 fn assert_rebuilt(counts: &path_counters::Counts, why: &str) {
     assert_eq!(counts.clears, 1, "{why} must force a full rebuild");
     assert_eq!(counts.full_computes, 1, "{why} must run a full layout pass");
@@ -202,7 +202,7 @@ fn assert_rebuilt(counts: &path_counters::Counts, why: &str) {
     assert_eq!(
         counts.retained_attempts, 0,
         "{why} must be rejected by the §R4 whitelist before the atlas is \
-         touched — this frame was admitted and then rolled back, which costs \
+         touched, this frame was admitted and then rolled back, which costs \
          the whole build walk twice and is invisible in every other counter"
     );
     assert_eq!(
@@ -300,8 +300,8 @@ fn a_hot_reload_forces_a_full_rebuild() {
 
 #[test]
 fn mounting_an_overlay_forces_a_full_rebuild() {
-    // An overlay mounts through a `when` guard (RFC-0017) — there is no
-    // `visible:` attribute — so this also re-covers the structural clause. The
+    // An overlay mounts through a `when` guard (RFC-0017), there is no
+    // `visible:` attribute, so this also re-covers the structural clause. The
     // overlay-count clause it targets is nonetheless load-bearing on its own:
     // overlay and navigation pools do not travel through
     // `reconcile_structure`, which is why `a_route_push_forces_a_full_rebuild`
@@ -361,7 +361,7 @@ fn unmounting_an_overlay_forces_a_full_rebuild() {
     // not the same clause running twice. A mount adds nodes, so a length check
     // catches it even if the overlay clause were missing; an unmount *removes*
     // them, which is the direction where a surviving stale entry is a rect the
-    // spatial grid still answers from — a dismissed dialog that keeps eating
+    // spatial grid still answers from, a dismissed dialog that keeps eating
     // taps over the screen behind it (INV-23's failure mode, and invisible in a
     // screenshot).
     const OVERLAY_SRC: &str = r"
@@ -429,11 +429,11 @@ View Probe() {
 // RFC-0005 lowers `Text` to three different layout shapes, and they are three
 // different measurements rather than one with a parameter:
 //
-//   * no `width`, `wrap` defaulting to `true` — a measured leaf the atlas sizes
+//   * no `width`, `wrap` defaulting to `true`, a measured leaf the atlas sizes
 //     to whatever width its parent offers, resolved *inside* layout;
-//   * an explicit `width` — a measured leaf with a fixed wrap width, the same
+//   * an explicit `width`, a measured leaf with a fixed wrap width, the same
 //     protocol against a different bound;
-//   * `wrap: false` — not a measured leaf at all, but a plain fixed leaf at the
+//   * `wrap: false`, not a measured leaf at all, but a plain fixed leaf at the
 //     natural single-line size, which never reaches the sizer.
 //
 // The retained path can break the first two by losing the sizer and the third
@@ -449,7 +449,7 @@ const PARAGRAPH: &str = "A paragraph long enough that it must wrap onto several 
 /// whose `y` is the observable.
 ///
 /// `col_width` and `text_attrs` may both read the `narrow` var, which is what
-/// [`text_layout_across_a_retained_frame`] flips — so each mode can be given
+/// [`text_layout_across_a_retained_frame`] flips, so each mode can be given
 /// the change that actually forces *its* leaf to be re-measured.
 fn wrap_fixture(col_width: &str, text_attrs: &str) -> String {
     format!(
@@ -505,7 +505,7 @@ const TOP_BOX_H: f32 = 20.0;
 ///
 /// The flip is the load-bearing part of this helper. Taffy invokes the measure
 /// callback only for leaves it is actually recomputing, so a retained frame
-/// that changes something *unrelated* to the paragraph never re-measures it —
+/// that changes something *unrelated* to the paragraph never re-measures it,
 /// and a test built on one passes whether or not the sizer is there at all.
 /// (It did: the original §R5 test flipped a colour, and stayed green with
 /// `recompute_dirty_with_text` swapped back to the sizer-less
@@ -526,7 +526,7 @@ fn text_layout_across_a_retained_frame(src: &str) -> (f32, f32) {
 }
 
 /// Asserts that narrowing a wrapping leaf's bound made it **taller** on the
-/// retained frame — i.e. that it re-wrapped rather than collapsing.
+/// retained frame, i.e. that it re-wrapped rather than collapsing.
 ///
 /// The failure mode this names is one-directional and worth stating: without
 /// the sizer the leaf reports its natural *single-line* size, so the paragraph
@@ -536,7 +536,7 @@ fn assert_rewrapped(mode: &str, full_h: f32, retained_h: f32) {
     assert!(
         retained_h >= full_h + LINE_H,
         "{mode}: narrowing the wrap width did not add a line on the retained \
-         frame — the paragraph went from {full_h} px tall to {retained_h}. \
+         frame, the paragraph went from {full_h} px tall to {retained_h}. \
          Anything at or below the starting height means it collapsed towards \
          its natural single line, which is the retained path having lost its \
          text sizer (RFC-0032 §R5)"
@@ -544,8 +544,8 @@ fn assert_rewrapped(mode: &str, full_h: f32, retained_h: f32) {
 }
 
 /// The three modes, as they are written in `.byd`. Each binds `narrow` to the
-/// bound that governs its own wrap width — the column's for the available-width
-/// mode, the attribute's for the fixed one — except `wrap: false`, which has no
+/// bound that governs its own wrap width, the column's for the available-width
+/// mode, the attribute's for the fixed one, except `wrap: false`, which has no
 /// wrap width to govern and is pinned as unchanging instead.
 fn available_width_fixture() -> String {
     wrap_fixture("narrow ? 200 : 400", "size: 14")
@@ -595,7 +595,7 @@ fn a_fixed_wrap_width_still_wraps_across_a_retained_frame() {
 fn a_non_wrapping_run_keeps_its_single_line_across_a_retained_frame() {
     // Mode 3, and the one that does *not* go through the sizer at all:
     // `wrap: false` lowers to a plain fixed leaf at the natural single-line
-    // size. It cannot un-wrap — which is exactly why it is worth pinning,
+    // size. It cannot un-wrap, which is exactly why it is worth pinning,
     // because it is the mode a retained pass must leave *alone*. Its column is
     // narrowed by the same flip the wrapping modes re-wrap on: the run must
     // overflow rather than reflow, and a build-order slot reused by the wrong
@@ -609,7 +609,7 @@ fn a_non_wrapping_run_keeps_its_single_line_across_a_retained_frame() {
     assert!(
         (retained_h - full_h).abs() < 0.5,
         "`wrap: false`: a run that opted out of wrapping reflowed anyway when \
-         its column narrowed — it went from {full_h} px tall to {retained_h}"
+         its column narrowed, it went from {full_h} px tall to {retained_h}"
     );
 }
 
@@ -658,7 +658,7 @@ View Probe() {
     let (long, counts) = frame(&mut interp, &tree);
     assert_eq!(
         counts.retained_recomputes, 1,
-        "editing text is not a structural change — the tree is retained"
+        "editing text is not a structural change, the tree is retained"
     );
     assert!(
         last_box_y(&long) > short_y,
@@ -672,7 +672,7 @@ View Probe() {
     );
     assert_eq!(
         counts.populate_dirty_matched, counts.populate_dirty_targets,
-        "every target must match a live node — a lower ratio means the targets \
+        "every target must match a live node, a lower ratio means the targets \
          are generation-stale, which is a caller bug rather than an empty set"
     );
 }
@@ -685,7 +685,7 @@ fn hit_testing_lands_on_the_element_that_is_visually_there() {
     // is stale but still in the spatial grid, so an element renders in its new
     // place and answers taps in its old one. Invisible in a screenshot.
     //
-    // The case exercised is deliberately the hard one — a **sibling reflow**.
+    // The case exercised is deliberately the hard one, a **sibling reflow**.
     // The first box's height changes, so the second box moves even though
     // nothing about *it* changed and nothing marked it. RFC-0032 §R3 delegates
     // that to Taffy's own dirty propagation and rebuilds the grid from the
@@ -723,7 +723,7 @@ View Probe() {
         .and_then(|n| interp.atlas.node_index(n));
     assert!(
         before != after,
-        "the spatial grid still answers from the pre-reflow geometry — a node \
+        "the spatial grid still answers from the pre-reflow geometry, a node \
          that moved because a sibling resized was never re-indexed"
     );
 
@@ -867,7 +867,7 @@ View Probe() {
     }
     assert!(
         moved,
-        "the animation never produced a new `smooth` — the test would pass on \
+        "the animation never produced a new `smooth`, the test would pass on \
          a property that does nothing"
     );
 }
@@ -891,7 +891,7 @@ fn the_first_frame_reports_everything_dirty() {
 fn a_retained_frame_is_byte_identical_to_a_forced_full_rebuild() {
     // INV-22: the retained path is not intended to change any output, so any
     // difference is a bug. Comparing the emitted primitives rather than pixels
-    // makes the check exact and cheap enough to run on every commit — a pixel
+    // makes the check exact and cheap enough to run on every commit, a pixel
     // comparison of the same frame lives in `byard-platform`'s readback tests.
     let (mut interp, tree) = build_from(WRAP_SRC);
     let _warmup = frame(&mut interp, &tree);
@@ -900,7 +900,7 @@ fn a_retained_frame_is_byte_identical_to_a_forced_full_rebuild() {
     let (retained, counts) = frame(&mut interp, &tree);
     assert_eq!(counts.retained_recomputes, 1);
 
-    // Same interpreter, same state, same frame — but rebuilt.
+    // Same interpreter, same state, same frame, but rebuilt.
     interp.invalidate_retained_layout();
     let (rebuilt, counts) = frame(&mut interp, &tree);
     assert_eq!(counts.full_computes, 1);

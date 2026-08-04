@@ -1,5 +1,5 @@
 // Ripple pipeline (RFC-0023): the Material ink reveal. One instance is one
-// expanding, fading circle — centred on the tap point, clipped to its
+// expanding, fading circle, centred on the tap point, clipped to its
 // element's rounded rect, composited *above* the element background and
 // *below* its children (the instance's draw-order depth, stamped between the
 // two by the evaluator's emission order, resolves that against the shared
@@ -17,13 +17,13 @@ struct VertexInput {
 };
 
 struct InstanceInput {
-    // Element rect (x, y, w, h) in logical px — quad geometry and clip bounds.
+    // Element rect (x, y, w, h) in logical px, quad geometry and clip bounds.
     @location(1) rect: vec4<f32>,
     // (center_x, center_y, radius, fade_alpha); centre in absolute logical px.
     @location(2) params: vec4<f32>,
     // Ink colour; `a` is the ink's own peak alpha.
     @location(3) color: vec4<f32>,
-    // Per-corner clip radii (tl, tr, br, bl) — the element's border radii.
+    // Per-corner clip radii (tl, tr, br, bl), the element's border radii.
     @location(4) radii: vec4<f32>,
     // Paint-time transform (RFC-0011); identity is a free no-op.
     @location(5) t_translate: vec2<f32>,
@@ -32,7 +32,7 @@ struct InstanceInput {
     @location(8) t_origin: vec2<f32>,
     // Draw-order depth (NDC-z), stamped by `RenderFrame::push_ripple`.
     @location(9) depth: f32,
-    // Corner smoothing 0..1 (RFC-0031 §S1) — the ink's clip must follow the
+    // Corner smoothing 0..1 (RFC-0031 §S1), the ink's clip must follow the
     // element's own corner profile, not a circular approximation of it.
     @location(10) smooth_amount: f32,
 };
@@ -54,7 +54,7 @@ struct VertexOutput {
 const QUAD_PADDING: f32 = 2.0;
 
 // Applies a paint-time transform (RFC-0011) to a world-space (logical-pixel)
-// position: rotate + scale about `origin`, then translate — identical to
+// position: rotate + scale about `origin`, then translate, identical to
 // `decorated_box.wgsl`'s helper, so a transformed element carries its ink
 // with it.
 fn apply_transform(
@@ -99,7 +99,7 @@ fn vs_main(vertex: VertexInput, instance: InstanceInput) -> VertexOutput {
         1.0
     );
 
-    // The tap point, in the same rect-centred local space as `local_pos` —
+    // The tap point, in the same rect-centred local space as `local_pos`, 
     // the fragment circle SDF is then transform-agnostic (the transform moves
     // the whole quad, ink included).
     let rect_center = instance.rect.xy + out.half_size;
@@ -111,12 +111,12 @@ fn vs_main(vertex: VertexInput, instance: InstanceInput) -> VertexOutput {
     return out;
 }
 
-// Rounded-box SDF, shared shape with `decorated_box.wgsl` — the clip must
+// Rounded-box SDF, shared shape with `decorated_box.wgsl`, the clip must
 // match the element's own outline exactly or the ink visibly bleeds past (or
 // falls short of) a rounded corner.
 /// Lⁿ norm of a **non-negative** 2-vector, paired with the magnitude of its own
 /// gradient (RFC-0031 §S1–S2). `n == 2` is the Euclidean norm, whose gradient is
-/// exactly 1 — the circular corner this pipeline clipped to before RFC-0031, and
+/// exactly 1, the circular corner this pipeline clipped to before RFC-0031, and
 /// the reason an unset `smooth` is bit-identical. Above 2 the norm is not a true
 /// signed distance: on the corner diagonal its gradient is `2^(1/n - 1/2)`,
 /// ≈0.79 at `n = 6`. Normalising by the returned gradient keeps the clip's
@@ -139,7 +139,7 @@ fn sd_rounded_box(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>, n: f32) -> f32 {
 
     // A corner radius may never exceed half the box (RFC-0001 §3.1: the
     // rounded-rect SDF is only well-defined for `r <= min(half)`; beyond it the
-    // field folds in on itself and the corners visibly deform — a `radius: 20`
+    // field folds in on itself and the corners visibly deform, a `radius: 20`
     // pill on a 33px-tall button is the everyday case). Clamping here, at the
     // one place the radius is consumed, keeps every pipeline honest and matches
     // the CSS rule that an over-large radius is reduced to fit.
@@ -152,7 +152,7 @@ fn sd_rounded_box(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>, n: f32) -> f32 {
         return inner + length(corner) - r_corner;
     }
     // `inner` is non-zero only where one of `corner`'s components is zero, and
-    // there `lp.y == 1` — so dividing the whole expression normalises exactly
+    // there `lp.y == 1`, so dividing the whole expression normalises exactly
     // the corner arc and leaves the straight edges untouched.
     let lp = lp_norm(corner, n);
     return (inner + lp.x - r_corner) / lp.y;
@@ -161,9 +161,9 @@ fn sd_rounded_box(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>, n: f32) -> f32 {
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Clip to the element's rounded rect (RFC-0023: always, no opt-out).
-    // `smoothstep` edges stay in ascending order — descending edges are
+    // `smoothstep` edges stay in ascending order, descending edges are
     // undefined per the spec and DX12/HLSL resolves them differently from
-    // Metal/Vulkan — and the `!(x > y)` discard also fires on NaN.
+    // Metal/Vulkan, and the `!(x > y)` discard also fires on NaN.
     let box_dist = sd_rounded_box(
         in.local_pos,
         in.half_size,

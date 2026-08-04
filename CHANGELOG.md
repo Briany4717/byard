@@ -10,18 +10,26 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- Documentation: added `support/STATUS_RFCS.md`, a per-RFC status checked
+  against the code, and corrected the RFC-0018, RFC-0024, and RFC-0028 headers
+  that still read `Draft` after the features had shipped. Refreshed the README
+  status and roadmap and the contributor doc map, and standardised dash
+  punctuation across prose and source comments.
+
 ### Added
 
 - **Corners with continuous curvature, on every box the framework draws
-  (RFC-0031 §S1–§S3).** `radius` gains a companion `smooth: 0…1` — the corner
+  (RFC-0031 §S1–§S3).** `radius` gains a companion `smooth: 0…1`, the corner
   *profile* the radius is measured with. `0` is the circular arc every surface
   drew before and remains the default; `≈0.6` is the Apple continuous-corner
   profile; `1.0` a pronounced squircle. A circular corner meets its straight
   edge at a curvature discontinuity, and that discontinuity is the single
   strongest reason a UI reads as "web" rather than "native" at a glance.
 
-  It is one substitution in the rounded-box field — the L² norm becomes an Lⁿ
-  norm — with `n = 2` short-circuiting to the historical expression verbatim, so
+  It is one substitution in the rounded-box field, the L² norm becomes an Lⁿ
+  norm, with `n = 2` short-circuiting to the historical expression verbatim, so
   a view that does not set `smooth` produces bit-identical pixels. One read per
   element reaches the fill, the border, every shadow it casts, the backdrop pane
   and ripple ink clipped to its outline, a rounded `Image`, and the `Canvas`
@@ -31,28 +39,28 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **`ngon`, and morphing between shapes from one animated scalar (RFC-0031
   §S9–§S10).** `ngon(n, r, corner, inner, rotate)` is one parametric shape kind
-  covering the n-fold symmetric half of Material 3 Expressive's vocabulary —
-  `inner: 0.82, n: 8` is a scallop, `inner: 0.42, n: 5` a burst — with no asset
+  covering the n-fold symmetric half of Material 3 Expressive's vocabulary, 
+  `inner: 0.82, n: 8` is a scallop, `inner: 0.42, n: 5` a burst, with no asset
   pipeline. `morph: <scalar>` on a `Canvas` reinterprets its shapes as a
   sequence and indexes it, wrapping at the end.
 
   Because the scalar is an ordinary animatable one, the M3E loading indicator is
   seven shapes and *one* `anim.linear(4550ms, repeat: infinite)`, and an
-  interaction-state shape change is two shapes and a spring — the same code
+  interaction-state shape change is two shapes and a spring, the same code
   path. The morph interpolates the shapes' *fields* rather than their vertex
   counts, so it has no seam and works between any two kinds: a circle morphs to
   a seven-pointed star. Colour rides the same scalar, blended in OKLab.
 
 - **Organic fusion (RFC-0031 §S7–§S8).** `fuse: <px>` on a `Canvas` unions its
-  shapes by a polynomial smooth minimum — metaball and blob merging — with the
+  shapes by a polynomial smooth minimum, metaball and blob merging, with the
   colour blended by the same factor that produced the geometry, so the surface
   bridge and the colour transition are one event. `fuse: 0` and an absent `fuse`
   are exactly the previous behaviour. A fused group draws one outline, the
   boundary of the union, rather than one per shape.
 
 - **Diagnostics can be advisory.** Every diagnostic in the compiler was fatal.
-  A stroke on a member of a fused group is inert rather than wrong — the shape
-  still renders correctly — so it is now a *warning*: `byard check` prints it in
+  A stroke on a member of a fused group is inert rather than wrong, the shape
+  still renders correctly, so it is now a *warning*: `byard check` prints it in
   full, counts it separately (`0 errors, 1 warning`), and exits 0. The default
   is still fatal, so a diagnostic added without a thought about severity stays
   an error.
@@ -61,7 +69,7 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **An animation belongs to an element, not to the line that wrote it.**
   Animation state was keyed by the source span of the `with` node alone, and a
-  `for` body is lowered once per row but *written* once — so every row in a list
+  `for` body is lowered once per row but *written* once, so every row in a list
   shared one `Motion`, one set of OKLab channels and one `LoopClock`. Each
   frame, row A retargeted the shared state to its own goal (reseeding `from` and
   restarting the clock) and row B immediately retargeted it back. Neither
@@ -70,21 +78,21 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   points nowhere near the cause.
 
   The key now carries the element instance as well. A row that leaves the list
-  drops its animation and a re-grown row starts fresh — which is forced rather
+  drops its animation and a re-grown row starts fresh, which is forced rather
   than chosen, because a pool's slots are reused, so state left behind would be
   inherited by a *different* element.
 
 - **A telemetry sample now carries who it belongs to (RFC-0030 self-accounting
   erratum).** The dev HUD runs a second interpreter, so when it was open two
   `interp.render` samples and two `layout.taffy` samples arrived in one frame.
-  The profile block merged them by name and printed `×2` — honest that a merge
+  The profile block merged them by name and printed `×2`, honest that a merge
   had happened, silently wrong about whose time it was, and enough to make the
   HUD look like it cost a tenth of what it did. It is the same class of defect
   as the nested double-count §I2b fixed, one level out: there a parent and a
   child were summed, here two peers were summed and billed to one of them.
 
   Every sample is now stamped `App` or `DevTools` at scope entry, from a
-  thread-local set at the boundary — so the interpreter, the layout atlas and
+  thread-local set at the boundary, so the interpreter, the layout atlas and
   the shaper are all attributed correctly without any of them knowing that
   owners exist. `Sample` is still 24 bytes: the owner lives in padding that was
   already reserved. Consequences a developer sees: the block's scope rows are
@@ -94,7 +102,7 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   hiding them is a checkbox in Perfetto.
 
 - **The render thread's half of the same problem.** A logic-thread scope cannot
-  enclose the encoder — it has been dropped by the time the frame is encoded —
+  enclose the encoder, it has been dropped by the time the frame is encoded, 
   so `RenderFrame` carries a cursor marking where the dev runner's primitives
   begin, and the encoder charges their shaping, staging and pass recording to
   `encode.glyphs.dev`, `encode.buffers.dev` and `encode.passes.dev`.
@@ -108,8 +116,8 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
 - **The dev loop is something you can see (RFC-0030).** `byard dev` spent every
-  session dumping a multi-line telemetry block to stderr once a second — three
-  hundred of them in five minutes — whose practical effect was to bury the parse
+  session dumping a multi-line telemetry block to stderr once a second, three
+  hundred of them in five minutes, whose practical effect was to bury the parse
   errors a developer actually needed to read. It now prints a startup header, a
   log that scrolls, and one line anchored to the bottom that redraws in place:
 
@@ -120,15 +128,15 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `Mod+Shift+P` (or `--profile`) swaps it for the full per-scope breakdown,
   charted against the frame budget in fixed execution order and redrawn with the
   cursor rather than by scrolling. The budget defaults to the display's refresh
-  interval — on a 120 Hz panel that threshold is 8.3 ms, and bars drawn against
-  16.7 ms there would report a comfortable frame for one that visibly stutters —
+  interval, on a 120 Hz panel that threshold is 8.3 ms, and bars drawn against
+  16.7 ms there would report a comfortable frame for one that visibly stutters, 
   and is printed in the header so it is never ambiguous which number a bar is
   drawn against. `[dev] frame_budget = "8ms"` pins it for CI.
 
 - **One output grammar for all seven commands (RFC-0030 §P1–§P4).** A 5-column
   prefix, a message, and a right-aligned duration, in ~80 lines with no
   dependency. Roles rather than colours, the 16 base ANSI colours rather than
-  truecolor — a terminal's palette is a preference the user set deliberately —
+  truecolor, a terminal's palette is a preference the user set deliberately, 
   and `Palette::plain()` empty throughout, so there is no `if colour` at any
   call site. The rustc-compatible diagnostic first line is untouched.
 
@@ -136,7 +144,7 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Perfetto, `chrome://tracing` and speedscope all read it natively and Byard
   never has to build a flame-graph viewer. The array terminator is maintained
   continuously rather than written on shutdown, so the file parses at every
-  instant — including the one where you `Ctrl-C`'d, which is usually the session
+  instant, including the one where you `Ctrl-C`'d, which is usually the session
   you most want to look at.
 
 - **An in-window HUD, written in `byld` (RFC-0030 §V3–§V4).** `Mod+Shift+D`.
@@ -144,15 +152,15 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   an ordinary z-layer with an ordinary backdrop blur and an ordinary `Canvas`
   sparkline. It is a permanent, self-executing test that the framework can
   render a non-trivial animated overlay inside its own frame budget, and it
-  passes: 0.163 ms against a 16.667 ms budget — 1.0 %, well inside RFC-0030
+  passes: 0.163 ms against a 16.667 ms budget, 1.0 %, well inside RFC-0030
   §V4's 5 % bar, measured against the frame delta rather than against what the
   profiler says about itself. It displays and colours its own cost (0.107 ms of
-  that 0.163 ms — the rest is `encode.finish`, which has its own row), so the
+  that 0.163 ms, the rest is `encode.finish`, which has its own row), so the
   reading is checkable rather than quoted.
 
 - **A reload flash (RFC-0030 §V6).** A 2 px inset border, green for a reactive
   reload and amber for one that waited behind the gesture gate. Never suppressed
-  on a save that changed nothing visible — the only case it exists for.
+  on a save that changed nothing visible, the only case it exists for.
 
 - **A `Canvas` can draw a chart (RFC-0020 erratum).** `for` and `when` are
   admitted inside a shape body, so a canvas's shape *count* can come from data.
@@ -162,7 +170,7 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - **Glyph shaping is content-addressed.** A text line is re-shaped when the run
-  it would produce actually differs — `(text, font_size, wrap)` — not when its
+  it would produce actually differs, `(text, font_size, wrap)`, not when its
   upstream `dirty` flag says so. That flag's producer is the interpreter, which
   re-walks the tree every tick with no per-element change signal, so it set
   `dirty: true` on every line of every frame: "trust the flag, hash nothing"
@@ -173,7 +181,7 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   It is also strictly more robust. A producer that changed a line and forgot to
   set `dirty` used to render stale glyphs in release, in silence; now it renders
   correctly, because the key is derived from the content rather than asserted
-  about it. Colour and position stay out of the key — neither reaches the
+  about it. Colour and position stay out of the key, neither reaches the
   shaper, so folding either in would re-shape a run for a change that provably
   cannot alter a glyph.
 
@@ -183,11 +191,11 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **The profile block's header colours on `work`, not on the frame period.**
   Under FIFO a frame that misses a vsync waits for the next one, so its period
-  is two intervals — ~200 % of budget — while the engine used a fraction of a
+  is two intervals, ~200 % of budget, while the engine used a fraction of a
   millisecond. That rendered in `err`, reporting a compositor event as an app
   regression. `err` now means the engine overran; a late frame whose engine
   work fit says `waited` in amber instead. The period and its percentage are
-  printed unchanged — only the verdict on them moved.
+  printed unchanged, only the verdict on them moved.
 
 
 - **RFC-0006's three outstanding commitments are closed (RFC-0030 §C1–§C3).**
@@ -207,13 +215,13 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   second interpreter appending after the app, so index `i` can hold the HUD's
   line where it held the app's, with both producers truthfully reporting
   themselves unchanged. The first fix marked the HUD's primitives dirty only
-  when the app's cursor had moved or the HUD had re-lowered — a condition that
+  when the app's cursor had moved or the HUD had re-lowered, a condition that
   cannot be proved from where it was made, and a real session tripped the
   encoder's debug assertion two seconds in. It is now unconditional.
 
 - **A panic can no longer be erased by the statusline.** The painter erases by
   walking the cursor up over as many lines as its last block occupied. That is
-  valid only while the painter was the last thing to write to the terminal — and
+  valid only while the painter was the last thing to write to the terminal, and
   a panic breaks the assumption, then runs the drop guard that depends on it,
   erasing the crash message. A panic hook now retires the statusline first, so
   the message lands on a clean line.
@@ -225,8 +233,8 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **A second interpreter drawing into a frame no longer risks stale glyphs.**
   The encoder's glyph cache is index-addressed and assumes a single producer;
   an overlay appended after the app moves its own indices whenever the app's
-  counts change. `RenderFrame::mark_dirty_since` lets the frame — the only thing
-  that sees both producers — resolve it.
+  counts change. `RenderFrame::mark_dirty_since` lets the frame, the only thing
+  that sees both producers, resolve it.
 
 - **The error overlay's mount and dismiss force a full redraw.** Both change the
   whole composition at once, while the encoder's scissor union is derived from
@@ -259,11 +267,11 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **RFC-0017, 0019, 0021, 0022, 0023, 0025, 0026 and 0027 read `Active`, not
   `Draft`.** All eight were shipped. Each was checked against what actually
   landed rather than assumed, and each carries a status note recording what
-  shipped and — for RFC-0017's coordinate anchoring, RFC-0022's dynamic colour
-  and RFC-0026's system back button — what did not.
+  shipped and, for RFC-0017's coordinate anchoring, RFC-0022's dynamic colour
+  and RFC-0026's system back button, what did not.
 
 - **One GPU buffer for every pipeline's instance data (RFC-0033).** Each render
-  pipeline used to create its instance buffer from scratch on every frame —
+  pipeline used to create its instance buffer from scratch on every frame, 
   nine or more `create_buffer_init` calls per frame. The correct pattern (a
   persistent buffer written with `queue.write_buffer`) existed in the crate in
   exactly one place, `viewport_buffer`, and there was no design reason for the
@@ -271,7 +279,7 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   one `write_buffer` per frame, per-pipeline draws reading from offsets into it.
 
   - **Grow-only, doubling, never shrinking within a session.** Shrinking
-    recreates the buffer — the operation being removed — at the least
+    recreates the buffer, the operation being removed, at the least
     predictable moment. `grows_this_session` is exposed so a churning arena is
     diagnosable rather than mysterious.
   - **Uniform regions pad to `device.limits().min_uniform_buffer_offset_alignment`**,
@@ -281,8 +289,8 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - **Staging happens before the first render pass opens.** Not a style
     choice: `wgpu` binds a buffer *range* eagerly and growing the arena
     replaces the buffer, so every pipeline is split into a `stage` half and a
-    `draw` half. The backdrop pipeline — the one whose data is not known until
-    the geometry behind the pane has been rasterised — *reserves* its regions
+    `draw` half. The backdrop pipeline, the one whose data is not known until
+    the geometry behind the pane has been rasterised, *reserves* its regions
     up front and fills them while recording.
   - **The acceptance condition is a counter, not a benchmark:** a steady-state
     frame creates **zero** GPU buffers and grows the arena zero times.
@@ -305,20 +313,20 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   three layers are live.
 
   - **Two value fingerprints per element**, hashed from the *resolved* values
-    the render walk already computes — never from a dependency graph. RFC-0032
+    the render walk already computes, never from a dependency graph. RFC-0032
     §R1 rejects reactive attribute bindings for one reason: a missing edge
     yields a false "clean", and a false clean is an element that renders in its
     new position and answers taps in its old one. A value comparison has no
     edge to miss. Every `f32` is hashed through `to_bits`, because `NaN != NaN`
     makes an element permanently dirty and `-0.0 == 0.0` makes it permanently
-    clean — and the second one is silent.
+    clean, and the second one is silent.
   - **The retained layout path.** A frame with no structural change, no
     resize, no hot reload, no theme flip and no overlay/route movement restyles
     the Taffy tree in place instead of tearing it down, keeping its cached
     geometry, its parent map, its spatial grid and its view generation. The
     eligibility list is a **default-deny whitelist** and every clause has its
     own test.
-  - **`recompute_dirty_with_text`** — the incremental pass, with a text sizer.
+  - **`recompute_dirty_with_text`**, the incremental pass, with a text sizer.
     The sizer-less `recompute_dirty` sizes every wrapping `Text` it touches at
     its natural *single-line* width, which would silently un-wrap every
     paragraph on the frame after any retained one; it is now documented as
@@ -331,12 +339,12 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - **`AttrClass` is a required field of every attribute definition**, so an
     attribute cannot be added without saying whether it can move geometry, and
     the class is answered per intrinsic (`align` on a `Column` and `align` on a
-    `Text` are different questions). RFC-0010's INV-8 — "an animated property
-    must never trigger relayout" — becomes a lower-time diagnostic rather than
+    `Text` are different questions). RFC-0010's INV-8, "an animated property
+    must never trigger relayout", becomes a lower-time diagnostic rather than
     a sentence in an RFC: `#[size: 20 with anim.spring()]` on a `Text` is now a
     compile error naming `transform` as the alternative, where before it
     compiled and relaid out the tree every frame.
-  - **`byard dev` prints which path each frame took** —
+  - **`byard dev` prints which path each frame took**, 
     `atlas  retained · 3 node(s) marked · 3/3 matched`. The answer to "am I on
     the fast path?" is on the readout instead of inferred from a timing that
     got smaller.
@@ -349,7 +357,7 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Example: `crates/byard-cli/examples/incremental`.
 
 - **The encode breakdown (RFC-0030 §I1, second pass).** `encode.frame` was a
-  single ~6 ms row — the largest term in the frame and the least explained
+  single ~6 ms row, the largest term in the frame and the least explained
   one. It now has five sub-scopes whose self-times add up to it exactly:
   `encode.uploads` (vector atlas + texture cache), `encode.glyphs` (shaping and
   atlas residency), `encode.passes` (render-pass recording) with nested
@@ -373,7 +381,7 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     (which would double-count it into the frame total), or if the subtree's
     self-times stop summing to `encode.frame`'s inclusive time.
 
-  Example: `crates/byard-cli/examples/profiling` — run it and read points 7–9
+  Example: `crates/byard-cli/examples/profiling`, run it and read points 7–9
   of its header.
 
 - **Real frame instrumentation (RFC-0030 §I1–§I3).** RFC-0013's zero-allocation
@@ -386,13 +394,13 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `layout.taffy`, `encode.frame`, `relay.publish` (`Native`).
 
   - **`Sample` carries a nesting `depth`**, maintained by the RAII guard in the
-    low byte of padding the type already reserved — `size_of::<Sample>()` is
+    low byte of padding the type already reserved, `size_of::<Sample>()` is
     unchanged, so the block still crosses the frame boundary as plain `Pod`
     data (RFC-0001 §5). The guard *restores* the entry depth on drop rather
     than decrementing, so a leaked or unwound-through scope cannot skew the
     counter permanently. GPU samples set depth `0` explicitly: a pass resolves
     two frames later on a different timeline and does not nest in a CPU scope.
-  - **New `SampleBlock` accessors:** `total_ns` (depth-0 inclusive — the frame),
+  - **New `SampleBlock` accessors:** `total_ns` (depth-0 inclusive, the frame),
     `self_ns` (inclusive minus direct children, recovered from the flat block in
     one reverse pass with no allocation), `sum_self_by_kind`, and
     `for_each_root`/`for_each_direct_child` for consumers rendering the scope
@@ -413,8 +421,8 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
   Example: `crates/byard-cli/examples/profiling`.
 
-- **Navigation & routing (RFC-0026).** Two new intrinsics — `NavStack(path: navPath)`
-  and `NavHost(active: tab)` — plus a `route "/detail/:id" {|params| … }` /
+- **Navigation & routing (RFC-0026).** Two new intrinsics, `NavStack(path: navPath)`
+  and `NavHost(active: tab)`, plus a `route "/detail/:id" {|params| … }` /
   `tab "home" { … }` sub-syntax, and the `navigate`/`back`/`replace` actions.
   Navigation state is a reactive `var` and nothing else: setting
   `navPath = "/detail/42"` *is* the push, setting it back *is* the pop. There is
@@ -431,11 +439,11 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     is lowered the first time navigation reaches it and kept alive underneath
     whatever covers it, so its `var`s, scroll offsets and controllers are exactly
     where you left them on the way back. A multi-pop discards what it skipped;
-    tabs are preserved permanently. Nothing is instantiated up front — a
+    tabs are preserved permanently. Nothing is instantiated up front, a
     ten-route table costs ten compiled patterns, not ten View trees.
   - **Transitions** (`slide`, `slide_up`, `fade`, `none`) run two screens at once
     and place both from a single progress scalar, driven by a fixed-duration
-    **monotone** ramp — decelerating into place for the positional ones,
+    **monotone** ramp, decelerating into place for the positional ones,
     symmetric for the cross-fade. Deliberately not a spring: RFC-0010's default
     spring is underdamped, and a screen's arrival must not overshoot its own
     edge and wobble back. A duration ramp is bounded to `0..=1`, never reverses,
@@ -443,12 +451,12 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     same instant the pixels do. The screen the navigation
     names stays in the container's normal flow and its transitioning partner is
     laid out absolutely over the same rect, so a transition costs two `f32` and
-    an alpha folded into the transform every subtree already inherits — no
+    an alpha folded into the transform every subtree already inherits, no
     relayout, no extra pass (INV-8), and the frames stop the moment it settles.
   - **`swipe_back: true`** is the Cupertino interactive edge pop: a drag from the
     leading 24 px follows the pointer in real time over the *real* preserved
     screen underneath, and on release the finger's progress hands over to the
-    spring — commit past halfway, spring back otherwise, with nothing jumping at
+    spring, commit past halfway, spring back otherwise, with nothing jumping at
     the hand-off.
   - **`deep_link: true`** accepts OS URL intents through
     `Interpreter::apply_deep_link`, which takes `byard://item/42`,
@@ -458,20 +466,20 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     navigating anything to a blank screen.
   - **Guards.** `max_depth` (default 10, `0` disables) refuses a push past its
     limit with a `PerfWarning::DeepNavStack` and reflects the refusal back into
-    the navigation `var`, so app state and screen never diverge — a runaway push
+    the navigation `var`, so app state and screen never diverge, a runaway push
     loop is flagged, not crashed. `route_change(e)` fires once a navigation
     settles. Nested stacks (one per tab) each keep their own independent history.
 
 - **Gradient fills (RFC-0001 §3.1).** Two new paint properties on every box-path
-  intrinsic — `gradient: (angle: 90deg, from: <color>, mid: <color>, to: <color>,
-  mid_pos: 0.5)` and `gradient_offset: Float` — fulfilling the `DecoratedBox`
+  intrinsic, `gradient: (angle: 90deg, from: <color>, mid: <color>, to: <color>,
+  mid_pos: 0.5)` and `gradient_offset: Float`, fulfilling the `DecoratedBox`
   pipeline's declared remit ("rectangles with border-radius, **gradients**,
   box-shadows"). The ramp is three-stop by design: two stops cover the ordinary
   fade (`mid` defaults to their midpoint), and the third is what makes a
   *highlight band* (transparent → bright → transparent) expressible, which is the
   shape a shimmer needs. It composites over the element's own fill with
-  straight-alpha src-over — a translucent ramp brightens the surface, an opaque
-  one paints it — is clipped by the element's border radius for free, and each
+  straight-alpha src-over, a translucent ramp brightens the surface, an opaque
+  one paints it, is clipped by the element's border radius for free, and each
   stop is an ordinary colour value, so `with`/keyframed stops crossfade in OKLab
   like any other animated colour. `gradient_offset` shifts the ramp along its
   axis and **wraps**, so an animated offset (`gradient_offset: 1.0 with
@@ -484,25 +492,25 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **`restart: <expr>` on any animation (RFC-0025 §5).** A replay trigger: when the
   witness value changes, the animation's timeline starts over and its delays are
   honoured again, so a staggered entrance replays *in item order*. Without it a
-  mount-time animation is observable exactly once — its endpoints never change,
-  so nothing ever retargets it — which left RFC-0025's own stagger cascade
+  mount-time animation is observable exactly once, its endpoints never change,
+  so nothing ever retargets it, which left RFC-0025's own stagger cascade
   unrepeatable. This is the reference-free equivalent of changing a `key`
   (RFC-0003 forbids handles), and it works on curves, keyframe sequences and
   staggers alike (`anim.stagger(spring(), 90ms, i, restart: attempt)`).
 
 - **Looping & indefinite animations (RFC-0025).** `with anim.*(…)` grows the
-  modifiers that turn a one-shot transition into continuous motion —
+  modifiers that turn a one-shot transition into continuous motion, 
   `repeat: N | infinite` (`loop: true` is sugar for the latter),
   `reverse: true` (alternate plays run back-to-front, so one curve becomes an
   oscillation), `delay: <duration>` and `from: <value>` (the explicit second
-  endpoint a loop needs) — plus two new curve surfaces:
+  endpoint a loop needs), plus two new curve surfaces:
   - **`anim.keyframes(0%: …, 50%: … ease_out, 100%: …, duration: 2s, loop: true)`**
-    — a multi-step sequence *in value position* (it supplies its own values, so
+    - a multi-step sequence *in value position* (it supplies its own values, so
     it is the property value rather than a `with` clause), with per-segment
     easing, capped at 8 steps (`TooManyKeyframes`). Steps may be scalars,
     colours (blended in OKLab), or coordinate pairs (interpolated
     component-wise, so `translate` keyframes work).
-  - **`anim.stagger(spring(), 50ms, i)`** — sugar for `delay: i * 50ms` over a
+  - **`anim.stagger(spring(), 50ms, i)`**, sugar for `delay: i * 50ms` over a
     `for` loop's index, with entrance semantics: a retarget replays the cascade
     in order instead of cancelling the offset, while a plain `delay:` *is*
     cancelled by a retarget so a delayed transition can never overwrite a more
@@ -514,8 +522,8 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   wraps at its *analytic* settle time, so "restart when it settles" needs no
   per-frame state. Infinite animations stay in the active set (frames keep
   flowing at the display rate); a finite repeat holds its final value and lets
-  the app idle; and an animation that stops being drawn — offscreen, or in a
-  collapsed `when` branch — is **paused** and later resumes in phase rather than
+  the app idle; and an animation that stops being drawn, offscreen, or in a
+  collapsed `when` branch, is **paused** and later resumes in phase rather than
   jumping (RFC-0025 §2), at zero cost while it is away. New grammar: percentage
   literals (`50%`), seconds durations (`1.5s`), and the `for i, item in items`
   index binding. Engine surface: `frame::{RepeatMode, LoopPhase, loop_phase,
@@ -524,16 +532,16 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Example: `crates/byard-cli/examples/looping_animations`.
 
 - **Backdrop blur & vibrancy (RFC-0023 §2).** Four new paint-time style
-  properties — `blur: Float` (frosted-glass backdrop blur in logical px,
+  properties, `blur: Float` (frosted-glass backdrop blur in logical px,
   clamped to 40), `backdrop_tint: Color` (blended over the blurred sample; the
   vibrancy pair with `blur`, a plain translucent wash without it),
   `blur_saturation: Float` (vibrancy boost, default 1.8) and `blur_quality:
-  auto | high | low` (always the two-pass separable Gaussian — the tiers pick
+  auto | high | low` (always the two-pass separable Gaussian, the tiers pick
   the base resolution: 0.75× forced high, 0.25× forced low, GPU-probed 0.5×
-  or 0.25× on auto) — on every box-path intrinsic. `blur` is the Gaussian σ,
+  or 0.25× on auto), on every box-path intrinsic. `blur` is the Gaussian σ,
   the CSS `backdrop-filter: blur(N)` convention. A blurred element samples
   the scene behind it (its own background included), blurs it off-screen at
-  adaptively reduced resolution (tap spacing stays gap-free at any radius —
+  adaptively reduced resolution (tap spacing stays gap-free at any radius, 
   no ghosting), saturates and tints it, and draws the result as its
   background clipped to its border radius; children render crisply on top
   and overlapping panes stack naturally (painter's-order double blur). Both `blur` and `backdrop_tint` animate through the RFC-0010 `with`
@@ -545,16 +553,16 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `PerfWarning::OverlappingBlurs` diagnostic (≥ 3 stacked panes) surfaced by
   `byard dev`. Example: `crates/byard-cli/examples/frosted_glass`.
 
-- **Material ripple ink (RFC-0023).** Four new paint-time style properties —
+- **Material ripple ink (RFC-0023).** Four new paint-time style properties, 
   `ripple: Color` (enables the effect and sets the ink colour),
   `ripple_active: Bool` (the trigger, typically `on pressed { ripple_active:
   true }`), `ripple_radius: Float` (max-radius override) and `ripple_duration:
-  Int` (fade-out ms, default 300) — on every box-path intrinsic. A press spawns
+  Int` (fade-out ms, default 300), on every box-path intrinsic. A press spawns
   an ink circle at the exact tap point that expands (ease-out) to cover the
   element and fades linearly, composited *above* the element's background and
   *below* its children, always clipped to the element's border radius. The ink
-  is alpha-composited over the surface — a light ink brightens a dark surface,
-  a dark ink darkens a light one — and rapid taps spawn one ripple each,
+  is alpha-composited over the surface, a light ink brightens a dark surface,
+  a dark ink darkens a light one, and rapid taps spawn one ripple each,
   pooling where their circles overlap. Backed by a new `Ripple`
   render pipeline (the seventh): `frame::RippleInstance`,
   `RenderFrame::{push_ripple, ripples, ripple_clips}`, `LayerMark::ripple`,
@@ -572,14 +580,14 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
   - **The retained-path eligibility tests passed with the whitelist deleted.**
     A frame RFC-0032 §R4 wrongly admits is refused by `end_retained_build` and
-    rebuilt — correct, and indistinguishable in every counter from a frame the
+    rebuilt, correct, and indistinguishable in every counter from a frame the
     whitelist rejected outright, differing only in that the build walk ran
     twice. `path_counters` gains `retained_attempts` and `retained_rollbacks`;
     the eligibility tests now assert the frame was rejected *before* the atlas
     was touched, and the frame budget pins rollbacks at zero.
   - **The wrapping-text test passed with the text sizer removed.** It provoked
     its retained frame with a colour change, and Taffy re-measures only the
-    leaves it recomputes — so the paragraph was never measured and the
+    leaves it recomputes, so the paragraph was never measured and the
     assertion held either way, on the hazard RFC-0032 itself called the most
     likely visible bug in the phase. The retained frame now changes the bound
     that governs the leaf's wrap width, and each of RFC-0005's three wrap modes
@@ -605,23 +613,23 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   path" does not, and was never measured. `ViewArena` is real, correct and
   unused per frame. §2.2's dirty flags have no producer: element attributes are
   raw expressions re-evaluated every frame, so the interpreter cannot say which
-  nodes changed — which is why `populate_frame` receives an empty dirty set, why
+  nodes changed, which is why `populate_frame` receives an empty dirty set, why
   the atlas is cleared every frame, and why the encoder's scissor decides by an
   instance-count heuristic. One missing mechanism, three symptoms; closing it is
   a design change and gets its own RFC. `cargo bench --bench atlas` reproduces
   every number.
-- **RFC-0020 status corrected** from `Draft` to `Active — partially
+- **RFC-0020 status corrected** from `Draft` to `Active, partially
   implemented`: its Tier-1 `CanvasShape` pipeline has been landed and in use
   since RFC-0020's own implementation. Tier-2 tessellated paths remain deferred.
 - **The RFC template now teaches `## Resolved questions`.** It carried an
   `## Unresolved questions` section with a "before merge / during
-  implementation" split — the exact opposite of the house rule that an RFC ships
+  implementation" split, the exact opposite of the house rule that an RFC ships
   no open questions.
 
 - **`SampleBlock::interpreter_tax_ns` is now self-time, not inclusive time
   (RFC-0030 §I2b).** `layout.taffy` is `Native` and nests strictly inside
   `interp.render`, which is `Interpreter`, so summing the interpreter bucket
-  inclusively billed Taffy to the interpreter — and an AOT build still pays for
+  inclusively billed Taffy to the interpreter, and an AOT build still pays for
   layout in full. `project_aot`, which computes
   `total − interpreter + interpreter × ratio`, therefore returned a projection
   optimistic by the entire cost of layout, and would have pushed the RFC-0014
@@ -629,23 +637,23 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   change to a public accessor; `sum_by_kind` is unchanged and still reports
   inclusive time, which remains correct for the disjoint `Gpu` bucket. Nothing
   could have observed the old value in practice, because nothing was
-  instrumented — the fix lands before the bug could ever have been read.
+  instrumented, the fix lands before the bug could ever have been read.
 - **`profile_scope!` now works outside `byard-core`.** The macro tested
   `#[cfg(feature = "telemetry")]` inside its own expansion, which is evaluated
-  against the *calling* crate's feature set — so it silently compiled to nothing
+  against the *calling* crate's feature set, so it silently compiled to nothing
   in every crate but the one that defined it. The feature is now resolved at the
   definition site by selecting between two macro definitions.
 
 - **Text now wraps to its parent's width by default (RFC-0005).** A `Text` with
-  no explicit `width` reflows to the width its container offers — like a block of
-  text in a browser — instead of overflowing on a single line. This is done
+  no explicit `width` reflows to the width its container offers, like a block of
+  text in a browser, instead of overflowing on a single line. This is done
   properly through Taffy's measure protocol: `Text` becomes a measured leaf that
   the layout atlas sizes via the shared, cached `TextMeasurer` during layout
   (`LayoutAtlas::add_text_leaf` + `compute_with_text`), so it re-wraps when its
   container resizes with no per-`Text` bookkeeping. `wrap: false` opts out to a
   single line; an explicit `width` still pins the wrap width. Previously wrapping
   required both `wrap: true` and an explicit `width`, so unbounded text overflowed
-  — the catalog documented `wrap` as defaulting to `true`, but the leaf-measured
+  - the catalog documented `wrap` as defaulting to `true`, but the leaf-measured
   model couldn't honour it. New engine surface: `atlas::TextLeaf`,
   `atlas::LayoutAtlas::{add_text_leaf, compute_with_text}`, and the
   `text::TextSizer` trait.
@@ -653,13 +661,13 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Fixed
 
 - **Dirty bits survive a skipped frame.** The relay is latest-wins, so a logic
-  thread that outruns the display — every logic thread — has most of its
+  thread that outruns the display, every logic thread, has most of its
   frames dropped. That cost nothing while every primitive was emitted dirty;
   with a real dirty set it meant the frame carrying "this paragraph changed"
   could be dropped and the next one would truthfully report it clean.
   `Relay::publish` now merges an unrendered frame's dirty bits into its
-  replacement. The previous mechanism — detect the version gap, force a full
-  redraw — was correct but fired on nearly every frame, which handed back the
+  replacement. The previous mechanism, detect the version gap, force a full
+  redraw, was correct but fired on nearly every frame, which handed back the
   entire benefit.
 - **The incremental scissor no longer under-covers three kinds of primitive.**
   Each was unreachable while the dirty union spanned the whole frame: the
@@ -672,13 +680,13 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `Interpreter::has_active_animations()` existed and **nothing consulted it**:
   `byard dev` set `ControlFlow::Poll` once at start-up and requested a redraw on
   every event-loop iteration forever, so a completely static scene still cost a
-  full core — the active-set settling that the whole animation design is built
+  full core, the active-set settling that the whole animation design is built
   around had no consumer. The event loop now asks the host each iteration
   (`PlatformHost::wants_frames`, default `true` so no other host changes
   behaviour) and spins **only while something is in motion**, dropping back to
   `Wait` the moment everything settles. The logic thread publishes the flag
   across the boundary as an `AtomicBool` (INV-2) and wakes the loop on the rising
-  edge — plus on a hot reload or a fresh error overlay, which change the frame
+  edge, plus on a hot reload or a fresh error overlay, which change the frame
   with no input behind them, so live-reload stays immediate. Visible in
   `byard dev`: the once-a-second telemetry line stops printing when the scene
   settles and returns when it moves.
@@ -686,11 +694,11 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **An over-large corner radius no longer deforms the box.** The rounded-rect SDF
   is only well-defined for `radius <= min(half_width, half_height)`; past it the
   distance field folds in on itself and the silhouette is pulled *inside* its own
-  rect — visible on any pill button (`radius: 20` on a 33 px-tall button, the
+  rect, visible on any pill button (`radius: 20` on a 33 px-tall button, the
   everyday case: its ends curved inward and looked pinched). The radius is now
   reduced to fit at the one place it is consumed, in every pipeline's
   `sd_rounded_box` (solid, decorated, ripple, backdrop, texture, canvas rect), so
-  a too-large radius renders as the pill it is asking for — the CSS rule. Proven
+  a too-large radius renders as the pill it is asking for, the CSS rule. Proven
   on a real GPU by `an_over_large_radius_is_reduced_to_a_pill_not_a_deformed_box`.
 
 - **`Spacer` actually flexes (RFC-0005).** The catalog specifies `Spacer` as a
@@ -702,10 +710,10 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   both are ordinary reactive props.
 
 - **An unmounted `when` branch now drops its animation state (RFC-0025).** "No
-  separate stop-animation API — the animation lives and dies with its element"
+  separate stop-animation API, the animation lives and dies with its element"
   now holds literally: collapsing a branch forgets the animations inside it, so a
   spinner that comes back starts its turn again instead of resuming a stale phase.
-  §2's offscreen rule is unchanged and now covers only what it was written for —
+  §2's offscreen rule is unchanged and now covers only what it was written for, 
   an element that is still mounted but not painted pauses and resumes *in phase*.
 
 - **Hit targets now follow the scroll offset (RFC-0005).** Interactive
@@ -713,8 +721,8 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   position: after scrolling, a button reacted at the stale location and was
   inert at its on-screen one. The scroll displacement (which paints through
   the transform, deliberately excluded from hit-testing by RFC-0011/INV-8)
-  now travels separately through the render walk and shifts every hit rect —
-  handlers, hover/press regions, focusables — to its on-screen position,
+  now travels separately through the render walk and shifts every hit rect, 
+  handlers, hover/press regions, focusables, to its on-screen position,
   clipped to the scroll viewport (content scrolled out of view is no longer
   tappable). Ripple tap points and backdrop-blur sample regions map through
   the same displacement.
@@ -726,13 +734,13 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Hex colour literals written with more than six digits (the RFC-0005 §1
   `0xAARRGGBB` form) are now tagged at lex time, every alpha-aware colour
   consumer shares one auto-detect, and colour animations carry a fourth
-  alpha channel — so translucent tints, ripple inks, and shape colours fade
+  alpha channel, so translucent tints, ripple inks, and shape colours fade
   the way they read.
 
 - **Enum keyword props can no longer be shadowed by a same-named `var`.** A
   keyword-valued prop (`snap: page`, `axis: horizontal`, `align: center`,
   `justify: …`, `direction: …`, `fit: …`, `alignment: …`, `anchor: …`) is a
-  closed token set the type-checker reads as a bare identifier — but the runtime
+  closed token set the type-checker reads as a bare identifier, but the runtime
   was resolving that identifier through the reactive environment, so a view
   declaring a `var` with the same name as the keyword silently evaluated the
   *variable* instead of the token. Most visibly, RFC-0021's `snap: page` carousel
@@ -752,12 +760,12 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **RFC-0021 advanced scroll behaviours — page snap, pagination, infinite
+- **RFC-0021 advanced scroll behaviours, page snap, pagination, infinite
   scroll (first slice).** `ScrollView` gains the full RFC-0021 prop/event surface
   (`snap`, `snap_align`, `pull_refresh`, `refreshing`, `collapse_header`, `page`,
   `page_count`, `end_threshold`; events `end_reached`/`page_change`/`scroll_end`/
   `refresh`). Implemented in this slice: **`snap: page`** glides the offset to the
-  nearest viewport-sized page with a **spring** (RFC-0010) when scrolling stops —
+  nearest viewport-sized page with a **spring** (RFC-0010) when scrolling stops, 
   on drag release *and* after wheel/trackpad scrolling goes quiet (there is no
   release event for a wheel). The settle is momentum-aware: it waits for the
   fling's shrinking deltas to actually stop before snapping, so the snap animation
@@ -767,15 +775,15 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   firing `page_change`), and setting `page` scrolls the offset to that page
   (edge-triggered so it never fights a drag). **`on_end_reached`** fires once when
   the visible bottom crosses `end_threshold` (debounced until the offset falls
-  back, so appending items re-arms it) — the infinite-scroll trigger. All other
+  back, so appending items re-arms it), the infinite-scroll trigger. All other
   props parse and validate. `snap: item` boundary snapping, pull-to-refresh
   (overscroll + indicator), and collapsing headers (layout-during-scroll +
-  implicit `scroll_fraction`) are follow-up passes — each needs a new
+  implicit `scroll_fraction`) are follow-up passes, each needs a new
   physics/layout subsystem. See `crates/byard-cli/examples/scroll_snap`.
 - **RFC-0021 collapsing header.** `collapse_header: true` on a `ScrollView` pins
   its **first child** (the header) to the viewport top while the rest scrolls
   under it, and exposes an implicit reactive **`scroll_fraction`** binding
-  (`0` = expanded, `1` = collapsed) scoped to that header's subtree — its children
+  (`0` = expanded, `1` = collapsed) scoped to that header's subtree, its children
   read it to interpolate their own size/opacity (e.g. a subtitle
   `opacity: 1.0 - scroll_fraction`). The fraction runs over the header's
   collapsible range (its natural height minus `collapse_min`, default 56) and
@@ -783,13 +791,13 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   complexity: the header keeps its laid-out height and the collapse is expressed as
   ordinary reactive interpolation. New example
   `crates/byard-cli/examples/collapse_header`. Parallax
-  (`collapse_parallax`) is accepted but not yet applied — a follow-up.
+  (`collapse_parallax`) is accepted but not yet applied, a follow-up.
 - **RFC-0021 pull-to-refresh.** `pull_refresh: true` makes a downward over-drag
   past the top of a `ScrollView` grow an elastic pull region (a diminishing-returns
   resistance curve); releasing past the threshold fires the `refresh` event and
   rests a default indicator (a ring drawn in the revealed gap that grows and fades
   in with pull progress). With a reflected `refreshing: Bool` the app owns the
-  lifecycle — the engine sets it `true` on trigger and holds the indicator until
+  lifecycle, the engine sets it `true` on trigger and holds the indicator until
   the controller clears it, which springs the region away; without the binding the
   pull is a momentary trigger that retracts immediately. Works with or without an
   `offset` var (the pull region is engine state, not the scroll offset), and the
@@ -801,9 +809,9 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `snap_spring: anim.spring(stiffness: …, damping: …)` prop overrides the snap
   glide's spring per `ScrollView` (reusing RFC-0010's curve grammar; a malformed
   curve is diagnosed and falls back to the default). And a settle now projects the
-  fling: above 150 dp/s it advances one boundary in the fling direction — clamped
+  fling: above 150 dp/s it advances one boundary in the fling direction, clamped
   to ±1 of the nearest, so a fast flick that stops short of the midpoint still
-  turns the page while a moderate one never skips — reusing the same boundary
+  turns the page while a moderate one never skips, reusing the same boundary
   geometry for `snap: page` and `snap: item`. Velocity is estimated from the
   offset change between scroll inputs over their timestamps, so it needs no extra
   gesture plumbing. This completes RFC-0021's snap-scrolling pillar. See
@@ -814,7 +822,7 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the snapped item at the viewport's `start` (default), `center`, or `end`. The
   item boundaries are read from the laid-out child rects each render (offset is a
   paint-time translate, so layout positions are the natural content coordinates),
-  aligned, and clamped to the scroll extent — the settle then picks the boundary
+  aligned, and clamped to the scroll extent, the settle then picks the boundary
   nearest the current offset and reuses the same spring glide and momentum-aware
   quiet detection as `snap: page`. When the content is wrapped in a single
   `Row`/`Column` (the usual scroll layout), the items are that container's
@@ -822,11 +830,11 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and fling-velocity projection remain follow-ups. See
   `crates/byard-cli/examples/scroll_snap`.
 - **RFC-0024 extended style states + combined selectors.** The style-state
-  system (RFC-0012/0016) gains five engine-managed pseudo-states — `checked`
+  system (RFC-0012/0016) gains five engine-managed pseudo-states, `checked`
   (a value-widget's value is true), `selected` (the `selected:` prop, or a
   `RadioButton` whose `bind == value`), `invalid` (the `invalid:` prop),
   `indeterminate` (a `Checkbox`'s mixed prop), and `dragging` (the element being
-  dragged past an 8px threshold) — plus **combined selectors**: `on focused+hover
+  dragged past an 8px threshold), plus **combined selectors**: `on focused+hover
   { … }` applies only when *all* its states are active. `selected`/`invalid` are
   universal opt-in props on any element; `checked`/`indeterminate` are mutually
   exclusive. Resolution is by specificity (a combined selector beats a
@@ -844,7 +852,7 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   content. See `crates/byard-cli/examples/zstack`.
 - **RFC-0018 `Grid` intrinsic.** A CSS-grid container backed by Taffy's grid
   mode. `columns`/`rows` take a template string (`"1fr 2fr 100"`,
-  `"repeat(3, 1fr)"`, `auto`) parsed into engine tracks — a malformed template
+  `"repeat(3, 1fr)"`, `auto`) parsed into engine tracks, a malformed template
   is a `CompileError::InvalidGridTemplate`. `gap`, plus per-axis `col_gap`/
   `row_gap`, space the cells. Children auto-place left-to-right, top-to-bottom by
   default, or place explicitly with the child props `col`/`row` (1-based grid
@@ -855,7 +863,7 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   button carries a `value: Str` identity and a `bind: Str` to the shared group
   `var`, and is selected when `bind == value`. Tapping a button writes its
   `value` to the group var, so the previously selected sibling deselects
-  reactively — automatic mutual exclusion, no explicit coordination (the
+  reactively, automatic mutual exclusion, no explicit coordination (the
   standard group-var model). Focusable by default; arrow keys move selection
   within the group (Down/Right next, Up/Left previous, wrapping at both ends).
   Visual is an engine-owned outer ring plus an inner accent dot when selected;
@@ -865,7 +873,7 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   distinct square identity from `Toggle`: reflected two-way `value`/`bind: Bool`
   (`true` = checked), an `indeterminate` mixed state, focusable by default
   (Space toggles), and a `change` event with `bind:` write-back (RFC-0003 E1).
-  It owns its visuals — a rounded square that fills with the `bg` accent and
+  It owns its visuals, a rounded square that fills with the `bg` accent and
   shows an engine-drawn checkmark when checked, an outlined box (or a muted
   filled slot) when unchecked, and a horizontal dash when indeterminate. The
   container is a `DecoratedBox`, so a style can give it a `border`/`on checked
@@ -877,8 +885,8 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   precedence, left-associative, Int/Float promotion; required by RFC-0020's
   reactive shape parameters and useful everywhere a prop is derived.
 - **RFC-0020 `Canvas` intrinsic & path/shape primitives.** A fixed-size
-  drawing surface whose children are declarative shape commands — `arc`,
-  `circle`, `line`, `rect`, `bezier`, `path(d: …)`, and `text` — rendered by
+  drawing surface whose children are declarative shape commands, `arc`,
+  `circle`, `line`, `rect`, `bezier`, `path(d: …)`, and `text`, rendered by
   a new analytic-SDF GPU pipeline: resolution-independent anti-aliasing,
   stroke caps (`butt`/`round`/`square`), dash patterns with an animatable
   `dash_offset`, fills (including arc sectors), and per-parameter reactivity
@@ -892,7 +900,7 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   order like every other primitive. A background dev-mode dispatcher generates
   each icon's field on its own worker thread the first time it's referenced;
   the call site paints a zero-opacity placeholder until the field lands, then
-  the icon appears — no stall, no re-render trigger needed from the caller.
+  the icon appears, no stall, no re-render trigger needed from the caller.
 - **RFC-0009 vector/icon MSDF generator.** `byard_compiler::vector` turns an
   SVG icon into a multi-channel signed distance field: a structural complexity
   guardrail (rejects gradients, patterns, filters, and oversized path sets),
@@ -907,7 +915,7 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and a global `~/.byard/cache`; multi-file + `path`-dependency hot-reload; and
   package-aware LSP completions (`use <TAB>`, `m.<TAB>`, package-view params).
 - Repository scaffolding: README, licenses, contributing guide, CI workflow.
-- `docs/rfcs/0001-core-architecture.md` — consolidated design document covering
+- `docs/rfcs/0001-core-architecture.md`, consolidated design document covering
   the memory model, multi-pipeline renderer, spatial hit-testing grid, threading
   model, and the `byld` compiler pipeline.
 - RFC template at `docs/rfcs/0000-template.md`.

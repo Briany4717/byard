@@ -1,12 +1,18 @@
 # RFC-0029: Async I/O Capabilities, runtime enablement, HTTP, JSON, timers, and persistence
 
-- **Status:** Draft
+- **Status:** Active, implemented. `runtime-io` (Tokio `net`+`time`), the
+  `Http` and `Json` capabilities, `every`/`after` timer effects and the `Store`
+  key/value capability are all wired, provided by default and tested end to end
+  from `byld` (verified against the tree 2026-08-04). Six sentences the design
+  got wrong are corrected in place and recorded in
+  [`0029-erratum-implementation-deltas.md`](0029-erratum-implementation-deltas.md).
 - **Author(s):** Briany4717
 - **Created:** 2026-07-17
-- **Last updated:** 2026-07-17
+- **Last updated:** 2026-08-04
 - **Depends on:** RFC-0001 (§5.1 Tokio I/O pool, INV-12 "decode off caller" generalized to "I/O off the logic/render threads"), RFC-0028 (the controller boundary, every capability here is reached through it), RFC-0027 (`HostValue`/`Record` shapes for parsed data), RFC-0004 (tick / waker for delivering time-driven and I/O-driven updates).
 - **Extends:** `relay.rs` (the Tokio runtime gains the `net`+`time` drivers; the frame waker fires on I/O-driven ticks), the Cargo feature set (new `runtime-io`, `net`, `json`, `storage` features, mirroring the existing `telemetry`/`image` gating).
 - **Enables:** Weather-API consumers, feed/list apps backed by remote JSON, periodic refresh, offline persistence of todos and settings, the concrete capabilities the audit's three target apps need once RFC-0028 gives `byld` a way to call Rust.
+- **Amended by:** [erratum `0029-erratum-implementation-deltas.md`](0029-erratum-implementation-deltas.md).
 - **Requires:** RFC-0028 merged first (this RFC has no `byld`-visible surface of its own except the timer effect; everything else is controller-delivered).
 
 ---
@@ -91,8 +97,8 @@ build that wants none of it can disable the feature.
 exposes async methods returning a `HostValue` response record:
 
 ```
-http.get(url)                 -> { status: Int, body: Str, json: Record|List }
-http.post(url, body)          -> { status, body, json }
+http.get(url)                 -> { status: Int, ok: Bool, body: Str, json: Record|List }
+http.post(url, body)          -> { status, ok, body, json }
 http.request(record)          -> full control (method, headers, body, timeout)
 ```
 
@@ -121,11 +127,12 @@ each timer tick via the existing frame waker.
 
 ### 5. Persistence (O5)
 
-`Store` is a built-in controller (opt-in via the `storage` feature) giving durable
+`Store` is a built-in controller (the `storage` feature, on by default) giving durable
 key/value storage in the platform data dir:
 
 ```
-store.get(key)        -> value | Unit
+store.get(key)           -> value | Unit
+store.get(key, default)  -> value | default
 store.set(key, value) -> Unit          // value is any HostValue (JSON-encoded on disk)
 store.remove(key)     -> Unit
 ```
@@ -154,9 +161,14 @@ that **applied any I/O result or timer tick** counts as "changed" and calls
 `relay.wake_renderer()` (today only input-bearing ticks wake it, `relay.rs:447`).
 Without this, an async result or timer would update state but a `Wait`-mode host
 would not repaint until the next unrelated OS event. The idle `park_timeout`
-(`IDLE_PARK`) is replaced by parking on a condvar that the I/O-result sender and
+(`IDLE_PARK`) is replaced by parking on a gate that the I/O-result sender and
 the timer driver signal, so a pending result wakes the logic thread immediately
-instead of after up to 6 ms, bounded latency for network/timer updates.
+instead of after up to 6 ms, bounded latency for network/timer updates. The gate
+carries a **pending flag** as well as a condvar: a result that arrives while the
+logic thread is still working leaves the flag set, so the following park returns
+at once rather than sleeping through work already queued (erratum §1). The
+amendment also runs in both directions, a tick that applied a result whose arm
+changed nothing must **not** wake the renderer (erratum §2).
 
 ### 3. HTTP capability (O2), `byard-core::cap::http`, `net` feature
 
@@ -184,11 +196,15 @@ Grammar (RFC-0002/0003 extension): `timer_effect := ("every" | "after") duration
 View-member position (like `on mount`). Lowered to a structural effect (RFC-0018)
 so it mounts/unmounts with its scope. On mount, the interpreter registers the
 timer with a `TimerDriver` running on the Tokio time driver: `every` uses
-`tokio::time::interval`, `after` a one-shot `sleep`. Each fire sends a
+`tokio::time::interval` **with its immediate first tick consumed**, so
+`every 5min` means "in five minutes" and not "now, and then every five
+minutes"; `after` uses a one-shot `sleep`. A zero interval is refused rather
+than armed (erratum §4). Each fire sends a
 `TimerTick { continuation_id }` `IoResult` (the same typed logic-thread channel
 as controller replies, RFC-0028 §7); `apply_io_results` runs the timer's action.
-Unmount cancels the Tokio task (drops the interval), so no tick fires after the
-view is gone (INV-10). Durations build on the existing duration literal: today the
+Unmount cancels the Tokio task, structurally: `TimerHandle`'s `Drop` aborts it
+and the effect slot owns the handle, so there is no cancel path to forget to
+call and no tick can fire after the view is gone (INV-10, erratum §4). Durations build on the existing duration literal: today the
 lexer parses only the `ms` suffix (`DurationLit(u32)`, milliseconds, RFC-0010,
 `lexer/mod.rs:127`). This RFC adds `s` and `min` suffixes (a one-line regex
 extension lowering to the same millisecond `DurationLit`), so `300s`/`5min` read
@@ -202,7 +218,10 @@ naturally at timer sites; `ms` stays valid. The parser must also accept a
 (`directories`-crate resolved path), loaded into an in-memory `HashMap<String,
 HostValue>` at first access, written atomically (temp-file + rename) on `set`/
 `remove`. All disk work runs via `spawn_blocking` on the pool. Concurrent `set`s
-are serialized by an async `Mutex` inside `Store`. v1 is single-file KV; a
+are serialized by an async `Mutex` inside `Store`, **held across the write**:
+releasing it after the cache mutation lets two writes race for the same
+temporary file and lose one (erratum §5). `store.get` also takes an optional
+second argument, the value a missing key resolves to. v1 is single-file KV; a
 `storage-sqlite` feature is a future possibility for large datasets. Values are
 `HostValue`, JSON-encoded on disk via O3, so a persisted todo list is human-
 readable and portable.
@@ -212,8 +231,11 @@ readable and portable.
 The engine `provide`s `Http`, `Json`, and (if `storage`) `Store` by default;
 `App::without_default_capabilities()` or per-capability `App::without::<Http>()`
 opts out (e.g. a controller that owns its own HTTP stack). Built-in capabilities
-occupy reserved type names (`Http`, `Json`, `Store`, `Timer`); a user controller
-of the same name is a `CompileError::ReservedControllerName` (INV-5).
+occupy reserved type names (`Http`, `Json`, `Store`, `Timer`), listed
+unconditionally rather than per feature so a name means the same thing in every
+build. `App::provide` **rejects** a controller taking one and `run()` fails
+naming it; the compiler never sees an app's Rust types, so the rule is enforced
+where the registry is (erratum §6).
 
 ### 8. Feature matrix
 
@@ -222,7 +244,7 @@ of the same name is a `CompileError::ReservedControllerName` (INV-5).
 | `runtime-io` | on | tokio `net`+`time` | sockets/timers for any controller |
 | `net` | on | `reqwest` (rustls), `webpki-roots` | `Http` capability |
 | `json` | on | `serde_json` | JSON parse/stringify, `Http.json` |
-| `storage` | off | `directories` | `Store` capability |
+| `storage` | on | `directories` | `Store` capability |
 
 Disabling `runtime-io` disables `net`/`storage` (compile-time `cfg` requires it).
 Everything degrades cleanly: no feature, no capability, no dependency cost, the

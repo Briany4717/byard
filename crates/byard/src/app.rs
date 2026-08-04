@@ -44,6 +44,20 @@ use byard_core::{
 /// and the window it runs in.
 pub struct App {
     entry: PathBuf,
+    /// The stable identity this app's persistent state is filed under
+    /// (RFC-0029 O5).
+    ///
+    /// Deliberately not the window title (presentation, and translated) and
+    /// deliberately not the entry file's stem, which is `main` for almost
+    /// every app and would file every shipped Byard app's `Store` in one
+    /// directory. Defaults to the executable's own name, which is as stable as
+    /// the binary itself, and is overridable with [`App::app_id`] for an app
+    /// whose binary is renamed or shipped under several names.
+    #[allow(
+        clippy::struct_field_names,
+        reason = "`app_id` is the domain term an app author writes; bare `id` would read as a handle"
+    )]
+    app_id: String,
     title: String,
     size: (u32, u32),
     registry: ControllerRegistry,
@@ -67,13 +81,15 @@ impl App {
             .and_then(|s| s.to_str())
             .unwrap_or("Byard")
             .to_string();
+        let app_id = executable_name().unwrap_or_else(|| title.clone());
         Self {
             entry,
-            title,
-            size: (1280, 720),
             // Seeded with the framework's own capabilities (RFC-0029 §7), so
             // `inject Http as http` works in an app that provided nothing.
-            registry: byard_core::cap::default_registry(),
+            registry: byard_core::cap::default_registry(&app_id),
+            app_id,
+            title,
+            size: (1280, 720),
             reserved: Vec::new(),
         }
     }
@@ -86,6 +102,21 @@ impl App {
     #[must_use]
     pub fn without_default_capabilities(mut self) -> Self {
         self.registry = ControllerRegistry::new();
+        self
+    }
+
+    /// Sets the identity this app's persistent state is filed under
+    /// (RFC-0029 O5), defaulting to the executable's name.
+    ///
+    /// Set it when the binary may be renamed, or shipped under more than one
+    /// name, and its saved state should follow the *app* rather than the file.
+    /// Changing it points the app at a different store, so it is a decision
+    /// about data, not about presentation, which is why it is separate from
+    /// [`title`](Self::title).
+    #[must_use]
+    pub fn app_id(mut self, app_id: impl Into<String>) -> Self {
+        self.app_id = app_id.into();
+        self.registry = byard_core::cap::default_registry(&self.app_id);
         self
     }
 
@@ -332,6 +363,18 @@ impl Host {
     }
 }
 
+/// The running executable's file stem, if the OS will say.
+///
+/// `None` under a harness that reports no path; the caller falls back to the
+/// entry stem, which is worse but never nothing.
+fn executable_name() -> Option<String> {
+    std::env::current_exe()
+        .ok()?
+        .file_stem()?
+        .to_str()
+        .map(str::to_string)
+}
+
 /// Milliseconds since the Unix epoch, the clock the router's tap/double-tap
 /// thresholds are measured against.
 fn now_ms() -> u64 {
@@ -368,5 +411,65 @@ impl LogicRuntime for AppRuntime {
 
     fn apply_io_results(&mut self, results: Vec<IoResult>) -> bool {
         self.interp.apply_io_results(results)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_store_identity_does_not_come_from_the_entry_file_name() {
+        // Almost every app's entry is `src/main.byd`, so keying persistent
+        // state on its stem would file every shipped Byard app's store in one
+        // directory called `main`, and two unrelated apps would share their
+        // settings. The default is the executable, which is as stable as the
+        // binary itself.
+        let app = App::new("src/main.byd");
+        assert_ne!(app.app_id, "main");
+        assert_eq!(
+            app.app_id,
+            executable_name().expect("a test binary has a path")
+        );
+    }
+
+    #[test]
+    fn the_window_title_and_the_store_identity_are_separate() {
+        // A title is presentation and may be translated; a store identity is
+        // where data lives. Rewording one must not move the other.
+        let app = App::new("src/main.byd").title("Weather, translated");
+        assert_eq!(app.title, "Weather, translated");
+        assert_ne!(app.app_id, "Weather, translated");
+    }
+
+    #[test]
+    fn app_id_overrides_the_default_and_rebuilds_the_registry() {
+        let app = App::new("src/main.byd").app_id("dev.example.weather");
+        assert_eq!(app.app_id, "dev.example.weather");
+        assert!(app.registry.contains("Store"));
+    }
+
+    #[test]
+    fn a_reserved_name_is_rejected_rather_than_shadowing_the_built_in() {
+        // RFC-0029 §7. `run()` fails naming it; the check is here because
+        // opening a window in a unit test is not an option.
+        struct Impostor;
+        impl byard_core::bridge::Controller for Impostor {
+            fn type_name(&self) -> &'static str {
+                "Http"
+            }
+            fn invoke(
+                &self,
+                _method: &str,
+                _args: Vec<byard_core::bridge::HostValue>,
+            ) -> byard_core::bridge::BoxFuture<
+                'static,
+                Result<byard_core::bridge::HostValue, byard_core::bridge::HostValue>,
+            > {
+                Box::pin(async { Ok(byard_core::bridge::HostValue::Unit) })
+            }
+        }
+        let app = App::new("src/main.byd").provide(Impostor);
+        assert_eq!(app.reserved, vec!["Http"]);
     }
 }

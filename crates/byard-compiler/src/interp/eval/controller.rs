@@ -207,6 +207,25 @@ impl Interpreter {
         self.provide_controllers();
     }
 
+    /// Declares that `names` will be provided at run time, without wiring a
+    /// live dispatcher (RFC-0028 §3).
+    ///
+    /// This is what lets `byard check` resolve `inject Http as http` and check
+    /// the calls on it. The framework's own capabilities are knowable
+    /// statically, unlike an app's, so treating them as unknown would report a
+    /// warning on the one half of the controller vocabulary the checker can be
+    /// certain about.
+    ///
+    /// The handles are unbound: a checker never places a call, and if some
+    /// other caller did, the dispatcher would answer with the `unregistered`
+    /// error reply rather than dispatching to a stranger.
+    pub fn declare_controllers(&mut self, names: &[&str]) {
+        for name in names {
+            self.env
+                .provide(Symbol::intern(name), Value::Controller(UNBOUND_CONTROLLER));
+        }
+    }
+
     /// Seeds one ambient `Value::Controller` per registered controller into
     /// the root environment, so `resolve_inject` (unchanged since RFC-0002)
     /// finds a handle where it used to find only values.

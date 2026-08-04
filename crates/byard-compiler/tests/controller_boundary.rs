@@ -663,8 +663,14 @@ impl Controller for Greeter {
         };
         Box::pin(async move {
             Ok(HostValue::Record(vec![
-                ("text".to_string(), HostValue::Str(format!("Hello, {name}!"))),
-                ("length".to_string(), HostValue::Int(name.len() as i64)),
+                (
+                    "text".to_string(),
+                    HostValue::Str(format!("Hello, {name}!")),
+                ),
+                (
+                    "length".to_string(),
+                    HostValue::Int(i64::try_from(name.len()).unwrap_or(i64::MAX)),
+                ),
             ]))
         })
     }

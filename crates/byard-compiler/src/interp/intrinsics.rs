@@ -1041,13 +1041,21 @@ pub fn validate_element(
             // curve in the (possibly nested) chain and type-check the innermost
             // target value. The chain walk matters: `(x with a) with b` must not
             // let its inner curve or value slip past unchecked.
-            if let Expr::Animated { span, .. } = value {
-                if is_layout {
-                    errs.push(CompileError::LayoutPropNotAnimatable {
-                        span: *span,
-                        prop: an.to_string(),
-                    });
-                } else {
+            // The layout half of that rule is asked of the whole expression, not
+            // just its outermost node. `width: (x with anim.linear(200ms)) + 0`
+            // animates a layout property exactly as `width: x with …` does — the
+            // `with` is simply written one level in — and matching only the top
+            // node let it through to be sampled during layout, where it relaid
+            // out every frame *and* resolved to a float the integer-valued
+            // dimension readers drop, silently collapsing the element to its
+            // default size. The rule holds however the animation is written.
+            if is_layout && animated_anywhere(value) {
+                errs.push(CompileError::LayoutPropNotAnimatable {
+                    span: value.span(),
+                    prop: an.to_string(),
+                });
+            } else if let Expr::Animated { .. } = value {
+                {
                     let mut target = value;
                     while let Expr::Animated {
                         value: inner, anim, ..
@@ -1070,14 +1078,10 @@ pub fn validate_element(
                 // Same rule for the keyframe form (RFC-0025 §3).
                 // RFC-0025 §3: `anim.keyframes(…)` stands in value position. It
                 // is rejected on a layout property for the same reason `with`
-                // is (a relayout every frame, INV-8), and each step's value is
-                // type-checked against the property like any other value.
-                if is_layout {
-                    errs.push(CompileError::LayoutPropNotAnimatable {
-                        span: value.span(),
-                        prop: an.to_string(),
-                    });
-                } else {
+                // is (a relayout every frame, INV-8) — handled above, for the
+                // nested form too — and each step's value is type-checked
+                // against the property like any other value.
+                {
                     match track {
                         Ok(track) => errs.extend(
                             track
@@ -1100,6 +1104,57 @@ pub fn validate_element(
 /// Whether `name` is a layout-affecting attribute — one whose value feeds Taffy
 /// and so cannot be GPU-animated (RFC-0010 §"Layout properties"). Covers the
 /// [`LAYOUT`] group plus the container `direction`.
+/// Whether an animation appears **anywhere** inside `value` — a `with` clause or
+/// an `anim.keyframes(…)` call, at any depth (RFC-0010 §"Layout properties").
+///
+/// Only layout properties ask this. Everywhere else an animation is a value like
+/// any other and its position in the expression is the author's business; on a
+/// layout property it is prohibited outright, and a prohibition that only
+/// inspects the outermost node is one that anyone can step around by accident —
+/// `(x with anim.linear(200ms)) * 2` is as animated as `x with …`.
+fn animated_anywhere(value: &Expr) -> bool {
+    fn args(args: &[crate::parser::ast::Arg]) -> bool {
+        args.iter().any(|a| animated_anywhere(&a.value))
+    }
+    if crate::interp::anim::is_keyframes_call(value) {
+        return true;
+    }
+    match value {
+        Expr::Animated { .. } => true,
+        Expr::IntLit(..)
+        | Expr::FloatLit(..)
+        | Expr::AngleLit(..)
+        | Expr::StrLit(..)
+        | Expr::Ident(..)
+        | Expr::ClassRef(..)
+        | Expr::StyleValue { .. }
+        | Expr::Error(..) => false,
+        Expr::Array(items, _) | Expr::Block(items, _) => items.iter().any(animated_anywhere),
+        Expr::Tuple(items, _) => args(items),
+        Expr::Call {
+            callee, args: a, ..
+        } => animated_anywhere(callee) || args(a),
+        Expr::Member { base, .. } | Expr::Postfix { target: base, .. } => animated_anywhere(base),
+        Expr::Lambda { body, .. } | Expr::Unary { rhs: body, .. } => animated_anywhere(body),
+        Expr::Assign { target, value, .. } => animated_anywhere(target) || animated_anywhere(value),
+        Expr::Index { base, index, .. } => animated_anywhere(base) || animated_anywhere(index),
+        Expr::Record { fields, spread, .. } => {
+            fields.iter().any(|(_, v)| animated_anywhere(v))
+                || spread.as_deref().is_some_and(animated_anywhere)
+        }
+        Expr::Binary { lhs, rhs, .. }
+        | Expr::Merge {
+            left: lhs,
+            right: rhs,
+            ..
+        } => animated_anywhere(lhs) || animated_anywhere(rhs),
+        Expr::Ternary {
+            cond, then, els, ..
+        } => animated_anywhere(cond) || animated_anywhere(then) || animated_anywhere(els),
+        Expr::KeyframeStep { value, .. } => animated_anywhere(value),
+    }
+}
+
 /// Light, false-positive-averse type check: only clear scalar-literal
 /// mismatches and unknown enum tokens are flagged; identifiers/members (which
 /// may resolve to a reactive `var`) are accepted.
@@ -1971,6 +2026,38 @@ mod tests {
             e.iter()
                 .any(|err| matches!(err, CompileError::UnknownAnimation { .. })),
             "a bad nested curve must still be reported"
+        );
+    }
+
+    /// The layout-property prohibition is about the *expression*, not its
+    /// outermost node — otherwise a parenthesis steps around it.
+    ///
+    /// `width: (x with anim.linear(200ms)) + 0` animates a layout property just
+    /// as plainly as `width: x with …`; it merely writes the `with` one level in.
+    /// Letting it through was not a lenient reading of the rule, it was a
+    /// silently broken element: the value reached the layout pass, relaid out
+    /// every frame, and resolved to a float the integer-valued dimension reader
+    /// drops — so the box lost its width entirely and stretched to fill.
+    #[test]
+    fn an_animation_nested_inside_a_layout_expression_is_still_rejected() {
+        for src in [
+            "View V() { Box #[width: ((true ? 200 : 20) with anim.linear(200ms)) + 0] {} }",
+            "View V() { Box #[height: 2 * (100 with anim.spring())] {} }",
+            "View V() { Box #[gap: (4 with anim.spring()) + 1] {} }",
+            "View V() { Box #[width: (anim.keyframes(0%: 0, 100%: 9, duration: 1s)) + 0] {} }",
+        ] {
+            let e = errs(src);
+            assert!(
+                e.iter()
+                    .any(|err| matches!(err, CompileError::LayoutPropNotAnimatable { .. })),
+                "{src}\nmust be rejected, got {e:?}"
+            );
+        }
+        // The rule is about layout, not about nesting: a paint property takes an
+        // animation wherever it is written, and still type-checks what it wraps.
+        assert!(
+            errs("View V() { Box #[radius: (4 with anim.spring()) + 1] {} }").is_empty(),
+            "a nested animation on a paint prop is ordinary"
         );
     }
 

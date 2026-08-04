@@ -37,7 +37,7 @@ View Main() {
         Text("The dialog floats above this screen, centred, behind a scrim.")
             #[color: 0x9A94A4, size: 15]
 
-        // Live status line. `pokes` only advances when the app is reachable, 
+        // Live status line. `pokes` only advances when the app is reachable,
         // i.e. NOT while the modal dialog is up. `deleted` flips when the
         // dialog's "Delete" fires, proving the overlay content is interactive
         // even as the app behind it is blocked (value reactivity is live; only

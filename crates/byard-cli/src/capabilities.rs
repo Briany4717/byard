@@ -26,9 +26,14 @@ use byard_core::bridge::ControllerRegistry;
 /// and a shipped `App` cannot end up offering different capabilities. An app
 /// that behaves one way under `byard dev` and another way when shipped is the
 /// single most expensive difference a framework can have.
+///
+/// `project` is the manifest's project name, which is what decides where the
+/// `Store` capability writes (RFC-0029 O5). Keyed on the project rather than
+/// on the path, so a store does not move when the directory does, and two
+/// projects never share one settings file.
 #[must_use]
-pub fn registry() -> ControllerRegistry {
-    byard_core::cap::default_registry()
+pub fn registry(project: &str) -> ControllerRegistry {
+    byard_core::cap::default_registry(project)
 }
 
 #[cfg(test)]
@@ -41,7 +46,7 @@ mod tests {
         // (RFC-0029 §7 reserved names), so the set is asserted rather than
         // assumed: a capability added without a decision would silently take
         // a name out of the app's vocabulary.
-        for name in registry().names() {
+        for name in registry("demo").names() {
             assert!(
                 byard_core::cap::is_reserved(name),
                 "`{name}` is offered but not reserved"
@@ -51,8 +56,8 @@ mod tests {
 
     #[test]
     fn the_dev_runner_offers_the_same_set_a_shipped_app_does() {
-        let dev: Vec<&str> = registry().names().collect();
-        let shipped: Vec<&str> = byard_core::cap::default_registry().names().collect();
+        let dev: Vec<&str> = registry("demo").names().collect();
+        let shipped: Vec<&str> = byard_core::cap::default_registry("demo").names().collect();
         assert_eq!(dev, shipped);
     }
 }

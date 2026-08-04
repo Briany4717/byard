@@ -58,6 +58,10 @@ impl Greeter {
 fn main() -> Result<(), byard::ByardError> {
     byard::App::new(concat!(env!("CARGO_MANIFEST_DIR"), "/src/main.byd"))
         .title("Byard, controller demo")
+        // Where this app's persistent state would live (RFC-0029 O5). Set
+        // explicitly rather than left to the executable's name, because that
+        // is the decision a shipped app should be making on purpose.
+        .app_id("dev.byard.controller-demo")
         .size(720, 480)
         .provide(Greeter {
             prefix: "Hello".to_string(),

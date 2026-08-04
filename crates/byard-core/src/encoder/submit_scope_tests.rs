@@ -1,4 +1,3 @@
-
 use super::*;
 
 fn try_device() -> Option<(std::sync::Arc<wgpu::Device>, std::sync::Arc<wgpu::Queue>)> {

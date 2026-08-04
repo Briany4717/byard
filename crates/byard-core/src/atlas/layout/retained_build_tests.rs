@@ -1,4 +1,3 @@
-
 use super::*;
 
 /// A two-leaf column, built in a fixed order so a retained rebuild can be

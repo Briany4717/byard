@@ -94,11 +94,15 @@ impl App {
         }
     }
 
-    /// Drops the framework's built-in capabilities, so the app provides
-    /// everything itself (RFC-0029 §7 opt-out).
+    /// Drops the framework's built-in capabilities, so a view can `inject`
+    /// only what the app provides (RFC-0029 §7 opt-out).
     ///
     /// For an app that owns its whole I/O story, or one auditing exactly what
-    /// its views can reach.
+    /// its views can reach. It does **not** free up the reserved names:
+    /// [`provide`](Self::provide) still refuses them, so an app replacing the
+    /// built-in HTTP stack names its own controller something else. What this
+    /// buys is that `inject Http as http` then fails loudly as unresolved,
+    /// rather than silently reaching a capability the app meant to remove.
     #[must_use]
     pub fn without_default_capabilities(mut self) -> Self {
         self.registry = ControllerRegistry::new();
@@ -142,10 +146,13 @@ impl App {
     /// **rejected**, and [`run`](Self::run) fails saying so. Allowing the
     /// shadow would mean `inject Http as http` meaning different things in
     /// different apps, and a `byld` file that reads correctly against the
-    /// documentation while doing something else entirely. An app that wants
-    /// its own stack calls
+    /// documentation while doing something else entirely.
+    ///
+    /// The rejection is unconditional, and in particular
     /// [`without_default_capabilities`](Self::without_default_capabilities)
-    /// and names it something of its own.
+    /// does **not** lift it: that method controls which built-ins are
+    /// *registered*, not which names exist. An app that wants its own HTTP
+    /// stack gives it a name of its own (`MyHttp`) and injects that.
     #[must_use]
     pub fn provide<C: Controller + 'static>(mut self, controller: C) -> Self {
         let name = controller.type_name();
@@ -166,11 +173,24 @@ impl App {
     /// the event loop produces.
     pub fn run(self) -> Result<(), ByardError> {
         if !self.reserved.is_empty() {
+            // Deduplicated, because two controllers rejected for the same name
+            // is one problem stated twice, and sorted so the message does not
+            // depend on registration order.
+            let mut reserved = self.reserved.clone();
+            reserved.sort_unstable();
+            reserved.dedup();
+            // The advice is only "rename". An earlier draft also offered
+            // `without_default_capabilities()`, which does not help: it clears
+            // the built-ins but `provide` still refuses a reserved name, by
+            // design, so `inject Http as http` means the same thing in every
+            // app. Pointing at a door that does not open is worse than not
+            // mentioning one.
             return Err(ByardError::Platform(format!(
                 "these controllers use names the framework reserves for its own \
-                 capabilities (RFC-0029): {}. Rename them, or call \
-                 `without_default_capabilities()` if you mean to replace the built-ins.",
-                self.reserved.join(", ")
+                 capabilities (RFC-0029 §7): {}. A reserved name cannot be provided \
+                 by an app, whatever the capability set; give yours a name of its \
+                 own (`MyHttp`) and `inject` that.",
+                reserved.join(", ")
             )));
         }
         let source = std::fs::read_to_string(&self.entry).map_err(|e| {
@@ -447,6 +467,88 @@ mod tests {
         let app = App::new("src/main.byd").app_id("dev.example.weather");
         assert_eq!(app.app_id, "dev.example.weather");
         assert!(app.registry.contains("Store"));
+    }
+
+    #[test]
+    fn dropping_the_built_ins_still_does_not_free_up_their_names() {
+        // The message used to point at this method as the way to provide your
+        // own `Http`. It is not, and a suggestion that does not work is worse
+        // than none.
+        struct Impostor;
+        impl byard_core::bridge::Controller for Impostor {
+            fn type_name(&self) -> &'static str {
+                "Http"
+            }
+            fn invoke(
+                &self,
+                _method: &str,
+                _args: Vec<byard_core::bridge::HostValue>,
+            ) -> byard_core::bridge::BoxFuture<
+                'static,
+                Result<byard_core::bridge::HostValue, byard_core::bridge::HostValue>,
+            > {
+                Box::pin(async { Ok(byard_core::bridge::HostValue::Unit) })
+            }
+        }
+        let app = App::new("src/main.byd")
+            .without_default_capabilities()
+            .provide(Impostor);
+        assert_eq!(app.reserved, vec!["Http"]);
+        assert!(
+            !app.registry.contains("Http"),
+            "the built-in really is gone"
+        );
+    }
+
+    #[test]
+    fn the_reserved_name_report_says_each_name_once() {
+        // Two controllers rejected for one name is one problem, and the
+        // message should not repeat it.
+        struct A;
+        struct B;
+        macro_rules! http_impostor {
+            ($t:ty) => {
+                impl byard_core::bridge::Controller for $t {
+                    fn type_name(&self) -> &'static str {
+                        "Http"
+                    }
+                    fn invoke(
+                        &self,
+                        _method: &str,
+                        _args: Vec<byard_core::bridge::HostValue>,
+                    ) -> byard_core::bridge::BoxFuture<
+                        'static,
+                        Result<byard_core::bridge::HostValue, byard_core::bridge::HostValue>,
+                    > {
+                        Box::pin(async { Ok(byard_core::bridge::HostValue::Unit) })
+                    }
+                }
+            };
+        }
+        http_impostor!(A);
+        http_impostor!(B);
+        let app = App::new("src/main.byd").provide(A).provide(B);
+        let message = app
+            .run()
+            .expect_err("a reserved name fails the run")
+            .to_string();
+        // Count within the list itself: the advice that follows names
+        // `MyHttp`, which contains `Http` and would make a whole-message count
+        // meaningless.
+        let list = message
+            .split("§7): ")
+            .nth(1)
+            .and_then(|rest| rest.split('.').next())
+            .expect("the message lists the offending names");
+        assert_eq!(
+            list.matches("Http").count(),
+            1,
+            "one name, said once: {list}"
+        );
+        assert!(
+            !message.contains("without_default_capabilities"),
+            "the message must not offer a door that does not open: {message}"
+        );
     }
 
     #[test]

@@ -128,6 +128,15 @@ struct Request {
     url: String,
     headers: Vec<(String, String)>,
     body: Option<String>,
+    /// Whether [`body`](Self::body) was produced by serialising a record, and
+    /// therefore really is JSON.
+    ///
+    /// Tracked rather than inferred, because the two cases are
+    /// indistinguishable once the body is a `String`: a caller who wrote a
+    /// record meant JSON and should not have to say so, and a caller who wrote
+    /// a string meant *that string*, whatever it is. Declaring the second one
+    /// `application/json` is a lie the server acts on.
+    body_is_json: bool,
     timeout: Duration,
 }
 
@@ -156,11 +165,12 @@ impl Request {
         };
         // A record body is serialised as JSON, because that is what the caller
         // meant by writing a record; a string body is sent verbatim, because
-        // that is what the caller meant by writing a string.
-        let body = match record.field("body") {
-            None | Some(HostValue::Unit) => None,
-            Some(HostValue::Str(s)) => Some(s.clone()),
-            Some(other) => Some(json::host_to_json(other).to_string()),
+        // that is what the caller meant by writing a string, and only the
+        // first of the two gets a JSON content type by default.
+        let (body, body_is_json) = match record.field("body") {
+            None | Some(HostValue::Unit) => (None, false),
+            Some(HostValue::Str(s)) => (Some(s.clone()), false),
+            Some(other) => (Some(json::host_to_json(other).to_string()), true),
         };
         let timeout = match record.field("timeout_ms") {
             Some(HostValue::Int(ms)) if *ms > 0 => {
@@ -173,6 +183,7 @@ impl Request {
             url,
             headers,
             body,
+            body_is_json,
             timeout,
         })
     }
@@ -193,8 +204,10 @@ impl Request {
         })?;
 
         let mut builder = client.request(method, &self.url).timeout(self.timeout);
-        // A record body implies JSON unless the caller said otherwise, so the
-        // common case needs no `headers` at all.
+        // A *record* body implies JSON unless the caller said otherwise, so the
+        // common case needs no `headers` at all. A string body does not: the
+        // caller wrote those exact bytes and the server is entitled to be told
+        // the truth about them.
         let has_content_type = self
             .headers
             .iter()
@@ -203,7 +216,7 @@ impl Request {
             builder = builder.header(name, value);
         }
         if let Some(body) = self.body {
-            if !has_content_type {
+            if self.body_is_json && !has_content_type {
                 builder = builder.header("content-type", "application/json");
             }
             builder = builder.body(body);
@@ -313,22 +326,27 @@ impl Controller for Http {
                     url: self.resolve(&url),
                     headers: Vec::new(),
                     body: None,
+                    body_is_json: false,
                     timeout: DEFAULT_TIMEOUT,
                 }),
                 _ => Err(json::error("bad_argument", "`http.get` takes a URL string")),
             },
             "post" => match args.next() {
-                Some(HostValue::Str(url)) => Ok(Request {
-                    method: "POST".to_string(),
-                    url: self.resolve(&url),
-                    headers: Vec::new(),
-                    body: match args.next() {
-                        None | Some(HostValue::Unit) => None,
-                        Some(HostValue::Str(s)) => Some(s),
-                        Some(other) => Some(json::host_to_json(&other).to_string()),
-                    },
-                    timeout: DEFAULT_TIMEOUT,
-                }),
+                Some(HostValue::Str(url)) => {
+                    let (body, body_is_json) = match args.next() {
+                        None | Some(HostValue::Unit) => (None, false),
+                        Some(HostValue::Str(s)) => (Some(s), false),
+                        Some(other) => (Some(json::host_to_json(&other).to_string()), true),
+                    };
+                    Ok(Request {
+                        method: "POST".to_string(),
+                        url: self.resolve(&url),
+                        headers: Vec::new(),
+                        body,
+                        body_is_json,
+                        timeout: DEFAULT_TIMEOUT,
+                    })
+                }
                 _ => Err(json::error(
                     "bad_argument",
                     "`http.post` takes a URL string",
@@ -533,6 +551,55 @@ mod tests {
             "a record body implies JSON: {}",
             seen[0]
         );
+    }
+
+    #[test]
+    fn a_string_body_is_not_advertised_as_json() {
+        // The caller wrote those exact bytes. Declaring them JSON is a lie the
+        // server acts on, and it contradicts the "sent verbatim" contract a
+        // string body has.
+        let server = Server::serve(vec![response("200 OK", "text/plain", "ok")]);
+        let url = server.url("/raw");
+        call(
+            &Http::new(),
+            "post",
+            vec![HostValue::Str(url), HostValue::Str("plain text".into())],
+        )
+        .expect("posted");
+
+        let seen = server.requests();
+        assert!(
+            !seen[0]
+                .to_lowercase()
+                .contains("content-type: application/json"),
+            "a string body must not claim to be JSON: {}",
+            seen[0]
+        );
+    }
+
+    #[test]
+    fn a_caller_supplied_content_type_always_wins() {
+        let server = Server::serve(vec![response("200 OK", "text/plain", "ok")]);
+        let record = HostValue::Record(vec![
+            ("url".into(), HostValue::Str(server.url("/x"))),
+            ("method".into(), HostValue::Str("POST".into())),
+            (
+                "headers".into(),
+                HostValue::Record(vec![(
+                    "content-type".into(),
+                    HostValue::Str("application/xml".into()),
+                )]),
+            ),
+            (
+                "body".into(),
+                HostValue::Record(vec![("a".into(), HostValue::Int(1))]),
+            ),
+        ]);
+        call(&Http::new(), "request", vec![record]).expect("posted");
+
+        let seen = server.requests().remove(0).to_lowercase();
+        assert!(seen.contains("content-type: application/xml"), "{seen}");
+        assert!(!seen.contains("content-type: application/json"), "{seen}");
     }
 
     #[test]

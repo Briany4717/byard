@@ -3,7 +3,7 @@
 - **Status:** Active, implemented. `runtime-io` (Tokio `net`+`time`), the
   `Http` and `Json` capabilities, `every`/`after` timer effects and the `Store`
   key/value capability are all wired, provided by default and tested end to end
-  from `byld` (verified against the tree 2026-08-04). Nine sentences the design
+  from `byld` (verified against the tree 2026-08-04). Ten sentences the design
   got wrong are corrected in place and recorded in
   [`0029-erratum-implementation-deltas.md`](0029-erratum-implementation-deltas.md).
 - **Author(s):** Briany4717
@@ -103,7 +103,9 @@ http.request(record)          -> full control (method, headers, body, timeout)
 ```
 
 `json` is populated when the response `Content-Type` is JSON (O3); otherwise it
-is `Unit` and the caller reads `body`. Non-2xx and transport failures go to the
+is `Unit` and the caller reads `body`. On the way *out*, a record body is
+serialised and announced as JSON while a string body is sent as written with no
+content type invented for it, and an explicit header always wins (erratum §9). Non-2xx and transport failures go to the
 `err` arm as `{ kind, message, status? }`. Controllers that want a different
 client (auth, retries, gRPC) simply don't use `Http` and call their own crate, 
 `Http` is a convenience, not a lock-in.

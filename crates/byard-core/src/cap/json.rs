@@ -128,9 +128,13 @@ impl Controller for Json {
                 }),
                 _ => Err(error("bad_argument", "`json.parse` takes one string")),
             },
-            "stringify" => Ok(HostValue::Str(
-                host_to_json(args.first().unwrap_or(&HostValue::Unit)).to_string(),
-            )),
+            // Required, not defaulted: `json.stringify()` returning `"null"`
+            // is a call-site mistake answering successfully, and the sibling
+            // `parse` already refuses a missing argument. One rule.
+            "stringify" => match args.first() {
+                Some(value) => Ok(HostValue::Str(host_to_json(value).to_string())),
+                _ => Err(error("bad_argument", "`json.stringify` takes one value")),
+            },
             other => Err(error(
                 "unknown_method",
                 &format!("`Json` has no method `{other}`"),
@@ -229,6 +233,22 @@ mod tests {
             panic!("expected a string");
         };
         assert_eq!(call("parse", vec![HostValue::Str(text)]), Ok(value));
+    }
+
+    #[test]
+    fn stringify_requires_its_argument() {
+        // `json.stringify()` used to answer `"null"` successfully, which is a
+        // call-site mistake reported as a result.
+        let err = call("stringify", vec![]).expect_err("a missing value is an error");
+        assert_eq!(
+            err.field("kind"),
+            Some(&HostValue::Str("bad_argument".into()))
+        );
+        // An explicit `Unit` is still a value, and still stringifies.
+        assert_eq!(
+            call("stringify", vec![HostValue::Unit]),
+            Ok(HostValue::Str("null".into()))
+        );
     }
 
     #[test]

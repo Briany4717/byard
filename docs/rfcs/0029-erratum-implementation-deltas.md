@@ -1,10 +1,10 @@
-# Erratum to RFC-0029: nine things building it corrected
+# Erratum to RFC-0029: ten things building it corrected
 
 - **Status:** Active erratum (amends, does not replace, RFC-0029)
 - **Author(s):** Briany4717
 - **Created:** 2026-08-04
 - **Applies to:** RFC-0029 §2 (what the idle gate has to carry), §3 (the
-  response shape and the client's lifetime), §5 (the first tick, and where a
+  response shape, the client's lifetime, and what a body is announced as), §5 (the first tick, and where a
   timer's lifetime comes from), §6 (`get`'s missing-key answer, the scope of
   the write lock, the temporary file's name, and what a store is keyed on), §7
   (what a reserved name means to `App::provide`, and the difference between a
@@ -18,8 +18,8 @@
 RFC-0029 was **Draft** while this work landed, so its body has been corrected
 in place. This erratum exists because a reader who only has the RFC would not
 otherwise learn which of its sentences were wrong, and each of these was wrong
-in a way that cost something to find. Nine of them are RFC-0029's own; the
-tenth section corrects RFC-0028 §9, which this work is what exposed.
+in a way that cost something to find. Ten of them are RFC-0029's own; the
+eleventh section corrects RFC-0028 §9, which this work is what exposed.
 
 ---
 
@@ -155,7 +155,26 @@ a runtime failure through.
 without instantiating a controller, so a checker can use it without resolving a
 data directory or opening a file the app owns.
 
-## 9. A reserved name is a rejection, not a shadow (§7)
+## 9. A JSON content type follows the body's *shape*, not its presence (§3)
+
+§3 says `http.request({...})` gives "full control (method, headers, body,
+timeout)" and says nothing about what a body without a declared content type is
+announced as. The first implementation announced every one of them as
+`application/json`, including a string body, which the same code path documents
+as "sent verbatim". A server that keys behaviour off the header is then acting
+on a claim the caller never made.
+
+**Correction.** The default follows how the body was written: a record was
+serialised to JSON and is announced as such, a string is sent as the bytes the
+caller wrote with no content type invented for it. An explicit `content-type`
+header always wins. `a_string_body_is_not_advertised_as_json` and
+`a_caller_supplied_content_type_always_wins` cover both.
+
+`json.stringify` also gained the missing-argument error its sibling `parse`
+already had: answering `"null"` to a call with no arguments is a call-site
+mistake reported as a result.
+
+## 10. A reserved name is a rejection, not a shadow (§7)
 
 §7 says a user controller sharing a reserved name is a
 `CompileError::ReservedControllerName`, which places the failure in the
@@ -169,7 +188,13 @@ to mean the same thing in every build, or an app compiled with
 someone re-enabled the feature, and the failure would look like a dependency
 problem rather than a collision.
 
-## 10. What a static check cannot know about `inject` (RFC-0028 §9)
+For the same reason, `without_default_capabilities()` does not lift the
+rejection: it controls which built-ins are *registered*, not which names exist.
+An earlier draft of the failure message suggested it as the escape hatch, which
+was advice that could not be followed; the message now says the only thing that
+works, which is to pick another name.
+
+## 11. What a static check cannot know about `inject` (RFC-0028 §9)
 
 RFC-0028 §9 lists `UnresolvedInject` as the diagnostic for a missing
 controller. That is right where a registry exists to contradict the name, and

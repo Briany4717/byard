@@ -643,6 +643,78 @@ pub enum CompileError {
         /// The closest known method, if any.
         hint: Option<String>,
     },
+    /// A controller call named a method the controller does not expose
+    /// (RFC-0028 §9). Raised at **runtime**, when the reply comes back saying
+    /// so: the dev interpreter cannot know an app's Rust types ahead of time,
+    /// which is precisely why dispatch is a registry lookup.
+    UnknownControllerMethod {
+        /// Source range of the call.
+        span: Span,
+        /// The controller's registered type name.
+        controller: String,
+        /// The method name that did not dispatch.
+        name: String,
+    },
+    /// A controller call was passed something with no data form, a `Signal`,
+    /// a memo, a callback, a theme or another controller handle (RFC-0028 §1).
+    ///
+    /// The boundary carries only `Send` data (INV-13); a handle that crossed
+    /// it would be a reference to logic-thread state observed from a pool
+    /// worker, which is the one thing the thread model forbids outright.
+    NonDataControllerArg {
+        /// Source range of the offending argument.
+        span: Span,
+        /// The controller method being called.
+        method: String,
+    },
+    /// A controller call appeared in a pure context, a `let`, a memo, an
+    /// attribute value (RFC-0028 §4).
+    ///
+    /// A call is an effect: it schedules work and returns nothing. Allowing
+    /// one where a value is expected would make a projection depend on when it
+    /// happened to be re-pulled, which is exactly what a projection must not
+    /// do.
+    EffectInPureContext {
+        /// Source range of the call.
+        span: Span,
+        /// What the surrounding context is (`let`, `fn`, an attribute value).
+        context: String,
+    },
+    /// A reply came back for a continuation that is gone: its view unmounted,
+    /// or a hot reload replaced the program (RFC-0028 §5, INV-14).
+    ///
+    /// Reported rather than silently dropped, because the alternative reading,
+    /// "the controller never answered", sends the developer looking in the
+    /// wrong half of the app.
+    DiscardedControllerReply {
+        /// Source range of the call that was dropped, when it is still known.
+        span: Span,
+    },
+    /// An `inject T as x` named a type no ambient provider declares, in a
+    /// context that has **no controller registry at all** (`byard check`, a
+    /// headless test).
+    ///
+    /// A warning, not an error, and the distinction is the point: the Rust half
+    /// of a two-layer app registers its controllers at run time
+    /// (`App::provide`), so a static check of the `.byd` file alone genuinely
+    /// cannot know whether `T` exists. Reporting it as an error would make
+    /// `byard check` fail on every correct two-layer app; reporting nothing
+    /// would let a typo through in silence. Saying exactly what is unknown, and
+    /// carrying on, is the only honest third option.
+    UncheckableInject {
+        /// Source range of the `inject` statement.
+        span: Span,
+        /// The type that could not be resolved here.
+        name: String,
+    },
+    /// An app registered a controller under a name the framework reserves for
+    /// one of its own capabilities (RFC-0029 §7).
+    ReservedControllerName {
+        /// Source range, the `inject` that resolved to it.
+        span: Span,
+        /// The reserved name.
+        name: String,
+    },
 }
 
 impl CompileError {
@@ -658,6 +730,12 @@ impl CompileError {
             | Self::CannotInfer { span }
             | Self::TextUsedAsType { span }
             | Self::UnresolvedInject { span, .. }
+            | Self::UnknownControllerMethod { span, .. }
+            | Self::NonDataControllerArg { span, .. }
+            | Self::EffectInPureContext { span, .. }
+            | Self::DiscardedControllerReply { span }
+            | Self::UncheckableInject { span, .. }
+            | Self::ReservedControllerName { span, .. }
             | Self::NotAssignable { span }
             | Self::UnknownThemeToken { span, .. }
             | Self::UnknownView { span, .. }
@@ -730,6 +808,12 @@ impl CompileError {
             | Self::CannotInfer { span }
             | Self::TextUsedAsType { span }
             | Self::UnresolvedInject { span, .. }
+            | Self::UnknownControllerMethod { span, .. }
+            | Self::NonDataControllerArg { span, .. }
+            | Self::EffectInPureContext { span, .. }
+            | Self::DiscardedControllerReply { span }
+            | Self::UncheckableInject { span, .. }
+            | Self::ReservedControllerName { span, .. }
             | Self::NotAssignable { span }
             | Self::UnknownThemeToken { span, .. }
             | Self::UnknownView { span, .. }
@@ -804,6 +888,12 @@ impl CompileError {
             Self::CannotInfer { .. } => "CannotInfer",
             Self::TextUsedAsType { .. } => "TextUsedAsType",
             Self::UnresolvedInject { .. } => "UnresolvedInject",
+            Self::UnknownControllerMethod { .. } => "UnknownControllerMethod",
+            Self::NonDataControllerArg { .. } => "NonDataControllerArg",
+            Self::EffectInPureContext { .. } => "EffectInPureContext",
+            Self::DiscardedControllerReply { .. } => "DiscardedControllerReply",
+            Self::UncheckableInject { .. } => "UncheckableInject",
+            Self::ReservedControllerName { .. } => "ReservedControllerName",
             Self::NotAssignable { .. } => "NotAssignable",
             Self::UnknownThemeToken { .. } => "UnknownThemeToken",
             Self::UnknownView { .. } => "UnknownView",
@@ -875,7 +965,10 @@ impl CompileError {
     /// severity stays fatal, which is the safe direction.
     #[must_use]
     pub const fn is_warning(&self) -> bool {
-        matches!(self, Self::StrokeInFusionGroup { .. })
+        matches!(
+            self,
+            Self::StrokeInFusionGroup { .. } | Self::UncheckableInject { .. }
+        )
     }
 
     /// The one-line headline for this error (no source context).
@@ -901,6 +994,27 @@ impl CompileError {
             }
             Self::UnresolvedInject { name, .. } => {
                 format!("no ambient `{name}` is provided by any ancestor view")
+            }
+            Self::UnknownControllerMethod {
+                controller, name, ..
+            } => format!("controller `{controller}` has no method `{name}`"),
+            Self::NonDataControllerArg { method, .. } => format!(
+                "`{method}` was passed a value with no data form; only data \
+                 (numbers, strings, lists, records) crosses the controller boundary"
+            ),
+            Self::EffectInPureContext { context, .. } => format!(
+                "a controller call is an effect and cannot appear in {context}; \
+                 call it from an action and write the result to a `var`"
+            ),
+            Self::UncheckableInject { name, .. } => format!(
+                "`{name}` is not an ambient value here; it must be a controller the Rust \
+                 half registers with `App::provide`, which this check cannot see"
+            ),
+            Self::DiscardedControllerReply { .. } => {
+                "a controller reply arrived after its view was gone, and was discarded".to_string()
+            }
+            Self::ReservedControllerName { name, .. } => {
+                format!("`{name}` is a built-in capability and cannot be provided by an app")
             }
             Self::NotAssignable { .. } => "this is not an assignable `var`".to_string(),
             Self::UnknownThemeToken { field, theme, .. } => format!(

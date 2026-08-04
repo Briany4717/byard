@@ -34,10 +34,16 @@ pollster = "0.4"
 naga = { version = "29.0", features = ["wgsl-in"] }
 
 [features]
-default = ["telemetry"]
+default = ["telemetry", "runtime-io"]
 # Zero-allocation profiler (RFC-0013): `profile_scope!` compiles to nothing
 # when this is off, so a release build pays exactly zero cost for it.
 telemetry = []
+# RFC-0029 O1: Tokio's `net` and `time` drivers, and the `.enable_all()` that
+# starts them. Every capability RFC-0029 adds needs them (a socket or a
+# `tokio::time::sleep` panics without a reactor), so this is default-on; a
+# headless or embedded build drops it and gets the original compute-only
+# runtime back with no networking or timer code compiled in.
+runtime-io = ["tokio/net", "tokio/time", "tokio/macros"]
 
 [lints]
 workspace = true

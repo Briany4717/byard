@@ -324,6 +324,17 @@ impl<'a> Parser<'a> {
             // name). Placement, `route` under a `NavStack`, `tab` under a
             // `NavHost`, is a *checker* rule, so a misplaced case still parses
             // and gets a precise diagnostic instead of a parse cascade.
+            // RFC-0028 §4b `on mount => …` / `on unmount => …`. Contextual like
+            // the `on <state> { … }` style block it shares a keyword with: that
+            // one is followed by `{`, this one by `=>`, and `mount`/`unmount`
+            // are not style states, so the two can never be confused.
+            Some(Token::Ident(name))
+                if name.as_str() == "on"
+                    && matches!(self.peek2(), Some(Token::Ident(ref s))
+                        if s.as_str() == "mount" || s.as_str() == "unmount") =>
+            {
+                Some(self.parse_lifecycle())
+            }
             Some(Token::Ident(name)) if matches!(self.peek2(), Some(Token::StrLit)) => {
                 match name.as_str() {
                     "route" => Some(self.parse_route(RouteKind::Route)),
@@ -393,6 +404,21 @@ impl<'a> Parser<'a> {
             params,
             ret,
             body,
+            span: self.span_from(start),
+        }
+    }
+
+    /// `lifecycle := "on" ("mount" | "unmount") "=>" action` (RFC-0028 §4b).
+    fn parse_lifecycle(&mut self) -> Member {
+        let start = self.cur_span();
+        self.advance(); // on
+        let on_mount = matches!(self.cur(), Some(Token::Ident(s)) if s.as_str() == "mount");
+        self.advance(); // mount | unmount
+        self.expect(&Token::Arrow, "'=>'");
+        let action = self.parse_expr(0);
+        Member::Lifecycle {
+            on_mount,
+            action,
             span: self.span_from(start),
         }
     }

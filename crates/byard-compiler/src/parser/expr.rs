@@ -132,6 +132,34 @@ impl Parser<'_> {
         }
     }
 
+    /// True when the cursor is on the result arm named `keyword` (RFC-0028 §4):
+    /// the keyword, the name its payload binds to, and the `=>` that opens the
+    /// body. All three are required, so a call followed by an unrelated
+    /// identifier is still just a call.
+    fn at_result_arm(&self, keyword: &str) -> bool {
+        matches!(self.cur(), Some(Token::Ident(s)) if s.as_str() == keyword)
+            && matches!(self.peek2(), Some(Token::Ident(_)))
+            && matches!(self.peek3(), Some(Token::Arrow))
+    }
+
+    /// Parses `keyword IDENT "=>" action`, or returns `None` if the arm is not
+    /// written (both arms are optional, RFC-0028 §4).
+    fn parse_result_arm(&mut self, keyword: &str) -> Option<super::ast::ResultArm> {
+        if !self.at_result_arm(keyword) {
+            return None;
+        }
+        let start = self.cur_span();
+        self.advance(); // ok | err
+        let binding = self.expect_ident("the name the result binds to")?;
+        self.expect(&Token::Arrow, "'=>'");
+        let action = self.parse_expr(0);
+        Some(super::ast::ResultArm {
+            binding,
+            action: Box::new(action),
+            span: self.span_from(start),
+        })
+    }
+
     /// True when the cursor is on an `on <state> { … }` interaction-state block
     /// (RFC-0016). `on` is a *contextual* keyword: it opens a state block only
     /// here (followed by an identifier), so nothing else that spells `on` breaks.
@@ -406,11 +434,27 @@ impl Parser<'_> {
                 self.advance();
                 let args = self.parse_arg_list(&Token::RParen);
                 self.expect(&Token::RParen, "')'");
-                Expr::Call {
+                let call = Expr::Call {
                     callee: Box::new(lhs),
                     args,
                     span: self.span_from(start),
+                };
+                // RFC-0028 §4: `ok r => …` / `err e => …` immediately after a
+                // call are its result arms. Contextual, like `on <state>`: the
+                // trigger is `IDENT IDENT "=>"` right after a call, a sequence
+                // no other production can produce, so `ok` and `err` stay
+                // ordinary identifiers everywhere else in the language.
+                if self.at_result_arm("ok") || self.at_result_arm("err") {
+                    let ok = self.parse_result_arm("ok");
+                    let err = self.parse_result_arm("err");
+                    return Expr::ControllerCall {
+                        call: Box::new(call),
+                        ok,
+                        err,
+                        span: self.span_from(start),
+                    };
                 }
+                call
             }
             Some(Token::PlusPlus | Token::MinusMinus) => {
                 let op = if matches!(self.cur(), Some(Token::PlusPlus)) {

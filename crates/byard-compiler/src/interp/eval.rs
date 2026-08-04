@@ -18,6 +18,10 @@
 //! - A mutation (`=`, `+=`, `++`, `--`) on a `var` marks it; on anything else
 //!   it is [`CompileError::NotAssignable`].
 
+mod controller;
+
+use controller::UNBOUND_CONTROLLER;
+
 use super::env::{Env, SignalId, Value};
 use super::events::Action;
 use super::intrinsics::validate_element;
@@ -124,6 +128,7 @@ fn members_span(members: &[Member]) -> Span {
             | Member::For { span, .. }
             | Member::When { span, .. }
             | Member::Route { span, .. }
+            | Member::Lifecycle { span, .. }
             | Member::Style { span, .. } => *span,
             Member::Element(el) => el.span,
             Member::Expr(expr) => expr.span(),
@@ -545,6 +550,19 @@ pub enum RenderNode {
         pool: usize,
         /// The reactive list projection, re-read each frame.
         list: ScopeId,
+    },
+    /// A structural effect (RFC-0028 §4b): `on mount => …` / `on unmount =>
+    /// …`.
+    ///
+    /// A node with no pixels. It is a node anyway, and not a side table, so
+    /// that its **position in the tree** is what decides when it fires: the
+    /// structural walk reaches exactly the mounted subtree, so being visited
+    /// is being mounted, and every container that can mount or unmount a
+    /// subtree, `when`, `for`, a route, a user-view instance, gets a correct
+    /// edge without knowing effects exist.
+    Effect {
+        /// Index into the interpreter's effect slots.
+        index: usize,
     },
     /// A `NavStack`/`NavHost` (RFC-0026): a stack container whose live children
     /// are the screens its navigation state selects. Unlike `When`/`For` this is
@@ -1382,6 +1400,10 @@ pub struct Interpreter {
     /// pool order, kept so the next frame can answer "did this primitive
     /// change?" by comparing resolved values rather than by asserting `true`.
     paint: byard_core::frame::PaintDigest,
+    /// The controller boundary (RFC-0028): the dispatcher, the call queue, the
+    /// continuation table and the structural effects. One field rather than
+    /// six, see [`controller::Bridge`].
+    bridge: controller::Bridge,
 }
 
 /// What [`Interpreter::render`] remembers between frames so it can decide
@@ -1633,6 +1655,11 @@ impl Interpreter {
 
     /// Runs one tick: begins an epoch and pulls all dirty scopes.
     pub fn tick(&mut self) {
+        // Anything an action raised since the last tick reaches the pool
+        // before the pull, so a call placed by a tap is in flight during the
+        // very frame that tap produced (RFC-0028 §5 step 2).
+        self.drain_calls();
+        self.drain_closure_diagnostics();
         let epoch = self.ctx.begin_tick();
         self.ctx.pull(epoch);
     }
@@ -1760,7 +1787,10 @@ impl Interpreter {
                 }
             }
             Member::Expr(e) => {
-                if let Err(err) = self.eval_action(e) {
+                // A bare statement member is an action, so a call written
+                // there is in effect position like any other (RFC-0028 §4).
+                let result = self.in_action_position(|s| s.eval_action(e));
+                if let Err(err) = result {
                     self.errors.push(err);
                 }
             }
@@ -1772,10 +1802,28 @@ impl Interpreter {
                 };
                 match self.env.resolve_inject(&ty_name).cloned() {
                     Some(val) => self.env.push(name.clone(), val),
-                    None => self.errors.push(CompileError::UnresolvedInject {
-                        span: *span,
-                        name: ty_name.as_str().to_string(),
-                    }),
+                    // Nothing provides it. Which of the two things that means
+                    // depends on whether anyone *could* have: a host with a
+                    // registry knows its whole controller set, so an
+                    // unresolved name there is wrong. A headless check has no
+                    // registry and no way to read the app's Rust half, so the
+                    // same name there is merely unknown, and the binding
+                    // becomes an unbound handle so the calls on it still
+                    // parse, lower and get checked.
+                    None if self.has_dispatcher() => {
+                        self.errors.push(CompileError::UnresolvedInject {
+                            span: *span,
+                            name: ty_name.as_str().to_string(),
+                        });
+                    }
+                    None => {
+                        self.errors.push(CompileError::UncheckableInject {
+                            span: *span,
+                            name: ty_name.as_str().to_string(),
+                        });
+                        self.env
+                            .push(name.clone(), Value::Controller(UNBOUND_CONTROLLER));
+                    }
                 }
             }
             // elements / control flow / style handled in lower_members.
@@ -1880,11 +1928,16 @@ impl Interpreter {
         })
     }
 
-    /// Applies a batch of pending I/O results from the async controller pool
-    /// (RFC-0001 §5.1). Each callback receives a mutable reference to `self`
-    /// and writes to whatever `var` signals it needs via [`write_var`](Self::write_var).
-    /// Results are drained before the next [`tick`](Self::tick).
-    pub fn apply_io_results(
+    /// Applies a batch of ready-made logic-thread callbacks, the test and
+    /// host driver for the reply path (RFC-0001 §5.1). Each callback receives
+    /// a mutable reference to `self` and writes whatever `var` signals it
+    /// needs via [`write_var`](Self::write_var).
+    ///
+    /// The real controller path is
+    /// [`apply_io_results`](Self::apply_io_results), which downcasts typed
+    /// replies off the relay channel; this one exists for callers that already
+    /// hold the write they want performed.
+    pub fn apply_io_callbacks(
         &mut self,
         results: impl IntoIterator<Item = Box<dyn FnOnce(&mut Self) + Send>>,
     ) {
@@ -1906,6 +1959,13 @@ impl Interpreter {
         self.invalidate_retained_layout();
         let old = std::mem::take(&mut self.var_sigs);
         self.env = Env::new();
+        // A reload replaces the program, so every continuation now names a
+        // call site that no longer exists and every effect's mount state
+        // describes a tree that is gone (RFC-0028 §5, INV-14). The ambient
+        // controller handles are re-provided because the environment they
+        // lived in was just discarded.
+        self.reset_bridge_state();
+        self.provide_controllers();
         for member in &new_view.body {
             match member {
                 Member::Var { name, init, .. } => {
@@ -2810,6 +2870,22 @@ impl Interpreter {
             }
             Member::Element(e) => {
                 out.push(self.lower_element(e, known_views));
+            }
+            // RFC-0028 §4b: a lifecycle effect. Lowered here, in the scope it
+            // was written in, and emitted as a node so its position in the
+            // tree is what decides when it mounts.
+            Member::Lifecycle {
+                on_mount, action, ..
+            } => {
+                if let Ok(lowered) = self.lower_action(action, None) {
+                    let kind = if *on_mount {
+                        controller::EffectKind::Mount
+                    } else {
+                        controller::EffectKind::Unmount
+                    };
+                    let index = self.register_effect(kind, lowered);
+                    out.push(RenderNode::Effect { index });
+                }
             }
             // RFC-0026: a `route`/`tab` case only means something as a direct
             // child of its container, the nav lowering consumes those without
@@ -3755,7 +3831,18 @@ impl Interpreter {
         // guard, so a runaway recursion still terminates (with a diagnostic).
         let mut passes = 0;
         let mut structure_changed = false;
-        while self.reconcile_structure(tree, 0) && passes <= MAX_INSTANCE_DEPTH {
+        loop {
+            // The structural walk marks every effect it reaches; settling
+            // reads those marks and fires the mount/unmount edges they imply
+            // (RFC-0028 §4b). It runs *inside* the fixpoint because a mount
+            // action writes `var`s, and a screen whose `on mount` sets
+            // `state = "loading"` should show the spinner on the frame it
+            // mounted, not the one after.
+            let mut changed = self.reconcile_structure(tree, 0);
+            changed |= self.settle_effects();
+            if !changed || passes > MAX_INSTANCE_DEPTH {
+                break;
+            }
             structure_changed = true;
             let epoch = self.ctx.begin_tick();
             self.ctx.pull(epoch);
@@ -4147,6 +4234,12 @@ impl Interpreter {
                         }
                     }
                 }
+                // An effect has no pixels and no layout box, so it is dropped
+                // *here*, before anything downstream can count it. Giving it a
+                // 0x0 leaf instead (the `Overlay` shape) would put it in the
+                // flat-id sequence, which is the RFC-0032 retained path's
+                // identity, for a node that can never draw.
+                RenderNode::Effect { .. } => {}
                 other => out.push(Concrete { node: other, slot }),
             }
         }
@@ -4341,6 +4434,10 @@ impl Interpreter {
                 RenderNode::Box { children, .. } | RenderNode::Overlay { children, .. } => {
                     dirtied |= self.reconcile_structure(children, depth + 1);
                 }
+                // Being reached by this walk *is* being mounted (RFC-0028
+                // §4b); `settle_effects` reads the marks once the walk has
+                // reached its fixpoint.
+                RenderNode::Effect { index } => self.mark_effect_seen(*index),
                 _ => {}
             }
         }
@@ -5133,6 +5230,11 @@ impl Interpreter {
             RenderNode::When { .. } | RenderNode::For { .. } => {
                 unreachable!("when/for are expanded by build_children before build_layout_tree")
             }
+            // An effect has no layout box; `expand_concrete` drops it before
+            // the build walk can reach one.
+            RenderNode::Effect { .. } => {
+                unreachable!("effects are dropped by expand_concrete before build_layout_tree")
+            }
             // RFC-0026: a navigation container lays out one wrapper per live
             // screen. The screen the navigation names is in the container's
             // normal flow, so the container measures to it exactly as it would
@@ -5690,6 +5792,9 @@ impl Interpreter {
             // walk reaches them (RFC-0018), so they never arrive as a paint node.
             RenderNode::When { .. } | RenderNode::For { .. } => {
                 unreachable!("when/for are expanded before render_node_with_atlas")
+            }
+            RenderNode::Effect { .. } => {
+                unreachable!("effects are dropped by expand_concrete before the paint walk")
             }
             // A `Spacer` is layout-only. An `Overlay` renders nothing in the main
             // flow, its 0×0 leaf holds a slot in the flat-id cursor (already
@@ -9131,6 +9236,46 @@ impl Interpreter {
                 })
             }
             Expr::Call { callee, args, .. } => self.lower_call(callee, args, payload_name),
+            // RFC-0028 §4: an async call with result arms. Only ever reached
+            // through an action, `eval_pure` rejects it first, so by the time
+            // it lowers here it is known to be in effect position.
+            Expr::ControllerCall {
+                call,
+                ok,
+                err,
+                span,
+            } => {
+                let Expr::Call {
+                    callee,
+                    args,
+                    span: call_span,
+                } = call.as_ref()
+                else {
+                    return Box::new(|_| Value::Unit);
+                };
+                let _ = call_span;
+                self.lower_controller_call(callee, args, ok.as_ref(), err.as_ref(), *span)
+                    .unwrap_or_else(|| {
+                        // Arms were written on a receiver that resolves to
+                        // something other than a controller. Reported rather
+                        // than lowered as a plain call: the arms would never
+                        // run, and a result handler that silently never fires
+                        // is the worst shape this mistake could take.
+                        //
+                        // A receiver that resolves to *nothing* is already
+                        // covered by the `inject` diagnostic at its
+                        // declaration, and saying it twice would point the
+                        // developer at the call instead of the cause.
+                        if self.receiver_is_bound(callee) {
+                            self.errors.push(CompileError::UnknownControllerMethod {
+                                span: *span,
+                                controller: "this receiver".to_string(),
+                                name: "an `ok`/`err` arm needs an injected controller".to_string(),
+                            });
+                        }
+                        Box::new(|_| Value::Unit)
+                    })
+            }
             Expr::ClassRef(class, _) => {
                 let s = format!(".{class}");
                 Box::new(move |_| Value::Str(s.clone()))
@@ -9439,6 +9584,12 @@ impl Interpreter {
                 return lowered;
             }
         }
+        // A call on an injected controller handle with no arms: fire-and-forget
+        // (RFC-0028 §4). It takes the *same* lowering as the arm-bearing form,
+        // so whether anyone reads the answer cannot change what the call does.
+        if let Some(lowered) = self.lower_controller_call(callee, args, None, None, callee.span()) {
+            return lowered;
+        }
         Box::new(|_| Value::Unit)
     }
 
@@ -9589,6 +9740,17 @@ impl Interpreter {
     /// Evaluates `expr` once, immediately, with no scope active (so nothing
     /// subscribes). Used to seed `var`s and to evaluate action operands.
     fn eval_pure(&mut self, expr: &Expr) -> Value {
+        // RFC-0028 §4: a call is an effect. `eval_pure` is every place a value
+        // is *needed*, a `var` seed, an attribute, a memo body, so rejecting
+        // it here rejects it in all of them at once, rather than in each of
+        // them separately and eventually in all but one.
+        if let Expr::ControllerCall { span, .. } = expr {
+            self.errors.push(CompileError::EffectInPureContext {
+                span: *span,
+                context: "a value position".to_string(),
+            });
+            return Value::Unit;
+        }
         // A `with` animation (RFC-0010) is driven here, at the single evaluation
         // chokepoint, so every animatable scalar prop (opacity/scale/translate/
         // rotate, all of which resolve through `eval_pure`) animates without
@@ -10105,7 +10267,7 @@ impl Interpreter {
             Expr::Lambda { params, body, .. } if params.is_empty() => body.as_ref(),
             other => other,
         };
-        let mut compute = self.lower_expr(expr, payload_name.as_ref());
+        let mut compute = self.in_action_position(|s| s.lower_expr(expr, payload_name.as_ref()));
         Ok(Box::new(move |ctx, payload| {
             CURRENT_PAYLOAD.with(|cell| {
                 *cell.borrow_mut() = payload.cloned();

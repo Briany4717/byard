@@ -22,6 +22,14 @@
 //! }
 //! ```
 
+pub mod app;
+
+pub use app::App;
+
+/// Re-exported so an app's `main` can name the error `App::run` returns
+/// without depending on `byard-core` directly.
+pub use byard_core::ByardError;
+
 /// The controller boundary: [`HostValue`](bridge::HostValue), the
 /// [`Controller`](bridge::Controller) trait, [`ControllerRegistry`](bridge::ControllerRegistry),
 /// the `From`/`IntoHostValue` conversions, and the reply/timer wire types.

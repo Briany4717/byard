@@ -47,6 +47,14 @@ pub struct App {
     title: String,
     size: (u32, u32),
     registry: ControllerRegistry,
+    /// Controllers rejected for taking a reserved capability name (RFC-0029
+    /// §7), reported by [`App::run`].
+    ///
+    /// Collected rather than returned from `provide`, because `provide` is a
+    /// builder step and making it fallible would put a `?` in the middle of
+    /// every app's `main` for a mistake almost no app makes. The failure still
+    /// has to be loud, so it is held here and fails the run.
+    reserved: Vec<&'static str>,
 }
 
 impl App {
@@ -63,8 +71,22 @@ impl App {
             entry,
             title,
             size: (1280, 720),
-            registry: ControllerRegistry::new(),
+            // Seeded with the framework's own capabilities (RFC-0029 §7), so
+            // `inject Http as http` works in an app that provided nothing.
+            registry: byard_core::cap::default_registry(),
+            reserved: Vec::new(),
         }
+    }
+
+    /// Drops the framework's built-in capabilities, so the app provides
+    /// everything itself (RFC-0029 §7 opt-out).
+    ///
+    /// For an app that owns its whole I/O story, or one auditing exactly what
+    /// its views can reach.
+    #[must_use]
+    pub fn without_default_capabilities(mut self) -> Self {
+        self.registry = ControllerRegistry::new();
+        self
     }
 
     /// Sets the window title (defaults to the entry file's stem).
@@ -84,12 +106,22 @@ impl App {
     /// Registers `controller` as an ambient provider, so `inject T as x`
     /// inside the view resolves a handle to it (RFC-0028 §3).
     ///
-    /// Registering two controllers with the same `type_name()` keeps the
-    /// later one: an app that provides a capability of its own deliberately
-    /// replaces the framework's, rather than getting whichever the iteration
-    /// order happened to reach last.
+    /// A controller whose `type_name()` is one of the framework's reserved
+    /// capability names (`Http`, `Json`, `Store`, `Timer`, RFC-0029 §7) is
+    /// **rejected**, and [`run`](Self::run) fails saying so. Allowing the
+    /// shadow would mean `inject Http as http` meaning different things in
+    /// different apps, and a `byld` file that reads correctly against the
+    /// documentation while doing something else entirely. An app that wants
+    /// its own stack calls
+    /// [`without_default_capabilities`](Self::without_default_capabilities)
+    /// and names it something of its own.
     #[must_use]
     pub fn provide<C: Controller + 'static>(mut self, controller: C) -> Self {
+        let name = controller.type_name();
+        if byard_core::cap::is_reserved(name) {
+            self.reserved.push(name);
+            return self;
+        }
         self.registry.insert(Arc::new(controller));
         self
     }
@@ -102,6 +134,14 @@ impl App {
     /// does not parse, and whatever engine/platform error initialisation or
     /// the event loop produces.
     pub fn run(self) -> Result<(), ByardError> {
+        if !self.reserved.is_empty() {
+            return Err(ByardError::Platform(format!(
+                "these controllers use names the framework reserves for its own \
+                 capabilities (RFC-0029): {}. Rename them, or call \
+                 `without_default_capabilities()` if you mean to replace the built-ins.",
+                self.reserved.join(", ")
+            )));
+        }
         let source = std::fs::read_to_string(&self.entry).map_err(|e| {
             ByardError::Platform(format!("cannot read `{}`: {e}", self.entry.display()))
         })?;

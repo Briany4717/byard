@@ -23,6 +23,7 @@
 
 pub mod atlas;
 pub mod bridge;
+pub mod cap;
 pub mod encoder;
 pub mod engine;
 pub mod evaluator;

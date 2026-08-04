@@ -5,26 +5,26 @@
 //!
 //! ## Design constraints
 //!
-//! - **Single render pass** — `TextGlyphPipeline::render_layer` is called
+//! - **Single render pass**, `TextGlyphPipeline::render_layer` is called
 //!   *inside* the same `wgpu::RenderPass` already started by the `SolidBox`
 //!   draw. On Apple Silicon (TBDR architecture) every render pass break
 //!   flushes the tile buffer to VRAM; sharing the pass with `SolidBox`
 //!   eliminates that cost.
-//! - **Layered text draws, one shared atlas** — RFC-0017 z-layers need a
+//! - **Layered text draws, one shared atlas**, RFC-0017 z-layers need a
 //!   later layer's transparent geometry (a modal scrim, a shadow) to
 //!   alpha-blend *over* an earlier layer's text, which a single frame-final
 //!   text draw can never provide. Instead of one `TextRenderer`, the pipeline
-//!   holds one **per z-layer** — all sharing the *same* `FontSystem`,
+//!   holds one **per z-layer**, all sharing the *same* `FontSystem`,
 //!   `SwashCache`, `TextAtlas`, `Viewport`, and shaped-buffer cache, so every
 //!   line is still shaped exactly once and every glyph is rasterised into one
 //!   atlas regardless of layer count. The only per-layer cost is one small
-//!   glyph vertex buffer and one draw call *inside* the existing pass — never
+//!   glyph vertex buffer and one draw call *inside* the existing pass, never
 //!   an extra render pass, never a re-shape, never a duplicate atlas. A
 //!   single-layer frame uses exactly one renderer: the pre-layering fast
 //!   path, unchanged.
-//! - **Content-addressed re-shaping** — a line's glyph buffer is re-shaped if
-//!   and only if the [`shape_key`] its buffer was shaped from — `(text,
-//!   font_size, wrap)` — differs from this frame's, or the viewport changed,
+//! - **Content-addressed re-shaping**, a line's glyph buffer is re-shaped if
+//!   and only if the [`shape_key`] its buffer was shaped from, `(text,
+//!   font_size, wrap)`, differs from this frame's, or the viewport changed,
 //!   or index identity is not comparable at all. See [`needs_reshape`].
 //!
 //!   This replaces trusting [`TextLine::dirty`] alone, and the reason is
@@ -33,7 +33,7 @@
 //!   it has no per-element change signal, so it sets `dirty: true` on every
 //!   line of every frame. "Trust the flag, hash nothing" therefore bought
 //!   zero skips in a real `byld` app and degenerated to *re-shape everything,
-//!   every frame* — which is why `encode.glyphs` was the largest single row
+//!   every frame*, which is why `encode.glyphs` was the largest single row
 //!   on the profile block, and why the dev HUD's twenty-five fixed-width
 //!   fields cost four times what they should have (RFC-0030 erratum
 //!   "self-accounting", §A2).
@@ -49,16 +49,16 @@
 //!   silence; now it renders correctly, because the key it is compared
 //!   against is derived from the content rather than asserted about it.
 //!
-//! - **The dirty flag still governs the redraw region** — so it is still
+//! - **The dirty flag still governs the redraw region**, so it is still
 //!   checked, in debug, against the full content hash (colour included):
 //!   `dirty` is what [`dirty_text_bounds`](super::dirty_text_bounds) unions
 //!   into the incremental scissor, so a line that changed colour with the
 //!   flag unset would now be shaped correctly and clipped out of the redraw.
 //!   See [`assert_dirty_flag_consistency`].
-//! - **Three-pass borrow pattern** — `prepare` splits work across three
+//! - **Three-pass borrow pattern**, `prepare` splits work across three
 //!   sequential passes to satisfy Rust's field-split borrowing rules (see the
 //!   method documentation for a precise explanation).
-//! - **No panics** — every fallible operation returns [`ByardError`].
+//! - **No panics**, every fallible operation returns [`ByardError`].
 
 use std::hash::Hasher as _;
 
@@ -87,7 +87,7 @@ use crate::ByardError;
 
 // ── Public surface ────────────────────────────────────────────────────────────
 
-/// Re-exported from [`crate::frame`] — the canonical definition now lives
+/// Re-exported from [`crate::frame`], the canonical definition now lives
 /// there so the Logic thread can populate [`RenderFrame::texts`] without
 /// importing from a subsystem that it must not depend on (RFC-0001 §9).
 pub use crate::frame::TextLine;
@@ -101,7 +101,7 @@ pub use crate::frame::TextLine;
 /// lines cost nothing beyond one [`shape_key`] hash.
 struct CachedLine {
     buffer: Buffer,
-    /// The [`shape_key`] `buffer` was last shaped from — the authority on
+    /// The [`shape_key`] `buffer` was last shaped from, the authority on
     /// whether it still describes this line.
     shape_key: u64,
     /// `FxHasher` digest of everything a *repaint* depends on, colour
@@ -139,7 +139,7 @@ static DEV_GLYPHS_SCOPE: std::sync::OnceLock<crate::telemetry::ScopeId> =
 /// [`FxHasher`] rather than `SipHash`: ≈3× faster on short keys, and this runs
 /// once per text line per frame. A collision would render a stale line; at
 /// 64 bits over a few hundred lines that is not a failure mode this engine
-/// will observe, and the alternative — comparing the string itself — costs a
+/// will observe, and the alternative, comparing the string itself, costs a
 /// heap copy per line to retain it.
 fn shape_key(text: &str, font_size: f32, wrap: Option<f32>) -> u64 {
     let mut h = FxHasher::default();
@@ -154,7 +154,7 @@ fn shape_key(text: &str, font_size: f32, wrap: Option<f32>) -> u64 {
 /// Computes the debug-only repaint hash for a [`TextLine`]: [`shape_key`]
 /// widened with colour.
 ///
-/// Position (`x`, `y`) stays excluded — a moved line is caught by
+/// Position (`x`, `y`) stays excluded, a moved line is caught by
 /// [`dirty_text_bounds`](super::dirty_text_bounds) unioning its previous
 /// bounds, not by this.
 ///
@@ -175,7 +175,7 @@ fn content_hash(text: &str, font_size: f32, color: [f32; 4], wrap: Option<f32>) 
 /// The **only** decision point `prepare` consults, in both build profiles, and
 /// deliberately content-addressed: `shape_changed` is the comparison of this
 /// frame's [`shape_key`] against the one the cached buffer was shaped from.
-/// `TextLine::dirty` is not consulted at all — see the module docs for why a
+/// `TextLine::dirty` is not consulted at all, see the module docs for why a
 /// flag whose producer sets it unconditionally is not a signal.
 ///
 /// Pulled out as a free, pure function so it is unit-testable without any
@@ -186,9 +186,9 @@ const fn needs_reshape(viewport_dirty: bool, shape_changed: bool) -> bool {
 
 /// Whether index `i` refers to the same *element* it referred to last frame.
 ///
-/// The whole incremental scheme is index-addressed — `texts[i]` compared
+/// The whole incremental scheme is index-addressed, `texts[i]` compared
 /// against what was shaped for `texts[i]`, with `TextLine::dirty` trusted to say
-/// when they differ — and that is sound only while this holds.
+/// when they differ, and that is sound only while this holds.
 ///
 /// It stops holding when the pool's length changes. Mount a paragraph in the
 /// middle of a column and every line after it shifts down one index: each of
@@ -198,7 +198,7 @@ const fn needs_reshape(viewport_dirty: bool, shape_changed: bool) -> bool {
 ///
 /// "Which index shifted" is not knowable from two lengths, so a length change
 /// invalidates all of them. That costs a reshape of the whole pool on such a
-/// frame — which is already a full-redraw frame
+/// frame, which is already a full-redraw frame
 /// (`needs_full_redraw_this_frame` includes exactly this condition), so it adds
 /// no cost class that was not being paid.
 #[must_use]
@@ -211,12 +211,12 @@ const fn index_is_identity_stable(is_new: bool, length_changed: bool) -> bool {
 ///
 /// # What this still catches, now that shaping is content-addressed
 ///
-/// Not staleness in the glyphs — [`needs_reshape`] derives that from the
+/// Not staleness in the glyphs, [`needs_reshape`] derives that from the
 /// content itself, so a forgotten flag can no longer leave a shaped buffer
 /// behind. What it catches is the *other* consumer of the same flag:
 /// `dirty` is what [`dirty_text_bounds`](super::dirty_text_bounds) unions into
 /// the incremental redraw scissor, so a line that changed with the flag unset
-/// is shaped correctly and then clipped out of the region that gets redrawn —
+/// is shaped correctly and then clipped out of the region that gets redrawn,
 /// which looks identical on screen and has a completely different cause.
 ///
 /// Absent in `--release` builds.
@@ -225,15 +225,15 @@ fn assert_dirty_flag_consistency(hash_changed: bool, line_dirty: bool) {
     assert!(
         !hash_changed || line_dirty,
         "a text primitive changed while its upstream dirty flag stayed unset. \
-         The glyphs themselves are still correct — shaping is content-addressed \
-         — but `dirty` is also what builds the incremental redraw region, so \
+         The glyphs themselves are still correct, shaping is content-addressed \
+         - but `dirty` is also what builds the incremental redraw region, so \
          this line may not be repainted where it changed."
     );
 }
 
 /// The frame-wide facts pass 1 needs, so
-/// [`shape_range`](TextGlyphPipeline::shape_range) can be called twice — once
-/// per owner — without repeating three arguments and risking their drifting
+/// [`shape_range`](TextGlyphPipeline::shape_range) can be called twice, once
+/// per owner, without repeating three arguments and risking their drifting
 /// apart between the two calls.
 #[derive(Clone, Copy)]
 struct ShapePass {
@@ -256,13 +256,13 @@ struct ShapePass {
 /// once in [`EncoderSubsystem::init`] and driven frame-by-frame by
 /// [`prepare`](TextGlyphPipeline::prepare) + [`render`](TextGlyphPipeline::render).
 pub struct TextGlyphPipeline {
-    /// glyphon font system — owns the loaded font data and shaped buffers.
+    /// glyphon font system, owns the loaded font data and shaped buffers.
     font_system: FontSystem,
-    /// glyphon swash cache — rasterises shaped glyphs on demand.
+    /// glyphon swash cache, rasterises shaped glyphs on demand.
     swash_cache: SwashCache,
-    /// glyphon glyph atlas — GPU texture containing rasterised glyphs.
+    /// glyphon glyph atlas, GPU texture containing rasterised glyphs.
     atlas: TextAtlas,
-    /// glyphon viewport — maps logical → physical pixels for the render pass.
+    /// glyphon viewport, maps logical → physical pixels for the render pass.
     viewport: Viewport,
     /// glyphon renderers, **one per z-layer** (RFC-0017 layered draw batches),
     /// all sharing `atlas`/`viewport`/`font_system`/`swash_cache` above. Grown
@@ -273,12 +273,12 @@ pub struct TextGlyphPipeline {
     /// Per-line cache: shaped buffers and content hashes.
     ///
     /// Index-aligned with the **full** `text_lines` slice passed to `prepare`
-    /// — *global* across layers, so layering never re-shapes a line.
+    ///, *global* across layers, so layering never re-shapes a line.
     /// Entries are added as new lines appear and never removed (Phase 1).
     cache: Vec<CachedLine>,
     /// How many lines the last [`prepare`](Self::prepare) actually re-shaped.
     ///
-    /// Read, not inferred — the same principle as the statusline's
+    /// Read, not inferred, the same principle as the statusline's
     /// `retained N/64`. "Is the glyph cache working?" is otherwise only
     /// answerable by timing, and a number that has to be inferred from a
     /// stopwatch is a number nobody checks. Surfaced on the `encode.glyphs`
@@ -293,7 +293,7 @@ impl TextGlyphPipeline {
     /// Initialises all glyphon resources in the correct order:
     /// `Cache` → `TextAtlas` → `Viewport` → `TextRenderer`. This sequence is
     /// wrapped in a single `Device::push_error_scope` / `pop_error_scope`
-    /// pair (RFC §8) — glyphon's constructors are opaque to byard-core, but
+    /// pair (RFC §8), glyphon's constructors are opaque to byard-core, but
     /// an error scope captures any validation error raised on `device`
     /// during the scope regardless of which crate triggered it, so the
     /// guarantee holds even though byard-core never calls
@@ -320,7 +320,7 @@ impl TextGlyphPipeline {
         let viewport = Viewport::new(device, &glyph_cache);
         // Enable the same draw-order depth state as the box/texture pipelines so
         // glyphon's text participates in cross-pass paint ordering (RFC-0011)
-        // instead of always drawing on top. This first renderer is layer 0 —
+        // instead of always drawing on top. This first renderer is layer 0,
         // the only one a frame without overlays ever touches; `prepare` grows
         // the vec on demand when a frame carries more z-layers.
         let renderer = TextRenderer::new(
@@ -362,7 +362,7 @@ impl TextGlyphPipeline {
     /// Uploads updated viewport dimensions to the glyphon `Viewport`.
     ///
     /// Must be called whenever the surface is resized and before the next
-    /// `prepare`. The `phys_w`/`phys_h` pair is in **physical pixels** —
+    /// `prepare`. The `phys_w`/`phys_h` pair is in **physical pixels**,
     /// glyphon's `Resolution` always works in physical pixels.
     pub fn update_resolution(&mut self, queue: &wgpu::Queue, phys_w: u32, phys_h: u32) {
         self.viewport.update(
@@ -396,20 +396,20 @@ impl TextGlyphPipeline {
     /// `&entry.buffer` (for the `TextArea` slice). Three sequential passes solve
     /// this cleanly:
     ///
-    /// 1. **Mutation pass** — mutably borrows `self.cache` and
+    /// 1. **Mutation pass**, mutably borrows `self.cache` and
     ///    `self.font_system` to grow the cache and re-shape dirty buffers.
-    /// 2. **Collection pass** — immutably borrows `self.cache` to build a
+    /// 2. **Collection pass**, immutably borrows `self.cache` to build a
     ///    `Vec<TextArea<'_>>` holding `&entry.buffer` references.
-    /// 3. **Prepare pass** — borrows `self.renderers`, `self.font_system`,
-    ///    `self.atlas`, `self.viewport`, `self.swash_cache` — all distinct
+    /// 3. **Prepare pass**, borrows `self.renderers`, `self.font_system`,
+    ///    `self.atlas`, `self.viewport`, `self.swash_cache`, all distinct
     ///    from `self.cache`, which is already borrowed by `text_areas`.
     ///
     /// Passes 2–3 run once per layer over that layer's subrange; every
     /// renderer is re-prepared each call (an empty range clears its layer's
-    /// previous glyph buffer — required, or a text line that moved layers
+    /// previous glyph buffer, required, or a text line that moved layers
     /// would ghost in both).
     ///
-    /// ## `dev_text_start` — whose shaping is this?
+    /// ## `dev_text_start`, whose shaping is this?
     ///
     /// The index at or after which `text_lines` belongs to the dev runner's own
     /// surfaces rather than to the app (`RenderFrame::dev_text_start`); pass
@@ -448,7 +448,7 @@ impl TextGlyphPipeline {
         //
         // Each CachedLine is grown lazily (push when missing) rather than
         // resize_with so the closure does not need to capture &mut font_system
-        // at the same time as &mut cache — which would be a double borrow.
+        // at the same time as &mut cache, which would be a double borrow.
         self.reshaped = 0;
         let preexisting_len = self.cache.len();
         // # A pool whose length changed is not index-comparable
@@ -461,7 +461,7 @@ impl TextGlyphPipeline {
         // A length change breaks it. Mount a paragraph in the middle of a
         // column and every line after it shifts down one index: each of those
         // indices now holds a different element, whose producer has truthfully
-        // reported it unchanged — because it *is* unchanged, at its own
+        // reported it unchanged, because it *is* unchanged, at its own
         // position in the tree. Index-wise it is entirely different text, and
         // the cached buffer at that index would be drawn as-is.
         //
@@ -469,13 +469,13 @@ impl TextGlyphPipeline {
         // pool, the shifted indices usually landed beyond the cache and were
         // taken as `is_new`, which reshapes unconditionally and hides it. The
         // in-window HUD made the cache long enough for them to land *inside*
-        // it, which is how it surfaced — as an intermittent debug assertion,
+        // it, which is how it surfaced, as an intermittent debug assertion,
         // and in release as silently stale text.
         //
         // So a length change reshapes everything. The frame is being fully
         // redrawn anyway on such a frame (`needs_full_redraw_this_frame`
         // includes exactly this condition), so this adds no cost class that
-        // was not already being paid — and it is the only answer available
+        // was not already being paid, and it is the only answer available
         // here, because "which index shifted" is not knowable from two
         // lengths.
         let length_changed = preexisting_len != text_lines.len();
@@ -485,7 +485,7 @@ impl TextGlyphPipeline {
             self.cache.push(CachedLine {
                 buffer,
                 // No buffer has been shaped for this entry yet. The value is
-                // never compared — `is_new` forces the shape below — but it is
+                // never compared, `is_new` forces the shape below, but it is
                 // set to a marker rather than to a plausible key so a future
                 // reader cannot mistake it for one.
                 shape_key: 0,
@@ -528,8 +528,8 @@ impl TextGlyphPipeline {
         }
         self.renderers.truncate(layer_count);
 
-        // A missing/empty partition means "everything is layer 0" — the
-        // ordinary frame — expressed as one full-slice range.
+        // A missing/empty partition means "everything is layer 0", the
+        // ordinary frame, expressed as one full-slice range.
         let full_range = 0..text_lines.len();
         let ranges: &[std::ops::Range<usize>] = if layer_ranges.is_empty() {
             std::slice::from_ref(&full_range)
@@ -540,7 +540,7 @@ impl TextGlyphPipeline {
         // ── Passes 2 + 3, once per layer ──────────────────────────────────────
         for (renderer, range) in self.renderers.iter_mut().zip(ranges) {
             // Clamp defensively: a malformed range must never panic the
-            // render thread — worst case a line draws in the wrong layer.
+            // render thread, worst case a line draws in the wrong layer.
             let start = range.start.min(text_lines.len());
             let end = range.end.clamp(start, text_lines.len());
 
@@ -561,7 +561,7 @@ impl TextGlyphPipeline {
             // ── Pass 2: collect immutable TextArea refs for this layer ────────
             //
             // A free function over `&self.cache` (not a `&self` method) so the
-            // returned borrow is of the `cache` field alone — a method would
+            // returned borrow is of the `cache` field alone, a method would
             // freeze all of `self` and collide with the `&mut` field borrows
             // pass 3 needs.
             let text_areas = collect_layer_text_areas(
@@ -584,7 +584,7 @@ impl TextGlyphPipeline {
             // depth-sorted against solids/decorated/textures instead of always
             // painting on top (RFC-0011 cross-pass paint order). A missing/
             // out-of-range depth falls back to the far plane. An empty layer
-            // still prepares — that is what clears its renderer's previous
+            // still prepares, that is what clears its renderer's previous
             // glyph buffer.
             renderer
                 .prepare_with_depth(
@@ -624,7 +624,7 @@ impl TextGlyphPipeline {
         for i in range {
             let line = &text_lines[i];
             // A line beyond the cache's previous length has no shaped buffer
-            // yet — it must always be shaped on its first appearance,
+            // yet, it must always be shaped on its first appearance,
             // whatever its key compares equal to. (An all-zero key on a fresh
             // entry could coincide with a real hash; "new" is detected
             // structurally rather than left to a sentinel value.)
@@ -647,7 +647,7 @@ impl TextGlyphPipeline {
             }
 
             if comparable && !needs_reshape(pass.viewport_dirty, key != entry.shape_key) {
-                continue; // byte-identical glyph run — the cached buffer stands
+                continue; // byte-identical glyph run, the cached buffer stands
             }
             entry.shape_key = key;
             self.reshaped += 1;
@@ -685,14 +685,14 @@ impl TextGlyphPipeline {
     /// Must be called after that layer's box/texture/vector draws, inside the
     /// same `wgpu::RenderPass`. On TBDR architectures (Apple Silicon), keeping
     /// every layer in one pass eliminates a tile-buffer flush. A `layer` with
-    /// no renderer (out of range — e.g. the frame carries more layer marks
+    /// no renderer (out of range, e.g. the frame carries more layer marks
     /// than the last `prepare` saw) is a no-op rather than an error, so a
     /// racing layer-count change can never crash the render thread.
     ///
     /// # Errors
     ///
     /// Returns [`ByardError::TextRender`] if glyphon's `render` fails (e.g.
-    /// atlas overflow — rare after a successful `prepare`).
+    /// atlas overflow, rare after a successful `prepare`).
     pub fn render_layer<'pass>(
         &'pass self,
         render_pass: &mut wgpu::RenderPass<'pass>,
@@ -708,7 +708,7 @@ impl TextGlyphPipeline {
 }
 
 /// Pass 2 of [`TextGlyphPipeline::prepare`]: builds one z-layer's
-/// `TextArea`s — the `range` subslice of `text_lines`, each referencing its
+/// `TextArea`s, the `range` subslice of `text_lines`, each referencing its
 /// *globally* cached shaped buffer (index-aligned with the full slice, like
 /// `clips`/`text_clips`).
 ///
@@ -744,9 +744,9 @@ fn collect_layer_text_areas<'cache>(
                 // pixels (see EncoderSubsystem::update_viewport), but
                 // TextLine.x/y are authored in logical pixels like every
                 // other public coordinate in this crate. cosmic-text's
-                // glyph positioning does not rescale this offset — only
+                // glyph positioning does not rescale this offset, only
                 // the buffer's own shaped glyph extents are scaled by
-                // `scale` — so `left`/`top` must already be physical
+                // `scale`, so `left`/`top` must already be physical
                 // pixels or text lands at `logical / scale_factor`,
                 // visibly drifting toward the origin on HiDPI displays.
                 left: line.x * scale_factor,
@@ -754,7 +754,7 @@ fn collect_layer_text_areas<'cache>(
                 scale: scale_factor,
                 // Content clip (RFC-0005 `ScrollView`): a line inside a
                 // scroll viewport is clipped to it via glyphon's own
-                // `TextBounds` (physical px) — the clean, per-area way to
+                // `TextBounds` (physical px), the clean, per-area way to
                 // clip text without a render-pass scissor. Unclipped
                 // lines stay unbounded.
                 bounds: text_clips
@@ -783,7 +783,7 @@ fn collect_layer_text_areas<'cache>(
 // `shape_key`, `needs_reshape` and `assert_dirty_flag_consistency` are
 // extracted as pure, glyphon/wgpu-free functions specifically so the re-shape
 // decision can be exercised deterministically here, without a real
-// `wgpu::Device` — the same CPU-mirror-of-decision-logic style already used
+// `wgpu::Device`, the same CPU-mirror-of-decision-logic style already used
 // by `encoder::mod`'s `cpu_sd_rounded_box` tests.
 #[cfg(test)]
 mod tests {
@@ -845,8 +845,8 @@ mod tests {
     #[test]
     fn a_colour_change_alone_never_re_shapes() {
         // Colour is applied per-`TextArea`, so it provably cannot alter a
-        // glyph. The whole INV-24 argument — a paint-class change never
-        // touches layout — is only true if the cache key agrees.
+        // glyph. The whole INV-24 argument, a paint-class change never
+        // touches layout, is only true if the cache key agrees.
         let before = shape_key("tap me", 16.0, None);
         let after = shape_key("tap me", 16.0, None);
         assert_eq!(before, after);
@@ -857,7 +857,7 @@ mod tests {
     fn a_forgotten_dirty_flag_can_no_longer_leave_a_line_stale() {
         // The old gate was `viewport_dirty || line.dirty`, so a producer that
         // changed the text and reported `dirty: false` rendered the previous
-        // run — in release, silently. The content is now the authority, and
+        // run, in release, silently. The content is now the authority, and
         // the flag is not consulted at all.
         let cached = shape_key("before", 14.0, None);
         let this_frame = shape_key("after", 14.0, None);
@@ -874,8 +874,8 @@ mod tests {
     fn a_length_change_makes_every_index_unstable() {
         // Mounting a paragraph mid-column shifts every line after it down one
         // index. Each of those indices now holds a different element whose
-        // producer truthfully reports it unchanged — it *is* unchanged at its
-        // own position in the tree — so index-wise comparison would draw the
+        // producer truthfully reports it unchanged, it *is* unchanged at its
+        // own position in the tree, so index-wise comparison would draw the
         // previous occupant's shaped buffer.
         assert!(!index_is_identity_stable(false, true));
         assert!(!index_is_identity_stable(true, true));
@@ -906,7 +906,7 @@ mod tests {
     #[test]
     #[cfg(debug_assertions)]
     fn consistency_check_passes_when_hash_unchanged_but_dirty_anyway() {
-        // Over-marking dirty is wasteful, never unsound — must not panic.
+        // Over-marking dirty is wasteful, never unsound, must not panic.
         assert_dirty_flag_consistency(false, true);
     }
 

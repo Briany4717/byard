@@ -1,11 +1,11 @@
-# RFC-0026: Navigation & Routing — stacks, transitions, deep linking
+# RFC-0026: Navigation & Routing, stacks, transitions, deep linking
 
-- **Status:** Active — implemented; §6's system back button awaits a mobile platform host
-- **Status note (2026-07-26):** Shipped: both intrinsics (`NavStack`, `NavHost`), the `route "/detail/:id"` / `tab "home"` sub-syntax with compile-time pattern validation, the `navigate`/`back`/`replace` actions over a reactive `var`, the four transitions, state preservation, `max_depth` guarding, `route_change`, Cupertino `swipe_back`, and deep linking via `Interpreter::apply_deep_link` (`byard dev --deep-link <url>`). §6's *system* back button is the one deferral and it is not a design gap: the `back` action it would call exists and `swipe_back` already drives it — what is missing is a platform host that delivers an Android hardware/gesture back event, and the only host today is desktop `winit`. Shared-element transitions remain where RFC-0026 put them, under future possibilities.
+- **Status:** Active, implemented; §6's system back button awaits a mobile platform host
+- **Status note (2026-07-26):** Shipped: both intrinsics (`NavStack`, `NavHost`), the `route "/detail/:id"` / `tab "home"` sub-syntax with compile-time pattern validation, the `navigate`/`back`/`replace` actions over a reactive `var`, the four transitions, state preservation, `max_depth` guarding, `route_change`, Cupertino `swipe_back`, and deep linking via `Interpreter::apply_deep_link` (`byard dev --deep-link <url>`). §6's *system* back button is the one deferral and it is not a design gap: the `back` action it would call exists and `swipe_back` already drives it, what is missing is a platform host that delivers an Android hardware/gesture back event, and the only host today is desktop `winit`. Shared-element transitions remain where RFC-0026 put them, under future possibilities.
 - **Author(s):** Briany4717
 - **Created:** 2026-07-10
 - **Last updated:** 2026-07-10
-- **Depends on:** RFC-0001 (§2.1 ViewArena, §5.1 logic thread), RFC-0002 (`when`/`for` structural effects, `var`/`inject`), RFC-0003 (events, no widget references), RFC-0007 (user-view instantiation), RFC-0010 (animations — transition curves), RFC-0011 (transforms — slide/fade transitions), RFC-0017 (overlay system — modal navigation, bottom sheets), RFC-0019 (callback props — navigation action forwarding).
+- **Depends on:** RFC-0001 (§2.1 ViewArena, §5.1 logic thread), RFC-0002 (`when`/`for` structural effects, `var`/`inject`), RFC-0003 (events, no widget references), RFC-0007 (user-view instantiation), RFC-0010 (animations, transition curves), RFC-0011 (transforms, slide/fade transitions), RFC-0017 (overlay system, modal navigation, bottom sheets), RFC-0019 (callback props, navigation action forwarding).
 - **Enables:** Multi-screen apps with back navigation, tab-based layouts, deep linking from OS intents, shared-element (hero) transitions. Essential for any non-trivial Material or Cupertino application.
 
 ---
@@ -16,7 +16,7 @@ Add a **declarative navigation model** with three primitives: `NavStack` (a push
 pop stack of Views with animated transitions), `NavHost` (a route-based container
 that maps URL-like paths to Views), and navigation actions (`navigate`, `back`,
 `replace`) exposed as functions callable from event handlers. Navigation state is
-a reactive `var` — there are no imperative navigation controllers, no route
+a reactive `var`, there are no imperative navigation controllers, no route
 objects to hold, no widget references.
 
 ```byld
@@ -34,7 +34,7 @@ View App() {
 ## Motivation
 
 Every real-world mobile app has multiple screens. Today, a Byard app can only
-show one View tree — there is no way to push a detail screen, go back, or
+show one View tree, there is no way to push a detail screen, go back, or
 deep-link from an OS intent. `byard-material`'s `NavigationBar` and
 `NavigationDrawer` render the chrome but can't actually navigate anywhere.
 
@@ -46,14 +46,14 @@ Both Material and Cupertino have deeply ingrained navigation patterns:
   swipe-back gesture), tab bar, modal presentation.
 
 Without framework-level navigation, developers would need to build it from
-`when` blocks and manual `var` management — error-prone, no transitions, no
+`when` blocks and manual `var` management, error-prone, no transitions, no
 deep linking, no back-button integration.
 
 ---
 
 ## Guide-level explanation
 
-### `NavStack` — push/pop navigation
+### `NavStack`, push/pop navigation
 
 ```byld
 View App() {
@@ -112,7 +112,7 @@ Built-in transitions:
 | `fade` | cross-fade between outgoing and incoming |
 | `none` | instant swap |
 
-Transitions use RFC-0010's animation system — the slide is a `translate` with
+Transitions use RFC-0010's animation system, the slide is a `translate` with
 `anim.spring()`, the fade is `opacity` with `anim.linear(200ms)`. Custom
 transitions are a future possibility.
 
@@ -145,7 +145,7 @@ View App() {
 ```
 
 `NavHost` shows one child at a time based on `active`. Unlike `NavStack`, there
-is no stack history — switching tabs is a flat swap with a cross-fade transition.
+is no stack history, switching tabs is a flat swap with a cross-fade transition.
 Each tab's state is **preserved** (not unmounted) when switching away.
 
 ### Deep linking
@@ -182,10 +182,10 @@ RFC-0010).
 ### 1. `NavStack` intrinsic
 
 - **Content:** none. **Children:** `route` blocks only.
-- **Props:** `path: Str` (reflected — current route path), `transition: Transition`
+- **Props:** `path: Str` (reflected, current route path), `transition: Transition`
   (default `slide`), `swipe_back: Bool` (default `false`), `deep_link: Bool`
   (default `false`).
-- **Events:** `route_change(e: ChangeEvent<Str>)` — fires after navigation settles.
+- **Events:** `route_change(e: ChangeEvent<Str>)`, fires after navigation settles.
 - **Pipeline:** manages a stack of View subtrees, two of which are simultaneously
   alive during a transition (the outgoing and incoming views).
 
@@ -201,7 +201,7 @@ struct RouteNode {
 }
 ```
 
-Matching is O(depth of path) — path segments are walked against the trie.
+Matching is O(depth of path), path segments are walked against the trie.
 Dynamic segments are extracted into a `Params` map.
 
 ### 3. Stack management
@@ -259,7 +259,7 @@ is either preserved (push) or discarded (pop) and removed from rendering.
 
 On Android, the hardware/gesture back button sets `navPath` to the previous
 stack entry's path. On iOS, the swipe-back gesture (if enabled) does the same.
-On desktop, there is no system back button — the app provides its own back
+On desktop, there is no system back button, the app provides its own back
 navigation through UI elements.
 
 The back action is:
@@ -276,10 +276,10 @@ fn handle_back(stack: &mut NavStackState) {
 
 ### 7. `NavHost` (tab container)
 
-Simpler than `NavStack` — no stack, no transitions by default:
+Simpler than `NavStack`, no stack, no transitions by default:
 
 - **Children:** `tab "name" { ... }` blocks.
-- **Props:** `active: Str` (reflected — current tab name).
+- **Props:** `active: Str` (reflected, current tab name).
 - **Behavior:** shows only the `active` tab's View tree. All tabs are
   instantiated on mount and preserved. Switching fades/slides between tabs.
 
@@ -297,7 +297,7 @@ Simpler than `NavStack` — no stack, no transitions by default:
   ~300ms. On low-end devices, this may cause frame drops. Mitigation: `none`
   transition for performance-critical paths.
 - **Deep linking requires manifest integration.** The engine must register URL
-  schemes with the OS — platform-specific code per target (Android manifest,
+  schemes with the OS, platform-specific code per target (Android manifest,
   iOS Info.plist, desktop URI handler).
 
 ---
@@ -305,7 +305,7 @@ Simpler than `NavStack` — no stack, no transitions by default:
 ## Rationale and alternatives
 
 **Why `var` path strings, not a navigation object?** RFC-0003 forbids widget
-references. A navigation "controller" would be a mutable reference — exactly
+references. A navigation "controller" would be a mutable reference, exactly
 what Byard eliminates. A `var navPath` is a reactive string: setting it triggers
 navigation. This is the SwiftUI `NavigationPath` model adapted to Byard's
 reference-free world.
@@ -348,7 +348,7 @@ tab switch as a stack push) breaks the mental model and the back-button contract
     (`:id`, `:uid`, `:slug`) resolve to `Str`. The View receiving the param
     parses as needed (`let id_num = Int(params.id)`). Typed params (`:id(Int)`)
     would require runtime type-checking in the route trie and error handling
-    for mismatches — complexity with minimal benefit since the parse happens
+    for mismatches, complexity with minimal benefit since the parse happens
     one line later anyway. Revisit if the type system gains enum route params.
   - [x] **Nested NavStacks.** **Supported.** Each NavStack manages its own
     stack independently. A tab containing a NavStack:
@@ -376,7 +376,7 @@ tab switch as a stack push) breaks the mental model and the back-button contract
   - [x] **Memory pressure.** Warn at **10 stack depth** via
     `PerfWarning::DeepNavStack`. Above 10, the engine still works but the
     warning flags likely navigation bugs (forgetting to pop, infinite push
-    loops). Configurable via `NavStack(max_depth: N)` prop — set to 0 to
+    loops). Configurable via `NavStack(max_depth: N)` prop, set to 0 to
     disable the warning. At `max_depth`, further pushes are rejected with a
     runtime warning (not a crash).
   - [x] **Route guards.** **No special guard API.** Route access control is
@@ -387,7 +387,7 @@ tab switch as a stack push) breaks the mental model and the back-button contract
         else { LoginPage() }
     }
     ```
-    This is the declarative Byard way — no imperative `canActivate()` hooks,
+    This is the declarative Byard way, no imperative `canActivate()` hooks,
     no guard middleware. The `when` block already handles conditional rendering,
     and the navigation state (`navPath`) can be redirected from the `else`
     branch (`navPath = "/login"`).
@@ -397,11 +397,11 @@ tab switch as a stack push) breaks the mental model and the back-button contract
 ## Future possibilities
 
 - **Shared-element transitions** (hero animations) between routes.
-- **Route middleware** — interceptors that run before a route mounts (auth
+- **Route middleware**, interceptors that run before a route mounts (auth
   checks, analytics, data prefetching).
-- **Animated route transitions API** — developer-defined transition animations
+- **Animated route transitions API**, developer-defined transition animations
   (custom spring parameters, directional slides, circular reveals).
-- **Browser history integration** — on web targets, sync `navPath` with
+- **Browser history integration**, on web targets, sync `navPath` with
   `window.history` for browser back/forward.
-- **Lazy route loading** — instantiate a route's View tree only when first
+- **Lazy route loading**, instantiate a route's View tree only when first
   navigated to, not at mount time.

@@ -1,6 +1,6 @@
 //! Guards the committed RFC-0018 `RadioButton` example through the real `byard`
-//! binary: the `radio_button` project — a three-option group sharing one
-//! `bind:` var, with a reactive "Selected: …" line — must check clean (parse,
+//! binary: the `radio_button` project, a three-option group sharing one
+//! `bind:` var, with a reactive "Selected: …" line, must check clean (parse,
 //! type-check, lower, and validate the intrinsic contract with no diagnostics).
 
 use std::path::PathBuf;

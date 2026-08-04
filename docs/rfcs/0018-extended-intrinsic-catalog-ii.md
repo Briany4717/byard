@@ -1,10 +1,10 @@
-# RFC-0018: Extended Intrinsic Catalog II — Checkbox, RadioButton, Grid, ZStack
+# RFC-0018: Extended Intrinsic Catalog II, Checkbox, RadioButton, Grid, ZStack
 
-- **Status:** Draft
+- **Status:** Active, implemented. `Checkbox`, `RadioButton`, `Grid`, and `ZStack` are registered intrinsics with committed examples and tests (verified against the tree 2026-08-03; see `support/STATUS_RFCS.md`).
 - **Author(s):** Briany4717
 - **Created:** 2026-07-10
 - **Last updated:** 2026-07-10
-- **Depends on:** RFC-0001 (§3.1 pipelines, §4.1 Taffy), RFC-0002 (D4 attribute contract, D9 types), RFC-0003 (events, reflected props, `bind:`), RFC-0005 (intrinsic catalog — this extends it), RFC-0012 (style states — `checked`/`selected` states from RFC-0024).
+- **Depends on:** RFC-0001 (§3.1 pipelines, §4.1 Taffy), RFC-0002 (D4 attribute contract, D9 types), RFC-0003 (events, reflected props, `bind:`), RFC-0005 (intrinsic catalog, this extends it), RFC-0012 (style states, `checked`/`selected` states from RFC-0024).
 - **Amends:** RFC-0005 (adds four new intrinsics to the closed table).
 - **Enables:** Native checkbox/radio in `byard-material` and `byard-cupertino`, CSS-grid layouts, explicit z-layering within the layout tree.
 
@@ -26,7 +26,7 @@ Box+Text workarounds.
 
 ### Checkbox and RadioButton
 
-The byard-material package currently fakes these with `Box` + `Text("check")` —
+The byard-material package currently fakes these with `Box` + `Text("check")`, 
 visually passable but fundamentally broken: there is no `checked` state for the
 engine to track, no accessibility semantics, no platform-native interaction
 pattern (keyboard Space to toggle, arrow keys to move within a radio group), and
@@ -37,8 +37,8 @@ checkboxes and radios as first-class controls. They are as fundamental as
 ### Grid
 
 `Column` and `Row` (flex-direction presets of `Box`) handle one-dimensional
-layouts. Two-dimensional layouts — dashboard grids, image galleries, form layouts
-with label+input columns — require either deep nesting (Column of Rows, the
+layouts. Two-dimensional layouts, dashboard grids, image galleries, form layouts
+with label+input columns, require either deep nesting (Column of Rows, the
 Flutter "wrapper hell" RFC-0001 rejects) or a proper grid. Taffy already supports
 CSS-grid; the intrinsic surface is the missing piece.
 
@@ -46,7 +46,7 @@ CSS-grid; the intrinsic surface is the missing piece.
 
 `Column`/`Row` place children sequentially. Overlapping children (a badge on top
 of an avatar, a play button centered on a thumbnail, a floating action button
-above content) require z-layering *within* the layout tree — not a full overlay
+above content) require z-layering *within* the layout tree, not a full overlay
 escape (RFC-0017) but just "these children occupy the same space, last-child on
 top." SwiftUI's `ZStack` and Flutter's `Stack` serve this role.
 
@@ -54,7 +54,7 @@ top." SwiftUI's `ZStack` and Flutter's `Stack` serve this role.
 
 ## Reference-level explanation
 
-### 1. `Checkbox` — boolean selection with distinct visual
+### 1. `Checkbox`, boolean selection with distinct visual
 
 - **Content:** none. **Children:** none.
 - **Props:** Layout + Decoration + `indeterminate: Bool` (default `false`).
@@ -63,7 +63,7 @@ top." SwiftUI's `ZStack` and Flutter's `Stack` serve this role.
 - **Events:** `change(e: ChangeEvent<Bool>)`, all pointer + focus; **focusable by
   default**. Space key toggles.
 - **Pipeline:** `DecoratedBox` (container square) + `VectorMSDF` or `TextGlyph`
-  (the checkmark path). The checkmark is an engine-owned vector asset — **not** a
+  (the checkmark path). The checkmark is an engine-owned vector asset, **not** a
   design-system icon (the engine draws the check; the design system themes the
   container colors via style states).
 - **Accessibility role:** `checkbox`.
@@ -72,12 +72,12 @@ Interaction model: tap or Space toggles `value` → `change` event → `bind:`
 write-back (RFC-0003 E1). Identical pattern to `Toggle` but with checkbox
 semantics and a square visual.
 
-### 2. `RadioButton` — single-selection within a group
+### 2. `RadioButton`, single-selection within a group
 
 - **Content:** none. **Children:** none.
-- **Props:** Layout + Decoration + `value: Str` (required — the value this button
+- **Props:** Layout + Decoration + `value: Str` (required, the value this button
   represents within the group).
-- **Reflected (two-way):** `bind: Str` (required — binds to the group's shared
+- **Reflected (two-way):** `bind: Str` (required, binds to the group's shared
   `var`). The RadioButton is selected when `bind == value`.
 - **States:** RFC-0024's `selected` pseudo-state is driven by `bind == value`.
 - **Events:** `change(e: ChangeEvent<Str>)`, all pointer + focus; **focusable**.
@@ -99,11 +99,11 @@ RadioButton(value: "other", bind: choice)  // selected when choice == "other"
 When one is tapped (or selected via keyboard), the engine writes its `value`
 to the bound var (`choice = "work"`). Because all RadioButtons in the group
 read the same var, the previously selected one deselects reactively via
-Mark-and-Pull — no explicit mutual-exclusion logic needed. This is the
+Mark-and-Pull, no explicit mutual-exclusion logic needed. This is the
 standard group-var model (SwiftUI Picker, Flutter RadioListTile `groupValue`,
 HTML `<input type="radio" name="group">`).
 
-### 3. `Grid` — CSS-grid layout
+### 3. `Grid`, CSS-grid layout
 
 - **Content:** none. **Children:** any.
 - **Props:** Layout + Decoration +
@@ -116,7 +116,7 @@ HTML `<input type="radio" name="group">`).
 | `col_gap` | `Int` | from `gap` | column gap override |
 | `row_gap` | `Int` | from `gap` | row gap override |
 
-`GridTemplate` syntax: `"1fr 2fr 100"` or `"repeat(3, 1fr)"` — a string parsed
+`GridTemplate` syntax: `"1fr 2fr 100"` or `"repeat(3, 1fr)"`, a string parsed
 at compile time into Taffy's `GridTrackVec`. Invalid syntax is a
 `CompileError::InvalidGridTemplate`.
 
@@ -132,10 +132,10 @@ at compile time into Taffy's `GridTrackVec`. Invalid syntax is a
 - **Events:** all pointer; focusable if events registered.
 - **Pipeline:** `DecoratedBox` (background, same as `Box`).
 
-Grid lowers directly to Taffy's CSS-grid mode — the layout engine already
+Grid lowers directly to Taffy's CSS-grid mode, the layout engine already
 supports it; this intrinsic exposes the surface.
 
-### 4. `ZStack` — overlapping children
+### 4. `ZStack`, overlapping children
 
 - **Content:** none. **Children:** any.
 - **Props:** Layout + Decoration + `alignment: Align2D` (default `center`).
@@ -165,7 +165,7 @@ child via `align_self`).
   lowering in `interp/intrinsics.rs`, adding to the validation surface. The
   catalog grows from 12 to 16.
 - **`RadioButton` group coordination** adds intra-tick state management that
-  crosses element boundaries — the first time the interpreter does this (Toggle
+  crosses element boundaries, the first time the interpreter does this (Toggle
   and Checkbox are self-contained).
 - **`Grid` template string parsing** adds a mini-parser inside the attribute
   validator. Invalid templates must produce clear diagnostics.
@@ -185,11 +185,11 @@ failures that `byard-material`'s Box+Text workaround demonstrates.
 **Why `Grid` instead of nested `Row`/`Column`?** Nested flex is the "wrapper
 hell" RFC-0001 §Motivation explicitly rejects. A grid with `columns: "1fr 2fr"`
 replaces a `Row` containing a `Column(grow: 1)` and a `Column(grow: 2)` and
-their inner content — fewer nodes, clearer intent, and proper 2D alignment.
+their inner content, fewer nodes, clearer intent, and proper 2D alignment.
 
 **Why `ZStack` instead of `Box` with `position: absolute` children?** `Box`
 children are flex items. Making some absolute would require a per-child
-`position` prop that changes Taffy's layout mode — error-prone and ambiguous.
+`position` prop that changes Taffy's layout mode, error-prone and ambiguous.
 A dedicated `ZStack` makes the overlap intent explicit and keeps `Box`/`Column`/
 `Row` purely flex-based.
 
@@ -220,7 +220,7 @@ A dedicated `ZStack` makes the overlap intent explicit and keeps `Box`/`Column`/
     The engine enforces mutual exclusion: setting `choice = "work"` deselects
     "home" automatically. This is the standard model (SwiftUI Picker, Flutter
     RadioListTile groupValue, HTML radio name). The per-button Bool model is
-    rejected — it forces the developer to manually coordinate exclusion,
+    rejected, it forces the developer to manually coordinate exclusion,
     which is error-prone for 3+ options.
   - [x] **Grid auto-placement.** Implicit default. Children without explicit
     `col`/`row` props fill cells left-to-right, top-to-bottom (Taffy's
@@ -230,7 +230,7 @@ A dedicated `ZStack` makes the overlap intent explicit and keeps `Box`/`Column`/
   - [x] **ZStack sizing.** Sizes to its **largest child** (SwiftUI model).
     The ZStack's intrinsic size is `(max(child.width), max(child.height))`.
     Explicit `width`/`height` props override this. Rationale: the SwiftUI
-    model is intuitive — the stack is "as big as it needs to be" — and avoids
+    model is intuitive, the stack is "as big as it needs to be", and avoids
     forcing dimensions on every ZStack.
 
 - **During implementation:**
@@ -250,10 +250,10 @@ A dedicated `ZStack` makes the overlap intent explicit and keeps `Box`/`Column`/
 
 ## Future possibilities
 
-- **`Divider` intrinsic** — currently composed from `Box #[height: 1]` in
+- **`Divider` intrinsic**, currently composed from `Box #[height: 1]` in
   `byard-material`, could become a semantic intrinsic with theme-aware color.
-- **`Menu` / `Dialog` intrinsics** — paired with RFC-0017's overlay system,
+- **`Menu` / `Dialog` intrinsics**, paired with RFC-0017's overlay system,
   these could become semantic intrinsics with built-in dismiss behavior.
-- **`LazyGrid`** — virtualized grid that only instantiates visible cells.
-- **`RadioButton` with enum values** — `bind:` to an enum `var` instead of
+- **`LazyGrid`**, virtualized grid that only instantiates visible cells.
+- **`RadioButton` with enum values**, `bind:` to an enum `var` instead of
   per-button `Bool`s, once the type system supports enums.

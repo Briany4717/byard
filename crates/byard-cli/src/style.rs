@@ -9,7 +9,7 @@
 //!
 //! # Roles, not colours
 //!
-//! Call sites name a *role* — `p.err`, `p.metric` — never a colour, and the
+//! Call sites name a *role*, `p.err`, `p.metric`, never a colour, and the
 //! codes are the **16 base ANSI colours**, never 24-bit RGB. A terminal's
 //! palette is a preference the user set deliberately; a tool that hardcodes
 //! `#FF5555` overrides it, and looks worse on a meaningful fraction of real
@@ -20,7 +20,7 @@
 //! # Resolved once, branched never
 //!
 //! [`Palette::plain`] sets every field to `""`, so formatting code interpolates
-//! unconditionally — `write!(f, "{}{msg}{}", p.err, p.reset)` — and pays one
+//! unconditionally, `write!(f, "{}{msg}{}", p.err, p.reset)`, and pays one
 //! empty-string interpolation when colour is off. There is no `if colour` at
 //! any call site, which is the property that keeps a colour bug from being
 //! expressible (§P3).
@@ -30,8 +30,8 @@ use std::sync::OnceLock;
 
 /// Semantic roles, resolved once per process.
 ///
-/// Every field is either an ANSI SGR sequence or `""` — never anything in
-/// between — so a call site cannot tell which mode it is in and cannot get it
+/// Every field is either an ANSI SGR sequence or `""`, never anything in
+/// between, so a call site cannot tell which mode it is in and cannot get it
 /// wrong.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Palette {
@@ -69,7 +69,7 @@ impl Palette {
         }
     }
 
-    /// Every role empty — the uncoloured mode.
+    /// Every role empty, the uncoloured mode.
     #[must_use]
     pub const fn plain() -> Self {
         Self {
@@ -170,7 +170,7 @@ pub fn glyphs() -> &'static Glyphs {
 }
 
 /// The environment, behind a trait so the resolution rules are testable
-/// without mutating the process's own environment — which is a data race in a
+/// without mutating the process's own environment, which is a data race in a
 /// threaded test binary and is `unsafe` on current Rust.
 trait Env {
     fn var(&self, key: &str) -> Option<String>;
@@ -228,7 +228,7 @@ fn resolve_glyphs(env: &dyn Env) -> Glyphs {
 /// Composed line width, and the column the duration is right-aligned to.
 ///
 /// Composed, not detected: `ioctl(TIOCGWINSZ)` needs `unsafe`, and the
-/// workspace sets `unsafe_code = "deny"` — a duration column does not justify
+/// workspace sets `unsafe_code = "deny"`, a duration column does not justify
 /// an exception to a workspace-wide soundness invariant, and `terminal_size`
 /// would be a dependency for one integer (§Q7). A message longer than this
 /// simply pushes its duration right rather than wrapping, which is the
@@ -278,8 +278,8 @@ pub fn fact(key: &str, value: &str) {
     ));
 }
 
-/// The shared line shape: a 5-column prefix, the message, and — when a
-/// duration is given — a right-aligned duration column.
+/// The shared line shape: a 5-column prefix, the message, and, when a
+/// duration is given, a right-aligned duration column.
 fn line(colour: &str, glyph: &str, message: &str, duration: Option<std::time::Duration>) {
     // Through the statusline, not `println!` directly: a log write has to erase
     // the anchored line before it scrolls and repaint it afterwards, or the two
@@ -337,7 +337,7 @@ pub fn format_duration(d: std::time::Duration) -> String {
 /// Deliberately not a full `wcwidth`: nothing this CLI prints is CJK or an
 /// emoji, and a grapheme-width dependency for a duration column would be the
 /// same trade §P1 already declined. It *is* escape-aware, because that is the
-/// error that actually happens — a coloured prefix counted as its byte length
+/// error that actually happens, a coloured prefix counted as its byte length
 /// misaligns every row.
 #[must_use]
 pub fn display_width(s: &str) -> usize {
@@ -400,7 +400,7 @@ mod tests {
 
     #[test]
     fn no_color_wins_over_a_terminal() {
-        // Any value, including the empty string — that is the NO_COLOR
+        // Any value, including the empty string, that is the NO_COLOR
         // contract, and honouring only `NO_COLOR=1` is the usual way to get it
         // wrong.
         let env = FakeEnv::new(true).with("NO_COLOR", "");
@@ -530,7 +530,7 @@ mod tests {
         for (i, w) in columns.iter().enumerate() {
             assert_eq!(
                 *w, WIDTH,
-                "line {i} composed to {w} columns, not {WIDTH} — the duration column moved"
+                "line {i} composed to {w} columns, not {WIDTH}, the duration column moved"
             );
         }
     }
@@ -539,7 +539,7 @@ mod tests {
     fn colour_never_moves_a_single_column() {
         // The property that makes the alignment above survive `CLICOLOR_FORCE`:
         // escapes occupy no columns, so the coloured and uncoloured renderings
-        // of the same line must have identical *display* widths — and stripping
+        // of the same line must have identical *display* widths, and stripping
         // the escapes must give back the plain line byte for byte.
         use std::time::Duration;
         let g = Glyphs::unicode();
@@ -566,7 +566,7 @@ mod tests {
     #[test]
     fn no_color_and_a_pipe_produce_byte_identical_output() {
         // Two different reasons to turn colour off must not produce two
-        // different renderings — a diff of two logs should be empty, not full
+        // different renderings, a diff of two logs should be empty, not full
         // of invisible bytes.
         use std::time::Duration;
         let piped = resolve_palette(&FakeEnv::new(false));
@@ -586,7 +586,7 @@ mod tests {
         assert!(!render(&piped).contains('\x1b'));
     }
 
-    /// Removes every CSI sequence — the test-side inverse of the palette.
+    /// Removes every CSI sequence, the test-side inverse of the palette.
     fn strip_escapes(s: &str) -> String {
         let mut out = String::with_capacity(s.len());
         let mut chars = s.chars();

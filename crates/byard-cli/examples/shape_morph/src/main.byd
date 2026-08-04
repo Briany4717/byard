@@ -1,4 +1,4 @@
-// RFC-0031 §S9–§S10 — `ngon` and sequence morphing.
+// RFC-0031 §S9–§S10, `ngon` and sequence morphing.
 //
 // Run it (from the repo root):
 //   cd crates/byard-cli/examples/shape_morph
@@ -10,8 +10,8 @@
 // give scallops and bursts, and `corner` rounds every point and every notch.
 //
 // `morph: <scalar>` reinterprets a Canvas's shapes as a *sequence*. The scalar
-// indexes it — `floor(phase)` and `floor(phase) + 1` blended by `fract(phase)`
-// — and it wraps, so a value sweeping 0 → N returns to the first shape with no
+// indexes it, `floor(phase)` and `floor(phase) + 1` blended by `fract(phase)`
+//, and it wraps, so a value sweeping 0 → N returns to the first shape with no
 // discontinuity. Because it is an ordinary animatable scalar, every RFC-0010 /
 // RFC-0025 modifier applies with no new surface.
 //
@@ -20,7 +20,7 @@
 //   2. The loader: seven shapes, 650 ms each, one linear infinite curve. This
 //      is Material 3 Expressive's morphing loading indicator, reproduced with
 //      machinery that already shipped.
-//   3. Tap the card: a spring between two shapes — the interaction-state case.
+//   3. Tap the card: a spring between two shapes, the interaction-state case.
 //      Two members and a phase in [0, 1] is the same code path as the loader.
 //   4. Circle → 7-point star: the fields are interpolated, not the vertices, so
 //      a morph between two *different kinds* is continuous.
@@ -28,7 +28,7 @@ View Main() {
     var selected = false
 
     Column #[bg: 0x14161C, p: 32, gap: 26, width: 720] {
-        Text("ngon + morph — one shape kind and one animated scalar")
+        Text("ngon + morph, one shape kind and one animated scalar")
             #[color: 0xF2F3F5, size: 20, weight: bold]
 
         // ── 1. The vocabulary ────────────────────────────────────────────
@@ -61,7 +61,7 @@ View Main() {
             }
 
             // ── 4. Two different kinds, and a colour that rides the same
-            //       scalar — one animation rather than two that can drift.
+            //       scalar, one animation rather than two that can drift.
             Canvas #[width: 120, height: 120, bg: 0x1C1F27,
                      morph: 2.0 with anim.linear(1300ms, from: 0.0, repeat: infinite)] {
                 circle(cx: 60, cy: 60, r: 44, fill: 0x4CC38A)
@@ -70,7 +70,7 @@ View Main() {
         }
 
         // ── 3. The interaction-state case ────────────────────────────────
-        Text("tap the square — the same code path, two members and a spring")
+        Text("tap the square, the same code path, two members and a spring")
             #[color: 0x8A90A0, size: 13]
         Canvas #[width: 120, height: 120, bg: 0x1C1F27,
                  morph: selected ? 1.0 : 0.0

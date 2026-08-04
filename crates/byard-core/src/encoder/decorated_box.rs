@@ -26,7 +26,7 @@ pub struct DecoratedInstance {
     pub shadow_color: [f32; 4],
     /// `[border_width, shadow_dx, shadow_dy, shadow_blur]`.
     pub params: [f32; 4],
-    /// `[opacity, depth, shadow_spread, smooth]` — `misc.w` is the RFC-0031
+    /// `[opacity, depth, shadow_spread, smooth]`, `misc.w` is the RFC-0031
     /// §S1 corner smoothing, carried in the lane a gradient present/absent flag
     /// used to occupy. The flag was redundant: `grad_axis` is `(cos θ, sin θ,
     /// …)` for a real ramp and all-zero without one, so the shader answers the
@@ -35,7 +35,7 @@ pub struct DecoratedInstance {
     pub misc: [f32; 4],
     /// Paint-time transform translate (RFC-0011), from `d.base.transform`.
     /// Only the geometric fields (`translate`/`scale`/`rotate`/`origin`) are
-    /// read here — `d.base.transform.opacity` is **not** consulted; `misc.x`
+    /// read here, `d.base.transform.opacity` is **not** consulted; `misc.x`
     /// (above) is the authoritative opacity for decorated boxes, unchanged
     /// since M21.
     pub t_translate: [f32; 2],
@@ -51,7 +51,7 @@ pub struct DecoratedInstance {
     pub grad_mid: [f32; 4],
     /// Gradient end colour.
     pub grad_to: [f32; 4],
-    /// `[dir_x, dir_y, mid_pos, offset]` — the ramp's axis, its middle stop's
+    /// `[dir_x, dir_y, mid_pos, offset]`, the ramp's axis, its middle stop's
     /// position, and its wrapping phase shift.
     pub grad_axis: [f32; 4],
 }
@@ -120,7 +120,7 @@ impl DecoratedInstance {
 /// # Errors
 ///
 /// [`ByardError::PipelineCompilation`] if the shader or pipeline fails GPU-side
-/// validation — never a panic, never a software fallback.
+/// validation, never a panic, never a software fallback.
 pub async fn build_pipeline(
     device: &wgpu::Device,
     bind_group_layout: &wgpu::BindGroupLayout,
@@ -190,7 +190,7 @@ pub async fn build_pipeline(
 /// Draws every [`DecoratedBox`], scissored to its content clip (RFC-0005). The
 /// active GPU scissor bounds which pixels are actually touched.
 ///
-/// The whole decorated pass is **transparent geometry** — shadows (blurred, a
+/// The whole decorated pass is **transparent geometry**, shadows (blurred, a
 /// transparent fill), borders (a stroked ring over a transparent interior), and
 /// translucent fills (`opacity < 1`). Its pipeline therefore *tests* the
 /// draw-order depth buffer (so a nearer opaque surface still occludes a border
@@ -198,14 +198,14 @@ pub async fn build_pipeline(
 /// split: only opaque geometry (the `SolidBox`/`TextureSampler`/`VectorMSDF`
 /// passes) writes depth. Writing depth here would make a translucent box stamp a
 /// nearer z across its whole rect and cull every earlier-emitted primitive drawn
-/// in a later pass — most visibly all the app text beneath an overlay scrim or a
+/// in a later pass, most visibly all the app text beneath an overlay scrim or a
 /// shadow's halo, which would simply vanish (RFC-0017). Opaque fills never reach
 /// this pass; the compiler routes them to `SolidBox`, which occludes correctly.
 /// Stages this batch's instances into the frame's arena (RFC-0033 §G1).
 ///
 /// Split from [`draw`] because `wgpu` binds a buffer *range* eagerly: the
-/// arena's GPU buffer has to be final — and therefore fully staged and
-/// uploaded — before the first render pass opens.
+/// arena's GPU buffer has to be final, and therefore fully staged and
+/// uploaded, before the first render pass opens.
 pub fn stage(
     arena: &mut super::instance_arena::InstanceArena,
     scratch: &mut Vec<DecoratedInstance>,

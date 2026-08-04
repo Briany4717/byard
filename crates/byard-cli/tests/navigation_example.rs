@@ -1,7 +1,7 @@
 //! Guards the committed RFC-0026 example through the real `byard` binary: the
-//! `navigation` project — a `NavHost` of three tabs, a `NavStack` per tab with
+//! `navigation` project, a `NavHost` of three tabs, a `NavStack` per tab with
 //! `:id` route params, a catch-all, `slide`/`slide_up` transitions,
-//! `swipe_back`, `deep_link`, and the `back`/`replace` actions — must check
+//! `swipe_back`, `deep_link`, and the `back`/`replace` actions, must check
 //! clean (parse, type-check, lower, validate the intrinsic and route contracts
 //! with no diagnostics).
 

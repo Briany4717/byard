@@ -1,12 +1,12 @@
-// reactive_demo.byd — RFC-0018 structural reactivity + text wrap.
+// reactive_demo.byd, RFC-0018 structural reactivity + text wrap.
 //
 // Everything here reacts to a `var` at *runtime* (no hot-reload): tapping a
 // button flips a `var`, and the very next frame re-derives the structure:
 //
-//   • `when cond { … } else { … }`  — mounts/unmounts a subtree live.
-//   • `for item in list { … }`      — renders one row per element; growing or
+//   • `when cond { … } else { … }`, mounts/unmounts a subtree live.
+//   • `for item in list { … }`, renders one row per element; growing or
 //                                      shrinking the list adds/removes rows live.
-//   • `Text(..) #[wrap: true, width: N]` — wraps a long line onto several.
+//   • `Text(..) #[wrap: true, width: N]`, wraps a long line onto several.
 //
 // Run with:
 //   cargo run -p byard-cli -- dev crates/byard-compiler/examples/reactive_demo.byd

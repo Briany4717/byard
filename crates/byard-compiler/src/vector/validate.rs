@@ -1,7 +1,7 @@
 //! The structural complexity guardrail (RFC-0009 §2, hard error).
 //!
 //! Keeps the JIT bounded: an SVG that paints with a gradient, pattern, or
-//! filter — or one whose path segment count exceeds [`MAX_NODES`] — cannot go
+//! filter, or one whose path segment count exceeds [`MAX_NODES`], cannot go
 //! through the monochrome MSDF pipeline and must route through `Image`
 //! (`TextureSampler`) instead.
 

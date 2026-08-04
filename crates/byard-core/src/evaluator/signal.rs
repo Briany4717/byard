@@ -116,7 +116,7 @@ impl Drop for BorrowGuard<'_> {
 }
 
 /// RAII guard for exclusive borrows that also bumps `dirty_version`
-/// atomically on drop — even if the user closure panics.
+/// atomically on drop, even if the user closure panics.
 ///
 /// This guarantees that any observable mutation of the value is reflected
 /// in the version counter before control returns to the caller (whether
@@ -242,7 +242,7 @@ impl<'a, T: 'static> Signal<'a, T> {
     ///
     /// # Panics
     ///
-    /// Panics if any other borrow on the same slot is in progress — including
+    /// Panics if any other borrow on the same slot is in progress, including
     /// `read`, `write`, or `with_subscribers` via a copied handle.
     pub fn subscribe(&self, target: TargetId) {
         // SAFETY: see `read`.
@@ -311,7 +311,7 @@ impl<'a, T: 'static> Signal<'a, T> {
     /// detect duplicate registrations in debug builds. Two `Signal` handles
     /// that compare equal by this pointer refer to the same underlying slot.
     ///
-    /// The returned pointer is opaque — it must not be dereferenced.
+    /// The returned pointer is opaque, it must not be dereferenced.
     #[must_use]
     pub(crate) fn slot_ptr(self) -> *const () {
         self.slot.as_ptr().cast()
@@ -327,12 +327,12 @@ impl<'a, T: 'static> Signal<'a, T> {
     /// allocated from is not dropped before every copy of the returned
     /// handle has gone out of use. This is intended for self-referential
     /// owner types that bundle a heap-allocated (`Box`ed) arena together
-    /// with signals allocated from it, then drop both together — e.g.
+    /// with signals allocated from it, then drop both together, e.g.
     /// [`crate::engine::Engine`]'s reactive label state. Boxing the arena
     /// first is what makes this sound: the arena's heap address (and
     /// therefore the signal's slot pointer) stays stable even if the
     /// owning struct itself is moved, and `Signal<'a, T>`'s only real
-    /// payload is that address — `'a` exists purely for the borrow
+    /// payload is that address, `'a` exists purely for the borrow
     /// checker, not the runtime representation, so erasing it is a
     /// zero-cost, layout-preserving operation.
     #[must_use]
@@ -358,7 +358,7 @@ impl<T: 'static> Signal<'static, T> {
     /// satisfied outside the evaluator subsystem's own files, which is
     /// where this project keeps every `unsafe` block auditable.
     ///
-    /// Takes `arena` as a plain `&ViewArena` (not `&Box<ViewArena>` —
+    /// Takes `arena` as a plain `&ViewArena` (not `&Box<ViewArena>`,
     /// `clippy::borrowed_box` rightly flags the latter as a pointless extra
     /// indirection in a parameter type). The caller is still responsible
     /// for the same contract [`Signal::erase_lifetime`] documents: the
@@ -371,7 +371,7 @@ impl<T: 'static> Signal<'static, T> {
     pub(crate) fn new_in_boxed(arena: &ViewArena, initial: T) -> Self {
         // SAFETY: the caller is responsible for `arena` living at a stable,
         // heap-allocated address and outliving every copy of the returned
-        // handle — see the doc above.
+        // handle, see the doc above.
         unsafe { Signal::new_in(arena, initial).erase_lifetime() }
     }
 }
@@ -405,7 +405,7 @@ mod tests {
     fn new_in_boxed_reads_and_writes_normally_without_unsafe_at_the_call_site() {
         // Same pattern as `erased_lifetime_signal_reads_and_writes_normally`,
         // but through the safe wrapper that `engine::ReactiveLabel` actually
-        // calls — no `unsafe` block needed here.
+        // calls, no `unsafe` block needed here.
         let arena = Box::new(ViewArena::new());
         let signal: Signal<'static, u32> = Signal::new_in_boxed(&arena, 1);
 

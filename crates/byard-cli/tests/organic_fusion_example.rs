@@ -1,7 +1,7 @@
 //! Guards the committed RFC-0031 §S7–§S8 example through the real `byard`
-//! binary: the `organic_fusion` project — a smoothing-radius ramp, an animated
+//! binary: the `organic_fusion` project, a smoothing-radius ramp, an animated
 //! member approaching a fixed one, a fused outline drawn from the first shape's
-//! stroke, and a fused pair of `ngon`s under a paint-time transform — must
+//! stroke, and a fused pair of `ngon`s under a paint-time transform, must
 //! check clean (parse, type-check, lower, validate with no diagnostics).
 
 use std::path::PathBuf;

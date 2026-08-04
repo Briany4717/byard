@@ -1,6 +1,6 @@
 //! # Platform abstraction
 //!
-//! Defines [`PlatformHost`] — the only point of contact between the engine
+//! Defines [`PlatformHost`], the only point of contact between the engine
 //! core and a concrete windowing backend (`winit`, a future mobile host,
 //! the headless *Coreolis* embedding, etc.), per RFC-0001 §6.
 //!
@@ -34,7 +34,7 @@ use crate::ByardError;
 /// window, expressed without depending on any windowing crate's types.
 /// `width`/`height` are in **physical pixels** (e.g. winit's
 /// `window.inner_size()`); `scale_factor` is the OS-reported DPI scale (e.g.
-/// winit's `window.scale_factor()`) — see [`crate::engine`]'s module docs for
+/// winit's `window.scale_factor()`), see [`crate::engine`]'s module docs for
 /// why the engine needs both.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct WindowSize {
@@ -50,7 +50,7 @@ pub struct WindowSize {
     /// than a fixed 16.7 ms on purpose: the budget answers "will this app drop
     /// frames on *this* machine", and on a 120 Hz panel that threshold is
     /// 8.3 ms. A tool that drew its bars against 16.7 ms there would report a
-    /// comfortable frame for one that visibly stutters — lying on exactly the
+    /// comfortable frame for one that visibly stutters, lying on exactly the
     /// hardware where the frame budget matters most.
     ///
     /// `None` when the platform cannot report it, in which case the consumer
@@ -60,12 +60,12 @@ pub struct WindowSize {
 
 /// Keyboard modifier state accompanying a key event.
 ///
-/// Separate from [`InputEvent`] because it exists for exactly one consumer —
-/// the dev runner's chords (RFC-0030 §Q1) — and those are consumed *before*
+/// Separate from [`InputEvent`] because it exists for exactly one consumer,
+/// the dev runner's chords (RFC-0030 §Q1), and those are consumed *before*
 /// `dispatch_events`, so the app under test never sees them. Putting modifiers
 /// into the router's event payload would be a language-visible change made for
 /// a dev-only feature.
-// Four `bool`s is the shape of the thing being modelled — a keyboard has four
+// Four `bool`s is the shape of the thing being modelled, a keyboard has four
 // modifier keys and they are independent. A bitflags type would satisfy the
 // lint and make every call site less readable than `mods.shift`.
 #[allow(clippy::struct_excessive_bools)]
@@ -86,7 +86,7 @@ impl KeyModifiers {
     /// everywhere else.
     ///
     /// A chord rather than a bare function key because bare F-keys are
-    /// unusable as a default — macOS maps them to media controls unless the
+    /// unusable as a default, macOS maps them to media controls unless the
     /// user flipped a preference, several are claimed by Linux window
     /// managers, and, critically, a bare key *can* collide with text entry in
     /// the app under test while a `Mod+Shift` chord cannot (§Q1).
@@ -107,7 +107,7 @@ impl KeyModifiers {
 }
 
 /// A mouse/pointer button, expressed without depending on any windowing
-/// crate's types — mirrors the variants `winit::event::MouseButton` exposes
+/// crate's types, mirrors the variants `winit::event::MouseButton` exposes
 /// today, since that is the only host that currently exists.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PointerButton {
@@ -224,7 +224,7 @@ pub struct InputEvent {
 /// logic thread; [`on_redraw`](PlatformHost::on_redraw) calls
 /// [`Engine::render_latest`](crate::engine::Engine::render_latest), which
 /// reads the latest [`RenderFrame`](crate::frame::RenderFrame) from the
-/// engine's [`Relay`](crate::relay::Relay) — the logic thread never blocks
+/// engine's [`Relay`](crate::relay::Relay), the logic thread never blocks
 /// the render thread, per RFC-0001 §5.
 pub trait PlatformHost {
     /// Called once, after the host has created its window and `wgpu`
@@ -233,14 +233,14 @@ pub trait PlatformHost {
     /// `pollster::block_on` or similar, since this method is synchronous)
     /// and store the resulting `Engine`.
     ///
-    /// `instance` is borrowed only for the duration of this call — adapter
+    /// `instance` is borrowed only for the duration of this call, adapter
     /// and device creation must happen before it returns; `surface` is
     /// moved in because the resulting `Engine` owns it for its lifetime.
     ///
     /// `waker` is a frame-waker tied to the host's event loop (see
     /// [`Engine::set_frame_waker`](crate::engine::Engine::set_frame_waker)).
     /// An event-driven (`Wait`-mode) host should install it on the `Engine` it
-    /// creates here — `engine.set_frame_waker(waker)` — so input results are
+    /// creates here, `engine.set_frame_waker(waker)`, so input results are
     /// presented as soon as the logic thread publishes them. A
     /// continuously-redrawing (`Poll`) host may ignore it.
     ///
@@ -273,10 +273,10 @@ pub trait PlatformHost {
     ///
     /// Returns whatever [`ByardError`] frame rendering produces. Transient
     /// surface loss is already handled internally and never reaches this
-    /// method as an error — only unrecoverable surface errors do.
+    /// method as an error, only unrecoverable surface errors do.
     fn on_redraw(&mut self) -> Result<(), ByardError>;
 
-    /// Whether the application still has frame-driven work — the render-thread
+    /// Whether the application still has frame-driven work, the render-thread
     /// side of the RFC-0010 active-animation set (extended by RFC-0025's
     /// repeating animations).
     ///
@@ -297,8 +297,8 @@ pub trait PlatformHost {
     /// event loop; returning `false` keeps the window open (e.g. to show an
     /// unsaved-changes prompt in a future application).
     ///
-    /// Defaults to always permitting the close, since most applications —
-    /// including every example in this crate today — have nothing to guard.
+    /// Defaults to always permitting the close, since most applications,
+    /// including every example in this crate today, have nothing to guard.
     fn on_close_requested(&mut self) -> bool {
         true
     }
@@ -326,7 +326,7 @@ pub trait PlatformHost {
     /// host can claim a chord for itself.
     ///
     /// Returning `true` **consumes** the event: `on_key` is not called and the
-    /// app under test never sees it. That is the whole point — a dev chord
+    /// app under test never sees it. That is the whole point, a dev chord
     /// that reached the router would be indistinguishable from the user typing
     /// (RFC-0030 §V3).
     ///

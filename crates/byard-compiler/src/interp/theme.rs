@@ -2,12 +2,12 @@
 //! RFC-0005 §6 `Typo` resolution).
 //!
 //! A [`Theme`] is a package/project-declared, engine-resolved bundle of **color**
-//! (per named scheme — `light`/`dark`), **typography**, and **shape** tokens. It
+//! (per named scheme, `light`/`dark`), **typography**, and **shape** tokens. It
 //! serves two roles:
 //!
-//! 1. **Theme-default layer** (RFC-0005 §6) — any intrinsic prop not set by a class or inline
+//! 1. **Theme-default layer** (RFC-0005 §6), any intrinsic prop not set by a class or inline
 //!    attribute falls back to the theme (the pre-existing `Theme::light()` role).
-//! 2. **Reactive token references** — `inject Theme as t` then `t.primary`,
+//! 2. **Reactive token references**, `inject Theme as t` then `t.primary`,
 //!    `t.titleLarge`, `t.cornerLg` in `.byd` resolve against the *active* scheme.
 //!    Flipping the scheme (`t.dark = true`) is a single reactive write that
 //!    marks every token-dependent binding dirty (RFC-0022 §1).
@@ -18,7 +18,7 @@
 //!
 //! The engine ships a built-in [`Theme::byard_base`] (RFC-0022 §6): a neutral
 //! gray palette, the M3 type scale, and the 0/4/8/12/16/28 shape scale. A
-//! manifest theme layers on top — it overrides only the tokens it redefines;
+//! manifest theme layers on top, it overrides only the tokens it redefines;
 //! everything else falls through to `byard-base`.
 
 use std::collections::BTreeMap;
@@ -31,7 +31,7 @@ pub enum FontWeight {
     Thin,
     /// 300.
     Light,
-    /// 400 — the default.
+    /// 400, the default.
     #[default]
     Regular,
     /// 500.
@@ -46,7 +46,7 @@ pub enum FontWeight {
 
 impl FontWeight {
     /// Parses a manifest weight string (case-insensitive). Unknown strings map
-    /// to [`FontWeight::Regular`] — the caller reports the diagnostic.
+    /// to [`FontWeight::Regular`], the caller reports the diagnostic.
     #[must_use]
     pub fn parse(s: &str) -> Option<Self> {
         Some(match s.to_ascii_lowercase().as_str() {
@@ -172,8 +172,8 @@ const BASE_SHAPES: &[(&str, f32)] = &[
 /// The `byard-base` light color scheme (`camelCase` token → 0xRRGGBB).
 ///
 /// The core tokens (`primary`/`surface`/`onSurface`/`secondary`/`error`) keep
-/// the historical `Theme::light()` values so the *default* look — every
-/// intrinsic that falls back to the theme, and the pixel-coupled render tests —
+/// the historical `Theme::light()` values so the *default* look, every
+/// intrinsic that falls back to the theme, and the pixel-coupled render tests,
 /// is unchanged; RFC-0022 adds the container/outline tokens and the dark scheme.
 const BASE_LIGHT: &[(&str, i64)] = &[
     ("primary", 0x0000_6495),
@@ -233,7 +233,7 @@ pub const SCHEME_DARK: &str = "dark";
 
 /// Color, typography, and shape design tokens for a view tree (RFC-0022 §1).
 ///
-/// The runtime *active scheme* is not stored here — it lives in a reactive
+/// The runtime *active scheme* is not stored here, it lives in a reactive
 /// signal owned by the interpreter, so a scheme flip participates in
 /// Mark-and-Pull. [`active_dark`](Self::active_dark) mirrors it for the
 /// non-reactive theme-default accessors ([`primary`](Self::primary) etc.).
@@ -308,7 +308,7 @@ impl Theme {
         }
     }
 
-    /// A Material 3-inspired light-first theme — `byard-base` is close enough to
+    /// A Material 3-inspired light-first theme, `byard-base` is close enough to
     /// serve as the historical `Theme::light()` default. Kept for the interpreter
     /// default and existing call sites.
     #[must_use]

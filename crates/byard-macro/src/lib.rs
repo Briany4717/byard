@@ -1,4 +1,4 @@
-//! Procedural macros for byard — the `#[byard_controller]` boundary marker
+//! Procedural macros for byard, the `#[byard_controller]` boundary marker
 //! (RFC-0028 §2, correcting erratum CB1).
 //!
 //! `#[byard_controller]` has two forms, distinguished by what it annotates:
@@ -6,7 +6,7 @@
 //! - **On a `struct`** it emits the struct **unchanged** plus an inherent `impl`
 //!   exposing field metadata (`BYARD_FIELDS` / `byard_field_type`) the LSP and
 //!   interpreter use for type-directed member access. It does **not** by itself
-//!   make the struct callable — that is the impl-block form below.
+//!   make the struct callable, that is the impl-block form below.
 //! - **On an `impl` block** it emits the block unchanged plus
 //!   `impl ::byard::bridge::Controller`: a `type_name` and an `invoke` that
 //!   dispatches each `async fn` by name, converting arguments from `HostValue`,
@@ -21,7 +21,7 @@ use proc_macro::TokenStream;
 use quote::quote;
 use syn::{Fields, Item, ReturnType, Type, parse_macro_input};
 
-/// Marks a Rust struct — or its `impl` block — as a byard controller (RFC-0028
+/// Marks a Rust struct, or its `impl` block, as a byard controller (RFC-0028
 /// §2). See the crate docs for the two forms. On a struct it emits
 /// `BYARD_FIELDS` + `byard_field_type`; on an `impl` block it emits
 /// `impl Controller` dispatching the block's `async fn`s.

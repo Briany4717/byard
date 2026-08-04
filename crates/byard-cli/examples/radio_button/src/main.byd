@@ -1,4 +1,4 @@
-// RFC-0018 — the `RadioButton` intrinsic.
+// RFC-0018, the `RadioButton` intrinsic.
 //
 // Run it (from the repo root):
 //   cd crates/byard-cli/examples/radio_button
@@ -7,10 +7,10 @@
 // What to verify visually:
 //   1. Each option is a ring; the selected one adds a filled inner dot in the
 //      accent colour. Exactly one option is selected at a time.
-//   2. Click a different option — it selects, the previous one deselects
+//   2. Click a different option, it selects, the previous one deselects
 //      automatically (they all `bind:` the same `plan` var, so mutual exclusion
 //      is reactive, no manual wiring).
-//   3. Click a radio to focus it, then press the arrow keys — Down/Right move
+//   3. Click a radio to focus it, then press the arrow keys, Down/Right move
 //      selection to the next option, Up/Left to the previous, wrapping at both
 //      ends (WAI-ARIA radio-group pattern).
 //   4. The "Selected: …" line tracks the choice reactively.

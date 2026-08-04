@@ -1,11 +1,11 @@
 # RFC-0013: Zero-Allocation Telemetry & Profiling
 
-- **Status:** Active — implemented (M30 CPU capture + frame hand-off, M31 GPU timestamps + overlay). Decisions P1–P5 resolved; IMPL-69–75 logged in `DESICIONS.md`.
+- **Status:** Active, implemented (M30 CPU capture + frame hand-off, M31 GPU timestamps + overlay). Decisions P1–P5 resolved; IMPL-69–75 logged in `DESICIONS.md`.
 - **Author(s):** Brian (byard_v2)
 - **Created:** 2026-07-01
 - **Last updated:** 2026-07-01
 - **Depends on:** RFC-0001 (§5 concurrency, atomic frame hand-off, `frame.rs` boundary), RFC-0004 (tick), RFC-0006 (dev runner & overlay).
-- **Recommended sequencing:** land **first** — it is the measurement tool that justifies (or rejects) RFC-0014 (JIT) and the layout-tween future of RFC-0010.
+- **Recommended sequencing:** land **first**, it is the measurement tool that justifies (or rejects) RFC-0014 (JIT) and the layout-tween future of RFC-0010.
 
 ---
 
@@ -17,7 +17,7 @@ lock-free capture, RAII scope timers, GPU timing via `wgpu` timestamp queries
 resolved asynchronously two frames later, and a transparent segmentation of the
 **"interpreter tax"** so a dev in `byard dev` can read off what the AOT-compiled
 build will actually cost. Telemetry piggybacks on the existing atomic frame
-channel — it introduces no new locks and no `Mutex` contention.
+channel, it introduces no new locks and no `Mutex` contention.
 
 ## Motivation
 
@@ -36,7 +36,7 @@ numbers (the observer effect). Three specific needs:
    GPU.
 
 Without this, every performance claim in the project is an assertion, not a
-measurement — and RFC-0014's JIT would be a solution to an *unquantified* problem.
+measurement, and RFC-0014's JIT would be a solution to an *unquantified* problem.
 
 ## Guide-level explanation
 
@@ -56,7 +56,7 @@ separately:
 
 ```
 frame.total     8.9ms   (interp tax 5.1ms → AOT proj… ~3.8ms)
-  interp.tick   5.1ms   [INTERPRETER — 0 in release]
+  interp.tick   5.1ms   [INTERPRETER, 0 in release]
   layout.taffy  1.2ms
   encode.frame  0.9ms
   gpu.solidbox  1.4ms   (async, −2 frames)
@@ -64,11 +64,11 @@ frame.total     8.9ms   (interp tax 5.1ms → AOT proj… ~3.8ms)
 ```
 
 Turn it off entirely with a feature flag; when compiled out, `profile_scope!`
-expands to nothing — zero cost in release.
+expands to nothing, zero cost in release.
 
 ## Reference-level explanation
 
-### CPU capture — thread-local ring, zero alloc
+### CPU capture, thread-local ring, zero alloc
 
 Each engine thread owns a **fixed-capacity, thread-local ring buffer** of samples
 (`thread_local!`, no shared state, no locks):
@@ -95,23 +95,23 @@ impl Drop for Guard { fn drop(&mut self) { RING.with(|r| r.borrow_mut().push(
 
 `now_ns()` uses `std::time::Instant` by default (portable, ~tens of ns). An
 optional `rdtsc`+calibration fast path is available behind a feature for
-sub-scopes where `Instant` overhead is itself significant — but `Instant` is the
+sub-scopes where `Instant` overhead is itself significant, but `Instant` is the
 default because correctness/portability beat a few ns (Byard principle).
 
 **Zero allocation:** the ring is preallocated and fixed; `push` overwrites the
 oldest slot when full (bounded memory, never grows). No `Vec` growth, no boxing,
 no formatting on the hot path.
 
-### Hand-off — piggyback on the atomic frame channel
+### Hand-off, piggyback on the atomic frame channel
 
 At end-of-tick, the logic thread packs the tick's samples into a flat POD block
 and ships it on **the same atomic frame swap** already used to hand `RenderFrame`
-to the renderer (RFC-0001 §5.1). No new channel, no `Mutex`, no contention — the
+to the renderer (RFC-0001 §5.1). No new channel, no `Mutex`, no contention, the
 telemetry rides the frame it describes. Only `Send` PODs cross the boundary,
 per the RFC-0001 §5 concurrency model. The renderer/overlay consumer reads the
 block after presenting.
 
-### GPU timing — async timestamp queries, never blocking
+### GPU timing, async timestamp queries, never blocking
 
 Per RFC-0001 §3.1 pipelines, the `Encoder` writes timestamps into a
 `wgpu::QuerySet` before/after each render pass:
@@ -120,7 +120,7 @@ Per RFC-0001 §3.1 pipelines, the `Encoder` writes timestamps into a
 2. `encoder.write_timestamp(set, i)` around each pass (`SolidBox`,
    `VectorMSDF`, `DecoratedBox`, `TextureSampler`).
 3. `resolve_query_set` into a buffer; `map_async` it.
-4. **Read it two frames later** when the map has completed — the CPU never waits
+4. **Read it two frames later** when the map has completed, the CPU never waits
    synchronously on the GPU. Results are matched to their frame by index.
 
 GPU samples land in the same overlay stream, tagged `(async, −2 frames)` so the
@@ -138,7 +138,7 @@ eval, dynamic dispatch, env lookups) are `Interpreter`. The overlay/CLI sums the
   is projected as `native ≈ total − interp_measured + interp_native_equiv`, where
   `interp_native_equiv` comes from the calibration table.
 - The number is presented as an **estimate with its basis**, never as a hard
-  promise — consistent with "measure, don't assert."
+  promise, consistent with "measure, don't assert."
 
 This directly answers RFC-0014's gating question: *is the tree-walker actually the
 bottleneck worth a JIT?* You cannot answer that honestly without this bucket.
@@ -180,21 +180,21 @@ Rust `tracing` span model (but allocation-free and fixed-capacity here).
 
 ## Resolved decisions (2026-07-01)
 
-- **P1 — ring capacity / overflow:** **4096 samples/thread, drop-newest + visible
+- **P1, ring capacity / overflow:** **4096 samples/thread, drop-newest + visible
   "N dropped" counter** (overwriting the oldest would corrupt an in-flight frame's
   capture).
-- **P2 — overlay format:** **flat list by default + toggleable flamegraph** (flat is
+- **P2, overlay format:** **flat list by default + toggleable flamegraph** (flat is
   the at-a-glance read; flamegraph for deep nesting).
-- **P3 — AOT projection:** **opt-in, always shown with its basis** (it's a calibrated
-  estimate; default-prominent invites over-trust — "measure, don't assert").
-- **P4 — calibration:** **fixed microbenchmarks in `benches/`**, refreshed per release
+- **P3, AOT projection:** **opt-in, always shown with its basis** (it's a calibrated
+  estimate; default-prominent invites over-trust, "measure, don't assert").
+- **P4, calibration:** **fixed microbenchmarks in `benches/`**, refreshed per release
   (reproducible; live per-op measurement would re-add observer overhead).
-- **P5 — backends without timestamp queries:** **degrade to CPU-only with a clear
+- **P5, backends without timestamp queries:** **degrade to CPU-only with a clear
   overlay notice** (honesty over invented numbers).
 
 ## Resolved questions (formerly unresolved)
 
-- [x] **Flamegraph view:** deferred to a follow-up. M31 ships the flat-list overlay (scope name + duration, at-a-glance per P2). A flamegraph requires either a tree-structured `SampleBlock` or post-hoc tree reconstruction from the flat ring — both add complexity with no blocking use case today. The flat list is the honest first cut; flamegraph is a natural overlay-panel extension.
+- [x] **Flamegraph view:** deferred to a follow-up. M31 ships the flat-list overlay (scope name + duration, at-a-glance per P2). A flamegraph requires either a tree-structured `SampleBlock` or post-hoc tree reconstruction from the flat ring, both add complexity with no blocking use case today. The flat list is the honest first cut; flamegraph is a natural overlay-panel extension.
 - [x] **Calibration refresh automation:** manual per release (CI infrastructure for benchmarking is not yet in place and would couple the project to a specific CI provider). The `benches/` microbenchmarks run locally; a regression gate in CI (future possibility) is the natural automation point when CI matures.
 
 ## Future possibilities

@@ -14,7 +14,7 @@
 //!
 //! - the logic thread's four scopes are entered by `dispatch_events` / `tick` /
 //!   `render`, on an ordinary frame, with no test-only wiring;
-//! - `layout.taffy` really does nest inside `interp.render` — the structural
+//! - `layout.taffy` really does nest inside `interp.render`, the structural
 //!   fact §I2b's correction rests on;
 //! - the frame total is the frame, not the sum of every nested row;
 //! - and the interpreter tax excludes the `Native` layout work nested inside
@@ -38,7 +38,7 @@ const W: f32 = 800.0;
 const H: f32 = 600.0;
 
 /// A view with a reactive value, a wrapping `Text` (so the measure path runs)
-/// and a tappable region — enough that every scope below has real work to do.
+/// and a tappable region, enough that every scope below has real work to do.
 const SOURCE: &str = r#"
 View Probe() {
     var count = 0
@@ -74,7 +74,7 @@ fn tap(pos: (f32, f32), t: u64) -> InputEvent {
 /// Runs one full frame of the runner loop and returns the samples it produced.
 ///
 /// The ring is drained (and discarded) first so the block holds this frame and
-/// nothing that a previous phase of the same test left behind — exactly what
+/// nothing that a previous phase of the same test left behind, exactly what
 /// `Relay::publish` does before every swap.
 fn profiled_frame(interp: &mut Interpreter, tree: &[RenderNode], inputs: &[InputEvent]) -> Samples {
     let _ = drain_samples();
@@ -104,7 +104,7 @@ impl Samples {
             .position(|s| scope_name(s.scope) == Some(name))
             .unwrap_or_else(|| {
                 panic!(
-                    "scope {name:?} was never entered on a real frame — production has stopped \
+                    "scope {name:?} was never entered on a real frame, production has stopped \
                      taking the instrumented path. Scopes seen: {:?}",
                     self.names()
                 )
@@ -144,7 +144,7 @@ fn the_scopes_carry_the_cost_bucket_their_call_site_declared() {
         assert_eq!(
             scope_kind(samples.sample(name).scope),
             Some(ScopeKind::Interpreter),
-            "{name} is interpreter overhead — it must evaporate in an AOT build"
+            "{name} is interpreter overhead, it must evaporate in an AOT build"
         );
     }
     assert_eq!(
@@ -158,8 +158,8 @@ fn the_scopes_carry_the_cost_bucket_their_call_site_declared() {
 #[test]
 fn layout_taffy_nests_inside_interp_render() {
     // RFC-0030 §Q8. This is structural, not incidental call order: the
-    // interpreter owns the `LayoutAtlas` and drives it from `render`. §I2b —
-    // the interpreter-tax self-time correction — exists only because of it, so
+    // interpreter owns the `LayoutAtlas` and drives it from `render`. §I2b,
+    // the interpreter-tax self-time correction, exists only because of it, so
     // if this ever stops holding, that correction needs revisiting rather than
     // silently becoming a no-op.
     let (mut interp, tree) = build();

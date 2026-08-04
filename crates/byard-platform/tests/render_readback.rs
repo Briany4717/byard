@@ -42,7 +42,7 @@ fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>)> {
 #[allow(clippy::too_many_lines)]
 fn demo_boxes_are_actually_painted_on_screen() {
     let Some((device, queue)) = try_device() else {
-        eprintln!("no GPU adapter — skipping readback");
+        eprintln!("no GPU adapter, skipping readback");
         return;
     };
 
@@ -58,7 +58,7 @@ fn demo_boxes_are_actually_painted_on_screen() {
     let mut frame = RenderFrame::new();
     interp.render(&tree, &mut frame, logical_w, logical_h);
 
-    // Pick the largest opaque box whose blue channel dominates strongly — the
+    // Pick the largest opaque box whose blue channel dominates strongly, the
     // 96×56 `0x6495ED` showcase box (a plain SolidBox, no text, no overlap).
     let bluest = frame
         .instances()
@@ -184,13 +184,13 @@ fn demo_boxes_are_actually_painted_on_screen() {
 /// End-to-end proof of the RFC-0009 dev JIT pipeline: a `VectorIcon` starts as
 /// a zero-opacity placeholder, the background generation lands within a few
 /// ticks, and the resulting `AtlasUpload` actually reaches the GPU texture and
-/// paints an opaque pixel — the whole chain from `.byd` source to a real
+/// paints an opaque pixel, the whole chain from `.byd` source to a real
 /// screen pixel, not just unit-level cache bookkeeping.
 #[test]
 #[allow(clippy::too_many_lines)]
 fn vector_icon_paints_after_generation_lands() {
     let Some((device, queue)) = try_device() else {
-        eprintln!("no GPU adapter — skipping readback");
+        eprintln!("no GPU adapter, skipping readback");
         return;
     };
 
@@ -329,14 +329,14 @@ fn vector_icon_paints_after_generation_lands() {
 /// Regression: a widget that sits *inside* an opaque, bordered card
 /// (here the `Toggle`, whose ON track is painted in the theme accent) must
 /// remain visible on screen. Before the fix the card became an opaque
-/// `DecoratedBox` drawn in the decorated pass — *after* the widget's `SolidBox`
-/// — so it painted over the toggle and only text showed through. We read the
+/// `DecoratedBox` drawn in the decorated pass, *after* the widget's `SolidBox`
+///, so it painted over the toggle and only text showed through. We read the
 /// toggle's track pixel and assert it is the bright accent, not the dark card.
 #[test]
 #[allow(clippy::too_many_lines)]
 fn widget_inside_bordered_card_is_not_occluded() {
     let Some((device, queue)) = try_device() else {
-        eprintln!("no GPU adapter — skipping readback");
+        eprintln!("no GPU adapter, skipping readback");
         return;
     };
 
@@ -455,7 +455,7 @@ fn widget_inside_bordered_card_is_not_occluded() {
 }
 
 /// RFC-0005 `ScrollView` content clip: a box (and text) emitted inside
-/// `begin_clip` is scissored to the clip rect — visible inside it, gone outside.
+/// `begin_clip` is scissored to the clip rect, visible inside it, gone outside.
 /// Set `BYARD_DUMP_PNG=1` to also write the frame to a PNG for eyeballing.
 #[test]
 #[allow(clippy::too_many_lines, clippy::many_single_char_names)]
@@ -464,7 +464,7 @@ fn content_clip_scissors_overflow_to_the_viewport() {
     use byard_core::frame::{Rect, TextLine, Transform};
 
     let Some((device, queue)) = try_device() else {
-        eprintln!("no GPU adapter — skipping readback");
+        eprintln!("no GPU adapter, skipping readback");
         return;
     };
 
@@ -488,7 +488,7 @@ fn content_clip_scissors_overflow_to_the_viewport() {
     let window = Rect::new(100.0, 80.0, 200.0, 140.0);
     frame.begin_clip(window);
     frame.push_instance(solid(60.0, 40.0, 280.0, 240.0, [0.39, 0.58, 0.93, 1.0]));
-    for (i, s) in ["clipped to the", "scroll viewport", "— overflow hidden"]
+    for (i, s) in ["clipped to the", "scroll viewport", ", overflow hidden"]
         .iter()
         .enumerate()
     {
@@ -593,7 +593,7 @@ fn content_clip_scissors_overflow_to_the_viewport() {
     // Inside the blue content's rect but OUTSIDE the window (top-left of it):
     // must be clipped away → the dark background, not the blue content. (The bg
     // is `[0.07,0.08,0.11]` linear, which sRGB-encodes to ~BGR(93,80,75) in the
-    // sRGB target — dark and near-neutral, unlike the strongly-blue content.)
+    // sRGB target, dark and near-neutral, unlike the strongly-blue content.)
     let (b_out, _g_out, r_out, _a) = px(70, 50);
     assert!(
         b_out < 120 && b_out < r_out + 40,
@@ -631,7 +631,7 @@ fn content_clip_scissors_overflow_to_the_viewport() {
 #[allow(clippy::too_many_lines, clippy::many_single_char_names)]
 fn scrollview_scrolls_and_clips_end_to_end() {
     let Some((device, queue)) = try_device() else {
-        eprintln!("no GPU adapter — skipping readback");
+        eprintln!("no GPU adapter, skipping readback");
         return;
     };
 
@@ -758,7 +758,7 @@ fn scrollview_scrolls_and_clips_end_to_end() {
         "the scrolled list must paint rows inside the viewport"
     );
     // Below the viewport (the outer column, y > 230) the clipped list must not
-    // bleed — no blue rows there.
+    // bleed, no blue rows there.
     assert!(
         !(232..300).step_by(4).any(has_blue_row),
         "the list must be clipped to the viewport (no bleed below it)"

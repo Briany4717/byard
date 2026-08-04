@@ -1,4 +1,4 @@
-//! RFC-0007 — user-view instantiation, exercised end-to-end through the
+//! RFC-0007, user-view instantiation, exercised end-to-end through the
 //! `user_views.byd` example: parameterized views compose, arguments bind
 //! (named/positional/defaulted), a reactive param flows across the call
 //! boundary, and a `content` slot splices the caller's block.
@@ -62,7 +62,7 @@ fn example_composes_views_and_binds_arguments() {
     );
 
     // A reactive `var` (errors = 7) flowed through a positional argument and was
-    // interpolated inside the child instance — arguments cross the call boundary
+    // interpolated inside the child instance, arguments cross the call boundary
     // as live values, not snapshots (RFC-0007 §3).
     assert!(
         t.iter().any(|s| s == "7"),

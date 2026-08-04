@@ -4,7 +4,7 @@
 //! The parser produces an [`Expr::Animated`](crate::parser::ast::Expr::Animated)
 //! whose `anim` side is an ordinary call/member expression; [`resolve_motion`]
 //! turns that surface into a typed, argument-validated [`MotionSpec`] at
-//! lowering time — the curve plus RFC-0025's repeat/reverse/delay/from
+//! lowering time, the curve plus RFC-0025's repeat/reverse/delay/from
 //! modifiers. [`resolve_keyframes`] does the same for an `anim.keyframes(…)`
 //! sequence, which stands in *value* position rather than after `with` (it
 //! supplies its own values). The parser stays free of any knowledge of the
@@ -61,7 +61,7 @@ pub enum Curve {
 
 impl Curve {
     /// The default spring (RFC-0010 A2): a snappy, iOS-feel `210/20` with no
-    /// initial velocity — what a bare `anim.spring()` resolves to.
+    /// initial velocity, what a bare `anim.spring()` resolves to.
     pub const DEFAULT_SPRING: Curve = Curve::Spring {
         stiffness: 210.0,
         damping: 20.0,
@@ -76,14 +76,14 @@ impl Curve {
 /// to be evaluated in the body's own scope, per item, at sample time.
 #[derive(Clone, Copy, Debug)]
 pub enum Delay<'a> {
-    /// No delay — motion begins the moment the property mounts or retargets.
+    /// No delay, motion begins the moment the property mounts or retargets.
     None,
     /// `delay: <ms>`: hold the start value for that many milliseconds. A fresh
     /// target **cancels** a pending delay (§5), so a delayed transition can
     /// never overwrite a more recent interaction.
     Offset(&'a Expr),
     /// `anim.stagger(<curve>, <step>, <index>)`: an offset of `step × index`,
-    /// and deliberately **not** cancellable (§5) — an entrance cascade is
+    /// and deliberately **not** cancellable (§5), an entrance cascade is
     /// intentional sequencing, not a response to input.
     Stagger {
         /// Per-item step, in milliseconds.
@@ -119,16 +119,16 @@ pub struct MotionSpec<'a> {
     pub reverse: bool,
     /// The start offset (§5).
     pub delay: Delay<'a>,
-    /// `restart: <expr>` — replay the animation whenever this value changes.
+    /// `restart: <expr>`, replay the animation whenever this value changes.
     ///
     /// A mount-time animation (an entrance, a cascade) is otherwise observable
     /// exactly once: its endpoints never change, so nothing ever retargets it.
-    /// This is the reference-free way to say "play that again" — the same role a
-    /// changed `key` plays in a retained-tree framework — and it is what makes
+    /// This is the reference-free way to say "play that again", the same role a
+    /// changed `key` plays in a retained-tree framework, and it is what makes
     /// RFC-0025's own stagger example re-runnable. A restart honours the
     /// animation's delays again, so a cascade replays *in order*.
     pub restart: Option<&'a Expr>,
-    /// `from:` — the explicit start value of the animation.
+    /// `from:`, the explicit start value of the animation.
     ///
     /// Not in the RFC's snippets, and required by them: a looping animation
     /// needs *two* endpoints, and a target alone only gives one (a `with`
@@ -141,7 +141,7 @@ pub struct MotionSpec<'a> {
 
 impl<'a> MotionSpec<'a> {
     /// The plain RFC-0010 spec for `curve`: one play, no offset, no explicit
-    /// start — the shape every animation had before RFC-0025.
+    /// start, the shape every animation had before RFC-0025.
     #[must_use]
     pub fn once(curve: Curve) -> Self {
         Self {
@@ -171,7 +171,7 @@ impl<'a> MotionSpec<'a> {
 pub struct Keyframe<'a> {
     /// Position in the sequence, `0.0..=1.0`.
     pub percent: f32,
-    /// The value at this step — evaluated by the interpreter, so a step may be
+    /// The value at this step, evaluated by the interpreter, so a step may be
     /// a scalar (`200`) or a coordinate pair (`(50, 0)`).
     pub value: &'a Expr,
     /// Easing of the segment *arriving* at this step, as a
@@ -194,7 +194,7 @@ pub struct KeyframeTrack<'a> {
     pub reverse: bool,
     /// The start offset.
     pub delay: Delay<'a>,
-    /// `restart:` — replay the sequence whenever this value changes.
+    /// `restart:`, replay the sequence whenever this value changes.
     pub restart: Option<&'a Expr>,
 }
 
@@ -252,7 +252,7 @@ pub fn resolve_curve(anim: &Expr) -> Result<Curve, CompileError> {
 /// # Errors
 ///
 /// Returns the first diagnostic encountered (not an `anim.*` call, unknown
-/// curve, a bad argument list, or `anim.keyframes` used after `with` — keyframes
+/// curve, a bad argument list, or `anim.keyframes` used after `with`, keyframes
 /// carry their own values and belong in value position).
 pub fn resolve_motion(anim: &Expr) -> Result<MotionSpec<'_>, CompileError> {
     let (name, name_span, args) = destructure_anim_call(anim, true)?;
@@ -260,7 +260,7 @@ pub fn resolve_motion(anim: &Expr) -> Result<MotionSpec<'_>, CompileError> {
         return Err(CompileError::InvalidAnimation {
             span: name_span,
             message: "`anim.keyframes(…)` supplies its own values, so it is the property value \
-                      itself — write `translate: anim.keyframes(0%: …, 100%: …)`, not `with`"
+                      itself, write `translate: anim.keyframes(0%: …, 100%: …)`, not `with`"
                 .to_string(),
         });
     }
@@ -297,7 +297,7 @@ pub fn resolve_keyframes(expr: &Expr) -> Option<Result<KeyframeTrack<'_>, Compil
     Some(resolve_keyframe_args(&args, name_span))
 }
 
-/// Whether `expr` is an `anim.keyframes(…)` call — the cheap shape test the
+/// Whether `expr` is an `anim.keyframes(…)` call, the cheap shape test the
 /// evaluation chokepoint runs before doing any resolution work.
 #[must_use]
 pub fn is_keyframes_call(expr: &Expr) -> bool {
@@ -374,7 +374,7 @@ fn resolve_keyframe_args<'a>(
     if let Some(from) = mods.from {
         return Err(CompileError::InvalidAnimation {
             span: from.span(),
-            message: "`from:` has no meaning for keyframes — the `0%` step is the start value"
+            message: "`from:` has no meaning for keyframes, the `0%` step is the start value"
                 .to_string(),
         });
     }
@@ -388,14 +388,14 @@ fn resolve_keyframe_args<'a>(
     })
 }
 
-/// Resolves `anim.stagger(<curve>, <step>, <index>)` (RFC-0025 §"Stagger") —
+/// Resolves `anim.stagger(<curve>, <step>, <index>)` (RFC-0025 §"Stagger"),
 /// sugar for the `delay: index * step` pattern, with the non-cancellable delay
 /// semantics of an entrance cascade. Arguments are positional or named
 /// (`base`/`step`/`index`).
 fn resolve_stagger<'a>(args: &[&'a Arg], call_span: Span) -> Result<MotionSpec<'a>, CompileError> {
     const FIELDS: [&str; 3] = ["base", "step", "index"];
     // Modifiers may sit on the stagger itself (`anim.stagger(spring(), 90ms, i,
-    // restart: attempt)`) as well as on its base curve — the outer position is
+    // restart: attempt)`) as well as on its base curve, the outer position is
     // the natural place for `restart:`, which is about the cascade, not the curve.
     let (args, stagger_mods) = split_modifiers(args)?;
     let mut slots: [Option<&Expr>; 3] = [None; 3];
@@ -416,7 +416,7 @@ fn resolve_stagger<'a>(args: &[&'a Arg], call_span: Span) -> Result<MotionSpec<'
             return Err(CompileError::InvalidAnimation {
                 span: arg.value.span(),
                 message: "`anim.stagger` takes exactly three arguments: a curve, the per-item \
-                          step, and the item index — e.g. `anim.stagger(spring(), 50ms, i)`"
+                          step, and the item index, e.g. `anim.stagger(spring(), 50ms, i)`"
                     .to_string(),
             });
         }
@@ -425,7 +425,7 @@ fn resolve_stagger<'a>(args: &[&'a Arg], call_span: Span) -> Result<MotionSpec<'
     let [Some(base), Some(step), Some(index)] = slots else {
         return Err(CompileError::InvalidAnimation {
             span: call_span,
-            message: "`anim.stagger` takes a curve, the per-item step, and the item index — \
+            message: "`anim.stagger` takes a curve, the per-item step, and the item index, \
                       e.g. `anim.stagger(spring(), 50ms, i)`"
                 .to_string(),
         });
@@ -495,7 +495,7 @@ fn split_modifiers<'a>(args: &[&'a Arg]) -> Result<(Vec<&'a Arg>, Modifiers<'a>)
                 if repeat_written.is_some_and(|written| written != name.as_str()) {
                     return Err(CompileError::InvalidAnimation {
                         span,
-                        message: "`loop:` is sugar for `repeat: infinite` — use one or the other"
+                        message: "`loop:` is sugar for `repeat: infinite`, use one or the other"
                             .to_string(),
                     });
                 }
@@ -608,7 +608,7 @@ fn resolve_named_curve(
 
 /// Splits `anim.<name>(<args>)` (or the bare `anim.<name>`) into its curve
 /// name, that name's span, and the argument list. With `require_namespace`
-/// cleared, the bare `spring()` form is accepted too — the shape
+/// cleared, the bare `spring()` form is accepted too, the shape
 /// `anim.stagger(spring(), …)` uses, where the namespace is already
 /// established. Anything else is a [`CompileError::InvalidAnimation`].
 fn destructure_anim_call(
@@ -619,7 +619,7 @@ fn destructure_anim_call(
         args.iter().collect()
     }
     match anim {
-        // `anim.spring(...)` / `spring(...)` — a call.
+        // `anim.spring(...)` / `spring(...)`, a call.
         Expr::Call { callee, args, span } => match callee.as_ref() {
             Expr::Member { base, field, span } if is_anim_base(base) => {
                 Ok((field.clone(), *span, borrowed(args)))
@@ -629,7 +629,7 @@ fn destructure_anim_call(
             }
             _ => Err(not_a_curve(*span)),
         },
-        // `anim.spring` / `spring` — the bare form, all defaults.
+        // `anim.spring` / `spring`, the bare form, all defaults.
         Expr::Member { base, field, span } if is_anim_base(base) => {
             Ok((field.clone(), *span, Vec::new()))
         }
@@ -705,7 +705,7 @@ fn resolve_spring(args: &[&Arg], call_span: Span) -> Result<Curve, CompileError>
 
 /// Extracts the single positional duration (whole milliseconds) from
 /// `anim.linear`/`ease`. A duration is a non-negative *integer* count of
-/// milliseconds — a fractional value (`200.5`) is rejected rather than silently
+/// milliseconds, a fractional value (`200.5`) is rejected rather than silently
 /// truncated, and a value beyond `u32` is a range error.
 fn single_duration(
     args: &[&Arg],
@@ -733,7 +733,7 @@ fn single_duration(
         return Err(CompileError::InvalidAnimation {
             span: arg.value.span(),
             message: format!(
-                "`anim.{curve}` has no `{name}` argument{hint} — its duration is positional,                  e.g. `anim.{curve}(200ms)`"
+                "`anim.{curve}` has no `{name}` argument{hint}, its duration is positional,                  e.g. `anim.{curve}(200ms)`"
             ),
         });
     }
@@ -1056,7 +1056,7 @@ mod tests {
     #[test]
     fn keyframes_after_with_points_at_value_position() {
         // Keyframes carry their own values, so `x with anim.keyframes(…)` has
-        // two sources of truth — rejected with the fix in the message.
+        // two sources of truth, rejected with the fix in the message.
         with_spec("anim.keyframes(0%: 0, 100%: 1, duration: 1s)", |spec| {
             let CompileError::InvalidAnimation { message, .. } = spec.unwrap_err() else {
                 panic!("expected an InvalidAnimation");

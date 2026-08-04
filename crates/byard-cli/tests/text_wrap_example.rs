@@ -1,6 +1,6 @@
 //! Guards the committed RFC-0005 default-text-wrap example through the real
-//! `byard` binary: the `text_wrap` project — long paragraphs that wrap to their
-//! parent's width with no explicit `width`, plus a `wrap: false` opt-out — must
+//! `byard` binary: the `text_wrap` project, long paragraphs that wrap to their
+//! parent's width with no explicit `width`, plus a `wrap: false` opt-out, must
 //! check clean (parse, type-check, lower, validate with no diagnostics).
 
 use std::path::PathBuf;

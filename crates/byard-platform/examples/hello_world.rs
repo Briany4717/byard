@@ -1,4 +1,4 @@
-//! Phase 1 visual verification — renders three `SolidBox` instances and two
+//! Phase 1 visual verification, renders three `SolidBox` instances and two
 //! text labels to a window, one of which is a Signal-driven reactive label.
 //!
 //! This example is intentionally minimal: it implements [`PlatformHost`] and
@@ -8,10 +8,10 @@
 //! full RFC-0001 §5 concurrency model in production. `on_resume` calls
 //! [`Engine::start_logic`] to spawn the logic thread; `on_redraw` calls
 //! [`Engine::render_latest`] to render the latest frame published by that
-//! thread — the render path never blocks on the logic thread.
+//! thread, the render path never blocks on the logic thread.
 //!
 //! Click anywhere in the window to mutate the reactive label's text via
-//! [`Engine::set_label_text`] — the only authored content for that label is
+//! [`Engine::set_label_text`], the only authored content for that label is
 //! the click count; everything about *how* the new text reaches the screen
 //! (channel → Signal write → `EvaluatorTick` → `LayoutAtlas` → `TextLine::dirty`
 //! → `Relay::publish`) happens inside [`Engine`], not here.
@@ -28,7 +28,7 @@ use byard_core::{
 use byard_platform::WinitHost;
 
 fn main() {
-    let host = WinitHost::new("Byard — Phase 1 Verification", 800, 600);
+    let host = WinitHost::new("Byard, Phase 1 Verification", 800, 600);
     host.run(App::default()).expect("event loop error");
 }
 
@@ -132,9 +132,9 @@ impl PlatformHost for App {
         if let Some(engine) = self.engine.as_ref() {
             // Engine handles every step from here: writing the Signal,
             // running `EvaluatorTick::collect_dirty`, marking the Atlas
-            // node dirty, and recomputing it — this call only supplies the
+            // node dirty, and recomputing it, this call only supplies the
             // new text.
-            engine.set_label_text(format!("Byard — clicked {} time(s)", self.click_count));
+            engine.set_label_text(format!("Byard, clicked {} time(s)", self.click_count));
         }
     }
 }

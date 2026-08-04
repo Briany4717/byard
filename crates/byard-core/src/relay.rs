@@ -10,7 +10,7 @@
 //! - a bounded recycle pool so steady-state operation reuses `RenderFrame`
 //!   heap allocations instead of reallocating every frame, and
 //! - the Tokio runtime backing the async I/O pool (file loads, network,
-//!   timers — anything that must not block either the logic or render
+//!   timers, anything that must not block either the logic or render
 //!   thread), plus the `tokio::sync::mpsc` channel that pool uses to hand
 //!   completed results back to the logic thread (RFC-0001 §5.1, row 3).
 //!
@@ -18,8 +18,8 @@
 //!
 //! RFC-0001 §5.1 says the Tokio pool "executes async I/O from Rust
 //! controllers" and "sends results back to the logic thread via
-//! `tokio::sync::mpsc`". No `#[byard_controller]` exists yet — that's a
-//! `byld`-side feature for a later phase — so there is no concrete result
+//! `tokio::sync::mpsc`". No `#[byard_controller]` exists yet, that's a
+//! `byld`-side feature for a later phase, so there is no concrete result
 //! type to name today. Making `Relay` generic over that type would force
 //! every call site (all 27 tests in this module included) to pin a type
 //! parameter for a feature none of them use yet, which is exactly the kind
@@ -34,7 +34,7 @@
 //! An earlier draft of this module used a raw `AtomicPtr<RenderFrame>` with
 //! manual `Box::into_raw`/`Box::from_raw`. `CONTRIBUTING.md`'s bar for new
 //! `unsafe` is: *"could this be done in safe code without significant cost
-//! or correctness loss?"* Here the answer is yes — [`arc_swap::ArcSwapOption`]
+//! or correctness loss?"* Here the answer is yes, [`arc_swap::ArcSwapOption`]
 //! is a published, audited, lock-free swap primitive with the same
 //! single-instruction-exchange performance characteristics, so introducing
 //! a new `#![allow(unsafe_code)]` module would have bought nothing. The
@@ -46,8 +46,8 @@
 //! The logic thread closure must hold a strong `Arc<Relay>` to call back
 //! into `acquire_recycled`/`publish`/`is_shutdown`. If `Relay` also stored
 //! its own `JoinHandle` for that same thread, dropping the *last* external
-//! `Arc<Relay>` would never actually run `Relay`'s drop glue — the thread's
-//! own clone keeps the refcount above zero — so a join-on-drop inside
+//! `Arc<Relay>` would never actually run `Relay`'s drop glue, the thread's
+//! own clone keeps the refcount above zero, so a join-on-drop inside
 //! `Relay` itself would either never fire or, worse, fire from inside the
 //! thread it's trying to join (a deadlock). [`Relay::spawn_logic_thread`]
 //! therefore returns the [`JoinHandle`] to the caller, exactly as
@@ -67,7 +67,7 @@
 //! releasing the last `Arc<Relay>`.
 //!
 //! [`Engine::start_logic`] does not use [`Relay::spawn_logic_thread`]
-//! directly. The tick state it needs to capture — a `ReactiveLabel` — holds
+//! directly. The tick state it needs to capture, a `ReactiveLabel`, holds
 //! a [`crate::evaluator::Signal`], which is intentionally `!Send` per
 //! RFC-0001 §5.1 (signals are never accessed outside the logic thread; the
 //! compiler enforces this). A `FnMut + Send` closure therefore cannot
@@ -101,7 +101,7 @@ pub type IoResult = Box<dyn Any + Send>;
 /// Capacity of the frame recycle pool.
 ///
 /// Two is the minimum that allows one frame to be "in flight" with the
-/// render thread while the logic thread recycles another — the literal
+/// render thread while the logic thread recycles another, the literal
 /// "double" in double-buffered. Raising this trades a little memory for
 /// more slack when the render thread holds a frame longer than usual.
 const RECYCLE_POOL_SIZE: usize = 2;
@@ -137,7 +137,7 @@ pub struct Relay {
     // `tokio::sync::mpsc::UnboundedReceiver` only allows a single consumer
     // and needs `&mut self` to poll, so it is not `Sync` on its own. The
     // `Mutex` exists purely to grant `&self` access for the very short
-    // `try_recv` in `Relay::try_recv_io_result` — it is never held across
+    // `try_recv` in `Relay::try_recv_io_result`, it is never held across
     // an `.await` and never contended in practice (one logic thread polls
     // it once per tick), so it does not reintroduce blocking in any
     // meaningful sense.
@@ -149,7 +149,7 @@ pub struct Relay {
     // wake and present it. `None` until a host installs one via
     // [`Relay::set_frame_waker`]; a continuously-redrawing (`Poll`) host can
     // leave it unset. Set rarely (once at startup), read once per published
-    // frame — the mutex is never contended.
+    // frame, the mutex is never contended.
     frame_waker: Mutex<Option<FrameWaker>>,
     /// Monotonic count of frames published through [`Relay::publish`], stamped
     /// onto each frame as its [`RenderFrame::version`]. The encoder uses the
@@ -170,7 +170,7 @@ pub struct Relay {
 /// frame (see [`Relay::set_frame_waker`]). The platform layer points it at its
 /// event loop's wake primitive (e.g. a winit `EventLoopProxy`) so an
 /// event-driven render thread redraws exactly when there is something new to
-/// show — no busy polling, no stale frame after an input.
+/// show, no busy polling, no stale frame after an input.
 pub type FrameWaker = Arc<dyn Fn() + Send + Sync>;
 
 impl Relay {
@@ -187,13 +187,13 @@ impl Relay {
     pub fn new() -> Result<Self, ByardError> {
         let (recycle_tx, recycle_rx) = bounded(RECYCLE_POOL_SIZE);
         for _ in 0..RECYCLE_POOL_SIZE {
-            // Channel was just created with this exact capacity — cannot be full.
+            // Channel was just created with this exact capacity, cannot be full.
             let _ = recycle_tx.try_send(RenderFrame::new());
         }
 
         // No `.enable_io()`/`.enable_time()`: those drivers need the `net`
         // and `time` Tokio features, which this crate does not currently
-        // enable (nothing here uses sockets or timers yet — only spawned
+        // enable (nothing here uses sockets or timers yet, only spawned
         // compute futures). Add them, and the matching Cargo feature, the
         // day a real async I/O task needs them.
         let io_runtime = tokio::runtime::Builder::new_multi_thread()
@@ -267,22 +267,22 @@ impl Relay {
     /// This is the "single atomic pointer exchange" from RFC-0001 §5.2: the
     /// swap is one lock-free operation, so a concurrent [`Relay::current`]
     /// call always observes either the entire old frame or the entire new
-    /// one — never a partial mix of both.
+    /// one, never a partial mix of both.
     ///
     /// If the previous frame is not referenced anywhere else (the render
     /// thread already dropped its clone, or never took one), its `Vec`
     /// allocation is returned to the recycle pool for reuse. If the pool is
-    /// momentarily full, the frame is dropped normally — a missed recycle
+    /// momentarily full, the frame is dropped normally, a missed recycle
     /// opportunity, not a correctness issue. This call never blocks.
     ///
     /// Also drains the calling thread's telemetry ring into `frame`
-    /// (RFC-0013 "Hand-off") before the swap, so every publish path — the
+    /// (RFC-0013 "Hand-off") before the swap, so every publish path, the
     /// Phase-1 demo loop, [`Relay::spawn_logic_thread`], and
-    /// [`Relay::spawn_logic_from_view`] alike — piggybacks CPU samples on
+    /// [`Relay::spawn_logic_from_view`] alike, piggybacks CPU samples on
     /// this same atomic exchange with no per-call-site wiring.
     pub fn publish(&self, mut frame: RenderFrame) {
         // RFC-0030 §I1. This scope's own sample is written when the guard
-        // drops — after `drain_telemetry` below — so it rides along with the
+        // drops, after `drain_telemetry` below, so it rides along with the
         // *next* tick's block rather than the one it timed. That one-tick lag
         // is inherent to measuring the hand-off from inside the hand-off, and
         // is preferable to the alternatives: hoisting the drain out of
@@ -295,7 +295,7 @@ impl Relay {
         //
         // The relay is latest-wins: a slow render thread simply never sees
         // some published frames. That was harmless while every primitive was
-        // emitted `dirty: true` — the encoder re-shaped everything on every
+        // emitted `dirty: true`, the encoder re-shaped everything on every
         // frame it *did* see. Now that the interpreter reports what actually
         // changed, a skipped frame is a lost dirty bit: the frame that carried
         // "this line's text changed" was dropped, and the next one truthfully
@@ -312,7 +312,7 @@ impl Relay {
         );
         // If the frame we are about to replace was never rendered, its dirty
         // bits describe changes nobody has drawn yet. Carry them forward
-        // rather than dropping them — see `RenderFrame::merge_dirty_from` for
+        // rather than dropping them, see `RenderFrame::merge_dirty_from` for
         // why the union is the correct operation and why the alternative
         // (detect the skip, redraw everything) gives the whole win back.
         if !self.rendered.swap(false, Ordering::Relaxed) {
@@ -326,7 +326,7 @@ impl Relay {
                 let _ = self.recycle_tx.try_send(reclaimed);
             }
             // else: a reader still holds a clone of the old Arc. It will be
-            // deallocated normally once that reader drops it — we simply
+            // deallocated normally once that reader drops it, we simply
             // don't get to recycle its buffer this time.
         }
     }
@@ -348,7 +348,7 @@ impl Relay {
     ///
     /// Non-blocking and may be called concurrently from any number of
     /// threads, including while the logic thread is mid-[`Relay::publish`]
-    /// — this is exactly the "render thread never blocks" guarantee.
+    ///, this is exactly the "render thread never blocks" guarantee.
     #[must_use]
     pub fn current(&self) -> Option<Arc<RenderFrame>> {
         self.latest.load_full()
@@ -358,7 +358,7 @@ impl Relay {
     /// it finishes drawing a frame) voluntarily return a `RenderFrame` to
     /// the recycle pool.
     ///
-    /// Using this is optional — frames returned only via [`Relay::publish`]
+    /// Using this is optional, frames returned only via [`Relay::publish`]
     /// already keep the pool healthy in the common case where the render
     /// thread doesn't hold on to old frames.
     #[must_use]
@@ -410,7 +410,7 @@ impl Relay {
 
     /// Signals the logic thread (and any other cooperating loop) to stop.
     ///
-    /// Idempotent — calling this more than once has no additional effect.
+    /// Idempotent, calling this more than once has no additional effect.
     /// Does not itself join any thread; pair with the [`JoinHandle`]
     /// returned by [`Relay::spawn_logic_thread`].
     pub fn request_shutdown(&self) {
@@ -421,14 +421,14 @@ impl Relay {
     /// `tick` populate it, publishes it, and repeats until
     /// [`Relay::request_shutdown`] is called.
     ///
-    /// `tick` is intentionally unpaced — it runs back-to-back with no
-    /// sleep — because RFC-0001 does not yet specify a fixed tick rate.
+    /// `tick` is intentionally unpaced, it runs back-to-back with no
+    /// sleep, because RFC-0001 does not yet specify a fixed tick rate.
     /// Callers that need pacing (vsync-driven redraw, a fixed-hz simulation
     /// step, etc.) should implement it inside `tick` itself, or wait on an
     /// external signal before returning. A future sub-issue may add a
     /// `Relay::run_at(hz, tick)` helper once that policy is decided.
     ///
-    /// The caller owns the returned [`JoinHandle`] — see the module-level
+    /// The caller owns the returned [`JoinHandle`], see the module-level
     /// docs for why `Relay` cannot safely join its own logic thread.
     ///
     /// # Errors
@@ -465,7 +465,7 @@ impl Relay {
     /// stateful interpreter: the running runtime holds `!Send` data
     /// (`Signal`s, a `ViewArena`, a logic-thread-local reactive scope), so it
     /// can never cross a thread boundary. Only the **factory** is bounded
-    /// `Send + 'static` (INV-6) — it closes over plain owned data (a
+    /// `Send + 'static` (INV-6), it closes over plain owned data (a
     /// `CompiledView`) and is moved into the thread, where it builds the arena
     /// and the borrowing runtime in place. The `for<'a>` HRTB ties the
     /// runtime's borrow to the thread-local arena's lifetime.
@@ -510,7 +510,7 @@ impl Relay {
                     // briefly, capping idle CPU while keeping first-input latency
                     // under one short park. (RFC-0001 leaves pacing to the caller.)
                     if had_input {
-                        // The frame just published reflects this input — wake an
+                        // The frame just published reflects this input, wake an
                         // event-driven (`Wait`-mode) render thread so it presents
                         // the update now, rather than showing the pre-input frame
                         // until the next unrelated OS event.
@@ -840,7 +840,7 @@ mod tests {
         // The M29 shape end-to-end at the relay level: a deliberately slow
         // (sleep + real decode) task on the I/O pool reports its result back
         // through the type-erased channel, exactly as `TextureCache::ensure`
-        // does — proving a blocking `image` decode never touches the caller.
+        // does, proving a blocking `image` decode never touches the caller.
         use std::io::Cursor;
 
         let relay = Relay::new().unwrap();
@@ -928,7 +928,7 @@ mod tests {
         let handle = Relay::spawn_logic_thread(&relay, |_frame| {}).unwrap();
 
         relay.request_shutdown();
-        // If this hangs, the test runner's own timeout will catch it — that
+        // If this hangs, the test runner's own timeout will catch it, that
         // is the acceptable failure signal for "does not join cleanly".
         handle
             .join()
@@ -946,7 +946,7 @@ mod tests {
         // Hammer `current()` from the "render thread" (this thread) while
         // the logic thread is publishing as fast as it can. The assertion
         // is on the *total* wall time for many calls, not on any single
-        // call — a per-iteration millisecond bound is flaky under
+        // call, a per-iteration millisecond bound is flaky under
         // scheduler jitter; a generous aggregate bound is not.
         let start = Instant::now();
         for _ in 0..2000 {
@@ -959,7 +959,7 @@ mod tests {
 
         assert!(
             elapsed < Duration::from_secs(2),
-            "2000 non-blocking reads took {elapsed:?} — render thread appears to be blocking"
+            "2000 non-blocking reads took {elapsed:?}, render thread appears to be blocking"
         );
     }
 
@@ -972,7 +972,7 @@ mod tests {
         // Each published frame encodes a single monotonic "generation"
         // value into every rect it contains. If the swap were ever
         // non-atomic, a reader could observe a frame built from two
-        // different generations — this test asserts that never happens.
+        // different generations, this test asserts that never happens.
         let handle = Relay::spawn_logic_thread(&relay, move |frame| {
             let generation_value = generation_clone.fetch_add(1, Ordering::SeqCst);
             #[allow(clippy::cast_precision_loss)]
@@ -1046,7 +1046,7 @@ mod tests {
         let handle = Relay::spawn_logic_thread(&relay, |_frame| {}).unwrap();
         relay.request_shutdown();
         handle.join().unwrap();
-        drop(relay); // last Arc — runs Relay's drop glue, must not panic
+        drop(relay); // last Arc, runs Relay's drop glue, must not panic
     }
 
     #[test]

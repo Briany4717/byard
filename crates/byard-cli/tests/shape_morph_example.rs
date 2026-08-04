@@ -1,8 +1,8 @@
 //! Guards the committed RFC-0031 §S9–§S10 example through the real `byard`
-//! binary: the `shape_morph` project — the `ngon` shape kind across its whole
+//! binary: the `shape_morph` project, the `ngon` shape kind across its whole
 //! parameter set, the Material 3 Expressive loading indicator as seven members
 //! and one `anim.linear(…, repeat: infinite)` scalar, a morph between two
-//! *different* shape kinds, and an interaction-state spring — must check clean
+//! *different* shape kinds, and an interaction-state spring, must check clean
 //! (parse, type-check, lower, validate with no diagnostics).
 
 use std::path::PathBuf;

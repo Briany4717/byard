@@ -12,8 +12,8 @@
 //! 2. blur it into a downsampled scratch target with a two-pass separable
 //!    21-tap Gaussian (`σ` = the `blur` prop, the CSS `backdrop-filter`
 //!    convention the RFC cites). The quality tiers differ only in *base
-//!    resolution* — high 0.75×, auto-on-capable-GPUs 0.5×, low (and auto on
-//!    software adapters) 0.25× — and the downsample deepens **adaptively**
+//!    resolution*, high 0.75×, auto-on-capable-GPUs 0.5×, low (and auto on
+//!    software adapters) 0.25×, and the downsample deepens **adaptively**
 //!    with σ so tap spacing never exceeds the kernel's clean coverage: the
 //!    anti-ghosting guarantee (see `blur.wgsl`),
 //! 3. composite the result back inside the resumed main pass, clipped to
@@ -92,14 +92,14 @@ pub struct BackdropPipelines {
     composite: wgpu::RenderPipeline,
     /// Bind-group layout of the composite's group 1: blurred texture + sampler.
     composite_bgl: wgpu::BindGroupLayout,
-    /// Shared bilinear sampler (clamping — the halo padding keeps edge taps
+    /// Shared bilinear sampler (clamping, the halo padding keeps edge taps
     /// in-region, and clamping avoids wrap artefacts on the border).
     sampler: wgpu::Sampler,
 }
 
 /// Adaptive-downsample cap: the largest Gaussian σ, in destination-scaled
 /// texels, that the 21-tap kernel covers cleanly (σ/4 tap spacing ≤ 2
-/// texels — see `blur.wgsl`'s anti-ghosting contract).
+/// texels, see `blur.wgsl`'s anti-ghosting contract).
 const SIGMA_CAP: f32 = 8.0;
 
 /// The per-slot scratch cache: backdrop pool index → its blur textures.
@@ -136,7 +136,7 @@ pub struct PreparedBackdrop {
 /// The backdrop is the one pipeline whose data is not known before the render
 /// passes open: a pane samples what is behind it, so it can only be prepared
 /// once that has been rasterised. Reserving up front keeps the arena's rule
-/// intact — the GPU buffer is final before the first pass — while still
+/// intact, the GPU buffer is final before the first pass, while still
 /// removing the per-frame `create_buffer_init` calls.
 ///
 /// It is also the **alignment case**: the blur parameters are a uniform, so
@@ -304,7 +304,7 @@ fn composite_pipeline(
 /// # Errors
 ///
 /// [`ByardError::PipelineCompilation`] if a shader or pipeline fails GPU-side
-/// validation — never a panic, never a software fallback.
+/// validation, never a panic, never a software fallback.
 pub async fn build_pipelines(
     device: &wgpu::Device,
     viewport_layout: &wgpu::BindGroupLayout,
@@ -353,7 +353,7 @@ pub async fn build_pipelines(
 
 /// The *base* downsample factor of a backdrop's scratch targets (RFC-0023
 /// resolved questions "blur quality tiers" + "blur texture resolution"):
-/// the tiers differ only in resolution — the kernel is always the same
+/// the tiers differ only in resolution, the kernel is always the same
 /// separable Gaussian. `high` forces 0.75×, `low` forces the cheap 0.25×,
 /// and `auto` picks 0.5× on capable GPUs (the startup probe) or 0.25× on
 /// software/virtual adapters. The adaptive σ cap in [`prepare`] may deepen
@@ -396,8 +396,8 @@ fn scratch_texture(
 
 /// Ensures the scratch cache holds textures of exactly the required sizes
 /// for `slot`, reusing the previous frame's when unchanged. Keyed by slot
-/// (the backdrop's pool index) so a skipped slot — a pane whose region
-/// degenerated off-screen — never misaligns the others.
+/// (the backdrop's pool index) so a skipped slot, a pane whose region
+/// degenerated off-screen, never misaligns the others.
 fn ensure_scratch(
     scratch: &mut ScratchCache,
     slot: usize,
@@ -490,8 +490,8 @@ fn blur_pass(
 }
 
 /// The physical-pixel copy region behind a pane: the **on-screen** AABB of
-/// its rect — mapped through its paint transform, which is also where any
-/// enclosing scroll displacement lives (RFC-0005) — plus the ±2.5σ kernel
+/// its rect, mapped through its paint transform, which is also where any
+/// enclosing scroll displacement lives (RFC-0005), plus the ±2.5σ kernel
 /// halo, clamped to the target. The composite shader maps each fragment's
 /// framebuffer position into this region, so the two must agree on where
 /// the pane actually is, not where layout placed it. `None` when the region
@@ -603,7 +603,7 @@ pub fn prepare(
     // 2. Blur into the scaled scratch (`b_view` ends holding the final
     //    result). Offsets are uniform in destination-scaled texels for both
     //    passes (`blur.wgsl` contract): the first pass samples the
-    //    full-resolution copy at scaled-grid positions — the bilinear
+    //    full-resolution copy at scaled-grid positions, the bilinear
     //    minification is the downsample.
     let scaled_texel = [1.0 / scaled_size.0 as f32, 1.0 / scaled_size.1 as f32];
     blur_pass(
@@ -655,7 +655,7 @@ pub fn prepare(
 }
 
 /// Builds the bind group and single-instance quad the resumed main pass
-/// composites with — the hand-off half of [`prepare`].
+/// composites with, the hand-off half of [`prepare`].
 #[allow(clippy::cast_precision_loss)]
 #[allow(clippy::too_many_arguments)]
 fn composite_resources(

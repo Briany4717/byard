@@ -1,10 +1,10 @@
-# RFC-0024: Extended Style States — `checked`, `selected`, `invalid`, `indeterminate`, and combined selectors
+# RFC-0024: Extended Style States, `checked`, `selected`, `invalid`, `indeterminate`, and combined selectors
 
-- **Status:** Draft
+- **Status:** Active, implemented. Prop and value-driven states (`checked`, `selected`, `invalid`) and combined selectors are folded in `interp/eval.rs` and guarded by `examples/style_states` (verified against the tree 2026-08-03; see `support/STATUS_RFCS.md`).
 - **Author(s):** Briany4717
 - **Created:** 2026-07-10
 - **Last updated:** 2026-07-10
-- **Depends on:** RFC-0003 (E3 focus, event catalog), RFC-0005 (intrinsic catalog — value-widget states), RFC-0012 (style states system — `hover`/`pressed`/`focused`/`disabled` already landed; this extends it), RFC-0016 (style system — `on <state> {}` blocks), RFC-0018 (Checkbox, RadioButton — new intrinsics that source these states).
+- **Depends on:** RFC-0003 (E3 focus, event catalog), RFC-0005 (intrinsic catalog, value-widget states), RFC-0012 (style states system, `hover`/`pressed`/`focused`/`disabled` already landed; this extends it), RFC-0016 (style system, `on <state> {}` blocks), RFC-0018 (Checkbox, RadioButton, new intrinsics that source these states).
 - **Completes:** RFC-0012's "Remaining" items: `checked`/`selected`/`invalid` value-widget states and combined selectors.
 
 ---
@@ -32,7 +32,7 @@ when multiple states are simultaneously true.
 RFC-0012 landed four states (`hover`, `pressed`, `focused`, `disabled`) and
 noted the rest as "remaining." The byard-material gap analysis confirmed the
 impact: without `checked`, the `Checkbox` workaround can't theme the checkmark
-container differently when checked vs. unchecked using engine-managed states —
+container differently when checked vs. unchecked using engine-managed states, 
 it resorts to `when checked { ... } else { ... }` which duplicates the entire
 element tree. Without `invalid`, a `TextField` can't show an error border
 reactively. Without combined selectors, expressing "hovered AND focused" requires
@@ -41,11 +41,11 @@ nesting `when` blocks.
 These states complete the interactive-style vocabulary needed for production
 component libraries. Material and Cupertino both rely on them:
 
-- **Checkbox checked/indeterminate** — container fill, checkmark visibility.
-- **RadioButton selected** — inner dot visibility, ring color.
-- **TextField invalid** — border and label color change, error text visibility.
-- **Tab/NavItem selected** — active indicator, color weight.
-- **Combined states** — a focused+hovered input has a different outline than
+- **Checkbox checked/indeterminate**, container fill, checkmark visibility.
+- **RadioButton selected**, inner dot visibility, ring color.
+- **TextField invalid**, border and label color change, error text visibility.
+- **Tab/NavItem selected**, active indicator, color weight.
+- **Combined states**, a focused+hovered input has a different outline than
   focused-only or hovered-only.
 
 ---
@@ -92,7 +92,7 @@ View EmailField() {
 
 `invalid: Bool` is a prop on `TextField` (and potentially other form fields)
 that activates the `invalid` pseudo-state. It's set by the developer, not by
-the engine — validation logic is app-specific.
+the engine, validation logic is app-specific.
 
 ### Combined selectors
 
@@ -132,7 +132,7 @@ View NavTab(label: Str, active: Bool = false) {
 
 `selected: Bool` is a universal prop (available on any intrinsic). Setting it to
 true activates the `selected` pseudo-state on that element. Unlike `checked`
-(which is a value-widget state driven by `bind:`), `selected` is caller-driven —
+(which is a value-widget state driven by `bind:`), `selected` is caller-driven, 
 the developer passes the selection state explicitly.
 
 ---
@@ -201,15 +201,15 @@ fn specificity(s: &ConditionalStyle) -> usize {
 
 | Intrinsic | New prop | Type | Activates |
 |---|---|---|---|
-| `Checkbox` | (none — `value: Bool` drives `checked`) | — | `checked` |
+| `Checkbox` | (none - `value: Bool` drives `checked`) | - | `checked` |
 | `Checkbox` | `indeterminate: Bool` | `Bool` | `indeterminate` |
-| `Toggle` | (none — `value: Bool` drives `checked`) | — | `checked` |
-| `RadioButton` | (none — `value: Bool` drives `selected`) | — | `selected` |
+| `Toggle` | (none - `value: Bool` drives `checked`) | - | `checked` |
+| `RadioButton` | (none - `value: Bool` drives `selected`) | - | `selected` |
 | `TextField` | `invalid: Bool` | `Bool` | `invalid` |
 | *any* | `selected: Bool` | `Bool` | `selected` |
 | *any* | `invalid: Bool` | `Bool` | `invalid` |
 
-`selected` and `invalid` are **universal props** — any element can opt into
+`selected` and `invalid` are **universal props**, any element can opt into
 them. This supports custom selection patterns (nav items, tabs, chips).
 
 ### 4. Grammar extension
@@ -233,9 +233,9 @@ Levenshtein hint.
 - **Nine states.** The combinatorial space of combined selectors is large. Two-
   state combinations alone give 36 pairs. Developers need guidance on which
   combinations are meaningful. The compiler could warn on nonsensical combinations
-  (e.g., `checked+indeterminate` — mutually exclusive on Checkbox).
+  (e.g., `checked+indeterminate`, mutually exclusive on Checkbox).
 - **`selected` on any element** is permissive. It's a manual state, not engine-
-  driven — the developer is responsible for setting it correctly. Misuse (setting
+  driven, the developer is responsible for setting it correctly. Misuse (setting
   `selected: true` on unrelated elements) won't cause errors but will confuse
   styling.
 - **`indeterminate` is Checkbox-only.** Adding it as a universal state would be
@@ -249,7 +249,7 @@ Levenshtein hint.
 **Why engine-managed states, not `var`-driven `when` blocks?** RFC-0012 already
 answered this: engine states are bounded, synthesized, and resolve at style-
 layer-4 precedence. `var`-driven states reopen the general D8 dynamic-style
-problem. `checked`/`selected`/`invalid` are bounded like `hover`/`pressed` —
+problem. `checked`/`selected`/`invalid` are bounded like `hover`/`pressed`, 
 they come from intrinsic state or explicit props, not arbitrary computation.
 
 **Why `+` for combined selectors, not nesting?** Nesting (`on hover { on pressed
@@ -309,11 +309,11 @@ patterns (`validate: email`, `validate: /regex/`).
 
 ## Future possibilities
 
-- **Custom states** — developer-defined state names beyond the built-in set
+- **Custom states**, developer-defined state names beyond the built-in set
   (e.g., `on loading { ... }`). Would require a state registry per View.
-- **State-based transitions** — `on checked(enter) { ... }` / `on checked(exit)
+- **State-based transitions**, `on checked(enter) { ... }` / `on checked(exit)
   { ... }` for mount/unmount animations.
-- **Form validation integration** — `validate: Fn(Str) -> Bool` prop on
+- **Form validation integration**, `validate: Fn(Str) -> Bool` prop on
   `TextField` that auto-drives `invalid`.
-- **Negation and disjunction** — `on !disabled { ... }`, `on hover|focused
+- **Negation and disjunction**, `on !disabled { ... }`, `on hover|focused
   { ... }`.

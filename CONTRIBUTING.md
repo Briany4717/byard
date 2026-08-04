@@ -2,7 +2,7 @@
 
 Thanks for your interest in Byard. Contributions are welcome from day one.
 
-Byard is in **Phase 1 — Engine core**. Phase 0 (design) is complete, and the
+Byard is in **Phase 1, Engine core**. Phase 0 (design) is complete, and the
 engine core is now being built piece by piece. The codebase builds, tests run,
 and CI is green. The `byld` DSL and the public engine API are still expected
 to change as Phase 1 evolves, but the foundations are in place.
@@ -19,8 +19,8 @@ to change as Phase 1 evolves, but the foundations are in place.
 | **Documentation** | Fixes to the README, RFCs, or this file are always welcome. |
 
 The [Unresolved Questions](docs/rfcs/0001-core-architecture.md#unresolved-questions)
-section of RFC-0001 still lists open design problems — accessibility mapping,
-runtime error handling, and the testing strategy for a multi-threaded engine —
+section of RFC-0001 still lists open design problems, accessibility mapping,
+runtime error handling, and the testing strategy for a multi-threaded engine, 
 where experienced reviewers can have outsized impact.
 
 ## Before you open an issue
@@ -37,10 +37,10 @@ where experienced reviewers can have outsized impact.
    can be agreed on before you spend time on it. Typo fixes and small doc changes
    can skip this.
 2. Fork the repository and create a branch from `main`.
-3. Make your change. Keep the commit history clean — small, focused commits.
+3. Make your change. Keep the commit history clean, small, focused commits.
 4. Make sure the checks pass locally (see below).
 5. Open the PR, fill in the template, and link the issue it closes.
-6. A maintainer will review. Expect discussion — Phase 1 iterates a lot.
+6. A maintainer will review. Expect discussion, Phase 1 iterates a lot.
 
 ### Commit messages
 
@@ -58,10 +58,10 @@ semi-automatically later.
 ## Local development
 
 ```sh
-# Format — must be clean before a PR
+# Format, must be clean before a PR
 cargo fmt --all
 
-# Lints — CI treats warnings as errors
+# Lints, CI treats warnings as errors
 cargo clippy --workspace --all-targets -- -D warnings
 
 # Tests
@@ -77,7 +77,7 @@ green.
 ### Benchmarks
 
 The Evaluator subsystem ships with benchmarks under `crates/byard-core/benches/`.
-They are **not** part of CI — they are local-only tools for verifying that
+They are **not** part of CI, they are local-only tools for verifying that
 changes don't regress hot-path performance.
 
 ```sh
@@ -96,7 +96,7 @@ Byard tracks **stable Rust**. The current MSRV is declared in the workspace
 
 - `rustfmt` is the source of truth for formatting. Do not hand-format.
 - `clippy` warnings are errors. If a lint is wrong for a specific case, `#[allow(...)]`
-  it with a comment explaining why — don't silence it globally.
+  it with a comment explaining why, don't silence it globally.
 - Follow the **strict domain separation** principle: engine crates must not depend
   on `winit` or any concrete platform. Platform code goes behind the `PlatformHost`
   trait. A PR that couples the core to a windowing library will be asked to change.
@@ -137,5 +137,5 @@ Apache-2.0 license. You do not need to sign a CLA.
 ## Questions
 
 If something here is unclear, open a
-[discussion](https://github.com/Briany4717/byard/discussions) — improving this document
+[discussion](https://github.com/Briany4717/byard/discussions), improving this document
 is itself a welcome contribution.

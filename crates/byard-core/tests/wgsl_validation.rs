@@ -2,7 +2,7 @@
 //!
 //! `naga` is the same shader front-end/validator `wgpu` uses internally, so a
 //! green validation here predicts a clean `Device::create_shader_module` on the
-//! GPU — caught in CI without a graphics device. M44 adds the fifth shader
+//! GPU, caught in CI without a graphics device. M44 adds the fifth shader
 //! (`vector_msdf.wgsl`); this test keeps all five honest from now on.
 
 use naga::valid::{Capabilities, ValidationFlags, Validator};

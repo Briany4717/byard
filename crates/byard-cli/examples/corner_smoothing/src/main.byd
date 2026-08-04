@@ -1,4 +1,4 @@
-// RFC-0031 §S1–S3 — superelliptical (continuous-curvature) corners.
+// RFC-0031 §S1–S3, superelliptical (continuous-curvature) corners.
 //
 // Run it (from the repo root):
 //   cd crates/byard-cli/examples/corner_smoothing
@@ -13,16 +13,16 @@
 //   1. The ramp: same `radius: 28`, seven profiles. The circle's corner meets
 //      its straight edge at a curvature discontinuity you can see once you know
 //      to look; the squircle's does not.
-//   2. The shadow and the border follow the *same* profile as the fill — a
+//   2. The shadow and the border follow the *same* profile as the fill, a
 //      shadow with a different corner than its caster reads as a bug (§Q2).
 //   3. Tap the card: `smooth` animates. It is a paint property, so the spring
-//      runs entirely in the shader's exponent — nothing relaid out (INV-8).
+//      runs entirely in the shader's exponent, nothing relaid out (INV-8).
 //   4. The `Canvas` row: the `rect` shape kind takes the same scalar.
 View Main() {
     var squircled = false
 
     Column #[bg: 0x14161C, p: 32, gap: 28, width: 760] {
-        Text("smooth — the corner profile radius is measured with")
+        Text("smooth, the corner profile radius is measured with")
             #[color: 0xF2F3F5, size: 20, weight: bold]
 
         // ── 1. The ramp ──────────────────────────────────────────────────
@@ -49,7 +49,7 @@ View Main() {
         }
 
         // ── 3. It animates (paint-class, RFC-0010) ───────────────────────
-        Text("tap the card — smooth is animatable, and moves no layout")
+        Text("tap the card, smooth is animatable, and moves no layout")
             #[color: 0x8A90A0, size: 13]
         Box #[bg: 0xE8734A, radius: 44, width: 220, height: 120,
               smooth: squircled ? 1.0 : 0.0 with anim.spring(stiffness: 180, damping: 0.7)]

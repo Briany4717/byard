@@ -15,7 +15,7 @@ fn int(n: i64) -> Value {
     Value::Int(n)
 }
 
-/// Fixture 1 — diamond, single compute. `a → b,c → d=b+c`.
+/// Fixture 1, diamond, single compute. `a → b,c → d=b+c`.
 #[test]
 fn diamond_computes_d_exactly_once() {
     let mut ctx = ReactiveCtx::new();
@@ -43,7 +43,7 @@ fn diamond_computes_d_exactly_once() {
     assert_eq!(ctx.binding_value(d), Some(int(220)));
 }
 
-/// Fixture 2 — idempotent marking, wide diamond. `a → m1..m50 → d`.
+/// Fixture 2, idempotent marking, wide diamond. `a → m1..m50 → d`.
 #[test]
 fn wide_diamond_marks_each_node_once() {
     let mut ctx = ReactiveCtx::new();
@@ -65,7 +65,7 @@ fn wide_diamond_marks_each_node_once() {
 
     let before = ctx.mark_effective_visits();
     ctx.write_signal(a, int(2));
-    // 50 memos + d, each dirtied exactly once — never exponential.
+    // 50 memos + d, each dirtied exactly once, never exponential.
     assert_eq!(ctx.mark_effective_visits() - before, 51);
 
     let e = ctx.begin_tick();
@@ -74,7 +74,7 @@ fn wide_diamond_marks_each_node_once() {
     assert_eq!(ctx.binding_value(d), Some(int(100)));
 }
 
-/// Fixture 3 — dynamic dependencies. Binding reads `a` when `flag` else `b`.
+/// Fixture 3, dynamic dependencies. Binding reads `a` when `flag` else `b`.
 #[test]
 fn dynamic_dependencies_swap_on_branch_change() {
     let mut ctx = ReactiveCtx::new();
@@ -120,7 +120,7 @@ fn dynamic_dependencies_swap_on_branch_change() {
     assert_eq!(ctx.binding_value(bind), Some(int(99)));
 }
 
-/// Fixture 4 — glitch-freedom. `b=a+1; c=a+1; d=(b==c)` is always `true`.
+/// Fixture 4, glitch-freedom. `b=a+1; c=a+1; d=(b==c)` is always `true`.
 #[test]
 fn glitch_freedom_d_is_always_true() {
     let mut ctx = ReactiveCtx::new();
@@ -148,7 +148,7 @@ fn glitch_freedom_d_is_always_true() {
     }
 }
 
-/// Fixture 5 — `untrack`. `x = a + untrack(|| b)` never subscribes to `b`.
+/// Fixture 5, `untrack`. `x = a + untrack(|| b)` never subscribes to `b`.
 #[test]
 fn untrack_does_not_subscribe() {
     let mut ctx = ReactiveCtx::new();
@@ -185,7 +185,7 @@ fn untrack_does_not_subscribe() {
     assert_eq!(ctx.signal_subscriber_count(b), 0);
 }
 
-/// Fixture 6 — over-mark bounded. Memo input changes, output equal: the binding
+/// Fixture 6, over-mark bounded. Memo input changes, output equal: the binding
 /// re-evaluates but writes no frame field.
 #[test]
 fn over_mark_re_evaluates_but_writes_nothing() {
@@ -215,7 +215,7 @@ fn over_mark_re_evaluates_but_writes_nothing() {
     );
 }
 
-/// Fixture 7 — structural `when`. N toggles ⇒ N mount/unmount pairs, no leaked
+/// Fixture 7, structural `when`. N toggles ⇒ N mount/unmount pairs, no leaked
 /// subscriptions.
 #[test]
 fn structural_when_mounts_and_unmounts_without_leaks() {
@@ -263,7 +263,7 @@ fn structural_when_mounts_and_unmounts_without_leaks() {
     }
 }
 
-/// Fixture 8 — structural `for` (coarse). Mutating the list drops and rebuilds.
+/// Fixture 8, structural `for` (coarse). Mutating the list drops and rebuilds.
 #[test]
 fn structural_for_drops_and_rebuilds() {
     let mut ctx = ReactiveCtx::new();
@@ -290,7 +290,7 @@ fn structural_for_drops_and_rebuilds() {
     assert_eq!(values, vec![int(3), int(4), int(5)]);
 }
 
-/// Fixture 9 — cycle trip-wire (debug). Two mutually-reading memos panic the
+/// Fixture 9, cycle trip-wire (debug). Two mutually-reading memos panic the
 /// `evaluating` `debug_assert!` instead of hanging.
 #[test]
 #[should_panic(expected = "reactive cycle")]
@@ -303,7 +303,7 @@ fn cycle_trip_wire_fires() {
     let _ = ctx.read_memo(b);
 }
 
-/// Fixture 10 — tick boundary. Batched mutations settle before any evaluation,
+/// Fixture 10, tick boundary. Batched mutations settle before any evaluation,
 /// and each dirty scope evaluates once.
 #[test]
 fn tick_boundary_batches_marks_before_evaluation() {

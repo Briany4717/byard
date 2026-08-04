@@ -18,10 +18,10 @@
 ///
 /// Internally packs three fields into a single 64-bit word:
 ///
-/// - bits 0–31  — `index`, the position inside the owning subsystem's table
-/// - bits 32–47 — `generation`, a monotonic counter that lets stale IDs be
+/// - bits 0–31, `index`, the position inside the owning subsystem's table
+/// - bits 32–47, `generation`, a monotonic counter that lets stale IDs be
 ///   detected when the underlying slot is reused
-/// - bits 48–63 — `kind`, a discriminant identifying which subsystem owns
+/// - bits 48–63, `kind`, a discriminant identifying which subsystem owns
 ///   the target (atlas node, encoder primitive, …)
 ///
 /// The internal representation is private; consumers must use [`TargetId::new`]
@@ -55,7 +55,7 @@ impl TargetId {
     /// Constructs a `TargetId` from its three components.
     ///
     /// The `index`, `generation`, and `kind` are packed into a single
-    /// 64-bit word — see the [`TargetId`] type documentation for the
+    /// 64-bit word, see the [`TargetId`] type documentation for the
     /// bit layout.
     #[must_use]
     pub const fn new(index: u32, generation: u16, kind: u16) -> Self {
@@ -160,7 +160,7 @@ impl Rect {
 
 /// A paint-time affine transform (RFC-0011): translate/scale/rotate about a
 /// pivot, plus an opacity multiplier. Applied in the vertex/fragment shader
-/// *after* Taffy has placed the element — layout geometry and hit-testing
+/// *after* Taffy has placed the element, layout geometry and hit-testing
 /// rects are never affected, and Taffy is never re-run because a transform
 /// changed (INV-8). The identity value is a free no-op in the shader.
 ///
@@ -195,7 +195,7 @@ impl Transform {
     };
 
     /// Whether this transform is a no-op (bit-exact match against `IDENTITY`
-    /// — every field is set from either a literal default or an exact
+    ///, every field is set from either a literal default or an exact
     /// user-authored value, never accumulated arithmetic, so exact float
     /// comparison is safe here).
     #[must_use]
@@ -219,7 +219,7 @@ impl Transform {
     }
 
     /// Maps a free vector (a displacement) through this transform: scale and
-    /// rotate only — no pivot, no translation.
+    /// rotate only, no pivot, no translation.
     #[must_use]
     fn apply_vec(&self, v: [f32; 2]) -> [f32; 2] {
         let dx = v[0] * self.scale[0];
@@ -228,7 +228,7 @@ impl Transform {
         [dx * cos - dy * sin, dx * sin + dy * cos]
     }
 
-    /// The mean of the two scale axes — the single factor a scalar-only sink
+    /// The mean of the two scale axes, the single factor a scalar-only sink
     /// (text `font_size`, a uniform glyph scale) uses when an ancestor's group
     /// transform is non-uniform. Exact for the common uniform-scale case.
     #[must_use]
@@ -239,7 +239,7 @@ impl Transform {
     /// Composes `self` (the outer / ancestor transform) with `inner` (a
     /// descendant's own transform), yielding the single [`Transform`] that maps
     /// the descendant's laid-out geometry as if `inner` were applied first and
-    /// `self` after it — the basis of RFC-0011 group transforms (a scaled or
+    /// `self` after it, the basis of RFC-0011 group transforms (a scaled or
     /// translated container carries its children, text, and widgets with it).
     ///
     /// Exact when the outer transform has no rotation (the common scale/translate
@@ -275,7 +275,7 @@ impl Default for Transform {
     }
 }
 
-/// A packed, POD animation curve (RFC-0010) — a `u32` tag plus three `f32`
+/// A packed, POD animation curve (RFC-0010), a `u32` tag plus three `f32`
 /// parameters, so it crosses the frame boundary as plain data and the engine
 /// never needs to know the compiler's typed `Curve`. The compiler packs its
 /// resolved curve into this at lower time; both the CPU (settling) and the GPU
@@ -283,7 +283,7 @@ impl Default for Transform {
 #[repr(C)]
 #[derive(Copy, Clone, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct MotionCurve {
-    /// The curve family — one of the `MotionCurve::*` tag constants.
+    /// The curve family, one of the `MotionCurve::*` tag constants.
     pub kind: u32,
     /// Curve parameters, interpreted by `kind`:
     /// - linear / ease: `[duration_ms, _, _]`
@@ -306,7 +306,7 @@ impl MotionCurve {
 
 /// A paint-time animatable scalar (RFC-0010 §"The animatable value model").
 ///
-/// Carries only endpoints and a curve — **no per-frame CPU work**: the CPU
+/// Carries only endpoints and a curve, **no per-frame CPU work**: the CPU
 /// rewrites `to` (and reseeds `from`/`start_ms`) once, on a target change, and
 /// the shader interpolates every active frame. The CPU also evaluates the same
 /// closed forms ([`sample`](Self::sample)/[`velocity`](Self::velocity)) to
@@ -370,7 +370,7 @@ impl Motion {
         if self.curve.kind == MotionCurve::SPRING {
             spring_velocity(self, t)
         } else {
-            // Finite-difference the eased/linear ramp — cheap and only used for
+            // Finite-difference the eased/linear ramp, cheap and only used for
             // settling, where a derivative-free estimate is plenty.
             const H: f32 = 1.0 / 240.0;
             (self.sample_secs(t + H) - self.sample_secs(t)) / H
@@ -382,7 +382,7 @@ impl Motion {
     ///
     /// This is the entry point a *looping* animation samples through
     /// (RFC-0025): the repeat clock ([`loop_phase`]) reduces wall time to an
-    /// offset inside one iteration, and that offset — not `now − start_ms` — is
+    /// offset inside one iteration, and that offset, not `now − start_ms`, is
     /// what the curve is evaluated at. Also used by the finite-difference
     /// velocity of the non-spring curves.
     #[must_use]
@@ -405,7 +405,7 @@ impl Motion {
         self.is_settled_with_eps(now_ms, Self::DEFAULT_EPS_POS, Self::DEFAULT_EPS_VEL)
     }
 
-    /// Whether the motion has reached rest under caller-supplied thresholds —
+    /// Whether the motion has reached rest under caller-supplied thresholds,
     /// within `eps_pos` of `to` and moving slower than `eps_vel`. The runtime
     /// scales these to the animated property's unit (px vs. opacity vs. colour
     /// channel) so settling is neither too eager nor too lax.
@@ -416,17 +416,17 @@ impl Motion {
 
     /// Shortest period a repeating animation may wrap at (one 60 Hz frame).
     pub const MIN_PERIOD_MS: u32 = 16;
-    /// Longest period a repeating animation may wrap at — the cap an undamped
+    /// Longest period a repeating animation may wrap at, the cap an undamped
     /// spring (which never settles) falls back to.
     pub const MAX_PERIOD_MS: u32 = 10_000;
 
-    /// How long one play of this motion lasts, in whole milliseconds — the
+    /// How long one play of this motion lasts, in whole milliseconds, the
     /// period a repeating animation wraps at (RFC-0025 §1).
     ///
     /// A fixed-duration curve simply reports its duration. A spring has no
     /// duration, so its period is the time it takes to come to rest within
     /// `eps_pos`: the closed forms all decay under an `e^{-ζωt}` envelope, so
-    /// `|d|·e^{-ζωt} = eps` inverts to `t = ln(|d| / eps) / (ζω)` — a genuine
+    /// `|d|·e^{-ζωt} = eps` inverts to `t = ln(|d| / eps) / (ζω)`, a genuine
     /// closed form, no iteration. That is exactly the "restarts when it settles"
     /// rule of RFC-0025, evaluated ahead of time so every curve family repeats
     /// through the one integer-millisecond clock.
@@ -482,7 +482,7 @@ impl Motion {
 /// `repeat: infinite`, the default single play).
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub enum RepeatMode {
-    /// Play once and hold the final value — RFC-0010's original behaviour.
+    /// Play once and hold the final value, RFC-0010's original behaviour.
     #[default]
     Once,
     /// Play exactly `n` times (`n ≥ 1`), then hold the final value.
@@ -500,7 +500,7 @@ impl RepeatMode {
     }
 }
 
-/// Where a repeating animation is within its current iteration (RFC-0025 §1) —
+/// Where a repeating animation is within its current iteration (RFC-0025 §1),
 /// the output of [`loop_phase`], and the only bridge between wall time and a
 /// curve's own `0..duration` domain.
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -512,7 +512,7 @@ pub struct LoopPhase {
     /// Zero-based iteration index, clamped to the last one once `finished`.
     pub iteration: u32,
     /// True once a finite repeat has played out. The caller holds the final
-    /// value and drops the animation from the active set — an
+    /// value and drops the animation from the active set, an
     /// [`Infinite`](RepeatMode::Infinite) animation never reports this, which is
     /// what keeps frames flowing.
     pub finished: bool,
@@ -572,11 +572,11 @@ pub fn loop_phase(period_ms: u32, elapsed_ms: u32, repeat: RepeatMode, reverse: 
 pub const MAX_KEYFRAME_STEPS: usize = 8;
 
 /// The pair of keyframe steps surrounding the current progress, and the eased
-/// blend factor between them (RFC-0025 §3) — [`keyframe_cursor`]'s answer.
+/// blend factor between them (RFC-0025 §3), [`keyframe_cursor`]'s answer.
 ///
 /// Deliberately value-free: the *timing* half of keyframes lives here in
 /// `byard-core` (pure, unit-tested arithmetic), while interpolating the actual
-/// values — which may be scalars or coordinate pairs — stays with the
+/// values, which may be scalars or coordinate pairs, stays with the
 /// interpreter that knows what a value is.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct KeyframeCursor {
@@ -615,7 +615,7 @@ pub fn keyframe_cursor(percents: &[f32], easings: &[u32], progress: f32) -> Keyf
     }
     // The first step strictly past `p` closes the active segment. The table is
     // capped at `MAX_KEYFRAME_STEPS`, so the linear scan is a handful of
-    // comparisons — cheaper than a branchy binary search at this size.
+    // comparisons, cheaper than a branchy binary search at this size.
     let hi = percents.iter().position(|&s| s > p).unwrap_or(last);
     let lo = hi - 1;
     let span = percents[hi] - percents[lo];
@@ -733,7 +733,7 @@ fn spring_position(m: &Motion, t: f32) -> f32 {
     }
 }
 
-/// Analytic damped-spring velocity (units/second) at elapsed time `t` — the
+/// Analytic damped-spring velocity (units/second) at elapsed time `t`, the
 /// exact derivative of [`spring_position`], so it is accurate even at `t = 0`
 /// where the initial acceleration is large. Each branch satisfies `v(0) = v0`.
 #[allow(clippy::many_single_char_names)] // standard spring-physics notation
@@ -770,7 +770,7 @@ fn spring_velocity(m: &Motion, t: f32) -> f32 {
 /// Shared between the logic thread (which populates [`RenderFrame::instances`])
 /// and the Encoder (which uploads the slice to the GPU instance buffer). Lives
 /// in `frame` rather than `encoder` because it crosses the subsystem boundary
-/// between the Logic thread's layout pass and the Encoder's GPU dispatch —
+/// between the Logic thread's layout pass and the Encoder's GPU dispatch,
 /// see the RFC-0001 §9 dependency graph.
 ///
 /// `#[repr(C)]` and `bytemuck` derives match the layout declared in
@@ -791,7 +791,7 @@ pub struct BoxInstance {
     /// travels from a circular arc (`0.0`, the default and the historical
     /// behaviour) towards a squircle (`1.0`). The shaders read it as the
     /// exponent of an Lⁿ norm, `n = 2 + smooth * 4`, and **short-circuit to the
-    /// existing L² expression at `n == 2`** — so an unset `smooth` produces
+    /// existing L² expression at `n == 2`**, so an unset `smooth` produces
     /// bit-identical pixels to before the property existed.
     ///
     /// Declared last so the earlier fields keep their byte offsets, which the
@@ -817,7 +817,7 @@ impl Default for BoxInstance {
 /// Maps the authored corner smoothing (`0..=1`) onto the Lⁿ exponent the
 /// rounded-box fields use (RFC-0031 §S1): `0.0 → 2` (the circular arc every
 /// pipeline drew before this property existed) through `1.0 → 6` (a pronounced
-/// squircle). Out-of-range input is clamped rather than rejected — an exponent
+/// squircle). Out-of-range input is clamped rather than rejected, an exponent
 /// below 2 produces concave corners nobody wants (RFC-0031 §Q1).
 #[must_use]
 pub fn corner_exponent(smooth: f32) -> f32 {
@@ -834,7 +834,7 @@ pub enum ImageFit {
     Contain,
     /// Scale uniformly to cover the rect (crop).
     Cover,
-    /// No scaling — image at natural size, top-left aligned.
+    /// No scaling, image at natural size, top-left aligned.
     None,
 }
 
@@ -847,7 +847,7 @@ pub enum ImageFit {
 pub struct DecoratedBox {
     /// The underlying fill/radii data. `base.transform`'s `translate`/`scale`/
     /// `rotate`/`origin` apply as usual; `base.transform.opacity` is **not**
-    /// consulted for decorated boxes — [`DecoratedBox::opacity`] (below) is
+    /// consulted for decorated boxes, [`DecoratedBox::opacity`] (below) is
     /// the one that reaches the shader, since it predates RFC-0011 and
     /// already has an established call-site contract.
     pub base: BoxInstance,
@@ -871,7 +871,7 @@ pub struct DecoratedBox {
     /// An optional linear colour ramp composited over the fill (RFC-0001 §3.1:
     /// the `DecoratedBox` pipeline's declared remit is "rectangles with
     /// border-radius, **gradients**, box-shadows"). `None` is the historical
-    /// behaviour — a flat `base.color`.
+    /// behaviour, a flat `base.color`.
     pub gradient: Option<Gradient>,
     /// Whether this decoration changed since the last tick.
     ///
@@ -879,7 +879,7 @@ pub struct DecoratedBox {
     /// pipeline (RFC-0001 §3.3): set upstream by the Evaluator → `RenderFrame`
     /// lowering, trusted by the Encoder when computing the incremental scissor
     /// union. A decoration's `base` is a [`BoxInstance`], which is a pure GPU
-    /// `Pod` vertex type and therefore cannot itself carry a dirty bit — so the
+    /// `Pod` vertex type and therefore cannot itself carry a dirty bit, so the
     /// flag lives here on the (non-`Pod`) wrapper instead.
     pub dirty: bool,
 }
@@ -913,7 +913,7 @@ impl Default for DecoratedBox {
 ///
 /// The ramp runs along `angle` (0 = left→right, `π/2` = top→bottom) across the
 /// element's own box, from `from` at the start, through `mid` at `mid_pos`, to
-/// `to` at the end — enough for the ordinary two-stop case (`mid` on the line
+/// `to` at the end, enough for the ordinary two-stop case (`mid` on the line
 /// between them) *and* for the highlight-band shape a shimmer needs
 /// (transparent → bright → transparent), which two stops cannot express.
 ///
@@ -926,7 +926,7 @@ impl Default for DecoratedBox {
 /// travelling sweep instead of a jump at the end of each play. Note the sign: a
 /// *rising* offset moves the ramp's colours **against** `angle`, so a
 /// left-to-right sweep is `angle: 180deg` (a ramp pointing right-to-left) with an
-/// offset counting up — the same relationship a scrolling background-position has
+/// offset counting up, the same relationship a scrolling background-position has
 /// in CSS.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct Gradient {
@@ -966,7 +966,7 @@ impl Gradient {
     }
 }
 
-/// A single in-flight ripple — the RFC-0023 Material ink reveal, lowered to
+/// A single in-flight ripple, the RFC-0023 Material ink reveal, lowered to
 /// the `Ripple` effects pipeline. One instance is one expanding, fading circle
 /// clipped to its element's rounded rect, composited *above* the element's
 /// background and *below* its children (the emission order between the
@@ -976,7 +976,7 @@ impl Gradient {
 /// [`Motion`] closed forms (the RFC-0010 model as landed: the CPU evaluates the
 /// curve at the engine clock while the animation is active and re-emits the
 /// instance; the shader rasterises the circle analytically). `radius` and
-/// `alpha` therefore carry the *current* sampled values — the GPU never needs
+/// `alpha` therefore carry the *current* sampled values, the GPU never needs
 /// the engine clock.
 ///
 /// Lives in `frame` because it crosses the Evaluator → Encoder subsystem
@@ -986,7 +986,7 @@ impl Gradient {
 #[repr(C)]
 #[derive(Copy, Clone, Debug, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct RippleInstance {
-    /// The element rect `[x, y, width, height]` in logical pixels — both the
+    /// The element rect `[x, y, width, height]` in logical pixels, both the
     /// quad geometry and the rounded-rect clip bounds.
     pub rect: [f32; 4],
     /// `[center_x, center_y, radius, alpha]`: the circle centre in absolute
@@ -996,7 +996,7 @@ pub struct RippleInstance {
     /// Ink colour `[r, g, b, a]`; `a` is the ink's own peak alpha (the fade
     /// multiplies it in the shader via `params.w`).
     pub color: [f32; 4],
-    /// Per-corner clip radii `[tl, tr, br, bl]` — the element's own border
+    /// Per-corner clip radii `[tl, tr, br, bl]`, the element's own border
     /// radii, so the ink never bleeds past a rounded corner (RFC-0023
     /// resolved question: always clip, no opt-out).
     pub radii: [f32; 4],
@@ -1009,19 +1009,19 @@ pub struct RippleInstance {
     /// Paint-time transform pivot (RFC-0011).
     pub t_origin: [f32; 2],
     /// Draw-order depth (NDC-z), stamped by [`RenderFrame::push_ripple`] like
-    /// [`VectorInstance::depth`] — between the element background's depth and
+    /// [`VectorInstance::depth`], between the element background's depth and
     /// its children's.
     pub depth: f32,
     /// Corner smoothing `0.0..=1.0` of the clipping element (RFC-0031 §S1).
     /// The ink is always clipped to its element's outline (RFC-0023), so the
-    /// clip has to follow the *same* corner profile — a squircle button whose
+    /// clip has to follow the *same* corner profile, a squircle button whose
     /// ripple squares off at the corners reads as a rendering error.
     pub smooth: f32,
 }
 
 /// [`BackdropInstance::quality`] tier: auto-select from the GPU capability
 /// probed at startup (RFC-0023 resolved question "Blur quality tiers"). The
-/// kernel is always the two-pass separable Gaussian — the tiers differ only
+/// kernel is always the two-pass separable Gaussian, the tiers differ only
 /// in base resolution: `auto` runs at 0.5× on capable GPUs and drops to the
 /// cheap 0.25× on software/virtual adapters.
 pub const BLUR_QUALITY_AUTO: u32 = 0;
@@ -1038,9 +1038,9 @@ pub const BLUR_QUALITY_HIGH: u32 = 2;
 pub const BLUR_MAX_RADIUS: f32 = 40.0;
 
 /// One backdrop-blur surface (RFC-0023 §2): the iOS frosted-glass/vibrancy
-/// effect. The element's rect samples the scene *behind* it — everything
+/// effect. The element's rect samples the scene *behind* it, everything
 /// emitted before this instance, its own background included (RFC-0023 §4
-/// compositing order) — blurs it, boosts saturation, blends `tint` on top,
+/// compositing order), blurs it, boosts saturation, blends `tint` on top,
 /// and draws the result as the element's background, clipped to its rounded
 /// rect. Children and later elements render on top.
 ///
@@ -1049,23 +1049,23 @@ pub const BLUR_MAX_RADIUS: f32 = 40.0;
 /// before it can sample. [`RenderFrame::push_backdrop`] therefore records a
 /// pool-cursor snapshot ([`RenderFrame::backdrop_marks`]) alongside each
 /// instance, and the encoder splits its single UI pass into segments at
-/// those cursors — zero segments (the single classic pass) when no backdrop
+/// those cursors, zero segments (the single classic pass) when no backdrop
 /// is live.
 ///
 /// Lives in `frame` because it crosses the Evaluator → Encoder subsystem
 /// boundary (RFC-0001 §9).
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct BackdropInstance {
-    /// The element rect `[x, y, width, height]` in logical pixels — both the
+    /// The element rect `[x, y, width, height]` in logical pixels, both the
     /// quad geometry and the sampling region behind the element.
     pub rect: [f32; 4],
-    /// Per-corner clip radii `[tl, tr, br, bl]` — the element's own border
+    /// Per-corner clip radii `[tl, tr, br, bl]`, the element's own border
     /// radii, so the glass pane matches its outline exactly.
     pub radii: [f32; 4],
-    /// Gaussian blur σ in logical pixels — the CSS `backdrop-filter:
-    /// blur(N)` convention the RFC cites as its inspiration — already
+    /// Gaussian blur σ in logical pixels, the CSS `backdrop-filter:
+    /// blur(N)` convention the RFC cites as its inspiration, already
     /// clamped to [`BLUR_MAX_RADIUS`] by the evaluator; always `> 0` (a
-    /// blur-less tint never becomes a backdrop — the evaluator lowers it to
+    /// blur-less tint never becomes a backdrop, the evaluator lowers it to
     /// a plain translucent fill instead).
     pub blur: f32,
     /// `backdrop_tint` colour `[r, g, b, a]`, blended over the blurred
@@ -1082,7 +1082,7 @@ pub struct BackdropInstance {
     /// Paint-time transform (RFC-0011 group transforms) applied to the quad.
     pub transform: Transform,
     /// Draw-order depth (NDC-z), stamped by
-    /// [`RenderFrame::push_backdrop`] — after the element's background,
+    /// [`RenderFrame::push_backdrop`], after the element's background,
     /// before its ripple and children.
     pub depth: f32,
     /// Corner smoothing `0.0..=1.0` of the element the pane sits behind
@@ -1111,14 +1111,14 @@ pub const CANVAS_SHAPE_RECT: u32 = 3;
 /// `inner: 0.4, n: 5` a burst, `n: 4, corner: r` a circle approached from the
 /// other direction.
 ///
-/// - `r` is the circumradius — the distance to an outer point, exactly, whatever
+/// - `r` is the circumradius, the distance to an outer point, exactly, whatever
 ///   `corner` is. That exactness is what makes two `ngon`s of the same `r`
 ///   morph into each other without the pair appearing to breathe.
 /// - `corner` rounds every vertex *and* every inner notch by that radius.
 /// - `inner` is normalised so `1.0` is the convex regular polygon and lower
 ///   values pull the notches in towards the centre.
 /// - `n` is an integer ≥ 3 and is **not** animatable (§Q10): a fractional `n`
-///   leaves a partial sector, whose seam sweeps the shape *while animating* —
+///   leaves a partial sector, whose seam sweeps the shape *while animating*,
 ///   the only time the feature is used. Changing shape is what `morph` is for.
 pub const CANVAS_SHAPE_NGON: u32 = 4;
 
@@ -1126,12 +1126,12 @@ pub const CANVAS_SHAPE_NGON: u32 = 4;
 /// shape emitted before RFC-0031 is this, and this mode's rendering path is the
 /// one that existed then.
 pub const GROUP_NONE: u32 = 0;
-/// [`CanvasShape`] combine mode: organic fusion (RFC-0031 §S7) — the members'
+/// [`CanvasShape`] combine mode: organic fusion (RFC-0031 §S7), the members'
 /// fields are unioned by a polynomial smooth-minimum whose blend factor also
 /// mixes their colours, so the surface bridge and the colour transition are one
 /// event.
 pub const GROUP_FUSE: u32 = 1;
-/// [`CanvasShape`] combine mode: sequence morphing (RFC-0031 §S10) — the
+/// [`CanvasShape`] combine mode: sequence morphing (RFC-0031 §S10), the
 /// members are a *sequence*, indexed by an animatable scalar that blends
 /// `floor(phase)` into `floor(phase) + 1` and wraps at the member count.
 pub const GROUP_MORPH: u32 = 2;
@@ -1141,8 +1141,8 @@ pub const GROUP_MORPH: u32 = 2;
 /// Eight, matching RFC-0025's keyframe cap and chosen the same way: it is the
 /// point past which the per-fragment loop stops being free, and past which a
 /// designer is describing something a group is the wrong tool for. Four cannot
-/// express the seven-shape Material 3 Expressive loader — the RFC's motivating
-/// use case — and sixteen doubles the worst-case fragment loop for cases better
+/// express the seven-shape Material 3 Expressive loader, the RFC's motivating
+/// use case, and sixteen doubles the worst-case fragment loop for cases better
 /// written as several groups. Exceeding it is a compile-time diagnostic naming
 /// the ninth shape, never a silent truncation.
 pub const MAX_GROUP_MEMBERS: usize = 8;
@@ -1163,16 +1163,16 @@ pub const MAX_GROUP_MEMBERS: usize = 8;
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default, PartialEq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct ShapeRecord {
-    /// Shape params, first half — the same layout per kind as
+    /// Shape params, first half, the same layout per kind as
     /// [`CanvasShape::params`]`[0..4]`.
     pub params0: [f32; 4],
-    /// Shape params, second half — [`CanvasShape::params`]`[4..8]`.
+    /// Shape params, second half, [`CanvasShape::params`]`[4..8]`.
     pub params1: [f32; 4],
     /// Fill colour `[r, g, b, a]`.
     pub fill_color: [f32; 4],
     /// Stroke colour `[r, g, b, a]`.
     pub stroke_color: [f32; 4],
-    /// `[kind, cap, 0, 0]` — small integers carried exactly in `f32`, matching
+    /// `[kind, cap, 0, 0]`, small integers carried exactly in `f32`, matching
     /// how [`CanvasShape`]'s own instance carries them.
     pub misc: [f32; 4],
 }
@@ -1205,12 +1205,12 @@ pub const CANVAS_CAP_ROUND: u32 = 1;
 pub const CANVAS_CAP_SQUARE: u32 = 2;
 
 /// A programmatic 2-D shape (RFC-0020): one `Canvas` shape command lowered to
-/// a GPU primitive for the `CanvasShape` analytic-SDF pipeline (Tier 1 —
+/// a GPU primitive for the `CanvasShape` analytic-SDF pipeline (Tier 1,
 /// arcs, circles, lines, rects). Coordinates in `params` are **absolute
 /// logical pixels** (the evaluator has already offset the shape by its
 /// `Canvas`'s resolved origin).
 ///
-/// Complex `path(d: …)` commands do not use this type — they rasterize
+/// Complex `path(d: …)` commands do not use this type, they rasterize
 /// through the `VectorMSDF` pipeline (RFC-0020 §2 Tier 2) as a
 /// [`VectorInstance`]; `text(…)` commands lower to [`TextLine`]s.
 #[derive(Clone, Debug, PartialEq)]
@@ -1235,13 +1235,13 @@ pub struct CanvasShape {
     /// Dash pattern `(dash_length, gap_length)` in logical pixels along the
     /// path; a non-positive dash length renders a solid stroke.
     pub dash: [f32; 2],
-    /// Dash phase offset in logical pixels (animatable — RFC-0020 §"Animation").
+    /// Dash phase offset in logical pixels (animatable, RFC-0020 §"Animation").
     pub dash_offset: f32,
     /// Shape opacity `0.0–1.0` (already multiplied by the canvas/inherited
     /// opacity by the lowering).
     pub opacity: f32,
     /// Paint-time transform (RFC-0011), inherited from the `Canvas` element's
-    /// ancestors. `transform.opacity` is **not** consulted — `opacity` above
+    /// ancestors. `transform.opacity` is **not** consulted, `opacity` above
     /// is authoritative, mirroring [`DecoratedBox`]'s contract.
     pub transform: Transform,
     /// Combine mode (RFC-0031 §S4): [`GROUP_NONE`], [`GROUP_FUSE`] or
@@ -1257,7 +1257,7 @@ pub struct CanvasShape {
     pub group_first: u32,
     /// How many members this group has (`<=` [`MAX_GROUP_MEMBERS`]).
     pub group_count: u32,
-    /// Hash of this group's member records — **INV-26**.
+    /// Hash of this group's member records, **INV-26**.
     ///
     /// [`PaintDigest`] compares a primitive by its own bytes at its own pool
     /// position, and a group head's bytes are its mode, its parameter, its
@@ -1274,7 +1274,7 @@ pub struct CanvasShape {
     ///
     /// Written by [`RenderFrame::push_shape_group`]; zero for a non-group.
     pub member_hash: u64,
-    /// Whether this shape changed since the last tick — the [`CanvasShape`]
+    /// Whether this shape changed since the last tick, the [`CanvasShape`]
     /// analogue of [`TextLine::dirty`] (RFC-0001 §3.3), consumed by the
     /// Encoder's incremental scissor union.
     pub dirty: bool,
@@ -1327,7 +1327,7 @@ impl CanvasShape {
             // Arc, circle and ngon: the circumscribed circle's box. An arc's
             // true box is a
             // subset, but sweep-dependent tightening is not worth the CPU per
-            // frame — the quad is still tiny.
+            // frame, the quad is still tiny.
             _ => {
                 let r = p2.max(0.0) + m;
                 Rect::new(p0 - r, p1 - r, r * 2.0, r * 2.0)
@@ -1357,7 +1357,7 @@ pub struct TextureSampler {
     pub opacity: f32,
     /// Whether this image primitive changed since the last tick.
     ///
-    /// The `TextureSampler` analogue of [`TextLine::dirty`] (RFC-0001 §3.3) —
+    /// The `TextureSampler` analogue of [`TextLine::dirty`] (RFC-0001 §3.3),
     /// set upstream by the lowering, trusted by the Encoder's incremental
     /// scissor union. Also set by the Encoder itself the frame after an async
     /// decode completes (M29), so a freshly-loaded image paints without a full
@@ -1372,7 +1372,7 @@ pub struct TextureSampler {
 ///
 /// `#[repr(C)]` + `bytemuck` so the slice uploads to the instance buffer with
 /// zero copy, exactly like [`BoxInstance`]. The shape is identical in dev (JIT
-/// atlas) and release (AOT-baked atlas) — INV-7 — so the render path is the same
+/// atlas) and release (AOT-baked atlas), INV-7, so the render path is the same
 /// in both modes.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -1388,7 +1388,7 @@ pub struct VectorInstance {
     pub px_range: f32,
     /// Array-texture layer holding this glyph's cell.
     pub atlas_layer: u32,
-    /// Draw-order depth (NDC-z, RFC-0011 cross-pass paint order — see
+    /// Draw-order depth (NDC-z, RFC-0011 cross-pass paint order, see
     /// [`draw_depth`]). Set by [`RenderFrame::push_vector`], not by
     /// [`VectorInstance::new`] (which defaults it to the far plane); a bare
     /// `VectorInstance` built outside a `RenderFrame` therefore always loses
@@ -1441,7 +1441,7 @@ pub struct AtlasUpload {
     pub bytes: Vec<u8>,
     /// Caller-assigned identity for this upload (monotonic per-generator),
     /// echoed back through an acknowledgment channel once the render thread
-    /// actually applies it — lets the caller resend an upload indefinitely
+    /// actually applies it, lets the caller resend an upload indefinitely
     /// until confirmed, rather than guessing a fixed retry window.
     pub id: u64,
 }
@@ -1451,7 +1451,7 @@ pub struct AtlasUpload {
 /// Shared between the logic thread (which populates [`RenderFrame::texts`]) and
 /// the Encoder's `TextGlyphPipeline`. Lives in `frame` rather than
 /// `encoder::text_glyph` because it crosses the subsystem boundary between the
-/// Evaluator/Atlas and the Encoder — see RFC-0001 §9.
+/// Evaluator/Atlas and the Encoder, see RFC-0001 §9.
 ///
 /// All coordinates are in **logical pixels**, consistent with [`BoxInstance`].
 #[derive(Debug, Clone)]
@@ -1468,7 +1468,7 @@ pub struct TextLine {
     pub color: [f32; 4],
     /// Whether this line's content changed since the last tick.
     ///
-    /// Set upstream by the Evaluator → Atlas → `RenderFrame` pipeline — never
+    /// Set upstream by the Evaluator → Atlas → `RenderFrame` pipeline, never
     /// derived locally by the Encoder. The Encoder trusts this bit completely
     /// in `--release` builds; see `encoder::text_glyph`'s module documentation.
     pub dirty: bool,
@@ -1538,7 +1538,7 @@ pub struct RenderFrame {
     /// lives here.
     instances_dirty: Vec<bool>,
 
-    /// Decorated-box instances (M21) — boxes with border/shadow/opacity.
+    /// Decorated-box instances (M21), boxes with border/shadow/opacity.
     decorated: Vec<DecoratedBox>,
 
     /// Texture-sampled image instances (M21).
@@ -1571,7 +1571,7 @@ pub struct RenderFrame {
     /// [`push_backdrop`](Self::push_backdrop): everything at pool indices
     /// strictly below the snapshot was emitted *behind* that backdrop, which
     /// is exactly the set the encoder must rasterise before sampling. The
-    /// [`LayerMark`] shape is reused — it is precisely "a cursor into every
+    /// [`LayerMark`] shape is reused, it is precisely "a cursor into every
     /// pool".
     backdrop_marks: Vec<LayerMark>,
 
@@ -1584,7 +1584,7 @@ pub struct RenderFrame {
     /// frame an overlay mounts over a previously clean scene, and the frame it
     /// dismisses. On the mount frame the app beneath is drawn for the first
     /// time in a while, so a union computed from a clean previous frame would
-    /// leave the overlay — and the view under it — partially painted.
+    /// leave the overlay, and the view under it, partially painted.
     ///
     /// This is an explicit request rather than a consequence of the instance
     /// and text counts happening to change, because "the counts happened to
@@ -1600,7 +1600,7 @@ pub struct RenderFrame {
     ///
     /// The Encoder draws in four type-grouped passes (solids → decorated →
     /// textures → text), which alone can never honour paint order *across*
-    /// passes — a container's border (decorated) would always sit above its
+    /// passes, a container's border (decorated) would always sit above its
     /// children (solids), and text above everything. To fix that coherently we
     /// stamp every primitive, in global emission order, with a monotonically
     /// *nearer* NDC-z (see [`draw_depth`]) and let a shared depth buffer
@@ -1622,7 +1622,7 @@ pub struct RenderFrame {
     /// index of the active clip in the parallel `*_clips` slices below, and the
     /// Encoder sets the GPU scissor to that rect (intersected with the dirty
     /// region) while drawing it. Distinct from the *dirty-region* scissor, which
-    /// is a per-frame redraw optimisation — this is a semantic content clip.
+    /// is a per-frame redraw optimisation, this is a semantic content clip.
     clips: Vec<ClipRect>,
     /// Stack of active clip indices during emission (not serialized). The top is
     /// stamped onto each `push_*`; nested clips store their **intersection** with
@@ -1630,7 +1630,7 @@ pub struct RenderFrame {
     clip_stack: Vec<u16>,
 
     /// Per-primitive clip index, parallel to each drawable pool (like the
-    /// `*_depths` vecs — kept off the `Pod` instance types so vertex layouts stay
+    /// `*_depths` vecs, kept off the `Pod` instance types so vertex layouts stay
     /// byte-for-byte unchanged). `None` = unclipped (the whole viewport).
     solid_clips: Vec<Option<u16>>,
     decorated_clips: Vec<Option<u16>>,
@@ -1655,7 +1655,7 @@ pub struct RenderFrame {
 
     /// Z-layer boundaries recorded by [`begin_layer`](Self::begin_layer)
     /// (RFC-0017 layered draw batches). Empty for the overwhelmingly common
-    /// single-layer frame — the Encoder then draws the exact pre-layering
+    /// single-layer frame, the Encoder then draws the exact pre-layering
     /// stream. See [`LayerMark`] for the full model.
     layer_marks: Vec<LayerMark>,
 
@@ -1703,17 +1703,17 @@ fn intersect_rect(a: Rect, b: Rect) -> Rect {
 /// [`RenderFrame::begin_layer`] was called (RFC-0017 layered draw batches).
 ///
 /// The Encoder turns consecutive marks into per-pool index ranges and draws
-/// each layer's primitives — solids, decorated, textures, vectors, **and
-/// text** — as one interleaved group inside the single UI render pass, so a
+/// each layer's primitives, solids, decorated, textures, vectors, **and
+/// text**, as one interleaved group inside the single UI render pass, so a
 /// later layer's *transparent* geometry (a modal scrim, a dialog shadow)
 /// alpha-blends **over** an earlier layer's text and images instead of being
 /// painted before them. Within a layer, the shared draw-order depth buffer
 /// keeps resolving paint order exactly as before; across layers, draw order
-/// itself is now correct for blending. A frame with no marks is one layer —
+/// itself is now correct for blending. A frame with no marks is one layer,
 /// the exact pre-layering draw stream, byte for byte.
 ///
 /// Kept as pool *cursors* (not per-primitive tags) because emission is
-/// strictly sequential — the main tree first, then each overlay — so a layer
+/// strictly sequential, the main tree first, then each overlay, so a layer
 /// is always a contiguous range of every pool. Five `u32`s per layer instead
 /// of one tag per primitive.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
@@ -1814,7 +1814,7 @@ impl RenderFrame {
         self.dev_base = None;
         self.draw_seq = 0;
         self.version = 0;
-        // `Vec::clear` only, not `SampleBlock::default()` — the latter would
+        // `Vec::clear` only, not `SampleBlock::default()`, the latter would
         // drop the block's existing allocation and defeat the capacity
         // retention this method promises once telemetry is attached.
         self.telemetry.samples.clear();
@@ -1866,7 +1866,7 @@ impl RenderFrame {
 
     /// Appends a [`BoxInstance`] to the frame.
     ///
-    /// The instance is recorded **dirty** — see
+    /// The instance is recorded **dirty**, see
     /// [`instances_dirty`](Self::instances_dirty) for why that is the only
     /// safe default and what narrows it.
     pub fn push_instance(&mut self, instance: BoxInstance) {
@@ -1881,7 +1881,7 @@ impl RenderFrame {
     /// Per-instance dirty state, parallel to [`instances`](Self::instances).
     ///
     /// [`BoxInstance`] is a pure GPU `Pod` vertex type with no room for a
-    /// dirty bit, so — unlike [`TextLine`] and friends — solid boxes carry
+    /// dirty bit, so, unlike [`TextLine`] and friends, solid boxes carry
     /// theirs out of band, here.
     ///
     /// Every entry starts `true`, because "this box may have changed" is the
@@ -1937,7 +1937,7 @@ impl RenderFrame {
     }
 
     /// Appends a [`RippleInstance`] (RFC-0023 ripple ink) to the frame,
-    /// stamping its draw-order depth — pushed by the evaluator between an
+    /// stamping its draw-order depth, pushed by the evaluator between an
     /// element's background and its children, which is exactly the RFC-0023
     /// compositing slot (background → ripple → children).
     pub fn push_ripple(&mut self, mut r: RippleInstance) {
@@ -1951,7 +1951,7 @@ impl RenderFrame {
     /// frame, stamping its draw-order depth and recording the pool-cursor
     /// snapshot that tells the encoder what was emitted *behind* it (the
     /// content it must rasterise before sampling). Pushed by the evaluator
-    /// right after the element's own background — the RFC-0023 §4 slot
+    /// right after the element's own background, the RFC-0023 §4 slot
     /// (background → blur → tint → ripple → children).
     pub fn push_backdrop(&mut self, mut b: BackdropInstance) {
         let mark = LayerMark {
@@ -2021,7 +2021,7 @@ impl RenderFrame {
     }
 
     /// Opens a new z-layer (RFC-0017): everything pushed from here on is drawn
-    /// — solids, decorated, textures, vectors, *and text*, interleaved — after
+    ///, solids, decorated, textures, vectors, *and text*, interleaved, after
     /// **everything** already in the frame, inside the same GPU render pass.
     ///
     /// Called by the overlay phase before emitting each overlay, so a modal
@@ -2042,7 +2042,7 @@ impl RenderFrame {
             backdrop: u32::try_from(self.backdrops.len()).unwrap_or(u32::MAX),
         };
         if self.layer_marks.last() == Some(&mark) {
-            return; // empty layer — dedup, an overlay that emitted nothing is free
+            return; // empty layer, dedup, an overlay that emitted nothing is free
         }
         self.layer_marks.push(mark);
     }
@@ -2075,16 +2075,16 @@ impl RenderFrame {
     /// contract holds as long as one producer owns the pool, because an
     /// element that keeps its index keeps its identity.
     ///
-    /// A dev overlay — the in-window HUD — is emitted *after* the app, by a
+    /// A dev overlay, the in-window HUD, is emitted *after* the app, by a
     /// different interpreter, into the same pools. Its indices therefore move
     /// whenever the app's counts change, and on such a frame index `i` holds
     /// the overlay's line where it held the app's a frame ago. Both producers
     /// truthfully report their own primitives unchanged, and the glyph cache
-    /// would draw last frame's shaped buffer at that index — stale text, in
+    /// would draw last frame's shaped buffer at that index, stale text, in
     /// release, silently.
     ///
-    /// Neither producer can see that on its own, so the frame — which is the
-    /// only thing that sees both — resolves it. Called only on frames where
+    /// Neither producer can see that on its own, so the frame, which is the
+    /// only thing that sees both, resolves it. Called only on frames where
     /// the base actually shifted, so the overlay costs nothing on the frames
     /// in between.
     pub fn mark_dirty_since(&mut self, mark: LayerMark) {
@@ -2110,8 +2110,8 @@ impl RenderFrame {
     /// overlay itself opens, so a thread-local owner (`telemetry::attribute_to`)
     /// captures all of it. Its cost on the *render* thread is not: by the time
     /// the encoder runs, the overlay's primitives are anonymous entries in the
-    /// same pools as the app's, and the single largest term in the frame —
-    /// glyph shaping — is charged per text line. Without a partition the
+    /// same pools as the app's, and the single largest term in the frame,
+    /// glyph shaping, is charged per text line. Without a partition the
     /// encoder cannot tell which lines it is shaping on the app's behalf, so
     /// the overlay's shaping is billed to the app and §V4's self-accounting
     /// under-reports by most of its real cost.
@@ -2119,7 +2119,7 @@ impl RenderFrame {
     /// The partition is a cursor rather than a per-primitive tag because dev
     /// surfaces are always emitted **last**, after the whole app tree: one
     /// `LayerMark` answers "is this one theirs?" for every pool at once and
-    /// costs nothing per primitive. `None` — the default — means the frame
+    /// costs nothing per primitive. `None`, the default, means the frame
     /// carries no dev surfaces at all, which is every frame of a shipped app.
     ///
     /// Call it with a [`cursor`](Self::cursor) taken **before** the first dev
@@ -2139,7 +2139,7 @@ impl RenderFrame {
     /// `texts().len()` when the frame carries none.
     ///
     /// Clamped to the pool's length, so a stale or malformed base can only ever
-    /// mean "no dev text" — never an out-of-range split in the encoder.
+    /// mean "no dev text", never an out-of-range split in the encoder.
     #[must_use]
     pub fn dev_text_start(&self) -> usize {
         self.dev_base
@@ -2208,7 +2208,7 @@ impl RenderFrame {
         &self.canvas_shapes
     }
 
-    /// This frame's shape-record pool — the members every group head indexes
+    /// This frame's shape-record pool, the members every group head indexes
     /// into (RFC-0031 §S4).
     #[must_use]
     pub fn shape_records(&self) -> &[ShapeRecord] {
@@ -2243,7 +2243,7 @@ impl RenderFrame {
     // ── Census (RFC-0030 §P6) ──────────────────────────────────────────────
     //
     // Three `len()` reads over data that already crosses the frame boundary.
-    // No new field, no new traffic, and nothing retained between frames — the
+    // No new field, no new traffic, and nothing retained between frames, the
     // statusline's "382 boxes" is a measurement of the frame in hand, which is
     // the only reading that cannot drift out of date.
 
@@ -2252,7 +2252,7 @@ impl RenderFrame {
     /// Every pool the encoder rasterises as a quad: solid rectangles,
     /// decorated boxes, sampled textures, `Canvas` shapes, ripples and
     /// backdrops. Text and vector glyphs are counted separately because they
-    /// are a different order of cost — a text line becomes as many quads as it
+    /// are a different order of cost, a text line becomes as many quads as it
     /// has glyphs, and conflating the two would make the number unreadable in
     /// the direction that matters.
     #[must_use]
@@ -2366,7 +2366,7 @@ impl RenderFrame {
     ///
     /// Called from the logic thread, once per tick, by
     /// [`crate::relay::Relay::publish`] right before the frame is swapped
-    /// in — so every publish path picks up telemetry automatically, with no
+    /// in, so every publish path picks up telemetry automatically, with no
     /// per-call-site wiring needed. Reuses this frame's existing
     /// `SampleBlock` allocation (see [`RenderFrame::clear`]) rather than
     /// allocating a fresh one each tick.
@@ -2387,7 +2387,7 @@ impl RenderFrame {
     ///
     /// The relay is **latest-wins**: the logic thread publishes faster than
     /// the display refreshes, so most published frames are never rendered.
-    /// While every primitive was emitted `dirty: true` that cost nothing —
+    /// While every primitive was emitted `dirty: true` that cost nothing,
     /// the encoder re-shaped and redrew everything on whichever frame it
     /// happened to see. Now that a frame reports what actually changed, a
     /// skipped frame is a **lost dirty bit**: the frame carrying "this
@@ -2396,8 +2396,8 @@ impl RenderFrame {
     ///
     /// Merging is the fix, and it is the right one because dirtiness is
     /// monotone: the union of "changed since frame N-1" and "changed since
-    /// frame N" *is* "changed since frame N-1". The alternative — detecting
-    /// the gap and redrawing everything — is correct too, and is what this
+    /// frame N" *is* "changed since frame N-1". The alternative, detecting
+    /// the gap and redrawing everything, is correct too, and is what this
     /// replaced; it just gives the whole win back on any machine whose logic
     /// thread outruns its display, which is every machine.
     ///
@@ -2447,7 +2447,7 @@ impl RenderFrame {
     /// only the dirty union (RFC-0006 §3.4).
     ///
     /// See [`Self::full_redraw`] for the two instants that need it. Cleared by
-    /// [`clear`](Self::clear), so it never leaks into the next frame — a
+    /// [`clear`](Self::clear), so it never leaks into the next frame, a
     /// sticky full redraw would silently disable the incremental path for the
     /// rest of the session, which is the expensive way to be wrong here.
     pub fn request_full_redraw(&mut self) {
@@ -2461,7 +2461,7 @@ impl RenderFrame {
     }
 
     /// Records which layout paths the atlas took while producing this frame
-    /// (RFC-0032 §R7) — a **delta** for this tick, not a running total.
+    /// (RFC-0032 §R7), a **delta** for this tick, not a running total.
     pub fn set_atlas_paths(&mut self, counts: crate::atlas::layout::path_counters::Counts) {
         self.atlas_paths = counts;
     }
@@ -2522,14 +2522,14 @@ fn merge_into<T>(
 /// # What it compares, and why that is the strong form
 ///
 /// One `u64` per primitive per pool, hashed from the primitive's **resolved
-/// values** — the numbers that reached the frame, not the expressions behind
+/// values**, the numbers that reached the frame, not the expressions behind
 /// them. [`apply`](Self::apply) re-hashes this frame's primitives, marks a
 /// primitive dirty exactly when its hash differs from the hash at the same
 /// pool position last frame, and keeps the new hashes for next time.
 ///
 /// RFC-0032 §R1 chose value comparison over reactive attribute bindings
 /// because a reactive graph can have a *missing edge*, and a missing edge
-/// yields a false "clean" — an element that renders in its new position and
+/// yields a false "clean", an element that renders in its new position and
 /// answers taps in its old one. Comparing primitives closes that gap in its
 /// strongest form: the thing being compared is the pipeline's own output, so
 /// there is no attribute table to keep in sync and no classification to get
@@ -2549,7 +2549,7 @@ fn merge_into<T>(
 ///
 /// Pool positions shift when the tree's shape changes, so hashes stop lining
 /// up and a wide region reports dirty. That is both the safe direction and the
-/// correct one — after a structural change the frame really has changed
+/// correct one, after a structural change the frame really has changed
 /// everywhere.
 #[derive(Debug, Default, Clone)]
 pub struct PaintDigest {
@@ -2559,7 +2559,7 @@ pub struct PaintDigest {
     textures: Vec<u64>,
     canvas: Vec<u64>,
     /// Whether any frame has been digested yet. Until one has, every
-    /// primitive is reported dirty — a first frame in which nothing is dirty
+    /// primitive is reported dirty, a first frame in which nothing is dirty
     /// would simply never be drawn.
     primed: bool,
 }
@@ -2575,8 +2575,8 @@ impl PaintDigest {
     /// Forgets everything, so the next [`apply`](Self::apply) reports every
     /// primitive dirty again.
     ///
-    /// Call after anything that invalidates the *meaning* of a pool position —
-    /// a hot reload, a new view — rather than letting positional comparison
+    /// Call after anything that invalidates the *meaning* of a pool position,
+    /// a hot reload, a new view, rather than letting positional comparison
     /// silently equate two unrelated primitives that happen to hash the same.
     pub fn reset(&mut self) {
         self.solid.clear();
@@ -2595,7 +2595,7 @@ impl PaintDigest {
     /// re-samples its own radius and alpha every tick and a backdrop pane
     /// re-blurs whatever moved behind it, so both are always dirty by
     /// construction and the encoder already treats them that way. Vector
-    /// glyphs are likewise untouched — a placeholder→resident atlas
+    /// glyphs are likewise untouched, a placeholder→resident atlas
     /// transition changes their *content* without changing any value here, and
     /// the encoder forces a draw on a fresh atlas upload for exactly that
     /// reason.
@@ -2674,14 +2674,14 @@ impl PaintDigest {
 ///
 /// `f32::to_bits`, not `f32`, for the reason the digest's own header gives and
 /// RFC-0032's fingerprints already documented: `NaN != NaN` makes a group
-/// permanently dirty — wasteful and visible — while `-0.0 == 0.0` makes it
+/// permanently dirty, wasteful and visible, while `-0.0 == 0.0` makes it
 /// permanently *clean*, which is silent and wrong. The second is the dangerous
 /// one, and hashing the record's raw bytes is immune to both.
 #[must_use]
 pub fn shape_record_hash(members: &[ShapeRecord]) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut h = rustc_hash::FxHasher::default();
-    // `ShapeRecord` is `Pod`, so its bytes *are* its value — there is no
+    // `ShapeRecord` is `Pod`, so its bytes *are* its value, there is no
     // padding to leak and no float comparison to get wrong.
     bytemuck::cast_slice::<ShapeRecord, u8>(members).hash(&mut h);
     h.finish()
@@ -2825,7 +2825,7 @@ mod tests {
         // An identity *outer* preserves the inner transform field-for-field.
         assert_eq!(Transform::IDENTITY.compose(&t), t);
         // An identity *inner* re-anchors the pivot to (0,0) but stays the same
-        // mapping — check a couple of sample points rather than the fields.
+        // mapping, check a couple of sample points rather than the fields.
         let reanchored = t.compose(&Transform::IDENTITY);
         for p in [[0.0, 0.0], [12.0, -7.0], [30.0, 40.0]] {
             let a = t.apply_point(p);
@@ -2840,7 +2840,7 @@ mod tests {
     #[test]
     fn parent_scale_carries_a_child_point_and_scale() {
         // A parent scaling 2× about the origin (0,0) should map a child point at
-        // (10, 5) to (20, 10) and double the child's scale — the group transform.
+        // (10, 5) to (20, 10) and double the child's scale, the group transform.
         let parent = Transform {
             scale: [2.0, 2.0],
             origin: [0.0, 0.0],
@@ -3147,7 +3147,7 @@ mod tests {
     fn render_frame_clear_retains_capacity_for_reuse() {
         // Clearing a frame with N rects and immediately re-populating with N
         // rects should not reallocate. We verify correctness (no stale data),
-        // not performance — allocation is observable only via Miri/asan.
+        // not performance, allocation is observable only via Miri/asan.
         let mut frame = RenderFrame::new();
         for i in 0..10 {
             #[allow(clippy::cast_precision_loss)]
@@ -3274,7 +3274,7 @@ mod motion_tests {
     #[test]
     fn near_critical_and_negative_damping_stay_finite() {
         // A damping ratio a hair off critical must not divide by a vanishing
-        // `wd`/`r1−r2` and blow up — the near-critical band routes it through
+        // `wd`/`r1−r2` and blow up, the near-critical band routes it through
         // the division-free form.
         let mut m = spring(0.0, 10.0, 0);
         m.curve.params = [100.0, 20.05, 0.0]; // critical is c = 2√k = 20
@@ -3285,7 +3285,7 @@ mod motion_tests {
         assert!((m.sample(6_000) - 10.0).abs() < Motion::DEFAULT_EPS_POS);
 
         // Negative damping is clamped to zero, so the worst case is an undamped
-        // (bounded) oscillation — never unbounded exponential growth.
+        // (bounded) oscillation, never unbounded exponential growth.
         m.curve.params = [100.0, -50.0, 0.0];
         for t_ms in [0_u32, 100, 1_000, 5_000] {
             let v = m.sample(t_ms);
@@ -3370,7 +3370,7 @@ mod motion_tests {
         assert!((fwd.t_secs - 0.25).abs() < 1e-6);
         let back = loop_phase(1_000, 1_250, RepeatMode::Infinite, true);
         assert!((back.t_secs - 0.75).abs() < 1e-6, "counting back down");
-        // The two directions meet exactly at the boundary — no jump.
+        // The two directions meet exactly at the boundary, no jump.
         let a = loop_phase(1_000, 999, RepeatMode::Infinite, true).t_secs;
         let b = loop_phase(1_000, 1_001, RepeatMode::Infinite, true).t_secs;
         assert!(
@@ -3762,7 +3762,7 @@ mod motion_tests {
         assert_eq!((heads[0].group_first, heads[0].group_count), (0, 1));
         assert_eq!((heads[1].group_first, heads[1].group_count), (1, 3));
         assert_eq!(f.shape_records().len(), 4);
-        // The ranges are contiguous and disjoint — the property the shader's
+        // The ranges are contiguous and disjoint, the property the shader's
         // `first + i` indexing depends on.
         assert_eq!(
             f.shape_records()[heads[1].group_first as usize].params0[0].to_bits(),
@@ -3792,7 +3792,7 @@ mod motion_tests {
     }
 
     /// **INV-26.** A group's members live outside the primitive `PaintDigest`
-    /// compares, and the shader reads them — so they are part of what decides
+    /// compares, and the shader reads them, so they are part of what decides
     /// its pixels, and the head folds a hash of them.
     ///
     /// The failure this prevents is not hypothetical and not loud: a fusion
@@ -3806,7 +3806,7 @@ mod motion_tests {
             circle_record(10.0, 10.0, 8.0),
             circle_record(30.0, 10.0, 8.0),
         ];
-        // Only the second member moved. The head — mode, `k`, colours, rect —
+        // Only the second member moved. The head, mode, `k`, colours, rect,
         // is identical.
         let members_b = [
             circle_record(10.0, 10.0, 8.0),
@@ -3828,7 +3828,7 @@ mod motion_tests {
 
         // Demonstrated red: with the member hash taken back out of the head,
         // the two frames' heads are byte-identical and the digest reports the
-        // group clean — the silent stale-shape bug this field exists to stop.
+        // group clean, the silent stale-shape bug this field exists to stop.
         let mut without = PaintDigest::new();
         let mut a = RenderFrame::new();
         a.push_shape_group(group_head(16.0), &members_a);
@@ -3889,7 +3889,7 @@ mod motion_tests {
     #[test]
     fn a_group_never_carries_more_members_than_the_cap() {
         // The compiler diagnoses the ninth shape (§S5), so reaching here with
-        // nine is a bug — and drawing eight of nine would hide it. Release
+        // nine is a bug, and drawing eight of nine would hide it. Release
         // builds clamp rather than index out of range; debug builds assert.
         let members: Vec<ShapeRecord> = (0..MAX_GROUP_MEMBERS)
             .map(|i| {
@@ -3908,10 +3908,10 @@ mod motion_tests {
         let mut f = RenderFrame::new();
         f.push_instance(box_at(0.0, 0.0));
         f.begin_layer();
-        f.begin_layer(); // nothing emitted in between — must not add a mark
+        f.begin_layer(); // nothing emitted in between, must not add a mark
         assert_eq!(f.layer_marks().len(), 1);
         f.push_instance(box_at(1.0, 1.0));
-        f.begin_layer(); // pool advanced — a real new layer
+        f.begin_layer(); // pool advanced, a real new layer
         assert_eq!(f.layer_marks().len(), 2);
     }
 
@@ -3970,7 +3970,7 @@ mod motion_tests {
     fn a_stale_dev_base_can_only_ever_mean_no_dev_text() {
         // The base is taken on the logic thread and read on the render thread
         // one pool-population later. A base past the end must degrade to "the
-        // app owns everything" — the reading that cannot invent overhead —
+        // app owns everything", the reading that cannot invent overhead,
         // rather than panicking on an out-of-range split.
         let mut f = RenderFrame::new();
         f.push_text(line("the app"));
@@ -4082,7 +4082,7 @@ mod paint_digest_tests {
 
     #[test]
     fn negative_zero_is_a_change() {
-        // `-0.0 == 0.0`, so a naive comparison reports this primitive clean —
+        // `-0.0 == 0.0`, so a naive comparison reports this primitive clean,
         // permanently, and with nothing on screen to suggest why.
         let mut d = PaintDigest::new();
         let _ = digest_frame(&mut d, &[boxed(0.0, RED)], &[]);

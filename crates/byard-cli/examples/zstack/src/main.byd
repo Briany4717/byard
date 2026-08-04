@@ -1,11 +1,11 @@
-// RFC-0018 — the `ZStack` intrinsic (overlapping children in the layout tree).
+// RFC-0018, the `ZStack` intrinsic (overlapping children in the layout tree).
 //
 // Run it (from the repo root):
 //   cd crates/byard-cli/examples/zstack
 //   cargo run -p byard-cli -- dev
 //
 // What to verify visually:
-//   1. In each stack the children occupy the SAME rect and overlap — the later
+//   1. In each stack the children occupy the SAME rect and overlap, the later
 //      a child is declared, the higher it paints (last on top).
 //   2. The first stack uses the default `center` alignment: the lavender chip
 //      sits centered over the purple thumbnail.
@@ -15,7 +15,7 @@
 //      keep their own size rather than stretching to fill.
 View Main() {
     Column #[bg: 0x14141C, p: 32, gap: 20, width: 340] {
-        Text("ZStack — RFC-0018") #[color: 0xE6E1E5, size: 20]
+        Text("ZStack, RFC-0018") #[color: 0xE6E1E5, size: 20]
 
         // Centered overlay (default alignment).
         ZStack #[width: 260, height: 150] {

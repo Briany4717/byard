@@ -48,7 +48,7 @@ fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>)> {
 }
 
 /// One scanline of the rendered frame, as `(b, g, r)` triples in logical-x
-/// order — the raw evidence every assertion below is read from.
+/// order, the raw evidence every assertion below is read from.
 fn scanline(
     device: &Arc<wgpu::Device>,
     queue: &Arc<wgpu::Queue>,
@@ -181,7 +181,7 @@ impl Driver {
 }
 
 /// The leading edge, in logical px, of the first run of pixels satisfying
-/// `is_match` — "where does that screen start on screen?", measured in pixels
+/// `is_match`, "where does that screen start on screen?", measured in pixels
 /// rather than inferred from frame data.
 fn edge_of(line: &[(u8, u8, u8)], is_match: impl Fn((u8, u8, u8)) -> bool) -> Option<f32> {
     line.iter().position(|px| is_match(*px)).map(|x| {
@@ -195,12 +195,12 @@ fn edge_of(line: &[(u8, u8, u8)], is_match: impl Fn((u8, u8, u8)) -> bool) -> Op
 // channels land near 99 rather than 32. What identifies a screen is which
 // channel is saturated, not the exact byte.
 
-/// Predominantly blue — the detail screen.
+/// Predominantly blue, the detail screen.
 fn is_detail(px: (u8, u8, u8)) -> bool {
     px.0 > 200 && px.2 < 160
 }
 
-/// Predominantly red — the home screen.
+/// Predominantly red, the home screen.
 fn is_home(px: (u8, u8, u8)) -> bool {
     px.2 > 200 && px.0 < 160
 }
@@ -220,7 +220,7 @@ fn nav_source(transition: &str) -> String {
 #[test]
 fn a_push_slides_the_incoming_screen_in_from_the_right_edge() {
     let Some(mut app) = Driver::new(&nav_source("slide")) else {
-        eprintln!("no GPU adapter — skipping readback");
+        eprintln!("no GPU adapter, skipping readback");
         return;
     };
     // At rest the home screen owns every pixel.
@@ -268,14 +268,14 @@ fn a_push_slides_the_incoming_screen_in_from_the_right_edge() {
 #[test]
 fn the_covered_screen_drifts_the_other_way_under_the_incoming_one() {
     let Some(mut app) = Driver::new(&nav_source("slide")) else {
-        eprintln!("no GPU adapter — skipping readback");
+        eprintln!("no GPU adapter, skipping readback");
         return;
     };
     app.at(0);
     app.set_path("/detail");
     app.at(1);
     let line = app.at(60);
-    // Both screens are on screen at once, home to the left of detail — the
+    // Both screens are on screen at once, home to the left of detail, the
     // parallax pair the RFC describes, in actual pixels.
     let home = edge_of(&line, is_home).expect("the covered screen still paints");
     let detail = edge_of(&line, is_detail).expect("the arriving screen paints");
@@ -298,7 +298,7 @@ fn the_covered_screen_drifts_the_other_way_under_the_incoming_one() {
 #[test]
 fn a_pop_reverses_the_slide_on_screen() {
     let Some(mut app) = Driver::new(&nav_source("slide")) else {
-        eprintln!("no GPU adapter — skipping readback");
+        eprintln!("no GPU adapter, skipping readback");
         return;
     };
     app.at(0);
@@ -329,7 +329,7 @@ fn a_pop_reverses_the_slide_on_screen() {
 #[test]
 fn a_fade_blends_the_two_screens_instead_of_moving_them() {
     let Some(mut app) = Driver::new(&nav_source("fade")) else {
-        eprintln!("no GPU adapter — skipping readback");
+        eprintln!("no GPU adapter, skipping readback");
         return;
     };
     app.at(0);

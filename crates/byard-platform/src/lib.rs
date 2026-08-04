@@ -39,7 +39,7 @@ fn control_flow_for(wants_frames: bool) -> ControlFlow {
 
 /// User event posted to the winit loop by the logic thread's [`FrameWaker`]
 /// when it publishes a frame that changed in response to input. It carries no
-/// data — its only job is to wake a `Wait`-mode loop so it redraws the update.
+/// data, its only job is to wake a `Wait`-mode loop so it redraws the update.
 #[derive(Debug, Clone, Copy)]
 struct FramePublished;
 
@@ -71,7 +71,7 @@ impl WinitHost {
         }
     }
 
-    /// Switches the event loop to `ControlFlow::Poll` — redraws are requested
+    /// Switches the event loop to `ControlFlow::Poll`, redraws are requested
     /// on every iteration instead of waiting for the next OS event.
     ///
     /// Use this for dev tools (e.g. `byard dev`) where file-change frames must
@@ -85,7 +85,7 @@ impl WinitHost {
     /// Runs the `winit` event loop until the window closes, dispatching
     /// every relevant OS event to `host`.
     ///
-    /// This call blocks the calling thread for the lifetime of the window —
+    /// This call blocks the calling thread for the lifetime of the window,
     /// per RFC-0001 §6, this is the render thread; it never shares mutable
     /// state with a logic thread, so blocking here is exactly what the
     /// concurrency model expects.
@@ -95,7 +95,7 @@ impl WinitHost {
     /// Returns [`ByardError::Platform`] if the event loop or window itself
     /// fails to initialise, or whatever [`ByardError`] a [`PlatformHost`]
     /// callback returns (e.g. [`Engine::init`](byard_core::engine::Engine::init)
-    /// failing inside [`PlatformHost::on_resume`]) — `winit`'s
+    /// failing inside [`PlatformHost::on_resume`]), `winit`'s
     /// `ApplicationHandler` callbacks are themselves infallible, so such
     /// errors are captured internally and surfaced here once the loop exits.
     pub fn run<H: PlatformHost>(self, host: H) -> Result<(), ByardError> {
@@ -105,7 +105,7 @@ impl WinitHost {
             .build()
             .map_err(|e| ByardError::Platform(e.to_string()))?;
         // Poll mode for live-reload dev tools; Wait mode for shipped applications
-        // (waits for OS events, no busy-loop — saves battery on static scenes).
+        // (waits for OS events, no busy-loop, saves battery on static scenes).
         if self.poll {
             event_loop.set_control_flow(ControlFlow::Poll);
         } else {
@@ -150,7 +150,7 @@ impl WinitHost {
 
 /// Adapts a [`PlatformHost`] to `winit`'s `ApplicationHandler`.
 ///
-/// `window` is `None` until `resumed()` fires — the first point at which
+/// `window` is `None` until `resumed()` fires, the first point at which
 /// creating a window is valid on every platform `winit` supports, including
 /// Android and iOS.
 struct WinitApp<H: PlatformHost> {
@@ -188,7 +188,7 @@ impl<H: PlatformHost> WinitApp<H> {
 
 impl<H: PlatformHost> ApplicationHandler<FramePublished> for WinitApp<H> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        // Already initialised — e.g. resumed again after a mobile suspend.
+        // Already initialised, e.g. resumed again after a mobile suspend.
         if self.window.is_some() {
             return;
         }
@@ -322,7 +322,7 @@ impl<H: PlatformHost> ApplicationHandler<FramePublished> for WinitApp<H> {
                 let key_str = key_to_str(&event.logical_key);
                 // The host gets first refusal with the modifier state. A dev
                 // chord that reached the router would be indistinguishable from
-                // the user typing, so a consumed chord stops here — no
+                // the user typing, so a consumed chord stops here, no
                 // `on_key`, no `on_text` (RFC-0030 §V3).
                 let consumed =
                     !key_str.is_empty() && self.host.on_chord(&key_str, pressed, self.modifiers);
@@ -359,7 +359,7 @@ impl<H: PlatformHost> ApplicationHandler<FramePublished> for WinitApp<H> {
     ///
     /// A poll-mode host requests a redraw after every iteration so the logic
     /// thread's latest `RenderFrame` is presented without waiting for a user
-    /// event (hot-reload in `byard dev`) — but only *while the application has
+    /// event (hot-reload in `byard dev`), but only *while the application has
     /// frame-driven work*. When [`PlatformHost::wants_frames`] goes false (every
     /// animation settled, per the RFC-0010/RFC-0025 active set) the loop drops
     /// back to `Wait` and genuinely idles at zero frames; input events and the
@@ -432,7 +432,7 @@ fn with_app_id(attrs: winit::window::WindowAttributes) -> winit::window::WindowA
 /// [`WindowSize`].
 ///
 /// Extracted as a pure function so the conversion is testable without a real
-/// `winit` event loop or display — neither of which exist in CI.
+/// `winit` event loop or display, neither of which exist in CI.
 fn to_window_size(size: PhysicalSize<u32>, scale_factor: f64) -> WindowSize {
     WindowSize {
         width: size.width,
@@ -456,7 +456,7 @@ fn to_key_modifiers(state: ModifiersState) -> KeyModifiers {
 /// Converts a `winit` mouse button into the plain, windowing-crate-agnostic
 /// [`PointerButton`] that crosses into `byard-core`.
 ///
-/// Extracted as a pure function for the same reason as [`to_window_size`] —
+/// Extracted as a pure function for the same reason as [`to_window_size`],
 /// testable without a real event loop.
 fn to_pointer_button(button: MouseButton) -> PointerButton {
     match button {
@@ -481,21 +481,21 @@ fn to_pointer_state(state: ElementState) -> PointerState {
 /// Which [`PlatformHost`] callback a `winit` scroll delta maps to
 /// (RFC-0012 §A loose end): a physical mouse wheel reports discrete
 /// [`MouseScrollDelta::LineDelta`]s, a trackpad reports continuous
-/// [`MouseScrollDelta::PixelDelta`]s — `winit` doesn't otherwise
+/// [`MouseScrollDelta::PixelDelta`]s, `winit` doesn't otherwise
 /// distinguish the two input devices, so the delta's own shape is the only
 /// signal available for routing `wheel` vs `scroll`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum ScrollOrigin {
-    /// A physical mouse wheel — `on_wheel`.
+    /// A physical mouse wheel, `on_wheel`.
     Wheel(f32, f32),
-    /// A trackpad/touch scroll gesture — `on_scroll`.
+    /// A trackpad/touch scroll gesture, `on_scroll`.
     Scroll(f32, f32),
 }
 
 /// Converts a `winit` [`MouseScrollDelta`] into a [`ScrollOrigin`], resolving
 /// `PixelDelta`'s physical coordinates to logical pixels via `scale_factor`.
 ///
-/// Extracted as a pure function for the same reason as [`to_window_size`] —
+/// Extracted as a pure function for the same reason as [`to_window_size`],
 /// testable without a real event loop.
 fn to_scroll_origin(delta: MouseScrollDelta, scale_factor: f64) -> ScrollOrigin {
     match delta {
@@ -589,7 +589,7 @@ mod tests {
 
     #[test]
     fn to_scroll_origin_routes_line_delta_to_wheel() {
-        // A physical mouse wheel — line deltas are already logical units,
+        // A physical mouse wheel, line deltas are already logical units,
         // `scale_factor` must not affect them.
         assert_eq!(
             to_scroll_origin(MouseScrollDelta::LineDelta(0.0, 1.0), 2.0),
@@ -599,7 +599,7 @@ mod tests {
 
     #[test]
     fn to_scroll_origin_routes_pixel_delta_to_scroll_and_converts_to_logical() {
-        // A trackpad — physical pixel deltas must be divided by the scale
+        // A trackpad, physical pixel deltas must be divided by the scale
         // factor to land in the same logical-pixel space as everything else.
         let physical = winit::dpi::PhysicalPosition::new(20.0, 40.0);
         let origin = to_scroll_origin(MouseScrollDelta::PixelDelta(physical), 2.0);

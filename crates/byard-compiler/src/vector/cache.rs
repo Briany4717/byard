@@ -10,7 +10,7 @@
 //! The generator version is part of the key, so a toolchain/algorithm bump
 //! invalidates every entry with no explicit purge (and `byard clean` wipes the
 //! directory). A corrupt or truncated file is treated as a miss and safely
-//! regenerated — never a panic (INV-3: the loaded payload is fully owned).
+//! regenerated, never a panic (INV-3: the loaded payload is fully owned).
 
 use std::path::{Path, PathBuf};
 
@@ -18,7 +18,7 @@ use crate::diagnostics::{CompileError, Span};
 
 use super::generate::{GENERATOR_VERSION, MsdfGlyph, generate};
 
-/// FNV-1a 64-bit over `bytes` — a small, dependency-free, fully deterministic
+/// FNV-1a 64-bit over `bytes`, a small, dependency-free, fully deterministic
 /// hash (identical on every platform and run, unlike `DefaultHasher`), which is
 /// exactly what a cross-run disk key needs.
 fn fnv1a(bytes: &[u8]) -> u64 {
@@ -111,7 +111,7 @@ pub fn store(cache_dir: &Path, key: &str, glyph: &MsdfGlyph) {
 /// # Errors
 ///
 /// Propagates any [`CompileError`] from [`generate`] on a miss. A cache I/O
-/// failure is never an error — it just forgoes caching.
+/// failure is never an error, it just forgoes caching.
 pub fn generate_cached(
     svg_bytes: &[u8],
     grid: u32,

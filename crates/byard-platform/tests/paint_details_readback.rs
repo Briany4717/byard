@@ -148,11 +148,11 @@ fn render(device: &Arc<wgpu::Device>, queue: &Arc<wgpu::Queue>, frame: &RenderFr
 #[test]
 fn an_over_large_radius_is_reduced_to_a_pill_not_a_deformed_box() {
     let Some((device, queue)) = try_device() else {
-        eprintln!("no GPU adapter — skipping readback");
+        eprintln!("no GPU adapter, skipping readback");
         return;
     };
     // The everyday case: a `radius: 20` pill on a 33 px-tall button. 20 exceeds
-    // half the height (16.5), which the rounded-rect SDF cannot represent — it
+    // half the height (16.5), which the rounded-rect SDF cannot represent, it
     // used to pull the whole silhouette inward, most visibly at the left and
     // right ends.
     let (x, y, w, h) = (20.0_f32, 12.0_f32, 120.0_f32, 33.0_f32);
@@ -192,7 +192,7 @@ fn an_over_large_radius_is_reduced_to_a_pill_not_a_deformed_box() {
     //   • the true stadium (r reduced to 16.5) reaches |dx| = 43.5 + √(16.5² −
     //     15²) ≈ 50.4 at |dy| = 15;
     //   • the unclamped field (r = 20) reaches only |dx| = 40 + √(20² − 18.5²)
-    //     ≈ 47.6 there — its boundary is an arc centred *outside* the box.
+    //     ≈ 47.6 there, its boundary is an arc centred *outside* the box.
     // So (129, 43.5) is ~1.4 px inside the correct shape and ~1.4 px outside the
     // deformed one: painted now, empty before. Point-sampled rather than
     // row-scanned, so the claim is about the silhouette and not about how a
@@ -205,7 +205,7 @@ fn an_over_large_radius_is_reduced_to_a_pill_not_a_deformed_box() {
 }
 
 /// A dark bar with a transparent → white → transparent ramp across it, at the
-/// given phase offset. `None` paints the same bar with no ramp at all — the
+/// given phase offset. `None` paints the same bar with no ramp at all, the
 /// baseline every brightness claim below is measured against, so the assertions
 /// never have to guess at sRGB encoding.
 fn shimmer_frame(offset: Option<f32>) -> RenderFrame {
@@ -236,7 +236,7 @@ fn shimmer_frame(offset: Option<f32>) -> RenderFrame {
 #[test]
 fn a_gradient_paints_a_ramp_over_the_fill_and_its_offset_travels() {
     let Some((device, queue)) = try_device() else {
-        eprintln!("no GPU adapter — skipping readback");
+        eprintln!("no GPU adapter, skipping readback");
         return;
     };
     let mid_y = 30.0;
@@ -258,7 +258,7 @@ fn a_gradient_paints_a_ramp_over_the_fill_and_its_offset_travels() {
     );
 
     // A quarter-phase shift moves the band a quarter of the way along the ramp,
-    // wrapping — which is what makes an animated offset a seamless sweep.
+    // wrapping, which is what makes an animated offset a seamless sweep.
     let shifted = render(&device, &queue, &shimmer_frame(Some(0.25)));
     assert!(
         shifted.luma(70.0, mid_y) > shifted.luma(120.0, mid_y) + 0.2,

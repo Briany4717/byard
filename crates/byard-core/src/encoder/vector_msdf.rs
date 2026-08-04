@@ -21,12 +21,12 @@ use crate::frame::{AtlasUpload, VectorInstance};
 pub const ATLAS_SIZE: u32 = 2048;
 
 /// Array-layer count the dev atlas is created with (and, until layer-growth
-/// M48 lands, its hard cap — the JIT allocator must not exceed it).
+/// M48 lands, its hard cap, the JIT allocator must not exceed it).
 ///
 /// **Must be ≥ 2.** The shader samples this atlas as a `texture_2d_array` (a
 /// `D2Array` view). On the GL backend, wgpu-hal maps a `D2` texture created with
 /// a *single* array layer to `GL_TEXTURE_2D`, not `GL_TEXTURE_2D_ARRAY`; binding
-/// that to a `sampler2DArray` then samples all-zero — every glyph reads as
+/// that to a `sampler2DArray` then samples all-zero, every glyph reads as
 /// "fully outside" the field and paints nothing (`alpha 0`). Metal and DX12
 /// reinterpret a 1-layer texture as an array freely, which is why a 1-layer
 /// atlas only ever broke on Linux/GL (the Ubuntu CI, which has no Vulkan ICD and
@@ -88,7 +88,7 @@ pub fn bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     })
 }
 
-/// The linear-filtering sampler — the whole point of an MSDF: hardware
+/// The linear-filtering sampler, the whole point of an MSDF: hardware
 /// interpolates the field, keeping edges crisp under magnification.
 #[must_use]
 pub fn sampler(device: &wgpu::Device) -> wgpu::Sampler {
@@ -186,7 +186,7 @@ impl VectorAtlas {
     }
 
     /// Applies pending MSDF-field uploads to the atlas (RFC-0009 §2-C / INV-8).
-    /// **Render thread only** — this is the single place a `Queue::write_texture`
+    /// **Render thread only**, this is the single place a `Queue::write_texture`
     /// for the atlas is issued. Out-of-bounds uploads are skipped defensively.
     /// Returns the `id` of every upload actually applied, so the caller can
     /// acknowledge them back to whoever is resending unconfirmed uploads.
@@ -244,7 +244,7 @@ impl VectorAtlas {
 /// # Errors
 ///
 /// [`ByardError::PipelineCompilation`] (`pipeline: "VectorMSDF"`) on GPU-side
-/// validation failure — never a panic.
+/// validation failure, never a panic.
 pub async fn build_pipeline(
     device: &wgpu::Device,
     viewport_layout: &wgpu::BindGroupLayout,
@@ -299,7 +299,7 @@ pub async fn build_pipeline(
             conservative: false,
         },
         // Shares the pass's draw-order depth buffer with the other pipelines
-        // (RFC-0011 cross-pass paint order) — required for pipeline/pass
+        // (RFC-0011 cross-pass paint order), required for pipeline/pass
         // compatibility even where a caller doesn't care about ordering.
         depth_stencil: Some(crate::encoder::draw_depth_stencil()),
         multisample: wgpu::MultisampleState::default(),
@@ -348,7 +348,7 @@ pub fn draw(
     });
 }
 
-/// Median of three channels — the MSDF reconstruction of the true signed
+/// Median of three channels, the MSDF reconstruction of the true signed
 /// distance (Chlumský 2015). The CPU twin of the WGSL `median3`, used by
 /// generator/packer tests to verify field correctness without a GPU.
 #[must_use]

@@ -1,7 +1,7 @@
 //! RFC-0026 navigation & routing, end to end through the interpreter.
 //!
 //! The unit tests in `interp::nav` cover pattern matching and transition
-//! geometry in isolation; these drive the real thing — lower a `.byd` source,
+//! geometry in isolation; these drive the real thing, lower a `.byd` source,
 //! move its navigation `var`, render, and assert on the frame the engine would
 //! ship: which screens exist, where they are, what survives a pop, and what the
 //! diagnostics say when the source is wrong.
@@ -355,7 +355,7 @@ fn text_x_in(frame: &RenderFrame, needle: &str) -> Option<f32> {
 /// The regression this pins: driving normalized progress with RFC-0010's
 /// underdamped spring made the incoming screen reach its resting place, then
 /// walk visibly back out (the spring's undershoot) before finally snapping into
-/// place — and, because the settle test read the unclamped curve, it kept
+/// place, and, because the settle test read the unclamped curve, it kept
 /// requesting frames through a long tail and could park with the screen a few
 /// pixels out until the next input forced a redraw.
 #[test]
@@ -385,7 +385,7 @@ fn a_transition_never_moves_backwards_and_lands_exactly_at_rest() {
     }
 
     let settled_at = settled_at.expect("the transition must settle");
-    // It stops asking for frames on the very frame it arrives — not before
+    // It stops asking for frames on the very frame it arrives, not before
     // (which would park it mid-slide) and not long after (a tail nobody sees).
     // Exactly, not approximately: a duration ramp lands on `p = 1`, so the
     // offset is `width * 0.0`. Any residual here is a screen parked off-place.
@@ -458,7 +458,7 @@ fn a_pop_never_moves_backwards_either() {
     assert_eq!(app.texts(), ["home"]);
 }
 
-/// A released swipe pays only for the distance still to travel — a gesture let
+/// A released swipe pays only for the distance still to travel, a gesture let
 /// go a hair from the end must not sit through a whole transition.
 #[test]
 fn a_released_swipe_finishes_in_proportion_to_what_is_left() {
@@ -557,7 +557,7 @@ fn tabs_are_preserved_and_never_re_instantiated() {
 fn an_unvisited_tab_is_never_instantiated() {
     let mut app = App::new(TABS);
     app.frame();
-    // Only the mounted tab exists — the other two cost nothing until visited.
+    // Only the mounted tab exists, the other two cost nothing until visited.
     assert_eq!(app.interp.nav_depths(), [1]);
 }
 

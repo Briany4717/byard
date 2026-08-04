@@ -1,6 +1,6 @@
 //! Verifies the RFC-0027 live data-ops showcase: it must `byard check` clean and
 //! render the *correct* derived values (comparison, logic, concat, list ops,
-//! records) — the same values a human sees running `-- dev`. Also taps a control
+//! records), the same values a human sees running `-- dev`. Also taps a control
 //! to prove the readouts recompute reactively.
 
 use std::path::PathBuf;
@@ -40,7 +40,7 @@ fn texts(interp: &mut Interpreter, tree: &[RenderNode]) -> Vec<String> {
 }
 
 /// A rendered line must exist that both starts with `label` and ends with
-/// `value` — i.e. the `LABEL → {derived}` readout resolved to `value`.
+/// `value`, i.e. the `LABEL → {derived}` readout resolved to `value`.
 fn has_readout(lines: &[String], label: &str, value: &str) {
     assert!(
         lines

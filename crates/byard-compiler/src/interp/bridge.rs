@@ -1,11 +1,11 @@
 //! `Value ⇄ HostValue` conversions at the controller boundary (RFC-0028 §1).
 //!
-//! These live in `byard-compiler` — which depends on `byard-core`, never the
-//! reverse (INV-1) — because they touch the interpreter's `!Send` [`Value`],
+//! These live in `byard-compiler`, which depends on `byard-core`, never the
+//! reverse (INV-1), because they touch the interpreter's `!Send` [`Value`],
 //! which cannot live in core. The boundary type ([`HostValue`]) is the neutral,
 //! `Send` data enum defined in `byard-core::bridge`; only the data subset of
 //! `Value` converts. A `Signal`/`Memo`/`Fn`/`Theme`/`Controller` has no
-//! `HostValue` form — passing one as a controller argument is
+//! `HostValue` form, passing one as a controller argument is
 //! [`CompileError::NonDataControllerArg`] (INV-13: the boundary holds only data).
 
 use byard_core::bridge::HostValue;
@@ -15,7 +15,7 @@ use crate::symbol::Symbol;
 
 /// Converts a [`Value`] to a [`HostValue`] for the crossing to the Tokio pool,
 /// or `None` if it holds a non-data variant (`Signal`/`Memo`/`Fn`/`Theme`/
-/// `Controller`) — the caller turns that into
+/// `Controller`), the caller turns that into
 /// [`CompileError::NonDataControllerArg`](crate::diagnostics::CompileError::NonDataControllerArg).
 #[must_use]
 pub fn value_to_host(value: &Value) -> Option<HostValue> {
@@ -34,7 +34,7 @@ pub fn value_to_host(value: &Value) -> Option<HostValue> {
         ),
         // A tuple is positional layout data, not a controller data shape; map it
         // to a list of its values (names dropped) so it still crosses lossily
-        // rather than erroring — controllers rarely receive one.
+        // rather than erroring, controllers rarely receive one.
         Value::Tuple(items) => HostValue::List(
             items
                 .iter()

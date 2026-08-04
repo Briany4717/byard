@@ -1,4 +1,4 @@
-// RFC-0026 — navigation & routing: stacks, tabs, transitions, deep linking.
+// RFC-0026, navigation & routing: stacks, tabs, transitions, deep linking.
 //
 // Run it (from the repo root):
 //   cd crates/byard-cli/examples/navigation
@@ -8,45 +8,45 @@
 //   cargo run -p byard-cli -- dev --deep-link byard://detail/7
 //
 // The whole model is one line of state: navigation IS a reactive `var`. There
-// is no navigation controller to hold, no route object, no widget reference —
+// is no navigation controller to hold, no route object, no widget reference, 
 // setting `homePath = "/detail/2"` *is* the push, and setting it back *is* the
 // pop.
 //
 // What to verify visually:
 //   1. TABS: the three buttons along the bottom switch the whole content area.
-//      Switching is a cross-fade, and each tab keeps its state — scroll the
+//      Switching is a cross-fade, and each tab keeps its state, scroll the
 //      Library list, jump to Profile, come back: the list is where you left it.
 //   2. PUSH: in Library, tap a row. The detail screen slides in from the right
-//      while the list drifts left underneath it (parallax) — that is the
+//      while the list drifts left underneath it (parallax), that is the
 //      `slide` transition, driven by RFC-0010's spring.
 //   3. ROUTE PARAMS: the detail screen shows the id from its path, extracted by
 //      the `:id` segment of `route "/detail/:id"`.
-//   4. POP: tap "Back" (or drag from the very left edge of the window — the
+//   4. POP: tap "Back" (or drag from the very left edge of the window, the
 //      `swipe_back` gesture follows your pointer in real time and completes if
 //      you pass halfway, otherwise springs back). The detail screen slides out
 //      to the right, revealing the list exactly as it was.
 //   5. STATE PRESERVATION: bump the counter on the Library screen, push into a
-//      detail, come back — the counter still reads what you left it at. The
+//      detail, come back, the counter still reads what you left it at. The
 //      covered screen was never unmounted.
 //   6. NESTED STACKS: Library and Profile each own an independent `NavStack`
 //      with its own history. Push into a Profile sub-screen, switch to Library,
-//      switch back — Profile is still on its sub-screen.
-//   7. REPLACE: on the Profile "Edit" screen, "Save" uses `replace(…)` — it
+//      switch back, Profile is still on its sub-screen.
+//   7. REPLACE: on the Profile "Edit" screen, "Save" uses `replace(…)`, it
 //      swaps the screen without stacking, so one Back returns to Profile's root
 //      rather than to the edit screen you just left.
-//   8. MODAL: "About" in Settings uses `transition: slide_up` — it rises from
+//   8. MODAL: "About" in Settings uses `transition: slide_up`, it rises from
 //      the bottom over a stationary screen.
 //   9. DEEP LINK: launch with `--deep-link byard://detail/7` and the app opens
-//      already on Book #7 — the URL's path went straight through the Library
+//      already on Book #7, the URL's path went straight through the Library
 //      stack's route table. (A deep link reaches every *mounted*
 //      `deep_link: true` stack, so the stack that should receive one belongs in
 //      the tab the app starts on.)
-//  10. IDLE: when nothing is moving the engine parks — `byard dev`'s telemetry
+//  10. IDLE: when nothing is moving the engine parks, `byard dev`'s telemetry
 //      line stops entirely. A transition costs frames only while it runs.
 View Main() {
     var tab = "library"
 
-    // One navigation `var` per stack. Each is independent history — the
+    // One navigation `var` per stack. Each is independent history, the
     // standard mobile shape (a tab bar over a stack per tab).
     var libraryPath = "/"
     var profilePath = "/"
@@ -111,7 +111,7 @@ View Main() {
                     route "/detail/:id" {|params|
                         Column #[..screen, bg: 0x1A1620] {
                             Text("Book #{params.id}") #[..title]
-                            Text("This screen was instantiated for `{route.path}`. Pushing `/detail/2` while `/detail/1` is open creates a second entry — each concrete path is its own screen.")
+                            Text("This screen was instantiated for `{route.path}`. Pushing `/detail/2` while `/detail/1` is open creates a second entry, each concrete path is its own screen.")
                                 #[..body]
                             Spacer
                             Row #[gap: 12] {
@@ -150,7 +150,7 @@ View Main() {
                     route "/" {
                         Column #[..screen] {
                             Text("Profile") #[..title]
-                            Text("This stack's history is its own. Push into Edit, switch to Library, come back — you are still on Edit.")
+                            Text("This stack's history is its own. Push into Edit, switch to Library, come back, you are still on Edit.")
                                 #[..body]
                             Button("Edit profile") #[..chip] => profilePath = "/edit"
                         }
@@ -170,7 +170,7 @@ View Main() {
                     route "/saved" {
                         Column #[..screen, bg: 0x14231C] {
                             Text("Saved ✓") #[..title]
-                            Text("One Back from here returns to the profile root — the edit screen is gone, not buried.")
+                            Text("One Back from here returns to the profile root, the edit screen is gone, not buried.")
                                 #[..body]
                             Spacer
                             Button("‹ Back") #[..chip] => back(profilePath)
@@ -184,7 +184,7 @@ View Main() {
                     route "/" {
                         Column #[..screen] {
                             Text("Settings") #[..title]
-                            Text("This stack uses `transition: slide_up` — a modal presentation that rises over a screen which stays put.")
+                            Text("This stack uses `transition: slide_up`, a modal presentation that rises over a screen which stays put.")
                                 #[..body]
                             Button("About") #[..chip] => settingsPath = "/about"
                         }
@@ -192,7 +192,7 @@ View Main() {
                     route "/about" {
                         Column #[..screen, bg: 0x231C14] {
                             Text("About") #[..title]
-                            Text("Byard — navigation with no controllers, no route objects, and no widget references. Just a `var`.")
+                            Text("Byard, navigation with no controllers, no route objects, and no widget references. Just a `var`.")
                                 #[..body]
                             Spacer
                             Button("Close") #[..chip] => back(settingsPath)

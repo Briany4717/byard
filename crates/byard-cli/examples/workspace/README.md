@@ -3,9 +3,9 @@
 A tiny two-package workspace showing user-view instantiation (RFC-0007) across
 files and packages (RFC-0008):
 
-- `app/` — the project. Its `src/main.byd` uses a sibling file (`widgets.byd`,
+- `app/`, the project. Its `src/main.byd` uses a sibling file (`widgets.byd`,
   same project namespace) and a `path` dependency `kit` via `use kit as k`.
-- `kit/` — a local package exposing `Card`.
+- `kit/`, a local package exposing `Card`.
 
 Check the whole module graph (from inside `app/`):
 

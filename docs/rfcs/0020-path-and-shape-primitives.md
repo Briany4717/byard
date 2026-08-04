@@ -1,6 +1,6 @@
-# RFC-0020: Path & Shape Primitives — arcs, circles, and custom vector drawing
+# RFC-0020: Path & Shape Primitives, arcs, circles, and custom vector drawing
 
-- **Status:** Active — partially implemented. The Tier-1 analytic-stroke pipeline
+- **Status:** Active, partially implemented. The Tier-1 analytic-stroke pipeline
   is landed and in production use: `frame::CanvasShape`,
   `RenderFrame::push_canvas_shape`, and `encoder/canvas_shape.{rs,wgsl}`, with
   the `Canvas` intrinsic lowering `arc`/`circle`/`rect`/`line`/`ngon` to it.
@@ -10,8 +10,8 @@
   status line unreadable.
 
   **The Tier-2 deferral has been re-checked** (2026-07-31) now that RFC-0031 has
-  grown Tier-1 by three constructs — `ngon`, sequence morphing and organic
-  fusion — and it stands, for a reason that got *stronger* rather than weaker:
+  grown Tier-1 by three constructs, `ngon`, sequence morphing and organic
+  fusion, and it stands, for a reason that got *stronger* rather than weaker:
   `ngon` plus field interpolation covers the shape vocabulary the deferral was
   blocking (Material 3 Expressive's set is overwhelmingly n-fold symmetric), so
   the demand that would have justified a tessellator has been answered
@@ -21,7 +21,7 @@
 - **Author(s):** Briany4717
 - **Created:** 2026-07-10
 - **Last updated:** 2026-07-31
-- **Depends on:** RFC-0001 (§3.1 render pipelines, `frame.rs`), RFC-0005 (intrinsic catalog), RFC-0009 (VectorMSDF pipeline, MSDF atlas), RFC-0010 (animations — animatable path properties), RFC-0011 (transforms).
+- **Depends on:** RFC-0001 (§3.1 render pipelines, `frame.rs`), RFC-0005 (intrinsic catalog), RFC-0009 (VectorMSDF pipeline, MSDF atlas), RFC-0010 (animations, animatable path properties), RFC-0011 (transforms).
 - **Extends:** RFC-0009 (the VectorMSDF pipeline gains programmatic shape support beyond SVG-file icons).
 - **Enables:** Circular progress indicators, loading spinners, arc-based gauges, custom shape decorations, clip masks. Unblocks `byard-material` circular progress and `byard-cupertino` activity indicators.
 
@@ -30,7 +30,7 @@
 ## Summary
 
 Add a **`Canvas`** intrinsic and a **path-drawing DSL** within `byld` that lets
-developers define arbitrary 2D vector shapes — arcs, circles, lines, beziers —
+developers define arbitrary 2D vector shapes, arcs, circles, lines, beziers, 
 rendered through the existing VectorMSDF pipeline (RFC-0009) or a new lightweight
 **stroke pipeline** for non-filled paths. Shapes are declared inline, animated
 per-property (arc sweep, stroke dash offset), and rasterized at the same MSDF
@@ -55,7 +55,7 @@ Canvas #[width: 48, height: 48] {
 The byard-material gap analysis identified **arc/path drawing** as a hard blocker
 for circular progress indicators, loading spinners, and arc-based gauges. The
 VectorMSDF pipeline (RFC-0009) renders SVG-sourced icons but has no way to define
-shapes programmatically — you can't draw a partial circle whose sweep angle is
+shapes programmatically, you can't draw a partial circle whose sweep angle is
 bound to a reactive `var`.
 
 Both Material and Cupertino rely heavily on circular shapes: Material's circular
@@ -82,7 +82,7 @@ Canvas #[width: 200, height: 200] {
         start: 0, sweep: 360,
         stroke: 0xE8DEF8, stroke_width: 6)
 
-    // Progress arc — sweep is reactive
+    // Progress arc, sweep is reactive
     arc(cx: 100, cy: 100, r: 80,
         start: -90, sweep: percent * 3.6,
         stroke: 0x6750A4, stroke_width: 6, cap: round)
@@ -126,7 +126,7 @@ Every shape accepts:
 Shape properties are animatable with `with` (RFC-0010):
 
 ```byld
-// Indeterminate spinner — rotating dash offset
+// Indeterminate spinner, rotating dash offset
 arc(cx: 24, cy: 24, r: 20,
     start: spin_angle with anim.linear(1000ms, repeat: infinite),
     sweep: 270,
@@ -158,7 +158,7 @@ Added to RFC-0005's catalog:
 Two tiers, chosen per shape:
 
 **Tier 1: Analytic stroke shader (new pipeline).** For arcs, circles, lines,
-and rects — shapes with closed-form SDF functions. A fragment shader computes
+and rects, shapes with closed-form SDF functions. A fragment shader computes
 the signed distance to the shape and applies stroke/fill/anti-aliasing
 analytically. This is resolution-independent, requires no atlas allocation,
 and is trivially animatable (the shader reads `start`/`sweep` from a uniform
@@ -194,7 +194,7 @@ struct CanvasShapeInstance {
 ```
 
 **Tier 2: VectorMSDF rasterization.** For `path(d: "...")` commands with complex
-SVG path data — these are too expensive for analytic SDF. The path is tessellated
+SVG path data, these are too expensive for analytic SDF. The path is tessellated
 into the MSDF atlas (RFC-0009) at the requested size and rendered as a textured
 quad. This path is **not real-time animatable** (re-rasterization on geometry
 change), but color/opacity/transform still animate on the GPU.
@@ -217,7 +217,7 @@ Box #[clip: Canvas { circle(cx: 50, cy: 50, r: 50) }] {
 ```
 
 The `clip` prop takes a `Canvas` whose shapes define the clip region. This is
-designed for but deferred — the initial implementation focuses on visible shapes.
+designed for but deferred, the initial implementation focuses on visible shapes.
 
 ---
 
@@ -243,7 +243,7 @@ meshes) is the traditional approach but requires re-tessellation when geometry
 changes (bad for animation) and produces aliased edges without MSAA. Analytic
 SDF gives perfect anti-aliasing, resolution independence, and zero-cost
 animation (just update a uniform). The tradeoff is that only simple shapes have
-closed-form SDFs — complex paths fall back to Tier 2 (VectorMSDF).
+closed-form SDFs, complex paths fall back to Tier 2 (VectorMSDF).
 
 **Why not extend `VectorIcon` with programmatic paths?** `VectorIcon` is
 purpose-built for monochrome icon rendering from SVG files. Adding real-time
@@ -252,7 +252,7 @@ allocation, MSDF baking) and its optimization assumptions (static geometry,
 batch-upload). A separate `Canvas` keeps both simple.
 
 **Why not a `<canvas>`-style imperative API?** Imperative drawing (`ctx.moveTo`,
-`ctx.arc`, ...) requires a reference to a drawing context — exactly what
+`ctx.arc`, ...) requires a reference to a drawing context, exactly what
 RFC-0003 forbids. Declarative shape commands fit the reactive model: when
 `percent` changes, the arc's `sweep` updates automatically.
 
@@ -278,13 +278,13 @@ RFC-0003 forbids. Declarative shape commands fit the reactive model: when
 - **Before merge:**
   - [x] **Gradient support.** **Solid colors only in v1.** `fill` and `stroke`
     accept `Color` values. Gradients (`linear(...)`, `radial(...)`, `conic(...)`)
-    are deferred to a follow-up RFC — they require additional shader variants
+    are deferred to a follow-up RFC, they require additional shader variants
     and a gradient stop interpolation pipeline. Documented in Future
     possibilities.
   - [x] **Shape hit-testing.** **Canvas rect only.** Individual shapes within a
     Canvas are not hit-testable; pointer events fire on the Canvas element's
     bounding rect. Per-shape hit-testing would require SDF evaluation on the
-    CPU per pointer event — expensive and rarely needed (most Canvas uses are
+    CPU per pointer event, expensive and rarely needed (most Canvas uses are
     decorative: progress indicators, spinners, badges). If a developer needs
     per-shape interaction, they overlay transparent `Box` elements with
     pointer handlers.
@@ -304,7 +304,7 @@ RFC-0003 forbids. Declarative shape commands fit the reactive model: when
   - [x] **Batch limits.** Warn at **64 shapes per Canvas** via
     `CompileWarning::CanvasShapeCount`. This covers all real UI patterns
     (a Cupertino activity indicator has ~12 arcs, a complex gauge ~20 shapes).
-    The limit is a diagnostic, not a hard cap — the engine renders all shapes
+    The limit is a diagnostic, not a hard cap, the engine renders all shapes
     but flags performance risk. The uniform buffer supports up to 256 shapes
     before requiring a second draw call.
 
@@ -314,10 +314,10 @@ RFC-0003 forbids. Declarative shape commands fit the reactive model: when
 
 - **Clip masks** (`clip: Canvas { ... }`) for circular image crops, custom
   shaped containers.
-- **Gradient fills** — linear, radial, conic gradients as fill types.
-- **SVG path animation** — morph between two SVG path strings (interpolate
+- **Gradient fills**, linear, radial, conic gradients as fill types.
+- **SVG path animation**, morph between two SVG path strings (interpolate
   control points).
-- **Sparkline / chart primitives** — sugar on top of `Canvas` for common data
+- **Sparkline / chart primitives**, sugar on top of `Canvas` for common data
   visualization patterns.
-- **`Canvas` children as children of `ZStack`** — compositing drawn shapes
+- **`Canvas` children as children of `ZStack`**, compositing drawn shapes
   with laid-out Views.

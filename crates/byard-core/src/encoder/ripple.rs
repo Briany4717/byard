@@ -1,6 +1,6 @@
 //! `Ripple` render pipeline (RFC-0023): the Material ink reveal.
 //!
-//! Draws one expanding, fading circle per [`RippleInstance`] — centred on the
+//! Draws one expanding, fading circle per [`RippleInstance`], centred on the
 //! tap point, clipped in-shader to the element's rounded rect, and composited
 //! with **premultiplied-alpha "over" blending**: a light ink brightens a dark
 //! surface, a dark ink darkens a light one (a purely additive blend could
@@ -8,7 +8,7 @@
 //! simultaneous ripples from rapid taps still accumulate where their circles
 //! overlap (RFC-0023 §1). The pipeline is transparent geometry: it *tests*
 //! the shared draw-order depth buffer but never *writes* it, exactly like
-//! `DecoratedBox` — its depth (stamped by
+//! `DecoratedBox`, its depth (stamped by
 //! [`RenderFrame::push_ripple`](crate::frame::RenderFrame::push_ripple)
 //! between the element's background and its children) is what places the ink
 //! in the RFC-0023 compositing slot: background → ripple → children.
@@ -16,7 +16,7 @@
 //! The expansion/fade animation is sampled on the logic thread each tick
 //! through the shared [`Motion`](crate::frame::Motion) closed forms (the
 //! RFC-0010 model as landed); this pipeline only rasterises the current
-//! circle. Zero cost when no ripple is live — the draw call is skipped
+//! circle. Zero cost when no ripple is live, the draw call is skipped
 //! entirely on an empty pool.
 
 use crate::ByardError;
@@ -54,7 +54,7 @@ impl RippleInstance {
 /// # Errors
 ///
 /// [`ByardError::PipelineCompilation`] if the shader or pipeline fails GPU-side
-/// validation — never a panic, never a software fallback.
+/// validation, never a panic, never a software fallback.
 pub async fn build_pipeline(
     device: &wgpu::Device,
     bind_group_layout: &wgpu::BindGroupLayout,
@@ -123,7 +123,7 @@ pub async fn build_pipeline(
 }
 
 /// Draws every [`RippleInstance`], scissored to its content clip (RFC-0005).
-/// The instances upload as-is — depth is already stamped on the struct by
+/// The instances upload as-is, depth is already stamped on the struct by
 /// `push_ripple`, so unlike `decorated_box::draw` no per-instance rewrite
 /// happens here.
 #[allow(clippy::too_many_arguments)]

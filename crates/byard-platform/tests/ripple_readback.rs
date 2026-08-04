@@ -162,17 +162,17 @@ fn ripple(rect: [f32; 4], params: [f32; 4], color: [f32; 4], radii: [f32; 4]) ->
     }
 }
 
-/// The ink composites over the background inside its circle — brightening a
+/// The ink composites over the background inside its circle, brightening a
 /// dark surface with light ink and *darkening* a light surface with dark ink
 /// (the regression a purely additive blend causes: addition can only ever add
-/// light, so dark ink on a light card was invisible) — leaves the rest of the
+/// light, so dark ink on a light card was invisible), leaves the rest of the
 /// element untouched, and never bleeds past a rounded corner (RFC-0023
 /// resolved question: always clip).
 #[test]
 #[allow(clippy::many_single_char_names)]
 fn ripple_ink_composites_over_light_and_dark_and_clips_to_the_rounded_corner() {
     let Some((device, queue)) = try_device() else {
-        eprintln!("no GPU adapter — skipping ripple readback");
+        eprintln!("no GPU adapter, skipping ripple readback");
         return;
     };
 
@@ -214,7 +214,7 @@ fn ripple_ink_composites_over_light_and_dark_and_clips_to_the_rounded_corner() {
         "ink must brighten the background: inked BGR=({ib},{ig},{ir}) vs bare BGR=({ob},{og},{or_})"
     );
 
-    // Dark ink on a *light* surface must darken it — the exact case a purely
+    // Dark ink on a *light* surface must darken it, the exact case a purely
     // additive blend gets wrong (dark ink was invisible on light cards).
     let mut light = RenderFrame::new();
     light.push_instance(BoxInstance {
@@ -274,7 +274,7 @@ fn ripple_ink_composites_over_light_and_dark_and_clips_to_the_rounded_corner() {
 #[test]
 fn ripple_depth_keeps_children_crisp_above_the_ink() {
     let Some((device, queue)) = try_device() else {
-        eprintln!("no GPU adapter — skipping ripple readback");
+        eprintln!("no GPU adapter, skipping ripple readback");
         return;
     };
 
@@ -311,7 +311,7 @@ fn ripple_depth_keeps_children_crisp_above_the_ink() {
         ink_a > 200 && ink_r > 150,
         "ink must cover the background, got r={ink_r} a={ink_a}"
     );
-    // On the child: pure blue — the ink must NOT wash over it (depth test
+    // On the child: pure blue, the ink must NOT wash over it (depth test
     // rejects the ripple fragment where the nearer child already drew).
     let (cb, cg, cr, ca) = rb.at(100.0, 100.0);
     assert!(

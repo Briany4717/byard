@@ -20,10 +20,10 @@ the corrections and the canonical replacements. Where RFC-0001's prose and the
 snippets disagree, **this erratum and RFC-0002/0003 win.**
 
 This erratum changes **surface syntax only**. Every architectural claim in
-RFC-0001 — the four subsystems, the zero-GC arena model, `Signal<T>` and its
+RFC-0001, the four subsystems, the zero-GC arena model, `Signal<T>` and its
 dirty-flag vector, the multi-pipeline renderer, the §4.2 spatial hash grid, the
 concurrency model, `PlatformHost`, and the Dev-interpreter / Prod-transpiler
-split — stands unchanged. In fact the Lume surface is implemented *on top of*
+split, stands unchanged. In fact the Lume surface is implemented *on top of*
 those primitives without altering them (RFC-0002 §"automatic reactivity" reuses
 the §2.2 dirty-flag vector as its subscription store).
 
@@ -31,27 +31,27 @@ the §2.2 dirty-flag vector as its subscription store).
 
 ## Corrections
 
-### C1 — `signal` keyword removed; state is `var` / `let`
+### C1, `signal` keyword removed; state is `var` / `let`
 
 RFC-0001 declared reactive state with a `signal` keyword. **There is no `signal`
 keyword in `byld`.** Reactive sources are declared with `var` (mutable) and
 computed/constant bindings with `let`; reactivity is **automatic** (the compiler
-discovers dependencies by read-tracking — RFC-0002 D1). The lowering is
+discovers dependencies by read-tracking, RFC-0002 D1). The lowering is
 unchanged: a `var` still becomes a `Signal::new_in(arena, …)` exactly as the old
 `signal` did; only the keyword and the wiring (now implicit) changed.
 
-### C2 — Properties move from `(...)` to `#[...]`; three-zone elements
+### C2, Properties move from `(...)` to `#[...]`; three-zone elements
 
 RFC-0001 packed decorative/spatial properties into the call parentheses
 (`Column(gap: 12, bg: …, radius: 16, p: 20)`). Under Lume an element has **three
 zones** (RFC-0002 D4):
 
-- `(...)` — **primary positional content only** (a `Text`'s string, a `Button`'s
+- `(...)`, **primary positional content only** (a `Text`'s string, a `Button`'s
   label).
-- `#[...]` — **properties / config / events**.
-- `{ }` — **children**.
+- `#[...]`, **properties / config / events**.
+- `{ }`, **children**.
 
-### C3 — Event syntax: bare names with `=>`, no `on` prefix
+### C3, Event syntax: bare names with `=>`, no `on` prefix
 
 RFC-0001 wrote handlers as `onClick: () => …`. Under RFC-0003 (decision
 "Attribute syntax" / D4-bis), engine events are **bare-named** and use the `=>`
@@ -60,7 +60,7 @@ bindings (properties, including reactive props like `focused:` and
 function-valued callback props). Event names drop the `on` prefix because `=>`
 already marks them.
 
-### C4 — Scalar string type is `Str`, not `Text`
+### C4, Scalar string type is `Str`, not `Text`
 
 Any RFC-0001 prose using `Text` as a type name is wrong: `Text` is the text
 **intrinsic view**. The scalar string type is **`Str`** (RFC-0002 D9).
@@ -69,7 +69,7 @@ Any RFC-0001 prose using `Text` as a type name is wrong: `Text` is the text
 
 ## Canonical replacements
 
-### RFC-0001 §"`byld` at a glance" — corrected
+### RFC-0001 §"`byld` at a glance", corrected
 
 ```byld
 View UserCard() {
@@ -84,11 +84,11 @@ View UserCard() {
 ```
 
 `View` remains the fundamental unit (kept over Lume's `component` for coherence
-with `ViewArena`/`ViewDecl` — RFC-0002 Rationale). `inject` is unchanged. Wrapper
+with `ViewArena`/`ViewDecl`, RFC-0002 Rationale). `inject` is unchanged. Wrapper
 views (`Padding`, `Align`, …) still do not exist; spatial properties are still
-named attributes — now in `#[...]` rather than `(...)`.
+named attributes, now in `#[...]` rather than `(...)`.
 
-### RFC-0001 §"Rust controller" — unchanged
+### RFC-0001 §"Rust controller", unchanged
 
 ```rust
 #[byard_controller]
@@ -100,14 +100,14 @@ impl NetworkController {
 ```
 
 The Rust side is **not** affected. Note the now-deliberate visual rhyme: `#[...]`
-means "configuration" in both languages — properties/events in `.byd`, attribute
+means "configuration" in both languages, properties/events in `.byd`, attribute
 macros in `.rs`. They never collide (different files, different grammars).
 
 ---
 
 ## Unresolved item from RFC-0001 newly closed
 
-RFC-0001's *Unresolved questions* listed **"`byld` syntax stabilisation — a
+RFC-0001's *Unresolved questions* listed **"`byld` syntax stabilisation, a
 grammar RFC must be written before the parser is implemented."** That item is now
 **closed**: RFC-0002 fixes the versioned grammar for the full Lume surface, and
 RFC-0003 fixes the event/attribute syntax. Mark it resolved in RFC-0001's
@@ -129,4 +129,4 @@ MSRV policy, and the hot-reload boundary (the last now answered by RFC-0002's
 | `Button("Action", onClick: () => clicks++)` | `Button("Action") => clicks++` | RFC-0003 C3 |
 | `Text("…", typo: m3.titleLarge)` | `Text("…") #[typo: m3.titleLarge]` | RFC-0002 C2 / D4 |
 | `Text` used as a string type | `Str` | RFC-0002 C4 / D9 |
-| `View`, `inject`, `#[byard_controller]` | unchanged | — |
+| `View`, `inject`, `#[byard_controller]` | unchanged | - |

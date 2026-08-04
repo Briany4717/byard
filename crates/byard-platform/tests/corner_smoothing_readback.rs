@@ -181,7 +181,7 @@ const DIAGONAL: [f32; 2] = [std::f32::consts::FRAC_1_SQRT_2; 2];
 #[test]
 fn smooth_zero_draws_the_circular_corner_and_smooth_one_extends_it() {
     let Some((device, queue)) = try_device() else {
-        eprintln!("no GPU adapter — skipping readback");
+        eprintln!("no GPU adapter, skipping readback");
         return;
     };
 
@@ -195,7 +195,7 @@ fn smooth_zero_draws_the_circular_corner_and_smooth_one_extends_it() {
     let measured = flat.edge_along(CENTRE, DIAGONAL, 0.5);
     assert!(
         (measured - circular).abs() < 0.6,
-        "smooth: 0 must still be the circular arc — expected {circular:.2}, got {measured:.2}"
+        "smooth: 0 must still be the circular arc, expected {circular:.2}, got {measured:.2}"
     );
 
     // §S1: the squircle keeps the same straight edges and pushes the corner
@@ -226,12 +226,12 @@ fn smooth_zero_draws_the_circular_corner_and_smooth_one_extends_it() {
 #[test]
 fn the_corner_fringe_is_as_wide_as_the_edge_fringe() {
     let Some((device, queue)) = try_device() else {
-        eprintln!("no GPU adapter — skipping readback");
+        eprintln!("no GPU adapter, skipping readback");
         return;
     };
     // §S2. The fringe is the band between nearly-opaque and nearly-clear.
     // Measured along the same ray in both places, so the only variable is the
-    // field's own slope — which is exactly what the Lⁿ norm distorts and what
+    // field's own slope, which is exactly what the Lⁿ norm distorts and what
     // the analytic gradient normalisation puts back.
     let rb = render(&device, &queue, &box_frame(1.0));
     let width = |dir: [f32; 2]| rb.edge_along(CENTRE, dir, 0.1) - rb.edge_along(CENTRE, dir, 0.9);
@@ -248,7 +248,7 @@ fn the_corner_fringe_is_as_wide_as_the_edge_fringe() {
 #[test]
 fn a_shadow_follows_its_casters_corner_profile() {
     let Some((device, queue)) = try_device() else {
-        eprintln!("no GPU adapter — skipping readback");
+        eprintln!("no GPU adapter, skipping readback");
         return;
     };
     // §Q2. A transparent caster with an opaque, barely-blurred shadow isolates
@@ -256,7 +256,7 @@ fn a_shadow_follows_its_casters_corner_profile() {
     // alone, so its corner profile can be measured directly and compared
     // against the caster's. The blur is the shader's smallest (`max(blur, 0.5)`
     // is its floor), because a shadow with no blur, offset or spread at all is
-    // skipped outright — there would be nothing to measure.
+    // skipped outright, there would be nothing to measure.
     let shadow_only = |smooth: f32| {
         let mut frame = RenderFrame::new();
         frame.push_decorated(DecoratedBox {

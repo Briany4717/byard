@@ -1,20 +1,20 @@
 # RFC-0009: Vector and Icon Subsystem (MSDF, JIT-Dev / AOT-Release Pipeline)
 
-- **Status:** Active — fully implemented (M44–M52 all landed). M53+ future pipelines deferred. IMPL-58–68 + IMPL-91–93 logged in `DESICIONS.md`, all Decided.
+- **Status:** Active, fully implemented (M44–M52 all landed). M53+ future pipelines deferred. IMPL-58–68 + IMPL-91–93 logged in `DESICIONS.md`, all Decided.
 - **Author(s):** Briany4717
 - **Created:** 2026-06-24
 - **Last updated:** 2026-06-26
 - **Depends on:**
-  - RFC-0001 (Core Architecture — zero-GC model, `wgpu` pipelines, four
+  - RFC-0001 (Core Architecture, zero-GC model, `wgpu` pipelines, four
     subsystems, `frame.rs` boundary, thread layout)
-  - RFC-0002 (`byld` Language — Lume surface, automatic reactivity)
-  - RFC-0003 (Interactive Events and View Mutation — reflected props, input)
-  - RFC-0005 (Intrinsic View Catalog — closed catalog, agnosticism contract)
-  - RFC-0006 (`byard` CLI and Dev Runner — file watcher, tick ordering, `.byard/`)
-  - RFC-0007 (User-View Instantiation — design-system wrappers are user `View`s)
-  - RFC-0008 (Package Ecosystem — asset distribution engine policy)
+  - RFC-0002 (`byld` Language, Lume surface, automatic reactivity)
+  - RFC-0003 (Interactive Events and View Mutation, reflected props, input)
+  - RFC-0005 (Intrinsic View Catalog, closed catalog, agnosticism contract)
+  - RFC-0006 (`byard` CLI and Dev Runner, file watcher, tick ordering, `.byard/`)
+  - RFC-0007 (User-View Instantiation, design-system wrappers are user `View`s)
+  - RFC-0008 (Package Ecosystem, asset distribution engine policy)
 - **Amends:**
-  - RFC-0001 §3.1 (the four-pipeline table becomes five — see
+  - RFC-0001 §3.1 (the four-pipeline table becomes five, see
     `0001-erratum-vector-pipeline.md`)
   - RFC-0005 §4 (adds the twelfth intrinsic, `VectorIcon`; closes the
     "Image source type" open item)
@@ -37,7 +37,7 @@ pipeline (`VectorMSDF`) that samples a **multi-channel signed distance field
 plus a two-phase asset pipeline that gives developers raw-SVG ergonomics with
 native execution. In **development** (`byard dev`), raw `.svg` files are
 intercepted on save, validated, and compiled to MSDF fields on a CPU worker pool,
-then blitted into a transient GPU atlas — all without ever blocking the render or
+then blitted into a transient GPU atlas, all without ever blocking the render or
 logic threads. In **production** (`byard build`), an AOT pass tree-shakes the
 module graph, packs only the icons actually instantiated into one immutable
 high-density atlas, and inlines their coordinates as a static `[Rect; N]` table.
@@ -65,12 +65,12 @@ Material) into the compiler or runtime adds weight and breaks the agnosticism a
 systems framework should preserve.
 
 MSDF solves the first two. By storing contour distance across the R, G, and B
-channels, it preserves sharp orthogonal corners under hardware linear filtering —
-the corners that a classic single-channel SDF rounds off when magnified — using
+channels, it preserves sharp orthogonal corners under hardware linear filtering, 
+the corners that a classic single-channel SDF rounds off when magnified, using
 only a trivial per-fragment median. The transform from Bézier paths to a field
 happens **once** in Dev (and **zero** times in Release); the GPU then handles
-arbitrary scale/rotation at the cost of a flat textured quad. The third problem —
-coupling — is solved by keeping the core's vocabulary at the level of asset
+arbitrary scale/rotation at the cost of a flat textured quad. The third problem, 
+coupling, is solved by keeping the core's vocabulary at the level of asset
 handles and pushing all design-system semantics into downstream packages.
 
 ## Guide-level explanation
@@ -91,13 +91,13 @@ View SettingsButton() {
 
 `size` drives Taffy geometry; `color` is the single tint the MSDF shader applies.
 Animating `size` from `16` to `128` re-samples the **same** field at a larger
-screen rect — infinitely crisp, no new texture, no CPU work.
+screen rect, infinitely crisp, no new texture, no CPU work.
 
 ### The ecosystem model (`byard-material` / `byard-cupertino`)
 
 To build stylised apps without authoring raw vectors, developers use ecosystem
 packages (RFC-0008) that declare their assets in their own manifest and expose
-clean, typed wrappers — themselves ordinary user `View`s (RFC-0007):
+clean, typed wrappers, themselves ordinary user `View`s (RFC-0007):
 
 ```byld
 use material as m
@@ -112,7 +112,7 @@ View Dashboard() {
 
 The `material` package maps the `.search` token + `variant` to an internal asset
 handle, which lowers to `VectorIcon`. The developer gets impeccable DX and LSP
-auto-completion; the engine core stays entirely decoupled — it never contains the
+auto-completion; the engine core stays entirely decoupled, it never contains the
 strings `"search"` or `"material"`.
 
 ### Dev runner vs. release mechanics
@@ -130,7 +130,7 @@ Running `byard dev` and saving an SVG:
 Running `byard build`, the compiler analyses exactly which icons are instantiated.
 Even if `byard-material` ships 6,000 icons, an app that instantiates 5 bakes a
 consolidated atlas with exactly those 5. VRAM overhead is the theoretical minimum;
-boot copies one texture and indexes a static table — no parsing, no runtime
+boot copies one texture and indexes a static table, no parsing, no runtime
 coordinate math.
 
 ## Reference-level explanation
@@ -141,7 +141,7 @@ A fifth specialised pipeline joins the Encoder subsystem
 (`byard-core/src/encoder/vector_msdf.rs`), compiled at engine init alongside the
 existing four (RFC-0001 §3.1), inside the same §8 `push_error_scope` window. On
 failure it returns `ByardError::PipelineCompilation { pipeline: "VectorMSDF",
-reason }` — no panic, no software fallback (RFC-0001 §8).
+reason }`, no panic, no software fallback (RFC-0001 §8).
 
 A render instance is an immutable data unit defined in `frame.rs` (the only
 cross-subsystem boundary, RFC-0001 §9):
@@ -194,7 +194,7 @@ matches a flat textured quad, preserving Byard's frame-time guarantees.
 ### 2. JIT vector compiler (`byard dev`)
 
 The generator is **compiler-side** (`byard-compiler/src/vector/`), never in
-`byard-core` — the core only consumes a finished field via `frame.rs` (RFC-0001
+`byard-core`, the core only consumes a finished field via `frame.rs` (RFC-0001
 §9 dependency direction). Evaluating a `VectorIcon` during dev runs:
 
 ```
@@ -204,7 +204,7 @@ The generator is **compiler-side** (`byard-compiler/src/vector/`), never in
      [YES]                                                    [NO]
         │                                                       │
   Read UV mapping                                  Emit zero-opacity placeholder
-  Emit VectorInstance                              (frame still ships — no stall)
+  Emit VectorInstance                              (frame still ships, no stall)
                                                           │
                                                   Dispatch one-shot task (dedup):
                                                     Tokio I/O reads SVG bytes
@@ -277,7 +277,7 @@ never visible beyond a one-frame placeholder. (This closes a gap in the original
 draft, which specified the blit but not the full-atlas behaviour.)
 
 On hot-reload, a saved `.svg` invalidates its cache entry; if the new field fits
-the same cell the UV slot is reused and only the texels change — existing
+the same cell the UV slot is reused and only the texels change, existing
 `VectorInstance`s are untouched, so a size animation in flight stays crisp and the
 consuming `View` does not remount.
 
@@ -298,7 +298,7 @@ consuming `View` does not remount.
    via **MaxRects bounding-box packing** into one immutable array-texture.
 5. The coordinate lookup is emitted as a fixed-size `static VECTOR_ATLAS: [Rect; N]`
    (with `px_range` and `layer`), inlined into the Phase-4 transpile target
-   (RFC-0001 §7.3). Boot uploads exactly one texture and indexes the table — no
+   (RFC-0001 §7.3). Boot uploads exactly one texture and indexes the table, no
    dynamic parsing, no runtime coordinate math, zero overhead.
 
 ### 5. Generation parameters
@@ -327,8 +327,8 @@ includes the generator version, so a toolchain bump invalidates the cache safely
   until the upload lands), and the persistent cache (§5) removes the cost on
   subsequent starts.
 - **Generator mathematical complexity.** Transforming arbitrary cubic Bézier paths
-  into continuous multi-channel distance fields — with correct channel coloring at
-  sharp joints — is a steep, well-isolated maintenance burden on the compiler crate.
+  into continuous multi-channel distance fields, with correct channel coloring at
+  sharp joints, is a steep, well-isolated maintenance burden on the compiler crate.
   It is mitigated by leaning on an existing generator (the `msdf` crate) and a
   strict determinism test harness.
 
@@ -384,11 +384,11 @@ arm branch-free.
 - **Before merge (all resolved, IMPL-62–63):**
   - [x] **Generation grid size:** **32×32**, `px_range = 4` (IMPL-62). Sharp-corner and determinism tests pass; raise to 64² only if 8K regression surfaces.
   - [x] **Edge-coloring threshold:** **48°** confirmed (IMPL-62). Channel separation holds under extreme scaling in the test suite.
-  - [x] **Generator dependency:** **`bymsdfgen-core`** — a pure-Rust, MIT, data-oriented msdfgen rewrite (IMPL-63). SVG normalization via `usvg`; path adaptation in `vector/generate.rs`.
+  - [x] **Generator dependency:** **`bymsdfgen-core`**, a pure-Rust, MIT, data-oriented msdfgen rewrite (IMPL-63). SVG normalization via `usvg`; path adaptation in `vector/generate.rs`.
 - **During implementation (IMPL-64–68):**
   - [x] **Dev-atlas cap and eviction:** shelf/skyline allocator + array-texture layers + LRU-evict recommended (IMPL-64, open pending M48 implementation). Evicted handles fall back to placeholder + regenerate (INV-9).
   - [x] **Inclusion-list ergonomics:** `byard.toml` `[assets.vectors] include = [...]` (IMPL-65, resolved). Seeds the closed set for dynamic `asset()` sites; absent = hard build error on non-literal handles.
-  - [x] **Persistent cache pruning:** deferred — cache grows unbounded until `byard clean` (IMPL-68). On-disk LRU mirrors M48's in-memory eviction, which is itself still to be tuned.
+  - [x] **Persistent cache pruning:** deferred, cache grows unbounded until `byard clean` (IMPL-68). On-disk LRU mirrors M48's in-memory eviction, which is itself still to be tuned.
 
 ## Future possibilities
 

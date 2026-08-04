@@ -1,4 +1,4 @@
-//! `byard get` — fetch dependencies and write `byard.lock`
+//! `byard get`, fetch dependencies and write `byard.lock`
 //! (RFC-0008 Pillar C, decisions D-H/D-I).
 //!
 //! The **only** command that may change the lockfile. Walks the dependency
@@ -67,7 +67,7 @@ fn ensure_present(declarer_root: &Path, dep: &Dependency) -> Result<(PathBuf, St
         DepSource::Git { url, reference } => {
             let dest = git_cache_path(&dep.name, url, reference);
             let commit = if dest.is_dir() {
-                // Already cached — pinned refs are immutable, no refetch.
+                // Already cached, pinned refs are immutable, no refetch.
                 let out = std::process::Command::new("git")
                     .args(["rev-parse", "HEAD"])
                     .current_dir(&dest)

@@ -14,7 +14,7 @@
 //!    encode.finish            0.590ms ░░░░░░░░░░░░░░░░░░░░
 //!  …
 //!  hud.render                 0.104ms ░░░░░░░░░░░░░░░░░░░░  dev, all threads
-//!  interpreter tax            0.260ms  self-time, 3 scope(s) — 0 in release
+//!  interpreter tax            0.260ms  self-time, 3 scope(s), 0 in release
 //!  layout path               retained  3 node(s) marked · 3/3 matched
 //! ```
 //!
@@ -34,7 +34,7 @@
 //! - each **row** charts self-time, with its inclusive time in parentheses when
 //!   the two differ;
 //! - the **interpreter tax** sums the self-time of `Interpreter` scopes only,
-//!   so Taffy's cost — `Native`, but nested inside an `Interpreter` parent — is
+//!   so Taffy's cost, `Native`, but nested inside an `Interpreter` parent, is
 //!   not billed to a tax an AOT build would not pay (§I2b).
 //!
 //! # Every row is one owner's, and the dev runner gets its own
@@ -42,13 +42,13 @@
 //! Nesting is not the only way a naive aggregate double-attributes. Two
 //! *peers* do it too: when the HUD is open, two interpreters run in one frame
 //! and both enter `interp.render`, `interp.tick` and `layout.taffy`. Summing by
-//! name merged them and printed `×2` — honest that a merge happened, silently
+//! name merged them and printed `×2`, honest that a merge happened, silently
 //! wrong about whose time it was, and enough to make the HUD look like it cost
 //! a tenth of what it did.
 //!
 //! So every scope row here aggregates **`Owner::App`** samples only, and the
-//! whole of `Owner::DevTools` — the HUD's interpreter, its layout, and the
-//! shaping of its text over on the render thread — lands in the single
+//! whole of `Owner::DevTools`, the HUD's interpreter, its layout, and the
+//! shaping of its text over on the render thread, lands in the single
 //! `hud.render` row. That row is therefore not "the inclusive time of the
 //! `hud.render` scope"; it is *what the dev surfaces cost this frame, on every
 //! thread*, which is the only figure §V4's 5 % gate can be evaluated against.
@@ -66,7 +66,7 @@
 //!
 //! **Constant count.** The block redraws in place by moving the cursor up N
 //! lines. If N changed between repaints the redraw would erase the wrong lines
-//! and eat scrollback — which is where parse errors live, and the reason this
+//! and eat scrollback, which is where parse errors live, and the reason this
 //! design exists at all. So [`ROWS`] is a *schema*: a scope that did not run
 //! this frame still gets its row, showing zero, and a scope that ran several
 //! times (`encode.buffers`, once per draw group) is aggregated into one. The
@@ -95,7 +95,7 @@ const NAME_WIDTH: usize = 24;
 ///
 /// Not 1.0×. A vsync-bound frame's period is the refresh interval plus or minus
 /// scheduling jitter, so it crosses the budget on about half of a healthy app's
-/// frames — a marker keyed on that is on permanently and says nothing. Not 2.0×
+/// frames, a marker keyed on that is on permanently and says nothing. Not 2.0×
 /// either: a frame that missed one interval and then ran slightly early would
 /// fall under it. Halfway between "paced" and "skipped one" is the only value
 /// that cannot be reached from either side by jitter alone.
@@ -108,7 +108,7 @@ const MISSED_VSYNC_RATIO: (u64, u64) = (3, 2);
 ///
 /// This is a schema, not a discovery: see the module docs for why the row set
 /// has to be fixed rather than derived from whatever happened to be sampled.
-/// Adding a `profile_scope!` without adding it here means it will not appear —
+/// Adding a `profile_scope!` without adding it here means it will not appear,
 /// which is deliberate friction, because a row appearing and disappearing
 /// between repaints is the exact failure this table prevents.
 const ROWS: &[(&str, u8)] = &[
@@ -134,7 +134,7 @@ const ROWS: &[(&str, u8)] = &[
     // (RFC-0030 §V4). Zero when the HUD is closed, which is the honest
     // rendering of "it cost nothing because it did not run".
     //
-    // Aggregated by *owner* rather than by name — see [`HUD_ROW`] and the
+    // Aggregated by *owner* rather than by name, see [`HUD_ROW`] and the
     // module docs.
     ("hud.render", 0),
 ];
@@ -150,7 +150,7 @@ const HUD_ROW: usize = ROWS.len() - 1;
 /// How many terminal lines [`format_profile_block`] always produces: the
 /// header, every schema row, and the two footer lines.
 ///
-/// Constant by construction, and asserted — the in-place redraw depends on it.
+/// Constant by construction, and asserted, the in-place redraw depends on it.
 pub const PROFILE_LINES: usize = ROWS.len() + 3;
 
 /// One row's aggregated timings.
@@ -165,12 +165,12 @@ struct Row {
 /// What the block needs beyond the sample blocks themselves.
 #[derive(Debug, Clone, Copy)]
 pub struct ProfileContext {
-    /// The frame budget in nanoseconds — the display's refresh interval unless
+    /// The frame budget in nanoseconds, the display's refresh interval unless
     /// `[dev] frame_budget` overrode it (RFC-0030 §V2/§Q3).
     pub budget_ns: u64,
     /// The frame period, as the developer perceives it.
     pub frame_ns: u64,
-    /// The engine's own cost for this frame — `crate::statusline::work_ns`,
+    /// The engine's own cost for this frame, `crate::statusline::work_ns`,
     /// i.e. the pipeline's critical path with the display's wait removed and
     /// the dev surfaces excluded.
     ///
@@ -187,7 +187,7 @@ pub struct ProfileContext {
     /// "The cache is working" and "the frame was fast" are different claims,
     /// and only one of them is checkable at a glance.
     pub text_reshapes: usize,
-    /// Text lines in the frame — the denominator for `text_reshapes`.
+    /// Text lines in the frame, the denominator for `text_reshapes`.
     pub text_lines: usize,
     /// Whether the device can time GPU passes at all (RFC-0013 **P5**).
     pub gpu_available: bool,
@@ -269,20 +269,20 @@ fn aggregate(logic: &SampleBlock, render: &SampleBlock) -> [Row; ROWS.len()] {
     rows
 }
 
-/// The header line: the frame period, the budget, and the percentage — with
+/// The header line: the frame period, the budget, and the percentage, with
 /// the *engine's* verdict on it rather than the clock's.
 ///
 /// # Why the colour is not `frame_ns > budget_ns`
 ///
 /// Under FIFO the acquire parks the caller until the display is ready. A frame
 /// that misses a vsync waits for the next one, so its *period* is two intervals
-/// — 200 % of budget — while the engine's own work was under a millisecond.
+///, 200 % of budget, while the engine's own work was under a millisecond.
 /// Colouring that in `err` reports a compositor event as an app regression, and
 /// a developer who chases it is chasing nothing.
 ///
 /// So `err` means the engine overran: `work > budget`. When a whole vsync
 /// interval was missed and the work did not overrun, the header says `waited`
-/// instead, in `warn` — the frame *was* late, that is worth seeing, and it is a
+/// instead, in `warn`, the frame *was* late, that is worth seeing, and it is a
 /// different fact with a different cause.
 ///
 /// # Why a *missed vsync* and not "over budget"
@@ -291,7 +291,7 @@ fn aggregate(logic: &SampleBlock, render: &SampleBlock) -> [Row; ROWS.len()] {
 /// refresh interval plus or minus scheduling jitter, so `frame_ns > budget_ns`
 /// is true on roughly half of a perfectly healthy app's frames. Running that as
 /// the condition put `waited` on the header at 100 % of budget, ten times a
-/// second, for a frame that missed nothing — a marker that is on all the time
+/// second, for a frame that missed nothing, a marker that is on all the time
 /// is one nobody reads, and this one would be lying while it did it.
 ///
 /// A frame that genuinely missed a vsync waited for the *next* one, so its
@@ -435,7 +435,7 @@ fn write_tax(
     p: &Palette,
 ) {
     // App-owned only: the tax says what an AOT build of *this app* would stop
-    // paying, and the HUD is `byld` too — its interpreter cost is real, and
+    // paying, and the HUD is `byld` too, its interpreter cost is real, and
     // somebody else's. Letting it in would raise the developer's tax figure
     // the moment they asked to look at it.
     let app_tax = |b: &SampleBlock| b.owner_kind_self_ns(Owner::App, ScopeKind::Interpreter);
@@ -446,7 +446,7 @@ fn write_tax(
         .count();
     let _ = write!(
         out,
-        " {:NAME_WIDTH$} {}{:>9}{}  {}self-time, {scopes} scope(s) — 0 in release{}",
+        " {:NAME_WIDTH$} {}{:>9}{}  {}self-time, {scopes} scope(s), 0 in release{}",
         "interpreter tax",
         p.metric,
         fmt_ms(tax),
@@ -479,8 +479,8 @@ fn write_atlas(out: &mut String, ctx: &ProfileContext, p: &Palette) {
 
 /// Three decimals, always milliseconds.
 ///
-/// Two decimals rounded `interp.dispatch_events` and `relay.publish` — both
-/// genuinely a few microseconds — to a flat `0.00ms`, which is exactly the
+/// Two decimals rounded `interp.dispatch_events` and `relay.publish`, both
+/// genuinely a few microseconds, to a flat `0.00ms`, which is exactly the
 /// reading "this scope is no longer being entered" produces. A profiler must
 /// not render a working scope and a dead one identically.
 #[allow(clippy::cast_precision_loss)] // frame times never approach f64's limit
@@ -533,7 +533,7 @@ mod tests {
     #[test]
     fn the_line_count_is_constant_whatever_was_sampled() {
         // The in-place redraw moves the cursor up N lines. If N varied, a
-        // repaint would erase the wrong lines and eat scrollback — which is
+        // repaint would erase the wrong lines and eat scrollback, which is
         // where parse errors live, and the reason this whole design exists.
         let empty = show(&SampleBlock::default(), &SampleBlock::default(), ctx());
         assert_eq!(empty.lines().count(), PROFILE_LINES);
@@ -641,7 +641,7 @@ mod tests {
     #[test]
     fn a_missed_vsync_is_not_reported_as_an_over_budget_frame() {
         // §A4. Under FIFO a frame that misses a vsync waits for the next one,
-        // so its *period* is two intervals — ~200 % of budget — while the
+        // so its *period* is two intervals, ~200 % of budget, while the
         // engine used a fraction of a millisecond. Rendering that in `err`
         // reports a compositor event as an app regression, which is exactly
         // the misreading the work/idle split exists to prevent.
@@ -674,7 +674,7 @@ mod tests {
         );
         assert!(
             header.contains("200%"),
-            "the period is reported unchanged — only the verdict on it moved: \
+            "the period is reported unchanged, only the verdict on it moved: \
              {header}"
         );
     }
@@ -698,7 +698,7 @@ mod tests {
     fn ordinary_vsync_jitter_is_not_reported_as_a_missed_frame() {
         // Found by running it. A vsync-bound frame's period is the refresh
         // interval ± scheduling jitter, so it crosses the budget on about half
-        // of a healthy app's frames — and the first cut of the `waited` marker
+        // of a healthy app's frames, and the first cut of the `waited` marker
         // keyed on exactly that, putting it on the header permanently at
         // `100%` of budget. A marker that is always on is one nobody reads,
         // and this one was also wrong: nothing had been missed.
@@ -752,7 +752,7 @@ mod tests {
     fn a_scope_that_did_not_run_still_gets_its_row() {
         // "This scope was not entered" is exactly the failure the
         // instrumentation exists to surface. A row that silently disappears
-        // communicates it to nobody — and would change the line count.
+        // communicates it to nobody, and would change the line count.
         let out = show(&SampleBlock::default(), &SampleBlock::default(), ctx());
         for (name, _) in ROWS {
             assert!(out.contains(name), "missing row {name}:\n{out}");
@@ -829,7 +829,7 @@ mod tests {
         // Composed, not detected, for the same reason the statusline is (§Q7).
         // A wrapped row breaks the cursor-up redraw the same way a wrapped
         // statusline does.
-        // Every row that carries a suffix, all at once, all at their widest —
+        // Every row that carries a suffix, all at once, all at their widest,
         // a row is 56 columns before its suffix even starts, so a suffix that
         // "looks short" is not evidence of anything. The dev row's needs the
         // HUD open, and the re-shape counts need six-figure pools; both are
@@ -878,7 +878,7 @@ mod tests {
 
     /// The frame the erratum is about: two interpreters, four scopes sharing
     /// two names, and a slice of the render thread's glyph shaping that
-    /// belongs to the HUD. Push order is `Drop` order — children first.
+    /// belongs to the HUD. Push order is `Drop` order, children first.
     fn a_frame_with_the_hud_open() -> (SampleBlock, SampleBlock) {
         let dev =
             |n: &'static str, k, d, dur| Sample::owned(scope(n, k), Owner::DevTools, d, 0, dur);
@@ -995,7 +995,7 @@ mod tests {
     #[test]
     fn the_interpreter_tax_does_not_move_when_the_hud_opens() {
         // INV-24. The tax answers "what would an AOT build of *this app* stop
-        // paying". The HUD is `byld` too, so its interpreter cost is real —
+        // paying". The HUD is `byld` too, so its interpreter cost is real,
         // and somebody else's. A developer must not see their tax figure rise
         // by a millisecond because they asked to look at it.
         let (logic, render) = a_frame_with_the_hud_open();
@@ -1007,7 +1007,7 @@ mod tests {
                 .to_string()
         };
         // The app's `interp.render` is 1.0ms inclusive with a 0.4ms native
-        // layout child, so its tax is 0.6ms — with or without the HUD.
+        // layout child, so its tax is 0.6ms, with or without the HUD.
         assert!(row(&with_hud).contains("0.600ms"), "{}", row(&with_hud));
 
         let app_only = block(vec![
@@ -1034,7 +1034,7 @@ mod tests {
     #[test]
     fn a_few_microseconds_is_not_rendered_the_same_as_a_dead_scope() {
         // A scope that stopped being entered and one that costs 4µs must not
-        // print identically — the first is the failure this exists to reveal.
+        // print identically, the first is the failure this exists to reveal.
         let b = block(vec![Sample::cpu(
             scope("relay.publish", ScopeKind::Native),
             0,

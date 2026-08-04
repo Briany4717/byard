@@ -1,7 +1,7 @@
 //! Guards the committed RFC-0019 callback-props example through the real
-//! `byard` binary: the `callbacks` project — reusable interactive wrappers that
+//! `byard` binary: the `callbacks` project, reusable interactive wrappers that
 //! forward their inner intrinsic's `tap` to a caller-supplied `Fn()` action
-//! block — must check clean (parse, type-check, lower, and validate the
+//! block, must check clean (parse, type-check, lower, and validate the
 //! callback bindings with no diagnostics).
 
 use std::path::PathBuf;
@@ -11,7 +11,7 @@ fn example_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/callbacks")
 }
 
-/// `byard check <project-dir>` on the callbacks example reports no errors —
+/// `byard check <project-dir>` on the callbacks example reports no errors,
 /// including the forwarding case (`on_tap: on_up`) where one wrapper passes a
 /// callback it received down into another.
 #[test]

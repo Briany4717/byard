@@ -1,4 +1,4 @@
-//! RFC-0006 §3.4 / RFC-0030 §C2 — the error overlay is a layer over the last
+//! RFC-0006 §3.4 / RFC-0030 §C2, the error overlay is a layer over the last
 //! good view, not a screen instead of it.
 //!
 //! Two claims, tested separately because they fail separately.
@@ -10,7 +10,7 @@
 //! explaining why was honest and correct when it was written: the flat four-pass
 //! encoder drew all text in one global pass after every box, so the app's text
 //! bled *over* the scrim. RFC-0017's z-layers and RFC-0023's backdrop blur
-//! removed that constraint, and this asserts the promise can now be kept — by
+//! removed that constraint, and this asserts the promise can now be kept, by
 //! reading the pixel, not by trusting the layer marks.
 //!
 //! # The two transition frames need a full redraw
@@ -151,7 +151,7 @@ fn encoder(device: &Arc<wgpu::Device>, queue: &Arc<wgpu::Queue>) -> EncoderSubsy
     enc
 }
 
-/// A full-viewport box in `color` — "the app".
+/// A full-viewport box in `color`, "the app".
 fn app_frame(color: [f32; 4]) -> RenderFrame {
     let mut f = RenderFrame::new();
     f.push_instance(BoxInstance {
@@ -185,12 +185,12 @@ fn push_overlay(f: &mut RenderFrame) {
 #[test]
 fn the_last_good_view_is_visible_through_the_overlays_backdrop() {
     let Some((device, queue)) = try_device() else {
-        eprintln!("no GPU adapter — skipping");
+        eprintln!("no GPU adapter, skipping");
         return;
     };
 
     // Two identical overlays over two different "apps". If the overlay were an
-    // opaque field — the pre-RFC-0017 implementation — these would read the
+    // opaque field, the pre-RFC-0017 implementation, these would read the
     // same pixel, because the view underneath would contribute nothing.
     let mut red = app_frame([0.9, 0.05, 0.05, 1.0]);
     push_overlay(&mut red);
@@ -204,7 +204,7 @@ fn the_last_good_view_is_visible_through_the_overlays_backdrop() {
 
     assert_ne!(
         over_red, over_blue,
-        "the view beneath the overlay must reach the screen — an opaque field \
+        "the view beneath the overlay must reach the screen, an opaque field \
          would render these identically ({over_red:?} vs {over_blue:?})"
     );
     assert!(
@@ -220,7 +220,7 @@ fn the_last_good_view_is_visible_through_the_overlays_backdrop() {
 #[test]
 fn the_backdrop_darkens_what_it_covers_rather_than_replacing_it() {
     let Some((device, queue)) = try_device() else {
-        eprintln!("no GPU adapter — skipping");
+        eprintln!("no GPU adapter, skipping");
         return;
     };
     // The point of the blur *and* the tint: the app must survive as shape and
@@ -246,7 +246,7 @@ fn the_backdrop_darkens_what_it_covers_rather_than_replacing_it() {
 #[test]
 fn a_frame_can_ask_for_a_full_redraw_and_the_request_does_not_leak() {
     // A sticky full-redraw request would silently disable the incremental path
-    // for the rest of the session — the expensive way to be wrong here, because
+    // for the rest of the session, the expensive way to be wrong here, because
     // nothing would ever look broken.
     let mut f = RenderFrame::new();
     assert!(!f.wants_full_redraw());
@@ -263,7 +263,7 @@ fn a_frame_can_ask_for_a_full_redraw_and_the_request_does_not_leak() {
 fn a_full_redraw_request_survives_a_frame_that_was_never_rendered() {
     // The logic thread outruns the display, so most published frames are never
     // drawn. If the frame that mounted the overlay is one of them, its request
-    // is still owed — dropping it would make the overlay's correctness depend
+    // is still owed, dropping it would make the overlay's correctness depend
     // on the display keeping up, which is the exact thing `merge_dirty_from`
     // exists because it does not.
     let mut mounted = RenderFrame::new();
@@ -356,7 +356,7 @@ fn mark_dirty_since_marks_forward_and_leaves_everything_before_it_alone() {
         "everything at or after the mark is dirty; everything before it is \
          exactly as its own producer reported it"
     );
-    // Solids are pushed dirty by default — a `BoxInstance` is a GPU `Pod` with
+    // Solids are pushed dirty by default, a `BoxInstance` is a GPU `Pod` with
     // no room for the flag, so the parallel vector is seeded `true` and cleared
     // by whoever can prove otherwise. Marking forward is therefore a no-op
     // here, which is the correct outcome and not evidence of anything.
@@ -366,7 +366,7 @@ fn mark_dirty_since_marks_forward_and_leaves_everything_before_it_alone() {
 #[test]
 fn mark_dirty_since_a_cursor_past_the_end_is_a_no_op() {
     // The overlay emitted nothing this frame. Nothing to mark, and nothing to
-    // panic about — an overlay that draws conditionally must not have to guard
+    // panic about, an overlay that draws conditionally must not have to guard
     // the call site.
     let mut f = RenderFrame::new();
     let mark = f.cursor();

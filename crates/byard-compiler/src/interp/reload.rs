@@ -26,9 +26,9 @@ use crate::symbol::Symbol;
 /// The classification of a single-View patch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReloadKind {
-    /// Shape unchanged — keep `Signal`s, rebuild scopes (RFC-0002 case 1).
+    /// Shape unchanged, keep `Signal`s, rebuild scopes (RFC-0002 case 1).
     ReactiveCompatible,
-    /// Shape changed — teardown and remount (RFC-0002 case 2).
+    /// Shape changed, teardown and remount (RFC-0002 case 2).
     StructureIncompatible,
 }
 
@@ -43,7 +43,7 @@ enum Tag {
 
 /// The reload-relevant shape of a View: the ordered `(tag, name)` of its
 /// `param`/`var`/`let`/`inject` declarations. Expressions, elements, control
-/// flow, and the style block are deliberately excluded — they may change freely
+/// flow, and the style block are deliberately excluded, they may change freely
 /// in a reactive-compatible patch.
 fn shape(view: &ViewDecl) -> Vec<(Tag, Symbol)> {
     let mut s: Vec<(Tag, Symbol)> = view
@@ -75,9 +75,9 @@ pub fn diff_view(old: &ViewDecl, new: &ViewDecl) -> ReloadKind {
 /// What to do with one View when reloading a whole file (D11: per-`ViewDecl`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ViewReload {
-    /// A newly added View — mount it.
+    /// A newly added View, mount it.
     Added,
-    /// A removed View — unmount it.
+    /// A removed View, unmount it.
     Removed,
     /// A patch to an existing View.
     Patch(ReloadKind),
@@ -107,7 +107,7 @@ pub fn diff_program(old: &[ViewDecl], new: &[ViewDecl]) -> Vec<(Symbol, ViewRelo
 /// (RFC-0007 §5): every **changed** view (body or shape differs, or added)
 /// unioned with its **transitive callers**, because a caller embeds the callee's
 /// expanded body. Instantiation widens per-`ViewDecl` reload (D11) to chase
-/// callers through the call graph — the single source of truth for both
+/// callers through the call graph, the single source of truth for both
 /// cycle detection and reload blast-radius.
 ///
 /// A *removed* view's own name is included so the caller can drop it; its
@@ -218,7 +218,7 @@ pub struct ParsedFile {
 /// publishes the result of `reparse()` to `channel` on every relevant change
 /// (M25; generalized to the module graph by RFC-0008 Pillar E).
 ///
-/// `reparse` re-derives the *whole program* — for a single-file project that
+/// `reparse` re-derives the *whole program*, for a single-file project that
 /// is one `parse`, for a multi-file/package project the CLI passes a closure
 /// that re-runs the module resolver. Directories are watched recursively
 /// (project sources and cooperative-dev `path` dependencies, D-J). Fetched,
@@ -230,7 +230,7 @@ pub struct ParsedFile {
 /// live (RFC-0009 §3, M47). Any other change is ignored.
 ///
 /// A parse error keeps `views` empty so the caller retains the last-good view.
-/// Returns the watcher handle — drop it to stop watching.
+/// Returns the watcher handle, drop it to stop watching.
 ///
 /// # Errors
 ///
@@ -260,7 +260,7 @@ where
                     {
                         source_changed = true;
                     } else if p.extension().is_some_and(|e| e == "svg") {
-                        // A vector asset changed — hand its path to the runtime
+                        // A vector asset changed, hand its path to the runtime
                         // for live regeneration (M47). A disconnected receiver
                         // (runtime torn down) is not the watcher's problem.
                         let _ = assets.send(p.clone());

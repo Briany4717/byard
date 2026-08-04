@@ -1,4 +1,4 @@
-//! M21 — `DecoratedBox` / `TextureSampler` pipeline tests (RFC-0001 §3.1, §8).
+//! M21, `DecoratedBox` / `TextureSampler` pipeline tests (RFC-0001 §3.1, §8).
 //!
 //! GPU-dependent tests request a real adapter and **skip gracefully** when none
 //! is available (headless CI), so they assert on machines with a GPU without
@@ -39,7 +39,7 @@ fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>)> {
 #[test]
 fn encoder_builds_all_pipelines_including_m21() {
     let Some((device, queue)) = try_device() else {
-        eprintln!("no GPU adapter — skipping pipeline build test");
+        eprintln!("no GPU adapter, skipping pipeline build test");
         return;
     };
     // init() builds SolidBox, clear, text, DecoratedBox and TextureSampler
@@ -59,13 +59,13 @@ fn encoder_builds_all_pipelines_including_m21() {
 #[test]
 fn bad_shader_surfaces_pipeline_compilation_not_panic() {
     let Some((device, _queue)) = try_device() else {
-        eprintln!("no GPU adapter — skipping bad-shader test");
+        eprintln!("no GPU adapter, skipping bad-shader test");
         return;
     };
 
     // Mirror the §8 error-scope pattern with intentionally invalid WGSL and
     // confirm the validation scope captures the failure (the mechanism that
-    // `build_pipeline` turns into `ByardError::PipelineCompilation`) — never a panic.
+    // `build_pipeline` turns into `ByardError::PipelineCompilation`), never a panic.
     let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("bad shader"),
@@ -174,7 +174,7 @@ fn render_and_read(
 #[test]
 fn solid_and_decorated_boxes_actually_paint_pixels() {
     let Some((device, queue)) = try_device() else {
-        eprintln!("no GPU adapter — skipping readback test");
+        eprintln!("no GPU adapter, skipping readback test");
         return;
     };
     let size = 128u32;

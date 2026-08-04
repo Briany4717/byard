@@ -9,13 +9,13 @@
 //! can happen *again*.
 //!
 //! Every layer had unit tests. Every layer had benchmarks. What none of them
-//! had was an assertion that fails when production stops taking the path — so
+//! had was an assertion that fails when production stops taking the path, so
 //! the paths went inert, stayed inert, and the only reason anyone found out was
 //! that someone eventually went looking.
 //!
 //! # The ratchet rule
 //!
-//! A ceiling below may be **lowered** by any PR that improves things — quietly,
+//! A ceiling below may be **lowered** by any PR that improves things, quietly,
 //! as part of the change.
 //!
 //! A ceiling may be **raised only** by a PR whose description states the new
@@ -30,7 +30,7 @@
 //! **Allocation and counter ceilings are enforced everywhere**, because they
 //! are deterministic and they are the ones that actually caught these defects.
 //!
-//! **Timing ceilings are advisory on CI** — shared runners are noisy, and a
+//! **Timing ceilings are advisory on CI**, shared runners are noisy, and a
 //! flaky budget test gets disabled, which is strictly worse than no budget
 //! test. They are recorded in `support/PERF_frame_budget.md` and read locally.
 //!
@@ -39,7 +39,7 @@
 //! The reference scene is a `.byd` file, so the suite needs the compiler; the
 //! GPU counters need a device. `byard-platform` is the only crate that has
 //! both, and it already owns this workspace's end-to-end GPU tests. It runs
-//! under the existing `cargo test --workspace` CI job — no new wiring, which
+//! under the existing `cargo test --workspace` CI job, no new wiring, which
 //! is also one fewer thing that can be switched off.
 #![allow(
     clippy::cast_possible_truncation,
@@ -75,13 +75,13 @@ use byard_core::frame::{RenderFrame, Viewport};
 /// the font stack underneath `glyphon` differs per platform in ways that
 /// cannot be measured from here. A budget test that goes flaky gets disabled,
 /// which is strictly worse than a loose one. **Whoever first reads the printed
-/// count on Linux and Windows should tighten this** — lowering a ceiling needs
+/// count on Linux and Windows should tighten this**, lowering a ceiling needs
 /// no ceremony, which is the point of a ratchet.
 const MAX_ALLOCATIONS_PER_FRAME: usize = 600;
 
 /// GPU buffers created during one steady-state frame (RFC-0033 §G5).
 ///
-/// **Zero, and this one is not a ratchet — it is an invariant.** Raising it
+/// **Zero, and this one is not a ratchet, it is an invariant.** Raising it
 /// means a pipeline started allocating GPU memory at the display rate again,
 /// which is the thing RFC-0001 §2's "sin spikes de VRAM" rules out.
 const MAX_GPU_BUFFER_CREATIONS_PER_FRAME: u32 = 0;
@@ -98,7 +98,7 @@ const MAX_FULL_COMPUTES_PER_FRAME: u64 = 0;
 ///
 /// Zero, and it measures something none of the counters above can. A frame the
 /// §R4 whitelist wrongly admits is refused by `end_retained_build` and rebuilt,
-/// which is *correct* — and lands on exactly the same `clears`,
+/// which is *correct*, and lands on exactly the same `clears`,
 /// `full_computes` and `retained_recomputes` as a frame the whitelist rejected
 /// outright. The only difference is that the build walk ran twice. Without this
 /// ceiling that difference is invisible, which is how a whitelist can quietly
@@ -117,7 +117,7 @@ const SCENE: &str = include_str!("fixtures/budget_scene.byd");
 /// A `System` allocator that counts allocations while armed.
 ///
 /// Armed around exactly the region being measured, so the harness's own
-/// allocations — parsing, device setup, the readback buffers — are not billed
+/// allocations, parsing, device setup, the readback buffers, are not billed
 /// to the frame.
 ///
 /// SAFETY: a thin pass-through wrapper around `System`. Every method forwards
@@ -133,7 +133,7 @@ thread_local! {
     ///
     /// **Thread-local, not global.** A process-wide counter also counts the
     /// other tests in this binary (they run in parallel), plus whatever
-    /// `wgpu`'s and `tokio`'s own threads are doing — so the measurement moves
+    /// `wgpu`'s and `tokio`'s own threads are doing, so the measurement moves
     /// depending on how the harness happens to schedule, which is the one
     /// thing a ratchet must not do. `const` initialisers keep the TLS
     /// non-lazy, so touching it from inside the allocator cannot itself
@@ -326,7 +326,7 @@ macro_rules! skip_without_gpu {
         match $warm {
             Some(w) => w,
             None => {
-                eprintln!("no GPU adapter — skipping the frame budget suite");
+                eprintln!("no GPU adapter, skipping the frame budget suite");
                 return;
             }
         }
@@ -358,7 +358,7 @@ fn a_steady_state_frame_stays_within_its_allocation_ceiling() {
         "a steady-state frame performed {allocations} heap allocations, over \
          the recorded ceiling of {MAX_ALLOCATIONS_PER_FRAME}.\n\n\
          If this is a deliberate regression, raise the ceiling *and say so in \
-         the PR description* — the old value, the new value, and why. If it is \
+         the PR description*, the old value, the new value, and why. If it is \
          not deliberate, something on the per-frame path started allocating; \
          the usual causes are a `Vec` built per frame instead of reused, or a \
          cache that stopped hitting."
@@ -389,7 +389,7 @@ fn a_steady_state_frame_creates_no_gpu_buffers() {
         w.enc.arena().buffer_creations() - before,
         MAX_GPU_BUFFER_CREATIONS_PER_FRAME,
         "a steady-state frame created a GPU buffer. This ceiling is not a \
-         ratchet — it is RFC-0001 §2's 'sin spikes de VRAM' expressed as a \
+         ratchet, it is RFC-0001 §2's 'sin spikes de VRAM' expressed as a \
          number, and the fix is to route the new pipeline through the instance \
          arena, not to raise it."
     );
@@ -420,7 +420,7 @@ fn a_steady_state_frame_never_rebuilds_the_layout_tree() {
         assert_eq!(
             counts.full_computes, MAX_FULL_COMPUTES_PER_FRAME,
             "frame {i} ran a full layout pass. Nothing structural changed, so \
-             the retained path's eligibility broke — `byard-compiler`'s \
+             the retained path's eligibility broke, `byard-compiler`'s \
              `incremental_paths.rs` has one test per clause and will say which."
         );
         assert_eq!(counts.clears, 0, "frame {i} tore the atlas down");
@@ -469,7 +469,7 @@ fn a_value_only_frame_takes_the_scissored_path() {
     );
     assert!(
         w.frame.texts().iter().all(|t| !t.dirty),
-        "no text changed, so none may be re-shaped — this is the assertion \
+        "no text changed, so none may be re-shaped, this is the assertion \
          that stands between the scene costing 3 ms and costing 45 ms"
     );
 }
@@ -477,8 +477,8 @@ fn a_value_only_frame_takes_the_scissored_path() {
 #[test]
 fn a_layout_affecting_frame_reaches_populate_frame_with_real_targets() {
     // RFC-0032 §R7's `targets_received > 0`, stated for the frame it is true
-    // of. A *paint-only* frame correctly marks nothing — a colour is not a
-    // layout input — so the criterion belongs to a frame that moves geometry.
+    // of. A *paint-only* frame correctly marks nothing, a colour is not a
+    // layout input, so the criterion belongs to a frame that moves geometry.
     let mut w = skip_without_gpu!(warm_up());
 
     flip(&mut w.interp, "tall");
@@ -496,7 +496,7 @@ fn a_layout_affecting_frame_reaches_populate_frame_with_real_targets() {
 
     assert!(
         counts.populate_dirty_targets > 0,
-        "a height change reached `populate_frame` with an empty dirty set — \
+        "a height change reached `populate_frame` with an empty dirty set, \
          the layer PR #148 found had no producer at all"
     );
     assert_eq!(

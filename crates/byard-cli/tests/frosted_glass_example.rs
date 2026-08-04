@@ -1,7 +1,7 @@
 //! Guards the committed RFC-0023 §2 backdrop-blur example through the real
-//! `byard` binary: the `frosted_glass` project — `blur`/`backdrop_tint`/
+//! `byard` binary: the `frosted_glass` project, `blur`/`backdrop_tint`/
 //! `blur_saturation`/`blur_quality` across styles, animated glass via
-//! `with anim.spring()` + `on hover`, and the tint-only cheap path — must
+//! `with anim.spring()` + `on hover`, and the tint-only cheap path, must
 //! check clean (parse, type-check, lower, validate with no diagnostics).
 
 use std::path::PathBuf;

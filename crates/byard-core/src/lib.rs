@@ -4,13 +4,13 @@
 //!
 //! This crate contains the four subsystems that compose the rendering engine:
 //!
-//! - [`evaluator`] — Reactive state (`Signal<T>`), per-view memory arenas (`ViewArena`),
+//! - [`evaluator`], Reactive state (`Signal<T>`), per-view memory arenas (`ViewArena`),
 //!   and dirty-flag collection.
-//! - [`atlas`] — Layout computation via Taffy and spatial hit-testing via a hash grid.
-//! - [`encoder`] — Multi-pipeline `wgpu` command dispatch. `SolidBox` and
+//! - [`atlas`], Layout computation via Taffy and spatial hit-testing via a hash grid.
+//! - [`encoder`], Multi-pipeline `wgpu` command dispatch. `SolidBox` and
 //!   `TextGlyph` are implemented today; `DecoratedBox` and `TextureSampler`
 //!   are planned (RFC-0001 §3.1) but not yet built.
-//! - [`relay`] — Thread management, double-buffered frame swap, and async I/O pool.
+//! - [`relay`], Thread management, double-buffered frame swap, and async I/O pool.
 //!
 //! Cross-subsystem communication goes exclusively through the types defined in
 //! [`frame`]. No subsystem module imports from another subsystem directly.
@@ -55,7 +55,7 @@ use std::fmt;
 
 /// Errors produced by the Byard engine.
 ///
-/// This enum is `#[non_exhaustive]` — new variants may be added in future
+/// This enum is `#[non_exhaustive]`, new variants may be added in future
 /// releases without breaking downstream code.
 #[non_exhaustive]
 #[derive(Debug)]
@@ -94,7 +94,7 @@ pub enum ByardError {
     ///
     /// The inner string is the original [`std::io::Error`] message. Per
     /// RFC-0001 §8, thread-spawn failure is a recoverable condition, not a
-    /// panic — the caller decides whether to retry or abort startup.
+    /// panic, the caller decides whether to retry or abort startup.
     ThreadSpawn(String),
 
     /// The async I/O Tokio runtime failed to initialise.
@@ -109,7 +109,7 @@ pub enum ByardError {
     /// The inner string is the original platform-specific error message
     /// (e.g. from `winit::event_loop::EventLoop::new` or
     /// `wgpu::Instance::create_surface`). `byard-core` never constructs this
-    /// variant itself — it exists so host crates (e.g. `byard-platform`)
+    /// variant itself, it exists so host crates (e.g. `byard-platform`)
     /// have a `ByardError` to return from [`platform::PlatformHost::on_resume`]
     /// without inventing their own error type.
     Platform(String),

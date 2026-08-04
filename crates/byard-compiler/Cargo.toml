@@ -23,7 +23,7 @@ default = ["telemetry"]
 # `--no-default-features` turns the interpreter's own scopes (RFC-0030 §I1)
 # off in the same build it turns the engine's off. The scopes themselves are
 # `byard_core::profile_scope!`, which resolves the feature at its definition
-# site — this entry exists so the two crates can never disagree about whether
+# site, this entry exists so the two crates can never disagree about whether
 # telemetry is on.
 telemetry = ["byard-core/telemetry"]
 

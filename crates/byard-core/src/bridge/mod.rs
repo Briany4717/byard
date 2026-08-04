@@ -1,5 +1,5 @@
 //! The controller boundary (RFC-0028): the `Send`-only wire type, the
-//! object-safe [`Controller`] trait, and the [`ControllerRegistry`] — all in
+//! object-safe [`Controller`] trait, and the [`ControllerRegistry`], all in
 //! `byard-core` so the trait that both the app crate and the interpreter speak
 //! drags **no** `byard-compiler` dependency into core (INV-1). Nothing here
 //! knows about `Signal`/`Value`/views; the `Value ⇄ HostValue` conversions live
@@ -14,7 +14,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-/// A boxed, `Send` future — the return shape of an async controller method
+/// A boxed, `Send` future, the return shape of an async controller method
 /// after type erasure (RFC-0028 §2).
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
@@ -22,7 +22,7 @@ pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 /// mirrors the data subset of the interpreter's `Value` (and RFC-0027's
 /// `Record`), so a controller's arguments and results drop straight into the
 /// reactive tree without copying through serde. `Signal`/`Memo`/`Fn` have **no**
-/// `HostValue` form — passing one as a controller argument is a compile error
+/// `HostValue` form, passing one as a controller argument is a compile error
 /// (`NonDataControllerArg`) in `byard-compiler`.
 #[derive(Clone, Debug, PartialEq)]
 pub enum HostValue {
@@ -62,7 +62,7 @@ impl HostValue {
 
 /// Converts a [`HostValue`] argument into a controller method's Rust parameter
 /// type (RFC-0028 §2). Total but lenient: a mismatched shape yields the type's
-/// [`Default`]-ish fallback rather than panicking (INV-4 — arguments are
+/// [`Default`]-ish fallback rather than panicking (INV-4, arguments are
 /// user-derived). Implemented for scalars, `String`, `HostValue` itself, and
 /// `Vec<T>`; `#[derive(HostValue)]` structs get it too.
 pub trait FromHostValue: Sized {
@@ -202,13 +202,13 @@ impl<T: IntoHostValue> IntoHostValue for Vec<T> {
 /// also implement it by hand. Object-safe so the registry can hold
 /// `Arc<dyn Controller>`.
 pub trait Controller: Send + Sync {
-    /// The stable type name used as the `inject` key — the struct's ident.
+    /// The stable type name used as the `inject` key, the struct's ident.
     fn type_name(&self) -> &'static str;
 
     /// Dispatches one async method by name, converting `args` into the method's
     /// Rust parameter types, awaiting it, and mapping `Ok`/`Err` back to
     /// [`HostValue`]. Returns a boxed future; it never blocks the caller (the
-    /// blocking/async work runs on the Tokio pool — INV-12). An unknown method
+    /// blocking/async work runs on the Tokio pool, INV-12). An unknown method
     /// resolves to an `Err` reply, never a panic (INV-4).
     fn invoke(
         &self,
@@ -219,7 +219,7 @@ pub trait Controller: Send + Sync {
 
 /// A `Copy` index into the [`ControllerRegistry`]. Read only on the logic thread
 /// (it only *schedules* work onto the pool, never dereferences a controller off
-/// that thread — INV-2), so it stays arena-friendly and cheap to store in a
+/// that thread, INV-2), so it stays arena-friendly and cheap to store in a
 /// `Value`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ControllerId(pub u32);
@@ -295,7 +295,7 @@ impl ControllerRegistry {
 /// A completed controller call delivered back to the logic thread (RFC-0028 §5).
 /// Sent over the relay's `io_result` channel as a `Box<dyn Any + Send>` and
 /// downcast by `Interpreter::apply_io_results`, which runs the matching `ok`/`err`
-/// arm keyed by `continuation_id` (a one-shot continuation — INV-14).
+/// arm keyed by `continuation_id` (a one-shot continuation, INV-14).
 pub struct ControllerReply {
     /// The continuation this reply resumes; a reply whose id was dropped (its
     /// view unmounted) is discarded, never applied (INV-14).

@@ -1,4 +1,4 @@
-//! `byard dev [file]` — the live-reload dev runner (RFC-0006 §3).
+//! `byard dev [file]`, the live-reload dev runner (RFC-0006 §3).
 //!
 //! Thread model:
 //!   Main/winit thread → `on_resume` → `start_logic_from_view` (logic thread)
@@ -65,12 +65,12 @@ pub fn run(opts: Options<'_>) -> Result<(), String> {
     let (program, provider) = resolve_project(&manifest)?;
 
     // The startup header is four facts, a rule, a result and a duration
-    // (RFC-0030 §"Starting the dev runner"). Two of the facts — the adapter and
-    // the frame budget — do not exist until the window and device do, so the
+    // (RFC-0030 §"Starting the dev runner"). Two of the facts, the adapter and
+    // the frame budget, do not exist until the window and device do, so the
     // *whole* header is deferred to `on_resume` rather than half-printed here
     // and finished later, which would put "watching for changes" above the
     // facts it is meant to introduce.
-    let title = format!("Byard dev — {}", manifest.name);
+    let title = format!("Byard dev, {}", manifest.name);
     let header = Header {
         project: manifest.name.clone(),
         entry: manifest.entry.display().to_string(),
@@ -118,7 +118,7 @@ pub fn run(opts: Options<'_>) -> Result<(), String> {
 
     // RFC-0030 §P6: the counters the statusline reads. `reloads` and
     // `reload_pending` are written by the logic thread and read by the render
-    // thread, so they cross as atomics — the only way anything may (INV-2).
+    // thread, so they cross as atomics, the only way anything may (INV-2).
     let reloads = Arc::new(AtomicU32::new(0));
     let reload_pending = Arc::new(AtomicBool::new(false));
     // `Mod+Shift+D` (or `[dev] hud`): written by the render thread, read by
@@ -188,7 +188,7 @@ fn now_ms() -> u64 {
 /// The two live in one type because the failure they exist to prevent is the
 /// two of them *disagreeing*. A developer holding a drag while a save waits
 /// behind the gate sees an application that has silently stopped responding to
-/// their edits — indistinguishable from a broken watcher, and the most alarming
+/// their edits, indistinguishable from a broken watcher, and the most alarming
 /// thing a dev runner can do without saying anything. An indicator that can be
 /// left on after the reload landed, or off while one waits, is worse than none.
 ///
@@ -196,7 +196,7 @@ fn now_ms() -> u64 {
 /// because nothing can reach either directly.
 struct PendingReload {
     slot: Option<(Vec<ViewDecl>, ReloadKind)>,
-    /// Mirrored to the render thread as an `AtomicBool` — the only way state
+    /// Mirrored to the render thread as an `AtomicBool`, the only way state
     /// may cross (INV-2).
     published: Arc<AtomicBool>,
 }
@@ -211,7 +211,7 @@ impl PendingReload {
 
     /// Holds `views` behind the gate. Returns `true` on the rising edge, so the
     /// caller can wake an idle render loop for the frame that shows the
-    /// indicator — the wait has no input behind it and would otherwise not be
+    /// indicator, the wait has no input behind it and would otherwise not be
     /// drawn until something unrelated happened.
     fn defer(&mut self, views: Vec<ViewDecl>, kind: ReloadKind) -> bool {
         let was = self.published.swap(true, Ordering::Relaxed);
@@ -246,7 +246,7 @@ impl PendingReload {
 ///
 /// That is its *only* justifying case. A save that changed a colour announces
 /// itself; a save that changed a handler, a comment, or a value that happens to
-/// render identically does not — and that is precisely the situation in which a
+/// render identically does not, and that is precisely the situation in which a
 /// developer cannot tell whether hot reload is working at all. Suppressing the
 /// flash there would remove the feature from the one case it exists for and
 /// leave it firing only when it is redundant.
@@ -299,7 +299,7 @@ impl ReloadFlash {
 
     /// Draws the inset border, if the flash is running.
     ///
-    /// One `DecoratedBox` — a transparent fill with a border — on top of
+    /// One `DecoratedBox`, a transparent fill with a border, on top of
     /// everything else. No new pipeline, and no state beyond the trigger.
     fn render(&mut self, frame: &mut RenderFrame, w: f32, h: f32, now_ms: u32) {
         let alpha = self.alpha(now_ms);
@@ -363,7 +363,7 @@ struct ByldRuntime {
     /// e.g. overlapping blurs), so each distinct warning prints once instead
     /// of every frame.
     reported_perf: std::collections::HashSet<String>,
-    /// How many hot reloads have been applied this session — the statusline's
+    /// How many hot reloads have been applied this session, the statusline's
     /// `↻N` field, and the cheapest possible confirmation that the watcher is
     /// alive at all (RFC-0030 §P6). Published to the render thread through
     /// `reloads_pub`.
@@ -371,7 +371,7 @@ struct ByldRuntime {
     /// The render thread's mirror of `reload_count`.
     reloads_pub: Arc<AtomicU32>,
     /// The RFC-0010 active-animation set, published for the render thread
-    /// (`AtomicBool` because that is the only way it may cross — INV-2).
+    /// (`AtomicBool` because that is the only way it may cross, INV-2).
     ///
     /// The logic thread writes it after every render; the event loop reads it to
     /// decide whether to keep spinning. Without this the accessor existed and
@@ -389,7 +389,7 @@ struct ByldRuntime {
     /// The reload flash (RFC-0030 §V6).
     flash: ReloadFlash,
     /// The in-window HUD (RFC-0030 §V3), or `None` if the embedded source
-    /// failed to parse — which is a defect in this repository, reported once
+    /// failed to parse, which is a defect in this repository, reported once
     /// rather than taking a developer's session down with it.
     hud: Option<crate::hud::DevHud>,
     /// The render thread's `Mod+Shift+D` toggle.
@@ -402,7 +402,7 @@ struct ByldRuntime {
     overlay_was_up: bool,
     /// A `--deep-link <url>` waiting to be delivered (RFC-0026), applied after
     /// the first render. It waits because a navigation container only exists
-    /// once the frame that mounts it has been reconciled — a stack nested in a
+    /// once the frame that mounts it has been reconciled, a stack nested in a
     /// tab is not there to receive anything before that.
     pending_deep_link: Option<String>,
 }
@@ -411,7 +411,7 @@ impl ByldRuntime {
     /// Publishes the active-animation set for the render thread, waking an idle
     /// loop on the **rising** edge (nothing moving → something moving). A loop
     /// that is already spinning needs no event, and a settled one must not be
-    /// woken at all — that is the whole point of letting it sleep.
+    /// woken at all, that is the whole point of letting it sleep.
     fn publish_animating(&self, active: bool) {
         let was = self.animating.swap(active, Ordering::Relaxed);
         if active && !was {
@@ -428,7 +428,7 @@ impl ByldRuntime {
 
     fn apply_reload(&mut self, new_views: &[ViewDecl], kind: ReloadKind) {
         // The flash is triggered here rather than at the call sites so it
-        // cannot be forgotten by one of them — and so it fires on *every*
+        // cannot be forgotten by one of them, and so it fires on *every*
         // applied reload, including the ones that changed nothing visible,
         // which is the only case it exists for (§Q9).
         let now = u32::try_from(self.start.elapsed().as_millis()).unwrap_or(u32::MAX);
@@ -437,7 +437,7 @@ impl ByldRuntime {
         // The rendered root is the first tracked view. Editing any view it
         // transitively instantiates must re-derive its tree, so compute the
         // affected set (changed views ∪ transitive callers, RFC-0007 §5) and
-        // re-lower only when the root is in it — siblings unrelated to the root
+        // re-lower only when the root is in it, siblings unrelated to the root
         // keep their state.
         if let (Some(old_root), Some(new_root)) = (self.current_views.first(), new_views.first()) {
             let affected =
@@ -538,7 +538,7 @@ impl LogicRuntime for ByldRuntime {
         // view underneath is being drawn again after a gap, so a union computed
         // from a clean previous frame would leave both it and the overlay
         // partially painted. Ask for a full redraw on exactly those two frames
-        // — not on every frame the overlay is up, which would hand back the
+        //, not on every frame the overlay is up, which would hand back the
         // incremental path for as long as a file stays broken.
         let overlay_now = self.error_state.is_some();
         if overlay_now != self.overlay_was_up {
@@ -556,13 +556,13 @@ impl LogicRuntime for ByldRuntime {
             //
             // RFC-0017's z-layers and RFC-0023's backdrop blur removed that
             // constraint. The app renders normally, `begin_layer` closes it,
-            // and the overlay composites after it — text included — so the
+            // and the overlay composites after it, text included, so the
             // promise can finally be kept as written.
             self.interp.render(&self.tree, frame, w, h);
             frame.begin_layer();
             render_error_overlay(frame, errors, w, h);
             // An error overlay is static: nothing to animate, so the loop may
-            // sleep until the next save — unless a flash is still running.
+            // sleep until the next save, unless a flash is still running.
             self.publish_animating(self.flash.is_active(elapsed));
         } else {
             self.interp.render(&self.tree, frame, w, h);
@@ -577,7 +577,7 @@ impl LogicRuntime for ByldRuntime {
                 let text = match warning {
                     byard_compiler::interp::eval::PerfWarning::OverlappingBlurs { count } => {
                         format!(
-                            "perf: {count} overlapping backdrop-blur panes in one frame — \
+                            "perf: {count} overlapping backdrop-blur panes in one frame, \
                              each pane re-blurs the ones below it (RFC-0023)"
                         )
                     }
@@ -585,7 +585,7 @@ impl LogicRuntime for ByldRuntime {
                     // always a push that never pops.
                     byard_compiler::interp::eval::PerfWarning::DeepNavStack { depth, path } => {
                         format!(
-                            "perf: `NavStack` is {depth} deep — refused to push `{path}`; \
+                            "perf: `NavStack` is {depth} deep, refused to push `{path}`; \
                              every entry below the top stays in memory (RFC-0026)"
                         )
                     }
@@ -595,7 +595,7 @@ impl LogicRuntime for ByldRuntime {
                 }
             }
             // RFC-0026 deep linking: the host's whole job is to hand the URL
-            // over — from here it is an ordinary navigation, with the same
+            // over, from here it is an ordinary navigation, with the same
             // push, transition and `route_change` as a tap.
             if let Some(url) = self.pending_deep_link.take() {
                 if self.interp.apply_deep_link(&url) {
@@ -603,7 +603,7 @@ impl LogicRuntime for ByldRuntime {
                     self.wake_render_loop();
                 } else {
                     crate::style::warn(&format!(
-                        "no route matches the deep link `{url}` — ignoring it"
+                        "no route matches the deep link `{url}`, ignoring it"
                     ));
                 }
             }
@@ -622,7 +622,7 @@ impl ByldRuntime {
     /// measurement says about it (INV-24).
     fn render_dev_surfaces(&mut self, frame: &mut RenderFrame, w: f32, h: f32, elapsed: u32) {
         // Where the app's primitives end and the dev runner's begin, recorded
-        // unconditionally — including on frames that emit no dev surface at
+        // unconditionally, including on frames that emit no dev surface at
         // all, where it resolves to "the dev range is empty" rather than to
         // "unknown". The render thread reads it to charge the shaping of these
         // lines to the profiler rather than to the app (RFC-0030 §V4).
@@ -633,7 +633,7 @@ impl ByldRuntime {
             // `LayoutAtlas` on this thread, so its layout activity lands in the
             // same thread-local counters the statusline reads. Without
             // restoring this, the HUD would report the app as rebuilding every
-            // frame — the observer effect in its most embarrassing form.
+            // frame, the observer effect in its most embarrassing form.
             let app_paths = frame.atlas_paths();
             while let Ok(t) = self.hud_telemetry.try_recv() {
                 if let Some(hud) = self.hud.as_mut() {
@@ -646,8 +646,8 @@ impl ByldRuntime {
             frame.set_atlas_paths(app_paths);
         }
 
-        // The flash is a dev surface too — it draws over the app and the app
-        // never asked for it — so it sits inside the same partition. It emits
+        // The flash is a dev surface too, it draws over the app and the app
+        // never asked for it, so it sits inside the same partition. It emits
         // one `DecoratedBox` and no text, so in practice it contributes
         // nothing; recording it anyway keeps the rule "everything after this
         // cursor belongs to the dev runner" true without exceptions.
@@ -663,14 +663,14 @@ impl ByldRuntime {
 /// hand-placed column on an opaque field. It is now a real layer over a real
 /// view, so the panel sizes itself to what it holds and the limit exists only
 /// to stop a cascade of two hundred errors from running off the bottom of the
-/// window — which is a different, much larger number.
+/// window, which is a different, much larger number.
 const OVERLAY_MAX_ERRORS: usize = 12;
 /// Max chars per headline before adding "…" (avoids horizontal overflow).
 const OVERLAY_MAX_HEADLINE_CHARS: usize = 78;
 /// Backdrop blur σ, in logical pixels (RFC-0023).
 ///
-/// Enough that no word of the app underneath is readable — a legible
-/// background competes with the error text for the same attention — and little
+/// Enough that no word of the app underneath is readable, a legible
+/// background competes with the error text for the same attention, and little
 /// enough that the layout, the colours and *where you were* all survive, which
 /// is the entire reason the last good view is shown at all.
 const OVERLAY_BLUR: f32 = 18.0;
@@ -680,11 +680,11 @@ const OVERLAY_BLUR: f32 = 18.0;
 ///
 /// Truncates to [`OVERLAY_MAX_ERRORS`] errors and [`OVERLAY_MAX_HEADLINE_CHARS`]
 /// chars per headline to keep the overlay bounded without needing Taffy layout
-/// — this path is deliberately independent of the interpreter, since the
+///, this path is deliberately independent of the interpreter, since the
 /// interpreter is what just failed.
 fn render_error_overlay(frame: &mut RenderFrame, errors: &[CompileError], w: f32, h: f32) {
     // The frosted pane: the whole viewport, blurred, with a dark tint over it.
-    // Not an opaque fill, and not a plain translucent scrim either — a scrim
+    // Not an opaque fill, and not a plain translucent scrim either, a scrim
     // leaves the app's own contrast fighting the error text, while a blur
     // removes the detail and keeps the shape.
     frame.push_backdrop(byard_core::frame::BackdropInstance {
@@ -771,7 +771,7 @@ fn render_error_overlay(frame: &mut RenderFrame, errors: &[CompileError], w: f32
     frame.push_text(TextLine {
         x,
         y: y + line_height * 0.6,
-        text: "Fix the file and save to dismiss — the last good view is behind this.".to_string(),
+        text: "Fix the file and save to dismiss, the last good view is behind this.".to_string(),
         font_size: 13.0,
         color: [0.55, 0.55, 0.58, 1.0],
         dirty: true,
@@ -825,9 +825,9 @@ struct App {
     /// A `--deep-link <url>` handed in at startup (RFC-0026): delivered to the
     /// interpreter once the tree is lowered, exactly as an OS intent would be.
     deep_link: Option<String>,
-    /// This (render/main) thread's telemetry ring — its own `encode.frame`
+    /// This (render/main) thread's telemetry ring, its own `encode.frame`
     /// scope (RFC-0030 §I1) plus the asynchronously-resolved `gpu.*` pass
-    /// samples — drained on **every** redraw, not just when about to print,
+    /// samples, drained on **every** redraw, not just when about to print,
     /// so it only ever holds samples produced since the *previous redraw*.
     /// `byard dev`'s Poll-mode loop redraws far more often than once a
     /// second; draining only at print time would let a whole second's worth
@@ -863,13 +863,13 @@ struct App {
     /// The sender half of the HUD's telemetry feed, taken in `on_resume`.
     hud_telemetry: Option<crossbeam_channel::Sender<crate::hud::HudTelemetry>>,
     /// When the previous redraw happened, so the sparkline plots the frame
-    /// *period* — which is what a developer sees — rather than the sum of the
+    /// *period*, which is what a developer sees, rather than the sum of the
     /// scopes that happened to be instrumented.
     last_frame: std::time::Instant,
     /// The `--trace <path>` writer (RFC-0030 §V5), or `None`.
     ///
     /// Both rings are streamed into it as they are drained, on the thread that
-    /// drains them — nothing is held back, and the file on disk is a complete
+    /// drains them, nothing is held back, and the file on disk is a complete
     /// JSON array after every frame, so a session that is `Ctrl-C`'d still
     /// leaves a trace every viewer will open. That is usually the session you
     /// most want to look at.
@@ -916,7 +916,7 @@ impl App {
     /// (RFC-0030 §"The statusline").
     ///
     /// `byard dev 2>&1 | tee log` has to produce a readable log, and the
-    /// multi-line block this replaces did the opposite — three hundred blocks
+    /// multi-line block this replaces did the opposite, three hundred blocks
     /// in a five-minute session, whose practical effect was to bury the parse
     /// errors a developer actually needed to read. One line per second is
     /// greppable, diffable, and still carries the split that matters.
@@ -959,7 +959,7 @@ impl App {
 ///
 /// The HUD's cost is **not** the inclusive time of the `hud.render` scope. That
 /// scope bounds the HUD's work on the logic thread and cannot bound its work on
-/// the render thread, where its text is shaped — it has been dropped by then.
+/// the render thread, where its text is shaped, it has been dropped by then.
 /// Reporting it as the HUD's cost under-reported by most of the real figure and
 /// let §V4's own 5 % gate read as comfortably passed.
 ///
@@ -1033,7 +1033,7 @@ const DEFAULT_FRAME_BUDGET_NS: u64 = 16_667_000;
 
 /// Resolves the frame budget and says where it came from (RFC-0030 §Q3).
 ///
-/// A pinned `[dev] frame_budget` wins — that is what pinning is for, and CI
+/// A pinned `[dev] frame_budget` wins, that is what pinning is for, and CI
 /// needs a value that does not depend on the runner's panel. Otherwise the
 /// display's refresh interval, because the budget answers "will this app drop
 /// frames on *this* machine". The 60 Hz fallback is last and says so, so a
@@ -1049,7 +1049,7 @@ fn resolve_budget(
     match refresh_mhz {
         // millihertz → nanoseconds per frame.
         Some(mhz) if mhz > 0 => (1_000_000_000_000 / u64::from(mhz), "display refresh"),
-        _ => (DEFAULT_FRAME_BUDGET_NS, "60Hz assumed — display unknown"),
+        _ => (DEFAULT_FRAME_BUDGET_NS, "60Hz assumed, display unknown"),
     }
 }
 
@@ -1073,7 +1073,7 @@ impl Header {
     /// runner").
     ///
     /// The `gpu` fact answers up front the question a developer would otherwise
-    /// ask twenty minutes in — *why is there no GPU timing?* — instead of
+    /// ask twenty minutes in, *why is there no GPU timing?*, instead of
     /// printing "GPU timing unavailable" on every subsequent readout. The
     /// `budget` fact removes any ambiguity about which number the bars and the
     /// sparkline are drawn against. The `keys` fact makes the dev chords
@@ -1087,7 +1087,7 @@ impl Header {
         let gpu = if engine.gpu_timing_available() {
             "timestamp-query ✓".to_string()
         } else {
-            "timestamp-query unavailable — gpu rows read `unknown`, never `0`".to_string()
+            "timestamp-query unavailable, gpu rows read `unknown`, never `0`".to_string()
         };
         crate::style::fact("gpu", &gpu);
         crate::style::fact(
@@ -1107,7 +1107,7 @@ impl Header {
         } else {
             crate::commands::check::print_diagnostics(&self.errors, &self.source_map, false);
             crate::style::err(&format!(
-                "{} error(s) — see the overlay in the window",
+                "{} error(s), see the overlay in the window",
                 self.errors.len()
             ));
         }
@@ -1153,7 +1153,7 @@ impl PlatformHost for App {
             Some(self.initial_errors.clone())
         };
         // Seeded to match, so a session that starts broken does not spend its
-        // first frame asking for a redraw it does not need — and a session that
+        // first frame asking for a redraw it does not need, and a session that
         // starts clean still gets one the moment it breaks.
         let initial_errors_present = initial_errors.is_some();
 
@@ -1165,7 +1165,7 @@ impl PlatformHost for App {
             size.scale_factor,
         ))?;
         // `byard dev` runs in Poll mode (redraws every iteration for hot-reload),
-        // so the waker is not strictly required — installing it is still correct
+        // so the waker is not strictly required, installing it is still correct
         // and makes input-driven redraws prompt if the mode ever changes.
         // The logic thread keeps its own handle: the relay only wakes on an
         // input-bearing tick, and a hot reload (or an animation starting from a
@@ -1221,7 +1221,7 @@ impl PlatformHost for App {
                 // `Interpreter`, which is `!Send` by design (RFC-0001 §5), so
                 // it is constructed on the thread that will drive it. A HUD
                 // that fails to parse is a defect in *this* repository, so it
-                // is reported once and the session continues without it — a
+                // is reported once and the session continues without it, a
                 // developer should never lose their dev runner to a broken
                 // diagnostic.
                 hud: match crate::hud::DevHud::new() {
@@ -1294,14 +1294,14 @@ impl PlatformHost for App {
             let logic = e.latest_cpu_telemetry().unwrap_or_default();
             // RFC-0030 §V5: stream both rings into the trace as they are
             // drained. The logic thread's block rides in on the frame it was
-            // captured with, so it is written from here too — the writer is a
+            // captured with, so it is written from here too, the writer is a
             // plain file handle and the render thread is the only one holding
             // it, which is what keeps this off any lock.
             if let Some(trace) = self.trace.as_mut() {
                 trace.write_frame(Some(&logic), &self.last_render_telemetry);
             }
 
-            // The frame *period*, which is what a developer perceives — not the
+            // The frame *period*, which is what a developer perceives, not the
             // sum of whichever scopes happen to be instrumented, which would
             // quietly shrink every time a scope was removed.
             let frame_ns = u64::try_from(self.last_frame.elapsed().as_nanos()).unwrap_or(u64::MAX);
@@ -1386,7 +1386,7 @@ impl PlatformHost for App {
                 let now = !self.hud_visible.load(Ordering::Relaxed);
                 self.hud_visible.store(now, Ordering::Relaxed);
                 // The logic thread may be parked with nothing to animate, and
-                // the chord is not an input event it will ever see — so the
+                // the chord is not an input event it will ever see, so the
                 // frame that mounts or dismisses the HUD has to be asked for.
                 if let Some(e) = self.engine.as_ref() {
                     e.push_input(byard_core::platform::InputEvent {
@@ -1445,7 +1445,7 @@ impl PlatformHost for App {
                 byard_core::platform::EventKind::KeyUp
             };
             // The router keys `Tab` traversal (M18) and `Backspace`/edit
-            // handling (M17) off this payload — dropping it here silently
+            // handling (M17) off this payload, dropping it here silently
             // breaks both, since every key would otherwise look identical.
             engine.push_input(byard_core::platform::InputEvent {
                 kind,
@@ -1548,7 +1548,7 @@ mod tests {
     #[test]
     fn a_second_defer_supersedes_the_first_and_is_not_a_second_rising_edge() {
         // Applying the older views afterwards would undo an edit the developer
-        // has already made — the gate holds the *latest* save, like the
+        // has already made, the gate holds the *latest* save, like the
         // latest-wins channel feeding it.
         let flag = Arc::new(AtomicBool::new(false));
         let mut gate = PendingReload::new(Arc::clone(&flag));
@@ -1563,7 +1563,7 @@ mod tests {
     }
 
     /// RFC-0030 §Q3. The budget is what every bar is drawn against, so where it
-    /// came from has to be unambiguous — and a pinned value has to win, or
+    /// came from has to be unambiguous, and a pinned value has to win, or
     /// pinning it in CI would do nothing.
     #[test]
     fn the_frame_budget_prefers_a_pin_then_the_display_then_says_it_guessed() {

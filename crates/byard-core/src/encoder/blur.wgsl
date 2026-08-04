@@ -1,12 +1,12 @@
 // Off-screen blur passes for the RFC-0023 backdrop pipeline: one 21-tap 1-D
-// Gaussian along `dir`, run twice (horizontal then vertical — the classic
+// Gaussian along `dir`, run twice (horizontal then vertical, the classic
 // separable pair) into a downsampled scratch target.
 //
 // `sigma` follows the CSS `backdrop-filter: blur(N)` convention the RFC cites
 // as its inspiration: the `blur` prop *is* the Gaussian σ. Taps span ±2.5σ
 // (99% of the kernel's mass) at a spacing of σ/4; the encoder adaptively
 // deepens the downsample until σ, expressed in destination texels, keeps
-// that spacing ≤ 2 — sparse taps at high resolution read as N overlaid
+// that spacing ≤ 2, sparse taps at high resolution read as N overlaid
 // copies of the image ("double vision"), not a blur, so resolution is
 // traded instead: the composite's bilinear upscale hides it (the RFC's own
 // resolution rationale). Weights are computed in-shader and normalised, so
@@ -34,7 +34,7 @@ struct VertexOutput {
     @location(0) uv: vec2<f32>,
 };
 
-// Fullscreen triangle from the vertex index alone — no vertex buffer.
+// Fullscreen triangle from the vertex index alone, no vertex buffer.
 @vertex
 fn vs_main(@builtin(vertex_index) vi: u32) -> VertexOutput {
     var out: VertexOutput;

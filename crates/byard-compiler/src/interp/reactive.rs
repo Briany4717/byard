@@ -15,7 +15,7 @@
 //! - **Pull** (§5) runs once per tick (the consistency boundary): structural
 //!   effects first (mounts create new bindings), then value bindings, each at
 //!   most once per tick via an epoch guard. Memos are **pull-on-read** (§6),
-//!   recomputing lazily against a fully-settled mark set — the glitch-free
+//!   recomputing lazily against a fully-settled mark set, the glitch-free
 //!   diamond solution.
 //! - Dynamic dependencies (§3): every (re)evaluation clears the scope's old
 //!   subscriptions before re-tracking.
@@ -321,7 +321,7 @@ impl ReactiveCtx {
 
     // ── mutation: the mark cascade (§4) ─────────────────────────────────
 
-    /// Reads a signal's current value **without** tracking — for mutation
+    /// Reads a signal's current value **without** tracking, for mutation
     /// l-values (`count++`) and other actions that are not reactive
     /// projections.
     #[must_use]
@@ -348,7 +348,7 @@ impl ReactiveCtx {
         {
             let scope = &mut self.scopes[s.0 as usize];
             if !scope.live || scope.dirty {
-                return; // IDEMPOTENT — stop re-traversal (D1)
+                return; // IDEMPOTENT, stop re-traversal (D1)
             }
             scope.dirty = true;
         }
@@ -387,7 +387,7 @@ impl ReactiveCtx {
     /// mounts create new bindings), then value bindings, each guarded to one
     /// evaluation per epoch. The frame write is value-equality–gated (§5/§7).
     pub fn pull(&mut self, epoch: u32) {
-        // RFC-0030 §I1 — the reactive tick itself: memo re-evaluation,
+        // RFC-0030 §I1, the reactive tick itself: memo re-evaluation,
         // structural reconciliation and frame projection. Declared on `pull`
         // rather than on `Interpreter::tick` so every driver is covered by
         // construction, including the fixpoint re-pulls that
@@ -598,7 +598,7 @@ impl ReactiveCtx {
 
     // ── escape hatch + metadata (§9, §10) ───────────────────────────────
 
-    /// Whether a scope read at least one source on its last evaluation — the
+    /// Whether a scope read at least one source on its last evaluation, the
     /// D3 "is this `let`/`fn` reactive?" signal (§10), recorded in a side-table,
     /// never on the AST.
     #[must_use]
@@ -653,7 +653,7 @@ impl ReactiveCtx {
 
 /// Evaluates `thunk` with read-tracking suspended (`CURRENT_SCOPE = None`), so
 /// `read_signal`/`read_memo` inside install no subscription, then restores the
-/// previous scope — correctly nested, even on unwind (§9 / D2).
+/// previous scope, correctly nested, even on unwind (§9 / D2).
 pub fn untrack<R>(thunk: impl FnOnce() -> R) -> R {
     struct Restore(Option<ScopeId>);
     impl Drop for Restore {

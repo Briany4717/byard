@@ -1,4 +1,4 @@
-//! RFC-0012 §A — the six modeled-but-previously-unexposed events (`hover`,
+//! RFC-0012 §A, the six modeled-but-previously-unexposed events (`hover`,
 //! `pointer_enter`, `pointer_exit`, `long_press`, `double_tap`, `secondary`),
 //! the `click` alias for `tap`, and the `focus =>`/`blur =>` sugar (S2).
 //!
@@ -193,7 +193,7 @@ fn focus_and_blur_sugar_fire_on_the_focused_signal_edges() {
         .expect("Box A's hover handler is registered")
         .2;
     // Box B registers no pointer handlers, but `focus =>`/`blur =>` are
-    // ordinary `Handler`s too — its `Blur` handler's rect locates it
+    // ordinary `Handler`s too, its `Blur` handler's rect locates it
     // directly, rather than inferring the position from Column layout.
     // Box A also has a `blur =>` handler (registered first, earlier in the
     // `Vec`); `.rev()` picks B's, the most-recently-registered one.

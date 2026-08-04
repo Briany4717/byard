@@ -52,7 +52,7 @@ struct VertexOutput {
 /// Extra pixels added on every side of the quad beyond the shape boundary.
 ///
 /// Without padding the quad ends exactly where the SDF crosses zero, so
-/// the GPU never rasterises the fragments needed to fade alpha to 0 —
+/// the GPU never rasterises the fragments needed to fade alpha to 0, 
 /// the anti-alias fringe is clipped at the cardinal points, making circles
 /// look flat-edged. Two pixels is enough for one-pixel smoothstep at 2× DPI.
 const QUAD_PADDING: f32 = 2.0;
@@ -60,7 +60,7 @@ const QUAD_PADDING: f32 = 2.0;
 /// Applies a paint-time transform (RFC-0011) to a world-space (logical-pixel)
 /// position: rotate + scale about `origin`, then translate. Identity inputs
 /// (`scale = (1,1)`, `rotate = 0`, `translate = (0,0)`) collapse to `world`
-/// unchanged — a few cheap ALU ops, never a relayout (INV-8).
+/// unchanged, a few cheap ALU ops, never a relayout (INV-8).
 fn apply_transform(
     world: vec2<f32>,
     translate: vec2<f32>,
@@ -98,11 +98,11 @@ fn vs_main(vertex: VertexInput, instance: InstanceInput, depth: DepthInput) -> V
     out.local_pos = (vertex.quad_pos - 0.5) * padded;
 
     // world_pos: the quad top-left shifts by QUAD_PADDING so the inflation
-    // is symmetric — QUAD_PADDING px of extra space on every side of the rect.
+    // is symmetric, QUAD_PADDING px of extra space on every side of the rect.
     let world_pos = instance.rect.xy - vec2<f32>(QUAD_PADDING) + vertex.quad_pos * padded;
 
     // Paint-time transform (RFC-0011), applied after layout placement and
-    // before projection — layout itself never re-runs for this.
+    // before projection, layout itself never re-runs for this.
     let transformed = apply_transform(
         world_pos,
         instance.t_translate,
@@ -133,11 +133,11 @@ fn vs_main(vertex: VertexInput, instance: InstanceInput, depth: DepthInput) -> V
 /// Lⁿ norm of a **non-negative** 2-vector, paired with the magnitude of its own
 /// gradient (RFC-0031 §S1–S2).
 ///
-/// `n == 2` is the Euclidean norm and its gradient is exactly 1 — the circular
+/// `n == 2` is the Euclidean norm and its gradient is exactly 1, the circular
 /// corner every pipeline drew before RFC-0031. Above 2 the norm is *not* a true
 /// signed distance: on the corner diagonal its gradient is `2^(1/n - 1/2)`,
 /// which falls to ≈0.79 at `n = 6`, so the corner's anti-aliased fringe would
-/// come out ~26 % wider than the edge's — a smeared corner on exactly the
+/// come out ~26 % wider than the edge's, a smeared corner on exactly the
 /// shapes the property exists to sharpen the *profile* of. Returning the
 /// gradient alongside the value lets the caller normalise the field once, at
 /// the source, so *every* consumer of it (edge coverage, the border band,
@@ -154,9 +154,9 @@ fn lp_norm(v: vec2<f32>, n: f32) -> vec2<f32> {
 
 /// SDF for a rounded rectangle with per-corner radii.
 ///
-/// `p`  — fragment position relative to the rectangle centre (logical pixels).
-/// `b`  — half-size of the rectangle (width/2, height/2) (logical pixels).
-/// `r`  — corner radii [top_left, top_right, bottom_right, bottom_left].
+/// `p`, fragment position relative to the rectangle centre (logical pixels).
+/// `b`, half-size of the rectangle (width/2, height/2) (logical pixels).
+/// `r`, corner radii [top_left, top_right, bottom_right, bottom_left].
 ///
 /// Returns a negative value inside the shape, zero on the boundary, and a
 /// positive value outside. Screen Y increases downward, so the top half has
@@ -165,14 +165,14 @@ fn lp_norm(v: vec2<f32>, n: f32) -> vec2<f32> {
 /// The default case (p.x <= 0 && p.y <= 0) covers the top-left quadrant and
 /// the coordinate axes, where the top-left radius applies.
 fn sd_rounded_box(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>, n: f32) -> f32 {
-    var r_corner = r.x; // Top-Left (default — also covers axes p.x == 0 or p.y == 0)
+    var r_corner = r.x; // Top-Left (default, also covers axes p.x == 0 or p.y == 0)
     if (p.x > 0.0 && p.y < 0.0) { r_corner = r.y; } // Top-Right
     if (p.x > 0.0 && p.y > 0.0) { r_corner = r.z; } // Bottom-Right
     if (p.x < 0.0 && p.y > 0.0) { r_corner = r.w; } // Bottom-Left
 
     // A corner radius may never exceed half the box (RFC-0001 §3.1: the
     // rounded-rect SDF is only well-defined for `r <= min(half)`; beyond it the
-    // field folds in on itself and the corners visibly deform — a `radius: 20`
+    // field folds in on itself and the corners visibly deform, a `radius: 20`
     // pill on a 33px-tall button is the everyday case). Clamping here, at the
     // one place the radius is consumed, keeps every pipeline honest and matches
     // the CSS rule that an over-large radius is reduced to fit. The clamp is
@@ -186,7 +186,7 @@ fn sd_rounded_box(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>, n: f32) -> f32 {
         return inner + length(corner) - r_corner;
     }
     // `inner` is non-zero only where one of `corner`'s components is zero, and
-    // there `lp.y == 1` — so dividing the whole expression normalises exactly
+    // there `lp.y == 1`, so dividing the whole expression normalises exactly
     // the corner arc and leaves the straight edges untouched.
     let lp = lp_norm(corner, n);
     return (inner + lp.x - r_corner) / lp.y;
@@ -198,7 +198,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     // Anti-alias the edge over one pixel using the Euclidean gradient magnitude.
     // We use length([dpdx, dpdy]) instead of fwidth (Manhattan norm) to get a
-    // uniform anti-alias band in every direction — fwidth is up to √2 wider at
+    // uniform anti-alias band in every direction, fwidth is up to √2 wider at
     // diagonals, which makes circles look slightly diamond-shaped.
     let edge_softness = length(vec2<f32>(dpdx(distance), dpdy(distance)));
     let alpha = smoothstep(edge_softness, 0.0, distance);

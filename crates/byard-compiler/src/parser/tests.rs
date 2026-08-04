@@ -153,7 +153,7 @@ View UserCard() {
 
 #[test]
 fn golden_search() {
-    // RFC-0002 §"State, derived values" — exercises typed var, let/fn memos,
+    // RFC-0002 §"State, derived values", exercises typed var, let/fn memos,
     // lambdas, for/when, and a scoped style block.
     let src = r#"
 View Search() {
@@ -242,7 +242,7 @@ View Search() {
 
 #[test]
 fn golden_profile_card() {
-    // RFC-0005 §"Guide-level" — params with a type, hex colors, a Len pair,
+    // RFC-0005 §"Guide-level", params with a type, hex colors, a Len pair,
     // a nested interpolated string, and a `=> follow()` action.
     let src = r#"
 View ProfileCard(name: Str) {
@@ -329,7 +329,7 @@ fn prop_vs_event_attributes() {
 
 #[test]
 fn sub_property_axis_parses_and_carries_the_base_name_plus_axis() {
-    // RFC-0011 `translate.y: 2` — one axis of a two-axis prop, set inline
+    // RFC-0011 `translate.y: 2`, one axis of a two-axis prop, set inline
     // without a tuple.
     let view = one_view("View V() { Box #[translate.y: 2, gap: 12] }");
     let el = as_element(&view.body[0]);
@@ -398,7 +398,7 @@ fn bare_minus_without_a_number_is_a_targeted_error() {
 
 #[test]
 fn with_animation_binds_the_whole_ternary_as_the_value() {
-    // RFC-0010: `a ? b : c with k` groups as `(a ? b : c) with k` — the whole
+    // RFC-0010: `a ? b : c with k` groups as `(a ? b : c) with k`, the whole
     // conditional is the animated value, not just the else-branch.
     let view = one_view("View V() { Box #[radius: pressed ? 3 : 10 with anim.spring()] }");
     let el = as_element(&view.body[0]);
@@ -696,7 +696,7 @@ fn style_value_parses_a_combined_state_selector() {
 }
 
 // ---------------------------------------------------------------------------
-// Binary arithmetic (`+ - * /`) — the minimal surface RFC-0020's reactive
+// Binary arithmetic (`+ - * /`), the minimal surface RFC-0020's reactive
 // shape parameters need (`sweep: percent * 3.6`).
 // ---------------------------------------------------------------------------
 
@@ -896,7 +896,7 @@ fn index_and_method_call_parse() {
 
 #[test]
 fn bare_single_param_lambda_parses() {
-    // `t => !t.done` — the map/filter predicate form.
+    // `t => !t.done`, the map/filter predicate form.
     let e = init_expr("xs.filter(t => !t.done)");
     let Expr::Call { args, .. } = &e else {
         panic!("expected a call, got {e:?}");
@@ -923,7 +923,7 @@ fn empty_braces_stay_a_callback_block_not_a_record() {
 }
 
 // ---------------------------------------------------------------------------
-// RFC-0026 — navigation cases (`route` / `tab`)
+// RFC-0026, navigation cases (`route` / `tab`)
 // ---------------------------------------------------------------------------
 
 /// The nav cases of the first element in `src`'s single view.
@@ -1014,7 +1014,7 @@ fn a_case_pattern_may_not_interpolate() {
 
 #[test]
 fn a_misplaced_case_still_parses_so_the_checker_can_explain_it() {
-    // Placement is a checker rule, not a parse rule — the case parses cleanly
+    // Placement is a checker rule, not a parse rule, the case parses cleanly
     // and gets a precise diagnostic later instead of a parse cascade.
     let parsed = parse(r#"View App() { Column { route "/" { Text("x") } } }"#);
     assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);

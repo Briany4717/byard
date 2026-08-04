@@ -1,9 +1,9 @@
 //! Per-`View` binding environment and `inject` resolution (RFC-0002 §"Dev-mode
-//! interpreter — values").
+//! interpreter, values").
 //!
 //! [`Env`] is a flat `Vec<(Symbol, Value)>` walked in **reverse** so shadowing
 //! is free. It is allocated once per `View` instance and never truncated until
-//! the View's `ViewArena` drops — nothing below the `View` level introduces a
+//! the View's `ViewArena` drops, nothing below the `View` level introduces a
 //! scope (nested elements share the View's single `Env`), so a binding pushed
 //! while evaluating one element stays visible to the next.
 //!
@@ -59,7 +59,7 @@ pub enum Value {
     Memo(ScopeId),
     /// An injected controller handle (RFC-0028 §3): a `Copy` index into the
     /// engine's `ControllerRegistry`, resolved by `inject T as x`. Read only on
-    /// the logic thread — it only *schedules* async work onto the pool, never
+    /// the logic thread, it only *schedules* async work onto the pool, never
     /// dereferences a controller off-thread (INV-2).
     Controller(ControllerId),
     /// An injected design-token theme (RFC-0022). The [`SignalId`] backs the
@@ -130,7 +130,7 @@ pub struct Env<'p> {
     /// Ordinary bindings (`var`/`let`/`fn`/params), in push order; shadowing is
     /// resolved by reverse scan.
     bindings: Vec<(Symbol, Value)>,
-    /// Ambient values provided to descendants, keyed by their type name — the
+    /// Ambient values provided to descendants, keyed by their type name, the
     /// provider side of `inject` (React-Context).
     ambient: Vec<(Symbol, Value)>,
     /// The enclosing View's environment, if any.
@@ -165,7 +165,7 @@ impl<'p> Env<'p> {
     }
 
     /// Looks up `name` in this View's bindings, most-recent first (shadowing).
-    /// Does **not** walk the parent chain — only `inject` crosses View
+    /// Does **not** walk the parent chain, only `inject` crosses View
     /// boundaries (RFC-0003 §6: no shared mutable state across Views).
     #[must_use]
     pub fn lookup(&self, name: &Symbol) -> Option<&Value> {
@@ -236,13 +236,13 @@ impl<'p> Env<'p> {
         self.bindings.truncate(len);
     }
 
-    /// A cheap clone of this environment's own bindings (not ancestors) — the
+    /// A cheap clone of this environment's own bindings (not ancestors), the
     /// `EnvSnapshot` of RFC-0019 §2. Every [`Value`] is an id (`SignalId`/
     /// `ScopeId`/`AstId`) or a small scalar, so the clone is shallow and `Send`.
     /// A user-view instance captures this at lower time and restores it during
     /// render, so an event action lowered inside the instance body (a forwarded
     /// callback, or any param reference) resolves against the bindings that were
-    /// live at instantiation — not the truncated post-instantiation env.
+    /// live at instantiation, not the truncated post-instantiation env.
     #[must_use]
     pub fn snapshot(&self) -> Vec<(Symbol, Value)> {
         self.bindings.clone()

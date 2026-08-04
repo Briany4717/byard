@@ -2,7 +2,7 @@
 // inside the main UI pass, sampling the blurred copy of the scene behind it.
 //
 // The UV is derived from the *framebuffer position* of each fragment mapped
-// into the copied region — "what is behind this pixel" is by definition the
+// into the copied region, "what is behind this pixel" is by definition the
 // same physical pixel of the colour target, so the sample stays perfectly
 // aligned regardless of the pane's transform. The fragment then boosts
 // saturation (the iOS vibrancy look), blends `backdrop_tint` on top, and
@@ -20,7 +20,7 @@ struct InstanceInput {
     @location(2) radii: vec4<f32>,
     // backdrop_tint colour; `a = 0` disables.
     @location(3) tint: vec4<f32>,
-    // (saturation, opacity, depth, smooth) — `params.w` is the RFC-0031 §S1
+    // (saturation, opacity, depth, smooth), `params.w` is the RFC-0031 §S1
     // corner smoothing, so the pane's clip follows the element's own profile.
     @location(4) params: vec4<f32>,
     // Copied region mapping: (origin_x, origin_y, 1/width, 1/height), all in
@@ -49,7 +49,7 @@ struct VertexOutput {
 
 const QUAD_PADDING: f32 = 2.0;
 
-// Identical helper to `decorated_box.wgsl` — a transformed pane carries its
+// Identical helper to `decorated_box.wgsl`, a transformed pane carries its
 // glass with it.
 fn apply_transform(
     world: vec2<f32>,
@@ -103,7 +103,7 @@ fn vs_main(vertex: VertexInput, instance: InstanceInput) -> VertexOutput {
 // Rounded-box SDF, shared shape with `decorated_box.wgsl` / `ripple.wgsl`.
 /// Lⁿ norm of a **non-negative** 2-vector, paired with the magnitude of its own
 /// gradient (RFC-0031 §S1–S2). `n == 2` is the Euclidean norm, whose gradient is
-/// exactly 1 — the circular corner this pipeline clipped to before RFC-0031, and
+/// exactly 1, the circular corner this pipeline clipped to before RFC-0031, and
 /// the reason an unset `smooth` is bit-identical. Above 2 the norm is not a true
 /// signed distance: on the corner diagonal its gradient is `2^(1/n - 1/2)`,
 /// ≈0.79 at `n = 6`. Normalising by the returned gradient keeps the clip's
@@ -126,7 +126,7 @@ fn sd_rounded_box(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>, n: f32) -> f32 {
 
     // A corner radius may never exceed half the box (RFC-0001 §3.1: the
     // rounded-rect SDF is only well-defined for `r <= min(half)`; beyond it the
-    // field folds in on itself and the corners visibly deform — a `radius: 20`
+    // field folds in on itself and the corners visibly deform, a `radius: 20`
     // pill on a 33px-tall button is the everyday case). Clamping here, at the
     // one place the radius is consumed, keeps every pipeline honest and matches
     // the CSS rule that an over-large radius is reduced to fit.
@@ -139,7 +139,7 @@ fn sd_rounded_box(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>, n: f32) -> f32 {
         return inner + length(corner) - r_corner;
     }
     // `inner` is non-zero only where one of `corner`'s components is zero, and
-    // there `lp.y == 1` — so dividing the whole expression normalises exactly
+    // there `lp.y == 1`, so dividing the whole expression normalises exactly
     // the corner arc and leaves the straight edges untouched.
     let lp = lp_norm(corner, n);
     return (inner + lp.x - r_corner) / lp.y;
@@ -149,7 +149,7 @@ fn sd_rounded_box(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>, n: f32) -> f32 {
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Clip to the element's rounded rect. `smoothstep` edges are kept in
     // ascending order (`1 - smoothstep(0, soft, d)` rather than the inverted
-    // trick) — descending edges are undefined per the spec and DX12/HLSL
+    // trick), descending edges are undefined per the spec and DX12/HLSL
     // resolves them differently from Metal/Vulkan. The `!(x > y)` form of
     // the discard is deliberate: it also discards on NaN.
     let dist = sd_rounded_box(
@@ -166,7 +166,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     // "What is behind this pixel": the fragment's own framebuffer position
     // mapped into the copied region (bilinear upscale from the downsampled
-    // blur — the smoothing the RFC's resolution answer relies on).
+    // blur, the smoothing the RFC's resolution answer relies on).
     let uv = (in.position.xy - in.region.xy) * in.region.zw;
     var color = textureSampleLevel(blurred_tex, blurred_smp, uv, 0.0).rgb;
 

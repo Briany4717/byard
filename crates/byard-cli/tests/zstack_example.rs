@@ -1,6 +1,6 @@
 //! Guards the committed RFC-0018 `ZStack` example through the real `byard`
-//! binary: the `zstack` project — two overlapping stacks (centered and
-//! corner-aligned) — must check clean (parse, type-check, lower, validate the
+//! binary: the `zstack` project, two overlapping stacks (centered and
+//! corner-aligned), must check clean (parse, type-check, lower, validate the
 //! intrinsic contract with no diagnostics).
 
 use std::path::PathBuf;

@@ -9,9 +9,9 @@ struct VertexInput {
 struct InstanceInput {
     @location(1) rect: vec4<f32>,
     @location(2) radii: vec4<f32>,
-    // (uv_scale_x, uv_scale_y, uv_offset_x, uv_offset_y) — the `fit` transform.
+    // (uv_scale_x, uv_scale_y, uv_offset_x, uv_offset_y), the `fit` transform.
     @location(3) uv_xform: vec4<f32>,
-    // (opacity, depth, smooth, _) — `misc.z` is the RFC-0031 §S1 corner
+    // (opacity, depth, smooth, _), `misc.z` is the RFC-0031 §S1 corner
     // smoothing, so a rounded image clips to the same profile as its container.
     @location(4) misc: vec4<f32>,
 };
@@ -59,7 +59,7 @@ fn vs_main(vertex: VertexInput, instance: InstanceInput) -> VertexOutput {
 
 /// Lⁿ norm of a **non-negative** 2-vector, paired with the magnitude of its own
 /// gradient (RFC-0031 §S1–S2). `n == 2` is the Euclidean norm, whose gradient is
-/// exactly 1 — the circular corner this pipeline clipped to before RFC-0031, and
+/// exactly 1, the circular corner this pipeline clipped to before RFC-0031, and
 /// the reason an unset `smooth` is bit-identical. Above 2 the norm is not a true
 /// signed distance: on the corner diagonal its gradient is `2^(1/n - 1/2)`,
 /// ≈0.79 at `n = 6`. Normalising by the returned gradient keeps the clip's
@@ -82,7 +82,7 @@ fn sd_rounded_box(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>, n: f32) -> f32 {
 
     // A corner radius may never exceed half the box (RFC-0001 §3.1: the
     // rounded-rect SDF is only well-defined for `r <= min(half)`; beyond it the
-    // field folds in on itself and the corners visibly deform — a `radius: 20`
+    // field folds in on itself and the corners visibly deform, a `radius: 20`
     // pill on a 33px-tall button is the everyday case). Clamping here, at the
     // one place the radius is consumed, keeps every pipeline honest and matches
     // the CSS rule that an over-large radius is reduced to fit.
@@ -95,7 +95,7 @@ fn sd_rounded_box(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>, n: f32) -> f32 {
         return inner + length(corner) - r_corner;
     }
     // `inner` is non-zero only where one of `corner`'s components is zero, and
-    // there `lp.y == 1` — so dividing the whole expression normalises exactly
+    // there `lp.y == 1`, so dividing the whole expression normalises exactly
     // the corner arc and leaves the straight edges untouched.
     let lp = lp_norm(corner, n);
     return (inner + lp.x - r_corner) / lp.y;

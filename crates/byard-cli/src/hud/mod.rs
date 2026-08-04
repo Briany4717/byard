@@ -9,7 +9,7 @@
 //! A Rust HUD would be easier to write and would prove nothing. This one is a
 //! permanent, self-executing test that the framework can render a non-trivial,
 //! continuously-updating, blurred, animated overlay within its own frame
-//! budget — run on every developer's machine, every session they press the
+//! budget, run on every developer's machine, every session they press the
 //! chord. If it cannot, the project needs to know immediately, and this is the
 //! cheapest possible way to find out.
 //!
@@ -23,7 +23,7 @@
 //! registry. A user view named `__ByardDevHud` therefore resolves to the user's
 //! view in the user's tree and to the HUD in the HUD's tree, with no
 //! interaction between them. There is nothing to diagnose because there is no
-//! collision — which *removes* work rather than adding it, and avoids a
+//! collision, which *removes* work rather than adding it, and avoids a
 //! permanent tax on the language's namespace paid for a dev-only feature.
 //!
 //! # The observer effect, handled rather than hidden (§V4)
@@ -43,20 +43,20 @@
 //!
 //! - Inside it, the HUD's own `interp.render`, `interp.tick` and
 //!   `layout.taffy` carry the same scope *names* as the app's. A block that
-//!   aggregates by name merges them into the app's rows — honestly marked
+//!   aggregates by name merges them into the app's rows, honestly marked
 //!   `×2`, and silently wrong about whose time it is.
 //! - Outside it entirely, on the render thread, the HUD's twenty-five text
 //!   leaves are shaped inside `encode.glyphs`, which the HUD's own scope
 //!   cannot possibly enclose because it has already been dropped.
 //!
 //! Both are answered by the owner travelling with the sample. `hud.render`
-//! still exists — it is what makes the logic half separable at all — but the
+//! still exists, it is what makes the logic half separable at all, but the
 //! figure §V4 requires is `owner_total_ns(DevTools)` summed over both threads.
 //!
 //! # INV-24: it must not defeat what it measures
 //!
 //! The HUD's text changes every frame, so its text leaves would be
-//! layout-dirty every frame, so they would be re-shaped every frame — exactly
+//! layout-dirty every frame, so they would be re-shaped every frame, exactly
 //! the cost the retained layout path removed, reintroduced by the tool that
 //! reports on it. Three mitigations:
 //!
@@ -72,7 +72,7 @@
 //! Mitigation 3 only became load-bearing once the glyph cache was made
 //! content-addressed. Before that the shaper re-shaped whatever the upstream
 //! `dirty` flag pointed at, and the interpreter sets that flag on every leaf
-//! of every frame — so the HUD's twenty-five fixed-width fields were re-shaped
+//! of every frame, so the HUD's twenty-five fixed-width fields were re-shaped
 //! sixty times a second no matter how stable their strings were, and
 //! `encode.glyphs` roughly quadrupled the moment the HUD opened. The
 //! formatting was correct and inert. It is now the thing that makes five of
@@ -82,7 +82,7 @@
 //! its own `LayoutAtlas`, on the same thread, so its layout activity lands in
 //! the same thread-local `path_counters` the statusline reads. The app's
 //! snapshot is captured before the HUD renders and restored onto the frame
-//! afterwards — otherwise the HUD would report the app as rebuilding every
+//! afterwards, otherwise the HUD would report the app as rebuilding every
 //! frame, which is the observer effect in its most embarrassing form.
 
 use byard_compiler::Symbol;
@@ -115,7 +115,7 @@ const HUD_WIDTH: f32 = 252.0;
 /// One frame's worth of numbers for the HUD, as they cross from the render
 /// thread to the logic thread.
 ///
-/// Plain `Copy` data — no `String`, no `Arc`, nothing that allocates on either
+/// Plain `Copy` data, no `String`, no `Arc`, nothing that allocates on either
 /// side of the boundary. The formatting happens on the logic thread, once per
 /// update rather than once per frame.
 #[derive(Debug, Clone, Copy, Default)]
@@ -171,7 +171,7 @@ impl DevHud {
     ///
     /// # Errors
     ///
-    /// Returns a message if the embedded HUD fails to parse — which is a build
+    /// Returns a message if the embedded HUD fails to parse, which is a build
     /// error in this repository, not a user-facing one, and is reported rather
     /// than panicked so a broken HUD never takes a developer's session down
     /// with it.
@@ -219,8 +219,8 @@ impl DevHud {
 
     /// Renders the HUD into `frame`'s overlay layer.
     ///
-    /// Everything here — the record build, the lowering, the tick and the
-    /// render — is inside `hud.render` **and** attributed to
+    /// Everything here, the record build, the lowering, the tick and the
+    /// render, is inside `hud.render` **and** attributed to
     /// [`Owner::DevTools`](byard_core::telemetry::Owner::DevTools), because all
     /// of it is cost the app would not otherwise pay. Measuring only the render
     /// half would understate the figure the HUD publishes about itself, which
@@ -228,7 +228,7 @@ impl DevHud {
     ///
     /// The attribution is entered **before** the scope, so `hud.render` is
     /// itself dev-owned, and it covers every scope the HUD's interpreter and
-    /// layout atlas open underneath — none of which have heard of owners.
+    /// layout atlas open underneath, none of which have heard of owners.
     pub fn render(&mut self, frame: &mut RenderFrame, width: f32, height: f32) {
         let _dev = byard_core::telemetry::attribute_to(byard_core::telemetry::Owner::DevTools);
         byard_core::profile_scope!("hud.render");
@@ -243,11 +243,11 @@ impl DevHud {
         self.interp.tick();
 
         // Where the app's primitives end. Everything the HUD writes from here
-        // on is marked dirty, unconditionally — see below.
+        // on is marked dirty, unconditionally, see below.
         let base = frame.cursor();
 
         // RFC-0017: the HUD composites after the app and cannot be occluded by
-        // it. This is an ordinary layer — nothing about the HUD is
+        // it. This is an ordinary layer, nothing about the HUD is
         // special-cased in the renderer.
         frame.begin_layer();
         self.interp.render(&self.tree, frame, width, height);
@@ -260,7 +260,7 @@ impl DevHud {
         // practice and, more importantly, **unprovable from here**: the HUD's
         // text is re-evaluated against the injected record on every render, and
         // the two producers' indices interleave in ways neither can see. The
-        // failure it allowed was a debug assertion on a frame two seconds in —
+        // failure it allowed was a debug assertion on a frame two seconds in,
         // and in release, silently stale text on screen.
         //
         // An overlay that cannot prove its indices are stable does not get to
@@ -324,7 +324,7 @@ impl DevHud {
 /// paint-class change, so a moving sparkline never touches layout.
 ///
 /// Scaled against the **budget**, and plotting **work** rather than the frame
-/// period — under vsync the period *is* the budget, so a period sparkline draws
+/// period, under vsync the period *is* the budget, so a period sparkline draws
 /// a permanently full bar on a perfectly healthy app.
 fn spark_bars(spark: &[u16; SPARK_BARS], budget_ns: u64) -> Value {
     #[allow(clippy::cast_precision_loss)]
@@ -350,7 +350,7 @@ fn spark_bars(spark: &[u16; SPARK_BARS], budget_ns: u64) -> Value {
     Value::List(bars)
 }
 
-/// `"  3.4"` — one decimal, right-aligned in five columns.
+/// `"  3.4"`, one decimal, right-aligned in five columns.
 ///
 /// Fixed width is the whole point: the string's *length* must not depend on its
 /// value, or every crossing of a power of ten re-measures the text.
@@ -374,7 +374,7 @@ mod tests {
     #[test]
     fn the_embedded_hud_parses_and_lowers_in_its_own_interpreter() {
         // The HUD ships inside the binary, so "does it compile" is a question
-        // about this repository rather than about a user's project — which is
+        // about this repository rather than about a user's project, which is
         // exactly why it needs a test rather than a runtime discovery.
         let mut hud = DevHud::new().expect("the embedded HUD must parse");
         let mut frame = RenderFrame::new();
@@ -394,7 +394,7 @@ mod tests {
         );
         assert!(
             !frame.canvas_shapes().is_empty(),
-            "the sparkline must be geometry, not text — a paint-class change \
+            "the sparkline must be geometry, not text, a paint-class change \
              never touches layout (INV-24)"
         );
     }
@@ -470,7 +470,7 @@ mod tests {
     #[test]
     fn every_scope_the_hud_causes_is_stamped_as_the_dev_runners() {
         // The correction the self-accounting erratum exists for. The HUD's
-        // cost is not a call it makes — it is the interpreter, the layout
+        // cost is not a call it makes, it is the interpreter, the layout
         // atlas and the shaper doing their ordinary jobs on its behalf, under
         // scope names the app also uses. Nothing below `render` opts in, so
         // this asserts that the boundary attribution really does reach all of
@@ -516,8 +516,8 @@ mod tests {
 
     #[test]
     fn the_hud_declares_where_its_primitives_start_so_the_encoder_can_charge_it() {
-        // The logic thread cannot enclose the render thread's shaping — its
-        // scope is long gone by then — so the *frame* carries the partition.
+        // The logic thread cannot enclose the render thread's shaping, its
+        // scope is long gone by then, so the *frame* carries the partition.
         // Without it the HUD's twenty-five lines are shaped on the app's
         // ticket and §V4 under-reports by the largest term in the frame.
         let mut frame = RenderFrame::new();
@@ -544,7 +544,7 @@ mod tests {
     #[test]
     fn every_displayed_number_has_a_value_independent_width() {
         // INV-24 mitigation 3. If a field's *length* changes with its value,
-        // the text re-measures the moment a number crosses a power of ten —
+        // the text re-measures the moment a number crosses a power of ten,
         // which is exactly when something interesting is happening.
         assert_eq!(fixed_ms(3_400_000).len(), fixed_ms(123_400_000).len());
         assert_eq!(fixed_ms(0).len(), fixed_ms(999_900_000).len());
@@ -560,7 +560,7 @@ mod tests {
     fn the_sparkline_is_scaled_against_the_budget_and_never_zero_height() {
         let budget = 16_667_000u64;
         let mut spark = [0u16; SPARK_BARS];
-        spark[0] = 1_000; // 1ms — well inside budget
+        spark[0] = 1_000; // 1ms, well inside budget
         spark[1] = 16_667; // exactly at budget
         spark[2] = 40_000; // way over
         let Value::List(bars) = spark_bars(&spark, budget) else {
@@ -597,7 +597,7 @@ mod tests {
             "an over-budget bar clamps to full height rather than overflowing"
         );
         // A never-measured frame and a zero-cost frame must not render as
-        // nothing at all — only one of them is news.
+        // nothing at all, only one of them is news.
         assert!(height(3) >= 1.0);
     }
 
@@ -605,7 +605,7 @@ mod tests {
     fn the_hud_does_not_claim_the_apps_layout_path_as_its_own() {
         // INV-24's second acceptance condition, at the unit level. The HUD runs
         // its own `LayoutAtlas` on the same thread, so its layout activity
-        // lands in the same thread-local counters the statusline reads — and
+        // lands in the same thread-local counters the statusline reads, and
         // `Interpreter::render` writes `set_atlas_paths` at the end of *its*
         // render. Without the caller restoring the app's snapshot afterwards,
         // the HUD reports the developer's app as rebuilding every frame, which
@@ -624,7 +624,7 @@ mod tests {
         assert_ne!(
             frame.atlas_paths(),
             app_paths,
-            "this test is worthless unless the HUD really does overwrite it —              if this ever fails, the restore in `dev.rs` has become unnecessary              and should be deleted rather than kept as a charm"
+            "this test is worthless unless the HUD really does overwrite it, if this ever fails, the restore in `dev.rs` has become unnecessary              and should be deleted rather than kept as a charm"
         );
 
         // Which is why the caller restores it, and why that restore is the
@@ -643,7 +643,7 @@ mod tests {
         // draw last frame's shaped buffer, in release, silently.
         //
         // The first cut marked only when the app's cursor had moved or the HUD
-        // had re-lowered. That was unprovable from here and wrong in practice —
+        // had re-lowered. That was unprovable from here and wrong in practice,
         // a real session tripped the debug assertion two seconds in. An overlay
         // that cannot prove its indices are stable does not get to assume they
         // are, so this is unconditional and the test says so.
@@ -680,7 +680,7 @@ mod tests {
              previous occupant's shaped buffer at that index"
         );
         // That `mark_dirty_since` leaves everything *before* the mark alone is
-        // asserted where the mechanism lives, in `byard-core`'s frame tests —
+        // asserted where the mechanism lives, in `byard-core`'s frame tests,
         // here the question is only whether the HUD invokes it.
     }
 
@@ -705,8 +705,8 @@ mod tests {
                 .and_then(|(_, v)| v.as_bool())
                 .unwrap()
         };
-        assert!(hud(400_000), "0.4ms of a 16.7ms budget is 2.4% — fine");
-        assert!(!hud(1_500_000), "1.5ms is 9% — the HUD has failed its test");
+        assert!(hud(400_000), "0.4ms of a 16.7ms budget is 2.4%, fine");
+        assert!(!hud(1_500_000), "1.5ms is 9%, the HUD has failed its test");
     }
 }
 
@@ -724,7 +724,7 @@ mod tests {
 /// # It is a paired measurement, and that is not a detail
 ///
 /// The two configurations are rendered **alternately**, one frame each, on two
-/// rigs that both exist for the whole run — never as one batch followed by
+/// rigs that both exist for the whole run, never as one batch followed by
 /// another. A batched version of this test passed here and failed on CI,
 /// because everything that varies with *time* rather than with configuration
 /// (a cold driver, a cold font cache, thermal state, a noisy runner) lands
@@ -734,17 +734,17 @@ mod tests {
 ///
 /// A measurement whose baseline is taken under different conditions from the
 /// thing it is a baseline for is the mistake this whole erratum is about. It
-/// is worth noticing that it was made twice more while fixing it — once with a
-/// static-scene baseline that skipped the draw path, once with batching — and
+/// is worth noticing that it was made twice more while fixing it, once with a
+/// static-scene baseline that skipped the draw path, once with batching, and
 /// that both times the *reported* number was right and the comparison was
 /// wrong.
 ///
 /// # Why the old rule is measured alongside the new one
 ///
 /// The erratum's acceptance also asks for the failure to be demonstrable. So
-/// each measurement reports **two** figures — the `hud.render` scope's
+/// each measurement reports **two** figures, the `hud.render` scope's
 /// inclusive time, which is what §V4 used to publish, and the dev-owner total,
-/// which is what it publishes now — and the test asserts that the first misses
+/// which is what it publishes now, and the test asserts that the first misses
 /// the delta and the second does not. The red case is therefore permanent and
 /// runs on every commit, rather than being a procedure in a document that
 /// someone has to remember to follow.
@@ -764,19 +764,19 @@ mod self_accounting {
     /// RFC-0030 §V4's own acceptance condition, and the budget it is against.
     ///
     /// Checked against the **measured** delta, never against what the profiler
-    /// reports about itself — a self-accounting gate read off its own output
+    /// reports about itself, a self-accounting gate read off its own output
     /// is not a gate.
     const GATE_FRACTION: f64 = 0.05;
     /// 60 Hz, the budget every figure in this test is quoted against.
     const BUDGET_NS: f64 = 16_667_000.0;
 
     /// How far `dev-owner total + the measured `encode.finish` delta` may sit
-    /// from the measured frame delta — in **both** profiles.
+    /// from the measured frame delta, in **both** profiles.
     ///
     /// This is the real invariant, and it is tighter than a wide band on the
     /// direct comparison rather than looser: it says every nanosecond the HUD
     /// adds is either *attributed to the dev runner* or *inside the one scope
-    /// this PR documented as unsplittable* — with that scope's contribution
+    /// this PR documented as unsplittable*, with that scope's contribution
     /// measured on the same frames rather than assumed. Attribution silently
     /// degrading fails it; `wgpu`'s validator being slow in debug does not,
     /// because the term it inflates is named on both sides of the equation.
@@ -884,7 +884,7 @@ View Main() {
 
     /// One frame's readings.
     struct Reading {
-        /// Both rings' depth-0 totals — the whole cost of producing this frame.
+        /// Both rings' depth-0 totals, the whole cost of producing this frame.
         total: u64,
         /// What §V4 reports now: every sample stamped `DevTools`, on both
         /// rings.
@@ -892,15 +892,15 @@ View Main() {
         /// What §V4 used to report: the inclusive time of the one scope named
         /// `hud.render`.
         scope: u64,
-        /// `encode.finish` — `wgpu` assembling the command buffer. The one
+        /// `encode.finish`, `wgpu` assembling the command buffer. The one
         /// term the attribution cannot split, measured so the accounting
         /// identity can name it instead of absorbing it into slack.
         finish: u64,
     }
 
     /// Everything one configuration needs to render frames indefinitely: its
-    /// own GPU device and encoder, its own interpreter and tree, and — for the
-    /// HUD-open configuration — its own `DevHud`.
+    /// own GPU device and encoder, its own interpreter and tree, and, for the
+    /// HUD-open configuration, its own `DevHud`.
     ///
     /// Two of these exist at once and are driven **alternately**; see the test
     /// below for why that matters more than anything else here.
@@ -947,14 +947,14 @@ View Main() {
             //
             // Without it the baseline measures a frame the encoder *skips*: a
             // static scene has no dirty region, so `should_draw` is false and
-            // the whole draw path — glyphs, staging, passes, the swapchain copy
-            // — is never entered. Comparing that against a frame the HUD forced
+            // the whole draw path, glyphs, staging, passes, the swapchain copy
+            //, is never entered. Comparing that against a frame the HUD forced
             // into a full redraw would attribute the app's own drawing to the
             // HUD, which is the same misattribution as the one under repair,
             // inverted.
             //
-            // (The effect is real and worth knowing — most of what a HUD costs
-            // a *static* app is that it defeats the skip — but it is a property
+            // (The effect is real and worth knowing, most of what a HUD costs
+            // a *static* app is that it defeats the skip, but it is a property
             // of the skip, not of the HUD's own work, and §V4's figure is the
             // latter. It is recorded in `support/PERF_hud_baseline.md`.)
             let tick = self.tick;
@@ -1000,7 +1000,7 @@ View Main() {
     #[test]
     fn the_reported_hud_cost_is_the_cost_the_hud_actually_adds() {
         let (Some(mut closed), Some(mut open)) = (Rig::new(false), Rig::new(true)) else {
-            eprintln!("no GPU adapter available — skipping");
+            eprintln!("no GPU adapter available, skipping");
             return;
         };
 
@@ -1016,8 +1016,8 @@ View Main() {
         //
         // The first version of this test measured one whole batch without the
         // HUD and then one whole batch with it. Every cost that is *sequential*
-        // rather than configurational — a cold driver, a cold font cache, the
-        // machine's thermal state, another job on the runner — then landed
+        // rather than configurational, a cold driver, a cold font cache, the
+        // machine's thermal state, another job on the runner, then landed
         // entirely in the difference between the batches. On this developer's
         // machine that bias was small enough to hide; on a CI runner it
         // inflated the first batch until the two totals nearly matched, and the
@@ -1028,8 +1028,8 @@ View Main() {
         //
         // Alternating one frame each shares that drift between the two
         // configurations instead of charging it to one, and taking the median
-        // of the per-iteration *differences* — rather than the difference of
-        // two medians — keeps a single noisy frame from moving the answer.
+        // of the per-iteration *differences*, rather than the difference of
+        // two medians, keeps a single noisy frame from moving the answer.
         // Each rig keeps its own encoder, so alternating never disturbs either
         // one's text cache or its steady-state pool length.
         let mut deltas = Vec::with_capacity(SAMPLES);
@@ -1080,7 +1080,7 @@ View Main() {
 
         // Green, in both profiles: every nanosecond the HUD adds is either
         // attributed to the dev runner or inside the one scope this cannot
-        // split — and that scope's share is measured here, not assumed.
+        // split, and that scope's share is measured here, not assumed.
         assert!(
             accounted_err <= ACCOUNTED_TOLERANCE,
             "the HUD's cost must be fully accounted for: {owner}ns attributed \
@@ -1090,7 +1090,7 @@ View Main() {
             ACCOUNTED_TOLERANCE * 100.0
         );
 
-        // §V4's own condition — the HUD inside 5 % of the frame budget —
+        // §V4's own condition, the HUD inside 5 % of the frame budget,
         // against the **measured** delta rather than against what the profiler
         // reports about itself, which is the only way a self-accounting gate
         // can be checked without begging the question.
@@ -1098,13 +1098,13 @@ View Main() {
         // Release only, and not because debug is inconvenient: a 5 % *budget*
         // claim is a claim about a shipped build. Asserting it against a debug
         // frame would be asserting something nobody has ever cared about. The
-        // accounting identity above — the correctness claim — runs in both.
+        // accounting identity above, the correctness claim, runs in both.
         if !cfg!(debug_assertions) {
             let share = delta / BUDGET_NS;
             assert!(
                 share <= GATE_FRACTION,
                 "RFC-0030 §V4: the HUD must fit in {:.0}% of the frame budget \
-                 — it costs {delta:.0}ns of {BUDGET_NS:.0}ns ({:.2}%)",
+                 - it costs {delta:.0}ns of {BUDGET_NS:.0}ns ({:.2}%)",
                 GATE_FRACTION * 100.0,
                 share * 100.0
             );
@@ -1114,7 +1114,7 @@ View Main() {
         // permanent rather than a procedure someone has to re-run.
         assert!(
             scope > 0 && scope < owner,
-            "`hud.render` alone cannot enclose the render thread's shaping — \
+            "`hud.render` alone cannot enclose the render thread's shaping, \
              if it now does, the attribution moved and this test is guarding \
              nothing (scope {scope}ns, owner {owner}ns)"
         );

@@ -1,6 +1,6 @@
-//! Guards the committed per-instance animation example — a spring and a stagger
+//! Guards the committed per-instance animation example, a spring and a stagger
 //! inside a `for`, a nested `for` inside each row, and rows that mount and
-//! unmount — two ways: it must `byard check` clean, and it must actually *move*,
+//! unmount, two ways: it must `byard check` clean, and it must actually *move*,
 //! driven headlessly through the real interpreter with real taps.
 //!
 //! The second half is the one that matters. Every defect this example was
@@ -19,7 +19,7 @@ use byard_core::{EventKind, InputEvent};
 const LIST: &str = include_str!("../examples/list_animations/src/main.byd");
 const W: f32 = 700.0;
 const H: f32 = 500.0;
-/// The bar inside each row, by its written height — the element whose `rotate`
+/// The bar inside each row, by its written height, the element whose `rotate`
 /// the shuffle drives. Its *width* is per-row (`width: row.bar`), which is
 /// precisely what a bar must not be identified by here.
 const BAR_HEIGHT: f32 = 22.0;
@@ -85,7 +85,7 @@ fn tap(interp: &mut Interpreter, tree: &[RenderNode], center: (f32, f32), ms: u3
 
 /// Every bar's rotation this frame, in row order. A row whose entrance is still
 /// running paints translucent (the decorated path); a settled one paints on the
-/// flat instance path — the bar is the same bar either way, so read both.
+/// flat instance path, the bar is the same bar either way, so read both.
 fn bar_rotations(interp: &mut Interpreter, tree: &[RenderNode], ms: u32) -> Vec<f32> {
     interp.tick();
     interp.set_now_ms(ms);
@@ -128,7 +128,7 @@ fn bar_widths(interp: &mut Interpreter, tree: &[RenderNode], ms: u32) -> Vec<f32
     bars.into_iter().map(|(_, w)| w).collect()
 }
 
-/// The rows' entrance opacities this frame, in row order — what the stagger
+/// The rows' entrance opacities this frame, in row order, what the stagger
 /// cascade is visible as.
 fn row_opacities(interp: &mut Interpreter, tree: &[RenderNode], ms: u32) -> Vec<f32> {
     interp.tick();
@@ -170,7 +170,7 @@ fn tap_centers(interp: &Interpreter) -> Vec<(f32, f32)> {
 /// **The example's headline claim.** Pressing "Shuffle" sends every bar to a
 /// different angle at the same moment, and each one arrives at *its own*.
 ///
-/// Each row's target is written as `row.tilt` inside a `when` — the ordinary
+/// Each row's target is written as `row.tilt` inside a `when`, the ordinary
 /// shape of a filtered list. A row that cannot resolve `row` at render time
 /// reads `0` for its target and simply never moves, which is what the example
 /// looked like: a correct-looking list where Shuffle did nothing at all.
@@ -189,7 +189,7 @@ fn shuffle_sends_every_row_to_its_own_angle() {
     let shuffle = tap_centers(&interp)[0];
     tap(&mut interp, &tree, shuffle, 3_100);
 
-    // Mid-flight the rows are already apart — one shared spring could only ever
+    // Mid-flight the rows are already apart, one shared spring could only ever
     // produce one angle.
     let mid = bar_rotations(&mut interp, &tree, 3_250);
     assert!(
@@ -213,7 +213,7 @@ fn shuffle_sends_every_row_to_its_own_angle() {
 ///
 /// Layout is a separate pass over the same tree, one ahead of paint, and it has
 /// to know which row it is in for the same reason paint does. When it did not,
-/// `row.bar` resolved to nothing there — and a `width` that resolves to nothing
+/// `row.bar` resolved to nothing there, and a `width` that resolves to nothing
 /// is a box with no width, so every bar stretched to fill the column while the
 /// paint pass, which *had* the row, coloured and rotated each one correctly.
 #[test]
@@ -231,7 +231,7 @@ fn each_bar_is_laid_out_at_its_own_rows_width() {
 }
 
 /// "Replay" restarts one written stagger, and the rows cascade in index order
-/// rather than arriving as one flash — the per-row delay is `80ms × i`, so a row
+/// rather than arriving as one flash, the per-row delay is `80ms × i`, so a row
 /// that has forgotten which index it is has no delay at all.
 #[test]
 fn replay_cascades_the_rows_in_index_order() {
@@ -296,7 +296,7 @@ fn add_and_remove_stop_at_the_ends_of_the_list() {
         "the list empties and stays, got {empty:?}"
     );
 
-    // It still comes back — the clamp is a bound, not a latch.
+    // It still comes back, the clamp is a bound, not a latch.
     tap(&mut interp, &tree, add, t);
     let again = bar_rotations(&mut interp, &tree, t + 3_000);
     assert_eq!(again.len(), 1, "one row is back, got {again:?}");

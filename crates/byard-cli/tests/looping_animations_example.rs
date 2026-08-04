@@ -1,7 +1,7 @@
 //! Guards the committed RFC-0025 example through the real `byard` binary: the
-//! `looping_animations` project — `repeat`/`reverse`/`delay`/`from` modifiers,
+//! `looping_animations` project, `repeat`/`reverse`/`delay`/`from` modifiers,
 //! two `anim.keyframes(…)` sequences per element, a looping colour, and
-//! `anim.stagger(…)` over a `for` loop's index — must check clean (parse,
+//! `anim.stagger(…)` over a `for` loop's index, must check clean (parse,
 //! type-check, lower, validate with no diagnostics).
 
 use std::path::PathBuf;

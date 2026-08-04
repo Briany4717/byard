@@ -1,7 +1,7 @@
-//! `CanvasShape` render pipeline (RFC-0020 §2, Tier 1) — the sixth pipeline.
+//! `CanvasShape` render pipeline (RFC-0020 §2, Tier 1), the sixth pipeline.
 //!
-//! Draws programmatic 2-D shapes — arcs, circles, lines, and (rounded)
-//! rectangles — by evaluating each shape's closed-form signed-distance
+//! Draws programmatic 2-D shapes, arcs, circles, lines, and (rounded)
+//! rectangles, by evaluating each shape's closed-form signed-distance
 //! function analytically in the fragment shader (`canvas_shape.wgsl`).
 //! Resolution-independent, atlas-free, and animation-friendly: a reactive
 //! `sweep`/`dash_offset` change is just fresh instance data, never a
@@ -10,7 +10,7 @@
 //! Like `DecoratedBox`, everything this pipeline draws is **transparent
 //! geometry** (anti-aliased strokes and fills with fractional-coverage
 //! edges), so its pipeline *tests* the shared draw-order depth buffer but
-//! never writes it — the RFC-0017 opaque/transparent split. Complex
+//! never writes it, the RFC-0017 opaque/transparent split. Complex
 //! `path(d: …)` commands never reach this pipeline; they rasterize through
 //! `VectorMSDF` (RFC-0020 §2, Tier 2).
 
@@ -22,10 +22,10 @@ use crate::frame::CanvasShape;
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct CanvasShapeInstance {
-    /// Quad bounds `[x, y, w, h]` in logical px ([`CanvasShape::bounds`] —
+    /// Quad bounds `[x, y, w, h]` in logical px ([`CanvasShape::bounds`],
     /// already inflated to cover the stroke and the AA fringe).
     pub rect: [f32; 4],
-    /// Shape params, first half (layout per kind — `frame::CANVAS_SHAPE_*`).
+    /// Shape params, first half (layout per kind, `frame::CANVAS_SHAPE_*`).
     pub params0: [f32; 4],
     /// Shape params, second half.
     pub params1: [f32; 4],
@@ -35,7 +35,7 @@ pub struct CanvasShapeInstance {
     pub fill_color: [f32; 4],
     /// `[stroke_width, dash_len, dash_gap, dash_offset]`.
     pub stroke_dash: [f32; 4],
-    /// `[opacity, draw-order depth, kind, cap]` — kind/cap are small integers
+    /// `[opacity, draw-order depth, kind, cap]`, kind/cap are small integers
     /// carried exactly in `f32`.
     pub misc: [f32; 4],
     /// Paint-time transform translate (RFC-0011).
@@ -110,7 +110,7 @@ impl CanvasShapeInstance {
 /// Bind-group layout for the per-frame shape-record pool (RFC-0031 §S4): one
 /// read-only storage buffer at `@group(1) @binding(0)`.
 ///
-/// Bound whole, at offset zero, with no dynamic offset — a group's
+/// Bound whole, at offset zero, with no dynamic offset, a group's
 /// `first_member` is an element index into the entire buffer
 /// ([`InstanceArena::push_storage`](super::instance_arena::InstanceArena::push_storage)
 /// aligns each region to the record stride so that index is exact). The bind
@@ -156,7 +156,7 @@ pub fn records_bind_group(
 /// # Errors
 ///
 /// [`ByardError::PipelineCompilation`] if the shader or pipeline fails
-/// GPU-side validation — never a panic, never a software fallback.
+/// GPU-side validation, never a panic, never a software fallback.
 pub async fn build_pipeline(
     device: &wgpu::Device,
     bind_group_layout: &wgpu::BindGroupLayout,
@@ -231,8 +231,8 @@ pub async fn build_pipeline(
 ///
 /// `record_base` is where the frame's shape-record pool landed in the arena, as
 /// an element index (RFC-0031 §S4). A group head stores its member offset
-/// relative to that pool; adding the base here — once, on the CPU, at the one
-/// place the arena's layout is known — is what lets the shader index the whole
+/// relative to that pool; adding the base here, once, on the CPU, at the one
+/// place the arena's layout is known, is what lets the shader index the whole
 /// buffer with no dynamic offset and no per-frame bind group.
 #[allow(clippy::cast_precision_loss)]
 pub fn stage(
@@ -261,7 +261,7 @@ pub fn stage(
 }
 
 /// Draws every [`CanvasShape`], scissored to its content clip (RFC-0005).
-/// Everything here is transparent geometry — the pipeline tests the shared
+/// Everything here is transparent geometry, the pipeline tests the shared
 /// draw-order depth buffer but never writes it (see the module docs).
 #[allow(clippy::too_many_arguments)]
 pub fn draw(
@@ -282,7 +282,7 @@ pub fn draw(
     render_pass.set_pipeline(pipeline);
     render_pass.set_bind_group(0, bind_group, &[]);
     // RFC-0031 §S4: the shape-record pool. Bound for every canvas batch, group
-    // or not — a pipeline layout is not conditional, and an instance that heads
+    // or not, a pipeline layout is not conditional, and an instance that heads
     // no group never reads it.
     render_pass.set_bind_group(1, records_bind_group, &[]);
     render_pass.set_vertex_buffer(0, quad_buffer.slice(..));
@@ -453,7 +453,7 @@ mod tests {
         };
         let inst = CanvasShapeInstance::new(&s, 0.5);
         // misc = [opacity, depth, kind (ARC = 0), cap (ROUND = 1)]. The
-        // packing copies these fields verbatim — no arithmetic — so *bitwise*
+        // packing copies these fields verbatim, no arithmetic, so *bitwise*
         // equality is precisely the claim (and satisfies `float_cmp`).
         assert_eq!(
             inst.misc.map(f32::to_bits),

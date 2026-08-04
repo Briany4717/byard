@@ -2,7 +2,7 @@
 //!
 //! Renders synthetic frames of programmatic shapes and reads pixels back, so
 //! the analytic-SDF fragment shader's stroke/fill/sweep behaviour is pinned
-//! down on a real device — the CPU-mirror tests in `byard-core` cover the
+//! down on a real device, the CPU-mirror tests in `byard-core` cover the
 //! same geometry deterministically without a GPU.
 //!
 //! Skips cleanly when no GPU adapter is available.
@@ -151,13 +151,13 @@ fn render(
 /// The load-bearing claim of the structural milestone, and the one no CPU test
 /// can make: the records have to reach the GPU, at the right element index, and
 /// be readable from the fragment stage. The head is given deliberately absurd
-/// `params` — a zero-radius circle at the origin — so anything that painted
+/// `params`, a zero-radius circle at the origin, so anything that painted
 /// from the instance instead of from the buffer would paint nothing at all.
 #[test]
 #[allow(clippy::many_single_char_names)]
 fn a_group_head_draws_its_member_record_and_not_its_own_params() {
     let Some((device, queue)) = try_device() else {
-        eprintln!("no GPU adapter — skipping canvas-shape readback");
+        eprintln!("no GPU adapter, skipping canvas-shape readback");
         return;
     };
 
@@ -172,7 +172,7 @@ fn a_group_head_draws_its_member_record_and_not_its_own_params() {
     frame.push_shape_group(
         CanvasShape {
             kind: CANVAS_SHAPE_CIRCLE,
-            // §S4: a head's `params` size its *quad*, not its shape — here the
+            // §S4: a head's `params` size its *quad*, not its shape, here the
             // union of its members' bounds, ten px larger than the member and
             // in a colour the member does not use, so painting from the head
             // instead of from the record is visible twice over.
@@ -203,7 +203,7 @@ fn a_group_head_draws_its_member_record_and_not_its_own_params() {
     );
 }
 
-/// RFC-0031 §"`ngon`": `r` is the circumradius, exactly, whatever `corner` is —
+/// RFC-0031 §"`ngon`": `r` is the circumradius, exactly, whatever `corner` is,
 /// and `inner` pulls the notches in without moving the points.
 ///
 /// The exactness matters beyond tidiness: two `ngon`s of the same `r` morph
@@ -213,7 +213,7 @@ fn a_group_head_draws_its_member_record_and_not_its_own_params() {
 #[allow(clippy::many_single_char_names)]
 fn an_ngon_reaches_its_circumradius_at_its_points_and_its_inner_ratio_between() {
     let Some((device, queue)) = try_device() else {
-        eprintln!("no GPU adapter — skipping canvas-shape readback");
+        eprintln!("no GPU adapter, skipping canvas-shape readback");
         return;
     };
     let (w, h) = (200.0_f32, 200.0_f32);
@@ -263,12 +263,12 @@ fn an_ngon_reaches_its_circumradius_at_its_points_and_its_inner_ratio_between() 
 /// Three claims in one frame each, because they are the three ways the feature
 /// can be wrong: an endpoint that is not the shape drawn alone, a midpoint that
 /// is not between them, and a sweep that stalls on the last shape instead of
-/// returning to the first (§Q9 — the Material 3 loader is a loop).
+/// returning to the first (§Q9, the Material 3 loader is a loop).
 #[test]
 #[allow(clippy::many_single_char_names)]
 fn a_morph_reaches_its_endpoints_blends_between_them_and_wraps() {
     let Some((device, queue)) = try_device() else {
-        eprintln!("no GPU adapter — skipping canvas-shape readback");
+        eprintln!("no GPU adapter, skipping canvas-shape readback");
         return;
     };
     let (w, h) = (200.0_f32, 200.0_f32);
@@ -365,7 +365,7 @@ fn a_morph_reaches_its_endpoints_blends_between_them_and_wraps() {
         (back - mid).abs() < 2.0,
         "the return leg must blend the same way: {back} vs {mid}"
     );
-    // A negative phase wraps too — an animation with a negative `from:` must
+    // A negative phase wraps too, an animation with a negative `from:` must
     // not fall off the front of the sequence.
     let negative = reach(&at_phase(-1.0));
     assert!(
@@ -392,7 +392,7 @@ fn a_morph_reaches_its_endpoints_blends_between_them_and_wraps() {
 #[allow(clippy::many_single_char_names)]
 fn fusion_bridges_nearby_shapes_and_carries_their_colours_across() {
     let Some((device, queue)) = try_device() else {
-        eprintln!("no GPU adapter — skipping canvas-shape readback");
+        eprintln!("no GPU adapter, skipping canvas-shape readback");
         return;
     };
     let (w, h) = (240.0_f32, 120.0_f32);
@@ -423,7 +423,7 @@ fn fusion_bridges_nearby_shapes_and_carries_their_colours_across() {
         render(&device, &queue, &frame, w, h)
     };
 
-    // 1. `fuse: 0` — the gap between two separated circles stays empty.
+    // 1. `fuse: 0`, the gap between two separated circles stays empty.
     let unfused = fused(70.0, 170.0, 0.0);
     assert!(
         unfused.at(120.0, 60.0).3 < 20,
@@ -443,7 +443,7 @@ fn fusion_bridges_nearby_shapes_and_carries_their_colours_across() {
     );
 
     // 3. Brought within reach of a `k` that spans the gap, the midpoint fills
-    //    — although neither circle covers it: their edges are 12 px apart.
+    //, although neither circle covers it: their edges are 12 px apart.
     let (left, right) = (90.0_f32, 150.0);
     let bridged = fused(left, right, 32.0);
     let mid = bridged.at(120.0, 60.0);
@@ -481,7 +481,7 @@ fn fusion_bridges_nearby_shapes_and_carries_their_colours_across() {
 #[allow(clippy::many_single_char_names)]
 fn a_fused_stroke_outlines_the_union_and_not_its_members() {
     let Some((device, queue)) = try_device() else {
-        eprintln!("no GPU adapter — skipping canvas-shape readback");
+        eprintln!("no GPU adapter, skipping canvas-shape readback");
         return;
     };
     let (w, h) = (240.0_f32, 120.0_f32);
@@ -518,7 +518,7 @@ fn a_fused_stroke_outlines_the_union_and_not_its_members() {
         rb.at(100.0 - 30.0 + 1.0, 60.0).3 > 150,
         "the union's left edge must be stroked"
     );
-    // The interior — where each member's own circle would have run — is not.
+    // The interior, where each member's own circle would have run, is not.
     // (140 − 30 = 110 is the right circle's left edge, deep inside the left
     // circle, which reaches 130.)
     let seam = rb.at(110.0, 60.0);
@@ -546,7 +546,7 @@ fn a_fused_stroke_outlines_the_union_and_not_its_members() {
 #[allow(clippy::many_single_char_names)]
 fn a_morphs_colour_blends_in_oklab_not_linearly() {
     let Some((device, queue)) = try_device() else {
-        eprintln!("no GPU adapter — skipping canvas-shape readback");
+        eprintln!("no GPU adapter, skipping canvas-shape readback");
         return;
     };
     let (w, h) = (200.0_f32, 200.0_f32);
@@ -581,8 +581,8 @@ fn a_morphs_colour_blends_in_oklab_not_linearly() {
 
     // The two spaces give measurably different answers, which is what makes
     // this assertion mean anything. Halfway from red to blue:
-    //   linear:  sRGB (188,   0, 188) — equal channels, no green at all
-    //   OKLab:   sRGB (140,  83, 162) — darker, leaning blue, with real green
+    //   linear:  sRGB (188,   0, 188), equal channels, no green at all
+    //   OKLab:   sRGB (140,  83, 162), darker, leaning blue, with real green
     // Green is the sharpest separator: a component-wise mix of pure red and
     // pure blue has *exactly* none.
     assert!(
@@ -605,7 +605,7 @@ fn a_morphs_colour_blends_in_oklab_not_linearly() {
 #[allow(clippy::many_single_char_names)]
 fn circle_stroke_paints_the_ring_and_not_the_interior() {
     let Some((device, queue)) = try_device() else {
-        eprintln!("no GPU adapter — skipping canvas-shape readback");
+        eprintln!("no GPU adapter, skipping canvas-shape readback");
         return;
     };
 
@@ -641,7 +641,7 @@ fn circle_stroke_paints_the_ring_and_not_the_interior() {
 #[allow(clippy::many_single_char_names)]
 fn arc_sweep_and_rect_fill_cover_exactly_their_regions() {
     let Some((device, queue)) = try_device() else {
-        eprintln!("no GPU adapter — skipping canvas-shape readback");
+        eprintln!("no GPU adapter, skipping canvas-shape readback");
         return;
     };
 

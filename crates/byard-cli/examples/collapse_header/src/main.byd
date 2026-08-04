@@ -1,4 +1,4 @@
-// RFC-0021 — collapsing header.
+// RFC-0021, collapsing header.
 //
 // Run it (from the repo root):
 //   cd crates/byard-cli/examples/collapse_header
@@ -7,7 +7,7 @@
 // What to verify:
 //   Scroll the list down. The header (first child) stays pinned to the top and
 //   paints over the list as it scrolls under it, while its subtitle block fades
-//   out — the implicit `scroll_fraction` binding (0 = expanded, 1 = collapsed) is
+//   out, the implicit `scroll_fraction` binding (0 = expanded, 1 = collapsed) is
 //   available to the header's children and drives the `opacity`. `collapse_min`
 //   sets the collapsed height, so the fade completes over `header − collapse_min`
 //   px of scroll. Scroll back up and it fades in again.
@@ -18,7 +18,7 @@ View Main() {
     Column #[bg: 0x14141C, width: 360] {
         ScrollView #[collapse_header: true, collapse_min: 66, offset: (sx, sy),
                      width: 360, height: 420] {
-            // The header — pinned to the top; its children read `scroll_fraction`.
+            // The header, pinned to the top; its children read `scroll_fraction`.
             Box #[bg: 0x381E72, width: 360, p: 28] {
                 Column #[gap: 10] {
                     Text("Large title") #[color: 0xE8DEF8, size: 32]

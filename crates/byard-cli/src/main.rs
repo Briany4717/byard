@@ -1,4 +1,4 @@
-//! `byard` — the Byard UI framework CLI.
+//! `byard`, the Byard UI framework CLI.
 //!
 //! See RFC-0006 for the full design rationale.
 
@@ -55,7 +55,7 @@ enum Command {
     },
     /// Parse and validate without opening a window (CI-friendly).
     Check {
-        /// One line per diagnostic, with no caret block beneath it — the
+        /// One line per diagnostic, with no caret block beneath it, the
         /// pre-RFC-0030 shape, for scripts (RFC-0006 C3).
         #[arg(long)]
         short: bool,
@@ -129,7 +129,7 @@ fn main() {
     };
     if let Err(e) = result {
         // An empty message is a silent failure sentinel (e.g. `check` already
-        // printed rustc-style diagnostics) — just set the exit code.
+        // printed rustc-style diagnostics), just set the exit code.
         if !e.is_empty() {
             style::err(&e);
         }

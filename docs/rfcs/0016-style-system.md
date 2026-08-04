@@ -1,18 +1,18 @@
-# RFC-0016: Style System — styles as first-class values (Hybrid D+B+C)
+# RFC-0016: Style System, styles as first-class values (Hybrid D+B+C)
 
-- **Status:** Active — partially implemented (M38 first-class `Style` values + `..` spread, M39 recipes/variants + `merge`, M40 `on <state> {}` blocks landed). All design decisions (D1–D3, inherited S1/S3/S5) and formerly-unresolved questions resolved. Remaining: responsive/adaptive variants, runtime theme switching with animated token transitions.
+- **Status:** Active, partially implemented (M38 first-class `Style` values + `..` spread, M39 recipes/variants + `merge`, M40 `on <state> {}` blocks landed). All design decisions (D1–D3, inherited S1/S3/S5) and formerly-unresolved questions resolved. Remaining: responsive/adaptive variants, runtime theme switching with animated token transitions.
 - **Author(s):** Brian (byard_v2)
 - **Created:** 2026-07-01
 - **Last updated:** 2026-07-01
 - **Depends on:** RFC-0002 (D5 resolution, D8 static styles, Pratt parser, `inject`), RFC-0005 (§6 theme tokens), RFC-0010 (`with` animation), RFC-0011 (transform), RFC-0012 (engine state source + event exposure).
 - **Supersedes:** RFC-0012's **§B declarative pseudo-state layer** (this RFC owns the declarative style/state surface). RFC-0012's **§A event exposure** and the engine `StyleState` mask **remain** and are consumed here.
-- **Relation to the existing `style { .class }`:** kept as desugaring sugar (§7 Migration) — no existing `.byd` breaks.
+- **Relation to the existing `style { .class }`:** kept as desugaring sugar (§7 Migration), no existing `.byd` breaks.
 
 ---
 
 ## Summary
 
-Byard styles become **first-class, typed, composable values** — not a cascade, not
+Byard styles become **first-class, typed, composable values**, not a cascade, not
 a global stylesheet, not string class names. A `Style` is created with `style { }`,
 named with `let`, composed with `merge` / the `..` spread, parameterized with
 **variants/recipes** (named axes like `size`/`tone`), applied inline as **colocated
@@ -22,7 +22,7 @@ an invalid token, variant, property, or state is a compile error, and the whole
 thing resolves at lower time to a flat attribute set with **zero runtime cost**.
 
 This is the "reimagine CSS, don't copy it" answer: no cascade to reason about, no
-specificity wars, no global leakage — styles are ordinary language values you can
+specificity wars, no global leakage, styles are ordinary language values you can
 name, pass, compose, and analyze, layered with the professional variant ergonomics
 of Panda/`cva` and the beloved colocation of Tailwind/SwiftUI, all type-checked.
 
@@ -31,9 +31,9 @@ of Panda/`cva` and the beloved colocation of Tailwind/SwiftUI, all type-checked.
 The audit and RFC-0016-exploration established: Byard already has scoped, non-
 cascading classes (`style { .class #[...] }`, RFC-0002 D5) but **no tokens, no
 variants, no composition, no states**. The 2024–2025 DX evidence points three ways
-at once — devs love *colocation* (Tailwind), still want *named/scoped* styles (CSS
+at once, devs love *colocation* (Tailwind), still want *named/scoped* styles (CSS
 Modules), and the modern professional baseline is *type-safe tokens + variants*
-(Panda `cva`, StyleX, vanilla-extract). SwiftUI notably lacks centralized theming —
+(Panda `cva`, StyleX, vanilla-extract). SwiftUI notably lacks centralized theming, 
 a gap Byard can win. No single existing model gives all of this cleanly.
 
 The unifying insight: if a **style is a value**, then colocation, naming,
@@ -71,7 +71,7 @@ let bigCard = card merge elevated                              // compose two st
 Card #[ ..base, ..elevated, radius: lg ]   // spread several; inline `radius` wins
 ```
 
-`merge` and `..` are the *only* composition mechanism — later wins, deterministically.
+`merge` and `..` are the *only* composition mechanism, later wins, deterministically.
 There is no specificity to memorize; the order you write is the order that applies.
 
 ### 3. Variants / recipes (the professional, type-safe layer)
@@ -103,11 +103,11 @@ Button("OK")                       // uses defaults (md, neutral)
 
 Asking for a variant that doesn't exist (`tone: teal`) is a **compile error** with a
 Levenshtein suggestion (D4-style). Variants are just a parameterized way to build a
-`Style` — under the hood it is still value composition.
+`Style`, under the hood it is still value composition.
 
 ### 4. Colocated semantic modifiers (the terse, prototyping layer)
 
-For one-off elements, compose inline from **semantic tokens** — no `style {}` block,
+For one-off elements, compose inline from **semantic tokens**, no `style {}` block,
 maximum colocation, but type-safe (not Tailwind's untyped "class soup"):
 
 ```byld
@@ -120,7 +120,7 @@ Button("Guardar") #[
 
 `.surface`/`.round(md)`/`.tone(primary)` are **token modifiers** resolved against the
 theme (RFC-0005 §6). They produce an anonymous `Style` merged inline. This is the
-same `Style` value model, just written at the terse end — the exact "verbose vs
+same `Style` value model, just written at the terse end, the exact "verbose vs
 inferred" spectrum you asked for, at the style-system level.
 
 ### 5. Three ceremonies, one model
@@ -149,7 +149,7 @@ pub struct Style {
   no `var` reads (still static, D8) except through inline `with`/ternary at the use
   site, which is the element's concern, not the style's.
 - `Style` values are **immutable**; `merge` produces a new `AttrSet` by
-  last-write-wins overlay. All of this happens at lower time — the emitted element
+  last-write-wins overlay. All of this happens at lower time, the emitted element
   carries a flat resolved attr set, so there is **zero runtime style cost**.
 
 ### Grammar (RFC-0002 additions)
@@ -171,7 +171,7 @@ token_mod    := "." IDENT ( "(" arg_list ")" )?   // .surface / .round(md) / .to
 
 - `on` and `merge` become contextual keywords (like `with` in RFC-0010). `merge`
   registers in the Pratt parser as a low-precedence infix (`left: 5, right: 6`,
-  above ternary `4` so `a merge b ? …` needs parens — intentional).
+  above ternary `4` so `a merge b ? …` needs parens, intentional).
 - `..expr` spread is parsed in the attribute list (`register_event_attrs` sibling)
   and requires an `expr` of type `Style` (checked).
 - `token_mod` is the **single-dot** `.name` form (a new `Expr::TokenMod`); the
@@ -187,7 +187,7 @@ At lower time, an element's effective attrs resolve last-wins in this order:
 2. **spread/merged styles** in written order (`..a, ..b` → b overrides a),
 3. **active interaction-state blocks**, in fixed priority
    `disabled > pressed > focused > hover` (RFC-0012 **S3**),
-4. **inline properties** (`#[ radius: lg ]`) — always win.
+4. **inline properties** (`#[ radius: lg ]`), always win.
 
 This replaces D5's "classes" middle layer with "composed Style values," preserving
 the last-wins mental model and the "inline wins" invariant. There is no cascade and
@@ -197,7 +197,7 @@ no specificity: **written order + this fixed 4-tier stack is the whole rule.**
 
 The `on <state> { }` blocks bind to RFC-0012's engine `StyleState` mask
 (`router.style_state(elem)`), which is the *only* dynamic input (engine-owned
-booleans, read on the logic thread) — so this does **not** reopen D8's general
+booleans, read on the logic thread), so this does **not** reopen D8's general
 dynamic-style deferral, exactly as RFC-0012 argued. When a state bit flips,
 `render()` re-resolves only elements that *have* state blocks (RFC-0012 **S4**
 bitset). If a base property carries `with anim.*`, the state change updates that
@@ -234,8 +234,8 @@ migrating `.class` references to `..style` spreads over time.
 ## Drawbacks
 
 - Biggest design surface of the cluster: a real `Style` type, `merge`/spread,
-  recipes, token modifiers, and state blocks — more to build, test, document.
-- Two ways to name styles (`let` value vs `style Name` recipe) — must document when
+  recipes, token modifiers, and state blocks, more to build, test, document.
+- Two ways to name styles (`let` value vs `style Name` recipe), must document when
   to use which (value for ad-hoc/composition, recipe for design-system axes).
 - Token modifiers vs old `.class` references need careful disambiguation (§Grammar).
 - `merge` precedence with ternary requires parens in edge cases (intentional, but a
@@ -248,12 +248,12 @@ migrating `.class` references to `..style` spreads over time.
   the differentiator that makes Byard's styling "better, not a copy."
 - **Hybrid vs a single surface.** Named values (D) give power; recipes (B) give
   design-system ergonomics; inline modifiers (C) give prototyping speed. One model,
-  three ceremonies — mirrors the verbose/inferred duality chosen for transforms.
+  three ceremonies, mirrors the verbose/inferred duality chosen for transforms.
 - **Why not just A (evolved classes).** A is "CSS slightly better" and misses the DX
   leap that is a Byard pillar.
 - **Type-safe tokens vs Tailwind's atomic strings.** Semantic, checked tokens keep
   colocation's speed without the untyped class-soup downside.
-- **Not doing it:** styling stays class-only with no tokens/variants/states — below
+- **Not doing it:** styling stays class-only with no tokens/variants/states, below
   the modern professional baseline and far below Byard's DX ambition.
 
 ## Prior art
@@ -273,26 +273,26 @@ central theming, which Byard's token layer fixes), Jetpack Compose Material3 the
 - **State set / priority / dispatch gating:** inherit RFC-0012 **S1/S3/S5**.
 - **Composition:** `merge` + `..` spread only; last-wins; inline overrides.
 - **Backward compat:** `style { .class }` and `#[style: .class]` desugar (§7).
-- **D1 — recipe naming:** a recipe is a **free name** applied via
+- **D1, recipe naming:** a recipe is a **free name** applied via
   `#[variant: (…)]`, **not** bound to an intrinsic name. Rationale: keeps recipes
   reusable/composable and decouples the style system from the intrinsic catalog; an
   intrinsic-bound default (all `Button`s adopt a `Button` recipe) is deferred sugar,
   not load-bearing.
-- **D2 — token vs style disambiguation → distinct sigils.** Single-dot **`.token`**
+- **D2, token vs style disambiguation → distinct sigils.** Single-dot **`.token`**
   = semantic token modifier (resolved against the theme); double-dot **`..style`** =
   spread a `Style` *value*. Legacy `.class` references desugar to `..class`.
   Rationale: eliminates any symbol-table collision, is visually unambiguous
   (`.` = token, `..` = whole style), and matches the §7 migration.
-- **D3 — composition operator → keyword `merge`.** Infix `merge` for building named
+- **D3, composition operator → keyword `merge`.** Infix `merge` for building named
   composed styles; `..` spread stays for inline. Rejected `+`/`&`: reads worse and
   overloads arithmetic with style semantics. `merge` is prose, consistent with
   `with`/`on`. A recipe may be `merge`d (it collapses to a plain `Style` first).
 
 ## Resolved questions (formerly unresolved)
 
-- [x] **`AttrSet` inline capacity:** resolved as **4 inline attrs before spilling** (the `SmallVec<[_;4]>` pattern). 4 covers the overwhelming majority of style blocks (most elements have ≤4 style overrides: bg, color, padding, border). Spill to heap is transparent and correct — the hot path pays only a `memcpy` for the common case, zero allocation. This matches the `Motion` packing (A5) and was validated by profiling the `byard-material` package: 92% of style blocks have ≤4 entries.
-- [x] **Lint/codemod for `.class` → `..style` migration:** deferred as **not needed for current phase**. The `.class` form still works (desugars to `..class` internally, per D2); no codemod ships until the old form is deprecated. When deprecation lands, a `byard check --fix` pass is the natural home — it already has the span infrastructure (M35 `SourceMap`) to rewrite source. Filing as a `byard check` future flag, not a standalone tool.
-- [x] **Theme-token vocabulary shared with RFC-0005 §6:** resolved as **implementation-defined by the theme provider** (e.g. `byard-material`), not hardcoded in the engine. The interpreter's `interp/theme.rs` resolves `.token` references against a `ThemeMap` injected via `inject` (RFC-0001 controller boundary). The vocabulary is whatever keys the provider registers — `surface`, `on-surface`, `primary`, `titleLarge`, etc. are Material conventions, not engine builtins. This means: Byard ships no default theme vocabulary (any theme is a package, per RFC-0008); the engine only provides the resolution mechanism. A package that registers `.surface` is correct; a package that registers `.frosted-glass` is equally correct. The vocabulary is the package author's concern, the resolution is the engine's.
+- [x] **`AttrSet` inline capacity:** resolved as **4 inline attrs before spilling** (the `SmallVec<[_;4]>` pattern). 4 covers the overwhelming majority of style blocks (most elements have ≤4 style overrides: bg, color, padding, border). Spill to heap is transparent and correct, the hot path pays only a `memcpy` for the common case, zero allocation. This matches the `Motion` packing (A5) and was validated by profiling the `byard-material` package: 92% of style blocks have ≤4 entries.
+- [x] **Lint/codemod for `.class` → `..style` migration:** deferred as **not needed for current phase**. The `.class` form still works (desugars to `..class` internally, per D2); no codemod ships until the old form is deprecated. When deprecation lands, a `byard check --fix` pass is the natural home, it already has the span infrastructure (M35 `SourceMap`) to rewrite source. Filing as a `byard check` future flag, not a standalone tool.
+- [x] **Theme-token vocabulary shared with RFC-0005 §6:** resolved as **implementation-defined by the theme provider** (e.g. `byard-material`), not hardcoded in the engine. The interpreter's `interp/theme.rs` resolves `.token` references against a `ThemeMap` injected via `inject` (RFC-0001 controller boundary). The vocabulary is whatever keys the provider registers, `surface`, `on-surface`, `primary`, `titleLarge`, etc. are Material conventions, not engine builtins. This means: Byard ships no default theme vocabulary (any theme is a package, per RFC-0008); the engine only provides the resolution mechanism. A package that registers `.surface` is correct; a package that registers `.frosted-glass` is equally correct. The vocabulary is the package author's concern, the resolution is the engine's.
 
 ## Future possibilities
 

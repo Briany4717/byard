@@ -2,7 +2,7 @@
 //!
 //! [`TextMeasurer`] shapes a string with the same `glyphon`/`cosmic-text`
 //! engine the renderer uses (`encoder::text_glyph`), so the intrinsic size a
-//! `Text`/`Button` reports to Taffy matches what is actually drawn — which is
+//! `Text`/`Button` reports to Taffy matches what is actually drawn, which is
 //! what lets text be aligned and justified correctly within its box (rather
 //! than estimated from a character count). The owning `FontSystem` is created
 //! once (it loads the system fonts) and reused for every measurement.
@@ -12,7 +12,7 @@ use std::collections::HashMap;
 
 /// Measures shaped text sizes, reusing one [`FontSystem`].
 ///
-/// Shaping a string through `cosmic-text` (`Shaping::Advanced`) is expensive —
+/// Shaping a string through `cosmic-text` (`Shaping::Advanced`) is expensive,
 /// several hundred microseconds for a short label. Because layout re-measures
 /// every `Text`/`Button` on **every** render tick (and most strings are
 /// unchanged frame to frame), results are memoised in a `(text, font_size)`
@@ -158,8 +158,8 @@ mod tests {
 
     #[test]
     fn repeated_measures_are_cached() {
-        // Re-measuring an unchanged (text, size) — which layout does on every
-        // render tick — must hit the cache and return an identical result, so a
+        // Re-measuring an unchanged (text, size), which layout does on every
+        // render tick, must hit the cache and return an identical result, so a
         // steady-state tick re-shapes nothing (the per-tick perf fix).
         let mut m = TextMeasurer::new();
         let first = m.measure("the counter is 0", 16.0);

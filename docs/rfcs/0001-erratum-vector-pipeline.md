@@ -24,14 +24,14 @@ This erratum changes **the pipeline count only**. Every other claim in RFC-0001 
 stands unchanged: the rationale for small, specialised pipelines over an
 über-shader (TBDR bandwidth); the Z-bin batching model (§3.2); the dirty-rectangle
 scissor-clipping model (§3.3); and the init-time GPU error boundary (§8). The new
-pipeline is added *within* those rules — it is exactly the kind of small,
+pipeline is added *within* those rules, it is exactly the kind of small,
 specialised pipeline §3.1 already argues for.
 
 ---
 
 ## Correction
 
-### C1 — The pipeline table gains a fifth row
+### C1, The pipeline table gains a fifth row
 
 RFC-0001 §3.1's table is amended to:
 
@@ -44,10 +44,10 @@ RFC-0001 §3.1's table is amended to:
 | **`VectorMSDF`** | **Monochrome vector icons via a multi-channel signed distance field atlas (RFC-0009)** |
 
 Any RFC-0001 sentence reading "exactly four pipelines" / "the renderer pipelines
-are fixed at four" is superseded by "**five** pipelines"; the set remains closed —
+are fixed at four" is superseded by "**five** pipelines"; the set remains closed,
 adding a sixth still requires an RFC and an erratum.
 
-### C2 — The §9 crate layout comment is widened
+### C2, The §9 crate layout comment is widened
 
 RFC-0001 §9 sketches `encoder/` as owning "(SolidBox, DecoratedBox, TextGlyph,
 TextureSampler)". Read it as additionally owning `vector_msdf` (the new
@@ -56,7 +56,7 @@ TextureSampler)". Read it as additionally owning `vector_msdf` (the new
 compiler side (`byard-compiler/src/vector/`) and never enters `byard-core`
 (RFC-0001 §9 dependency direction; RFC-0009 §2).
 
-### C3 — The §8 error boundary covers the fifth pipeline
+### C3, The §8 error boundary covers the fifth pipeline
 
 `VectorMSDF` is compiled at init inside the same `Device::push_error_scope` /
 `pop_error_scope` window as the other four. A failure returns
@@ -74,7 +74,7 @@ software fallback (RFC-0001 §8 unchanged).
 - **The thread layout.** The render thread still owns the GPU and never blocks;
   the logic thread still owns mutation; the Tokio pool is still async-I/O-only.
   MSDF field generation runs on a separate CPU pool, and atlas uploads cross
-  `frame.rs` as data — both consistent with RFC-0001 §5.1 (RFC-0009 §2).
+  `frame.rs` as data, both consistent with RFC-0001 §5.1 (RFC-0009 §2).
 - **The hard-GPU requirement.** No software vector rasteriser is added to the
   runtime path; the engine still requires a `wgpu`-compatible GPU (RFC-0001 §8).
 
@@ -87,5 +87,5 @@ software fallback (RFC-0001 §8 unchanged).
 | Four render pipelines | **Five** render pipelines (`+ VectorMSDF`) | RFC-0009 C1 |
 | `encoder/` owns four shader modules | owns **five** (`+ vector_msdf`) | RFC-0009 C2 |
 | Init error scope wraps four pipelines | wraps **five** | RFC-0009 C3 |
-| `frame.rs` is the only cross-subsystem boundary | unchanged | — |
-| Render thread owns the GPU; Tokio is I/O-only | unchanged | — |
+| `frame.rs` is the only cross-subsystem boundary | unchanged | - |
+| Render thread owns the GPU; Tokio is I/O-only | unchanged | - |

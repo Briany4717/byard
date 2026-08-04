@@ -1,18 +1,18 @@
-# RFC-0005: Intrinsic View Catalog — content, properties, and events per built-in
+# RFC-0005: Intrinsic View Catalog, content, properties, and events per built-in
 
-- **Status:** Active — implemented. All 11 Phase-2 intrinsics landed (M10, M16–M19 value widgets, M19 visual lowering); `ScrollView` added post-M25; `VectorIcon` added by RFC-0009 (M50). Validation rules enforced by checker.
+- **Status:** Active, implemented. All 11 Phase-2 intrinsics landed (M10, M16–M19 value widgets, M19 visual lowering); `ScrollView` added post-M25; `VectorIcon` added by RFC-0009 (M50). Validation rules enforced by checker.
 - **Author(s):** Briany4717
 - **Created:** 2026-06-20
 - **Last updated:** 2026-06-26
 - **Depends on:** RFC-0001 (§3.1 render pipelines, §4.1 Taffy layout, §4.2 grid), RFC-0002 (**D4** intrinsic attribute contract, **D5** style precedence, **D9** types/`Str`), RFC-0003 (event catalog, `:` vs `=>` attribute syntax, reflected props).
 - **Implements:** RFC-0002 D4's open item "exact arg names/types per intrinsic" and RFC-0003 §4's pairing of events with reactive props.
-- **Amended by:** RFC-0009 (adds the twelfth intrinsic, `VectorIcon`, and closes the "Image source type" open item — see §4 `VectorIcon` and §"Unresolved").
+- **Amended by:** RFC-0009 (adds the twelfth intrinsic, `VectorIcon`, and closes the "Image source type" open item, see §4 `VectorIcon` and §"Unresolved").
 
 ---
 
 ## Summary
 
-This RFC enumerates the Phase 2 **intrinsic views** — the fixed table in
+This RFC enumerates the Phase 2 **intrinsic views**, the fixed table in
 `interp/intrinsics.rs` (RFC-0002) that lowers reserved element names to
 `BoxInstance` / `TextLine` / texture writes on the `RenderFrame`. For each
 intrinsic it fixes: the positional **content** arity (`(...)`), the typed
@@ -21,7 +21,7 @@ action]`), and the **reflected reactive props** that command it without a
 reference (RFC-0003 §3). It also defines the shared property vocabulary, the
 scalar types those props use, and the exact validation/diagnostic rules from D4.
 
-Intrinsics are **not** user `View`s — a user `View` is pure composition that
+Intrinsics are **not** user `View`s, a user `View` is pure composition that
 bottoms out in these. An element name that is neither an intrinsic nor a
 `ViewDecl` in scope is `CompileError::UnknownView`; an unrecognized attribute is
 `CompileError::UnknownAttribute` with a Levenshtein hint (D4).
@@ -99,7 +99,7 @@ Levenshtein hint over the valid tokens.
 Most intrinsics draw their props from these groups (each intrinsic's spec lists
 which groups it accepts). All map to RFC-0001's pipelines/Taffy.
 
-**Layout (Taffy, §4.1)** — accepted by containers and most elements:
+**Layout (Taffy, §4.1)**, accepted by containers and most elements:
 
 | Prop | Type | Default | Meaning |
 |---|---|---|---|
@@ -112,7 +112,7 @@ which groups it accepts). All map to RFC-0001's pipelines/Taffy.
 | `grow` | `Int` | `0` | flex-grow factor |
 | `basis` | `Int` | auto | flex basis |
 
-**Decoration (`DecoratedBox`/`SolidBox`, §3.1)** — accepted by box-like intrinsics:
+**Decoration (`DecoratedBox`/`SolidBox`, §3.1)**, accepted by box-like intrinsics:
 
 | Prop | Type | Default | Meaning |
 |---|---|---|---|
@@ -122,7 +122,7 @@ which groups it accepts). All map to RFC-0001's pipelines/Taffy.
 | `shadow` | `Shadow` token | none | box shadow from theme |
 | `opacity` | `Float` (0–1) | `1.0` | |
 
-**Text (`TextGlyph`, §3.1)** — `Text` and text-bearing intrinsics:
+**Text (`TextGlyph`, §3.1)**, `Text` and text-bearing intrinsics:
 
 | Prop | Type | Default | Meaning |
 |---|---|---|---|
@@ -134,7 +134,7 @@ which groups it accepts). All map to RFC-0001's pipelines/Taffy.
 | `lines` | `Int` | `0` | max lines (`0` = unbounded); overflow ellipsizes |
 | `wrap` | `Bool` | `true` | |
 
-**Universal** — accepted by every intrinsic:
+**Universal**, accepted by every intrinsic:
 
 | Attr | Kind | Notes |
 |---|---|---|
@@ -146,14 +146,14 @@ which groups it accepts). All map to RFC-0001's pipelines/Taffy.
 
 Pointer events (`tap`, `pointer_down/up/move`, `pointer_enter/exit`, `hover`,
 `long_press`, `double_tap`, `secondary`, `wheel`) may attach to **any** intrinsic
-— attaching one registers the element's rect in the §4.2 grid (with the D4-bis
+- attaching one registers the element's rect in the §4.2 grid (with the D4-bis
 `=>` syntax) and inflates it to the 44×44 hit minimum (RFC-0003 E8).
 
 Keyboard/focus events (`key_down`, `key_up`, `focus`, `blur`) and the `focused:`
 reflected prop require the element to be **focusable**. An element is focusable
 iff it is an inherently-focusable intrinsic (`Button`, `TextField`, `Toggle`,
 `Slider`) **or** it registers any keyboard/focus listener (which makes a plain
-`Box` focusable and inserts it into the Tab ring — RFC-0003 E3). Edit events
+`Box` focusable and inserts it into the Tab ring, RFC-0003 E3). Edit events
 (`change`, `input`, `submit`) and value props (`value:`, `bind:`) are only valid
 on value-carrying intrinsics (`TextField`, `Toggle`, `Slider`); using them
 elsewhere is `CompileError::UnknownAttribute`.
@@ -164,7 +164,7 @@ Each spec lists: positional **content** (arity + type), accepted **prop groups**
 plus intrinsic-specific props, **reflected** two-way props, **events**, and the
 **pipeline** it lowers to.
 
-#### `Box` — generic styleable container
+#### `Box`, generic styleable container
 - **Content:** none (arity 0).
 - **Children:** any.
 - **Props:** Layout + Decoration + `direction: (row|column)` (default `column`).
@@ -172,22 +172,22 @@ plus intrinsic-specific props, **reflected** two-way props, **events**, and the
 - **Events:** all pointer; keyboard/focus if focusable.
 - **Pipeline:** `SolidBox` / `DecoratedBox`. The base of all containers.
 
-#### `Column` — vertical stack
+#### `Column`, vertical stack
 - **Content:** none. **Children:** any.
 - **Props:** Layout + Decoration. (`Box` with `direction: column` preset; `gap`
   applies along the vertical main axis.)
 - **Events:** all pointer; keyboard/focus if focusable.
 
-#### `Row` — horizontal stack
+#### `Row`, horizontal stack
 - Identical to `Column` with `direction: row` preset; `gap` along the horizontal
   main axis.
 
-#### `Spacer` — flexible gap
+#### `Spacer`, flexible gap
 - **Content:** none. **Children:** none.
 - **Props:** `grow: Int` (default `1`), `basis: Int`. No decoration, no events.
 - **Pipeline:** none (layout-only Taffy node).
 
-#### `Text` — text run
+#### `Text`, text run
 - **Content:** **arity 1**, `Str` (the text; interpolation allowed). `Text()` with
   no content or >1 positional arg is `CompileError::ArityMismatch`.
 - **Children:** none.
@@ -196,16 +196,16 @@ plus intrinsic-specific props, **reflected** two-way props, **events**, and the
   focusable only if it registers focus/key events.
 - **Pipeline:** `TextGlyph`.
 
-#### `Button` — pressable
+#### `Button`, pressable
 - **Content:** arity 1, `Str` (label). (A child-block form for icon+label buttons
-  is deferred — see *Unresolved*.)
+  is deferred, see *Unresolved*.)
 - **Props:** Layout + Decoration + Text (for the label).
 - **Reflected:** `focused: Bool`.
 - **Events:** all pointer + keyboard/focus; **focusable by default**. The
   element-tail `=>` shorthand maps to `tap` (RFC-0003).
 - **Pipeline:** `DecoratedBox` (background) + `TextGlyph` (label).
 
-#### `TextField` — single-line text input
+#### `TextField`, single-line text input
 - **Content:** none. **Children:** none.
 - **Props:** Layout + Decoration + Text + `placeholder: Str`.
 - **Reflected (two-way):** `value: Str` (or `bind: query` sugar → `value:` +
@@ -214,7 +214,7 @@ plus intrinsic-specific props, **reflected** two-way props, **events**, and the
   `key_down`, `key_up`, all pointer; **focusable by default**.
 - **Pipeline:** `DecoratedBox` + `TextGlyph` (text + caret).
 
-#### `Toggle` — boolean switch
+#### `Toggle`, boolean switch
 - **Content:** none.
 - **Props:** Layout + Decoration (track/thumb colors via theme).
 - **Reflected (two-way):** `value: Bool` (or `bind:`).
@@ -222,7 +222,7 @@ plus intrinsic-specific props, **reflected** two-way props, **events**, and the
   default.
 - **Pipeline:** `DecoratedBox` ×2 (track + thumb).
 
-#### `Slider` — numeric range
+#### `Slider`, numeric range
 - **Content:** none.
 - **Props:** Layout + Decoration + `min: Float` (default `0.0`), `max: Float`
   (default `1.0`), `step: Float` (default continuous).
@@ -231,14 +231,14 @@ plus intrinsic-specific props, **reflected** two-way props, **events**, and the
   default.
 - **Pipeline:** `DecoratedBox` (track + fill + thumb).
 
-#### `Image` — raster/texture
+#### `Image`, raster/texture
 - **Content:** arity 1, `Str` (source path/handle). `CompileError::ArityMismatch`
   otherwise.
 - **Props:** Layout + `radius`, `opacity`, `fit: Fit` (default `contain`).
 - **Events:** all pointer.
 - **Pipeline:** `TextureSampler`.
 
-#### `VectorIcon` — resolution-independent monochrome icon (RFC-0009)
+#### `VectorIcon`, resolution-independent monochrome icon (RFC-0009)
 - **Content:** arity 1, an **asset handle** (`asset("…")` → `Str`/handle). Any
   other arity is `CompileError::ArityMismatch`.
 - **Children:** none (`CompileError::UnexpectedChildren` otherwise).
@@ -247,7 +247,7 @@ plus intrinsic-specific props, **reflected** two-way props, **events**, and the
   `style`.
 - **Events:** all pointer (same set as `Image`); focusable only if it registers
   focus/key events.
-- **Pipeline:** `VectorMSDF` — samples the MSDF atlas; crisp at any scale.
+- **Pipeline:** `VectorMSDF`, samples the MSDF atlas; crisp at any scale.
 - **Constraint:** monochrome paths only. A source SVG with gradients/filters, or
   exceeding the complexity guardrail, is a hard `CompileError`
   (`SvgUnsupportedFeatures` / `SvgTooComplexForMssdf`, RFC-0009 §2) that directs
@@ -256,12 +256,12 @@ plus intrinsic-specific props, **reflected** two-way props, **events**, and the
   are ordinary user `View`s (RFC-0007) lowering to this primitive; the core stays
   design-agnostic (RFC-0009 §"Agnostic Usage").
 
-#### `ScrollView` — scroll container
+#### `ScrollView`, scroll container
 - **Content:** none. **Children:** any (a single content subtree).
 - **Props:** Layout + Decoration + `axis: (vertical|horizontal|both)` (default
   `vertical`).
 - **Reflected (two-way):** `offset: Vec2` (read current scroll; set to scroll
-  programmatically — RFC-0003 §3, no ref).
+  programmatically, RFC-0003 §3, no ref).
 - **Events:** `scroll(e: ScrollEvent)`, `wheel`, all pointer.
 - **Pipeline:** clips children via scissor (§3.3); content drawn at `-offset`.
 
@@ -281,12 +281,12 @@ diagnostic:
    content type → `CompileError::TypeMismatch { expected, found, span }`.
 4. **Attribute name.** An attr not in the intrinsic's accepted set →
    `CompileError::UnknownAttribute { name, span, suggestion }` where `suggestion`
-   is the nearest accepted attr by Levenshtein (≤ 2 and < half the typo length —
+   is the nearest accepted attr by Levenshtein (≤ 2 and < half the typo length, 
    D4). Includes using a value prop (`value:`) on a non-value intrinsic, or a
    keyboard event on a non-focusable one.
 5. **Attribute kind.** A property written with `=>` or an event written with `:`
    → `CompileError::WrongAttributeSeparator { name, expected_kind, span }` ("`gap`
-   is a property — use `gap: …`, not `gap => …`").
+   is a property, use `gap: …`, not `gap => …`").
 6. **Attribute type.** Value type ≠ the prop's declared type →
    `CompileError::TypeMismatch`. Enum-token props validate the token against the
    fixed set (Levenshtein hint over valid tokens).
@@ -304,7 +304,7 @@ No failure is ever silent (the MAUI lesson, D4). Every diagnostic carries a
 Props left unset fall to the intrinsic's **default typed base style** (D5 layer 1),
 resolved from the active theme injected via the environment (RFC-0001 `inject`).
 This is why `Text("hi")` renders with sensible color/typography and `Button("x")`
-gets a default surface — the catalog defaults above are the *fallbacks* when the
+gets a default surface, the catalog defaults above are the *fallbacks* when the
 theme does not override. Theme tokens (`titleLarge`, shadow tokens, on-surface
 color) are resolved at mount; making them reactive is deferred with dynamic
 styles (RFC-0002 D8 → Phase 3).
@@ -315,7 +315,7 @@ styles (RFC-0002 D8 → Phase 3).
 
 - **Fixed surface.** A closed intrinsic table means new built-ins require a code
   change, not a library. Intentional for Phase 2 (the set is small and the
-  renderer pipelines are fixed — five since RFC-0009 added `VectorMSDF`), but it
+  renderer pipelines are fixed, five since RFC-0009 added `VectorMSDF`), but it
   is a real extensibility limit until a user-defined-primitive story exists. Each
   new pipeline-backed intrinsic (like `VectorIcon`) is an explicit, RFC-gated
   addition, not an open extension point.
@@ -367,11 +367,11 @@ presets keeps the intrinsic table small and the lowering uniform.
     has no `bg` (a background behind text = wrap in a `Box`), to keep `Text`
     glyph-only.
 - **During implementation:**
-  - [ ] **Default `gap`/`p` from theme** vs. hard `0` — decide whether spacing
+  - [ ] **Default `gap`/`p` from theme** vs. hard `0`, decide whether spacing
     defaults come from the theme or are always explicit.
   - [ ] **`ScrollView` nested-scroll** and how `offset` reflects during an active
     drag (ties into RFC-0003 gesture deferral).
-  - [x] **`Image` source type** — *resolved by RFC-0009:* the positional `Str`
+  - [x] **`Image` source type**, *resolved by RFC-0009:* the positional `Str`
     is an **asset handle** produced by `asset("…")`, resolved against the
     package/asset table (RFC-0008). The same answer applies to `VectorIcon`. A
     controller-provided texture id remains a separate, later affordance and does
@@ -383,7 +383,7 @@ presets keeps the intrinsic table small and the lowering uniform.
 
 - **More intrinsics:** `Grid` (CSS-grid via Taffy), `Stack`/`ZStack` (explicit
   Z-layering), `Divider`, `Checkbox`, `RadioGroup`, `Menu`, `Dialog`
-  (paired with `when`). (`Icon` has shipped as `VectorIcon` — RFC-0009.)
+  (paired with `when`). (`Icon` has shipped as `VectorIcon`, RFC-0009.)
 - **Composite `Button`** and other child-bearing interactive intrinsics.
 - **User-defined primitives** that register new pipeline lowerings, once the
   closed-table constraint becomes limiting.

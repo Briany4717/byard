@@ -1,4 +1,4 @@
-//! `byard check [file]` — parse and validate without opening a window
+//! `byard check [file]`, parse and validate without opening a window
 //! (RFC-0006 §5, decision C7; RFC-0008: checks the *whole module graph*,
 //! project siblings and packages included).
 
@@ -57,7 +57,7 @@ pub fn run(file: Option<&Path>, short: bool) -> Result<(), String> {
 ///
 /// Resolve/parse errors short-circuit; otherwise every `View` is lowered and
 /// rendered into a throwaway [`RenderFrame`] so attribute-contract and
-/// `Len`-form validation checks — which run during lowering and render — are
+/// `Len`-form validation checks, which run during lowering and render, are
 /// exercised across the whole module graph.
 #[must_use]
 pub fn check_program(program: &ResolvedProgram) -> Vec<CompileError> {
@@ -66,7 +66,7 @@ pub fn check_program(program: &ResolvedProgram) -> Vec<CompileError> {
 
 /// Like [`check_program`], but validates against a specific design-token theme
 /// (RFC-0022) so `inject Theme as t` resolves and `t.token` references are
-/// checked against the project's *actual* declared tokens — a custom manifest
+/// checked against the project's *actual* declared tokens, a custom manifest
 /// token must not be flagged `UnknownThemeToken`.
 #[must_use]
 pub fn check_program_with_theme(
@@ -93,7 +93,7 @@ pub fn check_program_with_theme(
     interp.errors().to_vec()
 }
 
-/// Headless parse + semantic validation of one `.byd` source — the
+/// Headless parse + semantic validation of one `.byd` source, the
 /// single-file path (bare `byard check file.byd`, unit tests). Any `use` in a
 /// bare file is an `UnknownPackage` error: dependencies need a manifest.
 // Exercised by the unit tests below; the `run` entry point always goes through
@@ -121,8 +121,8 @@ pub fn check_source(src: &str) -> Vec<CompileError> {
     check_program(&program)
 }
 
-/// Prints every diagnostic: the machine-readable first line, then — unless
-/// `short` — a caret-anchored block beneath it (RFC-0006 **C3**).
+/// Prints every diagnostic: the machine-readable first line, then, unless
+/// `short`, a caret-anchored block beneath it (RFC-0006 **C3**).
 ///
 /// # The first line is not negotiable
 ///
@@ -213,7 +213,7 @@ mod tests {
         assert_eq!(caret.line, 2);
         assert!(caret.text.contains("colour"), "{:?}", caret.text);
         // The caret must land under `colour`, and the column the first line
-        // reports must agree with it — a caret and a `line:col` that disagree
+        // reports must agree with it, a caret and a `line:col` that disagree
         // are worse than either alone.
         let at: String = caret.text.chars().skip(caret.caret_start).take(6).collect();
         assert_eq!(at, "colour");
@@ -224,7 +224,7 @@ mod tests {
     #[test]
     fn a_caret_column_counts_characters_not_bytes() {
         // A multi-byte character before the span would push the caret right by
-        // its byte length if this counted bytes — the classic way a caret block
+        // its byte length if this counted bytes, the classic way a caret block
         // ends up pointing at nothing in particular.
         let src = "View Main() {\n    Text(\"héllo wörld\") #[colour: 1]\n}\n";
         let program = resolve_one(src);

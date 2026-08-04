@@ -15,7 +15,7 @@
 //! # Z-order contract
 //!
 //! When two rectangles overlap and a point falls inside both, the entry
-//! inserted **later** wins — this matches the convention that later
+//! inserted **later** wins, this matches the convention that later
 //! draw calls render on top.
 //!
 //! **The caller is responsible** for inserting entries in the same order
@@ -26,7 +26,7 @@
 //!
 //! If the engine ever supports stacking contexts (floating modals,
 //! tooltips, popovers), the orchestrator must insert those entries
-//! after the rest of the tree, so they keep priority on hit-testing —
+//! after the rest of the tree, so they keep priority on hit-testing,
 //! mirroring exactly what the renderer will do.
 //!
 //! # Large rectangles
@@ -103,7 +103,7 @@ impl SpatialGrid {
 
     /// Inserts a rectangle into every cell its AABB touches.
     ///
-    /// Insertion order matters for overlapping rectangles — the later
+    /// Insertion order matters for overlapping rectangles, the later
     /// entry wins point queries. See the module-level Z-order contract.
     pub fn insert(&mut self, rect: Rect, target: TargetId) {
         let entry = GridEntry { rect, target };
@@ -274,7 +274,7 @@ mod tests {
 
     #[test]
     fn rect_exactly_one_cell_wide_spans_one_cell() {
-        // Rect [0, 128) × [0, 128) — exactly one cell. The exclusive
+        // Rect [0, 128) × [0, 128), exactly one cell. The exclusive
         // upper bound (128.0) must NOT spill into cell (1, _).
         let mut grid = SpatialGrid::new();
         grid.insert(Rect::new(0.0, 0.0, CELL_SIZE, CELL_SIZE), make_target(1));
@@ -381,7 +381,7 @@ mod tests {
         let new = make_target(2);
         grid.insert(Rect::new(500.0, 500.0, 100.0, 100.0), new);
 
-        // Old position must return None — no stale ghost.
+        // Old position must return None, no stale ghost.
         assert_eq!(
             grid.query(50.0, 50.0),
             None,

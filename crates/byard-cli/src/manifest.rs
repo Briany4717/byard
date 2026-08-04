@@ -1,9 +1,9 @@
 //! `byard.toml` discovery and parsing (RFC-0006 §2, decision C1/C2;
-//! RFC-0008 Pillar C — the `[dependencies]` table).
+//! RFC-0008 Pillar C, the `[dependencies]` table).
 //!
 //! Dependency entries are parsed **strictly**: a malformed entry is an error,
 //! never a warning-and-drop (RFC-0008 explicitly reverses the C2
-//! warn-on-unknown policy for this table — silently ignoring a dependency is
+//! warn-on-unknown policy for this table, silently ignoring a dependency is
 //! a reproducibility hazard).
 
 use byard_compiler::interp::theme::{FontWeight, Theme, TypoToken};
@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 pub enum DepSource {
     /// A local package directory, relative to the declaring manifest.
     Path(PathBuf),
-    /// A git repository pinned to an exact ref (`rev` or `tag` — D-H requires
+    /// A git repository pinned to an exact ref (`rev` or `tag`, D-H requires
     /// a pin; floating branches are not reproducible).
     Git {
         /// Clone URL.
@@ -53,29 +53,29 @@ pub struct Dependency {
     pub source: DepSource,
 }
 
-/// The `[dev]` table (RFC-0030 §V2) — dev-runner surface only.
+/// The `[dev]` table (RFC-0030 §V2), dev-runner surface only.
 ///
 /// Every field has a default and an absent `[dev]` table is not an error, so a
 /// manifest written before this existed keeps working unchanged. Nothing here
 /// reaches a shipped application.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DevConfig {
-    /// `frame_budget = "8ms"` — what the profile block's bars and the
+    /// `frame_budget = "8ms"`, what the profile block's bars and the
     /// statusline's sparkline are drawn against.
     ///
     /// `None` means "the display's refresh interval", which is the default and
     /// the right one: the budget answers *"will this app drop frames on this
     /// machine"*, and on a 120 Hz panel that threshold is 8.3 ms. Bars drawn
     /// against a fixed 16.7 ms there would report a comfortable frame for one
-    /// that visibly stutters — lying on exactly the hardware where the frame
+    /// that visibly stutters, lying on exactly the hardware where the frame
     /// budget matters most (§Q3).
     ///
     /// Cross-machine comparability is a different job, served by `--trace` and
     /// by pinning this value in CI. Both are explicit, which is the point.
     pub frame_budget_ns: Option<u64>,
-    /// `hud = true` — start with the in-window HUD visible.
+    /// `hud = true`, start with the in-window HUD visible.
     pub hud: bool,
-    /// `statusline = false` — suppress the anchored line even on a TTY, for a
+    /// `statusline = false`, suppress the anchored line even on a TTY, for a
     /// terminal that renders it badly.
     pub statusline: bool,
 }
@@ -102,7 +102,7 @@ pub struct Manifest {
     /// project: only the entry file is compiled, sibling `.byd`s are ignored.
     /// A real project (a `byard.toml`) treats every sibling as one namespace.
     pub single_file: bool,
-    /// `[assets.vectors] include` — the RFC-0009 §4 escape hatch: handles the
+    /// `[assets.vectors] include`, the RFC-0009 §4 escape hatch: handles the
     /// AOT packer must bake even though no `VectorIcon("literal")` names them
     /// (e.g. a `VectorIcon(someVar)` resolved at runtime). Empty by default.
     pub vector_includes: Vec<String>,
@@ -124,7 +124,7 @@ impl Manifest {
                 .canonicalize()
                 .map_err(|e| format!("{}: {e}", p.display()))?;
             // Pointing at a project (a directory, or its `byard.toml`) reads the
-            // manifest — including `[dependencies]` — rather than treating the
+            // manifest, including `[dependencies]`, rather than treating the
             // path as a lone entry file. Only a `.byd` path is a bare entry.
             if p.is_dir() {
                 let manifest = p.join("byard.toml");
@@ -183,7 +183,7 @@ impl Manifest {
             .to_string())
     }
 
-    /// A manifest for a lone `.byd` entry file with no `[dependencies]` — the
+    /// A manifest for a lone `.byd` entry file with no `[dependencies]`, the
     /// bare single-file path (`byard check foo.byd`). `entry` is assumed to
     /// already be canonicalized.
     fn bare_entry(entry: PathBuf) -> Self {
@@ -213,7 +213,7 @@ impl Manifest {
 
         let project = table.get("project");
 
-        // Warn on unknown top-level keys (C2: forward-compatible) — except
+        // Warn on unknown top-level keys (C2: forward-compatible), except
         // `[dependencies]`, which is parsed strictly below, `[package]`,
         // reserved for package manifests, and `[assets]` (RFC-0009 §4).
         for key in table.keys() {
@@ -225,7 +225,7 @@ impl Manifest {
             }
         }
 
-        // `[assets.vectors] include = ["a.svg", ...]` — the AOT escape hatch.
+        // `[assets.vectors] include = ["a.svg", ...]`, the AOT escape hatch.
         let vector_includes = table
             .get("assets")
             .and_then(|a| a.get("vectors"))
@@ -374,7 +374,7 @@ fn parse_theme(table: &toml::Table) -> Result<Theme, String> {
         // is deferred (RFC-0022 unresolved question); anything else is accepted
         // and simply layers onto `byard-base`, the only built-in base today.
 
-        // [theme.color.<scheme>] — a table of `token = "#RRGGBB"`.
+        // [theme.color.<scheme>], a table of `token = "#RRGGBB"`.
         if let Some(colors) = theme_tbl.get("color").and_then(toml::Value::as_table) {
             for (scheme, tokens) in colors {
                 let tokens = tokens.as_table().ok_or_else(|| {
@@ -392,14 +392,14 @@ fn parse_theme(table: &toml::Table) -> Result<Theme, String> {
             }
         }
 
-        // [theme.typography] — `token = { size, family?, weight?, tracking?, line_height? }`.
+        // [theme.typography], `token = { size, family?, weight?, tracking?, line_height? }`.
         if let Some(typo) = theme_tbl.get("typography").and_then(toml::Value::as_table) {
             for (token, value) in typo {
                 theme.set_typo(token, parse_typo_token(token, value)?);
             }
         }
 
-        // [theme.shape] — `token = <radius>`.
+        // [theme.shape], `token = <radius>`.
         if let Some(shapes) = theme_tbl.get("shape").and_then(toml::Value::as_table) {
             for (token, value) in shapes {
                 let radius = as_number(value).ok_or_else(|| {
@@ -411,7 +411,7 @@ fn parse_theme(table: &toml::Table) -> Result<Theme, String> {
         }
     }
 
-    // [assets.fonts] — `family = "path/to/font.ttf"` (RFC-0022 §3). The bytes are
+    // [assets.fonts], `family = "path/to/font.ttf"` (RFC-0022 §3). The bytes are
     // not loaded yet (deferred); declaring a family here makes it resolvable by
     // `TypoToken.family` and suppresses the `FontNotFound` fallback warning.
     if let Some(fonts) = table
@@ -509,7 +509,7 @@ fn parse_hex_color(s: &str) -> Option<i64> {
 }
 
 /// Parses a `[dependencies]` table (RFC-0008 Pillar C). Every malformed entry
-/// is an **error** — this table is never warn-and-ignore.
+/// is an **error**, this table is never warn-and-ignore.
 pub fn parse_dependencies(deps: &toml::Value) -> Result<Vec<Dependency>, String> {
     let table = deps.as_table().ok_or("`[dependencies]` must be a table")?;
 

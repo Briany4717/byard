@@ -1,11 +1,11 @@
-// RFC-0020 — Canvas & path/shape primitives.
+// RFC-0020, Canvas & path/shape primitives.
 //
 // Run it (from the repo root):
 //   cd crates/byard-cli/examples/canvas_shapes
 //   cargo run -p byard-cli -- dev
 //
 // Drag the slider: the progress ring's sweep, its centre label, and the
-// gauge needle are all *reactive shape parameters* — no re-tessellation,
+// gauge needle are all *reactive shape parameters*, no re-tessellation,
 // no atlas churn, just new per-instance data on the analytic-SDF pipeline.
 //
 // What to verify visually:
@@ -13,9 +13,9 @@
 //      slider moves; the lavender track ring stays complete beneath it.
 //   2. The centre percentage label tracks the slider value.
 //   3. The gauge (right) sweeps its needle across a dashed 270° dial.
-//   4. The bezier wave and the dashed circle render crisp at any DPI —
+//   4. The bezier wave and the dashed circle render crisp at any DPI, 
 //      strokes stay anti-aliased, caps are round where declared.
-//   5. The red heart is a `path(d: …)` fill — Tier 2, rasterized through
+//   5. The red heart is a `path(d: …)` fill, Tier 2, rasterized through
 //      the MSDF pipeline at icon quality.
 View Main() {
     var percent: Float = 65.0
@@ -26,7 +26,7 @@ View Main() {
                    48.0, 83.0, 96.0, 61.0, 74.0, 52.0]
 
     Column #[bg: 0x14141C, p: 32, gap: 24, width: 560] {
-        Text("Canvas — path & shape primitives") #[color: 0xE6E1E5, size: 20]
+        Text("Canvas, path & shape primitives") #[color: 0xE6E1E5, size: 20]
 
         Row #[gap: 32, align: center] {
             // ── Determinate progress ring ─────────────────────────────────
@@ -85,7 +85,7 @@ View Main() {
         //
         // The shape *count* comes from the data, not from the source. Before
         // this a canvas could animate every coordinate, colour and sweep from
-        // live values and still could not draw `n` bars for `n` data points —
+        // live values and still could not draw `n` bars for `n` data points, 
         // which excludes charts, sparklines, histograms and legends, i.e. most
         // of what a drawing surface is for. The workaround was to write twelve
         // `rect(…)` lines against twelve separately named fields, and a
@@ -94,7 +94,7 @@ View Main() {
         // Drag the slider: every bar's height is derived from it, so the whole
         // chart is reactive with no reconciliation and no per-frame node. The
         // `when` picks the palette out of the same expression.
-        Text("A chart, from data — `for` and `when` inside a Canvas")
+        Text("A chart, from data, `for` and `when` inside a Canvas")
             #[color: 0xE6E1E5, size: 15]
         Canvas #[width: 496, height: 96, bg: 0x1C1B22] {
             for i, s in samples {
@@ -110,7 +110,7 @@ View Main() {
                 line(x1: 8, y1: 88, x2: 488, y2: 88, stroke: 0x49454F)
             }
         }
-        Text(percent > 80 ? "over the line — the `else` branch swapped out"
+        Text(percent > 80 ? "over the line, the `else` branch swapped out"
                           : "drag past 80 to swap the `when` branch")
             #[color: 0x938F99, size: 12]
 

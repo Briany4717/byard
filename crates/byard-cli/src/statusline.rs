@@ -16,14 +16,14 @@
 //! must not share a scroll region.
 //!
 //! The fix is not a TUI. A full-screen TUI takes the alternate screen buffer,
-//! which destroys scrollback — and scrollback is where parse errors live. This
+//! which destroys scrollback, and scrollback is where parse errors live. This
 //! is `cargo`'s model for the same reason: an ordinary scrolling log, plus one
 //! anchored line.
 //!
 //! # `work` / `idle`, not `cpu | gpu | interp`
 //!
 //! RFC-0030's original field set predates the `present.*` scopes and cannot
-//! distinguish an engine that finished early from one that overran — which is
+//! distinguish an engine that finished early from one that overran, which is
 //! the entire reading of a frame. `idle` is `present.acquire`, the wall time
 //! the display made the engine wait; `work` is everything else. Once a scene is
 //! vsync-bound every further engine win shows up as *more idle* rather than a
@@ -45,7 +45,7 @@
 //! and never enters the alternate screen.
 //!
 //! That is a deliberate design constraint rather than an omission. A `Drop`
-//! guard does not run on `SIGINT` — the process is terminated, not unwound — so
+//! guard does not run on `SIGINT`, the process is terminated, not unwound, so
 //! any terminal state this module could set is state it might fail to restore.
 //! By only ever writing state that is already scoped to the line being drawn,
 //! the terminal is left usable on *every* exit path, including `kill -9`, and
@@ -58,7 +58,7 @@
 //! therefore yields a readable, control-character-free log, and `byard dev
 //! 1>/dev/null` yields the live display alone. `byard check` and `byard build`
 //! keep the opposite, CI-shaped contract (diagnostics on stderr, non-zero exit)
-//! — two commands, two contracts, each matching what its consumer actually is.
+//!, two commands, two contracts, each matching what its consumer actually is.
 
 use std::io::{IsTerminal, Write};
 use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
@@ -71,7 +71,7 @@ use crate::style::{Glyphs, Palette, display_width, glyphs, palette};
 
 /// Frame-time history, in samples. Fixed at 24 (§Q5): it is the width that fits
 /// alongside every other field inside 80 columns, and at 60 fps it is 400 ms of
-/// history — long enough that a hitch is still on screen when the developer
+/// history, long enough that a hitch is still on screen when the developer
 /// looks up, short enough that the display tracks the present. A configurable
 /// sparkline width is a knob with no correct setting and therefore no reason to
 /// turn.
@@ -132,7 +132,7 @@ struct Painter {
 /// leaving the cursor at column 0 of where the block started.
 ///
 /// Walks *up*: clear this line, move up one, clear, repeat. This is why the
-/// profile block's line count has to be constant — a block that grew between
+/// profile block's line count has to be constant, a block that grew between
 /// repaints would leave its extra lines behind, and one that shrank would eat a
 /// line of scrollback on every repaint, ten times a second.
 fn erase_block(out: &mut impl Write, lines: usize) {
@@ -193,8 +193,8 @@ impl Painter {
     /// Replaces what is on screen, erasing the previous block first.
     ///
     /// The erase is the whole point and was missing in the first cut: without
-    /// it a one-line statusline still worked — `\r\x1b[2K` clears the line the
-    /// cursor is on — while the seventeen-line profile block appended sixteen
+    /// it a one-line statusline still worked, `\r\x1b[2K` clears the line the
+    /// cursor is on, while the seventeen-line profile block appended sixteen
     /// fresh lines on every repaint, scrolling ten times a second and eating
     /// exactly the scrollback this design exists to protect.
     fn replace(&mut self, block: &str) {
@@ -223,7 +223,7 @@ pub fn log(message: &str) {
     p.draw();
 }
 
-/// As [`log`], but for the lines whose contract is stderr — the
+/// As [`log`], but for the lines whose contract is stderr, the
 /// rustc-compatible diagnostic first line (RFC-0006 **C7**).
 pub fn log_stderr(message: &str) {
     let p = painter();
@@ -240,13 +240,13 @@ pub fn log_stderr(message: &str) {
 /// # Why this exists, and why it is not optional
 ///
 /// The painter erases what it drew by walking the cursor **up** over as many
-/// lines as its last block occupied — seventeen, for the `--profile` block. That
+/// lines as its last block occupied, seventeen, for the `--profile` block. That
 /// arithmetic is only valid while the painter is the last thing to have written
 /// to the terminal.
 ///
 /// A panic breaks that assumption and then invokes the exact code that depends
 /// on it: the message prints, `App` unwinds, `StatusLine::drop` runs, and the
-/// guard walks up seventeen lines erasing — **over the panic message**. A dev
+/// guard walks up seventeen lines erasing, **over the panic message**. A dev
 /// runner that swallows its own crash is worse than one that never had a
 /// statusline, and it is precisely the "the readout buries the error" failure
 /// this whole module exists to fix, reintroduced one layer down.
@@ -267,8 +267,8 @@ fn install_panic_hook() {
 
 /// Erases the statusline for the rest of the process.
 ///
-/// Called from [`StatusLine`]'s `Drop`. Not the thing correctness depends on —
-/// see the module docs on INV-25 — but it is what makes a clean exit leave no
+/// Called from [`StatusLine`]'s `Drop`. Not the thing correctness depends on,
+/// see the module docs on INV-25, but it is what makes a clean exit leave no
 /// stale line behind.
 fn retire() {
     let mut p = painter();
@@ -282,7 +282,7 @@ fn retire() {
 /// One statusline's worth of numbers.
 ///
 /// Split out from [`StatusLine`] so the composition is a pure function of its
-/// inputs and can be asserted exhaustively — including at field values no real
+/// inputs and can be asserted exhaustively, including at field values no real
 /// session would reach, which is where a width bug actually lives.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Fields {
@@ -290,9 +290,9 @@ pub struct Fields {
     pub animating: bool,
     /// Redraws in the last measured interval.
     pub fps: u32,
-    /// Frame time minus [`IDLE_SCOPE`] — what the engine actually did.
+    /// Frame time minus [`IDLE_SCOPE`], what the engine actually did.
     pub work_ns: u64,
-    /// [`IDLE_SCOPE`] — what the display made it wait.
+    /// [`IDLE_SCOPE`], what the display made it wait.
     pub idle_ns: u64,
     /// Box-class draw instances in the last published frame.
     pub instances: usize,
@@ -315,7 +315,7 @@ pub struct Fields {
 /// box count is a slow-moving number a developer can ask for another way; the
 /// reload count last among the droppable, because it is the cheapest possible
 /// confirmation that the watcher is alive at all. `work`/`idle`, fps and the
-/// animating dot are never dropped — a line that cannot show them is not worth
+/// animating dot are never dropped, a line that cannot show them is not worth
 /// drawing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Detail {
@@ -346,7 +346,7 @@ impl Detail {
 /// Composes the line, dropping fields in the fixed order until it fits.
 ///
 /// Never returns a string wider than `width`: an over-wide statusline wraps,
-/// and a wrapped statusline breaks the in-place redraw permanently — every
+/// and a wrapped statusline breaks the in-place redraw permanently, every
 /// subsequent repaint erases one line of a two-line display and the terminal
 /// fills with debris.
 fn compose(
@@ -366,7 +366,7 @@ fn compose(
         }
     }
     // Even `Minimal` did not fit: truncate on a character boundary rather than
-    // emit something that wraps. Colour is dropped entirely here — a truncated
+    // emit something that wraps. Colour is dropped entirely here, a truncated
     // escape sequence is the one way this module could corrupt a terminal.
     out.clear();
     write_line(
@@ -395,7 +395,7 @@ fn write_line(
 ) {
     use std::fmt::Write as _;
 
-    // ● / ○ — a direct read of the flag that decides whether the event loop
+    // ● / ○, a direct read of the flag that decides whether the event loop
     // sleeps. One relaxed load, and it says something no number beside it does.
     let (dot, dot_colour) = if f.animating {
         (g.dot_filled, p.ok)
@@ -482,7 +482,7 @@ fn tail_width(f: &Fields, detail: Detail, g: &Glyphs) -> usize {
 /// therefore always says nothing: it animates constantly, it looks alarming on
 /// a perfectly healthy scene, and a hitch is invisible because the hitch *is*
 /// the scale. Against a fixed budget, a fast frame is visibly empty space and a
-/// dropped frame is a spike — which is the entire reason this field earns its
+/// dropped frame is a spike, which is the entire reason this field earns its
 /// place beside three scalars.
 fn write_sparkline(out: &mut String, ring: &[u16], budget_ns: u64, p: &Palette, g: &Glyphs) {
     let ceiling_us = (budget_ns / 1_000).max(1);
@@ -514,7 +514,7 @@ fn truncate_to_width(s: &mut String, width: usize) {
     s.truncate(end);
 }
 
-/// One decimal place, always milliseconds — the same unit throughout, so the
+/// One decimal place, always milliseconds, the same unit throughout, so the
 /// two halves of `work · idle` stay comparable at a glance.
 #[allow(clippy::cast_precision_loss)] // frame times never approach f64's limit
 fn fmt_ms(ns: u64) -> String {
@@ -557,7 +557,7 @@ pub struct FrameInputs<'a> {
     /// Whether the device can time GPU passes (RFC-0013 **P5**).
     pub gpu_available: bool,
     /// How many text lines the encoder re-shaped for this frame
-    /// (`Engine::last_text_reshapes`) — read on the `encode.glyphs` row of the
+    /// (`Engine::last_text_reshapes`), read on the `encode.glyphs` row of the
     /// expanded block rather than inferred from its duration.
     pub text_reshapes: usize,
 }
@@ -575,7 +575,7 @@ pub struct StatusLine {
     budget_ns: u64,
     width: usize,
 
-    /// The engine's **work** per frame in microseconds, oldest first — not the
+    /// The engine's **work** per frame in microseconds, oldest first, not the
     /// frame period.
     ///
     /// Plotting the period looked obviously right and is useless: under vsync
@@ -604,7 +604,7 @@ pub struct StatusLine {
     /// The most recent frame's samples and context, kept so a repaint can
     /// recompose the expanded block without waiting for the next redraw.
     last: LastFrame,
-    /// Reused between repaints — cleared, never reallocated.
+    /// Reused between repaints, cleared, never reallocated.
     line: String,
 }
 
@@ -845,7 +845,7 @@ impl Drop for StatusLine {
 
 /// The composed width: `COLUMNS` when the shell exports it, 80 otherwise (§Q7).
 ///
-/// A stale or absent `COLUMNS` is never a correctness problem — the line only
+/// A stale or absent `COLUMNS` is never a correctness problem, the line only
 /// has to not *exceed* the width, and 80 is the floor every terminal in
 /// practical use clears.
 fn resolve_width() -> usize {
@@ -870,7 +870,7 @@ pub fn idle_ns(logic: &SampleBlock, render: &SampleBlock) -> u64 {
 /// totals, not their sum.
 ///
 /// The logic and render threads run concurrently. Adding their totals reports
-/// 20 ms of work inside a 16 ms frame — the same double count RFC-0030 §I2
+/// 20 ms of work inside a 16 ms frame, the same double count RFC-0030 §I2
 /// exists to prevent between nested scopes, one level up between threads. And
 /// taking only the render thread's would hide the interpreter entirely, which
 /// is the number a developer is usually looking for.
@@ -884,7 +884,7 @@ pub fn idle_ns(logic: &SampleBlock, render: &SampleBlock) -> u64 {
 /// headline number a developer optimises their app against, so it must not move
 /// when they open the HUD: `work` climbing by two milliseconds the moment you
 /// ask to see it is the observer effect reported as an app regression. The dev
-/// runner's own cost is a separate, displayed figure — never a silent addend
+/// runner's own cost is a separate, displayed figure, never a silent addend
 /// here.
 #[must_use]
 pub fn work_ns(logic: &SampleBlock, render: &SampleBlock, idle_ns: u64) -> u64 {
@@ -939,13 +939,13 @@ mod tests {
     #[test]
     fn a_retired_statusline_can_never_walk_the_cursor_over_someone_elses_output() {
         // The painter erases by walking the cursor *up* over as many lines as
-        // its last block occupied — seventeen, for the profile block. That
+        // its last block occupied, seventeen, for the profile block. That
         // arithmetic is valid only while the painter was the last thing to
         // write to the terminal.
         //
         // A panic breaks that and then runs the code that depends on it: the
         // message prints, `App` unwinds, `StatusLine::drop` fires, and the
-        // guard walks up seventeen lines erasing — over the panic. A dev runner
+        // guard walks up seventeen lines erasing, over the panic. A dev runner
         // that swallows its own crash is the "the readout buries the error"
         // failure this module exists to fix, one layer down.
         //
@@ -977,7 +977,7 @@ three",
     fn installing_the_panic_hook_twice_does_not_stack_it() {
         // `StatusLine::new` may run more than once in a process (a test binary,
         // a future multi-window host). A hook installed per call would chain to
-        // itself and retire the statusline once per layer — harmless today,
+        // itself and retire the statusline once per layer, harmless today,
         // and the kind of thing that stops being harmless silently.
         install_panic_hook();
         install_panic_hook();
@@ -990,7 +990,7 @@ three",
     fn a_multi_line_block_redraws_in_place_instead_of_scrolling() {
         // Found by running it against a real pty: a one-line statusline worked
         // because `\r\x1b[2K` clears the line the cursor is on, so the missing
-        // erase was invisible — while the seventeen-line profile block appended
+        // erase was invisible, while the seventeen-line profile block appended
         // sixteen fresh lines on every repaint, ten times a second, eating
         // exactly the scrollback this design exists to protect.
         let mut out = Vec::new();
@@ -1012,7 +1012,7 @@ three",
         erase_block(&mut out, 1);
         assert_eq!(out, b"\r\x1b[2K");
 
-        // Nothing drawn, nothing erased — the case where an eager cursor-up
+        // Nothing drawn, nothing erased, the case where an eager cursor-up
         // would climb into the log above.
         let mut out = Vec::new();
         erase_block(&mut out, 0);
@@ -1055,7 +1055,7 @@ three",
     #[test]
     fn a_non_tty_emits_no_control_characters_at_all() {
         // The `byard dev 2> log` case. A redirected stream full of `\x1b[2K`
-        // is debris, not a display — and the palette is only half of it, since
+        // is debris, not a display, and the palette is only half of it, since
         // the erase sequence is written by the painter, not by the palette.
         let out = render(&fields(), &ring(8_000), 80, &Palette::plain());
         assert!(
@@ -1069,12 +1069,12 @@ three",
         // A property test over the values a width bug actually lives at: a
         // six-digit box count, a four-digit fps, a five-digit reload count, a
         // frame time past the `u16` ceiling. An over-wide statusline wraps, and
-        // a wrapped statusline breaks the in-place redraw *permanently* —
+        // a wrapped statusline breaks the in-place redraw *permanently*,
         // every later repaint erases one line of a two-line display.
         for width in [24usize, 40, 60, 72, 79, 80, 100, 200] {
             // Six digits, not four. An occluded window on macOS stops
             // vsync-blocking, and a real session left running under `script`
-            // reported `26847fps` — an honest reading of a free-running loop,
+            // reported `26847fps`, an honest reading of a free-running loop,
             // and two digits wider than this test used to admit.
             for fps in [0u32, 60, 9999, 999_999] {
                 for instances in [0usize, 382, 999_999] {
@@ -1112,7 +1112,7 @@ three",
     fn a_free_running_loop_reports_its_real_rate_without_breaking_the_line() {
         // Found by running it: an occluded window stops vsync-blocking, the
         // loop free-runs, and the honest reading is five or six digits. The
-        // field is padded to three, so the *number* widens the line — which is
+        // field is padded to three, so the *number* widens the line, which is
         // correct (a truncated fps would be a lie) as long as the line still
         // fits, and the drop order is what makes that true.
         let f = Fields {
@@ -1146,7 +1146,7 @@ three",
         let mut seen_without = Vec::new();
         for width in [100usize, 80, 66, 52, 40, 30] {
             let out = render(&f, &ring(8_000), width, &Palette::plain());
-            // work/idle and fps survive every width — a line that cannot show
+            // work/idle and fps survive every width, a line that cannot show
             // them is not worth drawing.
             assert!(out.contains("fps"), "fps dropped at {width}: {out:?}");
             assert!(out.contains("work"), "work dropped at {width}: {out:?}");
@@ -1189,7 +1189,7 @@ three",
     fn the_sparkline_plots_work_not_the_vsync_locked_frame_period() {
         // Found by running it. Under vsync the frame *period* is the budget by
         // construction, so plotting it drew a permanently full, permanently red
-        // sparkline on a perfectly healthy 60 fps app — the "always full and
+        // sparkline on a perfectly healthy 60 fps app, the "always full and
         // therefore says nothing" failure, arrived at from the other direction.
         use byard_core::telemetry::{Sample, ScopeKind, scope_id_tagged};
         let acquire = scope_id_tagged(IDLE_SCOPE, ScopeKind::Native);
@@ -1309,8 +1309,8 @@ three",
     #[test]
     fn a_tick_that_rendered_nothing_does_not_count_as_a_rebuild() {
         // `populate_calls == 0` means nothing rendered. Counting it as a
-        // rebuild would make a parked, idle app — the healthiest state there
-        // is — read as the sickest.
+        // rebuild would make a parked, idle app, the healthiest state there
+        // is, read as the sickest.
         let mut s = StatusLine::new(false, BUDGET);
         s.enabled = true;
         let blank = SampleBlock::default();
@@ -1369,7 +1369,7 @@ three",
         use byard_core::telemetry::{Sample, ScopeKind, scope_id_tagged};
         // Found by running it: summing the two threads' totals reported
         // `work 5.1ms · idle 15.0ms` inside a 16.5ms frame. They run
-        // concurrently, so a sum is the §I2 double count one level up —
+        // concurrently, so a sum is the §I2 double count one level up,
         // between threads instead of between nested scopes.
         let acquire = scope_id_tagged(IDLE_SCOPE, ScopeKind::Native);
         let encode = scope_id_tagged("statusline.test.pipeline.encode", ScopeKind::Native);
@@ -1417,7 +1417,7 @@ three",
         let mut f = fields();
         f.reload_pending = true;
         // From 50 columns up. Below roughly 46 the minimal line itself does not
-        // fit and is truncated rather than wrapped — which is the right failure
+        // fit and is truncated rather than wrapped, which is the right failure
         // (a wrapped statusline breaks the in-place redraw permanently) but it
         // is a failure, and pretending otherwise would make this assertion a
         // claim the code cannot keep.

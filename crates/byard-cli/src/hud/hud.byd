@@ -15,7 +15,7 @@
 // ── Why every number here arrives pre-formatted ───────────────────────────
 //
 // The HUD's text changes every frame, so its text leaves would be layout-dirty
-// every frame, so they would be re-shaped every frame — exactly the cost the
+// every frame, so they would be re-shaped every frame, exactly the cost the
 // retained layout path removed, reintroduced by the tool that reports on it
 // (INV-24). Three mitigations, all of them here rather than in the engine:
 //
@@ -39,7 +39,7 @@ View __ByardDevHud() {
     let value = style { color: 0xE6E1E5, size: 12 }
 
     // An RFC-0017 overlay layer over an RFC-0023 frosted backdrop. It is an
-    // ordinary layer and an ordinary backdrop — nothing about the HUD is
+    // ordinary layer and an ordinary backdrop, nothing about the HUD is
     // special-cased anywhere in the renderer.
     Box #[width: 252, radius: 12, p: 12,
           blur: 24, backdrop_tint: 0x1418206E, blur_saturation: 1.4] {
@@ -101,7 +101,7 @@ View __ByardDevHud() {
             // Not decoration. The HUD competes for the frame it reports on, so
             // it runs inside its own `hud.render` scope, that scope is
             // subtracted from every number above, and the subtracted amount is
-            // printed *here* — so the subtraction is auditable rather than a
+            // printed *here*, so the subtraction is auditable rather than a
             // claim. A HUD that hides its own overhead is worse than no HUD.
             Row #[gap: 6, align: center] {
                 Text("hud cost") #[..label]

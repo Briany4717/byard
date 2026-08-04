@@ -1,7 +1,7 @@
 //! The module resolver (RFC-0008 Pillars A & B).
 //!
-//! Turns a set of `.byd` files — the root project plus every package reachable
-//! through `use` — into **one validated program**: a flat, deterministic
+//! Turns a set of `.byd` files, the root project plus every package reachable
+//! through `use`, into **one validated program**: a flat, deterministic
 //! `Vec<ViewDecl>` with package-qualified canonical names, ready for
 //! [`ViewTable`](crate::interp::views::ViewTable) so instantiation (RFC-0007)
 //! is identical for single-file and multi-file programs.
@@ -18,16 +18,16 @@
 //!   [`CompileError::DuplicateViewName`].
 //! - **Explicit namespacing (D-G)**: `use pkg as m` → `m.Card`;
 //!   `use pkg` → `pkg.Card`; `use pkg.{Card}` → bare `Card`, legal only while
-//!   unambiguous — any collision is a [`CompileError::NameCollision`]
+//!   unambiguous, any collision is a [`CompileError::NameCollision`]
 //!   demanding an alias. Resolution is order-independent.
 //! - **Determinism**: files are processed in the order the provider returns
 //!   them (sorted by the CLI), packages in first-`use` order, and the merged
-//!   view list is root-first — so the same inputs always produce the same
+//!   view list is root-first, so the same inputs always produce the same
 //!   program and the same diagnostics.
 //!
 //! Spans: each file is parsed in isolation, then every span is rebased by the
-//! file's byte offset in the program-wide [`SourceMap`], so any diagnostic —
-//! parse-time or lower-time — can be located back to `file:line:col`.
+//! file's byte offset in the program-wide [`SourceMap`], so any diagnostic,
+//! parse-time or lower-time, can be located back to `file:line:col`.
 
 mod rebase;
 
@@ -57,7 +57,7 @@ pub struct SourceFile {
 
 /// Supplies package sources to the resolver. Implemented by the CLI (manifest,
 /// lockfile, and cache) and the LSP; tests use an in-memory map. The resolver
-/// itself never touches the filesystem — acquisition policy lives one layer up
+/// itself never touches the filesystem, acquisition policy lives one layer up
 /// (RFC-0008 Pillar C).
 pub trait PackageProvider {
     /// Returns the `.byd` files of package `package`, requested by
@@ -78,7 +78,7 @@ pub struct MapEntry {
     pub source: String,
 }
 
-/// Maps program-wide spans back to `(file, local span)` — the multi-file
+/// Maps program-wide spans back to `(file, local span)`, the multi-file
 /// equivalent of handing `CompileError::render` the single source string.
 #[derive(Clone, Debug, Default)]
 pub struct SourceMap {
@@ -143,7 +143,7 @@ impl SourceMap {
     /// avoid one struct would be the wrong direction for a dev-only concern.
     ///
     /// Returns `None` for a diagnostic whose span belongs to no registered
-    /// file — a project-level error, for instance, which has a headline and no
+    /// file, a project-level error, for instance, which has a headline and no
     /// source to point at.
     #[must_use]
     pub fn caret(&self, err: &CompileError) -> Option<CaretContext> {
@@ -356,7 +356,7 @@ impl Resolver<'_> {
         // Load dependencies depth-first, in first-`use` order (deterministic).
         for (dep, span) in dep_requests {
             if self.packages.contains_key(&dep) {
-                // Already loaded — an edge back into the active chain is a cycle.
+                // Already loaded, an edge back into the active chain is a cycle.
                 if stack.contains(&dep) {
                     let mut path: Vec<&str> = stack
                         .iter()
@@ -417,7 +417,7 @@ impl Resolver<'_> {
                 continue; // already reported as UnknownPackage / cycle
             }
             if let Some(symbols) = &import.symbols {
-                // Selective form: `use pkg.{A, B}` — binds bare names only.
+                // Selective form: `use pkg.{A, B}`, binds bare names only.
                 for (sym, span) in symbols {
                     self.check_selective_symbol(&target, sym, *span, &local_exports, &mut bare);
                 }
@@ -792,7 +792,7 @@ mod tests {
     #[test]
     fn qualified_access_reaches_an_intrinsic_named_package_view() {
         // `Button` as a *package* view is unreachable bare, but reachable
-        // qualified — namespacing makes it unambiguous.
+        // qualified, namespacing makes it unambiguous.
         let mut p = MemProvider(BTreeMap::from([(
             "a",
             vec![("a/x.byd", "View Button() { Text(\"a\") }")],

@@ -1,7 +1,7 @@
 //! Guards the committed RFC-0031 §S1–S3 example through the real `byard`
-//! binary: the `corner_smoothing` project — the `smooth` ramp, a shadow and a
+//! binary: the `corner_smoothing` project, the `smooth` ramp, a shadow and a
 //! border sharing their caster's profile, an animated `smooth` under
-//! `anim.spring()`, and the `Canvas` `rect` kind's own `smooth:` — must check
+//! `anim.spring()`, and the `Canvas` `rect` kind's own `smooth:`, must check
 //! clean (parse, type-check, lower, validate with no diagnostics).
 
 use std::path::PathBuf;

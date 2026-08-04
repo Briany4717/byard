@@ -1,6 +1,6 @@
 //! Guards the committed RFC-0021 collapsing-header example through the real
-//! `byard` binary: the `collapse_header` project — a `collapse_header: true`
-//! `ScrollView` whose header reads the implicit `scroll_fraction` binding — must
+//! `byard` binary: the `collapse_header` project, a `collapse_header: true`
+//! `ScrollView` whose header reads the implicit `scroll_fraction` binding, must
 //! check clean (parse, type-check, lower, validate with no diagnostics).
 
 use std::path::PathBuf;

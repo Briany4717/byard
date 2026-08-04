@@ -1,7 +1,7 @@
 //! Parser: `Token` stream → `Vec<ViewDecl>` (RFC-0002 §"Parser" + §"Grammar";
 //! RFC-0003 §"Attribute syntax").
 //!
-//! Declarations, elements, and control flow are ordinary recursive descent —
+//! Declarations, elements, and control flow are ordinary recursive descent,
 //! one function per production, following the EBNF. Expressions use the Pratt
 //! parser in [`expr`]. Error recovery records a [`CompileError`], substitutes an
 //! [`Expr::Error`] (or skips one token at member level), and continues, so a
@@ -321,8 +321,8 @@ impl<'a> Parser<'a> {
             // reserved: `route`/`tab` stay ordinary identifiers everywhere else,
             // and the following string literal is what distinguishes a nav case
             // from an element (no element form ever puts a literal after its
-            // name). Placement — `route` under a `NavStack`, `tab` under a
-            // `NavHost` — is a *checker* rule, so a misplaced case still parses
+            // name). Placement, `route` under a `NavStack`, `tab` under a
+            // `NavHost`, is a *checker* rule, so a misplaced case still parses
             // and gets a precise diagnostic instead of a parse cascade.
             Some(Token::Ident(name)) if matches!(self.peek2(), Some(Token::StrLit)) => {
                 match name.as_str() {
@@ -423,7 +423,7 @@ impl<'a> Parser<'a> {
         let first = self
             .expect_ident("a loop variable")
             .unwrap_or_else(|| Symbol::intern(""));
-        // `for i, item in …` — the first name was the index.
+        // `for i, item in …`, the first name was the index.
         let (index, var) = if self.eat(&Token::Comma) {
             let item = self
                 .expect_ident("a loop variable")
@@ -469,7 +469,7 @@ impl<'a> Parser<'a> {
     /// `nav_case := ("route" | "tab") STRING "{" ("|" IDENT "|")? member* "}"`
     /// (RFC-0026).
     ///
-    /// The pattern is a *static* literal — a route table is resolved at mount
+    /// The pattern is a *static* literal, a route table is resolved at mount
     /// time, so an interpolated pattern has no meaning; any interpolation is
     /// dropped with a diagnostic rather than silently half-matched. The optional
     /// `|params|` header binds the extracted `:param` segments as a record.
@@ -485,14 +485,14 @@ impl<'a> Parser<'a> {
                 ast::StrPart::Text(t) => pattern.push_str(t.as_str()),
                 ast::StrPart::Interp(_) => self.error_at(
                     pattern_span,
-                    "a literal route pattern (interpolation is not allowed — a route \
+                    "a literal route pattern (interpolation is not allowed, a route \
                      table is fixed at mount time)",
                 ),
             }
         }
 
         self.expect(&Token::LBrace, "'{'");
-        // `{|params| … }` — the params binding, written like a lambda header so
+        // `{|params| … }`, the params binding, written like a lambda header so
         // it reads the same as every other block parameter in the language.
         let params = if self.eat(&Token::Pipe) {
             let name = self.expect_ident("a route params binding name");
@@ -550,7 +550,7 @@ impl<'a> Parser<'a> {
     // ---- elements & attributes ----
 
     /// `element := element_name ("(" arg_list? ")")? attr_block? element_tail?`,
-    /// `element_name := IDENT ("." IDENT)?` — the qualified form is a
+    /// `element_name := IDENT ("." IDENT)?`, the qualified form is a
     /// package-namespaced user-`View` reference (`m.Card`, RFC-0008 Pillar B),
     /// interned as one dotted symbol and resolved by the module resolver.
     fn parse_element(&mut self) -> ElementNode {
@@ -622,10 +622,10 @@ impl<'a> Parser<'a> {
     /// `attr := prop_attr | event_attr`, distinguished by the separator:
     /// `IDENT ("." IDENT)? ":" expr` (property, the optional sub-property
     /// axis is RFC-0011's `translate.y: 2`) vs `IDENT ("(" IDENT ")")? "=>"
-    /// expr` (event — no sub-property form).
+    /// expr` (event, no sub-property form).
     fn parse_attr(&mut self) -> Option<Attr> {
         let start = self.cur_span();
-        // `..style` spread (RFC-0016): no name — it splices a style value's
+        // `..style` spread (RFC-0016): no name, it splices a style value's
         // attributes into this list.
         if self.eat(&Token::DotDot) {
             let value = self.parse_expr(0);
@@ -650,7 +650,7 @@ impl<'a> Parser<'a> {
             })
         } else if self.eat(&Token::Dot) {
             // Sub-property access (RFC-0011): `translate.y: 2`. Only the
-            // property form takes an axis — an event never does.
+            // property form takes an axis, an event never does.
             let axis = self.expect_name("a sub-property axis (e.g. `x`, `y`)")?;
             self.expect(&Token::Colon, "':'");
             let value = self.parse_expr(0);

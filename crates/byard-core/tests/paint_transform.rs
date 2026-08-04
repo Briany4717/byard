@@ -1,4 +1,4 @@
-//! RFC-0011 — paint-time transform primitives: a `Transform` moves/scales/
+//! RFC-0011, paint-time transform primitives: a `Transform` moves/scales/
 //! rotates the *painted* quad without touching layout. GPU-dependent tests
 //! request a real adapter and **skip gracefully** when none is available
 //! (headless CI), mirroring `m21_pipelines.rs`'s pattern.
@@ -96,7 +96,7 @@ fn render_and_read(
 #[test]
 fn a_translated_box_paints_at_its_transformed_position_not_its_layout_rect() {
     let Some((device, queue)) = try_device() else {
-        eprintln!("no GPU adapter — skipping paint-transform readback test");
+        eprintln!("no GPU adapter, skipping paint-transform readback test");
         return;
     };
     let size = 128u32;
@@ -120,7 +120,7 @@ fn a_translated_box_paints_at_its_transformed_position_not_its_layout_rect() {
     );
 
     // A red box laid out at (10,10)-(50,50), translated +40px on each axis
-    // by the paint-time transform — its *layout* rect never moves, only
+    // by the paint-time transform, its *layout* rect never moves, only
     // where it's drawn.
     let mut frame = RenderFrame::new();
     frame.push_instance(BoxInstance {
@@ -134,7 +134,7 @@ fn a_translated_box_paints_at_its_transformed_position_not_its_layout_rect() {
         smooth: 0.0,
     });
 
-    // Its own (untransformed) layout rect must be empty — the transform
+    // Its own (untransformed) layout rect must be empty, the transform
     // moved the paint, not the geometry.
     let at_layout_rect = render_and_read(&mut enc, &device, &queue, &frame, size, 30, 30);
     assert!(
@@ -153,7 +153,7 @@ fn a_translated_box_paints_at_its_transformed_position_not_its_layout_rect() {
 #[test]
 fn identity_transform_matches_untransformed_output_byte_for_byte() {
     let Some((device, queue)) = try_device() else {
-        eprintln!("no GPU adapter — skipping identity-transform regression test");
+        eprintln!("no GPU adapter, skipping identity-transform regression test");
         return;
     };
     let size = 64u32;
@@ -189,7 +189,7 @@ fn identity_transform_matches_untransformed_output_byte_for_byte() {
     };
 
     // Constructing `Transform` field-by-field (not via the `IDENTITY`
-    // constant) still produces the same pixels — proves identity isn't a
+    // constant) still produces the same pixels, proves identity isn't a
     // special-cased fast path that silently diverges from the real math.
     let explicit_identity = Transform {
         translate: [0.0, 0.0],

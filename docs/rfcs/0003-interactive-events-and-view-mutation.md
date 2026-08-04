@@ -1,18 +1,18 @@
 # RFC-0003: Interactive Events and View Mutation (reference-free)
 
-- **Status:** Active — implemented (M12 events, M16–M18 write-back/keyboard/focus, M24 full catalog, M32 extended exposure). All design decisions (E1–E8) resolved 2026-06-20; code landed and verified green.
+- **Status:** Active, implemented (M12 events, M16–M18 write-back/keyboard/focus, M24 full catalog, M32 extended exposure). All design decisions (E1–E8) resolved 2026-06-20; code landed and verified green.
 - **Author(s):** Briany4717
 - **Created:** 2026-06-20
 - **Last updated:** 2026-06-20
 - **Depends on:** RFC-0001 (§4.2 spatial hash grid, §5 concurrency, §6 `PlatformHost`), RFC-0002 (Lume surface, automatic reactivity, **D1** Mark-and-Pull, **D4** intrinsic attribute contract, **D9** inference, **D10** tick channels).
-- **Resolutions:** the 8 questions formerly in *Unresolved questions* are answered in *Resolved design decisions (E1–E8)*. Three proposed answers were amended for correctness — see **E1** (the value-equality compare reads a `Signal`, so it must run on the logic thread, not the platform thread), **E4** (the proposed `tap`-before-`pointer_up` order was inverted to `pointer_up` → `tap` to match every platform convention — ratified 2026-06-20), and **E6** (the dispatch-vs-layout safety comes from intra-tick step ordering, not from double-buffering as proposed). Event-attribute syntax also changed to the `=>` separator (decided 2026-06-20): engine events use bare names with `=>` (`tap => …`), properties keep `:` — see **§ Attribute syntax**.
+- **Resolutions:** the 8 questions formerly in *Unresolved questions* are answered in *Resolved design decisions (E1–E8)*. Three proposed answers were amended for correctness, see **E1** (the value-equality compare reads a `Signal`, so it must run on the logic thread, not the platform thread), **E4** (the proposed `tap`-before-`pointer_up` order was inverted to `pointer_up` → `tap` to match every platform convention, ratified 2026-06-20), and **E6** (the dispatch-vs-layout safety comes from intra-tick step ordering, not from double-buffering as proposed). Event-attribute syntax also changed to the `=>` separator (decided 2026-06-20): engine events use bare names with `=>` (`tap => …`), properties keep `:`, see **§ Attribute syntax**.
 
 ---
 
 ## Summary
 
 This RFC specifies how a `byld` view **mutates in response to interactive
-input**, and the catalog of **natively-supported interactive events** — both
+input**, and the catalog of **natively-supported interactive events**, both
 designed around one hard rule: **the developer never holds a reference, handle,
 ref, controller, or key to a widget.** Neither to attach an event listener, nor
 to command a widget imperatively.
@@ -22,10 +22,10 @@ That rule has two halves:
 - **Input (event → app).** An interactive handler is declared inline as an
   attribute (`#[tap => count++]`). At mount, the engine registers the
   handler's resolved rectangle into RFC-0001 §4.2's spatial hash grid. The grid
-  *is* the listener registry — there is no `addEventListener`, no `GlobalKey`, no
+  *is* the listener registry, there is no `addEventListener`, no `GlobalKey`, no
   `useRef`. On input, hit-testing is an `O(1)` grid lookup, never a tree walk.
 - **Output (app → widget).** Anything you would normally reach for a reference
-  to do imperatively — focus a field, scroll to an offset, select text — is
+  to do imperatively, focus a field, scroll to an offset, select text, is
   instead a **reactive property bound to a `var`**. Mutating the `var` drives the
   widget; the widget reflects state back into the `var`. This is SwiftUI's
   `@FocusState` model and QML's property-binding model, and it means the
@@ -46,9 +46,9 @@ per-tick ordering that keeps the whole thing glitch-free.
 RFC-0002's examples already write `Button("Action") => clicks++` and
 `#[tap => …]`, and RFC-0002's own motivation notes that today's
 `hello_world.rs` drives a label "from a pointer-input handler" by hand in Rust.
-But the *semantics* of that arrow — when the handler runs, on which thread, what
+But the *semantics* of that arrow, when the handler runs, on which thread, what
 it is allowed to mutate, how the mutation reaches the screen, and how a widget is
-commanded back — were never specified. Without that specification, two
+commanded back, were never specified. Without that specification, two
 contributors will implement events two incompatible ways, and the "no widget
 references" promise that distinguishes `byld` from the DOM / Flutter /
 imperative-ref world is just an unstated assumption.
@@ -56,7 +56,7 @@ imperative-ref world is just an unstated assumption.
 The reference-free stance is not stylistic. References are the root of an entire
 class of UI bugs and lifetime headaches: dangling refs to unmounted nodes, stale
 closures capturing old refs, `GlobalKey` collisions, controllers that outlive
-their widget, and — in Rust specifically — the borrow-checker hostility RFC-0001
+their widget, and, in Rust specifically, the borrow-checker hostility RFC-0001
 §Motivation cites as the reason pure-Rust UI "destroys creative flow." A view
 whose only state primitive is a `var`, whose only event mechanism is an inline
 handler, and whose only imperative channel is a reactive prop, has none of those
@@ -96,7 +96,7 @@ The imperative things other frameworks need a ref for are reactive props here:
 ```byld
 View SearchBar() {
     var query   = ""
-    var editing = false        // drives focus — no ref to the field
+    var editing = false        // drives focus, no ref to the field
 
     Column #[gap: 8] {
         TextField #[bind: query, focused: editing, placeholder: "Search…"]
@@ -111,7 +111,7 @@ the field; when the user taps elsewhere and the field loses focus, the engine
 writes `false` back into `editing`. No `field.focus()`, no `FocusNode`, no ref.
 Scrolling (`#[offset: scrollY]`), selection, and toggle state work the same way.
 
-### `bind:` — two-way value binding
+### `bind:`, two-way value binding
 
 ```byld
 TextField #[bind: query]
@@ -132,20 +132,20 @@ appearance/state, `=>` is behavior.
 
 ```byld
 Column #[
-    gap: 12,                    // property  — `name: value`
+    gap: 12,                    // property, `name: value`
     bg: 0x222222,
     focused: editing,           // reactive prop (still a value) uses `:`
-    tap => count++,             // engine event — `name => action`
+    tap => count++,             // engine event, `name => action`
     pointer_move(e) => cur = e.pos,   // `name(e) => action` binds the payload
 ] { }
 ```
 
-- **Properties** use `name: value` and bind a value — including reactive props
+- **Properties** use `name: value` and bind a value, including reactive props
   (`focused:`, `offset:`, `value:`, `bind:`) and function-valued **callback
   props** passed to a child `View` (`onPick: (e) => …`), because passing a
   function *value* is still a value binding.
 - **Engine events** use `name => action` (or `name(payload) => action`). Event
-  names are **bare** — no `on` prefix, since `=>` already marks them. This is the
+  names are **bare**, no `on` prefix, since `=>` already marks them. This is the
   same `=>` as the element-tail shorthand (`Button("+") => count++` is the
   primary `tap` event hoisted), and `name => expr` desugars to
   `name: (payload) => expr` internally. The catalog (§4) lists every event name.
@@ -180,16 +180,16 @@ An interactive event travels a fixed path, ending in RFC-0002's D1 tick:
 - **Capture & normalize (platform thread).** RFC-0001 §6's `PlatformHost`
   (e.g. `WinitHost`) receives the OS event and normalizes it into a thread-safe,
   `Send + 'static` `InputEvent { kind: EventKind, pos: Vec2, payload: Payload }`.
-  No `Signal` is touched here — §5.1 restricts `Signal` access to the logic
+  No `Signal` is touched here, §5.1 restricts `Signal` access to the logic
   thread.
 - **Transport.** The `InputEvent` is pushed onto a `crossbeam-channel` to the
   logic thread, the same kind of channel D10 uses for hot-reload delivery and
   RFC-0001 §5.1 uses for Tokio results. Input is an unbounded (or large-bounded)
-  queue — input must never be silently dropped the way stale hot-reloads are
+  queue, input must never be silently dropped the way stale hot-reloads are
   coalesced.
 - **Dispatch (logic thread, tick step 2).** For a positional event the engine
   computes `H(pos)` and retrieves the topmost registered handler in amortised
-  `O(1)` (RFC-0001 §4.2) — *the UI tree is never walked.* The handler is an AST
+  `O(1)` (RFC-0001 §4.2), *the UI tree is never walked.* The handler is an AST
   lambda held by reference in the owning `View`'s `Env` (RFC-0002's interpreter
   model: lambdas are AST subtrees, not Rust closures), so dispatch is "walk this
   sub-tree now," with the event payload bound as its parameter.
@@ -205,7 +205,7 @@ no handler can observe a half-updated view, multiple events in one tick compose
 cleanly, and D1's "the tick is the consistency boundary" invariant holds for
 interactive input exactly as it does for any other mutation source.
 
-### 2. Registration — why no reference is needed (input side)
+### 2. Registration, why no reference is needed (input side)
 
 When an element carrying an event attribute mounts, the interpreter's intrinsic
 lowering (RFC-0002 `interp/intrinsics.rs`) does two things with the handler:
@@ -218,15 +218,15 @@ lowering (RFC-0002 `interp/intrinsics.rs`) does two things with the handler:
 That registration *is* the event subscription. There is no widget object exposed
 to the developer to attach to, and nothing to detach: on unmount, the element's
 `ViewArena` drop (RFC-0001 §2) removes its grid entries in the same linear pass.
-A handler therefore cannot dangle past its element's lifetime — the lifetime of
+A handler therefore cannot dangle past its element's lifetime, the lifetime of
 the subscription is exactly the lifetime of the arena, enforced by construction,
 not by developer discipline.
 
-### 3. Commanding a widget — why no reference is needed (output side)
+### 3. Commanding a widget, why no reference is needed (output side)
 
 The reference-free rule cuts both ways. The actions other frameworks expose as
-imperative methods on a ref — `focus()`, `blur()`, `scrollTo()`, `select()`,
-`open()/close()` — are modeled as **reflected reactive props**: a prop whose
+imperative methods on a ref, `focus()`, `blur()`, `scrollTo()`, `select()`,
+`open()/close()`, are modeled as **reflected reactive props**: a prop whose
 value the engine both *reads from* and *writes back to* a `var`.
 
 | Imperative API elsewhere | `byld` reactive prop | Direction |
@@ -241,13 +241,13 @@ Setting the `var` commands the widget; the widget reflects user-driven changes
 back into the same `var`. The mental model is uniform: **state lives in `var`s,
 the widget is a pure projection of that state, and "doing something to a widget"
 is always "mutating the state it projects."** This is why no ref is ever needed
-to *drive* a widget, only to *read* its state — and reading its state is just
+to *drive* a widget, only to *read* its state, and reading its state is just
 reading the `var`.
 
 ### 4. Native event catalog (Phase 2 core)
 
 Each event is a bare-named `=>` attribute on an intrinsic (events live in
-`#[...]`, never in `(...)`; the `=>` separator marks them — § Attribute syntax).
+`#[...]`, never in `(...)`; the `=>` separator marks them, § Attribute syntax).
 Unknown event names are a hard `CompileError::UnknownAttribute` with a Levenshtein
 hint (D4). Written `name => action`, or `name(e) => action` to bind the payload.
 The Phase 2 core set:
@@ -269,8 +269,8 @@ The Phase 2 core set:
 | Scroll | `scroll` | `ScrollEvent` | paired with the `offset:` prop |
 | Wheel | `wheel` | `ScrollEvent` | discrete wheel deltas |
 
-Note the reactive **props** these events pair with — `focused:`, `offset:`,
-`value:` — use the `:` separator, not `=>`, because they bind state rather than
+Note the reactive **props** these events pair with, `focused:`, `offset:`,
+`value:`, use the `:` separator, not `=>`, because they bind state rather than
 map an event (§ Attribute syntax).
 
 **Deferred (post-Phase-2, follow-up RFC):** full gesture recognizers
@@ -306,13 +306,13 @@ signature already declares the payload type (`pointer_move` → `PointerEvent`),
 so the interpreter infers `e`'s type from the attribute, and the Phase 4
 transpiler emits the concrete type from the same table. This exemption is the
 specific case of a general rule formalized in **E2**: an inline lambda's
-parameter types are inferred from the *expected function type* at its use site —
+parameter types are inferred from the *expected function type* at its use site, 
 whether that type comes from an intrinsic attr signature (`pointer_move` →
 `Fn(PointerEvent)`) or a developer-declared `Fn(...)` callback prop. Named `fn`
 declarations and `View`/`fn` signatures always require annotations (D9). `bind:`'s
 generated `change` lambda is covered by the same rule.
 
-### 6. Mutation scope — what a handler may write
+### 6. Mutation scope, what a handler may write
 
 A handler is an AST lambda living in a `View`'s `Env`. Its mutation rights follow
 lexical scope, with one bright line at the `View` boundary:
@@ -321,7 +321,7 @@ lexical scope, with one bright line at the `View` boundary:
   `View`. Nested intrinsic elements (`Column { Button … }`) share the enclosing
   `View`'s single `Env` (RFC-0002: "one `Env` per `View` instance; nothing below
   the `View` level introduces a scope"), so a deeply nested `Button`'s handler
-  mutating a top-of-`View` `var` is ordinary lexical access — no prop-drilling
+  mutating a top-of-`View` `var` is ordinary lexical access, no prop-drilling
   required *inside* a `View`.
 - **Across a `View` boundary:** a handler **cannot** reach into another `View`'s
   `Env`. There is no shared mutable state across `View`s, which is what keeps the
@@ -346,7 +346,7 @@ lexical scope, with one bright line at the `View` boundary:
 
   The `onPick` lambda is an AST node owned by `Parent`'s `Env`; `Picker` only
   invokes it. The mutation of `picked` therefore *executes in `Parent`'s scope*,
-  on the logic thread, with no shared reference and no cross-`Env` write — the
+  on the logic thread, with no shared reference and no cross-`Env` write, the
   child never names `picked`.
 
   **(b) Injected controllers (shared / persistent).** For state that outlives a
@@ -359,7 +359,7 @@ lexical scope, with one bright line at the `View` boundary:
   `when` or `for` reads, D1 marks that structural effect dirty and the tick's
   pull phase mounts/unmounts the affected arenas (RFC-0002 structural effects).
   Opening a dialog, revealing a row, or clearing a list is therefore *also* just
-  a `var` write — no separate navigation or visibility API.
+  a `var` write, no separate navigation or visibility API.
 
 ### 7. Hit-testing details: topmost-wins, no implicit bubbling
 
@@ -367,7 +367,7 @@ The §4.2 grid returns the **topmost** handler for a given event kind at a given
 point, ordered by the Z-bin / stacking-context rules of RFC-0001 §3.2. Phase 2
 deliberately does **not** implement DOM-style capture/bubble propagation:
 
-- **Decision:** an event is delivered to exactly one handler — the topmost
+- **Decision:** an event is delivered to exactly one handler, the topmost
   element registered for that event kind under the pointer. There is no implicit
   walk up an ancestor chain (the grid has no ancestor chain to walk; that is the
   point of §4.2).
@@ -375,14 +375,14 @@ deliberately does **not** implement DOM-style capture/bubble propagation:
   §4.2 exists specifically to avoid. Topmost-wins keeps dispatch `O(1)` and makes
   "which handler runs?" unambiguous.
 - **Consequences handled without bubbling:** common bubbling use-cases get
-  explicit, declarative answers instead — "tap outside to dismiss" is a
+  explicit, declarative answers instead, "tap outside to dismiss" is a
   full-bleed backdrop element with its own `tap` behind the dialog (and `when
   isOpen { … }` controls both), not a document-level capturing listener. A row
   that is tappable *and* contains a tappable button simply registers both; the
   button, being on top, wins inside its rect and the row wins elsewhere.
 - **Flagged:** if real applications show topmost-only is too restrictive (e.g.
   they genuinely need an outer handler to also see an inner event), a future RFC
-  can add opt-in propagation — but it must define how propagation coexists with
+  can add opt-in propagation, but it must define how propagation coexists with
   the grid without reintroducing a tree walk. Left as an unresolved question
   rather than silently assuming bubbling exists.
 
@@ -392,13 +392,13 @@ All handler execution is on the **logic thread** (RFC-0001 §5.1), because
 handlers touch `Signal`s. The per-tick order, extending RFC-0002 D10's
 "drain channels at tick start":
 
-1. **Hot-reload** channel drained (D10) — apply code changes first, so input
+1. **Hot-reload** channel drained (D10), apply code changes first, so input
    applies to the latest code.
-2. **Input** queue drained in **FIFO arrival order** — each event hit-tested and
+2. **Input** queue drained in **FIFO arrival order**, each event hit-tested and
    dispatched; mutations accumulate D1 marks. No pull.
-3. **Controller results** channel drained (RFC-0001 §5.1) — async I/O results
+3. **Controller results** channel drained (RFC-0001 §5.1), async I/O results
    mutate `var`s; marks accumulate. No pull.
-4. **D1 pull** — dirty value-bindings and structural effects re-evaluated once
+4. **D1 pull**, dirty value-bindings and structural effects re-evaluated once
    each (epoch guard); `RenderFrame` produced.
 5. **Atomic frame swap** to the render thread (RFC-0001 §5.2).
 
@@ -409,7 +409,7 @@ is hit-tested against the layout/grid produced by tick *T−1* (what the user
 actually saw and clicked); structural changes from those handlers register new
 grid entries when their arenas mount, visible to tick *T+1*. This is correct and
 must be stated, because it means a handler that spawns a new button cannot
-receive a click on that button within the same tick — the user has not seen it
+receive a click on that button within the same tick, the user has not seen it
 yet.
 
 ---
@@ -423,11 +423,11 @@ yet.
 - **Reactive-prop imperatives can feel indirect.** "Focus this field" becoming
   "set a `var` the field is bound to" is unfamiliar to developers used to
   `ref.focus()`, and a poorly-named driver `var` can obscure intent. The win
-  (no refs, no lifetime bugs) is worth it, but the learning curve is real —
+  (no refs, no lifetime bugs) is worth it, but the learning curve is real, 
   exactly the SwiftUI `@FocusState` adjustment.
 - **One payload per handler.** Handlers take zero or one payload, not a
   positional argument list. Composite needs (e.g. pointer + keyboard mods) are
-  handled by fields on the payload record, not multiple params — a deliberate
+  handled by fields on the payload record, not multiple params, a deliberate
   simplification that the catalog's payload types must anticipate.
 - **Gestures are deferred.** Drag/pan/pinch/multi-touch are out of Phase 2
   (§4). Apps needing rich gestures wait for the follow-up gesture RFC.
@@ -449,7 +449,7 @@ and imperatives are reflected props has none of those failure modes structurally
 `ViewHandle`)?** An escape hatch would reintroduce exactly the lifetime and
 aliasing problems the design eliminates, and would have to be `!Send`-juggled
 across the render/logic threads. Reflected props keep every imperative action on
-the existing reactive substrate (D1), so "focus" is not a special path — it is a
+the existing reactive substrate (D1), so "focus" is not a special path, it is a
 `var` write like any other, and it composes with `when`/`for` for free.
 
 **Why topmost-wins instead of bubbling?** §4.2 hit-testing is a collision query,
@@ -466,13 +466,13 @@ makes input just another mutation source that settles before the single pull.
 
 **Why callback props for child→parent instead of letting children mutate parent
 `var`s?** Allowing cross-`View` `var` writes is shared mutable state across
-ownership boundaries — the precise hazard the no-reference rule removes. Callback
+ownership boundaries, the precise hazard the no-reference rule removes. Callback
 props keep the mutation executing in the owner's scope while letting the child
 stay ignorant of the parent's state.
 
 **Why a single payload record, not positional args?** Fixed-shape typed records
 make the D9 inference exception sound (the engine knows the type) and keep the
-handler grammar identical to an ordinary one-or-zero-arg lambda — no special
+handler grammar identical to an ordinary one-or-zero-arg lambda, no special
 call form.
 
 ---
@@ -484,12 +484,12 @@ call form.
 - **SwiftUI `@FocusState` / `.focused($x)`.** The direct model for reflected
   imperative props: focus is a piece of bindable state, not a method on a ref.
 - **QML property bindings.** Two-way property binding as the universal mechanism
-  for both reading and driving widget state — the lineage of `bind:` and reflected
+  for both reading and driving widget state, the lineage of `bind:` and reflected
   props.
 - **Solid.js / Svelte event handlers.** Inline `onClick={…}` / `on:click` with no
-  ref and no manual subscription — the input-side ergonomics target.
+  ref and no manual subscription, the input-side ergonomics target.
 - **Elm / Flutter callback props.** Child→parent communication via passed
-  functions rather than shared mutable references — the model for §6(a).
+  functions rather than shared mutable references, the model for §6(a).
 - **React `useRef` / Flutter `GlobalKey` / DOM `addEventListener`.** The
   reference-based approaches this RFC deliberately rejects, named so the contrast
   is explicit.
@@ -502,7 +502,7 @@ All eight questions formerly in *Unresolved questions* are resolved here. Each i
 authoritative for implementation; three carry a correctness amendment marked in
 **bold**.
 
-### E1 — Reflected write-back: source-gated + value-deduplicated (loop dies at length 1)
+### E1, Reflected write-back: source-gated + value-deduplicated (loop dies at length 1)
 
 Two independent guards close the feedback loop between a two-way prop and its
 `var`:
@@ -525,10 +525,10 @@ thread. So the platform thread forwards only the **raw new value** as an ordinar
 never on the platform thread. With that placement, the closure argument holds
 exactly as proposed: at step 4 (pull) the `value:` binding re-evaluates to the
 value the widget already physically shows, the renderer emits no GPU command,
-and programmatic widget writes never re-emit input events — so the cycle
+and programmatic widget writes never re-emit input events, so the cycle
 terminates at length 1, by construction.
 
-### E2 — `Fn(...)` callback-prop type syntax + the lambda-inference rule
+### E2, `Fn(...)` callback-prop type syntax + the lambda-inference rule
 
 Callback-prop parameters are typed with a `Fn(...)` type, mandatory in `View`/`fn`
 signatures (no D9 exception for signatures):
@@ -543,12 +543,12 @@ Syntax rule: keyword `Fn`, argument types in parentheses, return type omitted fo
 the common void case, otherwise `Fn(Args) -> Ret`. The parser produces a
 `Type::Function` node. The **general inference rule** (generalizing §5's event
 exception): an inline lambda passed at a use site infers its parameter types from
-the **expected `Fn` type** there — an intrinsic attr signature or a declared
-`Fn(...)` param — and the compiler validates the lambda's arity and payload
+the **expected `Fn` type** there, an intrinsic attr signature or a declared
+`Fn(...)` param, and the compiler validates the lambda's arity and payload
 against that `Type::Function`. Callback lambdas are AST nodes owned by the
 **parent** `Env` (§6a), not Rust closures, so they carry no `Send`/lifetime cost.
 
-### E3 — Keyboard focus: one global scalar, no `FocusNode`
+### E3, Keyboard focus: one global scalar, no `FocusNode`
 
 Focus is a single logic-thread scalar `focused_arena_id: Option<ArenaId>` (one
 focused element per window). `#[focused: editing]` associates the `var` `editing`
@@ -563,15 +563,15 @@ with that arena's focus state, two-way via E1's write-back.
   text-input listener, and advances focus to the next id (`Shift+Tab` → previous).
 
 Refinements: (a) the Tab traversal is an acceptable infrequent `O(n)` walk
-**precisely because it is not the hot path** — pointer hit-testing stays `O(1)`
+**precisely because it is not the hot path**, pointer hit-testing stays `O(1)`
 via the grid (§4.2); only the rare `Tab` keypress walks, and it can be
 precomputed into an ordered focus-ring later if needed. (b) Binding the *same*
-`var` to `#[focused:]` on two elements is undefined (last-mount wins) — bind
+`var` to `#[focused:]` on two elements is undefined (last-mount wins), bind
 distinct `var`s. (c) Explicit tab-index ordering is deferred; the default order
 is pre-order (declaration/visual order). (d) Multi-window focus is deferred
 (single window in Phase 2).
 
-### E4 — `tap` vs `pointer_up`: thresholds + precedence (ratified)
+### E4, `tap` vs `pointer_up`: thresholds + precedence (ratified)
 
 A pointer interaction is a valid `tap` iff **all three** hold: `PointerDown` and
 `PointerUp` land within the same element's grid rect; total cursor displacement
@@ -579,7 +579,7 @@ A pointer interaction is a valid `tap` iff **all three** hold: `PointerDown` and
 same themeable constant as the `long_press` threshold, so tap and long-press
 partition cleanly at one boundary.
 
-**Precedence (ratified 2026-06-20): low-level before high-level —
+**Precedence (ratified 2026-06-20): low-level before high-level, 
 `pointer_up` → `tap`.** When both are registered on one element, the engine
 dispatches `pointer_up` first, then `tap`, in the same tick step 2. This matches
 every mainstream platform (DOM `pointerup` precedes `click`; the same on
@@ -591,23 +591,23 @@ firing order for a qualifying tap is therefore `pointer_down` → `pointer_up` �
 `tap` (and `double_tap`/`long_press`, when they qualify, fire after `tap` /
 instead of `tap` respectively, per their threshold rules).
 
-### E5 — Hot-reload during an in-flight gesture: Gesture State Safety
+### E5, Hot-reload during an in-flight gesture: Gesture State Safety
 
 A shared `pointer_pressed: AtomicBool` is set by the platform thread. At tick
 step 1, the reload gate uses RFC-0002's existing hot-reload diff classification:
 
-- **Reactive-compatible** patches (RFC-0002 case 1 — pure expression/value
+- **Reactive-compatible** patches (RFC-0002 case 1, pure expression/value
   changes that do not alter tree shape) apply immediately, even mid-gesture.
-- **Structure-incompatible** patches (case 2 — `var`/`param`/`inject` shape
+- **Structure-incompatible** patches (case 2, `var`/`param`/`inject` shape
   changes that tear down and rebuild an arena) are **held** while
   `pointer_pressed`, coalesced latest-wins in the bounded(1) channel (D10), and
   applied synchronously on the first tick after `PointerUp`.
 
 This prevents destroying a view arena in the middle of a physical interaction.
-Edge: a pointer held indefinitely starves structural reloads (rare, acceptable —
+Edge: a pointer held indefinitely starves structural reloads (rare, acceptable, 
 the latest held patch still applies on release).
 
-### E6 — Grid-vs-dispatch safety: **intra-tick step ordering, not double-buffering**
+### E6, Grid-vs-dispatch safety: **intra-tick step ordering, not double-buffering**
 
 Ratified: step-2 dispatch hit-tests against the previous tick's grid, so the user
 always interacts with what they see. **Amendment (the reason why):** the proposal
@@ -622,22 +622,22 @@ they are double-buffered. Both guarantees coexist; stating the right one prevent
 a future contributor from "optimizing" away the step ordering on the false belief
 that double-buffering covers it.
 
-### E7 — Input coalescing: continuous events only, by `(kind, element_id)`
+### E7, Input coalescing: continuous events only, by `(kind, element_id)`
 
 At step 2, before dispatching, the drainer inspects the whole buffer and
-coalesces **only continuous events** — `pointer_move`, `scroll`, `wheel`,
-and hover-move — per `(kind, element_id)`: keep the **latest absolute position**,
+coalesces **only continuous events**, `pointer_move`, `scroll`, `wheel`,
+and hover-move, per `(kind, element_id)`: keep the **latest absolute position**,
 **sum the deltas**, discard intermediate samples, and dispatch one consolidated
 call so the AST lambda is walked once per frame.
 
-**Discrete events are never coalesced** — `pointer_down`, `pointer_up`,
+**Discrete events are never coalesced**, `pointer_down`, `pointer_up`,
 `tap`, `double_tap`, `long_press`, `pointer_enter`/`pointer_exit`,
-`key_down`/`key_up`, `submit` — each carries distinct semantics and every
+`key_down`/`key_up`, `submit`, each carries distinct semantics and every
 occurrence is delivered. This is the one place the catalog is partitioned into
 "continuous/idempotent" vs "discrete/significant," and the partition is fixed in
 the intrinsic table.
 
-### E8 — Hit-test slop: backend inflation to a 44×44 minimum
+### E8, Hit-test slop: backend inflation to a 44×44 minimum
 
 When `interp/intrinsics.rs` registers an interactive element's rect into the grid,
 if either dimension is below **44×44 logical px** it inflates the **collision area
@@ -650,7 +650,7 @@ Refinements: (a) 44 logical px follows Apple HIG and is themeable (Material uses
 topmost/registration order, and inflation is clamped so it does not cross a
 sibling's center. (c) Inflation applies only to elements that registered a
 listener; static elements never enter the grid. (d) The visual layout is
-untouched — only the invisible touch target grows, so the developer's layout
+untouched, only the invisible touch target grows, so the developer's layout
 stays exactly as authored.
 
 ---

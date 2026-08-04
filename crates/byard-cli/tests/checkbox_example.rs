@@ -1,6 +1,6 @@
 //! Guards the committed RFC-0018 `Checkbox` example through the real `byard`
-//! binary: the `checkbox` project — a mixed-state sample plus three `bind:`ed
-//! boolean controls and a reactive `when` status line — must check clean
+//! binary: the `checkbox` project, a mixed-state sample plus three `bind:`ed
+//! boolean controls and a reactive `when` status line, must check clean
 //! (parse, type-check, lower, and validate the intrinsic contract with no
 //! diagnostics).
 

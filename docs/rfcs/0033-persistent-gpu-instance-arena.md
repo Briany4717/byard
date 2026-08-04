@@ -1,14 +1,14 @@
-# RFC-0033: Persistent GPU Instance Arena — one buffer, one upload, no per-frame VRAM churn
+# RFC-0033: Persistent GPU Instance Arena, one buffer, one upload, no per-frame VRAM churn
 
-- **Status:** Active — implemented
+- **Status:** Active, implemented
 - **Author(s):** Briany4717
 - **Created:** 2026-07-25
 - **Last updated:** 2026-07-26
 - **Depends on:**
-  - RFC-0001 (§2 the memory thesis — specifically *"sin spikes de VRAM"*, which this RFC is what makes true on the GPU side; §3.1 the pipeline set; §5 the render-thread boundary)
+  - RFC-0001 (§2 the memory thesis, specifically *"sin spikes de VRAM"*, which this RFC is what makes true on the GPU side; §3.1 the pipeline set; §5 the render-thread boundary)
   - RFC-0030 §I1 (the `encode.frame` scope that surfaced the cost)
-  - `0001-erratum-memory-and-dirty-model.md` (PR #148 — which corrected the *CPU* half of the same claim)
-- **Extends:** `byard-core::encoder` — every pipeline's per-draw buffer handling.
+  - `0001-erratum-memory-and-dirty-model.md` (PR #148, which corrected the *CPU* half of the same claim)
+- **Extends:** `byard-core::encoder`, every pipeline's per-draw buffer handling.
 - **Independent of:** RFC-0032. Different cause, no shared code, either may land first.
 
 ---
@@ -27,21 +27,21 @@ backdrop.rs:415  (uniform)
 ```
 
 Nine or more `create_buffer_init` calls per frame, more with multiple draw
-batches. The correct pattern — a persistent buffer written with
-`queue.write_buffer` — exists in the crate in **exactly one place**
+batches. The correct pattern, a persistent buffer written with
+`queue.write_buffer`, exists in the crate in **exactly one place**
 (`viewport_buffer`, `mod.rs:726`, the only `write_buffer` in `byard-core`).
 
 RFC-0030's instrumentation put `encode.frame` at **~6 ms**, an order of magnitude
 above `layout.taffy`, making it the largest single term in the frame. Buffer
 creation is the leading suspect: in `wgpu` each `create_buffer_init` is a device
-allocation, a validation pass, a staging allocation, a copy, and a device lock —
+allocation, a validation pass, a staging allocation, a copy, and a device lock, 
 per pipeline, per frame.
 
 > **Erratum, added on implementation.** The suspect was wrong. Sub-scoping
 > `encode.frame` (RFC-0030 §I1, second pass) put every `create_buffer_init` in
 > the encoder combined at **0.3–3.4 %** of it; the remaining 84–98 % was glyph
 > shaping, which RFC-0032 addresses. Measured after landing, this RFC is worth
-> about **0.1 ms** — within the revised projection and roughly fifty times
+> about **0.1 ms**, within the revised projection and roughly fifty times
 > below the figure in the paragraph above.
 >
 > The reasoning error is worth naming because it is easy to repeat: the RFC
@@ -57,7 +57,7 @@ reading from offsets into it. Buffers grow to a high-water mark and are never
 recreated in steady state.
 
 Beyond the time, this closes the GPU half of a thesis claim. PR #148's erratum
-already corrected the CPU half — *"zero-GC stands, allocation-free hot path does
+already corrected the CPU half, *"zero-GC stands, allocation-free hot path does
 not"*. RFC-0001 §2 also says **"sin spikes de VRAM"**, and recreating every
 instance buffer each frame is precisely VRAM churn. This RFC is what lets that
 sentence stand as written, rather than being corrected too.
@@ -70,7 +70,7 @@ sentence stand as written, rather than being corrected too.
 
 `viewport_buffer` is created once at init (`mod.rs:416`) and written with
 `queue.write_buffer` (`mod.rs:726`). Every other buffer in the encoder is
-recreated per use. There is no design reason for the asymmetry — the viewport
+recreated per use. There is no design reason for the asymmetry, the viewport
 buffer is not special, it is simply the one that was written correctly.
 
 ### Why per-frame buffer creation is expensive
@@ -83,7 +83,7 @@ Not merely "an allocation". Each `create_buffer_init` in `wgpu`:
 4. `memcpy`s the instance data into it,
 5. records a copy into the queue,
 6. registers a new resource in the device's tracker, which must later be
-   reclaimed — reclamation the driver performs at an unpredictable time, i.e.
+   reclaimed, reclamation the driver performs at an unpredictable time, i.e.
    *exactly* the kind of non-deterministic pause the project's thesis is built to
    avoid.
 
@@ -126,7 +126,7 @@ value after the first seconds means something is churning.
 
 ## Reference-level explanation
 
-### G1 — One arena, not one buffer per pipeline
+### G1, One arena, not one buffer per pipeline
 
 **Options.** (a) a persistent buffer per pipeline; (b) one shared arena with
 per-pipeline offsets.
@@ -160,7 +160,7 @@ Per frame: `staging.clear()` → each pipeline appends its instances and records
 `(offset, len)` → one `write_buffer(&gpu, 0, &staging)` → each draw binds its
 slice.
 
-### G2 — Alignment
+### G2, Alignment
 
 Two constraints, and the second is the trap:
 
@@ -169,7 +169,7 @@ Two constraints, and the second is the trap:
   already, so this is satisfied by construction; the arena asserts it in debug.
 - **Uniform buffer offsets** must be a multiple of
   `limits.min_uniform_buffer_offset_alignment`, which is **256 on many
-  backends** — not 4, and not a compile-time constant. `backdrop.rs:415`'s
+  backends**, not 4, and not a compile-time constant. `backdrop.rs:415`'s
   per-frame uniform is the affected case. The arena pads to the device's reported
   alignment before appending any uniform region, and the value is read from
   `device.limits()` at init rather than hardcoded.
@@ -178,11 +178,11 @@ Getting this wrong produces a validation error on some devices and silently wron
 data on others, so both are asserted in debug and covered by a test that runs
 against the actual device limits rather than an assumed 256.
 
-### G3 — Growth policy
+### G3, Growth policy
 
 Grow-only, doubling, never shrink within a session.
 
-- Growth reallocates the GPU buffer, which is the operation being eliminated —
+- Growth reallocates the GPU buffer, which is the operation being eliminated, 
   so it must happen a handful of times at startup and then never.
 - **Never shrinking is deliberate.** Shrinking after a large frame would
   reintroduce exactly the recreation churn this RFC removes, at the least
@@ -192,15 +192,15 @@ Grow-only, doubling, never shrink within a session.
   next power of two, so a small app never reserves for a large one.
 - `grows_this_session` is exposed for G5's assertion.
 
-### G4 — Depth buffers
+### G4, Depth buffers
 
 `mod.rs:2474` and `mod.rs:2520` create separate "depth" buffers alongside the
 instance buffers. These carry per-instance draw-order depth (RFC-0011's NDC-z),
 not a depth texture. They are ordinary per-instance data and go into the same
-arena as another region — there is no reason for them to be separate allocations,
+arena as another region, there is no reason for them to be separate allocations,
 and merging them removes two of the nine per-frame creations outright.
 
-### G5 — Observability (INV-18)
+### G5, Observability (INV-18)
 
 The same discipline PR #148 established: this path must be assertable, not
 merely benchmarkable.
@@ -211,11 +211,11 @@ merely benchmarkable.
 - `grows_this_session == 0` after warm-up on a fixed scene.
 - **A pixel-parity test**: the same frame rendered through the arena and through
   the current per-frame-buffer path produces byte-identical output. This is the
-  load-bearing test — the change is a pure refactor of *where bytes live*, so any
+  load-bearing test, the change is a pure refactor of *where bytes live*, so any
   pixel difference is a bug, and a golden-image comparison is the only honest way
   to say so.
 
-### G6 — What this does *not* change
+### G6, What this does *not* change
 
 - No pipeline's vertex layout, shader, or instance struct changes. `frame.rs` is
   untouched.
@@ -247,7 +247,7 @@ observable through the counter, so it is diagnosable rather than mysterious.
 total; buffer creation is the leading suspect but the sub-scope breakdown does not
 exist yet. The implementation plan therefore measures first (see
 `IMPLEMENTATION_10.md` M87). If the sub-scopes show buffer creation is a minor
-term, this RFC is still correct on thesis grounds but drops in priority — and
+term, this RFC is still correct on thesis grounds but drops in priority, and
 that outcome must be recorded rather than quietly ignored.
 
 ---
@@ -262,7 +262,7 @@ same edit surface is not a saving.
 **Why not a staging-belt / ring of mapped buffers?** The standard high-throughput
 pattern, and genuinely better for workloads that saturate PCIe. A UI's instance
 data is kilobytes per frame; `write_buffer` is not the bottleneck at that volume,
-and a ring introduces fence management and in-flight-frame tracking — real
+and a ring introduces fence management and in-flight-frame tracking, real
 complexity for a term that is not hot. Reachable later if measurement ever says
 so.
 
@@ -281,17 +281,17 @@ than being true.
 
 ## Prior art
 
-- **`viewport_buffer` in this crate** — the correct pattern, already present,
+- **`viewport_buffer` in this crate**, the correct pattern, already present,
   applied once. This RFC is largely "do what `mod.rs:726` does, everywhere".
-- **wgpu's own examples and `wgpu_glyph` / `egui-wgpu`** — both use a persistent,
+- **wgpu's own examples and `wgpu_glyph` / `egui-wgpu`**, both use a persistent,
   grow-to-high-water-mark instance buffer with `write_buffer`, for exactly these
   reasons. `egui-wgpu` additionally demonstrates the single-staging-vector
   consolidation.
-- **Bevy's `BufferVec` / `RawBufferVec`** — the canonical Rust implementation of
+- **Bevy's `BufferVec` / `RawBufferVec`**, the canonical Rust implementation of
   G1 and G3: a CPU-side `Vec` mirrored to a GPU buffer that grows and never
   shrinks. Worth reading before implementing; the growth and alignment handling
   are the parts to copy.
-- **`ViewArena` in this project** — the CPU-side statement of the same idea. G1's
+- **`ViewArena` in this project**, the CPU-side statement of the same idea. G1's
   framing as "the GPU analogue" is deliberate: after PR #148's erratum, the arena
   thesis has no live representative on the hot path, and this gives it one.
 
@@ -299,13 +299,13 @@ than being true.
 
 ## Resolved questions
 
-### Q1 — One arena or one buffer per pipeline?
+### Q1, One arena or one buffer per pipeline?
 
 **Resolution: one arena (G1).** Same edit surface, additionally consolidates nine
 uploads into one and nine staging allocations into zero, and gives RFC-0001 §2's
 memory model a GPU-side implementation.
 
-### Q2 — How is uniform alignment handled?
+### Q2, How is uniform alignment handled?
 
 **Resolution: read `device.limits().min_uniform_buffer_offset_alignment` at init
 and pad every uniform region to it (G2).** Not hardcoded to 256, because it is a
@@ -313,28 +313,28 @@ device limit and the value that works on the development machine is the least
 useful one to assume. Debug-asserted per append; tested against the real device
 limit.
 
-### Q3 — Does the arena ever shrink?
+### Q3, Does the arena ever shrink?
 
 **Resolution: no, within a session (G3).** Shrinking recreates the buffer, which
 is the operation being removed, at an unpredictable moment. The high-water mark
 of a UI is bounded. The reserved size is exposed as a counter so it is
 diagnosable rather than hidden.
 
-### Q4 — Do the per-instance depth buffers stay separate?
+### Q4, Do the per-instance depth buffers stay separate?
 
-**Resolution: no — they join the arena as ordinary regions (G4).** They are
+**Resolution: no, they join the arena as ordinary regions (G4).** They are
 per-instance vertex data, not depth attachments; nothing justified their separate
 allocation, and merging removes two of the nine per-frame creations.
 
-### Q5 — Should this land before or after RFC-0032?
+### Q5, Should this land before or after RFC-0032?
 
 **Resolution: either; they are independent (G6).** Different causes, no shared
 code. On the current numbers `encode.frame` (~6 ms) is an order of magnitude
-above `layout.taffy` (~0.4 ms), so on impact alone this one is first — but
+above `layout.taffy` (~0.4 ms), so on impact alone this one is first, but
 `IMPLEMENTATION_10.md` M87 measures the sub-terms before committing, because
 "leading suspect" is not a measurement and this project does not act on those.
 
-### Q6 — How is correctness established for a pure-refactor change?
+### Q6, How is correctness established for a pure-refactor change?
 
 **Resolution: golden-image parity (G5).** Since no pixel is intended to change,
 any pixel that changes is a bug, and byte-identical output is both the strictest
@@ -357,6 +357,6 @@ Implementation-time decisions that surface after merge go to
 - **A staging belt**, if instance volume ever grows to where `write_buffer`
   matters.
 - **Sub-allocating the vector atlas and texture cache from the same arena**,
-  which would give the engine a single VRAM budget number to report and enforce —
+  which would give the engine a single VRAM budget number to report and enforce, 
   and would make "no VRAM spikes" a testable assertion rather than a design
   intention.

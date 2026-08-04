@@ -7,13 +7,13 @@
 //! spawn the logic thread, notifies it of resize events via
 //! [`Engine::on_resize`], and drives it frame-by-frame via
 //! [`Engine::render_latest`]. The engine never imports windowing primitives
-//! (`winit`, `raw-window-handle`, etc.) — surface creation and window
+//! (`winit`, `raw-window-handle`, etc.), surface creation and window
 //! lifecycle are entirely the platform's responsibility (RFC-0001 §6).
 //!
 //! ## Coordinate system
 //!
 //! All instance coordinates (rect, radii, etc.) and the viewport uniform are
-//! in **logical pixels** — the same density-independent unit used by CSS,
+//! in **logical pixels**, the same density-independent unit used by CSS,
 //! `SwiftUI` points, and Android dp. On `HiDPI` displays (Retina 2×, etc.) the
 //! platform must supply the OS-reported `scale_factor` so that the engine can
 //! internally convert physical pixels → logical pixels for the viewport
@@ -52,7 +52,7 @@ use crate::relay::Relay;
 /// POD without any of the staleness questions a running total would raise.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Census {
-    /// Box-class draw instances — see [`crate::frame::RenderFrame::instance_count`].
+    /// Box-class draw instances, see [`crate::frame::RenderFrame::instance_count`].
     pub instances: usize,
     /// Text lines (not glyphs).
     pub texts: usize,
@@ -66,9 +66,9 @@ pub struct Census {
 /// [`Relay`] that connects the logic and render threads. Construction is
 /// two-phase:
 ///
-/// 1. [`Engine::init`] — selects the GPU adapter, compiles pipelines, and
+/// 1. [`Engine::init`], selects the GPU adapter, compiles pipelines, and
 ///    creates the `Relay`. Synchronous startup, no threads yet.
-/// 2. [`Engine::start_logic`] — spawns the logic thread (Evaluator + Atlas),
+/// 2. [`Engine::start_logic`], spawns the logic thread (Evaluator + Atlas),
 ///    publishes the first frame synchronously so `render_latest` has content
 ///    on the very first redraw.
 ///
@@ -77,7 +77,7 @@ pub struct Census {
 /// `RedrawRequested` event.
 ///
 /// Dropping `Engine` signals the logic thread to shut down and joins it
-/// before returning — no orphan threads after the window closes.
+/// before returning, no orphan threads after the window closes.
 pub struct Engine {
     encoder: EncoderSubsystem,
     surface: wgpu::Surface<'static>,
@@ -103,7 +103,7 @@ pub struct Engine {
 ///
 /// Bundles a [`ViewArena`], the [`Signal<String>`](Signal) allocated from
 /// it, an [`EvaluatorTick`] tracking that signal, and a trivial single-node
-/// [`LayoutAtlas`] that receives the resulting dirty-target broadcast — the
+/// [`LayoutAtlas`] that receives the resulting dirty-target broadcast, the
 /// same Evaluator → Atlas flow RFC-0001 §2.2/§4.1 describes, now exercised
 /// by production code instead of only by `atlas/layout.rs`'s unit tests.
 ///
@@ -115,13 +115,13 @@ pub struct Engine {
 /// any self-referential owner must: heap-allocate the arena (`Box`, so its
 /// address is stable even if `ReactiveLabel` itself moves) and erase the
 /// signal's lifetime to `'static` via [`Signal::erase_lifetime`]. This is
-/// sound because `arena` and `signal` are dropped together — nothing
+/// sound because `arena` and `signal` are dropped together, nothing
 /// outside this struct ever holds a copy of `signal`, so it is never used
 /// after `arena` is gone.
 struct ReactiveLabel {
     // Boxed so the heap address backing `signal`'s slot never moves, even
     // if `ReactiveLabel` (or the `Engine` that owns it) is moved. Never
-    // read directly — its only job is to keep that heap allocation (and
+    // read directly, its only job is to keep that heap allocation (and
     // therefore `signal`'s backing slot) alive for as long as `ReactiveLabel`
     // exists; the value is reached exclusively through `signal`'s erased
     // `'static` handle, not through this field.
@@ -142,14 +142,14 @@ impl ReactiveLabel {
         let arena = Box::new(ViewArena::new());
         // `arena` is boxed (stable heap address) and dropped together with
         // `signal` when `ReactiveLabel` (and the `Engine` that owns it) is
-        // dropped — see the struct doc above. `Signal::new_in_boxed` is the
+        // dropped, see the struct doc above. `Signal::new_in_boxed` is the
         // safe wrapper around the `unsafe` lifetime erasure that pattern
         // requires; the `unsafe` block itself stays inside `signal.rs`,
         // the evaluator subsystem file that owns this invariant.
         let signal: Signal<'static, String> = Signal::new_in_boxed(&arena, text.into());
 
         // A single trivial (zero-sized) leaf is enough to give the label a
-        // real AtlasNode TargetId to subscribe to and mark dirty — Phase 1
+        // real AtlasNode TargetId to subscribe to and mark dirty, Phase 1
         // does not yet thread Atlas-resolved geometry into `TextLine` (x/y
         // are authored directly), so this leaf's only job is to participate
         // honestly in the dirty-broadcast flow, not to compute position.
@@ -193,7 +193,7 @@ impl ReactiveLabel {
     }
 
     /// Runs one Evaluator → Atlas tick and returns this frame's `TextLine`,
-    /// with `dirty` reflecting the real dirty-flag pipeline output — never
+    /// with `dirty` reflecting the real dirty-flag pipeline output, never
     /// a hardcoded value.
     fn text_line(&mut self) -> Result<TextLine, ByardError> {
         let dirty_targets = self.tick.collect_dirty();
@@ -221,13 +221,13 @@ impl Engine {
     ///
     /// Performs adapter selection, device creation, surface format negotiation,
     /// surface configuration, and pipeline compilation. All GPU errors are
-    /// captured and returned as [`ByardError`] — this method never panics.
+    /// captured and returned as [`ByardError`], this method never panics.
     ///
     /// ## Parameters
     ///
-    /// - `width`, `height` — initial surface dimensions in **physical pixels**
+    /// - `width`, `height`, initial surface dimensions in **physical pixels**
     ///   (`window.inner_size()` in winit). Used for the `wgpu` surface only.
-    /// - `scale_factor` — OS DPI scale factor (`window.scale_factor()` in
+    /// - `scale_factor`, OS DPI scale factor (`window.scale_factor()` in
     ///   winit; typically `1.0` on non-HiDPI, `2.0` on Retina). Used to
     ///   convert physical pixels → logical pixels for the viewport uniform so
     ///   that all instance coordinates (rect, radii, etc.) can be authored in
@@ -235,9 +235,9 @@ impl Engine {
     ///
     /// # Errors
     ///
-    /// - [`ByardError::UnsupportedBackend`] — no compatible GPU adapter found,
+    /// - [`ByardError::UnsupportedBackend`], no compatible GPU adapter found,
     ///   or logical device creation failed.
-    /// - [`ByardError::PipelineCompilation`] — WGSL shader or pipeline
+    /// - [`ByardError::PipelineCompilation`], WGSL shader or pipeline
     ///   descriptor failed GPU-side validation.
     pub async fn init(
         instance: &wgpu::Instance,
@@ -260,7 +260,7 @@ impl Engine {
 
         // Surfaced unconditionally (not gated behind a verbose/debug flag):
         // which adapter and backend actually got picked is exactly the
-        // information needed to diagnose "nothing renders, no error" reports —
+        // information needed to diagnose "nothing renders, no error" reports,
         // a software/CPU adapter (`DeviceType::Cpu`) or an unexpected backend
         // (e.g. GL instead of Vulkan) explains a great deal that would
         // otherwise look like a silent failure.
@@ -285,7 +285,7 @@ impl Engine {
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("ByardCore - Engine Device"),
                 required_features: optional_features,
-                // Use the adapter's own limits — no artificial WebGL2 cap.
+                // Use the adapter's own limits, no artificial WebGL2 cap.
                 required_limits: adapter.limits(),
                 memory_hints: wgpu::MemoryHints::Performance,
                 ..Default::default()
@@ -308,7 +308,7 @@ impl Engine {
         // frame needs a genuinely empty background to blend onto), so the
         // presented image carries a zero alpha in its cleared regions. Under a
         // *non-opaque* composite mode the window manager then blends the whole
-        // window against the desktop and the app looks fully transparent — a
+        // window against the desktop and the app looks fully transparent, a
         // frozen, see-through window on X11, and on Wayland a toplevel the
         // compositor may not visibly map at all. macOS/Metal and Windows/DX12
         // happen to report `Opaque` first so `alpha_modes[0]` was invisibly
@@ -323,11 +323,11 @@ impl Engine {
             caps.alpha_modes[0]
         };
 
-        // --- Surface configuration (physical pixels — wgpu requirement) ---
+        // --- Surface configuration (physical pixels, wgpu requirement) ---
         //
         // COPY_DST is required in addition to RENDER_ATTACHMENT: per RFC §3.3's
         // scissor-clipping implementation, `EncoderSubsystem::encode_frame`
-        // never draws directly onto the swapchain image — it draws onto a
+        // never draws directly onto the swapchain image, it draws onto a
         // persistent off-screen target and `copy_texture_to_texture`s the
         // result onto this surface's current texture every frame (the
         // swapchain image's own previous contents are never assumed valid
@@ -360,8 +360,8 @@ impl Engine {
         .await?;
         // RFC-0023 resolved question "blur quality tiers": the `auto` tier
         // runs the separable Gaussian at 0.5× base resolution on every real
-        // GPU — `IntegratedGpu` includes Apple Silicon and modern mobile
-        // parts, which handle it easily — and drops to the cheap 0.25× base
+        // GPU, `IntegratedGpu` includes Apple Silicon and modern mobile
+        // parts, which handle it easily, and drops to the cheap 0.25× base
         // only on software/virtual adapters, where every fragment costs CPU.
         // A per-element `blur_quality: high | low` always overrides this.
         encoder.set_blur_auto_capable(!matches!(
@@ -404,10 +404,10 @@ impl Engine {
     /// Sends the new text to the logic thread via a lock-free channel; the
     /// logic thread picks it up on its next tick, writes it to the `Signal`,
     /// and the resulting `TextLine::dirty` bit propagates through the
-    /// Evaluator → Atlas pipeline — the full RFC-0001 §2.2/§4.1 path,
+    /// Evaluator → Atlas pipeline, the full RFC-0001 §2.2/§4.1 path,
     /// without any cross-thread `Signal` write.
     pub fn set_label_text(&self, text: impl Into<String>) {
-        // Unbounded channel: send is always non-blocking. Ignore the error —
+        // Unbounded channel: send is always non-blocking. Ignore the error,
         // it only fires when the logic thread has already exited, at which
         // point delivering the text is moot.
         let _ = self.label_tx.send(text.into());
@@ -431,7 +431,7 @@ impl Engine {
     }
 
     /// Installs the channel this engine reports applied vector-atlas-upload
-    /// ids through (RFC-0009 §2-C) — see
+    /// ids through (RFC-0009 §2-C), see
     /// [`EncoderSubsystem::set_vector_ack_sender`](crate::encoder::EncoderSubsystem::set_vector_ack_sender).
     pub fn set_vector_ack_sender(&mut self, tx: crossbeam_channel::Sender<u64>) {
         self.encoder.set_vector_ack_sender(tx);
@@ -441,11 +441,11 @@ impl Engine {
     ///
     /// `width` and `height` are the new dimensions in **physical pixels**
     /// (`window.inner_size()` in winit). `scale_factor` is the OS DPI scale
-    /// factor — pass `window.scale_factor()` and also call this method from
+    /// factor, pass `window.scale_factor()` and also call this method from
     /// `WindowEvent::ScaleFactorChanged` so the viewport uniform stays correct
     /// when the window moves between displays of different densities.
     ///
-    /// Calls with `width == 0` or `height == 0` are silently ignored — zero-size
+    /// Calls with `width == 0` or `height == 0` are silently ignored, zero-size
     /// surfaces are invalid in wgpu (occurs on window minimise on some platforms).
     pub fn on_resize(&mut self, width: u32, height: u32, scale_factor: f64) {
         if width == 0 || height == 0 {
@@ -499,7 +499,7 @@ impl Engine {
         // on the very first RedrawRequested, before the thread has ticked.
         {
             let mut label =
-                ReactiveLabel::new("Byard — Phase 1", 110.0, 110.0, 20.0, [1.0, 1.0, 1.0, 1.0]);
+                ReactiveLabel::new("Byard, Phase 1", 110.0, 110.0, 20.0, [1.0, 1.0, 1.0, 1.0]);
             let label_line = label.text_line()?;
             let mut frame = relay.acquire_recycled();
             for &inst in &instances {
@@ -513,7 +513,7 @@ impl Engine {
         }
 
         // Spawn the logic thread. `ReactiveLabel` is created inside the thread
-        // so it never needs to cross a thread boundary — `Signal<T>` is !Send
+        // so it never needs to cross a thread boundary, `Signal<T>` is !Send
         // by design (RFC-0001 §5.1). The closure only captures Send types:
         // `relay: Arc<Relay>`, `label_rx: Receiver<String>`, and the
         // plain-data `instances`/`texts` vecs.
@@ -521,7 +521,7 @@ impl Engine {
             .name("byard-logic-thread".to_string())
             .spawn(move || {
                 let mut label =
-                    ReactiveLabel::new("Byard — Phase 1", 110.0, 110.0, 20.0, [1.0, 1.0, 1.0, 1.0]);
+                    ReactiveLabel::new("Byard, Phase 1", 110.0, 110.0, 20.0, [1.0, 1.0, 1.0, 1.0]);
                 while !relay.is_shutdown() {
                     while let Ok(new_text) = label_rx.try_recv() {
                         label.set_text(new_text);
@@ -530,7 +530,7 @@ impl Engine {
                         .text_line()
                         .expect("text_line never fails in logic loop");
                     // The version is the relay's publish sequence number and
-                    // is stamped by `Relay::publish` itself (RFC-0001 §5.2) —
+                    // is stamped by `Relay::publish` itself (RFC-0001 §5.2),
                     // a host cannot forget to maintain it, which is the point.
                     let mut frame = relay.acquire_recycled();
                     for &inst in &instances {
@@ -559,7 +559,7 @@ impl Engine {
     /// the factory builds the `!Send` running interpreter (holding `Signal`s
     /// and a logic-thread-local reactive scope) on the logic thread, where it
     /// is then driven once per tick. The `Send + 'static` bound is on the
-    /// factory only — never on the [`LogicRuntime`] it produces (INV-6).
+    /// factory only, never on the [`LogicRuntime`] it produces (INV-6).
     ///
     /// Use this **instead of** [`start_logic`](Engine::start_logic); call it at
     /// most once.
@@ -598,7 +598,7 @@ impl Engine {
     pub fn render_latest(&mut self) -> Result<(), ByardError> {
         // Nothing published yet (the logic thread hasn't produced its first
         // frame): skip *before* touching the surface. Acquiring a surface
-        // texture and dropping it without `present()` is an anti-pattern — on
+        // texture and dropping it without `present()` is an anti-pattern, on
         // Wayland/FIFO it churns the swapchain acquire without ever committing a
         // buffer, so the window can sit unmapped ("loading", no error) until the
         // first real frame instead of drawing as soon as one lands.
@@ -608,7 +608,7 @@ impl Engine {
 
         // RFC-0030 §I1: swapchain acquire, timed on its own.
         //
-        // Under FIFO this is where vsync backpressure lands — the driver
+        // Under FIFO this is where vsync backpressure lands, the driver
         // parks the caller here until a swapchain image is free. Left
         // unscoped (as it was) that wait is invisible, and a frame that is
         // simply *well paced* reads identically to one that is slow, which
@@ -640,7 +640,7 @@ impl Engine {
         // Drain any completed async image decodes (M29) and upload them on this
         // (render) thread before encoding, so a freshly-decoded texture is
         // `Ready` for this frame. The decode itself already ran on the relay's
-        // I/O pool — only the cheap GPU upload happens here (INV-12).
+        // I/O pool, only the cheap GPU upload happens here (INV-12).
         while let Some(result) = self.relay.try_recv_io_result() {
             match result.downcast::<crate::encoder::DecodedImage>() {
                 Ok(decoded) => self.encoder.apply_decoded(*decoded),
@@ -661,7 +661,7 @@ impl Engine {
         {
             // RFC-0030 §I1: the swapchain commit. Cheap on a healthy frame and
             // the second place a compositor can charge the engine for pacing,
-            // so it is measured rather than assumed — the pair
+            // so it is measured rather than assumed, the pair
             // (`present.acquire`, `present.submit`) is what distinguishes "the
             // frame was slow" from "the frame was on time and waited".
             crate::profile_scope!("present.submit");
@@ -700,7 +700,7 @@ impl Engine {
     /// §P6): box-class instances, text lines, vector glyphs.
     ///
     /// Three `Vec::len` reads on data that already crossed the frame boundary
-    /// — no new field, no new traffic, and nothing that survives the frame it
+    ///, no new field, no new traffic, and nothing that survives the frame it
     /// describes.
     #[must_use]
     pub fn latest_census(&self) -> Census {
@@ -713,14 +713,14 @@ impl Engine {
             })
     }
 
-    /// How many text lines the last encoded frame re-shaped — see
+    /// How many text lines the last encoded frame re-shaped, see
     /// [`crate::encoder::EncoderSubsystem::last_text_reshapes`].
     #[must_use]
     pub const fn last_text_reshapes(&self) -> usize {
         self.encoder.last_text_reshapes()
     }
 
-    /// Whether GPU pass timing is active for this engine (RFC-0013 **P5**) —
+    /// Whether GPU pass timing is active for this engine (RFC-0013 **P5**),
     /// see [`crate::encoder::EncoderSubsystem::gpu_timing_available`].
     #[must_use]
     pub fn gpu_timing_available(&self) -> bool {
@@ -735,7 +735,7 @@ impl Drop for Engine {
             match handle.join() {
                 Ok(()) => {}
                 // Resume the logic thread's panic unless we're already
-                // unwinding — resuming inside a panic would abort the process
+                // unwinding, resuming inside a panic would abort the process
                 // (double-panic), so skip re-raising in that case.
                 Err(payload) => {
                     if !std::thread::panicking() {
@@ -817,9 +817,9 @@ mod tests {
 
     #[test]
     fn new_with_unicode_text() {
-        let mut label = label_with_text("Byard — 🦀 ñ");
+        let mut label = label_with_text("Byard, 🦀 ñ");
         let line = label.text_line().expect("first tick never fails");
-        assert_eq!(line.text, "Byard — 🦀 ñ");
+        assert_eq!(line.text, "Byard, 🦀 ñ");
     }
 
     #[test]
@@ -1028,7 +1028,7 @@ mod tests {
     #[test]
     fn set_text_with_same_value_still_marks_dirty() {
         // A Signal::write always advances the version counter, even when the
-        // new value is identical to the old one — there is no value-equality
+        // new value is identical to the old one, there is no value-equality
         // short-circuit anywhere in the Evaluator. This is intentional (see
         // RFC-0001 §2.2): cheaply comparing arbitrary `T` would not be
         // possible in general, and skipping it keeps the pipeline simple.
@@ -1098,7 +1098,7 @@ mod tests {
     fn repeated_ticks_with_no_writes_stay_clean() {
         let mut label = label_with_text("static");
         // Consume the initial (clean) state, then tick several more times
-        // with no writes in between — every one must stay clean.
+        // with no writes in between, every one must stay clean.
         for _ in 0..10 {
             let line = label.text_line().expect("tick with no writes never fails");
             assert!(!line.dirty);
@@ -1182,7 +1182,7 @@ mod tests {
 
     #[test]
     fn logical_viewport_large_dimensions_do_not_overflow() {
-        // 8K physical resolution at 1x scale — comfortably within f32's
+        // 8K physical resolution at 1x scale, comfortably within f32's
         // 24-bit mantissa (RFC-0001 already accepts this precision
         // trade-off for viewport math; see `Engine::init`'s `cast_precision_loss`
         // allow).

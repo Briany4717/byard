@@ -2,11 +2,11 @@
 resolver = "2"
 # Crates will be added here as phases land.
 # Planned layout:
-#   crates/byard-core      — engine subsystems (render, spatial, logic, concurrency)
-#   crates/byard-compiler  — byld lexer, parser, and AST interpreter
-#   crates/byard-macro     — #[byard_controller] procedural macro
-#   crates/byard-platform  — PlatformHost implementations (winit, etc.)
-#   crates/byard           — public façade re-exporting the above
+#   crates/byard-core, engine subsystems (render, spatial, logic, concurrency)
+#   crates/byard-compiler, byld lexer, parser, and AST interpreter
+#   crates/byard-macro, #[byard_controller] procedural macro
+#   crates/byard-platform, PlatformHost implementations (winit, etc.)
+#   crates/byard, public façade re-exporting the above
 members = ["crates/byard","crates/byard-compiler","crates/byard-core", "crates/byard-platform", "crates/byard-macro", "crates/byld-lsp", "crates/byard-cli",]
 
 [workspace.package]

@@ -14,7 +14,7 @@ Cargo.lock
 .vscode
 .codegraph
 .antigravitycli
-# byard-material lives here only temporarily — it graduates to its own
+# byard-material lives here only temporarily, it graduates to its own
 # repository (github.com/byard-framework/byard-material); see RFC-0008.
 /byard-material/
 

@@ -61,16 +61,16 @@ security of the reporter of any incident.
 Community leaders will follow these guidelines in determining the consequences
 for any action they deem in violation of this Code of Conduct:
 
-**1. Correction** — A private, written warning providing clarity around the
+**1. Correction**, A private, written warning providing clarity around the
 nature of the violation and an explanation of why the behavior was inappropriate.
 
-**2. Warning** — A warning with consequences for continued behavior. No
+**2. Warning**, A warning with consequences for continued behavior. No
 interaction with the people involved for a specified period of time.
 
-**3. Temporary Ban** — A temporary ban from any sort of interaction or public
+**3. Temporary Ban**, A temporary ban from any sort of interaction or public
 communication with the community.
 
-**4. Permanent Ban** — A permanent ban from any sort of public interaction
+**4. Permanent Ban**, A permanent ban from any sort of public interaction
 within the community.
 
 ## Attribution

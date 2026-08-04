@@ -12,12 +12,6 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- Documentation: added `support/STATUS_RFCS.md`, a per-RFC status checked
-  against the code, and corrected the RFC-0018, RFC-0024, and RFC-0028 headers
-  that still read `Draft` after the features had shipped. Refreshed the README
-  status and roadmap and the contributor doc map, and standardised dash
-  punctuation across prose and source comments.
-
 ### Added
 
 - **Corners with continuous curvature, on every box the framework draws

@@ -895,6 +895,9 @@ fn describe_member(m: &Member) -> String {
         Member::When { .. } => "a `when` block".to_string(),
         Member::Style { .. } => "a `style` block".to_string(),
         Member::Route { kind, .. } => format!("a `{}` block", kind.as_str()),
+        Member::Timer { every, .. } => {
+            format!("an `{}` timer", if *every { "every" } else { "after" })
+        }
         Member::Lifecycle { on_mount, .. } => {
             format!(
                 "an `on {}` effect",
@@ -917,6 +920,7 @@ fn member_span(m: &Member) -> crate::diagnostics::Span {
         | Member::When { span, .. }
         | Member::Route { span, .. }
         | Member::Lifecycle { span, .. }
+        | Member::Timer { span, .. }
         | Member::Style { span, .. } => *span,
         Member::Element(e) => e.span,
         Member::Expr(e) => e.span(),
@@ -1536,6 +1540,7 @@ fn validate_canvas_body(members: &[Member], errs: &mut Vec<CompileError>) {
             Member::Style { span, .. } => push_non_shape(errs, *span, "style"),
             Member::Route { kind, span, .. } => push_non_shape(errs, *span, kind.as_str()),
             Member::Lifecycle { span, .. } => push_non_shape(errs, *span, "on mount"),
+            Member::Timer { span, .. } => push_non_shape(errs, *span, "a timer"),
             Member::Expr(e) => push_non_shape(errs, e.span(), "an expression"),
         }
     }

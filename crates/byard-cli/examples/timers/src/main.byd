@@ -1,0 +1,66 @@
+// RFC-0029 §5, timer effects: the clock moves with nobody touching anything.
+//
+// Run it (from the repo root):
+//   cd crates/byard-cli/examples/timers
+//   cargo run -p byard-cli -- dev
+//
+// Three timers, three shapes:
+//
+//   • `every 1s`  — a session clock, ticking for as long as this view is up;
+//   • `after 3s`  — a one-shot that reveals a panel, once, and never again;
+//   • `every 500ms` — a scoped timer inside a `when`, which stops the instant
+//     the panel is collapsed and starts fresh when it comes back.
+//
+// A tick is delivered through exactly the path a controller reply travels
+// (RFC-0028 §5): it lands on the logic thread, runs the written action, writes
+// a `var`, and the ordinary reactive update paints it. Nothing here polls.
+View Main() {
+    var seconds: Int = 0
+    var revealed: Bool = false
+    var beats: Int = 0
+    var live: Bool = true
+
+    every 1s => { seconds = seconds + 1 }
+    after 3s => { revealed = true }
+
+    Column #[bg: 0x14141C, p: 32, gap: 20, width: 620] {
+        Text("RFC-0029, timers") #[color: 0xFFFFFF, size: 26, weight: bold]
+
+        Column #[bg: 0x1E1E2A, radius: 14, p: 24, gap: 6] {
+            Text("this view has been open for") #[color: 0x9AA0AC, size: 13]
+            Text("{seconds}s") #[color: 0xFFFFFF, size: 40, weight: bold]
+        }
+
+        // Appears three seconds in, once. Leave it running: it never
+        // reappears, because `after` is one-shot.
+        when revealed {
+            Row #[bg: 0x1E2A1E, radius: 12, p: 16, gap: 10, border: 0x477A56] {
+                Text("✓") #[color: 0x8FD19E, size: 18]
+                Text("`after 3s` fired, and will not fire again")
+                    #[color: 0xC8E6C9, size: 14]
+            }
+        }
+
+        Row #[gap: 12] {
+            Button(live ? "stop the scoped timer" : "start it again")
+                #[bg: 0x477A96, radius: 10, color: 0xFFFFFF,
+                  p: (vertical: 10, horizontal: 18)]
+                => { live = !live }
+            Text("beats: {beats}") #[color: 0x9AA0AC, size: 14]
+        }
+
+        // The scoped timer lives inside the `when`, so collapsing the panel
+        // cancels it (INV-10: nothing survives the scope that started it) and
+        // re-opening arms a fresh one. Watch `beats` freeze and resume.
+        when live {
+            Column #[bg: 0x1E1E2A, radius: 14, p: 20, gap: 8] {
+                every 500ms => { beats = beats + 1 }
+                Text("scoped timer running") #[color: 0x9AA0AC, size: 13]
+                Text("{beats}") #[color: 0xFFFFFF, size: 28, weight: bold]
+            }
+        } else {
+            Text("scoped timer cancelled — `beats` is frozen")
+                #[color: 0x9AA0AC, size: 13]
+        }
+    }
+}

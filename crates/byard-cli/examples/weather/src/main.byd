@@ -23,6 +23,10 @@ View Main() {
     var day_high: Float = 0.0
     var day_low: Float = 0.0
     var message: Str = ""
+    // The selected place, so the refresh timer knows what to re-ask for.
+    var lat: Float = 35.68
+    var lon: Float = 139.69
+    var refreshes: Int = 0
 
     // Latitude/longitude per city, so the example needs no geocoding round
     // trip and stays about the one thing it is demonstrating.
@@ -32,6 +36,27 @@ View Main() {
         { name: "Nairobi",   lat: -1.29,  lon: 36.82 },
         { name: "Santiago",  lat: -33.45, lon: -70.67 }
     ]
+
+    // RFC-0029 §5: a forecast goes stale, so it is re-asked for on a timer as
+    // well as on a press. `every 30s` is short for an example; a real app says
+    // `every 5min`, which is the unit the lexer learned for exactly this
+    // sentence. The timer is scoped to this view, so closing the window stops
+    // the polling rather than leaving it running (INV-10).
+    every 30s => {
+        refreshes = refreshes + 1
+        http.get("https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,wind_speed_10m&daily=temperature_2m_max,temperature_2m_min&forecast_days=1")
+            ok res => {
+                state = "ok"
+                temp = res.json.current.temperature_2m
+                wind = res.json.current.wind_speed_10m
+                day_high = res.json.daily.temperature_2m_max[0]
+                day_low = res.json.daily.temperature_2m_min[0]
+            }
+            err e => {
+                state = "error"
+                message = e.message
+            }
+    }
 
     Column #[bg: 0x14141C, p: 32, gap: 20, width: 720] {
         Text("RFC-0029, weather over HTTP") #[color: 0xFFFFFF, size: 26, weight: bold]
@@ -48,6 +73,8 @@ View Main() {
                     => {
                         state = "loading"
                         city = place.name
+                        lat = place.lat
+                        lon = place.lon
                         message = ""
                         http.get("https://api.open-meteo.com/v1/forecast?latitude={place.lat}&longitude={place.lon}&current=temperature_2m,wind_speed_10m&daily=temperature_2m_max,temperature_2m_min&forecast_days=1")
                             ok res => {
@@ -87,6 +114,7 @@ View Main() {
                     Text("low {day_low}°") #[color: 0x9AA0AC, size: 14]
                     Text("wind {wind} km/h") #[color: 0x9AA0AC, size: 14]
                 }
+                Text("auto-refreshed {refreshes} times") #[color: 0x6A7080, size: 12]
             }
         }
 

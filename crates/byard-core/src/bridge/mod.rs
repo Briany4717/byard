@@ -304,6 +304,25 @@ pub struct ControllerReply {
     pub result: Result<HostValue, HostValue>,
 }
 
+/// An armed timer, cancelled when this handle is dropped (RFC-0029 §5).
+///
+/// Cancellation on drop rather than an explicit `stop()` because the failure
+/// mode of the explicit form is a timer that keeps firing into a view that no
+/// longer exists, and that failure is invisible until something writes a `var`
+/// nobody is watching. Tying it to ownership makes "the scope went away" and
+/// "the timer stopped" the same event.
+#[cfg(feature = "runtime-io")]
+pub struct TimerHandle {
+    abort: tokio::task::AbortHandle,
+}
+
+#[cfg(feature = "runtime-io")]
+impl Drop for TimerHandle {
+    fn drop(&mut self) {
+        self.abort.abort();
+    }
+}
+
 /// A timer effect firing (RFC-0029 §5): a zero-argument reply delivered through
 /// the same logic-thread apply path as a [`ControllerReply`], running the
 /// timer's action.
@@ -351,6 +370,56 @@ impl Dispatcher {
     #[must_use]
     pub fn registry(&self) -> &ControllerRegistry {
         &self.registry
+    }
+
+    /// Arms a timer that delivers a [`TimerTick`] for `continuation_id`
+    /// (RFC-0029 §5), repeating every `dur_ms` when `every`, or once after it.
+    ///
+    /// Returns the handle whose drop **cancels** the timer. That is the whole
+    /// leak story (INV-10): the effect that armed the timer owns the handle,
+    /// and an effect that unmounts drops its state, so there is no separate
+    /// "stop" path to forget to call and no way for a task to outlive the
+    /// scope that started it.
+    ///
+    /// A `0 ms` interval is refused rather than armed: a zero-period
+    /// `tokio::time::interval` fires as fast as the pool can send, which is a
+    /// livelock dressed as a timer.
+    #[cfg(feature = "runtime-io")]
+    #[must_use]
+    pub fn spawn_timer(
+        &self,
+        every: bool,
+        dur_ms: u64,
+        continuation_id: u64,
+    ) -> Option<TimerHandle> {
+        if dur_ms == 0 {
+            return None;
+        }
+        let period = std::time::Duration::from_millis(dur_ms);
+        let tx = self.tx.clone();
+        let task = self.handle.spawn(async move {
+            if every {
+                let mut ticks = tokio::time::interval(period);
+                // The first tick of a Tokio interval completes immediately;
+                // `every 5min` means "in five minutes", not "now and then every
+                // five minutes", so the immediate one is consumed here.
+                ticks.tick().await;
+                loop {
+                    ticks.tick().await;
+                    if tx.send(Box::new(TimerTick { continuation_id })).is_err() {
+                        // The logic thread is gone (shutdown): stop rather than
+                        // spin sending into a closed channel.
+                        break;
+                    }
+                }
+            } else {
+                tokio::time::sleep(period).await;
+                let _ = tx.send(Box::new(TimerTick { continuation_id }));
+            }
+        });
+        Some(TimerHandle {
+            abort: task.abort_handle(),
+        })
     }
 
     /// Schedules `method` on the controller at `id` and arranges for its

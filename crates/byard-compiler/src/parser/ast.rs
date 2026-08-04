@@ -218,6 +218,27 @@ pub enum Member {
         /// Source span.
         span: Span,
     },
+    /// `every 5min => action` / `after 2s => action`, a timer effect
+    /// (RFC-0029 §5).
+    ///
+    /// A structural effect like [`Member::Lifecycle`], and for the same
+    /// reason: a timer belongs to the scope that declared it, so a screen that
+    /// unmounts stops polling instead of leaving a task running against a view
+    /// nobody can see (INV-10).
+    ///
+    /// Coarse by design. `every 16ms` is not a substitute for the animation
+    /// runtime (RFC-0010), which evaluates on the GPU; a timer runs its action
+    /// on the logic thread and is for seconds-scale refresh.
+    Timer {
+        /// `true` for `every` (repeating), `false` for `after` (one-shot).
+        every: bool,
+        /// The interval or delay, in milliseconds.
+        dur_ms: u64,
+        /// The action to run on each fire.
+        action: Expr,
+        /// Source span.
+        span: Span,
+    },
     /// `style { .class #[...] ... }`, scoped style rules (static; D5).
     Style {
         /// The style rules.

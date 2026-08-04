@@ -129,6 +129,7 @@ fn members_span(members: &[Member]) -> Span {
             | Member::When { span, .. }
             | Member::Route { span, .. }
             | Member::Lifecycle { span, .. }
+            | Member::Timer { span, .. }
             | Member::Style { span, .. } => *span,
             Member::Element(el) => el.span,
             Member::Expr(expr) => expr.span(),
@@ -2884,6 +2885,26 @@ impl Interpreter {
                         controller::EffectKind::Unmount
                     };
                     let index = self.register_effect(kind, lowered);
+                    out.push(RenderNode::Effect { index });
+                }
+            }
+            // RFC-0029 §5: a timer effect. Same node, same mount rule and same
+            // reply path as a lifecycle effect, which is the point: a timer
+            // *is* a repeating mount-scoped effect.
+            Member::Timer {
+                every,
+                dur_ms,
+                action,
+                ..
+            } => {
+                if let Ok(lowered) = self.lower_action(action, None) {
+                    let index = self.register_effect(
+                        controller::EffectKind::Timer {
+                            every: *every,
+                            dur_ms: *dur_ms,
+                        },
+                        lowered,
+                    );
                     out.push(RenderNode::Effect { index });
                 }
             }

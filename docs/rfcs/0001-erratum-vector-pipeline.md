@@ -44,7 +44,7 @@ RFC-0001 §3.1's table is amended to:
 | **`VectorMSDF`** | **Monochrome vector icons via a multi-channel signed distance field atlas (RFC-0009)** |
 
 Any RFC-0001 sentence reading "exactly four pipelines" / "the renderer pipelines
-are fixed at four" is superseded by "**five** pipelines"; the set remains closed, 
+are fixed at four" is superseded by "**five** pipelines"; the set remains closed,
 adding a sixth still requires an RFC and an erratum.
 
 ### C2, The §9 crate layout comment is widened

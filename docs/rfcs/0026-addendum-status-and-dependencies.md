@@ -19,7 +19,7 @@ its status and its **hard dependencies on the newly proposed data/async layer**,
 so the 0027–0029 set can reference navigation without duplicating it and so the
 milestone plan sequences them correctly.
 
-This addendum adds **no navigation design**, RFC-0026 owns that. It only fixes
+This addendum adds **no navigation design**; RFC-0026 owns that. It only fixes
 the dependency order.
 
 ---

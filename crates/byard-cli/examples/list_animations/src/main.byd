@@ -4,7 +4,7 @@
 //   cd crates/byard-cli/examples/list_animations
 //   cargo run -p byard-cli -- dev
 //
-// An animation's persisted state is keyed by the `with` node that wrote it, 
+// An animation's persisted state is keyed by the `with` node that wrote it,
 // and by the element *instance* running it. That second half is what this
 // example exists to show, because without it none of the motion below works: a
 // `for` body is lowered once per row but *written* once, so every row's `with`

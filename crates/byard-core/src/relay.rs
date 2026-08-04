@@ -11,23 +11,31 @@
 //!   heap allocations instead of reallocating every frame, and
 //! - the Tokio runtime backing the async I/O pool (file loads, network,
 //!   timers, anything that must not block either the logic or render
-//!   thread), plus the `tokio::sync::mpsc` channel that pool uses to hand
-//!   completed results back to the logic thread (RFC-0001 §5.1, row 3).
+//!   thread), plus the two `tokio::sync::mpsc` channels that pool uses to
+//!   hand completed results back (RFC-0001 §5.1, row 3).
 //!
-//! ## Why the I/O result channel carries `Box<dyn Any + Send>`
+//! ## Why there are two result channels, not one
 //!
-//! RFC-0001 §5.1 says the Tokio pool "executes async I/O from Rust
-//! controllers" and "sends results back to the logic thread via
-//! `tokio::sync::mpsc`". No `#[byard_controller]` exists yet, that's a
-//! `byld`-side feature for a later phase, so there is no concrete result
-//! type to name today. Making `Relay` generic over that type would force
-//! every call site (all 27 tests in this module included) to pin a type
-//! parameter for a feature none of them use yet, which is exactly the kind
-//! of speculative coupling this crate avoids. A type-erased channel keeps
-//! `Relay` itself concrete and unchanged for existing callers, while still
-//! giving the first real controller a working, tested delivery mechanism:
-//! it sends `Box::new(value) as Box<dyn Any + Send>` and the logic thread
-//! downcasts on receipt.
+//! The pool serves two different consumers, and they run on different
+//! threads. A controller reply has to reach the **logic** thread, which is
+//! the only place a `Signal` may be written (INV-2); a decoded image has to
+//! reach the **render** thread, which is the only place a texture may be
+//! uploaded. A single channel would mean each thread receiving the other's
+//! traffic and having to put it back, which RFC-0028 §7 rejects on the
+//! grounds that re-queueing invites livelock and ordering surprises between
+//! two consumers. So the channel is split by destination: `io_result_*` is
+//! drained by the logic thread, `decode_result_*` by the render thread, and
+//! neither ever sees a message addressed to the other.
+//!
+//! ## Why each channel still carries `Box<dyn Any + Send>`
+//!
+//! Splitting by *thread* is not the same as naming a concrete payload type.
+//! `byard-core` cannot name `ControllerReply`'s continuation semantics, or a
+//! future capability's reply shape, without pinning `Relay` to one consumer's
+//! vocabulary. Type erasure at the channel keeps `Relay` concrete for every
+//! caller while still giving each consumer a working, tested delivery
+//! mechanism: a sender sends `Box::new(value) as Box<dyn Any + Send>` and the
+//! receiving thread downcasts on receipt.
 //!
 //! ## Why `arc-swap`, not hand-rolled `unsafe`
 //!
@@ -94,9 +102,15 @@ use crate::evaluator::ViewArena;
 use crate::frame::RenderFrame;
 
 /// A type-erased result delivered from the async I/O pool back to the
-/// logic thread. See the module-level docs for why this is `Box<dyn Any +
-/// Send>` rather than a generic parameter on [`Relay`].
+/// **logic** thread, a controller reply or a timer tick (RFC-0028 §7). See
+/// the module-level docs for why this is `Box<dyn Any + Send>` rather than a
+/// generic parameter on [`Relay`].
 pub type IoResult = Box<dyn Any + Send>;
+
+/// A type-erased result delivered from the async I/O pool back to the
+/// **render** thread, today an image decode (RFC-0028 §7). Same erasure, a
+/// different destination, see [`IoResult`].
+pub type DecodeResult = Box<dyn Any + Send>;
 
 /// Capacity of the frame recycle pool.
 ///
@@ -114,11 +128,96 @@ const RECYCLE_POOL_SIZE: usize = 2;
 // the build immediately if anyone ever sets this to 0.
 const _: () = assert!(RECYCLE_POOL_SIZE > 0);
 
-/// How long an *idle* logic tick parks before re-checking for input. ~6 ms caps
-/// idle CPU to a fraction of one core (vs a 100% `yield_now` spin) while keeping
-/// the latency of the first input after an idle period imperceptible (well under
-/// one 60 Hz frame). A waiting input is never delayed beyond this bound.
+/// How long an *idle* logic tick parks before re-checking for work.
+///
+/// This is now only a **fallback** bound, not the delivery latency: an I/O
+/// result or timer tick opens the [`IdleGate`] and the parked thread wakes
+/// immediately (RFC-0029 §2). The timeout remains so a signal lost to a race
+/// (a result queued in the instant between the emptiness check and the park)
+/// can never hang the loop, and so a caller that hands the logic thread work
+/// by some other means keeps its old ≤6 ms responsiveness.
 const IDLE_PARK: std::time::Duration = std::time::Duration::from_millis(6);
+
+/// The rendezvous between a sleeping logic thread and the async pool
+/// (RFC-0029 §2, resolved question "idle parking vs latency").
+///
+/// Before this, an idle tick parked for a flat [`IDLE_PARK`], so a network
+/// reply or a timer tick that landed just after the park was invisible for up
+/// to 6 ms, an eternity to add to a result the pool already has in hand, and
+/// worse, a latency the developer cannot see or attribute. A condvar makes
+/// the wake edge-triggered instead: whoever queues work for the logic thread
+/// opens the gate.
+///
+/// The flag is what makes it a *gate* rather than a bare condvar: a result
+/// that arrives while the logic thread is still working (not yet parked)
+/// leaves the flag set, so the following park returns at once instead of
+/// sleeping through work that is already queued. Missing that is the classic
+/// lost-wakeup bug, and it is exactly the case a busy tick produces.
+#[derive(Default)]
+struct IdleGate {
+    /// Set when work has been queued and not yet observed by the logic thread.
+    pending: Mutex<bool>,
+    /// Signalled on every [`IdleGate::signal`].
+    woken: std::sync::Condvar,
+}
+
+impl IdleGate {
+    /// Records that work is queued and wakes a parked logic thread.
+    fn signal(&self) {
+        let mut pending = self.pending.lock().unwrap_or_else(PoisonError::into_inner);
+        *pending = true;
+        drop(pending);
+        self.woken.notify_all();
+    }
+
+    /// Parks until [`signal`](Self::signal) is called or `timeout` elapses,
+    /// clearing the pending flag. Returns immediately when work was queued
+    /// while the caller was busy.
+    fn park(&self, timeout: std::time::Duration) {
+        let pending = self.pending.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut pending = if *pending {
+            pending
+        } else {
+            self.woken
+                .wait_timeout(pending, timeout)
+                .unwrap_or_else(PoisonError::into_inner)
+                .0
+        };
+        *pending = false;
+    }
+}
+
+/// The sender an async task uses to hand a completed result to the **logic**
+/// thread (RFC-0028 §5 step 2, RFC-0029 §2).
+///
+/// A thin wrapper over the channel sender rather than the sender itself,
+/// because delivering a result has two halves that must not be separable:
+/// queueing the payload, and waking the thread that will apply it. A caller
+/// that had the raw sender could do the first and forget the second, and the
+/// symptom, a result that appears up to one park late, only under idle, is
+/// the kind of latency bug that gets attributed to the network instead.
+#[derive(Clone)]
+pub struct IoSender {
+    tx: UnboundedSender<IoResult>,
+    idle: Arc<IdleGate>,
+}
+
+impl IoSender {
+    /// Queues `result` for the logic thread and wakes it if it is parked.
+    ///
+    /// # Errors
+    ///
+    /// Returns the undelivered payload if the receiving `Relay` has been
+    /// dropped (the app is shutting down), never panics.
+    pub fn send(
+        &self,
+        result: IoResult,
+    ) -> Result<(), tokio::sync::mpsc::error::SendError<IoResult>> {
+        self.tx.send(result)?;
+        self.idle.signal();
+        Ok(())
+    }
+}
 
 /// Owns the atomic frame swap, the frame recycle pool, and the async I/O
 /// runtime described in RFC-0001 §5.
@@ -142,6 +241,11 @@ pub struct Relay {
     // it once per tick), so it does not reintroduce blocking in any
     // meaningful sense.
     io_result_rx: Mutex<UnboundedReceiver<IoResult>>,
+    decode_result_tx: UnboundedSender<DecodeResult>,
+    // The render thread's half of the split (RFC-0028 §7). Same single-consumer
+    // `Mutex` rationale as `io_result_rx` above; the two are never locked
+    // together, and each is polled by exactly one thread.
+    decode_result_rx: Mutex<UnboundedReceiver<DecodeResult>>,
     input_tx: crossbeam_channel::Sender<InputEvent>,
     input_rx: crossbeam_channel::Receiver<InputEvent>,
     // Invoked by the logic thread after it publishes a frame that changed in
@@ -156,6 +260,9 @@ pub struct Relay {
     /// gap between consecutive versions it *encodes* to detect that the render
     /// thread skipped a frame, and therefore possibly a dirty bit
     /// (RFC-0001 §5.2).
+    /// The gate an idle logic tick parks on, and that a completed I/O result
+    /// or timer tick opens (RFC-0029 §2). See [`IdleGate`].
+    idle: Arc<IdleGate>,
     publish_seq: std::sync::atomic::AtomicU64,
     /// Whether the frame currently in [`Relay::latest`] has been rendered.
     ///
@@ -191,17 +298,23 @@ impl Relay {
             let _ = recycle_tx.try_send(RenderFrame::new());
         }
 
-        // No `.enable_io()`/`.enable_time()`: those drivers need the `net`
-        // and `time` Tokio features, which this crate does not currently
-        // enable (nothing here uses sockets or timers yet, only spawned
-        // compute futures). Add them, and the matching Cargo feature, the
-        // day a real async I/O task needs them.
-        let io_runtime = tokio::runtime::Builder::new_multi_thread()
-            .thread_name("byard-io-worker")
+        // RFC-0029 O1: the `runtime-io` feature turns on Tokio's `net` and
+        // `time` drivers, which is what a socket or a `tokio::time::sleep`
+        // needs to exist at all (without them either panics with "no reactor
+        // running"). It is default-on because every capability RFC-0029 adds
+        // depends on it; a headless or embedded build that wants none of them
+        // drops the feature and gets the original compute-only runtime back,
+        // with no `net`/`time` code compiled in.
+        let mut builder = tokio::runtime::Builder::new_multi_thread();
+        builder.thread_name("byard-io-worker");
+        #[cfg(feature = "runtime-io")]
+        builder.enable_all();
+        let io_runtime = builder
             .build()
             .map_err(|e| ByardError::RuntimeCreation(e.to_string()))?;
 
         let (io_result_tx, io_result_rx) = mpsc::unbounded_channel();
+        let (decode_result_tx, decode_result_rx) = mpsc::unbounded_channel();
         let (input_tx, input_rx) = crossbeam_channel::unbounded();
 
         Ok(Self {
@@ -212,9 +325,12 @@ impl Relay {
             io_runtime,
             io_result_tx,
             io_result_rx: Mutex::new(io_result_rx),
+            decode_result_tx,
+            decode_result_rx: Mutex::new(decode_result_rx),
             input_tx,
             input_rx,
             frame_waker: Mutex::new(None),
+            idle: Arc::new(IdleGate::default()),
             publish_seq: std::sync::atomic::AtomicU64::new(0),
             rendered: AtomicBool::new(false),
         })
@@ -376,16 +492,20 @@ impl Relay {
     }
 
     /// Returns a cloneable sender that tasks spawned on [`Relay::io_handle`]
-    /// use to deliver a completed result back to the logic thread.
+    /// use to deliver a completed result back to the **logic** thread.
     ///
     /// Per RFC-0001 §5.1: "\[the Tokio pool\] sends results back to the
     /// logic thread via `tokio::sync::mpsc`." The payload is boxed and
-    /// type-erased (see the module-level docs) since no concrete result
-    /// type exists yet; the receiving side downcasts via
-    /// [`Relay::try_recv_io_result`].
+    /// type-erased (see the module-level docs); the receiving side downcasts
+    /// via [`Relay::try_recv_io_result`]. Sending also wakes a parked logic
+    /// thread (RFC-0029 §2), which is why this hands out an [`IoSender`]
+    /// rather than the bare channel sender.
     #[must_use]
-    pub fn io_result_sender(&self) -> UnboundedSender<IoResult> {
-        self.io_result_tx.clone()
+    pub fn io_result_sender(&self) -> IoSender {
+        IoSender {
+            tx: self.io_result_tx.clone(),
+            idle: Arc::clone(&self.idle),
+        }
     }
 
     /// Non-blocking poll for the next completed I/O result, if any.
@@ -400,6 +520,35 @@ impl Relay {
             .unwrap_or_else(PoisonError::into_inner)
             .try_recv()
             .ok()
+    }
+
+    /// Returns a cloneable sender for results addressed to the **render**
+    /// thread, today an image decode (RFC-0028 §7).
+    #[must_use]
+    pub fn decode_result_sender(&self) -> UnboundedSender<DecodeResult> {
+        self.decode_result_tx.clone()
+    }
+
+    /// Non-blocking poll for the next completed decode, if any. The render
+    /// thread's counterpart to [`Relay::try_recv_io_result`].
+    #[must_use]
+    pub fn try_recv_decode_result(&self) -> Option<DecodeResult> {
+        self.decode_result_rx
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .try_recv()
+            .ok()
+    }
+
+    /// Opens the idle gate, waking a parked logic thread now rather than at
+    /// the end of its [`IDLE_PARK`] fallback (RFC-0029 §2).
+    ///
+    /// [`IoSender::send`] already does this for every delivered result; this
+    /// is for the sources that hand the logic thread work without going
+    /// through that channel, a timer driver arming its first tick, a host
+    /// pushing a reload.
+    pub fn wake_logic(&self) {
+        self.idle.signal();
     }
 
     /// Returns `true` once [`Relay::request_shutdown`] has been called.
@@ -491,6 +640,18 @@ impl Relay {
                 let mut runtime = build(&arena);
                 while !relay.is_shutdown() {
                     let mut frame = relay.acquire_recycled();
+                    // Tick step 0 (RFC-0028 §6): apply everything the async
+                    // pool completed *before* input is processed and before
+                    // the pull, so a reply and a same-tick input mark together
+                    // and the frame reflects both coherently. A result that
+                    // lands mid-frame simply waits for the next tick; it never
+                    // arrives mid-pull, which is what makes the tick the
+                    // consistency boundary D1 promises.
+                    let mut results = Vec::new();
+                    while let Some(result) = relay.try_recv_io_result() {
+                        results.push(result);
+                    }
+                    let applied = !results.is_empty() && runtime.apply_io_results(results);
                     let mut inputs = Vec::new();
                     while let Ok(ev) = relay.input_rx.try_recv() {
                         inputs.push(ev);
@@ -509,15 +670,26 @@ impl Relay {
                     // speed so bursts drain immediately; only an idle tick parks
                     // briefly, capping idle CPU while keeping first-input latency
                     // under one short park. (RFC-0001 leaves pacing to the caller.)
-                    if had_input {
-                        // The frame just published reflects this input, wake an
-                        // event-driven (`Wait`-mode) render thread so it presents
-                        // the update now, rather than showing the pre-input frame
-                        // until the next unrelated OS event.
+                    if had_input || applied {
+                        // The frame just published reflects this input, or an
+                        // async result that landed with no input at all. Either
+                        // way, wake an event-driven (`Wait`-mode) render thread
+                        // so it presents the update now rather than showing the
+                        // stale frame until the next unrelated OS event.
+                        //
+                        // The `applied` half is RFC-0029 §2: without it a
+                        // network reply or a timer tick would update state and
+                        // then sit unseen, which reads as "the app ignored the
+                        // response" and is indistinguishable from a bug in the
+                        // request.
                         relay.wake_renderer();
                         thread::yield_now();
                     } else {
-                        thread::park_timeout(IDLE_PARK);
+                        // Edge-triggered, with a timeout only as a lost-signal
+                        // backstop (RFC-0029 §2): a result queued by the pool
+                        // opens this gate immediately instead of waiting out
+                        // the park.
+                        relay.idle.park(IDLE_PARK);
                     }
                 }
             })
@@ -1117,6 +1289,228 @@ mod tests {
         assert!(
             relay.current().is_some(),
             "ticking must have published at least one frame"
+        );
+    }
+
+    // ── RFC-0028 §7: two channels, one per destination thread ────────────
+
+    #[test]
+    fn a_decode_result_never_reaches_the_logic_threads_drain() {
+        // The whole point of the split: the render thread's traffic must be
+        // invisible to the logic thread, so neither has to recognise and
+        // re-queue the other's messages.
+        let relay = Relay::new().unwrap();
+        relay
+            .decode_result_sender()
+            .send(Box::new(7_i32))
+            .expect("decode channel accepts a result");
+
+        assert!(
+            relay.try_recv_io_result().is_none(),
+            "the logic drain must not see a decode result"
+        );
+        assert_eq!(
+            *relay
+                .try_recv_decode_result()
+                .expect("the render drain sees it")
+                .downcast::<i32>()
+                .unwrap(),
+            7
+        );
+    }
+
+    #[test]
+    fn a_controller_reply_never_reaches_the_render_threads_drain() {
+        let relay = Relay::new().unwrap();
+        relay.io_result_sender().send(Box::new(9_i32)).unwrap();
+
+        assert!(
+            relay.try_recv_decode_result().is_none(),
+            "the render drain must not see a controller reply"
+        );
+        assert!(relay.try_recv_io_result().is_some());
+    }
+
+    // ── RFC-0029 O1/§2: the runtime can do I/O, and idle wakes on it ─────
+
+    #[test]
+    #[cfg(feature = "runtime-io")]
+    fn the_io_pool_can_sleep_on_the_time_driver() {
+        // Without `.enable_all()` this panics with "there is no reactor
+        // running", which is exactly the state RFC-0029 O1 found the runtime
+        // in. It is the single precondition for every capability that follows.
+        let relay = Relay::new().unwrap();
+        let elapsed = relay.io_handle().block_on(async {
+            let start = Instant::now();
+            tokio::time::sleep(Duration::from_millis(5)).await;
+            start.elapsed()
+        });
+        assert!(
+            elapsed >= Duration::from_millis(4),
+            "the timer actually slept"
+        );
+    }
+
+    #[test]
+    fn a_result_queued_while_the_logic_thread_was_busy_does_not_sleep_through_the_park() {
+        // The lost-wakeup case: work arrives before the thread parks. A bare
+        // condvar would sleep for the full fallback; the gate's pending flag
+        // means the park returns at once.
+        let gate = IdleGate::default();
+        gate.signal();
+        let start = Instant::now();
+        gate.park(Duration::from_secs(30));
+        assert!(
+            start.elapsed() < Duration::from_secs(1),
+            "a pre-signalled gate must not park"
+        );
+    }
+
+    #[test]
+    fn parking_ends_the_moment_a_result_is_sent() {
+        let relay = Arc::new(Relay::new().unwrap());
+        let sender = relay.io_result_sender();
+        let park_relay = Arc::clone(&relay);
+
+        let parked = thread::spawn(move || {
+            let start = Instant::now();
+            // A 30 s fallback: if the wake did not work this test fails on
+            // duration rather than hanging the suite.
+            park_relay.idle.park(Duration::from_secs(30));
+            start.elapsed()
+        });
+
+        thread::sleep(Duration::from_millis(20));
+        sender.send(Box::new(1_i32)).unwrap();
+
+        let waited = parked.join().expect("the parked thread must not panic");
+        assert!(
+            waited < Duration::from_secs(5),
+            "sending a result must wake the parked logic thread, waited {waited:?}"
+        );
+    }
+
+    /// A runtime that records what it was handed at tick step 0 and reports
+    /// whether it changed anything, the two halves of the `LogicRuntime`
+    /// contract this phase adds.
+    struct DrainingRuntime {
+        applied: Arc<AtomicUsize>,
+        changed: bool,
+    }
+
+    impl LogicRuntime for DrainingRuntime {
+        fn evaluate_tick(
+            &mut self,
+            _frame: &mut RenderFrame,
+            _input_events: &[InputEvent],
+            _dirty: &[crate::frame::TargetId],
+        ) {
+        }
+
+        fn apply_io_results(&mut self, results: Vec<crate::relay::IoResult>) -> bool {
+            self.applied.fetch_add(results.len(), Ordering::SeqCst);
+            self.changed
+        }
+    }
+
+    #[test]
+    fn the_logic_loop_drains_io_results_into_the_runtime() {
+        // The gap RFC-0028 §5 step 3 names: the channel had a sender and a
+        // receiver and nothing on the logic side ever called it.
+        let relay = Arc::new(Relay::new().unwrap());
+        let applied = Arc::new(AtomicUsize::new(0));
+        let applied_rt = Arc::clone(&applied);
+
+        let handle = Relay::spawn_logic_from_view(&relay, move |_arena| {
+            Box::new(DrainingRuntime {
+                applied: applied_rt,
+                changed: true,
+            })
+        })
+        .unwrap();
+
+        relay.io_result_sender().send(Box::new(1_i32)).unwrap();
+
+        let start = Instant::now();
+        while applied.load(Ordering::SeqCst) == 0 && start.elapsed() < Duration::from_secs(2) {
+            thread::yield_now();
+        }
+        relay.request_shutdown();
+        relay.wake_logic();
+        handle.join().unwrap();
+
+        assert_eq!(applied.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn an_applied_result_wakes_a_wait_mode_render_loop_with_no_input_at_all() {
+        // RFC-0029 §2: without this, a network reply or a timer tick updates
+        // state and then sits unseen until some unrelated OS event repaints.
+        let relay = Arc::new(Relay::new().unwrap());
+        let woke = Arc::new(AtomicUsize::new(0));
+        let woke_cb = Arc::clone(&woke);
+        relay.set_frame_waker(Arc::new(move || {
+            woke_cb.fetch_add(1, Ordering::SeqCst);
+        }));
+
+        let handle = Relay::spawn_logic_from_view(&relay, |_arena| {
+            Box::new(DrainingRuntime {
+                applied: Arc::new(AtomicUsize::new(0)),
+                changed: true,
+            })
+        })
+        .unwrap();
+
+        relay.io_result_sender().send(Box::new(1_i32)).unwrap();
+
+        let start = Instant::now();
+        while woke.load(Ordering::SeqCst) == 0 && start.elapsed() < Duration::from_secs(2) {
+            thread::yield_now();
+        }
+        relay.request_shutdown();
+        relay.wake_logic();
+        handle.join().unwrap();
+
+        assert!(
+            woke.load(Ordering::SeqCst) >= 1,
+            "an I/O-applied tick must wake the renderer"
+        );
+    }
+
+    #[test]
+    fn a_result_that_changed_nothing_does_not_cost_a_repaint() {
+        // The other direction of the same rule: `apply_io_results` reporting
+        // `false` means no `var` moved, so there is nothing new to present.
+        let relay = Arc::new(Relay::new().unwrap());
+        let woke = Arc::new(AtomicUsize::new(0));
+        let woke_cb = Arc::clone(&woke);
+        relay.set_frame_waker(Arc::new(move || {
+            woke_cb.fetch_add(1, Ordering::SeqCst);
+        }));
+        let applied = Arc::new(AtomicUsize::new(0));
+        let applied_rt = Arc::clone(&applied);
+
+        let handle = Relay::spawn_logic_from_view(&relay, move |_arena| {
+            Box::new(DrainingRuntime {
+                applied: applied_rt,
+                changed: false,
+            })
+        })
+        .unwrap();
+
+        relay.io_result_sender().send(Box::new(1_i32)).unwrap();
+        let start = Instant::now();
+        while applied.load(Ordering::SeqCst) == 0 && start.elapsed() < Duration::from_secs(2) {
+            thread::yield_now();
+        }
+        relay.request_shutdown();
+        relay.wake_logic();
+        handle.join().unwrap();
+
+        assert_eq!(
+            woke.load(Ordering::SeqCst),
+            0,
+            "a reply that wrote nothing must not wake the renderer"
         );
     }
 

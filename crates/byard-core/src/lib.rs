@@ -49,6 +49,22 @@ pub trait LogicRuntime {
         input_events: &[InputEvent],
         dirty_targets: &[frame::TargetId],
     );
+
+    /// Applies everything the async I/O pool completed since the last tick,
+    /// **before** input is processed and before the pull (tick step 0,
+    /// RFC-0028 §6). Each payload is type-erased; the implementation downcasts
+    /// the shapes it understands and drops the rest (INV-4, never a panic).
+    ///
+    /// Returns whether any result actually changed state. The relay uses that
+    /// answer to decide whether to wake a `Wait`-mode render loop: a reply
+    /// nobody was waiting for should not cost a repaint, and one that wrote a
+    /// `var` must not go unseen (RFC-0029 §2).
+    ///
+    /// Defaulted to "nothing applied" so a runtime with no controllers, every
+    /// existing one, is unaffected.
+    fn apply_io_results(&mut self, _results: Vec<relay::IoResult>) -> bool {
+        false
+    }
 }
 
 use std::fmt;

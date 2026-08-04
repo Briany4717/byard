@@ -312,6 +312,93 @@ pub struct TimerTick {
     pub continuation_id: u64,
 }
 
+/// The interpreter's whole view of the async world (RFC-0028 §5 step 2).
+///
+/// The logic thread needs three things to place a call: the registry to look
+/// the controller up in, a runtime handle to spawn on, and the sender the
+/// reply comes back through. Bundling them here rather than handing the
+/// interpreter a `tokio::runtime::Handle` directly is what keeps
+/// `byard-compiler` free of any async dependency: it holds one `Dispatcher`,
+/// calls [`spawn_call`](Dispatcher::spawn_call), and never names a future, a
+/// runtime or a channel.
+///
+/// Cheap to clone (three handles) and `Send`, so it can be moved into the
+/// logic-thread factory closure alongside the compiled views.
+#[derive(Clone)]
+pub struct Dispatcher {
+    registry: ControllerRegistry,
+    handle: tokio::runtime::Handle,
+    tx: crate::relay::IoSender,
+}
+
+impl Dispatcher {
+    /// Bundles a registry, a runtime handle and a reply sender.
+    #[must_use]
+    pub fn new(
+        registry: ControllerRegistry,
+        handle: tokio::runtime::Handle,
+        tx: crate::relay::IoSender,
+    ) -> Self {
+        Self {
+            registry,
+            handle,
+            tx,
+        }
+    }
+
+    /// The registered controllers, so the interpreter can seed one ambient
+    /// handle per controller at mount and resolve `inject T as x`.
+    #[must_use]
+    pub fn registry(&self) -> &ControllerRegistry {
+        &self.registry
+    }
+
+    /// Schedules `method` on the controller at `id` and arranges for its
+    /// result to arrive on the logic thread as a [`ControllerReply`] tagged
+    /// with `continuation_id` (RFC-0028 §5 steps 2–3).
+    ///
+    /// Returns immediately: nothing here awaits, and the controller's own work
+    /// runs entirely on the pool (INV-12). An unregistered `id` yields an
+    /// **error reply** rather than silence, so the call site's `err` arm runs
+    /// and the developer sees the mismatch instead of a call that vanished.
+    pub fn spawn_call(
+        &self,
+        id: ControllerId,
+        method: String,
+        args: Vec<HostValue>,
+        continuation_id: u64,
+    ) {
+        let Some(controller) = self.registry.get(id) else {
+            // Delivered through the same channel as a real reply so the
+            // failure is observed at the same place, and in the same tick
+            // order, as a successful one.
+            let _ = self.tx.send(Box::new(ControllerReply {
+                continuation_id,
+                result: Err(HostValue::Record(vec![
+                    ("kind".into(), HostValue::Str("unregistered".into())),
+                    (
+                        "message".into(),
+                        HostValue::Str(format!(
+                            "no controller is registered for this handle (method `{method}`)"
+                        )),
+                    ),
+                ])),
+            }));
+            return;
+        };
+        let tx = self.tx.clone();
+        self.handle.spawn(async move {
+            let result = controller.invoke(&method, args).await;
+            // The relay may already be gone on shutdown; a dropped send is
+            // correct then, there is no logic thread left to apply it.
+            let _ = tx.send(Box::new(ControllerReply {
+                continuation_id,
+                result,
+            }));
+        });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

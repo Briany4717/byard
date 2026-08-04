@@ -128,6 +128,7 @@ pub fn run(opts: Options<'_>) -> Result<(), String> {
     let host = WinitHost::new(&title, 1280, 720).with_poll();
     host.run(App {
         engine: None,
+        project: manifest.name.clone(),
         header: Some(header),
         dev: manifest.dev.clone(),
         want_profile: profile,
@@ -810,6 +811,10 @@ fn truncate_str(s: &str, max_chars: usize) -> String {
 
 struct App {
     engine: Option<Engine>,
+    /// The manifest's project name. Decides where the `Store` capability
+    /// writes (RFC-0029 O5): keyed on the project rather than on the path, so
+    /// a store does not move when the directory does.
+    project: String,
     width_bits: Option<Arc<AtomicU32>>,
     height_bits: Option<Arc<AtomicU32>>,
     /// Mirror of the logic thread's active-animation set (RFC-0010), read by the
@@ -1190,7 +1195,7 @@ impl PlatformHost for App {
         // with the pool that runs them and the channel their replies come back
         // on. Built here, on the main thread, because it has to be `Send` into
         // the logic-thread factory below and cannot be built inside it.
-        let dispatcher = engine.dispatcher(crate::capabilities::registry());
+        let dispatcher = engine.dispatcher(crate::capabilities::registry(&self.project));
 
         engine.start_logic_from_view(move |_arena| {
             let (mut interp, tree, current_views) = if initial_views.is_empty() {

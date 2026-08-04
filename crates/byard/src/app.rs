@@ -69,11 +69,14 @@ impl App {
             .to_string();
         Self {
             entry,
-            title,
-            size: (1280, 720),
             // Seeded with the framework's own capabilities (RFC-0029 §7), so
             // `inject Http as http` works in an app that provided nothing.
-            registry: byard_core::cap::default_registry(),
+            // Keyed on the entry's stem rather than the window title, which is
+            // presentation and may be translated: a store must not move
+            // because someone reworded a title bar.
+            registry: byard_core::cap::default_registry(&title),
+            title,
+            size: (1280, 720),
             reserved: Vec::new(),
         }
     }

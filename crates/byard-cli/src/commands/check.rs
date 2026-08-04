@@ -80,14 +80,17 @@ pub fn check_program_with_theme(
     let known: Vec<&str> = program.views.iter().map(|v| v.name.as_str()).collect();
     let mut interp = Interpreter::new();
     interp.set_theme(theme);
-    // RFC-0029 §7: the framework's own capabilities are knowable statically,
-    // so `inject Http as http` resolves here and its calls are checked. An
-    // app's own controllers are not, and stay a warning (`UncheckableInject`).
+    // RFC-0029 §7: the framework's own capability names are knowable
+    // statically, so `inject Http as http` resolves here and its calls are
+    // checked. An app's own controllers are not, and stay a warning
+    // (`UncheckableInject`).
     //
     // The *provided* names, not the reserved ones: `Timer` is reserved because
     // `every`/`after` own the word and has no controller behind it, so
     // declaring it would call `inject Timer as t` checkable and let a runtime
-    // failure through.
+    // failure through. Asking for the names rather than building a registry
+    // also keeps the checker off the filesystem: constructing one resolves a
+    // data directory and opens a store the app owns.
     let capabilities = byard_core::cap::provided_names();
     interp.declare_controllers(&capabilities);
     // Build the user-`View` registry once for the whole program so user-view

@@ -15,16 +15,21 @@
 //! |---|---|---|
 //! | `json` | on | [`Json`], and the `.json` field on an HTTP response |
 //! | `net` | on | [`Http`] (reqwest + rustls) |
+//! | `storage` | on | [`Store`], durable key/value in the OS data dir |
 
 #[cfg(feature = "net")]
 pub mod http;
 #[cfg(feature = "json")]
 pub mod json;
+#[cfg(feature = "storage")]
+pub mod store;
 
 #[cfg(feature = "net")]
 pub use http::Http;
 #[cfg(feature = "json")]
 pub use json::Json;
+#[cfg(feature = "storage")]
+pub use store::Store;
 
 /// The type names the framework reserves for its own capabilities
 /// (RFC-0029 §7).
@@ -57,6 +62,7 @@ pub fn provided_names() -> Vec<&'static str> {
         .filter(|name| match *name {
             "Json" => cfg!(feature = "json"),
             "Http" => cfg!(feature = "net"),
+            "Store" => cfg!(feature = "storage"),
             // `Timer` is reserved because `every`/`after` own the word; there
             // is no controller behind it and never will be.
             _ => false,
@@ -72,18 +78,24 @@ pub fn is_reserved(name: &str) -> bool {
 
 /// The capabilities enabled in this build, ready to register (RFC-0029 §7).
 ///
+/// `app` names the application, which is what decides where [`Store`] writes:
+/// two apps must not share a settings file, and a store keyed by anything less
+/// stable than the project name would move when the binary did.
+///
 /// Built here rather than at each host so `byard dev` and a shipped `App`
 /// cannot end up offering different sets, which would make an app behave one
 /// way under the dev runner and another way when shipped, the single most
 /// expensive kind of difference a framework can have.
 #[must_use]
-pub fn default_registry() -> crate::bridge::ControllerRegistry {
-    #[allow(unused_mut)]
+pub fn default_registry(app: &str) -> crate::bridge::ControllerRegistry {
+    #[allow(unused_mut, unused_variables)]
     let mut registry = crate::bridge::ControllerRegistry::new();
     #[cfg(feature = "json")]
     registry.insert(std::sync::Arc::new(Json));
     #[cfg(feature = "net")]
     registry.insert(std::sync::Arc::new(Http::new()));
+    #[cfg(feature = "storage")]
+    registry.insert(std::sync::Arc::new(Store::for_app(app)));
     registry
 }
 
@@ -97,7 +109,7 @@ mod tests {
         // because one of them has to be answerable without instantiating a
         // controller. As *sets*: the registry's order is its `ControllerId`
         // assignment and is nobody else's business.
-        let mut registered: Vec<&str> = default_registry().names().collect();
+        let mut registered: Vec<&str> = default_registry("test").names().collect();
         let mut provided = provided_names();
         registered.sort_unstable();
         provided.sort_unstable();
@@ -120,14 +132,14 @@ mod tests {
         // this is the assertion that keeps them describing it. A capability
         // registered under an unreserved name could be shadowed by an app's
         // controller and silently stop being the one the docs describe.
-        for name in default_registry().names() {
+        for name in default_registry("test").names() {
             assert!(is_reserved(name), "`{name}` is registered but not reserved");
         }
     }
 
     #[test]
     fn the_default_set_matches_the_features_this_build_enabled() {
-        let names: Vec<&str> = default_registry().names().collect();
+        let names: Vec<&str> = default_registry("test").names().collect();
         #[cfg(feature = "json")]
         assert!(names.contains(&"Json"), "{names:?}");
         #[cfg(feature = "net")]

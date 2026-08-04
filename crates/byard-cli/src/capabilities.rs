@@ -19,10 +19,16 @@ use byard_core::bridge::ControllerRegistry;
 /// Empty of app controllers by design: `byard dev` runs a `.byd` file, and a
 /// file is not a crate, so there is no Rust half for it to register. What it
 /// can offer is the framework's own capability set, which is the whole reason
-/// RFC-0029 makes those first-party.
+/// RFC-0029 makes those first-party, and the reason a pure-`byld` example can
+/// fetch from the network at all.
+///
+/// The set comes from `byard-core`, not from a list here, so the dev runner
+/// and a shipped `App` cannot end up offering different capabilities. An app
+/// that behaves one way under `byard dev` and another way when shipped is the
+/// single most expensive difference a framework can have.
 #[must_use]
 pub fn registry() -> ControllerRegistry {
-    ControllerRegistry::new()
+    byard_core::cap::default_registry()
 }
 
 #[cfg(test)]
@@ -30,15 +36,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_default_registry_reserves_no_app_names() {
+    fn every_capability_the_dev_runner_offers_is_a_reserved_name() {
         // Every name here becomes unavailable to an app controller
         // (RFC-0029 §7 reserved names), so the set is asserted rather than
         // assumed: a capability added without a decision would silently take
         // a name out of the app's vocabulary.
-        let names: Vec<&str> = registry().names().collect();
-        assert!(
-            names.is_empty(),
-            "unexpected default capabilities: {names:?}"
-        );
+        for name in registry().names() {
+            assert!(
+                byard_core::cap::is_reserved(name),
+                "`{name}` is offered but not reserved"
+            );
+        }
+    }
+
+    #[test]
+    fn the_dev_runner_offers_the_same_set_a_shipped_app_does() {
+        let dev: Vec<&str> = registry().names().collect();
+        let shipped: Vec<&str> = byard_core::cap::default_registry().names().collect();
+        assert_eq!(dev, shipped);
     }
 }

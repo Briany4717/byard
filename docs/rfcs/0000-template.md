@@ -20,7 +20,7 @@ unsatisfactory? Include concrete examples where possible.
 
 Explain the proposal as if you were documenting it for a new contributor.
 Focus on *what* changes and *how* users or implementors interact with it.
-Avoid low-level detail here — that goes in the next section.
+Avoid low-level detail here, that goes in the next section.
 
 ## Reference-level explanation
 
@@ -50,7 +50,7 @@ game engines, compiler toolchains)? What can we learn from them?
 ## Resolved questions
 
 **An RFC ships no open questions.** Every question this design raised is
-answered here, before merge — not filed as a to-do for whoever implements it.
+answered here, before merge, not filed as a to-do for whoever implements it.
 A deferred question is a decision made later, by someone with less context,
 under more pressure, and usually by accident.
 
@@ -62,10 +62,10 @@ it out is what surfaces the questions that turn out not to be details. (RFC-0030
 bookkeeping and turned out to be a bug in an accessor RFC-0013 already shipped.)
 
 If a question genuinely cannot be answered without building something first,
-that is a signal to spike it and come back — not to merge the RFC with a
+that is a signal to spike it and come back, not to merge the RFC with a
 placeholder.
 
-### Q1 — one-line statement of the question
+### Q1, one-line statement of the question
 
 **Question.** What exactly is undecided, and why it matters.
 
@@ -76,8 +76,8 @@ which part of the argument they disagree with.
 
 ---
 
-Decisions that only surface *after* merge — implementation-time trade-offs the
-design could not have anticipated — go to `support/DESICIONS.md` as `IMPL-NN`
+Decisions that only surface *after* merge, implementation-time trade-offs the
+design could not have anticipated, go to `support/DESICIONS.md` as `IMPL-NN`
 entries, per that file's own rule. They do not come back into the RFC.
 
 ## Future possibilities

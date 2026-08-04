@@ -1,6 +1,6 @@
-# RFC-0017: Overlay & Z-Layer System — portals, modals, and floating surfaces
+# RFC-0017: Overlay & Z-Layer System, portals, modals, and floating surfaces
 
-- **Status:** Active — implemented; §Positioning's absolute `(x, y)` and `relative(ref)` anchoring deferred
+- **Status:** Active, implemented; §Positioning's absolute `(x, y)` and `relative(ref)` anchoring deferred
 - **Status note (2026-07-26):** Shipped: the `Overlay` intrinsic, the overlay stack, per-layer draw batches, modality and scrim, dismissal, and the transform/animation interaction. Deferred to Future possibilities and recorded at the call site (`intrinsics.rs`'s `ANCHOR` set): coordinate anchoring beyond the edge/centre tokens.
 - **Author(s):** Briany4717
 - **Created:** 2026-07-10
@@ -16,12 +16,12 @@ Add a **z-layer rendering model** and an `Overlay` intrinsic that lets a subtree
 escape the normal layout flow and render above everything else in a separate
 compositing layer. Overlays are stacked in declaration order within a global
 **overlay stack** managed by the engine, hit-tested top-down (topmost overlay
-first), and dismissed declaratively through `when` — no imperative show/hide API,
+first), and dismissed declaratively through `when`, no imperative show/hide API,
 no widget references, consistent with RFC-0003's reference-free design.
 
 The overlay system adds exactly **one new render pass** (a sorted, back-to-front
 composite of overlay layers after the main scene) and **one new intrinsic**
-(`Overlay`). Everything else — positioning, animation, scrim, dismissal — is
+(`Overlay`). Everything else, positioning, animation, scrim, dismissal, is
 composed from existing primitives (`Box`, `when`, transforms, style states).
 
 ---
@@ -32,7 +32,7 @@ The byard-material gap analysis identified **overlay rendering** as the single
 largest blocker: dialogs, menus, tooltips, snackbars, bottom sheets, side sheets,
 date/time pickers, search result surfaces, and dropdown selects all require
 content to render *above* the normal layout tree. Without this, these components
-are limited to inline approximations that the caller must manually position — a
+are limited to inline approximations that the caller must manually position, a
 DX failure that makes a component library unusable for real apps.
 
 The same need arises in Cupertino: action sheets, popovers, context menus with
@@ -42,11 +42,11 @@ Every major UI framework solves this: Flutter's `Overlay`/`OverlayEntry`, the
 DOM's stacking contexts and `position: fixed`, SwiftUI's `.sheet`/`.popover`
 modifiers. Byard needs an answer that:
 
-1. **Respects the reference-free model** — no handle to show/hide an overlay.
-2. **Is declarative** — mount/unmount via `when`, not imperative push/pop.
-3. **Integrates with existing hit-testing** — overlays intercept input above the
+1. **Respects the reference-free model**, no handle to show/hide an overlay.
+2. **Is declarative**, mount/unmount via `when`, not imperative push/pop.
+3. **Integrates with existing hit-testing**, overlays intercept input above the
    main tree, with proper dismissal on outside tap.
-4. **Costs zero when unused** — no extra render pass if no overlay is mounted.
+4. **Costs zero when unused**, no extra render pass if no overlay is mounted.
 
 ---
 
@@ -58,7 +58,7 @@ modifiers. Byard needs an answer that:
 View ConfirmDialog(visible: Bool, title: Str, body: Str, content) {
     when visible {
         Overlay #[modal: true] {
-            // Scrim — tapping outside dismisses (caller handles via on_dismiss)
+            // Scrim, tapping outside dismisses (caller handles via on_dismiss)
             Box #[bg: 0x1D1B20, opacity: 0.32, grow: 1]
 
             // Dialog surface, centered
@@ -91,18 +91,18 @@ default. An `anchor` prop on any child controls placement:
 | `center` | centered in viewport (default for modal content) |
 | `top`, `bottom`, `start`, `end` | edge-aligned |
 | `(x, y)` | absolute logical-pixel offset from viewport top-left |
-| `relative(ref_element)` | **deferred** — anchored to a specific element |
+| `relative(ref_element)` | **deferred** - anchored to a specific element |
 
 For the initial implementation, `center` and edge anchors cover dialogs,
 snackbars, bottom sheets, and side sheets. Relative anchoring (for dropdown
-menus, tooltips near a trigger) is a follow-up — the workaround is to compute
+menus, tooltips near a trigger) is a follow-up, the workaround is to compute
 position from the trigger's known layout coordinates and pass as `(x, y)`.
 
 ### Modality
 
 `modal: true` (the default) makes the overlay **capture all input**: taps outside
 the overlay's content children hit the scrim (the first child, typically a
-semi-transparent `Box`), not the main tree below. This is how dismissal works —
+semi-transparent `Box`), not the main tree below. This is how dismissal works, 
 the scrim's tap handler sets the `visible` var to `false`, which unmounts the
 `when` and therefore the `Overlay`.
 
@@ -150,9 +150,9 @@ over `OverlayStack.entries` in order (back to front). Each entry's children are
 laid out against the viewport rect (not the parent's layout rect) and painted
 using the same pipelines (`SolidBox`, `DecoratedBox`, `TextGlyph`, `VectorMSDF`,
 `TextureSampler`). The overlay pass shares the same GPU texture atlas and glyph
-cache — no resource duplication.
+cache, no resource duplication.
 
-If `OverlayStack` is empty, the second pass is skipped entirely — zero cost when
+If `OverlayStack` is empty, the second pass is skipped entirely, zero cost when
 no overlay is mounted.
 
 ### 3. Hit-testing
@@ -170,7 +170,7 @@ struct GridEntry {
 Hit-testing walks layers **top-down**: the topmost overlay's entries are tested
 first. If a modal overlay is mounted and the hit point falls outside all of that
 overlay's rects, the hit is consumed by the overlay's scrim (or discarded if no
-scrim handler exists) — it never reaches lower layers. Non-modal overlays that
+scrim handler exists), it never reaches lower layers. Non-modal overlays that
 miss fall through to the next layer.
 
 ### 4. The `Overlay` intrinsic
@@ -179,7 +179,7 @@ Added to RFC-0005's catalog:
 
 - **Content:** none. **Children:** any (the overlay's content subtree).
 - **Props:** `modal: Bool` (default `true`), `dismiss_on_outside: Bool` (default
-  `true` when modal — fires a `dismiss` event on scrim tap).
+  `true` when modal, fires a `dismiss` event on scrim tap).
 - **Events:** `dismiss` (fired when modal + outside tap), all pointer.
 - **Pipeline:** none (layout-only; children use their own pipelines).
 - **Constraint:** an `Overlay` whose `when` guard is not in scope is a
@@ -221,7 +221,7 @@ reads the final transformed quads.
 - **Full-viewport layout context.** Overlay children cannot participate in the
   parent's layout (they're removed from the flow). This is intentional but means
   a tooltip can't automatically position itself "next to" its trigger without
-  coordinate passing — the `relative` anchor mode (deferred) would solve this.
+  coordinate passing, the `relative` anchor mode (deferred) would solve this.
 - **Stacking order by mount time.** Two overlays mounted in the same tick have
   undefined relative order (deterministic within a single tick by declaration
   order, but across ticks it's mount order). This is fine for typical use
@@ -237,7 +237,7 @@ model. A dedicated `Overlay` intrinsic makes the escape-hatch explicit: "this
 subtree leaves the flow." It's the Flutter `Overlay` model, not the CSS model.
 
 **Why not `Stack`/`ZStack`?** A `ZStack` (RFC-0018) layers children *within* the
-layout tree. An `Overlay` escapes the tree entirely — it's viewport-relative,
+layout tree. An `Overlay` escapes the tree entirely, it's viewport-relative,
 not parent-relative. Both are needed; they serve different purposes.
 
 **Why modal by default?** The vast majority of overlay use cases (dialogs,
@@ -273,7 +273,7 @@ work (one at a time, the latest one wins).
     requires an element-reference mechanism that conflicts with RFC-0003's
     reference-free model; the proper solution is a layout-query API designed
     later. Documented in Future possibilities.
-  - [x] **Nested overlays.** Yes — an overlay's content can mount another
+  - [x] **Nested overlays.** Yes, an overlay's content can mount another
     overlay. They stack in declaration order within the overlay layer. This is
     required for common patterns (confirmation dialog inside a bottom sheet,
     submenu inside a menu). The overlay stack is a flat list; nesting is just
@@ -291,7 +291,7 @@ work (one at a time, the latest one wins).
     could relax this for edge cases.
   - [x] **Accessibility.** Modal overlays trap focus: Tab cycles within the
     overlay's focusable children, wrapping from last to first. This is wired
-    through RFC-0003 E3's focus system — the overlay sets a `focus_scope` that
+    through RFC-0003 E3's focus system, the overlay sets a `focus_scope` that
     restricts traversal. Non-modal overlays do not trap focus. `Escape` key
     dismisses the topmost modal overlay (fires a `dismiss` event).
 
@@ -303,7 +303,7 @@ work (one at a time, the latest one wins).
   that position themselves near a trigger element.
 - **Shared-element transitions** between an overlay and the main tree (hero
   animations).
-- **Multi-window** — each window has its own overlay stack; cross-window overlays
+- **Multi-window**, each window has its own overlay stack; cross-window overlays
   are explicitly out of scope.
 - **Priority overlays** (e.g., system-level alerts above all app overlays) with
   a tier system.

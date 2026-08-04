@@ -1,11 +1,11 @@
-# RFC-0023: Paint Effects — ripple, blur, vibrancy, and composited visual effects
+# RFC-0023: Paint Effects, ripple, blur, vibrancy, and composited visual effects
 
-- **Status:** Active — implemented
+- **Status:** Active, implemented
 - **Status note (2026-07-26):** Shipped in full: the Material ripple (§1) and the iOS backdrop blur / vibrancy (§2), their style-property integration (§3) and the effects pipeline (§4), including the quality tiers and the anti-ghosting adaptive downsample.
 - **Author(s):** Briany4717
 - **Created:** 2026-07-10
 - **Last updated:** 2026-07-10
-- **Depends on:** RFC-0001 (§3.1 render pipelines, `frame.rs`), RFC-0003 (pointer events — tap coordinates for ripple origin), RFC-0010 (animation — the effects animate), RFC-0011 (opacity/transform), RFC-0012 (style states — effects triggered by hover/pressed).
+- **Depends on:** RFC-0001 (§3.1 render pipelines, `frame.rs`), RFC-0003 (pointer events, tap coordinates for ripple origin), RFC-0010 (animation, the effects animate), RFC-0011 (opacity/transform), RFC-0012 (style states, effects triggered by hover/pressed).
 - **Enables:** Material ripple/ink effect, iOS frosted-glass blur/vibrancy, custom visual effects. Completes the visual fidelity gap between Byard and native platform renderers.
 
 ---
@@ -15,15 +15,15 @@
 Add three **paint-time visual effects** as style properties and a backing
 **effects pipeline** that composites them at render time:
 
-1. **`ripple`** — a radial ink reveal originating from the tap point, expanding
+1. **`ripple`**, a radial ink reveal originating from the tap point, expanding
    and fading. The signature Material interaction feedback.
-2. **`blur`** — a Gaussian (or box) blur applied to the element's background,
+2. **`blur`**, a Gaussian (or box) blur applied to the element's background,
    reading pixels behind it. The foundation of iOS vibrancy/frosted glass.
-3. **`backdrop_tint`** — a colored overlay blended with the blurred background.
+3. **`backdrop_tint`**, a colored overlay blended with the blurred background.
    Combined with blur, it produces the vibrancy effect.
 
 All three are **style properties** (usable in `style {}` blocks, animatable with
-`with`, driven by style states), not intrinsics. They are paint-time only — they
+`with`, driven by style states), not intrinsics. They are paint-time only, they
 never affect layout.
 
 ---
@@ -33,7 +33,7 @@ never affect layout.
 ### Material ripple
 
 Every Material interactive surface shows a ripple on tap. `byard-material`
-currently approximates this with `on pressed { bg: darkerColor }` — a flat color
+currently approximates this with `on pressed { bg: darkerColor }`, a flat color
 swap, not a radial reveal. The difference is viscerally obvious: flat swaps feel
 dead, ripples feel responsive. Material Design's identity is built on ink
 physics; without it, the package looks like a wireframe.
@@ -70,7 +70,7 @@ Button("Save") #[..btn]
 When `pressed` becomes true, a ripple circle begins expanding from the tap point
 (the pointer coordinates at `pointer_down`). It fades out over ~300ms. The
 ripple is rendered as a composited circle *above* the element's background but
-*below* its children — the text remains crisp on top of the ripple.
+*below* its children, the text remains crisp on top of the ripple.
 
 Ripple properties:
 
@@ -157,7 +157,7 @@ once, and the shader computes radius and alpha each frame from elapsed time.
 Active ripples are in the RFC-0010 active-animation set and stop requesting
 frames once fully faded.
 
-Multiple simultaneous ripples (rapid tapping) are supported — each tap creates
+Multiple simultaneous ripples (rapid tapping) are supported, each tap creates
 a new `RippleInstance`, and they blend additively.
 
 ### 2. Blur rendering
@@ -177,7 +177,7 @@ Blur requires **render-to-texture** for the scene behind the element:
 **Performance considerations:**
 
 - The texture copy + two-pass blur is expensive. It runs once per blurred element
-  per frame — not per pixel.
+  per frame, not per pixel.
 - For static scenes, the blurred background can be cached until the content
   behind it changes (tracked via dirty rectangles, RFC-0001 §3.3).
 - Blur radius is clamped to a maximum (e.g., 40px) to bound kernel size.
@@ -202,7 +202,7 @@ enum StyleProperty {
 
 `blur` and `backdrop_tint` are in the GPU-animatable set (RFC-0010): the shader
 interpolates them per frame. `ripple_active` is a boolean trigger, not a
-continuous value — it starts the ripple animation.
+continuous value, it starts the ripple animation.
 
 ### 4. Effects pipeline
 
@@ -218,7 +218,7 @@ Background (SolidBox / DecoratedBox)
 ```
 
 This is per-element, not a global post-processing pass. Only elements with
-effects enabled run through the effects stage — zero cost for normal elements.
+effects enabled run through the effects stage, zero cost for normal elements.
 
 ---
 
@@ -228,7 +228,7 @@ effects enabled run through the effects stage — zero cost for normal elements.
   computationally expensive operation in Byard's pipeline. On mobile GPUs, a
   full-screen blur can consume the entire frame budget. Mitigations: caching,
   radius clamping, quality tiers.
-- **Render order dependency.** Blur reads pixels already rendered — it requires
+- **Render order dependency.** Blur reads pixels already rendered, it requires
   strict painter's-order rendering, which Byard already uses. But it prevents
   future batching optimizations that might reorder draw calls.
 - **Platform inconsistency.** The blur effect looks slightly different across
@@ -253,7 +253,7 @@ effect needs for Material and Cupertino. A general system can layer on top later
 **Why GPU-driven ripple, not a CPU-animated circle overlay?** A CPU-animated
 overlay would require a render-tree mutation every frame (adding/resizing a
 circle node). The GPU-driven approach updates zero state after the initial
-trigger — consistent with RFC-0010's "CPU computes target once, GPU drives the
+trigger, consistent with RFC-0010's "CPU computes target once, GPU drives the
 curve" model.
 
 ---
@@ -285,7 +285,7 @@ curve" model.
   - [x] **Ripple clipping.** **Always clip to border-radius.** The ripple circle
     is clipped to the element's rounded rect (using the same corner radii as
     `DecoratedBox`). An unclipped ripple extending beyond rounded corners looks
-    broken. No opt-out — this is visual correctness, not a preference.
+    broken. No opt-out, this is visual correctness, not a preference.
   - [x] **Blur on `Canvas`.** Yes. A `Canvas` element (RFC-0020) can have `blur`
     as a style property. The blur sampling reads the scene behind the Canvas's
     bounding rect, regardless of what the Canvas itself draws. The Canvas
@@ -300,7 +300,7 @@ curve" model.
     main render target uses bilinear filtering to smooth the upscale.
   - [x] **Multiple blurred elements overlap.** Yes, natural painter's order:
     the upper blurred element reads the already-blurred output of the lower
-    one. This produces a "double blur" effect — physically correct (stacking
+    one. This produces a "double blur" effect, physically correct (stacking
     frosted glass) and visually expected. Performance diagnostic: if ≥3
     overlapping blurred elements exist in the same frame, emit
     `PerfWarning::OverlappingBlurs` with the count.
@@ -309,11 +309,11 @@ curve" model.
 
 ## Future possibilities
 
-- **Custom shader effects** — a general `effect: shader("...")` prop for
+- **Custom shader effects**, a general `effect: shader("...")` prop for
   user-defined fragment shaders (post-MVP).
-- **Drop shadow blur** — `DecoratedBox` shadow could use the same blur pipeline
+- **Drop shadow blur**, `DecoratedBox` shadow could use the same blur pipeline
   for soft shadows instead of approximations.
-- **Motion blur** — during fast scroll or fling, apply directional blur to
+- **Motion blur**, during fast scroll or fling, apply directional blur to
   content. Expensive but cinematic.
-- **Color matrix effects** — grayscale, sepia, hue-rotate applied as paint-time
+- **Color matrix effects**, grayscale, sepia, hue-rotate applied as paint-time
   transformations (CSS `filter` equivalents).

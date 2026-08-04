@@ -1,13 +1,13 @@
-# RFC-0006: `byard` CLI and Dev Runner — Project Scaffolding, Live Reload, and the Developer Loop
+# RFC-0006: `byard` CLI and Dev Runner, Project Scaffolding, Live Reload, and the Developer Loop
 
-- **Status:** Active — implemented, and its three outstanding commitments are
+- **Status:** Active, implemented, and its three outstanding commitments are
   now **closed**. `byard new/dev/check/build/add/get/clean` all landed in
   `byard-cli`; hot-reload, error overlay, manifest parsing and dependency
   commands are operational. The three things this document described in the
-  present tense and the implementation did not do —
+  present tense and the implementation did not do, 
   the `⟳ reload pending` indicator (§"`byard dev`"), the blurred last-good
   backdrop behind the error overlay (§3.4), and caret-anchored source context
-  in diagnostics (**C3**, whose renderer shipped under `#[allow(dead_code)]`) —
+  in diagnostics (**C3**, whose renderer shipped under `#[allow(dead_code)]`), 
   are all implemented, per RFC-0030 §C1–C3. **C7**'s rustc-compatible
   diagnostic first line is unchanged and asserted byte-for-byte, including
   under `CLICOLOR_FORCE=1`.
@@ -30,7 +30,7 @@
 ## Summary
 
 This RFC introduces **`crates/byard-cli`**, a new workspace crate that ships the
-`byard` binary, and specifies **the dev runner** — the unified host that `byard
+`byard` binary, and specifies **the dev runner**, the unified host that `byard
 dev` runs, which replaces the ad-hoc `hello_world_byd.rs` example as the
 canonical real-app entry point. Together they close the gap between "the engine
 can render a `.byd` file" (Phase 2 thesis, proven) and "a developer can write,
@@ -47,7 +47,7 @@ Four commands are defined:
 | `byard build` | Phase 3+ stub; prints a clear "not yet available" message |
 
 The central specification is **`byard dev`**: it owns the complete developer loop
-— parse once, open window, run logic thread, watch file, apply reactive-compatible
+- parse once, open window, run logic thread, watch file, apply reactive-compatible
 patches instantly, defer structure-incompatible patches past in-flight gestures
 (RFC-0002 E5 / RFC-0003), and display parse errors as an overlay in the window
 without crashing.
@@ -63,7 +63,7 @@ After Phase 2, `byard-compiler` can parse, interpret, render, and hot-reload
 `cargo run --example hello_world_byd -p byard-platform`, which:
 
 - Hard-codes the source file via `include_str!`, so any edit requires a
-  `cargo run` restart — *exactly the problem hot reload was built to solve.*
+  `cargo run` restart, *exactly the problem hot reload was built to solve.*
 - Is an internal development fixture, not a public interface.
 - Has no project conventions, no error display, and no scaffolding.
 
@@ -74,7 +74,7 @@ see it running in under two minutes. This RFC changes that.
 
 `byld` is a language for UI, but the tool that runs it must be scriptable: CI
 pipelines run `byard check`, package managers invoke `byard build`, and
-developers type `byard dev` in a terminal. A CLI is also the simplest artifact —
+developers type `byard dev` in a terminal. A CLI is also the simplest artifact, 
 one binary, no installer required on macOS/Linux. A GUI launcher is a future
 possibility (§ Future possibilities) and can compose *on top of* the CLI.
 
@@ -89,8 +89,8 @@ and it connects three previously-separate Phase 2 pieces:
 3. The hot-reload decision logic `diff_view` / `diff_program` / `gate`
    (RFC-0002 §hot-reload boundary)
 
-Decisions about how these connect — tick ordering, error overlay, gesture gate
-window, channel drain position — are load-bearing design choices that belong in a
+Decisions about how these connect, tick ordering, error overlay, gesture gate
+window, channel drain position, are load-bearing design choices that belong in a
 document, not buried in example code.
 
 ---
@@ -105,7 +105,7 @@ cd my_app
 byard dev
 ```
 
-A GPU window opens showing the starter view. Edit `main.byd`, save — the window
+A GPU window opens showing the starter view. Edit `main.byd`, save, the window
 updates within one tick cycle (typically < 16 ms on any modern machine) without
 closing or restarting. No recompile. No `cargo run`. No hot key. Just save.
 
@@ -127,7 +127,7 @@ name    = "my_app"
 entry   = "main.byd"     # relative to byard.toml; default "main.byd"
 ```
 
-No build system integration, no dependency resolver, no lock file — those belong
+No build system integration, no dependency resolver, no lock file, those belong
 to the Rust/Cargo side. `byard.toml` only describes what `byard dev` needs to
 find and run the view.
 
@@ -149,16 +149,16 @@ the repo. It compiles and runs without errors from the first keystroke.
 
 ```
 $ cd my_app && byard dev
-  Byard 0.0.0 — dev mode
+  Byard 0.0.0, dev mode
   Entry: main.byd
   Watching for changes…
   ↳ Loaded (0 errors)
 ```
 
-The window title shows `"Byard dev — <name>"`. On every save:
+The window title shows `"Byard dev, <name>"`. On every save:
 
 - A **reactive-compatible** patch (body changes only): applied on the very next
-  tick — the window updates while any in-flight pointer gesture continues safely.
+  tick, the window updates while any in-flight pointer gesture continues safely.
 - A **structure-incompatible** patch (`var`/`let`/`inject` shape changed): applied
   after the current gesture ends (RFC-0003 E5 gate). A small "⟳ reload pending"
   indicator is shown during the wait. Applied immediately if no gesture is
@@ -173,7 +173,7 @@ The window title shows `"Byard dev — <name>"`. On every save:
 
 ```
 $ byard check main.byd
-main.byd:7:5: error: unknown attribute `colour` — did you mean `color`?
+main.byd:7:5: error: unknown attribute `colour`, did you mean `color`?
 $ echo $?
 1
 ```
@@ -236,7 +236,7 @@ It never inverts any existing edge. `byard-core` continues to have zero knowledg
 of the CLI; `byard-compiler` continues to have zero knowledge of the window
 system. The CLI is the integration point.
 
-### 2. `manifest.rs` — project-root discovery and `byard.toml`
+### 2. `manifest.rs`, project-root discovery and `byard.toml`
 
 **Discovery algorithm** (decision **C1**):
 
@@ -262,9 +262,9 @@ impl Manifest {
 
 `[project].name` defaults to the directory name. `[project].entry` defaults to
 `"main.byd"`. Unknown keys in `byard.toml` emit a warning, never an error
-(forward-compatible with future manifest additions — decision **C2**).
+(forward-compatible with future manifest additions, decision **C2**).
 
-### 3. The dev runner — `commands/dev.rs`
+### 3. The dev runner, `commands/dev.rs`
 
 The dev runner is the most complex piece. Its design is a direct consequence of
 the constraints in RFC-0001 §5, RFC-0002 D10, and RFC-0003.
@@ -276,7 +276,7 @@ the constraints in RFC-0001 §5, RFC-0002 D10, and RFC-0003.
     │  OS events (resize, input, close)
     │  on_resume → spawn logic thread, spawn watcher thread
     ▼
-  Logic thread   (ByldRuntime::evaluate_tick — must stay !Send)
+  Logic thread   (ByldRuntime::evaluate_tick, must stay !Send)
     │  drain reload channel (step 0)
     │  dispatch_events (step 1)
     │  tick (step 2)
@@ -287,11 +287,11 @@ the constraints in RFC-0001 §5, RFC-0002 D10, and RFC-0003.
 ```
 
 The watcher thread is separate from the Tokio pool (RFC-0002 D10: "not relay's
-Tokio pool — to avoid latency and contention"). The `Arc<LatestWins<ParsedFile>>`
+Tokio pool, to avoid latency and contention"). The `Arc<LatestWins<ParsedFile>>`
 is the only shared state between the watcher and logic threads; it is already
-designed for exactly this (bounded(1), try_recv before try_send — latest-wins).
+designed for exactly this (bounded(1), try_recv before try_send, latest-wins).
 
-#### 3.2 `ByldRuntime` — per-tick logic
+#### 3.2 `ByldRuntime`, per-tick logic
 
 ```rust
 struct ByldRuntime {
@@ -332,7 +332,7 @@ This ordering guarantees:
 - Events from the *current* tick always run against the *current* view, never a
   partially-applied patch (D1 consistency boundary).
 - A reactive-compatible patch is applied *before* dispatch, so the very next
-  render already reflects the new source — zero extra tick of lag.
+  render already reflects the new source, zero extra tick of lag.
 - A structure-incompatible patch that arrives during a gesture never tears down
   the view mid-gesture (RFC-0003 E5): the user finishes their tap, the tap fires,
   *then* the view rebuilds.
@@ -351,7 +351,7 @@ fn apply_reload(&mut self, new_view: &ViewDecl, kind: ReloadKind) {
 ```
 
 `Interpreter::reload` is the existing method that either keeps `Signal` state
-(ReactiveCompatible) or resets it (StructureIncompatible) — RFC-0002 §hot-reload
+(ReactiveCompatible) or resets it (StructureIncompatible), RFC-0002 §hot-reload
 boundary. The tree is rebuilt from the new `ViewDecl` on the same call. The
 reactive graph re-derives from scratch on the next tick; no special-casing needed.
 
@@ -362,14 +362,14 @@ overlay with the first error's message, file, line, and column. The last
 successfully-rendered frame is not re-emitted (it has already been displayed);
 the overlay is a simple `BoxInstance` + `TextLine` written directly to the frame
 without going through the interpreter. This keeps the error display path entirely
-independent of the interpreter state — a parser bug or evaluator panic cannot
+independent of the interpreter state, a parser bug or evaluator panic cannot
 prevent the error from being shown (decision **C4**).
 
 Structure of the overlay (rendered directly, not via `byld`):
 
 ```
 ┌──────────────────────────────────────────────┐
-│  ✕  Parse error — main.byd                   │
+│  ✕  Parse error, main.byd                   │
 │     line 7, col 5                            │
 │     unknown attribute `colour`               │
 │     did you mean `color`?                    │
@@ -379,7 +379,7 @@ Structure of the overlay (rendered directly, not via `byld`):
 ```
 
 Background: `0xCC000000` (80% opaque black). Text: white. No border-radius
-(keeps the overlay renderer trivially simple — no `DecoratedBox` needed).
+(keeps the overlay renderer trivially simple, no `DecoratedBox` needed).
 
 #### 3.5 Watcher setup
 
@@ -388,7 +388,7 @@ Background: `0xCC000000` (80% opaque black). Text: white. No border-radius
 let reload_channel = Arc::new(LatestWins::<ParsedFile>::new());
 let channel_for_watcher = Arc::clone(&reload_channel);
 
-// Hold the handle — dropping it stops the watcher.
+// Hold the handle, dropping it stops the watcher.
 let _watcher = start_watcher(&manifest.entry, channel_for_watcher)?;
 ```
 
@@ -400,7 +400,7 @@ The initial parse happens on the main thread in `on_resume` (before the logic
 thread starts) so that parse errors at startup can be shown immediately, and the
 logic thread always receives a valid `current_view` to start from.
 
-### 4. `commands/new.rs` — scaffolding
+### 4. `commands/new.rs`, scaffolding
 
 Three files are written:
 
@@ -411,19 +411,19 @@ name  = "<name>"
 entry = "main.byd"
 ```
 
-**`main.byd`** — a runnable starter that demonstrates `var`, reactivity, a
+**`main.byd`**, a runnable starter that demonstrates `var`, reactivity, a
 `Button`, and a `TextField` (same feature set as the existing `hello_world.byd`,
 but with cleaner structure and inline comments explaining the syntax):
 
 ```byld
-// <name> — starter view
+// <name>, starter view
 // Edit and save; the window updates instantly.
 View Main() {
     var count = 0
     var label = "hello"
 
     Column #[gap: 20, p: 32, align: center, justify: center] {
-        Text("{label} — tapped {count} times") #[size: 24, color: 0xFFFFFF]
+        Text("{label}, tapped {count} times") #[size: 24, color: 0xFFFFFF]
 
         Button("Tap me") #[bg: 0x3B82F6, radius: 8, px: 20, py: 10,
                            color: 0xFFFFFF, weight: bold] => count++
@@ -443,7 +443,7 @@ All three files are written atomically: if any write fails, the directory is
 removed and an error is reported. Partial scaffolding is never left on disk
 (decision **C6**).
 
-### 5. `commands/check.rs` — headless validation
+### 5. `commands/check.rs`, headless validation
 
 Reads the entry file, runs `byard_compiler::parser::parse`, and prints diagnostics
 in a format compatible with terminal linkers (file:line:col: error: message).
@@ -460,11 +460,11 @@ $ echo $?
 1
 ```
 
-The output format is `file:line:col: error[kind]: message\n  note: hint` —
+The output format is `file:line:col: error[kind]: message\n  note: hint`, 
 matching the Rust compiler's format so existing IDE integrations that parse `rustc`
 output will work without custom parsers (decision **C7**).
 
-### 6. CLI surface — `main.rs`
+### 6. CLI surface, `main.rs`
 
 ```rust
 #[derive(Parser)]
@@ -489,7 +489,7 @@ mirrors this document's table.
 
 ## Resolved design decisions (CLI and dev runner, final)
 
-### C1 — Project-root discovery: manifest-walk then CWD fallback
+### C1, Project-root discovery: manifest-walk then CWD fallback
 
 Adopted as described in §2. The upward walk mirrors Cargo's `Cargo.toml`
 discovery: it makes `byard dev` work from any subdirectory of the project, which
@@ -503,15 +503,15 @@ The walk stops at the filesystem root, not at a git boundary. A git-boundary sto
 dependency resolution at this stage, there is no safety reason for the git-root
 stop.
 
-### C2 — `byard.toml` unknown keys: warn, not error
+### C2, `byard.toml` unknown keys: warn, not error
 
 Forward-compatible. Future fields (`[dependencies]`, `[build]`, `[features]`)
 will land in Phase 3+. If earlier manifests treat unknown keys as errors,
 upgrading `byard` in an existing project breaks `byard dev` until the manifest is
-updated — a poor upgrade story. A warning preserves the signal that the key is
+updated, a poor upgrade story. A warning preserves the signal that the key is
 unrecognized while keeping the project runnable.
 
-### C3 — Tick step ordering: drain-reload before dispatch-events
+### C3, Tick step ordering: drain-reload before dispatch-events
 
 The critical ordering decision. Two alternatives were considered:
 
@@ -521,7 +521,7 @@ The critical ordering decision. Two alternatives were considered:
 - **Drain reload before dispatch (adopted):** the new view is in effect when
   events are dispatched. This means that an event handler that was *removed* in
   the reload will not fire, and an event handler that was *added* will be
-  available immediately. Both behaviors are correct and expected — the developer
+  available immediately. Both behaviors are correct and expected, the developer
   saved the file; the new behavior is what they intended.
 
 The only edge case is a tap that was in progress during a structure-incompatible
@@ -529,10 +529,10 @@ reload: the E5 gate (Gated::Defer) ensures such reloads are held until the
 gesture ends, so the tap fires against the old view, completes, and *then* the
 new view mounts. No event is lost; no view is torn down under a live gesture.
 
-### C4 — Error overlay rendered directly, not via `byld`
+### C4, Error overlay rendered directly, not via `byld`
 
 If the overlay were a `byld` view, a parse error in the byld surface syntax would
-block the overlay from rendering — the exact scenario where the overlay is needed.
+block the overlay from rendering, the exact scenario where the overlay is needed.
 Direct-to-frame rendering (a few `BoxInstance` and `TextLine` writes, no
 interpreter involved) keeps the error path independent of the interpreter's
 correctness. This mirrors how OSes render crash dialogs: the crash handler cannot
@@ -542,25 +542,25 @@ Consequence: the overlay is intentionally plain (no border-radius, no animation,
 fixed colors). Aesthetic polish of the overlay is a future possibility; correctness
 is non-negotiable.
 
-### C5 — Watcher lifetime tied to `App`, not to logic thread
+### C5, Watcher lifetime tied to `App`, not to logic thread
 
 A structure-incompatible reload rebuilds the `Interpreter` (teardown + remount).
 If the watcher were owned by the logic thread, rebuilding the interpreter would
-drop the watcher and stop watching — the developer would have to restart `byard
+drop the watcher and stop watching, the developer would have to restart `byard
 dev` after changing a `var` declaration. Owning the watcher in `App` keeps it
 alive for the full session; the `Arc<LatestWins<ParsedFile>>` is shared across
 any number of logic-thread rebuilds.
 
-### C6 — Atomic scaffolding: remove partial state on failure
+### C6, Atomic scaffolding: remove partial state on failure
 
 `byard new` creates a directory and writes several files. If any write fails
 (permissions, disk full), a partial project is left in a state that `byard dev`
 cannot run from. This is more confusing than "no directory was created." The
-fix — track files written, delete them all on first error — costs negligible code
+fix, track files written, delete them all on first error, costs negligible code
 and eliminates a class of confusing UX failures. This applies the same principle
 as database transactions to file creation.
 
-### C7 — `byard check` output format: rustc-compatible `file:line:col: error[kind]: message`
+### C7, `byard check` output format: rustc-compatible `file:line:col: error[kind]: message`
 
 The Rust compiler's output format is already parsed by every major IDE extension,
 CI log parser, and terminal emulator. Using the same format means `byard check`
@@ -608,17 +608,17 @@ the collision risk. Phase 3 will reconsider once the feature set is stable.
 **Why hold the watcher in `App` and not in the logic thread?** See C5. The
 alternative (logic-thread ownership) was rejected because structure-incompatible
 reloads would stop file-watching, requiring a manual `byard dev` restart on any
-`var` declaration change — precisely the interaction most likely during early
+`var` declaration change, precisely the interaction most likely during early
 development.
 
 **Why drain the reload channel at Step 0 (before dispatch) rather than Step 3
 (after render)?** See C3. "After render" would mean the user sees a stale frame
-for one full tick after every save — a noticeable flicker at 60 Hz. "Before
+for one full tick after every save, a noticeable flicker at 60 Hz. "Before
 dispatch" applies the patch in the same tick it arrives, with the E5 gate
 ensuring gesture safety.
 
 **Why no `byard run` (non-reloading)? Why no `byard test`?**  `byard dev` *is*
-the non-reloading runner when the file does not change — no separate `run` is
+the non-reloading runner when the file does not change, no separate `run` is
 needed. `byard test` (headless test runner for `.byd` views) is a Phase 3
 concern; the `byard check` command covers the parse/validate use case that CI
 needs today.
@@ -634,7 +634,7 @@ needs today.
   require a "hot restart." RFC-0002 §hot-reload boundary formalizes the same
   distinction; this RFC wires it.
 - **JetBrains Compose Hot Reload.** State-preservation on compatible patches,
-  full rebuild on incompatible ones — the model RFC-0002 already cited.
+  full rebuild on incompatible ones, the model RFC-0002 already cited.
 - **`cargo-watch`.** External file watcher that re-runs Cargo commands. `byard
   dev` provides a first-class equivalent within the framework, with gesture-safety
   and error overlay that `cargo-watch` cannot offer.
@@ -642,7 +642,7 @@ needs today.
   `byld` LSP integration could offer this; the current RFC targets the terminal
   workflow.
 - **`gleam` CLI.** A language-first CLI with `gleam new`, `gleam run`, `gleam
-  check`, `gleam build` — the same four-command shape this RFC adopts.
+  check`, `gleam build`, the same four-command shape this RFC adopts.
   Demonstrates that a minimal CLI surface is sufficient for a complete developer
   experience.
 
@@ -652,33 +652,33 @@ needs today.
 
 **Before implementation:**
 
-- [x] **`byard.toml` in `Cargo.toml`?** Resolved: **keep `byard.toml` separate**. The manifest has grown to include `[dependencies]`, `[assets.vectors]`, and `[project]` — embedding it in `Cargo.toml` as `[workspace.byard]` would couple the byld ecosystem's versioning and tooling to Cargo's schema evolution. Separate files also let non-Rust controller languages (RFC-0015) use the same manifest. Revisit only if the Rust ecosystem converges on a unified manifest standard.
-- [x] **Window title / taskbar icon.** Resolved: `byard dev` uses `"Byard dev — <project-name>"` from `byard.toml` `[project].name`. Using the first `View` name would change on every file save in a multi-view project — confusing. The project name is stable.
-- [x] **`byard dev --no-watch`.** Deferred — no use case has materialized. Headless testing uses the `Interpreter` directly (no window, no watcher). If needed, a `--no-watch` flag is a trivial addition to `clap`.
+- [x] **`byard.toml` in `Cargo.toml`?** Resolved: **keep `byard.toml` separate**. The manifest has grown to include `[dependencies]`, `[assets.vectors]`, and `[project]`, embedding it in `Cargo.toml` as `[workspace.byard]` would couple the byld ecosystem's versioning and tooling to Cargo's schema evolution. Separate files also let non-Rust controller languages (RFC-0015) use the same manifest. Revisit only if the Rust ecosystem converges on a unified manifest standard.
+- [x] **Window title / taskbar icon.** Resolved: `byard dev` uses `"Byard dev, <project-name>"` from `byard.toml` `[project].name`. Using the first `View` name would change on every file save in a multi-view project, confusing. The project name is stable.
+- [x] **`byard dev --no-watch`.** Deferred, no use case has materialized. Headless testing uses the `Interpreter` directly (no window, no watcher). If needed, a `--no-watch` flag is a trivial addition to `clap`.
 
 **During implementation:**
 
-- [x] **Error overlay position and opacity.** Resolved by implementation: the overlay renders headline-only (file, line, error kind) — long messages are truncated to fit. The telemetry overlay (M31) reuses the same screen space with a throttled refresh. No scrolling needed at current diagnostic verbosity.
+- [x] **Error overlay position and opacity.** Resolved by implementation: the overlay renders headline-only (file, line, error kind), long messages are truncated to fit. The telemetry overlay (M31) reuses the same screen space with a throttled refresh. No scrolling needed at current diagnostic verbosity.
 - [x] **Multiple view files.** Resolved by RFC-0008 (M35): `use` imports + module resolver + `PackageProvider` trait landed. `byard.toml` still specifies one entry file; the resolver discovers all `.byd` files in the project and dependency trees.
-- [x] **`byard check` exit code for warnings.** Resolved: exit 0 on warnings. A `--strict` flag is a future CLI addition, not an architectural question. `byard check` currently treats `UnknownAttribute` and all catalog violations as hard errors (exit 1) — the boundary between error and warning is defined by the diagnostics, not a flag.
+- [x] **`byard check` exit code for warnings.** Resolved: exit 0 on warnings. A `--strict` flag is a future CLI addition, not an architectural question. `byard check` currently treats `UnknownAttribute` and all catalog violations as hard errors (exit 1), the boundary between error and warning is defined by the diagnostics, not a flag.
 
 ---
 
 ## Future possibilities
 
-- **`byard test <file>`** — headless test runner for `.byd` views, exercising
+- **`byard test <file>`**, headless test runner for `.byd` views, exercising
   reactive state and event dispatch without a GPU window. Natural Phase 3
   deliverable using the existing `Interpreter` + headless `Engine` path.
-- **`byard format` / `byard fmt`** — formatter for `.byd` files. Requires the
+- **`byard format` / `byard fmt`**, formatter for `.byd` files. Requires the
   lossless rowan-based CST RFC-0002 deferred to Phase 3.
-- **`byard lsp`** — start the language server (already exists as `byld-lsp`;
+- **`byard lsp`**, start the language server (already exists as `byld-lsp`;
   this would add a CLI alias).
-- **GUI launcher** — a graphical project browser that embeds `byard dev` sessions,
+- **GUI launcher**, a graphical project browser that embeds `byard dev` sessions,
   aimed at developers less comfortable with the terminal. Composable on top of
   the CLI; no architectural changes required.
-- **`byard add <controller>`** — scaffold a Rust controller crate and wire it into
+- **`byard add <controller>`**, scaffold a Rust controller crate and wire it into
   the project. Requires Phase 3's `#[byard_controller]` metadata system.
-- **Remote dev server** — a headless `byard dev` mode that streams the rendered
+- **Remote dev server**, a headless `byard dev` mode that streams the rendered
   frame to a browser via WebSockets, enabling remote development and mobile
   preview without native builds. The `PlatformHost` abstraction makes this
   possible without engine changes.

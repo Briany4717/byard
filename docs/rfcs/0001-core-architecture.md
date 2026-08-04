@@ -49,10 +49,10 @@ the declarative layer never owns complex Rust lifetimes.
 
 A Byard application consists of exactly two kinds of files:
 
-- **`.byd` files** — written in `byld`. These describe UI structure, styling,
+- **`.byd` files**, written in `byld`. These describe UI structure, styling,
   and visual reactivity. They contain no network calls, no file I/O, and no
   business logic.
-- **`.rs` files** — written in Rust. These implement controllers: networking,
+- **`.rs` files**, written in Rust. These implement controllers: networking,
   disk, cryptography, OS integration, and application state that outlives a
   single view. Controllers are declared with `#[byard_controller]` and exposed
   to `byld` through a zero-cost, compile-time-generated boundary.
@@ -139,14 +139,14 @@ A `Signal<T>` contains:
 
 Mutating a `Signal` sets the relevant dirty flags. The Logic subsystem collects
 dirty flags on each tick and derives the minimal set of dirty rectangles to
-re-dispatch — without diffing a virtual DOM tree.
+re-dispatch, without diffing a virtual DOM tree.
 
 ### 3. Render subsystem
 
 #### 3.1 Multi-pipeline architecture
 
-To support tile-based deferred rendering (TBDR) GPUs common on mobile — where
-an über-shader causes bandwidth exhaustion — the renderer uses small, specialized
+To support tile-based deferred rendering (TBDR) GPUs common on mobile, where
+an über-shader causes bandwidth exhaustion, the renderer uses small, specialized
 pipelines compiled at startup from parallel WGSL modules:
 
 | Pipeline | Draws |
@@ -205,7 +205,7 @@ A spatial hash grid runs parallel to the UI tree.
 
 The render thread and the logic thread never share mutable state. The logic
 thread writes a new `RenderFrame`; the render thread reads the previous one.
-The swap is a single atomic pointer exchange — no mutex, no stall.
+The swap is a single atomic pointer exchange, no mutex, no stall.
 
 ### 6. Platform abstraction
 
@@ -230,7 +230,7 @@ A hand-written recursive descent parser consumes the token stream. This choice
 prioritises:
 
 - **Error quality.** A hand-written parser can emit precise, context-aware error
-  messages with source spans — something PEG generators make difficult.
+  messages with source spans, something PEG generators make difficult.
 - **AST fidelity.** Full control over the AST shape.
 
 #### 7.3 Execution modes
@@ -249,15 +249,15 @@ name, shader stage, feature flag).
 
 The error boundary is at initialisation time. During the pipeline compilation
 phase at startup, the engine wraps the full creation sequence of each pipeline
-— `Device::create_shader_module`, `Device::create_pipeline_layout`, and
-`Device::create_render_pipeline` — inside a single
+- `Device::create_shader_module`, `Device::create_pipeline_layout`, and
+`Device::create_render_pipeline`, inside a single
 `Device::push_error_scope` / `Device::pop_error_scope` pair with
 `ErrorFilter::Validation`. `pop_error_scope` returns a future that is driven
 to completion before the render loop begins, guaranteeing that any validation
 or compilation error from any stage of pipeline creation is captured. If any
 pipeline fails, the engine returns
 `Err(ByardError::PipelineCompilation { pipeline, reason })` to the caller.
-The application decides how to handle it — log and exit, show a fallback UI,
+The application decides how to handle it, log and exit, show a fallback UI,
 or surface the error to the developer.
 
 **There is no software rendering fallback.** Byard requires a `wgpu`-compatible
@@ -269,17 +269,17 @@ explicit and documented. Attempting to run on an unsupported backend returns
 
 The `byard-core` crate maps directly to the four subsystems. Each subsystem is
 a top-level module. No subsystem module imports from another subsystem module
-directly — cross-subsystem communication goes through the types defined in the
+directly, cross-subsystem communication goes through the types defined in the
 `frame.rs` module, which is the shared data boundary.
 
 ```
 crates/byard-core/src/
-├── lib.rs          — public API surface, re-exports, ByardError
-├── evaluator/      — Signal<T>, ViewArena, dirty-flag collection
-├── atlas/          — Taffy integration, spatial hash grid
-├── encoder/        — wgpu pipelines (SolidBox, DecoratedBox, TextGlyph, TextureSampler)
-├── relay/          — thread management, RenderFrame, atomic frame swap, Tokio pool
-└── frame.rs        — RenderFrame and the primitive types shared across subsystems
+├── lib.rs, public API surface, re-exports, ByardError
+├── evaluator/, Signal<T>, ViewArena, dirty-flag collection
+├── atlas/, Taffy integration, spatial hash grid
+├── encoder/, wgpu pipelines (SolidBox, DecoratedBox, TextGlyph, TextureSampler)
+├── relay/, thread management, RenderFrame, atomic frame swap, Tokio pool
+└── frame.rs, RenderFrame and the primitive types shared across subsystems
 ```
 
 The dependency graph within the crate is strictly layered:
@@ -373,7 +373,7 @@ layout engine is a multi-year distraction from the differentiated parts of Byard
 **During implementation:**
 
 - [ ] **Testing strategy.** The double-buffered multi-threaded model is hard to
-  test with standard `#[test]`. What is the approach — headless wgpu, snapshot
+  test with standard `#[test]`. What is the approach, headless wgpu, snapshot
   tests of render output, deterministic frame replay?
 - [ ] **`byld` syntax stabilisation.** The syntax shown in this RFC is
   conceptual. A grammar RFC must be written before the parser is implemented.

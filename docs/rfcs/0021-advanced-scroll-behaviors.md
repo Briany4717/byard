@@ -1,6 +1,6 @@
-# RFC-0021: Advanced Scroll Behaviors — snap, pull-to-refresh, collapsing headers, pagination
+# RFC-0021: Advanced Scroll Behaviors, snap, pull-to-refresh, collapsing headers, pagination
 
-- **Status:** Active — implemented
+- **Status:** Active, implemented
 - **Status note (2026-07-26):** Shipped in full: snap scrolling (item and page) with its physics, pull-to-refresh, the collapsing header, pagination, and `on_end_reached`/`end_threshold`.
 - **Author(s):** Briany4717
 - **Created:** 2026-07-10
@@ -14,16 +14,16 @@
 ## Summary
 
 Extend `ScrollView` (RFC-0005) with four behavioral capabilities delivered as
-new props on the existing intrinsic — no new intrinsics needed:
+new props on the existing intrinsic, no new intrinsics needed:
 
-1. **Snap scrolling** — content snaps to discrete positions (pages, items).
-2. **Pull-to-refresh** — overscroll at the start triggers a refresh callback.
-3. **Collapsing headers** — a header region that shrinks/expands as the user
+1. **Snap scrolling**, content snaps to discrete positions (pages, items).
+2. **Pull-to-refresh**, overscroll at the start triggers a refresh callback.
+3. **Collapsing headers**, a header region that shrinks/expands as the user
    scrolls, with parallax and opacity effects.
-4. **Pagination** — discrete page indicators and page-change events.
+4. **Pagination**, discrete page indicators and page-change events.
 
 All behaviors are declared as props on `ScrollView`, animated through RFC-0010's
-springs, and managed entirely by the engine — no imperative scroll controllers,
+springs, and managed entirely by the engine, no imperative scroll controllers,
 no widget references.
 
 ---
@@ -34,14 +34,14 @@ The byard-material gap analysis flagged **snap-scrolling** as a blocker for
 carousels. But the real gap is broader: every polished mobile app relies on
 scroll-linked behaviors that `ScrollView` cannot express today:
 
-- **Material carousel** — horizontal snap to item boundaries.
-- **Cupertino page view** — full-page horizontal snap with page dots.
-- **Pull-to-refresh** — nearly universal on mobile; both Material and Cupertino
+- **Material carousel**, horizontal snap to item boundaries.
+- **Cupertino page view**, full-page horizontal snap with page dots.
+- **Pull-to-refresh**, nearly universal on mobile; both Material and Cupertino
   have distinct visual treatments.
-- **Large title navigation** (Cupertino) — the title collapses from large to
+- **Large title navigation** (Cupertino), the title collapses from large to
   inline as the user scrolls down. Material's `MediumTopAppBar` / `LargeTopAppBar`
   do the same.
-- **Infinite scroll / load-more** — detecting scroll-to-bottom to trigger data
+- **Infinite scroll / load-more**, detecting scroll-to-bottom to trigger data
   fetching.
 
 These are not niche features; they're table-stakes for any mobile UI framework.
@@ -67,7 +67,7 @@ ScrollView #[axis: horizontal, snap: item, snap_align: center] {
 scrolling. `snap_align` controls where the snapped item aligns within the
 viewport: `start`, `center`, or `end`.
 
-The snap physics use RFC-0010's spring with a fast settle — the content
+The snap physics use RFC-0010's spring with a fast settle, the content
 decelerates from the fling velocity and springs to the nearest snap point.
 
 ### Pull-to-refresh
@@ -123,7 +123,7 @@ ScrollView #[axis: horizontal, snap: page,
 }
 ```
 
-`page: Int` is a reflected prop — it reflects the current page index and can be
+`page: Int` is a reflected prop, it reflects the current page index and can be
 set programmatically to scroll to a page. `page_count` enables the engine to
 provide page-indicator data (the actual dot UI is a user View reading `page` and
 `page_count`).
@@ -200,7 +200,7 @@ from 0:
   scrolls relative to the collapse (0.5 = half speed = parallax effect).
 
 The layout is re-computed each frame during header collapse, but only the header's
-Taffy node changes — the content below shifts by the height delta. This is O(1)
+Taffy node changes, the content below shifts by the height delta. This is O(1)
 in the number of content items (Taffy incrementally relayouts changed subtrees).
 
 ### 5. `on_end_reached` (infinite scroll)
@@ -221,7 +221,7 @@ appends items to the list; the `for` loop (RFC-0004) reactively adds nodes.
   collapse, not the entire tree).
 - **Pull-to-refresh indicator.** The engine provides a default indicator, but
   design systems want custom indicators (Material's circular, Cupertino's spinner).
-  This requires the indicator to be themeable or replaceable — a `refresh_indicator`
+  This requires the indicator to be themeable or replaceable, a `refresh_indicator`
   slot or a composed approach.
 
 ---
@@ -242,7 +242,7 @@ across apps. The engine guarantees 60fps snap animations with correct physics.
 **Why `scroll_fraction` for collapsing headers instead of a CSS `position: sticky`
 model?** Sticky positioning is a layout concept that requires the element to
 participate in two layout contexts simultaneously. `scroll_fraction` is a reactive
-value that header children read — simpler, more flexible (any property can
+value that header children read, simpler, more flexible (any property can
 interpolate), and avoids the layout complexity.
 
 ---
@@ -288,7 +288,7 @@ interpolate), and avoids the layout complexity.
     as an implicit reactive binding (0.0 = fully expanded, 1.0 = fully
     collapsed). No explicit `var` declaration needed. This is consistent
     with the implicit `refresh_progress` in pull-to-refresh and with
-    `route.params` in RFC-0026. The binding is scoped — it only exists
+    `route.params` in RFC-0026. The binding is scoped, it only exists
     inside `collapse_header`, not in the broader ScrollView scope.
 
 - **During implementation:**
@@ -308,11 +308,11 @@ interpolate), and avoids the layout complexity.
 
 ## Future possibilities
 
-- **Lazy/virtualized scroll** — only instantiate children within the viewport
+- **Lazy/virtualized scroll**, only instantiate children within the viewport
   plus a buffer zone. Essential for long lists (thousands of items).
-- **Scroll-linked animations** — arbitrary property interpolation driven by
+- **Scroll-linked animations**, arbitrary property interpolation driven by
   scroll position (parallax backgrounds, reveal animations).
-- **Nested scroll coordination protocol** — formalize which scroll view captures
+- **Nested scroll coordination protocol**, formalize which scroll view captures
   a gesture when scrollviews are nested.
 - **Horizontal paging dots** as a built-in `PageIndicator` intrinsic or as a
   composed View reading `page` + `page_count`.

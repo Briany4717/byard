@@ -5,7 +5,7 @@
 - **Created:** 2026-07-25
 - **Applies to:** RFC-0001 §2 ("Memory model (Zero-GC)"), §2.1 (`ViewArena`),
   §2.2 (`Signal<T>` dirty flags), and §3.3 ("Dirty rectangles and scissor
-  clipping") — specifically, any prose asserting that per-view arenas are on the
+  clipping"), specifically, any prose asserting that per-view arenas are on the
   per-frame path, or that a `Signal` mutation yields a minimal dirty-rectangle
   set.
 - **Authority:** measurement (`cargo bench --bench atlas`) and the integration
@@ -17,7 +17,7 @@
 
 RFC-0001 §2 describes a memory and invalidation architecture in the present
 tense. The mechanisms it names are all real, all correct, and all sound in
-isolation — and **the per-frame path does not run through them.** An audit of the
+isolation, and **the per-frame path does not run through them.** An audit of the
 incremental paths found the same shape three times over, and the honest response
 is either to change the code or to change the document. This erratum changes the
 document; the code side is tracked as a design change, not a bug fix, for the
@@ -27,7 +27,7 @@ RFC-0001 is **Active**, so its body is not edited: erasing the original text
 would erase the record of a design that is still the intended destination. Where
 RFC-0001 §2/§3.3 and this erratum disagree about what the engine *does today*,
 **this erratum wins**. Where they disagree about what the engine *should
-eventually do*, RFC-0001 still stands — nothing here retracts the goal.
+eventually do*, RFC-0001 still stands, nothing here retracts the goal.
 
 This erratum does **not** touch: the four-subsystem split (§1), the frame
 boundary and `Send`-POD rule (§5), the Z-bin batching model (§3.2), the layout
@@ -38,7 +38,7 @@ are implemented as written.
 
 ## Correction
 
-### C1 — `ViewArena` exists, is correct, and is not on the per-frame path
+### C1, `ViewArena` exists, is correct, and is not on the per-frame path
 
 RFC-0001 §2.1 describes a `ViewArena` allocated per mounted view, holding that
 view's signals, Taffy node references and spatial-grid entries, reclaimed in
@@ -46,7 +46,7 @@ view's signals, Taffy node references and spatial-grid entries, reclaimed in
 
 `ViewArena` (`byard-core/src/evaluator/arena.rs`) is implemented exactly as
 specified: a `bumpalo::Bump` with type-erased destructor registration, LIFO drop,
-`!Send`/`!Sync`, with its own benchmarks. Production receives it and ignores it —
+`!Send`/`!Sync`, with its own benchmarks. Production receives it and ignores it, 
 the dev runner binds it as `_arena`. Every piece of persistent interpreter state
 (`ForPool`, `anim_clocks`, `scroll_targets`, `when_pools`, …) lives in ordinary
 `Vec`s and `HashMap`s on the `Interpreter`; layout lives in Taffy's own
@@ -56,10 +56,10 @@ Read §2.1 as describing **a facility available for per-view scoping at
 instantiation and teardown**, not as a description of where per-frame memory
 comes from.
 
-### C2 — "Zero-GC" is true; "no per-frame allocation" is not, and was never measured
+### C2, "Zero-GC" is true; "no per-frame allocation" is not, and was never measured
 
-RFC-0001 §2's opening claim — "No `Box::new` for per-view allocations… no
-deferred collection, no latency spike" — has been read as a claim that the hot
+RFC-0001 §2's opening claim, "No `Box::new` for per-view allocations… no
+deferred collection, no latency spike", has been read as a claim that the hot
 path is allocation-free. That claim had never been measured. It is now:
 
 | Tree (2-level flex) | Rebuild time | Allocations/frame | Bytes/frame |
@@ -68,21 +68,21 @@ path is allocation-free. That claim had never been measured. It is now:
 | 200 leaves | ~112 µs | 270 | ~562 KB |
 | 800 leaves | ~424 µs | 664 | ~2.3 MB |
 
-Measured on the sequence `Interpreter::render` actually runs — `atlas.clear()` →
-rebuild every node → `set_root` → full `compute` — on a **reused** atlas, after a
+Measured on the sequence `Interpreter::render` actually runs, `atlas.clear()` →
+rebuild every node → `set_root` → full `compute`, on a **reused** atlas, after a
 200-frame warm-up, with the benchmark's own scratch buffers hoisted out of the
 counted region. Of the 664 allocations at 800 leaves, **477 are the teardown and
 reconstruction** and 187 remain on the retained path (Taffy's own per-layout
 scratch).
 
 So: there is no garbage collector, no deferred collection and no reference-count
-cascade — those parts of §2 are accurate, and they are the parts that rule out
+cascade, those parts of §2 are accurate, and they are the parts that rule out
 *pauses*. But the per-frame path performs hundreds of heap allocations, because
 `TaffyTree::clear()` drops each node's children storage rather than retaining it,
 and every node is then reconstructed. "Deterministic" is the defensible word;
 "allocation-free" is not, and should not be used of the current implementation.
 
-### C3 — §2.2's dirty flags do not exist for element attributes
+### C3, §2.2's dirty flags do not exist for element attributes
 
 RFC-0001 §2.2 says a `Signal` carries "a vector of atomic dirty flags pointing to
 specific render or spatial subsystem entries", and §3.3 builds the scissor model
@@ -95,8 +95,8 @@ What does not exist is the **producer**. The interpreter stores element
 attributes as raw expressions on the render node and re-evaluates them from
 scratch every frame, so there is no reactive edge from a signal to a box's colour
 or width. `ReactiveCtx` does track which value *bindings* changed each tick, but
-bindings cover `Text` content and `Image` sources only — not the attribute
-surface — and there is no binding→node map.
+bindings cover `Text` content and `Image` sources only, not the attribute
+surface, and there is no binding→node map.
 
 The consequences, all measured or asserted in
 `crates/byard-compiler/tests/incremental_paths.rs`:
@@ -114,7 +114,7 @@ The consequences, all measured or asserted in
 These were previously classified as three independent defects. They are one:
 **the evaluation model that got built does not produce the signal the
 invalidation model consumes.** That is a design change, not a call-site fix, and
-attempting it as a call-site fix is actively dangerous — a fast path that misses
+attempting it as a call-site fix is actively dangerous, a fast path that misses
 an invalidation leaves a stale rect that hit-testing still answers from, i.e. an
 element that looks like it moved but is tappable where it used to be.
 
@@ -128,7 +128,7 @@ allocations). Reaching it needs its own RFC.
 > `Interpreter::render` takes the retained path on an eligible frame,
 > `populate_frame` receives the layout-dirty set, and every primitive carries
 > `dirty` derived from a comparison against its own resolved values last
-> frame — so §2.2 and §3.3 now describe the runtime rather than the intent.
+> frame, so §2.2 and §3.3 now describe the runtime rather than the intent.
 > Two things this erratum did **not** anticipate turned up on the way, and
 > both are worth knowing:
 >

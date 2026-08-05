@@ -69,6 +69,7 @@ pub mod canvas_shape;
 pub mod decorated_box;
 pub mod gpu_timer;
 pub mod instance_arena;
+pub mod pipeline;
 pub mod ripple;
 pub mod text_glyph;
 pub mod texture_sampler;
@@ -258,7 +259,13 @@ const QUAD_VERTICES: &[f32] = &[
 pub struct EncoderSubsystem {
     device: Arc<wgpu::Device>,
     queue: Arc<wgpu::Queue>,
-    render_pipeline: wgpu::RenderPipeline,
+    /// The ordered set of pipelines this frame draws through (RFC-0039).
+    ///
+    /// Core pipelines are registered here at startup through the same call a
+    /// package's pipeline uses, which is the whole of what RFC-0039 changes at
+    /// this level: the set is data, iterated in a declared order (INV-32),
+    /// rather than a sequence of names written into the pass.
+    pipelines: pipeline::PipelineRegistry,
     /// No-blend variant of `SolidBox`'s pipeline, used only to paint a fully
     /// transparent "clear quad" over a dirty rect before it is repainted.
     ///
@@ -278,11 +285,6 @@ pub struct EncoderSubsystem {
     viewport_bind_group: wgpu::BindGroup,
     /// Text rendering pipeline, shares the UI render pass with `SolidBox`.
     text_pipeline: TextGlyphPipeline,
-    /// `DecoratedBox` pipeline (M21), border/shadow/opacity boxes. Shares the
-    /// viewport bind group (group 0) with `SolidBox`.
-    decorated_pipeline: wgpu::RenderPipeline,
-    /// `TextureSampler` pipeline (M21), `Image` quads.
-    texture_pipeline: wgpu::RenderPipeline,
     /// Texture+sampler bind group layout (group 1) for `texture_pipeline`.
     texture_bind_group_layout: wgpu::BindGroupLayout,
     /// Shared linear sampler for all sampled images.
@@ -291,12 +293,10 @@ pub struct EncoderSubsystem {
     texture_cache: texture_sampler::TextureCache,
     /// `VectorMSDF` pipeline (RFC-0009 §1, the fifth pipeline), samples
     /// [`vector_atlas`](Self::vector_atlas) to draw crisp monochrome icons.
-    vector_pipeline: wgpu::RenderPipeline,
     /// `CanvasShape` pipeline (RFC-0020, the sixth pipeline), analytic-SDF
     /// arcs/circles/lines/rects from `Canvas` shape commands. Shares the
     /// viewport bind group (group 0); transparent geometry, so it tests but
     /// never writes the draw-order depth buffer (RFC-0017 split).
-    canvas_pipeline: wgpu::RenderPipeline,
     /// The `CanvasShape` pipeline's shape-record binding (RFC-0031 §S4).
     canvas_records: CanvasRecordBinding,
     /// `Ripple` pipeline (RFC-0023, the seventh pipeline), the Material ink
@@ -305,7 +305,6 @@ pub struct EncoderSubsystem {
     /// ink works on light and dark surfaces alike). Shares the viewport bind
     /// group (group 0); transparent geometry, so it tests but never writes
     /// the draw-order depth buffer (RFC-0017 split).
-    ripple_pipeline: wgpu::RenderPipeline,
     /// Backdrop-blur pipelines (RFC-0023 §2, the eighth pipeline pair): the
     /// off-screen blur passes plus the in-pass frosted-glass composite.
     backdrop_pipelines: backdrop::BackdropPipelines,
@@ -685,24 +684,33 @@ impl EncoderSubsystem {
         let arena = instance_arena::InstanceArena::new(&device);
         let canvas_records = CanvasRecordBinding::new(&device, &canvas_records_layout, &arena);
 
+        // RFC-0039 §"Pipeline registration": the core set, registered in its
+        // historical draw order. A package's pipeline goes in through the same
+        // call, after these, and a frame with no package pipeline draws exactly
+        // the stream it always did (INV-22, INV-32).
+        let mut pipelines = pipeline::PipelineRegistry::new();
+        pipelines.register_core(SolidBoxPipeline::new(render_pipeline));
+        pipelines.register_core(decorated_box::DecoratedBoxPipeline::new(decorated_pipeline));
+        pipelines.register_core(ripple::RipplePipeline::new(ripple_pipeline));
+        pipelines.register_core(canvas_shape::CanvasShapePipeline::new(canvas_pipeline));
+        pipelines.register_core(texture_sampler::TextureSamplerPipeline::new(
+            texture_pipeline,
+        ));
+        pipelines.register_core(vector_msdf::VectorMsdfPipeline::new(vector_pipeline));
+
         Ok(Self {
             device,
             queue,
-            render_pipeline,
+            pipelines,
             clear_pipeline,
             quad_buffer,
             viewport_buffer,
             viewport_bind_group,
             text_pipeline,
-            decorated_pipeline,
-            texture_pipeline,
             texture_bind_group_layout,
             image_sampler,
             texture_cache: texture_sampler::TextureCache::default(),
-            vector_pipeline,
-            canvas_pipeline,
             canvas_records,
-            ripple_pipeline,
             backdrop_pipelines,
             blur_scratch: backdrop::ScratchCache::new(),
             blur_auto_capable: false,
@@ -737,6 +745,26 @@ impl EncoderSubsystem {
             gpu_samples_scratch: Vec::new(),
             gpu_timing_pending: false,
         })
+    }
+
+    /// The registered pipelines, in the order this encoder draws them
+    /// (RFC-0039, INV-32).
+    ///
+    /// Exposed so the order can be asserted rather than described: a set whose
+    /// order is a property of registration should be readable as data.
+    #[must_use]
+    pub fn pipeline_order(&self) -> Vec<&'static str> {
+        self.pipelines.order()
+    }
+
+    /// How many erased pipeline calls the last encoded frame made (INV-30).
+    ///
+    /// The number that must scale with the pipeline count and not with the
+    /// instance count. It is a measurement rather than a claim precisely
+    /// because "zero-cost" is the sentence this ABI has to keep.
+    #[must_use]
+    pub fn pipeline_dispatches(&self) -> u32 {
+        self.pipelines.dispatches()
     }
 
     /// Returns a reference to the underlying `wgpu` device.
@@ -1195,13 +1223,8 @@ impl EncoderSubsystem {
                 &self.persistent_depth_view,
                 &self.device,
                 &DrawPipelines {
-                    solid: &self.render_pipeline,
+                    registry: &self.pipelines,
                     clear: &self.clear_pipeline,
-                    decorated: &self.decorated_pipeline,
-                    texture: &self.texture_pipeline,
-                    vector: &self.vector_pipeline,
-                    canvas: &self.canvas_pipeline,
-                    ripple: &self.ripple_pipeline,
                 },
                 &self.viewport_bind_group,
                 &self.quad_buffer,
@@ -1465,13 +1488,12 @@ fn update_frame_bookkeeping(
 /// count within the lint threshold (mechanical grouping, not fresh coupling).
 #[derive(Clone, Copy)]
 struct DrawPipelines<'a> {
-    solid: &'a wgpu::RenderPipeline,
+    /// The registered set, iterated once per segment (RFC-0039).
+    registry: &'a pipeline::PipelineRegistry,
+    /// The clear quad's no-blend pipeline. Not a registered pipeline: it draws
+    /// no pool and belongs to the incremental-redraw machinery rather than to
+    /// the frame's content.
     clear: &'a wgpu::RenderPipeline,
-    decorated: &'a wgpu::RenderPipeline,
-    texture: &'a wgpu::RenderPipeline,
-    vector: &'a wgpu::RenderPipeline,
-    canvas: &'a wgpu::RenderPipeline,
-    ripple: &'a wgpu::RenderPipeline,
 }
 
 /// Draw-order depth slices for one frame (RFC-0011 cross-pass paint order),
@@ -1525,7 +1547,7 @@ pub(crate) struct StagingScratch {
 
 /// One pass segment's staged regions.
 #[derive(Default)]
-struct SegmentStaging {
+pub struct SegmentStaging {
     solid: (instance_arena::Region, instance_arena::Region),
     decorated: instance_arena::Region,
     ripple: instance_arena::Region,
@@ -1676,7 +1698,7 @@ struct DrawPrimitives<'a> {
 /// A frame with no layers and no backdrops is exactly one segment, the
 /// classic single-pass draw stream, byte for byte.
 #[derive(Clone, Debug, PartialEq, Eq)]
-struct SegmentRanges {
+pub struct SegmentRanges {
     solid: std::ops::Range<usize>,
     decorated: std::ops::Range<usize>,
     texture: std::ops::Range<usize>,
@@ -1888,14 +1910,12 @@ fn draw_ui_pass(
     // measure, only one arena append per pipeline and a single upload.
     crate::profile_scope!("encode.passes");
     let DrawPipelines {
-        solid: render_pipeline,
+        registry,
         clear: clear_pipeline,
-        decorated: decorated_pipeline,
-        texture: texture_pipeline,
-        vector: vector_pipeline,
-        canvas: canvas_pipeline,
-        ripple: ripple_pipeline,
     } = *pipelines;
+    // One dispatch counter per frame (INV-30): the number this ends on must
+    // track the pipeline count, never the instance count.
+    registry.begin_frame();
     // Only what the *recording* half still reads directly. The pools and their
     // depth slices are consumed by `stage_segment`, which takes `primitives`
     // whole so the two owner-split staging loops share one body.
@@ -2105,106 +2125,28 @@ fn draw_ui_pass(
             );
         }
 
-        let staged = &staging.segments[i];
-        let sr = &seg.solid;
-        let dr = &seg.decorated;
-        let tr = &seg.texture;
-        let vr = &seg.vector;
-        let xr = &seg.text;
-        let cr = &seg.canvas;
-        let rr = &seg.ripple;
-
-        // Drawn on every call to this function, not just a full redraw, the
-        // clear quad above can wipe a box's area on an incremental frame, so
-        // boxes must be repainted afterwards or they would stay erased. The
-        // active GPU scissor rect (set above, incremental frames only) bounds
-        // which pixels this actually touches, so the cost is still
-        // proportional to the dirty region, not the full instance list.
-        if !sr.is_empty() {
-            draw_solid_box_instances(
-                &mut render_pass,
+        // ── The registered pipelines, in declared order (RFC-0039) ──────
+        //
+        // What used to be seven calls written out here is one iteration over
+        // the registry. The order is the order they were registered in, which
+        // is the order they were written in before, so the draw stream is the
+        // same stream (INV-22). A package's pipeline joins it after the core
+        // ones without this loop knowing anything new (INV-32).
+        registry.draw_segment(
+            &mut render_pass,
+            &pipeline::SegmentDraw {
                 arena,
-                staged.solid,
-                render_pipeline,
+                staged: &staging.segments[i],
+                ranges: seg,
+                clips,
+                clip_ctx,
                 viewport_bind_group,
                 quad_buffer,
-                sr.len(),
-                sub_slice(clips.solid, sr),
-                clip_ctx,
-            );
-        }
-
-        // M21: decorated boxes (border/shadow/opacity), then textured images.
-        // The order within a layer is unchanged; the shared depth buffer (each
-        // primitive carrying its emission-order z) resolves visibility, so a
-        // container's border no longer paints over a child that was emitted
-        // after it, and text (below) no longer sits unconditionally on top.
-        decorated_box::draw(
-            &mut render_pass,
-            arena,
-            staged.decorated,
-            decorated_pipeline,
-            viewport_bind_group,
-            quad_buffer,
-            dr.len(),
-            sub_slice(clips.decorated, dr),
-            clip_ctx,
-        );
-        // RFC-0023: ripple ink reveals. Transparent geometry, its stamped
-        // depth (between an element's background and its children) resolves
-        // the compositing slot against the shared depth buffer, so draw
-        // order within the layer doesn't matter.
-        ripple::draw(
-            &mut render_pass,
-            arena,
-            staged.ripple,
-            ripple_pipeline,
-            viewport_bind_group,
-            quad_buffer,
-            rr.len(),
-            sub_slice(clips.ripple, rr),
-            clip_ctx,
-        );
-        // RFC-0020: programmatic `Canvas` shapes (arcs/circles/lines/rects),
-        // analytic SDF. Transparent geometry like the decorated pass, tests
-        // the draw-order depth buffer, never writes it.
-        canvas_shape::draw(
-            &mut render_pass,
-            arena,
-            staged.canvas,
-            canvas_pipeline,
-            viewport_bind_group,
-            &records.bind_group,
-            quad_buffer,
-            cr.len(),
-            sub_slice(clips.canvas, cr),
-            clip_ctx,
-        );
-        texture_sampler::draw(
-            &mut render_pass,
-            arena,
-            &staged.textures,
-            texture_pipeline,
-            viewport_bind_group,
-            quad_buffer,
-            texture_cache,
-            &textures[tr.clone()],
-        );
-        // RFC-0009 §1: crisp monochrome icons, sampled from the same MSDF
-        // atlas the JIT/AOT paths upload to. Each instance carries its own
-        // draw-order depth (RFC-0011), so paint order across pipelines is
-        // honoured here too.
-        vector_msdf::draw(
-            &mut render_pass,
-            arena,
-            staged.vector,
-            vector_pipeline,
-            viewport_bind_group,
-            quad_buffer,
-            vector_atlas,
-            vr.len(),
-            sub_slice(clips.vector, vr),
-            clip_ctx,
+                records_bind_group: &records.bind_group,
+                vector_atlas,
+                texture_cache,
+                textures: &textures[seg.texture.clone()],
+            },
         );
 
         // Restore the base scissor before this layer's text: the pool draws
@@ -2227,7 +2169,7 @@ fn draw_ui_pass(
         // glyph buffer with the wrong line. The scissor rect set above (on
         // incremental frames) is what actually limits which pixels this
         // call may write, not the slice contents.
-        if !xr.is_empty() {
+        if !seg.text.is_empty() {
             text_pipeline.render_layer(&mut render_pass, i)?;
         }
 
@@ -3085,6 +3027,50 @@ fn stage_solid_box_instances(
 /// function) is what actually bounds the pixels touched here, so calling this
 /// unconditionally on every `should_draw` frame is still proportional to the
 /// dirty region's bandwidth, not the full instance list's.
+/// The registered `SolidBox` pipeline (RFC-0039).
+///
+/// The oldest pipeline in the engine, and now an ordinary entry in the
+/// registry like every other: the only thing that makes it "core" is that the
+/// engine registers it first.
+pub struct SolidBoxPipeline {
+    pipeline: wgpu::RenderPipeline,
+}
+
+impl SolidBoxPipeline {
+    /// Wraps a built pipeline for registration.
+    #[must_use]
+    pub const fn new(pipeline: wgpu::RenderPipeline) -> Self {
+        Self { pipeline }
+    }
+}
+
+impl pipeline::RenderPipeline for SolidBoxPipeline {
+    const NAME: &'static str = "solid_box";
+    type Instance = BoxInstance;
+
+    fn vertex_layout() -> wgpu::VertexBufferLayout<'static> {
+        BoxInstance::layout()
+    }
+
+    fn draw(&self, pass: &mut wgpu::RenderPass<'_>, cx: &pipeline::SegmentDraw<'_>) {
+        let range = &cx.ranges.solid;
+        if range.is_empty() {
+            return;
+        }
+        draw_solid_box_instances(
+            pass,
+            cx.arena,
+            cx.staged.solid,
+            &self.pipeline,
+            cx.viewport_bind_group,
+            cx.quad_buffer,
+            range.len(),
+            sub_slice(cx.clips.solid, range),
+            cx.clip_ctx,
+        );
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn draw_solid_box_instances(
     render_pass: &mut wgpu::RenderPass<'_>,

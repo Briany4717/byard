@@ -189,6 +189,7 @@ impl Checker<'_> {
             // action expression; it declares no bindings of its own.
             Member::Lifecycle { .. }
             | Member::Timer { .. }
+            | Member::Measure { .. }
             | Member::Style { .. }
             | Member::Expr(_) => {}
         }
@@ -626,6 +627,7 @@ fn member_span(member: &Member) -> Span {
         | Member::Route { span, .. }
         | Member::Lifecycle { span, .. }
         | Member::Timer { span, .. }
+        | Member::Measure { span, .. }
         | Member::Style { span, .. } => *span,
         Member::Element(el) => el.span,
         Member::Expr(e) => e.span(),

@@ -704,6 +704,33 @@ pub enum CompileError {
         /// Source range of the call that was dropped, when it is still known.
         span: Span,
     },
+    /// An element declared `on measure` twice (RFC-0038).
+    ///
+    /// Both would fire and both would write, and which one won would be an
+    /// ordering detail invisible in the source, so the second is refused and
+    /// pointed at the first.
+    DuplicateMeasure {
+        /// Source range of the second declaration.
+        span: Span,
+        /// Source range of the one already declared.
+        first: Span,
+    },
+    /// An element's `on measure` writes a binding its own layout-class
+    /// property reads (RFC-0038 "no feedback loop"), the statically visible
+    /// half of the cycle rule.
+    ///
+    /// The safe and common use, a parent measuring itself so a *child* can size
+    /// to it, is untouched: the dependency runs one way and settles in a frame.
+    /// This diagnostic is only the shape that cannot settle, where the measured
+    /// size is an input to the measurement.
+    MeasureFeedback {
+        /// Source range of the `on measure` declaration.
+        span: Span,
+        /// The layout property that reads the binding back.
+        prop: String,
+        /// The binding written by the handler and read by the property.
+        binding: String,
+    },
     /// An `inject T as x` named a type no ambient provider declares, in a
     /// context that has **no controller registry at all** (`byard check`, a
     /// headless test).
@@ -774,6 +801,8 @@ impl CompileError {
             | Self::StrokeInFusionGroup { span, .. }
             | Self::DashOnFusedStroke { span }
             | Self::NotAnimatable { span, .. }
+            | Self::DuplicateMeasure { span, .. }
+            | Self::MeasureFeedback { span, .. }
             | Self::PathStrokeUnsupported { span }
             | Self::DynamicStyleForbidden { span }
             | Self::ConflictingSpacingField { span, .. }
@@ -853,6 +882,8 @@ impl CompileError {
             | Self::StrokeInFusionGroup { span, .. }
             | Self::DashOnFusedStroke { span }
             | Self::NotAnimatable { span, .. }
+            | Self::DuplicateMeasure { span, .. }
+            | Self::MeasureFeedback { span, .. }
             | Self::PathStrokeUnsupported { span }
             | Self::DynamicStyleForbidden { span }
             | Self::ConflictingSpacingField { span, .. }
@@ -934,6 +965,8 @@ impl CompileError {
             Self::StrokeInFusionGroup { .. } => "StrokeInFusionGroup",
             Self::DashOnFusedStroke { .. } => "DashOnFusedStroke",
             Self::NotAnimatable { .. } => "NotAnimatable",
+            Self::DuplicateMeasure { .. } => "DuplicateMeasure",
+            Self::MeasureFeedback { .. } => "MeasureFeedback",
             Self::PathStrokeUnsupported { .. } => "PathStrokeUnsupported",
             Self::DynamicStyleForbidden { .. } => "DynamicStyleForbidden",
             Self::ConflictingSpacingField { .. } => "ConflictingSpacingField",
@@ -1147,6 +1180,17 @@ impl CompileError {
                     "`{prop}` has no value between one step and the next, so it                      cannot be animated; use `{use_instead}` to change shape over time"
                 )
             }
+            Self::DuplicateMeasure { .. } => {
+                "this element already declares `on measure`; one element has one \
+                 measured rect, so a second handler would only race the first"
+                    .to_string()
+            }
+            Self::MeasureFeedback { prop, binding, .. } => format!(
+                "`on measure` writes `{binding}`, which this element's own `{prop}` \
+                 reads: measuring a size that depends on the measurement cannot \
+                 settle. Move the consumer into a child, which is what the \
+                 measured size is for"
+            ),
             Self::PathStrokeUnsupported { .. } => {
                 "`path` renders fills only; stroke it with `arc`/`line`/`bezier` \
                  or outline the `d` data"

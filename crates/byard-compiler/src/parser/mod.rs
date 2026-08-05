@@ -335,6 +335,17 @@ impl<'a> Parser<'a> {
             {
                 Some(self.parse_lifecycle())
             }
+            // RFC-0038 `on measure => …`. Contextual on the same rule as the
+            // two above: `on` is only special when the word after it is one
+            // this grammar knows and an `=>` follows, so `measure` stays an
+            // ordinary identifier everywhere an app wants it.
+            Some(Token::Ident(name))
+                if name.as_str() == "on"
+                    && matches!(self.peek2(), Some(Token::Ident(ref s))
+                        if s.as_str() == "measure") =>
+            {
+                Some(self.parse_measure())
+            }
             // RFC-0029 §5 `every <dur> => …` / `after <dur> => …`. Contextual,
             // like `on mount`: the keyword is only special when a duration
             // literal follows it, so `every` and `after` stay ordinary
@@ -428,6 +439,23 @@ impl<'a> Parser<'a> {
         let action = self.parse_expr(0);
         Member::Lifecycle {
             on_mount,
+            action,
+            span: self.span_from(start),
+        }
+    }
+
+    /// `measure := "on" "measure" "=>" action` (RFC-0038).
+    ///
+    /// The payload binds as `it` rather than through a written parameter: the
+    /// event has exactly one value and no second one is imaginable, so a
+    /// binding position would be ceremony over `on measure => size = it`.
+    fn parse_measure(&mut self) -> Member {
+        let start = self.cur_span();
+        self.advance(); // on
+        self.advance(); // measure
+        self.expect(&Token::Arrow, "'=>'");
+        let action = self.parse_expr(0);
+        Member::Measure {
             action,
             span: self.span_from(start),
         }

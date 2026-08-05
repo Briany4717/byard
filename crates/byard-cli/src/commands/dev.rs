@@ -596,6 +596,17 @@ impl LogicRuntime for ByldRuntime {
                              every entry below the top stays in memory (RFC-0026)"
                         )
                     }
+                    // RFC-0038: a rect that keeps flipping between two sizes is
+                    // an `on measure` feeding its own layout. Bounded to one
+                    // fire per frame, so the app runs; named here, because a
+                    // layout that twitches explains nothing by itself.
+                    byard_compiler::interp::eval::PerfWarning::MeasureFeedback { span } => {
+                        format!(
+                            "perf: the `on measure` at byte {} alternates between two sizes, \
+                             so its own layout depends on what it measured (RFC-0038)",
+                            span.start
+                        )
+                    }
                 };
                 if self.reported_perf.insert(text.clone()) {
                     crate::style::warn(&text);

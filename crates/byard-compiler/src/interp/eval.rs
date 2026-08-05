@@ -19,6 +19,7 @@
 //!   it is [`CompileError::NotAssignable`].
 
 mod controller;
+mod measure;
 
 use controller::UNBOUND_CONTROLLER;
 
@@ -130,6 +131,7 @@ fn members_span(members: &[Member]) -> Span {
             | Member::Route { span, .. }
             | Member::Lifecycle { span, .. }
             | Member::Timer { span, .. }
+            | Member::Measure { span, .. }
             | Member::Style { span, .. } => *span,
             Member::Element(el) => el.span,
             Member::Expr(expr) => expr.span(),
@@ -454,6 +456,13 @@ pub enum RenderNode {
         /// and argument bindings, so a forwarded callback (`tap => on_tap()`)
         /// resolves against the scope it was instantiated in.
         env_snapshot: Vec<(Symbol, super::env::Value)>,
+        /// The RFC-0038 `on measure` slot this element declared, if any: an
+        /// index into the interpreter's measure slots.
+        ///
+        /// On the node rather than in a side table keyed by position, because
+        /// the element and the rect it wants are only in the same hand during
+        /// the layout build; `None` is the whole cost of not using the feature.
+        measure: Option<u32>,
     },
     /// A text run.
     Text {
@@ -1297,6 +1306,20 @@ pub struct Interpreter {
     /// currently the overlapping-blurs stack check, run over the frame's
     /// emitted backdrops at the end of [`render`](Self::render).
     perf_warnings: Vec<PerfWarning>,
+    /// RFC-0038 `on measure`: one slot per element that declared the event,
+    /// allocated at lower time and indexed by
+    /// [`RenderNode::Box::measure`](RenderNode::Box). An element that does not
+    /// declare it allocates nothing, which is the whole cost model: the event
+    /// is a slot, not a per-element field.
+    measures: Vec<MeasureSlot>,
+    /// The elements to measure this frame, `(laid-out node, slot)`, refilled by
+    /// the layout build walk.
+    ///
+    /// Recorded by the build rather than rediscovered afterwards because the
+    /// build is where a `RenderNode` and its atlas node are in the same hand;
+    /// a second walk would have to re-derive that pairing and could disagree
+    /// with it.
+    measure_targets: Vec<(byard_core::atlas::layout::AtlasNodeId, u32)>,
     /// The element instance the render walk is currently inside, the `slot`
     /// half of an [`AnimKey`].
     ///
@@ -1518,6 +1541,42 @@ const RIPPLE_DEFAULT_DURATION_MS: f32 = 300.0;
 /// vibrancy look.
 const BLUR_DEFAULT_SATURATION: f32 = 1.8;
 
+/// One element's `on measure` declaration (RFC-0038): the action, and the last
+/// size it was told about.
+struct MeasureSlot {
+    /// The lowered action, with `it` bound to the measured size. Shared the way
+    /// a lifecycle effect's action is, so firing it needs no exclusive borrow of
+    /// the interpreter it writes through.
+    action: std::rc::Rc<std::cell::RefCell<super::events::Action>>,
+    /// The last size delivered, as raw bits.
+    ///
+    /// **Bits, not `f32`.** Comparing the floats would make a `NaN` extent fire
+    /// forever (visible, merely wasteful) and, far worse, make `-0.0` and `0.0`
+    /// compare equal, so a collapsed element would silently never fire again.
+    /// This is the RFC-0032 fingerprint rule, and it applies here for the same
+    /// reason it applies there.
+    last: Option<(u32, u32)>,
+    /// The size before [`last`](Self::last), for the oscillation check below.
+    prev: Option<(u32, u32)>,
+    /// How many times in a row the rect has flipped back to the size it held
+    /// two fires ago: the signature of a same-element feedback loop that the
+    /// compiler could not see statically (RFC-0038 "no feedback loop").
+    flips: u32,
+    /// The last frame this slot fired on, the one-resolve-per-frame clamp.
+    fired_frame: u64,
+    /// Source span of the `on measure` declaration, for the runtime warning.
+    span: Span,
+}
+
+/// How many alternations it takes before an `on measure` slot is reported as a
+/// feedback loop (RFC-0038).
+///
+/// An honest resize never alternates: dragging a window edge walks the size in
+/// one direction and stops. A feedback loop flips between exactly two sizes
+/// forever, so a handful of flips is already conclusive, and waiting longer
+/// only delays the one message that explains what the developer is seeing.
+const MEASURE_FEEDBACK_FLIPS: u32 = 8;
+
 /// A runtime performance diagnostic surfaced by the evaluator (RFC-0023
 /// resolved question "multiple blurred elements overlap"). Recomputed every
 /// [`render`](Interpreter::render); hosts (the dev runner) report new ones to
@@ -1545,6 +1604,19 @@ pub enum PerfWarning {
         depth: usize,
         /// The path that could not be pushed.
         path: String,
+    },
+    /// An `on measure` element's rect has been alternating between two sizes
+    /// for [`MEASURE_FEEDBACK_FLIPS`] frames (RFC-0038 "no feedback loop"): the
+    /// handler is feeding its own size back into its own layout through a path
+    /// the compiler could not see (a `var` read by an ancestor, a `let` derived
+    /// from it).
+    ///
+    /// The loop is already bounded, one fire per element per frame, so this
+    /// costs a frame's work and not a hang; the warning exists because a
+    /// silently twitching layout is far harder to diagnose than a named one.
+    MeasureFeedback {
+        /// Source offset of the `on measure` declaration.
+        span: Span,
     },
 }
 
@@ -2423,12 +2495,12 @@ impl Interpreter {
             return None;
         }
         #[allow(clippy::cast_precision_loss)]
-        let row_height = self.eval_int_prop(sv_attrs, "row_height").unwrap_or(0) as f32;
+        let row_height = self.eval_px_prop(sv_attrs, "row_height").unwrap_or(0.0);
         if row_height <= 0.0 {
             return None;
         }
         #[allow(clippy::cast_precision_loss)]
-        let viewport_h = self.eval_int_prop(sv_attrs, "height").unwrap_or(0) as f32;
+        let viewport_h = self.eval_px_prop(sv_attrs, "height").unwrap_or(0.0);
         let (_, offset_y) = self.resolve_axis_pair(sv_attrs, "offset", (0.0, 0.0));
 
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -2495,6 +2567,12 @@ impl Interpreter {
         let to_validate = attrs_with_states(&attrs, &state_blocks);
         self.errors
             .extend(validate_element(el, &to_validate, known_views));
+        // RFC-0038: an `on measure` member is *about* this element, so it is
+        // consumed here and never reaches the child list. `el_children` is the
+        // element's members minus those declarations, borrowed unchanged in the
+        // overwhelming case where there are none.
+        let (measure, el_children) = self.lower_measures(el, &attrs);
+        let el_children: &[Member] = &el_children;
         match el.name.as_str() {
             "Text" | "Button" if !el.content.is_empty() => {
                 let content = self.bind_value(&el.content[0].value);
@@ -2512,6 +2590,7 @@ impl Interpreter {
                         action: el.action.clone(),
                         bound_sig: None,
                         env_snapshot: self.capture_env_snapshot(),
+                        measure,
                     }
                 } else {
                     RenderNode::Text {
@@ -2561,7 +2640,7 @@ impl Interpreter {
             "Canvas" => {
                 self.errors
                     .extend(super::intrinsics::validate_canvas(el, &to_validate));
-                let shapes = lower_canvas_items(&el.children);
+                let shapes = lower_canvas_items(el_children);
                 RenderNode::Canvas {
                     attrs,
                     state_blocks,
@@ -2574,7 +2653,7 @@ impl Interpreter {
             // normally, but the node itself carries them out of the parent flow
             //, the render walk defers them to the overlay layer.
             "Overlay" => {
-                let children = self.lower_members(&el.children, known_views);
+                let children = self.lower_members(el_children, known_views);
                 RenderNode::Overlay {
                     attrs,
                     children,
@@ -2594,6 +2673,7 @@ impl Interpreter {
                     action: el.action.clone(),
                     bound_sig,
                     env_snapshot: self.capture_env_snapshot(),
+                    measure,
                 }
             }
             // RFC-0018 `RadioButton`: like the value widgets, but its `value:` is a
@@ -2610,6 +2690,7 @@ impl Interpreter {
                     action: el.action.clone(),
                     bound_sig,
                     env_snapshot: self.capture_env_snapshot(),
+                    measure,
                 }
             }
             _ => {
@@ -2621,17 +2702,17 @@ impl Interpreter {
                 // `bound_sig` (unused by a ScrollView) so `render` can drive it.
                 let collapse = el.name.as_str() == "ScrollView"
                     && Self::enum_prop(&attrs, "collapse_header") == Some("true");
-                let (children, bound_sig) = if collapse && !el.children.is_empty() {
+                let (children, bound_sig) = if collapse && !el_children.is_empty() {
                     let frac = self.ctx.create_signal(Value::Float(0.0));
                     let snap = self.env.len();
                     self.env
                         .push(Symbol::intern("scroll_fraction"), Value::Signal(frac));
-                    let mut kids = self.lower_members(&el.children[..1], known_views);
+                    let mut kids = self.lower_members(&el_children[..1], known_views);
                     self.env.truncate(snap);
-                    kids.extend(self.lower_members(&el.children[1..], known_views));
+                    kids.extend(self.lower_members(&el_children[1..], known_views));
                     (kids, Some(frac))
                 } else {
-                    (self.lower_members(&el.children, known_views), None)
+                    (self.lower_members(el_children, known_views), None)
                 };
                 RenderNode::Box {
                     name: el.name.clone(),
@@ -2641,6 +2722,7 @@ impl Interpreter {
                     action: el.action.clone(),
                     bound_sig,
                     env_snapshot: self.capture_env_snapshot(),
+                    measure,
                 }
             }
         }
@@ -4001,6 +4083,12 @@ impl Interpreter {
         // which is the truth about a rebuilt frame.
         self.atlas.populate_frame_dirty(frame, retained_used);
 
+        // RFC-0038: rects are final for this frame, so an element that asked
+        // for its own is told now, before anything paints and while nothing can
+        // still move it (INV-29). Elements whose rect did not change are not
+        // told anything, which is what keeps a static screen at zero writes.
+        self.fire_measures();
+
         self.retained.flat_ids.clear();
         self.retained.flat_ids.extend_from_slice(&flat_ids);
         self.retained.viewport = Some((width, height));
@@ -4128,6 +4216,10 @@ impl Interpreter {
         byard_core::atlas::layout::AtlasNodeId,
     )> {
         let (width, height) = viewport;
+        // Refilled by this walk (RFC-0038). Cleared rather than appended to,
+        // because a retained build that rolls back runs the walk twice and the
+        // second run is the one that describes the frame.
+        self.measure_targets.clear();
         // Expand reactive `when`/`for` at the root, then build each concrete node.
         let root_children = self.build_children(tree, pools, flat_ids);
 
@@ -4191,6 +4283,17 @@ impl Interpreter {
         // unrelated primitives that happen to hash alike would be equated
         // across the discontinuity (RFC-0032 §R3 step 6).
         self.paint.reset();
+    }
+
+    /// How many elements in the lowered program declared `on measure`
+    /// (RFC-0038).
+    ///
+    /// Exposed because "an element that does not use the event pays nothing"
+    /// is a claim about a number, and a claim about a number should be read
+    /// from the number rather than inferred from behaviour.
+    #[must_use]
+    pub fn measure_slots(&self) -> usize {
+        self.measures.len()
     }
 
     /// Runtime performance diagnostics recomputed by the last
@@ -5311,8 +5414,8 @@ impl Interpreter {
                 Ok(id)
             }
             RenderNode::Image { attrs, .. } => {
-                let w = self.eval_int_prop(attrs, "width").unwrap_or(100) as f32;
-                let h = self.eval_int_prop(attrs, "height").unwrap_or(100) as f32;
+                let w = self.eval_px_prop(attrs, "width").unwrap_or(100.0);
+                let h = self.eval_px_prop(attrs, "height").unwrap_or(100.0);
                 let id = self.atlas.add_leaf(LeafSize::new(w, h))?;
                 flat_ids.push(id);
                 Ok(id)
@@ -5332,8 +5435,8 @@ impl Interpreter {
                 for (k, v) in env_snapshot {
                     self.env.push(k.clone(), v.clone());
                 }
-                let w = self.eval_int_prop(attrs, "width").unwrap_or(0) as f32;
-                let h = self.eval_int_prop(attrs, "height").unwrap_or(0) as f32;
+                let w = self.eval_px_prop(attrs, "width").unwrap_or(0.0);
+                let h = self.eval_px_prop(attrs, "height").unwrap_or(0.0);
                 self.env.truncate(env_base);
                 let id = self.atlas.add_leaf(LeafSize::new(w, h))?;
                 flat_ids.push(id);
@@ -5372,7 +5475,7 @@ impl Interpreter {
                     return Ok(id);
                 }
                 #[allow(clippy::cast_precision_loss)]
-                let explicit_w = self.eval_int_prop(attrs, "width").map(|w| w as f32);
+                let explicit_w = self.eval_px_prop(attrs, "width");
                 let id = self.atlas.add_text_leaf(byard_core::atlas::TextLeaf {
                     content: text,
                     font_size,
@@ -5387,6 +5490,7 @@ impl Interpreter {
                 attrs,
                 children,
                 env_snapshot,
+                measure,
                 ..
             } => {
                 // The same restore the paint walk does, for the same reason and
@@ -5403,6 +5507,13 @@ impl Interpreter {
                 }
                 let out = self.build_box_layout(name, attrs, children, pools, flat_ids);
                 self.env.truncate(env_base);
+                // RFC-0038: pair the element with the node that will hold its
+                // resolved rect. Recorded here because this is the one point
+                // where both are in hand, and skipped entirely by an element
+                // that declared no `on measure`.
+                if let (Some(slot), Ok(id)) = (measure, &out) {
+                    self.measure_targets.push((*id, *slot));
+                }
                 out
             }
         }
@@ -5422,15 +5533,15 @@ impl Interpreter {
         // Value widgets are leaf nodes with intrinsic default sizes (M16/M19).
         match name.as_str() {
             "Toggle" => {
-                let w = self.eval_int_prop(attrs, "width").unwrap_or(50) as f32;
-                let h = self.eval_int_prop(attrs, "height").unwrap_or(30) as f32;
+                let w = self.eval_px_prop(attrs, "width").unwrap_or(50.0);
+                let h = self.eval_px_prop(attrs, "height").unwrap_or(30.0);
                 let id = self.atlas.add_leaf(LeafSize::new(w, h))?;
                 flat_ids.push(id);
                 return Ok(id);
             }
             "Slider" => {
-                let w = self.eval_int_prop(attrs, "width").unwrap_or(200) as f32;
-                let h = self.eval_int_prop(attrs, "height").unwrap_or(24) as f32;
+                let w = self.eval_px_prop(attrs, "width").unwrap_or(200.0);
+                let h = self.eval_px_prop(attrs, "height").unwrap_or(24.0);
                 let id = self.atlas.add_leaf(LeafSize::new(w, h))?;
                 flat_ids.push(id);
                 return Ok(id);
@@ -5439,23 +5550,23 @@ impl Interpreter {
             // `height` override. Sized square unless overridden so the
             // container and checkmark geometry stay proportional.
             "Checkbox" => {
-                let w = self.eval_int_prop(attrs, "width").unwrap_or(18) as f32;
-                let h = self.eval_int_prop(attrs, "height").unwrap_or(18) as f32;
+                let w = self.eval_px_prop(attrs, "width").unwrap_or(18.0);
+                let h = self.eval_px_prop(attrs, "height").unwrap_or(18.0);
                 let id = self.atlas.add_leaf(LeafSize::new(w, h))?;
                 flat_ids.push(id);
                 return Ok(id);
             }
             // RFC-0018 RadioButton: a 20×20 circle by default.
             "RadioButton" => {
-                let w = self.eval_int_prop(attrs, "width").unwrap_or(20) as f32;
-                let h = self.eval_int_prop(attrs, "height").unwrap_or(20) as f32;
+                let w = self.eval_px_prop(attrs, "width").unwrap_or(20.0);
+                let h = self.eval_px_prop(attrs, "height").unwrap_or(20.0);
                 let id = self.atlas.add_leaf(LeafSize::new(w, h))?;
                 flat_ids.push(id);
                 return Ok(id);
             }
             "TextField" => {
-                let w = self.eval_int_prop(attrs, "width").unwrap_or(200) as f32;
-                let h = self.eval_int_prop(attrs, "height").unwrap_or(36) as f32;
+                let w = self.eval_px_prop(attrs, "width").unwrap_or(200.0);
+                let h = self.eval_px_prop(attrs, "height").unwrap_or(36.0);
                 let id = self.atlas.add_leaf(LeafSize::new(w, h))?;
                 flat_ids.push(id);
                 return Ok(id);
@@ -5642,13 +5753,9 @@ impl Interpreter {
     /// Resolves a `Grid`'s per-axis gaps: `col_gap`/`row_gap` each fall back to
     /// the shared `gap` (default 0). Returns `(col_gap, row_gap)`.
     fn eval_grid_gaps(&mut self, attrs: &[Attr]) -> (f32, f32) {
-        let gap = self.eval_int_prop(attrs, "gap").map_or(0.0, |n| n as f32);
-        let col_gap = self
-            .eval_int_prop(attrs, "col_gap")
-            .map_or(gap, |n| n as f32);
-        let row_gap = self
-            .eval_int_prop(attrs, "row_gap")
-            .map_or(gap, |n| n as f32);
+        let gap = self.eval_px_prop(attrs, "gap").unwrap_or(0.0);
+        let col_gap = self.eval_px_prop(attrs, "col_gap").unwrap_or(gap);
+        let row_gap = self.eval_px_prop(attrs, "row_gap").unwrap_or(gap);
         (col_gap, row_gap)
     }
 
@@ -5914,6 +6021,7 @@ impl Interpreter {
                 action,
                 bound_sig,
                 env_snapshot,
+                measure: _,
             } => {
                 // RFC-0019 §2: restore the instance environment captured at lower
                 // time so event actions re-lowered below (a forwarded callback,
@@ -7736,6 +7844,30 @@ impl Interpreter {
         })
     }
 
+    /// Reads a **pixel extent** prop (`width`, `height`) as an `f32`.
+    ///
+    /// Separate from [`eval_int_prop`](Self::eval_int_prop) because a pixel
+    /// extent is not an integer quantity: layout is `f32` throughout, a
+    /// measured rect (RFC-0038) is fractional, and `800.0 / 3.0` is a perfectly
+    /// ordinary width to write. Read through the integer path, every one of
+    /// those resolved to `None` and the element silently fell back to its
+    /// default size, which is the failure INV-4 exists to forbid.
+    fn eval_px_prop(&mut self, attrs: &[Attr], name: &str) -> Option<f32> {
+        #[allow(clippy::cast_possible_truncation)]
+        attrs.iter().find_map(|a| {
+            if a.name.as_str() == name {
+                if let AttrKind::Prop { value } = &a.kind {
+                    return match self.eval_pure(value) {
+                        Value::Int(n) => Some(n as f32),
+                        Value::Float(f) => Some(f as f32),
+                        _ => None,
+                    };
+                }
+            }
+            None
+        })
+    }
+
     fn eval_float_prop(&mut self, attrs: &[Attr], name: &str) -> Option<f64> {
         attrs.iter().find_map(|a| {
             if a.name.as_str() == name {
@@ -8162,8 +8294,8 @@ impl Interpreter {
                             }
                         }
                     }
-                    "width" => style.width = val.as_int().map(|n| n as f32),
-                    "height" => style.height = val.as_int().map(|n| n as f32),
+                    "width" => style.width = val_to_f32(&val),
+                    "height" => style.height = val_to_f32(&val),
                     "direction" => {
                         if let Some(s) = Self::enum_token(value) {
                             style.direction = match s {
@@ -8173,8 +8305,8 @@ impl Interpreter {
                         }
                     }
                     "gap" => {
-                        if let Some(n) = val.as_int() {
-                            style.gap = n as f32;
+                        if let Some(v) = val_to_f32(&val) {
+                            style.gap = v;
                         }
                     }
                     "p" | "padding" => {

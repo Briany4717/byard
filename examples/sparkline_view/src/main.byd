@@ -1,0 +1,55 @@
+// RFC-0039, the native render extension ABI: an element the language does not
+// know how to draw, and cannot tell apart from one it does.
+//
+// Run it (from the repo root):
+//   cargo run -p sparkline-view
+//
+// `Sparkline` is a Rust type in the app's own crate, registered with
+// `App::native_view::<Sparkline>()`. Everything about the call site below is
+// ordinary: it takes `width`/`height`/`bg` like any element, its own props are
+// type-checked with spans, and it sits inside a `Column` that lays it out.
+//
+// Try it:
+//   • press add / reset, and the widget follows the data;
+//   • hover the bars, and the one under the pointer lights up. That hit test
+//     happens inside the Rust view, in its own coordinates, and never becomes
+//     an event handler here.
+//   • change `gap:` to something silly like 40 and watch the bars thin out.
+View Main() {
+    var series = [12.0, 30.0, 18.0, 44.0, 26.0, 51.0, 33.0]
+    var next = 20.0
+
+    Column #[bg: 0x14141C, p: 32, gap: 24, width: 760] {
+        Column #[gap: 6] {
+            Text("A widget written in Rust") #[size: 26, color: 0xF2F2F7, weight: bold]
+            Text("One element here, one batch on the GPU, no elements per bar.")
+                #[size: 15, color: 0x9A9AA8]
+        }
+
+        // The native view. `data` is re-evaluated every tick like any other
+        // prop, so pressing add below is all it takes to redraw the chart.
+        Box #[bg: 0x1C1C26, radius: 16, p: 20] {
+            Sparkline #[
+                data: series,
+                bar: 0x5B8DEF,
+                highlight: 0xF9A8A8,
+                gap: 6.0,
+                width: 680,
+                height: 220,
+            ]
+        }
+
+        Row #[gap: 12] {
+            Button("add") #[bg: 0x5B8DEF, color: 0x0B0B10, p: (vertical: 10, horizontal: 20), radius: 10] => {
+                next = next * 1.21
+                series = series + [next]
+            }
+            Button("reset") #[bg: 0x2A2A38, color: 0xF2F2F7, p: (vertical: 10, horizontal: 20), radius: 10] => {
+                series = [12.0, 30.0, 18.0, 44.0, 26.0, 51.0, 33.0]
+                next = 20.0
+            }
+            Spacer()
+            Text("bars: {series.len}") #[size: 15, color: 0x9A9AA8]
+        }
+    }
+}

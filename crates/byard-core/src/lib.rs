@@ -24,12 +24,14 @@
 pub mod atlas;
 pub mod bridge;
 pub mod cap;
+pub mod color;
 pub mod encoder;
 pub mod engine;
 pub mod evaluator;
 pub mod frame;
 pub mod platform;
 pub mod relay;
+pub mod render;
 pub mod telemetry;
 pub mod text;
 

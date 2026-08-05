@@ -401,6 +401,13 @@ pub struct EncoderSubsystem {
     /// the same structural-change reasoning as
     /// [`last_instance_count`](Self::last_instance_count).
     last_text_count: usize,
+    /// Digest of the previous frame's native-view batches (RFC-0039, INV-26).
+    ///
+    /// A native batch carries no dirty bit, because its instances are a
+    /// package's own type and nothing here can read one out of them. The bytes
+    /// are the dirty bit: if they differ from last frame's, the widget's
+    /// pixels differ, and the frame repaints.
+    last_native_digest: u64,
     /// Per-line bounding boxes (logical pixels) from the previous
     /// `encode_frame` call, positionally aligned with that call's `texts`
     /// slice.
@@ -730,6 +737,7 @@ impl EncoderSubsystem {
             needs_full_redraw: true,
             last_instance_count: 0,
             last_text_count: 0,
+            last_native_digest: 0,
             last_text_bounds: Vec::new(),
             last_box_bounds: Vec::new(),
             last_decorated_bounds: Vec::new(),
@@ -976,6 +984,7 @@ impl EncoderSubsystem {
             FrameClips::default(),
             FrameDirty::default(),
             &[],
+            NativeFrameData::default(),
             // This convenience path has no `RenderFrame` and therefore no dev
             // surfaces: every primitive in it is the caller's own.
             None,
@@ -1010,6 +1019,10 @@ impl EncoderSubsystem {
         clips: FrameClips<'_>,
         dirty: FrameDirty<'_>,
         layers: &[crate::frame::LayerMark],
+        // What this frame's native views emitted (RFC-0039). A bundle for the
+        // same reason the backdrop pair is one: the batches and the textures
+        // they name are meaningless apart.
+        native: NativeFrameData<'_>,
         // Where the dev runner's own surfaces begin in every pool
         // (`RenderFrame::dev_base`); `None` for a frame that carries none,
         // which is every frame of a shipped app. Passed explicitly rather than
@@ -1050,8 +1063,22 @@ impl EncoderSubsystem {
 
         self.drain_gpu_samples_into_telemetry();
 
+        // RFC-0039 × INV-26: a native view's batch is opaque bytes, so there
+        // is no per-instance dirty bit to read and no rect to union into the
+        // scissor. What there is, is the bytes themselves: a digest of this
+        // frame's batches against last frame's answers "did this widget's
+        // pixels change" exactly, and a change repaints in full.
+        //
+        // Full rather than scissored because a batch's bounds are not knowable
+        // from here: the instances are the package's own type, and guessing at
+        // their extent is how a widget ends up half-painted. A digest over a
+        // few kilobytes is cheap; a wrong rect is a bug nobody can see coming.
+        let native_digest = native_batch_digest(native.batches);
+        let native_changed = native_digest != self.last_native_digest;
+        self.last_native_digest = native_digest;
+
         let full_redraw = needs_full_redraw_this_frame(
-            self.needs_full_redraw || dirty.full,
+            self.needs_full_redraw || dirty.full || native_changed,
             self.last_instance_count,
             instances.len(),
             self.last_text_count,
@@ -1149,6 +1176,7 @@ impl EncoderSubsystem {
             canvas: u32::try_from(canvas_shapes.len()).unwrap_or(u32::MAX),
             ripple: u32::try_from(ripples.len()).unwrap_or(u32::MAX),
             backdrop: u32::try_from(backdrops.len()).unwrap_or(u32::MAX),
+            native: u32::try_from(native.batches.len()).unwrap_or(u32::MAX),
         };
         let segments = compute_segments(layers, backdrop_marks, &totals);
 
@@ -1242,6 +1270,7 @@ impl EncoderSubsystem {
                     canvas_shapes,
                     shape_records,
                     ripples,
+                    native: native.batches,
                     solid_depths: depths.solid,
                     decorated_depths: depths.decorated,
                     texture_depths: depths.texture,
@@ -1363,6 +1392,10 @@ impl EncoderSubsystem {
                 full: frame.wants_full_redraw(),
             },
             frame.layer_marks(),
+            NativeFrameData {
+                batches: frame.native_batches(),
+                textures: frame.native_textures(),
+            },
             frame.dev_base(),
         )?;
         self.last_relay_version = frame.version();
@@ -1554,6 +1587,23 @@ pub struct SegmentStaging {
     canvas: instance_arena::Region,
     vector: instance_arena::Region,
     textures: Vec<texture_sampler::StagedImage>,
+    /// This segment's native-view batches, staged (RFC-0039). One entry per
+    /// batch, in emission order, cleared and refilled like `textures`.
+    native: Vec<StagedBatch>,
+}
+
+/// One native-view batch, staged into the arena and ready to draw
+/// (RFC-0039).
+#[derive(Clone, Copy)]
+pub struct StagedBatch {
+    /// Which pipeline draws it.
+    key: crate::render::PipelineKey,
+    /// Where its instances landed.
+    instances: instance_arena::Region,
+    /// Where its parallel depths landed, one `f32` per instance.
+    depths: instance_arena::Region,
+    /// How many instances.
+    count: u32,
 }
 
 impl FrameStaging {
@@ -1574,8 +1624,21 @@ impl FrameStaging {
             seg.canvas = instance_arena::Region::default();
             seg.vector = instance_arena::Region::default();
             seg.textures.clear();
+            seg.native.clear();
         }
     }
+}
+
+/// What a frame's native views emitted, as the encoder reads it (RFC-0039).
+///
+/// [`Default`] is empty, which is every frame of every app that uses no native
+/// view: the pool costs nothing to carry and nothing to skip.
+#[derive(Clone, Copy, Default)]
+pub struct NativeFrameData<'a> {
+    /// This frame's batches, in emission order.
+    pub batches: &'a [crate::render::NativeBatch],
+    /// Textures the views asked for, to be resolved before the pass opens.
+    pub textures: &'a [crate::render::TextureRequest],
 }
 
 /// The per-primitive dirty bits a frame carries that do not fit on the
@@ -1674,6 +1737,9 @@ struct DrawPrimitives<'a> {
     /// on `RippleInstance` itself (stamped by `RenderFrame::push_ripple`),
     /// like `vectors`.
     ripples: &'a [RippleInstance],
+    /// Native-view batches (RFC-0039). Each carries its own depth, like
+    /// `ripples`, because a batch is emitted as a unit.
+    native: &'a [crate::render::NativeBatch],
     /// Draw-order depths, parallel to `instances`/`decorated`/`textures`
     /// respectively (RFC-0011 cross-pass paint order). `texts` depth is applied
     /// inside `TextGlyphPipeline::prepare` via glyphon's per-glyph metadata;
@@ -1706,6 +1772,8 @@ pub struct SegmentRanges {
     text: std::ops::Range<usize>,
     canvas: std::ops::Range<usize>,
     ripple: std::ops::Range<usize>,
+    /// This segment's native-view batches (RFC-0039).
+    native: std::ops::Range<usize>,
     /// `Some(b)`: after drawing this segment, end the pass, blur what has
     /// been rasterised so far for backdrop `b`, and composite `b` at the
     /// start of the next segment's pass.
@@ -1759,6 +1827,12 @@ fn stage_segment(
         record_base,
     );
     out.vector = arena.push_vertex(&primitives.vectors[seg.vector.clone()]);
+    stage_native_batches(
+        &primitives.native[seg.native.clone()],
+        &mut out.native,
+        arena,
+        &mut scratch.depth,
+    );
     texture_sampler::stage(
         arena,
         &mut out.textures,
@@ -1768,6 +1842,100 @@ fn stage_segment(
         sub_slice(primitives.clips.texture, &seg.texture),
         clip_ctx,
     );
+}
+
+/// Stages one segment's native-view batches into the arena (RFC-0039).
+///
+/// Each batch takes two regions: its instances, exactly as the view laid them
+/// out, and a parallel run of its draw-order depth, one `f32` per instance.
+/// The depth run is staged for every batch rather than for the pipelines known
+/// to read one, because "which pipelines read it" is a fact about pipelines a
+/// package may add to, and four bytes an instance is a smaller price than an
+/// extension whose depth silently does not work.
+fn stage_native_batches(
+    batches: &[crate::render::NativeBatch],
+    out: &mut Vec<StagedBatch>,
+    arena: &mut instance_arena::InstanceArena,
+    depth_scratch: &mut Vec<f32>,
+) {
+    for batch in batches {
+        if batch.count == 0 {
+            continue;
+        }
+        let instances = arena.push_vertex_bytes(&batch.bytes);
+        depth_scratch.clear();
+        depth_scratch.resize(batch.count as usize, batch.depth);
+        let depths = arena.push_vertex(depth_scratch);
+        out.push(StagedBatch {
+            key: batch.pipeline,
+            instances,
+            depths,
+            count: batch.count,
+        });
+    }
+}
+
+/// A digest of this frame's native-view batches (RFC-0039, INV-26).
+///
+/// Over everything that decides the pixels: which pipeline, how many
+/// instances, the instance bytes, the clip, the depth. `to_bits` for the
+/// floats, so a `NaN` is not permanently dirty and `-0.0` is not permanently
+/// clean, the fingerprint rule RFC-0032 already documented.
+///
+/// An empty pool digests to zero, which is the value every frame of every app
+/// with no native view produces, so nothing about this costs those apps a
+/// thing.
+fn native_batch_digest(batches: &[crate::render::NativeBatch]) -> u64 {
+    use std::hash::{Hash, Hasher};
+
+    if batches.is_empty() {
+        return 0;
+    }
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for batch in batches {
+        batch.pipeline.name().hash(&mut hasher);
+        batch.count.hash(&mut hasher);
+        batch.bytes.hash(&mut hasher);
+        batch.depth.to_bits().hash(&mut hasher);
+        match batch.clip {
+            None => 0u8.hash(&mut hasher),
+            Some(crate::render::ClipShape::Rect(r)) => {
+                1u8.hash(&mut hasher);
+                for v in r {
+                    v.to_bits().hash(&mut hasher);
+                }
+            }
+            Some(crate::render::ClipShape::RoundedRect { rect, radii }) => {
+                2u8.hash(&mut hasher);
+                for v in rect.iter().chain(radii.iter()) {
+                    v.to_bits().hash(&mut hasher);
+                }
+            }
+        }
+    }
+    hasher.finish()
+}
+
+/// Names a native view's batch that no registered pipeline draws (INV-4).
+///
+/// A view emitting into a pipeline the app never registered draws nothing, and
+/// "nothing" is indistinguishable from a widget that had nothing to say. Once
+/// per pipeline per process, because it is a fact about how the app was put
+/// together rather than about this frame: it is either wrong every frame or
+/// never.
+fn unregistered_pipeline(key: crate::render::PipelineKey) {
+    use std::collections::HashSet;
+    use std::sync::Mutex;
+    static SAID: Mutex<Option<HashSet<&'static str>>> = Mutex::new(None);
+    let Ok(mut said) = SAID.lock() else { return };
+    if said.get_or_insert_with(HashSet::new).insert(key.name()) {
+        eprintln!(
+            "  a native view drew through the `{}` pipeline, which is not \
+             registered. Register it at startup, or the view paints nothing \
+             (RFC-0039).",
+            key.name()
+        );
+    }
 }
 
 /// Whether every primitive this segment draws sits at or after `base` in its
@@ -1794,6 +1962,7 @@ fn segment_belongs_to(seg: &SegmentRanges, base: LayerMark) -> bool {
         && at_or_after(seg.text.start, base.text)
         && at_or_after(seg.canvas.start, base.canvas)
         && at_or_after(seg.ripple.start, base.ripple)
+        && at_or_after(seg.native.start, base.native)
 }
 
 /// Field-wise clamp of a pool-cursor snapshot into `[lo, hi]`, the same
@@ -1811,6 +1980,7 @@ fn mark_clamped(m: &LayerMark, lo: &LayerMark, hi: &LayerMark) -> LayerMark {
         canvas: m.canvas.clamp(lo.canvas, hi.canvas),
         ripple: m.ripple.clamp(lo.ripple, hi.ripple),
         backdrop: m.backdrop.clamp(lo.backdrop, hi.backdrop),
+        native: m.native.clamp(lo.native, hi.native),
     }
 }
 
@@ -1824,6 +1994,7 @@ fn ranges_between(a: &LayerMark, b: &LayerMark, backdrop_after: Option<usize>) -
         text: a.text as usize..b.text as usize,
         canvas: a.canvas as usize..b.canvas as usize,
         ripple: a.ripple as usize..b.ripple as usize,
+        native: a.native as usize..b.native as usize,
         backdrop_after,
     }
 }
@@ -2148,6 +2319,30 @@ fn draw_ui_pass(
                 textures: &textures[seg.texture.clone()],
             },
         );
+
+        // This segment's native-view batches (RFC-0039), after the core pools
+        // and before the text batch, which is where they sit in emission order:
+        // the depth each batch carries is what actually orders it against
+        // everything else, exactly as it does for a core primitive.
+        for staged in &staging.segments[i].native {
+            let known = registry.draw_batch(
+                &mut render_pass,
+                staged.key,
+                &pipeline::BatchDraw {
+                    arena,
+                    instances: staged.instances,
+                    depths: staged.depths,
+                    count: staged.count,
+                    viewport_bind_group,
+                    quad_buffer,
+                    records_bind_group: &records.bind_group,
+                    vector_atlas,
+                },
+            );
+            if !known {
+                unregistered_pipeline(staged.key);
+            }
+        }
 
         // Restore the base scissor before this layer's text: the pool draws
         // above left the GPU scissor at their last clip run, but text is
@@ -3068,6 +3263,23 @@ impl pipeline::RenderPipeline for SolidBoxPipeline {
             sub_slice(cx.clips.solid, range),
             cx.clip_ctx,
         );
+    }
+
+    fn draw_batch(&self, pass: &mut wgpu::RenderPass<'_>, cx: &pipeline::BatchDraw<'_>) {
+        if cx.instances.is_empty() {
+            return;
+        }
+        pass.set_pipeline(&self.pipeline);
+        pass.set_bind_group(0, cx.viewport_bind_group, &[]);
+        pass.set_vertex_buffer(0, cx.quad_buffer.slice(..));
+        pass.set_vertex_buffer(1, cx.arena.slice(cx.instances));
+        // This pipeline reads its draw-order depth from a parallel buffer
+        // rather than from the instance record, which is why every batch is
+        // staged with one: a native view emitting solid boxes gets the same
+        // depth handling the interpreter's own boxes get, without having to
+        // know that is how this pipeline works.
+        pass.set_vertex_buffer(2, cx.arena.slice(cx.depths));
+        pass.draw(0..4, 0..cx.count);
     }
 }
 

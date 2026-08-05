@@ -38,3 +38,12 @@ pub use byard_core::bridge;
 /// Marks a Rust struct as a byard controller (field metadata) and, on its `impl`
 /// block, generates the async-method dispatch shim (`impl Controller`).
 pub use byard_macro::byard_controller;
+
+/// The native render extension ABI (RFC-0039): [`NativeView`](render::NativeView)
+/// and the bounded [`RenderCtx`](render::RenderCtx) it draws through, plus the
+/// catalog types `#[native_view]` generates.
+pub use byard_core::render;
+
+/// Marks a Rust struct as a native view (RFC-0039): generates its catalog entry
+/// and the prop assignment behind it, leaving the drawing to the author.
+pub use byard_macro::native_view;

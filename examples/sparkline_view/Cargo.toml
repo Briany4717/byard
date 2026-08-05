@@ -1,0 +1,16 @@
+[package]
+name = "sparkline-view"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+byard = { path = "../../crates/byard" }
+
+[lints]
+workspace = true

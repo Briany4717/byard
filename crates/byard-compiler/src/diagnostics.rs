@@ -667,6 +667,23 @@ pub enum CompileError {
         /// The controller method being called.
         method: String,
     },
+    /// A native view's prop was given something with no data form, a
+    /// `Signal`, a memo, a callback, a theme or a controller handle
+    /// (RFC-0039).
+    ///
+    /// A view receives *values*, re-evaluated each tick, for the same reason a
+    /// controller receives values: a handle would be a reference to
+    /// interpreter state held by Rust that the interpreter can then rewrite
+    /// underneath it. Passing the signal's value is what the author meant, and
+    /// it is what an intrinsic's prop does.
+    NonDataViewProp {
+        /// Source range of the offending prop value.
+        span: Span,
+        /// The prop's name.
+        prop: String,
+        /// The view the prop was written on.
+        view: String,
+    },
     /// A controller call appeared in a pure context, a `let`, a memo, an
     /// attribute value (RFC-0028 §4).
     ///
@@ -774,6 +791,7 @@ impl CompileError {
             | Self::UnknownControllerMethod { span, .. }
             | Self::ControllerCallFailed { span, .. }
             | Self::NonDataControllerArg { span, .. }
+            | Self::NonDataViewProp { span, .. }
             | Self::EffectInPureContext { span, .. }
             | Self::DiscardedControllerReply { span }
             | Self::UncheckableInject { span, .. }
@@ -855,6 +873,7 @@ impl CompileError {
             | Self::UnknownControllerMethod { span, .. }
             | Self::ControllerCallFailed { span, .. }
             | Self::NonDataControllerArg { span, .. }
+            | Self::NonDataViewProp { span, .. }
             | Self::EffectInPureContext { span, .. }
             | Self::DiscardedControllerReply { span }
             | Self::UncheckableInject { span, .. }
@@ -938,6 +957,7 @@ impl CompileError {
             Self::UnknownControllerMethod { .. } => "UnknownControllerMethod",
             Self::ControllerCallFailed { .. } => "ControllerCallFailed",
             Self::NonDataControllerArg { .. } => "NonDataControllerArg",
+            Self::NonDataViewProp { .. } => "NonDataViewProp",
             Self::EffectInPureContext { .. } => "EffectInPureContext",
             Self::DiscardedControllerReply { .. } => "DiscardedControllerReply",
             Self::UncheckableInject { .. } => "UncheckableInject",
@@ -1054,6 +1074,11 @@ impl CompileError {
             Self::NonDataControllerArg { method, .. } => format!(
                 "`{method}` was passed a value with no data form; only data \
                  (numbers, strings, lists, records) crosses the controller boundary"
+            ),
+            Self::NonDataViewProp { prop, view, .. } => format!(
+                "`{view}`'s `{prop}` was given a value with no data form; a view prop \
+                 takes data (numbers, strings, lists, records), so pass the value \
+                 rather than the signal holding it"
             ),
             Self::EffectInPureContext { context, .. } => format!(
                 "a controller call is an effect and cannot appear in {context}; \

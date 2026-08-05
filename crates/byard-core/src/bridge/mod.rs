@@ -144,6 +144,45 @@ impl FromHostValue for f64 {
     }
 }
 
+/// `f32` crosses as the single float `HostValue` carries.
+///
+/// The boundary is `f64` because the language's numbers are, and a widget's
+/// geometry is `f32` because the GPU's is. Narrowing here, once, is what keeps
+/// every native view from writing the same cast (RFC-0039).
+impl FromHostValue for f32 {
+    #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+    fn from_host(value: HostValue) -> Self {
+        match value {
+            HostValue::Float(f) => f as Self,
+            HostValue::Int(n) => n as Self,
+            _ => 0.0,
+        }
+    }
+}
+impl IntoHostValue for f32 {
+    fn into_host(self) -> HostValue {
+        HostValue::Float(f64::from(self))
+    }
+}
+
+/// A pair of numbers, which is how a `byld` tuple crosses (RFC-0028 §1 maps a
+/// tuple to a positional list) and what a widget calls a point.
+impl FromHostValue for (f32, f32) {
+    fn from_host(value: HostValue) -> Self {
+        match value {
+            HostValue::List(xs) if xs.len() == 2 => {
+                (f32::from_host(xs[0].clone()), f32::from_host(xs[1].clone()))
+            }
+            _ => (0.0, 0.0),
+        }
+    }
+}
+impl IntoHostValue for (f32, f32) {
+    fn into_host(self) -> HostValue {
+        HostValue::List(vec![self.0.into_host(), self.1.into_host()])
+    }
+}
+
 /// Generates `FromHostValue`/`IntoHostValue` for every signed/unsigned integer
 /// type, going through `i64` (the single integer `HostValue` variant).
 macro_rules! int_host_value {

@@ -341,6 +341,20 @@ impl super::pipeline::RenderPipeline for CanvasShapePipeline {
             cx.clip_ctx,
         );
     }
+
+    fn draw_batch(&self, pass: &mut wgpu::RenderPass<'_>, cx: &super::pipeline::BatchDraw<'_>) {
+        if cx.instances.is_empty() {
+            return;
+        }
+        pass.set_pipeline(&self.pipeline);
+        pass.set_bind_group(0, cx.viewport_bind_group, &[]);
+        // Group 1 is the shape-record pool, which the pipeline layout requires
+        // whether or not this batch's instances head a group.
+        pass.set_bind_group(1, cx.records_bind_group, &[]);
+        pass.set_vertex_buffer(0, cx.quad_buffer.slice(..));
+        pass.set_vertex_buffer(1, cx.arena.slice(cx.instances));
+        pass.draw(0..4, 0..cx.count);
+    }
 }
 
 #[cfg(test)]

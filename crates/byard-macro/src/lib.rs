@@ -21,6 +21,30 @@ use proc_macro::TokenStream;
 use quote::quote;
 use syn::{Fields, Item, ReturnType, Type, parse_macro_input};
 
+mod native_view;
+
+/// Marks a Rust struct as a native view (RFC-0039): a package-authored widget
+/// that draws, measures and handles events like an intrinsic.
+///
+/// ```ignore
+/// #[byard::native_view(name = "Sparkline")]
+/// struct Sparkline {
+///     #[prop] data: Vec<f32>,
+///     #[prop(layout)] thickness: f32,
+///     #[event] hover_point: (),
+/// }
+/// ```
+///
+/// It emits the struct unchanged, a `Default`-based constructor, the catalog
+/// entry the compiler validates `byld` against, and the `set_prop` half of
+/// `NativeView` that assigns each declared field from the value the language
+/// evaluated this tick. The `NativeView` impl itself stays the author's: what
+/// the widget draws is the one thing a macro must not guess.
+#[proc_macro_attribute]
+pub fn native_view(attr: TokenStream, item: TokenStream) -> TokenStream {
+    native_view::expand(attr, item)
+}
+
 /// Marks a Rust struct, or its `impl` block, as a byard controller (RFC-0028
 /// §2). See the crate docs for the two forms. On a struct it emits
 /// `BYARD_FIELDS` + `byard_field_type`; on an `impl` block it emits

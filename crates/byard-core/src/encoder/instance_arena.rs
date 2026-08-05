@@ -141,6 +141,19 @@ impl InstanceArena {
         self.push_bytes(bytemuck::cast_slice(data), VERTEX_ALIGNMENT, false)
     }
 
+    /// Appends already-`Pod` bytes as a **vertex** region (RFC-0039).
+    ///
+    /// The entry a native view's batch takes. A view emitted its instances as
+    /// its own concrete type, on the logic thread, and by the time they reach
+    /// here the engine no longer knows what that type was, only that they are
+    /// `Pod` bytes with an instance stride. That is exactly the information
+    /// [`push_vertex`](Self::push_vertex) has after `cast_slice`, so the two
+    /// land the same bytes at the same alignment, and a package pool and a
+    /// core pool are indistinguishable to the arena (INV-30).
+    pub fn push_vertex_bytes(&mut self, bytes: &[u8]) -> Region {
+        self.push_bytes(bytes, VERTEX_ALIGNMENT, false)
+    }
+
     /// Appends `value` as a **uniform** region, padded to the device's
     /// reported `min_uniform_buffer_offset_alignment`.
     pub fn push_uniform<T: bytemuck::Pod>(&mut self, value: &T) -> Region {
@@ -391,6 +404,34 @@ mod tests {
     #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
     struct Rec {
         v: [f32; 20],
+    }
+
+    #[test]
+    fn a_native_batch_stages_exactly_what_the_core_path_stages() {
+        // RFC-0039's zero-cost claim, at the one place it can be checked
+        // without a GPU: the arena cannot tell a package's instances from a
+        // core intrinsic's, because by the time they reach it there is nothing
+        // left to tell them apart by (INV-30).
+        let Some((device, _queue)) = try_device() else {
+            eprintln!("no GPU adapter, skipping arena test");
+            return;
+        };
+        let instances = [Rec { v: [3.5; 20] }, Rec { v: [-1.0; 20] }];
+
+        let mut core_path = InstanceArena::new(&device);
+        core_path.begin_frame();
+        let core_region = core_path.push_vertex(&instances);
+
+        let mut native_path = InstanceArena::new(&device);
+        native_path.begin_frame();
+        let native_region =
+            native_path.push_vertex_bytes(bytemuck::cast_slice::<Rec, u8>(&instances));
+
+        assert_eq!(core_region, native_region, "same offset, same length");
+        assert_eq!(
+            core_path.staging, native_path.staging,
+            "same bytes, byte for byte"
+        );
     }
 
     #[test]

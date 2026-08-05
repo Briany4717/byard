@@ -489,6 +489,35 @@ pub enum RenderNode {
         /// The reactive scope that evaluates to the image source path/URL.
         src: ScopeId,
     },
+    /// A package-authored native view (RFC-0039): an element whose drawing,
+    /// measurement and event handling are compiled-in Rust rather than an
+    /// intrinsic's.
+    ///
+    /// It is a leaf here for the same reason an `Image` is: what it contains
+    /// is its own business, and the tree only needs to know how much room it
+    /// takes and when to hand it a frame.
+    Native {
+        /// The registered name, which is also what `byld` calls it.
+        name: Symbol,
+        /// Styling attributes, including the view's own declared props.
+        attrs: Vec<Attr>,
+        /// `on <state> { … }` blocks (RFC-0016) overlaid at render time.
+        state_blocks: Vec<StateBlock>,
+        /// Event shorthand action, as on any element.
+        action: Option<Expr>,
+        /// The instance environment captured at lower time (RFC-0019 §2), so a
+        /// prop expression resolves against the scope the element was written
+        /// in even though it is re-evaluated every tick.
+        env_snapshot: Vec<(Symbol, super::env::Value)>,
+        /// This element's view instance, as an index into the interpreter's
+        /// live views.
+        ///
+        /// The instance is made when this node is lowered and dropped when the
+        /// tree is lowered again, which is exactly the element's lifetime: a
+        /// view's state lives and dies with the element that declared it, with
+        /// no separate lifetime to manage (INV-31).
+        slot: usize,
+    },
     /// An MSDF vector glyph, the `VectorIcon` intrinsic (RFC-0009 §1)
     /// routed to the `VectorMSDF` pipeline.
     Vector {
@@ -840,6 +869,42 @@ enum SnapAlign {
     Center,
     /// Item's trailing edge at the viewport's trailing edge.
     End,
+}
+
+/// Stands in for a view whose registration went missing between checking and
+/// lowering (RFC-0039).
+///
+/// It draws nothing, and it exists so the slot table stays index-aligned with
+/// the lowered tree: the diagnostic beside it is what tells the author, and a
+/// missing entry here would silently shift every later view's slot onto the
+/// wrong instance.
+struct MissingNativeView;
+
+impl byard_core::render::NativeProps for MissingNativeView {}
+
+impl byard_core::render::NativeView for MissingNativeView {
+    fn render(
+        &mut self,
+        _layout: byard_core::render::Layout,
+        _cx: &mut byard_core::render::RenderCtx<'_>,
+    ) {
+    }
+}
+
+/// A native view laid out in the last render (RFC-0039), and where.
+///
+/// The event half of the ABI: an input event is offered to the views under the
+/// pointer, innermost first, and a view that says [`Handled::Yes`] stops it, so
+/// a package widget takes part in routing under the rules an intrinsic follows
+/// rather than beside them.
+///
+/// [`Handled::Yes`]: byard_core::render::Handled::Yes
+#[derive(Clone, Copy)]
+struct NativeTarget {
+    /// Which live view, by slot.
+    slot: usize,
+    /// Its on-screen rect in logical pixels.
+    rect: crate::interp::intrinsics::Rect,
 }
 
 /// A wheel/drag-scrollable region recorded during render (RFC-0005
@@ -1347,6 +1412,20 @@ pub struct Interpreter {
     /// reads this to convert a wheel into a clamped scroll, the same
     /// render-then-dispatch handshake the router's hit rects use.
     scroll_targets: Vec<ScrollTarget>,
+    /// Live native-view instances (RFC-0039), indexed by a lowered element's
+    /// `slot`.
+    ///
+    /// Dropped and rebuilt whenever the tree is lowered, which is what makes
+    /// mount and unmount the element's own lifetime rather than a second thing
+    /// for a package author to get right.
+    native_views: Vec<Box<dyn byard_core::render::NativeView>>,
+    /// Native views laid out in the last render, with the rect each occupies
+    /// (RFC-0039 × RFC-0003).
+    ///
+    /// The same render-then-dispatch handshake `scroll_targets` uses: the walk
+    /// records where each view ended up, and `dispatch_events` routes the
+    /// tick's input against it.
+    native_targets: Vec<NativeTarget>,
     /// The drag-to-scroll gesture in flight, if any (RFC-0005). Set when a
     /// pointer press lands on inert `ScrollView` content; each move writes the
     /// offset so the content tracks the pointer; cleared on release.
@@ -2693,6 +2772,22 @@ impl Interpreter {
                     measure,
                 }
             }
+            // RFC-0039: a package's native view. Reached here because the
+            // catalog resolved the name (`validate_element` has already checked
+            // its props and events against the entry the package declared), so
+            // by this point it is an element like any other, with a Rust
+            // implementation behind it instead of an intrinsic.
+            name if byard_core::render::registry::info(name).is_some() => {
+                let slot = self.mount_native_view(name, el.span);
+                RenderNode::Native {
+                    name: el.name.clone(),
+                    attrs,
+                    state_blocks,
+                    action: el.action.clone(),
+                    env_snapshot: self.capture_env_snapshot(),
+                    slot,
+                }
+            }
             _ => {
                 // Box / Column / Row / ScrollView and any other container.
                 // RFC-0021 collapsing header: a `collapse_header` ScrollView mints
@@ -3906,6 +4001,10 @@ impl Interpreter {
         // lifecycle (settle above read the previous frame's; emit rebuilds them).
         self.scroll_targets.clear();
         self.scroll_item_bounds.clear();
+        // RFC-0039: where each native view ended up is re-recorded every
+        // render, for the same reason the scroll targets are, a rect from two
+        // frames ago is a hit test against a widget that has moved.
+        self.native_targets.clear();
         // RFC-0026 swipe-back regions follow the same render-then-dispatch
         // lifecycle as the scroll targets.
         self.nav_targets.clear();
@@ -5442,6 +5541,48 @@ impl Interpreter {
                 flat_ids.push(id);
                 Ok(id)
             }
+            // RFC-0039: a native view is laid out by asking it. The `width`
+            // and `height` props, if written, are what layout already knows,
+            // and `measure` gets the chance to answer with something else (an
+            // intrinsic size) or to keep them.
+            //
+            // A view that leaves both axes free is a flex leaf rather than a
+            // zero-sized one: "fill" is the answer a chart or a map gives, and
+            // a leaf of size zero would be an invisible widget with no error
+            // anywhere, which is the failure mode INV-4 exists to prevent.
+            RenderNode::Native {
+                attrs,
+                env_snapshot,
+                slot,
+                ..
+            } => {
+                let env_base = self.env.len();
+                for (k, v) in env_snapshot {
+                    self.env.push(k.clone(), v.clone());
+                }
+                let known = byard_core::render::Measure {
+                    width: self.eval_px_prop(attrs, "width"),
+                    height: self.eval_px_prop(attrs, "height"),
+                };
+                self.env.truncate(env_base);
+                let answer = self
+                    .native_views
+                    .get(*slot)
+                    .map_or(known, |v| v.measure(known));
+                let id = match (answer.width, answer.height) {
+                    (Some(w), Some(h)) => self.atlas.add_leaf(LeafSize::new(w, h))?,
+                    (w, h) => {
+                        // One free axis still fills the other: a fixed extent
+                        // on the axis that has one, growth on the axis that
+                        // does not.
+                        let leaf = self.atlas.add_flex_leaf(1.0, 0.0)?;
+                        let _ = (w, h);
+                        leaf
+                    }
+                };
+                flat_ids.push(id);
+                Ok(id)
+            }
             // A VectorIcon is a square leaf sized by its `size` prop (default 24),
             // RFC-0009 §1.
             RenderNode::Vector { attrs, .. } => {
@@ -6806,6 +6947,110 @@ impl Interpreter {
                     });
                 }
             }
+            // RFC-0039: hand the view its rect and let it draw. Props are
+            // re-evaluated every tick through the same `eval_*` chokepoints an
+            // intrinsic's are, so a native view animates and reacts for free
+            // (RFC-0010), and the view itself never learns that a value came
+            // from a signal.
+            RenderNode::Native {
+                name,
+                attrs,
+                state_blocks,
+                action,
+                env_snapshot,
+                slot,
+            } => {
+                if let Ok(Some(rect)) = self.atlas.resolved_rect(atlas_node) {
+                    let elem_idx = self.atlas.node_index(atlas_node);
+                    let state = elem_idx
+                        .map_or_else(crate::interp::events::StyleState::empty, |i| {
+                            self.router.style_state(i)
+                        })
+                        .union(self.prop_style_state(attrs, None, ""));
+                    let paint_attrs = resolve_state_attrs(attrs, state_blocks, state);
+                    let paint_attrs = paint_attrs.as_ref();
+
+                    // RFC-0019 §2: prop expressions resolve against the scope
+                    // the element was written in.
+                    let env_base = self.env.len();
+                    for (k, v) in env_snapshot {
+                        self.env.push(k.clone(), v.clone());
+                    }
+                    self.apply_native_props(name.as_str(), *slot, paint_attrs);
+                    self.env.truncate(env_base);
+
+                    let view_rect = crate::interp::intrinsics::Rect::new(
+                        rect.x,
+                        rect.y,
+                        rect.width,
+                        rect.height,
+                    );
+                    if let Some(view) = self.native_views.get_mut(*slot) {
+                        let repaint = frame.render_native(
+                            view.as_mut(),
+                            byard_core::render::Layout::new([
+                                rect.x,
+                                rect.y,
+                                rect.width,
+                                rect.height,
+                            ]),
+                        );
+                        if repaint {
+                            // The view is animating from state the engine
+                            // cannot see, so it says so once per frame rather
+                            // than holding a subscription open (RFC-0032).
+                            frame.request_full_redraw();
+                        }
+                    }
+
+                    // Events: the view's rect, under the same hit-rect rules an
+                    // intrinsic follows (RFC-0003 E8 inflation included), and
+                    // recorded so `dispatch_events` can offer it the raw event
+                    // its `on_event` expects.
+                    let hit_rect = scrolled_hit_rect(
+                        crate::interp::intrinsics::inflate_hit_rect(view_rect, parent_rect),
+                        scroll_shift,
+                        cull_clip,
+                    );
+                    self.native_targets.push(NativeTarget {
+                        slot: *slot,
+                        rect: hit_rect,
+                    });
+                    if let Some(idx) = elem_idx {
+                        if state_blocks.iter().any(|sb| {
+                            sb.states.iter().any(|st| {
+                                matches!(st, StyleStateKind::Hover | StyleStateKind::Pressed)
+                            })
+                        }) {
+                            self.router.track_region(idx, hit_rect);
+                        }
+                    }
+                    let has_events = attrs
+                        .iter()
+                        .any(|a| matches!(a.kind, AttrKind::Event { .. }))
+                        || action.is_some();
+                    if has_events {
+                        let env_base = self.env.len();
+                        for (k, v) in env_snapshot {
+                            self.env.push(k.clone(), v.clone());
+                        }
+                        self.register_event_attrs(attrs, hit_rect, elem_idx);
+                        if let Some(action_expr) = action {
+                            if let (Ok(closure), Some(idx)) =
+                                (self.lower_action(action_expr, None), elem_idx)
+                            {
+                                self.router.on(
+                                    idx,
+                                    hit_rect,
+                                    crate::interp::events::EventKind::Tap,
+                                    closure,
+                                );
+                            }
+                        }
+                        self.env.truncate(env_base);
+                    }
+                }
+            }
             RenderNode::Vector { attrs, src } => {
                 if let Ok(Some(rect)) = self.atlas.resolved_rect(atlas_node) {
                     let handle = self
@@ -7626,6 +7871,118 @@ impl Interpreter {
     }
 
     /// Registers handlers for all event-kind attrs (`#[tap => …]`, etc.).
+    /// Offers each event to the native views under the pointer, innermost
+    /// first, and reports which events a view took (RFC-0039 × RFC-0003).
+    ///
+    /// Innermost first is "last recorded first": the render walk is
+    /// depth-first, so a view nested inside another was pushed after it, and
+    /// walking the targets in reverse is the same front-to-back order the
+    /// router's own hit testing uses.
+    ///
+    /// A keyboard event has no position, so it is offered to no view here; a
+    /// view that wants keys gets them the way an intrinsic does, through the
+    /// focus path, and inventing a second rule for package elements is exactly
+    /// the divergence this ABI exists to avoid.
+    fn dispatch_to_native_views(&mut self, events: &[byard_core::InputEvent]) -> Vec<bool> {
+        use byard_core::render::{Event as ViewEvent, Handled, Layout};
+
+        let mut consumed = vec![false; events.len()];
+        if self.native_targets.is_empty() {
+            return consumed;
+        }
+        let targets = self.native_targets.clone();
+        for (i, ev) in events.iter().enumerate() {
+            let (px, py) = ev.pos;
+            for target in targets.iter().rev() {
+                let r = target.rect;
+                if px < r.x || px >= r.x + r.w || py < r.y || py >= r.y + r.h {
+                    continue;
+                }
+                let Some(view) = self.native_views.get_mut(target.slot) else {
+                    continue;
+                };
+                let layout = Layout::new([r.x, r.y, r.w, r.h]);
+                let handled = view.on_event(
+                    &ViewEvent {
+                        kind: ev.kind,
+                        local: layout.local((px, py)),
+                        delta: ev.delta,
+                        payload: ev.payload.clone(),
+                    },
+                    layout,
+                );
+                if handled == Handled::Yes {
+                    consumed[i] = true;
+                    break;
+                }
+            }
+        }
+        consumed
+    }
+
+    /// Makes this element's native-view instance and returns its slot
+    /// (RFC-0039).
+    ///
+    /// Called at lower time, which is the element's birth: the view exists for
+    /// as long as this lowered node does, and a re-lower (a hot reload, a
+    /// structural change) drops it, which is its unmount. There is no separate
+    /// bookkeeping to keep in step, and therefore nothing to get out of step
+    /// (INV-31).
+    fn mount_native_view(&mut self, name: &str, span: crate::diagnostics::Span) -> usize {
+        let slot = self.native_views.len();
+        if let Some(view) = byard_core::render::registry::create(name) {
+            self.native_views.push(view);
+        } else {
+            // The catalog answered for this name a moment ago, so failing here
+            // means the registry changed underneath the lowering, which is not
+            // something an app can do by accident. Said with a span rather
+            // than papered over with a blank element (INV-4).
+            self.errors.push(CompileError::UnknownView {
+                span,
+                name: name.to_string(),
+                hint: None,
+            });
+            self.native_views.push(Box::new(MissingNativeView));
+        }
+        slot
+    }
+
+    /// Evaluates this element's declared props and hands them to its view
+    /// (RFC-0039).
+    ///
+    /// Only the props the view declared, and only the ones the element wrote:
+    /// an unwritten prop is the view's own initial value, not a `None` it has
+    /// to interpret, and an unknown one was already a compile error with a
+    /// span before lowering ever reached here.
+    fn apply_native_props(&mut self, name: &str, slot: usize, attrs: &[Attr]) {
+        let Some(info) = byard_core::render::registry::info(name) else {
+            return;
+        };
+        for prop in info.props {
+            let Some(attr) = attrs.iter().find(|a| a.name.as_str() == prop.name) else {
+                continue;
+            };
+            let AttrKind::Prop { value } = &attr.kind else {
+                continue;
+            };
+            let evaluated = self.eval_pure(value);
+            // A signal, a memo or a callback has no data form, and a view is
+            // data-only by construction (INV-13): the same rule the controller
+            // boundary follows, for the same reason.
+            let Some(host) = super::bridge::value_to_host(&evaluated) else {
+                self.errors.push(CompileError::NonDataViewProp {
+                    span: attr.span,
+                    prop: prop.name.to_string(),
+                    view: name.to_string(),
+                });
+                continue;
+            };
+            if let Some(view) = self.native_views.get_mut(slot) {
+                view.set_prop(prop.name, &host);
+            }
+        }
+    }
+
     fn register_event_attrs(
         &mut self,
         attrs: &[Attr],
@@ -11185,9 +11542,18 @@ impl Interpreter {
             byard_core::telemetry::ScopeKind::Interpreter
         );
 
+        // RFC-0039: offer each event to the native views under the pointer,
+        // innermost first, before anything else looks at it. A view that
+        // handles one stops it there, which is the rule an intrinsic's handler
+        // follows; a view that declines is invisible to the rest of routing,
+        // which is the rule an element with no listener follows (RFC-0003).
+        let consumed = self.dispatch_to_native_views(events);
+
         let comp_events: Vec<CompEvent> = events
             .iter()
-            .map(|ev| {
+            .enumerate()
+            .filter(|(i, _)| !consumed[*i])
+            .map(|(_, ev)| {
                 let kind = match ev.kind {
                     CoreKind::PointerDown => CompKind::PointerDown,
                     CoreKind::PointerUp => CompKind::PointerUp,
@@ -11228,7 +11594,13 @@ impl Interpreter {
         // per-line step); trackpad `Scroll` deltas are already pixels. Done here,
         // before the render, so the same tick paints the new offset (paint-time
         // translate, no relayout, INV-8).
-        for ev in events {
+        for (i, ev) in events.iter().enumerate() {
+            if consumed[i] {
+                // A native view took this wheel event (a chart panning its own
+                // axis, say), so the ScrollView underneath must not also
+                // scroll on it.
+                continue;
+            }
             let step = match ev.kind {
                 CoreKind::Wheel => WHEEL_LINE_PX,
                 CoreKind::Scroll => 1.0,

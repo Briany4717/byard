@@ -1712,6 +1712,19 @@ pub struct RenderFrame {
     /// [`push_text`](Self::push_text) records `None`.
     text_wrap: Vec<Option<f32>>,
 
+    /// What this frame's native views emitted (RFC-0039): instance bytes and
+    /// the pipeline that draws them, one batch per pipeline per emitting view.
+    ///
+    /// A pool like every other, and deliberately so. A native view is not a
+    /// special case in the frame any more than it is in layout: it takes a
+    /// draw-order depth from the same counter, a clip from the same stack, and
+    /// a cursor in [`LayerMark`] so it segments with the rest.
+    native: crate::render::NativeBatches,
+
+    /// Textures this frame's native views asked the engine to make available,
+    /// drained by the encoder (RFC-0039).
+    native_textures: Vec<crate::render::TextureRequest>,
+
     /// Running global emission counter, mapped to a depth by [`draw_depth`].
     /// Reset each [`clear`](Self::clear); advanced by every `push_*` drawable.
     draw_seq: u32,
@@ -1797,6 +1810,8 @@ pub struct LayerMark {
     pub ripple: u32,
     /// `backdrops` length at the boundary (RFC-0023 §2).
     pub backdrop: u32,
+    /// Native-view batch count at the boundary (RFC-0039).
+    pub native: u32,
 }
 
 /// Applies `set` to every element of `pool` from index `from` onward.
@@ -1873,6 +1888,8 @@ impl RenderFrame {
         self.ripple_clips.clear();
         self.backdrop_clips.clear();
         self.text_wrap.clear();
+        self.native.begin_frame();
+        self.native_textures.clear();
         self.layer_marks.clear();
         self.dev_base = None;
         self.draw_seq = 0;
@@ -2017,21 +2034,69 @@ impl RenderFrame {
     /// right after the element's own background, the RFC-0023 §4 slot
     /// (background → blur → tint → ripple → children).
     pub fn push_backdrop(&mut self, mut b: BackdropInstance) {
-        let mark = LayerMark {
-            solid: u32::try_from(self.instances.len()).unwrap_or(u32::MAX),
-            decorated: u32::try_from(self.decorated.len()).unwrap_or(u32::MAX),
-            texture: u32::try_from(self.textures.len()).unwrap_or(u32::MAX),
-            vector: u32::try_from(self.vector_instances.len()).unwrap_or(u32::MAX),
-            text: u32::try_from(self.texts.len()).unwrap_or(u32::MAX),
-            canvas: u32::try_from(self.canvas_shapes.len()).unwrap_or(u32::MAX),
-            ripple: u32::try_from(self.ripples.len()).unwrap_or(u32::MAX),
-            backdrop: u32::try_from(self.backdrops.len()).unwrap_or(u32::MAX),
-        };
+        let mark = self.cursor();
         b.depth = self.next_depth();
         let c = self.active_clip();
         self.backdrops.push(b);
         self.backdrop_marks.push(mark);
         self.backdrop_clips.push(c);
+    }
+
+    /// Draws one native view into this frame (RFC-0039).
+    ///
+    /// The engine calls this where it lowers an intrinsic: the view is handed
+    /// the box layout resolved for it and a [`RenderCtx`] over this frame's
+    /// pools, and whatever it emits takes the next draw-order depth and the
+    /// clip in force, exactly as a `push_*` would have.
+    ///
+    /// Returns whether the view asked for another frame
+    /// ([`RenderCtx::request_repaint`]).
+    ///
+    /// [`RenderCtx`]: crate::render::RenderCtx
+    /// [`RenderCtx::request_repaint`]: crate::render::RenderCtx::request_repaint
+    pub fn render_native(
+        &mut self,
+        view: &mut dyn crate::render::NativeView,
+        layout: crate::render::Layout,
+    ) -> bool {
+        let depth = self.next_depth();
+        let clip = self.active_clip_shape();
+        let mut cx =
+            crate::render::RenderCtx::new(&mut self.native, &mut self.native_textures, depth);
+        match clip {
+            Some(shape) => cx.clip(shape, |cx| view.render(layout, cx)),
+            None => view.render(layout, &mut cx),
+        }
+        cx.wants_repaint()
+    }
+
+    /// This frame's native-view batches, in emission order (RFC-0039).
+    #[must_use]
+    pub fn native_batches(&self) -> &[crate::render::NativeBatch] {
+        self.native.batches()
+    }
+
+    /// Textures this frame's native views asked for (RFC-0039).
+    #[must_use]
+    pub fn native_textures(&self) -> &[crate::render::TextureRequest] {
+        &self.native_textures
+    }
+
+    /// The clip rectangle in force, as a [`ClipShape`] a native view's batch
+    /// can carry.
+    ///
+    /// The frame's own clips are indices into a table the encoder scissors
+    /// with; a native batch carries its shape instead, because a package's
+    /// pipeline is not obliged to be scissored the way the core pools are.
+    ///
+    /// [`ClipShape`]: crate::render::ClipShape
+    fn active_clip_shape(&self) -> Option<crate::render::ClipShape> {
+        let index = self.active_clip()?;
+        let clip = self.clips.get(usize::from(index))?;
+        let r = clip.rect;
+        Some(crate::render::ClipShape::Rect([
+            r.x, r.y, r.width, r.height,
+        ]))
     }
 
     /// Appends a [`CanvasShape`] (RFC-0020 Tier-1 shape command) to the frame.
@@ -2094,16 +2159,7 @@ impl RenderFrame {
     /// that emits nothing costs nothing. A frame that never calls this is a
     /// single layer and renders through the exact pre-layering draw stream.
     pub fn begin_layer(&mut self) {
-        let mark = LayerMark {
-            solid: u32::try_from(self.instances.len()).unwrap_or(u32::MAX),
-            decorated: u32::try_from(self.decorated.len()).unwrap_or(u32::MAX),
-            texture: u32::try_from(self.textures.len()).unwrap_or(u32::MAX),
-            vector: u32::try_from(self.vector_instances.len()).unwrap_or(u32::MAX),
-            text: u32::try_from(self.texts.len()).unwrap_or(u32::MAX),
-            canvas: u32::try_from(self.canvas_shapes.len()).unwrap_or(u32::MAX),
-            ripple: u32::try_from(self.ripples.len()).unwrap_or(u32::MAX),
-            backdrop: u32::try_from(self.backdrops.len()).unwrap_or(u32::MAX),
-        };
+        let mark = self.cursor();
         if self.layer_marks.last() == Some(&mark) {
             return; // empty layer, dedup, an overlay that emitted nothing is free
         }
@@ -2125,6 +2181,7 @@ impl RenderFrame {
             canvas: u32::try_from(self.canvas_shapes.len()).unwrap_or(u32::MAX),
             ripple: u32::try_from(self.ripples.len()).unwrap_or(u32::MAX),
             backdrop: u32::try_from(self.backdrops.len()).unwrap_or(u32::MAX),
+            native: u32::try_from(self.native.len()).unwrap_or(u32::MAX),
         }
     }
 
@@ -3667,6 +3724,7 @@ mod motion_tests {
                 canvas: 0,
                 ripple: 0,
                 backdrop: 0,
+                native: 0,
             }]
         );
     }

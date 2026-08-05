@@ -86,6 +86,16 @@ pub trait RenderPipeline: 'static {
     /// pass's shared frontier for exactly the same reason `frame.rs` is the
     /// subsystem boundary: one place to look for what crosses.
     fn draw(&self, pass: &mut wgpu::RenderPass<'_>, cx: &SegmentDraw<'_>);
+
+    /// Records one native view's batch of this pipeline's instances
+    /// (RFC-0039).
+    ///
+    /// The same pipeline, the same shader, the same vertex layout; the only
+    /// difference from [`draw`](Self::draw) is where the instances came from,
+    /// and by this point that difference is a byte range in the arena. A
+    /// pipeline that cannot be driven this way is one no package could use,
+    /// which is why it is a required method rather than a defaulted one.
+    fn draw_batch(&self, pass: &mut wgpu::RenderPass<'_>, cx: &BatchDraw<'_>);
 }
 
 /// The object-safe half of [`RenderPipeline`], which is what the registry
@@ -109,6 +119,12 @@ pub trait ErasedPipeline: 'static {
 
     /// Records this pipeline's draws for one segment.
     fn draw_segment(&self, pass: &mut wgpu::RenderPass<'_>, cx: &SegmentDraw<'_>);
+
+    /// This pipeline's key, which is what a native view's batch names it by.
+    fn key(&self) -> crate::render::PipelineKey;
+
+    /// Records one native view's batch (RFC-0039).
+    fn draw_native_batch(&self, pass: &mut wgpu::RenderPass<'_>, cx: &BatchDraw<'_>);
 }
 
 impl<P: RenderPipeline> ErasedPipeline for P {
@@ -126,6 +142,14 @@ impl<P: RenderPipeline> ErasedPipeline for P {
 
     fn draw_segment(&self, pass: &mut wgpu::RenderPass<'_>, cx: &SegmentDraw<'_>) {
         self.draw(pass, cx);
+    }
+
+    fn key(&self) -> crate::render::PipelineKey {
+        crate::render::PipelineKey::of::<P>()
+    }
+
+    fn draw_native_batch(&self, pass: &mut wgpu::RenderPass<'_>, cx: &BatchDraw<'_>) {
+        self.draw_batch(pass, cx);
     }
 }
 
@@ -251,6 +275,32 @@ impl PipelineRegistry {
         self.dispatches.get()
     }
 
+    /// Draws one native view's batch through the pipeline it names
+    /// (RFC-0039), reporting whether that pipeline is registered.
+    ///
+    /// A `false` is a view drawing through a pipeline nobody registered, which
+    /// is an app-assembly mistake rather than a frame-time condition: the
+    /// caller names it once and the batch is skipped, because the alternative
+    /// is either a panic in the render thread or a silently missing widget
+    /// (INV-4).
+    pub fn draw_batch(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        key: crate::render::PipelineKey,
+        cx: &BatchDraw<'_>,
+    ) -> bool {
+        let Some(entry) = self
+            .entries
+            .iter()
+            .find(|e| e.pipeline.key().type_id() == key.type_id())
+        else {
+            return false;
+        };
+        self.dispatches.set(self.dispatches.get() + 1);
+        entry.pipeline.draw_native_batch(pass, cx);
+        true
+    }
+
     /// Draws one segment through every registered pipeline, in order.
     pub fn draw_segment(&self, pass: &mut wgpu::RenderPass<'_>, cx: &SegmentDraw<'_>) {
         for entry in &self.entries {
@@ -346,6 +396,33 @@ pub fn check_portable_layout(
     Ok(())
 }
 
+/// Everything one native view's batch draw reads (RFC-0039).
+///
+/// Deliberately narrower than [`SegmentDraw`]: a batch is one contiguous run
+/// of one pipeline's instances, so there are no pool ranges to slice and no
+/// per-pool clip table to walk. What is left is where the instances are, how
+/// many, and the shared bindings every instanced pipeline in the UI pass uses.
+pub struct BatchDraw<'a> {
+    /// The frame's instance arena.
+    pub arena: &'a super::instance_arena::InstanceArena,
+    /// Where this batch's instances were staged.
+    pub instances: super::instance_arena::Region,
+    /// Where this batch's parallel draw-order depths were staged, one `f32`
+    /// per instance. Staged for every batch, because whether a pipeline reads
+    /// it is the pipeline's business and staging it is cheaper than asking.
+    pub depths: super::instance_arena::Region,
+    /// How many instances the batch holds.
+    pub count: u32,
+    /// The shared viewport uniform bind group (group 0).
+    pub viewport_bind_group: &'a wgpu::BindGroup,
+    /// The unit quad every instanced pipeline expands.
+    pub quad_buffer: &'a wgpu::Buffer,
+    /// The `CanvasShape` pipeline's per-frame shape-record binding (group 1).
+    pub records_bind_group: &'a wgpu::BindGroup,
+    /// The MSDF atlas the vector pipeline samples (group 1).
+    pub vector_atlas: &'a super::VectorAtlas,
+}
+
 /// A pipeline whose shader failed to compile names itself (INV-4).
 ///
 /// Kept here rather than at each call site so every pipeline's build failure
@@ -382,6 +459,7 @@ mod tests {
             }
         }
         fn draw(&self, _pass: &mut wgpu::RenderPass<'_>, _cx: &SegmentDraw<'_>) {}
+        fn draw_batch(&self, _pass: &mut wgpu::RenderPass<'_>, _cx: &BatchDraw<'_>) {}
     }
 
     #[test]
@@ -451,6 +529,7 @@ mod tests {
             }
         }
         fn draw(&self, _pass: &mut wgpu::RenderPass<'_>, _cx: &SegmentDraw<'_>) {}
+        fn draw_batch(&self, _pass: &mut wgpu::RenderPass<'_>, _cx: &BatchDraw<'_>) {}
     }
 
     /// A pipeline that stays inside every location but declares too many of
@@ -475,6 +554,7 @@ mod tests {
             }
         }
         fn draw(&self, _pass: &mut wgpu::RenderPass<'_>, _cx: &SegmentDraw<'_>) {}
+        fn draw_batch(&self, _pass: &mut wgpu::RenderPass<'_>, _cx: &BatchDraw<'_>) {}
     }
 
     #[test]

@@ -5949,7 +5949,7 @@ fn inject_provider_is_visible_to_view() {
 }
 
 #[test]
-fn apply_io_results_writes_to_var_and_ticks() {
+fn apply_io_callbacks_writes_to_var_and_ticks() {
     let parsed = parse("View C() {\n var data = \"\"\n Text(\"{data}\")\n}");
     assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
     let view = &parsed.views[0];
@@ -5961,7 +5961,7 @@ fn apply_io_results_writes_to_var_and_ticks() {
     interp.tick();
 
     // Simulate an async I/O result writing to the `data` var.
-    interp.apply_io_results([Box::new(move |interp: &mut Interpreter| {
+    interp.apply_io_callbacks([Box::new(move |interp: &mut Interpreter| {
         interp.write_var(sig, Value::Str("loaded".to_string()));
     }) as Box<dyn FnOnce(&mut Interpreter) + Send>]);
     interp.tick();

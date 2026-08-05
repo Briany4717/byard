@@ -129,8 +129,9 @@ pub enum Token {
         s[..s.len() - 3].parse::<f64>().ok()
     })]
     AngleLit(f64),
-    /// A duration literal, `200ms` (RFC-0010) or the seconds form `1.5s` /
-    /// `2s` (RFC-0025 §4), value always in **milliseconds**.
+    /// A duration literal, `200ms` (RFC-0010), the seconds form `1.5s` / `2s`
+    /// (RFC-0025 §4), or the minutes form `5min` (RFC-0029 §5), value always in
+    /// **milliseconds**.
     ///
     /// Listed before the plain number rules so `logos`'s longest-match prefers
     /// `200ms` over `200` + `ms`. The seconds form is canonicalized to ms right
@@ -139,6 +140,20 @@ pub enum Token {
     /// duration is only meaningful inside an `anim.*` curve call, read there as
     /// milliseconds.
     #[regex(r"[0-9]+ms", |lex| lex.slice()[..lex.slice().len() - 2].parse::<u32>().ok())]
+    // Minutes, listed before the `s` rule so longest-match takes `5min` whole
+    // rather than reading `5mi` + `n`. A refresh interval is written in the
+    // unit a person would say it in (RFC-0029 §5): `every 5min`, not
+    // `every 300000ms`, where a mistyped zero is invisible.
+    #[regex(r"[0-9]+(\.[0-9]+)?min", |lex| {
+        let s = lex.slice();
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        s[..s.len() - 3]
+            .parse::<f64>()
+            .ok()
+            .map(|mins| (mins * 60_000.0).round())
+            .filter(|ms| *ms >= 0.0 && *ms <= f64::from(u32::MAX))
+            .map(|ms| ms as u32)
+    })]
     #[regex(r"[0-9]+(\.[0-9]+)?s", |lex| {
         let s = lex.slice();
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]

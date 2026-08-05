@@ -381,10 +381,12 @@ impl Engine {
         );
 
         let relay = Arc::new(Relay::new()?);
-        // Wire async image decode (M29): the encoder spawns decodes on the
-        // relay's I/O pool and reports results back through its type-erased
-        // channel, which `render_latest` drains.
-        encoder.set_io_context(relay.io_handle(), relay.io_result_sender());
+        // Wire async image decode: the encoder spawns decodes on the relay's
+        // I/O pool and reports results back through the **render** thread's
+        // half of the split result channel (RFC-0028 §7), which
+        // `render_latest` drains. Controller replies travel the other half and
+        // are never seen here.
+        encoder.set_io_context(relay.io_handle(), relay.decode_result_sender());
         let (label_tx, label_rx) = crossbeam_channel::unbounded::<String>();
 
         Ok(Self {
@@ -463,6 +465,26 @@ impl Engine {
             height,
             scale_factor as f32,
         );
+    }
+
+    /// Bundles `registry` with this engine's I/O runtime and its logic-thread
+    /// reply channel into the [`Dispatcher`](crate::bridge::Dispatcher) the
+    /// interpreter places controller calls through (RFC-0028 §5).
+    ///
+    /// Built here because the engine is the one place that owns both halves:
+    /// the app supplies the controllers, the relay supplies the pool and the
+    /// channel. The result is `Send`, so it can be moved into the logic-thread
+    /// factory closure.
+    #[must_use]
+    pub fn dispatcher(
+        &self,
+        registry: crate::bridge::ControllerRegistry,
+    ) -> crate::bridge::Dispatcher {
+        crate::bridge::Dispatcher::new(
+            registry,
+            self.relay.io_handle(),
+            self.relay.io_result_sender(),
+        )
     }
 
     /// Spawns the logic thread and publishes the first frame synchronously.
@@ -641,12 +663,13 @@ impl Engine {
         // (render) thread before encoding, so a freshly-decoded texture is
         // `Ready` for this frame. The decode itself already ran on the relay's
         // I/O pool, only the cheap GPU upload happens here (INV-12).
-        while let Some(result) = self.relay.try_recv_io_result() {
+        while let Some(result) = self.relay.try_recv_decode_result() {
             match result.downcast::<crate::encoder::DecodedImage>() {
                 Ok(decoded) => self.encoder.apply_decoded(*decoded),
-                // A result of some other type (not an image) is not ours to
-                // handle here; drop it. Today only image decode uses this
-                // channel on the render thread.
+                // A result of some other type is not ours to handle here; drop
+                // it. Since RFC-0028 §7 split the channel by destination this
+                // is unreachable in practice, the logic thread's replies go to
+                // the other half, and it stays as the honest `downcast` arm.
                 Err(_other) => {}
             }
         }

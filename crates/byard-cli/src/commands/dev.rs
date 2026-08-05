@@ -128,6 +128,7 @@ pub fn run(opts: Options<'_>) -> Result<(), String> {
     let host = WinitHost::new(&title, 1280, 720).with_poll();
     host.run(App {
         engine: None,
+        project: manifest.name.clone(),
         header: Some(header),
         dev: manifest.dev.clone(),
         want_profile: profile,
@@ -461,6 +462,12 @@ impl ByldRuntime {
 }
 
 impl LogicRuntime for ByldRuntime {
+    fn apply_io_results(&mut self, results: Vec<byard_core::relay::IoResult>) -> bool {
+        // Tick step 0 (RFC-0028 §6): every controller reply and timer tick the
+        // pool completed, applied before input and before the pull.
+        self.interp.apply_io_results(results)
+    }
+
     fn evaluate_tick(
         &mut self,
         frame: &mut RenderFrame,
@@ -804,6 +811,10 @@ fn truncate_str(s: &str, max_chars: usize) -> String {
 
 struct App {
     engine: Option<Engine>,
+    /// The manifest's project name. Decides where the `Store` capability
+    /// writes (RFC-0029 O5): keyed on the project rather than on the path, so
+    /// a store does not move when the directory does.
+    project: String,
     width_bits: Option<Arc<AtomicU32>>,
     height_bits: Option<Arc<AtomicU32>>,
     /// Mirror of the logic thread's active-animation set (RFC-0010), read by the
@@ -1180,16 +1191,25 @@ impl PlatformHost for App {
         engine.set_vector_ack_sender(vector_ack_tx);
         let vector_cache_dir = self.vector_cache_dir.clone();
         let deep_link = self.deep_link.clone();
+        // RFC-0028 §3: the capabilities a `.byd` file may `inject`, bundled
+        // with the pool that runs them and the channel their replies come back
+        // on. Built here, on the main thread, because it has to be `Send` into
+        // the logic-thread factory below and cannot be built inside it.
+        let dispatcher = engine.dispatcher(crate::capabilities::registry(&self.project));
 
         engine.start_logic_from_view(move |_arena| {
             let (mut interp, tree, current_views) = if initial_views.is_empty() {
                 let mut interp = Interpreter::new();
+                interp.set_dispatcher(dispatcher);
                 interp.set_theme(initial_theme);
                 (interp, vec![], vec![])
             } else {
                 let mut interp = Interpreter::new();
-                // Install the theme (RFC-0022) before lowering so `inject Theme`
-                // resolves and token references paint from the first frame.
+                // Both of these provide ambient values, and both must land
+                // before lowering: `inject` resolves against the ambient chain
+                // at lower time, so anything provided afterwards is invisible
+                // to the view that asked for it (RFC-0022, RFC-0028 §3).
+                interp.set_dispatcher(dispatcher);
                 interp.set_theme(initial_theme);
                 interp.load_views(&initial_views);
                 let known: Vec<&str> = initial_views.iter().map(|v| v.name.as_str()).collect();

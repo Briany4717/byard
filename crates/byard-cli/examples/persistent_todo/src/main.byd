@@ -1,0 +1,95 @@
+// RFC-0029 O5, persistence: the todo list is still there tomorrow.
+//
+// Run it (from the repo root):
+//   cd crates/byard-cli/examples/persistent_todo
+//   cargo run -p byard-cli -- dev
+//
+// Add a few tasks, close the window, run it again. They come back. Then open
+// the file the panel names and read it: it is ordinary JSON, because a
+// persisted list you cannot open is a persisted list you cannot debug.
+//
+// This is `examples/todo` (RFC-0027, pure `byld`, no persistence) with three
+// lines added:
+//
+//   • `on mount` asks the store for the saved list;
+//   • every mutation writes it back;
+//   • `after 400ms` shows where the file lives, once, so the example can be
+//     verified without going looking.
+View Main() {
+    inject Store as store
+
+    var todos: List = []
+    var draft: Str = ""
+    var nextId = 0
+    var loaded: Bool = false
+    var note: Str = ""
+
+    let remaining = todos.filter(t => !t.done).len
+
+    // The screen asks for its own data (RFC-0028 §4b). The second argument is
+    // what a missing key resolves to, which is the first run of every app that
+    // saves anything: without it the `ok` arm would assign `Unit` to a `List`.
+    on mount => {
+        store.get("todos", [])
+            ok saved => {
+                todos = saved
+                nextId = saved.len
+                loaded = true
+            }
+            err e => {
+                note = "could not read the store: {e.message}"
+                loaded = true
+            }
+    }
+
+    after 400ms => { note = "saved in this app's data directory as store.json" }
+
+    Column #[bg: 0x14141C, p: 32, gap: 16, width: 600] {
+        Text("RFC-0029, a todo list that persists")
+            #[color: 0xFFFFFF, size: 24, weight: bold]
+        Text("{remaining} of {todos.len} left") #[color: 0x9AA0AC, size: 14]
+
+        Row #[gap: 12] {
+            TextField #[value: draft, placeholder: "New task…", grow: 1,
+                        bg: 0x1E1E2A, radius: 8, p: (horizontal: 12), height: 40,
+                        color: 0xFFFFFF]
+            Button("Add") #[bg: 0x477A96, radius: 10, color: 0xFFFFFF,
+                            p: (vertical: 10, horizontal: 18)]
+                => {
+                    todos = todos.push({ id: nextId, text: draft, done: false })
+                    nextId = nextId + 1
+                    draft = ""
+                    store.set("todos", todos)
+                }
+        }
+
+        Column #[gap: 8] {
+            for t in todos {
+                Row #[bg: 0x1E1E2A, radius: 12, p: 12, gap: 12, border: 0x3C3C52] {
+                    Button(t.done ? "☑" : "☐") #[bg: 0x262636, radius: 8, p: 8]
+                        => {
+                            todos = todos.map(x => x.id == t.id ? { ..x, done: !x.done } : x)
+                            store.set("todos", todos)
+                        }
+                    Text(t.text) #[color: 0xFFFFFF, size: 16, grow: 1]
+                    Button("✕") #[bg: 0x964747, radius: 8, p: 8]
+                        => {
+                            todos = todos.filter(x => x.id != t.id)
+                            store.set("todos", todos)
+                        }
+                }
+            }
+        }
+
+        Row #[gap: 12] {
+            Button("Forget everything") #[bg: 0x262636, radius: 8, color: 0x9AA0AC,
+                                          p: (vertical: 8, horizontal: 14)]
+                => {
+                    todos = []
+                    nextId = 0
+                    store.remove("todos")
+                }
+            Text("{note}") #[color: 0x6A7080, size: 12]
+        }
+    }
+}

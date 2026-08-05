@@ -13,12 +13,16 @@ use tokio::sync::mpsc::UnboundedSender;
 use crate::ByardError;
 use crate::frame::{ImageFit, TextureSampler};
 
-/// Type-erased I/O result channel sender, structurally identical to
-/// `relay::IoResult`'s sender. Spelled out here (rather than imported from
-/// `relay`) so the encoder never gains a dependency on the relay subsystem,
-/// the async-decode result flows through the existing type-erased channel,
-/// not a new cross-module call (RFC-0001 §9 / INV-11).
-pub type IoResultSender = UnboundedSender<Box<dyn Any + Send>>;
+/// Type-erased decode-result channel sender, structurally identical to
+/// `relay::DecodeResult`'s sender. Spelled out here (rather than imported
+/// from `relay`) so the encoder never gains a dependency on the relay
+/// subsystem, the async-decode result flows through the existing type-erased
+/// channel, not a new cross-module call (RFC-0001 §9 / INV-11).
+///
+/// This is the **render** thread's half of the split channel (RFC-0028 §7): a
+/// decoded image is addressed to the thread that owns the `Device`/`Queue`,
+/// and never reaches the logic thread's controller-reply drain.
+pub type DecodeResultSender = UnboundedSender<Box<dyn Any + Send>>;
 
 /// Raw decoded RGBA8 pixels produced off the render thread by the I/O pool
 /// (M29). Carries no `wgpu` handles, `Device`/`Queue` are used only on their
@@ -130,7 +134,7 @@ impl TextureCache {
     pub fn ensure(
         &mut self,
         io_handle: &tokio::runtime::Handle,
-        io_tx: &IoResultSender,
+        io_tx: &DecodeResultSender,
         src: &str,
     ) {
         if self.entries.contains_key(src) {

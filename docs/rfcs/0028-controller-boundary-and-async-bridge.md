@@ -1,6 +1,7 @@
 # RFC-0028: Controller Boundary & Async Bridge, making `#[byard_controller]` real
 
-- **Status:** Active, implemented. The controller boundary (`HostValue`, `ControllerRegistry`, `Interpreter::apply_io_results`, the `#[byard_controller]` dispatch shim) is wired and tested (verified against the tree 2026-08-03; see `support/STATUS_RFCS.md`).
+- **Status:** Active, implemented, end to end. The boundary types landed first (`HostValue`, `ControllerRegistry`, the `#[byard_controller]` dispatch shim); the *path* between them, the async-call grammar with `ok`/`err` arms, `on mount`/`on unmount` lifecycle effects, the split result channel, the logic-thread drain at tick step 0, and `byard::App` registration, landed with RFC-0029 and is tested from a `.byd` file (verified against the tree 2026-08-04).
+- **Amended in practice by:** [erratum `0029-erratum-implementation-deltas.md`](0029-erratum-implementation-deltas.md) §7, which corrects §9's treatment of an `inject` that a static check cannot resolve.
 - **Author(s):** Briany4717
 - **Created:** 2026-07-17
 - **Last updated:** 2026-07-17

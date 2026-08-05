@@ -17,15 +17,17 @@ What works end to end right now: interactive widgets (`Toggle`, `Slider`,
 with `Grid` and `ZStack` alongside `Row`/`Column`; decorated rendering (border,
 shadow, opacity, per-corner `radius`, continuous-curvature `smooth` corners);
 paint-time transforms (`translate`, `scale`, `rotate`); a theme system; the
-`#[byard_controller]` boundary into Rust; navigation and routing; data and
-collection operations; the MSDF vector and icon pipeline; paint effects (ripple,
-backdrop blur); an incremental redraw path with a real per-element dirty set; and
-a zero-allocation frame profiler with an in-window HUD.
+`#[byard_controller]` boundary into Rust, with async calls and result arms
+reachable from `byld`; navigation and routing; data and collection operations;
+HTTP, JSON, timers and durable key/value storage as built-in capabilities; the
+MSDF vector and icon pipeline; paint effects (ripple, backdrop blur); an
+incremental redraw path with a real per-element dirty set; and a
+zero-allocation frame profiler with an in-window HUD.
 
 Still in progress or not yet started: parts of the animation runtime (GPU
-springs), the hierarchical transform stack, a dev-mode bytecode JIT, a polyglot
-controller bridge, and the byld-facing async I/O capabilities. Public APIs and
-the `byld` syntax will change before the first stable release.
+springs), the hierarchical transform stack, a dev-mode bytecode JIT, and a
+polyglot controller bridge. Public APIs and the `byld` syntax will change
+before the first stable release.
 
 For the exact state of each subsystem, checked against the code rather than the
 design notes, see [`support/STATUS_RFCS.md`](support/STATUS_RFCS.md).
@@ -120,6 +122,15 @@ Running from this repo (pre-release): `byard` is not published yet, so there is 
 directly (no `byard.toml` needed):
 
 ```sh
+# A weather app in pure `byld`, fetching live over HTTPS
+cd crates/byard-cli/examples/weather && cargo run -p byard-cli -- dev
+
+# A todo list that survives a restart
+cd crates/byard-cli/examples/persistent_todo && cargo run -p byard-cli -- dev
+
+# The two-layer model: a `.byd` view plus a Rust controller
+cargo run -p controller-demo
+
 # Live-reload dev window for the bundled demo
 cargo run -p byard-cli -- dev crates/byard-compiler/examples/hello_world.byd
 
@@ -188,6 +199,7 @@ crates/
 | 4, Motion and interactive styling | mostly complete | Paint-time transforms, the frame profiler, the style system, and interactive states have landed; the GPU spring path and the hierarchical transform stack remain |
 | 5, Composition and packages | complete | User-view composition within and across files, modules, dependencies, distribution |
 | 6, Extended widgets and rendering | complete | Checkbox/radio/grid/zstack, vectors, overlays, navigation, data operations, paint effects, the shape system, the invalidation model |
+| 6b, The app layer | complete | Async controller calls with result arms, lifecycle and timer effects, and the HTTP / JSON / storage capabilities that make a data-backed app writable in `byld` alone |
 | 7, Production transpiler | planned | `byld` to native Rust AOT compilation, the dev-mode JIT, a polyglot controller bridge, and an accessibility bridge |
 
 ## Contributing

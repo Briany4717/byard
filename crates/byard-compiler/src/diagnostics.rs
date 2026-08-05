@@ -667,6 +667,16 @@ pub enum CompileError {
         /// The controller method being called.
         method: String,
     },
+    /// A `path { … }` body's first command is not a `move` (RFC-0037).
+    ///
+    /// A path has to start somewhere. Choosing for the author, the canvas
+    /// origin, wherever the previous path ended, produces a shape that is
+    /// almost right, which is worse than one that does not compile: a stray
+    /// triangle from the corner of a chart is a bug people stare at.
+    PathMustStartWithMove {
+        /// Source range of the offending first command.
+        span: Span,
+    },
     /// A native view's prop was given something with no data form, a
     /// `Signal`, a memo, a callback, a theme or a controller handle
     /// (RFC-0039).
@@ -792,6 +802,7 @@ impl CompileError {
             | Self::ControllerCallFailed { span, .. }
             | Self::NonDataControllerArg { span, .. }
             | Self::NonDataViewProp { span, .. }
+            | Self::PathMustStartWithMove { span }
             | Self::EffectInPureContext { span, .. }
             | Self::DiscardedControllerReply { span }
             | Self::UncheckableInject { span, .. }
@@ -874,6 +885,7 @@ impl CompileError {
             | Self::ControllerCallFailed { span, .. }
             | Self::NonDataControllerArg { span, .. }
             | Self::NonDataViewProp { span, .. }
+            | Self::PathMustStartWithMove { span }
             | Self::EffectInPureContext { span, .. }
             | Self::DiscardedControllerReply { span }
             | Self::UncheckableInject { span, .. }
@@ -958,6 +970,7 @@ impl CompileError {
             Self::ControllerCallFailed { .. } => "ControllerCallFailed",
             Self::NonDataControllerArg { .. } => "NonDataControllerArg",
             Self::NonDataViewProp { .. } => "NonDataViewProp",
+            Self::PathMustStartWithMove { .. } => "PathMustStartWithMove",
             Self::EffectInPureContext { .. } => "EffectInPureContext",
             Self::DiscardedControllerReply { .. } => "DiscardedControllerReply",
             Self::UncheckableInject { .. } => "UncheckableInject",
@@ -1075,6 +1088,11 @@ impl CompileError {
                 "`{method}` was passed a value with no data form; only data \
                  (numbers, strings, lists, records) crosses the controller boundary"
             ),
+            Self::PathMustStartWithMove { .. } => {
+                "a `path` body starts with `move(x, y)`: the first command says where the \
+                 path begins, and every command after it draws from there"
+                    .to_string()
+            }
             Self::NonDataViewProp { prop, view, .. } => format!(
                 "`{view}`'s `{prop}` was given a value with no data form; a view prop \
                  takes data (numbers, strings, lists, records), so pass the value \

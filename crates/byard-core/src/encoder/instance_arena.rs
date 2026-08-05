@@ -121,6 +121,7 @@ impl InstanceArena {
             label: Some("ByardCore - Instance Arena"),
             size,
             usage: wgpu::BufferUsages::VERTEX
+                | wgpu::BufferUsages::INDEX
                 | wgpu::BufferUsages::UNIFORM
                 | wgpu::BufferUsages::STORAGE
                 | wgpu::BufferUsages::COPY_DST,
@@ -152,6 +153,18 @@ impl InstanceArena {
     /// core pool are indistinguishable to the arena (INV-30).
     pub fn push_vertex_bytes(&mut self, bytes: &[u8]) -> Region {
         self.push_bytes(bytes, VERTEX_ALIGNMENT, false)
+    }
+
+    /// Appends `data` as an **index** region (RFC-0037).
+    ///
+    /// Indices are `u32` and align like any other four-byte data, so this is
+    /// [`push_vertex`](Self::push_vertex) with a name that says what the
+    /// region is for. It exists because a tessellated mesh is indexed: a
+    /// filled path shares its interior vertices between triangles, and
+    /// expanding them out would triple the geometry a chart uploads for no
+    /// reason other than avoiding this call.
+    pub fn push_index(&mut self, data: &[u32]) -> Region {
+        self.push_bytes(bytemuck::cast_slice(data), VERTEX_ALIGNMENT, false)
     }
 
     /// Appends `value` as a **uniform** region, padded to the device's

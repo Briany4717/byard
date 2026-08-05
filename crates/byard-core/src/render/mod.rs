@@ -37,7 +37,9 @@ pub mod registry;
 pub mod view;
 
 pub use batch::{ClipShape, NativeBatch, NativeBatches, PipelineKey};
-pub use ctx::{PipelineHandle, RenderCtx, TextureHandle, TextureRequest, TextureSource};
+pub use ctx::{
+    NativeCall, PipelineHandle, RenderCtx, TextureHandle, TextureRequest, TextureSource,
+};
 pub use registry::{NativeProp, NativePropType, NativeViewInfo, NativeViewMeta};
 pub use view::{Event, Handled, Layout, Measure, NativeProps, NativeView, RequestKey};
 

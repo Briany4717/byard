@@ -1725,6 +1725,10 @@ pub struct RenderFrame {
     /// drained by the encoder (RFC-0039).
     native_textures: Vec<crate::render::TextureRequest>,
 
+    /// Controller requests this frame's native views issued (RFC-0039), in
+    /// emission order. Drained by the engine after the walk.
+    native_calls: Vec<crate::render::NativeCall>,
+
     /// Running global emission counter, mapped to a depth by [`draw_depth`].
     /// Reset each [`clear`](Self::clear); advanced by every `push_*` drawable.
     draw_seq: u32,
@@ -1752,6 +1756,18 @@ pub struct RenderFrame {
     /// the existing atomic frame swap instead of a dedicated channel. Empty
     /// when the `telemetry` feature is off or nothing was profiled this tick.
     telemetry: crate::telemetry::SampleBlock,
+}
+
+/// What one native view's `render` left behind, beyond its instances
+/// (RFC-0039).
+#[derive(Clone, Debug)]
+pub struct NativeOutcome {
+    /// Whether the view asked for the frame to be painted
+    /// ([`RenderCtx::request_repaint`](crate::render::RenderCtx::request_repaint)).
+    pub repaint: bool,
+    /// Where this view's controller requests landed in the frame's pool, so
+    /// the engine can dispatch them knowing whose they are.
+    pub calls: std::ops::Range<usize>,
 }
 
 /// A content-clip rectangle (RFC-0005 `ScrollView`). `rect` is in logical
@@ -1890,6 +1906,7 @@ impl RenderFrame {
         self.text_wrap.clear();
         self.native.begin_frame();
         self.native_textures.clear();
+        self.native_calls.clear();
         self.layer_marks.clear();
         self.dev_base = None;
         self.draw_seq = 0;
@@ -2058,16 +2075,40 @@ impl RenderFrame {
         &mut self,
         view: &mut dyn crate::render::NativeView,
         layout: crate::render::Layout,
-    ) -> bool {
+    ) -> NativeOutcome {
         let depth = self.next_depth();
         let clip = self.active_clip_shape();
-        let mut cx =
-            crate::render::RenderCtx::new(&mut self.native, &mut self.native_textures, depth);
+        let mut cx = crate::render::RenderCtx::new(
+            &mut self.native,
+            &mut self.native_textures,
+            &mut self.native_calls,
+            depth,
+        );
         match clip {
             Some(shape) => cx.clip(shape, |cx| view.render(layout, cx)),
             None => view.render(layout, &mut cx),
         }
-        cx.wants_repaint()
+        NativeOutcome {
+            repaint: cx.wants_repaint(),
+            calls: cx.calls_issued(),
+        }
+    }
+
+    /// The controller requests this frame's views issued (RFC-0039), which
+    /// the engine dispatches after the walk.
+    #[must_use]
+    pub fn native_calls(&self) -> &[crate::render::NativeCall] {
+        &self.native_calls
+    }
+
+    /// Takes the issued requests, leaving the pool empty for the next frame.
+    ///
+    /// Taken rather than read, because a request is placed exactly once: a
+    /// frame that dispatched its calls and then re-read them would place every
+    /// one of them twice, which for a widget fetching tiles is a second
+    /// network round trip nobody asked for.
+    pub fn take_native_calls(&mut self) -> Vec<crate::render::NativeCall> {
+        std::mem::take(&mut self.native_calls)
     }
 
     /// This frame's native-view batches, in emission order (RFC-0039).

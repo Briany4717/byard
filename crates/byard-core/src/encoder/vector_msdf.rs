@@ -368,6 +368,44 @@ pub fn screen_px_range(px_range: f32, uv_fwidth: [f32; 2], atlas_dims: [f32; 2])
     (0.5 * dot).max(1.0)
 }
 
+/// The registered `VectorMSDF` pipeline (RFC-0039).
+pub struct VectorMsdfPipeline {
+    pipeline: wgpu::RenderPipeline,
+}
+
+impl VectorMsdfPipeline {
+    /// Wraps a built pipeline for registration.
+    #[must_use]
+    pub const fn new(pipeline: wgpu::RenderPipeline) -> Self {
+        Self { pipeline }
+    }
+}
+
+impl super::pipeline::RenderPipeline for VectorMsdfPipeline {
+    const NAME: &'static str = "vector_msdf";
+    type Instance = crate::frame::VectorInstance;
+
+    fn vertex_layout() -> wgpu::VertexBufferLayout<'static> {
+        instance_layout()
+    }
+
+    fn draw(&self, pass: &mut wgpu::RenderPass<'_>, cx: &super::pipeline::SegmentDraw<'_>) {
+        let range = &cx.ranges.vector;
+        draw(
+            pass,
+            cx.arena,
+            cx.staged.vector,
+            &self.pipeline,
+            cx.viewport_bind_group,
+            cx.quad_buffer,
+            cx.vector_atlas,
+            range.len(),
+            super::sub_slice(cx.clips.vector, range),
+            cx.clip_ctx,
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

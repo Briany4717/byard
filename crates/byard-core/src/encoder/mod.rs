@@ -466,6 +466,9 @@ pub struct EncoderSubsystem {
     /// frame that changed one colour must not repaint the window, and there is
     /// no way to see that from a timing.
     last_frame_scissored: bool,
+    /// Whether the last encoded frame redrew everything (RFC-0001 §3.3), the
+    /// other half of [`last_frame_scissored`](Self::last_frame_scissored).
+    last_frame_full_redraw: bool,
     /// Async GPU pass timing (RFC-0013 §"GPU timing"), or `None` if the
     /// device lacks `wgpu::Features::TIMESTAMP_QUERY` (P5), checked once at
     /// construction, never re-probed per frame.
@@ -749,6 +752,7 @@ impl EncoderSubsystem {
             arena,
             staging: FrameStaging::default(),
             last_frame_scissored: false,
+            last_frame_full_redraw: false,
             gpu_timer,
             gpu_samples_scratch: Vec::new(),
             gpu_timing_pending: false,
@@ -791,6 +795,18 @@ impl EncoderSubsystem {
     /// per-element `blur_quality: high | low` always overrides it.
     pub fn set_blur_auto_capable(&mut self, capable: bool) {
         self.blur_auto_capable = capable;
+    }
+
+    /// Whether the last encoded frame redrew the whole target.
+    ///
+    /// The decision, exposed so a test can ask what the encoder *decided*
+    /// rather than infer it from pixels. Reading it from the screen means
+    /// reading the persistent target, whose contents across two frames are a
+    /// backend's business; the decision is the engine's, and it is the same
+    /// everywhere.
+    #[must_use]
+    pub const fn last_frame_was_full_redraw(&self) -> bool {
+        self.last_frame_full_redraw
     }
 
     /// Whether the last encoded frame took the incremental scissored path
@@ -1165,6 +1181,7 @@ impl EncoderSubsystem {
         // the scissor union (rect-based) would otherwise miss it entirely.
         let should_draw = full_redraw || scissor.is_some() || !atlas_uploads.is_empty();
         self.last_frame_scissored = !full_redraw && scissor.is_some();
+        self.last_frame_full_redraw = full_redraw;
 
         // ── Pass segmentation (RFC-0017 z-layers × RFC-0023 backdrops) ────────
         let totals = LayerMark {

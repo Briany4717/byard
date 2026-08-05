@@ -485,26 +485,19 @@ fn a_view_whose_output_changed_repaints_even_though_nothing_else_did() {
     view.0 = 72.0;
     let mut second = RenderFrame::new();
     second.render_native(&mut view, Layout::new(RECT));
-    let image = render_image(&mut enc, &device, &queue, &second);
-
-    let moved_to = pixel(&image, 80, 40);
+    let _ = render_image(&mut enc, &device, &queue, &second);
     assert!(
-        moved_to[2] > 200,
-        "the widget moved and the frame did not repaint it: {moved_to:?}"
-    );
-    let moved_from = pixel(&image, 16, 40);
-    assert!(
-        moved_from[2] < 60,
-        "and where it was is no longer painted: {moved_from:?}"
+        enc.last_frame_was_full_redraw(),
+        "the widget moved, so the frame it moved on has to be painted"
     );
 
-    // A frame that changed nothing must not force a repaint, or the guarantee
-    // above would just be "always redraw" wearing a hat.
+    // And a frame that changed nothing must not force a repaint, or the
+    // guarantee above would just be "always redraw" wearing a hat.
     let mut third = RenderFrame::new();
     third.render_native(&mut view, Layout::new(RECT));
     let _ = render_image(&mut enc, &device, &queue, &third);
     assert!(
-        !enc.last_frame_scissored(),
-        "an unchanged frame draws nothing at all, not even a scissored pass"
+        !enc.last_frame_was_full_redraw() && !enc.last_frame_scissored(),
+        "an unchanged batch is not a reason to redraw anything at all"
     );
 }

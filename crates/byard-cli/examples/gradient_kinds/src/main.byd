@@ -1,0 +1,102 @@
+// RFC-0035, radial and conic gradients.
+//
+// Run it (from the repo root):
+//   cd crates/byard-cli/examples/gradient_kinds
+//   cargo run -p byard-cli -- dev
+//
+// One gradient block, three shapes. `kind` picks which one; everything else
+// (three stops, `mid_pos`, the compositing over the element's own fill) is
+// shared, because a gradient's shape is only how a fragment's position becomes
+// the ramp parameter.
+//
+// What to look for:
+//   1. The three cards, left to right: a linear ramp (what `gradient:` has
+//      always meant, and what it still means with no `kind` written), a radial
+//      glow, and a conic sweep.
+//   2. The wide card below them. Its radial glow is a *circle*, not an ellipse
+//      stretched to a 3:1 element: the falloff is corrected by the box's own
+//      aspect, which is what makes a glow usable as a page background.
+//   3. The dial. Its sweep starts at twelve o'clock and comes back to the same
+//      red it left, so there is no seam where the angle wraps. Both ends of a
+//      conic gradient are the same colour, or the wrap is visible.
+//   4. Corner smoothing on a gradient box. `radius: 24, smooth: 1` and a radial
+//      fill on the same element: the tag that says "radial" and the number that
+//      says "squircle" are different lanes, and both arrive.
+//   5. Tap the last card: its glow's centre moves. Gradient geometry is paint,
+//      so it moves in the shader with nothing relaid out.
+View Main() {
+    var pulled = false
+
+    Column #[bg: 0x0B0D12, p: 28, gap: 22, grow: 1] {
+        Text("gradient kinds: linear, radial, conic") #[color: 0xF2F3F5, size: 20]
+
+        Row #[gap: 18] {
+            // Linear: no `kind`, so this is exactly what the file would have
+            // meant before RFC-0035 existed.
+            Column #[width: 200, height: 130, radius: 18, bg: 0x121620, p: 14,
+                     gradient: (angle: 60deg, from: 0xFF5B8DEF, to: 0xFF9B5BEF)] {
+                Spacer #[grow: 1]
+                Text("linear") #[color: 0xF2F3F5, size: 14]
+            }
+
+            // Radial: a centred falloff. `center` is normalized, so `(1, 0)` is
+            // the top-right corner whatever the card's size.
+            Column #[width: 200, height: 130, radius: 18, bg: 0x0A140F, p: 14,
+                     gradient: (kind: radial, center: (1.0, 0.0), radius: 1.1,
+                                from: 0xFF34D399, mid: 0xCC0E3D2F, to: 0x000E3D2F)] {
+                Spacer #[grow: 1]
+                Text("radial") #[color: 0xF2F3F5, size: 14]
+            }
+
+            // Conic: an angular sweep. Both ends are the same colour, so the
+            // wrap at the start angle is invisible.
+            Column #[width: 200, height: 130, radius: 18, bg: 0x14161C, p: 14,
+                     gradient: (kind: conic, center: (0.5, 0.5), start: -90deg,
+                                from: 0xFFEF4444, mid: 0xFFF59E0B, to: 0xFFEF4444)] {
+                Spacer #[grow: 1]
+                Text("conic") #[color: 0xF2F3F5, size: 14]
+            }
+        }
+
+        // Aspect: a 3:1 card whose glow is still round.
+        Column #[height: 120, radius: 18, bg: 0x0A140F, p: 18,
+                 gradient: (kind: radial, center: (0.5, 0.5), radius: 0.9,
+                            from: 0xFF34D399, mid: 0x800E3D2F, to: 0x000E3D2F)] {
+            Spacer #[grow: 1]
+            Text("a radial on a wide card stays circular") #[color: 0xCFE9DD, size: 13]
+        }
+
+        Row #[gap: 18] {
+            // The dial: a conic sweep on a box with a hole punched by a second,
+            // smaller box on top of it. The colour tracks the angle.
+            Column #[width: 140, height: 140, radius: 70, smooth: 0.0,
+                     gradient: (kind: conic, center: (0.5, 0.5), start: -90deg,
+                                from: 0xFFEF4444, mid: 0xFF34D399, to: 0xFFEF4444)] {
+                Column #[width: 96, height: 96, radius: 48, bg: 0x0B0D12,
+                         m: (top: 22, left: 22), justify: center, align: center] {
+                    Text("dial") #[color: 0x8A90A0, size: 13]
+                }
+            }
+
+            // Corner smoothing and a gradient on the same element: two lanes,
+            // two owners, both arrive.
+            Column #[width: 200, height: 140, radius: 36, smooth: 1.0, bg: 0x0A140F, p: 16,
+                     gradient: (kind: radial, center: (0.35, 0.25), radius: 1.0,
+                                from: 0xFF5B8DEF, mid: 0xCC1B2A4A, to: 0xFF0A0F1A)] {
+                Spacer #[grow: 1]
+                Text("squircle + radial") #[color: 0xF2F3F5, size: 13]
+            }
+
+            // The animated centre: paint class, so nothing relayouts.
+            Column #[width: 200, height: 140, radius: 18, bg: 0x14161C, p: 16,
+                     tap => pulled = !pulled,
+                     gradient: (kind: radial,
+                                center: (pulled ? 0.85 : 0.15, 0.5),
+                                radius: 0.8,
+                                from: 0xFFF59E0B, mid: 0xCC3A2A08, to: 0xFF14161C)] {
+                Spacer #[grow: 1]
+                Text("tap: the centre moves") #[color: 0xF2F3F5, size: 13]
+            }
+        }
+    }
+}

@@ -226,6 +226,7 @@ fn shimmer_frame(offset: Option<f32>) -> RenderFrame {
             to: [1.0, 1.0, 1.0, 0.0],
             mid_pos: 0.5,
             offset,
+            ..Gradient::two_stop(0.0, [0.0; 4], [0.0; 4])
         }),
         dirty: true,
         ..Default::default()

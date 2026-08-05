@@ -12,6 +12,17 @@ fn element(m: &Member) -> &ElementNode {
 // ── user-view registry & call-site recognition ──────────────────
 
 /// Loads a multi-view file and lowers the named view to a render tree.
+/// The linear value of an sRGB byte, for tests that identify a primitive by the
+/// colour it was written with.
+///
+/// A colour literal is written encoded (`0x5B8DEF` is what the design tool
+/// says) and reaches the frame decoded, because everything past the compiler
+/// blends in linear light. A test comparing against `byte / 255` is comparing
+/// the two spaces, which is exactly the mistake the double-encoding hid.
+fn linear(byte: u8) -> f32 {
+    crate::interp::intrinsics::srgb_to_linear(f32::from(byte) / 255.0)
+}
+
 fn lower_named(src: &str, name: &str) -> (Interpreter, Vec<RenderNode>) {
     let parsed = parse(src);
     assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
@@ -2244,11 +2255,16 @@ fn a_keyframed_colour_blends_in_oklab() {
     let grey = |f: &byard_core::frame::RenderFrame| f.instances()[0].color[0];
     let seen = sample_over_time(src, &[0, 200, 400], grey);
     assert!(seen[0].0 < 0.01, "starts black, got {}", seen[0].0);
+    // The frame carries linear light, so the number read here is the *luminance*
+    // of the midpoint. OKLab's midpoint of black→white is `L = 0.5`, the
+    // perceptual middle, which is a luminance of about 0.125 and encodes to
+    // roughly `0x63`. The mistake this rules out is lerping the two colours in
+    // linear light, which lands on 0.5 luminance, a grey most of a stop too
+    // bright and the reason a naive fade looks like it washes out in the middle.
     assert!(
-        seen[1].0 > 0.30 && seen[1].0 < 0.48,
-        "the OKLab midpoint of black→white is mid *lightness*: brighter than \
-             the naive channel lerp (0x7F7F7F ≈ 0.22 in linear light), and still \
-             below linear 0.5, got {}",
+        seen[1].0 > 0.09 && seen[1].0 < 0.17,
+        "the OKLab midpoint of black→white is the perceptual middle \
+             (luminance ≈ 0.125), not the linear-light midpoint (0.5), got {}",
         seen[1].0
     );
     assert!(seen[2].0 > 0.99, "ends white, got {}", seen[2].0);
@@ -4545,13 +4561,13 @@ fn style_value_spreads_onto_an_element_and_inline_overrides() {
     let insts = frame.instances();
     // First box takes `bg` from the spread (0x11 red channel).
     assert!(
-        (insts[0].color[0] - f32::from(0x11u8) / 255.0).abs() < 1e-3,
+        (insts[0].color[0] - linear(0x11)).abs() < 1e-3,
         "spread bg reaches the box, got {:?}",
         insts[0].color
     );
     // Second box: inline `bg` overrides the spread (0x44 red channel).
     assert!(
-        (insts[1].color[0] - f32::from(0x44u8) / 255.0).abs() < 1e-3,
+        (insts[1].color[0] - linear(0x44)).abs() < 1e-3,
         "inline bg overrides the spread, got {:?}",
         insts[1].color
     );
@@ -4577,7 +4593,7 @@ fn merge_composes_two_styles_right_wins() {
     let inst = frame.instances()[0];
     // `bg` comes from the right side of the merge (0x44 red channel)…
     assert!(
-        (inst.color[0] - f32::from(0x44u8) / 255.0).abs() < 1e-3,
+        (inst.color[0] - linear(0x44)).abs() < 1e-3,
         "right style's bg wins, got {:?}",
         inst.color
     );
@@ -4754,7 +4770,7 @@ fn disabled_state_block_recolours_in_the_same_frame() {
     interp.render(&tree, &mut frame, 400.0, 300.0);
     let inst = frame.instances()[0];
     assert!(
-        (inst.color[0] - f32::from(0x44u8) / 255.0).abs() < 1e-3,
+        (inst.color[0] - linear(0x44)).abs() < 1e-3,
         "disabled bg overlays the base, got {:?}",
         inst.color
     );
@@ -4780,7 +4796,7 @@ fn hover_state_block_recolours_after_pointer_enters() {
     let mut frame = byard_core::frame::RenderFrame::new();
     interp.render(&tree, &mut frame, 400.0, 300.0);
     assert!(
-        (frame.instances()[0].color[0] - f32::from(0x11u8) / 255.0).abs() < 1e-3,
+        (frame.instances()[0].color[0] - linear(0x11)).abs() < 1e-3,
         "base bg before hover, got {:?}",
         frame.instances()[0].color
     );
@@ -4797,7 +4813,7 @@ fn hover_state_block_recolours_after_pointer_enters() {
     let mut frame2 = byard_core::frame::RenderFrame::new();
     interp.render(&tree, &mut frame2, 400.0, 300.0);
     assert!(
-        (frame2.instances()[0].color[0] - f32::from(0x44u8) / 255.0).abs() < 1e-3,
+        (frame2.instances()[0].color[0] - linear(0x44)).abs() < 1e-3,
         "hover bg overlays after the pointer enters, got {:?}",
         frame2.instances()[0].color
     );
@@ -6640,7 +6656,7 @@ fn overlay_center_anchor_positions_content_in_the_viewport() {
     let dialog = frame
         .instances()
         .iter()
-        .find(|b| (b.color[0] - 0.133).abs() < 0.05)
+        .find(|b| (b.color[0] - linear(0x22)).abs() < 0.02)
         .expect("dialog emitted");
     // Centred: (400−100)/2 = 150, (300−60)/2 = 120.
     assert!(
@@ -6672,7 +6688,7 @@ fn overlay_bottom_anchor_pins_content_to_the_viewport_bottom() {
     let sheet = frame
         .instances()
         .iter()
-        .find(|b| (b.color[0] - 0.2).abs() < 0.05)
+        .find(|b| (b.color[0] - linear(0x33)).abs() < 0.02)
         .expect("sheet emitted");
     // Pinned to the bottom: y = 300 − 80 = 220; centred x = (400−200)/2 = 100.
     assert!(
@@ -6963,21 +6979,24 @@ fn overlay_demo_example_renders_dialog_above_the_base_app() {
     let mut frame = byard_core::frame::RenderFrame::new();
     interp.render(&tree, &mut frame, 900.0, 560.0);
 
-    // The base app background (0x14141C, red≈0.078) is emitted early; the
-    // dialog surface (0xECE6F0, red≈0.925) is an overlay emitted later, so it
-    // sits at a nearer depth than the base app.
+    // The base app background (0x14141C) is emitted early; the dialog surface
+    // (0xECE6F0) is an overlay emitted later, so it sits at a nearer depth than
+    // the base app. Both are matched by their written colour, decoded: the
+    // frame is in linear light.
     let base = frame
         .instances()
         .iter()
         .enumerate()
-        .find(|(_, b)| (b.color[0] - 0.078).abs() < 0.02)
+        .find(|(_, b)| (b.color[0] - linear(0x14)).abs() < 0.01)
         .map(|(i, _)| i)
         .expect("base app background emitted");
     let (dialog, dialog_box) = frame
         .instances()
         .iter()
         .enumerate()
-        .find(|(_, b)| b.color[0] > 0.9 && b.color[1] > 0.85)
+        .find(|(_, b)| {
+            (b.color[0] - linear(0xEC)).abs() < 0.02 && (b.color[1] - linear(0xE6)).abs() < 0.02
+        })
         .map(|(i, b)| (i, *b))
         .expect("dialog surface emitted");
     assert!(
@@ -7035,14 +7054,14 @@ fn nested_overlays_stack_in_mount_order() {
         .instances()
         .iter()
         .enumerate()
-        .find(|(_, b)| (b.color[0] - 0.066).abs() < 0.02)
+        .find(|(_, b)| (b.color[0] - linear(0x11)).abs() < 0.01)
         .map(|(i, _)| i)
         .expect("outer overlay box");
     let inner = frame
         .instances()
         .iter()
         .enumerate()
-        .find(|(_, b)| (b.color[0] - 0.133).abs() < 0.02)
+        .find(|(_, b)| (b.color[0] - linear(0x22)).abs() < 0.01)
         .map(|(i, _)| i)
         .expect("inner overlay box");
     assert!(

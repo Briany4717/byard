@@ -1067,3 +1067,52 @@ fn bad_cap_token_is_flagged_with_a_hint() {
         "{e:?}"
     );
 }
+
+/// A colour literal is written encoded and reaches the frame decoded
+/// (RFC-0005 §1).
+///
+/// The engine blends in linear light and presents through an sRGB surface, so
+/// the GPU encodes once on write. Handing the written bytes through unchanged
+/// encoded them twice: `0x808080` reached the screen as `0xBC`, dark surfaces
+/// flattened into each other, and every blend was pulled the same way, which
+/// is why gradients washed out through the middle.
+#[test]
+fn a_colour_literal_is_decoded_into_linear_light() {
+    let mid = color_to_rgba(0x0080_8080, false);
+    assert!(
+        (mid[0] - 0.2158).abs() < 1e-3,
+        "0x80 is 0.216 in linear light, not 0.502, got {}",
+        mid[0]
+    );
+    // The endpoints are fixed points of the transfer, so they pin the direction
+    // as well as the shape.
+    assert!((color_to_rgba(0x0000_0000, false)[0]).abs() < 1e-6);
+    assert!((color_to_rgba(0x00FF_FFFF, false)[0] - 1.0).abs() < 1e-6);
+}
+
+/// Alpha is coverage, not colour: it has never been gamma-encoded and must not
+/// be transferred.
+#[test]
+fn alpha_passes_through_untouched() {
+    let half = color_to_rgba(i64::from(0x8080_8080_u32), true);
+    assert!(
+        (half[3] - 0.502).abs() < 1e-3,
+        "alpha stays a fraction, got {}",
+        half[3]
+    );
+}
+
+/// The piecewise transfer, not `powf(2.2)`: the two agree in the midtones and
+/// disagree in the darkest few percent, which is where a dark UI lives.
+#[test]
+fn the_transfer_is_the_piecewise_srgb_one() {
+    let dark = srgb_to_linear(0.02);
+    assert!(
+        (dark - 0.02 / 12.92).abs() < 1e-6,
+        "below the knee it is the linear segment, got {dark}"
+    );
+    assert!(
+        (dark - 0.02_f32.powf(2.2)).abs() > 1e-4,
+        "and it is not the approximation"
+    );
+}

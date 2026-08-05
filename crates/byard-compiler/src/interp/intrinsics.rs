@@ -1791,17 +1791,49 @@ pub fn color_rgba_auto(hex: i64) -> [f32; 4] {
     color_to_rgba(hex, color_has_alpha(hex))
 }
 
-/// Parses a `Color` integer into RGBA `[f32; 4]` (6-digit ⇒ opaque, 8-digit ⇒
-/// alpha-first `0xAARRGGBB`), RFC-0005 §1.
+/// Parses a `Color` integer into **linear-space** RGBA `[f32; 4]` (6-digit ⇒
+/// opaque, 8-digit ⇒ alpha-first `0xAARRGGBB`), RFC-0005 §1.
+///
+/// # Why the transfer function is here
+///
+/// A colour is *written* the way a designer reads it, `0x5B8DEF` is the number
+/// out of the design tool, which is an sRGB-encoded triple. Everything
+/// downstream of this function is linear: `RenderFrame`'s colours are
+/// documented as linear, the shaders blend in linear, and the surface is an
+/// sRGB format precisely so the GPU encodes once on write.
+///
+/// Handing the encoded bytes straight through skipped the decode, so every
+/// colour in the engine was encoded twice and displayed lighter and flatter
+/// than it was written: `0x808080` reached the screen as `0xBC`. Blends were
+/// wrong in the same direction, because a mix of two encoded values is not the
+/// encoding of their mix, which is why gradients and shadows washed out worst.
+///
+/// Alpha is **not** transferred: it is a coverage fraction, not a colour, and
+/// has never been gamma-encoded.
 #[must_use]
 pub fn color_to_rgba(hex: i64, alpha_byte: bool) -> [f32; 4] {
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let v = hex as u32;
-    let f = |b: u32| (b & 0xFF) as f32 / 255.0;
+    let f = |b: u32| srgb_to_linear((b & 0xFF) as f32 / 255.0);
+    let a = |b: u32| (b & 0xFF) as f32 / 255.0;
     if alpha_byte {
-        [f(v >> 16), f(v >> 8), f(v), f(v >> 24)]
+        [f(v >> 16), f(v >> 8), f(v), a(v >> 24)]
     } else {
         [f(v >> 16), f(v >> 8), f(v), 1.0]
+    }
+}
+
+/// One channel of sRGB gamma → linear.
+///
+/// The IEC 61966-2-1 piecewise transfer, not a `powf(2.2)` approximation: the
+/// approximation is visibly wrong in the darkest few percent, which is exactly
+/// where a dark UI spends most of its range.
+#[must_use]
+pub fn srgb_to_linear(c: f32) -> f32 {
+    if c <= 0.040_45 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
     }
 }
 

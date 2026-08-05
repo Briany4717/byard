@@ -45,6 +45,37 @@ use crate::evaluator::{EvaluatorTick, Signal, ViewArena};
 use crate::frame::{BoxInstance, TargetId, TargetKind, TextLine, Viewport};
 use crate::relay::Relay;
 
+/// The limits Byard asks a GPU device for.
+///
+/// The adapter's own limits, with one exception: the vertex-attribute budget is
+/// held down to the 16 the WebGPU specification guarantees everywhere, even on
+/// an adapter that offers more.
+///
+/// Asking for everything the machine happens to offer sounds generous and is
+/// actually a way of not finding out about a portability bug until someone
+/// else's machine finds it. A Metal adapter offers 31 vertex attributes, a
+/// Linux Vulkan or GL one exactly 16, so a pipeline that overruns the floor
+/// builds on the first machine and does not exist on the second, and the only
+/// symptom is a pipeline-compilation error nobody could reproduce. Requesting
+/// the floor makes the device validate against it, so the overrun fails the
+/// same way on every machine, which is the only way it gets noticed where it
+/// was written (INV-4).
+///
+/// Every other limit stays the adapter's: nothing else here is a portability
+/// cliff Byard has walked off, and lowering limits the engine does honour would
+/// cost real capability for no evidence.
+///
+/// Test devices use this too, so a readback test is running the pipeline the
+/// engine runs.
+#[must_use]
+pub fn device_limits(adapter: &wgpu::Adapter) -> wgpu::Limits {
+    let mut limits = adapter.limits();
+    limits.max_vertex_attributes = limits
+        .max_vertex_attributes
+        .min(wgpu::Limits::default().max_vertex_attributes);
+    limits
+}
+
 /// The instance census of one frame (RFC-0030 §P6).
 ///
 /// A snapshot, not a counter: it describes the frame it was read from and
@@ -285,8 +316,7 @@ impl Engine {
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("ByardCore - Engine Device"),
                 required_features: optional_features,
-                // Use the adapter's own limits, no artificial WebGL2 cap.
-                required_limits: adapter.limits(),
+                required_limits: device_limits(&adapter),
                 memory_hints: wgpu::MemoryHints::Performance,
                 ..Default::default()
             })

@@ -239,6 +239,25 @@ pub enum Member {
         /// Source span.
         span: Span,
     },
+    /// `on measure => action`, an element's own laid-out rect delivered back to
+    /// it as a reactive value (RFC-0038).
+    ///
+    /// Written as a member of the element it measures, because that is the
+    /// element it is *about*: the enclosing element consumes it at lower time
+    /// and it never reaches the child list, so a subtree that declares no
+    /// `on measure` carries nothing.
+    ///
+    /// The action's payload binding is `it`, a `Size { w, h }` record. Unlike
+    /// [`Member::Lifecycle`] and [`Member::Timer`], this is not a structural
+    /// effect: it fires from a post-layout step, once per frame in which the
+    /// element's rect changed, and never on its own schedule.
+    Measure {
+        /// The action to run when the rect changes, with `it` bound to the
+        /// measured size.
+        action: Expr,
+        /// Source span.
+        span: Span,
+    },
     /// `style { .class #[...] ... }`, scoped style rules (static; D5).
     Style {
         /// The style rules.

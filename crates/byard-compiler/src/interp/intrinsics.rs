@@ -904,6 +904,7 @@ fn describe_member(m: &Member) -> String {
                 if *on_mount { "mount" } else { "unmount" }
             )
         }
+        Member::Measure { .. } => "an `on measure` event".to_string(),
         Member::Expr(_) => "an expression".to_string(),
     }
 }
@@ -921,6 +922,7 @@ fn member_span(m: &Member) -> crate::diagnostics::Span {
         | Member::Route { span, .. }
         | Member::Lifecycle { span, .. }
         | Member::Timer { span, .. }
+        | Member::Measure { span, .. }
         | Member::Style { span, .. } => *span,
         Member::Element(e) => e.span,
         Member::Expr(e) => e.span(),
@@ -1541,6 +1543,7 @@ fn validate_canvas_body(members: &[Member], errs: &mut Vec<CompileError>) {
             Member::Route { kind, span, .. } => push_non_shape(errs, *span, kind.as_str()),
             Member::Lifecycle { span, .. } => push_non_shape(errs, *span, "on mount"),
             Member::Timer { span, .. } => push_non_shape(errs, *span, "a timer"),
+            Member::Measure { span, .. } => push_non_shape(errs, *span, "on measure"),
             Member::Expr(e) => push_non_shape(errs, e.span(), "an expression"),
         }
     }

@@ -1,0 +1,80 @@
+// RFC-0038, element self-measurement: `on measure => size = it`.
+//
+// Run it (from the repo root):
+//   cd crates/byard-cli/examples/self_measurement
+//   cargo run -p byard-cli -- dev
+//
+// Then **resize the window**. That is the whole demonstration: nothing here
+// hard-codes a width, and every number on screen comes from the element that
+// was measured telling its own children how large it turned out to be.
+//
+// Why this is a core primitive and not a convenience: a `Canvas` needs an
+// explicit `width`/`height`, and a card in a real layout does not know its own
+// until the frame is laid out. Before this event the only way to draw a chart
+// that spans its container was to hard-code the container's width in two
+// places and keep them in step by hand.
+//
+// What to look for:
+//   1. The readout under the title is the card's own rect, in the same units
+//      the frame paints in. Drag the window edge and it tracks continuously.
+//   2. The bar chart spans the card exactly, at any width. The bars are placed
+//      from `w`, so the gaps stay even instead of the last bar falling off the
+//      right edge.
+//   3. The rule under the chart is drawn to `w - 48` and lines up with the
+//      card's padding at every size, which is what "the measurement is real"
+//      looks like.
+//   4. Nothing animates while you are not resizing. `on measure` fires only
+//      when the rect *changes*, so a still window is a still program.
+View Main() {
+    // The measured rect of the card, written by `on measure` and read by
+    // everything below it. `0` until the first frame is laid out, which is the
+    // one frame where the chart has not yet been told anything.
+    var w: Float = 0.0
+    var h: Float = 0.0
+
+    let bars = [46.0, 72.0, 58.0, 90.0, 64.0, 81.0, 39.0]
+    // Seven bars and eight gutters over the card's inner width.
+    let inner = w - 48.0
+    let step = inner / 7.0
+
+    Column #[bg: 0x0E1016, p: 24, gap: 20, grow: 1] {
+        Column #[bg: 0x171A22, radius: 20, smooth: 0.6, p: 24, gap: 16, grow: 1] {
+            // The card measures itself. Its children are the consumers, which
+            // is the direction that always terminates: the parent lays out
+            // first and unconditionally, and the size flows downward.
+            on measure => {
+                w = it.w
+                h = it.h
+            }
+
+            Text("This card was laid out to {w} × {h}")
+                #[color: 0xF2F3F5, size: 20]
+            Text("resize the window: the chart below is drawn from that number, not from a literal")
+                #[color: 0x8A90A0, size: 13]
+
+            // The consumer. A `Canvas` is a fixed-size leaf by contract, so
+            // before RFC-0038 this width could only be a literal.
+            Canvas #[width: inner, height: 200, bg: 0x11141B] {
+                text("seven bars, spaced from the measured width",
+                     x: 16, y: 22, color: 0x6B7280, size: 12)
+
+                // The baseline the bars stand on, inset by the same 8px at both
+                // ends at every window width.
+                line(x1: 8, y1: 172, x2: inner - 8.0, y2: 172,
+                     stroke: 0x2A2F3A, stroke_width: 2)
+
+                for i in [0, 1, 2, 3, 4, 5, 6] {
+                    rect(x: i * step + 10.0, y: 172.0 - bars[i],
+                         w: step - 20.0, h: bars[i],
+                         radius: 6, fill: 0x5B8DEF)
+                }
+            }
+
+            // A plain box, sized from the same number: the measurement is not a
+            // `Canvas` trick, it is an ordinary value any property can read.
+            Box #[bg: 0x5B8DEF, radius: 8, height: 6, width: inner] {}
+
+            Spacer #[grow: 1]
+        }
+    }
+}

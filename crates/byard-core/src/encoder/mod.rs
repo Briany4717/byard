@@ -550,15 +550,7 @@ impl EncoderSubsystem {
             }],
         });
 
-        let quad_layout = wgpu::VertexBufferLayout {
-            array_stride: 8, // 2 × f32
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &[wgpu::VertexAttribute {
-                offset: 0,
-                shader_location: 0,
-                format: wgpu::VertexFormat::Float32x2,
-            }],
-        };
+        let quad_layout = quad_vertex_layout();
 
         // `bind_group_layout` is passed into the helper so that `pipeline_layout`
         // can be created inside the error scope alongside the shader and pipeline,
@@ -580,15 +572,7 @@ impl EncoderSubsystem {
         let clear_pipeline = build_solid_box_pipeline(
             &device,
             &bind_group_layout,
-            wgpu::VertexBufferLayout {
-                array_stride: 8,
-                step_mode: wgpu::VertexStepMode::Vertex,
-                attributes: &[wgpu::VertexAttribute {
-                    offset: 0,
-                    shader_location: 0,
-                    format: wgpu::VertexFormat::Float32x2,
-                }],
-            },
+            quad_vertex_layout(),
             surface_format,
             None,
             clear_depth_stencil(),
@@ -3125,6 +3109,21 @@ fn draw_solid_box_instances(
     for_each_clip_run(render_pass, count, clip_slice, ctx, |p, s, e| {
         p.draw(0..4, s..e);
     });
+}
+
+/// The unit quad every instanced pipeline expands, at shader location 0.
+///
+/// One definition rather than one per call site, because location 0 being the
+/// quad's is a fact about the whole encoder: every instance layout in this
+/// directory starts counting at 1 for that reason, and the portability check
+/// in `tests.rs` measures a pipeline's attribute budget starting here.
+fn quad_vertex_layout() -> wgpu::VertexBufferLayout<'static> {
+    const ATTRS: &[wgpu::VertexAttribute] = &wgpu::vertex_attr_array![0 => Float32x2];
+    wgpu::VertexBufferLayout {
+        array_stride: 8, // 2 × f32
+        step_mode: wgpu::VertexStepMode::Vertex,
+        attributes: ATTRS,
+    }
 }
 
 /// Vertex buffer layout for the `SolidBox` pipeline's parallel draw-order depth

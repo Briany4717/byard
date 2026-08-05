@@ -19,23 +19,25 @@ struct InstanceInput {
     // corner smoothing, and nothing else: the gradient's own tag lives in
     // `grad_kind` below, one lane one owner (INV-28).
     @location(7) misc: vec4<f32>,
-    // Paint-time transform (RFC-0011); identity is a free no-op below.
-    // `opacity` isn't part of this block, `misc.x` above stays authoritative.
-    @location(8) t_translate: vec2<f32>,
-    @location(9) t_scale: vec2<f32>,
-    @location(10) t_rotate: f32,
-    @location(11) t_origin: vec2<f32>,
+    // Paint-time transform (RFC-0011); identity is a free no-op below. Two
+    // attributes rather than four, because 16 locations is the portable floor
+    // and this pipeline needs every one of them: (translate.xy, scale.xy) and
+    // (rotate, origin.xy) are already contiguous in the uploaded bytes, so
+    // reading them wide is free. `opacity` isn't part of this block, `misc.x`
+    // above stays authoritative.
+    @location(8) t_translate_scale: vec4<f32>,
+    @location(9) t_rotate_origin: vec3<f32>,
     // The gradient (RFC-0001 §3.1, RFC-0035): three stops, four control floats
     // whose meaning depends on the kind, and the kind itself.
-    @location(12) grad_from: vec4<f32>,
-    @location(13) grad_mid: vec4<f32>,
-    @location(14) grad_to: vec4<f32>,
+    @location(10) grad_from: vec4<f32>,
+    @location(11) grad_mid: vec4<f32>,
+    @location(12) grad_to: vec4<f32>,
     // linear: (dir_x, dir_y, mid_pos, offset)
     // radial: (center_x, center_y, radius, mid_pos)
     // conic:  (center_x, center_y, start_angle, mid_pos)
-    @location(15) grad_axis: vec4<f32>,
+    @location(13) grad_axis: vec4<f32>,
     // 0 = linear, 1 = radial, 2 = conic, 3 = no gradient at all.
-    @location(16) grad_kind: u32,
+    @location(14) grad_kind: u32,
 };
 
 struct VertexOutput {
@@ -101,10 +103,10 @@ fn vs_main(vertex: VertexInput, instance: InstanceInput) -> VertexOutput {
 
     let transformed = apply_transform(
         world_pos,
-        instance.t_translate,
-        instance.t_scale,
-        instance.t_rotate,
-        instance.t_origin,
+        instance.t_translate_scale.xy,
+        instance.t_translate_scale.zw,
+        instance.t_rotate_origin.x,
+        instance.t_rotate_origin.yz,
     );
 
     // misc.y carries the draw-order depth (NDC-z); the encoder writes it per

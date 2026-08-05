@@ -70,6 +70,16 @@ impl CompositeQuad {
     }
 }
 
+/// The composite quad's instance layout, for the encoder-wide check that no
+/// pipeline asks for more vertex attributes than every adapter guarantees.
+///
+/// The type itself stays private; what the check needs is the shape of what it
+/// declares, not the record.
+#[cfg(test)]
+pub(super) fn composite_instance_layout() -> wgpu::VertexBufferLayout<'static> {
+    CompositeQuad::layout()
+}
+
 /// Uniforms of one off-screen blur pass; must match `blur.wgsl`'s
 /// `BlurParams`.
 #[repr(C)]

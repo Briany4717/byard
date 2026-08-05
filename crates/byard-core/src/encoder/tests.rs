@@ -1336,3 +1336,167 @@ fn compute_scissor_includes_a_dirty_decorated_box() {
         inflate(rect_of(decorated[0].base.rect), AA_MARGIN_PX)
     );
 }
+
+// ── Vertex attributes are a budget, and the budget is 16 ──────────────────
+//
+// `wgpu::Limits::default().max_vertex_attributes` is 16, and it is not a
+// suggestion: it is the floor the WebGPU specification guarantees, so it is
+// also what a pipeline may assume anywhere. The engine asks its adapter for
+// `adapter.limits()`, which on a Metal device is 31 and on a Linux Vulkan or
+// GL device is exactly 16, so a pipeline that overruns the floor builds fine
+// on one developer's machine and fails to build at all on another's.
+//
+// That is what happened to `DecoratedBox`: adding the gradient kind put its
+// last lane at location 16, one past the end, and the pipeline stopped
+// existing on Linux. These tests are the reason the next lane cannot do it
+// again without saying so here first.
+
+/// The portable floor: 16 attributes, at locations `0..16`.
+const PORTABLE_VERTEX_ATTRIBUTES: u32 = 16;
+
+/// Asserts one pipeline's whole vertex state fits inside the floor.
+///
+/// The check is per pipeline and not per buffer, because the limit is: a
+/// pipeline's attributes are counted across every vertex buffer it binds, so
+/// `SolidBox`'s parallel depth buffer spends from the same budget its instance
+/// buffer does.
+fn assert_vertex_state_is_portable(pipeline: &str, buffers: &[wgpu::VertexBufferLayout<'static>]) {
+    let mut seen: Vec<u32> = Vec::new();
+    for buffer in buffers {
+        for attr in buffer.attributes {
+            assert!(
+                attr.shader_location < PORTABLE_VERTEX_ATTRIBUTES,
+                "{pipeline} declares shader location {}, past the {PORTABLE_VERTEX_ATTRIBUTES} \
+                 every adapter guarantees; pack lanes rather than raising the location",
+                attr.shader_location
+            );
+            assert!(
+                !seen.contains(&attr.shader_location),
+                "{pipeline} declares shader location {} twice; one lane, one owner",
+                attr.shader_location
+            );
+            seen.push(attr.shader_location);
+        }
+    }
+    assert!(
+        seen.len() <= PORTABLE_VERTEX_ATTRIBUTES as usize,
+        "{pipeline} declares {} vertex attributes, past the {PORTABLE_VERTEX_ATTRIBUTES} every \
+         adapter guarantees",
+        seen.len()
+    );
+}
+
+#[test]
+fn every_pipelines_vertex_state_fits_the_portable_attribute_floor() {
+    let quad = quad_vertex_layout;
+    for (name, buffers) in [
+        (
+            "SolidBox",
+            vec![quad(), BoxInstance::layout(), solid_depth_layout()],
+        ),
+        (
+            "DecoratedBox",
+            vec![quad(), decorated_box::DecoratedInstance::layout()],
+        ),
+        (
+            "Ripple",
+            vec![quad(), crate::frame::RippleInstance::layout()],
+        ),
+        (
+            "CanvasShape",
+            vec![quad(), canvas_shape::CanvasShapeInstance::layout()],
+        ),
+        (
+            "TextureSampler",
+            vec![quad(), texture_sampler::TextureInstance::layout()],
+        ),
+        ("VectorMSDF", vec![quad(), vector_msdf::instance_layout()]),
+        (
+            "Backdrop",
+            vec![quad(), backdrop::composite_instance_layout()],
+        ),
+    ] {
+        assert_vertex_state_is_portable(name, &buffers);
+    }
+}
+
+#[test]
+fn the_portability_check_catches_a_lane_past_the_floor() {
+    // The check above is only worth having if it fails on the layout that
+    // actually broke the Linux build, so here is that layout.
+    const PAST_THE_END: &[wgpu::VertexAttribute] = &wgpu::vertex_attr_array![16 => Uint32];
+    let overrun = wgpu::VertexBufferLayout {
+        array_stride: 4,
+        step_mode: wgpu::VertexStepMode::Instance,
+        attributes: PAST_THE_END,
+    };
+    let panicked = std::panic::catch_unwind(|| {
+        assert_vertex_state_is_portable("Overrun", &[overrun]);
+    });
+    assert!(
+        panicked.is_err(),
+        "a location at the floor itself must be rejected: the range is 0..16"
+    );
+}
+
+// ── DecoratedInstance's wide lanes ────────────────────────────────────────
+
+#[test]
+fn decorated_instance_lanes_are_contiguous() {
+    use decorated_box::DecoratedInstance;
+
+    // `layout()` reads the four transform fields as two attributes, which is
+    // only correct while the fields are adjacent and unpadded. `repr(C)` on
+    // all-`f32` fields guarantees it; this test is what notices if a field of
+    // another alignment is ever inserted between them.
+    assert_eq!(std::mem::offset_of!(DecoratedInstance, t_translate), 112);
+    assert_eq!(std::mem::offset_of!(DecoratedInstance, t_scale), 120);
+    assert_eq!(std::mem::offset_of!(DecoratedInstance, t_rotate), 128);
+    assert_eq!(std::mem::offset_of!(DecoratedInstance, t_origin), 132);
+    assert_eq!(std::mem::offset_of!(DecoratedInstance, grad_from), 140);
+    assert_eq!(std::mem::align_of::<DecoratedInstance>(), 4);
+}
+
+#[test]
+fn decorated_instance_attributes_land_on_their_fields() {
+    use decorated_box::DecoratedInstance;
+
+    let layout = DecoratedInstance::layout();
+    assert_eq!(
+        layout.array_stride,
+        std::mem::size_of::<DecoratedInstance>() as wgpu::BufferAddress
+    );
+    assert_eq!(layout.step_mode, wgpu::VertexStepMode::Instance);
+
+    // Every attribute, against the field it is a window onto. The two wide
+    // transform lanes are the interesting rows: location 8 starts at
+    // `t_translate` and spans `t_scale`, location 9 starts at `t_rotate` and
+    // spans `t_origin`.
+    let expected: &[(u32, u64, wgpu::VertexFormat)] = &[
+        (1, 0, wgpu::VertexFormat::Float32x4),
+        (2, 16, wgpu::VertexFormat::Float32x4),
+        (3, 32, wgpu::VertexFormat::Float32x4),
+        (4, 48, wgpu::VertexFormat::Float32x4),
+        (5, 64, wgpu::VertexFormat::Float32x4),
+        (6, 80, wgpu::VertexFormat::Float32x4),
+        (7, 96, wgpu::VertexFormat::Float32x4),
+        (8, 112, wgpu::VertexFormat::Float32x4),
+        (9, 128, wgpu::VertexFormat::Float32x3),
+        (10, 140, wgpu::VertexFormat::Float32x4),
+        (11, 156, wgpu::VertexFormat::Float32x4),
+        (12, 172, wgpu::VertexFormat::Float32x4),
+        (13, 188, wgpu::VertexFormat::Float32x4),
+        (14, 204, wgpu::VertexFormat::Uint32),
+    ];
+    let actual: Vec<(u32, u64, wgpu::VertexFormat)> = layout
+        .attributes
+        .iter()
+        .map(|a| (a.shader_location, a.offset, a.format))
+        .collect();
+    assert_eq!(actual, expected);
+    assert_eq!(
+        std::mem::size_of::<DecoratedInstance>(),
+        208,
+        "the packing changed which locations are read, not a byte of what is uploaded"
+    );
+}

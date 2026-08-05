@@ -175,11 +175,17 @@ pub async fn build_pipeline(
         immediate_size: 0,
     });
 
+    // The gradient block is prepended rather than duplicated: `canvas_fill`
+    // paints the same ramps, and two copies of a colour interpolation agree
+    // exactly until somebody improves one of them (RFC-0037).
+    let source = format!(
+        "{}\n{}",
+        include_str!("gradient.wgsl"),
+        include_str!("decorated_box.wgsl")
+    );
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("ByardCore - DecoratedBox WGSL Shader"),
-        source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(include_str!(
-            "decorated_box.wgsl"
-        ))),
+        source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Owned(source)),
     });
 
     let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {

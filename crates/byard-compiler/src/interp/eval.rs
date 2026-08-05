@@ -8658,6 +8658,18 @@ impl Interpreter {
     /// separate `gradient_offset` prop shifts the ramp along its axis and, being
     /// an ordinary numeric prop, animates through the RFC-0010/RFC-0025
     /// chokepoints, a looping offset is a travelling sweep.
+    ///
+    /// RFC-0035 adds a `kind`, and with it the two fields the other shapes
+    /// need:
+    ///
+    /// ```text
+    /// gradient: (kind: radial, center: (1.0, 0.0), radius: 0.9, from: …, to: …)
+    /// gradient: (kind: conic, center: (0.5, 0.5), start: -90deg, from: …, mid: …, to: …)
+    /// ```
+    ///
+    /// `kind` is absent in every file written before this, and absent means
+    /// `linear`, so nothing already written changes meaning, which is the one
+    /// thing RFC-0035's resolved question about the existing surface asks for.
     fn resolve_gradient(&mut self, attrs: &[Attr]) -> Option<byard_core::frame::Gradient> {
         let value = attrs.iter().find_map(|a| match (&a.name, &a.kind) {
             (n, AttrKind::Prop { value }) if n.as_str() == "gradient" => Some(value),
@@ -8674,6 +8686,11 @@ impl Interpreter {
         let mut angle = 0.0_f32;
         let (mut from, mut to, mut mid) = (None, None, None);
         let mut mid_pos = 0.5_f32;
+        let mut kind = byard_core::frame::GradientKind::Linear;
+        let mut center = [0.5_f32, 0.5_f32];
+        let mut radius = 0.5_f32;
+        let mut radius_written = false;
+        let mut start_span = None;
         for arg in args {
             let Some(field) = arg.name.as_ref().map(crate::Symbol::as_str) else {
                 self.errors.push(CompileError::ConflictingSpacingField {
@@ -8690,10 +8707,49 @@ impl Interpreter {
                 "to" => to = Some(self.eval_gradient_stop(&arg.value)),
                 "mid" => mid = Some(self.eval_gradient_stop(&arg.value)),
                 "mid_pos" => mid_pos = self.eval_num(&arg.value).clamp(0.0, 1.0),
+                // RFC-0035. `start` is the conic sweep's own name for the
+                // angle it begins at; it writes the same field, because a
+                // gradient has exactly one angle and two spellings for it
+                // would be two things to keep in step.
+                "start" => {
+                    angle = self.eval_num(&arg.value);
+                    start_span = Some(arg.value.span());
+                }
+                "kind" => {
+                    kind = match Self::enum_token(&arg.value) {
+                        Some("radial") => byard_core::frame::GradientKind::Radial,
+                        Some("conic") => byard_core::frame::GradientKind::Conic,
+                        Some("linear") => byard_core::frame::GradientKind::Linear,
+                        other => {
+                            let hint = other
+                                .and_then(|o| {
+                                    crate::util::closest_match(o, ["linear", "radial", "conic"])
+                                })
+                                .map(String::from);
+                            self.errors.push(CompileError::UnknownAttribute {
+                                span: arg.value.span(),
+                                name: format!("gradient.kind = {}", other.unwrap_or("?")),
+                                hint,
+                            });
+                            byard_core::frame::GradientKind::Linear
+                        }
+                    };
+                }
+                "center" => {
+                    let (x, y) = self.resolve_axis_pair_value(&arg.value, (center[0], center[1]));
+                    center = [x, y];
+                }
+                "radius" => {
+                    radius = self.eval_num(&arg.value);
+                    radius_written = true;
+                }
                 unknown => {
                     let hint = crate::util::closest_match(
                         unknown,
-                        ["angle", "from", "mid", "to", "mid_pos"],
+                        [
+                            "angle", "from", "mid", "to", "mid_pos", "kind", "center", "radius",
+                            "start",
+                        ],
                     )
                     .map(String::from);
                     self.errors.push(CompileError::UnknownAttribute {
@@ -8716,8 +8772,34 @@ impl Interpreter {
         let offset = self
             .eval_float_prop(attrs, "gradient_offset")
             .map_or(0.0, |v| v as f32);
+        // RFC-0035 §Compiler validation, all three of it.
+        if kind == byard_core::frame::GradientKind::Radial && radius <= 0.0 {
+            self.errors.push(CompileError::AttributeTypeMismatch {
+                span: *span,
+                expected: if radius_written {
+                    "a radial gradient with a positive `radius:` (it is a \
+                     fraction of the element's half-diagonal, so `0` paints \
+                     nothing but the last stop)"
+                        .to_string()
+                } else {
+                    "a radial gradient with a `radius:`".to_string()
+                },
+            });
+        }
+        // An angle outside one turn is not wrong, it is just written the long
+        // way; the shader wraps anyway, and normalising here keeps the encoded
+        // bytes of `start: -90deg` and `start: 270deg` identical, so the paint
+        // digest sees one value rather than two spellings of it.
+        if kind == byard_core::frame::GradientKind::Conic {
+            let tau = std::f32::consts::TAU;
+            angle = angle.rem_euclid(tau);
+            let _ = start_span;
+        }
         Some(byard_core::frame::Gradient {
+            kind,
             angle,
+            center,
+            radius,
             from,
             mid: mid.unwrap_or_else(|| std::array::from_fn(|i| f32::midpoint(from[i], to[i]))),
             to,

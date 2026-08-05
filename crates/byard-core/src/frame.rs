@@ -908,8 +908,41 @@ impl Default for DecoratedBox {
     }
 }
 
-/// A three-stop linear colour ramp painted over a `DecoratedBox`'s fill
-/// (RFC-0001 §3.1's `DecoratedBox` remit).
+/// Which shape a [`Gradient`] paints (RFC-0035).
+///
+/// The tag is a lane of its own on the instance rather than bits stolen from a
+/// neighbour (INV-28): `grad_axis` is fully occupied in every kind, and the one
+/// spare float this pipeline had was taken by RFC-0031's `smooth`. Four bytes
+/// per decorated instance is the honest price, and it keeps every lane with
+/// exactly one owner.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
+#[repr(u32)]
+pub enum GradientKind {
+    /// A directional ramp across the box. The historical behaviour, and what
+    /// every existing `.byd` file means.
+    #[default]
+    Linear = 0,
+    /// A centred falloff, circular in the box's own aspect.
+    Radial = 1,
+    /// An angular sweep around a centre.
+    Conic = 2,
+}
+
+/// The tag value the shader reads for "this instance has no gradient".
+///
+/// Presence used to be inferred from `grad_axis.xy` being a unit vector, which
+/// only worked because every kind was linear: a radial gradient centred on the
+/// box's top-left corner is `(0, 0)`, and would have read as absent.
+pub const GRADIENT_NONE: u32 = 3;
+
+/// A three-stop colour ramp painted over a `DecoratedBox`'s fill
+/// (RFC-0001 §3.1's `DecoratedBox` remit), in one of the three shapes
+/// [`GradientKind`] names (RFC-0035).
+///
+/// The three stops and their `mid_pos` split are shared by every kind; what
+/// differs is only how a fragment's position becomes the ramp parameter. The
+/// paragraphs below describe the linear kind, which is what a gradient with no
+/// `kind` written is.
 ///
 /// The ramp runs along `angle` (0 = left→right, `π/2` = top→bottom) across the
 /// element's own box, from `from` at the start, through `mid` at `mid_pos`, to
@@ -930,8 +963,18 @@ impl Default for DecoratedBox {
 /// in CSS.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct Gradient {
-    /// Ramp direction in radians.
+    /// Which shape this gradient paints (RFC-0035). `Linear` is the historical
+    /// behaviour and the default.
+    pub kind: GradientKind,
+    /// Ramp direction in radians (`Linear`), or the sweep's start angle
+    /// (`Conic`). Unused by `Radial`.
     pub angle: f32,
+    /// Centre in normalized element space, `(0, 0)` top-left to `(1, 1)`
+    /// bottom-right. `Radial` and `Conic` only.
+    pub center: [f32; 2],
+    /// Radius as a fraction of the element's half-diagonal. `Radial` only, and
+    /// required to be positive by the compiler.
+    pub radius: f32,
     /// Colour at the start of the ramp.
     pub from: [f32; 4],
     /// Colour at `mid_pos`.
@@ -950,7 +993,10 @@ impl Gradient {
     #[must_use]
     pub fn two_stop(angle: f32, from: [f32; 4], to: [f32; 4]) -> Self {
         Self {
+            kind: GradientKind::Linear,
             angle,
+            center: [0.5, 0.5],
+            radius: 0.5,
             from,
             mid: std::array::from_fn(|i| f32::midpoint(from[i], to[i])),
             to,
@@ -963,6 +1009,23 @@ impl Gradient {
     #[must_use]
     pub fn direction(&self) -> [f32; 2] {
         [self.angle.cos(), self.angle.sin()]
+    }
+
+    /// The four control floats the shader reads, whose meaning is per kind
+    /// (RFC-0035 §Reference).
+    ///
+    /// Written here, once, so the encoder and the tests cannot disagree about
+    /// which lane means what for which tag.
+    #[must_use]
+    pub fn axis(&self) -> [f32; 4] {
+        match self.kind {
+            GradientKind::Linear => {
+                let [dx, dy] = self.direction();
+                [dx, dy, self.mid_pos, self.offset]
+            }
+            GradientKind::Radial => [self.center[0], self.center[1], self.radius, self.mid_pos],
+            GradientKind::Conic => [self.center[0], self.center[1], self.angle, self.mid_pos],
+        }
     }
 }
 
@@ -2771,12 +2834,19 @@ mod paint_hash {
         );
         f32s(&mut h, &d.border_color);
         f32s(&mut h, &d.shadow_color);
+        // The gradient, whole. Not a chosen subset of its fields: `axis()` is
+        // by construction *the four floats the shader reads*, so a gradient
+        // that changed cannot be judged clean, whatever the kind reinterprets
+        // those lanes as. Hashing a hand-picked list is how a moving glow
+        // centre, or a shifted `mid_pos`, becomes a change nobody repaints.
         match &d.gradient {
             Some(g) => {
                 1u8.hash(&mut h);
+                (g.kind as u32).hash(&mut h);
                 f32s(&mut h, &g.from);
+                f32s(&mut h, &g.mid);
                 f32s(&mut h, &g.to);
-                f32s(&mut h, &[g.angle, g.offset]);
+                f32s(&mut h, &g.axis());
             }
             None => 0u8.hash(&mut h),
         }
@@ -4170,6 +4240,78 @@ mod paint_digest_tests {
         assert!(f.texts()[0].dirty, "unwrapped → wrapped");
         let f = digest_wrapped(&mut d, &[(line("hello"), None)]);
         assert!(f.texts()[0].dirty, "wrapped → unwrapped");
+    }
+
+    /// Every field of a gradient decides pixels, so every field has to reach
+    /// the digest. Hand-picking a few of them is how a moving glow becomes a
+    /// change nobody repaints, which is what this is about: the frame is
+    /// published, the app looks frozen, and the next unrelated repaint reveals
+    /// the update that had been sitting there.
+    #[test]
+    fn a_gradient_that_only_moved_its_centre_is_dirty() {
+        let mut d = PaintDigest::new();
+        let glow = |cx: f32| DecoratedBox {
+            base: boxed(0.0, RED),
+            gradient: Some(Gradient {
+                kind: GradientKind::Radial,
+                center: [cx, 0.5],
+                radius: 0.8,
+                ..Gradient::two_stop(0.0, RED, BLUE)
+            }),
+            ..Default::default()
+        };
+        let mut f = RenderFrame::new();
+        f.push_decorated(glow(0.2));
+        d.apply(&mut f);
+        let mut f = RenderFrame::new();
+        f.push_decorated(glow(0.8));
+        d.apply(&mut f);
+        assert!(f.decorated()[0].dirty);
+    }
+
+    /// The same claim for the fields a subset-hash left out before there were
+    /// kinds at all: a band that slid along its ramp was already invisible.
+    #[test]
+    fn a_gradient_that_only_moved_its_middle_stop_is_dirty() {
+        let mut d = PaintDigest::new();
+        let band = |mid_pos: f32| DecoratedBox {
+            base: boxed(0.0, RED),
+            gradient: Some(Gradient {
+                mid_pos,
+                ..Gradient::two_stop(0.0, RED, BLUE)
+            }),
+            ..Default::default()
+        };
+        let mut f = RenderFrame::new();
+        f.push_decorated(band(0.3));
+        d.apply(&mut f);
+        let mut f = RenderFrame::new();
+        f.push_decorated(band(0.7));
+        d.apply(&mut f);
+        assert!(f.decorated()[0].dirty);
+    }
+
+    /// And its opposite: an unchanged gradient is still clean, or the whole
+    /// incremental path is handed back for every gradient on screen.
+    #[test]
+    fn an_unchanged_gradient_stays_clean() {
+        let mut d = PaintDigest::new();
+        let card = || DecoratedBox {
+            base: boxed(0.0, RED),
+            gradient: Some(Gradient {
+                kind: GradientKind::Conic,
+                center: [0.5, 0.5],
+                ..Gradient::two_stop(1.0, RED, BLUE)
+            }),
+            ..Default::default()
+        };
+        let mut f = RenderFrame::new();
+        f.push_decorated(card());
+        d.apply(&mut f);
+        let mut f = RenderFrame::new();
+        f.push_decorated(card());
+        d.apply(&mut f);
+        assert!(!f.decorated()[0].dirty);
     }
 
     #[test]

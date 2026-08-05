@@ -16,10 +16,8 @@ struct InstanceInput {
     // (border_width, shadow_dx, shadow_dy, shadow_blur)
     @location(6) params: vec4<f32>,
     // (opacity, depth, shadow_spread, smooth), `misc.w` is the RFC-0031 §S1
-    // corner smoothing. It used to be a gradient present/absent flag; that
-    // question is now answered by `grad_axis.xy`, which is a unit direction
-    // vector for a real ramp and all-zero otherwise, so the flag was redundant
-    // and its lane was the spare one the RFC asked for.
+    // corner smoothing, and nothing else: the gradient's own tag lives in
+    // `grad_kind` below, one lane one owner (INV-28).
     @location(7) misc: vec4<f32>,
     // Paint-time transform (RFC-0011); identity is a free no-op below.
     // `opacity` isn't part of this block, `misc.x` above stays authoritative.
@@ -27,13 +25,17 @@ struct InstanceInput {
     @location(9) t_scale: vec2<f32>,
     @location(10) t_rotate: f32,
     @location(11) t_origin: vec2<f32>,
-    // Linear gradient (RFC-0001 §3.1), active only when `grad_axis.xy` is a
-    // real direction vector (see `has_gradient` in the fragment stage).
+    // The gradient (RFC-0001 §3.1, RFC-0035): three stops, four control floats
+    // whose meaning depends on the kind, and the kind itself.
     @location(12) grad_from: vec4<f32>,
     @location(13) grad_mid: vec4<f32>,
     @location(14) grad_to: vec4<f32>,
-    // (dir_x, dir_y, mid_pos, offset)
+    // linear: (dir_x, dir_y, mid_pos, offset)
+    // radial: (center_x, center_y, radius, mid_pos)
+    // conic:  (center_x, center_y, start_angle, mid_pos)
     @location(15) grad_axis: vec4<f32>,
+    // 0 = linear, 1 = radial, 2 = conic, 3 = no gradient at all.
+    @location(16) grad_kind: u32,
 };
 
 struct VertexOutput {
@@ -50,6 +52,9 @@ struct VertexOutput {
     @location(9) grad_mid: vec4<f32>,
     @location(10) grad_to: vec4<f32>,
     @location(11) grad_axis: vec4<f32>,
+    // Constant across the primitive: an integer cannot be interpolated, and
+    // there is nothing here to interpolate anyway.
+    @location(12) @interpolate(flat) grad_kind: u32,
 };
 
 @group(0) @binding(0) var<uniform> viewport_size: vec2<f32>;
@@ -121,23 +126,79 @@ fn vs_main(vertex: VertexInput, instance: InstanceInput) -> VertexOutput {
     out.grad_mid = instance.grad_mid;
     out.grad_to = instance.grad_to;
     out.grad_axis = instance.grad_axis;
+    out.grad_kind = instance.grad_kind;
     return out;
 }
 
-/// The gradient's colour at this fragment (RFC-0001 §3.1): projects the point
-/// onto the ramp's axis, normalized so `0` is the box's leading edge along that
-/// axis and `1` the trailing one, shifted by `offset` and **wrapped**, which is
-/// what makes an animated offset a seamless travelling sweep. `mid` splits the
-/// ramp at `mid_pos`, so a three-stop highlight band (transparent → bright →
-/// transparent) is expressible, not just a two-stop fade.
-fn gradient_color(in: VertexOutput) -> vec4<f32> {
+const GRAD_LINEAR: u32 = 0u;
+const GRAD_RADIAL: u32 = 1u;
+const GRAD_CONIC: u32 = 2u;
+const GRAD_NONE: u32 = 3u;
+const TAU: f32 = 6.28318530718;
+
+/// The ramp's parameter at this fragment, for a **linear** gradient
+/// (RFC-0001 §3.1): projects the point onto the ramp's axis, normalized so `0`
+/// is the box's leading edge along that axis and `1` the trailing one, shifted
+/// by `offset` and **wrapped**, which is what makes an animated offset a
+/// seamless travelling sweep.
+///
+/// Kept as its own function, expression for expression, because every gradient
+/// written before RFC-0035 takes this path and has to keep producing the same
+/// bits (INV-22). The kind branch is around it, never inside it.
+fn linear_t(in: VertexOutput) -> f32 {
     let dir = in.grad_axis.xy;
     // Half-extent of the box measured along `dir` (a box is convex, so the
     // support function is just the weighted sum of the half-sizes).
     let extent = max(abs(dir.x) * in.half_size.x + abs(dir.y) * in.half_size.y, 1e-5);
     let raw = (dot(in.local_pos, dir) / extent) * 0.5 + 0.5 + in.grad_axis.w;
-    let t = fract(raw);
-    let mid_pos = clamp(in.grad_axis.z, 0.0, 1.0);
+    return fract(raw);
+}
+
+/// The ramp's parameter for a **radial** gradient (RFC-0035): distance from the
+/// centre, in units of `radius` half-diagonals.
+///
+/// The offset from the centre is divided by the box's half-size before it is
+/// measured, so the falloff is circular in the box's *own* aspect: a glow on a
+/// 2:1 card stays a circle rather than being stretched into an ellipse by the
+/// element it happens to live in.
+fn radial_t(in: VertexOutput) -> f32 {
+    let center = (in.grad_axis.xy - vec2<f32>(0.5)) * 2.0 * in.half_size;
+    let half = max(in.half_size, vec2<f32>(1e-5));
+    let aspect = half / max(half.x, half.y);
+    let d = (in.local_pos - center) / half * aspect;
+    return clamp(length(d) / max(in.grad_axis.z, 1e-5), 0.0, 1.0);
+}
+
+/// The ramp's parameter for a **conic** gradient (RFC-0035): the fragment's
+/// angle around the centre, measured from `start` and wrapped into `0..1`.
+///
+/// `fract` of a full turn is what makes the sweep meet itself: the stop
+/// interpolation below is cyclic in `t`, so there is no seam at the start
+/// angle as long as `from` and `to` are the same colour, which is what a dial
+/// that wraps means.
+fn conic_t(in: VertexOutput) -> f32 {
+    let center = (in.grad_axis.xy - vec2<f32>(0.5)) * 2.0 * in.half_size;
+    let d = in.local_pos - center;
+    return fract((atan2(d.y, d.x) - in.grad_axis.z) / TAU + 1.0);
+}
+
+/// The gradient's colour at this fragment: one scalar `t` per kind, then the
+/// *same* three-stop interpolation for all of them. `mid` splits the ramp at
+/// `mid_pos`, so a three-stop highlight band (transparent → bright →
+/// transparent) is expressible, not just a two-stop fade.
+fn gradient_color(in: VertexOutput) -> vec4<f32> {
+    var t = 0.0;
+    var mid_pos = 0.0;
+    if (in.grad_kind == GRAD_LINEAR) {
+        t = linear_t(in);
+        mid_pos = clamp(in.grad_axis.z, 0.0, 1.0);
+    } else if (in.grad_kind == GRAD_RADIAL) {
+        t = radial_t(in);
+        mid_pos = clamp(in.grad_axis.w, 0.0, 1.0);
+    } else {
+        t = conic_t(in);
+        mid_pos = clamp(in.grad_axis.w, 0.0, 1.0);
+    }
     if (t < mid_pos) {
         return mix(in.grad_from, in.grad_mid, t / max(mid_pos, 1e-5));
     }
@@ -204,10 +265,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // RFC-0031 §S1. Clamped here (rather than trusted) for the same reason the
     // corner radius is: one consumption site, one rule.
     let corner_n = 2.0 + clamp(in.misc.w, 0.0, 1.0) * 4.0;
-    // A ramp's axis is `(cos θ, sin θ)`, always unit length, and an absent
-    // ramp leaves `grad_axis` all-zero, so the direction vector *is* the
-    // present/absent answer. That is what freed `misc.w` for `smooth`.
-    let has_gradient = dot(in.grad_axis.xy, in.grad_axis.xy) > 0.25;
+    // The tag answers it directly (RFC-0035). It used to be inferred from
+    // `grad_axis.xy` being a unit vector, which only worked while every
+    // gradient was linear: a radial centred on the box's top-left corner is
+    // `(0, 0)` and would have read as "no gradient".
+    let has_gradient = in.grad_kind != GRAD_NONE;
 
     // ── Drop shadow (drawn beneath the surface) ───────────────────────────
     // `spread` grows/shrinks the shadow shape (and its corner radii) before the

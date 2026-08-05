@@ -13,7 +13,15 @@
   - RFC-0001 §1 (two-layer rule, `.byd` has no I/O), §3.1/§7.3 (pipelines,
     Dev/Prod), §9 (strict, layered crate dependency graph)
   - RFC-0002 **D10** (file-watcher, `LatestWins`, debounce), **D11** (per-`ViewDecl` reload)
-  - RFC-0005 (intrinsic catalog, packages ship `View`s, never new intrinsics)
+  - RFC-0005 (intrinsic catalog, packages ship `View`s, never new intrinsics).
+    **Amended by RFC-0039** (2026-08-05): a package may also ship a *native
+    view*, a compiled-in Rust widget that draws through its own registered
+    pipeline. The old rule's premise was performance, a package element could
+    only be a composition, so making one an intrinsic would have been the only
+    way to make it fast. That premise no longer holds: a native view is linked
+    into the same binary and reaches the GPU by the same code an intrinsic
+    does, so the ecosystem gets domain widgets (maps, charts) without core
+    growing them.
   - RFC-0006 (CLI, `byard new/dev/check/build`, `manifest.rs`)
 - **Provides:** a Flutter/`pub`-style modular distribution model so libraries such
   as a Material or Liquid-Glass component set can be declared, fetched,

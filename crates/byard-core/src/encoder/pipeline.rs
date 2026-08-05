@@ -102,6 +102,11 @@ pub trait ErasedPipeline: 'static {
     /// same code as a core one.
     fn instance_size(&self) -> usize;
 
+    /// The instance layout this pipeline declares (from
+    /// [`RenderPipeline::vertex_layout`]), which registration reads to answer
+    /// whether it can run on any GPU rather than only on the author's.
+    fn instance_layout(&self) -> wgpu::VertexBufferLayout<'static>;
+
     /// Records this pipeline's draws for one segment.
     fn draw_segment(&self, pass: &mut wgpu::RenderPass<'_>, cx: &SegmentDraw<'_>);
 }
@@ -113,6 +118,10 @@ impl<P: RenderPipeline> ErasedPipeline for P {
 
     fn instance_size(&self) -> usize {
         std::mem::size_of::<P::Instance>()
+    }
+
+    fn instance_layout(&self) -> wgpu::VertexBufferLayout<'static> {
+        P::vertex_layout()
     }
 
     fn draw_segment(&self, pass: &mut wgpu::RenderPass<'_>, cx: &SegmentDraw<'_>) {
@@ -165,7 +174,21 @@ impl PipelineRegistry {
     /// to register (INV-32). A stable sort on a two-part key is the whole
     /// mechanism; there is deliberately no priority number for an author to
     /// tune, because a tunable order is one nobody can reason about.
-    pub fn register(&mut self, order: PipelineOrder, pipeline: Box<dyn ErasedPipeline>) -> usize {
+    ///
+    /// # Errors
+    ///
+    /// [`ByardError::PipelineCompilation`] naming the pipeline if its instance
+    /// layout asks for more vertex attributes than a GPU is guaranteed to have
+    /// (see [`check_portable_layout`]). Registration is the last moment this
+    /// can be answered on the CPU, with the pipeline's name in hand; after it,
+    /// the same mistake is a driver validation error on one machine and a
+    /// working build on another.
+    pub fn register(
+        &mut self,
+        order: PipelineOrder,
+        pipeline: Box<dyn ErasedPipeline>,
+    ) -> Result<usize, ByardError> {
+        check_portable_layout(pipeline.name(), &pipeline.instance_layout())?;
         let seq = self.entries.len();
         let entry = Registration {
             order,
@@ -176,11 +199,17 @@ impl PipelineRegistry {
             .entries
             .partition_point(|e| (e.order, e.seq) <= (entry.order, entry.seq));
         self.entries.insert(at, entry);
-        at
+        Ok(at)
     }
 
     /// Registers a core pipeline (convenience over [`register`](Self::register)).
-    pub fn register_core<P: RenderPipeline>(&mut self, pipeline: P) -> usize {
+    ///
+    /// # Errors
+    ///
+    /// As [`register`](Self::register): a core pipeline is held to the same
+    /// portability rule a package's is, which is the point of core going
+    /// through this call at all.
+    pub fn register_core<P: RenderPipeline>(&mut self, pipeline: P) -> Result<usize, ByardError> {
         self.register(PipelineOrder::Core, Box::new(pipeline))
     }
 
@@ -262,6 +291,61 @@ pub struct SegmentDraw<'a> {
     pub textures: &'a [crate::frame::TextureSampler],
 }
 
+/// Rejects an instance layout that could not run on some conformant GPU.
+///
+/// A vertex attribute is scarcer than it looks. The WebGPU specification
+/// guarantees sixteen of them, at locations `0..16`, and that is exactly what a
+/// Linux Vulkan or GL adapter offers, while a Metal one offers thirty-one. A
+/// layout that spends more than the guarantee therefore builds on its author's
+/// machine and does not exist on its user's, and the only symptom is a
+/// pipeline that never draws.
+///
+/// The rule is enforced here, at registration, because this is where a package
+/// pipeline first meets the engine and where the pipeline still has a name.
+/// One attribute of the budget is the shared unit quad's (location 0), which
+/// every instanced pipeline binds and none of them declares, so an instance
+/// layout may spend the fifteen that are left.
+///
+/// # Errors
+///
+/// [`ByardError::PipelineCompilation`] naming the pipeline and the lane, if a
+/// location falls outside the guaranteed range or the layout declares more
+/// attributes than remain after the quad.
+pub fn check_portable_layout(
+    name: &str,
+    layout: &wgpu::VertexBufferLayout<'static>,
+) -> Result<(), ByardError> {
+    /// The quad at location 0, which every instanced pipeline binds.
+    const QUAD_ATTRIBUTES: u32 = 1;
+    let guaranteed = wgpu::Limits::default().max_vertex_attributes;
+
+    for attr in layout.attributes {
+        if attr.shader_location >= guaranteed {
+            return Err(build_error(
+                name,
+                &format!(
+                    "vertex attribute at shader location {} is outside the 0..{guaranteed} every \
+                     GPU guarantees; pack lanes into wider attributes rather than raising the \
+                     location",
+                    attr.shader_location
+                ),
+            ));
+        }
+    }
+
+    let declared = u32::try_from(layout.attributes.len()).unwrap_or(u32::MAX);
+    if declared.saturating_add(QUAD_ATTRIBUTES) > guaranteed {
+        return Err(build_error(
+            name,
+            &format!(
+                "declares {declared} vertex attributes, and with the shared quad that is past the \
+                 {guaranteed} every GPU guarantees"
+            ),
+        ));
+    }
+    Ok(())
+}
+
 /// A pipeline whose shader failed to compile names itself (INV-4).
 ///
 /// Kept here rather than at each call site so every pipeline's build failure
@@ -305,9 +389,13 @@ mod tests {
         // INV-32: the order is declared. A package that registers first still
         // draws after core, because "first" is not what decides.
         let mut registry = PipelineRegistry::new();
-        registry.register(PipelineOrder::Package, Box::new(Probe::<1>));
-        registry.register_core(Probe::<2>);
-        registry.register(PipelineOrder::Package, Box::new(Probe::<3>));
+        registry
+            .register(PipelineOrder::Package, Box::new(Probe::<1>))
+            .unwrap();
+        registry.register_core(Probe::<2>).unwrap();
+        registry
+            .register(PipelineOrder::Package, Box::new(Probe::<3>))
+            .unwrap();
         let order: Vec<usize> = registry
             .entries
             .iter()
@@ -326,9 +414,10 @@ mod tests {
         // have, and the reason the entries are a `Vec` sorted on insertion.
         let build = || {
             let mut r = PipelineRegistry::new();
-            r.register_core(Probe::<1>);
-            r.register_core(Probe::<2>);
-            r.register(PipelineOrder::Package, Box::new(Probe::<3>));
+            r.register_core(Probe::<1>).unwrap();
+            r.register_core(Probe::<2>).unwrap();
+            r.register(PipelineOrder::Package, Box::new(Probe::<3>))
+                .unwrap();
             r.entries
                 .iter()
                 .map(|e| (e.order, e.seq))
@@ -343,6 +432,110 @@ mod tests {
                 (PipelineOrder::Package, 2),
             ]
         );
+    }
+
+    /// A pipeline whose instance layout spends a lane no GPU is guaranteed to
+    /// have, which is precisely what `DecoratedBox` did when its gradient kind
+    /// took location 16 and the pipeline stopped existing on Linux.
+    struct Overrun;
+
+    impl RenderPipeline for Overrun {
+        const NAME: &'static str = "overrun";
+        type Instance = ProbeInstance;
+        fn vertex_layout() -> wgpu::VertexBufferLayout<'static> {
+            const ATTRS: &[wgpu::VertexAttribute] = &wgpu::vertex_attr_array![16 => Uint32];
+            wgpu::VertexBufferLayout {
+                array_stride: 16,
+                step_mode: wgpu::VertexStepMode::Instance,
+                attributes: ATTRS,
+            }
+        }
+        fn draw(&self, _pass: &mut wgpu::RenderPass<'_>, _cx: &SegmentDraw<'_>) {}
+    }
+
+    /// A pipeline that stays inside every location but declares too many of
+    /// them: fifteen plus the shared quad is the whole budget, sixteen is one
+    /// past it.
+    struct TooMany;
+
+    impl RenderPipeline for TooMany {
+        const NAME: &'static str = "too_many";
+        type Instance = ProbeInstance;
+        fn vertex_layout() -> wgpu::VertexBufferLayout<'static> {
+            const ATTRS: &[wgpu::VertexAttribute] = &wgpu::vertex_attr_array![
+                0 => Float32, 1 => Float32, 2 => Float32, 3 => Float32,
+                4 => Float32, 5 => Float32, 6 => Float32, 7 => Float32,
+                8 => Float32, 9 => Float32, 10 => Float32, 11 => Float32,
+                12 => Float32, 13 => Float32, 14 => Float32, 15 => Float32,
+            ];
+            wgpu::VertexBufferLayout {
+                array_stride: 64,
+                step_mode: wgpu::VertexStepMode::Instance,
+                attributes: ATTRS,
+            }
+        }
+        fn draw(&self, _pass: &mut wgpu::RenderPass<'_>, _cx: &SegmentDraw<'_>) {}
+    }
+
+    #[test]
+    fn a_pipeline_that_could_not_run_everywhere_is_refused_at_registration() {
+        // The registry is where a package pipeline first meets the engine, and
+        // the last point at which "this asks for more than a GPU has" can be
+        // said with the pipeline's name attached. After it, the same mistake
+        // is a driver error on someone else's machine (INV-4).
+        let mut registry = PipelineRegistry::new();
+        let err = registry
+            .register(PipelineOrder::Package, Box::new(Overrun))
+            .expect_err("a lane past the guaranteed range must be refused");
+        let text = err.to_string();
+        assert!(
+            text.contains("overrun"),
+            "the error names the pipeline: {text}"
+        );
+        assert!(text.contains("16"), "the error names the lane: {text}");
+        assert!(
+            registry.is_empty(),
+            "a refused pipeline is not in the order"
+        );
+    }
+
+    #[test]
+    fn the_shared_quad_is_counted_against_the_budget() {
+        // Fifteen attributes plus the quad at location 0 is exactly sixteen,
+        // which fits. A pipeline declaring sixteen of its own does not, even
+        // though every one of its locations is in range.
+        let mut registry = PipelineRegistry::new();
+        let err = registry
+            .register(PipelineOrder::Package, Box::new(TooMany))
+            .expect_err("sixteen declared attributes plus the quad is seventeen");
+        assert!(err.to_string().contains("too_many"));
+    }
+
+    #[test]
+    fn every_core_pipeline_layout_passes_the_portability_rule() {
+        // The rule is only worth enforcing if core itself lives by it, which
+        // is the same claim the encoder's own layout test makes and the reason
+        // core registers through this call instead of around it.
+        for (name, layout) in [
+            ("solid_box", super::super::BoxInstance::layout()),
+            (
+                "decorated_box",
+                super::super::decorated_box::DecoratedInstance::layout(),
+            ),
+            ("ripple", crate::frame::RippleInstance::layout()),
+            (
+                "canvas_shape",
+                super::super::canvas_shape::CanvasShapeInstance::layout(),
+            ),
+            (
+                "texture_sampler",
+                super::super::texture_sampler::TextureInstance::layout(),
+            ),
+            ("vector_msdf", super::super::vector_msdf::instance_layout()),
+        ] {
+            check_portable_layout(name, &layout)
+                .unwrap_or_else(|e| panic!("{name} is not portable: {e}"));
+        }
     }
 
     #[test]

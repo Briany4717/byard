@@ -39,7 +39,7 @@ fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>)> {
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("nav transition readback device"),
         required_features: wgpu::Features::empty(),
-        required_limits: adapter.limits(),
+        required_limits: byard_core::engine::device_limits(&adapter),
         memory_hints: wgpu::MemoryHints::Performance,
         ..Default::default()
     }))

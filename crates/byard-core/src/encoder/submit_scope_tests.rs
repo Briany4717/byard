@@ -9,7 +9,7 @@ fn try_device() -> Option<(std::sync::Arc<wgpu::Device>, std::sync::Arc<wgpu::Qu
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         label: Some("ByardCore - encode.submit Test Device"),
         required_features: wgpu::Features::empty(),
-        required_limits: adapter.limits(),
+        required_limits: crate::engine::device_limits(&adapter),
         memory_hints: wgpu::MemoryHints::Performance,
         ..Default::default()
     }))

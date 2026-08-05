@@ -87,7 +87,7 @@
 
 use std::any::Any;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, PoisonError};
 use std::thread::{self, JoinHandle};
 
@@ -263,14 +263,23 @@ pub struct Relay {
     /// The gate an idle logic tick parks on, and that a completed I/O result
     /// or timer tick opens (RFC-0029 §2). See [`IdleGate`].
     idle: Arc<IdleGate>,
-    publish_seq: std::sync::atomic::AtomicU64,
-    /// Whether the frame currently in [`Relay::latest`] has been rendered.
+    publish_seq: AtomicU64,
+    /// The [`RenderFrame::version`] of the last frame the render thread
+    /// actually encoded, or `0` before the first one.
     ///
-    /// Set by [`Relay::mark_rendered`] once the encoder has actually consumed
-    /// a frame; cleared on every publish. [`Relay::publish`] uses it to decide
-    /// whether the frame it is about to replace still carries dirty bits that
+    /// [`Relay::publish`] compares it against the version of the frame it is
+    /// about to replace, to decide whether that frame still carries dirty bits
     /// nobody has acted on (RFC-0032 §R3 step 6).
-    rendered: AtomicBool,
+    ///
+    /// **A version and not a flag.** A flag answers "has *something* been
+    /// rendered", and the two threads run free of each other: the render
+    /// thread reads a frame, spends milliseconds encoding it, and marks
+    /// afterwards, by which time the logic thread may have published one or
+    /// more newer frames into the slot. A flag set at that moment claims those
+    /// frames were drawn, and the next publish drops their dirty bits. The
+    /// version names the frame the mark is *about*, so a mark that lands late
+    /// can only ever clear the frame it belongs to.
+    rendered_version: AtomicU64,
 }
 
 /// A host-installed callback the logic thread fires after publishing a changed
@@ -331,8 +340,8 @@ impl Relay {
             input_rx,
             frame_waker: Mutex::new(None),
             idle: Arc::new(IdleGate::default()),
-            publish_seq: std::sync::atomic::AtomicU64::new(0),
-            rendered: AtomicBool::new(false),
+            publish_seq: AtomicU64::new(0),
+            rendered_version: AtomicU64::new(0),
         })
     }
 
@@ -423,7 +432,7 @@ impl Relay {
         // through, so the counter cannot be forgotten by a new runtime.
         frame.set_version(
             self.publish_seq
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                .fetch_add(1, Ordering::Relaxed)
                 .wrapping_add(1),
         );
         // If the frame we are about to replace was never rendered, its dirty
@@ -431,8 +440,8 @@ impl Relay {
         // rather than dropping them, see `RenderFrame::merge_dirty_from` for
         // why the union is the correct operation and why the alternative
         // (detect the skip, redraw everything) gives the whole win back.
-        if !self.rendered.swap(false, Ordering::Relaxed) {
-            if let Some(previous) = self.latest.load_full() {
+        if let Some(previous) = self.latest.load_full() {
+            if previous.version() != self.rendered_version.load(Ordering::Relaxed) {
                 frame.merge_dirty_from(&previous);
             }
         }
@@ -447,16 +456,24 @@ impl Relay {
         }
     }
 
-    /// Records that the frame currently in the slot has been rendered, so the
-    /// next [`publish`](Self::publish) may drop its dirty bits instead of
-    /// carrying them forward.
+    /// Records that the frame with this [`version`](RenderFrame::version) has
+    /// been rendered, so a later [`publish`](Self::publish) that replaces *that
+    /// frame* may drop its dirty bits instead of carrying them forward.
     ///
     /// Called by the render thread **after** the encode succeeds, not when the
     /// frame is fetched: a frame read and then abandoned (a lost surface, an
     /// occluded window) has not been drawn, and its dirty bits still have to
     /// reach the screen eventually.
-    pub fn mark_rendered(&self) {
-        self.rendered.store(true, Ordering::Relaxed);
+    ///
+    /// The version is what makes the late arrival harmless. Encoding takes
+    /// milliseconds and the logic thread does not wait, so by the time this is
+    /// called the slot usually holds a newer frame; naming the frame that was
+    /// drawn means this can never be read as a claim about that newer one.
+    pub fn mark_rendered(&self, version: u64) {
+        // Monotonic: an out-of-order mark (two render threads, a retried
+        // encode) must not walk the watermark backwards and make a frame that
+        // was drawn look undrawn.
+        self.rendered_version.fetch_max(version, Ordering::Relaxed);
     }
 
     /// Returns a clone of the current latest frame, or `None` if nothing
@@ -781,6 +798,26 @@ mod tests {
         assert!(observed.telemetry().samples.is_empty());
     }
 
+    /// A text line the producer reported as changed.
+    fn dirty_line(text: &str) -> crate::frame::TextLine {
+        crate::frame::TextLine {
+            x: 0.0,
+            y: 0.0,
+            text: text.to_string(),
+            font_size: 12.0,
+            color: [1.0; 4],
+            dirty: true,
+        }
+    }
+
+    /// The same line, reported unchanged.
+    fn clean_line(text: &str) -> crate::frame::TextLine {
+        crate::frame::TextLine {
+            dirty: false,
+            ..dirty_line(text)
+        }
+    }
+
     #[test]
     fn multiple_publishes_overwrite_rather_than_merge() {
         let relay = Relay::new().unwrap();
@@ -797,6 +834,85 @@ mod tests {
         let observed = relay.current().unwrap();
         assert_eq!(observed.rects().len(), 2);
         assert_eq!(observed.rects()[0], Rect::new(9.0, 9.0, 9.0, 9.0));
+    }
+
+    /// The dirty bits of a frame nobody drew are carried into its replacement,
+    /// so a logic thread that outruns the display loses nothing (RFC-0032 §R3
+    /// step 6).
+    #[test]
+    fn an_unrendered_frames_dirty_bits_survive_into_its_replacement() {
+        let relay = Relay::new().unwrap();
+        let mut a = relay.acquire_recycled();
+        a.push_text(dirty_line("changed"));
+        relay.publish(a);
+
+        // Nobody rendered it. The next frame reports the line clean, because
+        // the producer compares against what it last published, not against
+        // what was last drawn.
+        let mut b = relay.acquire_recycled();
+        b.push_text(clean_line("changed"));
+        relay.publish(b);
+
+        assert!(
+            relay.current().unwrap().texts()[0].dirty,
+            "the change nobody drew is still owed"
+        );
+    }
+
+    /// The mark names the frame it is about, so a mark that lands after newer
+    /// frames have been published cannot clear *their* dirty bits.
+    ///
+    /// This is the real interleaving, not a contrived one: encoding takes
+    /// milliseconds, the logic thread does not wait for it, and the render
+    /// thread marks when it finishes. A flag set at that moment says "the frame
+    /// in the slot has been drawn" about a frame it never saw.
+    #[test]
+    fn a_late_mark_cannot_claim_a_frame_it_never_saw() {
+        let relay = Relay::new().unwrap();
+
+        let mut drawn = relay.acquire_recycled();
+        drawn.push_text(clean_line("steady"));
+        relay.publish(drawn);
+        let encoding = relay.current().unwrap();
+        let encoding_version = encoding.version();
+
+        // Mid-encode, the logic thread publishes a frame carrying a change.
+        let mut changed = relay.acquire_recycled();
+        changed.push_text(dirty_line("edited"));
+        relay.publish(changed);
+
+        // The encode finishes now, and marks the frame it actually drew.
+        relay.mark_rendered(encoding_version);
+
+        // The next frame is clean at the producer, as before.
+        let mut after = relay.acquire_recycled();
+        after.push_text(clean_line("edited"));
+        relay.publish(after);
+
+        assert!(
+            relay.current().unwrap().texts()[0].dirty,
+            "the edit was never drawn, so it is still owed"
+        );
+    }
+
+    /// And the other direction: a frame that *was* drawn does not keep
+    /// re-reporting itself, which would hand back the whole incremental path.
+    #[test]
+    fn a_rendered_frames_dirty_bits_are_not_carried_forward() {
+        let relay = Relay::new().unwrap();
+        let mut a = relay.acquire_recycled();
+        a.push_text(dirty_line("changed"));
+        relay.publish(a);
+        relay.mark_rendered(relay.current().unwrap().version());
+
+        let mut b = relay.acquire_recycled();
+        b.push_text(clean_line("changed"));
+        relay.publish(b);
+
+        assert!(
+            !relay.current().unwrap().texts()[0].dirty,
+            "a drawn change is settled"
+        );
     }
 
     #[test]

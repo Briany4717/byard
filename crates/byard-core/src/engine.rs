@@ -678,9 +678,12 @@ impl Engine {
             .encoder
             .encode_frame_from_relay(&frame.texture, &relay_frame)?;
         self.encoder.submit(cmd);
-        // The frame reached the GPU: its dirty bits have been acted on, so the
-        // next publish need not carry them forward (RFC-0032 §R3 step 6).
-        self.relay.mark_rendered();
+        // *This* frame reached the GPU: its dirty bits have been acted on, so
+        // the publish that replaces it need not carry them forward (RFC-0032
+        // §R3 step 6). Named by version, because the logic thread has very
+        // likely published a newer frame during the encode above, and this must
+        // not be read as a claim about that one.
+        self.relay.mark_rendered(relay_frame.version());
         {
             // RFC-0030 §I1: the swapchain commit. Cheap on a healthy frame and
             // the second place a compositor can charge the engine for pacing,

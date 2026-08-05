@@ -11,6 +11,7 @@ publish = false
 
 [dependencies]
 byard = { path = "../../crates/byard" }
+tokio = { version = "1", features = ["time"] }
 
 [lints]
 workspace = true

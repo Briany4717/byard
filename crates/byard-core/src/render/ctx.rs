@@ -84,7 +84,8 @@ pub enum TextureSource<'a> {
 /// fn escapes() -> TextureHandle<'static> {
 ///     let mut pool = NativeBatches::new();
 ///     let mut textures = Vec::new();
-///     let mut cx = RenderCtx::new(&mut pool, &mut textures, 0.0);
+///     let mut calls = Vec::new();
+///     let mut cx = RenderCtx::new(&mut pool, &mut textures, &mut calls, 0.0);
 ///     cx.upload_texture(&TextureSource::Path("tile.png"))
 /// }
 /// ```
@@ -96,7 +97,8 @@ pub enum TextureSource<'a> {
 ///
 /// let mut pool = NativeBatches::new();
 /// let mut textures = Vec::new();
-/// let mut cx = RenderCtx::new(&mut pool, &mut textures, 0.0);
+/// let mut calls = Vec::new();
+/// let mut cx = RenderCtx::new(&mut pool, &mut textures, &mut calls, 0.0);
 /// let tile = cx.upload_texture(&TextureSource::Path("tile.png"));
 /// assert_eq!(tile.id(), 0);
 /// ```
@@ -145,6 +147,26 @@ pub enum OwnedTextureSource {
     Path(String),
 }
 
+/// One controller request a view issued this frame (RFC-0039 §"Async across
+/// the boundary").
+///
+/// A view does no I/O of its own. It names a controller the app registered
+/// (RFC-0028), the engine dispatches it on the pool exactly as an action's
+/// call is dispatched, and the answer comes back to
+/// [`on_result`](super::NativeView::on_result) on the logic thread. Nothing
+/// here is a second I/O path; it is the same one, reached from a widget.
+#[derive(Debug)]
+pub struct NativeCall {
+    /// The view's own key for this request, handed back with the answer.
+    pub key: super::view::RequestKey,
+    /// The controller type's name, as the app registered it.
+    pub controller: String,
+    /// The method to call.
+    pub method: String,
+    /// The arguments, as data (INV-13).
+    pub args: Vec<crate::bridge::HostValue>,
+}
+
 /// The per-frame handle a native view's `render` receives (RFC-0039).
 ///
 /// Not `Send`, by construction: it borrows the frame's pools, which the logic
@@ -159,12 +181,17 @@ pub enum OwnedTextureSource {
 ///
 /// let mut pool = NativeBatches::new();
 /// let mut textures = Vec::new();
-/// let cx = RenderCtx::new(&mut pool, &mut textures, 0.0);
+/// let mut calls = Vec::new();
+/// let cx = RenderCtx::new(&mut pool, &mut textures, &mut calls, 0.0);
 /// only_takes_send(cx);
 /// ```
 pub struct RenderCtx<'frame> {
     batches: &'frame mut NativeBatches,
     textures: &'frame mut Vec<TextureRequest>,
+    calls: &'frame mut Vec<NativeCall>,
+    /// Where this view's calls start in `calls`, so the engine can tell whose
+    /// they are without the view having to know its own identity.
+    calls_base: usize,
     /// The clip in force, the intersection of every enclosing
     /// [`clip`](Self::clip).
     clip: Option<ClipShape>,
@@ -185,16 +212,52 @@ impl<'frame> RenderCtx<'frame> {
     pub fn new(
         batches: &'frame mut NativeBatches,
         textures: &'frame mut Vec<TextureRequest>,
+        calls: &'frame mut Vec<NativeCall>,
         depth: f32,
     ) -> Self {
+        let calls_base = calls.len();
         Self {
             batches,
             textures,
+            calls,
+            calls_base,
             clip: None,
             depth,
             repaint: false,
             _not_send: PhantomData,
         }
+    }
+
+    /// Asks a controller for something, to be answered through
+    /// [`on_result`](super::NativeView::on_result) (RFC-0039).
+    ///
+    /// Fire and forget from the view's point of view: it returns immediately,
+    /// nothing blocks, and the answer arrives on a later tick keyed by `key`.
+    /// A view that awaited here would be holding the logic thread, which is
+    /// the one thing a widget must never do.
+    ///
+    /// The arguments are data (INV-13). There is no way to pass a handle,
+    /// because the pool worker that runs the call is on the other side of the
+    /// thread boundary that exists to keep handles here.
+    pub fn call(
+        &mut self,
+        key: super::view::RequestKey,
+        controller: &str,
+        method: &str,
+        args: Vec<crate::bridge::HostValue>,
+    ) {
+        self.calls.push(NativeCall {
+            key,
+            controller: controller.to_string(),
+            method: method.to_string(),
+            args,
+        });
+    }
+
+    /// How many calls this view issued, for the engine that dispatches them.
+    #[must_use]
+    pub fn calls_issued(&self) -> std::ops::Range<usize> {
+        self.calls_base..self.calls.len()
     }
 
     /// A handle to the registered pipeline `P`.
@@ -339,7 +402,8 @@ mod tests {
         // the same, which is checkable (INV-30).
         let mut pool = NativeBatches::new();
         let mut textures = Vec::new();
-        let mut cx = RenderCtx::new(&mut pool, &mut textures, 0.5);
+        let mut calls = Vec::new();
+        let mut cx = RenderCtx::new(&mut pool, &mut textures, &mut calls, 0.5);
         let instances = boxes(3);
         let handle = cx.pipeline::<SolidBoxPipeline>();
         cx.emit(handle, &instances);
@@ -360,7 +424,8 @@ mod tests {
     fn emitting_nothing_costs_the_encoder_nothing() {
         let mut pool = NativeBatches::new();
         let mut textures = Vec::new();
-        let mut cx = RenderCtx::new(&mut pool, &mut textures, 0.0);
+        let mut calls = Vec::new();
+        let mut cx = RenderCtx::new(&mut pool, &mut textures, &mut calls, 0.0);
         let handle = cx.pipeline::<SolidBoxPipeline>();
         cx.emit(handle, &[]);
         assert!(pool.is_empty(), "an empty emit is not an empty batch");
@@ -370,7 +435,8 @@ mod tests {
     fn a_batch_carries_the_clip_that_was_in_force() {
         let mut pool = NativeBatches::new();
         let mut textures = Vec::new();
-        let mut cx = RenderCtx::new(&mut pool, &mut textures, 0.0);
+        let mut calls = Vec::new();
+        let mut cx = RenderCtx::new(&mut pool, &mut textures, &mut calls, 0.0);
         let handle = cx.pipeline::<SolidBoxPipeline>();
         let outer = ClipShape::Rect([0.0, 0.0, 100.0, 100.0]);
         let inner = ClipShape::Rect([50.0, 50.0, 100.0, 100.0]);
@@ -400,7 +466,8 @@ mod tests {
     fn a_texture_request_is_recorded_for_the_encoder_to_drain() {
         let mut pool = NativeBatches::new();
         let mut textures = Vec::new();
-        let mut cx = RenderCtx::new(&mut pool, &mut textures, 0.0);
+        let mut calls = Vec::new();
+        let mut cx = RenderCtx::new(&mut pool, &mut textures, &mut calls, 0.0);
         let first = cx.upload_texture(&TextureSource::Rgba8 {
             width: 1,
             height: 1,
@@ -416,13 +483,14 @@ mod tests {
     fn a_repaint_request_is_for_the_next_frame_and_not_a_subscription() {
         let mut pool = NativeBatches::new();
         let mut textures = Vec::new();
-        let mut cx = RenderCtx::new(&mut pool, &mut textures, 0.0);
+        let mut calls = Vec::new();
+        let mut cx = RenderCtx::new(&mut pool, &mut textures, &mut calls, 0.0);
         assert!(!cx.wants_repaint());
         cx.request_repaint();
         assert!(cx.wants_repaint());
 
         // The next frame's context is a new one, and starts unasked.
-        let mut next = RenderCtx::new(&mut pool, &mut textures, 0.0);
+        let mut next = RenderCtx::new(&mut pool, &mut textures, &mut calls, 0.0);
         assert!(
             !next.wants_repaint(),
             "asking once must not keep the app awake forever"

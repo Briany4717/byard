@@ -327,7 +327,8 @@ mod tests {
         let mut view = quad();
         let mut pool = NativeBatches::new();
         let mut textures = Vec::new();
-        let mut cx = RenderCtx::new(&mut pool, &mut textures, 0.25);
+        let mut calls = Vec::new();
+        let mut cx = RenderCtx::new(&mut pool, &mut textures, &mut calls, 0.25);
         let layout = Layout::new([10.0, 20.0, 100.0, 50.0]);
         view.render(layout, &mut cx);
 

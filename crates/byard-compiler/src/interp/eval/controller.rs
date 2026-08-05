@@ -73,6 +73,11 @@ pub(super) struct PendingCall {
     args: Vec<HostValue>,
     /// The arms to resume into, or `None` for fire-and-forget.
     arms: Option<Rc<RefCell<CallArms>>>,
+    /// A continuation opened before queuing, for a call whose answer does not
+    /// resume an action at all: a native view's request is delivered to the
+    /// view (RFC-0039), so there are no arms to run and the id has to exist
+    /// before the call is placed.
+    continuation: Option<u64>,
     /// The effect that owns this call, if it was raised from one. A call an
     /// effect placed dies with that effect (INV-14).
     owner: Option<usize>,
@@ -193,6 +198,16 @@ pub(super) struct Bridge {
 }
 
 impl Bridge {
+    /// A fresh continuation id with nothing registered under it.
+    ///
+    /// For a reply that resumes no action: a native view's request is answered
+    /// by handing the value to the view, so the id is a name for "who asked",
+    /// not for "what to run" (RFC-0039).
+    fn open_bare(&mut self) -> u64 {
+        self.next_id = self.next_id.wrapping_add(1);
+        self.next_id
+    }
+
     /// Registers `arms` under a fresh continuation id. `repeating` is `true`
     /// only for an `every` timer, whose ticks resume into the same action
     /// forever; everything else is one-shot.
@@ -399,11 +414,82 @@ impl Interpreter {
                 method: method.clone(),
                 args: host_args,
                 arms: arms.clone(),
+                continuation: None,
                 owner: running_effect.get(),
                 span,
             });
             Value::Unit
         }))
+    }
+
+    /// Opens a continuation that delivers to a native view (RFC-0039).
+    ///
+    /// The generation is recorded with it, so a reply that arrives after the
+    /// tree was lowered again finds a stale entry and is discarded rather than
+    /// landing in whichever widget inherited the slot.
+    pub(super) fn open_native_continuation(
+        &mut self,
+        slot: usize,
+        key: byard_core::render::RequestKey,
+    ) -> u64 {
+        let id = self.bridge.open_bare();
+        self.native_waiting.insert(
+            id,
+            super::NativeRequest {
+                slot,
+                generation: self.native_generation,
+                key,
+            },
+        );
+        id
+    }
+
+    /// Queues a native view's controller request (RFC-0039).
+    pub(super) fn queue_native_call(
+        &mut self,
+        controller: ControllerId,
+        method: &str,
+        args: Vec<HostValue>,
+        continuation: u64,
+    ) {
+        self.bridge.queue.borrow_mut().push(PendingCall {
+            controller,
+            method: method.to_string(),
+            args,
+            arms: None,
+            continuation: Some(continuation),
+            owner: None,
+            span: Span::new(0, 0),
+        });
+    }
+
+    /// The registered controller named `name`, if the host provided one
+    /// (RFC-0039).
+    pub(super) fn controller_id_by_name(&self, name: &str) -> Option<ControllerId> {
+        self.bridge.dispatcher.as_ref()?.registry().id_of(name)
+    }
+
+    /// Hands a reply to the native view that asked for it (RFC-0039), or
+    /// reports that there was nobody left to hand it to.
+    ///
+    /// Returns whether a view took it, which is what tells the relay the frame
+    /// is worth waking a waiting renderer for.
+    fn deliver_native(&mut self, continuation_id: u64, payload: &HostValue) -> bool {
+        let Some(request) = self.native_waiting.remove(&continuation_id) else {
+            return false;
+        };
+        if request.generation != self.native_generation {
+            // The view unmounted (a hot reload, a structural change) while its
+            // answer was in flight. Dropped deliberately and quietly: this is
+            // the expected end of a request, not a failure, and the slot may
+            // now belong to a different widget entirely (INV-14).
+            return false;
+        }
+        let Some(view) = self.native_views.get_mut(request.slot) else {
+            return false;
+        };
+        view.on_result(request.key, payload);
+        true
     }
 
     /// Schedules every call raised since the last drain (RFC-0028 §5 step 2).
@@ -425,11 +511,13 @@ impl Interpreter {
                 // screen. The call is simply not placed.
                 continue;
             };
-            let continuation = match call.arms {
-                Some(arms) => self.bridge.open(arms, call.owner, call.span, false),
+            let continuation = match (call.continuation, call.arms) {
+                // Already opened by whoever queued it (RFC-0039).
+                (Some(id), _) => id,
+                (None, Some(arms)) => self.bridge.open(arms, call.owner, call.span, false),
                 // Fire-and-forget still gets an id, so the reply has somewhere
                 // to be discarded rather than being an untracked message.
-                None => 0,
+                (None, None) => 0,
             };
             dispatcher.spawn_call(call.controller, call.method, call.args, continuation);
         }
@@ -466,6 +554,15 @@ impl Interpreter {
         // Fire-and-forget: the reply is expected and there is nothing to run.
         if continuation_id == 0 {
             return false;
+        }
+        // RFC-0039: a native view's request. Both outcomes reach the view; a
+        // widget that asked for a tile wants to know that the tile failed as
+        // much as it wants the tile, and it has no `err` arm to write.
+        if self.native_waiting.contains_key(&continuation_id) {
+            let payload = match &result {
+                Ok(value) | Err(value) => value.clone(),
+            };
+            return self.deliver_native(continuation_id, &payload);
         }
         let Some(continuation) = self.bridge.continuations.remove(&continuation_id) else {
             // Its view unmounted, or a hot reload replaced the program

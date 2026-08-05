@@ -19,6 +19,7 @@ members = [
     # (RFC-0028 §2). They are workspace members so `cargo test --workspace`
     # compiles them, which is what keeps the façade's public surface honest.
     "examples/controller_demo",
+    "examples/sparkline_view",
 ]
 
 [workspace.package]

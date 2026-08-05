@@ -566,6 +566,38 @@ impl super::pipeline::RenderPipeline for TextureSamplerPipeline {
             cx.textures,
         );
     }
+
+    fn draw_batch(&self, _pass: &mut wgpu::RenderPass<'_>, cx: &super::pipeline::BatchDraw<'_>) {
+        // This is the one core pipeline a native view cannot emit into, and
+        // the reason is in the pipeline rather than in the ABI: sampling an
+        // image means binding *that* image's bind group before the draw, so
+        // the unit of work here is one image, not a run of instances. A batch
+        // says nothing about which image it wants.
+        //
+        // A view that draws images registers its own pipeline with its own
+        // binding, which is what the extension ABI is for, and it is a better
+        // answer than a texture id smuggled through an instance field would
+        // be. Said out loud rather than silently drawn as nothing (INV-4).
+        if cx.count > 0 {
+            log_unbatchable();
+        }
+    }
+}
+
+/// Names the `texture_sampler` batch attempt once per process.
+///
+/// Once, because it is a mistake in how an app was assembled: it is either
+/// true on every frame or on none, and a per-frame line would bury the frame
+/// it first appeared on.
+fn log_unbatchable() {
+    static SAID: std::sync::Once = std::sync::Once::new();
+    SAID.call_once(|| {
+        eprintln!(
+            "  a native view emitted into `texture_sampler`, which draws one \
+             image at a time and cannot take a batch. Register a pipeline that \
+             binds the texture the view wants (RFC-0039)."
+        );
+    });
 }
 
 #[cfg(test)]

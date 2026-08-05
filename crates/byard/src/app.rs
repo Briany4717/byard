@@ -69,6 +69,11 @@ pub struct App {
     /// every app's `main` for a mistake almost no app makes. The failure still
     /// has to be loud, so it is held here and fails the run.
     reserved: Vec<&'static str>,
+    /// Native views refused because their name was already registered
+    /// (RFC-0039), reported by [`run`](App::run) for the same reason
+    /// [`reserved`](Self::reserved) is: a builder step that returns `Self`
+    /// cannot fail, and a name collision is too consequential to drop.
+    duplicate_views: Vec<&'static str>,
 }
 
 impl App {
@@ -91,6 +96,7 @@ impl App {
             title,
             size: (1280, 720),
             reserved: Vec::new(),
+            duplicate_views: Vec::new(),
         }
     }
 
@@ -164,6 +170,28 @@ impl App {
         self
     }
 
+    /// Registers a native view so `byld` can name it as an element
+    /// (RFC-0039).
+    ///
+    /// ```ignore
+    /// byard::App::new("src/main.byd")
+    ///     .native_view::<Sparkline>()
+    ///     .run()
+    /// ```
+    ///
+    /// The view is compiled into this binary, so the call site in `byld` is a
+    /// direct one and the widget draws at intrinsic speed. Registering two
+    /// views under one name is refused and [`run`](Self::run) says so: which
+    /// widget appears must not depend on the order two `register` calls
+    /// happened to run in.
+    #[must_use]
+    pub fn native_view<V: byard_core::render::NativeViewMeta>(mut self) -> Self {
+        if !byard_core::render::registry::register::<V>() {
+            self.duplicate_views.push(V::INFO.name);
+        }
+        self
+    }
+
     /// Opens the window and runs until it closes.
     ///
     /// # Errors
@@ -191,6 +219,18 @@ impl App {
                  by an app, whatever the capability set; give yours a name of its \
                  own (`MyHttp`) and `inject` that.",
                 reserved.join(", ")
+            )));
+        }
+        if !self.duplicate_views.is_empty() {
+            let mut names = self.duplicate_views.clone();
+            names.sort_unstable();
+            names.dedup();
+            return Err(ByardError::Platform(format!(
+                "these native views were registered under a name another view already \
+                 has (RFC-0039): {}. An element name resolves to exactly one view, so \
+                 rename one of them rather than letting link order decide which widget \
+                 the app draws.",
+                names.join(", ")
             )));
         }
         let source = std::fs::read_to_string(&self.entry).map_err(|e| {

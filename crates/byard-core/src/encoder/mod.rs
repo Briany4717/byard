@@ -689,14 +689,14 @@ impl EncoderSubsystem {
         // call, after these, and a frame with no package pipeline draws exactly
         // the stream it always did (INV-22, INV-32).
         let mut pipelines = pipeline::PipelineRegistry::new();
-        pipelines.register_core(SolidBoxPipeline::new(render_pipeline));
-        pipelines.register_core(decorated_box::DecoratedBoxPipeline::new(decorated_pipeline));
-        pipelines.register_core(ripple::RipplePipeline::new(ripple_pipeline));
-        pipelines.register_core(canvas_shape::CanvasShapePipeline::new(canvas_pipeline));
+        pipelines.register_core(SolidBoxPipeline::new(render_pipeline))?;
+        pipelines.register_core(decorated_box::DecoratedBoxPipeline::new(decorated_pipeline))?;
+        pipelines.register_core(ripple::RipplePipeline::new(ripple_pipeline))?;
+        pipelines.register_core(canvas_shape::CanvasShapePipeline::new(canvas_pipeline))?;
         pipelines.register_core(texture_sampler::TextureSamplerPipeline::new(
             texture_pipeline,
-        ));
-        pipelines.register_core(vector_msdf::VectorMsdfPipeline::new(vector_pipeline));
+        ))?;
+        pipelines.register_core(vector_msdf::VectorMsdfPipeline::new(vector_pipeline))?;
 
         Ok(Self {
             device,

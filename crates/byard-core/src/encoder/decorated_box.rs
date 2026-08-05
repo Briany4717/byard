@@ -105,8 +105,28 @@ impl From<&DecoratedBox> for DecoratedInstance {
 }
 
 impl DecoratedInstance {
-    /// Vertex buffer layout for the per-instance step (locations 1..=16; the
+    /// Vertex buffer layout for the per-instance step (locations 1..=14; the
     /// static quad occupies location 0).
+    ///
+    /// # Why the transform arrives in two attributes and not four
+    ///
+    /// A vertex attribute is a scarcer resource than it looks: the portable
+    /// floor every conformant adapter guarantees is **16 attributes, at
+    /// locations `0..16`** (`wgpu::Limits::default().max_vertex_attributes`).
+    /// One attribute per transform field, plus the gradient block, put this
+    /// pipeline's last lane at location 16 and it simply failed to build on an
+    /// adapter that offers no more than the floor, which is most of them
+    /// outside Metal.
+    ///
+    /// The fields are `repr(C)` and unpadded, so `translate`/`scale` are one
+    /// contiguous `vec4` and `rotate`/`origin` one contiguous `vec3` in the
+    /// bytes that were already being uploaded. Reading them that way costs
+    /// nothing, changes no byte of the instance record, and buys back two
+    /// locations. The Rust fields stay separate because that is where their
+    /// meaning is, and [`decorated_instance_lanes_are_contiguous`] pins the
+    /// offsets this reading depends on.
+    ///
+    /// [`decorated_instance_lanes_are_contiguous`]: super::tests
     #[must_use]
     pub fn layout() -> wgpu::VertexBufferLayout<'static> {
         const ATTRS: &[wgpu::VertexAttribute] = &wgpu::vertex_attr_array![
@@ -117,15 +137,13 @@ impl DecoratedInstance {
             5 => Float32x4, // shadow_color
             6 => Float32x4, // params
             7 => Float32x4, // misc
-            8 => Float32x2, // transform.translate
-            9 => Float32x2, // transform.scale
-            10 => Float32, // transform.rotate
-            11 => Float32x2, // transform.origin
-            12 => Float32x4, // gradient from
-            13 => Float32x4, // gradient mid
-            14 => Float32x4, // gradient to
-            15 => Float32x4, // gradient axis (meaning per kind, see the field)
-            16 => Uint32,    // gradient kind (RFC-0035)
+            8 => Float32x4, // transform.translate ++ transform.scale
+            9 => Float32x3, // transform.rotate ++ transform.origin
+            10 => Float32x4, // gradient from
+            11 => Float32x4, // gradient mid
+            12 => Float32x4, // gradient to
+            13 => Float32x4, // gradient axis (meaning per kind, see the field)
+            14 => Uint32,    // gradient kind (RFC-0035)
         ];
         wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<DecoratedInstance>() as wgpu::BufferAddress,

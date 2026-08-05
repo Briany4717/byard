@@ -26,17 +26,22 @@ View Main() {
                 #[size: 15, color: 0x9A9AA8]
         }
 
-        // The native view. `data` is re-evaluated every tick like any other
-        // prop, so pressing add below is all it takes to redraw the chart.
+        // Two native views over the same data, stacked. `data` is
+        // re-evaluated every tick like any other prop, so pressing add below
+        // is all it takes to redraw the chart; the mean line asks Rust for its
+        // number and catches up a moment later.
         Box #[bg: 0x1C1C26, radius: 16, p: 20] {
-            Sparkline #[
-                data: series,
-                bar: 0x5B8DEF,
-                highlight: 0xF9A8A8,
-                gap: 6.0,
-                width: 680,
-                height: 220,
-            ]
+            ZStack {
+                Sparkline #[
+                    data: series,
+                    bar: 0x5B8DEF,
+                    highlight: 0xF9A8A8,
+                    gap: 6.0,
+                    width: 680,
+                    height: 220,
+                ]
+                MeanLine #[of: series, stroke: 0xFFD479, width: 680, height: 220]
+            }
         }
 
         Row #[gap: 12] {

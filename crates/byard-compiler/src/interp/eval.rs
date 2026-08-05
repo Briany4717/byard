@@ -891,6 +891,17 @@ impl byard_core::render::NativeView for MissingNativeView {
     }
 }
 
+/// One outstanding controller request a native view issued (RFC-0039).
+#[derive(Clone, Copy)]
+struct NativeRequest {
+    /// Which view asked.
+    slot: usize,
+    /// The view table's generation when it asked.
+    generation: u64,
+    /// The key the view chose, handed back with the answer.
+    key: byard_core::render::RequestKey,
+}
+
 /// A native view laid out in the last render (RFC-0039), and where.
 ///
 /// The event half of the ABI: an input event is offered to the views under the
@@ -1419,6 +1430,24 @@ pub struct Interpreter {
     /// mount and unmount the element's own lifetime rather than a second thing
     /// for a package author to get right.
     native_views: Vec<Box<dyn byard_core::render::NativeView>>,
+    /// Which view issued which of this frame's native controller requests
+    /// (RFC-0039), as `(slot, range into the frame's call pool)`.
+    ///
+    /// Collected during the walk and consumed at the end of it, because the
+    /// answer has to come back to the view that asked and a `RenderCtx` is
+    /// deliberately not told which view it belongs to.
+    native_call_owners: Vec<(usize, std::ops::Range<usize>)>,
+    /// A native view's outstanding requests, by continuation id: which view
+    /// asked, under which key, and which generation of the view table it
+    /// belonged to (RFC-0039).
+    native_waiting: std::collections::HashMap<u64, NativeRequest>,
+    /// How many times the view table has been rebuilt.
+    ///
+    /// A reply that comes back after a re-lower belongs to a view that no
+    /// longer exists, even though some *other* view may now hold its slot.
+    /// The generation is what tells those two cases apart, and it is why a
+    /// late tile does not land in whatever widget inherited the index.
+    native_generation: u64,
     /// Native views laid out in the last render, with the rect each occupies
     /// (RFC-0039 × RFC-0003).
     ///
@@ -1671,6 +1700,19 @@ pub enum PerfWarning {
     OverlappingBlurs {
         /// The size of the largest overlap cluster.
         count: usize,
+    },
+    /// A native view called a controller the app never provided (RFC-0039).
+    ///
+    /// A widget that fetches something and is answered by silence looks
+    /// exactly like a widget with nothing to show, which is why this is
+    /// surfaced rather than dropped: the mistake is in how the app was
+    /// assembled (`App::provide`), and it is the same mistake on every frame
+    /// until somebody is told (INV-4).
+    UnprovidedNativeCall {
+        /// The controller name the view asked for.
+        controller: String,
+        /// The method it wanted.
+        method: String,
     },
     /// A `NavStack` grew past its `max_depth` (default 10), RFC-0026 resolved
     /// question "memory pressure". Every entry below the top keeps its View
@@ -4258,6 +4300,13 @@ impl Interpreter {
         self.for_pools = for_pools;
         self.when_pools = when_pools;
         self.nav_pools = nav_pools;
+
+        // RFC-0039: place the controller requests this frame's views issued.
+        // After the walk, because a request is placed once per frame and the
+        // walk is what decides which views ran; before the frame ships, so a
+        // widget that asked for a tile on the frame it mounted has its request
+        // in flight rather than waiting a frame for nothing.
+        self.dispatch_native_calls(frame);
 
         frame.set_atlas_paths(path_delta(
             paths_before,
@@ -6986,7 +7035,7 @@ impl Interpreter {
                         rect.height,
                     );
                     if let Some(view) = self.native_views.get_mut(*slot) {
-                        let repaint = frame.render_native(
+                        let outcome = frame.render_native(
                             view.as_mut(),
                             byard_core::render::Layout::new([
                                 rect.x,
@@ -6995,11 +7044,17 @@ impl Interpreter {
                                 rect.height,
                             ]),
                         );
-                        if repaint {
+                        if outcome.repaint {
                             // The view is animating from state the engine
                             // cannot see, so it says so once per frame rather
                             // than holding a subscription open (RFC-0032).
                             frame.request_full_redraw();
+                        }
+                        // Whose calls these are is known here and nowhere
+                        // else: a view is handed a context, never an identity
+                        // (RFC-0039).
+                        if !outcome.calls.is_empty() {
+                            self.native_call_owners.push((*slot, outcome.calls));
                         }
                     }
 
@@ -7871,6 +7926,41 @@ impl Interpreter {
     }
 
     /// Registers handlers for all event-kind attrs (`#[tap => …]`, etc.).
+    /// Places this frame's native-view controller requests (RFC-0039).
+    ///
+    /// A view named a controller and a method; from here the request is
+    /// indistinguishable from one an action raised, because it *is* one: the
+    /// same queue, the same dispatcher, the same reply channel. What is extra
+    /// is the note of who to hand the answer to, which is the whole of the
+    /// "async across the boundary" surface.
+    fn dispatch_native_calls(&mut self, frame: &mut byard_core::frame::RenderFrame) {
+        let owners = std::mem::take(&mut self.native_call_owners);
+        if owners.is_empty() {
+            // Nothing asked for anything, which is the steady state of every
+            // widget that is not fetching something.
+            frame.take_native_calls();
+            return;
+        }
+        let calls = frame.take_native_calls();
+        for (slot, range) in owners {
+            for call in calls.get(range).into_iter().flatten() {
+                let Some(controller) = self.controller_id_by_name(&call.controller) else {
+                    // A view asking for a controller the app never provided is
+                    // an assembly mistake, and a silent no-answer is the worst
+                    // possible way to learn about it (INV-4).
+                    self.perf_warnings.push(PerfWarning::UnprovidedNativeCall {
+                        controller: call.controller.clone(),
+                        method: call.method.clone(),
+                    });
+                    continue;
+                };
+                let continuation = self.open_native_continuation(slot, call.key);
+                self.queue_native_call(controller, &call.method, call.args.clone(), continuation);
+            }
+        }
+        self.drain_calls();
+    }
+
     /// Offers each event to the native views under the pointer, innermost
     /// first, and reports which events a view took (RFC-0039 × RFC-0003).
     ///
@@ -9662,6 +9752,16 @@ impl Interpreter {
         self.nav_pools.clear();
         self.nav_elems.clear();
         self.nav_shared.clear();
+        // RFC-0039: the previous tree's native views die with it, which is
+        // their unmount. Each is told, in mount order, and the generation
+        // moves so a reply still in flight for one of them finds the door
+        // closed rather than the next widget to take its slot.
+        for view in &mut self.native_views {
+            view.on_unmount();
+        }
+        self.native_views.clear();
+        self.native_call_owners.clear();
+        self.native_generation = self.native_generation.wrapping_add(1);
         self.eval_view_decls(view);
         // A view that declares a `content` slot (RFC-0007 D-A) may reference it in
         // its body. When the view is lowered *standalone*, e.g. `byard check`

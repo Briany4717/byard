@@ -581,33 +581,7 @@ impl LogicRuntime for ByldRuntime {
             // RFC-0023 runtime perf diagnostics (e.g. ≥ 3 stacked frosted-glass
             // panes): surface each distinct warning once on the terminal.
             for warning in self.interp.perf_warnings() {
-                let text = match warning {
-                    byard_compiler::interp::eval::PerfWarning::OverlappingBlurs { count } => {
-                        format!(
-                            "perf: {count} overlapping backdrop-blur panes in one frame, \
-                             each pane re-blurs the ones below it (RFC-0023)"
-                        )
-                    }
-                    // RFC-0026: a navigation stack that keeps growing is almost
-                    // always a push that never pops.
-                    byard_compiler::interp::eval::PerfWarning::DeepNavStack { depth, path } => {
-                        format!(
-                            "perf: `NavStack` is {depth} deep, refused to push `{path}`; \
-                             every entry below the top stays in memory (RFC-0026)"
-                        )
-                    }
-                    // RFC-0038: a rect that keeps flipping between two sizes is
-                    // an `on measure` feeding its own layout. Bounded to one
-                    // fire per frame, so the app runs; named here, because a
-                    // layout that twitches explains nothing by itself.
-                    byard_compiler::interp::eval::PerfWarning::MeasureFeedback { span } => {
-                        format!(
-                            "perf: the `on measure` at byte {} alternates between two sizes, \
-                             so its own layout depends on what it measured (RFC-0038)",
-                            span.start
-                        )
-                    }
-                };
+                let text = perf_warning_text(warning);
                 if self.reported_perf.insert(text.clone()) {
                     crate::style::warn(&text);
                 }
@@ -1522,6 +1496,43 @@ impl PlatformHost for App {
                 time_ms: now_ms(),
             });
         }
+    }
+}
+
+/// One runtime perf diagnostic, as the terminal says it.
+///
+/// Extracted from the tick so the loop stays readable: a diagnostic's wording
+/// is the only thing here that grows every time the engine learns to notice
+/// something new.
+fn perf_warning_text(warning: &byard_compiler::interp::eval::PerfWarning) -> String {
+    use byard_compiler::interp::eval::PerfWarning;
+    match warning {
+        PerfWarning::OverlappingBlurs { count } => format!(
+            "perf: {count} overlapping backdrop-blur panes in one frame, \
+             each pane re-blurs the ones below it (RFC-0023)"
+        ),
+        // RFC-0026: a navigation stack that keeps growing is almost always a
+        // push that never pops.
+        PerfWarning::DeepNavStack { depth, path } => format!(
+            "perf: `NavStack` is {depth} deep, refused to push `{path}`; \
+             every entry below the top stays in memory (RFC-0026)"
+        ),
+        // RFC-0038: a rect that keeps flipping between two sizes is an
+        // `on measure` feeding its own layout. Bounded to one fire per frame,
+        // so the app runs; named here, because a layout that twitches explains
+        // nothing by itself.
+        PerfWarning::MeasureFeedback { span } => format!(
+            "perf: the `on measure` at byte {} alternates between two sizes, \
+             so its own layout depends on what it measured (RFC-0038)",
+            span.start
+        ),
+        // RFC-0039: a native view asked a controller the app never provided.
+        // Nothing will ever answer it, and a widget waiting for an answer
+        // looks exactly like a widget with nothing to show.
+        PerfWarning::UnprovidedNativeCall { controller, method } => format!(
+            "a native view called `{controller}.{method}`, and no controller named \
+             `{controller}` is provided; register it with `App::provide` (RFC-0039)"
+        ),
     }
 }
 

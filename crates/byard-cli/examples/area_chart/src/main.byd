@@ -1,0 +1,72 @@
+// RFC-0037, Canvas Tier-2: filled curved paths, with the gradient a box fill
+// uses.
+//
+// Run it (from the repo root):
+//   cd crates/byard-cli/examples/area_chart
+//   cargo run -p byard-cli -- dev
+//
+// What to verify visually:
+//   1. The area under the temperature curve is filled with a vertical fade,
+//      opaque at the curve and transparent at the baseline. That is the same
+//      three-stop ramp a `Box`'s `gradient:` paints, read by the same parser
+//      and interpolated by the same shader.
+//   2. Drag the slider. The curve's shape changes every frame, and the fill
+//      follows it: the path is re-tessellated only when its numbers move, so
+//      a still chart costs nothing.
+//   3. The stroke on top is Tier-1 (analytic, RFC-0020) and the fill beneath
+//      is Tier-2 (tessellated). Two pipelines, one canvas, one draw order.
+//   4. The ring below is a hole, not a disc: two squares traced the same way
+//      with `winding: even_odd`, which is the fill rule doing its job.
+View Main() {
+    var peak: Float = 120.0
+
+    Column #[bg: 0x14141C, p: 32, gap: 20, width: 620] {
+        Text("Weather trends") #[color: 0xF2F2F7, size: 22, weight: bold]
+        Text("A filled Bézier path, faded from the curve to the baseline.")
+            #[color: 0x9A9AA8, size: 14]
+
+        Box #[bg: 0x1C1C26, radius: 16, p: 16] {
+            Canvas #[width: 540, height: 200] {
+                // The area: baseline, up to the first sample, along the curve,
+                // back down, closed. `gradient:` is the RFC-0035 descriptor,
+                // spelled exactly as it is on a box.
+                path(
+                    fill: 0x00000000,
+                    gradient: (kind: linear, angle: 90deg,
+                               from: 0xFFF9A8A8, mid: 0x66F9A8A8, to: 0x00F9A8A8)
+                ) {
+                    move(0, 200)
+                    line(0, 150)
+                    cubic(90, 60, 180, peak, 270, 110)
+                    cubic(360, 100, 450, 40, 540, 90)
+                    line(540, 200)
+                    close()
+                }
+
+                // The curve itself, stroked on top (Tier-1, unchanged).
+                bezier(0, 150, 90, 60, 180, peak, 270, 110,
+                       stroke: 0xFFF9A8A8, stroke_width: 3, cap: round)
+                bezier(270, 110, 360, 100, 450, 40, 540, 90,
+                       stroke: 0xFFF9A8A8, stroke_width: 3, cap: round)
+            }
+        }
+
+        Row #[gap: 16, align: center] {
+            Text("peak") #[color: 0x9A9AA8, size: 14, width: 48]
+            Slider #[bind: peak, min: 20.0, max: 190.0, step: 1.0, width: 380, height: 26]
+            Text("{peak}") #[color: 0xF2F2F7, size: 14]
+        }
+
+        Box #[bg: 0x1C1C26, radius: 16, p: 16] {
+            Canvas #[width: 540, height: 120] {
+                // A ring, by fill rule alone: the outer square and the inner
+                // one are traced the same direction, so `even_odd` leaves the
+                // middle out and `nonzero` would fill it solid.
+                path(fill: 0xFF5B8DEF, winding: even_odd) {
+                    move(210, 10) line(330, 10) line(330, 110) line(210, 110) close()
+                    move(240, 35) line(300, 35) line(300, 85) line(240, 85) close()
+                }
+            }
+        }
+    }
+}

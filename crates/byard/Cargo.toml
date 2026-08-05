@@ -11,6 +11,13 @@ rust-version.workspace = true
 [dependencies]
 byard-core = { path = "../byard-core" }
 byard-macro = { path = "../byard-macro" }
+# `App` is the shipped-application runner (RFC-0028 §2): it lowers the `.byd`
+# entry with the interpreter and drives it through the winit host. The façade
+# is the top of the dependency graph, so both edges point forward (INV-1).
+byard-compiler = { path = "../byard-compiler" }
+byard-platform = { path = "../byard-platform" }
+wgpu = "29.0"
+pollster = "0.4"
 
 [lints]
 workspace = true

@@ -115,7 +115,7 @@ pub use texture_sampler::DecodedImage;
 /// relay subsystem (RFC-0001 §9 / INV-11).
 struct IoContext {
     handle: tokio::runtime::Handle,
-    tx: texture_sampler::IoResultSender,
+    tx: texture_sampler::DecodeResultSender,
 }
 
 impl BoxInstance {
@@ -1401,7 +1401,7 @@ impl EncoderSubsystem {
     pub fn set_io_context(
         &mut self,
         handle: tokio::runtime::Handle,
-        tx: texture_sampler::IoResultSender,
+        tx: texture_sampler::DecodeResultSender,
     ) {
         self.io = Some(IoContext { handle, tx });
     }

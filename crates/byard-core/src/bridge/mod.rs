@@ -304,12 +304,176 @@ pub struct ControllerReply {
     pub result: Result<HostValue, HostValue>,
 }
 
+/// An armed timer, cancelled when this handle is dropped (RFC-0029 §5).
+///
+/// Cancellation on drop rather than an explicit `stop()` because the failure
+/// mode of the explicit form is a timer that keeps firing into a view that no
+/// longer exists, and that failure is invisible until something writes a `var`
+/// nobody is watching. Tying it to ownership makes "the scope went away" and
+/// "the timer stopped" the same event.
+#[cfg(feature = "runtime-io")]
+pub struct TimerHandle {
+    abort: tokio::task::AbortHandle,
+}
+
+#[cfg(feature = "runtime-io")]
+impl Drop for TimerHandle {
+    fn drop(&mut self) {
+        self.abort.abort();
+    }
+}
+
 /// A timer effect firing (RFC-0029 §5): a zero-argument reply delivered through
 /// the same logic-thread apply path as a [`ControllerReply`], running the
 /// timer's action.
 pub struct TimerTick {
     /// The timer's continuation (its bound action).
     pub continuation_id: u64,
+}
+
+/// The interpreter's whole view of the async world (RFC-0028 §5 step 2).
+///
+/// The logic thread needs three things to place a call: the registry to look
+/// the controller up in, a runtime handle to spawn on, and the sender the
+/// reply comes back through. Bundling them here rather than handing the
+/// interpreter a `tokio::runtime::Handle` directly is what keeps
+/// `byard-compiler` free of any async dependency: it holds one `Dispatcher`,
+/// calls [`spawn_call`](Dispatcher::spawn_call), and never names a future, a
+/// runtime or a channel.
+///
+/// Cheap to clone (three handles) and `Send`, so it can be moved into the
+/// logic-thread factory closure alongside the compiled views.
+#[derive(Clone)]
+pub struct Dispatcher {
+    registry: ControllerRegistry,
+    handle: tokio::runtime::Handle,
+    tx: crate::relay::IoSender,
+}
+
+impl Dispatcher {
+    /// Bundles a registry, a runtime handle and a reply sender.
+    #[must_use]
+    pub fn new(
+        registry: ControllerRegistry,
+        handle: tokio::runtime::Handle,
+        tx: crate::relay::IoSender,
+    ) -> Self {
+        Self {
+            registry,
+            handle,
+            tx,
+        }
+    }
+
+    /// The registered controllers, so the interpreter can seed one ambient
+    /// handle per controller at mount and resolve `inject T as x`.
+    #[must_use]
+    pub fn registry(&self) -> &ControllerRegistry {
+        &self.registry
+    }
+
+    /// Arms a timer that delivers a [`TimerTick`] for `continuation_id`
+    /// (RFC-0029 §5), repeating every `dur_ms` when `every`, or once after it.
+    ///
+    /// Returns the handle whose drop **cancels** the timer. That is the whole
+    /// leak story (INV-10): the effect that armed the timer owns the handle,
+    /// and an effect that unmounts drops its state, so there is no separate
+    /// "stop" path to forget to call and no way for a task to outlive the
+    /// scope that started it.
+    ///
+    /// A `0 ms` interval is refused rather than armed: a zero-period
+    /// `tokio::time::interval` fires as fast as the pool can send, which is a
+    /// livelock dressed as a timer.
+    #[cfg(feature = "runtime-io")]
+    #[must_use]
+    pub fn spawn_timer(
+        &self,
+        every: bool,
+        dur_ms: u64,
+        continuation_id: u64,
+    ) -> Option<TimerHandle> {
+        if dur_ms == 0 {
+            return None;
+        }
+        let period = std::time::Duration::from_millis(dur_ms);
+        let tx = self.tx.clone();
+        let task = self.handle.spawn(async move {
+            if every {
+                let mut ticks = tokio::time::interval(period);
+                // A stalled runtime must not produce a burst. Tokio's default
+                // is `Burst`, which delivers every tick the stall swallowed as
+                // fast as it can once things recover: a laptop closed for an
+                // hour with `every 5min` running would wake to twelve
+                // back-to-back refreshes, which for a polling timer means
+                // twelve back-to-back requests. `Skip` resumes at the steady
+                // cadence, which is what "every five minutes" means.
+                ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                // The first tick of a Tokio interval completes immediately;
+                // `every 5min` means "in five minutes", not "now and then every
+                // five minutes", so the immediate one is consumed here.
+                ticks.tick().await;
+                loop {
+                    ticks.tick().await;
+                    if tx.send(Box::new(TimerTick { continuation_id })).is_err() {
+                        // The logic thread is gone (shutdown): stop rather than
+                        // spin sending into a closed channel.
+                        break;
+                    }
+                }
+            } else {
+                tokio::time::sleep(period).await;
+                let _ = tx.send(Box::new(TimerTick { continuation_id }));
+            }
+        });
+        Some(TimerHandle {
+            abort: task.abort_handle(),
+        })
+    }
+
+    /// Schedules `method` on the controller at `id` and arranges for its
+    /// result to arrive on the logic thread as a [`ControllerReply`] tagged
+    /// with `continuation_id` (RFC-0028 §5 steps 2–3).
+    ///
+    /// Returns immediately: nothing here awaits, and the controller's own work
+    /// runs entirely on the pool (INV-12). An unregistered `id` yields an
+    /// **error reply** rather than silence, so the call site's `err` arm runs
+    /// and the developer sees the mismatch instead of a call that vanished.
+    pub fn spawn_call(
+        &self,
+        id: ControllerId,
+        method: String,
+        args: Vec<HostValue>,
+        continuation_id: u64,
+    ) {
+        let Some(controller) = self.registry.get(id) else {
+            // Delivered through the same channel as a real reply so the
+            // failure is observed at the same place, and in the same tick
+            // order, as a successful one.
+            let _ = self.tx.send(Box::new(ControllerReply {
+                continuation_id,
+                result: Err(HostValue::Record(vec![
+                    ("kind".into(), HostValue::Str("unregistered".into())),
+                    (
+                        "message".into(),
+                        HostValue::Str(format!(
+                            "no controller is registered for this handle (method `{method}`)"
+                        )),
+                    ),
+                ])),
+            }));
+            return;
+        };
+        let tx = self.tx.clone();
+        self.handle.spawn(async move {
+            let result = controller.invoke(&method, args).await;
+            // The relay may already be gone on shutdown; a dropped send is
+            // correct then, there is no logic thread left to apply it.
+            let _ = tx.send(Box::new(ControllerReply {
+                continuation_id,
+                result,
+            }));
+        });
+    }
 }
 
 #[cfg(test)]

@@ -14,6 +14,59 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A view can call Rust, and the answer arrives on the logic thread
+  (RFC-0028 §4–§7).** `api.forecast("Tokyo") ok res => { … } err e => { … }`
+  converts its arguments to the `Send` boundary type, hands them to the async
+  pool and returns; the reply resumes into the written arm on the logic thread,
+  writes a `var`, and the ordinary reactive path repaints. `on mount` /
+  `on unmount` give a data-backed screen somewhere to ask for its data, because
+  every other action position is behind an input the user has to perform first.
+
+  Effects are nodes with no pixels, so their position in the tree decides when
+  they fire: the structural walk reaches exactly the mounted subtree, which is
+  how `when`, `for`, routes, instances and hot reload all get correct mount
+  edges without any of them knowing effects exist.
+
+  The result channel is split by destination, a reply belongs to the logic
+  thread and a decoded image to the render thread, and the logic loop drains its
+  half at tick step 0, before input and before the pull. A tick that applied an
+  async result now wakes a `Wait`-mode renderer, which it previously did not: a
+  reply has no input behind it, so it would write its `var`, publish a correct
+  frame, and the host would keep showing the previous one.
+
+  `byard::App` is the shipped-application runner, and the only path that can
+  register controllers at all.
+
+- **HTTP and JSON, so a weather app needs no Rust (RFC-0029 §3–§4).** `Http`
+  (reqwest + rustls with bundled roots) and `Json` are first-party capabilities
+  the engine provides by default, reached through the same `inject` and
+  answering through the same arms as anything an app writes. A JSON object *is*
+  an RFC-0027 record, so `res.json.current.temperature_2m` reads a parsed
+  response the way it reads a literal, with key order preserved.
+
+  A non-2xx goes to `err` with its status and body attached; a body that lies
+  about its content type leaves `json` unset and `body` intact rather than
+  failing the request. `Http`, `Json`, `Store` and `Timer` are reserved names,
+  and `App::provide` rejects a controller taking one instead of shadowing it.
+
+- **A view can react to the clock, and stops when it leaves (RFC-0029 §5).**
+  `every 5min => …` and `after 2s => …` are structural effects: armed on mount,
+  cancelled on unmount by ownership rather than by a `stop` anyone could forget,
+  and delivered through the same continuation path a controller reply travels.
+  The first tick of `every` waits out its interval, and a zero interval is
+  refused rather than armed. The lexer learned `min`, because `every 300000ms`
+  hides a mistyped zero.
+
+- **Durable key/value storage (RFC-0029 §6).** `Store` persists any value to one
+  readable JSON file in the platform data directory, written atomically to a
+  per-write temporary file in the same directory and then renamed, so a crash
+  mid-write leaves the old file or the new one and two processes writing the
+  same store cannot collide. A corrupt file loads empty with the failure
+  reported, and the next write recovers. `store.get(key, default)` answers the
+  missing key every app hits on its first run. The store is filed under a stable
+  app identity, the manifest project name under `byard dev` and the executable
+  name (or `App::app_id`) for a shipped app, never the entry file's stem.
+
 - **Corners with continuous curvature, on every box the framework draws
   (RFC-0031 §S1–§S3).** `radius` gains a companion `smooth: 0…1`, the corner
   *profile* the radius is measured with. `0` is the circular arc every surface

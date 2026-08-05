@@ -4,10 +4,12 @@
   is landed and in production use: `frame::CanvasShape`,
   `RenderFrame::push_canvas_shape`, and `encoder/canvas_shape.{rs,wgsl}`, with
   the `Canvas` intrinsic lowering `arc`/`circle`/`rect`/`line`/`ngon` to it.
-  Tier-2 tessellated custom paths and clip masks remain deferred, as
-  §"Ordering" describes. The status line previously read `Draft` while the
-  pipeline was shipping, which is the kind of drift that makes every other
-  status line unreadable.
+  **Tier-2 tessellated custom paths landed 2026-08-05, delivered by RFC-0037**
+  (`path { … }`, `encoder/canvas_fill.{rs,wgsl}`), so the deferral below is
+  history rather than a plan: what it was waiting for is here. Clip masks are
+  the part of Tier-2 still outstanding, and they are RFC-0037's to deliver too.
+  The status line previously read `Draft` while the pipeline was shipping,
+  which is the kind of drift that makes every other status line unreadable.
 
   **The Tier-2 deferral has been re-checked** (2026-07-31) now that RFC-0031 has
   grown Tier-1 by three constructs, `ngon`, sequence morphing and organic
@@ -18,6 +20,10 @@
   analytically. What Tier-2 is still needed for is author-supplied arbitrary
   paths and clip masks, and neither has a caller. RFC-0031 §S11 restates the
   same conclusion from the morphing side.
+
+  That last sentence is what changed: the weather-trends chart is the caller,
+  and an area under a curve is exactly the author-supplied arbitrary path the
+  re-check said nobody was asking for. RFC-0037 delivers it.
 - **Author(s):** Briany4717
 - **Created:** 2026-07-10
 - **Last updated:** 2026-07-31

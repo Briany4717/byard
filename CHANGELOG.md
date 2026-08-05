@@ -12,7 +12,64 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **A pipeline may only ask for the vertex attributes every GPU has.** The
+  engine requests the adapter's limits with the attribute budget held down to
+  the sixteen the WebGPU specification guarantees, so a layout that overruns
+  the floor fails on the machine it was written on rather than only on a user's.
+  `DecoratedBox` was over the line, which is why it stopped existing on Linux;
+  its transform now reads as two wide lanes instead of four narrow ones, which
+  changes not one byte of what is uploaded.
+
+- **The colour transfer moved into the engine** (`byard_core::color`). A
+  package's widget writes colours too, and a second implementation of a
+  transfer function is a second chance to spend a release displaying every
+  colour lighter than it was written.
+
 ### Added
+
+- **A package can ship a widget that draws itself (RFC-0039).** A native view is
+  a Rust type in a package that lays out, draws and handles events like an
+  intrinsic, and costs what one costs, because it is compiled into the same
+  binary and reaches the GPU by the same code:
+
+  ```rust
+  #[byard::native_view(name = "Sparkline")]
+  #[derive(Default)]
+  struct Sparkline { #[prop] data: Vec<f32>, #[prop] bar: u32 }
+
+  impl NativeView for Sparkline {
+      fn render(&mut self, layout: Layout, cx: &mut RenderCtx<'_>) {
+          let pipeline = cx.pipeline::<SolidBoxPipeline>();
+          cx.emit(pipeline, &self.bars(layout));
+      }
+  }
+  ```
+
+  ```byld
+  Sparkline #[data: series, bar: 0x5B8DEF, width: 680, height: 220]
+  ```
+
+  Nothing at that call site says "package": a registered view is looked up in
+  the same catalog an intrinsic is, so its props are type-checked with spans,
+  carry the classes the invalidation model reads, and a typo in one is a
+  compile error rather than an attribute nobody reads.
+
+  The handle it draws through hands out no device, no queue, and no way to keep
+  a texture past the frame that asked for it. A view calls a controller for
+  anything asynchronous and is answered on the logic thread, keyed by whatever
+  it asked with, so a widget that fetches a tile never blocks the frame and
+  never sees a thread. `cargo run -p sparkline-view`.
+
+- **A curve can be filled, and faded (RFC-0037).** A `path { … }` body
+  tessellates into a mesh, cached under a fingerprint of the numbers its
+  commands produced, and fills with a colour or with the *same* gradient
+  descriptor a box fill uses, read by the same parser and interpolated by the
+  same shader block. Ten frames of an unchanged chart tessellate nothing; a
+  path whose data moved tessellates again. `winding: even_odd` makes a ring out
+  of two squares. `cd crates/byard-cli/examples/area_chart && cargo run -p byard-cli -- dev`.
+
+  `path(d: …)` is untouched and still bakes into the icon atlas: static art
+  amortises a bake, geometry that changes with the data does not.
 
 - **A view can call Rust, and the answer arrives on the logic thread
   (RFC-0028 §4–§7).** `api.forecast("Tokyo") ok res => { … } err e => { … }`

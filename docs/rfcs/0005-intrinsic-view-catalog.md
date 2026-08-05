@@ -6,7 +6,7 @@
 - **Last updated:** 2026-06-26
 - **Depends on:** RFC-0001 (§3.1 render pipelines, §4.1 Taffy layout, §4.2 grid), RFC-0002 (**D4** intrinsic attribute contract, **D5** style precedence, **D9** types/`Str`), RFC-0003 (event catalog, `:` vs `=>` attribute syntax, reflected props).
 - **Implements:** RFC-0002 D4's open item "exact arg names/types per intrinsic" and RFC-0003 §4's pairing of events with reactive props.
-- **Amended by:** RFC-0009 (adds the twelfth intrinsic, `VectorIcon`, and closes the "Image source type" open item, see §4 `VectorIcon` and §"Unresolved").
+- **Amended by:** RFC-0009 (adds the twelfth intrinsic, `VectorIcon`, and closes the "Image source type" open item, see §4 `VectorIcon` and §"Unresolved"); RFC-0039 (2026-08-05) widens *who may add an element name*: a package can register a **native view**, which is looked up in this catalog beside the intrinsics and validated by the same rules, so `c.Sparkline(…)` type-checks, carries `AttrClass`es and reports unknown props with spans exactly as a built-in does. The closed set of *intrinsics* is unchanged; what is no longer closed is the set of element names, and it is closed per program rather than per release.
 
 ---
 

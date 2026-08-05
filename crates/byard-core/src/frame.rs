@@ -2613,15 +2613,18 @@ impl PaintDigest {
         }
         self.solid.truncate(frame.instances.len());
 
-        Self::diff(
-            &mut self.text,
-            &mut frame.texts,
-            primed,
-            paint_hash::text_line,
-            |t, dirty| {
-                t.dirty = dirty;
-            },
-        );
+        // Text is the one pool whose value is not all inside the primitive: the
+        // wrap width lives in a parallel array, and it decides where the lines
+        // break, so it decides the pixels. It is hashed here with the line it
+        // belongs to rather than left out of the comparison, which is the same
+        // rule INV-26 states for a shape group's members.
+        self.text.resize(frame.texts.len().max(self.text.len()), 0);
+        for (i, line) in frame.texts.iter_mut().enumerate() {
+            let h = paint_hash::text_line(line, frame.text_wrap.get(i).copied().flatten());
+            line.dirty = !primed || self.text[i] != h;
+            self.text[i] = h;
+        }
+        self.text.truncate(frame.texts.len());
         Self::diff(
             &mut self.decorated,
             &mut frame.decorated,
@@ -2728,7 +2731,7 @@ mod paint_hash {
         h.finish()
     }
 
-    pub(super) fn text_line(t: &TextLine) -> u64 {
+    pub(super) fn text_line(t: &TextLine, wrap: Option<f32>) -> u64 {
         let mut h = hasher();
         // Content first: it is the field whose change is most expensive to
         // miss, because a stale glyph run is a stale *shape*, not a stale
@@ -2736,6 +2739,19 @@ mod paint_hash {
         t.text.hash(&mut h);
         f32s(&mut h, &[t.x, t.y, t.font_size]);
         f32s(&mut h, &t.color);
+        // The wrap width, which is not a field of the line at all (RFC-0005
+        // default wrap keeps it in a parallel array). It breaks the lines, so
+        // two runs that differ only in it are two different pictures.
+        // `to_bits` through `f32s` for the reason every other float here goes
+        // through it: `-0.0 == 0.0` would compare two different wrap widths
+        // equal, silently.
+        match wrap {
+            Some(w) => {
+                1u8.hash(&mut h);
+                f32s(&mut h, &[w]);
+            }
+            None => 0u8.hash(&mut h),
+        }
         h.finish()
     }
 
@@ -4109,6 +4125,51 @@ mod paint_digest_tests {
         // than matching it against a hash from two frames ago.
         let f = digest_frame(&mut d, &[boxed(0.0, RED), boxed(20.0, RED)], &[]);
         assert_eq!(f.instances_dirty(), [false, true]);
+    }
+
+    /// Builds a frame of wrapped lines and runs it through `digest`.
+    fn digest_wrapped(digest: &mut PaintDigest, lines: &[(TextLine, Option<f32>)]) -> RenderFrame {
+        let mut f = RenderFrame::new();
+        for (t, wrap) in lines {
+            f.push_text_wrapped(t.clone(), *wrap);
+        }
+        digest.apply(&mut f);
+        f
+    }
+
+    #[test]
+    fn a_line_that_only_changed_its_wrap_width_is_dirty() {
+        // The wrap width is not a field of `TextLine`, it travels in a
+        // parallel array, and it is what decides where the lines break. A
+        // paragraph pinned to the top-left of a resized window changes nothing
+        // else: same string, same origin, same colour, different picture.
+        //
+        // Left out of the hash, the line is reported clean, shaped correctly
+        // (shaping is content-addressed) and then clipped out of the
+        // incremental redraw region, which is a stale rectangle on screen with
+        // no stale data anywhere to explain it.
+        let mut d = PaintDigest::new();
+        let _ = digest_wrapped(&mut d, &[(line("a long paragraph"), Some(200.0))]);
+        let f = digest_wrapped(&mut d, &[(line("a long paragraph"), Some(300.0))]);
+        assert!(f.texts()[0].dirty);
+    }
+
+    #[test]
+    fn a_line_whose_wrap_width_is_unchanged_stays_clean() {
+        let mut d = PaintDigest::new();
+        let _ = digest_wrapped(&mut d, &[(line("a long paragraph"), Some(200.0))]);
+        let f = digest_wrapped(&mut d, &[(line("a long paragraph"), Some(200.0))]);
+        assert!(!f.texts()[0].dirty);
+    }
+
+    #[test]
+    fn gaining_or_losing_a_wrap_width_is_a_change() {
+        let mut d = PaintDigest::new();
+        let _ = digest_wrapped(&mut d, &[(line("hello"), None)]);
+        let f = digest_wrapped(&mut d, &[(line("hello"), Some(120.0))]);
+        assert!(f.texts()[0].dirty, "unwrapped → wrapped");
+        let f = digest_wrapped(&mut d, &[(line("hello"), None)]);
+        assert!(f.texts()[0].dirty, "wrapped → unwrapped");
     }
 
     #[test]

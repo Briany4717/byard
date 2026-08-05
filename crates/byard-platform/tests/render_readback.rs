@@ -354,8 +354,21 @@ fn widget_inside_bordered_card_is_not_occluded() {
     // The toggle ON track: the accent-coloured solid box furthest to the right
     // (the slider's accent pieces sit further left). A point just left of centre
     // lands on the track, clear of the white thumb that rides the right half.
-    let accent =
-        |c: &[f32; 4]| c[0] < 0.1 && (0.3..0.5).contains(&c[1]) && (0.5..0.7).contains(&c[2]);
+    // The theme's `primary`, decoded: the frame carries linear light, so the
+    // written `0x006495` is not the triple that reaches it.
+    let lin = |b: u8| {
+        let c = f32::from(b) / 255.0;
+        if c <= 0.040_45 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let accent = |c: &[f32; 4]| {
+        (c[0] - lin(0x00)).abs() < 0.02
+            && (c[1] - lin(0x64)).abs() < 0.03
+            && (c[2] - lin(0x95)).abs() < 0.04
+    };
     let track = frame
         .instances()
         .iter()

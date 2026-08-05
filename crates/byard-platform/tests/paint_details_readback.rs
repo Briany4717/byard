@@ -1,7 +1,8 @@
-//! GPU readback proofs for two `DecoratedBox` contracts (RFC-0001 §3.1):
-//! an over-large corner radius is reduced to fit instead of deforming the box,
-//! and a linear gradient paints a real ramp over the fill that a phase offset
-//! travels along.
+//! GPU readback proofs for three paint contracts (RFC-0001 §3.1): an
+//! over-large corner radius is reduced to fit instead of deforming the box, a
+//! linear gradient paints a real ramp over the fill that a phase offset travels
+//! along, and a colour written in a `.byd` file arrives on screen as the colour
+//! that was written.
 //!
 //! Both are things only pixels can prove: the frame data is identical either
 //! way, and it is the shader that gets them right or wrong.
@@ -276,6 +277,40 @@ fn a_gradient_paints_a_ramp_over_the_fill_and_its_offset_travels() {
         assert!(
             (l - next).abs() < 0.12,
             "the wrapped ramp stays continuous at x={lx}: {l} → {next}"
+        );
+    }
+}
+
+/// A colour survives the round trip from the source to the framebuffer
+/// (RFC-0005 §1).
+///
+/// The whole path is involved and every step of it can be wrong on its own:
+/// the literal is decoded to linear light by the compiler, blended in linear by
+/// the shader, and encoded once by the sRGB surface on write. Skipping the
+/// decode encoded it twice and put `0x808080` on screen as `0xBC`, which is the
+/// kind of error that looks like a taste decision rather than a bug.
+#[test]
+fn a_written_colour_reaches_the_screen_as_itself() {
+    let Some((device, queue)) = try_device() else {
+        eprintln!("no GPU adapter, skipping readback");
+        return;
+    };
+    let parsed = byard_compiler::parser::parse(
+        "View Main() { Box #[bg: 0x808080, width: 200, height: 40] {} }",
+    );
+    assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+    let mut interp = byard_compiler::interp::eval::Interpreter::new();
+    let tree = interp.lower_view(&parsed.views[0], &[]);
+    interp.tick();
+    let mut frame = RenderFrame::new();
+    interp.render(&tree, &mut frame, LOGICAL_W, LOGICAL_H);
+
+    let rb = render(&device, &queue, &frame);
+    let (b, g, r, _) = rb.at(100.0, 20.0);
+    for (channel, value) in [("blue", b), ("green", g), ("red", r)] {
+        assert!(
+            value.abs_diff(0x80) <= 1,
+            "the {channel} channel of an authored 0x808080 is 0x80 on screen, got {value:#04X}"
         );
     }
 }

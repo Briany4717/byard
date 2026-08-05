@@ -51,9 +51,29 @@ pub struct DecoratedInstance {
     pub grad_mid: [f32; 4],
     /// Gradient end colour.
     pub grad_to: [f32; 4],
-    /// `[dir_x, dir_y, mid_pos, offset]`, the ramp's axis, its middle stop's
-    /// position, and its wrapping phase shift.
+    /// The four gradient control floats, **whose meaning depends on
+    /// `grad_kind`** (RFC-0035 §Reference):
+    ///
+    /// | kind   | `grad_axis`                                  |
+    /// |--------|----------------------------------------------|
+    /// | linear | `[dir_x, dir_y, mid_pos, offset]`            |
+    /// | radial | `[center_x, center_y, radius, mid_pos]`      |
+    /// | conic  | `[center_x, center_y, start_angle, mid_pos]` |
+    ///
+    /// Written by [`Gradient::axis`](crate::frame::Gradient::axis), which is
+    /// the single place that table exists in code.
     pub grad_axis: [f32; 4],
+    /// Which shape the gradient paints, or [`GRADIENT_NONE`] for an instance
+    /// with no gradient at all (RFC-0035).
+    ///
+    /// **This lane has exactly one owner** (INV-28). The obvious cheaper
+    /// alternatives were both wrong: `misc.w` is RFC-0031's `smooth`, and
+    /// inferring presence from `grad_axis.xy` only ever worked because every
+    /// gradient was linear, a radial centred on the box's top-left corner is
+    /// `(0, 0)` and would read as "no gradient".
+    ///
+    /// [`GRADIENT_NONE`]: crate::frame::GRADIENT_NONE
+    pub grad_kind: u32,
 }
 
 impl From<&DecoratedBox> for DecoratedInstance {
@@ -76,16 +96,16 @@ impl From<&DecoratedBox> for DecoratedInstance {
             grad_from: d.gradient.map_or([0.0; 4], |g| g.from),
             grad_mid: d.gradient.map_or([0.0; 4], |g| g.mid),
             grad_to: d.gradient.map_or([0.0; 4], |g| g.to),
-            grad_axis: d.gradient.map_or([0.0; 4], |g| {
-                let [dx, dy] = g.direction();
-                [dx, dy, g.mid_pos, g.offset]
-            }),
+            grad_axis: d.gradient.map_or([0.0; 4], |g| g.axis()),
+            grad_kind: d
+                .gradient
+                .map_or(crate::frame::GRADIENT_NONE, |g| g.kind as u32),
         }
     }
 }
 
 impl DecoratedInstance {
-    /// Vertex buffer layout for the per-instance step (locations 1..=15; the
+    /// Vertex buffer layout for the per-instance step (locations 1..=16; the
     /// static quad occupies location 0).
     #[must_use]
     pub fn layout() -> wgpu::VertexBufferLayout<'static> {
@@ -104,7 +124,8 @@ impl DecoratedInstance {
             12 => Float32x4, // gradient from
             13 => Float32x4, // gradient mid
             14 => Float32x4, // gradient to
-            15 => Float32x4, // gradient axis (dir, mid_pos, offset)
+            15 => Float32x4, // gradient axis (meaning per kind, see the field)
+            16 => Uint32,    // gradient kind (RFC-0035)
         ];
         wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<DecoratedInstance>() as wgpu::BufferAddress,

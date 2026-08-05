@@ -145,7 +145,9 @@ fn shift_member(member: &mut Member, delta: u32) {
                 shift_style_rule(rule, delta);
             }
         }
-        Member::Timer { action, span, .. } | Member::Lifecycle { action, span, .. } => {
+        Member::Timer { action, span, .. }
+        | Member::Lifecycle { action, span, .. }
+        | Member::Measure { action, span } => {
             shift(span, delta);
             shift_expr(action, delta);
         }

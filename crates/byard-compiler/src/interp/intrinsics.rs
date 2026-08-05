@@ -77,6 +77,13 @@ pub enum PropType {
     /// A spring curve literal (`anim.spring(...)`), RFC-0021 `snap_spring`. Shape
     /// is validated at lower time via `resolve_curve`.
     Spring,
+    /// A list of values, the shape a chart's series takes (RFC-0039).
+    ///
+    /// Checked as far as syntax can check it: a literal of the wrong kind is
+    /// rejected here, and everything else, an identifier, a member access, a
+    /// `map` over a collection, is a value the lowering evaluates and converts
+    /// when it hands the view its props.
+    List,
 }
 
 /// Which half of the frame an attribute can change (RFC-0032 §R2).
@@ -404,9 +411,67 @@ fn parse_grid_track(t: &str) -> Option<byard_core::atlas::GridTrack> {
     t.parse::<f32>().ok().map(GridTrack::Px)
 }
 
-/// Looks up the intrinsic named `name` (RFC-0005 §4 table).
+/// The [`Intrinsic`] a registered native view presents (RFC-0039).
+///
+/// A native view is looked up here, in the same call an intrinsic is, because
+/// the RFC's central claim is that the two are indistinguishable at the call
+/// site: same validation rules, same prop typing, same `AttrClass`, same
+/// unknown-prop diagnostic with a span. Building a second, parallel checking
+/// path for package elements is exactly how that claim would stop being true
+/// the first time one of the two paths gained a rule.
+///
+/// Layout, decoration, transform and effect props come with it, so a native
+/// view can be given a `width`, a `bg` or an `opacity` like anything else; the
+/// declared props are added on top, with the classes the view declared.
+fn native_view(info: &byard_core::render::NativeViewInfo) -> Intrinsic {
+    use byard_core::render::NativePropType as N;
+    let mut props = props_from(&[LAYOUT, DECORATION, EFFECTS, TRANSFORM]);
+    for prop in info.props {
+        let ty = match prop.ty {
+            N::Int => PropType::Int,
+            N::Float => PropType::Float,
+            N::Bool => PropType::Bool,
+            N::Str => PropType::Str,
+            N::Color => PropType::Color,
+            N::Vec2 => PropType::Vec2,
+            N::Floats => PropType::List,
+        };
+        props.insert(
+            prop.name,
+            PropDef {
+                ty,
+                class: if prop.layout {
+                    AttrClass::Layout
+                } else {
+                    AttrClass::Paint
+                },
+            },
+        );
+    }
+    Intrinsic {
+        arity: 0,
+        content: None,
+        children: false,
+        focusable: false,
+        interactive: true,
+        props,
+        events: events_from(false, info.events),
+    }
+}
+
+/// Looks up the intrinsic named `name` (RFC-0005 §4 table), or the native view
+/// registered under it (RFC-0039).
 #[must_use]
 pub fn lookup(name: &str) -> Option<Intrinsic> {
+    if let Some(info) = byard_core::render::registry::info(name) {
+        return Some(native_view(&info));
+    }
+    lookup_intrinsic(name)
+}
+
+/// The built-in half of [`lookup`].
+#[must_use]
+fn lookup_intrinsic(name: &str) -> Option<Intrinsic> {
     let container = |dir_default: bool| {
         let mut props = props_from(&[LAYOUT, DECORATION, EFFECTS, TRANSFORM]);
         if dir_default {
@@ -1201,6 +1266,10 @@ fn check_value_type(ty: PropType, value: &Expr) -> Option<CompileError> {
             }
         }
         (PropType::Str, Expr::IntLit(..) | Expr::FloatLit(..)) => mismatch("a string"),
+        (
+            PropType::List,
+            Expr::IntLit(..) | Expr::FloatLit(..) | Expr::StrLit(..) | Expr::ClassRef(..),
+        ) => mismatch("a list"),
         (PropType::Bool, Expr::IntLit(..) | Expr::StrLit(..) | Expr::FloatLit(..)) => {
             mismatch("a boolean")
         }
@@ -1810,32 +1879,16 @@ pub fn color_rgba_auto(hex: i64) -> [f32; 4] {
 ///
 /// Alpha is **not** transferred: it is a coverage fraction, not a colour, and
 /// has never been gamma-encoded.
+///
+/// The transfer itself lives in [`byard_core::color`], because a package's
+/// native view writes colours too and one engine has one colour space
+/// (RFC-0039).
 #[must_use]
 pub fn color_to_rgba(hex: i64, alpha_byte: bool) -> [f32; 4] {
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let v = hex as u32;
-    let f = |b: u32| srgb_to_linear((b & 0xFF) as f32 / 255.0);
-    let a = |b: u32| (b & 0xFF) as f32 / 255.0;
-    if alpha_byte {
-        [f(v >> 16), f(v >> 8), f(v), a(v >> 24)]
-    } else {
-        [f(v >> 16), f(v >> 8), f(v), 1.0]
-    }
+    byard_core::color::to_rgba(hex, alpha_byte)
 }
 
-/// One channel of sRGB gamma → linear.
-///
-/// The IEC 61966-2-1 piecewise transfer, not a `powf(2.2)` approximation: the
-/// approximation is visibly wrong in the darkest few percent, which is exactly
-/// where a dark UI spends most of its range.
-#[must_use]
-pub fn srgb_to_linear(c: f32) -> f32 {
-    if c <= 0.040_45 {
-        c / 12.92
-    } else {
-        ((c + 0.055) / 1.055).powf(2.4)
-    }
-}
+pub use byard_core::color::srgb_to_linear;
 
 #[cfg(test)]
 mod tests;

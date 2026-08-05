@@ -404,6 +404,18 @@ impl super::pipeline::RenderPipeline for VectorMsdfPipeline {
             cx.clip_ctx,
         );
     }
+
+    fn draw_batch(&self, pass: &mut wgpu::RenderPass<'_>, cx: &super::pipeline::BatchDraw<'_>) {
+        if cx.instances.is_empty() {
+            return;
+        }
+        pass.set_pipeline(&self.pipeline);
+        pass.set_bind_group(0, cx.viewport_bind_group, &[]);
+        pass.set_bind_group(1, cx.vector_atlas.bind_group(), &[]);
+        pass.set_vertex_buffer(0, cx.quad_buffer.slice(..));
+        pass.set_vertex_buffer(1, cx.arena.slice(cx.instances));
+        pass.draw(0..4, 0..cx.count);
+    }
 }
 
 #[cfg(test)]

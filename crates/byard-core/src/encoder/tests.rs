@@ -13,6 +13,7 @@ fn mark(n: u32) -> crate::frame::LayerMark {
         canvas: n,
         ripple: n,
         backdrop: n,
+        native: n,
     }
 }
 

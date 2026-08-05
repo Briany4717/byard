@@ -150,3 +150,40 @@ pub fn draw(
         p.draw(0..4, s..e);
     });
 }
+
+/// The registered `Ripple` pipeline (RFC-0039).
+pub struct RipplePipeline {
+    pipeline: wgpu::RenderPipeline,
+}
+
+impl RipplePipeline {
+    /// Wraps a built pipeline for registration.
+    #[must_use]
+    pub const fn new(pipeline: wgpu::RenderPipeline) -> Self {
+        Self { pipeline }
+    }
+}
+
+impl super::pipeline::RenderPipeline for RipplePipeline {
+    const NAME: &'static str = "ripple";
+    type Instance = RippleInstance;
+
+    fn vertex_layout() -> wgpu::VertexBufferLayout<'static> {
+        RippleInstance::layout()
+    }
+
+    fn draw(&self, pass: &mut wgpu::RenderPass<'_>, cx: &super::pipeline::SegmentDraw<'_>) {
+        let range = &cx.ranges.ripple;
+        draw(
+            pass,
+            cx.arena,
+            cx.staged.ripple,
+            &self.pipeline,
+            cx.viewport_bind_group,
+            cx.quad_buffer,
+            range.len(),
+            super::sub_slice(cx.clips.ripple, range),
+            cx.clip_ctx,
+        );
+    }
+}

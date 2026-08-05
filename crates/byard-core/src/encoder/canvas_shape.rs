@@ -299,6 +299,50 @@ pub fn draw(
 // established pattern (`encoder::mod`'s `cpu_sd_rounded_box`): the decision
 // geometry is pinned down deterministically here, without a GPU; the
 // GPU-readback test in `byard-platform` proves the wired-up pipeline paints.
+/// The registered `CanvasShape` pipeline (RFC-0039).
+///
+/// The one core pipeline that binds something of its own beyond the shared
+/// viewport group: the frame's shape-record storage buffer (RFC-0031 §S4). It
+/// reads that binding from the segment context rather than holding it, because
+/// the binding is rebuilt whenever the arena grows and a pipeline that cached
+/// it would be pointing at a buffer that no longer exists.
+pub struct CanvasShapePipeline {
+    pipeline: wgpu::RenderPipeline,
+}
+
+impl CanvasShapePipeline {
+    /// Wraps a built pipeline for registration.
+    #[must_use]
+    pub const fn new(pipeline: wgpu::RenderPipeline) -> Self {
+        Self { pipeline }
+    }
+}
+
+impl super::pipeline::RenderPipeline for CanvasShapePipeline {
+    const NAME: &'static str = "canvas_shape";
+    type Instance = CanvasShapeInstance;
+
+    fn vertex_layout() -> wgpu::VertexBufferLayout<'static> {
+        CanvasShapeInstance::layout()
+    }
+
+    fn draw(&self, pass: &mut wgpu::RenderPass<'_>, cx: &super::pipeline::SegmentDraw<'_>) {
+        let range = &cx.ranges.canvas;
+        draw(
+            pass,
+            cx.arena,
+            cx.staged.canvas,
+            &self.pipeline,
+            cx.viewport_bind_group,
+            cx.records_bind_group,
+            cx.quad_buffer,
+            range.len(),
+            super::sub_slice(cx.clips.canvas, range),
+            cx.clip_ctx,
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

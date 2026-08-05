@@ -528,6 +528,46 @@ pub fn draw(
     }
 }
 
+/// The registered `TextureSampler` pipeline (RFC-0039).
+///
+/// Unlike its neighbours it rebinds per image, so its "instances" are staged
+/// one image at a time. That is a property of sampling N different textures in
+/// one segment, not of the registration: the per-instance record is still one
+/// `Pod` type going into the same arena.
+pub struct TextureSamplerPipeline {
+    pipeline: wgpu::RenderPipeline,
+}
+
+impl TextureSamplerPipeline {
+    /// Wraps a built pipeline for registration.
+    #[must_use]
+    pub const fn new(pipeline: wgpu::RenderPipeline) -> Self {
+        Self { pipeline }
+    }
+}
+
+impl super::pipeline::RenderPipeline for TextureSamplerPipeline {
+    const NAME: &'static str = "texture_sampler";
+    type Instance = TextureInstance;
+
+    fn vertex_layout() -> wgpu::VertexBufferLayout<'static> {
+        TextureInstance::layout()
+    }
+
+    fn draw(&self, pass: &mut wgpu::RenderPass<'_>, cx: &super::pipeline::SegmentDraw<'_>) {
+        draw(
+            pass,
+            cx.arena,
+            &cx.staged.textures,
+            &self.pipeline,
+            cx.viewport_bind_group,
+            cx.quad_buffer,
+            cx.texture_cache,
+            cx.textures,
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

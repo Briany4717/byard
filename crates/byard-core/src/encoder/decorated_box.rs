@@ -294,3 +294,44 @@ pub fn draw(
         p.draw(0..4, s..e);
     });
 }
+
+/// The registered `DecoratedBox` pipeline (RFC-0039).
+///
+/// A thin wrapper over the `wgpu` pipeline this module already built. What it
+/// adds is the answer to "who draws, and when", which used to be a line of
+/// source in the encoder and is now an entry in the registry.
+pub struct DecoratedBoxPipeline {
+    pipeline: wgpu::RenderPipeline,
+}
+
+impl DecoratedBoxPipeline {
+    /// Wraps a built pipeline for registration.
+    #[must_use]
+    pub const fn new(pipeline: wgpu::RenderPipeline) -> Self {
+        Self { pipeline }
+    }
+}
+
+impl super::pipeline::RenderPipeline for DecoratedBoxPipeline {
+    const NAME: &'static str = "decorated_box";
+    type Instance = DecoratedInstance;
+
+    fn vertex_layout() -> wgpu::VertexBufferLayout<'static> {
+        DecoratedInstance::layout()
+    }
+
+    fn draw(&self, pass: &mut wgpu::RenderPass<'_>, cx: &super::pipeline::SegmentDraw<'_>) {
+        let range = &cx.ranges.decorated;
+        draw(
+            pass,
+            cx.arena,
+            cx.staged.decorated,
+            &self.pipeline,
+            cx.viewport_bind_group,
+            cx.quad_buffer,
+            range.len(),
+            super::sub_slice(cx.clips.decorated, range),
+            cx.clip_ctx,
+        );
+    }
+}

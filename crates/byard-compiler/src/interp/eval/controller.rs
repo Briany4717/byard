@@ -35,7 +35,9 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use byard_core::bridge::{ControllerId, ControllerReply, Dispatcher, HostValue, TimerTick};
+use byard_core::bridge::{
+    ControllerId, ControllerReply, Dispatcher, HostValue, TimerHandle, TimerTick,
+};
 use byard_core::relay::IoResult;
 
 use crate::diagnostics::{CompileError, Span};
@@ -94,6 +96,10 @@ struct Continuation {
     owner: Option<usize>,
     /// The call site, so a discarded reply can point at it.
     span: Span,
+    /// Whether this continuation survives being resumed. A controller reply is
+    /// one-shot; an `every` timer's is not, because it resumes into the same
+    /// written action on every tick.
+    repeating: bool,
 }
 
 /// What kind of structural effect a slot holds.
@@ -102,6 +108,14 @@ pub(crate) enum EffectKind {
     Mount,
     /// `on unmount => …`, run once each time it unmounts.
     Unmount,
+    /// `every <dur> => …` / `after <dur> => …` (RFC-0029 §5): armed when the
+    /// scope mounts, cancelled when it unmounts.
+    Timer {
+        /// `true` for `every` (repeating), `false` for `after` (one-shot).
+        every: bool,
+        /// The interval or delay, in milliseconds.
+        dur_ms: u64,
+    },
 }
 
 /// One structural effect and the mount state it is tracking (RFC-0028 §4b).
@@ -116,13 +130,26 @@ pub(crate) enum EffectKind {
 pub(super) struct EffectSlot {
     /// Which edge this effect fires on.
     pub kind: EffectKind,
-    /// The lowered action, shared so a fire does not need `&mut self` on the
-    /// vector holding it.
-    pub action: Rc<RefCell<Action>>,
+    /// The lowered action.
+    ///
+    /// Held as [`CallArms`] rather than a bare [`Action`] so a timer can
+    /// register it as a continuation without a second representation: a tick
+    /// resumes into the `ok` arm exactly as a reply does, which is what lets
+    /// both travel one delivery path (RFC-0029 §5). Shared so a fire does not
+    /// need `&mut self` on the vector holding it.
+    pub action: Rc<RefCell<CallArms>>,
     /// The `frame_seq` this effect was last visited on.
     pub seen: u64,
     /// Whether its scope is currently mounted.
     pub mounted: bool,
+    /// The armed timer, for a [`EffectKind::Timer`] whose scope is mounted.
+    /// Dropping it cancels the Tokio task, which is the entire leak story:
+    /// unmounting drops this, and a cancelled timer cannot fire into a view
+    /// that is gone (INV-10).
+    pub timer: Option<TimerHandle>,
+    /// The continuation a timer's ticks resume into, so an unmount can drop it
+    /// alongside the task.
+    pub continuation: Option<u64>,
 }
 
 /// Everything the interpreter needs to reach the async world, kept in one
@@ -144,7 +171,8 @@ pub(super) struct Bridge {
     /// nothing.
     ///
     /// Bounded by construction rather than by a cap: every controller call
-    /// produces exactly one reply, and the reply removes its entry.
+    /// produces exactly one reply, and the reply removes its entry. A timer's
+    /// continuation is never recorded, because its task is aborted with it.
     discarded: HashMap<u64, Span>,
     /// Monotonic continuation id source.
     next_id: u64,
@@ -165,12 +193,27 @@ pub(super) struct Bridge {
 }
 
 impl Bridge {
-    /// Registers `arms` under a fresh continuation id.
-    fn open(&mut self, arms: Rc<RefCell<CallArms>>, owner: Option<usize>, span: Span) -> u64 {
+    /// Registers `arms` under a fresh continuation id. `repeating` is `true`
+    /// only for an `every` timer, whose ticks resume into the same action
+    /// forever; everything else is one-shot.
+    fn open(
+        &mut self,
+        arms: Rc<RefCell<CallArms>>,
+        owner: Option<usize>,
+        span: Span,
+        repeating: bool,
+    ) -> u64 {
         self.next_id = self.next_id.wrapping_add(1);
         let id = self.next_id;
-        self.continuations
-            .insert(id, Continuation { arms, owner, span });
+        self.continuations.insert(
+            id,
+            Continuation {
+                arms,
+                owner,
+                span,
+                repeating,
+            },
+        );
         id
     }
 }
@@ -212,6 +255,25 @@ impl Interpreter {
     pub fn set_dispatcher(&mut self, dispatcher: Dispatcher) {
         self.bridge.dispatcher = Some(dispatcher);
         self.provide_controllers();
+    }
+
+    /// Declares that `names` will be provided at run time, without wiring a
+    /// live dispatcher (RFC-0028 §3).
+    ///
+    /// This is what lets `byard check` resolve `inject Http as http` and check
+    /// the calls on it. The framework's own capabilities are knowable
+    /// statically, unlike an app's, so treating them as unknown would report a
+    /// warning on the one half of the controller vocabulary the checker can be
+    /// certain about.
+    ///
+    /// The handles are unbound: a checker never places a call, and if some
+    /// other caller did, the dispatcher would answer with the `unregistered`
+    /// error reply rather than dispatching to a stranger.
+    pub fn declare_controllers(&mut self, names: &[&str]) {
+        for name in names {
+            self.env
+                .provide(Symbol::intern(name), Value::Controller(UNBOUND_CONTROLLER));
+        }
     }
 
     /// Seeds one ambient `Value::Controller` per registered controller into
@@ -356,17 +418,15 @@ impl Interpreter {
         let pending: Vec<PendingCall> = std::mem::take(&mut *self.bridge.queue.borrow_mut());
         for call in pending {
             let Some(dispatcher) = self.bridge.dispatcher.clone() else {
-                // No host wired one in (a headless test, `byard check`). The
-                // call cannot happen, and saying so is better than a silent
-                // no-op that reads as "the controller never answered".
-                self.errors.push(CompileError::EffectInPureContext {
-                    span: call.span,
-                    context: "a program with no controllers registered".to_string(),
-                });
+                // Nothing to dispatch onto, so this is a check and not a run:
+                // `byard check` renders every view to validate it, which runs
+                // its `on mount` effects, and a checker that reported "this
+                // call did not happen" would fail every correct data-backed
+                // screen. The call is simply not placed.
                 continue;
             };
             let continuation = match call.arms {
-                Some(arms) => self.bridge.open(arms, call.owner, call.span),
+                Some(arms) => self.bridge.open(arms, call.owner, call.span, false),
                 // Fire-and-forget still gets an id, so the reply has somewhere
                 // to be discarded rather than being an untracked message.
                 None => 0,
@@ -468,9 +528,19 @@ impl Interpreter {
     /// never drift.
     fn fire_timer(&mut self, continuation_id: u64) -> bool {
         let Some(continuation) = self.bridge.continuations.get(&continuation_id) else {
+            // Its scope unmounted between the tick being queued and this drain.
+            // Silently dropped rather than reported: unlike a controller reply,
+            // a timer tick that lands one frame late is an ordinary race, not a
+            // sign that something went wrong.
             return false;
         };
         let arms = Rc::clone(&continuation.arms);
+        // An `after` fires once. Removing the continuation here, rather than
+        // relying on the task having ended, means a duplicate delivery can
+        // never run a one-shot action twice.
+        if !continuation.repeating {
+            self.bridge.continuations.remove(&continuation_id);
+        }
         let mut arms = arms.borrow_mut();
         let Some(arm) = arms.ok.as_mut() else {
             return false;
@@ -486,12 +556,17 @@ impl Interpreter {
         let index = self.bridge.effects.len();
         self.bridge.effects.push(EffectSlot {
             kind,
-            action: Rc::new(RefCell::new(action)),
+            action: Rc::new(RefCell::new(CallArms {
+                ok: Some(action),
+                err: None,
+            })),
             // Not `frame_seq`: an effect lowered mid-reconcile must still be
             // *visited* to count as mounted, so the sweep sees one consistent
             // rule rather than a lowering-order exception.
             seen: 0,
             mounted: false,
+            timer: None,
+            continuation: None,
         });
         index
     }
@@ -534,14 +609,61 @@ impl Interpreter {
             self.bridge
                 .continuations
                 .retain(|_, c| c.owner != Some(index));
+            self.disarm_timer(index);
             self.run_effect(index, &EffectKind::Unmount);
         }
         let fired = !mounted.is_empty();
         for index in mounted {
+            self.arm_timer(index);
             self.run_effect(index, &EffectKind::Mount);
         }
         self.drain_calls();
         fired || fired_unmount
+    }
+
+    /// Arms effect `index`'s timer, if it is one (RFC-0029 §5).
+    ///
+    /// The action is registered as a continuation first, so a tick is resumed
+    /// through exactly the same path a controller reply is: one delivery
+    /// mechanism, one consistency boundary, one waker amendment. A timer tick
+    /// really is a zero-argument reply, and giving it a second path would mean
+    /// a second set of ordering and leak rules to keep in step with the first.
+    fn arm_timer(&mut self, index: usize) {
+        let Some(slot) = self.bridge.effects.get(index) else {
+            return;
+        };
+        let EffectKind::Timer { every, dur_ms } = slot.kind else {
+            return;
+        };
+        let arms = Rc::clone(&slot.action);
+        let Some(dispatcher) = self.bridge.dispatcher.clone() else {
+            // A check, not a run (see `drain_calls`): there is no runtime to
+            // arm against and nothing is waiting for a tick.
+            return;
+        };
+        let continuation = self.bridge.open(arms, Some(index), Span::new(0, 0), every);
+        let Some(handle) = dispatcher.spawn_timer(every, dur_ms, continuation) else {
+            // The driver refused it (a zero interval). Nothing will ever
+            // resume this continuation, so it is withdrawn rather than left
+            // sitting in the table for as long as the scope stays mounted,
+            // where it would be a small leak and would quietly inflate
+            // `outstanding_continuations`, which is the number the tests read.
+            self.bridge.continuations.remove(&continuation);
+            return;
+        };
+        if let Some(slot) = self.bridge.effects.get_mut(index) {
+            slot.continuation = Some(continuation);
+            slot.timer = Some(handle);
+        }
+    }
+
+    /// Cancels effect `index`'s timer and forgets its continuation.
+    fn disarm_timer(&mut self, index: usize) {
+        if let Some(slot) = self.bridge.effects.get_mut(index) {
+            // Dropping the handle aborts the Tokio task (INV-10).
+            slot.timer = None;
+            slot.continuation = None;
+        }
     }
 
     /// Runs effect `index` if it fires on `edge`.
@@ -549,6 +671,8 @@ impl Interpreter {
         let Some(slot) = self.bridge.effects.get(index) else {
             return;
         };
+        // A timer has no mount/unmount action of its own: arming and
+        // cancelling *is* its lifecycle, and `arm_timer`/`disarm_timer` own it.
         if !matches!(
             (&slot.kind, edge),
             (EffectKind::Mount, EffectKind::Mount) | (EffectKind::Unmount, EffectKind::Unmount)
@@ -559,7 +683,9 @@ impl Interpreter {
         // Attributed while it runs, so a call the effect places is owned by it
         // and dies with it.
         self.bridge.running_effect.set(Some(index));
-        action.borrow_mut()(&mut self.ctx, None);
+        if let Some(run) = action.borrow_mut().ok.as_mut() {
+            run(&mut self.ctx, None);
+        }
         self.bridge.running_effect.set(None);
     }
 
@@ -590,7 +716,13 @@ impl Interpreter {
             .collect();
         for id in ids {
             if let Some(continuation) = self.bridge.continuations.remove(&id) {
-                self.bridge.discarded.insert(id, continuation.span);
+                // A repeating continuation is a timer's: its task is aborted
+                // alongside it, so a tick that still lands is an ordinary race
+                // rather than an answer nobody will hear, and reporting it
+                // would put a diagnostic on every screen that closes.
+                if !continuation.repeating {
+                    self.bridge.discarded.insert(id, continuation.span);
+                }
             }
         }
     }

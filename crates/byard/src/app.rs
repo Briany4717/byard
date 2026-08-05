@@ -44,9 +44,31 @@ use byard_core::{
 /// and the window it runs in.
 pub struct App {
     entry: PathBuf,
+    /// The stable identity this app's persistent state is filed under
+    /// (RFC-0029 O5).
+    ///
+    /// Deliberately not the window title (presentation, and translated) and
+    /// deliberately not the entry file's stem, which is `main` for almost
+    /// every app and would file every shipped Byard app's `Store` in one
+    /// directory. Defaults to the executable's own name, which is as stable as
+    /// the binary itself, and is overridable with [`App::app_id`] for an app
+    /// whose binary is renamed or shipped under several names.
+    #[allow(
+        clippy::struct_field_names,
+        reason = "`app_id` is the domain term an app author writes; bare `id` would read as a handle"
+    )]
+    app_id: String,
     title: String,
     size: (u32, u32),
     registry: ControllerRegistry,
+    /// Controllers rejected for taking a reserved capability name (RFC-0029
+    /// §7), reported by [`App::run`].
+    ///
+    /// Collected rather than returned from `provide`, because `provide` is a
+    /// builder step and making it fallible would put a `?` in the middle of
+    /// every app's `main` for a mistake almost no app makes. The failure still
+    /// has to be loud, so it is held here and fails the run.
+    reserved: Vec<&'static str>,
 }
 
 impl App {
@@ -59,12 +81,47 @@ impl App {
             .and_then(|s| s.to_str())
             .unwrap_or("Byard")
             .to_string();
+        let app_id = executable_name().unwrap_or_else(|| title.clone());
         Self {
             entry,
+            // Seeded with the framework's own capabilities (RFC-0029 §7), so
+            // `inject Http as http` works in an app that provided nothing.
+            registry: byard_core::cap::default_registry(&app_id),
+            app_id,
             title,
             size: (1280, 720),
-            registry: ControllerRegistry::new(),
+            reserved: Vec::new(),
         }
+    }
+
+    /// Drops the framework's built-in capabilities, so a view can `inject`
+    /// only what the app provides (RFC-0029 §7 opt-out).
+    ///
+    /// For an app that owns its whole I/O story, or one auditing exactly what
+    /// its views can reach. It does **not** free up the reserved names:
+    /// [`provide`](Self::provide) still refuses them, so an app replacing the
+    /// built-in HTTP stack names its own controller something else. What this
+    /// buys is that `inject Http as http` then fails loudly as unresolved,
+    /// rather than silently reaching a capability the app meant to remove.
+    #[must_use]
+    pub fn without_default_capabilities(mut self) -> Self {
+        self.registry = ControllerRegistry::new();
+        self
+    }
+
+    /// Sets the identity this app's persistent state is filed under
+    /// (RFC-0029 O5), defaulting to the executable's name.
+    ///
+    /// Set it when the binary may be renamed, or shipped under more than one
+    /// name, and its saved state should follow the *app* rather than the file.
+    /// Changing it points the app at a different store, so it is a decision
+    /// about data, not about presentation, which is why it is separate from
+    /// [`title`](Self::title).
+    #[must_use]
+    pub fn app_id(mut self, app_id: impl Into<String>) -> Self {
+        self.app_id = app_id.into();
+        self.registry = byard_core::cap::default_registry(&self.app_id);
+        self
     }
 
     /// Sets the window title (defaults to the entry file's stem).
@@ -84,12 +141,25 @@ impl App {
     /// Registers `controller` as an ambient provider, so `inject T as x`
     /// inside the view resolves a handle to it (RFC-0028 §3).
     ///
-    /// Registering two controllers with the same `type_name()` keeps the
-    /// later one: an app that provides a capability of its own deliberately
-    /// replaces the framework's, rather than getting whichever the iteration
-    /// order happened to reach last.
+    /// A controller whose `type_name()` is one of the framework's reserved
+    /// capability names (`Http`, `Json`, `Store`, `Timer`, RFC-0029 §7) is
+    /// **rejected**, and [`run`](Self::run) fails saying so. Allowing the
+    /// shadow would mean `inject Http as http` meaning different things in
+    /// different apps, and a `byld` file that reads correctly against the
+    /// documentation while doing something else entirely.
+    ///
+    /// The rejection is unconditional, and in particular
+    /// [`without_default_capabilities`](Self::without_default_capabilities)
+    /// does **not** lift it: that method controls which built-ins are
+    /// *registered*, not which names exist. An app that wants its own HTTP
+    /// stack gives it a name of its own (`MyHttp`) and injects that.
     #[must_use]
     pub fn provide<C: Controller + 'static>(mut self, controller: C) -> Self {
+        let name = controller.type_name();
+        if byard_core::cap::is_reserved(name) {
+            self.reserved.push(name);
+            return self;
+        }
         self.registry.insert(Arc::new(controller));
         self
     }
@@ -102,6 +172,27 @@ impl App {
     /// does not parse, and whatever engine/platform error initialisation or
     /// the event loop produces.
     pub fn run(self) -> Result<(), ByardError> {
+        if !self.reserved.is_empty() {
+            // Deduplicated, because two controllers rejected for the same name
+            // is one problem stated twice, and sorted so the message does not
+            // depend on registration order.
+            let mut reserved = self.reserved.clone();
+            reserved.sort_unstable();
+            reserved.dedup();
+            // The advice is only "rename". An earlier draft also offered
+            // `without_default_capabilities()`, which does not help: it clears
+            // the built-ins but `provide` still refuses a reserved name, by
+            // design, so `inject Http as http` means the same thing in every
+            // app. Pointing at a door that does not open is worse than not
+            // mentioning one.
+            return Err(ByardError::Platform(format!(
+                "these controllers use names the framework reserves for its own \
+                 capabilities (RFC-0029 §7): {}. A reserved name cannot be provided \
+                 by an app, whatever the capability set; give yours a name of its \
+                 own (`MyHttp`) and `inject` that.",
+                reserved.join(", ")
+            )));
+        }
         let source = std::fs::read_to_string(&self.entry).map_err(|e| {
             ByardError::Platform(format!("cannot read `{}`: {e}", self.entry.display()))
         })?;
@@ -292,6 +383,18 @@ impl Host {
     }
 }
 
+/// The running executable's file stem, if the OS will say.
+///
+/// `None` under a harness that reports no path; the caller falls back to the
+/// entry stem, which is worse but never nothing.
+fn executable_name() -> Option<String> {
+    std::env::current_exe()
+        .ok()?
+        .file_stem()?
+        .to_str()
+        .map(str::to_string)
+}
+
 /// Milliseconds since the Unix epoch, the clock the router's tap/double-tap
 /// thresholds are measured against.
 fn now_ms() -> u64 {
@@ -328,5 +431,147 @@ impl LogicRuntime for AppRuntime {
 
     fn apply_io_results(&mut self, results: Vec<IoResult>) -> bool {
         self.interp.apply_io_results(results)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_store_identity_does_not_come_from_the_entry_file_name() {
+        // Almost every app's entry is `src/main.byd`, so keying persistent
+        // state on its stem would file every shipped Byard app's store in one
+        // directory called `main`, and two unrelated apps would share their
+        // settings. The default is the executable, which is as stable as the
+        // binary itself.
+        let app = App::new("src/main.byd");
+        assert_ne!(app.app_id, "main");
+        assert_eq!(
+            app.app_id,
+            executable_name().expect("a test binary has a path")
+        );
+    }
+
+    #[test]
+    fn the_window_title_and_the_store_identity_are_separate() {
+        // A title is presentation and may be translated; a store identity is
+        // where data lives. Rewording one must not move the other.
+        let app = App::new("src/main.byd").title("Weather, translated");
+        assert_eq!(app.title, "Weather, translated");
+        assert_ne!(app.app_id, "Weather, translated");
+    }
+
+    #[test]
+    fn app_id_overrides_the_default_and_rebuilds_the_registry() {
+        let app = App::new("src/main.byd").app_id("dev.example.weather");
+        assert_eq!(app.app_id, "dev.example.weather");
+        assert!(app.registry.contains("Store"));
+    }
+
+    #[test]
+    fn dropping_the_built_ins_still_does_not_free_up_their_names() {
+        // The message used to point at this method as the way to provide your
+        // own `Http`. It is not, and a suggestion that does not work is worse
+        // than none.
+        struct Impostor;
+        impl byard_core::bridge::Controller for Impostor {
+            fn type_name(&self) -> &'static str {
+                "Http"
+            }
+            fn invoke(
+                &self,
+                _method: &str,
+                _args: Vec<byard_core::bridge::HostValue>,
+            ) -> byard_core::bridge::BoxFuture<
+                'static,
+                Result<byard_core::bridge::HostValue, byard_core::bridge::HostValue>,
+            > {
+                Box::pin(async { Ok(byard_core::bridge::HostValue::Unit) })
+            }
+        }
+        let app = App::new("src/main.byd")
+            .without_default_capabilities()
+            .provide(Impostor);
+        assert_eq!(app.reserved, vec!["Http"]);
+        assert!(
+            !app.registry.contains("Http"),
+            "the built-in really is gone"
+        );
+    }
+
+    #[test]
+    fn the_reserved_name_report_says_each_name_once() {
+        // Two controllers rejected for one name is one problem, and the
+        // message should not repeat it.
+        struct A;
+        struct B;
+        macro_rules! http_impostor {
+            ($t:ty) => {
+                impl byard_core::bridge::Controller for $t {
+                    fn type_name(&self) -> &'static str {
+                        "Http"
+                    }
+                    fn invoke(
+                        &self,
+                        _method: &str,
+                        _args: Vec<byard_core::bridge::HostValue>,
+                    ) -> byard_core::bridge::BoxFuture<
+                        'static,
+                        Result<byard_core::bridge::HostValue, byard_core::bridge::HostValue>,
+                    > {
+                        Box::pin(async { Ok(byard_core::bridge::HostValue::Unit) })
+                    }
+                }
+            };
+        }
+        http_impostor!(A);
+        http_impostor!(B);
+        let app = App::new("src/main.byd").provide(A).provide(B);
+        let message = app
+            .run()
+            .expect_err("a reserved name fails the run")
+            .to_string();
+        // Count within the list itself: the advice that follows names
+        // `MyHttp`, which contains `Http` and would make a whole-message count
+        // meaningless.
+        let list = message
+            .split("§7): ")
+            .nth(1)
+            .and_then(|rest| rest.split('.').next())
+            .expect("the message lists the offending names");
+        assert_eq!(
+            list.matches("Http").count(),
+            1,
+            "one name, said once: {list}"
+        );
+        assert!(
+            !message.contains("without_default_capabilities"),
+            "the message must not offer a door that does not open: {message}"
+        );
+    }
+
+    #[test]
+    fn a_reserved_name_is_rejected_rather_than_shadowing_the_built_in() {
+        // RFC-0029 §7. `run()` fails naming it; the check is here because
+        // opening a window in a unit test is not an option.
+        struct Impostor;
+        impl byard_core::bridge::Controller for Impostor {
+            fn type_name(&self) -> &'static str {
+                "Http"
+            }
+            fn invoke(
+                &self,
+                _method: &str,
+                _args: Vec<byard_core::bridge::HostValue>,
+            ) -> byard_core::bridge::BoxFuture<
+                'static,
+                Result<byard_core::bridge::HostValue, byard_core::bridge::HostValue>,
+            > {
+                Box::pin(async { Ok(byard_core::bridge::HostValue::Unit) })
+            }
+        }
+        let app = App::new("src/main.byd").provide(Impostor);
+        assert_eq!(app.reserved, vec!["Http"]);
     }
 }

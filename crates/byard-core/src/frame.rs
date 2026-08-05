@@ -1273,6 +1273,44 @@ pub const CANVAS_CAP_SQUARE: u32 = 2;
 /// logical pixels** (the evaluator has already offset the shape by its
 /// `Canvas`'s resolved origin).
 ///
+/// A tessellated filled path (RFC-0037 Tier-2).
+///
+/// The mesh is behind an `Arc` because it is *retained*: a path whose commands
+/// did not change reuses the mesh it was tessellated into, and copying that
+/// mesh onto the frame every tick would pay the cost the cache exists to
+/// avoid. The `Arc` is what crosses to the render thread, so the geometry is
+/// shared rather than cloned, and freed when the last frame holding it is
+/// (INV-12: it is plain `Send` data, no graphics state).
+#[derive(Clone, Debug)]
+pub struct CanvasFill {
+    /// The triangles, in the canvas' logical-pixel space.
+    pub mesh: std::sync::Arc<FillMesh>,
+    /// Solid fill colour, linear RGBA. Ignored when `gradient` is set.
+    pub color: [f32; 4],
+    /// The gradient to fill with, if any: the **same** descriptor a box fill
+    /// carries (RFC-0035), so the two cannot drift.
+    pub gradient: Option<Gradient>,
+    /// Paint-time transform (RFC-0011).
+    pub transform: Transform,
+    /// Overall opacity.
+    pub opacity: f32,
+    /// Whether this fill changed since the last tick.
+    pub dirty: bool,
+}
+
+/// The triangles of one tessellated path, and the bounds its `uv` is measured
+/// against.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct FillMesh {
+    /// Positions and normalised `uv`s.
+    pub vertices: Vec<crate::encoder::canvas_fill::FillVertex>,
+    /// Triangle indices into `vertices`.
+    pub indices: Vec<u32>,
+    /// The path's bounding box `[x, y, w, h]` in logical pixels, which is what
+    /// `uv` normalises against and what the dirty-bounds union reads.
+    pub bounds: [f32; 4],
+}
+
 /// Complex `path(d: …)` commands do not use this type, they rasterize
 /// through the `VectorMSDF` pipeline (RFC-0020 §2 Tier 2) as a
 /// [`VectorInstance`]; `text(…)` commands lower to [`TextLine`]s.
@@ -1617,6 +1655,12 @@ pub struct RenderFrame {
     /// the `CanvasShape` analytic-SDF pipeline (the sixth pipeline).
     canvas_shapes: Vec<CanvasShape>,
 
+    /// Tessellated filled paths (RFC-0037 Tier-2), drawn by the `CanvasFill`
+    /// pipeline.
+    fills: Vec<CanvasFill>,
+    /// Draw-order depths, parallel to `fills`.
+    fill_depths: Vec<f32>,
+
     /// The per-frame shape-record pool every group head indexes into
     /// (RFC-0031 §S4). Cleared and refilled exactly like every other frame
     /// vector: no allocation on the steady-state path, no `Box`, no lifetime.
@@ -1828,6 +1872,8 @@ pub struct LayerMark {
     pub backdrop: u32,
     /// Native-view batch count at the boundary (RFC-0039).
     pub native: u32,
+    /// `fills` length at the boundary (RFC-0037).
+    pub fill: u32,
 }
 
 /// Applies `set` to every element of `pool` from index `from` onward.
@@ -1893,6 +1939,8 @@ impl RenderFrame {
         self.texture_depths.clear();
         self.text_depths.clear();
         self.canvas_depths.clear();
+        self.fills.clear();
+        self.fill_depths.clear();
         self.clips.clear();
         self.clip_stack.clear();
         self.solid_clips.clear();
@@ -2140,6 +2188,25 @@ impl RenderFrame {
         ]))
     }
 
+    /// Appends a tessellated filled path (RFC-0037 Tier-2) to the frame.
+    pub fn push_fill(&mut self, fill: CanvasFill) {
+        let depth = self.next_depth();
+        self.fills.push(fill);
+        self.fill_depths.push(depth);
+    }
+
+    /// This frame's filled paths (RFC-0037).
+    #[must_use]
+    pub fn fills(&self) -> &[CanvasFill] {
+        &self.fills
+    }
+
+    /// Draw-order depths, parallel to [`fills`](Self::fills).
+    #[must_use]
+    pub fn fill_depths(&self) -> &[f32] {
+        &self.fill_depths
+    }
+
     /// Appends a [`CanvasShape`] (RFC-0020 Tier-1 shape command) to the frame.
     pub fn push_canvas_shape(&mut self, s: CanvasShape) {
         let d = self.next_depth();
@@ -2223,6 +2290,7 @@ impl RenderFrame {
             ripple: u32::try_from(self.ripples.len()).unwrap_or(u32::MAX),
             backdrop: u32::try_from(self.backdrops.len()).unwrap_or(u32::MAX),
             native: u32::try_from(self.native.len()).unwrap_or(u32::MAX),
+            fill: u32::try_from(self.fills.len()).unwrap_or(u32::MAX),
         }
     }
 
@@ -3766,6 +3834,7 @@ mod motion_tests {
                 ripple: 0,
                 backdrop: 0,
                 native: 0,
+                fill: 0,
             }]
         );
     }

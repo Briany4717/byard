@@ -891,6 +891,217 @@ impl byard_core::render::NativeView for MissingNativeView {
     }
 }
 
+/// One tessellated path, and when it was last drawn (RFC-0037).
+struct CachedMesh {
+    mesh: std::sync::Arc<byard_core::frame::FillMesh>,
+    /// The frame this mesh was last used on, so a path that has gone away
+    /// stops being paid for.
+    last_used: u64,
+}
+
+/// How many frames an unused mesh is kept before it is dropped.
+///
+/// Long enough that a path alternating with a sibling (a `when` toggling two
+/// charts) does not re-tessellate on every switch, short enough that a screen
+/// nobody is on stops holding geometry. Frames rather than seconds because the
+/// cost being bounded is memory per drawn frame, not wall-clock.
+const MESH_CACHE_FRAMES: u64 = 120;
+
+/// One evaluated path command, in absolute logical pixels (RFC-0037).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum PathCommand {
+    /// Start a new subpath at this point.
+    Move([f32; 2]),
+    /// A straight segment to this point.
+    Line([f32; 2]),
+    /// A quadratic Bézier: control point, end point.
+    Quad([f32; 2], [f32; 2]),
+    /// A cubic Bézier: two control points, end point.
+    Cubic([f32; 2], [f32; 2], [f32; 2]),
+    /// Close the current subpath back to its start.
+    Close,
+}
+
+/// The fingerprint a mesh is cached under (RFC-0037, RFC-0032's rule).
+///
+/// `to_bits` rather than the float itself, because hashing an `f32` directly
+/// makes `NaN` permanently dirty and `-0.0`/`0.0` permanently clean: two
+/// coordinates that are the same number would fingerprint differently, and a
+/// coordinate that is no number at all would fingerprint differently every
+/// frame. The tolerance and the fill rule are in the key too, since both
+/// change the triangles the same commands produce.
+fn path_fingerprint(commands: &[PathCommand], tolerance: f32, even_odd: bool) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    tolerance.to_bits().hash(&mut hasher);
+    even_odd.hash(&mut hasher);
+    for command in commands {
+        match command {
+            PathCommand::Move(p) => (0u8, p[0].to_bits(), p[1].to_bits()).hash(&mut hasher),
+            PathCommand::Line(p) => (1u8, p[0].to_bits(), p[1].to_bits()).hash(&mut hasher),
+            PathCommand::Quad(c, p) => {
+                (
+                    2u8,
+                    c[0].to_bits(),
+                    c[1].to_bits(),
+                    p[0].to_bits(),
+                    p[1].to_bits(),
+                )
+                    .hash(&mut hasher);
+            }
+            PathCommand::Cubic(a, b, p) => {
+                (
+                    3u8,
+                    a[0].to_bits(),
+                    a[1].to_bits(),
+                    b[0].to_bits(),
+                    b[1].to_bits(),
+                    p[0].to_bits(),
+                    p[1].to_bits(),
+                )
+                    .hash(&mut hasher);
+            }
+            PathCommand::Close => 4u8.hash(&mut hasher),
+        }
+    }
+    hasher.finish()
+}
+
+/// Turns a tessellated position into the vertex the pipeline reads: the
+/// position it already had, plus where it sits inside the path's box.
+///
+/// The `uv` is what a gradient is measured in, so it is computed here, once
+/// per vertex, rather than in the shader from bounds it would have to be told
+/// separately (RFC-0037).
+struct WithUv {
+    bounds: [f32; 4],
+}
+
+impl lyon_tessellation::FillVertexConstructor<byard_core::encoder::canvas_fill::FillVertex>
+    for WithUv
+{
+    fn new_vertex(
+        &mut self,
+        vertex: lyon_tessellation::FillVertex<'_>,
+    ) -> byard_core::encoder::canvas_fill::FillVertex {
+        let p = vertex.position();
+        byard_core::encoder::canvas_fill::FillVertex {
+            pos: [p.x, p.y],
+            uv: [
+                (p.x - self.bounds[0]) / self.bounds[2],
+                (p.y - self.bounds[1]) / self.bounds[3],
+            ],
+        }
+    }
+}
+
+/// Tessellates a path into the triangles the `CanvasFill` pipeline draws
+/// (RFC-0037).
+///
+/// An unclosed fill is closed back to its subpath's start rather than
+/// refused: an open filled path is almost always an oversight, and closing it
+/// produces the obviously-intended shape (the RFC's resolved question). `lyon`
+/// closes it for us, which is why there is no special case here to get wrong.
+fn tessellate_path(
+    commands: &[PathCommand],
+    tolerance: f32,
+    even_odd: bool,
+) -> byard_core::frame::FillMesh {
+    use lyon_tessellation::geom::point;
+    use lyon_tessellation::path::Path;
+    use lyon_tessellation::{
+        BuffersBuilder, FillOptions, FillRule, FillTessellator, VertexBuffers,
+    };
+
+    let mut builder = Path::builder();
+    let mut open = false;
+    for command in commands {
+        match command {
+            PathCommand::Move(p) => {
+                if open {
+                    builder.end(true);
+                }
+                builder.begin(point(p[0], p[1]));
+                open = true;
+            }
+            PathCommand::Line(p) if open => {
+                builder.line_to(point(p[0], p[1]));
+            }
+            PathCommand::Quad(c, p) if open => {
+                builder.quadratic_bezier_to(point(c[0], c[1]), point(p[0], p[1]));
+            }
+            PathCommand::Cubic(a, b, p) if open => {
+                builder.cubic_bezier_to(point(a[0], a[1]), point(b[0], b[1]), point(p[0], p[1]));
+            }
+            PathCommand::Close if open => {
+                builder.end(true);
+                open = false;
+            }
+            // A segment before any `move` is refused at check time
+            // (`PathMustStartWithMove`); reaching here means the body was
+            // built some other way, and dropping the segment is the only
+            // answer that cannot invent geometry.
+            _ => {}
+        }
+    }
+    if open {
+        builder.end(true);
+    }
+    let path = builder.build();
+
+    // The bounds `uv` is normalised against: the path's own box, so a
+    // gradient across a fill runs from its top to its bottom rather than from
+    // the canvas' (RFC-0035 reused verbatim).
+    let (mut min_x, mut min_y) = (f32::MAX, f32::MAX);
+    let (mut max_x, mut max_y) = (f32::MIN, f32::MIN);
+    for command in commands {
+        let points: &[[f32; 2]] = match command {
+            PathCommand::Move(p) | PathCommand::Line(p) => std::slice::from_ref(p),
+            PathCommand::Quad(c, p) => &[*c, *p],
+            PathCommand::Cubic(a, b, p) => &[*a, *b, *p],
+            PathCommand::Close => &[],
+        };
+        for p in points {
+            min_x = min_x.min(p[0]);
+            min_y = min_y.min(p[1]);
+            max_x = max_x.max(p[0]);
+            max_y = max_y.max(p[1]);
+        }
+    }
+    let bounds = [
+        min_x,
+        min_y,
+        (max_x - min_x).max(1e-3),
+        (max_y - min_y).max(1e-3),
+    ];
+
+    let mut buffers: VertexBuffers<byard_core::encoder::canvas_fill::FillVertex, u32> =
+        VertexBuffers::new();
+    let options = FillOptions::tolerance(tolerance).with_fill_rule(if even_odd {
+        FillRule::EvenOdd
+    } else {
+        FillRule::NonZero
+    });
+    let ok = FillTessellator::new()
+        .tessellate_path(
+            &path,
+            &options,
+            &mut BuffersBuilder::new(&mut buffers, WithUv { bounds }),
+        )
+        .is_ok();
+    if !ok {
+        // A tessellation failure is a path the tessellator could not make
+        // sense of. An empty mesh draws nothing, which is what a shape nobody
+        // could triangulate looks like; the alternative is garbage triangles.
+        return byard_core::frame::FillMesh::default();
+    }
+    byard_core::frame::FillMesh {
+        vertices: buffers.vertices,
+        indices: buffers.indices,
+        bounds,
+    }
+}
+
 /// One outstanding controller request a native view issued (RFC-0039).
 #[derive(Clone, Copy)]
 struct NativeRequest {
@@ -1430,6 +1641,16 @@ pub struct Interpreter {
     /// mount and unmount the element's own lifetime rather than a second thing
     /// for a package author to get right.
     native_views: Vec<Box<dyn byard_core::render::NativeView>>,
+    /// Tessellated path meshes, keyed by a fingerprint of the commands that
+    /// produced them (RFC-0037).
+    ///
+    /// The cache that makes a live chart affordable: the commands are
+    /// re-evaluated every tick, and the mesh is rebuilt only when the numbers
+    /// they produced actually changed.
+    path_meshes: std::collections::HashMap<u64, CachedMesh>,
+    /// How many meshes have been tessellated this session, the measurement
+    /// behind the caching claim (INV-19).
+    tessellations: u64,
     /// Which view issued which of this frame's native controller requests
     /// (RFC-0039), as `(slot, range into the frame's call pool)`.
     ///
@@ -4047,6 +4268,13 @@ impl Interpreter {
         // render, for the same reason the scroll targets are, a rect from two
         // frames ago is a hit test against a widget that has moved.
         self.native_targets.clear();
+        // RFC-0037: a mesh nobody has drawn for a while stops being paid for.
+        // Swept here rather than on insertion, because the question is "is
+        // this path still on screen", and only a frame knows that.
+        if !self.path_meshes.is_empty() {
+            let horizon = self.frame_seq.saturating_sub(MESH_CACHE_FRAMES);
+            self.path_meshes.retain(|_, m| m.last_used >= horizon);
+        }
         // RFC-0026 swipe-back regions follow the same render-then-dispatch
         // lifecycle as the scroll targets.
         self.nav_targets.clear();
@@ -5395,6 +5623,15 @@ impl Interpreter {
         transform: byard_core::frame::Transform,
         frame: &mut byard_core::frame::RenderFrame,
     ) {
+        // RFC-0037: a `path` with a body is Tier-2, tessellated and filled by
+        // the `CanvasFill` pipeline. A `path(d: …)` with no body is Tier-1,
+        // baked into the MSDF atlas below. Both are the same command, drawn by
+        // whichever pipeline suits the shape: static art amortises a bake,
+        // geometry that changes with the data does not.
+        if !el.children.is_empty() {
+            self.emit_filled_path(el, canvas, opacity, transform, frame);
+            return;
+        }
         let Some(fill) = self.shape_color(el, "fill") else {
             return; // no fill → nothing to rasterize (stroke is rejected upstream)
         };
@@ -5438,6 +5675,134 @@ impl Interpreter {
             glyph.px_range,
             glyph.layer,
         ));
+    }
+
+    /// A Tier-2 filled path (RFC-0037): evaluate the commands, tessellate them
+    /// if they changed, and push the mesh.
+    ///
+    /// The evaluation happens every tick, because a command's coordinates are
+    /// ordinary expressions and a chart's are ordinary data. The
+    /// *tessellation* happens only when the numbers those expressions produced
+    /// differ from last time, which is what keeps a live chart inside the
+    /// frame budget: the expensive step is the one that is skipped
+    /// (INV-23, RFC-0032's dirty model).
+    fn emit_filled_path(
+        &mut self,
+        el: &ElementNode,
+        canvas: crate::interp::intrinsics::Rect,
+        opacity: f32,
+        transform: byard_core::frame::Transform,
+        frame: &mut byard_core::frame::RenderFrame,
+    ) {
+        let commands = self.eval_path_commands(&el.children, canvas);
+        if commands.len() < 2 {
+            // One point is not a shape. Silent rather than an error, because
+            // an empty `for` over an empty series is a perfectly ordinary
+            // frame of a chart that has no data yet.
+            return;
+        }
+        let fill = self.shape_color(el, "fill").unwrap_or([0.0; 4]);
+        let gradient = Self::shape_arg(el, "gradient")
+            .cloned()
+            .and_then(|expr| self.resolve_gradient_expr(&expr, 0.0));
+        if gradient.is_none() && fill[3] <= 0.0 {
+            return; // nothing to paint
+        }
+        let even_odd = Self::shape_token(el, "winding").as_deref() == Some("even_odd");
+
+        // The flattening tolerance is derived from the path's on-screen size:
+        // a sparkline in a 40px card and a chart across a 4K window are the
+        // same commands and want very different triangle counts (RFC-0037).
+        let scale = transform.scale[0]
+            .abs()
+            .max(transform.scale[1].abs())
+            .max(0.01);
+        let extent = (canvas.w.max(canvas.h) * scale).max(1.0);
+        let tolerance = (extent / 800.0).clamp(0.05, 0.5);
+
+        let key = path_fingerprint(&commands, tolerance, even_odd);
+        let mesh = if let Some(cached) = self.path_meshes.get_mut(&key) {
+            cached.last_used = self.frame_seq;
+            std::sync::Arc::clone(&cached.mesh)
+        } else {
+            let mesh = std::sync::Arc::new(tessellate_path(&commands, tolerance, even_odd));
+            self.tessellations += 1;
+            self.path_meshes.insert(
+                key,
+                CachedMesh {
+                    mesh: std::sync::Arc::clone(&mesh),
+                    last_used: self.frame_seq,
+                },
+            );
+            mesh
+        };
+        if mesh.indices.is_empty() {
+            return;
+        }
+
+        let shape_opacity = opacity * self.shape_num(el, "opacity").unwrap_or(1.0);
+        frame.push_fill(byard_core::frame::CanvasFill {
+            mesh,
+            color: fill,
+            gradient,
+            transform,
+            opacity: shape_opacity,
+            dirty: true,
+        });
+    }
+
+    /// Evaluates a path body into absolute points (RFC-0037).
+    ///
+    /// Absolute, and offset by the canvas' own origin, because everything
+    /// downstream of here works in the frame's logical-pixel space and a mesh
+    /// that remembered it was relative would have to be re-tessellated every
+    /// time its canvas moved.
+    fn eval_path_commands(
+        &mut self,
+        members: &[Member],
+        canvas: crate::interp::intrinsics::Rect,
+    ) -> Vec<PathCommand> {
+        let mut out = Vec::new();
+        for member in members {
+            let Member::Element(cmd) = member else {
+                continue;
+            };
+            let coords: Vec<f32> = {
+                let params = super::intrinsics::path_command_params(cmd.name.as_str());
+                let mut values = Vec::with_capacity(params.len());
+                for (i, (pname, _)) in params.iter().enumerate() {
+                    let expr = cmd
+                        .content
+                        .iter()
+                        .find(|a| a.name.as_ref().is_some_and(|n| n.as_str() == *pname))
+                        .or_else(|| cmd.content.iter().filter(|a| a.name.is_none()).nth(i))
+                        .map(|a| a.value.clone());
+                    values.push(expr.map_or(0.0, |e| self.eval_num(&e)));
+                }
+                values
+            };
+            let at = |i: usize| [canvas.x + coords[i], canvas.y + coords[i + 1]];
+            match cmd.name.as_str() {
+                "move" => out.push(PathCommand::Move(at(0))),
+                "line" => out.push(PathCommand::Line(at(0))),
+                "quad" => out.push(PathCommand::Quad(at(0), at(2))),
+                "cubic" => out.push(PathCommand::Cubic(at(0), at(2), at(4))),
+                "close" => out.push(PathCommand::Close),
+                _ => {}
+            }
+        }
+        out
+    }
+
+    /// How many paths this interpreter has tessellated, ever (RFC-0037,
+    /// INV-18/INV-19).
+    ///
+    /// The number the caching claim is made of: a chart whose data did not
+    /// change must not move it. Exposed rather than inferred, because "the
+    /// frame was fast" is not evidence that the expensive step was skipped.
+    #[must_use]
+    pub const fn tessellations(&self) -> u64 {
+        self.tessellations
     }
 
     /// A canvas `text(…)` command: a `TextLine` anchored at `(x, y)` with
@@ -9122,6 +9487,26 @@ impl Interpreter {
             (n, AttrKind::Prop { value }) if n.as_str() == "gradient" => Some(value),
             _ => None,
         })?;
+        let value = value.clone();
+        let offset = self
+            .eval_float_prop(attrs, "gradient_offset")
+            .map_or(0.0, |v| v as f32);
+        self.resolve_gradient_expr(&value, offset)
+    }
+
+    /// The gradient a `(kind: …, from: …, to: …)` tuple describes.
+    ///
+    /// Split out from [`resolve_gradient`](Self::resolve_gradient) so a filled
+    /// path reads its gradient through the *same* parser a box does
+    /// (RFC-0037 resolved question: share the descriptor, do not fork it). The
+    /// alternative is two parsers that agree until one of them learns
+    /// something, which is how a path gradient and a box gradient end up
+    /// meaning different things by the same words.
+    fn resolve_gradient_expr(
+        &mut self,
+        value: &Expr,
+        offset: f32,
+    ) -> Option<byard_core::frame::Gradient> {
         let Expr::Tuple(args, span) = value else {
             self.errors.push(CompileError::AttributeTypeMismatch {
                 span: value.span(),
@@ -9216,9 +9601,6 @@ impl Interpreter {
             });
             return None;
         };
-        let offset = self
-            .eval_float_prop(attrs, "gradient_offset")
-            .map_or(0.0, |v| v as f32);
         // RFC-0035 §Compiler validation, all three of it.
         if kind == byard_core::frame::GradientKind::Radial && radius <= 0.0 {
             self.errors.push(CompileError::AttributeTypeMismatch {

@@ -1303,11 +1303,55 @@ pub const SHAPE_COMMAND_NAMES: &[&str] = &[
     "arc", "circle", "line", "rect", "ngon", "path", "bezier", "text",
 ];
 
+/// The commands a `path { … }` body may contain (RFC-0037 Tier-2).
+///
+/// A closed set, like the shape commands: a path is built from moves, lines
+/// and curves, and a name outside this list is a typo rather than an
+/// extension point.
+pub const PATH_COMMAND_NAMES: &[&str] = &["move", "line", "cubic", "quad", "close"];
+
+/// Whether `name` is one of the RFC-0037 path commands.
+#[must_use]
+pub fn is_path_command(name: &str) -> bool {
+    PATH_COMMAND_NAMES.contains(&name)
+}
+
+/// The parameters one path command takes, in order (RFC-0037).
+///
+/// Coordinate pairs rather than the RFC sketch's `Vec2` arguments, because
+/// every other canvas command spells a point as two numbers and one command
+/// spelling it differently is a rule nobody can remember.
+#[must_use]
+pub fn path_command_params(name: &str) -> ShapeParams {
+    match name {
+        "move" | "line" => &[("x", PropType::Float), ("y", PropType::Float)],
+        "quad" => &[
+            ("cx", PropType::Float),
+            ("cy", PropType::Float),
+            ("x", PropType::Float),
+            ("y", PropType::Float),
+        ],
+        "cubic" => &[
+            ("c1x", PropType::Float),
+            ("c1y", PropType::Float),
+            ("c2x", PropType::Float),
+            ("c2y", PropType::Float),
+            ("x", PropType::Float),
+            ("y", PropType::Float),
+        ],
+        _ => &[],
+    }
+}
+
 /// Whether `name` is one of the RFC-0020 shape commands.
 #[must_use]
 pub fn is_shape_command(name: &str) -> bool {
     SHAPE_COMMAND_NAMES.contains(&name)
 }
+
+/// Fill-rule tokens (RFC-0037): which points a self-intersecting path
+/// encloses. `nonzero` is the default everywhere that has one.
+const WINDING: &[&str] = &["nonzero", "even_odd"];
 
 /// Line-cap tokens (RFC-0020 §"Stroke and fill").
 const CAP: &[&str] = &["butt", "round", "square"];
@@ -1330,7 +1374,7 @@ const SHAPE_PAINT_PARAMS: &[(&str, PropType)] = &[
 ];
 
 /// A static table of shape-parameter `(name, type)` pairs.
-type ShapeParams = &'static [(&'static str, PropType)];
+pub type ShapeParams = &'static [(&'static str, PropType)];
 
 /// Geometry parameters per shape command: `(required, optional)` name/type
 /// pairs, not counting the shared [`SHAPE_PAINT_PARAMS`].
@@ -1390,7 +1434,19 @@ fn shape_geometry(name: &str) -> (ShapeParams, ShapeParams) {
                 ("rotate", PropType::Angle),
             ],
         ),
-        "path" => (&[("d", PropType::Str)], &[]),
+        // Tier-1 (`d:`, rasterised through the MSDF atlas) and Tier-2 (a
+        // command body, tessellated) are the same command with two spellings,
+        // because they are the same shape drawn by whichever pipeline suits
+        // it: static art amortises a bake, dynamic geometry does not
+        // (RFC-0037's dividing line).
+        "path" => (
+            &[],
+            &[
+                ("d", PropType::Str),
+                ("gradient", PropType::Str),
+                ("winding", PropType::Enum(WINDING)),
+            ],
+        ),
         "bezier" => (
             &[
                 ("x1", PropType::Float),
@@ -1416,6 +1472,77 @@ fn shape_geometry(name: &str) -> (ShapeParams, ShapeParams) {
         ),
         _ => (&[], &[]),
     }
+}
+
+/// Validates a `path { … }` body (RFC-0037): path commands only, each with the
+/// parameters it takes, and a first command that establishes where the path
+/// starts.
+fn validate_path_body(el: &ElementNode) -> Vec<CompileError> {
+    let mut errs = Vec::new();
+    let mut first = true;
+    for member in &el.children {
+        let Member::Element(cmd) = member else {
+            // A `for` or a `when` inside a path body is a shape the language
+            // cannot check the arity of yet; the shape commands have the same
+            // restriction, and lifting it is a change to both.
+            continue;
+        };
+        let name = cmd.name.as_str();
+        if !is_path_command(name) {
+            errs.push(CompileError::UnknownShapeCommand {
+                span: cmd.span,
+                name: name.to_string(),
+                hint: closest_match(name, PATH_COMMAND_NAMES.iter().copied()).map(str::to_string),
+            });
+            continue;
+        }
+        if first && name != "move" {
+            // A path that starts with a `line` has no start point to draw
+            // from, and picking one silently (the origin, the last path's end)
+            // is how a chart ends up with a stray triangle nobody can explain.
+            errs.push(CompileError::PathMustStartWithMove { span: cmd.span });
+        }
+        first = false;
+
+        let params = path_command_params(name);
+        let positional = cmd.content.iter().filter(|a| a.name.is_none()).count();
+        let named = cmd.content.len() - positional;
+        if positional > 0 && positional != params.len() {
+            errs.push(CompileError::ArityMismatch {
+                span: cmd.span,
+                name: name.to_string(),
+                expected: params.len(),
+                found: positional,
+            });
+        }
+        for arg in &cmd.content {
+            let Some(argname) = &arg.name else { continue };
+            let known = params.iter().find(|(k, _)| *k == argname.as_str());
+            match known {
+                Some((_, ty)) => {
+                    if let Some(err) = check_value_type(*ty, &arg.value) {
+                        errs.push(err);
+                    }
+                }
+                None => errs.push(CompileError::UnknownShapeParam {
+                    span: arg.value.span(),
+                    shape: name.to_string(),
+                    name: argname.as_str().to_string(),
+                    hint: closest_match(argname.as_str(), params.iter().map(|(k, _)| *k))
+                        .map(str::to_string),
+                }),
+            }
+        }
+        if positional == 0 && named < params.len() {
+            errs.push(CompileError::ArityMismatch {
+                span: cmd.span,
+                name: name.to_string(),
+                expected: params.len(),
+                found: named,
+            });
+        }
+    }
+    errs
 }
 
 /// Validates a `Canvas` element (RFC-0020 §1): required `width`/`height`
@@ -1648,10 +1775,15 @@ pub fn validate_shape(el: &ElementNode) -> Vec<CompileError> {
         });
     }
     if !el.children.is_empty() {
-        errs.push(CompileError::UnexpectedChildren {
-            span: el.span,
-            name: shape.to_string(),
-        });
+        // RFC-0037: except a `path`, whose body *is* its geometry.
+        if shape == "path" {
+            errs.extend(validate_path_body(el));
+        } else {
+            errs.push(CompileError::UnexpectedChildren {
+                span: el.span,
+                name: shape.to_string(),
+            });
+        }
     }
 
     let param_type = |name: &str| -> Option<PropType> {

@@ -65,6 +65,7 @@
 //!   exactly the frames worth reading.
 
 pub mod backdrop;
+pub mod canvas_fill;
 pub mod canvas_shape;
 pub mod decorated_box;
 pub mod gpu_timer;
@@ -635,6 +636,17 @@ impl EncoderSubsystem {
             draw_depth_stencil_no_write(),
         )
         .await?;
+        // `CanvasFill` pipeline (RFC-0037, Tier-2 filled paths), registered
+        // through the extension ABI like a package's would be (RFC-0039).
+        // Transparent geometry, so the same no-write depth state the other
+        // anti-aliased pipelines use.
+        let canvas_fill_pipeline = canvas_fill::build_pipeline(
+            &device,
+            &bind_group_layout,
+            surface_format,
+            draw_depth_stencil_no_write(),
+        )
+        .await?;
         // `Ripple` pipeline (RFC-0023, the seventh pipeline). Transparent
         // geometry (the ink reveal), so it also uses the no-write depth
         // state, its stamped depth places it between an element's
@@ -707,6 +719,10 @@ impl EncoderSubsystem {
             texture_pipeline,
         ))?;
         pipelines.register_core(vector_msdf::VectorMsdfPipeline::new(vector_pipeline))?;
+        // RFC-0037 draws after the Tier-1 shapes it shares a canvas with,
+        // which is where a fill belongs: a stroke over its own fill is the
+        // shape everybody draws, and the depth each carries orders the rest.
+        pipelines.register_core(canvas_fill::CanvasFillPipeline::new(canvas_fill_pipeline))?;
 
         Ok(Self {
             device,
@@ -992,7 +1008,7 @@ impl EncoderSubsystem {
             &[],
             &[],
             &[],
-            (&[], &[]),
+            CanvasPools::default(),
             &[],
             &[],
             (&[], &[]),
@@ -1019,13 +1035,12 @@ impl EncoderSubsystem {
         decorated: &[crate::frame::DecoratedBox],
         textures: &[crate::frame::TextureSampler],
         vectors: &[VectorInstance],
-        // The `Canvas` pool and the shape-record pool its group heads index
-        // into (RFC-0031 §S4), bundled because one is meaningless without the
-        // other, a head whose members were not uploaded draws nothing.
-        (canvas_shapes, shape_records): (
-            &[crate::frame::CanvasShape],
-            &[crate::frame::ShapeRecord],
-        ),
+        // Everything a `Canvas` emits: Tier-1 shapes with the record pool its
+        // group heads index into (RFC-0031 §S4), and Tier-2 filled paths with
+        // their depths (RFC-0037). Bundled because each half is meaningless
+        // without the others, a head whose members were not uploaded draws
+        // nothing, and a mesh without its depth has no place in the order.
+        canvas: CanvasPools<'_>,
         ripples: &[RippleInstance],
         atlas_uploads: &[AtlasUpload],
         // The backdrop pool and its parallel barrier snapshots (RFC-0023 §2),
@@ -1053,6 +1068,12 @@ impl EncoderSubsystem {
         // asynchronously two frames later by `gpu_timer.rs`. Both land on
         // this thread's ring; the overlay separates them by `ScopeKind`.
         crate::profile_scope!("encode.frame");
+        let CanvasPools {
+            shapes: canvas_shapes,
+            records: shape_records,
+            fills,
+            fill_depths,
+        } = canvas;
         {
             // RFC-0030 §I1 sub-scope: everything this frame hands to the GPU
             // that is *not* instance data, the vector MSDF atlas layers and
@@ -1194,6 +1215,7 @@ impl EncoderSubsystem {
             ripple: u32::try_from(ripples.len()).unwrap_or(u32::MAX),
             backdrop: u32::try_from(backdrops.len()).unwrap_or(u32::MAX),
             native: u32::try_from(native.batches.len()).unwrap_or(u32::MAX),
+            fill: u32::try_from(fills.len()).unwrap_or(u32::MAX),
         };
         let segments = compute_segments(layers, backdrop_marks, &totals);
 
@@ -1288,6 +1310,8 @@ impl EncoderSubsystem {
                     shape_records,
                     ripples,
                     native: native.batches,
+                    fills,
+                    fill_depths,
                     solid_depths: depths.solid,
                     decorated_depths: depths.decorated,
                     texture_depths: depths.texture,
@@ -1398,7 +1422,12 @@ impl EncoderSubsystem {
             frame.decorated(),
             frame.textures(),
             frame.vector_instances(),
-            (frame.canvas_shapes(), frame.shape_records()),
+            CanvasPools {
+                shapes: frame.canvas_shapes(),
+                records: frame.shape_records(),
+                fills: frame.fills(),
+                fill_depths: frame.fill_depths(),
+            },
             frame.ripples(),
             frame.atlas_uploads(),
             (frame.backdrops(), frame.backdrop_marks()),
@@ -1603,6 +1632,10 @@ pub struct SegmentStaging {
     ripple: instance_arena::Region,
     canvas: instance_arena::Region,
     vector: instance_arena::Region,
+    /// This segment's tessellated filled paths (RFC-0037), staged. One entry
+    /// per path, because a mesh is variable-length and cannot share a stride
+    /// with the next one.
+    fills: Vec<canvas_fill::StagedFill>,
     textures: Vec<texture_sampler::StagedImage>,
     /// This segment's native-view batches, staged (RFC-0039). One entry per
     /// batch, in emission order, cleared and refilled like `textures`.
@@ -1641,9 +1674,26 @@ impl FrameStaging {
             seg.canvas = instance_arena::Region::default();
             seg.vector = instance_arena::Region::default();
             seg.textures.clear();
+            seg.fills.clear();
             seg.native.clear();
         }
     }
+}
+
+/// Everything a `Canvas` put on this frame.
+///
+/// [`Default`] is empty on every field, which is what the raw solid+text
+/// convenience path passes and what an app with no `Canvas` produces.
+#[derive(Clone, Copy, Default)]
+pub struct CanvasPools<'a> {
+    /// Tier-1 analytic shapes (RFC-0020).
+    pub shapes: &'a [crate::frame::CanvasShape],
+    /// The shape-record pool group heads index into (RFC-0031 §S4).
+    pub records: &'a [crate::frame::ShapeRecord],
+    /// Tier-2 tessellated filled paths (RFC-0037).
+    pub fills: &'a [crate::frame::CanvasFill],
+    /// Draw-order depths, parallel to `fills`.
+    pub fill_depths: &'a [f32],
 }
 
 /// What a frame's native views emitted, as the encoder reads it (RFC-0039).
@@ -1757,6 +1807,9 @@ struct DrawPrimitives<'a> {
     /// Native-view batches (RFC-0039). Each carries its own depth, like
     /// `ripples`, because a batch is emitted as a unit.
     native: &'a [crate::render::NativeBatch],
+    /// Tessellated filled paths (RFC-0037), with their parallel depths.
+    fills: &'a [crate::frame::CanvasFill],
+    fill_depths: &'a [f32],
     /// Draw-order depths, parallel to `instances`/`decorated`/`textures`
     /// respectively (RFC-0011 cross-pass paint order). `texts` depth is applied
     /// inside `TextGlyphPipeline::prepare` via glyphon's per-glyph metadata;
@@ -1791,6 +1844,8 @@ pub struct SegmentRanges {
     ripple: std::ops::Range<usize>,
     /// This segment's native-view batches (RFC-0039).
     native: std::ops::Range<usize>,
+    /// This segment's tessellated filled paths (RFC-0037).
+    fill: std::ops::Range<usize>,
     /// `Some(b)`: after drawing this segment, end the pass, blur what has
     /// been rasterised so far for backdrop `b`, and composite `b` at the
     /// start of the next segment's pass.
@@ -1844,6 +1899,12 @@ fn stage_segment(
         record_base,
     );
     out.vector = arena.push_vertex(&primitives.vectors[seg.vector.clone()]);
+    canvas_fill::stage(
+        arena,
+        &mut out.fills,
+        &primitives.fills[seg.fill.clone()],
+        sub_slice(primitives.fill_depths, &seg.fill),
+    );
     stage_native_batches(
         &primitives.native[seg.native.clone()],
         &mut out.native,
@@ -1980,6 +2041,7 @@ fn segment_belongs_to(seg: &SegmentRanges, base: LayerMark) -> bool {
         && at_or_after(seg.canvas.start, base.canvas)
         && at_or_after(seg.ripple.start, base.ripple)
         && at_or_after(seg.native.start, base.native)
+        && at_or_after(seg.fill.start, base.fill)
 }
 
 /// Field-wise clamp of a pool-cursor snapshot into `[lo, hi]`, the same
@@ -1998,6 +2060,7 @@ fn mark_clamped(m: &LayerMark, lo: &LayerMark, hi: &LayerMark) -> LayerMark {
         ripple: m.ripple.clamp(lo.ripple, hi.ripple),
         backdrop: m.backdrop.clamp(lo.backdrop, hi.backdrop),
         native: m.native.clamp(lo.native, hi.native),
+        fill: m.fill.clamp(lo.fill, hi.fill),
     }
 }
 
@@ -2012,6 +2075,7 @@ fn ranges_between(a: &LayerMark, b: &LayerMark, backdrop_after: Option<usize>) -
         canvas: a.canvas as usize..b.canvas as usize,
         ripple: a.ripple as usize..b.ripple as usize,
         native: a.native as usize..b.native as usize,
+        fill: a.fill as usize..b.fill as usize,
         backdrop_after,
     }
 }

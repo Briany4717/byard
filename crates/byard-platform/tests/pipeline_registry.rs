@@ -142,9 +142,11 @@ fn the_draw_order_is_declared_and_two_encoders_agree_on_it() {
         second.pipeline_order(),
         "two encoders built the same way draw in the same order (INV-32)"
     );
-    // The historical order, which is what makes the refactor a parity change:
-    // these are the same pipelines, drawn at the same points, as before the
-    // registry existed.
+    // The historical order, which is what made the registry a parity change:
+    // these are the same pipelines, drawn at the same points, as before it
+    // existed. `canvas_fill` (RFC-0037) is the first pipeline that is not one
+    // of them, and it is *after* them, which is where a registration lands
+    // that did not exist when the order was written down (INV-32).
     assert_eq!(
         first.pipeline_order(),
         vec![
@@ -154,6 +156,7 @@ fn the_draw_order_is_declared_and_two_encoders_agree_on_it() {
             "canvas_shape",
             "texture_sampler",
             "vector_msdf",
+            "canvas_fill",
         ]
     );
 }

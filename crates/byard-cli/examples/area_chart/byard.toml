@@ -1,0 +1,3 @@
+[project]
+name = "area_chart"
+entry = "src/main.byd"

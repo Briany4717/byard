@@ -14,6 +14,7 @@ fn mark(n: u32) -> crate::frame::LayerMark {
         ripple: n,
         backdrop: n,
         native: n,
+        fill: n,
     }
 }
 

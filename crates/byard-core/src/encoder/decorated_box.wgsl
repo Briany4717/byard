@@ -132,81 +132,6 @@ fn vs_main(vertex: VertexInput, instance: InstanceInput) -> VertexOutput {
     return out;
 }
 
-const GRAD_LINEAR: u32 = 0u;
-const GRAD_RADIAL: u32 = 1u;
-const GRAD_CONIC: u32 = 2u;
-const GRAD_NONE: u32 = 3u;
-const TAU: f32 = 6.28318530718;
-
-/// The ramp's parameter at this fragment, for a **linear** gradient
-/// (RFC-0001 §3.1): projects the point onto the ramp's axis, normalized so `0`
-/// is the box's leading edge along that axis and `1` the trailing one, shifted
-/// by `offset` and **wrapped**, which is what makes an animated offset a
-/// seamless travelling sweep.
-///
-/// Kept as its own function, expression for expression, because every gradient
-/// written before RFC-0035 takes this path and has to keep producing the same
-/// bits (INV-22). The kind branch is around it, never inside it.
-fn linear_t(in: VertexOutput) -> f32 {
-    let dir = in.grad_axis.xy;
-    // Half-extent of the box measured along `dir` (a box is convex, so the
-    // support function is just the weighted sum of the half-sizes).
-    let extent = max(abs(dir.x) * in.half_size.x + abs(dir.y) * in.half_size.y, 1e-5);
-    let raw = (dot(in.local_pos, dir) / extent) * 0.5 + 0.5 + in.grad_axis.w;
-    return fract(raw);
-}
-
-/// The ramp's parameter for a **radial** gradient (RFC-0035): distance from the
-/// centre, in units of `radius` half-diagonals.
-///
-/// The offset from the centre is divided by the box's half-size before it is
-/// measured, so the falloff is circular in the box's *own* aspect: a glow on a
-/// 2:1 card stays a circle rather than being stretched into an ellipse by the
-/// element it happens to live in.
-fn radial_t(in: VertexOutput) -> f32 {
-    let center = (in.grad_axis.xy - vec2<f32>(0.5)) * 2.0 * in.half_size;
-    let half = max(in.half_size, vec2<f32>(1e-5));
-    let aspect = half / max(half.x, half.y);
-    let d = (in.local_pos - center) / half * aspect;
-    return clamp(length(d) / max(in.grad_axis.z, 1e-5), 0.0, 1.0);
-}
-
-/// The ramp's parameter for a **conic** gradient (RFC-0035): the fragment's
-/// angle around the centre, measured from `start` and wrapped into `0..1`.
-///
-/// `fract` of a full turn is what makes the sweep meet itself: the stop
-/// interpolation below is cyclic in `t`, so there is no seam at the start
-/// angle as long as `from` and `to` are the same colour, which is what a dial
-/// that wraps means.
-fn conic_t(in: VertexOutput) -> f32 {
-    let center = (in.grad_axis.xy - vec2<f32>(0.5)) * 2.0 * in.half_size;
-    let d = in.local_pos - center;
-    return fract((atan2(d.y, d.x) - in.grad_axis.z) / TAU + 1.0);
-}
-
-/// The gradient's colour at this fragment: one scalar `t` per kind, then the
-/// *same* three-stop interpolation for all of them. `mid` splits the ramp at
-/// `mid_pos`, so a three-stop highlight band (transparent → bright →
-/// transparent) is expressible, not just a two-stop fade.
-fn gradient_color(in: VertexOutput) -> vec4<f32> {
-    var t = 0.0;
-    var mid_pos = 0.0;
-    if (in.grad_kind == GRAD_LINEAR) {
-        t = linear_t(in);
-        mid_pos = clamp(in.grad_axis.z, 0.0, 1.0);
-    } else if (in.grad_kind == GRAD_RADIAL) {
-        t = radial_t(in);
-        mid_pos = clamp(in.grad_axis.w, 0.0, 1.0);
-    } else {
-        t = conic_t(in);
-        mid_pos = clamp(in.grad_axis.w, 0.0, 1.0);
-    }
-    if (t < mid_pos) {
-        return mix(in.grad_from, in.grad_mid, t / max(mid_pos, 1e-5));
-    }
-    return mix(in.grad_mid, in.grad_to, (t - mid_pos) / max(1.0 - mid_pos, 1e-5));
-}
-
 /// Lⁿ norm of a **non-negative** 2-vector, paired with the magnitude of its own
 /// gradient (RFC-0031 §S1–S2).
 ///
@@ -303,7 +228,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // so a translucent ramp brightens/darkens the surface instead of replacing
     // it, the shimmer case, while an opaque one paints the surface outright.
     if (has_gradient) {
-        let g = gradient_color(in);
+        let g = gradient_color(
+            in.grad_kind,
+            in.grad_from,
+            in.grad_mid,
+            in.grad_to,
+            in.grad_axis,
+            in.local_pos,
+            in.half_size,
+        );
         let a = g.a + surface.a * (1.0 - g.a);
         if (a > 0.0) {
             surface = vec4<f32>(

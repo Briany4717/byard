@@ -691,6 +691,44 @@ fn an_animated_member_repaints_its_fusion_group() {
     }
 }
 
+/// The same rule, one pool over: a wrapping line's width is not in the line.
+///
+/// A paragraph pinned to the top-left of a window that is resized keeps its
+/// string, its origin and its colour, and breaks in different places. If the
+/// wrap width is left out of the comparison the line is reported clean, and
+/// `dirty` is what builds the incremental redraw region, so the correctly
+/// shaped new text is clipped out of the rectangle that gets repainted.
+#[test]
+fn a_resize_repaints_a_paragraph_that_only_changed_where_it_breaks() {
+    let (mut interp, tree) = lower_named(
+        "View App() { Column #[p: 24] { \
+             Text(\"a paragraph long enough to wrap inside its column, pinned to the \
+                   top left so a resize moves nothing about it except the width it \
+                   wraps at\") #[color: 0xFFFFFF, size: 14] } }",
+        "App",
+    );
+    let mut digest = byard_core::frame::PaintDigest::new();
+    let mut render = |interp: &mut Interpreter, width: f32| {
+        interp.tick();
+        let mut frame = byard_core::frame::RenderFrame::new();
+        interp.render(&tree, &mut frame, width, 600.0);
+        digest.apply(&mut frame);
+        let line = frame.texts()[0].clone();
+        let wrap = frame.text_wraps()[0];
+        (line, wrap)
+    };
+    let (before, wrap_before) = render(&mut interp, 800.0);
+    let (after, wrap_after) = render(&mut interp, 900.0);
+    assert_ne!(wrap_before, wrap_after, "the resize must change the wrap");
+    assert_eq!(before.text, after.text, "and nothing else about the line");
+    assert!((before.x - after.x).abs() < f32::EPSILON);
+    assert!((before.y - after.y).abs() < f32::EPSILON);
+    assert!(
+        after.dirty,
+        "a line that breaks in new places has to be repainted"
+    );
+}
+
 /// A `for` inside a grouped canvas can generate more members than the cap
 /// allows, and how many is only knowable at render time. The static check
 /// cannot see it; this one can, and it diagnoses rather than truncating in

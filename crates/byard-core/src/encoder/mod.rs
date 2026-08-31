@@ -2976,9 +2976,6 @@ fn build_viewport_bind_group(
     })
 }
 
-/// Bytes of real payload in one clip entry: `rect` then `radii`, two `vec4`s.
-pub(crate) const CLIP_ENTRY_SIZE: u64 = 32;
-
 /// Stride between clip entries in [`clip_buffer`]. A dynamic uniform offset
 /// must be a multiple of `min_uniform_buffer_offset_alignment`, whose maximum
 /// guaranteed value across adapters is 256, so the stride is 256 everywhere
@@ -2986,6 +2983,18 @@ pub(crate) const CLIP_ENTRY_SIZE: u64 = 32;
 ///
 /// [`clip_buffer`]: EncoderSubsystem::clip_buffer
 pub(crate) const CLIP_STRIDE: u64 = 256;
+
+/// Bytes bound for one clip entry.
+///
+/// The payload is two `vec4`s — `rect` then `radii`, 32 bytes — but the binding
+/// is the **whole stride**, because a D3D12 constant-buffer view must be a
+/// multiple of 256 bytes in both offset and size. Asking for a 32-byte window
+/// is legal on Metal and Vulkan and is not on D3D12, and the way it failed was
+/// not an error: the shader read the entry shifted, so `rect` came back holding
+/// `radii`. A square clip then had a zero-sized rect and painted nothing, while
+/// a rounded one had a degenerate-but-nonzero rect and still painted an arc —
+/// which is exactly the split Windows CI reported.
+pub(crate) const CLIP_ENTRY_SIZE: u64 = CLIP_STRIDE;
 
 /// The clip table as the GPU reads it: entry 0 is the "no clip" sentinel and
 /// every real clip follows in table order, so a clip index maps to an offset

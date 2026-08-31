@@ -286,15 +286,30 @@ fn a_square_clip_stays_square() {
     let mut enc = encoder(&device, &queue);
     let image = render(&mut enc, &device, &queue, &framed([0.0; 4]));
 
+    // The control: the identical box with no clip opened at all. If a defect
+    // shows in both, it is not the clip's — and the clip is the only thing
+    // this file is entitled to accuse.
+    let mut bare = RenderFrame::new();
+    bare.request_full_redraw();
+    bare.push_instance(BoxInstance {
+        rect: AREA,
+        color: FILL,
+        radii: [0.0; 4],
+        transform: Transform::IDENTITY,
+        smooth: 0.0,
+    });
+    let mut enc2 = encoder(&device, &queue);
+    let unclipped = render(&mut enc2, &device, &queue, &bare);
+
     // A coarse alpha map in the failure message. Two guesses at this from the
     // outside were both wrong, and the assertions sample four points, which
     // cannot distinguish "the clip cut the corners" from "nothing painted at
     // all" — the distinction the whole diagnosis turns on.
-    let map = || {
-        let mut out = String::from("\nalpha map (8px grid):\n");
+    let map_of = |img: &[u8], title: &str| {
+        let mut out = format!("\n{title}\n");
         for gy in 0..(SIZE / 8) {
             for gx in 0..(SIZE / 8) {
-                let a = at(&image, gx * 8 + 4, gy * 8 + 4).3;
+                let a = at(img, gx * 8 + 4, gy * 8 + 4).3;
                 out.push(match a {
                     0 => '.',
                     1..=84 => '-',
@@ -305,6 +320,13 @@ fn a_square_clip_stays_square() {
             out.push('\n');
         }
         out
+    };
+    let map = || {
+        format!(
+            "{}{}",
+            map_of(&image, "clipped (8px grid):"),
+            map_of(&unclipped, "UNCLIPPED control, same box, no clip opened:")
+        )
     };
 
     let [x, y, w, h] = AREA;

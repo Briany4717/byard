@@ -1043,8 +1043,8 @@ fn push_stroke_quad(
     let dx = b[0] - a[0];
     let dy = b[1] - a[1];
     let len = (dx * dx + dy * dy).sqrt();
-    let cx = (a[0] + b[0]) * 0.5;
-    let cy = (a[1] + b[1]) * 0.5;
+    let cx = f32::midpoint(a[0], b[0]);
+    let cy = f32::midpoint(a[1], b[1]);
     let seg = byard_core::frame::Transform {
         rotate: dy.atan2(dx),
         origin: [cx, cy],

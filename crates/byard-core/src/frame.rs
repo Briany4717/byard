@@ -233,7 +233,7 @@ impl Transform {
     /// transform is non-uniform. Exact for the common uniform-scale case.
     #[must_use]
     pub fn uniform_scale(&self) -> f32 {
-        (self.scale[0] + self.scale[1]) * 0.5
+        f32::midpoint(self.scale[0], self.scale[1])
     }
 
     /// Composes `self` (the outer / ancestor transform) with `inner` (a

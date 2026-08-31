@@ -56,9 +56,19 @@ fn clip_sdf(p: vec2<f32>) -> f32 {
 /// every other edge this engine draws is antialiased. A hard `discard` would
 /// make the one boundary the user did not draw the only jagged one on screen.
 fn clip_coverage(p: vec2<f32>) -> f32 {
-    // `fwidth` is the boundary's width in this fragment's own screen space, so
-    // the fade stays one pixel wide at any DPI and under any transform.
+    // The band is half a pixel wide, as a constant, because this test already
+    // runs in physical pixels: `p` is `@builtin(position)` and the entry was
+    // uploaded scaled, so one unit *is* one device pixel and the width of the
+    // fade is known without asking the hardware for it.
+    //
+    // This deliberately does not use `fwidth`. A derivative is the one thing in
+    // this file whose value is not fully pinned by the spec, and it bought
+    // nothing here: a screen-space distance field has a gradient of one by
+    // construction. Windows CI is what established that it also bought a bug —
+    // a square clip painted nothing there while a rounded one painted fine,
+    // and a square clip's field is exactly the case where `length(max(d, 0))`
+    // is identically zero over a whole region and its derivative is least
+    // well-behaved.
     let d = clip_sdf(p);
-    let aa = max(fwidth(d), 1e-5);
-    return 1.0 - smoothstep(-aa, aa, d);
+    return saturate(1.0 - smoothstep(-0.5, 0.5, d));
 }

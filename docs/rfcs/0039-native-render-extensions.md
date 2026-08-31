@@ -7,6 +7,17 @@
   consumer and Canvas Tier-2 (RFC-0037) as the pipeline that proves the
   registration path carries a real one.
 
+  **One correction, found by auditing rather than by a bug report
+  (2026-08-31).** `RenderCtx::clip` was inert: the shape was carried on the
+  batch and hashed into the invalidation digest, and staging dropped it before
+  the draw. Because native batches are recorded straight after the core pools,
+  which leave the GPU scissor at their last clip run, a package widget did not
+  draw unclipped — it drew under whatever rectangle the rest of the scene
+  happened to leave behind, so the clip it got varied with unrelated content.
+  Every bookkeeping assertion about the clip passed throughout. It is fixed and
+  now guarded in pixels (`native_view_paint.rs`), which is the only kind of
+  test that could have caught it.
+
   **Deltas against this document, as written:**
 
   - `cx.emit` does not write "directly into the persistent instance arena".

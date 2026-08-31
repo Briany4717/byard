@@ -469,7 +469,7 @@ fn bench_rebuild_allocations(mid: u32, per_mid: u32, cycles: usize) {
     let retained = (c1 - c0) as f64 / cycles as f64;
     println!(
         "{:60} {:>10.1} allocs/frame retained  ({:.1} avoidable, {:.0} B)",
-        format!("  → of which the teardown+rebuild is responsible for"),
+        "  → of which the teardown+rebuild is responsible for",
         retained,
         rebuild - retained,
         (b1 - b0) as f64 / cycles as f64,

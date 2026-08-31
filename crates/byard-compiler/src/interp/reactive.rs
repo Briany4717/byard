@@ -394,6 +394,12 @@ impl ReactiveCtx {
         // `Interpreter::render` performs while structure settles (those nest
         // one level down, and the depth field keeps the frame total honest).
         byard_core::profile_scope!("interp.tick", byard_core::telemetry::ScopeKind::Interpreter);
+        // Drained rather than taken: this releases the borrow on `self` so
+        // the reconcile below can have it, and it leaves `dirty_structural`
+        // holding its capacity for the next tick. `mem::take`, which clippy
+        // suggests here, would move that capacity into a local and drop it,
+        // making the hot tick reallocate every frame.
+        #[allow(clippy::drain_collect)]
         let structural: Vec<ScopeId> = self.dirty_structural.drain(..).collect();
         for s in structural {
             self.reconcile_structural(s, epoch);

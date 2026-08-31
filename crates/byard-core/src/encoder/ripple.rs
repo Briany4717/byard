@@ -72,7 +72,12 @@ pub async fn build_pipeline(
 
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("ByardCore - Ripple WGSL Shader"),
-        source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(include_str!("ripple.wgsl"))),
+        source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Owned(format!(
+            "{}
+{}",
+            include_str!("clip.wgsl"),
+            include_str!("ripple.wgsl")
+        ))),
     });
 
     let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -142,7 +147,7 @@ pub fn draw(
         return;
     }
     render_pass.set_pipeline(pipeline);
-    render_pass.set_bind_group(0, bind_group, &[]);
+    render_pass.set_bind_group(0, bind_group, &[super::clip_offset(None)]);
     render_pass.set_vertex_buffer(0, quad_buffer.slice(..));
     render_pass.set_vertex_buffer(1, arena.slice(region));
     // Content-clip runs (RFC-0005): scissor each run to its ScrollView viewport.
@@ -192,7 +197,7 @@ impl super::pipeline::RenderPipeline for RipplePipeline {
             return;
         }
         pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, cx.viewport_bind_group, &[]);
+        pass.set_bind_group(0, cx.viewport_bind_group, &[super::clip_offset(None)]);
         pass.set_vertex_buffer(0, cx.quad_buffer.slice(..));
         pass.set_vertex_buffer(1, cx.arena.slice(cx.instances));
         pass.draw(0..4, 0..cx.count);

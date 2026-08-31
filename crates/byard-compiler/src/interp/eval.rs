@@ -6924,6 +6924,33 @@ impl Interpreter {
                 // is a two-way `Vec2` the app can read or drive on either axis;
                 // wheel and drag write it below. Rotation of a scroll viewport is
                 // out of scope (the clip is an axis-aligned screen rect).
+                // RFC-0037 clip masks: `Clip #[rrect: r]` clips its subtree
+                // to its own laid-out box. A zero (or absent) radius is a
+                // plain rectangular clip, which costs exactly what a
+                // `ScrollView`'s does — a scissor — so wrapping content in a
+                // square `Clip` is not a new expense.
+                let mask_clip = if name.as_str() == "Clip" {
+                    let tl = inherited_transform.apply_point([current_rect.x, current_rect.y]);
+                    let rect = byard_core::frame::Rect::new(
+                        tl[0],
+                        tl[1],
+                        current_rect.w * inherited_transform.scale[0],
+                        current_rect.h * inherited_transform.scale[1],
+                    );
+                    // Read the same way a box's `radius` is, so `rrect: 16`
+                    // and `rrect: (16, 0, 0, 16)` both mean here what they
+                    // already mean there. The radius scales with the subtree,
+                    // as a decorated box's corners do: a scaled card's clip
+                    // has to keep matching the card.
+                    let mut radii = self.resolve_radii(attrs, "rrect");
+                    for r in &mut radii {
+                        *r *= inherited_transform.scale[0];
+                    }
+                    frame.begin_clip_rounded(rect, radii);
+                    Some(())
+                } else {
+                    None
+                };
                 let scroll_clip = if name.as_str() == "ScrollView" {
                     let (ox, oy) = self.resolve_axis_pair(attrs, "offset", (0.0, 0.0));
                     let tl = inherited_transform.apply_point([current_rect.x, current_rect.y]);
@@ -7194,6 +7221,9 @@ impl Interpreter {
                     }
                 }
                 if scroll_clip.is_some() {
+                    frame.end_clip();
+                }
+                if mask_clip.is_some() {
                     frame.end_clip();
                 }
                 // Close the RFC-0019 instance-env scope opened at the top of this

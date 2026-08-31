@@ -1823,6 +1823,10 @@ pub struct NativeOutcome {
 pub struct ClipRect {
     /// The clip region in logical pixels.
     pub rect: Rect,
+    /// Per-corner radii `[tl, tr, br, bl]` in logical pixels (RFC-0037 clip
+    /// masks). All zero for a plain rectangular clip, which is the
+    /// `ScrollView` case and stays a pure scissor with no shader work.
+    pub radii: [f32; 4],
 }
 
 /// Axis-aligned intersection of two logical-pixel rects (empty if disjoint).
@@ -1994,12 +1998,43 @@ impl RenderFrame {
     /// clip is stored as its **intersection** with the enclosing clip, so the
     /// Encoder only ever sets one scissor rect. Returns the clip's index.
     pub fn begin_clip(&mut self, rect: Rect) -> u16 {
-        let clipped = match self.clip_stack.last() {
-            Some(&parent) => intersect_rect(self.clips[parent as usize].rect, rect),
-            None => rect,
+        self.begin_clip_rounded(rect, [0.0; 4])
+    }
+
+    /// Opens a **rounded** content clip (RFC-0037 clip masks): as
+    /// [`begin_clip`](Self::begin_clip), but fragments outside the rounded
+    /// rectangle are discarded by the shared clip test rather than only by the
+    /// scissor.
+    ///
+    /// Nesting keeps the established rule that a nested clip is stored as its
+    /// intersection with its parent, but the intersection of two rounded rects
+    /// is not a rounded rect. The corners of the *inner* clip are kept and the
+    /// parent contributes its box, which is exact whenever the inner clip sits
+    /// within the parent's straight edges — the case every real nesting is —
+    /// and conservative-in-the-safe-direction otherwise: it can only keep a
+    /// fragment the parent's corner would have cut, never cut one it kept, and
+    /// the parent's own scissor still bounds it.
+    pub fn begin_clip_rounded(&mut self, rect: Rect, radii: [f32; 4]) -> u16 {
+        let (clipped, radii) = match self.clip_stack.last() {
+            Some(&parent) => {
+                let p = self.clips[parent as usize];
+                let r = intersect_rect(p.rect, rect);
+                // Whichever clip actually has corners owns them; if both do,
+                // the inner one is the tighter statement. Asked as "does this
+                // clip round anything" rather than as an equality against
+                // zero, because a radius is a measurement and measurements do
+                // not compare exactly.
+                let rounds_nothing = radii.iter().all(|r| *r <= 0.0);
+                let radii = if rounds_nothing { p.radii } else { radii };
+                (r, radii)
+            }
+            None => (rect, radii),
         };
         let id = u16::try_from(self.clips.len()).unwrap_or(u16::MAX);
-        self.clips.push(ClipRect { rect: clipped });
+        self.clips.push(ClipRect {
+            rect: clipped,
+            radii,
+        });
         self.clip_stack.push(id);
         id
     }

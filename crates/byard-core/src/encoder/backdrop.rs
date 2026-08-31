@@ -495,6 +495,8 @@ fn blur_pass(
         multiview_mask: None,
     });
     pass.set_pipeline(&pipes.blur);
+    // The blur pass binds its own group 0 (the source texture and sampler),
+    // not the shared viewport group, so it takes no clip offset.
     pass.set_bind_group(0, &bind, &[]);
     pass.draw(0..3, 0..1);
 }
@@ -729,7 +731,7 @@ pub fn draw_composite(
     ctx: super::ClipCtx<'_>,
 ) {
     render_pass.set_pipeline(&pipes.composite);
-    render_pass.set_bind_group(0, viewport_bind_group, &[]);
+    render_pass.set_bind_group(0, viewport_bind_group, &[super::clip_offset(None)]);
     render_pass.set_bind_group(1, &prepared.bind_group, &[]);
     render_pass.set_vertex_buffer(0, quad_buffer.slice(..));
     render_pass.set_vertex_buffer(1, arena.slice(prepared.instance));

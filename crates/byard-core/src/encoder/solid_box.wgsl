@@ -207,5 +207,5 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         discard;
     }
 
-    return vec4<f32>(in.color.rgb, in.color.a * alpha * in.opacity);
+    return vec4<f32>(in.color.rgb, in.color.a * alpha * in.opacity * clip_coverage(in.position.xy));
 }

@@ -283,7 +283,19 @@ pub struct EncoderSubsystem {
     clear_pipeline: wgpu::RenderPipeline,
     quad_buffer: wgpu::Buffer,
     viewport_buffer: wgpu::Buffer,
+    /// The frame's clip table, as the fragment shaders read it (RFC-0037 clip
+    /// masks). One 256-byte-aligned entry per clip, selected by the dynamic
+    /// offset the clip-run walker sets; entry 0 is the "no clip" sentinel, so
+    /// an unclipped draw costs one offset and no branch the others do not
+    /// already pay.
+    ///
+    /// Grow-only, like every other per-frame buffer here.
+    clip_buffer: wgpu::Buffer,
+    /// How many aligned entries [`clip_buffer`](Self::clip_buffer) can hold.
+    clip_capacity: u32,
     viewport_bind_group: wgpu::BindGroup,
+    /// Kept so the bind group can be rebuilt when the clip buffer grows.
+    viewport_layout: wgpu::BindGroupLayout,
     /// Text rendering pipeline, shares the UI render pass with `SolidBox`.
     text_pipeline: TextGlyphPipeline,
     /// Texture+sampler bind group layout (group 1) for `texture_pipeline`.
@@ -539,26 +551,47 @@ impl EncoderSubsystem {
 
         let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("ByardCore - Viewport Bind Group Layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: wgpu::BufferSize::new(16),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: wgpu::BufferSize::new(16),
+                    },
+                    count: None,
                 },
-                count: None,
-            }],
+                // The active clip (RFC-0037). A dynamic offset rather than a
+                // per-instance lane: `decorated_box` already declares fifteen
+                // of the sixteen vertex attributes every adapter guarantees,
+                // and spending the last one on a value that changes per clip
+                // run — never per instance — would buy nothing and close the
+                // door on the next pipeline that needs a lane.
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: true,
+                        min_binding_size: wgpu::BufferSize::new(CLIP_ENTRY_SIZE),
+                    },
+                    count: None,
+                },
+            ],
         });
 
-        let viewport_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("ByardCore - Viewport Bind Group"),
-            layout: &bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: viewport_buffer.as_entire_binding(),
-            }],
+        // Room for the sentinel plus a first handful of clips; grown, never
+        // shrunk, like the instance arena.
+        let clip_capacity: u32 = 16;
+        let clip_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("ByardCore - Clip Table"),
+            size: CLIP_STRIDE * u64::from(clip_capacity),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
         });
+        let viewport_bind_group =
+            build_viewport_bind_group(&device, &bind_group_layout, &viewport_buffer, &clip_buffer);
 
         let quad_layout = quad_vertex_layout();
 
@@ -731,7 +764,10 @@ impl EncoderSubsystem {
             clear_pipeline,
             quad_buffer,
             viewport_buffer,
+            clip_buffer,
+            clip_capacity,
             viewport_bind_group,
+            viewport_layout: bind_group_layout,
             text_pipeline,
             texture_bind_group_layout,
             image_sampler,
@@ -902,6 +938,37 @@ impl EncoderSubsystem {
         for sample in self.gpu_samples_scratch.drain(..) {
             crate::telemetry::push_sample(sample);
         }
+    }
+
+    /// Writes this frame's clip table into the shared uniform the fragment
+    /// shaders read (RFC-0037 clip masks), growing the buffer if the frame has
+    /// more clips than it has held before.
+    ///
+    /// Growing rebuilds the bind group, because a bind group names the buffer
+    /// it was built against. That happens on the frame a deeper scene first
+    /// appears and never again, which is the same grow-only bargain the
+    /// instance arena makes.
+    fn upload_clips(&mut self, table: &[crate::frame::ClipRect]) {
+        let needed = u32::try_from(table.len() + 1).unwrap_or(u32::MAX);
+        if needed > self.clip_capacity {
+            let capacity = needed.next_power_of_two();
+            self.clip_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("ByardCore - Clip Table"),
+                size: CLIP_STRIDE * u64::from(capacity),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            self.clip_capacity = capacity;
+            self.viewport_bind_group = build_viewport_bind_group(
+                &self.device,
+                &self.viewport_layout,
+                &self.viewport_buffer,
+                &self.clip_buffer,
+            );
+        }
+        let data = clip_entries(table, self.scale_factor);
+        self.queue
+            .write_buffer(&self.clip_buffer, 0, bytemuck::cast_slice(&data));
     }
 
     /// Uploads updated viewport dimensions to the GPU uniform buffer and
@@ -1267,6 +1334,11 @@ impl EncoderSubsystem {
             )?;
         }
         self.viewport_dirty = false;
+
+        // The clip table the fragment shaders will read (RFC-0037). Written
+        // once per frame, before any pass: a clip is frame data, and the
+        // dynamic offset the draw loop sets is the only per-run cost.
+        self.upload_clips(clips.table);
 
         // ── Command encoding ──────────────────────────────────────────────────
         let mut encoder = self
@@ -1654,6 +1726,13 @@ pub struct StagedBatch {
     depths: instance_arena::Region,
     /// How many instances.
     count: u32,
+    /// The clip in force when the view emitted it (RFC-0039).
+    ///
+    /// Carried through staging rather than dropped: the batches draw straight
+    /// after the core pools, which leave the GPU scissor at their last clip
+    /// run, so a batch that forgets its own clip does not draw unclipped, it
+    /// draws under whatever rectangle the scene happened to leave behind.
+    clip: Option<crate::render::ClipShape>,
 }
 
 impl FrameStaging {
@@ -1949,6 +2028,7 @@ fn stage_native_batches(
             instances,
             depths,
             count: batch.count,
+            clip: batch.clip,
         });
     }
 }
@@ -2191,6 +2271,7 @@ fn draw_ui_pass(
         scale,
         phys_w,
         phys_h,
+        viewport_bind_group,
     };
     // ── Segmented draw (RFC-0017 z-layers × RFC-0023 backdrop barriers) ───────
     //
@@ -2406,6 +2487,11 @@ fn draw_ui_pass(
         // the depth each batch carries is what actually orders it against
         // everything else, exactly as it does for a core primitive.
         for staged in &staging.segments[i].native {
+            // The batch's own clip, not the one the core pools left behind.
+            let Some((sx, sy, sw, sh)) = native_batch_scissor(clip_ctx, staged.clip) else {
+                continue;
+            };
+            render_pass.set_scissor_rect(sx, sy, sw, sh);
             let known = registry.draw_batch(
                 &mut render_pass,
                 staged.key,
@@ -2834,6 +2920,9 @@ pub struct ClipCtx<'a> {
     scale: f32,
     phys_w: u32,
     phys_h: u32,
+    /// The shared group-0 bind group, rebound per clip run with the run's
+    /// dynamic offset so the fragment shaders see the clip in force.
+    viewport_bind_group: &'a wgpu::BindGroup,
 }
 
 /// Axis-aligned intersection of two physical scissor rects; `None` if empty
@@ -2859,6 +2948,110 @@ pub(crate) fn clip_scissor(ctx: ClipCtx<'_>, clip: Option<u16>) -> Option<Scisso
     }
 }
 
+/// The shared group-0 bind group: the viewport uniform, and the clip table as
+/// a dynamic-offset window onto one entry.
+fn build_viewport_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    viewport_buffer: &wgpu::Buffer,
+    clip_buffer: &wgpu::Buffer,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("ByardCore - Viewport Bind Group"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: viewport_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: clip_buffer,
+                    offset: 0,
+                    size: wgpu::BufferSize::new(CLIP_ENTRY_SIZE),
+                }),
+            },
+        ],
+    })
+}
+
+/// Bytes of real payload in one clip entry: `rect` then `radii`, two `vec4`s.
+pub(crate) const CLIP_ENTRY_SIZE: u64 = 32;
+
+/// Stride between clip entries in [`clip_buffer`]. A dynamic uniform offset
+/// must be a multiple of `min_uniform_buffer_offset_alignment`, whose maximum
+/// guaranteed value across adapters is 256, so the stride is 256 everywhere
+/// rather than a per-device number the CPU mirror would have to track.
+///
+/// [`clip_buffer`]: EncoderSubsystem::clip_buffer
+pub(crate) const CLIP_STRIDE: u64 = 256;
+
+/// The clip table as the GPU reads it: entry 0 is the "no clip" sentinel and
+/// every real clip follows in table order, so a clip index maps to an offset
+/// by `(index + 1) * CLIP_STRIDE`.
+///
+/// The sentinel is a rect large enough to contain any viewport with zero
+/// radii, which makes the shader's test uniform: there is no "is there a clip"
+/// branch, only a test every fragment passes when nothing is clipping.
+pub(crate) fn clip_entries(clips: &[crate::frame::ClipRect], scale: f32) -> Vec<f32> {
+    let stride = (CLIP_STRIDE / 4) as usize;
+    let mut out = vec![0.0_f32; stride * (clips.len() + 1)];
+    // The sentinel.
+    out[0..8].copy_from_slice(&[-1.0e7, -1.0e7, 2.0e7, 2.0e7, 0.0, 0.0, 0.0, 0.0]);
+    for (i, c) in clips.iter().enumerate() {
+        let base = stride * (i + 1);
+        // Written in physical pixels, because the fragment shader tests
+        // against `@builtin(position)`, which is in framebuffer space. Scaling
+        // here means no shader needs to know the DPI factor, and no shader
+        // needs a new varying to carry a logical position it already has a
+        // physical one for.
+        out[base..base + 4].copy_from_slice(&[
+            c.rect.x * scale,
+            c.rect.y * scale,
+            c.rect.width * scale,
+            c.rect.height * scale,
+        ]);
+        for (o, r) in c.radii.iter().enumerate() {
+            out[base + 4 + o] = r * scale;
+        }
+    }
+    out
+}
+
+/// The dynamic offset for clip `idx`, or the sentinel's when unclipped.
+#[must_use]
+pub(crate) fn clip_offset(idx: Option<u16>) -> u32 {
+    let slot = idx.map_or(0, |i| u32::from(i) + 1);
+    #[allow(clippy::cast_possible_truncation)]
+    {
+        slot * CLIP_STRIDE as u32
+    }
+}
+
+/// The physical scissor for a native view's batch (RFC-0039): the frame's base
+/// scissor when the view drew unclipped, else that base intersected with the
+/// clip's bounding box. `None` means fully clipped away, so the batch is
+/// skipped.
+///
+/// A [`ClipShape::RoundedRect`] contributes its bounding box here and its
+/// corners in the shader (RFC-0037 clip masks); the scissor is the conservative
+/// half either way, which is why both variants read their `bounds`.
+///
+/// [`ClipShape::RoundedRect`]: crate::render::ClipShape::RoundedRect
+pub(crate) fn native_batch_scissor(
+    ctx: ClipCtx<'_>,
+    clip: Option<crate::render::ClipShape>,
+) -> Option<Scissor> {
+    let Some(shape) = clip else {
+        return Some(ctx.base);
+    };
+    let bounds = shape.bounds();
+    let logical = crate::frame::Rect::new(bounds[0], bounds[1], bounds[2], bounds[3]);
+    let phys = logical_rect_to_physical_scissor(logical, ctx.scale, ctx.phys_w, ctx.phys_h);
+    intersect_scissor(ctx.base, phys)
+}
+
 /// Draws `count` instances grouped by content clip (RFC-0005 `ScrollView`).
 /// Walks maximal runs of equal clip in `clip_slice`, which is contiguous
 /// because emission is tree-order, and for each run sets the scissor to
@@ -2873,6 +3066,9 @@ pub(crate) fn for_each_clip_run(
     ctx: ClipCtx<'_>,
     mut draw_range: impl FnMut(&mut wgpu::RenderPass<'_>, u32, u32),
 ) {
+    // The run's clip also selects its entry in the shared clip uniform
+    // (RFC-0037), rebound here rather than per instance because a run is
+    // exactly the span over which the clip does not change.
     let clip_at = |i: usize| clip_slice.get(i).copied().flatten();
     let mut i = 0;
     while i < count {
@@ -2885,6 +3081,7 @@ pub(crate) fn for_each_clip_run(
             #[allow(clippy::cast_possible_truncation)]
             {
                 pass.set_scissor_rect(x, y, w, h);
+                pass.set_bind_group(0, ctx.viewport_bind_group, &[clip_offset(cur)]);
                 draw_range(pass, i as u32, j as u32);
             }
         }
@@ -3172,8 +3369,11 @@ async fn build_solid_box_pipeline(
 
     let shader_module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("ByardCore - SolidBox WGSL Shader"),
-        source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(include_str!(
-            "solid_box.wgsl"
+        source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Owned(format!(
+            "{}
+{}",
+            include_str!("clip.wgsl"),
+            include_str!("solid_box.wgsl")
         ))),
     });
 
@@ -3263,7 +3463,7 @@ fn draw_clear_quad(
     quad_buffer: &wgpu::Buffer,
 ) {
     render_pass.set_pipeline(pipeline);
-    render_pass.set_bind_group(0, bind_group, &[]);
+    render_pass.set_bind_group(0, bind_group, &[clip_offset(None)]);
     render_pass.set_vertex_buffer(0, quad_buffer.slice(..));
     render_pass.set_vertex_buffer(1, arena.slice(regions.0));
     render_pass.set_vertex_buffer(2, arena.slice(regions.1));
@@ -3351,7 +3551,7 @@ impl pipeline::RenderPipeline for SolidBoxPipeline {
             return;
         }
         pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, cx.viewport_bind_group, &[]);
+        pass.set_bind_group(0, cx.viewport_bind_group, &[clip_offset(None)]);
         pass.set_vertex_buffer(0, cx.quad_buffer.slice(..));
         pass.set_vertex_buffer(1, cx.arena.slice(cx.instances));
         // This pipeline reads its draw-order depth from a parallel buffer
@@ -3380,7 +3580,7 @@ fn draw_solid_box_instances(
         return;
     }
     render_pass.set_pipeline(pipeline);
-    render_pass.set_bind_group(0, bind_group, &[]);
+    render_pass.set_bind_group(0, bind_group, &[clip_offset(None)]);
     render_pass.set_vertex_buffer(0, quad_buffer.slice(..));
     render_pass.set_vertex_buffer(1, arena.slice(regions.0));
     render_pass.set_vertex_buffer(2, arena.slice(regions.1));

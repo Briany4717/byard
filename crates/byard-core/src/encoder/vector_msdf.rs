@@ -262,8 +262,11 @@ pub async fn build_pipeline(
 
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("ByardCore - VectorMSDF WGSL Shader"),
-        source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(include_str!(
-            "vector_msdf.wgsl"
+        source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Owned(format!(
+            "{}
+{}",
+            include_str!("clip.wgsl"),
+            include_str!("vector_msdf.wgsl")
         ))),
     });
 
@@ -337,7 +340,7 @@ pub fn draw(
         return;
     }
     render_pass.set_pipeline(pipeline);
-    render_pass.set_bind_group(0, viewport_bind_group, &[]);
+    render_pass.set_bind_group(0, viewport_bind_group, &[super::clip_offset(None)]);
     render_pass.set_bind_group(1, atlas.bind_group(), &[]);
     render_pass.set_vertex_buffer(0, quad_buffer.slice(..));
     render_pass.set_vertex_buffer(1, arena.slice(region));
@@ -410,7 +413,7 @@ impl super::pipeline::RenderPipeline for VectorMsdfPipeline {
             return;
         }
         pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, cx.viewport_bind_group, &[]);
+        pass.set_bind_group(0, cx.viewport_bind_group, &[super::clip_offset(None)]);
         pass.set_bind_group(1, cx.vector_atlas.bind_group(), &[]);
         pass.set_vertex_buffer(0, cx.quad_buffer.slice(..));
         pass.set_vertex_buffer(1, cx.arena.slice(cx.instances));

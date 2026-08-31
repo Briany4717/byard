@@ -261,5 +261,5 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         discard;
     }
     let out_rgb = (surface.rgb * a_top + in.shadow_color.rgb * a_bot) / out_a;
-    return vec4<f32>(out_rgb, out_a * opacity);
+    return vec4<f32>(out_rgb, out_a * opacity * clip_coverage(in.position.xy));
 }

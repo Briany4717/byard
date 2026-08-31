@@ -6,10 +6,13 @@
 //!
 //! # Why some of these are two files
 //!
-//! The gradient ramp is shared textually rather than copied (RFC-0037): a
-//! pipeline that paints one prepends `gradient.wgsl` to its own source before
-//! compiling, so a box gradient and a path gradient are the same instructions
-//! rather than two implementations that agree today.
+//! Two blocks are shared textually rather than copied. The gradient ramp
+//! (RFC-0037): a pipeline that paints one prepends `gradient.wgsl` to its own
+//! source before compiling, so a box gradient and a path gradient are the same
+//! instructions rather than two implementations that agree today. And the clip
+//! mask (RFC-0037 clip masks): every clippable pipeline prepends `clip.wgsl`,
+//! so a clip cuts the same curve in all of them — if each spelled the test
+//! itself, a clip would round one pipeline's corners and not another's.
 //!
 //! What is validated here is therefore the shader **as the pipeline assembles
 //! it**, not the fragment on disk. Validating the fragment would be validating
@@ -21,34 +24,56 @@ use naga::valid::{Capabilities, ValidationFlags, Validator};
 /// The shared gradient block, prepended by the pipelines that paint one.
 const GRADIENT: &str = include_str!("../src/encoder/gradient.wgsl");
 
+/// The shared clip block, prepended by every pipeline that can be clipped.
+const CLIP: &str = include_str!("../src/encoder/clip.wgsl");
+
 /// Every pipeline shader, assembled the way its pipeline assembles it.
 fn shaders() -> Vec<(&'static str, String)> {
     vec![
         (
             "solid_box",
-            include_str!("../src/encoder/solid_box.wgsl").to_string(),
+            format!("{CLIP}\n{}", include_str!("../src/encoder/solid_box.wgsl")),
         ),
         (
             "decorated_box",
             format!(
-                "{GRADIENT}\n{}",
+                "{CLIP}\n{GRADIENT}\n{}",
                 include_str!("../src/encoder/decorated_box.wgsl")
             ),
         ),
         (
             "canvas_fill",
             format!(
-                "{GRADIENT}\n{}",
+                "{CLIP}\n{GRADIENT}\n{}",
                 include_str!("../src/encoder/canvas_fill.wgsl")
             ),
         ),
+        // Neither of these was listed before; both are clippable, so both
+        // assemble with the shared block now and both belong here.
+        (
+            "canvas_shape",
+            format!(
+                "{CLIP}\n{}",
+                include_str!("../src/encoder/canvas_shape.wgsl")
+            ),
+        ),
+        (
+            "ripple",
+            format!("{CLIP}\n{}", include_str!("../src/encoder/ripple.wgsl")),
+        ),
         (
             "texture_sampler",
-            include_str!("../src/encoder/texture_sampler.wgsl").to_string(),
+            format!(
+                "{CLIP}\n{}",
+                include_str!("../src/encoder/texture_sampler.wgsl")
+            ),
         ),
         (
             "vector_msdf",
-            include_str!("../src/encoder/vector_msdf.wgsl").to_string(),
+            format!(
+                "{CLIP}\n{}",
+                include_str!("../src/encoder/vector_msdf.wgsl")
+            ),
         ),
     ]
 }

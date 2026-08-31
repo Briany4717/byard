@@ -386,8 +386,11 @@ pub async fn build_pipeline(
 
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("ByardCore - TextureSampler WGSL Shader"),
-        source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(include_str!(
-            "texture_sampler.wgsl"
+        source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Owned(format!(
+            "{}
+{}",
+            include_str!("clip.wgsl"),
+            include_str!("texture_sampler.wgsl")
         ))),
     });
 
@@ -511,7 +514,7 @@ pub fn draw(
         return;
     }
     render_pass.set_pipeline(pipeline);
-    render_pass.set_bind_group(0, viewport_bind_group, &[]);
+    render_pass.set_bind_group(0, viewport_bind_group, &[super::clip_offset(None)]);
     render_pass.set_vertex_buffer(0, quad_buffer.slice(..));
 
     for image in staged {

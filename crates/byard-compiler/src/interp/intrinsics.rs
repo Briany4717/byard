@@ -34,6 +34,7 @@ pub const INTRINSIC_NAMES: &[&str] = &[
     "Overlay",
     "Canvas",
     "Grid",
+    "Clip",
     "ZStack",
     "NavStack",
     "NavHost",
@@ -818,6 +819,34 @@ fn lookup_intrinsic(name: &str) -> Option<Intrinsic> {
         // Props: Layout + Decoration + Transform + `alignment: Align2D` (how
         // children smaller than the stack are positioned; default `center`).
         // Pipeline: the generic `DecoratedBox` background, same as `Box`.
+        // RFC-0037 clip masks: a container whose subtree is clipped to its own
+        // box, optionally with rounded corners. Content: none. Children: any.
+        //
+        // Spelled as an element rather than the RFC's lowercase `clip(...)`
+        // form: the RFC itself cites `Overlay` as the precedent for "a
+        // container form, not a style prop", and `Overlay` is an element. That
+        // keeps the whole attribute, style and state machinery working on it
+        // for free, where a new lexical form would need its own grammar and
+        // would still have to grow all of it back.
+        "Clip" => {
+            let mut props = props_from(&[LAYOUT, TRANSFORM]);
+            // The corner radius of the mask. Absent (or zero) is a plain
+            // rectangular clip, which stays a pure scissor.
+            props.insert("rrect", lay(PropType::Len));
+            props.insert("col", lay(PropType::Int));
+            props.insert("row", lay(PropType::Int));
+            props.insert("col_span", lay(PropType::Int));
+            props.insert("row_span", lay(PropType::Int));
+            Intrinsic {
+                arity: 0,
+                content: None,
+                children: true,
+                focusable: false,
+                interactive: false,
+                props,
+                events: events_from(false, &[]),
+            }
+        }
         "ZStack" => {
             let mut props = props_from(&[LAYOUT, DECORATION, EFFECTS, TRANSFORM]);
             props.insert("focused", pnt(PropType::Bool));

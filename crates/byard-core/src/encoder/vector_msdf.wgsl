@@ -83,5 +83,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // §2-D premultiplied-alpha output; a zero-coverage fragment blends to nothing
     // without a `discard`.
     let a = coverage * in.color.a;
-    return vec4<f32>(in.color.rgb * a, a);
+    let a_clipped = a * clip_coverage(in.position.xy);
+    return vec4<f32>(in.color.rgb * a_clipped, a_clipped);
 }

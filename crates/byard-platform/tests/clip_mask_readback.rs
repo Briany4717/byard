@@ -250,9 +250,14 @@ fn the_clipped_corner_is_antialiased() {
     // can cross the arc between two pixel centres and find only fully-in and
     // fully-out samples on either side — a real antialiased edge would then
     // read as jagged purely because of where the line was drawn.
+    // Scanned strictly *inside* the box's own edges. The box fills `AREA`
+    // exactly, so its left and top edges are antialiased too — an earlier
+    // version of this started at the box corner and would have passed on a
+    // frame where the clip did nothing at all, reporting the box's own fringe
+    // as the clip's arc.
     let [x, y, ..] = AREA;
-    let (x0, y0) = (x as u32, y as u32);
-    let span = RADIUS as u32 + 2;
+    let (x0, y0) = (x as u32 + 2, y as u32 + 2);
+    let span = RADIUS as u32 - 2;
     let partial = (0..span).any(|dy| {
         (0..span).any(|dx| {
             let a = at(&image, x0 + dx, y0 + dy).3;
@@ -281,6 +286,27 @@ fn a_square_clip_stays_square() {
     let mut enc = encoder(&device, &queue);
     let image = render(&mut enc, &device, &queue, &framed([0.0; 4]));
 
+    // A coarse alpha map in the failure message. Two guesses at this from the
+    // outside were both wrong, and the assertions sample four points, which
+    // cannot distinguish "the clip cut the corners" from "nothing painted at
+    // all" — the distinction the whole diagnosis turns on.
+    let map = || {
+        let mut out = String::from("\nalpha map (8px grid):\n");
+        for gy in 0..(SIZE / 8) {
+            for gx in 0..(SIZE / 8) {
+                let a = at(&image, gx * 8 + 4, gy * 8 + 4).3;
+                out.push(match a {
+                    0 => '.',
+                    1..=84 => '-',
+                    85..=169 => '+',
+                    _ => '#',
+                });
+            }
+            out.push('\n');
+        }
+        out
+    };
+
     let [x, y, w, h] = AREA;
     for (px, py) in [
         (x + 1.0, y + 1.0),
@@ -291,7 +317,8 @@ fn a_square_clip_stays_square() {
         let p = at(&image, px as u32, py as u32);
         assert!(
             p.3 > 200,
-            "a square clip keeps all four corners, ({px}, {py}) got {p:?}"
+            "a square clip keeps all four corners, ({px}, {py}) got {p:?}{}",
+            map()
         );
     }
 }

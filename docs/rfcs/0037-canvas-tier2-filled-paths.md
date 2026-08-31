@@ -1,6 +1,33 @@
 # RFC-0037: Canvas Tier-2 — filled curved paths, path gradients, clip masks
 
-- **Status:** Draft
+- **Status:** Active, filled paths and path gradients implemented 2026-08-05.
+  `path { … }` tessellates through `lyon` on the logic thread, caches its mesh
+  under a `to_bits` fingerprint of the commands, and draws through the
+  `CanvasFill` pipeline, which is registered via RFC-0039 rather than wired
+  into the encoder. Fills take a colour or the RFC-0035 gradient descriptor,
+  read by the same parser and interpolated by the same shader block a box fill
+  uses (`encoder/gradient.wgsl`, textually shared).
+
+  **Clip masks are not landed.** `clip(rrect:)` and `clip(path)` are the one
+  part of this RFC still deferred: the rounded-rect fast path needs a clip
+  entry every pipeline's fragment shader can read (a storage binding on the
+  shared viewport group, plus one lane per instance), and the arbitrary-path
+  case needs a stencil attachment and stencil state on every pipeline. Both are
+  cross-cutting changes to the whole pipeline set rather than additions beside
+  it, which is why they are their own piece of work rather than a tail of this
+  one. Nothing else in this RFC depends on them.
+
+  **Deltas against this document, as written:**
+
+  - Paint is written in the command's parentheses
+    (`path(gradient: (…), winding: even_odd) { … }`), not in an attribute
+    block. Every canvas command carries its paint that way, and a shape with an
+    attribute block is rejected by a rule that predates this RFC.
+  - `gradient:` is the RFC-0035 tuple beside `fill:`, rather than
+    `fill: gradient(…)`: sharing the descriptor means sharing its spelling too,
+    and a second spelling is a second thing to keep in step.
+  - A point is two numbers (`cubic(c1x, c1y, c2x, c2y, x, y)`), as in every
+    other canvas command, rather than the `Vec2` arguments the guide sketches.
 - **Author(s):** Briany4717
 - **Created:** 2026-08-04
 - **Last updated:** 2026-08-04

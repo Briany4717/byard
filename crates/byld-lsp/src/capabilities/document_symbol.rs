@@ -148,7 +148,9 @@ fn collect_member_symbols(doc: &Document, members: &[Member], out: &mut Vec<Docu
                     },
                 });
             }
-            Member::For { var, span, body, .. } => {
+            Member::For {
+                var, span, body, ..
+            } => {
                 let range = doc.line_index.span_to_range(&doc.content, *span);
                 let mut children = Vec::new();
                 collect_member_symbols(doc, body, &mut children);
@@ -169,7 +171,10 @@ fn collect_member_symbols(doc: &Document, members: &[Member], out: &mut Vec<Docu
                 });
             }
             Member::Route {
-                pattern, span, body, ..
+                pattern,
+                span,
+                body,
+                ..
             } => {
                 let range = doc.line_index.span_to_range(&doc.content, *span);
                 let mut children = Vec::new();
@@ -213,6 +218,53 @@ fn collect_member_symbols(doc: &Document, members: &[Member], out: &mut Vec<Docu
                     } else {
                         Some(children)
                     },
+                });
+            }
+            Member::Lifecycle { on_mount, span, .. } => {
+                let range = doc.line_index.span_to_range(&doc.content, *span);
+                #[allow(deprecated)]
+                out.push(DocumentSymbol {
+                    name: if *on_mount { "on mount" } else { "on unmount" }.to_string(),
+                    detail: Some("Lifecycle effect".to_string()),
+                    kind: SymbolKind::EVENT,
+                    tags: None,
+                    deprecated: None,
+                    range,
+                    selection_range: range,
+                    children: None,
+                });
+            }
+            Member::Timer {
+                every,
+                dur_ms,
+                span,
+                ..
+            } => {
+                let range = doc.line_index.span_to_range(&doc.content, *span);
+                #[allow(deprecated)]
+                out.push(DocumentSymbol {
+                    name: format!("{} {}ms", if *every { "every" } else { "after" }, dur_ms),
+                    detail: Some("Timer effect".to_string()),
+                    kind: SymbolKind::EVENT,
+                    tags: None,
+                    deprecated: None,
+                    range,
+                    selection_range: range,
+                    children: None,
+                });
+            }
+            Member::Measure { span, .. } => {
+                let range = doc.line_index.span_to_range(&doc.content, *span);
+                #[allow(deprecated)]
+                out.push(DocumentSymbol {
+                    name: "on measure".to_string(),
+                    detail: Some("Self-measurement".to_string()),
+                    kind: SymbolKind::EVENT,
+                    tags: None,
+                    deprecated: None,
+                    range,
+                    selection_range: range,
+                    children: None,
                 });
             }
             Member::Expr(_) => {}

@@ -8,14 +8,41 @@
   read by the same parser and interpolated by the same shader block a box fill
   uses (`encoder/gradient.wgsl`, textually shared).
 
-  **Clip masks are not landed.** `clip(rrect:)` and `clip(path)` are the one
-  part of this RFC still deferred: the rounded-rect fast path needs a clip
-  entry every pipeline's fragment shader can read (a storage binding on the
-  shared viewport group, plus one lane per instance), and the arbitrary-path
-  case needs a stencil attachment and stencil state on every pipeline. Both are
-  cross-cutting changes to the whole pipeline set rather than additions beside
-  it, which is why they are their own piece of work rather than a tail of this
-  one. Nothing else in this RFC depends on them.
+  **Clip masks: the rounded-rect half landed 2026-08-31; `clip(path)` did
+  not.** `Clip #[rrect: r]` cuts its whole subtree to a rounded rectangle
+  through an analytic SDF in the fragment shader — no stencil, no
+  tessellation — which is the fast path this RFC's resolved question asks for.
+  It is guarded in pixels (`clip_mask_readback.rs`) with a runnable example
+  (`examples/clip_mask`).
+
+  Two corrections to what this document predicted about it:
+
+  - **It is a dynamic-offset uniform, not "a storage binding plus one lane per
+    instance".** The lane was the wrong currency: `decorated_box` already
+    declares fifteen of the sixteen vertex attributes every adapter
+    guarantees, so the lane would have spent the last one on a value that
+    never varies within a clip run. The clip is rebound per run instead, where
+    the scissor already changes, at a cost of zero attributes.
+  - **The test is shared textually** (`encoder/clip.wgsl`), the way
+    `gradient.wgsl` is, because seven pipelines clip and a clip that rounded
+    one pipeline's corners and not another's would show as a hairline where an
+    image meets the card it is clipped to.
+
+  **`clip(path)` remains deferred, and is underspecified here.** The guide
+  writes it as `clip(path) { … }` with a literal ellipsis and never says where
+  the path's commands come from — a `d:` string, a Canvas-style body, or a
+  sibling shape are all consistent with the text. That surface has to be
+  decided before it can be built.
+
+  Its implementation blocker is smaller than this document assumed, though.
+  The stencil attachment it needs is real — `DEPTH_FORMAT` is `Depth32Float`
+  and carries no stencil bits — but switching to the universally available
+  `Depth24PlusStencil8` is safe for this engine's draw-order scheme, which was
+  the reason to fear the swap: depths are spaced `1/65536` apart (`draw_depth`)
+  and a 24-bit unorm quantum is about `6e-8`, leaving roughly 256× headroom, so
+  no primitive pair comes near z-fighting. What is left is genuinely
+  cross-cutting — stencil state on six pipelines, a mask pipeline, and a clip
+  stack keyed by stencil reference count — but not precision-risky.
 
   **Deltas against this document, as written:**
 

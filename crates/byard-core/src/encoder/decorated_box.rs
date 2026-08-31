@@ -179,7 +179,8 @@ pub async fn build_pipeline(
     // paints the same ramps, and two copies of a colour interpolation agree
     // exactly until somebody improves one of them (RFC-0037).
     let source = format!(
-        "{}\n{}",
+        "{}\n{}\n{}",
+        include_str!("clip.wgsl"),
         include_str!("gradient.wgsl"),
         include_str!("decorated_box.wgsl")
     );
@@ -292,7 +293,7 @@ pub fn draw(
         return;
     }
     render_pass.set_pipeline(pipeline);
-    render_pass.set_bind_group(0, bind_group, &[]);
+    render_pass.set_bind_group(0, bind_group, &[super::clip_offset(None)]);
     render_pass.set_vertex_buffer(0, quad_buffer.slice(..));
     render_pass.set_vertex_buffer(1, arena.slice(region));
     // Content-clip runs (RFC-0005): scissor each run to its ScrollView viewport.
@@ -346,7 +347,7 @@ impl super::pipeline::RenderPipeline for DecoratedBoxPipeline {
             return;
         }
         pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, cx.viewport_bind_group, &[]);
+        pass.set_bind_group(0, cx.viewport_bind_group, &[super::clip_offset(None)]);
         pass.set_vertex_buffer(0, cx.quad_buffer.slice(..));
         pass.set_vertex_buffer(1, cx.arena.slice(cx.instances));
         pass.draw(0..4, 0..cx.count);

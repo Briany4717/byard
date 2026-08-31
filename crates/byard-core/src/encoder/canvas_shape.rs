@@ -175,8 +175,11 @@ pub async fn build_pipeline(
 
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("ByardCore - CanvasShape WGSL Shader"),
-        source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(include_str!(
-            "canvas_shape.wgsl"
+        source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Owned(format!(
+            "{}
+{}",
+            include_str!("clip.wgsl"),
+            include_str!("canvas_shape.wgsl")
         ))),
     });
 
@@ -280,7 +283,7 @@ pub fn draw(
         return;
     }
     render_pass.set_pipeline(pipeline);
-    render_pass.set_bind_group(0, bind_group, &[]);
+    render_pass.set_bind_group(0, bind_group, &[super::clip_offset(None)]);
     // RFC-0031 §S4: the shape-record pool. Bound for every canvas batch, group
     // or not, a pipeline layout is not conditional, and an instance that heads
     // no group never reads it.
@@ -347,7 +350,7 @@ impl super::pipeline::RenderPipeline for CanvasShapePipeline {
             return;
         }
         pass.set_pipeline(&self.pipeline);
-        pass.set_bind_group(0, cx.viewport_bind_group, &[]);
+        pass.set_bind_group(0, cx.viewport_bind_group, &[super::clip_offset(None)]);
         // Group 1 is the shape-record pool, which the pipeline layout requires
         // whether or not this batch's instances head a group.
         pass.set_bind_group(1, cx.records_bind_group, &[]);

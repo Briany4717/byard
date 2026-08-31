@@ -10,7 +10,11 @@
 //!
 //! GPU-dependent, and skips gracefully with no adapter (headless CI), the same
 //! pattern the other readback tests use.
-#![allow(clippy::cast_precision_loss)]
+#![allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
 // Each test's view type is declared inside the test it belongs to: a view that
 // exists to answer one question reads better beside that question than in a
 // preamble the reader has to scroll back to.
@@ -499,5 +503,75 @@ fn a_view_whose_output_changed_repaints_even_though_nothing_else_did() {
     assert!(
         !enc.last_frame_was_full_redraw() && !enc.last_frame_scissored(),
         "an unchanged batch is not a reason to redraw anything at all"
+    );
+}
+
+/// A native view's `clip` must actually clip (RFC-0039 §`RenderCtx`).
+///
+/// This is a pixel question and nothing else answers it: the clip shape is
+/// carried on the batch and hashed into the invalidation digest, so every
+/// bookkeeping assertion about it passes whether or not a single fragment is
+/// discarded. Staging used to drop the shape before the draw, and because the
+/// batches are recorded straight after the core pools — which leave the GPU
+/// scissor at their last clip run — the view did not draw unclipped, it drew
+/// under whatever rectangle the rest of the scene happened to leave behind.
+///
+/// So the assertion is deliberately two-sided: inside the clip the view still
+/// paints, and outside it the ground stays untouched.
+#[test]
+fn a_native_views_clip_reaches_the_gpu() {
+    let Some((device, queue)) = try_device() else {
+        eprintln!("no GPU adapter, skipping native-view clip readback");
+        return;
+    };
+
+    /// Fills its whole rect, and clips itself to the left half of it.
+    struct Clipped;
+    impl NativeProps for Clipped {}
+    impl NativeView for Clipped {
+        fn render(&mut self, layout: Layout, cx: &mut RenderCtx<'_>) {
+            let [x, y, w, h] = layout.rect;
+            let half = byard_core::render::ClipShape::Rect([x, y, w / 2.0, h]);
+            cx.clip(half, |cx| {
+                let handle = cx.pipeline::<byard_core::encoder::SolidBoxPipeline>();
+                cx.emit(
+                    handle,
+                    &[BoxInstance {
+                        rect: layout.rect,
+                        color: FILL,
+                        radii: [0.0; 4],
+                        transform: Transform::IDENTITY,
+                        smooth: 0.0,
+                    }],
+                );
+            });
+        }
+    }
+
+    let mut frame = RenderFrame::new();
+    frame.request_full_redraw();
+    frame.render_native(&mut Clipped, Layout::new(RECT));
+    let mut enc = encoder(&device, &queue);
+    let image = render_image(&mut enc, &device, &queue, &frame);
+
+    let at = |x: u32, y: u32| {
+        let i = ((y * SIZE + x) * 4) as usize;
+        (image[i], image[i + 1], image[i + 2], image[i + 3])
+    };
+    let [rx, ry, rw, rh] = RECT;
+    let mid_y = (ry + rh / 2.0) as u32;
+    // A quarter of the way in: inside the clipped left half.
+    let inside = at((rx + rw * 0.25) as u32, mid_y);
+    // Three quarters in: inside the view's rect, outside its clip.
+    let outside = at((rx + rw * 0.75) as u32, mid_y);
+
+    assert!(
+        inside.2 > 40 && inside.3 > 40,
+        "the clipped half must still paint, got {inside:?}"
+    );
+    assert_eq!(
+        outside,
+        (0, 0, 0, 0),
+        "the half outside the clip must be untouched, got {outside:?}"
     );
 }

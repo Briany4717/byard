@@ -1,0 +1,61 @@
+// RFC-0037 clip masks: `Clip #[rrect: r]` cuts its whole subtree to a rounded
+// rectangle, which a corner radius on a box has never been able to do.
+//
+// Run it (from the repo root):
+//   cd crates/byard-cli/examples/clip_mask
+//   cargo run -p byard-cli -- dev
+//
+// Why this is not `radius:` on a box: a box's radius rounds the box's own
+// fill. It does nothing to the children painted over it, which keep their
+// square corners and spill past the curve. A clip is the other thing — it
+// decides which fragments of a *subtree* survive.
+//
+// What to verify visually:
+//   1. First card: the four coloured tiles are cut by the 28px curve. The
+//      corner tiles lose their outer corners, and nothing pokes past the arc.
+//   2. Second card: the same tiles, same layout, no clip. The corners are
+//      square and the tiles reach the edges. This is the control — the two
+//      cards differ only by the `Clip` wrapper.
+//   3. Third card: `rrect` takes the same per-corner tuple `radius:` does, so
+//      only the top corners are rounded and the bottom edge stays flat.
+//   4. The arcs are antialiased, not stair-stepped: lean in on the curve and
+//      it should be as smooth as any shape edge the engine draws.
+//   5. Drag the window wider. The clip tracks the layout, because it is taken
+//      from the element's laid-out box rather than from a hard-coded rect.
+View Tiles() {
+    Column #[gap: 0] {
+        Row #[gap: 0] {
+            Box #[bg: 0xE8543F, width: 90, height: 60] {}
+            Box #[bg: 0xF2B705, width: 90, height: 60] {}
+        }
+        Row #[gap: 0] {
+            Box #[bg: 0x2D9B8A, width: 90, height: 60] {}
+            Box #[bg: 0x4A6FD0, width: 90, height: 60] {}
+        }
+    }
+}
+
+View Label(text: Str) {
+    Text(text) #[color: 0x9AA3AE, size: 13]
+}
+
+View Main() {
+    Column #[bg: 0x0E1116, p: 28, gap: 22, width: 260] {
+        Text("Clip masks, RFC-0037") #[color: 0xE7ECF2, size: 20]
+
+        Label("Clip #[rrect: 28]")
+        Clip #[rrect: 28, width: 180, height: 120] {
+            Tiles()
+        }
+
+        Label("no clip — the control")
+        Box #[width: 180, height: 120] {
+            Tiles()
+        }
+
+        Label("Clip #[rrect: (28, 28, 0, 0)]")
+        Clip #[rrect: (28, 28, 0, 0), width: 180, height: 120] {
+            Tiles()
+        }
+    }
+}

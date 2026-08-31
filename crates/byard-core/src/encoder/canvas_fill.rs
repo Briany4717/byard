@@ -160,7 +160,11 @@ pub async fn build_pipeline(
         immediate_size: 0,
     });
 
-    let source = format!("{GRADIENT_WGSL}\n{}", include_str!("canvas_fill.wgsl"));
+    let source = format!(
+        "{}\n{GRADIENT_WGSL}\n{}",
+        include_str!("clip.wgsl"),
+        include_str!("canvas_fill.wgsl")
+    );
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("ByardCore - CanvasFill WGSL Shader"),
         source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Owned(source)),
@@ -267,7 +271,7 @@ pub fn draw(
         return;
     }
     render_pass.set_pipeline(pipeline);
-    render_pass.set_bind_group(0, bind_group, &[]);
+    render_pass.set_bind_group(0, bind_group, &[super::clip_offset(None)]);
     for fill in staged {
         render_pass.set_vertex_buffer(0, arena.slice(fill.vertices));
         render_pass.set_vertex_buffer(1, arena.slice(fill.record));

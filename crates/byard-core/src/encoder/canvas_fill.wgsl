@@ -111,5 +111,5 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     if (alpha <= 0.0) {
         discard;
     }
-    return vec4<f32>(surface.rgb, alpha);
+    return vec4<f32>(surface.rgb, alpha * clip_coverage(in.position.xy));
 }

@@ -1,0 +1,3 @@
+[project]
+name = "clip_mask"
+entry = "src/main.byd"

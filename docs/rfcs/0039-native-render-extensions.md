@@ -1,6 +1,32 @@
 # RFC-0039: Native render extensions — the zero-cost package pipeline ABI
 
-- **Status:** Draft
+- **Status:** Active, implemented 2026-08-05. The ABI is full as the resolved
+  question promised: layout, draw, events, pipeline registration and async
+  delivery all landed (`byard_core::render`, `#[byard::native_view]`,
+  `encoder/pipeline.rs`), with `examples/sparkline_view` as the in-tree
+  consumer and Canvas Tier-2 (RFC-0037) as the pipeline that proves the
+  registration path carries a real one.
+
+  **Deltas against this document, as written:**
+
+  - `cx.emit` does not write "directly into the persistent instance arena".
+    The arena lives on the render thread behind the frame swap, so a view
+    writing into it would be exactly the cross-thread graphics access this RFC
+    forbids two paragraphs later. It writes into the frame's own pool, and the
+    encoder stages that into the arena in the single linear pass it stages
+    every other pool in. The claim the wording defends, that a package instance
+    and a core instance reach the arena *by the same code*, is what the arena
+    test checks.
+  - Props are attributes (`Sparkline #[data: …]`), not the parenthesised form
+    the guide sketches: parentheses are content arguments in `byld`, and a
+    native view has none.
+  - `set_prop` lives on a `NativeProps` supertrait rather than on `NativeView`,
+    because it is the half the macro writes and Rust does not let generated
+    code reach into a hand-written `impl` block.
+  - `texture_sampler` is the one core pipeline a view cannot emit into: its
+    unit of work is one image, because sampling means binding *that* image
+    before the draw, and a batch of instances names no image. A view that draws
+    images registers a pipeline of its own, which is what this ABI is for.
 - **Author(s):** Briany4717
 - **Created:** 2026-08-04
 - **Last updated:** 2026-08-04

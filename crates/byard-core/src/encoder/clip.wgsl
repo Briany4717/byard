@@ -13,10 +13,18 @@
 // clipping" branch here: an unclipped fragment takes the same path and passes.
 
 struct ClipEntry {
-    /// `xy` origin, `zw` size, in logical pixels.
+    /// `xy` origin, `zw` size, in physical pixels.
     rect: vec4<f32>,
     /// Per-corner radii `[tl, tr, br, bl]`, all zero for a plain rectangle.
     radii: vec4<f32>,
+    /// Padding out to the 256-byte stride the entries are spaced at.
+    ///
+    /// The stride is what gets bound, not the 32 bytes of payload: a D3D12
+    /// constant-buffer view must be a multiple of 256 bytes, and binding a
+    /// 32-byte window there did not fail loudly — it shifted the read, so
+    /// `rect` came back holding `radii`. Declaring the padding here keeps the
+    /// shader's idea of the entry the same size as the binding's.
+    _pad: array<vec4<f32>, 14>,
 };
 
 @group(0) @binding(1) var<uniform> clip_entry: ClipEntry;

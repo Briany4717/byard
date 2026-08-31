@@ -245,12 +245,19 @@ fn the_clipped_corner_is_antialiased() {
     let mut enc = encoder(&device, &queue);
     let image = render(&mut enc, &device, &queue, &framed([RADIUS; 4]));
 
-    // Walk the diagonal through the top-left corner arc and look for a pixel
-    // that is neither fully in nor fully out.
+    // Scan the whole top-left corner quadrant rather than one diagonal
+    // through it. The fade is a single pixel wide by construction, so a line
+    // can cross the arc between two pixel centres and find only fully-in and
+    // fully-out samples on either side — a real antialiased edge would then
+    // read as jagged purely because of where the line was drawn.
     let [x, y, ..] = AREA;
-    let partial = (0..40).any(|i| {
-        let a = at(&image, (x as u32) + i, (y as u32) + (40 - i)).3;
-        (20..=235).contains(&a)
+    let (x0, y0) = (x as u32, y as u32);
+    let span = RADIUS as u32 + 2;
+    let partial = (0..span).any(|dy| {
+        (0..span).any(|dx| {
+            let a = at(&image, x0 + dx, y0 + dy).3;
+            (20..=235).contains(&a)
+        })
     });
     assert!(
         partial,

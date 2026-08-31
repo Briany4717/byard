@@ -1,12 +1,12 @@
 //! Hover capability for inspecting components, attributes, and typed variables.
 
+use byard_compiler::Symbol;
 use byard_compiler::infer::{Inference, Ty};
 use byard_compiler::interp::intrinsics;
-use byard_compiler::Symbol;
 use lsp_types::{Hover, HoverContents, MarkupContent, MarkupKind, Position};
 
 use crate::state::document::Document;
-use crate::syntax::ast_utils::{find_hover_target, HoverTarget};
+use crate::syntax::ast_utils::{HoverTarget, find_hover_target};
 
 /// Handles a hover request at a specific document position.
 #[must_use]

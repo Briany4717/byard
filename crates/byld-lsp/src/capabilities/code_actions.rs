@@ -11,10 +11,7 @@ use crate::state::document::Document;
 
 /// Handles `textDocument/codeAction` request to generate automated quick-fixes.
 #[must_use]
-pub fn handle_code_action(
-    doc: &Document,
-    params: CodeActionParams,
-) -> Option<CodeActionResponse> {
+pub fn handle_code_action(doc: &Document, params: CodeActionParams) -> Option<CodeActionResponse> {
     let mut actions = Vec::new();
 
     // 1. Process diagnostic-driven quick fixes
@@ -47,11 +44,16 @@ pub fn handle_code_action(
     }
 
     // 2. Refactoring code actions based on range/cursor position
-    let offset = doc.line_index.position_to_offset(&doc.content, params.range.start)?;
+    let offset = doc
+        .line_index
+        .position_to_offset(&doc.content, params.range.start)?;
     for view in &doc.parsed.views {
         if crate::syntax::ast_utils::span_contains(view.span, offset) {
             for member in &view.body {
-                if let byard_compiler::parser::ast::Member::Var { name, span, init, .. } = member {
+                if let byard_compiler::parser::ast::Member::Var {
+                    name, span, init, ..
+                } = member
+                {
                     if crate::syntax::ast_utils::span_contains(*span, offset) {
                         let var_range = doc.line_index.span_to_range(&doc.content, *span);
                         let let_replacement = format!("let {name} = {}", format_expr(init));

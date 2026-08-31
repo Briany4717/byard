@@ -471,7 +471,11 @@ pub fn find_element_ref_in_members(members: &[Member], offset: usize) -> Option<
 
 /// Finds the declaration span of a local variable name.
 #[must_use]
-pub fn find_local_declaration_span(members: &[Member], var_name: &str, offset: usize) -> Option<Span> {
+pub fn find_local_declaration_span(
+    members: &[Member],
+    var_name: &str,
+    offset: usize,
+) -> Option<Span> {
     for member in members {
         match member {
             Member::Var { name, span, .. } if name.as_str() == var_name => {

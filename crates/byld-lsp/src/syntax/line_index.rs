@@ -89,7 +89,7 @@ mod tests {
     fn test_line_index_basic() {
         let source = "View Main {\n  var x = 10\n}";
         let index = LineIndex::new(source);
-        
+
         let pos = index.offset_to_position(source, 14); // inside line 1 `var x = 10`
         assert_eq!(pos.line, 1);
         assert_eq!(pos.character, 2);

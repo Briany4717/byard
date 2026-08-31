@@ -3,8 +3,8 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use byard_compiler::infer::{check_views, Inference};
-use byard_compiler::parser::{parse, ParsedFile};
+use byard_compiler::infer::{Inference, check_views};
+use byard_compiler::parser::{ParsedFile, parse};
 use dashmap::DashMap;
 use lsp_types::Uri;
 

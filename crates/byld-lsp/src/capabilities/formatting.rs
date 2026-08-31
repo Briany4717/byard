@@ -18,7 +18,9 @@ pub fn handle_formatting(doc: &Document, options: FormattingOptions) -> Option<V
         return Some(Vec::new());
     }
 
-    let end_pos = doc.line_index.offset_to_position(&doc.content, doc.content.len());
+    let end_pos = doc
+        .line_index
+        .offset_to_position(&doc.content, doc.content.len());
     let full_range = Range::new(Position::new(0, 0), end_pos);
 
     Some(vec![TextEdit {

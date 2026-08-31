@@ -4,8 +4,8 @@ use lsp_types::{GotoDefinitionResponse, Location, Position};
 
 use crate::state::document::Document;
 use crate::syntax::ast_utils::{
-    find_class_ref_at_offset, find_element_ref_at_offset, find_hover_target,
-    find_local_declaration_span, span_contains, HoverTarget,
+    HoverTarget, find_class_ref_at_offset, find_element_ref_at_offset, find_hover_target,
+    find_local_declaration_span, span_contains,
 };
 
 /// Handles a goto definition request.
@@ -57,7 +57,8 @@ pub fn handle_definition(doc: &Document, pos: Position) -> Option<GotoDefinition
                     )));
                 }
 
-                if let Some(target_view) = doc.parsed.views.iter().find(|v| v.name.as_str() == name) {
+                if let Some(target_view) = doc.parsed.views.iter().find(|v| v.name.as_str() == name)
+                {
                     let range = doc.line_index.span_to_range(&doc.content, target_view.span);
                     return Some(GotoDefinitionResponse::Scalar(Location::new(
                         doc.uri.clone(),

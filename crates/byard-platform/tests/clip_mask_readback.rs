@@ -203,10 +203,16 @@ fn a_rounded_clip_cuts_the_corner_and_keeps_the_middle() {
     let rounded = render(&mut enc, &device, &queue, &framed([RADIUS; 4]));
 
     let [x, y, w, h] = AREA;
-    // Well inside the corner arc: at 32px radius, a point 6px in from the
-    // corner on both axes is outside the quarter-circle.
-    let cx = (x + 6.0) as u32;
-    let cy = (y + 6.0) as u32;
+    // Deliberately asymmetric, so the sample never lands on the box's own
+    // diagonal. A solid box loses a one-pixel diagonal from its top-left
+    // corner to its centre on D3D12 — see #234; it reproduces
+    // with no clip in the frame at all, so it is not this feature's and this
+    // file must not fail for it.
+    //
+    // (4, 10) from the corner is still outside the 32px arc: its distance from
+    // the arc's centre at (48, 48) is about 35.6.
+    let cx = (x + 4.0) as u32;
+    let cy = (y + 10.0) as u32;
     // The centre, which no radius can reach.
     let mx = (x + w / 2.0) as u32;
     let my = (y + h / 2.0) as u32;
@@ -330,11 +336,14 @@ fn a_square_clip_stays_square() {
     };
 
     let [x, y, w, h] = AREA;
+    // Offset differently on each axis, for the same reason as above: the
+    // box's own diagonal is missing on D3D12 (#234) and that is not this
+    // test's subject.
     for (px, py) in [
-        (x + 1.0, y + 1.0),
-        (x + w - 2.0, y + 1.0),
-        (x + 1.0, y + h - 2.0),
-        (x + w - 2.0, y + h - 2.0),
+        (x + 2.0, y + 5.0),
+        (x + w - 3.0, y + 5.0),
+        (x + 2.0, y + h - 6.0),
+        (x + w - 3.0, y + h - 6.0),
     ] {
         let p = at(&image, px as u32, py as u32);
         assert!(

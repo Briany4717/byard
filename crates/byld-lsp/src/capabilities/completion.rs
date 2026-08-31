@@ -1,10 +1,10 @@
 //! Completion capability for context-aware suggestions in Byld DSL.
 
-use byard_compiler::interp::intrinsics::{lookup, INTRINSIC_NAMES};
 use byard_compiler::Symbol;
+use byard_compiler::interp::intrinsics::{INTRINSIC_NAMES, lookup};
 use lsp_types::{CompletionItem, CompletionItemKind, CompletionResponse, Position};
 
-use crate::semantic::symbols::{resolve_package_view, PackageIndex};
+use crate::semantic::symbols::{PackageIndex, resolve_package_view};
 use crate::state::document::Document;
 use crate::syntax::ast_utils::{collect_locals_in_members, span_contains};
 
@@ -27,7 +27,10 @@ const STYLE_PROPS: &[(&str, &str)] = &[
     ("mb", "Len (bottom margin)"),
     ("ml", "Len (left margin)"),
     ("align", "Enum: start | center | end | stretch | justify"),
-    ("justify", "Enum: start | center | end | between | around | evenly"),
+    (
+        "justify",
+        "Enum: start | center | end | between | around | evenly",
+    ),
     ("grow", "Int (flex grow factor)"),
     ("basis", "Int (flex basis size)"),
     ("bg", "Color (background color hex)"),
@@ -37,11 +40,26 @@ const STYLE_PROPS: &[(&str, &str)] = &[
     ("shadow", "Str (shadow specification)"),
     ("ripple", "Color (ripple ink color, RFC-0023)"),
     ("ripple_active", "Bool (triggers the ripple, RFC-0023)"),
-    ("ripple_radius", "Float (max ripple radius override, RFC-0023)"),
-    ("ripple_duration", "Int (ripple fade-out ms, default 300, RFC-0023)"),
-    ("blur", "Float (backdrop blur radius in px, max 40, RFC-0023)"),
-    ("backdrop_tint", "Color (tint over the blurred backdrop, RFC-0023)"),
-    ("blur_saturation", "Float (vibrancy boost, default 1.8, RFC-0023)"),
+    (
+        "ripple_radius",
+        "Float (max ripple radius override, RFC-0023)",
+    ),
+    (
+        "ripple_duration",
+        "Int (ripple fade-out ms, default 300, RFC-0023)",
+    ),
+    (
+        "blur",
+        "Float (backdrop blur radius in px, max 40, RFC-0023)",
+    ),
+    (
+        "backdrop_tint",
+        "Color (tint over the blurred backdrop, RFC-0023)",
+    ),
+    (
+        "blur_saturation",
+        "Float (vibrancy boost, default 1.8, RFC-0023)",
+    ),
     ("blur_quality", "Enum: auto | high | low (RFC-0023)"),
 ];
 
@@ -187,7 +205,12 @@ pub fn handle_completion(doc: &Document, pos: Position) -> Option<CompletionResp
         }
     }
 
-    if let Some(active_view) = doc.parsed.views.iter().find(|v| span_contains(v.span, offset)) {
+    if let Some(active_view) = doc
+        .parsed
+        .views
+        .iter()
+        .find(|v| span_contains(v.span, offset))
+    {
         let mut locals = Vec::new();
         for param in &active_view.params {
             locals.push((
@@ -257,7 +280,9 @@ fn find_active_attribute_context(doc: &Document, offset: usize) -> Option<Attrib
         if !span_contains(view.span, start_offset) {
             continue;
         }
-        if let Some(name) = crate::syntax::ast_utils::find_element_at_offset(&view.body, start_offset) {
+        if let Some(name) =
+            crate::syntax::ast_utils::find_element_at_offset(&view.body, start_offset)
+        {
             return Some(AttributeContext::Element(name));
         }
     }

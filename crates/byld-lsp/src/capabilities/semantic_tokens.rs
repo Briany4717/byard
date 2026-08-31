@@ -3,8 +3,8 @@
 use byard_compiler::diagnostics::Span;
 use byard_compiler::parser::ast::{AttrKind, ElementNode, Expr, Member, StrPart, ViewDecl};
 use lsp_types::{
-    SemanticToken, SemanticTokenModifier, SemanticTokens, SemanticTokensLegend,
-    SemanticTokensResult, SemanticTokenType,
+    SemanticToken, SemanticTokenModifier, SemanticTokenType, SemanticTokens, SemanticTokensLegend,
+    SemanticTokensResult,
 };
 
 use crate::state::document::Document;
@@ -14,17 +14,17 @@ use crate::state::document::Document;
 pub fn get_legend() -> SemanticTokensLegend {
     SemanticTokensLegend {
         token_types: vec![
-            SemanticTokenType::KEYWORD,    // 0
-            SemanticTokenType::TYPE,       // 1
-            SemanticTokenType::FUNCTION,   // 2
-            SemanticTokenType::VARIABLE,   // 3
-            SemanticTokenType::PROPERTY,   // 4
-            SemanticTokenType::STRING,     // 5
-            SemanticTokenType::NUMBER,     // 6
-            SemanticTokenType::OPERATOR,   // 7
-            SemanticTokenType::COMMENT,    // 8
-            SemanticTokenType::CLASS,      // 9
-            SemanticTokenType::EVENT,      // 10
+            SemanticTokenType::KEYWORD,  // 0
+            SemanticTokenType::TYPE,     // 1
+            SemanticTokenType::FUNCTION, // 2
+            SemanticTokenType::VARIABLE, // 3
+            SemanticTokenType::PROPERTY, // 4
+            SemanticTokenType::STRING,   // 5
+            SemanticTokenType::NUMBER,   // 6
+            SemanticTokenType::OPERATOR, // 7
+            SemanticTokenType::COMMENT,  // 8
+            SemanticTokenType::CLASS,    // 9
+            SemanticTokenType::EVENT,    // 10
         ],
         token_modifiers: vec![
             SemanticTokenModifier::DECLARATION,
@@ -53,7 +53,10 @@ pub fn handle_semantic_tokens(doc: &Document) -> Option<SemanticTokensResult> {
             modifiers: 0,
         });
         raw_tokens.push(RawToken {
-            span: Span::new(import.span.start + 4, import.span.start + 4 + import.package.as_str().len() as u32),
+            span: Span::new(
+                import.span.start + 4,
+                import.span.start + 4 + import.package.as_str().len() as u32,
+            ),
             token_type: 9, // CLASS / PACKAGE
             modifiers: 0,
         });
@@ -73,7 +76,9 @@ pub fn handle_semantic_tokens(doc: &Document) -> Option<SemanticTokensResult> {
     let mut prev_char = 0;
 
     for token in raw_tokens {
-        let pos = doc.line_index.offset_to_position(&doc.content, token.span.start as usize);
+        let pos = doc
+            .line_index
+            .offset_to_position(&doc.content, token.span.start as usize);
         let len = token.span.end.saturating_sub(token.span.start);
 
         let delta_line = pos.line - prev_line;
@@ -114,14 +119,17 @@ fn collect_view_tokens(view: &ViewDecl, out: &mut Vec<RawToken>) {
             view.span.start + view_kw_len + 1 + view.name.as_str().len() as u32,
         ),
         token_type: 9, // CLASS
-        modifiers: 1, // DECLARATION
+        modifiers: 1,  // DECLARATION
     });
 
     for param in &view.params {
         out.push(RawToken {
-            span: Span::new(param.span.start, param.span.start + param.name.as_str().len() as u32),
+            span: Span::new(
+                param.span.start,
+                param.span.start + param.name.as_str().len() as u32,
+            ),
             token_type: 3, // VARIABLE
-            modifiers: 1, // DECLARATION
+            modifiers: 1,  // DECLARATION
         });
     }
 
@@ -131,7 +139,9 @@ fn collect_view_tokens(view: &ViewDecl, out: &mut Vec<RawToken>) {
 fn collect_member_tokens(members: &[Member], out: &mut Vec<RawToken>) {
     for member in members {
         match member {
-            Member::Var { name, init, span, .. } => {
+            Member::Var {
+                name, init, span, ..
+            } => {
                 out.push(RawToken {
                     span: Span::new(span.start, span.start + 3), // "var"
                     token_type: 0,                               // KEYWORD
@@ -140,11 +150,13 @@ fn collect_member_tokens(members: &[Member], out: &mut Vec<RawToken>) {
                 out.push(RawToken {
                     span: Span::new(span.start + 4, span.start + 4 + name.as_str().len() as u32),
                     token_type: 3, // VARIABLE
-                    modifiers: 1, // DECLARATION
+                    modifiers: 1,  // DECLARATION
                 });
                 collect_expr_tokens(init, out);
             }
-            Member::Let { name, init, span, .. } => {
+            Member::Let {
+                name, init, span, ..
+            } => {
                 out.push(RawToken {
                     span: Span::new(span.start, span.start + 3), // "let"
                     token_type: 0,                               // KEYWORD
@@ -153,7 +165,7 @@ fn collect_member_tokens(members: &[Member], out: &mut Vec<RawToken>) {
                 out.push(RawToken {
                     span: Span::new(span.start + 4, span.start + 4 + name.as_str().len() as u32),
                     token_type: 3, // VARIABLE
-                    modifiers: 3, // DECLARATION | READONLY
+                    modifiers: 3,  // DECLARATION | READONLY
                 });
                 collect_expr_tokens(init, out);
             }
@@ -172,13 +184,16 @@ fn collect_member_tokens(members: &[Member], out: &mut Vec<RawToken>) {
                 out.push(RawToken {
                     span: Span::new(span.start + 3, span.start + 3 + name.as_str().len() as u32),
                     token_type: 2, // FUNCTION
-                    modifiers: 1, // DECLARATION
+                    modifiers: 1,  // DECLARATION
                 });
                 for param in params {
                     out.push(RawToken {
-                        span: Span::new(param.span.start, param.span.start + param.name.as_str().len() as u32),
+                        span: Span::new(
+                            param.span.start,
+                            param.span.start + param.name.as_str().len() as u32,
+                        ),
                         token_type: 3, // VARIABLE
-                        modifiers: 1, // DECLARATION
+                        modifiers: 1,  // DECLARATION
                     });
                 }
                 collect_expr_tokens(body, out);
@@ -186,7 +201,13 @@ fn collect_member_tokens(members: &[Member], out: &mut Vec<RawToken>) {
             Member::Element(el) => {
                 collect_element_tokens(el, out);
             }
-            Member::For { var, iter, body, span, .. } => {
+            Member::For {
+                var,
+                iter,
+                body,
+                span,
+                ..
+            } => {
                 out.push(RawToken {
                     span: Span::new(span.start, span.start + 3), // "for"
                     token_type: 0,                               // KEYWORD
@@ -195,7 +216,7 @@ fn collect_member_tokens(members: &[Member], out: &mut Vec<RawToken>) {
                 out.push(RawToken {
                     span: Span::new(span.start + 4, span.start + 4 + var.as_str().len() as u32),
                     token_type: 3, // VARIABLE
-                    modifiers: 1, // DECLARATION
+                    modifiers: 1,  // DECLARATION
                 });
                 collect_expr_tokens(iter, out);
                 collect_member_tokens(body, out);
@@ -225,7 +246,10 @@ fn collect_member_tokens(members: &[Member], out: &mut Vec<RawToken>) {
                 });
                 for rule in rules {
                     out.push(RawToken {
-                        span: Span::new(rule.span.start, rule.span.start + 1 + rule.class.as_str().len() as u32),
+                        span: Span::new(
+                            rule.span.start,
+                            rule.span.start + 1 + rule.class.as_str().len() as u32,
+                        ),
                         token_type: 4, // PROPERTY / STYLE
                         modifiers: 0,
                     });
@@ -242,6 +266,34 @@ fn collect_member_tokens(members: &[Member], out: &mut Vec<RawToken>) {
             Member::Expr(expr) => {
                 collect_expr_tokens(expr, out);
             }
+            Member::Lifecycle { action, span, .. } => {
+                // "on mount" / "on unmount": highlight the `on` keyword, then
+                // the action body like any other expression.
+                out.push(RawToken {
+                    span: Span::new(span.start, span.start + 2), // "on"
+                    token_type: 0,                               // KEYWORD
+                    modifiers: 0,
+                });
+                collect_expr_tokens(action, out);
+            }
+            Member::Timer { action, span, .. } => {
+                // "every" and "after" are both five characters, so the keyword
+                // run is the same length either way.
+                out.push(RawToken {
+                    span: Span::new(span.start, span.start + 5),
+                    token_type: 0, // KEYWORD
+                    modifiers: 0,
+                });
+                collect_expr_tokens(action, out);
+            }
+            Member::Measure { action, span } => {
+                out.push(RawToken {
+                    span: Span::new(span.start, span.start + 2), // "on"
+                    token_type: 0,                               // KEYWORD
+                    modifiers: 0,
+                });
+                collect_expr_tokens(action, out);
+            }
             Member::Inject { name, span, .. } => {
                 out.push(RawToken {
                     span: Span::new(span.start, span.start + 6), // "inject"
@@ -251,7 +303,7 @@ fn collect_member_tokens(members: &[Member], out: &mut Vec<RawToken>) {
                 out.push(RawToken {
                     span: Span::new(span.start + 7, span.start + 7 + name.as_str().len() as u32),
                     token_type: 3, // VARIABLE
-                    modifiers: 1, // DECLARATION
+                    modifiers: 1,  // DECLARATION
                 });
             }
         }

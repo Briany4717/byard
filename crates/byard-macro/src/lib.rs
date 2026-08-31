@@ -183,6 +183,12 @@ fn expand_impl(input: &syn::ItemImpl) -> TokenStream {
     }
 
     let expanded = quote! {
+        // A controller method is `async` because the boundary is async, not
+        // because its body awaits: `fn add(&self, n: i64) -> i64` is a
+        // perfectly ordinary controller method and the shim still has to hand
+        // back a future. Allowed on the re-emitted impl so every caller of
+        // this macro gets it, rather than each one rediscovering it.
+        #[allow(clippy::unused_async_trait_impl)]
         #input
 
         impl ::byard::bridge::Controller for #self_ty {

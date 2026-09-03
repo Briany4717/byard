@@ -51,8 +51,12 @@ jobs:
       - name: fmt
         run: cargo fmt --all -- --check
 
+      # `--locked` on every cargo invocation that resolves. The lockfile is
+      # committed, so a build that needs to change it is a build whose inputs
+      # nobody chose — CI must refuse it rather than quietly resolve something
+      # newer than what was reviewed.
       - name: clippy
-        run: cargo clippy --workspace --all-targets
+        run: cargo clippy --locked --workspace --all-targets
 
       - name: test
-        run: cargo test --workspace
+        run: cargo test --locked --workspace

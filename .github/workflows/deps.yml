@@ -1,0 +1,67 @@
+name: Dependencies
+
+# The committed lockfile is what CI builds, which is the point of committing
+# it — but it also means nobody finds out that the ecosystem moved until
+# somebody bumps something. This job goes and looks, on its own schedule.
+#
+# It exists because of a real morning: `tinyvec 1.13.0` shipped with a missing
+# `vec!` import in its `no_std` path, and the first anyone knew of it was three
+# platforms going red on an unrelated pull request about overlay positioning.
+# Upstream breakage should arrive as its own signal, addressed to nobody's
+# feature branch.
+on:
+  schedule:
+    # Mondays, early. A week is short enough that the diff is readable and long
+    # enough that the job is not noise.
+    - cron: "0 6 * * 1"
+  # And on demand, for when you want to know before starting an upgrade.
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-D warnings"
+
+jobs:
+  latest:
+    name: Build against the latest resolvable dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Install Linux GPU dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1-mesa-dev libgl1-mesa-dev
+
+      # Deliberately *without* `--locked`: resolving fresh is the whole
+      # question this job asks.
+      - name: Update every dependency
+        run: cargo update
+
+      - name: Show what moved
+        run: git --no-pager diff --stat Cargo.lock
+
+      - name: clippy
+        run: cargo clippy --workspace --all-targets
+
+      - name: test
+        run: cargo test --workspace
+
+      # A failure here is information, not an emergency: the committed lockfile
+      # still builds, so `main` and every open PR are unaffected. What it says
+      # is that an upgrade needs a person before it needs a merge.
+      - name: What a failure here means
+        if: failure()
+        run: |
+          echo "The tree does not build against the newest resolvable"
+          echo "dependencies. The committed Cargo.lock is unaffected and CI"
+          echo "on main and on pull requests is still green."
+          echo
+          echo "Read the diff above to see which crate moved, then either pin"
+          echo "it or wait for a fix upstream. Do not update the lockfile"
+          echo "until this job is green again."

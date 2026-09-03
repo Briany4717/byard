@@ -664,6 +664,21 @@ impl<'a> Parser<'a> {
             Vec::new()
         };
 
+        // `as <name>` (RFC-0036), before the tail: it names *this* element, and
+        // reads next to the element rather than after its body, which for a
+        // container can be many lines further down.
+        let anchor_name = if self.eat(&Token::As) {
+            if let Some(Token::Ident(n)) = self.cur().cloned() {
+                self.advance();
+                Some(n)
+            } else {
+                self.error("a name after `as`");
+                None
+            }
+        } else {
+            None
+        };
+
         // element_tail := "{" member* "}" | "=>" expr
         let mut action = None;
         let mut children = Vec::new();
@@ -679,6 +694,7 @@ impl<'a> Parser<'a> {
             attrs,
             action,
             children,
+            anchor_name,
             span: self.span_from(start),
         }
     }

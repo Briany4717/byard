@@ -5241,7 +5241,18 @@ impl Interpreter {
         let Some(name) = self.eval_str_prop(attrs, "anchor_to") else {
             return (0.0, 0.0);
         };
-        let Some(anchor) = self.anchor_rects.get(&Symbol::intern(&name)).copied() else {
+        // Compared by text rather than interned. `anchor_to` may be computed,
+        // and the interner is process-global and append-only for the life of
+        // the process, so interning a per-frame string would grow memory
+        // without bound and take the write lock on the logic thread every time
+        // a new one appeared. The table holds a handful of entries — one per
+        // `as` tag in the view — so the scan is cheaper than the hash would be.
+        let Some(anchor) = self
+            .anchor_rects
+            .iter()
+            .find(|(k, _)| k.as_str() == name)
+            .map(|(_, r)| *r)
+        else {
             return (0.0, 0.0);
         };
         let Ok(Some(own)) = self.atlas.resolved_rect(slot.id) else {
@@ -5253,7 +5264,7 @@ impl Interpreter {
         let align = Self::enum_prop(attrs, "anchor_align")
             .unwrap_or("start")
             .to_string();
-        let gap = self.resolve_radii(attrs, "anchor_gap")[0];
+        let gap = self.eval_px_prop(attrs, "anchor_gap").unwrap_or(0.0);
         let flip = self.eval_bool_prop(attrs, "anchor_flip") != Some(false);
 
         let (tx, ty) = anchor_placement_flipped(

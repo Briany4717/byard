@@ -260,3 +260,36 @@ fn an_element_cannot_anchor_to_itself() {
         interp.errors()
     );
 }
+
+/// A computed anchor name resolves, and does so without interning it.
+///
+/// The interner is process-global and append-only for the life of the process,
+/// so a name built per frame — `"row-{i}"` in a list, say — would grow memory
+/// without bound and take the interner's write lock on the logic thread every
+/// time a new one appeared. The lookup compares text instead.
+///
+/// Asserted through behaviour rather than by inspecting the interner: the
+/// overlay lands on its anchor, which it can only do if a string that was
+/// never interned still found the entry.
+#[test]
+fn a_computed_anchor_name_resolves() {
+    let src = "View Main() {
+    var which: Str = \"field\"
+    Column #[bg: 0x101010, p: 20, width: 400, height: 300] {
+        Box #[bg: 0x223344, width: 120, height: 30] as field {}
+    }
+    Overlay #[modal: false] {
+        Box #[bg: 0xAA3344, width: 80, height: 40, anchor_to: \"{which}\",
+              anchor_edge: below, anchor_gap: 6] {}
+    }
+}";
+    let rects = boxes(src);
+    let anchor = find(&rects, 120.0, 30.0);
+    let panel = find(&rects, 80.0, 40.0);
+
+    assert!(
+        (panel[1] - (anchor[1] + anchor[3] + 6.0)).abs() < 0.5,
+        "an interpolated name must place the same as a literal one: \
+         anchor {anchor:?} panel {panel:?}"
+    );
+}

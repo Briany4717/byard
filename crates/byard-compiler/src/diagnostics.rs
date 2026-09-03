@@ -235,6 +235,20 @@ pub enum CompileError {
         /// The path that matched nothing.
         path: String,
     },
+    /// An overlay's `anchor_to:` names an element that is not tagged `as`
+    /// before it in the same view (RFC-0036).
+    ///
+    /// Reported rather than ignored because the failure is otherwise silent:
+    /// a misspelt anchor produces an overlay that simply sits wherever layout
+    /// left it, which reads as a placement bug rather than a typo.
+    UnknownAnchor {
+        /// Source range of the offending `anchor_to:`.
+        span: Span,
+        /// The name that was written.
+        name: String,
+        /// The closest anchor declared before this point, if any.
+        hint: Option<String>,
+    },
     /// A `Canvas` child is not a recognized shape command (RFC-0020 §1:
     /// `Canvas` children are shape commands only, intrinsics, user views,
     /// declarations, and control flow are all rejected).
@@ -821,6 +835,7 @@ impl CompileError {
             | Self::NavCaseRequired { span, .. }
             | Self::InvalidRoutePattern { span, .. }
             | Self::UnmatchedRoute { span, .. }
+            | Self::UnknownAnchor { span, .. }
             | Self::UnknownShapeCommand { span, .. }
             | Self::UnknownShapeParam { span, .. }
             | Self::MissingShapeParam { span, .. }
@@ -904,6 +919,7 @@ impl CompileError {
             | Self::NavCaseRequired { span, .. }
             | Self::InvalidRoutePattern { span, .. }
             | Self::UnmatchedRoute { span, .. }
+            | Self::UnknownAnchor { span, .. }
             | Self::UnknownShapeCommand { span, .. }
             | Self::UnknownShapeParam { span, .. }
             | Self::MissingShapeParam { span, .. }
@@ -989,6 +1005,7 @@ impl CompileError {
             Self::NavCaseRequired { .. } => "NavCaseRequired",
             Self::InvalidRoutePattern { .. } => "InvalidRoutePattern",
             Self::UnmatchedRoute { .. } => "UnmatchedRoute",
+            Self::UnknownAnchor { .. } => "UnknownAnchor",
             Self::UnknownShapeCommand { .. } => "UnknownShapeCommand",
             Self::UnknownShapeParam { .. } => "UnknownShapeParam",
             Self::MissingShapeParam { .. } => "MissingShapeParam",
@@ -1176,6 +1193,14 @@ impl CompileError {
             Self::UnmatchedRoute { path, .. } => {
                 format!("no route matches `{path}`; the navigation stays where it is")
             }
+            Self::UnknownAnchor { name, hint, .. } => with_hint(
+                format!(
+                    "no element tagged `as {name}` before this overlay; an \
+                     overlay may only anchor to a name declared earlier in the \
+                     same view"
+                ),
+                hint.as_deref(),
+            ),
             Self::UnknownShapeCommand { name, hint, .. } => with_hint(
                 format!(
                     "`{name}` is not a shape command; `Canvas` children are shape commands only"

@@ -147,6 +147,11 @@ const SNAP_ALIGN: &[&str] = &["start", "center", "end"];
 /// `relative(ref)` anchoring are deferred (RFC-0017 Future possibilities),
 /// coordinate-passing covers the gap in the interim.
 const ANCHOR: &[&str] = &["center", "top", "bottom", "start", "end"];
+/// RFC-0036 `anchor_edge`: which side of the anchor the overlay sits on.
+const ANCHOR_EDGE: &[&str] = &["above", "below", "before", "after"];
+/// RFC-0036 `anchor_align`: how the overlay lines up along the anchor's other
+/// axis.
+const ANCHOR_ALIGN: &[&str] = &["start", "center", "end"];
 /// RFC-0018 `ZStack` `alignment`: how children smaller than the stack are
 /// positioned within it. Two-word tokens are `<block>_<inline>`; single-word
 /// tokens centre on the other axis.
@@ -484,6 +489,21 @@ fn lookup_intrinsic(name: &str) -> Option<Intrinsic> {
         // within the viewport. Harmless outside an overlay (no-op in normal
         // flow), so it lives on every container rather than a special case.
         props.insert("anchor", lay(PropType::Enum(ANCHOR)));
+        // RFC-0036: element-relative anchoring, the other half of the same
+        // placement story. `anchor_to` names an element tagged `as <name>`
+        // earlier in the view; the rest say where against it.
+        //
+        // Spelled `anchor_edge`/`anchor_align`/`anchor_gap` rather than the
+        // RFC's bare `edge`/`align`/`gap`, because `align` and `gap` are
+        // already layout properties on every container and a second meaning
+        // for them would be decided by whether an overlay happened to be the
+        // parent — the kind of context-dependence this catalogue exists to
+        // prevent.
+        props.insert("anchor_to", lay(PropType::Str));
+        props.insert("anchor_edge", lay(PropType::Enum(ANCHOR_EDGE)));
+        props.insert("anchor_align", lay(PropType::Enum(ANCHOR_ALIGN)));
+        props.insert("anchor_gap", lay(PropType::Len));
+        props.insert("anchor_flip", lay(PropType::Bool));
         // RFC-0018: grid child-placement props. Valid on any container child of a
         // `Grid`; harmless (no-op) outside a grid, like `anchor`, so they live on
         // every container rather than being special-cased.

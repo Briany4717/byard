@@ -1,0 +1,85 @@
+// RFC-0036, element-relative overlays: a panel anchored to *another element's*
+// laid-out box, not to the viewport.
+//
+// Run it (from the repo root):
+//   cd crates/byard-cli/examples/anchored_overlay
+//   cargo run -p byard-cli -- dev
+//
+// RFC-0017 could already float a panel in the viewport — centred, or pinned to
+// an edge. What it could not say is "directly under *this* field". That is the
+// difference between a dialog and an autocomplete, and it is what `as` plus
+// `anchor_to` adds: an element names itself, and an overlay points at the name.
+//
+// What to verify visually:
+//   1. The results panel sits under the search field, left edges lined up, with
+//      6px between them. Type to open it (`when` guards the overlay).
+//   2. The tooltip sits above its button, centred on it. Different edge, same
+//      mechanism.
+//   3. The bottom field's panel opens *upward*. Nothing asks it to: `below`
+//      would run off the window, so it flips. That is the default, because an
+//      autocomplete that renders off-screen is a bug in almost every case.
+//   4. **Resize the window.** Every panel tracks its anchor, because the
+//      placement is computed from the anchor's rect each frame rather than from
+//      a hard-coded offset.
+View Panel(label: Str) {
+    Column #[bg: 0x1C2430, radius: 10, p: 10, gap: 6, width: 220] {
+        Text(label) #[color: 0x9AA3AE, size: 12]
+        Text("Bucharest") #[color: 0xE7ECF2, size: 14]
+        Text("Budapest") #[color: 0xE7ECF2, size: 14]
+    }
+}
+
+View Main() {
+    var query: Str = "bu"
+    var hovering: Bool = true
+    var lower: Str = "bu"
+
+    Column #[bg: 0x0E1116, p: 24, gap: 0, width: 420, height: 460] {
+        Text("Element-relative overlays") #[color: 0xE7ECF2, size: 20]
+        Text("RFC-0036") #[color: 0x69737F, size: 13]
+
+        Box #[height: 16] {}
+        TextField #[value: query, placeholder: "Search locations…", width: 220]
+            as searchField => query = it
+
+        Box #[height: 150] {}
+        Button("Hover target") #[width: 140] as tipTarget => hovering = !hovering
+
+        Spacer #[grow: 1]
+        // Near the bottom on purpose: its panel has nowhere to go downward.
+        TextField #[value: lower, placeholder: "Flips upward…", width: 220]
+            as bottomField => lower = it
+    }
+
+    // Anchored under the search field.
+    when query != "" {
+        Overlay #[modal: false] {
+            Box #[anchor_to: "searchField", anchor_edge: below,
+                  anchor_align: start, anchor_gap: 6] {
+                Panel("results")
+            }
+        }
+    }
+
+    // Above its trigger, centred on it: a tooltip is the degenerate case.
+    when hovering {
+        Overlay #[modal: false] {
+            Box #[anchor_to: "tipTarget", anchor_edge: above,
+                  anchor_align: center, anchor_gap: 8] {
+                Box #[bg: 0x2D3644, radius: 6, p: 8] {
+                    Text("Anchored above, centred") #[color: 0xE7ECF2, size: 12]
+                }
+            }
+        }
+    }
+
+    // Asks for `below` and gets `above`, because below does not fit.
+    when lower != "" {
+        Overlay #[modal: false] {
+            Box #[anchor_to: "bottomField", anchor_edge: below,
+                  anchor_align: start, anchor_gap: 6] {
+                Panel("flipped")
+            }
+        }
+    }
+}

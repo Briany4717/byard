@@ -329,6 +329,14 @@ pub struct ElementNode {
     pub action: Option<Expr>,
     /// The `{ ... }` children block.
     pub children: Vec<Member>,
+    /// `as <name>`, tagging this element as an anchor an overlay can be placed
+    /// against (RFC-0036).
+    ///
+    /// Scoped to the view it is written in and resolved lexically: an overlay
+    /// may only anchor to a name declared *before* it. That is what makes an
+    /// anchor cycle impossible to write rather than something to detect at
+    /// runtime, and it is the order a reader follows anyway.
+    pub anchor_name: Option<Symbol>,
     /// Source span.
     pub span: Span,
 }
@@ -866,6 +874,7 @@ mod tests {
             }),
             children: Vec::new(),
             span: sp(),
+            anchor_name: None,
         };
         let view = ViewDecl {
             name: Symbol::intern("Counter"),

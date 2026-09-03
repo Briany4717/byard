@@ -456,6 +456,9 @@ pub enum RenderNode {
         /// and argument bindings, so a forwarded callback (`tap => on_tap()`)
         /// resolves against the scope it was instantiated in.
         env_snapshot: Vec<(Symbol, super::env::Value)>,
+        /// `as <name>`, this element's anchor tag (RFC-0036), carried through
+        /// lowering so the overlay pass can find its laid-out rect.
+        anchor_name: Option<Symbol>,
         /// The RFC-0038 `on measure` slot this element declared, if any: an
         /// index into the interpreter's measure slots.
         ///
@@ -1716,6 +1719,13 @@ pub struct Interpreter {
     /// over-drag at the top, sprung back by [`pull_anims`](Self::pull_anims). The
     /// content is painted shifted down by this much, with the indicator in the gap.
     pull_distance: std::collections::HashMap<u32, f32>,
+    /// `as <name>` anchors and the rect each resolved to this frame (RFC-0036).
+    ///
+    /// Filled by the main render walk and read by the overlay pass, which runs
+    /// after it — which is the whole reason an overlay may only anchor to a
+    /// name declared before it: by the time the overlay is placed, the anchor's
+    /// rect is a fact rather than a prediction.
+    anchor_rects: std::collections::HashMap<Symbol, crate::interp::intrinsics::Rect>,
     /// RFC-0021 pull-to-refresh: the in-flight spring retracting or resting the
     /// pull region per elem (see [`PullAnim`]).
     pull_anims: std::collections::HashMap<u32, PullAnim>,
@@ -2924,6 +2934,7 @@ impl Interpreter {
                         name: Symbol::intern("Button"),
                         attrs,
                         state_blocks,
+                        anchor_name: el.anchor_name.clone(),
                         children: vec![RenderNode::Text {
                             attrs: Vec::new(),
                             state_blocks: Vec::new(),
@@ -3011,6 +3022,7 @@ impl Interpreter {
                     name: el.name.clone(),
                     attrs,
                     state_blocks,
+                    anchor_name: el.anchor_name.clone(),
                     children: Vec::new(),
                     action: el.action.clone(),
                     bound_sig,
@@ -3028,6 +3040,7 @@ impl Interpreter {
                     name: el.name.clone(),
                     attrs,
                     state_blocks,
+                    anchor_name: el.anchor_name.clone(),
                     children: Vec::new(),
                     action: el.action.clone(),
                     bound_sig,
@@ -3076,6 +3089,7 @@ impl Interpreter {
                     name: el.name.clone(),
                     attrs,
                     state_blocks,
+                    anchor_name: el.anchor_name.clone(),
                     children,
                     action: el.action.clone(),
                     bound_sig,
@@ -4237,6 +4251,10 @@ impl Interpreter {
         // the passes that record them (reconcile can raise one too, RFC-0026's
         // stack-depth guard fires while navigation is being reconciled).
         self.perf_warnings.clear();
+        // RFC-0036: anchors are recorded by this frame's walk, so last frame's
+        // rects have to go first. An anchor whose element unmounted must stop
+        // existing rather than keep pointing at where it used to be.
+        self.anchor_rects.clear();
         // The atlas is **not** torn down here any more (RFC-0032 §R3). Whether
         // it can be retained is not knowable until `reconcile_structure` has
         // run, so the decision, and the `clear()` that follows from it, moves
@@ -5076,8 +5094,16 @@ impl Interpreter {
             let Ok(cid) = self.build_layout_tree(child, pools, &mut cflat) else {
                 continue;
             };
-            let anchor = self.anchor_token(child);
-            let style = anchor_wrapper_style(anchor.as_deref());
+            // RFC-0036: an anchored child is positioned by the overlay pass,
+            // so its wrapper must not stretch it. It has to arrive at its own
+            // content size, because that size is exactly what the placement
+            // measures against — a panel stretched to the viewport would be
+            // "placed" correctly and still cover the screen.
+            let style = if self.anchor_ref(child).is_some() {
+                anchor_wrapper_style(Some("__anchored"))
+            } else {
+                anchor_wrapper_style(self.anchor_token(child).as_deref())
+            };
             let Ok(anchor_id) = self.atlas.add_container(style, &[cid]) else {
                 continue;
             };
@@ -5097,6 +5123,18 @@ impl Interpreter {
             wrapper_id,
             children: slots,
         })
+    }
+
+    /// The `anchor_to:` name of an overlay child (RFC-0036), if it anchors to
+    /// an element rather than to the viewport.
+    fn anchor_ref(&mut self, child: &RenderNode) -> Option<String> {
+        match child {
+            RenderNode::Box { attrs, .. } => {
+                let attrs = attrs.clone();
+                self.eval_str_prop(&attrs, "anchor_to")
+            }
+            _ => None,
+        }
     }
 
     /// The `anchor:` token of an overlay child (RFC-0017), or `None` for an
@@ -5161,6 +5199,15 @@ impl Interpreter {
         }
 
         for slot in &ol.children {
+            // RFC-0036: an overlay child naming an anchor is moved from where
+            // the viewport wrapper put it onto the anchor's rect. The shift
+            // rides both channels — the paint transform and the hit-rect shift
+            // — because a dropdown you can see but not click is not placed.
+            let shift = self.anchor_shift(slot, width, height);
+            let mut transform = byard_core::frame::Transform::IDENTITY;
+            transform.translate[0] += shift.0;
+            transform.translate[1] += shift.1;
+
             let mut flat_idx = 0;
             self.render_node_with_atlas(
                 slot.node,
@@ -5170,15 +5217,55 @@ impl Interpreter {
                 &mut flat_idx,
                 viewport,
                 1.0,
-                byard_core::frame::Transform::IDENTITY,
+                transform,
                 None,
-                (0.0, 0.0),
+                shift,
                 None,
                 pools,
             );
         }
 
         frame.end_clip();
+    }
+
+    /// How far to move an overlay child so it sits against its anchor
+    /// (RFC-0036), or `(0, 0)` for a child that names none.
+    ///
+    /// Returns zero rather than an error when the name is unknown at render
+    /// time: the *compile* check is what reports a misspelt or forward
+    /// reference, and a frame is the wrong place to raise it again.
+    fn anchor_shift(&mut self, slot: &OverlayChildSlot<'_>, width: f32, height: f32) -> (f32, f32) {
+        let RenderNode::Box { attrs, .. } = slot.node else {
+            return (0.0, 0.0);
+        };
+        let Some(name) = self.eval_str_prop(attrs, "anchor_to") else {
+            return (0.0, 0.0);
+        };
+        let Some(anchor) = self.anchor_rects.get(&Symbol::intern(&name)).copied() else {
+            return (0.0, 0.0);
+        };
+        let Ok(Some(own)) = self.atlas.resolved_rect(slot.id) else {
+            return (0.0, 0.0);
+        };
+        let edge = Self::enum_prop(attrs, "anchor_edge")
+            .unwrap_or("below")
+            .to_string();
+        let align = Self::enum_prop(attrs, "anchor_align")
+            .unwrap_or("start")
+            .to_string();
+        let gap = self.resolve_radii(attrs, "anchor_gap")[0];
+        let flip = self.eval_bool_prop(attrs, "anchor_flip") != Some(false);
+
+        let (tx, ty) = anchor_placement_flipped(
+            anchor,
+            (own.width, own.height),
+            &edge,
+            &align,
+            gap,
+            flip,
+            (width, height),
+        );
+        (tx - own.x, ty - own.y)
     }
 
     /// Lowers an `Overlay`'s `dismiss =>` action to a router [`Action`], if
@@ -6576,6 +6663,7 @@ impl Interpreter {
                 action,
                 bound_sig,
                 env_snapshot,
+                anchor_name,
                 measure: _,
             } => {
                 // RFC-0019 §2: restore the instance environment captured at lower
@@ -6605,6 +6693,23 @@ impl Interpreter {
                         rect.width,
                         rect.height,
                     );
+                    // RFC-0036: this element is an anchor, so record where it
+                    // landed. Recorded from the *painted* rect, transform and
+                    // scroll shift included, because an overlay has to point at
+                    // where the user sees the element, not where it would have
+                    // been without them.
+                    if let Some(name) = anchor_name {
+                        let tl = inherited_transform.apply_point([rect.x, rect.y]);
+                        self.anchor_rects.insert(
+                            name.clone(),
+                            crate::interp::intrinsics::Rect::new(
+                                tl[0] + scroll_shift.0,
+                                tl[1] + scroll_shift.1,
+                                rect.width * inherited_transform.scale[0],
+                                rect.height * inherited_transform.scale[1],
+                            ),
+                        );
+                    }
                     let elem_idx = self.atlas.node_index(atlas_node);
                     // RFC-0012 S5: a `disabled:` element still lays out and paints,
                     // but the router gates every handler it registers below and
@@ -10151,10 +10256,85 @@ impl Interpreter {
         (rect.x + fx * rect.w, rect.y + fy * rect.h)
     }
 
+    /// Checks every `anchor_to:` against the `as <name>` tags declared before
+    /// it, in lexical order (RFC-0036).
+    ///
+    /// Lexical order is the whole guarantee: an overlay may only anchor to a
+    /// name that appears earlier in the same view, which makes an anchor cycle
+    /// impossible to write rather than something to detect at runtime, and
+    /// means the anchor's rect is already a fact by the time the overlay pass
+    /// places against it.
+    fn check_anchor_refs(&mut self, view: &ViewDecl) {
+        let mut declared: Vec<String> = Vec::new();
+        Self::walk_anchor_members(&view.body, &mut declared, &mut self.errors);
+    }
+
+    /// Walks members in written order, collecting `as` tags and checking
+    /// `anchor_to:` against what has been collected so far.
+    fn walk_anchor_members(
+        members: &[Member],
+        declared: &mut Vec<String>,
+        errors: &mut Vec<CompileError>,
+    ) {
+        for member in members {
+            match member {
+                Member::Element(el) => Self::walk_anchor_element(el, declared, errors),
+                Member::For { body, .. } | Member::Route { body, .. } => {
+                    Self::walk_anchor_members(body, declared, errors);
+                }
+                Member::When { then, els, .. } => {
+                    Self::walk_anchor_members(then, declared, errors);
+                    if let Some(e) = els {
+                        Self::walk_anchor_members(e, declared, errors);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn walk_anchor_element(
+        el: &ElementNode,
+        declared: &mut Vec<String>,
+        errors: &mut Vec<CompileError>,
+    ) {
+        for attr in &el.attrs {
+            if attr.name.as_str() != "anchor_to" {
+                continue;
+            }
+            let AttrKind::Prop { value } = &attr.kind else {
+                continue;
+            };
+            // Only a literal name can be checked. A computed one is allowed
+            // through rather than rejected: the check exists to catch typos,
+            // not to forbid the (rare, deliberate) dynamic case.
+            let Expr::StrLit(parts, span) = value else {
+                continue;
+            };
+            let [crate::parser::ast::StrPart::Text(name)] = parts.as_slice() else {
+                continue;
+            };
+            if !declared.iter().any(|d| d == name) {
+                errors.push(CompileError::UnknownAnchor {
+                    span: *span,
+                    name: name.clone(),
+                    hint: closest_anchor(name, declared),
+                });
+            }
+        }
+        // Recorded *after* its own attrs are checked, so an element cannot
+        // anchor to itself.
+        if let Some(name) = &el.anchor_name {
+            declared.push(name.as_str().to_string());
+        }
+        Self::walk_anchor_members(&el.children, declared, errors);
+    }
+
     /// Processes a whole `View`: its declarations first (so bindings can resolve
     /// names), then lowers its top-level elements into a render tree, handling
     /// `when`/`for` structural members (M20).
     pub fn lower_view(&mut self, view: &ViewDecl, known_views: &[&str]) -> Vec<RenderNode> {
+        self.check_anchor_refs(view);
         // RFC-0018: a fresh tree gets fresh `when`/`for` pools; the previous
         // tree's pool ids are discarded with it (hot-reload re-lowers the tree).
         self.for_pools.clear();
@@ -12290,6 +12470,120 @@ struct OverlayChildSlot<'a> {
 /// and `align` the horizontal one. An unanchored child keeps the default
 /// (`Start`/`Stretch`), so a `grow` scrim fills the viewport; an anchored child
 /// is pinned to the requested edge/centre.
+/// Where an anchored overlay's box goes, given its anchor's rect (RFC-0036).
+///
+/// Pure, and separated from the render walk on purpose: placement is the part
+/// with the arithmetic and the flip rule, and it is the part worth testing
+/// without a GPU, a frame, or a layout tree.
+///
+/// `edge` picks the side of `anchor` to sit on, `align` lines the overlay up
+/// along the other axis, and `gap` is the space between the two boxes.
+#[must_use]
+fn anchor_placement(
+    anchor: crate::interp::intrinsics::Rect,
+    size: (f32, f32),
+    edge: &str,
+    align: &str,
+    gap: f32,
+) -> (f32, f32) {
+    let (w, h) = size;
+    // Along the anchor's cross axis: `start` lines the near edges up, `end`
+    // the far ones, `center` the midpoints.
+    let across = |anchor_start: f32, anchor_len: f32, own_len: f32| match align {
+        "end" => anchor_start + anchor_len - own_len,
+        "center" => anchor_start + (anchor_len - own_len) / 2.0,
+        _ => anchor_start,
+    };
+    match edge {
+        "above" => (across(anchor.x, anchor.w, w), anchor.y - gap - h),
+        "before" => (anchor.x - gap - w, across(anchor.y, anchor.h, h)),
+        "after" => (anchor.x + anchor.w + gap, across(anchor.y, anchor.h, h)),
+        // `below` is the default, and the one an autocomplete wants.
+        _ => (across(anchor.x, anchor.w, w), anchor.y + anchor.h + gap),
+    }
+}
+
+/// The opposite side, for the flip (RFC-0036 §"Flip logic").
+#[must_use]
+fn flipped_edge(edge: &str) -> &'static str {
+    match edge {
+        "above" => "below",
+        "before" => "after",
+        "after" => "before",
+        _ => "above",
+    }
+}
+
+/// Places an anchored overlay, flipping to the opposite edge when the first
+/// choice would leave the viewport (RFC-0036).
+///
+/// Default-on, because an autocomplete that renders off the bottom of the
+/// window is a bug in almost every case; `anchor_flip: false` opts out.
+///
+/// A flip happens at most once. If both sides overflow — a viewport too small
+/// to hold the overlay either way — the side with more room wins and the box is
+/// clamped into view rather than rendered where nobody can reach it.
+#[must_use]
+fn anchor_placement_flipped(
+    anchor: crate::interp::intrinsics::Rect,
+    size: (f32, f32),
+    edge: &str,
+    align: &str,
+    gap: f32,
+    flip: bool,
+    viewport: (f32, f32),
+) -> (f32, f32) {
+    let (w, h) = size;
+    let (vw, vh) = viewport;
+    let fits = |(x, y): (f32, f32)| x >= 0.0 && y >= 0.0 && x + w <= vw && y + h <= vh;
+
+    let first = anchor_placement(anchor, size, edge, align, gap);
+    if !flip || fits(first) {
+        return clamp_into(first, size, viewport);
+    }
+    let other = anchor_placement(anchor, size, flipped_edge(edge), align, gap);
+    if fits(other) {
+        return other;
+    }
+    // Neither fits. Keep whichever leaves more of the overlay on screen, then
+    // clamp; a half-visible dropdown over its own field is the documented
+    // last resort and beats one that is entirely off-screen.
+    let visible = |(x, y): (f32, f32)| {
+        let vx = (x + w).min(vw) - x.max(0.0);
+        let vy = (y + h).min(vh) - y.max(0.0);
+        vx.max(0.0) * vy.max(0.0)
+    };
+    let best = if visible(other) > visible(first) {
+        other
+    } else {
+        first
+    };
+    clamp_into(best, size, viewport)
+}
+
+/// Slides a box back inside the viewport without resizing it.
+#[must_use]
+fn clamp_into(pos: (f32, f32), size: (f32, f32), viewport: (f32, f32)) -> (f32, f32) {
+    let (w, h) = size;
+    let (vw, vh) = viewport;
+    // `max(0.0)` last, so a box larger than the viewport pins to the top-left
+    // rather than to a negative coordinate.
+    (pos.0.min(vw - w).max(0.0), pos.1.min(vh - h).max(0.0))
+}
+
+/// The nearest declared anchor name to `name`, for the diagnostic's hint.
+fn closest_anchor(name: &str, declared: &[String]) -> Option<String> {
+    declared
+        .iter()
+        .filter(|d| {
+            // Cheap and good enough for a hint: same first letter and a
+            // similar length is what a typo usually looks like.
+            d.chars().next() == name.chars().next() && d.len().abs_diff(name.len()) <= 2
+        })
+        .min_by_key(|d| d.len().abs_diff(name.len()))
+        .cloned()
+}
+
 fn anchor_wrapper_style(anchor: Option<&str>) -> byard_core::atlas::layout::ContainerStyle {
     use byard_core::atlas::layout::{Align, ContainerStyle, FlexDir, Justify};
     let mut style = ContainerStyle::default()
@@ -12300,6 +12594,10 @@ fn anchor_wrapper_style(anchor: Option<&str>) -> byard_core::atlas::layout::Cont
         Some("top") => (Some(Justify::Start), Some(Align::Center)),
         Some("bottom") => (Some(Justify::End), Some(Align::Center)),
         Some("start") => (Some(Justify::Center), Some(Align::Start)),
+        // RFC-0036: an element-anchored child sizes to its content and is
+        // moved into place afterwards, so it pins to the origin and stretches
+        // on neither axis.
+        Some("__anchored") => (Some(Justify::Start), Some(Align::Start)),
         Some("end") => (Some(Justify::Center), Some(Align::End)),
         // No anchor (a scrim): keep flow defaults so `grow` fills the viewport.
         _ => (None, None),

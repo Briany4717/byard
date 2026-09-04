@@ -364,6 +364,18 @@ fn a_steady_state_frame_stays_within_its_allocation_ceiling() {
          cache that stopped hitting."
     );
     eprintln!("frame budget: {allocations} allocations (ceiling {MAX_ALLOCATIONS_PER_FRAME})");
+
+    // RFC-0034: the font table rides every frame, so it is on the per-frame
+    // path by construction. The reference scene declares no families, and a
+    // project that declares none must pay nothing at all: the ceiling above
+    // is what enforces that, and this says which table it was measuring, so a
+    // later change that starts building a fresh one per frame is read as the
+    // regression it is rather than as noise in the number.
+    assert!(
+        w.frame.fonts().is_empty(),
+        "the reference scene declares no fonts; the ceiling above was \
+         measured against a frame carrying some"
+    );
 }
 
 #[test]

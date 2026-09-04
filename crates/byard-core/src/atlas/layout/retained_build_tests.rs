@@ -197,6 +197,112 @@ fn text_content_is_part_of_the_layout_fingerprint() {
     );
 }
 
+/// A family change moves the leaf's fingerprint; an unchanged one does not.
+///
+/// The negative half is the one that carries weight. A fingerprint that
+/// invalidates on everything is trivially correct and useless: it would make
+/// every text leaf re-measure on every frame, which is the cost the retained
+/// path exists to remove. So this asserts both directions on the same leaf,
+/// and the "nothing marked" half is the assertion that fails if production
+/// stops taking the incremental path at all.
+#[test]
+fn a_family_change_marks_the_leaf_and_an_unchanged_one_does_not() {
+    let spec = |family: Option<&str>| TextLeaf {
+        content: "Handgloves".to_string(),
+        font_size: 14.0,
+        weight: 400,
+        family: family.map(std::sync::Arc::from),
+        width: None,
+        fallback: (10.0, 14.0),
+    };
+    let mut atlas = LayoutAtlas::new();
+    let t = atlas.add_text_leaf(spec(Some("Space Grotesk"))).unwrap();
+    atlas.set_root(t).unwrap();
+    atlas.compute(Viewport::new(200.0, 200.0)).unwrap();
+
+    // Same family, byte for byte: nothing to re-measure.
+    atlas.begin_retained_build();
+    let same = atlas.add_text_leaf(spec(Some("Space Grotesk"))).unwrap();
+    atlas.set_root(same).unwrap();
+    assert!(atlas.end_retained_build());
+    assert_eq!(
+        atlas.layout_dirty_targets().len(),
+        0,
+        "an unchanged family must not mark the leaf: the retained path is \
+         what keeps a steady scene from re-shaping every frame"
+    );
+
+    // A different family sets the same string to a different width, so the
+    // leaf has to be measured again.
+    atlas.begin_retained_build();
+    let moved = atlas.add_text_leaf(spec(Some("Manrope"))).unwrap();
+    atlas.set_root(moved).unwrap();
+    assert!(atlas.end_retained_build());
+    assert_eq!(
+        atlas.layout_dirty_targets().len(),
+        1,
+        "a changed family must mark its leaf for re-measurement"
+    );
+
+    // And dropping the family entirely is a change too, not a return to a
+    // neutral value that happens to hash the same as one of them.
+    atlas.begin_retained_build();
+    let dropped = atlas.add_text_leaf(spec(None)).unwrap();
+    atlas.set_root(dropped).unwrap();
+    assert!(atlas.end_retained_build());
+    assert_eq!(atlas.layout_dirty_targets().len(), 1, "family → none");
+}
+
+/// The family reaches the sizer, rather than being carried on the leaf and
+/// dropped on the way to the measurement.
+///
+/// The exact shape of defect this project keeps paying for: everything is
+/// plumbed, every bookkeeping assertion passes, and the value never arrives
+/// where it does the work.
+#[test]
+fn the_family_on_a_leaf_reaches_the_sizer() {
+    #[derive(Default)]
+    struct Recording(Vec<Option<String>>);
+    impl crate::text::TextSizer for Recording {
+        fn measure(
+            &mut self,
+            _content: &str,
+            _font_size: f32,
+            _wrap: Option<f32>,
+            _weight: u16,
+            family: Option<&str>,
+        ) -> (f32, f32) {
+            self.0.push(family.map(str::to_string));
+            (40.0, 14.0)
+        }
+    }
+
+    let mut atlas = LayoutAtlas::new();
+    let t = atlas
+        .add_text_leaf(TextLeaf {
+            content: "Handgloves".to_string(),
+            font_size: 14.0,
+            weight: 400,
+            family: Some(std::sync::Arc::from("Space Grotesk")),
+            width: None,
+            fallback: (10.0, 14.0),
+        })
+        .unwrap();
+    atlas.set_root(t).unwrap();
+    let mut sizer = Recording::default();
+    atlas
+        .compute_with_text(Viewport::new(200.0, 200.0), &mut sizer)
+        .unwrap();
+    assert!(
+        sizer
+            .0
+            .iter()
+            .any(|f| f.as_deref() == Some("Space Grotesk")),
+        "the sizer was asked to measure without the leaf's family: {:?}",
+        sizer.0
+    );
+}
+
 #[test]
 fn recompute_dirty_with_text_reaches_the_sizer() {
     // RFC-0032 §R5: the sizer-less `recompute_dirty` would size this leaf

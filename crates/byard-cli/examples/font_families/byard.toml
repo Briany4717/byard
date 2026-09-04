@@ -1,0 +1,18 @@
+[project]
+name = "font_families"
+entry = "src/main.byd"
+
+# RFC-0034: a family declared here is loaded once and registered into *both*
+# font systems, the one layout measures with and the one the GPU paints with.
+# The name on the left is the one `font:` uses; the face's own family name
+# ("Space Grotesk") is resolved from the file, so neither has to be repeated.
+[assets.fonts]
+display = "../assets/fonts/SpaceGrotesk-Variable.ttf"
+body = "../assets/fonts/Manrope-Variable.ttf"
+
+# A token can name a family, which is the point of having a type scale: a
+# screen says `typo: hero` and gets the face, the size and the weight together.
+[theme.typography]
+hero = { size = 44, family = "display", weight = "bold" }
+label = { size = 12, family = "body", weight = "medium" }
+body = { size = 16, family = "body" }

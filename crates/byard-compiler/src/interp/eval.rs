@@ -2205,6 +2205,209 @@ impl Interpreter {
         }
     }
 
+    /// The attributes that describe *type* rather than *box*, copied so a
+    /// wrapper element can hand them to the text it contains.
+    ///
+    /// The list is exactly the text properties the intrinsic catalogue puts on
+    /// a text-bearing widget. A widget that wraps its label in a box has to
+    /// forward them or accept them into a void.
+    fn text_shaping_attrs(attrs: &[Attr]) -> Vec<Attr> {
+        const TYPE_PROPS: &[&str] = &[
+            "typo", "size", "weight", "font", "color", "align", "wrap", "lines",
+        ];
+        attrs
+            .iter()
+            .filter(|a| TYPE_PROPS.contains(&a.name.as_str()))
+            .cloned()
+            .collect()
+    }
+
+    /// The resolved font family a text-bearing element shapes in (RFC-0034).
+    ///
+    /// Three layers, in this order, and only the first can be wrong:
+    ///
+    /// 1. an explicit `font:`, which names a family in `[assets.fonts]`. A
+    ///    name nobody declared was already reported when the view was lowered,
+    ///    so reaching here with one means the fallback below is the honest
+    ///    answer rather than a second, quieter diagnostic every frame.
+    /// 2. the family of the `typo:` token the element names. The token has
+    ///    carried a family since the theme runtime landed and it has been
+    ///    dropped on the floor the whole time, which is exactly what made a
+    ///    two-typeface theme impossible to express.
+    /// 3. the theme's body family, so a project that declares one gets it
+    ///    everywhere without repeating itself.
+    ///
+    /// `None` at the end is the system font, and it is silent by design: a
+    /// project that declares no fonts is not making a mistake.
+    fn resolve_family(&mut self, attrs: &[Attr]) -> Option<std::sync::Arc<str>> {
+        if let Some(name) = self.font_prop(attrs) {
+            return self.theme.font(&name).map(|f| f.resolved.clone());
+        }
+        if let Some(name) = self.typo_family(attrs) {
+            return self.theme.font(&name).map(|f| f.resolved.clone());
+        }
+        self.theme_body_family()
+    }
+
+    /// The `font:` an element names, written bare (`font: display`) or as a
+    /// string. Both spellings are accepted for the same reason `weight:` takes
+    /// both a keyword and a number: neither is more correct, and rejecting one
+    /// only makes the language harder to guess at.
+    fn font_prop(&mut self, attrs: &[Attr]) -> Option<String> {
+        let value = attrs.iter().find_map(|a| match &a.kind {
+            AttrKind::Prop { value } if a.name.as_str() == "font" => Some(value.clone()),
+            _ => None,
+        })?;
+        // A bare identifier is read as a *value* first and as a family name
+        // second. `font: display` names the family `display`; `font: family`
+        // inside a view that takes a `family: Str` parameter means that
+        // parameter, and reading it the other way round would make a
+        // reusable specimen view impossible to write.
+        if let Value::Str(s) = self.eval_pure(&value) {
+            return Some(s);
+        }
+        if let Expr::Ident(sym, _) = &value {
+            return Some(sym.as_str().to_string());
+        }
+        None
+    }
+
+    /// The family named by the `typo:` token an element carries, if any.
+    fn typo_family(&mut self, attrs: &[Attr]) -> Option<String> {
+        let value = attrs.iter().find_map(|a| match (&a.name, &a.kind) {
+            (n, AttrKind::Prop { value }) if n.as_str() == "typo" => Some(value.clone()),
+            _ => None,
+        })?;
+        // A bare token reads as an identifier; a theme accessor has already
+        // resolved to a size and carries no family with it, which is the same
+        // gap the token's weight had.
+        if let Expr::Ident(sym, _) = &value {
+            return self.theme.typo(sym.as_str())?.family.clone();
+        }
+        None
+    }
+
+    /// The family the theme's `body` token names, if it names one.
+    ///
+    /// The default face for everything that says nothing. A theme pairing a
+    /// display face with a UI face wants the UI face on ordinary text, and
+    /// making every `Text` repeat that is how a type scale stops being used.
+    fn theme_body_family(&mut self) -> Option<std::sync::Arc<str>> {
+        let name = self.theme.typo("body")?.family.clone()?;
+        self.theme.font(&name).map(|f| f.resolved.clone())
+    }
+
+    /// Checks every literal `font:` in `view` against the declared families
+    /// (RFC-0034).
+    ///
+    /// Once, when the view is lowered, rather than on every render: a
+    /// diagnostic re-reported sixty times a second is a diagnostic nobody
+    /// reads. Only a literal name is checked; a computed one is allowed
+    /// through, because the check exists to catch typos and not to forbid the
+    /// rare deliberate dynamic case, exactly as the anchor check does.
+    fn check_font_families(&mut self, view: &ViewDecl) {
+        let declared: Vec<String> = self.theme.fonts().keys().cloned().collect();
+        // A name the view binds is a value reference, not a family literal:
+        // `View Specimen(family: Str)` writing `font: family` means the
+        // parameter. Treating those as literals would make a reusable
+        // type-specimen view unwritable, which is the first thing anyone
+        // builds with a font selector. Kept apart from `declared` so a bound
+        // name is skipped without ever being offered as a spelling hint.
+        let mut bound: Vec<String> = view
+            .params
+            .iter()
+            .map(|p| p.name.as_str().to_string())
+            .collect();
+        bound.extend(view.body.iter().filter_map(|m| match m {
+            Member::Var { name, .. } | Member::Let { name, .. } | Member::Fn { name, .. } => {
+                Some(name.as_str().to_string())
+            }
+            _ => None,
+        }));
+        Self::walk_font_members(&view.body, &declared, &mut bound, &mut self.errors);
+    }
+
+    fn walk_font_members(
+        members: &[Member],
+        declared: &[String],
+        bound: &mut Vec<String>,
+        errors: &mut Vec<CompileError>,
+    ) {
+        for member in members {
+            match member {
+                Member::Element(el) => Self::walk_font_element(el, declared, bound, errors),
+                Member::For {
+                    var, index, body, ..
+                } => {
+                    // The loop variables are in scope for the body and no
+                    // further, so they are pushed and popped rather than
+                    // collected up front.
+                    let depth = bound.len();
+                    bound.push(var.as_str().to_string());
+                    if let Some(i) = index {
+                        bound.push(i.as_str().to_string());
+                    }
+                    Self::walk_font_members(body, declared, bound, errors);
+                    bound.truncate(depth);
+                }
+                Member::Route { body, .. } => {
+                    Self::walk_font_members(body, declared, bound, errors);
+                }
+                Member::When { then, els, .. } => {
+                    Self::walk_font_members(then, declared, bound, errors);
+                    if let Some(e) = els {
+                        Self::walk_font_members(e, declared, bound, errors);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn walk_font_element(
+        el: &ElementNode,
+        declared: &[String],
+        bound: &mut Vec<String>,
+        errors: &mut Vec<CompileError>,
+    ) {
+        for attr in &el.attrs {
+            if attr.name.as_str() != "font" {
+                continue;
+            }
+            let AttrKind::Prop { value } = &attr.kind else {
+                continue;
+            };
+            // Only a name written literally can be checked. Anything computed
+            // is allowed through: the check exists to catch typos, not to
+            // forbid the deliberate dynamic case, exactly as the anchor check
+            // does.
+            let (name, span) = match value {
+                Expr::Ident(sym, span) => (sym.as_str().to_string(), *span),
+                Expr::StrLit(parts, span) => {
+                    let [crate::parser::ast::StrPart::Text(name)] = parts.as_slice() else {
+                        continue;
+                    };
+                    (name.clone(), *span)
+                }
+                _ => continue,
+            };
+            if bound.contains(&name)
+                || declared
+                    .iter()
+                    .any(|d| *d == name || super::theme::to_camel(d) == name)
+            {
+                continue;
+            }
+            errors.push(CompileError::UnknownFontFamily {
+                span,
+                name: name.clone(),
+                hint: crate::util::closest_match(&name, declared.iter().map(String::as_str))
+                    .map(str::to_string),
+            });
+        }
+        Self::walk_font_members(&el.children, declared, bound, errors);
+    }
+
     // ── declarations ────────────────────────────────────────────────────
 
     /// Processes the declaration-level members of a `View` body (`var`/`let`/
@@ -3013,14 +3216,21 @@ impl Interpreter {
             "Text" | "Button" if !el.content.is_empty() => {
                 let content = self.bind_value(&el.content[0].value);
                 if el.name.as_str() == "Button" {
-                    // A Button is a decorated box wrapping its label.
+                    // A Button is a decorated box wrapping its label, and the
+                    // label is where every typographic property has to land.
+                    // The button's box cannot use `size`, `weight`, `font` or
+                    // `color` for anything, so leaving them on it made all
+                    // four accepted, type-checked and completely inert: a
+                    // `Button` set in bold rendered at the theme default with
+                    // nothing to say so.
+                    let label_attrs = Self::text_shaping_attrs(&attrs);
                     RenderNode::Box {
                         name: Symbol::intern("Button"),
                         attrs,
                         state_blocks,
                         anchor_name: el.anchor_name.clone(),
                         children: vec![RenderNode::Text {
-                            attrs: Vec::new(),
+                            attrs: label_attrs,
                             state_blocks: Vec::new(),
                             content,
                         }],
@@ -6215,8 +6425,9 @@ impl Interpreter {
                 // a fixed natural single-line leaf (may overflow, the caller's
                 // choice). `fallback` is the natural size for the no-sizer path.
                 let weight = self.resolve_weight(attrs);
+                let family = self.resolve_family(attrs);
                 let (nat_w, nat_h) =
-                    self.measure_text_wrapped(&text, font_size, None, weight, None);
+                    self.measure_text_wrapped(&text, font_size, None, weight, family.as_deref());
                 if self.eval_bool_prop(attrs, "wrap") == Some(false) {
                     let id = self.atlas.add_leaf(LeafSize::new(nat_w, nat_h))?;
                     flat_ids.push(id);
@@ -6228,7 +6439,7 @@ impl Interpreter {
                     content: text,
                     font_size,
                     weight,
-                    family: None,
+                    family,
                     width: explicit_w,
                     fallback: (nat_w, nat_h),
                 })?;
@@ -6728,6 +6939,7 @@ impl Interpreter {
                     // atlas's measure pass, so the rendered line breaks match the
                     // laid-out height.
                     let weight = self.resolve_weight(attrs);
+                    let family = self.resolve_family(attrs);
                     let wrap_w = if self.eval_bool_prop(attrs, "wrap") == Some(false) {
                         None
                     } else {
@@ -6740,7 +6952,7 @@ impl Interpreter {
                             text,
                             font_size: scaled_size,
                             weight,
-                            family: None,
+                            family,
                             color: rgba,
                             dirty: true,
                         },
@@ -8432,10 +8644,16 @@ impl Interpreter {
         // only box primitives were given one), so the field's *text* does not
         // follow `translate`/`scale`/`rotate`, the box visuals below (underline,
         // caret) and its `bg` fill do. Same limitation as the `Text` intrinsic.
+        // The field's own type properties, which it accepts from the
+        // intrinsic catalogue and, until now, ignored: a field set in a
+        // declared family rendered in the system font, which is the shape of
+        // defect this whole change exists to remove.
+        let weight = self.resolve_weight(attrs);
+        let family = self.resolve_family(attrs);
         if !display_text.is_empty() {
             frame.push_text(byard_core::TextLine {
-                weight: 400,
-                family: None,
+                weight,
+                family: family.clone(),
                 x: text_x,
                 y: text_y,
                 text: display_text.clone(),
@@ -8450,7 +8668,8 @@ impl Interpreter {
             let measured = if is_placeholder {
                 0.0
             } else {
-                self.measure_text(&display_text, font_size).0
+                self.measure_text_wrapped(&display_text, font_size, None, weight, family.as_deref())
+                    .0
             };
             frame.push_instance(byard_core::BoxInstance {
                 rect: [text_x + measured + 1.0, text_y, 1.5, font_size],
@@ -10464,6 +10683,7 @@ impl Interpreter {
     /// `when`/`for` structural members (M20).
     pub fn lower_view(&mut self, view: &ViewDecl, known_views: &[&str]) -> Vec<RenderNode> {
         self.check_anchor_refs(view);
+        self.check_font_families(view);
         // RFC-0018: a fresh tree gets fresh `when`/`for` pools; the previous
         // tree's pool ids are discarded with it (hot-reload re-lowers the tree).
         self.for_pools.clear();

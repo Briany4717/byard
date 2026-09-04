@@ -511,6 +511,7 @@ fn content_clip_scissors_overflow_to_the_viewport() {
             text: (*s).to_string(),
             font_size: 18.0,
             weight: 400,
+            family: None,
             color: [1.0, 1.0, 1.0, 1.0],
             dirty: true,
         });

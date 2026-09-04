@@ -338,6 +338,7 @@ dependencies = [
  "smallvec",
  "taffy",
  "tokio",
+ "ttf-parser",
  "wgpu",
 ]
 

@@ -527,6 +527,7 @@ mod tests {
             text: "the app".to_string(),
             font_size: 14.0,
             weight: 400,
+            family: None,
             color: [1.0; 4],
             dirty: true,
         });
@@ -667,6 +668,7 @@ mod tests {
             text: "the app".to_string(),
             font_size: 14.0,
             weight: 400,
+            family: None,
             color: [1.0; 4],
             dirty: false,
         });

@@ -66,6 +66,28 @@ fn conic_t(axis: vec4<f32>, local: vec2<f32>, half_size: vec2<f32>) -> f32 {
     return fract((atan2(d.y, d.x) - axis.z) / TAU + 1.0);
 }
 
+/// The three-stop interpolation, given a ramp parameter somebody else
+/// computed.
+///
+/// Split out from `gradient_color` for the one caller whose `t` cannot come
+/// from a point in a box: a conic stroke on an `arc` measures the fragment's
+/// angle within *the arc's own sweep*, so that the ring's colour tracks its
+/// geometry rather than the rectangle the arc happens to sit in. That caller
+/// still has to interpolate the stops the same way as everything else, and
+/// this is how it does that without owning a second copy of them.
+fn gradient_stops(
+    t: f32,
+    mid_pos: f32,
+    grad_from: vec4<f32>,
+    grad_mid: vec4<f32>,
+    grad_to: vec4<f32>,
+) -> vec4<f32> {
+    if (t < mid_pos) {
+        return mix(grad_from, grad_mid, t / max(mid_pos, 1e-5));
+    }
+    return mix(grad_mid, grad_to, (t - mid_pos) / max(1.0 - mid_pos, 1e-5));
+}
+
 /// The gradient's colour at this fragment: one scalar `t` per kind, then the
 /// *same* three-stop interpolation for all of them. `mid` splits the ramp at
 /// `mid_pos`, so a three-stop highlight band (transparent → bright →
@@ -91,8 +113,5 @@ fn gradient_color(
         t = conic_t(axis, local, half_size);
         mid_pos = clamp(axis.w, 0.0, 1.0);
     }
-    if (t < mid_pos) {
-        return mix(grad_from, grad_mid, t / max(mid_pos, 1e-5));
-    }
-    return mix(grad_mid, grad_to, (t - mid_pos) / max(1.0 - mid_pos, 1e-5));
+    return gradient_stops(t, mid_pos, grad_from, grad_mid, grad_to);
 }

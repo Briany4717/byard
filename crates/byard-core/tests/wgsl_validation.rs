@@ -53,7 +53,7 @@ fn shaders() -> Vec<(&'static str, String)> {
         (
             "canvas_shape",
             format!(
-                "{CLIP}\n{}",
+                "{CLIP}\n{GRADIENT}\n{}",
                 include_str!("../src/encoder/canvas_shape.wgsl")
             ),
         ),
@@ -103,6 +103,10 @@ fn the_gradient_block_is_included_rather_than_copied() {
         (
             "canvas_fill",
             include_str!("../src/encoder/canvas_fill.wgsl"),
+        ),
+        (
+            "canvas_shape",
+            include_str!("../src/encoder/canvas_shape.wgsl"),
         ),
     ] {
         assert!(

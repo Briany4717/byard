@@ -696,3 +696,144 @@ fn arc_sweep_and_rect_fill_cover_exactly_their_regions() {
         "rect interior must be blue, got BGRA=({fb},{fg},{fr},{fa})"
     );
 }
+
+// ── RFC-0035 §"Canvas arc strokes": a ramp along the stroke ────────────────
+
+/// A conic stroke on a full circle ramps with the *angle* and not with the
+/// position in the box.
+///
+/// The two halves are what separate an angular ramp from a linear one, and
+/// only asserting the first would pass with a linear gradient pointing the
+/// same way: two points at different angles differ, and two points at the same
+/// angle and different radii do not.
+#[test]
+#[allow(clippy::many_single_char_names)]
+fn a_conic_stroke_ramps_with_the_angle_and_not_with_the_radius() {
+    let Some((device, queue)) = try_device() else {
+        eprintln!("no GPU adapter, skipping conic stroke readback");
+        return;
+    };
+
+    let (w, h) = (240.0_f32, 240.0_f32);
+    let ring = |r: f32, width: f32| CanvasShape {
+        kind: CANVAS_SHAPE_CIRCLE,
+        params: [120.0, 120.0, r, 0.0, 0.0, 0.0, 0.0, 0.0],
+        stroke_width: width,
+        stroke_gradient: Some(byard_core::frame::Gradient {
+            kind: byard_core::frame::GradientKind::Conic,
+            angle: 0.0,
+            center: [0.5, 0.5],
+            radius: 0.5,
+            from: [1.0, 0.0, 0.0, 1.0],
+            mid: [0.0, 1.0, 0.0, 1.0],
+            to: [0.0, 0.0, 1.0, 1.0],
+            mid_pos: 0.5,
+            offset: 0.0,
+        }),
+        ..CanvasShape::default()
+    };
+
+    // Two concentric rings of the same gradient: the inner one exists purely
+    // so "same angle, different radius" can be sampled without leaving the
+    // stroke, which is where the only pixels are.
+    let mut frame = RenderFrame::new();
+    frame.push_canvas_shape(ring(90.0, 24.0));
+    frame.push_canvas_shape(ring(50.0, 24.0));
+    let rb = render(&device, &queue, &frame, w, h);
+
+    // East (t ≈ 0, the `from` stop) and south (t ≈ 0.25, between `from` and
+    // `mid`) on the outer ring.
+    let east = rb.at(210.0, 120.0);
+    let south = rb.at(120.0, 210.0);
+    let west = rb.at(30.0, 120.0);
+    for (name, p) in [("east", east), ("south", south), ("west", west)] {
+        assert!(p.3 > 200, "{name} must be on the ring, got alpha {}", p.3);
+    }
+    assert_ne!(
+        (east.0, east.1, east.2),
+        (south.0, south.1, south.2),
+        "two angles on one ring must differ: the ramp is not angular"
+    );
+    assert_ne!(
+        (east.0, east.1, east.2),
+        (west.0, west.1, west.2),
+        "opposite sides of the sweep must differ"
+    );
+
+    // Same angle, different radius. A *linear* gradient of any direction
+    // gives these two different colours; a conic gives them the same one.
+    let outer_east = rb.at(210.0, 120.0);
+    let inner_east = rb.at(170.0, 120.0);
+    assert!(
+        inner_east.3 > 200,
+        "the inner ring must be painted at the sample point, got alpha {}",
+        inner_east.3
+    );
+    let close = |a: u8, b: u8| i32::from(a).abs_diff(i32::from(b)) <= 6;
+    assert!(
+        close(outer_east.0, inner_east.0)
+            && close(outer_east.1, inner_east.1)
+            && close(outer_east.2, inner_east.2),
+        "one angle at two radii must be one colour: outer {outer_east:?} vs \
+         inner {inner_east:?}, which is a linear ramp wearing a conic's name"
+    );
+}
+
+/// A conic on an **arc** spends its whole ramp on the arc's own sweep.
+///
+/// This is the difference between the shared conic and the arc's own, and it
+/// is the reason the arc does not simply use the shared one: over a 180° arc,
+/// the shared conic reaches `t = 0.5` at the arc's far end, so half the ramp
+/// is spent behind the shape. The arc's version reaches the `to` stop where
+/// the arc stops.
+#[test]
+#[allow(clippy::many_single_char_names)]
+fn a_conic_on_an_arc_spans_the_arcs_own_sweep() {
+    let Some((device, queue)) = try_device() else {
+        eprintln!("no GPU adapter, skipping arc conic readback");
+        return;
+    };
+
+    let (w, h) = (240.0_f32, 240.0_f32);
+    // A half-turn arc from due east, sweeping clockwise through south to west.
+    let mut frame = RenderFrame::new();
+    frame.push_canvas_shape(CanvasShape {
+        kind: CANVAS_SHAPE_ARC,
+        params: [120.0, 120.0, 90.0, 0.0, std::f32::consts::PI, 0.0, 0.0, 0.0],
+        stroke_width: 24.0,
+        stroke_gradient: Some(byard_core::frame::Gradient {
+            kind: byard_core::frame::GradientKind::Conic,
+            angle: 0.0,
+            center: [0.5, 0.5],
+            radius: 0.5,
+            // Pure red at the arc's start, pure blue at its end, with the mid
+            // stop halfway between so the ramp has no third colour to confuse
+            // the reading.
+            from: [1.0, 0.0, 0.0, 1.0],
+            mid: [0.5, 0.0, 0.5, 1.0],
+            to: [0.0, 0.0, 1.0, 1.0],
+            mid_pos: 0.5,
+            offset: 0.0,
+        }),
+        ..CanvasShape::default()
+    });
+    let rb = render(&device, &queue, &frame, w, h);
+
+    let start = rb.at(210.0, 120.0); // due east, the arc's first end
+    let end = rb.at(30.0, 120.0); // due west, the arc's last end
+    assert!(start.3 > 200 && end.3 > 200, "both ends must be painted");
+    // Red at the start.
+    assert!(
+        start.2 > 180 && start.0 < 80,
+        "the arc must begin at its `from` stop, got BGR={:?}",
+        (start.0, start.1, start.2)
+    );
+    // Blue at the end. Under a *shared* conic this point is t = 0.5, which is
+    // the mid stop, and the assertion fails with a purple pixel.
+    assert!(
+        end.0 > 180 && end.2 < 80,
+        "the arc must reach its `to` stop where the arc ends, got BGR={:?}: \
+         a ramp measured over a full turn stops halfway",
+        (end.0, end.1, end.2)
+    );
+}

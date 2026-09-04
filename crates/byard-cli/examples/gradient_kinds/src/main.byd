@@ -24,6 +24,14 @@
 //      says "squircle" are different lanes, and both arrive.
 //   5. Tap the last card: its glow's centre moves. Gradient geometry is paint,
 //      so it moves in the shader with nothing relaid out.
+//   6. The gauge in the last row. Its ring is a `Canvas` arc with
+//      `stroke_gradient:`, and the ramp is spent on the arc's *own* 270° sweep:
+//      it begins red where the arc begins and reaches green where the arc
+//      stops. A conic measured over a full turn instead would still be
+//      two-thirds of the way through its ramp at the far end, which looks
+//      nearly right, which is how a wrong gradient survives being looked at.
+//      Compare it with the dial above, which is a box and does sweep a whole
+//      turn.
 View Main() {
     var pulled = false
 
@@ -96,6 +104,29 @@ View Main() {
                                 from: 0xFFF59E0B, mid: 0xCC3A2A08, to: 0xFF14161C)] {
                 Spacer #[grow: 1]
                 Text("tap: the centre moves") #[color: 0xF2F3F5, size: 13]
+            }
+        }
+
+        // RFC-0035 §"Canvas arc strokes": the ramp on a Tier-1 stroke rather
+        // than on a box. This is the case the RFC was written for, and the one
+        // a flat stroke can only approximate with dozens of segments.
+        Row #[gap: 18] {
+            Canvas #[width: 200, height: 200] {
+                // Track: the same arc, flat and dim, so the gauge reads as a
+                // gauge rather than as a line that stops.
+                arc(cx: 100, cy: 100, r: 74, start: 135, sweep: 270,
+                    stroke: 0xFF1A1E27, stroke_width: 18, cap: round)
+                arc(cx: 100, cy: 100, r: 74, start: 135, sweep: 200,
+                    stroke_width: 18, cap: round,
+                    stroke_gradient: (kind: conic, from: 0xFFEF4444,
+                                      mid: 0xFFF59E0B, to: 0xFF34D399))
+                text("62", x: 100, y: 108, color: 0xFFF2F3F5, size: 34, align: center)
+            }
+
+            Column #[width: 240, justify: center, gap: 6] {
+                Text("air quality") #[color: 0x8A90A0, size: 13]
+                Text("the ramp runs along the arc") #[color: 0xF2F3F5, size: 17]
+                Text("Red where the arc starts, green where it ends. The sweep is the arc's, not the box's.") #[color: 0x8A90A0, size: 13]
             }
         }
     }

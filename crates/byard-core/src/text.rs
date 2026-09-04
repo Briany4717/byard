@@ -23,7 +23,7 @@ pub struct TextMeasurer {
     /// `(text, font_size.to_bits(), wrap_width.to_bits())` → shaped
     /// `(width, height)`. The wrap width is part of the key because it changes
     /// the line breaks and thus the measured size (RFC-0018).
-    cache: HashMap<(String, u32, u32), (f32, f32)>,
+    cache: HashMap<(String, u32, u32, u16), (f32, f32)>,
 }
 
 impl Default for TextMeasurer {
@@ -38,14 +38,30 @@ impl Default for TextMeasurer {
 /// Decouples the atlas from the concrete shaper (`TextMeasurer`) and keeps
 /// measurement cached and single-sourced.
 pub trait TextSizer {
-    /// Shaped `(width, height)` of `text` at `font_size`, wrapped to `max_width`
-    /// logical px when `Some` (`None` = natural single line).
-    fn measure(&mut self, text: &str, font_size: f32, max_width: Option<f32>) -> (f32, f32);
+    /// Shaped `(width, height)` of `text` at `font_size` and `weight`, wrapped
+    /// to `max_width` logical px when `Some` (`None` = natural single line).
+    ///
+    /// The weight is part of the question, not a paint detail: a bold run is
+    /// wider than a regular one at the same size, so layout that measured
+    /// without it would size every heading to the wrong box.
+    fn measure(
+        &mut self,
+        text: &str,
+        font_size: f32,
+        max_width: Option<f32>,
+        weight: u16,
+    ) -> (f32, f32);
 }
 
 impl TextSizer for TextMeasurer {
-    fn measure(&mut self, text: &str, font_size: f32, max_width: Option<f32>) -> (f32, f32) {
-        self.measure_wrapped(text, font_size, max_width)
+    fn measure(
+        &mut self,
+        text: &str,
+        font_size: f32,
+        max_width: Option<f32>,
+        weight: u16,
+    ) -> (f32, f32) {
+        self.measure_wrapped(text, font_size, max_width, weight)
     }
 }
 
@@ -64,8 +80,8 @@ impl TextMeasurer {
     /// height is `lines × line_height`. Empty text still reports one line's
     /// height so an empty label keeps its baseline.
     #[must_use]
-    pub fn measure(&mut self, text: &str, font_size: f32) -> (f32, f32) {
-        self.measure_wrapped(text, font_size, None)
+    pub fn measure(&mut self, text: &str, font_size: f32, weight: u16) -> (f32, f32) {
+        self.measure_wrapped(text, font_size, None, weight)
     }
 
     /// Like [`measure`](Self::measure), but bounds shaping to `max_width` logical
@@ -78,23 +94,35 @@ impl TextMeasurer {
         text: &str,
         font_size: f32,
         max_width: Option<f32>,
+        weight: u16,
     ) -> (f32, f32) {
+        // The weight is part of the key, not an afterthought: a bold run is
+        // wider than a regular one at the same size, so a key without it would
+        // hand the second caller the first one's width and lay the text out to
+        // a measurement of a different face.
         let key = (
             text.to_string(),
             font_size.to_bits(),
             max_width.map_or(u32::MAX, f32::to_bits),
+            weight,
         );
         if let Some(&hit) = self.cache.get(&key) {
             return hit;
         }
-        let measured = self.shape(text, font_size, max_width);
+        let measured = self.shape(text, font_size, max_width, weight);
         self.cache.insert(key, measured);
         measured
     }
 
     /// Shapes `text` through `cosmic-text` and returns its `(width, height)`,
     /// optionally bounded to `max_width` so it wraps.
-    fn shape(&mut self, text: &str, font_size: f32, max_width: Option<f32>) -> (f32, f32) {
+    fn shape(
+        &mut self,
+        text: &str,
+        font_size: f32,
+        max_width: Option<f32>,
+        weight: u16,
+    ) -> (f32, f32) {
         let line_height = font_size * 1.2;
         let mut buffer = Buffer::new(&mut self.font_system, Metrics::new(font_size, line_height));
         // `None` measures the natural single-line width; `Some(w)` wraps to `w`.
@@ -102,7 +130,9 @@ impl TextMeasurer {
         buffer.set_text(
             &mut self.font_system,
             text,
-            &Attrs::new().family(Family::SansSerif),
+            &Attrs::new()
+                .family(Family::SansSerif)
+                .weight(glyphon::Weight(weight)),
             Shaping::Advanced,
             None,
         );
@@ -124,8 +154,8 @@ mod tests {
     #[test]
     fn wider_text_measures_wider() {
         let mut m = TextMeasurer::new();
-        let (w_short, h) = m.measure("i", 16.0);
-        let (w_long, _) = m.measure("wwwwwwwwww", 16.0);
+        let (w_short, h) = m.measure("i", 16.0, 400);
+        let (w_long, _) = m.measure("wwwwwwwwww", 16.0, 400);
         assert!(
             w_long > w_short,
             "more glyphs ⇒ wider: {w_short} vs {w_long}"
@@ -139,8 +169,8 @@ mod tests {
         // so it measures taller and no wider than the bound.
         let mut m = TextMeasurer::new();
         let long = "the quick brown fox jumps over the lazy dog again and again";
-        let (nat_w, nat_h) = m.measure(long, 16.0);
-        let (wrap_w, wrap_h) = m.measure_wrapped(long, 16.0, Some(120.0));
+        let (nat_w, nat_h) = m.measure(long, 16.0, 400);
+        let (wrap_w, wrap_h) = m.measure_wrapped(long, 16.0, Some(120.0), 400);
         assert!(wrap_h > nat_h, "wrapped text is taller: {nat_h} → {wrap_h}");
         assert!(
             wrap_w <= 120.5 && wrap_w < nat_w,
@@ -151,8 +181,8 @@ mod tests {
     #[test]
     fn larger_font_is_taller() {
         let mut m = TextMeasurer::new();
-        let (_, h_small) = m.measure("Ag", 12.0);
-        let (_, h_big) = m.measure("Ag", 48.0);
+        let (_, h_small) = m.measure("Ag", 12.0, 400);
+        let (_, h_big) = m.measure("Ag", 48.0, 400);
         assert!(h_big > h_small);
     }
 
@@ -162,20 +192,20 @@ mod tests {
         // render tick, must hit the cache and return an identical result, so a
         // steady-state tick re-shapes nothing (the per-tick perf fix).
         let mut m = TextMeasurer::new();
-        let first = m.measure("the counter is 0", 16.0);
+        let first = m.measure("the counter is 0", 16.0, 400);
         assert_eq!(m.cache.len(), 1, "the result was memoised");
-        let second = m.measure("the counter is 0", 16.0);
+        let second = m.measure("the counter is 0", 16.0, 400);
         assert_eq!(first, second, "cache returns the same measurement");
         assert_eq!(m.cache.len(), 1, "no second shaping was performed");
         // A distinct size is a distinct key.
-        let _ = m.measure("the counter is 0", 20.0);
+        let _ = m.measure("the counter is 0", 20.0, 400);
         assert_eq!(m.cache.len(), 2);
     }
 
     #[test]
     fn empty_text_keeps_one_line_height() {
         let mut m = TextMeasurer::new();
-        let (w, h) = m.measure("", 16.0);
+        let (w, h) = m.measure("", 16.0, 400);
         assert!(w.abs() < 1e-6, "empty text has zero width, got {w}");
         assert!(h > 0.0);
     }

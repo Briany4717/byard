@@ -367,6 +367,15 @@ impl Theme {
         self.typo(token).map(|t| t.size)
     }
 
+    /// The weight a typography token carries, on the CSS axis (RFC-0034).
+    ///
+    /// The `typo:`/`size:` pipeline projected only the size until now, so a
+    /// theme that said its headline was semibold got a headline that was not.
+    #[must_use]
+    pub fn typo_weight(&self, token: &str) -> Option<u16> {
+        self.typo(token).map(|t| t.weight.axis())
+    }
+
     /// Resolves a `camelCase` shape (corner-radius) token.
     #[must_use]
     pub fn shape(&self, token: &str) -> Option<f32> {

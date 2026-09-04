@@ -237,6 +237,7 @@ fn encode_one_frame() -> Option<SampleBlock> {
         y: 40.0,
         text: "sub-scopes".to_string(),
         font_size: 12.0,
+        weight: 400,
         color: [1.0, 1.0, 1.0, 1.0],
         dirty: true,
     });
@@ -380,6 +381,7 @@ fn a_steady_state_frame_creates_no_gpu_buffers() {
             y: 40.0,
             text: "arena".to_string(),
             font_size: 12.0,
+            weight: 400,
             color: [1.0, 1.0, 1.0, 1.0],
             dirty: true,
         });

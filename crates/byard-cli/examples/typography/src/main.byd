@@ -1,0 +1,50 @@
+// RFC-0034, the weight axis: `weight:` now reaches the glyphs.
+//
+// Run it (from the repo root):
+//   cd crates/byard-cli/examples/typography
+//   cargo run -p byard-cli -- dev
+//
+// Until this landed, `weight:` was a property the checker accepted and nothing
+// read. Two frames differing only in weight came back byte-for-byte identical:
+// every `weight: bold` in every example rendered regular, and no test could
+// see it, because none of them looked at how much ink was on screen.
+//
+// What to verify visually:
+//   1. The keyword column gets visibly heavier downward. If those four lines
+//      look the same, the property is inert again.
+//   2. The numeric column is *continuous*, not four steps in disguise — 600
+//      sits between 500 and 700 rather than snapping to one of them.
+//   3. `bold` and `700` are indistinguishable. They are one axis, not two
+//      parallel notions of weight.
+//   4. Heavier lines are also *wider*. That is the part that matters beyond
+//      looks: measurement and shaping have to agree, or layout would size a
+//      heading to a box measured for a lighter face.
+View Main() {
+    Column #[bg: 0x0E1116, p: 28, gap: 24, width: 460] {
+        Text("The weight axis") #[color: 0xE7ECF2, size: 22, weight: 700]
+        Text("RFC-0034") #[color: 0x69737F, size: 13]
+
+        Row #[gap: 40] {
+            Column #[gap: 8] {
+                Text("keywords") #[color: 0x69737F, size: 12]
+                Text("thin") #[color: 0xE7ECF2, size: 26, weight: thin]
+                Text("regular") #[color: 0xE7ECF2, size: 26, weight: regular]
+                Text("medium") #[color: 0xE7ECF2, size: 26, weight: medium]
+                Text("bold") #[color: 0xE7ECF2, size: 26, weight: bold]
+            }
+            Column #[gap: 8] {
+                Text("axis") #[color: 0x69737F, size: 12]
+                Text("100") #[color: 0xE7ECF2, size: 26, weight: 100]
+                Text("400") #[color: 0xE7ECF2, size: 26, weight: 400]
+                Text("600") #[color: 0xE7ECF2, size: 26, weight: 600]
+                Text("900") #[color: 0xE7ECF2, size: 26, weight: 900]
+            }
+        }
+
+        Text("bold and 700 are the same weight") #[color: 0x9AA3AE, size: 13]
+        Column #[gap: 4] {
+            Text("Indistinguishable") #[color: 0xE7ECF2, size: 24, weight: bold]
+            Text("Indistinguishable") #[color: 0xE7ECF2, size: 24, weight: 700]
+        }
+    }
+}

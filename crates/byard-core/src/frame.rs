@@ -1565,6 +1565,13 @@ pub struct TextLine {
     pub text: String,
     /// Font size in logical pixels.
     pub font_size: f32,
+    /// The typographic weight on the CSS axis, `100..=900` (RFC-0034).
+    ///
+    /// `400` is regular, and is what every line that says nothing gets. The
+    /// axis is numeric rather than a four-value enum because that is what a
+    /// variable font's `wght` axis takes and how designers already write it;
+    /// the keywords remain as aliases.
+    pub weight: u16,
     /// Text colour: `[r, g, b, a]` in linear space, each component 0–1.
     pub color: [f32; 4],
     /// Whether this line's content changed since the last tick.
@@ -3853,6 +3860,7 @@ mod motion_tests {
             y: 0.0,
             text: "hi".to_string(),
             font_size: 12.0,
+            weight: 400,
             color: [1.0; 4],
             dirty: true,
         });
@@ -4223,6 +4231,7 @@ mod motion_tests {
             y: 0.0,
             text: text.to_string(),
             font_size: 14.0,
+            weight: 400,
             color: [1.0; 4],
             dirty: true,
         }
@@ -4304,6 +4313,7 @@ mod paint_digest_tests {
             y: 0.0,
             text: text.to_string(),
             font_size: 12.0,
+            weight: 400,
             color: [1.0; 4],
             dirty: true,
         }

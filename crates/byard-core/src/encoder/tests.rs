@@ -828,6 +828,7 @@ fn assert_f32_eq(actual: f32, expected: f32) {
 
 fn line(x: f32, y: f32, text: &str, font_size: f32, dirty: bool) -> TextLine {
     TextLine {
+        weight: 400,
         x,
         y,
         text: text.to_string(),

@@ -386,7 +386,13 @@ fn zstack_alignment_pins_a_small_child_to_a_corner() {
 /// `chars × font_size/2`, wrapped to `max_width` by stacking whole "lines".
 struct StubSizer;
 impl crate::text::TextSizer for StubSizer {
-    fn measure(&mut self, text: &str, font_size: f32, max_width: Option<f32>) -> (f32, f32) {
+    fn measure(
+        &mut self,
+        text: &str,
+        font_size: f32,
+        max_width: Option<f32>,
+        _weight: u16,
+    ) -> (f32, f32) {
         let line_h = font_size * 1.2;
         #[allow(clippy::cast_precision_loss)]
         let natural = text.chars().count() as f32 * font_size * 0.5;
@@ -406,6 +412,7 @@ fn text_leaf_wraps_to_parent_width() {
         .add_text_leaf(TextLeaf {
             content: "abcdefghijklmnopqrst".to_string(), // 20 chars → ~200px natural
             font_size: 20.0,
+            weight: 400,
             width: None,
             fallback: (200.0, 24.0),
         })
@@ -442,7 +449,13 @@ fn text_leaf_wraps_to_parent_width() {
 /// pixel-rounding path.
 struct FractionalSizer(f32);
 impl crate::text::TextSizer for FractionalSizer {
-    fn measure(&mut self, _text: &str, font_size: f32, max_width: Option<f32>) -> (f32, f32) {
+    fn measure(
+        &mut self,
+        _text: &str,
+        font_size: f32,
+        max_width: Option<f32>,
+        _weight: u16,
+    ) -> (f32, f32) {
         let line_h = font_size * 1.2;
         match max_width {
             Some(w) if w > 0.0 && self.0 > w => (w, line_h * 2.0),
@@ -463,6 +476,7 @@ fn fractional_text_width_reserves_a_whole_pixel_and_stays_one_line() {
         .add_text_leaf(TextLeaf {
             content: "one line".to_string(),
             font_size: 16.0,
+            weight: 400,
             width: None,
             fallback: (100.4, 19.2),
         })
@@ -502,6 +516,7 @@ fn text_leaf_without_sizer_uses_fallback() {
         .add_text_leaf(TextLeaf {
             content: "hello".to_string(),
             font_size: 16.0,
+            weight: 400,
             width: None,
             fallback: (42.0, 19.0),
         })

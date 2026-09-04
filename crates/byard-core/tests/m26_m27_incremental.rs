@@ -186,6 +186,7 @@ fn static_decorated_box_survives_unrelated_incremental_text_frames() {
             y: 40.0,
             text: text.to_string(),
             font_size: 12.0,
+            weight: 400,
             color: [1.0, 1.0, 1.0, 1.0],
             dirty: true,
         });

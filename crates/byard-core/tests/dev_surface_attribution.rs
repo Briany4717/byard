@@ -115,6 +115,7 @@ fn line(y: f32, text: &str) -> TextLine {
         y,
         text: text.to_string(),
         font_size: 12.0,
+        weight: 400,
         color: [1.0, 1.0, 1.0, 1.0],
         // What the interpreter always sends. These tests are only meaningful
         // because it is `true` here: the point is that it is not the signal.

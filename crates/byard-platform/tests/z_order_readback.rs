@@ -216,6 +216,7 @@ fn later_box_occludes_earlier_text() {
         y: 60.0,
         text: "OCCLUSION".to_string(),
         font_size: 64.0,
+        weight: 400,
         color: [1.0, 0.0, 0.0, 1.0],
         dirty: true,
     };
@@ -311,6 +312,7 @@ fn transparent_geometry_over_text_does_not_cull_it() {
         y: 60.0,
         text: "SCRIM".to_string(),
         font_size: 64.0,
+        weight: 400,
         color: [1.0, 0.0, 0.0, 1.0],
         dirty: true,
     };
@@ -386,6 +388,7 @@ fn scrim_in_a_later_layer_dims_text_beneath_it() {
         y: 60.0,
         text: "DIMMED".to_string(),
         font_size: 64.0,
+        weight: 400,
         color: [1.0, 0.0, 0.0, 1.0],
         dirty: true,
     };
@@ -450,6 +453,7 @@ fn wrapped_text_renders_multiple_lines() {
         y: 20.0,
         text: "the quick brown fox jumps over the lazy dog".to_string(),
         font_size: 22.0,
+        weight: 400,
         color: [1.0, 0.0, 0.0, 1.0],
         dirty: true,
     };

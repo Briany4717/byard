@@ -206,3 +206,113 @@ fn the_kind_reaches_the_instance_lane() {
         "`misc.w` is `smooth` and nothing else"
     );
 }
+
+// ── RFC-0035 §"Canvas arc strokes": the ramp on a Tier-1 stroke ────────────
+
+/// A canvas carrying one shape command.
+fn canvas(cmd: &str) -> String {
+    format!("View Main() {{ Canvas #[width: 200, height: 200] {{ {cmd} }} }}")
+}
+
+/// The descriptor read off the frame is the descriptor written in the source.
+///
+/// Deterministic, and first: a readback can say a ring is not flat, but only
+/// this can say the ring is carrying a *conic* rather than a linear ramp that
+/// happens to look wrong in the same direction.
+#[test]
+fn a_stroke_gradient_reaches_the_shape_as_the_kind_it_was_written_as() {
+    let (interp, frame) = frame_of(&canvas(
+        "arc(cx: 100, cy: 100, r: 70, start: -90, sweep: 270, stroke_width: 14, \
+         stroke_gradient: (kind: conic, start: -90deg, from: 0xFFEF4444, \
+         mid: 0xFFF59E0B, to: 0xFF34D399))",
+    ));
+    assert!(interp.errors().is_empty(), "{:?}", interp.errors());
+    let s = &frame.canvas_shapes()[0];
+    let g = s
+        .stroke_gradient
+        .expect("the arc carries a stroke gradient");
+    assert_eq!(g.kind, GradientKind::Conic);
+    // The `from` stop, converted to linear space by the same parser a box
+    // gradient goes through: `0xFFEF4444` opaque red.
+    assert!((g.from[0] - 0.863_157_3).abs() < 1e-5, "{:?}", g.from);
+    assert!((g.from[3] - 1.0).abs() < 1e-6, "{:?}", g.from);
+    // The conic's start angle lands in the lane the shader reads it from,
+    // normalised into `[0, TAU)` by the same parser a box gradient uses, so
+    // `-90deg` and `270deg` are one sweep with one set of bytes.
+    assert!(
+        (g.axis()[2] - 3.0 * std::f32::consts::FRAC_PI_2).abs() < 1e-5,
+        "{:?}",
+        g.axis()
+    );
+}
+
+/// A shape that says nothing carries no gradient, so the flat-stroke path is
+/// still the one every shape written before this takes.
+#[test]
+fn a_shape_with_no_stroke_gradient_carries_none() {
+    let (_, frame) = frame_of(&canvas(
+        "circle(cx: 100, cy: 100, r: 60, stroke: 0xFFFFFFFF, stroke_width: 4)",
+    ));
+    assert!(frame.canvas_shapes()[0].stroke_gradient.is_none());
+}
+
+/// A stroke gradient is a stroke. Dropping the shape because the flat colour
+/// it never set is transparent would be the "nothing to paint" check firing on
+/// the one case it should not.
+#[test]
+fn a_stroke_gradient_alone_is_enough_to_paint_a_shape() {
+    let (_, frame) = frame_of(&canvas(
+        "arc(cx: 100, cy: 100, r: 70, sweep: 270, stroke_width: 10, \
+         stroke_gradient: (kind: conic, from: 0xFFEF4444, to: 0xFF34D399))",
+    ));
+    assert_eq!(
+        frame.canvas_shapes().len(),
+        1,
+        "a shape with a gradient and no `stroke:` must still be emitted"
+    );
+}
+
+/// The gradient is part of what decides the shape's pixels, so a shape whose
+/// gradient moved is a shape that must be repainted (INV-26).
+#[test]
+fn a_moved_stroke_gradient_is_not_judged_clean() {
+    use byard_core::frame::PaintDigest;
+    let mut digest = PaintDigest::new();
+    let render = |digest: &mut PaintDigest, to: &str| {
+        let src = canvas(&format!(
+            "arc(cx: 100, cy: 100, r: 70, sweep: 270, stroke_width: 10, \
+             stroke_gradient: (kind: conic, from: 0xFFEF4444, to: {to}))"
+        ));
+        let parsed = parse(&src);
+        let mut interp = Interpreter::new();
+        interp.load_views(&parsed.views);
+        let known: Vec<&str> = parsed.views.iter().map(|v| v.name.as_str()).collect();
+        let tree: Vec<RenderNode> = interp.lower_view(&parsed.views[0], &known);
+        interp.tick();
+        let mut frame = RenderFrame::new();
+        interp.render(&tree, &mut frame, 400.0, 300.0);
+        digest.apply(&mut frame);
+        frame.canvas_shapes()[0].dirty
+    };
+    let _first = render(&mut digest, "0xFF34D399");
+    assert!(
+        !render(&mut digest, "0xFF34D399"),
+        "an unchanged shape must be clean, or the assertion below proves nothing"
+    );
+    assert!(
+        render(&mut digest, "0xFF3B82F6"),
+        "a shape whose gradient changed colour must be repainted"
+    );
+}
+
+/// A misspelt kind is a diagnostic, on a canvas stroke as much as on a box.
+/// One parser means one message.
+#[test]
+fn a_misspelt_kind_on_a_stroke_gradient_is_a_diagnostic() {
+    let (interp, _) = frame_of(&canvas(
+        "arc(cx: 100, cy: 100, r: 70, sweep: 270, stroke_width: 10, \
+         stroke_gradient: (kind: conics, from: 0xFFEF4444, to: 0xFF34D399))",
+    ));
+    let errs = format!("{:?}", interp.errors());
+    assert!(errs.contains("conic"), "{errs}");
+}

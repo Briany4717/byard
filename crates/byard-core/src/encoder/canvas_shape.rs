@@ -51,6 +51,18 @@ pub struct CanvasShapeInstance {
     /// `misc`'s kind and cap. `[0, 0, 0, 0]` is a shape that heads no group,
     /// which is every shape the pipeline drew before RFC-0031.
     pub group: [f32; 4],
+    /// Stroke-gradient start colour (RFC-0035), all-zero without one.
+    pub grad_from: [f32; 4],
+    /// Stroke-gradient mid colour.
+    pub grad_mid: [f32; 4],
+    /// Stroke-gradient end colour.
+    pub grad_to: [f32; 4],
+    /// The four gradient control floats, meaning per kind
+    /// ([`Gradient::axis`](crate::frame::Gradient::axis)).
+    pub grad_axis: [f32; 4],
+    /// Which shape the stroke gradient paints, or
+    /// [`GRADIENT_NONE`](crate::frame::GRADIENT_NONE) for a flat stroke.
+    pub grad_kind: u32,
 }
 
 impl CanvasShapeInstance {
@@ -78,11 +90,27 @@ impl CanvasShapeInstance {
                 s.group_first as f32,
                 s.group_count as f32,
             ],
+            grad_from: s.stroke_gradient.map_or([0.0; 4], |g| g.from),
+            grad_mid: s.stroke_gradient.map_or([0.0; 4], |g| g.mid),
+            grad_to: s.stroke_gradient.map_or([0.0; 4], |g| g.to),
+            grad_axis: s.stroke_gradient.map_or([0.0; 4], |g| g.axis()),
+            grad_kind: s
+                .stroke_gradient
+                .map_or(crate::frame::GRADIENT_NONE, |g| g.kind as u32),
         }
     }
 
-    /// Vertex buffer layout for the per-instance step (locations 1..=12; the
+    /// Vertex buffer layout for the per-instance step (locations 1..=13; the
     /// static quad occupies location 0).
+    ///
+    /// **Sixteen attributes with the quad's, which is exactly the number
+    /// every adapter guarantees and no more.** The transform was packed into
+    /// two of them rather than four, the way `canvas_fill` already packs the
+    /// identical seven floats, and those two reclaimed slots are what the
+    /// stroke gradient is spending. There is nothing left: the next thing
+    /// added to this pipeline moves to the record pool, and finding that out
+    /// from a validation error on somebody else's adapter is the outcome this
+    /// note exists to prevent.
     #[must_use]
     pub fn layout() -> wgpu::VertexBufferLayout<'static> {
         const ATTRS: &[wgpu::VertexAttribute] = &wgpu::vertex_attr_array![
@@ -93,11 +121,14 @@ impl CanvasShapeInstance {
             5 => Float32x4, // fill_color
             6 => Float32x4, // stroke_dash
             7 => Float32x4, // misc
-            8 => Float32x2, // transform.translate
-            9 => Float32x2, // transform.scale
-            10 => Float32, // transform.rotate
-            11 => Float32x2, // transform.origin
-            12 => Float32x4, // shape group (RFC-0031 §S4)
+            8 => Float32x4, // transform.translate ++ transform.scale
+            9 => Float32x3, // transform.rotate ++ transform.origin
+            10 => Float32x4, // shape group (RFC-0031 §S4)
+            11 => Float32x4, // stroke gradient from
+            12 => Float32x4, // stroke gradient mid
+            13 => Float32x4, // stroke gradient to
+            14 => Float32x4, // stroke gradient axis
+            15 => Uint32,   // stroke gradient kind
         ];
         wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<CanvasShapeInstance>() as wgpu::BufferAddress,
@@ -177,8 +208,10 @@ pub async fn build_pipeline(
         label: Some("ByardCore - CanvasShape WGSL Shader"),
         source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Owned(format!(
             "{}
+{}
 {}",
             include_str!("clip.wgsl"),
+            include_str!("gradient.wgsl"),
             include_str!("canvas_shape.wgsl")
         ))),
     });

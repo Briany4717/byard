@@ -5795,7 +5795,19 @@ impl Interpreter {
         // neither stroke nor fill paints nothing, skip it entirely.
         let stroke_color = self.shape_color(el, "stroke").unwrap_or([0.0; 4]);
         let fill_color = self.shape_color(el, "fill").unwrap_or([0.0; 4]);
-        if stroke_color[3] <= 0.0 && fill_color[3] <= 0.0 {
+        // RFC-0035 §"Canvas arc strokes": a ramp along the stroke, read by the
+        // same parser a box gradient and a filled path use, so there is one
+        // spelling of a gradient rather than three that agree today.
+        let stroke_gradient = Self::shape_arg(el, "stroke_gradient")
+            .cloned()
+            .and_then(|expr| self.resolve_gradient_expr(&expr, 0.0));
+        // A shape with neither stroke nor fill paints nothing; skip it
+        // entirely. A stroke *gradient* counts as a stroke: writing one and
+        // no `stroke:` is a reasonable thing to do, and dropping the shape
+        // because the flat colour it never set is transparent would be the
+        // silent failure this check exists to avoid, wearing the check's own
+        // clothes.
+        if stroke_color[3] <= 0.0 && fill_color[3] <= 0.0 && stroke_gradient.is_none() {
             return;
         }
         let stroke_width = self.shape_num(el, "stroke_width").unwrap_or(1.0);
@@ -5820,6 +5832,7 @@ impl Interpreter {
             dash_offset,
             opacity: shape_opacity,
             transform,
+            stroke_gradient,
             dirty: true,
             ..CanvasShape::default()
         };

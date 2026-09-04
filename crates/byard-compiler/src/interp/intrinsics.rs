@@ -1477,6 +1477,13 @@ const JOIN: &[&str] = &["miter", "round", "bevel"];
 /// (RFC-0020 §"Stroke and fill").
 const SHAPE_PAINT_PARAMS: &[(&str, PropType)] = &[
     ("stroke", PropType::Color),
+    // RFC-0035 §"Canvas arc strokes": a gradient along the *stroke*, spelled
+    // apart from `path`'s `gradient:` because they paint different things. One
+    // name meaning the fill's ramp on one command and the stroke's on another
+    // would be a rule to remember rather than a name to read. Typed loosely
+    // here for the same reason `path`'s is: the value is a named tuple that
+    // the lowering parses and reports on.
+    ("stroke_gradient", PropType::Str),
     ("stroke_width", PropType::Float),
     ("cap", PropType::Enum(CAP)),
     ("join", PropType::Enum(JOIN)),

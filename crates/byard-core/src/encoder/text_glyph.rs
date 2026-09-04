@@ -669,7 +669,10 @@ impl TextGlyphPipeline {
             entry.buffer.set_text(
                 &mut self.font_system,
                 &line.text,
-                &Attrs::new().family(Family::SansSerif).metadata(i),
+                &Attrs::new()
+                    .family(Family::SansSerif)
+                    .weight(glyphon::Weight(line.weight))
+                    .metadata(i),
                 glyphon::Shaping::Advanced,
                 None, // align: no paragraph-level override
             );
@@ -975,6 +978,7 @@ mod tests {
             y: 0.0,
             text: "hi".to_string(),
             font_size: 12.0,
+            weight: 400,
             color: [0.0, 0.0, 0.0, 1.0],
             dirty: true,
         };

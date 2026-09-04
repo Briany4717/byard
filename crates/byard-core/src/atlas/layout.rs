@@ -288,6 +288,9 @@ pub struct TextLeaf {
     pub content: String,
     /// Font size in logical pixels.
     pub font_size: f32,
+    /// Typographic weight on the CSS axis, `100..=900` (RFC-0034). Part of the
+    /// leaf because it changes the shaped width, so it changes layout.
+    pub weight: u16,
     /// Fixed wrap width in logical px, or `None` to wrap to the available width.
     pub width: Option<f32>,
     /// Natural single-line `(width, height)` fallback.
@@ -1360,6 +1363,11 @@ impl LayoutAtlas {
         let mut fp = LayoutFingerprint::new(NodeKind::TextLeaf);
         fp.str(&spec.content)
             .f32(spec.font_size)
+            // RFC-0034: the weight changes the shaped width, so a leaf whose
+            // weight moved is a leaf that must re-measure. Left out of the
+            // fingerprint it would keep last frame's line breaks at the new
+            // weight — the silent staleness this fingerprint exists to stop.
+            .f32(f32::from(spec.weight))
             .opt_f32(spec.width)
             .f32(spec.fallback.0)
             .f32(spec.fallback.1);
@@ -2320,7 +2328,7 @@ fn measure_text_node(
         AvailableSpace::MinContent => Some(0.0),
     });
     let (width, height) = match sizer {
-        Some(s) => s.measure(&spec.content, spec.font_size, wrap_w),
+        Some(s) => s.measure(&spec.content, spec.font_size, wrap_w, spec.weight),
         None => spec.fallback,
     };
     // Reserve a **whole pixel** of width for the glyphs. Taffy rounds resolved

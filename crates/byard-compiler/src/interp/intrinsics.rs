@@ -66,6 +66,15 @@ pub enum PropType {
     Typo,
     /// An enum token validated against a fixed set.
     Enum(&'static [&'static str]),
+    /// The typographic weight axis (RFC-0034): one of the four historical
+    /// keywords, or an integer `100..=900`.
+    ///
+    /// Its own type rather than `Int`, because `Int` accepts a bare identifier
+    /// and would let `weight: chunky` through in silence — and a weight that
+    /// is quietly ignored is the exact failure this property is being fixed
+    /// for. Rather than an `Enum`, because the axis is genuinely numeric and
+    /// a variable font's `wght` takes the number.
+    WeightAxis,
     /// A scoped style class reference (`.title`).
     Class,
     /// A `Vec2` `(Float, Float)`.
@@ -261,7 +270,10 @@ const TEXT_PROPS: &[(&str, PropDef)] = &[
     ("typo", lay(PropType::Typo)),
     ("color", pnt(PropType::Color)),
     ("size", lay(PropType::Int)),
-    ("weight", pnt(PropType::Enum(WEIGHT))),
+    // RFC-0034: the four keywords stay as aliases for 100/400/500/700, and a
+    // numeric value addresses the CSS axis directly, which is what a variable
+    // font's `wght` takes and how designers already write it.
+    ("weight", pnt(PropType::WeightAxis)),
     ("align", lay(PropType::Enum(ALIGN))),
     ("lines", lay(PropType::Int)),
     ("wrap", lay(PropType::Bool)),
@@ -1324,6 +1336,38 @@ fn check_value_type(ty: PropType, value: &Expr) -> Option<CompileError> {
         }
         (PropType::Class, e) if !matches!(e, Expr::ClassRef(..)) => {
             mismatch("a style class (.name)")
+        }
+        (PropType::WeightAxis, Expr::IntLit(n, _)) => {
+            if (100..=900).contains(n) {
+                None
+            } else {
+                Some(CompileError::AttributeTypeMismatch {
+                    span,
+                    expected: "a weight on the 100..=900 axis".to_string(),
+                })
+            }
+        }
+        (PropType::WeightAxis, Expr::Ident(sym, _)) => {
+            let tok = sym.as_str();
+            if WEIGHT.contains(&tok) {
+                None
+            } else {
+                let hint = closest_match(tok, WEIGHT.iter().copied()).map(str::to_string);
+                Some(CompileError::AttributeTypeMismatch {
+                    span,
+                    expected: hint.map_or_else(
+                        || format!("one of {WEIGHT:?}, or a number 100..=900"),
+                        |h| {
+                            format!(
+                                "one of {WEIGHT:?} (did you mean `{h}`?), or a number 100..=900"
+                            )
+                        },
+                    ),
+                })
+            }
+        }
+        (PropType::WeightAxis, Expr::StrLit(..) | Expr::FloatLit(..)) => {
+            mismatch("one of the weight keywords, or a whole number 100..=900")
         }
         (PropType::Enum(set), Expr::Ident(sym, _)) => {
             let tok = sym.as_str();

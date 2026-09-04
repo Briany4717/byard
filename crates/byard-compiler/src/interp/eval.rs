@@ -2145,7 +2145,7 @@ impl Interpreter {
     /// Glyph-accurate `(width, height)` of `text` at `font_size`, lazily
     /// initializing the font system on first use.
     fn measure_text(&mut self, text: &str, font_size: f32) -> (f32, f32) {
-        self.measure_text_wrapped(text, font_size, None)
+        self.measure_text_wrapped(text, font_size, None, 400)
     }
 
     /// Measures `text`, wrapping to `max_width` logical pixels when `Some`
@@ -2155,10 +2155,43 @@ impl Interpreter {
         text: &str,
         font_size: f32,
         max_width: Option<f32>,
+        weight: u16,
     ) -> (f32, f32) {
         self.text_measurer
             .get_or_insert_with(byard_core::text::TextMeasurer::new)
-            .measure_wrapped(text, font_size, max_width)
+            .measure_wrapped(text, font_size, max_width, weight)
+    }
+
+    /// The `weight:` of a text-bearing element on the CSS axis (RFC-0034).
+    ///
+    /// Accepts the four historical keywords and any integer `100..=900`; the
+    /// keywords are aliases for `100/400/500/700`, so both spellings land on
+    /// the same axis rather than on two parallel notions of weight. Absent is
+    /// `400`.
+    fn resolve_weight(&mut self, attrs: &[Attr]) -> u16 {
+        // An explicit `weight:` always wins. Failing that, a `typo:` token
+        // brings its own — a theme that calls its headline semibold means it,
+        // and the token's weight was being dropped on the way through while
+        // only its size survived.
+        if !attrs.iter().any(|a| a.name.as_str() == "weight") {
+            if let Some(w) = self.typo_weight(attrs) {
+                return w;
+            }
+            return 400;
+        }
+        if let Some(kw) = Self::enum_prop(attrs, "weight") {
+            return match kw {
+                "thin" => 100,
+                "medium" => 500,
+                "bold" => 700,
+                _ => 400,
+            };
+        }
+        match self.eval_px_prop(attrs, "weight") {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            Some(n) => (n.round().clamp(100.0, 900.0)) as u16,
+            None => 400,
+        }
     }
 
     // ── declarations ────────────────────────────────────────────────────
@@ -5946,6 +5979,7 @@ impl Interpreter {
             y: anchor[1],
             text,
             font_size: size * transform.uniform_scale(),
+            weight: 400,
             color: dim_alpha(color, opacity),
             dirty: true,
         });
@@ -6121,7 +6155,8 @@ impl Interpreter {
                 // explicit `width` fixes the wrap width; `wrap: false` opts out to
                 // a fixed natural single-line leaf (may overflow, the caller's
                 // choice). `fallback` is the natural size for the no-sizer path.
-                let (nat_w, nat_h) = self.measure_text_wrapped(&text, font_size, None);
+                let weight = self.resolve_weight(attrs);
+                let (nat_w, nat_h) = self.measure_text_wrapped(&text, font_size, None, weight);
                 if self.eval_bool_prop(attrs, "wrap") == Some(false) {
                     let id = self.atlas.add_leaf(LeafSize::new(nat_w, nat_h))?;
                     flat_ids.push(id);
@@ -6132,6 +6167,7 @@ impl Interpreter {
                 let id = self.atlas.add_text_leaf(byard_core::atlas::TextLeaf {
                     content: text,
                     font_size,
+                    weight,
                     width: explicit_w,
                     fallback: (nat_w, nat_h),
                 })?;
@@ -6630,6 +6666,7 @@ impl Interpreter {
                     // `wrap: false` opts out to a single-line run. This mirrors the
                     // atlas's measure pass, so the rendered line breaks match the
                     // laid-out height.
+                    let weight = self.resolve_weight(attrs);
                     let wrap_w = if self.eval_bool_prop(attrs, "wrap") == Some(false) {
                         None
                     } else {
@@ -6641,6 +6678,7 @@ impl Interpreter {
                             y: anchor[1],
                             text,
                             font_size: scaled_size,
+                            weight,
                             color: rgba,
                             dirty: true,
                         },
@@ -8334,6 +8372,7 @@ impl Interpreter {
         // caret) and its `bg` fill do. Same limitation as the `Text` intrinsic.
         if !display_text.is_empty() {
             frame.push_text(byard_core::TextLine {
+                weight: 400,
                 x: text_x,
                 y: text_y,
                 text: display_text.clone(),
@@ -8860,6 +8899,22 @@ impl Interpreter {
     /// (`typo: titleLarge` → a `Str`, resolved against the theme's typography
     /// then the built-in M3 scale) or a theme accessor (`typo: t.titleLarge` →
     /// an `Int` size projected by [`lower_theme_member`](Self::lower_theme_member)).
+    /// The weight of the `typo:` token an element names, if it names one
+    /// (RFC-0034).
+    fn typo_weight(&mut self, attrs: &[Attr]) -> Option<u16> {
+        let value = attrs.iter().find_map(|a| match (&a.name, &a.kind) {
+            (n, AttrKind::Prop { value }) if n.as_str() == "typo" => Some(value.clone()),
+            _ => None,
+        })?;
+        // A bare token reads as an identifier; a theme accessor has already
+        // resolved to a size and carries no weight with it, which is exactly
+        // the gap this closes.
+        if let Expr::Ident(sym, _) = &value {
+            return self.theme.typo_weight(sym.as_str());
+        }
+        None
+    }
+
     fn eval_typo_size(&mut self, attrs: &[Attr]) -> Option<i64> {
         let value = attrs.iter().find_map(|a| match (&a.name, &a.kind) {
             (n, AttrKind::Prop { value }) if n.as_str() == "typo" => Some(value),

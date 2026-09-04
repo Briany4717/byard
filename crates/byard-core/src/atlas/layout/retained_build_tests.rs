@@ -97,6 +97,7 @@ fn a_kind_mismatch_aborts_the_retained_build() {
     let err = atlas.add_text_leaf(TextLeaf {
         content: "x".to_string(),
         font_size: 12.0,
+        weight: 400,
         width: None,
         fallback: (10.0, 12.0),
     });
@@ -171,6 +172,7 @@ fn text_content_is_part_of_the_layout_fingerprint() {
     let spec = |content: &str| TextLeaf {
         content: content.to_string(),
         font_size: 14.0,
+        weight: 400,
         width: None,
         fallback: (10.0, 14.0),
     };
@@ -200,7 +202,13 @@ fn recompute_dirty_with_text_reaches_the_sizer() {
     // is that the fallback is a *single line*.
     struct FixedSizer;
     impl crate::text::TextSizer for FixedSizer {
-        fn measure(&mut self, _content: &str, _font_size: f32, _wrap: Option<f32>) -> (f32, f32) {
+        fn measure(
+            &mut self,
+            _content: &str,
+            _font_size: f32,
+            _wrap: Option<f32>,
+            _weight: u16,
+        ) -> (f32, f32) {
             (77.0, 88.0)
         }
     }
@@ -210,6 +218,7 @@ fn recompute_dirty_with_text_reaches_the_sizer() {
         .add_text_leaf(TextLeaf {
             content: "hello".to_string(),
             font_size: 14.0,
+            weight: 400,
             width: None,
             fallback: (10.0, 14.0),
         })

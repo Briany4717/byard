@@ -241,6 +241,7 @@ impl ReactiveLabel {
             y: self.y,
             text: self.signal.read(String::clone),
             font_size: self.font_size,
+            weight: 400,
             color: self.color,
             dirty,
         })

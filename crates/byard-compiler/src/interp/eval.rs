@@ -1468,6 +1468,16 @@ pub struct Interpreter {
     text_measurer: Option<byard_core::text::TextMeasurer>,
     /// Active design-token theme (RFC-0022; the theme-default layer).
     pub theme: super::theme::Theme,
+    /// The registered font families, in the shape the render thread reads
+    /// them (RFC-0034), rebuilt whenever the theme changes and handed to
+    /// every frame.
+    ///
+    /// One table rather than a per-frame pool: see
+    /// [`FontTable`](byard_core::frame::FontTable). Kept beside the theme it
+    /// was built from so a hot-reload that swaps the theme swaps this in the
+    /// same breath, rather than leaving the render thread holding faces the
+    /// measurer no longer knows about.
+    fonts: std::sync::Arc<byard_core::frame::FontTable>,
     /// The reactive `Bool` signal backing the theme's active scheme (`true` ⇒
     /// dark), created by [`set_theme`](Self::set_theme). `theme.primary` reads it
     /// (tracked) and `theme.dark = …` / `bind: theme.dark` writes it, so a scheme
@@ -2145,7 +2155,7 @@ impl Interpreter {
     /// Glyph-accurate `(width, height)` of `text` at `font_size`, lazily
     /// initializing the font system on first use.
     fn measure_text(&mut self, text: &str, font_size: f32) -> (f32, f32) {
-        self.measure_text_wrapped(text, font_size, None, 400)
+        self.measure_text_wrapped(text, font_size, None, 400, None)
     }
 
     /// Measures `text`, wrapping to `max_width` logical pixels when `Some`
@@ -2156,10 +2166,11 @@ impl Interpreter {
         font_size: f32,
         max_width: Option<f32>,
         weight: u16,
+        family: Option<&str>,
     ) -> (f32, f32) {
         self.text_measurer
             .get_or_insert_with(byard_core::text::TextMeasurer::new)
-            .measure_wrapped(text, font_size, max_width, weight)
+            .measure_wrapped(text, font_size, max_width, weight, family)
     }
 
     /// The `weight:` of a text-bearing element on the CSS axis (RFC-0034).
@@ -2345,6 +2356,7 @@ impl Interpreter {
     pub fn set_theme(&mut self, theme: super::theme::Theme) {
         let dark = theme.active_dark;
         self.theme = theme;
+        self.register_theme_fonts();
         // A whole new token set: every resolved colour, size and typo scale
         // may differ, so the next frame rebuilds (RFC-0032 §Q6).
         self.invalidate_retained_layout();
@@ -2356,6 +2368,45 @@ impl Interpreter {
             sig
         };
         self.env.provide(Symbol::intern("Theme"), Value::Theme(sig));
+    }
+
+    /// Loads every family the theme declares into the measurement
+    /// `FontSystem` and rebuilds the table the render thread reads
+    /// (RFC-0034 §Reference "Asset side", INV-27).
+    ///
+    /// This is the single source of truth the invariant asks for. The bytes
+    /// come from one place, the theme; they go to the measurer directly
+    /// because it lives on this thread, and to the paint `FontSystem` on the
+    /// frame, because it does not. Neither side ever reads a font file.
+    fn register_theme_fonts(&mut self) {
+        if self.theme.fonts().is_empty() {
+            // Nothing declared: leave the table empty and, crucially, do not
+            // force the lazy measurer into existence. A project with no fonts
+            // must not start paying for a `FontSystem` because this ran.
+            self.fonts = std::sync::Arc::default();
+            return;
+        }
+        let measurer = self
+            .text_measurer
+            .get_or_insert_with(byard_core::text::TextMeasurer::new);
+        let mut table = byard_core::frame::FontTable::default();
+        for (declared, font) in self.theme.fonts() {
+            let here = measurer.register_family(&font.bytes);
+            // The manifest resolved this name from the same bytes when it read
+            // the file. If the measurer disagrees, one side of INV-27 is
+            // shaping against a family name the other never produced.
+            debug_assert_eq!(
+                here.as_deref(),
+                Some(font.resolved.as_ref()),
+                "family `{declared}` resolves differently on the measurement side (INV-27)"
+            );
+            table.push(byard_core::frame::FontFace {
+                declared: declared.clone(),
+                resolved: font.resolved.clone(),
+                bytes: font.bytes.clone(),
+            });
+        }
+        self.fonts = std::sync::Arc::new(table);
     }
 
     /// Flips the active color scheme (RFC-0022 §1): writes the reactive scheme
@@ -4252,6 +4303,13 @@ impl Interpreter {
     ) {
         use byard_core::frame::Viewport;
 
+        // RFC-0034: the registered families ride every frame, not just the one
+        // after registration. The relay keeps only the latest frame, so a pool
+        // handed over once is a pool a dropped frame loses for good; the table
+        // is `Arc`-shared, so carrying all of it is a pointer clone and the
+        // render thread skips what it already holds.
+        frame.set_fonts(self.fonts.clone());
+
         // RFC-0030 §I1. `layout.taffy` (Native) nests strictly inside this
         // scope, the interpreter owns the `LayoutAtlas` and drives it from
         // here, which is exactly why the interpreter tax is self-time and
@@ -5980,6 +6038,7 @@ impl Interpreter {
             text,
             font_size: size * transform.uniform_scale(),
             weight: 400,
+            family: None,
             color: dim_alpha(color, opacity),
             dirty: true,
         });
@@ -6156,7 +6215,8 @@ impl Interpreter {
                 // a fixed natural single-line leaf (may overflow, the caller's
                 // choice). `fallback` is the natural size for the no-sizer path.
                 let weight = self.resolve_weight(attrs);
-                let (nat_w, nat_h) = self.measure_text_wrapped(&text, font_size, None, weight);
+                let (nat_w, nat_h) =
+                    self.measure_text_wrapped(&text, font_size, None, weight, None);
                 if self.eval_bool_prop(attrs, "wrap") == Some(false) {
                     let id = self.atlas.add_leaf(LeafSize::new(nat_w, nat_h))?;
                     flat_ids.push(id);
@@ -6168,6 +6228,7 @@ impl Interpreter {
                     content: text,
                     font_size,
                     weight,
+                    family: None,
                     width: explicit_w,
                     fallback: (nat_w, nat_h),
                 })?;
@@ -6679,6 +6740,7 @@ impl Interpreter {
                             text,
                             font_size: scaled_size,
                             weight,
+                            family: None,
                             color: rgba,
                             dirty: true,
                         },
@@ -8373,6 +8435,7 @@ impl Interpreter {
         if !display_text.is_empty() {
             frame.push_text(byard_core::TextLine {
                 weight: 400,
+                family: None,
                 x: text_x,
                 y: text_y,
                 text: display_text.clone(),

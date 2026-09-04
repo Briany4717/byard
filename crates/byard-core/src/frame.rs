@@ -1547,6 +1547,70 @@ pub struct AtlasUpload {
     pub id: u64,
 }
 
+/// One registered font family: the file's bytes plus the two names that
+/// identify it (RFC-0034 §Reference "Asset side").
+///
+/// The engine never learns what a *theme* is (INV-1): the compiler reads the
+/// manifest, loads the bytes and hands over this record, which is an opaque
+/// blob and two strings.
+///
+/// The distinction between the two names is the whole reason this type exists.
+/// `declared` is what the manifest called the family, which is what a
+/// diagnostic must say back to the author. `resolved` is the family name the
+/// face itself carries, which is what `cosmic-text` matches on. They are
+/// routinely different (`display = "SpaceGrotesk-Variable.ttf"` declares
+/// `display` and resolves to `Space Grotesk`), and shaping against the wrong
+/// one silently falls back to the system font.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FontFace {
+    /// The family name as written in the manifest, used only in diagnostics.
+    pub declared: String,
+    /// The family name the face carries internally: what both `FontSystem`s
+    /// match against, and what a [`TextLine::family`] holds.
+    pub resolved: std::sync::Arc<str>,
+    /// The font file's bytes, shared rather than copied because both the
+    /// measurement and the paint `FontSystem` are handed the same blob.
+    pub bytes: std::sync::Arc<[u8]>,
+}
+
+/// Every font family the application has registered, carried on the frame so
+/// the render thread's `FontSystem` can be brought level with the logic
+/// thread's (RFC-0034, INV-27).
+///
+/// **Why the whole table, every frame, rather than a drained pool.** The
+/// vector atlas ships its bytes as a pool of [`AtlasUpload`]s that the
+/// generator resends until an acknowledgment comes back, because a frame that
+/// the relay drops takes its pool with it. A font table is small (a handful of
+/// faces for the life of the process) and is `Arc`-shared, so carrying all of
+/// it costs one pointer clone per frame and needs no acknowledgment channel at
+/// all: the render thread loads the faces it has not seen and ignores the
+/// rest. A dropped frame then costs nothing, where a drained pool would cost a
+/// permanently unregistered family, which is exactly the failure INV-27 is
+/// about.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FontTable {
+    faces: Vec<FontFace>,
+}
+
+impl FontTable {
+    /// Adds a face to the table.
+    pub fn push(&mut self, face: FontFace) {
+        self.faces.push(face);
+    }
+
+    /// The registered faces, in declaration order.
+    #[must_use]
+    pub fn faces(&self) -> &[FontFace] {
+        &self.faces
+    }
+
+    /// Whether any family has been registered.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.faces.is_empty()
+    }
+}
+
 /// A single line of text to be rendered in a frame.
 ///
 /// Shared between the logic thread (which populates [`RenderFrame::texts`]) and
@@ -1572,6 +1636,14 @@ pub struct TextLine {
     /// variable font's `wght` axis takes and how designers already write it;
     /// the keywords remain as aliases.
     pub weight: u16,
+    /// The resolved font family this line is shaped in (RFC-0034), or `None`
+    /// for the system sans-serif.
+    ///
+    /// This is the *resolved* name from [`FontFace::resolved`], never the name
+    /// the manifest declared: it is handed straight to `cosmic-text`, and both
+    /// the measurement and the paint `FontSystem` must be given the identical
+    /// string or layout sizes one face and the GPU draws another (INV-27).
+    pub family: Option<std::sync::Arc<str>>,
     /// Text colour: `[r, g, b, a]` in linear space, each component 0–1.
     pub color: [f32; 4],
     /// Whether this line's content changed since the last tick.
@@ -1709,6 +1781,16 @@ pub struct RenderFrame {
     /// (RFC-0009 §2-C / INV-8). Applied by the render thread via a single
     /// `Queue::write_texture` each, during frame application, before the draw.
     atlas_uploads: Vec<AtlasUpload>,
+
+    /// Every font family registered so far (RFC-0034), shared with the logic
+    /// thread rather than copied.
+    ///
+    /// Deliberately **not** cleared by [`RenderFrame::clear`]: this is
+    /// registration state that outlives any one frame's primitives, not a
+    /// pool of this frame's work. The evaluator assigns it on every emit, so a
+    /// reused frame buffer can never resurrect a table the application has
+    /// replaced.
+    fonts: std::sync::Arc<FontTable>,
 
     /// Per-primitive **draw-order depth**, one parallel vec per drawable pool.
     ///
@@ -2298,6 +2380,14 @@ impl RenderFrame {
         self.atlas_uploads.push(upload);
     }
 
+    /// Installs the registered font table for this frame (RFC-0034).
+    ///
+    /// Cheap: the table is `Arc`-shared, so this is a pointer clone however
+    /// many megabytes of font bytes it holds.
+    pub fn set_fonts(&mut self, fonts: std::sync::Arc<FontTable>) {
+        self.fonts = fonts;
+    }
+
     /// Opens a new z-layer (RFC-0017): everything pushed from here on is drawn
     ///, solids, decorated, textures, vectors, *and text*, interleaved, after
     /// **everything** already in the frame, inside the same GPU render pass.
@@ -2509,6 +2599,13 @@ impl RenderFrame {
     #[must_use]
     pub fn atlas_uploads(&self) -> &[AtlasUpload] {
         &self.atlas_uploads
+    }
+
+    /// Returns the registered font families (RFC-0034). The render thread
+    /// loads any face its `FontSystem` has not seen before it shapes.
+    #[must_use]
+    pub fn fonts(&self) -> &FontTable {
+        &self.fonts
     }
 
     // ── Census (RFC-0030 §P6) ──────────────────────────────────────────────
@@ -3861,6 +3958,7 @@ mod motion_tests {
             text: "hi".to_string(),
             font_size: 12.0,
             weight: 400,
+            family: None,
             color: [1.0; 4],
             dirty: true,
         });
@@ -4232,6 +4330,7 @@ mod motion_tests {
             text: text.to_string(),
             font_size: 14.0,
             weight: 400,
+            family: None,
             color: [1.0; 4],
             dirty: true,
         }
@@ -4314,6 +4413,7 @@ mod paint_digest_tests {
             text: text.to_string(),
             font_size: 12.0,
             weight: 400,
+            family: None,
             color: [1.0; 4],
             dirty: true,
         }

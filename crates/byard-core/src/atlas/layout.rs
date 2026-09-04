@@ -291,6 +291,10 @@ pub struct TextLeaf {
     /// Typographic weight on the CSS axis, `100..=900` (RFC-0034). Part of the
     /// leaf because it changes the shaped width, so it changes layout.
     pub weight: u16,
+    /// Resolved font family, or `None` for the system sans-serif (RFC-0034).
+    /// Part of the leaf for the same reason `weight` is: two faces set the
+    /// same string to different widths, so the family is a layout input.
+    pub family: Option<std::sync::Arc<str>>,
     /// Fixed wrap width in logical px, or `None` to wrap to the available width.
     pub width: Option<f32>,
     /// Natural single-line `(width, height)` fallback.
@@ -1368,6 +1372,10 @@ impl LayoutAtlas {
             // fingerprint it would keep last frame's line breaks at the new
             // weight — the silent staleness this fingerprint exists to stop.
             .f32(f32::from(spec.weight))
+            // RFC-0034: and the family, for exactly the same reason. A leaf
+            // that changed face and kept its fingerprint keeps last frame's
+            // measurement, which is the whole class of staleness INV-26 names.
+            .str(spec.family.as_deref().unwrap_or(""))
             .opt_f32(spec.width)
             .f32(spec.fallback.0)
             .f32(spec.fallback.1);
@@ -2328,7 +2336,13 @@ fn measure_text_node(
         AvailableSpace::MinContent => Some(0.0),
     });
     let (width, height) = match sizer {
-        Some(s) => s.measure(&spec.content, spec.font_size, wrap_w, spec.weight),
+        Some(s) => s.measure(
+            &spec.content,
+            spec.font_size,
+            wrap_w,
+            spec.weight,
+            spec.family.as_deref(),
+        ),
         None => spec.fallback,
     };
     // Reserve a **whole pixel** of width for the glyphs. Taffy rounds resolved

@@ -249,6 +249,22 @@ pub enum CompileError {
         /// The closest anchor declared before this point, if any.
         hint: Option<String>,
     },
+    /// A `font:` names a family the project does not declare in
+    /// `[assets.fonts]` (RFC-0034).
+    ///
+    /// Reported for the same reason a misspelt anchor is: the alternative is
+    /// text that renders perfectly in the wrong face, which reads as a design
+    /// decision rather than a typo. The fallbacks (a `typo:` token's family,
+    /// then the system font) are silent by design; only a name nobody
+    /// declared is an error.
+    UnknownFontFamily {
+        /// Source range of the offending `font:`.
+        span: Span,
+        /// The name that was written.
+        name: String,
+        /// The closest declared family, if any.
+        hint: Option<String>,
+    },
     /// A `Canvas` child is not a recognized shape command (RFC-0020 §1:
     /// `Canvas` children are shape commands only, intrinsics, user views,
     /// declarations, and control flow are all rejected).
@@ -836,6 +852,7 @@ impl CompileError {
             | Self::InvalidRoutePattern { span, .. }
             | Self::UnmatchedRoute { span, .. }
             | Self::UnknownAnchor { span, .. }
+            | Self::UnknownFontFamily { span, .. }
             | Self::UnknownShapeCommand { span, .. }
             | Self::UnknownShapeParam { span, .. }
             | Self::MissingShapeParam { span, .. }
@@ -920,6 +937,7 @@ impl CompileError {
             | Self::InvalidRoutePattern { span, .. }
             | Self::UnmatchedRoute { span, .. }
             | Self::UnknownAnchor { span, .. }
+            | Self::UnknownFontFamily { span, .. }
             | Self::UnknownShapeCommand { span, .. }
             | Self::UnknownShapeParam { span, .. }
             | Self::MissingShapeParam { span, .. }
@@ -1006,6 +1024,7 @@ impl CompileError {
             Self::InvalidRoutePattern { .. } => "InvalidRoutePattern",
             Self::UnmatchedRoute { .. } => "UnmatchedRoute",
             Self::UnknownAnchor { .. } => "UnknownAnchor",
+            Self::UnknownFontFamily { .. } => "UnknownFontFamily",
             Self::UnknownShapeCommand { .. } => "UnknownShapeCommand",
             Self::UnknownShapeParam { .. } => "UnknownShapeParam",
             Self::MissingShapeParam { .. } => "MissingShapeParam",
@@ -1193,6 +1212,13 @@ impl CompileError {
             Self::UnmatchedRoute { path, .. } => {
                 format!("no route matches `{path}`; the navigation stays where it is")
             }
+            Self::UnknownFontFamily { name, hint, .. } => with_hint(
+                format!(
+                    "no font family `{name}` is declared; add it to \
+                     `[assets.fonts]` in byard.toml"
+                ),
+                hint.as_deref(),
+            ),
             Self::UnknownAnchor { name, hint, .. } => with_hint(
                 format!(
                     "no element tagged `as {name}` before this overlay; an \

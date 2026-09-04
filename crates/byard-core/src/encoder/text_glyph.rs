@@ -63,8 +63,8 @@
 use std::hash::Hasher as _;
 
 use glyphon::{
-    Attrs, Buffer, Cache, Color, Family, FontSystem, Metrics, Resolution, SwashCache, TextArea,
-    TextAtlas, TextBounds, TextRenderer, Viewport,
+    Attrs, Buffer, Cache, Color, FontSystem, Metrics, Resolution, SwashCache, TextArea, TextAtlas,
+    TextBounds, TextRenderer, Viewport,
 };
 
 /// Converts a logical-pixel content clip ([`crate::frame::ClipRect`]) into
@@ -141,13 +141,95 @@ static DEV_GLYPHS_SCOPE: std::sync::OnceLock<crate::telemetry::ScopeId> =
 /// 64 bits over a few hundred lines that is not a failure mode this engine
 /// will observe, and the alternative, comparing the string itself, costs a
 /// heap copy per line to retain it.
-fn shape_key(text: &str, font_size: f32, wrap: Option<f32>) -> u64 {
+/// Loads every face in `fonts` that `loaded` does not already name, and
+/// returns how many were loaded (RFC-0034, INV-27).
+///
+/// A free function over the `fontdb::Database` rather than a method, so the
+/// registration half of INV-27 can be exercised without a GPU: the pipeline
+/// that owns the `FontSystem` needs a device, and the invariant does not.
+fn load_missing(
+    db: &mut glyphon::fontdb::Database,
+    loaded: &mut std::collections::HashSet<String>,
+    fonts: &crate::frame::FontTable,
+) -> usize {
+    let mut count = 0;
+    for face in fonts.faces() {
+        if loaded.contains(face.resolved.as_ref()) {
+            continue;
+        }
+        // Loaded through the same helper as the measurement side, so the two
+        // `FontSystem`s cannot be handed the bytes by subtly different routes.
+        let here = crate::text::register_into(db, &face.bytes);
+        // INV-27 checked at the seam it can break at. The logic thread
+        // resolved this face's family name from the same bytes; if this side
+        // reads a different one, every line naming that family shapes in the
+        // fallback font and no test of *this* frame would notice.
+        debug_assert_eq!(
+            here.as_deref(),
+            Some(face.resolved.as_ref()),
+            "family `{}` resolves differently on the paint side (INV-27)",
+            face.declared
+        );
+        loaded.insert(face.resolved.to_string());
+        count += 1;
+    }
+    count
+}
+
+/// Shapes one [`TextLine`] into `buffer`, the only place the paint side turns
+/// a line into glyphs.
+///
+/// Free rather than inlined into `shape_range` so the attributes it resolves,
+/// family above all, can be checked against the measurement path without a
+/// device (INV-27). If this and `TextMeasurer::shape` ever stop agreeing about
+/// which face a line is in, the test that compares them is reading the real
+/// code on both sides rather than two transcriptions of it.
+fn shape_line(
+    font_system: &mut FontSystem,
+    buffer: &mut Buffer,
+    line: &TextLine,
+    wrap: Option<f32>,
+    metadata: usize,
+) {
+    let metrics = Metrics::new(line.font_size, line.font_size * 1.2);
+    buffer.set_metrics(font_system, metrics);
+    // RFC-0018 text wrap: a `Some(w)` bound shapes the line onto multiple
+    // lines within `w` logical pixels; `None` keeps the natural single-line
+    // width. Height stays unbounded so every wrapped line is shaped.
+    buffer.set_size(font_system, wrap, None);
+    // Color is applied per-TextArea in pass 2 (default_color field). Here we
+    // only need to shape the text; color does not affect layout. Tag every
+    // glyph of this line with its line index as glyphon `metadata`, so pass
+    // 3's `metadata_to_depth` can look up this line's draw-order depth. A
+    // skipped line keeps the metadata it was shaped with, which is still
+    // correct: the skip requires the index to mean the same element it did
+    // last frame.
+    buffer.set_text(
+        font_system,
+        &line.text,
+        &Attrs::new()
+            .family(crate::text::family_of(line.family.as_deref()))
+            .weight(glyphon::Weight(line.weight))
+            .metadata(metadata),
+        glyphon::Shaping::Advanced,
+        None, // align: no paragraph-level override
+    );
+    buffer.shape_until_scroll(font_system, false);
+}
+
+fn shape_key(line: &TextLine, wrap: Option<f32>) -> u64 {
     let mut h = FxHasher::default();
-    h.write(text.as_bytes());
-    h.write_u32(font_size.to_bits());
+    h.write(line.text.as_bytes());
+    h.write_u32(line.font_size.to_bits());
     // RFC-0018: the wrap width changes the shaped glyph run (line breaks), so a
     // wrap-only change must invalidate the cached buffer.
     h.write_u32(wrap.map_or(u32::MAX, f32::to_bits));
+    // RFC-0034: weight and family both reach `Attrs`, so both change the glyph
+    // run. Either one missing here is the same defect wearing a different hat:
+    // a line that changes face and keeps last frame's buffer, which looks like
+    // the prop doing nothing at all.
+    h.write_u16(line.weight);
+    h.write(line.family.as_deref().unwrap_or("").as_bytes());
     h.finish()
 }
 
@@ -160,10 +242,10 @@ fn shape_key(text: &str, font_size: f32, wrap: Option<f32>) -> u64 {
 ///
 /// **Debug-only.** This function does not exist in `--release` builds.
 #[cfg(debug_assertions)]
-fn content_hash(text: &str, font_size: f32, color: [f32; 4], wrap: Option<f32>) -> u64 {
+fn content_hash(line: &TextLine, wrap: Option<f32>) -> u64 {
     let mut h = FxHasher::default();
-    h.write_u64(shape_key(text, font_size, wrap));
-    for c in color {
+    h.write_u64(shape_key(line, wrap));
+    for c in line.color {
         h.write_u32(c.to_bits());
     }
     h.finish()
@@ -285,6 +367,13 @@ pub struct TextGlyphPipeline {
     /// row of the profile block, where a developer can watch it sit at zero on
     /// a steady scene and jump the frame something changed.
     reshaped: usize,
+    /// Resolved family names already loaded into `font_system` (RFC-0034).
+    ///
+    /// The frame carries the *whole* registered table every frame rather than
+    /// a drained pool (see [`FontTable`](crate::frame::FontTable) for why), so
+    /// this set is what makes a repeat delivery free: a face already here is
+    /// skipped, and `cosmic-text` never sees the same bytes twice.
+    loaded_families: std::collections::HashSet<String>,
 }
 
 impl TextGlyphPipeline {
@@ -345,6 +434,7 @@ impl TextGlyphPipeline {
             renderers: vec![renderer],
             cache: Vec::new(),
             reshaped: 0,
+            loaded_families: std::collections::HashSet::new(),
         })
     }
 
@@ -357,6 +447,22 @@ impl TextGlyphPipeline {
     #[must_use]
     pub const fn reshaped_lines(&self) -> usize {
         self.reshaped
+    }
+
+    /// Brings the paint `FontSystem` level with the logic thread's by loading
+    /// every family in `fonts` it has not seen (RFC-0034, INV-27).
+    ///
+    /// Must run **before** any shaping in the frame: a line whose `family`
+    /// names a face this `FontSystem` does not hold shapes in the system font
+    /// and is then cached under a key that says otherwise.
+    ///
+    /// Returns how many faces this call actually loaded, which is the number
+    /// the "a registered family is not re-loaded every frame" test reads. It
+    /// is a count of work done, not a count of families known, precisely so
+    /// that a regression to per-frame loading shows up as a number rather than
+    /// as a slow application.
+    pub fn register_fonts(&mut self, fonts: &crate::frame::FontTable) -> usize {
+        load_missing(self.font_system.db_mut(), &mut self.loaded_families, fonts)
     }
 
     /// Uploads updated viewport dimensions to the glyphon `Viewport`.
@@ -630,13 +736,13 @@ impl TextGlyphPipeline {
             // structurally rather than left to a sentinel value.)
             let is_new = i >= pass.preexisting_len;
             let wrap_w = wraps.get(i).copied().flatten();
-            let key = shape_key(&line.text, line.font_size, wrap_w);
+            let key = shape_key(line, wrap_w);
             let comparable = index_is_identity_stable(is_new, pass.length_changed);
             let entry = &mut self.cache[i];
 
             #[cfg(debug_assertions)]
             {
-                let hash = content_hash(&line.text, line.font_size, line.color, wrap_w);
+                let hash = content_hash(line, wrap_w);
                 // Not asserted on a length-changed frame: the premise of the
                 // check is about *this* element's flag, and on such a frame
                 // index `i` is not this element's previous position at all.
@@ -652,33 +758,7 @@ impl TextGlyphPipeline {
             entry.shape_key = key;
             self.reshaped += 1;
 
-            let metrics = Metrics::new(line.font_size, line.font_size * 1.2);
-            entry.buffer.set_metrics(&mut self.font_system, metrics);
-            // RFC-0018 text wrap: a `Some(w)` bound shapes the line onto multiple
-            // lines within `w` logical pixels; `None` keeps the natural single-
-            // line width. Height stays unbounded so every wrapped line is shaped.
-            entry.buffer.set_size(&mut self.font_system, wrap_w, None);
-
-            // Color is applied per-TextArea in pass 2 (default_color field).
-            // Here we only need to shape the text; color does not affect layout.
-            // Tag every glyph of this line with its line index as glyphon
-            // `metadata`, so pass 3's `metadata_to_depth` can look up this
-            // line's draw-order depth. A skipped line keeps the metadata it was
-            // shaped with, which is still correct: the skip requires `i` to
-            // mean the same element it did last frame.
-            entry.buffer.set_text(
-                &mut self.font_system,
-                &line.text,
-                &Attrs::new()
-                    .family(Family::SansSerif)
-                    .weight(glyphon::Weight(line.weight))
-                    .metadata(i),
-                glyphon::Shaping::Advanced,
-                None, // align: no paragraph-level override
-            );
-            entry
-                .buffer
-                .shape_until_scroll(&mut self.font_system, false);
+            shape_line(&mut self.font_system, &mut entry.buffer, line, wrap_w, i);
         }
     }
 
@@ -792,6 +872,126 @@ fn collect_layer_text_areas<'cache>(
 mod tests {
     use super::*;
 
+    /// A minimal [`TextLine`] for the hashing tests: the fields the keys read,
+    /// and defaults for the ones they must not.
+    fn line(text: &str, font_size: f32) -> TextLine {
+        TextLine {
+            x: 0.0,
+            y: 0.0,
+            text: text.to_string(),
+            font_size,
+            weight: 400,
+            family: None,
+            color: [1.0, 1.0, 1.0, 1.0],
+            dirty: false,
+        }
+    }
+
+    /// The same line in a colour.
+    fn colored(text: &str, font_size: f32, color: [f32; 4]) -> TextLine {
+        TextLine {
+            color,
+            ..line(text, font_size)
+        }
+    }
+
+    // ── INV-27: measurement and paint resolve the same font ────────────────
+
+    /// A shipped example asset, read from the tree rather than synthesised.
+    ///
+    /// The suite and the examples deliberately share these files: a test that
+    /// proves families work against a font no example uses proves it for a
+    /// font nobody ships.
+    const DISPLAY_FONT: &[u8] =
+        include_bytes!("../../../byard-cli/examples/assets/fonts/SpaceGrotesk-Variable.ttf");
+
+    /// Shapes `text` the way the paint side does, on a `FontSystem` prepared
+    /// the way the paint side prepares one, and returns the run's width.
+    fn painted_width(fonts: &crate::frame::FontTable, family: Option<&str>, text: &str) -> f32 {
+        let mut fs = FontSystem::new();
+        let mut loaded = std::collections::HashSet::new();
+        load_missing(fs.db_mut(), &mut loaded, fonts);
+        let mut buf = Buffer::new(&mut fs, Metrics::new(32.0, 38.4));
+        let mut l = line(text, 32.0);
+        l.family = family.map(std::sync::Arc::from);
+        shape_line(&mut fs, &mut buf, &l, None, 0);
+        buf.layout_runs().fold(0.0_f32, |w, r| w.max(r.line_w))
+    }
+
+    /// The invariant Phase 13 wrote and nothing has ever checked: a family
+    /// registered from one source of truth measures and paints identically.
+    ///
+    /// Not a pixel test and not a magnitude test. It compares two
+    /// numbers the engine produces for the same string, and the only way they
+    /// can differ is the one INV-27 names: one `FontSystem` holding the face
+    /// and the other silently falling back.
+    #[test]
+    fn a_registered_family_measures_and_paints_the_same_width() {
+        let bytes: std::sync::Arc<[u8]> = std::sync::Arc::from(DISPLAY_FONT);
+        let mut measurer = crate::text::TextMeasurer::new();
+        let resolved = measurer
+            .register_family(&bytes)
+            .expect("the shipped example font parses");
+
+        let mut fonts = crate::frame::FontTable::default();
+        fonts.push(crate::frame::FontFace {
+            declared: "display".to_string(),
+            resolved: std::sync::Arc::from(resolved.as_str()),
+            bytes,
+        });
+
+        let text = "Aura Weather";
+        let (from_layout, _) = measurer.measure(text, 32.0, 400, Some(&resolved));
+        let painted = painted_width(&fonts, Some(&resolved), text);
+        assert!(
+            (from_layout - painted).abs() < 0.01,
+            "measured {from_layout} vs painted {painted}: the two font systems \
+             disagree about `{resolved}` (INV-27)"
+        );
+
+        // The control, and the reason this test cannot pass vacuously: with
+        // the table withheld from the paint side, the same line falls back to
+        // the system font and the widths part company. If this assertion ever
+        // fails, the one above proves nothing.
+        let unregistered =
+            painted_width(&crate::frame::FontTable::default(), Some(&resolved), text);
+        assert!(
+            (from_layout - unregistered).abs() > 0.01,
+            "a family the paint side never loaded still measured {unregistered}, \
+             so the agreement above is not evidence of anything"
+        );
+    }
+
+    /// A family already loaded is not loaded again, however many frames carry
+    /// it. The table rides every frame by design; the cost of that must be
+    /// zero after the first.
+    #[test]
+    fn a_registered_family_is_loaded_once_however_often_it_is_delivered() {
+        let bytes: std::sync::Arc<[u8]> = std::sync::Arc::from(DISPLAY_FONT);
+        let resolved = crate::text::family_name(&bytes).expect("parses");
+        let mut fonts = crate::frame::FontTable::default();
+        fonts.push(crate::frame::FontFace {
+            declared: "display".to_string(),
+            resolved: std::sync::Arc::from(resolved.as_str()),
+            bytes,
+        });
+
+        let mut fs = FontSystem::new();
+        let mut loaded = std::collections::HashSet::new();
+        assert_eq!(
+            load_missing(fs.db_mut(), &mut loaded, &fonts),
+            1,
+            "first frame"
+        );
+        for frame in 2..=10 {
+            assert_eq!(
+                load_missing(fs.db_mut(), &mut loaded, &fonts),
+                0,
+                "frame {frame} re-loaded a face already resident"
+            );
+        }
+    }
+
     // ── needs_reshape: all four (viewport_dirty, shape_changed) combinations ──
 
     #[test]
@@ -819,18 +1019,22 @@ mod tests {
     #[test]
     fn the_shape_key_is_stable_for_an_identical_run() {
         assert_eq!(
-            shape_key("hello", 14.0, None),
-            shape_key("hello", 14.0, None)
+            shape_key(&line("hello", 14.0), None),
+            shape_key(&line("hello", 14.0), None)
         );
     }
 
     #[test]
     fn the_shape_key_moves_with_text_size_and_wrap() {
-        let base = shape_key("hello", 14.0, None);
-        assert_ne!(base, shape_key("world", 14.0, None), "text");
-        assert_ne!(base, shape_key("hello", 15.0, None), "font size");
+        let base = shape_key(&line("hello", 14.0), None);
+        assert_ne!(base, shape_key(&line("world", 14.0), None), "text");
+        assert_ne!(base, shape_key(&line("hello", 15.0), None), "font size");
         // RFC-0018: a wrap-only change moves the line breaks.
-        assert_ne!(base, shape_key("hello", 14.0, Some(40.0)), "wrap width");
+        assert_ne!(
+            base,
+            shape_key(&line("hello", 14.0), Some(40.0)),
+            "wrap width"
+        );
     }
 
     #[test]
@@ -838,9 +1042,9 @@ mod tests {
         // RFC-0030 §V4's INV-24 mitigation 3, now load-bearing rather than
         // decorative: the HUD re-emits the same padded string on five of every
         // six frames, and those five must not re-shape.
-        let a = shape_key(&format!("{:>5.1}", 3.4), 12.0, None);
-        let b = shape_key(&format!("{:>5.1}", 3.4), 12.0, None);
-        let c = shape_key(&format!("{:>5.1}", 12.7), 12.0, None);
+        let a = shape_key(&line(&format!("{:>5.1}", 3.4), 12.0), None);
+        let b = shape_key(&line(&format!("{:>5.1}", 3.4), 12.0), None);
+        let c = shape_key(&line(&format!("{:>5.1}", 12.7), 12.0), None);
         assert_eq!(a, b, "an unchanged reading re-shapes nothing");
         assert_ne!(a, c, "a changed reading still re-shapes, once");
     }
@@ -850,8 +1054,8 @@ mod tests {
         // Colour is applied per-`TextArea`, so it provably cannot alter a
         // glyph. The whole INV-24 argument, a paint-class change never
         // touches layout, is only true if the cache key agrees.
-        let before = shape_key("tap me", 16.0, None);
-        let after = shape_key("tap me", 16.0, None);
+        let before = shape_key(&line("tap me", 16.0), None);
+        let after = shape_key(&line("tap me", 16.0), None);
         assert_eq!(before, after);
         assert!(!needs_reshape(false, before != after));
     }
@@ -862,8 +1066,8 @@ mod tests {
         // changed the text and reported `dirty: false` rendered the previous
         // run, in release, silently. The content is now the authority, and
         // the flag is not consulted at all.
-        let cached = shape_key("before", 14.0, None);
-        let this_frame = shape_key("after", 14.0, None);
+        let cached = shape_key(&line("before", 14.0), None);
+        let this_frame = shape_key(&line("after", 14.0), None);
         assert!(
             needs_reshape(false, this_frame != cached),
             "the shaped run is re-derived from the content, not from a claim \
@@ -931,16 +1135,16 @@ mod tests {
     #[test]
     #[cfg(debug_assertions)]
     fn content_hash_is_stable_for_identical_input() {
-        let a = content_hash("hello", 14.0, [1.0, 1.0, 1.0, 1.0], None);
-        let b = content_hash("hello", 14.0, [1.0, 1.0, 1.0, 1.0], None);
+        let a = content_hash(&line("hello", 14.0), None);
+        let b = content_hash(&line("hello", 14.0), None);
         assert_eq!(a, b);
     }
 
     #[test]
     #[cfg(debug_assertions)]
     fn content_hash_changes_with_text() {
-        let a = content_hash("hello", 14.0, [1.0, 1.0, 1.0, 1.0], None);
-        let b = content_hash("world", 14.0, [1.0, 1.0, 1.0, 1.0], None);
+        let a = content_hash(&line("hello", 14.0), None);
+        let b = content_hash(&line("world", 14.0), None);
         assert_ne!(a, b);
     }
 
@@ -948,8 +1152,8 @@ mod tests {
     #[cfg(debug_assertions)]
     fn content_hash_changes_with_wrap_width() {
         // RFC-0018: a wrap-only change must invalidate the shaped buffer.
-        let a = content_hash("hello world", 14.0, [1.0; 4], None);
-        let b = content_hash("hello world", 14.0, [1.0; 4], Some(40.0));
+        let a = content_hash(&line("hello world", 14.0), None);
+        let b = content_hash(&line("hello world", 14.0), Some(40.0));
         assert_ne!(a, b);
     }
 
@@ -959,12 +1163,12 @@ mod tests {
         // The two hashes answer different questions and must not be conflated:
         // colour changes the pixels (so the region must be redrawn) and cannot
         // change a glyph (so the run must not be re-shaped).
-        let white = content_hash("ok", 14.0, [1.0; 4], None);
-        let red = content_hash("ok", 14.0, [1.0, 0.0, 0.0, 1.0], None);
+        let white = content_hash(&line("ok", 14.0), None);
+        let red = content_hash(&colored("ok", 14.0, [1.0, 0.0, 0.0, 1.0]), None);
         assert_ne!(white, red, "a recolour must reach the redraw region");
         assert_eq!(
-            shape_key("ok", 14.0, None),
-            shape_key("ok", 14.0, None),
+            shape_key(&line("ok", 14.0), None),
+            shape_key(&line("ok", 14.0), None),
             "and must not reach the shaper"
         );
     }
@@ -979,6 +1183,7 @@ mod tests {
             text: "hi".to_string(),
             font_size: 12.0,
             weight: 400,
+            family: None,
             color: [0.0, 0.0, 0.0, 1.0],
             dirty: true,
         };

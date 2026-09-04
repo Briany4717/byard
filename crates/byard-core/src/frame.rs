@@ -1325,6 +1325,15 @@ pub struct CanvasShape {
     pub params: [f32; 8],
     /// Stroke colour `[r, g, b, a]`; `a == 0` disables the stroke.
     pub stroke_color: [f32; 4],
+    /// A gradient painting this shape's **stroke** (RFC-0035
+    /// §"Canvas arc strokes"), or `None` for the flat `stroke_color`.
+    ///
+    /// The stroke rather than the fill, and that is the whole feature rather
+    /// than an omission: the case this exists for is a ring whose colour
+    /// sweeps around it, which a flat stroke can only approximate with dozens
+    /// of segments. A gradient *fill* of an arbitrary shape already has a
+    /// home in the Tier-2 `path`, which carries the same descriptor.
+    pub stroke_gradient: Option<Gradient>,
     /// Fill colour `[r, g, b, a]`; `a == 0` disables the fill. A filled arc
     /// paints the circular sector (pie wedge) swept by `start..start+sweep`.
     pub fill_color: [f32; 4],
@@ -1385,6 +1394,7 @@ impl Default for CanvasShape {
     fn default() -> Self {
         Self {
             kind: CANVAS_SHAPE_CIRCLE,
+            stroke_gradient: None,
             params: [0.0; 8],
             stroke_color: [0.0; 4],
             fill_color: [0.0; 4],
@@ -3185,6 +3195,21 @@ mod paint_hash {
         f32s(&mut h, &s.fill_color);
         f32s(&mut h, &s.dash);
         f32s(&mut h, &[s.stroke_width, s.dash_offset, s.opacity]);
+        // The stroke gradient, whole, for the same reason a box's is: `axis()`
+        // is by construction the four floats the shader reads, so a gradient
+        // that moved cannot be judged clean whatever its kind reinterprets
+        // those lanes as.
+        match &s.stroke_gradient {
+            Some(g) => {
+                1u8.hash(&mut h);
+                (g.kind as u32).hash(&mut h);
+                f32s(&mut h, &g.from);
+                f32s(&mut h, &g.mid);
+                f32s(&mut h, &g.to);
+                f32s(&mut h, &g.axis());
+            }
+            None => 0u8.hash(&mut h),
+        }
         transform(&mut h, &s.transform);
         // INV-26 (RFC-0031): the group members live outside this primitive and
         // the shader reads them, so they are part of what decides its pixels.

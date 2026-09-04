@@ -273,7 +273,11 @@ const TEXT_PROPS: &[(&str, PropDef)] = &[
     // RFC-0034: the four keywords stay as aliases for 100/400/500/700, and a
     // numeric value addresses the CSS axis directly, which is what a variable
     // font's `wght` takes and how designers already write it.
-    ("weight", pnt(PropType::WeightAxis)),
+    // Layout class, not paint: the weight changes the shaped width, so a
+    // heading that gets heavier gets wider and its box has to be recomputed.
+    // It was paint-class while it did nothing at all, which was harmless then
+    // and would now be a lie any relayout gate built on this would believe.
+    ("weight", lay(PropType::WeightAxis)),
     ("align", lay(PropType::Enum(ALIGN))),
     ("lines", lay(PropType::Int)),
     ("wrap", lay(PropType::Bool)),

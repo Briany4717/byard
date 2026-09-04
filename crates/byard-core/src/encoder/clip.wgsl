@@ -19,11 +19,15 @@ struct ClipEntry {
     radii: vec4<f32>,
     /// Padding out to the 256-byte stride the entries are spaced at.
     ///
-    /// The stride is what gets bound, not the 32 bytes of payload: a D3D12
-    /// constant-buffer view must be a multiple of 256 bytes, and binding a
-    /// 32-byte window there did not fail loudly — it shifted the read, so
-    /// `rect` came back holding `radii`. Declaring the padding here keeps the
-    /// shader's idea of the entry the same size as the binding's.
+    /// The binding is the whole stride rather than the 32 bytes of payload,
+    /// which keeps it clear of D3D12's rule that a constant-buffer view be a
+    /// multiple of 256 bytes in offset *and* size. This padding is what keeps
+    /// the shader's idea of an entry the same size as the binding's.
+    ///
+    /// Honest provenance: this arrived while chasing a Windows failure that
+    /// turned out to be #234, a pre-existing defect in `solid_box`, not this.
+    /// So the wider binding is not known to be *required* — it is correct,
+    /// it costs nothing, and the smaller one was never seen green on D3D12.
     _pad: array<vec4<f32>, 14>,
 };
 
@@ -64,19 +68,15 @@ fn clip_sdf(p: vec2<f32>) -> f32 {
 /// every other edge this engine draws is antialiased. A hard `discard` would
 /// make the one boundary the user did not draw the only jagged one on screen.
 fn clip_coverage(p: vec2<f32>) -> f32 {
-    // The band is half a pixel wide, as a constant, because this test already
+    // The band is half a pixel either side, as a constant, because this test
     // runs in physical pixels: `p` is `@builtin(position)` and the entry was
-    // uploaded scaled, so one unit *is* one device pixel and the width of the
-    // fade is known without asking the hardware for it.
+    // uploaded scaled, so one unit *is* one device pixel and a screen-space
+    // distance field has a gradient of one by construction. There is nothing
+    // for a derivative to tell us that the units do not already say.
     //
-    // This deliberately does not use `fwidth`. A derivative is the one thing in
-    // this file whose value is not fully pinned by the spec, and it bought
-    // nothing here: a screen-space distance field has a gradient of one by
-    // construction. Windows CI is what established that it also bought a bug —
-    // a square clip painted nothing there while a rounded one painted fine,
-    // and a square clip's field is exactly the case where `length(max(d, 0))`
-    // is identically zero over a whole region and its derivative is least
-    // well-behaved.
+    // An earlier version called `fwidth` here and was changed on the theory
+    // that it explained a Windows failure. It did not — that was #234 — so
+    // this stands on the reasoning above and not on that story.
     let d = clip_sdf(p);
     return saturate(1.0 - smoothstep(-0.5, 0.5, d));
 }

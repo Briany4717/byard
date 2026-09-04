@@ -15,12 +15,13 @@ use std::collections::HashMap;
 /// Shaping a string through `cosmic-text` (`Shaping::Advanced`) is expensive,
 /// several hundred microseconds for a short label. Because layout re-measures
 /// every `Text`/`Button` on **every** render tick (and most strings are
-/// unchanged frame to frame), results are memoised in a `(text, font_size)`
-/// cache so a steady-state tick re-shapes nothing. This is the single biggest
+/// unchanged frame to frame), results are memoised in a
+/// `(text, font_size, wrap_width, weight)` cache
+/// so a steady-state tick re-shapes nothing. This is the single biggest
 /// factor in per-tick cost on a continuously-redrawing logic thread.
 pub struct TextMeasurer {
     font_system: FontSystem,
-    /// `(text, font_size.to_bits(), wrap_width.to_bits())` → shaped
+    /// `(text, font_size.to_bits(), wrap_width.to_bits(), weight)` → shaped
     /// `(width, height)`. The wrap width is part of the key because it changes
     /// the line breaks and thus the measured size (RFC-0018).
     cache: HashMap<(String, u32, u32, u16), (f32, f32)>,

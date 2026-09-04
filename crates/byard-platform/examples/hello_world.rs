@@ -96,6 +96,7 @@ impl PlatformHost for App {
             y: 190.0,
             text: "TextGlyph".to_string(),
             font_size: 14.0,
+            weight: 400,
             color: [0.1, 0.05, 0.0, 1.0],
             dirty: false,
         }];

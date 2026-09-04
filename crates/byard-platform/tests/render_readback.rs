@@ -510,6 +510,7 @@ fn content_clip_scissors_overflow_to_the_viewport() {
             y: 110.0 + i as f32 * 28.0,
             text: (*s).to_string(),
             font_size: 18.0,
+            weight: 400,
             color: [1.0, 1.0, 1.0, 1.0],
             dirty: true,
         });

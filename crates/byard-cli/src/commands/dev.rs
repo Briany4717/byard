@@ -729,6 +729,7 @@ fn render_error_overlay(frame: &mut RenderFrame, errors: &[CompileError], w: f32
         y,
         text: title,
         font_size: 18.0,
+        weight: 400,
         color: [1.0, 0.42, 0.42, 1.0],
         dirty: true,
     });
@@ -741,6 +742,7 @@ fn render_error_overlay(frame: &mut RenderFrame, errors: &[CompileError], w: f32
             y,
             text: headline,
             font_size: 15.0,
+            weight: 400,
             color: [1.0, 1.0, 1.0, 1.0],
             dirty: true,
         });
@@ -754,6 +756,7 @@ fn render_error_overlay(frame: &mut RenderFrame, errors: &[CompileError], w: f32
             y,
             text: format!("… and {} more error(s)", errors.len() - OVERLAY_MAX_ERRORS),
             font_size: 13.0,
+            weight: 400,
             color: [0.6, 0.6, 0.6, 1.0],
             dirty: true,
         });
@@ -765,6 +768,7 @@ fn render_error_overlay(frame: &mut RenderFrame, errors: &[CompileError], w: f32
         y: y + line_height * 0.6,
         text: "Fix the file and save to dismiss, the last good view is behind this.".to_string(),
         font_size: 13.0,
+        weight: 400,
         color: [0.55, 0.55, 0.58, 1.0],
         dirty: true,
     });

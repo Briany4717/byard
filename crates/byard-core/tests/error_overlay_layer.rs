@@ -320,6 +320,7 @@ fn mark_dirty_since_marks_forward_and_leaves_everything_before_it_alone() {
         y: 0.0,
         text: text.to_string(),
         font_size: 14.0,
+        weight: 400,
         color: [1.0; 4],
         dirty: false,
     };
@@ -377,6 +378,7 @@ fn mark_dirty_since_a_cursor_past_the_end_is_a_no_op() {
         y: 0.0,
         text: "after".to_string(),
         font_size: 14.0,
+        weight: 400,
         color: [1.0; 4],
         dirty: false,
     });

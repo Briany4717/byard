@@ -44,7 +44,7 @@ jobs:
         run: cargo update
 
       - name: Show what moved
-        run: git --no-pager diff --stat Cargo.lock
+        run: git --no-pager diff --unified=0 -- Cargo.lock
 
       - name: clippy
         run: cargo clippy --workspace --all-targets

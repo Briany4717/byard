@@ -5406,7 +5406,7 @@ impl Interpreter {
             // content size, because that size is exactly what the placement
             // measures against — a panel stretched to the viewport would be
             // "placed" correctly and still cover the screen.
-            let style = if self.anchor_ref(child).is_some() {
+            let style = if self.is_pass_placed(child) {
                 anchor_wrapper_style(Some("__anchored"))
             } else {
                 anchor_wrapper_style(self.anchor_token(child).as_deref())
@@ -5441,6 +5441,26 @@ impl Interpreter {
                 self.eval_str_prop(&attrs, "anchor_to")
             }
             _ => None,
+        }
+    }
+
+    /// Whether the overlay pass, rather than the viewport wrapper, decides
+    /// where this child goes.
+    ///
+    /// True for an element-relative anchor (RFC-0036) and for an absolute
+    /// `at:` (RFC-0017 §Positioning). Both are placed from a resolved rect, so
+    /// both need the child to arrive at its own content size: a stretched
+    /// panel would be "placed" correctly and still cover the screen.
+    fn is_pass_placed(&mut self, child: &RenderNode) -> bool {
+        if self.anchor_ref(child).is_some() {
+            return true;
+        }
+        match child {
+            RenderNode::Box { attrs, .. } => {
+                let attrs = attrs.clone();
+                attrs.iter().any(|a| a.name.as_str() == "at")
+            }
+            _ => false,
         }
     }
 
@@ -5692,6 +5712,17 @@ impl Interpreter {
         let RenderNode::Box { attrs, .. } = slot.node else {
             return (0.0, 0.0);
         };
+        // RFC-0017 §Positioning: an absolute offset from the viewport's
+        // top-left, unconditionally. It does not flip and it does not clamp: a
+        // panel placed off-screen stays off-screen, because silently pulling
+        // it back would make a wrong coordinate look like a layout decision.
+        if attrs.iter().any(|a| a.name.as_str() == "at") {
+            let (ax, ay) = self.resolve_axis_pair(attrs, "at", (0.0, 0.0));
+            let Ok(Some(own)) = self.atlas.resolved_rect(slot.id) else {
+                return (0.0, 0.0);
+            };
+            return (ax - own.x, ay - own.y);
+        }
         let Some(name) = self.eval_str_prop(attrs, "anchor_to") else {
             return (0.0, 0.0);
         };
@@ -10823,6 +10854,23 @@ impl Interpreter {
         // wants the same answers. A width matched against a name nobody
         // declared, or written on an element that anchors to nothing, is a
         // `width:` that quietly does nothing.
+        // RFC-0017 §Positioning: `at:` is viewport-space and unconditional;
+        // `anchor_to:` is element-relative and flips. Writing both is not a
+        // precedence question to settle in the docs, it is two answers to one
+        // question, so it is refused.
+        if let Some(at) = el.attrs.iter().find(|a| a.name.as_str() == "at") {
+            if el.attrs.iter().any(|a| a.name.as_str() == "anchor_to") {
+                errors.push(CompileError::MisplacedAnchorTail {
+                    span: at.span,
+                    prop: "at:".to_string(),
+                    reason: "cannot be combined with `anchor_to:`: one places the \
+                             overlay in the viewport and the other against an \
+                             element, and there is no sensible order for both"
+                        .to_string(),
+                    hint: None,
+                });
+            }
+        }
         // RFC-0036: `dismiss =>` on a container is the light-dismiss of an
         // anchored overlay, so it needs an anchor for the same reason a
         // matched width does: the press it ignores is the one on the anchor,

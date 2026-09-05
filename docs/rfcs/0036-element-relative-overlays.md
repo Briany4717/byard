@@ -28,14 +28,38 @@
     on both axes so it arrives at content size — a stretched panel would be
     placed correctly and still cover the screen.
 
-  **Not implemented:** `width: match(ref)` sizing, and the `on dismiss`
-  outside-press convenience (RFC-0017's `dismiss` already covers the scrim
-  case). Both are additive and neither is needed by the placement story.
+  **The two tails landed 2026-09-05**, with two more deltas.
+
+  - **`width: match(ref)` is a second layout pass, not a widened rect.** The
+    placement above is a paint transform on purpose, and the obvious extension
+    is to widen the finished rect the same way. That is wrong: the panel's own
+    children were laid out against the width it had, so its rows would sit in
+    a box they no longer fill. Instead the anchor's resolved width is written
+    onto the panel's node after the main tree has painted and layout is run
+    once more. This is **not** the cycle §"Does `match(ref)` create a layout
+    cycle?" asks about, and for the reason that section already gives: the
+    dependency runs one way and the overlay cannot influence its anchor. The
+    second pass is skipped entirely when the width has not moved, which is
+    every steady frame, and there is a test that says so as a difference
+    against the same screen with a fixed width.
+  - **`on dismiss` is an observer, not a scrim.** RFC-0017's modal dismissal
+    exists and is the wrong mechanism here: its scrim covers the viewport,
+    raises the router's modal floor, and swallows every event beneath it. An
+    autocomplete that froze the page under it would be a worse bug than the one
+    it solves. So an anchored `dismiss =>` registers a light-dismiss that
+    blocks nothing, fires on a press outside both the panel *and its anchor*,
+    and answers to `Escape`. Keeping the anchor's rect is the half that is easy
+    to omit: without it the press that opens a dropdown is also the press that
+    closes it, which reads as a flicker with no cause.
+
+  Both tails are compile-checked against the same `as` tags `anchor_to` is, and
+  written on an element that anchors to nothing they are a diagnostic rather
+  than a property that quietly does nothing.
 
   [`UnknownAnchor`]: the compile error raised for an unknown or forward anchor.
 - **Author(s):** Briany4717
 - **Created:** 2026-08-04
-- **Last updated:** 2026-09-03
+- **Last updated:** 2026-09-05
 
 ---
 

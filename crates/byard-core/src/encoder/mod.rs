@@ -1522,6 +1522,14 @@ impl EncoderSubsystem {
         Ok(encoder.finish())
     }
 
+    /// How many times the clip-mask strip has been rasterised (RFC-0037
+    /// `clip(path)`). A frame whose path clips did not change must not add to
+    /// it; that is the whole of the steady-state guarantee for masks.
+    #[must_use]
+    pub const fn clip_mask_rasterisations(&self) -> u64 {
+        self.clip_masks.rasterised()
+    }
+
     /// Encodes a frame from a [`RenderFrame`] published by the Relay.
     ///
     /// # Skipped frames

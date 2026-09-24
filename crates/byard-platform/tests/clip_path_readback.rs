@@ -376,3 +376,45 @@ fn a_mask_equal_to_its_bounds_keeps_everything() {
         );
     }
 }
+
+/// A frame whose masks have not changed rasterises nothing, and is still
+/// clipped correctly from the strip the previous frame left.
+///
+/// Both halves matter. The count on its own would pass on a frame that skipped
+/// the pass and then sampled a stale or empty strip; the pixels on their own
+/// would pass on a frame that paid for the pass every time.
+#[test]
+fn an_unchanged_mask_is_not_rasterised_again() {
+    let Some((device, queue)) = try_device() else {
+        eprintln!("no GPU adapter, skipping path clip readback");
+        return;
+    };
+    let mut enc = encoder(&device, &queue);
+    // One mask, kept alive across frames the way the interpreter's mesh cache
+    // keeps it: the same `Arc` every frame the outline does not move.
+    let mask = triangle();
+    let frame_with = |m: &ClipMask| {
+        let mut frame = RenderFrame::new();
+        frame.request_full_redraw();
+        frame.begin_clip_path(m.clone());
+        frame.push_instance(solid());
+        frame.end_clip();
+        frame
+    };
+    let _first = render(&mut enc, &device, &queue, &frame_with(&mask));
+    let after_first = enc.clip_mask_rasterisations();
+    let second = render(&mut enc, &device, &queue, &frame_with(&mask));
+    assert_eq!(
+        enc.clip_mask_rasterisations(),
+        after_first,
+        "a frame with the same mask must not rasterise it again"
+    );
+    assert!(
+        at(&second, 30, 30).3 > 200 && at(&second, 100, 100).3 < 20,
+        "and must still be clipped by it, from the strip it kept{}",
+        alpha_map(&second)
+    );
+    // A different outline is a different mesh, and is drawn once.
+    let _third = render(&mut enc, &device, &queue, &frame_with(&triangle()));
+    assert_eq!(enc.clip_mask_rasterisations(), after_first + 1);
+}

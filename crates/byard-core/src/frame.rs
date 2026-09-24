@@ -1684,6 +1684,16 @@ impl Viewport {
     }
 }
 
+/// What the platform needs to know about text input this frame (RFC-0040
+/// §4): where the focused field's caret is, so the IME can put its candidate
+/// window beside it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TextInputState {
+    /// The caret, in logical pixels in viewport space: after the element's
+    /// transform and its scroll containers' offsets.
+    pub caret: Rect,
+}
+
 /// A snapshot of all render primitives for a single frame.
 ///
 /// Built by the Logic thread (Evaluator + Atlas) and read by the Render
@@ -1803,6 +1813,10 @@ pub struct RenderFrame {
     /// [`ClipRect::mask`]. Empty on every frame that clips only rectangles,
     /// which is nearly all of them.
     clip_masks: Vec<ClipMask>,
+    /// Where the focused text field's caret is, in viewport space, so the
+    /// platform can place its IME candidate window (RFC-0040 §4). `None` when
+    /// no text field has focus, which is also what turns the IME off.
+    text_input: Option<TextInputState>,
 
     /// Every font family registered so far (RFC-0034), shared with the logic
     /// thread rather than copied.
@@ -2089,6 +2103,18 @@ impl RenderFrame {
         Self::default()
     }
 
+    /// Records the focused text field's caret rectangle, in viewport space
+    /// (RFC-0040 §4). The last call in a frame wins; there is one focus.
+    pub fn set_text_input(&mut self, state: TextInputState) {
+        self.text_input = Some(state);
+    }
+
+    /// The focused text field's caret, if a text field has focus (RFC-0040).
+    #[must_use]
+    pub const fn text_input(&self) -> Option<TextInputState> {
+        self.text_input
+    }
+
     /// Clears the frame, retaining internal buffer capacity.
     ///
     /// After the first frame, subsequent populations pay zero allocation cost
@@ -2113,6 +2139,7 @@ impl RenderFrame {
         self.backdrop_marks.clear();
         self.atlas_uploads.clear();
         self.clip_masks.clear();
+        self.text_input = None;
         self.groups.clear();
         self.open_group = None;
         self.solid_depths.clear();

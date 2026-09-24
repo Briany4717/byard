@@ -1,0 +1,46 @@
+// RFC-0040, text input with an input method (IME).
+//
+// Run it (from the repo root):
+//   cargo run -p byard-cli -- dev crates/byard-cli/examples/text_input
+//
+// Nothing in this file is about IMEs: a TextField bound to a var accepts
+// composed text on its own. What to verify, by hand, since no CI machine has
+// an input method:
+//   1. Japanese (Kotoeri / Microsoft IME / Mozc): click the first field and
+//      type `nihon`. The field shows にほん underlined, the candidate window
+//      opens beside the caret, and the echo line below still shows the old
+//      value: a preedit is not the value. Space converts, Enter commits, and
+//      only then does the echo change, once.
+//   2. Korean (2-Set): type ㅎㅏㄴ. The syllable 한 builds up underlined and
+//      commits when the next syllable starts.
+//   3. macOS dead key: Option-e then e types é.
+//   4. Start a composition, then click the second field. The underlined text
+//      disappears and the first field keeps the value it had.
+//   5. Backspace after typing a flag emoji removes the whole flag.
+//   6. The second field sits inside a scrolled ScrollView. Scroll it, focus
+//      it and compose: the candidate window follows the caret to where the
+//      field actually is on screen.
+View Main() {
+    var name = ""
+    var note = ""
+    var scroll = 0
+
+    Column #[bg: 0x14161C, p: 32, gap: 16, width: 560] {
+        Text("Text input, with an input method") #[color: 0xF2F3F5, size: 20]
+
+        TextField #[bind: name, placeholder: "Type a name, in any script",
+                    bg: 0x1F222B, width: 420, height: 44, size: 18]
+        Text("name = \"{name}\"") #[color: 0x8A90A0, size: 14]
+
+        Text("the second field is inside a ScrollView") #[color: 0x8A90A0, size: 13]
+        ScrollView #[width: 440, height: 120, offset: (0, scroll), bg: 0x1C1F27] {
+            Column #[gap: 12, p: 10] {
+                Box #[height: 60] {}
+                TextField #[bind: note, placeholder: "A note", bg: 0x1F222B,
+                            width: 400, height: 44, size: 18]
+                Box #[height: 160] {}
+            }
+        }
+        Text("note = \"{note}\"") #[color: 0x8A90A0, size: 14]
+    }
+}

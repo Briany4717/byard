@@ -1482,6 +1482,18 @@ impl PlatformHost for App {
         }
     }
 
+    fn on_ime(&mut self, event: byard_core::platform::ImeEvent) {
+        if let (Some(engine), Some(input)) = (&self.engine, event.into_input(now_ms())) {
+            engine.push_input(input);
+        }
+    }
+
+    fn text_input(&self) -> Option<byard_core::frame::TextInputState> {
+        self.engine
+            .as_ref()
+            .and_then(byard_core::Engine::text_input)
+    }
+
     fn on_scroll(&mut self, dx: f32, dy: f32, x: f32, y: f32) {
         if let Some(engine) = &self.engine {
             engine.push_input(byard_core::platform::InputEvent {

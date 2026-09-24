@@ -39,3 +39,7 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 
 [lints]
 workspace = true
+
+[[bench]]
+name = "spring_frame"
+harness = false

@@ -46,16 +46,23 @@ fn font_families_example_checks_clean() {
 /// checked against the families that project really declares.
 #[test]
 fn a_misspelt_family_in_the_example_is_a_diagnostic() {
-    let tmp = std::env::temp_dir().join("byard_font_families_typo");
-    let _ = std::fs::remove_dir_all(&tmp);
+    // The scratch project mirrors the example's layout, `<root>/font_families`
+    // beside `<root>/assets/fonts`, so the manifest is copied **unmodified**.
+    // An earlier version rewrote the font paths to absolute ones, which on
+    // Windows put `\\?\D:\…` inside a TOML basic string and failed as an
+    // invalid escape: the test was exercising the path splice, not the
+    // diagnostic.
+    let root = std::env::temp_dir().join("byard_font_families_typo");
+    let _ = std::fs::remove_dir_all(&root);
+    let tmp = root.join("font_families");
     std::fs::create_dir_all(tmp.join("src")).expect("scratch project");
-    // The manifest's font paths are relative to the project root, so they are
-    // rewritten to absolute ones for the copy.
-    let manifest = std::fs::read_to_string(example_dir().join("byard.toml")).unwrap();
-    let fonts = example_dir().join("../assets/fonts");
-    let fonts = fonts.canonicalize().unwrap();
-    let manifest = manifest.replace("../assets/fonts", fonts.to_str().unwrap());
-    std::fs::write(tmp.join("byard.toml"), manifest).unwrap();
+    let fonts = root.join("assets").join("fonts");
+    std::fs::create_dir_all(&fonts).expect("scratch fonts");
+    for entry in std::fs::read_dir(example_dir().join("../assets/fonts")).unwrap() {
+        let entry = entry.unwrap();
+        std::fs::copy(entry.path(), fonts.join(entry.file_name())).unwrap();
+    }
+    std::fs::copy(example_dir().join("byard.toml"), tmp.join("byard.toml")).unwrap();
     let src = std::fs::read_to_string(example_dir().join("src/main.byd")).unwrap();
     std::fs::write(
         tmp.join("src/main.byd"),
@@ -74,5 +81,5 @@ fn a_misspelt_family_in_the_example_is_a_diagnostic() {
         text.contains("did you mean `display`"),
         "the nearest declared family must be offered:\n{text}"
     );
-    let _ = std::fs::remove_dir_all(&tmp);
+    let _ = std::fs::remove_dir_all(&root);
 }

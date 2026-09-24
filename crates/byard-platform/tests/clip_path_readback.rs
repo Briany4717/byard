@@ -248,8 +248,11 @@ fn a_path_clip_keeps_its_inside_and_cuts_its_outside() {
     let mut enc = encoder(&device, &queue);
     let plain = render(&mut enc, &device, &queue, &rect_clipped());
 
-    // Well inside the triangle, near the top-left corner.
-    let kept = at(&masked, 30, 30);
+    // Well inside the triangle, near the top-left corner, and off the line
+    // x = y: on D3D12 every solid box loses a one-pixel diagonal from its
+    // top-left corner to its centre (#234), and a probe on that line reads a
+    // hole that has nothing to do with the clip.
+    let kept = at(&masked, 44, 28);
     assert!(
         kept.3 > 200,
         "inside the path must be painted, got {kept:?}"
@@ -322,7 +325,8 @@ fn a_path_inside_a_rounded_clip_is_cut_by_both() {
         corner.3 < 20,
         "the rounded parent's corner must still be cut, got {corner:?}"
     );
-    let kept = at(&image, 40, 40);
+    // Off the x = y diagonal, for #234.
+    let kept = at(&image, 52, 36);
     assert!(
         kept.3 > 200,
         "the shared inside must survive, got {kept:?}{}",
@@ -367,7 +371,8 @@ fn a_mask_equal_to_its_bounds_keeps_everything() {
     frame.end_clip();
     let mut enc = encoder(&device, &queue);
     let image = render(&mut enc, &device, &queue, &frame);
-    for (px, py) in [(30, 30), (100, 30), (30, 100), (100, 100), (64, 64)] {
+    // None of these on the box's top-left-to-centre diagonal (#234).
+    for (px, py) in [(44, 28), (100, 30), (30, 100), (100, 100), (72, 58)] {
         let p = at(&image, px, py);
         assert!(
             p.3 > 200,
@@ -410,7 +415,7 @@ fn an_unchanged_mask_is_not_rasterised_again() {
         "a frame with the same mask must not rasterise it again"
     );
     assert!(
-        at(&second, 30, 30).3 > 200 && at(&second, 100, 100).3 < 20,
+        at(&second, 44, 28).3 > 200 && at(&second, 100, 100).3 < 20,
         "and must still be clipped by it, from the strip it kept{}",
         alpha_map(&second)
     );

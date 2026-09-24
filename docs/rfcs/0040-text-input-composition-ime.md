@@ -1,6 +1,17 @@
 # RFC-0040: Text input, composition and IME
 
-- **Status:** Accepted, not yet implemented.
+- **Status:** Accepted, implemented 2026-09-24 (`TextField`, `byard-platform`,
+  both hosts; `examples/text_input`). What is verified automatically and what
+  still has to be checked by hand is listed in §9.
+
+  **One refinement against the text below.** §3 says a commit "travels the
+  existing `TextInput` path". It reaches the field through the same
+  `TextInput` handler, but it crosses the platform boundary as its own
+  `EventKind::CompositionCommit`, with `EventKind::CompositionEnd` for
+  `Disabled`. Without a separate kind, a commit could not be routed to the
+  composition's owner (§6) while typed text keeps going to the focused field,
+  because the two would be indistinguishable by the time they reached the
+  router.
 - **Author(s):** Briany4717
 - **Created:** 2026-09-24
 - **Last updated:** 2026-09-24

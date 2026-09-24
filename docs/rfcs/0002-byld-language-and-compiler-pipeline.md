@@ -280,6 +280,12 @@ re-invokes the pipeline on each `{...}` span (the PEP 701 model). This part is
 unchanged by the Lume adoption; the only delta is the larger terminal set
 listed above.
 
+Because an unescaped `{` always opens an interpolation, a literal brace in a
+string is written `\{` (and `\}`). The other escapes are `\"`, `\\`, `\n` and
+`\t`; any other backslash sequence is kept verbatim. Spans inside an
+interpolation are file spans: a diagnostic in `{...}` points where the code is
+written.
+
 ### Parser
 
 Declaration / statement / element / control-flow level is ordinary recursive

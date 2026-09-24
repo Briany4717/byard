@@ -429,10 +429,17 @@ pub struct LexedFile {
 /// span-carrying [`CompileError`]; the driver never panics on malformed input.
 #[must_use]
 pub fn lex(source: &str) -> LexedFile {
+    lex_remapped(source, |span| span)
+}
+
+/// [`lex`], with every token and diagnostic span passed through `remap`. The
+/// parser uses it to re-lex a string interpolation's fragment so its spans
+/// land on the fragment's position in the file, not at the fragment's start.
+pub(crate) fn lex_remapped(source: &str, remap: impl Fn(Span) -> Span) -> LexedFile {
     let mut lexer = Token::lexer(source);
     let mut out = LexedFile::default();
     while let Some(result) = lexer.next() {
-        let span: Span = lexer.span().into();
+        let span = remap(lexer.span().into());
         match result {
             Ok(token) => out.tokens.push((token, span)),
             Err(err) => out.errors.push(match err {

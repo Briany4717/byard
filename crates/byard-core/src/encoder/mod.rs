@@ -3252,7 +3252,9 @@ fn intersect_scissor(a: Scissor, b: Scissor) -> Option<Scissor> {
     let y0 = a.1.max(b.1);
     let x1 = (a.0 + a.2).min(b.0 + b.2);
     let y1 = (a.1 + a.3).min(b.1 + b.3);
-    (x1 > x0 && y1 > y0).then_some((x0, y0, x1 - x0, y1 - y0))
+    // `then`, not `then_some`: the size is only valid when the rects
+    // overlap, and `then_some` would evaluate it (and underflow) regardless.
+    (x1 > x0 && y1 > y0).then(|| (x0, y0, x1 - x0, y1 - y0))
 }
 
 /// The physical scissor for a primitive with clip index `clip`: the frame's

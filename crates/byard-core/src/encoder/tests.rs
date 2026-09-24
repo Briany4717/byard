@@ -1608,3 +1608,23 @@ fn every_group_end_is_followed_by_a_frame_segment() {
         }
     }
 }
+
+// ── Scissor intersection ────────────────────────────────────────────────────
+
+/// Two scissors that do not overlap intersect to nothing, on either axis and
+/// in either order, and that answer must not be computed by subtracting the
+/// far edge from the near one first: in `u32` that underflows, which a debug
+/// build reports as a panic in the middle of a frame. A clip scrolled wholly
+/// out of its parent's rect is the ordinary way to get here.
+#[test]
+fn disjoint_scissors_intersect_to_nothing_without_underflow() {
+    let a = (0, 0, 100, 100);
+    for b in [(200, 0, 50, 50), (0, 200, 50, 50), (100, 0, 10, 10)] {
+        assert_eq!(intersect_scissor(a, b), None, "{a:?} and {b:?}");
+        assert_eq!(intersect_scissor(b, a), None, "{b:?} and {a:?}");
+    }
+    assert_eq!(
+        intersect_scissor(a, (50, 60, 100, 100)),
+        Some((50, 60, 50, 40))
+    );
+}

@@ -70,6 +70,7 @@ pub mod canvas_shape;
 pub mod clip_mask;
 pub mod decorated_box;
 pub mod gpu_timer;
+pub mod group;
 pub mod instance_arena;
 pub mod pipeline;
 pub mod ripple;
@@ -297,6 +298,8 @@ pub struct EncoderSubsystem {
     /// The coverage strip for `clip(path)` (RFC-0037), bound beside the clip
     /// table so every clippable pipeline can sample it.
     clip_masks: clip_mask::ClipMaskAtlas,
+    /// The opacity-group target and composite (RFC-0011 T4).
+    groups: group::GroupCompositor,
     viewport_bind_group: wgpu::BindGroup,
     /// Kept so the bind group can be rebuilt when the clip buffer grows.
     viewport_layout: wgpu::BindGroupLayout,
@@ -615,6 +618,8 @@ impl EncoderSubsystem {
             mapped_at_creation: false,
         });
         let clip_masks = clip_mask::ClipMaskAtlas::new(&device, &queue).await?;
+        let groups =
+            group::GroupCompositor::new(&device, surface_format, quad_vertex_layout()).await?;
         let viewport_bind_group = build_viewport_bind_group(
             &device,
             &bind_group_layout,
@@ -797,6 +802,7 @@ impl EncoderSubsystem {
             clip_buffer,
             clip_capacity,
             clip_masks,
+            groups,
             viewport_bind_group,
             viewport_layout: bind_group_layout,
             text_pipeline,
@@ -1120,6 +1126,7 @@ impl EncoderSubsystem {
             FrameClips::default(),
             FrameDirty::default(),
             &[],
+            &[],
             NativeFrameData::default(),
             // This convenience path has no `RenderFrame` and therefore no dev
             // surfaces: every primitive in it is the caller's own.
@@ -1154,6 +1161,11 @@ impl EncoderSubsystem {
         clips: FrameClips<'_>,
         dirty: FrameDirty<'_>,
         layers: &[crate::frame::LayerMark],
+        // Opacity groups (RFC-0011 T4): subtrees faded as one picture. Beside
+        // the layer marks because it is the same kind of thing, a partition of
+        // the draw stream, which here changes *where* a range is drawn rather
+        // than *when*.
+        groups: &[crate::frame::OpacityGroup],
         // What this frame's native views emitted (RFC-0039). A bundle for the
         // same reason the backdrop pair is one: the batches and the textures
         // they name are meaningless apart.
@@ -1321,7 +1333,17 @@ impl EncoderSubsystem {
             native: u32::try_from(native.batches.len()).unwrap_or(u32::MAX),
             fill: u32::try_from(fills.len()).unwrap_or(u32::MAX),
         };
-        let segments = compute_segments(layers, backdrop_marks, &totals);
+        let segments = split_groups(compute_segments(layers, backdrop_marks, &totals), groups);
+        // RFC-0011 T4: the offscreen target exists from the first frame that
+        // has a group and never before, so an application with no translucent
+        // container holds no extra texture at all.
+        if !groups.is_empty() {
+            let size = (
+                self.persistent_color.width(),
+                self.persistent_color.height(),
+            );
+            self.groups.ensure(&self.device, self.surface_format, size);
+        }
 
         // ── Who owns what, for the rest of this frame ─────────────────────────
         //
@@ -1453,6 +1475,10 @@ impl EncoderSubsystem {
                 &segments,
                 dev_segment_start,
                 &mut backdrop_draw,
+                GroupDraw {
+                    compositor: &self.groups,
+                    groups,
+                },
                 self.gpu_timer.as_ref(),
                 &mut self.arena,
                 &mut self.canvas_records,
@@ -1530,6 +1556,16 @@ impl EncoderSubsystem {
         self.clip_masks.rasterised()
     }
 
+    /// Whether an opacity-group target has ever been allocated (RFC-0011 T4).
+    ///
+    /// Exposed for the fast-path assertion: a frame with no group must not
+    /// have caused one, because a full-frame offscreen texture is exactly the
+    /// kind of cost that is invisible until someone measures memory.
+    #[must_use]
+    pub const fn has_group_target(&self) -> bool {
+        self.groups.has_target()
+    }
+
     /// Encodes a frame from a [`RenderFrame`] published by the Relay.
     ///
     /// # Skipped frames
@@ -1585,6 +1621,7 @@ impl EncoderSubsystem {
                 full: frame.wants_full_redraw(),
             },
             frame.layer_marks(),
+            frame.groups(),
             NativeFrameData {
                 batches: frame.native_batches(),
                 textures: frame.native_textures(),
@@ -1755,6 +1792,9 @@ pub(crate) struct FrameStaging {
     /// One reservation per backdrop in the pool (RFC-0033 §G2's alignment
     /// case), indexed by backdrop slot.
     backdrops: Vec<backdrop::BackdropRegions>,
+    /// One composite instance per opacity group (RFC-0011 T4), indexed by
+    /// group.
+    groups: Vec<instance_arena::Region>,
     /// Reused conversion buffers, so the per-pipeline instance builds do not
     /// allocate either.
     scratch: StagingScratch,
@@ -1815,6 +1855,7 @@ impl FrameStaging {
     fn begin(&mut self, segment_count: usize) {
         self.clear_quad = None;
         self.backdrops.clear();
+        self.groups.clear();
         // Grown, never shrunk, and each segment's own `Vec` is cleared in
         // place rather than dropped, the same reasoning as the arena's
         // grow-only policy, one layer up.
@@ -2007,6 +2048,12 @@ pub struct SegmentRanges {
     /// been rasterised so far for backdrop `b`, and composite `b` at the
     /// start of the next segment's pass.
     backdrop_after: Option<usize>,
+    /// `Some(g)`: this segment belongs to opacity group `g` (RFC-0011 T4) and
+    /// is drawn into the group's offscreen target rather than the frame.
+    group: Option<usize>,
+    /// `Some(g)`: this is the last segment of group `g`; its picture is
+    /// complete, and the next segment drawn into the frame composites it.
+    group_end: Option<usize>,
 }
 
 /// The scope charged with a dev surface's own render pass, interned once.
@@ -2235,7 +2282,136 @@ fn ranges_between(a: &LayerMark, b: &LayerMark, backdrop_after: Option<usize>) -
         native: a.native as usize..b.native as usize,
         fill: a.fill as usize..b.fill as usize,
         backdrop_after,
+        group: None,
+        group_end: None,
     }
+}
+
+/// The start and end cursors a segment covers, recovered from its ranges.
+/// `backdrop` is not a range of the segment and reads as zero; nothing that
+/// splits on these marks consults it.
+fn segment_marks(seg: &SegmentRanges) -> (LayerMark, LayerMark) {
+    let at = |start: bool| {
+        let pick = |r: &std::ops::Range<usize>| {
+            u32::try_from(if start { r.start } else { r.end }).unwrap_or(u32::MAX)
+        };
+        LayerMark {
+            solid: pick(&seg.solid),
+            decorated: pick(&seg.decorated),
+            texture: pick(&seg.texture),
+            vector: pick(&seg.vector),
+            text: pick(&seg.text),
+            canvas: pick(&seg.canvas),
+            ripple: pick(&seg.ripple),
+            backdrop: 0,
+            native: pick(&seg.native),
+            fill: pick(&seg.fill),
+        }
+    };
+    (at(true), at(false))
+}
+
+/// A total order on cursor snapshots from one frame.
+///
+/// Every pool only grows while a frame is built, so two cursors taken at
+/// different moments compare the same way in every field; the sum is a key
+/// that respects that order without choosing a pool to trust.
+fn mark_key(m: &LayerMark) -> u64 {
+    [
+        m.solid,
+        m.decorated,
+        m.texture,
+        m.vector,
+        m.text,
+        m.canvas,
+        m.ripple,
+        m.native,
+        m.fill,
+    ]
+    .iter()
+    .map(|v| u64::from(*v))
+    .sum()
+}
+
+/// Splits `segments` at every opacity group's boundaries and tags each piece
+/// with the group it belongs to (RFC-0011 T4).
+///
+/// A post-pass over the layer/backdrop segmentation rather than a third kind
+/// of barrier inside it, because a group is a *target* change and not a pass
+/// order change: the pieces are drawn in exactly the order they were before,
+/// and only where each one lands differs. A frame with no groups returns its
+/// segments unchanged, which is the frame every application without a
+/// translucent container renders.
+///
+/// When the last piece of the frame belongs to a group, an empty frame
+/// segment is appended so there is always a pass for its composite to be drawn
+/// in.
+fn split_groups(
+    segments: Vec<SegmentRanges>,
+    groups: &[crate::frame::OpacityGroup],
+) -> Vec<SegmentRanges> {
+    if groups.is_empty() {
+        return segments;
+    }
+    let mut out = Vec::with_capacity(segments.len() + groups.len() * 2);
+    for seg in segments {
+        let (lo, hi) = segment_marks(&seg);
+        let (klo, khi) = (mark_key(&lo), mark_key(&hi));
+        // Every group boundary strictly inside this segment, in frame order.
+        let mut cuts: Vec<LayerMark> = groups
+            .iter()
+            .flat_map(|g| [g.start, g.end])
+            .map(|m| mark_clamped(&m, &lo, &hi))
+            .filter(|m| {
+                let k = mark_key(m);
+                k > klo && k < khi
+            })
+            .collect();
+        cuts.sort_by_key(mark_key);
+        cuts.dedup();
+        let mut points = Vec::with_capacity(cuts.len() + 2);
+        points.push(lo);
+        points.extend(cuts);
+        points.push(hi);
+        let pieces = points.len() - 1;
+        for (i, w) in points.windows(2).enumerate() {
+            let mut piece = ranges_between(&w[0], &w[1], None);
+            // The piece's midpoint decides its group: a piece lies entirely
+            // inside or entirely outside each group once the cuts are in.
+            let (ka, kb) = (mark_key(&w[0]), mark_key(&w[1]));
+            piece.group = groups
+                .iter()
+                .position(|g| mark_key(&g.start) <= ka && kb <= mark_key(&g.end) && ka < kb);
+            if i + 1 == pieces {
+                piece.backdrop_after = seg.backdrop_after;
+            }
+            out.push(piece);
+        }
+    }
+    // Mark each group's last piece, so the draw loop knows when its picture
+    // is complete.
+    for g in 0..groups.len() {
+        if let Some(last) = out.iter().rposition(|s| s.group == Some(g)) {
+            out[last].group_end = Some(g);
+        }
+    }
+    // A completed group is composited in the next segment drawn into the
+    // frame. If the next piece is another group's, that picture would be
+    // drawn into the one offscreen target before the first was composited
+    // out of it, so an empty frame segment goes between them: the composite
+    // costs a pass boundary, and the target stays one texture however many
+    // groups a frame has.
+    let mut spaced = Vec::with_capacity(out.len() + groups.len());
+    let mut pieces = out.into_iter().peekable();
+    while let Some(seg) = pieces.next() {
+        let completes = seg.group_end.is_some();
+        let end = segment_marks(&seg).1;
+        spaced.push(seg);
+        if completes && pieces.peek().is_none_or(|next| next.group.is_some()) {
+            spaced.push(ranges_between(&end, &end, None));
+        }
+    }
+    spaced
 }
 
 /// Partitions the frame's draw stream into render-pass segments: one per
@@ -2265,6 +2441,15 @@ fn compute_segments(
         cursor = end;
     }
     segments
+}
+
+/// Everything `draw_ui_pass` needs to draw opacity groups (RFC-0011 T4).
+#[derive(Clone, Copy)]
+struct GroupDraw<'a> {
+    /// The offscreen target and the composite pipeline.
+    compositor: &'a group::GroupCompositor,
+    /// The frame's groups, indexed by `SegmentRanges::group`.
+    groups: &'a [crate::frame::OpacityGroup],
 }
 
 /// Everything `draw_ui_pass` needs to honour RFC-0023 backdrop barriers,
@@ -2308,6 +2493,7 @@ fn draw_ui_pass(
     // point rather than a per-segment predicate.
     dev_segment_start: usize,
     bd: &mut BackdropDraw<'_>,
+    groups: GroupDraw<'_>,
     gpu_timer: Option<&GpuTimer>,
     arena: &mut instance_arena::InstanceArena,
     records: &mut CanvasRecordBinding,
@@ -2427,6 +2613,12 @@ fn draw_ui_pass(
             let regions = backdrop::reserve(arena);
             staging.backdrops.push(regions);
         }
+        for g in groups.groups {
+            let region = arena.push_vertex(&[group::GroupInstance {
+                params: [g.opacity, g.depth],
+            }]);
+            staging.groups.push(region);
+        }
         arena.upload(device, queue);
         // After the upload, because that is where a growth replaces the buffer
         // the bind group points at, and before the first pass opens, because
@@ -2435,7 +2627,8 @@ fn draw_ui_pass(
     }
 
     let mut pending: Option<(usize, backdrop::PreparedBackdrop)> = None;
-    let seg_count = segments.len();
+    // Opacity groups whose picture is complete and not yet composited.
+    let mut pending_groups: Vec<usize> = Vec::new();
     for (i, seg) in segments.iter().enumerate() {
         // A dev surface's segment records its own pass, including, for the
         // HUD, the copy/blur/composite of its frosted pane, which is by far
@@ -2448,22 +2641,49 @@ fn draw_ui_pass(
                 crate::telemetry::Owner::DevTools,
             )
         });
-        let first = i == 0;
-        let last = i + 1 == seg_count;
+        // RFC-0011 T4: a group's pieces are drawn into the group's offscreen
+        // target and every other segment into the frame. "First" and "last"
+        // are therefore asked of the frame's own segments, because those are
+        // the ones that clear and discard the frame's depth, and a group's
+        // first piece is the one that clears the group's.
+        let group = seg.group;
+        let first = segments.iter().position(|s| s.group.is_none()) == Some(i);
+        let last = segments.iter().rposition(|s| s.group.is_none()) == Some(i);
+        let group_first = group.is_some_and(|g| segments[..i].iter().all(|s| s.group != Some(g)));
+        let (color_view, pass_depth_view) = match (group, groups.compositor.views()) {
+            (Some(_), Some(views)) => views,
+            _ => (persistent_view, depth_view),
+        };
+        let clears_color = if group.is_some() {
+            group_first
+        } else {
+            first && full_redraw
+        };
+        let color_load = if clears_color {
+            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
+        } else {
+            wgpu::LoadOp::Load
+        };
+        let depth_load = if (group.is_some() && group_first) || (group.is_none() && first) {
+            wgpu::LoadOp::Clear(crate::frame::DRAW_DEPTH_CLEAR)
+        } else {
+            wgpu::LoadOp::Load
+        };
+        let depth_store = if group.is_none() && last {
+            wgpu::StoreOp::Discard
+        } else {
+            wgpu::StoreOp::Store
+        };
         // Composite prepared between the previous segment and this one; held
         // in a local so it outlives this pass's recording.
         let taken = pending.take();
         let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("ByardCore - UI Render Pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: persistent_view,
+                view: color_view,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    load: if first && full_redraw {
-                        wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
-                    } else {
-                        wgpu::LoadOp::Load
-                    },
+                    load: color_load,
                     store: wgpu::StoreOp::Store,
                 },
                 // wgpu 29: new field; None = standard 2-D rendering.
@@ -2474,24 +2694,16 @@ fn draw_ui_pass(
             // backdrop pass-splits (Store + Load) so occlusion spans the
             // whole frame, and discarded after the last segment.
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                view: depth_view,
+                view: pass_depth_view,
                 depth_ops: Some(wgpu::Operations {
-                    load: if first {
-                        wgpu::LoadOp::Clear(crate::frame::DRAW_DEPTH_CLEAR)
-                    } else {
-                        wgpu::LoadOp::Load
-                    },
-                    store: if last {
-                        wgpu::StoreOp::Discard
-                    } else {
-                        wgpu::StoreOp::Store
-                    },
+                    load: depth_load,
+                    store: depth_store,
                 }),
                 stencil_ops: None,
             }),
             // The single GPU-timed scope brackets the first segment (the
             // whole frame when no backdrop splits the pass).
-            timestamp_writes: if first {
+            timestamp_writes: if i == 0 {
                 gpu_timer.and_then(|t| t.timestamp_writes(GPU_UI_PASS_SCOPE))
             } else {
                 None
@@ -2534,6 +2746,29 @@ fn draw_ui_pass(
                 clips.backdrop.get(*bidx).copied().flatten(),
                 clip_ctx,
             );
+        }
+
+        // RFC-0011 T4: every group completed since the last frame segment is
+        // composited here, at the start of a frame pass and before this
+        // segment's own primitives. Each carries the depth reserved before its
+        // first primitive, so the picture lands between what was drawn before
+        // the group and what is drawn after it, whichever pass that is.
+        if group.is_none() && !pending_groups.is_empty() {
+            let (x, y, w, h) = base_scissor;
+            if w > 0 && h > 0 {
+                render_pass.set_scissor_rect(x, y, w, h);
+                for g in pending_groups.drain(..) {
+                    if let Some(region) = staging.groups.get(g) {
+                        groups.compositor.draw_composite(
+                            &mut render_pass,
+                            arena,
+                            quad_buffer,
+                            *region,
+                        );
+                    }
+                }
+            }
+            pending_groups.clear();
         }
 
         // ── The registered pipelines, in declared order (RFC-0039) ──────
@@ -2611,6 +2846,13 @@ fn draw_ui_pass(
         // call may write, not the slice contents.
         if !seg.text.is_empty() {
             text_pipeline.render_layer(&mut render_pass, i)?;
+        }
+
+        // RFC-0011 T4: this was the group's last piece, so its picture is
+        // complete; the next frame segment composites it. (`split_groups`
+        // guarantees there is one before the target is reused.)
+        if let Some(g) = seg.group_end {
+            pending_groups.push(g);
         }
 
         // A backdrop barrier: end this pass (dropping the recorder), record
@@ -3424,7 +3666,7 @@ async fn build_m21_pipelines(
 }
 
 /// Depth-buffer format used to resolve draw order across the four UI pipelines.
-const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+pub(crate) const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
 /// Depth-stencil state for the *drawing* pipelines (solid/decorated/texture/
 /// vector/text): write each primitive's draw-order z and keep the nearest,

@@ -178,6 +178,31 @@ impl EventKind {
     pub fn is_continuous(self) -> bool {
         matches!(self, Self::PointerMove | Self::Scroll | Self::Wheel)
     }
+
+    /// Whether this event happens at a place, so `InputEvent.pos` is where
+    /// it happened and hit testing may route it.
+    ///
+    /// Keyboard, text and value-change events have no position: hosts send
+    /// them with `pos: (0.0, 0.0)`, and they go to the focused element. Routing
+    /// one by rect would hand it to whatever sits at the window's corner.
+    #[must_use]
+    pub fn is_positional(self) -> bool {
+        match self {
+            Self::PointerDown
+            | Self::PointerUp
+            | Self::Tap
+            | Self::PointerMove
+            | Self::Scroll
+            | Self::Wheel
+            | Self::PointerEnter
+            | Self::PointerExit
+            | Self::Hover
+            | Self::LongPress
+            | Self::DoubleTap
+            | Self::Secondary => true,
+            Self::Change | Self::KeyDown | Self::KeyUp | Self::TextInput => false,
+        }
+    }
 }
 
 /// A simple payload for input events.

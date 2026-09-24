@@ -399,6 +399,22 @@ fn parse_theme(table: &toml::Table, project_root: &Path) -> Result<Theme, String
             }
         }
 
+        // [theme.breakpoints], `name = <logical px>` (RFC-0016 responsive
+        // variants). Strict, like every other token table: a breakpoint that
+        // is not a number would make every `on width >= name` block silently
+        // never apply.
+        if let Some(bps) = theme_tbl.get("breakpoints").and_then(toml::Value::as_table) {
+            for (name, value) in bps {
+                let px = as_number(value).ok_or_else(|| {
+                    format!(
+                        "byard.toml: breakpoint `{name}` must be a width in logical pixels, like `md = 600`"
+                    )
+                })?;
+                #[allow(clippy::cast_possible_truncation)]
+                theme.set_breakpoint(name, px as f32);
+            }
+        }
+
         // [theme.shape], `token = <radius>`.
         if let Some(shapes) = theme_tbl.get("shape").and_then(toml::Value::as_table) {
             for (token, value) in shapes {
@@ -751,6 +767,27 @@ mod tests {
         let err = theme_of("[theme.typography]\ntitle_large = { size = 22, weight = \"ultra\" }\n")
             .unwrap_err();
         assert!(err.contains("weight") && err.contains("ultra"), "{err}");
+    }
+
+    /// `[theme.breakpoints]` declares named widths for responsive variants
+    /// (RFC-0016), canonicalised like every other token table.
+    #[test]
+    fn breakpoints_parse_and_canonicalize() {
+        let theme = theme_of("[theme.breakpoints]\nmd = 600\nextra_wide = 1440.5\n").unwrap();
+        assert_eq!(theme.breakpoint("md"), Some(600.0));
+        assert_eq!(theme.breakpoint("extraWide"), Some(1440.5));
+        assert_eq!(theme.breakpoint("lg"), None);
+    }
+
+    /// A breakpoint that is not a number is an error: read as anything else, it
+    /// would make every block that names it silently never apply.
+    #[test]
+    fn a_breakpoint_that_is_not_a_number_is_an_error() {
+        let err = theme_of("[theme.breakpoints]\nmd = \"wide\"\n").unwrap_err();
+        assert!(
+            err.contains("md") && err.contains("logical pixels"),
+            "{err}"
+        );
     }
 
     #[test]

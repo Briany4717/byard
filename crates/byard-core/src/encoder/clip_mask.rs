@@ -77,6 +77,18 @@ pub struct ClipMaskAtlas {
     sampler: wgpu::Sampler,
     /// Where each mask of the last [`prepare`](Self::prepare) landed.
     slots: Vec<MaskSlot>,
+    /// The masks the strip currently holds, and the scale they were drawn at.
+    ///
+    /// Kept so a frame whose masks are the same meshes at the same bounds can
+    /// skip the pass entirely: the strip already holds exactly that coverage.
+    /// Holding the `Arc`s is also what makes comparing them by address sound,
+    /// since a mesh cannot be freed, and its address handed to a different
+    /// outline, while this still owns it.
+    drawn: Vec<ClipMask>,
+    drawn_scale: f32,
+    /// How many times the strip has actually been rasterised. Read by the
+    /// steady-frame assertion.
+    rasterised: u64,
 }
 
 impl ClipMaskAtlas {
@@ -117,6 +129,12 @@ impl ClipMaskAtlas {
         // Written once so the placeholder samples as "fully covered" rather
         // than as whatever the driver left in it: an unused mask binding must
         // not be able to erase anything.
+        //
+        // No row pitch is declared, because a single-row copy needs none. An
+        // earlier version declared the 256 a multi-row upload would need over
+        // a one-byte slice, which the validator accepts (it checks only the
+        // bytes the copy reads) and which leaves a backend that copies by the
+        // declared pitch reading 255 bytes past the end of the data.
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &texture,
@@ -127,8 +145,8 @@ impl ClipMaskAtlas {
             &[255_u8],
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(256),
-                rows_per_image: Some(1),
+                bytes_per_row: None,
+                rows_per_image: None,
             },
             wgpu::Extent3d {
                 width: 1,
@@ -147,6 +165,9 @@ impl ClipMaskAtlas {
             layout,
             sampler,
             slots: Vec::new(),
+            drawn: Vec::new(),
+            drawn_scale: 0.0,
+            rasterised: 0,
         })
     }
 
@@ -166,6 +187,13 @@ impl ClipMaskAtlas {
     #[must_use]
     pub fn slots(&self) -> &[MaskSlot] {
         &self.slots
+    }
+
+    /// How many times the strip has been rasterised, for the steady-frame
+    /// assertion: a frame whose masks did not change must not add to it.
+    #[must_use]
+    pub const fn rasterised(&self) -> u64 {
+        self.rasterised
     }
 
     /// The strip's allocated size in physical pixels.
@@ -188,10 +216,28 @@ impl ClipMaskAtlas {
         masks: &[ClipMask],
         scale: f32,
     ) -> bool {
-        self.slots.clear();
         if masks.is_empty() {
+            self.slots.clear();
+            self.drawn.clear();
             return false;
         }
+        // A steady frame: the same meshes at the same bounds and scale. The
+        // strip already holds their coverage and the slots already say where,
+        // so there is nothing to rasterise and nothing to allocate.
+        #[allow(clippy::float_cmp)]
+        let unchanged = scale == self.drawn_scale
+            && masks.len() == self.drawn.len()
+            && masks
+                .iter()
+                .zip(&self.drawn)
+                .all(|(a, b)| std::sync::Arc::ptr_eq(&a.mesh, &b.mesh) && a.bounds == b.bounds);
+        if unchanged {
+            return false;
+        }
+        self.slots.clear();
+        self.drawn = masks.to_vec();
+        self.drawn_scale = scale;
+        self.rasterised += 1;
         let reallocated = self.layout_strip(device, masks, scale);
 
         let bind_group = self.mask_uniforms(device, queue, masks);

@@ -384,6 +384,16 @@ fn parse_theme(table: &toml::Table, project_root: &Path) -> Result<Theme, String
                 theme.transition_ms = ms.round() as u32;
             }
         }
+        // `seed = "#RRGGBB"` (RFC-0022 §5): derive both schemes' colour roles
+        // from one brand colour. Applied before `[theme.color.*]` below, so an
+        // explicitly declared token always beats the derived one.
+        if let Some(v) = theme_tbl.get("seed") {
+            let rgb = v.as_str().and_then(parse_hex_color).ok_or_else(|| {
+                "byard.toml: [theme] `seed` must be a hex colour string, like `seed = \"#6750A4\"`"
+                    .to_string()
+            })?;
+            theme.apply_seed(rgb);
+        }
         // `extends` beyond the built-in `byard-base` (multi-level, cross-package)
         // is deferred (RFC-0022 unresolved question); anything else is accepted
         // and simply layers onto `byard-base`, the only built-in base today.
@@ -802,6 +812,35 @@ mod tests {
             err.contains("transition") && err.contains("milliseconds"),
             "{err}"
         );
+    }
+
+    /// `[theme] seed` derives the palette, both schemes, and an explicit
+    /// `[theme.color.*]` token still wins over the derived one.
+    #[test]
+    fn a_seed_derives_both_schemes_and_explicit_tokens_win() {
+        let base = theme_of("[theme]\nname = \"x\"\n").unwrap();
+        let seeded = theme_of("[theme]\nseed = \"#1E8E3E\"\n").unwrap();
+        for dark in [false, true] {
+            assert_ne!(
+                seeded.color("primary", dark),
+                base.color("primary", dark),
+                "dark={dark}"
+            );
+        }
+        assert_ne!(
+            seeded.color("primary", false),
+            seeded.color("primary", true)
+        );
+        let overridden =
+            theme_of("[theme]\nseed = \"#1E8E3E\"\n[theme.color.light]\nprimary = \"#123456\"\n")
+                .unwrap();
+        assert_eq!(overridden.color("primary", false), Some(0x12_3456));
+        assert_eq!(
+            overridden.color("onPrimary", false),
+            seeded.color("onPrimary", false)
+        );
+        let err = theme_of("[theme]\nseed = 12\n").unwrap_err();
+        assert!(err.contains("seed"), "{err}");
     }
 
     /// `[theme.breakpoints]` declares named widths for responsive variants

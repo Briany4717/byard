@@ -466,6 +466,20 @@ impl Theme {
         self.fonts.insert(name.into(), font);
     }
 
+    /// Replaces both schemes' colour roles with the ones derived from `seed`
+    /// (`0xRRGGBB`, RFC-0022 §5, see [`crate::interp::seed`]). Only the roles
+    /// a derivation fills are touched, so a token the base has and the seed
+    /// does not keeps its value, and any `set_color` made *after* this wins,
+    /// which is how an explicit `[theme.color.*]` entry overrides a seed.
+    pub fn apply_seed(&mut self, seed: i64) {
+        let (light, dark) = crate::interp::seed::derive(seed);
+        for (scheme, table) in [("light", light), ("dark", dark)] {
+            for (role, rgb) in table {
+                self.set_color(scheme, role, rgb);
+            }
+        }
+    }
+
     /// Sets (or overrides) a color token in a scheme. Keys are canonicalized to
     /// `camelCase`. Creates the scheme if absent.
     pub fn set_color(&mut self, scheme: &str, token: &str, rgb: i64) {

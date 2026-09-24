@@ -8519,10 +8519,11 @@ impl Interpreter {
     /// walking the targets in reverse is the same front-to-back order the
     /// router's own hit testing uses.
     ///
-    /// A keyboard event has no position, so it is offered to no view here; a
-    /// view that wants keys gets them the way an intrinsic does, through the
-    /// focus path, and inventing a second rule for package elements is exactly
-    /// the divergence this ABI exists to avoid.
+    /// A keyboard, text or change event has no position (hosts send it at the
+    /// origin), so it is offered to no view here; a view that wants keys gets
+    /// them the way an intrinsic does, through the focus path, and inventing a
+    /// second rule for package elements is exactly the divergence this ABI
+    /// exists to avoid.
     fn dispatch_to_native_views(&mut self, events: &[byard_core::InputEvent]) -> Vec<bool> {
         use byard_core::render::{Event as ViewEvent, Handled, Layout};
 
@@ -8532,6 +8533,9 @@ impl Interpreter {
         }
         let targets = self.native_targets.clone();
         for (i, ev) in events.iter().enumerate() {
+            if !ev.kind.is_positional() {
+                continue;
+            }
             let (px, py) = ev.pos;
             for target in targets.iter().rev() {
                 let r = target.rect;

@@ -22,6 +22,17 @@
 //      it should be as smooth as any shape edge the engine draws.
 //   5. Drag the window wider. The clip tracks the layout, because it is taken
 //      from the element's laid-out box rather than from a hard-coded rect.
+//   6. The hexagon: the same four tiles cut by an arbitrary outline, written as
+//      a `path { … }` child of `Clip` in the same commands a `Canvas` path
+//      uses, measured from the Clip's own top-left. Its slanted edges are as
+//      smooth as the rounded ones above, which is the reason the mask is a
+//      coverage texture and not a stencil: a stencil is one bit, and it would
+//      make the one edge you drew the only jagged edge on screen.
+//   7. Tap the ticket. Its notch is a `path` that reads a `var`, so the
+//      outline moves and the tiles under it repaint, while the tiles
+//      themselves never changed. Before the clip was part of what decides
+//      whether a primitive is repainted, the notch would have moved and the
+//      tiles would have kept last frame's pixels.
 View Tiles() {
     Column #[gap: 0] {
         Row #[gap: 0] {
@@ -40,6 +51,8 @@ View Label(text: Str) {
 }
 
 View Main() {
+    var notch = 18
+
     Column #[bg: 0x0E1116, p: 28, gap: 22, width: 260] {
         Text("Clip masks, RFC-0037") #[color: 0xE7ECF2, size: 20]
 
@@ -55,6 +68,34 @@ View Main() {
 
         Label("Clip #[rrect: (28, 28, 0, 0)]")
         Clip #[rrect: (28, 28, 0, 0), width: 180, height: 120] {
+            Tiles()
+        }
+
+        Label("Clip with a path child")
+        Clip #[width: 180, height: 120] {
+            path {
+                move(45, 0)
+                line(135, 0)
+                line(180, 60)
+                line(135, 120)
+                line(45, 120)
+                line(0, 60)
+                close()
+            }
+            Tiles()
+        }
+
+        Label("a mask that reads a var (tap)")
+        Clip #[width: 180, height: 120, tap => notch = notch == 18 ? 40 : 18] {
+            path {
+                move(0, 0)
+                line(180, 0)
+                line(180, 60 - notch)
+                cubic(180 - notch, 60 - notch, 180 - notch, 60 + notch, 180, 60 + notch)
+                line(180, 120)
+                line(0, 120)
+                close()
+            }
             Tiles()
         }
     }

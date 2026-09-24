@@ -160,6 +160,32 @@ fn at(image: &[u8], x: u32, y: u32) -> (u8, u8, u8, u8) {
     (image[i], image[i + 1], image[i + 2], image[i + 3])
 }
 
+/// The frame's alpha as a coarse character map, attached to every failure.
+///
+/// Instrumentation rather than decoration: this path's shader work differs
+/// between backends, and the one CI machine with D3D12 is the only place some
+/// failures exist. A map of where coverage landed says which stage broke — a
+/// uniformly empty frame, a mask sampled from the wrong place, a flipped axis —
+/// in one CI round rather than three rounds of hypotheses drawn from re-reading
+/// the diff.
+fn alpha_map(image: &[u8]) -> String {
+    const STEP: u32 = 4;
+    let mut out = String::from("\nalpha map (4px cells, ' ' = 0, '#' = opaque):\n");
+    for y in (0..SIZE).step_by(STEP as usize) {
+        for x in (0..SIZE).step_by(STEP as usize) {
+            let a = at(image, x, y).3;
+            out.push(match a {
+                0 => ' ',
+                1..=63 => '.',
+                64..=191 => '+',
+                _ => '#',
+            });
+        }
+        out.push('\n');
+    }
+    out
+}
+
 fn solid() -> BoxInstance {
     BoxInstance {
         rect: AREA,
@@ -297,10 +323,56 @@ fn a_path_inside_a_rounded_clip_is_cut_by_both() {
         "the rounded parent's corner must still be cut, got {corner:?}"
     );
     let kept = at(&image, 40, 40);
-    assert!(kept.3 > 200, "the shared inside must survive, got {kept:?}");
+    assert!(
+        kept.3 > 200,
+        "the shared inside must survive, got {kept:?}{}",
+        alpha_map(&image)
+    );
     let cut = at(&image, 100, 100);
     assert!(
         cut.3 < 20,
         "the path's outside must still be cut, got {cut:?}"
     );
+}
+
+/// A mask that is exactly its own bounds keeps the whole box.
+///
+/// A test in its own right (a mask with nothing to cut must cut nothing), and
+/// also the half of a bisection: if this frame is empty on some backend while
+/// the geometry is trivially a rectangle, the fault is in how the coverage is
+/// *sampled*, not in how the path was tessellated or rasterised.
+#[test]
+fn a_mask_equal_to_its_bounds_keeps_everything() {
+    let Some((device, queue)) = try_device() else {
+        eprintln!("no GPU adapter, skipping path clip readback");
+        return;
+    };
+    let [x, y, w, h] = AREA;
+    let v = |px: f32, py: f32| FillVertex {
+        pos: [px, py],
+        uv: [(px - x) / w, (py - y) / h],
+    };
+    let full = ClipMask {
+        mesh: Arc::new(FillMesh {
+            vertices: vec![v(x, y), v(x + w, y), v(x + w, y + h), v(x, y + h)],
+            indices: vec![0, 1, 2, 0, 2, 3],
+            bounds: AREA,
+        }),
+        bounds: Rect::new(x, y, w, h),
+    };
+    let mut frame = RenderFrame::new();
+    frame.request_full_redraw();
+    frame.begin_clip_path(full);
+    frame.push_instance(solid());
+    frame.end_clip();
+    let mut enc = encoder(&device, &queue);
+    let image = render(&mut enc, &device, &queue, &frame);
+    for (px, py) in [(30, 30), (100, 30), (30, 100), (100, 100), (64, 64)] {
+        let p = at(&image, px, py);
+        assert!(
+            p.3 > 200,
+            "a mask covering its whole bounds must keep ({px}, {py}), got {p:?}{}",
+            alpha_map(&image)
+        );
+    }
 }

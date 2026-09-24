@@ -1,0 +1,68 @@
+// RFC-0011, transforms that compose down a subtree, and the two things that
+// have to follow them: where a press lands, and where a clip cuts.
+//
+// Run it (from the repo root):
+//   cd crates/byard-cli/examples/transform_stack
+//   cargo run -p byard-cli -- dev
+//
+// Paint has composed an ancestor's transform onto its children for a while:
+// rotate a card and everything in it is drawn rotated with it. Two things had
+// not been told. A button inside the rotated card was pressable where the card
+// would have put it *unrotated*, which no screenshot shows and anyone pressing
+// it finds at once. And a `Clip` inside the card clipped to an axis-aligned
+// box placed at the card's rotated corner, which kept a triangle of the
+// content and lost the rest.
+//
+// What to verify:
+//   1. Press "tilt" a few times. The card turns 30° each press, carrying its
+//      contents.
+//   2. At any angle, press the "+1" button *where you see it*. The count goes
+//      up. Press the empty space where it would be if the card were straight:
+//      nothing happens.
+//   3. The striped panel is a `Clip` holding content twice its size. At every
+//      angle it is cut along the card's own edges, a clean rotated rectangle
+//      with rounded corners, never a triangle and never a square that ignores
+//      the tilt.
+//   4. Hover the "+1" button. It grows a little (its own transform) and its
+//      target does not move under the pointer. An element's *own* transform
+//      still leaves its own target alone; only its ancestors' move it. That is
+//      what keeps a hover-scale from flickering at its edge.
+View Main() {
+    var angle = 0
+    var presses = 0
+    // The button's own hover-scale. Its own transform, so it never moves its
+    // own target (point 4 above).
+    let grows = style {
+        on hover { scale: 1.08 }
+    }
+
+    Column #[bg: 0x0E1116, p: 28, gap: 18, width: 520, height: 560] {
+        Text("Transforms that compose") #[color: 0xE7ECF2, size: 20]
+        Text("RFC-0011") #[color: 0x69737F, size: 13]
+
+        Row #[gap: 12] {
+            Button("tilt") #[bg: 0x2A3442, radius: 8, p: 10, color: 0xE7ECF2] => angle = angle + 30
+            Button("reset") #[bg: 0x1C2430, radius: 8, p: 10, color: 0x9AA3AE] => angle = 0
+            Text("presses: {presses}") #[color: 0xE7ECF2, size: 15]
+        }
+
+        Box #[m: (left: 80, top: 40), width: 300, height: 260, bg: 0x1C2430, radius: 16,
+              p: 20, gap: 14, rotate: angle * 1deg, origin: center] {
+            Box #[..grows, width: 90, height: 44, bg: 0x4A6FD0, radius: 10,
+                  justify: center, align: center, origin: center,
+                  tap => presses++] {
+                Text("+1") #[color: 0xFFFFFF, size: 18]
+            }
+
+            Clip #[rrect: 14, width: 260, height: 150] {
+                Column #[gap: 0] {
+                    Box #[bg: 0xE8543F, width: 520, height: 50] {}
+                    Box #[bg: 0xF2B705, width: 520, height: 50] {}
+                    Box #[bg: 0x2D9B8A, width: 520, height: 50] {}
+                    Box #[bg: 0x4A6FD0, width: 520, height: 50] {}
+                    Box #[bg: 0xE8543F, width: 520, height: 50] {}
+                }
+            }
+        }
+    }
+}

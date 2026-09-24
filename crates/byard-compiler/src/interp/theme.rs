@@ -281,6 +281,11 @@ pub struct Theme {
     pub active_dark: bool,
     /// Default font size in logical pixels (the theme-default layer).
     pub font_size: f32,
+    /// How long a scheme flip cross-fades the colour tokens, in milliseconds
+    /// (RFC-0016 animated token transitions). `0` is the cut, which is what
+    /// every theme did before this existed and what a theme that says nothing
+    /// still gets.
+    pub transition_ms: u32,
 }
 
 impl Theme {
@@ -331,6 +336,7 @@ impl Theme {
             breakpoints: BTreeMap::new(),
             active_dark: false,
             font_size: DEFAULT_FONT_SIZE,
+            transition_ms: 0,
         }
     }
 

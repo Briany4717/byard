@@ -1792,6 +1792,11 @@ pub struct RenderFrame {
     /// `Queue::write_texture` each, during frame application, before the draw.
     atlas_uploads: Vec<AtlasUpload>,
 
+    /// This frame's clip coverage masks (RFC-0037 `clip(path)`), indexed by
+    /// [`ClipRect::mask`]. Empty on every frame that clips only rectangles,
+    /// which is nearly all of them.
+    clip_masks: Vec<ClipMask>,
+
     /// Every font family registered so far (RFC-0034), shared with the logic
     /// thread rather than copied.
     ///
@@ -1926,6 +1931,41 @@ pub struct ClipRect {
     /// masks). All zero for a plain rectangular clip, which is the
     /// `ScrollView` case and stays a pure scissor with no shader work.
     pub radii: [f32; 4],
+    /// Index into [`RenderFrame::clip_masks`] of the coverage this clip is
+    /// additionally cut by (RFC-0037 `clip(path)`), or `None` for a clip that
+    /// is only a rounded rectangle.
+    ///
+    /// The mask *narrows* the rect rather than replacing it: the rect is still
+    /// the scissor, which is what keeps the fragment cost of an arbitrary
+    /// clip proportional to the path's own bounding box rather than to the
+    /// window.
+    pub mask: Option<u32>,
+    /// The mask's own bounds in logical pixels, which the coverage is mapped
+    /// through. Not `rect`: nesting intersects `rect` with the parent, and
+    /// sampling the mask through a shrunk rect would stretch the outline onto
+    /// the smaller box. Unused when `mask` is `None`.
+    pub mask_bounds: Rect,
+}
+
+/// A tessellated path acting as a clip mask (RFC-0037 `clip(path)`).
+///
+/// The mask is rasterised to a **coverage texture** rather than to a stencil,
+/// and the reason is not performance: a stencil is one bit, and the rounded
+/// clip that shipped alongside this cuts its edge with an analytic SDF, so it
+/// is smooth. A stencil-based path clip beside it would put a hard, aliased
+/// edge on the one boundary the user actually drew while every boundary the
+/// engine generated stayed soft, which is a worse outcome than not shipping
+/// it at all.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ClipMask {
+    /// The triangles, in logical pixels, from the same tessellator and the
+    /// same mesh cache a filled path uses. A mask whose commands have not
+    /// changed re-tessellates nothing.
+    pub mesh: std::sync::Arc<FillMesh>,
+    /// The mask's bounding box in logical pixels: the region of the coverage
+    /// texture it is rasterised into, and the rectangle the shader maps a
+    /// fragment through to sample it.
+    pub bounds: Rect,
 }
 
 /// Axis-aligned intersection of two logical-pixel rects (empty if disjoint).
@@ -2037,6 +2077,7 @@ impl RenderFrame {
         self.backdrops.clear();
         self.backdrop_marks.clear();
         self.atlas_uploads.clear();
+        self.clip_masks.clear();
         self.solid_depths.clear();
         self.decorated_depths.clear();
         self.texture_depths.clear();
@@ -2114,7 +2155,24 @@ impl RenderFrame {
     /// fragment the parent's corner would have cut, never cut one it kept, and
     /// the parent's own scissor still bounds it.
     pub fn begin_clip_rounded(&mut self, rect: Rect, radii: [f32; 4]) -> u16 {
-        let (clipped, radii) = match self.clip_stack.last() {
+        self.begin_clip_masked(rect, radii, None)
+    }
+
+    /// Opens a clip cut by an arbitrary **path** (RFC-0037 `clip(path)`).
+    ///
+    /// The mask's own bounding box is the clip's rectangle, so the scissor
+    /// still bounds the work to the path rather than to the window, and the
+    /// coverage narrows it from there.
+    pub fn begin_clip_path(&mut self, mask: ClipMask) -> u16 {
+        let bounds = mask.bounds;
+        let index = u32::try_from(self.clip_masks.len()).unwrap_or(u32::MAX);
+        self.clip_masks.push(mask);
+        self.begin_clip_masked(bounds, [0.0; 4], Some((index, bounds)))
+    }
+
+    /// The shared body of the three `begin_clip*` forms.
+    fn begin_clip_masked(&mut self, rect: Rect, radii: [f32; 4], mask: Option<(u32, Rect)>) -> u16 {
+        let (clipped, radii, mask) = match self.clip_stack.last() {
             Some(&parent) => {
                 let p = self.clips[parent as usize];
                 let r = intersect_rect(p.rect, rect);
@@ -2125,14 +2183,23 @@ impl RenderFrame {
                 // not compare exactly.
                 let rounds_nothing = radii.iter().all(|r| *r <= 0.0);
                 let radii = if rounds_nothing { p.radii } else { radii };
-                (r, radii)
+                // One mask per entry, and the inner one wins, on exactly the
+                // reasoning the corners follow: it is the tighter statement,
+                // and the parent still contributes its box through the
+                // intersection above. A path inside a path is therefore
+                // bounded correctly and cut by the inner outline, which is
+                // conservative in the safe direction rather than exact.
+                let inherited = p.mask.map(|m| (m, p.mask_bounds));
+                (r, radii, mask.or(inherited))
             }
-            None => (rect, radii),
+            None => (rect, radii, mask),
         };
         let id = u16::try_from(self.clips.len()).unwrap_or(u16::MAX);
         self.clips.push(ClipRect {
             rect: clipped,
             radii,
+            mask: mask.map(|(m, _)| m),
+            mask_bounds: mask.map_or(Rect::new(0.0, 0.0, 0.0, 0.0), |(_, b)| b),
         });
         self.clip_stack.push(id);
         id
@@ -2611,6 +2678,12 @@ impl RenderFrame {
         &self.atlas_uploads
     }
 
+    /// Returns this frame's clip coverage masks (RFC-0037 `clip(path)`).
+    #[must_use]
+    pub fn clip_masks(&self) -> &[ClipMask] {
+        &self.clip_masks
+    }
+
     /// Returns the registered font families (RFC-0034). The render thread
     /// loads any face its `FontSystem` has not seen before it shapes.
     #[must_use]
@@ -2979,13 +3052,31 @@ impl PaintDigest {
     /// reason.
     pub fn apply(&mut self, frame: &mut RenderFrame) {
         let primed = self.primed;
+        // INV-26: a primitive's pixels are decided by the clip it is drawn
+        // under as much as by its own bytes. A box whose clip's corner radius
+        // animates, or whose path mask moved, is byte-for-byte the box it was
+        // last frame and must still be repainted. Each clip entry is hashed
+        // once, here, and folded into every primitive drawn under it.
+        let clip_hashes: Vec<u64> = frame
+            .clips
+            .iter()
+            .map(|c| paint_hash::clip(c, &frame.clip_masks))
+            .collect();
+        let under = |clips: &[Option<u16>], i: usize| -> u64 {
+            clips
+                .get(i)
+                .copied()
+                .flatten()
+                .and_then(|c| clip_hashes.get(c as usize).copied())
+                .unwrap_or(0)
+        };
 
         // Solids keep their dirty bit out of band, so they get their own loop
         // rather than a `set` closure over the same slice.
         self.solid
             .resize(frame.instances.len().max(self.solid.len()), 0);
         for (i, instance) in frame.instances.iter().enumerate() {
-            let h = paint_hash::box_instance(instance);
+            let h = paint_hash::box_instance(instance) ^ under(&frame.solid_clips, i);
             frame.instances_dirty[i] = !primed || self.solid[i] != h;
             self.solid[i] = h;
         }
@@ -2998,7 +3089,8 @@ impl PaintDigest {
         // rule INV-26 states for a shape group's members.
         self.text.resize(frame.texts.len().max(self.text.len()), 0);
         for (i, line) in frame.texts.iter_mut().enumerate() {
-            let h = paint_hash::text_line(line, frame.text_wrap.get(i).copied().flatten());
+            let h = paint_hash::text_line(line, frame.text_wrap.get(i).copied().flatten())
+                ^ under(&frame.text_clips, i);
             line.dirty = !primed || self.text[i] != h;
             self.text[i] = h;
         }
@@ -3006,6 +3098,7 @@ impl PaintDigest {
         Self::diff(
             &mut self.decorated,
             &mut frame.decorated,
+            &|i| under(&frame.decorated_clips, i),
             primed,
             paint_hash::decorated,
             |d, dirty| d.dirty = dirty,
@@ -3013,6 +3106,7 @@ impl PaintDigest {
         Self::diff(
             &mut self.textures,
             &mut frame.textures,
+            &|i| under(&frame.texture_clips, i),
             primed,
             paint_hash::texture,
             // The encoder sets this bit itself the frame after an async decode
@@ -3023,6 +3117,7 @@ impl PaintDigest {
         Self::diff(
             &mut self.canvas,
             &mut frame.canvas_shapes,
+            &|i| under(&frame.canvas_clips, i),
             primed,
             paint_hash::canvas,
             |s, dirty| s.dirty = dirty,
@@ -3036,13 +3131,14 @@ impl PaintDigest {
     fn diff<T>(
         previous: &mut Vec<u64>,
         items: &mut [T],
+        clip_of: &dyn Fn(usize) -> u64,
         primed: bool,
         hash: impl Fn(&T) -> u64,
         set: impl Fn(&mut T, bool),
     ) {
         previous.resize(items.len().max(previous.len()), 0);
         for (i, item) in items.iter_mut().enumerate() {
-            let h = hash(item);
+            let h = hash(item) ^ clip_of(i);
             let dirty = !primed || previous[i] != h;
             previous[i] = h;
             set(item, dirty);
@@ -3184,6 +3280,31 @@ mod paint_hash {
         f32s(&mut h, &t.radii);
         f32s(&mut h, &[t.smooth, t.opacity]);
         h.finish()
+    }
+
+    /// One clip entry: its rectangle, its corners, and its path mask's
+    /// outline. The mask is hashed by its vertex positions rather than by the
+    /// `Arc` holding them, because an allocator is free to hand a new mesh the
+    /// address the old one had, and "same address" would then read as "same
+    /// outline" for a mask that moved.
+    pub(super) fn clip(c: &super::ClipRect, masks: &[super::ClipMask]) -> u64 {
+        let mut h = hasher();
+        f32s(&mut h, &[c.rect.x, c.rect.y, c.rect.width, c.rect.height]);
+        f32s(&mut h, &c.radii);
+        match c.mask.and_then(|m| masks.get(m as usize)) {
+            Some(m) => {
+                1u8.hash(&mut h);
+                f32s(&mut h, &m.mesh.bounds);
+                for v in &m.mesh.vertices {
+                    f32s(&mut h, &v.pos);
+                }
+                m.mesh.indices.hash(&mut h);
+            }
+            None => 0u8.hash(&mut h),
+        }
+        // Never zero, so "under a clip" and "under no clip" cannot fold to the
+        // same value by accident.
+        h.finish() | 1
     }
 
     pub(super) fn canvas(s: &CanvasShape) -> u64 {
@@ -4543,6 +4664,37 @@ mod paint_digest_tests {
         // are not passing because everything is dirty.
         let f = digest_frame(&mut d, &[], std::slice::from_ref(&other_face));
         assert!(!f.texts()[0].dirty, "an unchanged line must stay clean");
+    }
+
+    /// A primitive whose *clip* changed is a primitive whose pixels changed
+    /// (INV-26).
+    ///
+    /// The box's own bytes are identical across all three frames; only the
+    /// clip it is drawn under moves. Before the clip was folded into the hash,
+    /// a card whose corner radius animated kept its first frame's corners for
+    /// the rest of the animation, because the box inside it was judged clean.
+    #[test]
+    fn a_primitive_under_a_changed_clip_is_repainted() {
+        let clipped = |radius: f32| {
+            let mut f = RenderFrame::new();
+            f.begin_clip_rounded(Rect::new(0.0, 0.0, 40.0, 40.0), [radius; 4]);
+            f.push_instance(boxed(0.0, RED));
+            f.end_clip();
+            f
+        };
+        let mut d = PaintDigest::new();
+        let mut f = clipped(4.0);
+        d.apply(&mut f);
+        let mut f = clipped(4.0);
+        d.apply(&mut f);
+        assert_eq!(f.instances_dirty(), [false], "an unchanged clip is clean");
+        let mut f = clipped(12.0);
+        d.apply(&mut f);
+        assert_eq!(
+            f.instances_dirty(),
+            [true],
+            "the same box under a different clip must be repainted"
+        );
     }
 
     #[test]

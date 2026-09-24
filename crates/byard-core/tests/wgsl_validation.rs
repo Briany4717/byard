@@ -58,6 +58,10 @@ fn shaders() -> Vec<(&'static str, String)> {
             ),
         ),
         (
+            "clip_mask",
+            include_str!("../src/encoder/clip_mask.wgsl").to_string(),
+        ),
+        (
             "ripple",
             format!("{CLIP}\n{}", include_str!("../src/encoder/ripple.wgsl")),
         ),

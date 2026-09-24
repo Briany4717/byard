@@ -466,6 +466,15 @@ pub enum RenderNode {
         /// the element and the rect it wants are only in the same hand during
         /// the layout build; `None` is the whole cost of not using the feature.
         measure: Option<u32>,
+        /// The `path { … }` child of a `Clip`, lifted out of the children and
+        /// used as the clip's mask (RFC-0037 `clip(path)`). `None` for every
+        /// other box, and for a `Clip` that only rounds its corners.
+        ///
+        /// Kept as the unevaluated element rather than as a mesh because its
+        /// commands are ordinary expressions: a mask whose outline follows a
+        /// `var` has to be re-evaluated on the frame the `var` moves, exactly as
+        /// a filled path in a `Canvas` is.
+        clip_path: Option<std::rc::Rc<ElementNode>>,
     },
     /// A text run.
     Text {
@@ -3238,6 +3247,7 @@ impl Interpreter {
                         bound_sig: None,
                         env_snapshot: self.capture_env_snapshot(),
                         measure,
+                        clip_path: None,
                     }
                 } else {
                     RenderNode::Text {
@@ -3322,6 +3332,7 @@ impl Interpreter {
                     bound_sig,
                     env_snapshot: self.capture_env_snapshot(),
                     measure,
+                    clip_path: None,
                 }
             }
             // RFC-0018 `RadioButton`: like the value widgets, but its `value:` is a
@@ -3340,6 +3351,7 @@ impl Interpreter {
                     bound_sig,
                     env_snapshot: self.capture_env_snapshot(),
                     measure,
+                    clip_path: None,
                 }
             }
             // RFC-0039: a package's native view. Reached here because the
@@ -3367,6 +3379,13 @@ impl Interpreter {
                 // `bound_sig` (unused by a ScrollView) so `render` can drive it.
                 let collapse = el.name.as_str() == "ScrollView"
                     && Self::enum_prop(&attrs, "collapse_header") == Some("true");
+                // RFC-0037 `clip(path)`: a `Clip`'s `path { … }` child is its
+                // mask, not content. Lifted out here so it never reaches the
+                // child list, which is what keeps `path` a hard error
+                // everywhere else: the slot is claimed by exactly one parent,
+                // not by a rule relaxed for everyone.
+                let (clip_path, el_children) = self.lift_clip_path(el, el_children);
+                let el_children: &[Member] = &el_children;
                 let (children, bound_sig) = if collapse && !el_children.is_empty() {
                     let frac = self.ctx.create_signal(Value::Float(0.0));
                     let snap = self.env.len();
@@ -3389,9 +3408,96 @@ impl Interpreter {
                     bound_sig,
                     env_snapshot: self.capture_env_snapshot(),
                     measure,
+                    clip_path,
                 }
             }
         }
+    }
+
+    /// Evaluates a `Clip`'s mask and opens it as a path clip (RFC-0037
+    /// `clip(path)`), returning whether a clip was opened.
+    ///
+    /// The commands are measured from the `Clip`'s own top-left, the way a
+    /// `Canvas`'s are from its own, so a mask is written in the same
+    /// coordinates as the content it cuts. Tessellated through the same
+    /// cache a filled path uses and keyed the same way, so a mask whose
+    /// commands have not changed costs a lookup and not a tessellation.
+    ///
+    /// A mask that tessellates to nothing opens nothing, and that is not a
+    /// silent failure dressed up: an outline with no area encloses no content,
+    /// and the honest rendering of that is the clip's rectangle alone, which
+    /// is what the enclosing entry already is.
+    fn begin_clip_path_mask(
+        &mut self,
+        mask: &ElementNode,
+        rect: byard_core::frame::Rect,
+        frame: &mut byard_core::frame::RenderFrame,
+    ) -> bool {
+        let origin = crate::interp::intrinsics::Rect::new(rect.x, rect.y, rect.width, rect.height);
+        let commands = self.eval_path_commands(&mask.children, origin);
+        if commands.len() < 2 {
+            return false;
+        }
+        let even_odd = Self::shape_token(mask, "winding").as_deref() == Some("even_odd");
+        let extent = rect.width.max(rect.height).max(1.0);
+        let tolerance = (extent / 800.0).clamp(0.05, 0.5);
+        let key = path_fingerprint(&commands, tolerance, even_odd);
+        let mesh = if let Some(cached) = self.path_meshes.get_mut(&key) {
+            cached.last_used = self.frame_seq;
+            std::sync::Arc::clone(&cached.mesh)
+        } else {
+            let mesh = std::sync::Arc::new(tessellate_path(&commands, tolerance, even_odd));
+            self.tessellations += 1;
+            self.path_meshes.insert(
+                key,
+                CachedMesh {
+                    mesh: std::sync::Arc::clone(&mesh),
+                    last_used: self.frame_seq,
+                },
+            );
+            mesh
+        };
+        if mesh.indices.is_empty() {
+            return false;
+        }
+        let [bx, by, bw, bh] = mesh.bounds;
+        frame.begin_clip_path(byard_core::frame::ClipMask {
+            mesh,
+            bounds: byard_core::frame::Rect::new(bx, by, bw, bh),
+        });
+        true
+    }
+
+    /// Splits a `Clip`'s `path { … }` child off its content (RFC-0037
+    /// `clip(path)`), returning the mask and the members that remain.
+    ///
+    /// Only a `Clip` has the slot, and only one: a second `path` is left in the
+    /// children, where the ordinary validator reports it as a shape outside a
+    /// `Canvas` with its existing message. Widening that rule to let a mask in
+    /// would have let the next thing in by the same door. The mask's own body
+    /// is checked here with the same validator a canvas path gets, so a
+    /// misspelt command in a mask reads exactly as it would anywhere else.
+    fn lift_clip_path(
+        &mut self,
+        el: &ElementNode,
+        members: &[Member],
+    ) -> (Option<std::rc::Rc<ElementNode>>, Vec<Member>) {
+        if el.name.as_str() != "Clip" {
+            return (None, members.to_vec());
+        }
+        let mut mask = None;
+        let mut rest = Vec::with_capacity(members.len());
+        for m in members {
+            match m {
+                Member::Element(child) if child.name.as_str() == "path" && mask.is_none() => {
+                    self.errors
+                        .extend(crate::interp::intrinsics::validate_path_body(child));
+                    mask = Some(std::rc::Rc::new(child.clone()));
+                }
+                _ => rest.push(m.clone()),
+            }
+        }
+        (mask, rest)
     }
 
     /// Captures the instance environment for a box being lowered (RFC-0019 §2),
@@ -7185,6 +7291,7 @@ impl Interpreter {
                 env_snapshot,
                 anchor_name,
                 measure: _,
+                clip_path,
             } => {
                 // RFC-0019 §2: restore the instance environment captured at lower
                 // time so event actions re-lowered below (a forwarded callback,
@@ -7572,7 +7679,15 @@ impl Interpreter {
                         *r *= inherited_transform.scale[0];
                     }
                     frame.begin_clip_rounded(rect, radii);
-                    Some(())
+                    // RFC-0037 `clip(path)`: the mask opens *inside* the
+                    // rounded clip rather than replacing it, so the two
+                    // coverages multiply and `rrect` still means what it says
+                    // on a clip that also has a path. Two entries, closed in
+                    // reverse below.
+                    let pathed = clip_path
+                        .as_ref()
+                        .is_some_and(|p| self.begin_clip_path_mask(p, rect, frame));
+                    Some(pathed)
                 } else {
                     None
                 };
@@ -7848,7 +7963,10 @@ impl Interpreter {
                 if scroll_clip.is_some() {
                     frame.end_clip();
                 }
-                if mask_clip.is_some() {
+                if let Some(pathed) = mask_clip {
+                    if pathed {
+                        frame.end_clip();
+                    }
                     frame.end_clip();
                 }
                 // Close the RFC-0019 instance-env scope opened at the top of this

@@ -33,8 +33,9 @@ const SIZE: u32 = 128;
 const AREA: [f32; 4] = [16.0, 16.0, 96.0, 96.0];
 const RADIUS: f32 = 32.0;
 const FILL: [f32; 4] = [0.0, 0.55, 0.9, 1.0];
-/// Big enough to hold the shipped example, which is 260 logical px wide.
-const EXAMPLE: u32 = 560;
+/// Big enough to hold the shipped example: 260 logical px wide, and tall
+/// enough for all five cards, the two path-masked ones included.
+const EXAMPLE: u32 = 1000;
 
 fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>)> {
     let instance =

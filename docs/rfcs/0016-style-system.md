@@ -1,6 +1,22 @@
 # RFC-0016: Style System, styles as first-class values (Hybrid D+B+C)
 
-- **Status:** Active, partially implemented (M38 first-class `Style` values + `..` spread, M39 recipes/variants + `merge`, M40 `on <state> {}` blocks landed). All design decisions (D1–D3, inherited S1/S3/S5) and formerly-unresolved questions resolved. Remaining: responsive/adaptive variants, runtime theme switching with animated token transitions.
+- **Status:** Active, partially implemented (M38 first-class `Style` values + `..` spread, M39 recipes/variants + `merge`, M40 `on <state> {}` blocks landed). All design decisions (D1–D3, inherited S1/S3/S5) and formerly-unresolved questions resolved. **Responsive variants landed 2026-09-24.** Remaining: runtime theme switching with animated token transitions.
+
+  **Responsive variants, as built.** A style carries `on width >= md { … }` (and `on width < md`, and the `height` forms) beside its `on hover { … }`, where `md` is a breakpoint the project declares:
+
+  ```toml
+  [theme.breakpoints]
+  md = 640
+  lg = 1024
+  ```
+
+  Three decisions, each worth the reasoning:
+
+  - **Breakpoints are the design system's, not the language's.** A fixed `sm`/`md`/`lg` baked into the grammar is three numbers every project that disagrees has to work around, which is how a feature stops being used. A literal width (`on width >= 700`) works too. An undeclared name is a compile error with the nearest declared one, reported once per written block however many rows lower it; resolved at render it never holds, rather than holding always.
+  - **Two operators, `>=` and `<`.** They partition the axis with no gap and no overlap at the breakpoint itself; a test checks exactly one of a pair applies at 599.9, 600 and 600.1.
+  - **They reach layout, which interaction blocks never did.** Every `on …` block was applied only when painting, so a `p:` inside one never reached layout. That is right for `on hover` (a hover must not move its own box) and wrong for a breakpoint, whose whole purpose is often a padding, a width, a direction or a grid's `columns`. The layout pass now resolves blocks with no interaction state, so exactly the viewport blocks apply there; paint resolves both. A responsive block counts as one unit of specificity, the same as a single state, so declaration order settles a tie between them as it settles one between two states.
+
+  Crossing a breakpoint is a resize, which already rebuilds layout in full (RFC-0032 §Q6), so a variant costs nothing on any frame that did not change the window.
 - **Author(s):** Brian (byard_v2)
 - **Created:** 2026-07-01
 - **Last updated:** 2026-07-01
@@ -296,7 +312,7 @@ central theming, which Byard's token layer fixes), Jetpack Compose Material3 the
 
 ## Future possibilities
 
-- Responsive/adaptive variants (axis keyed on viewport/platform).
+- ~~Responsive/adaptive variants (axis keyed on viewport/platform).~~ Implemented for the viewport axis; see the status line. A *platform* axis (`on platform == ios`) is not built: the engine has one desktop host today and a condition nothing can make true is a surface to maintain for no one.
 - Theme switching at runtime via `inject`ed theme (dark/light) with animated token
   transitions (RFC-0010).
 - `checked`/`selected`/`invalid` value-widget states (RFC-0012 Phase 2).

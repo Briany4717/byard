@@ -170,7 +170,9 @@ fn per_instance_opacity_shows_the_overlap() {
     };
     let mut enc = encoder(&device, &queue);
     let img = render(&mut enc, &device, &queue, &two_boxes(false));
-    let overlap = at(&img, 64, 64);
+    // Off every box's top-left-to-centre diagonal, which D3D12 drops (#234):
+    // (64, 64) sits on the blue box's, (24, 24) on the red one's.
+    let overlap = at(&img, 70, 56);
     let blue_only = at(&img, 100, 100);
     assert!(
         !close(overlap, blue_only),
@@ -191,9 +193,10 @@ fn a_group_fades_as_one_picture_and_hides_the_overlap() {
     };
     let mut enc = encoder(&device, &queue);
     let img = render(&mut enc, &device, &queue, &two_boxes(true));
-    let overlap = at(&img, 64, 64);
+    // Off the box diagonals (#234), as above.
+    let overlap = at(&img, 70, 56);
     let blue_only = at(&img, 100, 100);
-    let red_only = at(&img, 24, 24);
+    let red_only = at(&img, 24, 40);
     assert!(
         blue_only[3] > 20 && red_only[3] > 20,
         "the group must draw something at all: blue {blue_only:?} red {red_only:?}"
@@ -236,7 +239,8 @@ fn a_group_composites_in_draw_order() {
 
     let mut enc = encoder(&device, &queue);
     let img = render(&mut enc, &device, &queue, &frame);
-    let centre = at(&img, 64, 64);
+    // Below the red box's centre and off every diagonal (#234).
+    let centre = at(&img, 64, 84);
     assert!(
         centre[0] > 240 && centre[1] > 240 && centre[2] > 240,
         "the box drawn after the group must cover it, got {centre:?}"

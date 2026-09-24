@@ -15,6 +15,7 @@
 use super::env::{SignalId, Value};
 use super::intrinsics::Rect;
 use super::reactive::ReactiveCtx;
+use byard_core::frame::Transform;
 
 /// The event kinds the Phase-2 router models.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -145,6 +146,9 @@ pub type Action = Box<dyn FnMut(&mut ReactiveCtx, Option<&Value>)>;
 struct Handler {
     elem: u32,
     rect: Rect,
+    /// The ancestors' paint transform this region is drawn under, if any
+    /// (RFC-0011). See [`EventRouter::set_hit_frame`].
+    frame: Option<Transform>,
     kind: EventKind,
     action: Action,
 }
@@ -152,6 +156,7 @@ struct Handler {
 struct Focusable {
     elem: u32,
     rect: Rect,
+    frame: Option<Transform>,
     /// The `var` bound via `#[focused: …]`.
     focused_sig: SignalId,
 }
@@ -257,7 +262,11 @@ pub struct EventRouter {
     /// hover/press hit-testing so [`style_state`](Self::style_state) reports the
     /// pointer state a purely-declarative interactive style depends on. Rebuilt
     /// every render like the handler set.
-    hover_regions: Vec<(u32, Rect)>,
+    hover_regions: Vec<(u32, Rect, Option<Transform>)>,
+    /// The paint transform of the ancestors of whatever is being registered
+    /// right now (RFC-0011 hierarchical transforms). Set by the render walk
+    /// per node; every region registered while it is set remembers it.
+    current_frame: Option<Transform>,
     /// RFC-0017 modality floor: a modal `Overlay` registers a full-viewport
     /// scrim and raises this to the scrim's handler index, so every handler
     /// registered *before* it (the main tree, and any lower overlay) is
@@ -308,6 +317,7 @@ impl EventRouter {
         self.focusables.clear();
         self.disabled.clear();
         self.hover_regions.clear();
+        self.current_frame = None;
         self.modal_floor = 0;
         self.focusable_floor = 0;
         self.modal_scrims.clear();
@@ -332,6 +342,9 @@ impl EventRouter {
         self.handlers.push(Handler {
             elem,
             rect,
+            // A scrim covers the viewport in screen space whatever it was
+            // opened from, so it is never under an ancestor's transform.
+            frame: None,
             kind: EventKind::Tap,
             action: dismiss.unwrap_or_else(|| Box::new(|_, _| {})),
         });
@@ -384,11 +397,57 @@ impl EventRouter {
         fired
     }
 
+    /// Sets the ancestors' paint transform for the regions registered next,
+    /// and returns the one it replaces so the caller can restore it
+    /// (RFC-0011 hierarchical transforms).
+    ///
+    /// **The ancestors', never the element's own.** A hover-scale on a button
+    /// must not move that button's own hit target, or the pointer at its edge
+    /// flickers in and out of hover as the button grows and shrinks under it;
+    /// that rule stands exactly as it was. What changes is that a button inside
+    /// a *rotated card* is pressable where it is drawn, rather than where the
+    /// card would have put it unrotated.
+    ///
+    /// An identity *mapping* is stored as `None`, so an untransformed tree
+    /// registers and tests exactly as it did before this existed. The mapping
+    /// and not the struct: composing two identities re-anchors the pivot, so a
+    /// transform that moves nothing routinely arrives with a non-zero `origin`
+    /// and fails the bit-exact `is_identity`. With no translation, unit scale
+    /// and no rotation the pivot decides nothing, and that is the test. (The
+    /// fast-path assertion caught this on its first run: every region of an
+    /// untransformed tree was being carried as a frame.)
+    // Exact comparison on purpose: the question is "does this move anything
+    // at all", and a transform that moves a point by a rounding error is still
+    // exactly answerable by the frame path, which inverts it. Treating a
+    // near-identity as identity would be the only way this could be wrong.
+    #[allow(clippy::float_cmp)]
+    pub fn set_hit_frame(&mut self, frame: Transform) -> Option<Transform> {
+        let moves =
+            frame.translate != [0.0, 0.0] || frame.scale != [1.0, 1.0] || frame.rotate != 0.0;
+        let next = if moves { Some(frame) } else { None };
+        std::mem::replace(&mut self.current_frame, next)
+    }
+
+    /// Restores a hit frame returned by [`set_hit_frame`](Self::set_hit_frame).
+    pub fn restore_hit_frame(&mut self, frame: Option<Transform>) {
+        self.current_frame = frame;
+    }
+
+    /// How many regions registered this render are under a non-identity
+    /// ancestor transform. The fast-path assertion reads this: a tree with no
+    /// transforms must register none.
+    #[must_use]
+    pub fn framed_region_count(&self) -> usize {
+        self.handlers.iter().filter(|h| h.frame.is_some()).count()
+            + self.focusables.iter().filter(|f| f.frame.is_some()).count()
+            + self.hover_regions.iter().filter(|r| r.2.is_some()).count()
+    }
+
     /// Registers `elem`'s `rect` as a hover/press hit region (RFC-0016) so an
     /// element styled with `on hover`/`on pressed` but no event handler still
     /// reports those interaction states. Rebuilt every render.
     pub fn track_region(&mut self, elem: u32, rect: Rect) {
-        self.hover_regions.push((elem, rect));
+        self.hover_regions.push((elem, rect, self.current_frame));
     }
 
     /// Marks `elem` disabled for this tick (RFC-0012 S5): it reports the
@@ -428,6 +487,7 @@ impl EventRouter {
         self.handlers.push(Handler {
             elem,
             rect,
+            frame: self.current_frame,
             kind,
             action,
         });
@@ -441,7 +501,7 @@ impl EventRouter {
     #[must_use]
     pub fn claims_pointer(&self, pos: (f32, f32)) -> bool {
         self.handlers.iter().any(|h| {
-            contains(h.rect, pos)
+            hits(h.rect, h.frame, pos)
                 && matches!(
                     h.kind,
                     EventKind::Tap
@@ -457,6 +517,7 @@ impl EventRouter {
         self.focusables.push(Focusable {
             elem,
             rect,
+            frame: self.current_frame,
             focused_sig,
         });
     }
@@ -798,7 +859,7 @@ impl EventRouter {
             .rev()
             // RFC-0017: a mounted modal overlay raises `modal_floor`, hiding every
             // handler beneath its scrim so input can't reach the main tree.
-            .find(|(i, h)| *i >= self.modal_floor && h.kind == kind && contains(h.rect, pos))
+            .find(|(i, h)| *i >= self.modal_floor && h.kind == kind && hits(h.rect, h.frame, pos))
             .map(|(i, _)| i)
     }
 
@@ -813,7 +874,7 @@ impl EventRouter {
             .iter()
             .enumerate()
             .rev()
-            .find(|(i, h)| *i >= self.modal_floor && contains(h.rect, pos))
+            .find(|(i, h)| *i >= self.modal_floor && hits(h.rect, h.frame, pos))
             .map(|(_, h)| h.elem)
             // Fall back to declarative hover/press regions (RFC-0016) for
             // elements that style interaction states but register no handler.
@@ -826,8 +887,8 @@ impl EventRouter {
                 self.hover_regions
                     .iter()
                     .rev()
-                    .find(|(_, rect)| contains(*rect, pos))
-                    .map(|(elem, _)| *elem)
+                    .find(|(_, rect, frame)| hits(*rect, *frame, pos))
+                    .map(|(elem, _, _)| *elem)
             })
     }
 
@@ -842,7 +903,7 @@ impl EventRouter {
             .rev()
             // RFC-0017 focus trap: a modal overlay confines focus to its own
             // scope; a press below the focus floor cannot steal focus.
-            .find(|(i, f)| *i >= self.focusable_floor && contains(f.rect, pos))
+            .find(|(i, f)| *i >= self.focusable_floor && hits(f.rect, f.frame, pos))
             .map(|(_, f)| f.elem)
     }
 
@@ -965,6 +1026,40 @@ pub fn write_back_action(sig: SignalId) -> Action {
 
 fn contains(r: Rect, p: (f32, f32)) -> bool {
     p.0 >= r.x && p.0 <= r.x + r.w && p.1 >= r.y && p.1 <= r.y + r.h
+}
+
+/// Whether `p` lands in `r` as it is drawn under `frame` (RFC-0011).
+///
+/// The pointer is mapped *back* through the ancestors' transform rather than
+/// the rect being mapped forward, because a rotated rectangle is not a
+/// rectangle and the inverse of a point is exact. `None` is the untransformed
+/// case and takes exactly the test it always did, which is nearly every region
+/// in every frame.
+fn hits(r: Rect, frame: Option<Transform>, p: (f32, f32)) -> bool {
+    match frame {
+        None => contains(r, p),
+        Some(t) => {
+            let q = invert_point(&t, [p.0, p.1]);
+            contains(r, (q[0], q[1]))
+        }
+    }
+}
+
+/// The inverse of [`Transform::apply_point`]: undo the translation, rotate
+/// back about the pivot, and divide the scale out.
+///
+/// A zero scale collapses the element to a line, which nothing can be pressed
+/// on; it maps to a point no rect contains rather than dividing by zero.
+fn invert_point(t: &Transform, p: [f32; 2]) -> [f32; 2] {
+    if t.scale[0] == 0.0 || t.scale[1] == 0.0 {
+        return [f32::NAN, f32::NAN];
+    }
+    let x = p[0] - t.translate[0] - t.origin[0];
+    let y = p[1] - t.translate[1] - t.origin[1];
+    let (sin, cos) = (-t.rotate).sin_cos();
+    let rx = x * cos - y * sin;
+    let ry = x * sin + y * cos;
+    [t.origin[0] + rx / t.scale[0], t.origin[1] + ry / t.scale[1]]
 }
 
 #[cfg(test)]

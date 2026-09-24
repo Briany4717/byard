@@ -7445,6 +7445,9 @@ impl Interpreter {
                 // when it has a resolved rect (set below), else whatever it
                 // inherited unchanged.
                 let mut child_opacity = inherited_opacity;
+                // Whether this box opened an opacity group (RFC-0011 T4), so the
+                // group is closed on the way out of exactly the box that opened it.
+                let mut grouped = false;
                 // Likewise the composed paint transform children inherit (RFC-0011
                 // group transforms): this box's own transform ∘ its ancestors',
                 // set once the rect is known, else passed through unchanged.
@@ -7552,6 +7555,19 @@ impl Interpreter {
                         * self
                             .eval_float_prop(paint_attrs, "opacity")
                             .map_or(1.0, |v| v as f32);
+                    // RFC-0011 T4: a translucent box with children is faded as
+                    // one picture rather than by multiplying its alpha into
+                    // every primitive it contains. The difference is overlap:
+                    // its text over its own background, two children crossing,
+                    // each darkening the other where they meet. Inside the
+                    // group everything draws opaque and the composite applies
+                    // the alpha once. A leaf has nothing to overlap, and a box
+                    // inside an open group falls back to per-instance, so both
+                    // keep the path they always had.
+                    grouped = (opacity - 1.0).abs() > f32::EPSILON
+                        && !children.is_empty()
+                        && frame.begin_group(opacity);
+                    let opacity = if grouped { 1.0 } else { opacity };
                     child_opacity = opacity;
                     let translucent = (opacity - 1.0).abs() > f32::EPSILON;
                     // RFC-0001 §3.1: a gradient is a `DecoratedBox` feature, so
@@ -8136,6 +8152,11 @@ impl Interpreter {
                         frame.end_clip();
                     }
                     frame.end_clip();
+                }
+                // After the clips it contains, so the group's picture includes
+                // everything its box drew, clipped the way it was drawn.
+                if grouped {
+                    frame.end_group();
                 }
                 // Close the RFC-0019 instance-env scope opened at the top of this
                 // arm (balanced with `env_base`), restoring the caller's env for

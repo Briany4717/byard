@@ -7697,3 +7697,31 @@ fn three_stacked_glass_panes_raise_the_overlap_warning() {
     );
     assert!(interp.perf_warnings().is_empty());
 }
+
+#[test]
+fn eval_pure_answers_literals_with_the_value_lowering_would_give() {
+    // `eval_pure` short-circuits numeric literals and all-literal tuples; the
+    // value must be the one the lowered closure produces.
+    let parsed = parse(
+        "View V() { Box #[scale: 2, opacity: 0.5, rotate: 90deg, translate: (x: 4, y: -2.5), \
+         width: (1, 2 + 3)] {} }",
+    );
+    assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+    let el = element(&parsed.views[0].body[0]);
+    let mut interp = Interpreter::new();
+    for attr in &el.attrs {
+        let AttrKind::Prop { value } = &attr.kind else {
+            panic!("expected a property");
+        };
+        let fast = interp.eval_pure(value);
+        let mut lowered = interp.lower_expr(value, None);
+        let slow = lowered(&mut interp.ctx);
+        assert_eq!(
+            format!("{fast:?}"),
+            format!("{slow:?}"),
+            "{}",
+            attr.name.as_str()
+        );
+    }
+    assert!(interp.errors().is_empty(), "{:?}", interp.errors());
+}

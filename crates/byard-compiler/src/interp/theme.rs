@@ -226,6 +226,19 @@ const BASE_DARK: &[(&str, i64)] = &[
 /// The default logical-pixel font size when no `titleLarge`-style token applies.
 pub const DEFAULT_FONT_SIZE: f32 = 14.0;
 
+/// The `byard-base` padding a `Button` puts around its label when the author
+/// writes no `p:` (vertical, horizontal): the M3 common button's 24 px side
+/// inset, and the vertical inset that centres a `labelLarge` line in
+/// [`BUTTON_MIN_SIZE`].
+pub const BUTTON_PADDING: (f32, f32) = (10.0, 24.0);
+
+/// The `byard-base` minimum `Button` extent, applied to the height unless the
+/// author writes `height:` and to the width unless they write `width:`: the M3
+/// button container height, so a bare one-line label is still a target a
+/// pointer or finger can hit, and a single-glyph button stays a square target
+/// instead of a sliver.
+pub const BUTTON_MIN_SIZE: f32 = 40.0;
+
 /// The scheme name used for the light color scheme.
 pub const SCHEME_LIGHT: &str = "light";
 /// The scheme name used for the dark color scheme.
@@ -256,6 +269,12 @@ pub struct Theme {
     pub active_dark: bool,
     /// Default font size in logical pixels (the theme-default layer).
     pub font_size: f32,
+    /// Padding a `Button` gets when no `p:`/side is written, as
+    /// `(vertical, horizontal)` (the theme-default layer).
+    pub button_padding: (f32, f32),
+    /// Minimum `Button` width and height, each applied unless the matching
+    /// `width:`/`height:` is written (the theme-default layer).
+    pub button_min_size: f32,
 }
 
 impl Theme {
@@ -305,6 +324,8 @@ impl Theme {
             fonts: BTreeMap::new(),
             active_dark: false,
             font_size: DEFAULT_FONT_SIZE,
+            button_padding: BUTTON_PADDING,
+            button_min_size: BUTTON_MIN_SIZE,
         }
     }
 

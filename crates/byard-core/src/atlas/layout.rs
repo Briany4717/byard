@@ -395,6 +395,13 @@ pub struct ContainerStyle {
     pub width: Option<f32>,
     /// Explicit height in logical pixels. `None` means "grow to fit children".
     pub height: Option<f32>,
+    /// Floor on the laid-out width in logical pixels, `None` for none.
+    pub min_width: Option<f32>,
+    /// Floor on the laid-out height in logical pixels, `None` for none. A
+    /// `Button` takes its theme's minimum touch size in both floors, so a
+    /// one-line label, or a single glyph, still yields a target a finger can
+    /// hit.
+    pub min_height: Option<f32>,
     /// Main-axis direction.
     pub direction: FlexDir,
     /// Space between children, in logical pixels.
@@ -440,6 +447,14 @@ impl ContainerStyle {
             height,
             ..Default::default()
         }
+    }
+
+    /// Sets the minimum width and height (logical px).
+    #[must_use]
+    pub fn with_min_size(mut self, min_width: Option<f32>, min_height: Option<f32>) -> Self {
+        self.min_width = min_width;
+        self.min_height = min_height;
+        self
     }
 
     /// Sets the main-axis direction.
@@ -515,6 +530,14 @@ impl ContainerStyle {
                 width: self.width.map_or(Dimension::auto(), Dimension::from_length),
                 height: self
                     .height
+                    .map_or(Dimension::auto(), Dimension::from_length),
+            },
+            min_size: Size {
+                width: self
+                    .min_width
+                    .map_or(Dimension::auto(), Dimension::from_length),
+                height: self
+                    .min_height
                     .map_or(Dimension::auto(), Dimension::from_length),
             },
             flex_direction: match self.direction {

@@ -9264,6 +9264,18 @@ impl Interpreter {
         if element_name == "ScrollView" {
             style = style.with_scroll_axes(false, true);
         }
+        // A `Button` starts from the theme's defaults: padding around its
+        // label, the label centred on both axes, and a minimum touch size.
+        // They are seeded before the attribute loop, so anything the author
+        // wrote (`p:`, one side, `align:`, `justify:`) simply overwrites them.
+        if element_name == "Button" {
+            let (v, h) = self.theme.button_padding;
+            style.padding = byard_core::atlas::layout::Spacing::symmetric(v, h);
+            style.align = Align::Center;
+            style.justify = Justify::Center;
+            let min = Some(self.theme.button_min_size);
+            style = style.with_min_size(min, min);
+        }
         for attr in attrs {
             if let AttrKind::Prop { value } = &attr.kind {
                 // Evaluate only the layout props this resolver consumes.
@@ -9410,6 +9422,14 @@ impl Interpreter {
                     _ => {}
                 }
             }
+        }
+        // An explicit `width:`/`height:` is the author's call; the touch floor
+        // never overrides it.
+        if style.width.is_some() {
+            style.min_width = None;
+        }
+        if style.height.is_some() {
+            style.min_height = None;
         }
         style
     }

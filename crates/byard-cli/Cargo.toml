@@ -16,6 +16,7 @@ path = "src/main.rs"
 byard-compiler = { path = "../byard-compiler" }
 byard-platform = { path = "../byard-platform" }
 byard-core     = { path = "../byard-core" }
+byard-project  = { path = "../byard-project" }
 clap           = { version = "4", features = ["derive"] }
 toml           = { version = "0.8", features = ["preserve_order"] }
 toml_edit      = "0.22"
@@ -23,6 +24,8 @@ sha2           = "0.10"
 pollster       = "0.3"
 wgpu           = "29.0"
 crossbeam-channel = "0.5"
+# `byard shot` writes PNGs. Already in the tree through the image stack.
+image = { version = "0.25", default-features = false, features = ["png"] }
 # RFC-0008 D-H: package archives are gzip-compressed. Already in the tree
 # (through the image stack), so this adds no new crate.
 flate2 = "1"

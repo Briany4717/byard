@@ -88,7 +88,7 @@ impl TextMeasurer {
     #[must_use]
     pub fn new() -> Self {
         Self {
-            font_system: FontSystem::new(),
+            font_system: new_font_system(),
             cache: HashMap::new(),
         }
     }
@@ -242,9 +242,24 @@ pub fn register_into(db: &mut glyphon::fontdb::Database, bytes: &Arc<[u8]>) -> O
     // A collection can carry several faces; they share a family, so the first
     // one names the family for all of them.
     let id = *ids.first()?;
-    let info = db.face(id)?.clone();
-    let family = info.families.first().map(|(name, _)| name.clone())?;
-    for weight in axis_weights(bytes) {
+    let family = db
+        .face(id)?
+        .families
+        .first()
+        .map(|(name, _)| name.clone())?;
+    declare_axis_weights(db, id);
+    Some(family)
+}
+
+/// Registers every weight face `id`'s `wght` axis covers as its own face
+/// record, all sharing the one blob (see [`register_into`] for why). A static
+/// face declares nothing.
+fn declare_axis_weights(db: &mut glyphon::fontdb::Database, id: glyphon::fontdb::ID) {
+    let Some(info) = db.face(id).cloned() else {
+        return;
+    };
+    let weights = db.with_face_data(id, axis_weights_of).unwrap_or_default();
+    for weight in weights {
         if weight == info.weight {
             continue; // the face already stands at this weight
         }
@@ -256,16 +271,57 @@ pub fn register_into(db: &mut glyphon::fontdb::Database, bytes: &Arc<[u8]>) -> O
             ..info.clone()
         });
     }
-    Some(family)
 }
 
-/// The CSS-axis weights a variable font's `wght` axis covers, in 100 steps.
+/// A `FontSystem` with the system's fonts, prepared the way every Byard
+/// `FontSystem` must be: the measuring one here and the painting one in
+/// `encoder::text_glyph` both come from this, so they cannot disagree about
+/// which face a weight selects (INV-27).
+///
+/// # The system face at every weight
+///
+/// The platform's UI face is usually one variable font (SF on macOS) recorded
+/// at a single weight, and `cosmic-text` only considers faces recorded at
+/// exactly the weight asked for. Left alone, `weight: medium` in the system
+/// face came out in whatever other face was recorded at 500 (SF Compact
+/// Rounded, with its spaces from Apple Color Emoji) and `weight: bold` in
+/// Menlo. So the face the default sans-serif family resolves to has its axis
+/// weights declared exactly as a project's own variable fonts do.
+#[must_use]
+pub fn new_font_system() -> FontSystem {
+    let mut fs = FontSystem::new();
+    let mut probe = Buffer::new(&mut fs, Metrics::new(16.0, 20.0));
+    probe.set_text(
+        &mut fs,
+        "a",
+        &Attrs::new().family(Family::SansSerif),
+        Shaping::Advanced,
+        None,
+    );
+    probe.shape_until_scroll(&mut fs, false);
+    let face = probe
+        .layout_runs()
+        .next()
+        .and_then(|run| run.glyphs.first().map(|g| g.font_id));
+    if let Some(id) = face {
+        declare_axis_weights(fs.db_mut(), id);
+    }
+    fs
+}
+
+/// The first face's axis weights, for the tests of a single-face file.
+#[cfg(test)]
+fn axis_weights(bytes: &[u8]) -> Vec<glyphon::fontdb::Weight> {
+    axis_weights_of(bytes, 0)
+}
+
+/// The CSS-axis weights face `index`'s `wght` axis covers, in 100 steps.
 ///
 /// Empty for a static font, which is what keeps a Regular file from claiming
 /// to be a Bold one. Clamped to the axis's own range, so a face that stops at
 /// 700 does not advertise 800.
-fn axis_weights(bytes: &[u8]) -> Vec<glyphon::fontdb::Weight> {
-    let Ok(face) = ttf_parser::Face::parse(bytes, 0) else {
+fn axis_weights_of(bytes: &[u8], index: u32) -> Vec<glyphon::fontdb::Weight> {
+    let Ok(face) = ttf_parser::Face::parse(bytes, index) else {
         return Vec::new();
     };
     let Some(axis) = face
@@ -443,5 +499,148 @@ mod tests {
         let (w, h) = m.measure("", 16.0, 400, None);
         assert!(w.abs() < 1e-6, "empty text has zero width, got {w}");
         assert!(h > 0.0);
+    }
+
+    /// A glyph rasterizes to the same image whatever was rasterized before it.
+    ///
+    /// `swash` keeps one buffer of variation coordinates for every scaler its
+    /// context builds, and before the vendored fix it never cleared it: a
+    /// variable font scaled away from its default weight left its coordinates
+    /// behind, and the next variable font picked them up on every axis it did
+    /// not set itself. On macOS that turned the system font wider after any
+    /// declared font was drawn bold, and `glyphon` then re-uploaded the wider
+    /// images into slots sized for the narrow ones when its atlas grew, which
+    /// is what cut every line of text into overlapping slivers.
+    ///
+    /// Needs a system face with more than one axis, which is what macOS's
+    /// system font is; elsewhere it says so and returns.
+    #[test]
+    fn a_glyph_rasterizes_the_same_after_another_variable_font() {
+        use glyphon::{Attrs, Buffer, Metrics, Shaping, SwashCache};
+
+        fn key_of(
+            fs: &mut FontSystem,
+            family: Family<'_>,
+            weight: u16,
+        ) -> glyphon::cosmic_text::CacheKey {
+            let mut b = Buffer::new(fs, Metrics::new(32.0, 38.0));
+            b.set_text(
+                fs,
+                "a",
+                &Attrs::new().family(family).weight(glyphon::Weight(weight)),
+                Shaping::Advanced,
+                None,
+            );
+            b.shape_until_scroll(fs, false);
+            let glyph = b.layout_runs().next().expect("one run").glyphs[0].clone();
+            glyph.physical((0.0, 0.0), 2.0).cache_key
+        }
+        fn dims(
+            sc: &mut SwashCache,
+            fs: &mut FontSystem,
+            key: glyphon::cosmic_text::CacheKey,
+        ) -> (u32, u32, Vec<u8>) {
+            let image = sc
+                .get_image_uncached(fs, key)
+                .expect("the glyph rasterizes");
+            (image.placement.width, image.placement.height, image.data)
+        }
+
+        let mut fs = FontSystem::new();
+        let system = key_of(&mut fs, Family::SansSerif, 400);
+        let axes = fs
+            .db()
+            .with_face_data(system.font_id, |data, index| {
+                ttf_parser::Face::parse(data, index).map_or(0, |f| f.variation_axes().len())
+            })
+            .unwrap_or(0);
+        if axes < 2 {
+            eprintln!("the system face has {axes} variation axes; this needs two, skipping");
+            return;
+        }
+
+        let mut sc = SwashCache::new();
+        let before = dims(&mut sc, &mut fs, system);
+        let display: Arc<[u8]> = Arc::from(DISPLAY);
+        let family = register_into(fs.db_mut(), &display).expect("the display face parses");
+        let bold = key_of(&mut fs, Family::Name(&family), 700);
+        let _ = dims(&mut sc, &mut fs, bold);
+        let after = dims(&mut sc, &mut fs, system);
+        assert_eq!(
+            (before.0, before.1),
+            (after.0, after.1),
+            "the system glyph changed size after a bold variable glyph"
+        );
+        assert!(
+            before.2 == after.2,
+            "the system glyph changed pixels after a bold variable glyph"
+        );
+    }
+
+    /// Text in the system face stays in the system face at every weight.
+    ///
+    /// On macOS the system face is one variable font recorded at 400, and
+    /// `cosmic-text` drops candidates whose recorded weight differs from the
+    /// one asked for, so `weight: medium` came out in SF Compact Rounded with
+    /// its spaces taken from Apple Color Emoji (a visible gap between every
+    /// word) and `weight: bold` in Menlo. Registering the system face's axis
+    /// weights, as a declared variable font's are, keeps it in its own family.
+    ///
+    /// Only meaningful where the system face is variable; elsewhere it says so
+    /// and returns.
+    #[test]
+    fn the_system_face_answers_to_every_weight() {
+        use glyphon::{Attrs, Buffer, Metrics, Shaping};
+
+        fn families(fs: &mut FontSystem, weight: u16) -> Vec<String> {
+            let mut b = Buffer::new(fs, Metrics::new(14.0, 17.0));
+            b.set_text(
+                fs,
+                "Icon buttons",
+                &Attrs::new()
+                    .family(Family::SansSerif)
+                    .weight(glyphon::Weight(weight)),
+                Shaping::Advanced,
+                None,
+            );
+            b.shape_until_scroll(fs, false);
+            let ids: Vec<_> = b
+                .layout_runs()
+                .flat_map(|r| r.glyphs.iter().map(|g| g.font_id).collect::<Vec<_>>())
+                .collect();
+            ids.iter()
+                .map(|id| {
+                    fs.db()
+                        .face(*id)
+                        .map(|f| f.families[0].0.clone())
+                        .unwrap_or_default()
+                })
+                .collect()
+        }
+
+        let mut fs = new_font_system();
+        let regular = families(&mut fs, 400);
+        let family = regular[0].clone();
+        let id = fs
+            .db()
+            .faces()
+            .find(|f| f.families[0].0 == family)
+            .map(|f| f.id)
+            .expect("the face");
+        let variable = fs
+            .db()
+            .with_face_data(id, |data, index| axis_weights_of(data, index).len() > 1)
+            .unwrap_or(false);
+        if !variable {
+            eprintln!("the system face `{family}` is not variable; skipping");
+            return;
+        }
+        for weight in [500, 700] {
+            let got = families(&mut fs, weight);
+            assert!(
+                got.iter().all(|f| *f == family),
+                "weight {weight} left `{family}`: {got:?}"
+            );
+        }
     }
 }

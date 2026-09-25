@@ -1,0 +1,53 @@
+[project]
+name = "aura_weather"
+entry = "src/main.byd"
+
+# Two typefaces: a display face for numbers and headings, a UI face for
+# everything you read. Both ship with the app, under ./fonts (SIL OFL).
+[assets.fonts]
+Display = "fonts/SpaceGrotesk-Variable.ttf"
+Body = "fonts/Manrope-Variable.ttf"
+
+[theme]
+name = "aura"
+scheme = "dark"
+transition = 300
+# The light scheme is derived from this; the dark one is written out below,
+# because it is the app's own look rather than a generic palette.
+seed = "#3B82F6"
+
+[theme.color.dark]
+background = "#0A0F1E"
+on_background = "#E8EEF9"
+surface = "#0E1528"
+surface_container_low = "#121A31"
+surface_container = "#16203A"
+surface_container_high = "#1D2947"
+on_surface = "#E8EEF9"
+on_surface_variant = "#9AA8C2"
+outline = "#3A4866"
+outline_variant = "#26324D"
+primary = "#7CC4FF"
+on_primary = "#06223A"
+primary_container = "#17375C"
+on_primary_container = "#CFE8FF"
+secondary = "#FFC46B"
+on_secondary = "#3A2600"
+tertiary = "#9EF0C4"
+on_tertiary = "#00391F"
+error = "#FF8A80"
+on_error = "#5C0B06"
+
+# The type scale. Screens say `typo: t.display`, never three loose props.
+[theme.typography]
+display = { size = 88, family = "Display", weight = "light" }
+headline = { size = 28, family = "Display", weight = "regular" }
+title = { size = 18, family = "Display", weight = "medium" }
+body = { size = 15, family = "Body", weight = "regular" }
+label = { size = 13, family = "Body", weight = "medium" }
+caption = { size = 12, family = "Body", weight = "regular" }
+
+[theme.shape]
+corner_md = 14
+corner_lg = 22
+corner_xl = 28

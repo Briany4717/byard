@@ -21,6 +21,7 @@ members = [
     # compiles them, which is what keeps the façade's public surface honest.
     "examples/controller_demo",
     "examples/sparkline_view",
+    "examples/aura_weather",
 ]
 
 [workspace.package]

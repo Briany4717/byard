@@ -1,0 +1,6 @@
+View AirScreen() {
+    inject Theme as t
+    Screen(title: "Air quality", subtitle: "What you are breathing") {
+        Text("Coming in the next milestone.") #[typo: t.body, color: t.onSurfaceVariant]
+    }
+}

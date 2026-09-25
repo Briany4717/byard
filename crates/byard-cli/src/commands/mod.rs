@@ -5,3 +5,4 @@ pub mod clean;
 pub mod dev;
 pub mod get;
 pub mod new;
+pub mod publish;

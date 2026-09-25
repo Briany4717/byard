@@ -89,6 +89,20 @@ pub struct UseDecl {
     pub span: Span,
 }
 
+/// The view a program renders: the one named `Main` when there is one,
+/// otherwise the first.
+///
+/// Helper views written above `Main` are a natural way to write a file, and
+/// the runner used to render whichever came first, so an example with a
+/// helper at the top showed that helper alone and nothing said why.
+#[must_use]
+pub fn root_view(views: &[ViewDecl]) -> Option<&ViewDecl> {
+    views
+        .iter()
+        .find(|v| v.name.as_str() == "Main")
+        .or_else(|| views.first())
+}
+
 /// A whole `.byd` file is a list of [`ViewDecl`]s (D11: multiple `View`s per
 /// file are allowed).
 #[derive(Clone, Debug, PartialEq)]

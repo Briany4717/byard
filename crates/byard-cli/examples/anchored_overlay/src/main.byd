@@ -15,9 +15,12 @@
 //      6px between them. Type to open it (`when` guards the overlay).
 //   2. The tooltip sits above its button, centred on it. Different edge, same
 //      mechanism.
-//   3. The bottom field's panel opens *upward*. Nothing asks it to: `below`
-//      would run off the window, so it flips. That is the default, because an
-//      autocomplete that renders off-screen is a bug in almost every case.
+//   3. Drag the window's bottom edge up until it is just under the lower
+//      field: that field's panel flips and opens *upward*. Nothing asks it to:
+//      `below` would run off the window, so it flips. That is the default,
+//      because an autocomplete that renders off-screen is a bug in almost every
+//      case. (At the window's starting height there is room below, so it opens
+//      downward, as asked.)
 //   4. **Resize the window.** Every panel tracks its anchor, because the
 //      placement is computed from the anchor's rect each frame rather than from
 //      a hard-coded offset.
@@ -64,7 +67,9 @@ View Main() {
             as searchField => query = it
 
         Box #[height: 150] {}
-        Button("Hover target") #[width: 140] as tipTarget => hovering = !hovering
+        Button("Hover target") #[bg: 0x2A3242, color: 0xE7ECF2, radius: 8,
+                                 p: (vertical: 8, horizontal: 14)]
+            as tipTarget => hovering = !hovering
 
         Spacer #[grow: 1]
         // Near the bottom on purpose: its panel has nowhere to go downward.
@@ -109,7 +114,7 @@ View Main() {
         }
     }
 
-    // Asks for `below` and gets `above`, because below does not fit.
+    // Asks for `below`, and gets `above` once the window is too short for it.
     when lower != "" {
         Overlay #[modal: false] {
             Box #[anchor_to: "bottomField", anchor_edge: below,

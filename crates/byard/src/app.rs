@@ -325,7 +325,9 @@ impl PlatformHost for Host {
             interp.set_dispatcher(dispatcher);
             interp.load_views(&views);
             let known: Vec<&str> = views.iter().map(|v| v.name.as_str()).collect();
-            let tree = interp.lower_view(&views[0], &known);
+            let root = byard_compiler::parser::ast::root_view(&views)
+                .expect("a program with no views is rejected before this");
+            let tree = interp.lower_view(root, &known);
             interp.tick();
             Box::new(AppRuntime {
                 interp,

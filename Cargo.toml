@@ -15,6 +15,8 @@ members = [
     "crates/byard-macro",
     "crates/byld-lsp",
     "crates/byard-cli",
+    # Test support: one GPU device per test process, used by one test at a time.
+    "crates/byard-test-gpu",
     # Runnable two-layer apps: a `.byd` view plus the Rust controller half
     # (RFC-0028 §2). They are workspace members so `cargo test --workspace`
     # compiles them, which is what keeps the façade's public surface honest.

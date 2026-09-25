@@ -34,21 +34,8 @@ use std::sync::Arc;
 
 const SIZE: u32 = 128;
 
-fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>)> {
-    let instance =
-        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-    let adapter =
-        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-            .ok()?;
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("ByardCore - Overlay Test Device"),
-        required_features: wgpu::Features::empty(),
-        required_limits: byard_core::engine::device_limits(&adapter),
-        memory_hints: wgpu::MemoryHints::Performance,
-        ..Default::default()
-    }))
-    .ok()?;
-    Some((Arc::new(device), Arc::new(queue)))
+fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>, byard_test_gpu::Turn)> {
+    byard_test_gpu::device(byard_core::engine::device_limits)
 }
 
 fn render_and_read(
@@ -184,7 +171,7 @@ fn push_overlay(f: &mut RenderFrame) {
 
 #[test]
 fn the_last_good_view_is_visible_through_the_overlays_backdrop() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping");
         return;
     };
@@ -219,7 +206,7 @@ fn the_last_good_view_is_visible_through_the_overlays_backdrop() {
 
 #[test]
 fn the_backdrop_darkens_what_it_covers_rather_than_replacing_it() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping");
         return;
     };

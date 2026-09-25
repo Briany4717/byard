@@ -26,21 +26,8 @@ const DISPLAY: &[u8] =
     include_bytes!("../../byard-cli/examples/assets/fonts/SpaceGrotesk-Variable.ttf");
 const BODY: &[u8] = include_bytes!("../../byard-cli/examples/assets/fonts/Manrope-Variable.ttf");
 
-fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>)> {
-    let instance =
-        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-    let adapter =
-        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-            .ok()?;
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("font family device"),
-        required_features: wgpu::Features::empty(),
-        required_limits: byard_core::engine::device_limits(&adapter),
-        memory_hints: wgpu::MemoryHints::Performance,
-        ..Default::default()
-    }))
-    .ok()?;
-    Some((Arc::new(device), Arc::new(queue)))
+fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>, byard_test_gpu::Turn)> {
+    byard_test_gpu::device(byard_core::engine::device_limits)
 }
 
 fn encoder(device: &Arc<wgpu::Device>, queue: &Arc<wgpu::Queue>) -> EncoderSubsystem {
@@ -178,7 +165,7 @@ fn differing(a: &[u8], b: &[u8]) -> usize {
 
 #[test]
 fn two_families_paint_different_pixels() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping font family readback");
         return;
     };
@@ -220,7 +207,7 @@ fn two_families_paint_different_pixels() {
 /// difference between two frames.
 #[test]
 fn an_unregistered_family_does_not_paint_as_the_registered_one() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping font fallback readback");
         return;
     };

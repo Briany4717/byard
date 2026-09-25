@@ -298,6 +298,7 @@ dependencies = [
  "clap",
  "crossbeam-channel",
  "flate2",
+ "image",
  "pollster 0.3.0",
  "serde_json",
  "sha2",

@@ -487,6 +487,19 @@ fn apply_theme_table(
     if let Some(name) = theme_tbl.get("name").and_then(toml::Value::as_str) {
         theme.name = name.to_string();
     }
+    // `scheme = "dark"` (RFC-0022): the scheme the app starts in. Absent is
+    // light, as it always was. The runtime flag (`t.dark`) still flips it.
+    if let Some(v) = theme_tbl.get("scheme") {
+        theme.active_dark = match v.as_str() {
+            Some("light") => false,
+            Some("dark") => true,
+            _ => {
+                return Err(
+                    "byard.toml: [theme] `scheme` must be \"light\" or \"dark\"".to_string()
+                );
+            }
+        };
+    }
     // `transition = <ms>` (RFC-0016): how long a scheme flip cross-fades
     // the colour tokens. Absent is the cut every theme has always had.
     if let Some(v) = theme_tbl.get("transition") {
@@ -1046,6 +1059,25 @@ mod tests {
         let err = theme_of("[theme.typography]\ntitle_large = { size = 22, weight = \"ultra\" }\n")
             .unwrap_err();
         assert!(err.contains("weight") && err.contains("ultra"), "{err}");
+    }
+
+    /// `[theme] scheme` picks the scheme an app starts in; absent is light,
+    /// and anything but the two names is an error rather than a guess.
+    #[test]
+    fn a_theme_can_start_dark() {
+        assert!(!theme_of("[theme]\nname = \"x\"\n").unwrap().active_dark);
+        assert!(
+            theme_of("[theme]\nscheme = \"dark\"\n")
+                .unwrap()
+                .active_dark
+        );
+        assert!(
+            !theme_of("[theme]\nscheme = \"light\"\n")
+                .unwrap()
+                .active_dark
+        );
+        let err = theme_of("[theme]\nscheme = \"night\"\n").unwrap_err();
+        assert!(err.contains("scheme"), "{err}");
     }
 
     /// `[theme] transition = <ms>` sets how long a scheme flip cross-fades

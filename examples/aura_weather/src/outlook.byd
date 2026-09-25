@@ -1,0 +1,6 @@
+View OutlookScreen() {
+    inject Theme as t
+    Screen(title: "10 days", subtitle: "The outlook, day by day") {
+        Text("Coming in the next milestone.") #[typo: t.body, color: t.onSurfaceVariant]
+    }
+}

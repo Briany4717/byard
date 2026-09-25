@@ -11,6 +11,9 @@ rust-version.workspace = true
 [dependencies]
 logos = "0.14"
 smallvec = "1"
+# Animation state is looked up once per animated element per frame, keyed by
+# small integer spans; SipHash's flooding resistance buys nothing there.
+rustc-hash = "2"
 crossbeam-channel = "0.5"
 notify = "6"
 byard-core = { path = "../byard-core" }

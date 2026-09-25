@@ -1785,6 +1785,10 @@ pub struct Interpreter {
     /// re-evaluated every tick, and the mesh is rebuilt only when the numbers
     /// they produced actually changed.
     path_meshes: std::collections::HashMap<u64, CachedMesh>,
+    /// The view [`lower_view`](Self::lower_view) last lowered, by name and
+    /// declaration span: lowering a different one is a new tree (RFC-0032
+    /// §R4).
+    lowered_view: Option<(crate::symbol::Symbol, Span)>,
     /// The IME composition in progress, if any (RFC-0040 §2).
     ///
     /// Engine state, not app state: it has no name in byld and never touches
@@ -11778,6 +11782,16 @@ impl Interpreter {
     /// names), then lowers its top-level elements into a render tree, handling
     /// `when`/`for` structural members (M20).
     pub fn lower_view(&mut self, view: &ViewDecl, known_views: &[&str]) -> Vec<RenderNode> {
+        // RFC-0032 §R4: another view is another tree, and last frame's build
+        // order says nothing about it. The same view lowered again (the HUD's
+        // periodic refresh) keeps its eligibility: its structure is compared
+        // as it always was. A hot reload of the same view invalidates in
+        // `reload`, which knows the AST changed.
+        let identity = (view.name.clone(), view.span);
+        if self.lowered_view.as_ref() != Some(&identity) {
+            self.invalidate_retained_layout();
+            self.lowered_view = Some(identity);
+        }
         self.check_anchor_refs(view);
         self.check_font_families(view);
         // RFC-0018: a fresh tree gets fresh `when`/`for` pools; the previous

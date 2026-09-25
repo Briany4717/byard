@@ -7,12 +7,10 @@
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
-mod archive;
 mod capabilities;
+use byard_project::{archive, deps, manifest};
 mod commands;
-mod deps;
 mod hud;
-mod manifest;
 mod statusline;
 mod style;
 mod telemetry_overlay;

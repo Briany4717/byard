@@ -16,6 +16,7 @@ path = "src/main.rs"
 byard-compiler = { path = "../byard-compiler" }
 byard-platform = { path = "../byard-platform" }
 byard-core     = { path = "../byard-core" }
+byard-project  = { path = "../byard-project" }
 clap           = { version = "4", features = ["derive"] }
 toml           = { version = "0.8", features = ["preserve_order"] }
 toml_edit      = "0.22"

@@ -282,6 +282,7 @@ dependencies = [
  "byard-core",
  "byard-macro",
  "byard-platform",
+ "byard-project",
  "pollster 0.4.0",
  "wgpu",
 ]
@@ -293,6 +294,7 @@ dependencies = [
  "byard-compiler",
  "byard-core",
  "byard-platform",
+ "byard-project",
  "clap",
  "crossbeam-channel",
  "flate2",
@@ -365,6 +367,17 @@ dependencies = [
  "pollster 0.3.0",
  "wgpu",
  "winit",
+]
+
+[[package]]
+name = "byard-project"
+version = "0.0.0"
+dependencies = [
+ "byard-compiler",
+ "byard-core",
+ "flate2",
+ "sha2",
+ "toml",
 ]
 
 [[package]]

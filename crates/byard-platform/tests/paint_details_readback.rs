@@ -1,10 +1,11 @@
-//! GPU readback proofs for three paint contracts (RFC-0001 §3.1): an
+//! GPU readback proofs for four paint contracts (RFC-0001 §3.1): an
 //! over-large corner radius is reduced to fit instead of deforming the box, a
 //! linear gradient paints a real ramp over the fill that a phase offset travels
-//! along, and a colour written in a `.byd` file arrives on screen as the colour
-//! that was written.
+//! along, a colour written in a `.byd` file arrives on screen as the colour
+//! that was written, and an 8-digit colour's alpha byte lets what is behind it
+//! show through.
 //!
-//! Both are things only pixels can prove: the frame data is identical either
+//! All are things only pixels can prove: the frame data is identical either
 //! way, and it is the shader that gets them right or wrong.
 //!
 //! Skips cleanly when no GPU adapter is available.
@@ -313,4 +314,40 @@ fn a_written_colour_reaches_the_screen_as_itself() {
             "the {channel} channel of an authored 0x808080 is 0x80 on screen, got {value:#04X}"
         );
     }
+}
+
+/// Renders a white box with a black child whose `bg` is `child_bg`, and
+/// returns the pixel at the middle of the child.
+fn child_over_white(device: &Arc<wgpu::Device>, queue: &Arc<wgpu::Queue>, child_bg: &str) -> u8 {
+    let parsed = byard_compiler::parser::parse(&format!(
+        "View Main() {{ Box #[bg: 0xFFFFFF, width: 200, height: 40] {{ \
+             Box #[bg: {child_bg}, width: 100, height: 20] {{}} }} }}"
+    ));
+    assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+    let mut interp = byard_compiler::interp::eval::Interpreter::new();
+    let tree = interp.lower_view(&parsed.views[0], &[]);
+    interp.tick();
+    let mut frame = RenderFrame::new();
+    interp.render(&tree, &mut frame, LOGICAL_W, LOGICAL_H);
+    render(device, queue, &frame).at(50.0, 10.0).1
+}
+
+/// An 8-digit `bg` is alpha-first `0xAARRGGBB` (RFC-0005 §1), so a
+/// half-transparent background shows what is painted behind it.
+///
+/// Measured against the same box with an opaque `FF` alpha byte rather than
+/// against an expected grey, so the claim is "the alpha byte did something",
+/// not a guess at the blend's exact output.
+#[test]
+fn a_half_transparent_bg_shows_what_is_behind_it() {
+    let Some((device, queue)) = try_device() else {
+        eprintln!("no GPU adapter, skipping readback");
+        return;
+    };
+    let opaque = child_over_white(&device, &queue, "0xFF000000");
+    let half = child_over_white(&device, &queue, "0x80000000");
+    assert!(
+        half > opaque.saturating_add(40),
+        "the white parent shows through a 0x80 black child: {half:#04X} vs opaque {opaque:#04X}"
+    );
 }

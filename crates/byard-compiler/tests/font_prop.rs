@@ -111,6 +111,49 @@ fn a_typo_token_brings_its_family() {
     assert_eq!(lines[0].1.as_deref(), Some("Space Grotesk"));
 }
 
+/// The accessor spelling, `typo: t.hero` through `inject Theme as t`, brings
+/// the token's family and weight too, not only its size.
+///
+/// This is the spelling every example and package writes. The bare form above
+/// was the only one tested, and the accessor evaluates to a size before any of
+/// this code sees it, so family and weight were dropped on exactly the path
+/// people use: a design system's headline rendered in the system face at
+/// regular weight, at the right size, which looks like almost nothing wrong.
+#[test]
+fn a_typo_accessor_brings_its_family_and_weight() {
+    let mut theme = two_families();
+    theme.set_typo(
+        "hero",
+        TypoToken {
+            family: Some("display".to_string()),
+            weight: byard_compiler::interp::theme::FontWeight::Bold,
+            ..TypoToken::plain(40.0)
+        },
+    );
+    let src = r#"View Main() {
+        inject Theme as t
+        Column #[width: 400] { Text("a") #[typo: t.hero] }
+    }"#;
+    let parsed = parse(src);
+    assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+    let mut interp = Interpreter::new();
+    interp.set_theme(theme);
+    let known: Vec<&str> = parsed.views.iter().map(|v| v.name.as_str()).collect();
+    interp.load_views(&parsed.views);
+    let tree = interp.lower_view(&parsed.views[0], &known);
+    assert!(interp.errors().is_empty(), "{:?}", interp.errors());
+    interp.tick();
+    let mut frame = RenderFrame::new();
+    interp.render(&tree, &mut frame, 400.0, 300.0);
+    let line = &frame.texts()[0];
+    assert!(
+        (line.font_size - 40.0).abs() < 1e-3,
+        "the size always came through"
+    );
+    assert_eq!(line.family.as_deref(), Some("Space Grotesk"), "the family");
+    assert_eq!(line.weight, 700, "the weight");
+}
+
 /// An explicit `font:` outranks the token's family. The narrower statement
 /// wins, which is the same rule `weight:` follows.
 #[test]

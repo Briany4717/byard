@@ -427,7 +427,7 @@ impl TextGlyphPipeline {
         }
 
         Ok(Self {
-            font_system: FontSystem::new(),
+            font_system: crate::text::new_font_system(),
             swash_cache: SwashCache::new(),
             atlas,
             viewport,
@@ -813,13 +813,21 @@ fn collect_layer_text_areas<'cache>(
         .enumerate()
         .map(|(offset, line)| {
             let global = start + offset; // global line index (cache/clips/depths)
+            // The frame's colours are linear, like every other primitive's;
+            // glyphon takes sRGB bytes and linearises them in its shader.
+            // Handing it the linear values as bytes converted them twice and
+            // painted every mid-tone far too dark.
             let [red, green, blue, alpha] = line.color;
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let byte = |linear: f32| {
+                (crate::color::linear_to_srgb(linear.clamp(0.0, 1.0)) * 255.0).round() as u8
+            };
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let default_color = Color::rgba(
-                (red.clamp(0.0, 1.0) * 255.0) as u8,
-                (green.clamp(0.0, 1.0) * 255.0) as u8,
-                (blue.clamp(0.0, 1.0) * 255.0) as u8,
-                (alpha.clamp(0.0, 1.0) * 255.0) as u8,
+                byte(red),
+                byte(green),
+                byte(blue),
+                (alpha.clamp(0.0, 1.0) * 255.0).round() as u8,
             );
             TextArea {
                 buffer: &cache[global].buffer,

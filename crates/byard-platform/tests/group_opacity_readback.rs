@@ -20,21 +20,8 @@ const SIZE: u32 = 128;
 const RED: [f32; 4] = [1.0, 0.0, 0.0, 1.0];
 const BLUE: [f32; 4] = [0.0, 0.2, 1.0, 1.0];
 
-fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>)> {
-    let instance =
-        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-    let adapter =
-        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-            .ok()?;
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("group opacity device"),
-        required_features: wgpu::Features::empty(),
-        required_limits: byard_core::engine::device_limits(&adapter),
-        memory_hints: wgpu::MemoryHints::Performance,
-        ..Default::default()
-    }))
-    .ok()?;
-    Some((Arc::new(device), Arc::new(queue)))
+fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>, byard_test_gpu::Turn)> {
+    byard_test_gpu::device(byard_core::engine::device_limits)
 }
 
 fn encoder(device: &Arc<wgpu::Device>, queue: &Arc<wgpu::Queue>) -> EncoderSubsystem {
@@ -164,7 +151,7 @@ fn two_boxes(grouped: bool) -> RenderFrame {
 
 #[test]
 fn per_instance_opacity_shows_the_overlap() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping group opacity readback");
         return;
     };
@@ -187,7 +174,7 @@ fn per_instance_opacity_shows_the_overlap() {
 
 #[test]
 fn a_group_fades_as_one_picture_and_hides_the_overlap() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping group opacity readback");
         return;
     };
@@ -216,7 +203,7 @@ fn a_group_fades_as_one_picture_and_hides_the_overlap() {
 /// and one drawn before is covered by it.
 #[test]
 fn a_group_composites_in_draw_order() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping group opacity readback");
         return;
     };

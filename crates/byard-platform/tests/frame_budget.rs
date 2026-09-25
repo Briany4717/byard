@@ -189,21 +189,8 @@ fn count_allocations<R>(f: impl FnOnce() -> R) -> (R, usize) {
 
 // ── Harness ────────────────────────────────────────────────────────────────
 
-fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>)> {
-    let instance =
-        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-    let adapter =
-        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-            .ok()?;
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("frame budget device"),
-        required_features: wgpu::Features::empty(),
-        required_limits: byard_core::engine::device_limits(&adapter),
-        memory_hints: wgpu::MemoryHints::Performance,
-        ..Default::default()
-    }))
-    .ok()?;
-    Some((Arc::new(device), Arc::new(queue)))
+fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>, byard_test_gpu::Turn)> {
+    byard_test_gpu::device(byard_core::engine::device_limits)
 }
 
 fn build() -> (Interpreter, Vec<RenderNode>) {
@@ -270,13 +257,15 @@ struct Warm {
     queue: Arc<wgpu::Queue>,
     target: wgpu::Texture,
     frame: RenderFrame,
+    /// Held for as long as the warmed-up encoder can draw.
+    _turn: byard_test_gpu::Turn,
 }
 
 /// Builds the scene and drives enough frames that every cache, pool and arena
 /// has reached this scene's high-water mark. Returns `None` with a printed
 /// notice when there is no GPU.
 fn warm_up() -> Option<Warm> {
-    let (device, queue) = try_device()?;
+    let (device, queue, turn) = try_device()?;
     let mut enc = pollster::block_on(EncoderSubsystem::init(
         Arc::clone(&device),
         Arc::clone(&queue),
@@ -318,6 +307,7 @@ fn warm_up() -> Option<Warm> {
         queue,
         target,
         frame,
+        _turn: turn,
     })
 }
 

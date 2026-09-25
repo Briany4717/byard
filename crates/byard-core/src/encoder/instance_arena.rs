@@ -389,21 +389,8 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
-    fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>)> {
-        let instance =
-            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-        let adapter =
-            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-                .ok()?;
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("ByardCore - Instance Arena Test Device"),
-            required_features: wgpu::Features::empty(),
-            required_limits: crate::engine::device_limits(&adapter),
-            memory_hints: wgpu::MemoryHints::Performance,
-            ..Default::default()
-        }))
-        .ok()?;
-        Some((Arc::new(device), Arc::new(queue)))
+    fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>, byard_test_gpu::Turn)> {
+        byard_test_gpu::device(crate::engine::device_limits)
     }
 
     /// RFC-0031 §S4: a storage region's returned index must be an *exact*
@@ -425,7 +412,7 @@ mod tests {
         // without a GPU: the arena cannot tell a package's instances from a
         // core intrinsic's, because by the time they reach it there is nothing
         // left to tell them apart by (INV-30).
-        let Some((device, _queue)) = try_device() else {
+        let Some((device, _queue, _turn)) = try_device() else {
             eprintln!("no GPU adapter, skipping arena test");
             return;
         };
@@ -449,7 +436,7 @@ mod tests {
 
     #[test]
     fn a_storage_region_returns_an_exact_element_index() {
-        let Some((device, _queue)) = try_device() else {
+        let Some((device, _queue, _turn)) = try_device() else {
             eprintln!("no GPU adapter, skipping arena test");
             return;
         };
@@ -484,7 +471,7 @@ mod tests {
 
     #[test]
     fn appended_regions_are_contiguous_and_aligned() {
-        let Some((device, _queue)) = try_device() else {
+        let Some((device, _queue, _turn)) = try_device() else {
             eprintln!("no GPU adapter, skipping");
             return;
         };
@@ -505,7 +492,7 @@ mod tests {
         // The trap RFC-0033 §G2 names: 256 is *a* value this limit takes, not
         // *the* value, and assuming it is the least useful thing to assume
         // because it works on the machine you are writing on.
-        let Some((device, _queue)) = try_device() else {
+        let Some((device, _queue, _turn)) = try_device() else {
             eprintln!("no GPU adapter, skipping");
             return;
         };
@@ -543,7 +530,7 @@ mod tests {
     fn a_reserved_uniform_is_alignment_sized_and_fits_inside_the_staging() {
         // The reservation path is the one the backdrop takes, and it is the
         // one that crashed on DX12 while passing everywhere else.
-        let Some((device, queue)) = try_device() else {
+        let Some((device, queue, _turn)) = try_device() else {
             eprintln!("no GPU adapter, skipping");
             return;
         };
@@ -563,7 +550,7 @@ mod tests {
 
     #[test]
     fn an_empty_push_costs_nothing_and_returns_an_empty_region() {
-        let Some((device, _queue)) = try_device() else {
+        let Some((device, _queue, _turn)) = try_device() else {
             eprintln!("no GPU adapter, skipping");
             return;
         };
@@ -576,7 +563,7 @@ mod tests {
 
     #[test]
     fn growth_doubles_and_never_shrinks() {
-        let Some((device, queue)) = try_device() else {
+        let Some((device, queue, _turn)) = try_device() else {
             eprintln!("no GPU adapter, skipping");
             return;
         };
@@ -607,7 +594,7 @@ mod tests {
         // The two acceptance conditions of RFC-0033 §G5, asserted rather than
         // benchmarked: after warm-up a frame of the same shape must create
         // zero GPU buffers and must not grow the staging `Vec` either.
-        let Some((device, queue)) = try_device() else {
+        let Some((device, queue, _turn)) = try_device() else {
             eprintln!("no GPU adapter, skipping");
             return;
         };
@@ -644,7 +631,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "outside the")]
     fn binding_a_region_the_arena_never_uploaded_fails_in_debug() {
-        let Some((device, _queue)) = try_device() else {
+        let Some((device, _queue, _turn)) = try_device() else {
             // `should_panic` needs a panic even on the skip path, or the test
             // fails for the wrong reason on a machine with no GPU.
             panic!("outside the, no GPU adapter, skipping");

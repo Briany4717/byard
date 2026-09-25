@@ -5961,6 +5961,8 @@ impl Interpreter {
         let size = self.shape_num(el, "size").unwrap_or(self.theme.font_size);
         let color = self
             .shape_color(el, "color")
+            // Theme tokens are `#RRGGBB` only (the manifest rejects anything
+            // else), so the fallback is opaque by construction.
             .unwrap_or_else(|| super::intrinsics::color_to_rgba(self.theme.on_surface(), false));
         let x = canvas.x + self.shape_num(el, "x").unwrap_or(0.0);
         let y = canvas.y + self.shape_num(el, "y").unwrap_or(0.0);
@@ -6650,7 +6652,7 @@ impl Interpreter {
                         self.eval_int_prop(attrs, "size")
                             .or(typo_size)
                             .unwrap_or(self.theme.font_size as i64) as f32;
-                    let mut rgba = super::intrinsics::color_to_rgba(color, false);
+                    let mut rgba = super::intrinsics::color_rgba_auto(color);
                     rgba[3] *= inherited_opacity;
                     // RFC-0011 group transforms: a `Text` carries no transform of
                     // its own, so an ancestor's scale/translate is baked into the
@@ -6836,7 +6838,13 @@ impl Interpreter {
                             .eval_float_prop(paint_attrs, "opacity")
                             .map_or(1.0, |v| v as f32);
                     child_opacity = opacity;
-                    let translucent = (opacity - 1.0).abs() > f32::EPSILON;
+                    // An 8-digit `bg` carries its own alpha byte (RFC-0005 §1).
+                    let bg_rgba = bg.map_or([0.0; 4], super::intrinsics::color_rgba_auto);
+                    // A background below full alpha is as translucent as a
+                    // faded box: on the depth-writing SolidBox pass it would
+                    // cull whatever later passes draw beneath it.
+                    let translucent =
+                        (opacity - 1.0).abs() > f32::EPSILON || (bg.is_some() && bg_rgba[3] < 1.0);
                     // RFC-0001 §3.1: a gradient is a `DecoratedBox` feature, so
                     // its presence promotes the box off the flat SolidBox path
                     // exactly as a border/shadow/opacity does.
@@ -6854,14 +6862,13 @@ impl Interpreter {
                     if !owns_visuals && (bg.is_some() || gradient.is_some()) {
                         let base = byard_core::BoxInstance {
                             rect: [rect.x, rect.y, rect.width, rect.height],
-                            color: bg
-                                .map_or([0.0; 4], |c| super::intrinsics::color_to_rgba(c, false)),
+                            color: bg_rgba,
                             radii,
                             transform,
                             smooth,
                         };
-                        let border_rgba = border_color
-                            .map_or([0.0; 4], |c| super::intrinsics::color_to_rgba(c, false));
+                        let border_rgba =
+                            border_color.map_or([0.0; 4], super::intrinsics::color_rgba_auto);
                         // Cast the shadows first so they sit *beneath* the fill.
                         // Reversed: first-listed is pushed last → nearest z → on
                         // top of later shadows (CSS box-shadow order), all still
@@ -7414,13 +7421,16 @@ impl Interpreter {
                         .eval_float_prop(paint_attrs, "opacity")
                         .map_or(1.0, |v| v as f32);
                 if let Some(bg) = self.eval_color_prop(paint_attrs, "bg") {
-                    frame.push_instance(byard_core::BoxInstance {
-                        rect: [rect.x, rect.y, rect.width, rect.height],
-                        color: dim_alpha(super::intrinsics::color_to_rgba(bg, false), opacity),
-                        radii: self.resolve_radii(paint_attrs, "radius"),
-                        transform,
-                        smooth: self.resolve_smooth(paint_attrs),
-                    });
+                    push_fill(
+                        frame,
+                        byard_core::BoxInstance {
+                            rect: [rect.x, rect.y, rect.width, rect.height],
+                            color: dim_alpha(super::intrinsics::color_rgba_auto(bg), opacity),
+                            radii: self.resolve_radii(paint_attrs, "radius"),
+                            transform,
+                            smooth: self.resolve_smooth(paint_attrs),
+                        },
+                    );
                 }
                 // `route_change` and any pointer handlers on the container.
                 let hit_rect = scrolled_hit_rect(nav_rect, scroll_shift, cull_clip);
@@ -7663,9 +7673,7 @@ impl Interpreter {
                         .unwrap_or_default();
                     let base_rgb = self
                         .eval_color_prop(attrs, "color")
-                        .map_or([1.0, 1.0, 1.0, 1.0], |c| {
-                            super::intrinsics::color_to_rgba(c, false)
-                        });
+                        .map_or([1.0, 1.0, 1.0, 1.0], super::intrinsics::color_rgba_auto);
                     let opacity = inherited_opacity
                         * self
                             .eval_float_prop(attrs, "opacity")
@@ -7745,13 +7753,16 @@ impl Interpreter {
 
                     // Background fill: a plain solid behind every shape.
                     if let Some(bg) = self.eval_color_prop(paint_attrs, "bg") {
-                        frame.push_instance(byard_core::BoxInstance {
-                            rect: [rect.x, rect.y, rect.width, rect.height],
-                            color: dim_alpha(super::intrinsics::color_to_rgba(bg, false), opacity),
-                            radii: [0.0; 4],
-                            transform: inherited_transform,
-                            smooth: 0.0,
-                        });
+                        push_fill(
+                            frame,
+                            byard_core::BoxInstance {
+                                rect: [rect.x, rect.y, rect.width, rect.height],
+                                color: dim_alpha(super::intrinsics::color_rgba_auto(bg), opacity),
+                                radii: [0.0; 4],
+                                transform: inherited_transform,
+                                smooth: 0.0,
+                            },
+                        );
                     }
 
                     // Shape commands, in declaration order (painter's order,
@@ -7848,6 +7859,10 @@ impl Interpreter {
         let accent = self
             .eval_color_prop(attrs, "bg")
             .unwrap_or(self.theme.primary());
+        // The accent reads as opaque on purpose, here and on every control
+        // that owns its visuals: the layered pieces (thumb over track, dot
+        // under ring, disc under disc) are composed for an opaque accent and
+        // sit on the SolidBox pass. Fading a control is `opacity:`'s job.
         let track_color = if is_on {
             super::intrinsics::color_to_rgba(accent, false)
         } else {
@@ -7941,9 +7956,12 @@ impl Interpreter {
         } else {
             0.0
         };
+        // A border is a plain stroke on the blended pass, so its alpha byte
+        // counts, as on any `Box`.
         let border_rgba = border.map_or([0.0; 4], |c| {
-            dim_alpha(super::intrinsics::color_to_rgba(c, false), opacity)
+            dim_alpha(super::intrinsics::color_rgba_auto(c), opacity)
         });
+        // Opaque accent, as for `Toggle`.
         let accent = bg.unwrap_or(self.theme.primary());
         let fill = if filled {
             dim_alpha(super::intrinsics::color_to_rgba(accent, false), opacity)
@@ -8081,6 +8099,7 @@ impl Interpreter {
         let accent = self
             .eval_color_prop(attrs, "bg")
             .unwrap_or(self.theme.primary());
+        // Opaque accent, as for `Toggle`.
         let accent_rgba = super::intrinsics::color_to_rgba(accent, false);
         let ring_color = if selected {
             accent_rgba
@@ -8226,6 +8245,7 @@ impl Interpreter {
         let accent = self
             .eval_color_prop(attrs, "bg")
             .unwrap_or(self.theme.primary());
+        // Opaque accent, as for `Toggle`.
         let accent_rgba = super::intrinsics::color_to_rgba(accent, false);
 
         // Track (unfilled remainder).
@@ -13038,6 +13058,24 @@ fn eval_binary_f(op: BinOp, a: f64, b: f64) -> Value {
 fn dim_alpha(mut color: [f32; 4], opacity: f32) -> [f32; 4] {
     color[3] *= opacity;
     color
+}
+
+/// Pushes a plain fill onto the pass its alpha belongs to: an opaque one onto
+/// `SolidBox`, which writes depth and occludes, and a translucent one onto the
+/// blended decorated pass, which only tests it. A translucent fill on the solid
+/// pass would stamp a nearer depth over its whole rect and cull whatever later
+/// passes draw beneath it.
+fn push_fill(frame: &mut byard_core::frame::RenderFrame, fill: byard_core::BoxInstance) {
+    if fill.color[3] < 1.0 {
+        frame.push_decorated(byard_core::frame::DecoratedBox {
+            base: fill,
+            opacity: 1.0,
+            dirty: true,
+            ..Default::default()
+        });
+    } else {
+        frame.push_instance(fill);
+    }
 }
 
 /// Converts a packed `0xRRGGBB` colour to OKLab `[L, a, b]` for perceptually

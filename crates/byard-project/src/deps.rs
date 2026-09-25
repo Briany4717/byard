@@ -37,6 +37,7 @@ pub fn cache_dir() -> PathBuf {
 
 /// The cache directory for one pinned git source. The key hashes the URL and
 /// the exact ref, so two pins of the same repo never collide.
+#[must_use]
 pub fn git_cache_path(name: &str, url: &str, reference: &GitRef) -> PathBuf {
     let mut hasher = Sha256::new();
     hasher.update(url.as_bytes());
@@ -303,6 +304,7 @@ impl Lockfile {
 }
 
 /// The lockfile source string of a dependency.
+#[must_use]
 pub fn source_string(dep: &Dependency) -> String {
     match &dep.source {
         DepSource::Path(p) => format!("path+{}", p.display()),
@@ -423,6 +425,7 @@ pub fn fetch_git(url: &str, reference: &GitRef, dest: &Path) -> Result<String, S
 /// The cache directory for one published package version. Keyed by the
 /// registry's location too, so the same name and version from two
 /// registries never share a directory.
+#[must_use]
 pub fn registry_cache_path(name: &str, registry: &Path, version: &str) -> PathBuf {
     let mut hasher = Sha256::new();
     hasher.update(registry.to_string_lossy().as_bytes());
@@ -435,7 +438,9 @@ pub fn registry_cache_path(name: &str, registry: &Path, version: &str) -> PathBu
 /// One published version in a registry's `index.toml`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IndexEntry {
+    /// The package's `[package] name`.
     pub name: String,
+    /// The exact version published.
     pub version: String,
     /// [`package_checksum`] of the package: the value a lockfile pins, the
     /// same whether the package arrived from git, a path or here.
@@ -449,6 +454,7 @@ pub struct IndexEntry {
 /// A registry's `index.toml`: every published version.
 #[derive(Clone, Debug, Default)]
 pub struct RegistryIndex {
+    /// Every published version, one entry each.
     pub entries: Vec<IndexEntry>,
 }
 
@@ -513,6 +519,7 @@ impl RegistryIndex {
 }
 
 /// `sha256:<hex>` of some bytes.
+#[must_use]
 pub fn sha256_tag(bytes: &[u8]) -> String {
     format!("sha256:{}", hex_encode(&Sha256::digest(bytes)))
 }
@@ -590,6 +597,9 @@ pub struct FsProvider {
 }
 
 impl FsProvider {
+    /// A provider for `manifest`'s dependencies, verifying fetched content
+    /// against `lock` when there is one.
+    #[must_use]
     pub fn new(manifest: &Manifest, lock: Option<Lockfile>) -> Self {
         Self {
             roots: BTreeMap::new(),

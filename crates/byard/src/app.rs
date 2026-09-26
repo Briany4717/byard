@@ -77,7 +77,12 @@ pub struct App {
 }
 
 impl App {
-    /// Starts an app rooted at the `.byd` entry file `entry`.
+    /// Starts an app rooted at `entry`: a project (its directory or its
+    /// `byard.toml`), or a lone `.byd` file.
+    ///
+    /// A project runs exactly as `byard dev` runs it: its `[theme]` and
+    /// declared fonts, every `.byd` beside the entry, and its packages. A lone
+    /// file runs by itself in the built-in theme.
     #[must_use]
     pub fn new(entry: impl AsRef<Path>) -> Self {
         let entry = entry.as_ref().to_path_buf();
@@ -233,31 +238,7 @@ impl App {
                 names.join(", ")
             )));
         }
-        let source = std::fs::read_to_string(&self.entry).map_err(|e| {
-            ByardError::Platform(format!("cannot read `{}`: {e}", self.entry.display()))
-        })?;
-        let parsed = byard_compiler::parser::parse(&source);
-        if !parsed.errors.is_empty() {
-            // A shipped app with a broken view has nothing to fall back on, so
-            // it fails at startup with the diagnostics rather than opening a
-            // window onto nothing. (`byard dev` is the one that keeps going.)
-            let report = parsed
-                .errors
-                .iter()
-                .map(|e| format!("  {}", e.headline()))
-                .collect::<Vec<_>>()
-                .join("\n");
-            return Err(ByardError::Platform(format!(
-                "`{}` did not compile:\n{report}",
-                self.entry.display()
-            )));
-        }
-        if parsed.views.is_empty() {
-            return Err(ByardError::Platform(format!(
-                "`{}` declares no `View`",
-                self.entry.display()
-            )));
-        }
+        let (views, theme) = load_program(&self.entry)?;
 
         let (width, height) = self.size;
         // Wait mode: a shipped app redraws when something changed, and the
@@ -267,7 +248,8 @@ impl App {
         let (w0, h0) = (width as f32, height as f32);
         byard_platform::WinitHost::new(self.title.clone(), width, height).run(Host {
             engine: None,
-            views: parsed.views,
+            views,
+            theme: Some(theme),
             registry: self.registry,
             width_bits: Arc::new(AtomicU32::new(w0.to_bits())),
             height_bits: Arc::new(AtomicU32::new(h0.to_bits())),
@@ -275,11 +257,53 @@ impl App {
     }
 }
 
+/// Reads the program an app runs and the theme it runs in, the same way
+/// `byard dev` does (RFC-0008, RFC-0022).
+///
+/// `entry` is a `.byd` file, or a project: its directory or its `byard.toml`.
+/// A project brings its `[theme]`, its declared fonts, every `.byd` beside the
+/// entry, and its packages; a lone file brings itself and the built-in theme,
+/// exactly as it always did.
+///
+/// A shipped app with a broken view has nothing to fall back on, so a program
+/// that does not compile fails here with its diagnostics rather than opening
+/// a window onto nothing. (`byard dev` is the one that keeps going.)
+fn load_program(
+    entry: &Path,
+) -> Result<(Vec<ViewDecl>, byard_compiler::interp::theme::Theme), ByardError> {
+    let manifest = byard_project::manifest::Manifest::discover(Some(entry))
+        .map_err(|e| ByardError::Platform(format!("`{}`: {e}", entry.display())))?;
+    let (program, _) = byard_project::deps::resolve_project(&manifest)
+        .map_err(|e| ByardError::Platform(format!("`{}`: {e}", entry.display())))?;
+    if !program.errors.is_empty() {
+        let report = program
+            .errors
+            .iter()
+            .map(|e| format!("  {}", e.headline()))
+            .collect::<Vec<_>>()
+            .join("\n");
+        return Err(ByardError::Platform(format!(
+            "`{}` did not compile:\n{report}",
+            entry.display()
+        )));
+    }
+    if program.views.is_empty() {
+        return Err(ByardError::Platform(format!(
+            "`{}` declares no `View`",
+            entry.display()
+        )));
+    }
+    Ok((program.views, manifest.theme))
+}
+
 /// The `PlatformHost` half: owns the `Engine`, forwards OS input, and starts
 /// the logic thread once the surface exists.
 struct Host {
     engine: Option<Engine>,
     views: Vec<ViewDecl>,
+    /// The project's theme, fonts included (RFC-0022, RFC-0034): taken by the
+    /// logic thread when it starts.
+    theme: Option<byard_compiler::interp::theme::Theme>,
     registry: ControllerRegistry,
     width_bits: Arc<AtomicU32>,
     height_bits: Arc<AtomicU32>,
@@ -317,15 +341,23 @@ impl PlatformHost for Host {
         // invisible to the view that asked for it (RFC-0028 §3).
         let dispatcher = engine.dispatcher(std::mem::take(&mut self.registry));
         let views = std::mem::take(&mut self.views);
+        let theme = self.theme.take();
         let width_bits = Arc::clone(&self.width_bits);
         let height_bits = Arc::clone(&self.height_bits);
 
         engine.start_logic_from_view(move |_arena| {
             let mut interp = Interpreter::new();
             interp.set_dispatcher(dispatcher);
+            // Before lowering, as `byard dev` does: `inject Theme` resolves
+            // against the ambient chain at lower time.
+            if let Some(theme) = theme {
+                interp.set_theme(theme);
+            }
             interp.load_views(&views);
             let known: Vec<&str> = views.iter().map(|v| v.name.as_str()).collect();
-            let tree = interp.lower_view(&views[0], &known);
+            let root = byard_compiler::parser::ast::root_view(&views)
+                .expect("a program with no views is rejected before this");
+            let tree = interp.lower_view(root, &known);
             interp.tick();
             Box::new(AppRuntime {
                 interp,
@@ -391,6 +423,16 @@ impl PlatformHost for Host {
             (0.0, 0.0),
             payload,
         );
+    }
+
+    fn on_ime(&mut self, event: byard_core::ImeEvent) {
+        if let (Some(engine), Some(input)) = (self.engine.as_ref(), event.into_input(now_ms())) {
+            engine.push_input(input);
+        }
+    }
+
+    fn text_input(&self) -> Option<byard_core::frame::TextInputState> {
+        self.engine.as_ref().and_then(Engine::text_input)
     }
 
     fn on_scroll(&mut self, dx: f32, dy: f32, x: f32, y: f32) {
@@ -477,6 +519,54 @@ impl LogicRuntime for AppRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A shipped app reads its project as `byard dev` does: the theme's
+    /// tokens and declared fonts arrive, and a view in a sibling file is part
+    /// of the program. It used to read the entry file alone, so a project's
+    /// theme, fonts, other files and packages were all silently absent from
+    /// the shipped build.
+    #[test]
+    fn a_project_brings_its_theme_fonts_and_sibling_views() {
+        let dir = std::env::temp_dir().join(format!("byard-app-project-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("fonts")).unwrap();
+        std::fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../byard-cli/examples/assets/fonts/Manrope-Variable.ttf"),
+            dir.join("fonts/Body.ttf"),
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("byard.toml"),
+            "[project]\nname = \"shipped\"\nentry = \"main.byd\"\n\
+             [assets.fonts]\nBody = \"fonts/Body.ttf\"\n\
+             [theme.color.light]\nprimary = \"#123456\"\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("main.byd"), "View Main() { Card() }\n").unwrap();
+        std::fs::write(
+            dir.join("card.byd"),
+            "View Card() { Text(\"card\") #[font: \"Body\"] }\n",
+        )
+        .unwrap();
+
+        let (views, theme) = load_program(&dir).expect("the project loads");
+        let names: Vec<&str> = views.iter().map(|v| v.name.as_str()).collect();
+        assert!(names.contains(&"Card"), "the sibling view: {names:?}");
+        assert_eq!(theme.color("primary", false), Some(0x0012_3456));
+        assert!(theme.font("Body").is_some(), "the declared font");
+
+        // A lone file still runs by itself, in the built-in theme.
+        let (views, theme) = load_program(&dir.join("card.byd")).expect("a lone file loads");
+        assert_eq!(views.len(), 1);
+        assert!(theme.font("Body").is_none());
+
+        // And a program that does not compile fails with its diagnostics.
+        std::fs::write(dir.join("main.byd"), "View Main( {").unwrap();
+        let err = load_program(&dir).unwrap_err().to_string();
+        assert!(err.contains("did not compile"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn the_store_identity_does_not_come_from_the_entry_file_name() {

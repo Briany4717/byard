@@ -135,6 +135,7 @@ impl WinitHost {
             poll: self.poll,
             waker,
             modifiers: KeyModifiers::default(),
+            ime_caret: None,
         };
 
         event_loop
@@ -175,6 +176,9 @@ struct WinitApp<H: PlatformHost> {
     /// Latest modifier state, tracked so a key event can be offered to the host
     /// as a chord before it reaches the router (RFC-0030 §V3).
     modifiers: KeyModifiers,
+    /// The caret last handed to the IME, `None` while it is off (RFC-0040
+    /// §4). Kept so the window is only told when something changed.
+    ime_caret: Option<byard_core::frame::Rect>,
 }
 
 impl<H: PlatformHost> WinitApp<H> {
@@ -183,6 +187,33 @@ impl<H: PlatformHost> WinitApp<H> {
     fn fail(&mut self, event_loop: &ActiveEventLoop, err: ByardError) {
         self.fatal = Some(err);
         event_loop.exit();
+    }
+
+    /// Turns the IME on or off and moves its candidate window to follow the
+    /// focused field's caret, as the frame just presented reports it
+    /// (RFC-0040 §4). Read from the presented frame, so the rectangle is
+    /// always that of what is on screen, and the logic thread never touches
+    /// the window.
+    fn sync_ime(&mut self) {
+        let want = self.host.text_input().map(|t| t.caret);
+        if want == self.ime_caret {
+            return;
+        }
+        let Some(window) = self.window.as_ref() else {
+            return;
+        };
+        match (self.ime_caret, want) {
+            (None, Some(_)) => window.set_ime_allowed(true),
+            (Some(_), None) => window.set_ime_allowed(false),
+            _ => {}
+        }
+        if let Some(caret) = want {
+            window.set_ime_cursor_area(
+                winit::dpi::LogicalPosition::new(caret.x, caret.y),
+                LogicalSize::new(caret.width, caret.height),
+            );
+        }
+        self.ime_caret = want;
     }
 }
 
@@ -278,7 +309,14 @@ impl<H: PlatformHost> ApplicationHandler<FramePublished> for WinitApp<H> {
             WindowEvent::RedrawRequested => {
                 if let Err(e) = self.host.on_redraw() {
                     self.fail(event_loop, e);
+                    return;
                 }
+                self.sync_ime();
+            }
+
+            WindowEvent::Ime(ime) => {
+                self.host.on_ime(to_ime_event(ime));
+                window.request_redraw();
             }
 
             WindowEvent::CursorMoved { position, .. } => {
@@ -333,10 +371,15 @@ impl<H: PlatformHost> ApplicationHandler<FramePublished> for WinitApp<H> {
                 if !key_str.is_empty() {
                     self.host.on_key(&key_str, pressed);
                 }
-                // Fire text input only for printable characters on press
+                // Typed text, on press. Read from `text` rather than the logical
+                // key: it is what carries a dead-key combination on Windows.
+                // Control characters (Enter's "\r", Backspace's "\u{8}") are
+                // keys, not text, and already went to `on_key`. Text an IME
+                // commits never arrives here, winit delivers it as
+                // `Ime::Commit` instead (RFC-0040 §3).
                 if pressed {
-                    if let Key::Character(s) = &event.logical_key {
-                        self.host.on_text(s.as_str());
+                    if let Some(text) = typed_text(&event) {
+                        self.host.on_text(text);
                     }
                 }
                 window.request_redraw();
@@ -508,6 +551,28 @@ fn to_scroll_origin(delta: MouseScrollDelta, scale_factor: f64) -> ScrollOrigin 
     }
 }
 
+/// The text a key press typed, if any: `None` for a key that types nothing
+/// and for control characters, which are keys rather than text.
+fn typed_text(event: &winit::event::KeyEvent) -> Option<&str> {
+    event
+        .text
+        .as_deref()
+        .filter(|t| !t.is_empty() && !t.chars().any(char::is_control))
+}
+
+/// Maps winit's IME event onto the engine's platform-neutral one (RFC-0040
+/// §3). A pure function, so the mapping is testable without a window.
+fn to_ime_event(ime: winit::event::Ime) -> byard_core::ImeEvent {
+    use byard_core::ImeEvent;
+    use winit::event::Ime;
+    match ime {
+        Ime::Enabled => ImeEvent::Enabled,
+        Ime::Preedit(text, cursor) => ImeEvent::Preedit { text, cursor },
+        Ime::Commit(text) => ImeEvent::Commit(text),
+        Ime::Disabled => ImeEvent::Disabled,
+    }
+}
+
 /// Converts a `winit` logical key to a string key name.
 ///
 /// Returns an empty string for keys we don't model (so the caller can skip).
@@ -535,6 +600,35 @@ fn key_to_str(key: &Key) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every winit IME event maps onto the engine's own, field for field
+    /// (RFC-0040 §3), so the host never has to know which windowing library
+    /// produced it.
+    #[test]
+    fn ime_events_map_one_to_one() {
+        use byard_core::ImeEvent;
+        use winit::event::Ime;
+        assert_eq!(to_ime_event(Ime::Enabled), ImeEvent::Enabled);
+        assert_eq!(
+            to_ime_event(Ime::Preedit("にほん".into(), Some((3, 6)))),
+            ImeEvent::Preedit {
+                text: "にほん".into(),
+                cursor: Some((3, 6))
+            }
+        );
+        assert_eq!(
+            to_ime_event(Ime::Preedit(String::new(), None)),
+            ImeEvent::Preedit {
+                text: String::new(),
+                cursor: None
+            }
+        );
+        assert_eq!(
+            to_ime_event(Ime::Commit("日本".into())),
+            ImeEvent::Commit("日本".into())
+        );
+        assert_eq!(to_ime_event(Ime::Disabled), ImeEvent::Disabled);
+    }
 
     #[test]
     fn to_window_size_carries_fields_through_unchanged() {

@@ -1,0 +1,10 @@
+// A view the package exports. It names its own face as `brand/Display`,
+// which works in any project that depends on it, whatever that project calls
+// the dependency.
+View Badge(label: Str = "brand") {
+    inject Theme as t
+    Box #[bg: t.primaryContainer, radius: 12, p: (vertical: 6, horizontal: 12)] {
+        Text(label) #[font: "brand/Display", size: 14, weight: medium,
+                      color: t.onPrimaryContainer]
+    }
+}

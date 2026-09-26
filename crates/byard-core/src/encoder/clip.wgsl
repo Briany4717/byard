@@ -17,6 +17,13 @@ struct ClipEntry {
     rect: vec4<f32>,
     /// Per-corner radii `[tl, tr, br, bl]`, all zero for a plain rectangle.
     radii: vec4<f32>,
+    /// The path mask's bounds in physical pixels (RFC-0037 `clip(path)`), or
+    /// all zero when this clip has no path. A zero-width rect contains
+    /// nothing, which is what makes "is there a mask" a width test rather
+    /// than a separate flag to keep in step.
+    mask_rect: vec4<f32>,
+    /// Where that mask was rasterised in the coverage strip, `(u0, v0, u1, v1)`.
+    mask_uv: vec4<f32>,
     /// Padding out to the 256-byte stride the entries are spaced at.
     ///
     /// The binding is the whole stride rather than the 32 bytes of payload,
@@ -28,10 +35,16 @@ struct ClipEntry {
     /// turned out to be #234, a pre-existing defect in `solid_box`, not this.
     /// So the wider binding is not known to be *required* — it is correct,
     /// it costs nothing, and the smaller one was never seen green on D3D12.
-    _pad: array<vec4<f32>, 14>,
+    _pad: array<vec4<f32>, 12>,
 };
 
 @group(0) @binding(1) var<uniform> clip_entry: ClipEntry;
+/// The coverage strip every path mask of the frame is rasterised into, and
+/// the sampler it is read with. Always bound: a frame with no path clip binds
+/// a one-texel placeholder, so an unclipped fragment and a path-clipped one
+/// run the same instructions.
+@group(0) @binding(2) var clip_mask_tex: texture_2d<f32>;
+@group(0) @binding(3) var clip_mask_samp: sampler;
 
 /// Signed distance to the clip's rounded rectangle: negative inside.
 ///
@@ -78,5 +91,31 @@ fn clip_coverage(p: vec2<f32>) -> f32 {
     // that it explained a Windows failure. It did not — that was #234 — so
     // this stands on the reasoning above and not on that story.
     let d = clip_sdf(p);
-    return saturate(1.0 - smoothstep(-0.5, 0.5, d));
+    let rounded = saturate(1.0 - smoothstep(-0.5, 0.5, d));
+    return rounded * clip_path_coverage(p);
+}
+
+/// Coverage of `p` by this clip's path mask (RFC-0037 `clip(path)`), or 1 when
+/// the clip has none.
+///
+/// Multiplied into the rounded coverage rather than replacing it, so a path
+/// clip nested inside a rounded one is cut by both, and the antialiasing of
+/// either edge survives the other. The mask's own edge was antialiased when it
+/// was rasterised (a multisampled attachment, resolved); this reads it back
+/// linearly, which is what keeps that softness when a fragment falls between
+/// texels.
+///
+/// `textureSampleLevel` rather than `textureSample`: the clip test is called
+/// from inside non-uniform control flow in several pipelines, where implicit
+/// derivatives are not defined, and a mask has one mip level regardless.
+fn clip_path_coverage(p: vec2<f32>) -> f32 {
+    let r = clip_entry.mask_rect;
+    let uv_rect = clip_entry.mask_uv;
+    let t = (p - r.xy) / max(r.zw, vec2<f32>(1e-5));
+    let uv = mix(uv_rect.xy, uv_rect.zw, t);
+    let inside = f32(all(t >= vec2<f32>(0.0)) && all(t <= vec2<f32>(1.0)));
+    let sampled = textureSampleLevel(clip_mask_tex, clip_mask_samp, uv, 0.0).r;
+    // `select` keeps a clip with no mask at exactly 1.0, whatever the
+    // placeholder texel holds; a masked clip reads 0 outside its own region.
+    return select(1.0, sampled * inside, r.z > 0.0);
 }

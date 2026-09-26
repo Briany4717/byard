@@ -31,9 +31,13 @@ pub fn run() -> Result<(), String> {
             }
             let (root, commit) = ensure_present(&declarer_root, &dep)?;
             let checksum = package_checksum(&root)?;
+            let kind = match dep.source {
+                DepSource::Path(_) => "path",
+                DepSource::Git { .. } => "git ",
+                DepSource::Registry { .. } => "reg ",
+            };
             style::info(&format!(
-                "{} {} ({})",
-                if commit.is_empty() { "path" } else { "git " },
+                "{kind} {} ({})",
                 dep.name,
                 checksum.split(':').nth(1).map_or("", |h| &h[..12])
             ));
@@ -64,6 +68,10 @@ pub fn run() -> Result<(), String> {
 fn ensure_present(declarer_root: &Path, dep: &Dependency) -> Result<(PathBuf, String), String> {
     match &dep.source {
         DepSource::Path(_) => Ok((dep_root(declarer_root, dep)?, String::new())),
+        DepSource::Registry { registry, version } => Ok((
+            crate::deps::fetch_registry(&dep.name, &declarer_root.join(registry), version)?,
+            String::new(),
+        )),
         DepSource::Git { url, reference } => {
             let dest = git_cache_path(&dep.name, url, reference);
             let commit = if dest.is_dir() {

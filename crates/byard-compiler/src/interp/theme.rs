@@ -226,10 +226,41 @@ const BASE_DARK: &[(&str, i64)] = &[
 /// The default logical-pixel font size when no `titleLarge`-style token applies.
 pub const DEFAULT_FONT_SIZE: f32 = 14.0;
 
+/// The `byard-base` padding a `Button` puts around its label when the author
+/// writes no `p:` (vertical, horizontal): the M3 common button's 24 px side
+/// inset, and the vertical inset that centres a `labelLarge` line in
+/// [`BUTTON_MIN_SIZE`].
+pub const BUTTON_PADDING: (f32, f32) = (10.0, 24.0);
+
+/// The `byard-base` minimum `Button` extent, applied to the height unless the
+/// author writes `height:` and to the width unless they write `width:`: the M3
+/// button container height, so a bare one-line label is still a target a
+/// pointer or finger can hit, and a single-glyph button stays a square target
+/// instead of a sliver.
+pub const BUTTON_MIN_SIZE: f32 = 40.0;
+
 /// The scheme name used for the light color scheme.
 pub const SCHEME_LIGHT: &str = "light";
 /// The scheme name used for the dark color scheme.
 pub const SCHEME_DARK: &str = "dark";
+
+/// A font family declared in `[assets.fonts]`, with its bytes loaded
+/// (RFC-0034 §Reference "Asset side").
+///
+/// Holding the bytes here rather than a path is what makes the theme the
+/// single source of truth INV-27 asks for: the measurement `FontSystem` and
+/// the paint one are both fed from this record, so neither can be given a file
+/// the other never saw.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DeclaredFont {
+    /// The path as written in `byard.toml`, for diagnostics.
+    pub path: String,
+    /// The family name the face itself carries, which is what shaping matches
+    /// on. Resolved once, when the bytes were read.
+    pub resolved: std::sync::Arc<str>,
+    /// The font file's bytes, shared with every `FontSystem` that loads them.
+    pub bytes: std::sync::Arc<[u8]>,
+}
 
 /// Color, typography, and shape design tokens for a view tree (RFC-0022 §1).
 ///
@@ -247,15 +278,33 @@ pub struct Theme {
     typography: BTreeMap<String, TypoToken>,
     /// `camelCase token → corner radius`.
     shapes: BTreeMap<String, f32>,
-    /// Declared font families available for `TypoToken.family` resolution
-    /// (RFC-0022 §3): `family name → asset path`. Registration of the bytes
-    /// themselves is deferred; presence here suppresses the `FontNotFound`
-    /// warning.
-    fonts: BTreeMap<String, String>,
+    /// Declared font families (RFC-0022 §3, RFC-0034): the name written in
+    /// `[assets.fonts]` → the loaded face.
+    ///
+    /// The bytes are loaded when the manifest is read, not deferred: a family
+    /// that resolves to nothing is a compile diagnostic, and a diagnostic that
+    /// arrives at paint time is a square box nobody can act on (INV-4).
+    fonts: BTreeMap<String, DeclaredFont>,
+    /// Named viewport widths for responsive style variants (RFC-0016):
+    /// `camelCase` name → logical pixels. A design system's breakpoints are
+    /// part of the design system, so they are declared here rather than baked
+    /// into the language as a fixed `sm`/`md`/`lg`.
+    breakpoints: BTreeMap<String, f32>,
     /// The active scheme mirror for default resolution (`true` ⇒ `dark`).
     pub active_dark: bool,
     /// Default font size in logical pixels (the theme-default layer).
     pub font_size: f32,
+    /// Padding a `Button` gets when no `p:`/side is written, as
+    /// `(vertical, horizontal)` (the theme-default layer).
+    pub button_padding: (f32, f32),
+    /// Minimum `Button` width and height, each applied unless the matching
+    /// `width:`/`height:` is written (the theme-default layer).
+    pub button_min_size: f32,
+    /// How long a scheme flip cross-fades the colour tokens, in milliseconds
+    /// (RFC-0016 animated token transitions). `0` is the cut, which is what
+    /// every theme did before this existed and what a theme that says nothing
+    /// still gets.
+    pub transition_ms: u32,
 }
 
 impl Theme {
@@ -303,8 +352,12 @@ impl Theme {
             typography,
             shapes,
             fonts: BTreeMap::new(),
+            breakpoints: BTreeMap::new(),
             active_dark: false,
             font_size: DEFAULT_FONT_SIZE,
+            button_padding: BUTTON_PADDING,
+            button_min_size: BUTTON_MIN_SIZE,
+            transition_ms: 0,
         }
     }
 
@@ -385,18 +438,67 @@ impl Theme {
     /// Whether a font family has been declared in `[assets.fonts]` (RFC-0022 §3).
     #[must_use]
     pub fn has_font(&self, family: &str) -> bool {
-        self.fonts.contains_key(family) || self.fonts.keys().any(|k| to_camel(k) == family)
+        self.font(family).is_some()
     }
 
-    /// Declared font families (`name → asset path`).
+    /// The declared face for `family`, under either the manifest's spelling or
+    /// its `camelCase` byld reference form (RFC-0034 `font:` resolution).
     #[must_use]
-    pub fn fonts(&self) -> &BTreeMap<String, String> {
+    pub fn font(&self, family: &str) -> Option<&DeclaredFont> {
+        self.fonts.get(family).or_else(|| {
+            self.fonts
+                .iter()
+                .find(|(k, _)| to_camel(k) == family)
+                .map(|(_, v)| v)
+        })
+    }
+
+    /// The width in logical pixels a named breakpoint stands for, under
+    /// either its manifest spelling or its `camelCase` form (RFC-0016).
+    #[must_use]
+    pub fn breakpoint(&self, name: &str) -> Option<f32> {
+        self.breakpoints.get(name).copied().or_else(|| {
+            self.breakpoints
+                .iter()
+                .find(|(k, _)| to_camel(k) == name)
+                .map(|(_, v)| *v)
+        })
+    }
+
+    /// Every declared breakpoint name, for diagnostics.
+    #[must_use]
+    pub fn breakpoint_names(&self) -> Vec<String> {
+        self.breakpoints.keys().cloned().collect()
+    }
+
+    /// Declares a breakpoint (RFC-0016).
+    pub fn set_breakpoint(&mut self, name: &str, px: f32) {
+        self.breakpoints.insert(to_camel(name), px);
+    }
+
+    /// Declared font families (`declared name → loaded face`).
+    #[must_use]
+    pub fn fonts(&self) -> &BTreeMap<String, DeclaredFont> {
         &self.fonts
     }
 
-    /// Registers a font family declared in `[assets.fonts]`.
-    pub fn add_font(&mut self, name: impl Into<String>, path: impl Into<String>) {
-        self.fonts.insert(name.into(), path.into());
+    /// Registers a font family declared in `[assets.fonts]`, already loaded.
+    pub fn add_font(&mut self, name: impl Into<String>, font: DeclaredFont) {
+        self.fonts.insert(name.into(), font);
+    }
+
+    /// Replaces both schemes' colour roles with the ones derived from `seed`
+    /// (`0xRRGGBB`, RFC-0022 §5, see [`crate::interp::seed`]). Only the roles
+    /// a derivation fills are touched, so a token the base has and the seed
+    /// does not keeps its value, and any `set_color` made *after* this wins,
+    /// which is how an explicit `[theme.color.*]` entry overrides a seed.
+    pub fn apply_seed(&mut self, seed: i64) {
+        let (light, dark) = crate::interp::seed::derive(seed);
+        for (scheme, table) in [("light", light), ("dark", dark)] {
+            for (role, rgb) in table {
+                self.set_color(scheme, role, rgb);
+            }
+        }
     }
 
     /// Sets (or overrides) a color token in a scheme. Keys are canonicalized to

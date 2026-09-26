@@ -1,6 +1,30 @@
 # RFC-0016: Style System, styles as first-class values (Hybrid D+B+C)
 
-- **Status:** Active, partially implemented (M38 first-class `Style` values + `..` spread, M39 recipes/variants + `merge`, M40 `on <state> {}` blocks landed). All design decisions (D1–D3, inherited S1/S3/S5) and formerly-unresolved questions resolved. Remaining: responsive/adaptive variants, runtime theme switching with animated token transitions.
+- **Status:** Active, implemented, except the platform axis, which is deliberately not built (below). First-class `Style` values with `..` spread, recipes and variants with `merge`, and `on <state> {}` blocks landed first. All design decisions (D1 to D3, inherited S1/S3/S5) and formerly-unresolved questions resolved. **Responsive variants and animated token transitions landed 2026-09-24.** Nothing in this RFC's deferred list remains unbuilt except the platform axis, noted below as deliberately not built.
+
+  **Responsive variants, as built.** A style carries `on width >= md { … }` (and `on width < md`, and the `height` forms) beside its `on hover { … }`, where `md` is a breakpoint the project declares:
+
+  ```toml
+  [theme.breakpoints]
+  md = 640
+  lg = 1024
+  ```
+
+  Three decisions, each worth the reasoning:
+
+  - **Breakpoints are the design system's, not the language's.** A fixed `sm`/`md`/`lg` baked into the grammar is three numbers every project that disagrees has to work around, which is how a feature stops being used. A literal width (`on width >= 700`) works too. An undeclared name is a compile error with the nearest declared one, reported once per written block however many rows lower it; resolved at render it never holds, rather than holding always.
+  - **Two operators, `>=` and `<`.** They partition the axis with no gap and no overlap at the breakpoint itself; a test checks exactly one of a pair applies at 599.9, 600 and 600.1.
+  - **They reach layout, which interaction blocks never did.** Every `on …` block was applied only when painting, so a `p:` inside one never reached layout. That is right for `on hover` (a hover must not move its own box) and wrong for a breakpoint, whose whole purpose is often a padding, a width, a direction or a grid's `columns`. The layout pass now resolves blocks with no interaction state, so exactly the viewport blocks apply there; paint resolves both. A responsive block counts as one unit of specificity, the same as a single state, so declaration order settles a tie between them as it settles one between two states.
+
+  Crossing a breakpoint is a resize, which already rebuilds layout in full (RFC-0032 §Q6), so a variant costs nothing on any frame that did not change the window.
+
+  **Animated token transitions, as built.** `[theme] transition = 300` makes a scheme flip cross-fade every colour token in OKLab over that many milliseconds; absent, the flip is the cut it always was, byte for byte. Decisions:
+
+  - **One mix for the whole theme, not an animation per token or per element.** Every token is heading from the same scheme to the same scheme, so one number describes all of them, and a theme with forty tokens flips for the price of one. The example this replaces put `with anim.spring()` on some token reads and not others, so backgrounds eased while text snapped; the per-theme transition makes them move together by construction.
+  - **Reversal is continuous.** A flip half way through replaces the mix with `1 − mix`, which is the same colour read backwards, under a smoothstep that is symmetric about one half; a second tap turns the fade round from wherever it had got to.
+  - **The mix restarts in the tick the flip happens in**, so the first frame after a flip is still the old colour rather than one frame of the new scheme at full strength.
+  - **Colour tokens only.** A typography token that animated its size would relayout every frame of the fade, a cost better refused than offered. The frames of a fade take the retained layout path, and that is asserted.
+  - **At rest a token returns exactly its value**, not a blend that happens to land on it, and an interpreter with no theme is never reported as mid-fade (the mix's fields default to zero, which would otherwise have kept every theme-less app awake).
 - **Author(s):** Brian (byard_v2)
 - **Created:** 2026-07-01
 - **Last updated:** 2026-07-01
@@ -296,8 +320,8 @@ central theming, which Byard's token layer fixes), Jetpack Compose Material3 the
 
 ## Future possibilities
 
-- Responsive/adaptive variants (axis keyed on viewport/platform).
-- Theme switching at runtime via `inject`ed theme (dark/light) with animated token
-  transitions (RFC-0010).
+- ~~Responsive/adaptive variants (axis keyed on viewport/platform).~~ Implemented for the viewport axis; see the status line. A *platform* axis (`on platform == ios`) is not built: the engine has one desktop host today and a condition nothing can make true is a surface to maintain for no one.
+- ~~Theme switching at runtime via `inject`ed theme (dark/light) with animated token
+  transitions (RFC-0010).~~ Implemented; see the status line.
 - `checked`/`selected`/`invalid` value-widget states (RFC-0012 Phase 2).
 - A visual style inspector in the dev overlay (RFC-0013) showing the 4-tier resolve.

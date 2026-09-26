@@ -16,6 +16,9 @@ byard-macro = { path = "../byard-macro" }
 # is the top of the dependency graph, so both edges point forward (INV-1).
 byard-compiler = { path = "../byard-compiler" }
 byard-platform = { path = "../byard-platform" }
+# `App` reads a project the way `byard dev` does: manifest, theme, fonts,
+# sibling views and packages (RFC-0008, RFC-0022).
+byard-project = { path = "../byard-project" }
 wgpu = "29.0"
 pollster = "0.4"
 

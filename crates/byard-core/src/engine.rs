@@ -242,6 +242,7 @@ impl ReactiveLabel {
             text: self.signal.read(String::clone),
             font_size: self.font_size,
             weight: 400,
+            family: None,
             color: self.color,
             dirty,
         })
@@ -628,6 +629,14 @@ impl Engine {
         let handle = Relay::spawn_logic_from_view(&self.relay, build)?;
         self.logic_handle = Some(handle);
         Ok(())
+    }
+
+    /// The caret of the focused text field in the latest published frame,
+    /// in viewport space (RFC-0040 §4). The platform reads it after each
+    /// redraw to place the IME's candidate window.
+    #[must_use]
+    pub fn text_input(&self) -> Option<crate::frame::TextInputState> {
+        self.relay.current().and_then(|f| f.text_input())
     }
 
     /// Renders the latest [`RenderFrame`](crate::frame::RenderFrame) published

@@ -15,11 +15,15 @@ members = [
     "crates/byard-macro",
     "crates/byld-lsp",
     "crates/byard-cli",
+    # Test support: one GPU device per test process, used by one test at a time.
+    "crates/byard-test-gpu",
+    "crates/byard-project",
     # Runnable two-layer apps: a `.byd` view plus the Rust controller half
     # (RFC-0028 §2). They are workspace members so `cargo test --workspace`
     # compiles them, which is what keeps the façade's public surface honest.
     "examples/controller_demo",
     "examples/sparkline_view",
+    "examples/aura_weather",
 ]
 
 [workspace.package]
@@ -41,3 +45,8 @@ pedantic = { level = "warn", priority = -1 }
 # Allow these pedantic lints that are too noisy for a young codebase:
 module_name_repetitions = "allow"
 missing_errors_doc      = "allow"
+
+# A one-line fix to swash 0.2.9's variation coordinates, which leaked from
+# one font to the next. See third_party/swash/BYARD.md.
+[patch.crates-io]
+swash = { path = "third_party/swash" }

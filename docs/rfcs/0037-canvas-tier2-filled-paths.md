@@ -8,8 +8,8 @@
   read by the same parser and interpolated by the same shader block a box fill
   uses (`encoder/gradient.wgsl`, textually shared).
 
-  **Clip masks: the rounded-rect half landed 2026-08-31; `clip(path)` did
-  not.** `Clip #[rrect: r]` cuts its whole subtree to a rounded rectangle
+  **Clip masks: the rounded-rect half landed 2026-08-31; `clip(path)`
+  followed on 2026-09-23 (below).** `Clip #[rrect: r]` cuts its whole subtree to a rounded rectangle
   through an analytic SDF in the fragment shader — no stencil, no
   tessellation — which is the fast path this RFC's resolved question asks for.
   It is guarded in pixels (`clip_mask_readback.rs`) with a runnable example
@@ -28,15 +28,45 @@
     one pipeline's corners and not another's would show as a hairline where an
     image meets the card it is clipped to.
 
-  **`clip(path)` remains deferred, and is underspecified here.** The guide
-  writes it as `clip(path) { … }` with a literal ellipsis and never says where
-  the path's commands come from — a `d:` string, a Canvas-style body, or a
-  sibling shape are all consistent with the text. That surface has to be
-  decided before it can be built.
+  **`clip(path)` landed 2026-09-23, and this document did not specify it.**
+  The guide wrote `clip(path) { … }` with a literal ellipsis and never said
+  where the commands come from: a `d:` string, a Canvas-style body, or a
+  sibling shape are all consistent with the text. Two decisions were taken
+  before it was built, and both are recorded here as the specification.
 
-  Its implementation blocker is smaller than this document assumed, though.
-  The stencil attachment it needs is real — `DEPTH_FORMAT` is `Depth32Float`
-  and carries no stencil bits — but switching to the universally available
+  - **The surface: the mask is a `path` child of `Clip`.** `path` is a hard
+    error outside `Canvas`, so the slot was free and claiming it breaks
+    nothing. The commands are the ones the language already has, measured
+    from the `Clip`'s own top-left the way a `Canvas`'s are from its own,
+    tessellated by the same `lyon` path and cached under the same fingerprint.
+    A `d:` string would have been a second path grammar. Only one `path` is
+    lifted, and only by `Clip`: a second one, or one anywhere else, is still
+    `ShapeOutsideCanvas` with its existing message, so the rule was not
+    relaxed for anyone. A mask and `rrect:` compose, as two nested entries
+    whose coverages multiply.
+  - **The mechanism: a coverage texture, not a stencil.** Not a performance
+    argument, and the performance argument is the one that would lead you
+    wrong: the stencil is cheaper, and the attachment switch it needs is safe
+    (see the precision note below). The reason is that **a stencil is one
+    bit.** The rounded clip that shipped cuts its edge with an analytic SDF,
+    so it is smooth; a stencil sibling would put a hard edge on the one
+    boundary the user actually drew, while every boundary the engine generated
+    stayed soft. Each mask is rasterised into a 4× multisampled R8 attachment,
+    resolved into a single-sample coverage strip, and multiplied into the
+    coverage the shared clip test already computes (`encoder/clip.wgsl`). The
+    readback that pins this was run against a single-sample mask as well, and
+    only the antialiasing assertion failed, which is the argument above made
+    executable.
+
+  One defect found on the way, fixed at the source: **the paint digest did not
+  know about clips at all.** A primitive drawn under a clip whose corner radius
+  animated, or whose path moved, is byte-for-byte what it was last frame, so it
+  was judged clean and kept stale pixels. Every clip entry is now hashed once
+  per frame and folded into the hash of every primitive drawn under it, with no
+  added allocation on the reference frame.
+
+  For the record, the precision analysis that made a stencil *look* safe, and
+  still holds: `DEPTH_FORMAT` is `Depth32Float` with no stencil bits, but
   `Depth24PlusStencil8` is safe for this engine's draw-order scheme, which was
   the reason to fear the swap: depths are spaced `1/65536` apart (`draw_depth`)
   and a 24-bit unorm quantum is about `6e-8`, leaving roughly 256× headroom, so

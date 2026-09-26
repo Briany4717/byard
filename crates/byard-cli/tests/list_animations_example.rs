@@ -135,11 +135,34 @@ fn row_opacities(interp: &mut Interpreter, tree: &[RenderNode], ms: u32) -> Vec<
     interp.set_now_ms(ms);
     let mut f = RenderFrame::new();
     interp.render(tree, &mut f, W, H);
+    // The *effective* opacity each bar reaches the screen with. A row that
+    // fades its whole container is faded as one picture (RFC-0011 T4), so its
+    // bar draws opaque inside an opacity group and the fade is the group's.
+    // Reading only the primitive's own alpha would report every fading row as
+    // either opaque or missing, which is where this helper used to look.
     let mut rows: Vec<(f32, f32)> = f
         .decorated()
         .iter()
-        .filter(|d| (d.base.rect[3] - BAR_HEIGHT).abs() < 0.5)
-        .map(|d| (d.base.rect[1], d.opacity))
+        .enumerate()
+        .filter(|(_, d)| (d.base.rect[3] - BAR_HEIGHT).abs() < 0.5)
+        .map(|(i, d)| {
+            (
+                d.base.rect[1],
+                d.opacity * f.composite_opacity(|m| m.decorated, i),
+            )
+        })
+        .chain(
+            f.instances()
+                .iter()
+                .enumerate()
+                .filter(|(_, b)| (b.rect[3] - BAR_HEIGHT).abs() < 0.5)
+                .map(|(i, b)| {
+                    (
+                        b.rect[1],
+                        b.color[3] * b.transform.opacity * f.composite_opacity(|m| m.solid, i),
+                    )
+                }),
+        )
         .collect();
     rows.sort_by(|a, b| a.0.total_cmp(&b.0));
     rows.into_iter().map(|(_, o)| o).collect()

@@ -1,0 +1,32 @@
+// RFC-0008 pillar D: a package ships its typeface and theme.
+//
+// Run it (from the repo root):
+//   cargo run -p byard-cli -- dev crates/byard-cli/examples/package_theme/app
+//
+// This project has no fonts and no colours of its own. What to verify:
+//   1. The headline and title are Space Grotesk, bold and medium: the
+//      package's typography, with the package's font, found inside
+//      ../brand rather than here.
+//   2. The colours are a blue scheme: the package declares only a seed.
+//   3. The badge is a view the package exports, in the package's face.
+//   4. Publish the package and depend on the published version instead:
+//        byard publish crates/byard-cli/examples/package_theme/brand --registry /tmp/reg
+//      then in app/byard.toml write
+//        brand = { registry = "/tmp/reg", version = "0.1.0" }
+//      and run `byard get`: the lock pins the same checksum the path source
+//      gets, and the app looks the same.
+use brand as b
+
+View Main() {
+    inject Theme as t
+    Column #[bg: t.surface, p: 32, gap: 14, width: 560] {
+        Text("A theme from a package") #[typo: t.headline, color: t.onSurface]
+        Text("Type, colour and shape, from ../brand") #[typo: t.title, color: t.onSurfaceVariant]
+        Row #[gap: 10, align: center] {
+            b.Badge(label: "exported view")
+            Box #[bg: t.primary, radius: t.cornerLg, p: (vertical: 10, horizontal: 18)] {
+                Text("Primary") #[size: 15, weight: medium, color: t.onPrimary]
+            }
+        }
+    }
+}

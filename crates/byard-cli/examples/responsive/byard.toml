@@ -1,0 +1,10 @@
+[project]
+name = "responsive"
+entry = "src/main.byd"
+
+# RFC-0016 responsive variants: a design system's breakpoints are part of the
+# design system, so they are declared here rather than baked into the language
+# as a fixed sm/md/lg. `on width >= md` in a style compares against these.
+[theme.breakpoints]
+md = 640
+lg = 1024

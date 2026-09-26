@@ -1,0 +1,20 @@
+[package]
+name = "byard-project"
+description = "A Byard project on disk: its manifest, theme, dependencies, lockfile and package archives"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+byard-compiler = { path = "../byard-compiler" }
+byard-core     = { path = "../byard-core" }
+toml           = { version = "0.8", features = ["preserve_order"] }
+sha2           = "0.10"
+flate2         = "1"
+
+[lints]
+workspace = true

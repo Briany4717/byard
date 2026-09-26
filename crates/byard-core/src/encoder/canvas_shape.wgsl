@@ -27,15 +27,24 @@ struct InstanceInput {
     // carried exactly in f32.
     @location(7) misc: vec4<f32>,
     // Paint-time transform (RFC-0011); identity is a free no-op.
-    @location(8) t_translate: vec2<f32>,
-    @location(9) t_scale: vec2<f32>,
-    @location(10) t_rotate: f32,
-    @location(11) t_origin: vec2<f32>,
+    // Packed two attributes rather than four: the pipeline is at the sixteen
+    // vertex attributes every adapter guarantees, and these seven floats were
+    // spending four slots.
+    @location(8) t_translate_scale: vec4<f32>,
+    @location(9) t_rotate_origin: vec3<f32>,
     // Shape group (RFC-0031 §S4): (mode, param, first_member, member_count).
     // `mode == GROUP_NONE` is every shape that existed before RFC-0031 and
     // takes the identical path below. `first_member` indexes `shape_records`
     // directly, so a group's records are ordinary per-instance data.
-    @location(12) group: vec4<f32>,
+    @location(10) group: vec4<f32>,
+    // Stroke gradient (RFC-0035 §"Canvas arc strokes"): the three stops, the
+    // four kind-dependent control floats, and the kind. `GRAD_NONE` is a flat
+    // stroke and is what every shape written before this carries.
+    @location(11) grad_from: vec4<f32>,
+    @location(12) grad_mid: vec4<f32>,
+    @location(13) grad_to: vec4<f32>,
+    @location(14) grad_axis: vec4<f32>,
+    @location(15) grad_kind: u32,
 };
 
 struct VertexOutput {
@@ -53,6 +62,14 @@ struct VertexOutput {
     // Flat: a group's mode and member range are per-instance integers, and
     // interpolating them would address records that do not exist.
     @location(7) @interpolate(flat) group: vec4<f32>,
+    // The quad's bounds, so the gradient's box space is the same box space a
+    // `DecoratedBox` gradient uses. Flat for the same reason `group` is.
+    @location(8) @interpolate(flat) rect: vec4<f32>,
+    @location(9) @interpolate(flat) grad_from: vec4<f32>,
+    @location(10) @interpolate(flat) grad_mid: vec4<f32>,
+    @location(11) @interpolate(flat) grad_to: vec4<f32>,
+    @location(12) @interpolate(flat) grad_axis: vec4<f32>,
+    @location(13) @interpolate(flat) grad_kind: u32,
 };
 
 @group(0) @binding(0) var<uniform> viewport_size: vec2<f32>;
@@ -73,7 +90,9 @@ struct ShapeRecord {
 @group(1) @binding(0) var<storage, read> shape_records: array<ShapeRecord>;
 
 const PI: f32 = 3.14159265358979;
-const TAU: f32 = 6.28318530717959;
+// `TAU` comes from `gradient.wgsl`, which is prepended to this file: two
+// declarations of one constant is a compile error, and two *values* of it
+// would be worse.
 // A distance far past any quad extent, "no coverage from this term".
 const FAR: f32 = 1e6;
 
@@ -118,10 +137,10 @@ fn vs_main(vertex: VertexInput, instance: InstanceInput) -> VertexOutput {
 
     let transformed = apply_transform(
         world_pos,
-        instance.t_translate,
-        instance.t_scale,
-        instance.t_rotate,
-        instance.t_origin,
+        instance.t_translate_scale.xy,
+        instance.t_translate_scale.zw,
+        instance.t_rotate_origin.x,
+        instance.t_rotate_origin.yz,
     );
 
     // misc.y carries the draw-order depth (NDC-z, RFC-0011) so shapes honour
@@ -140,6 +159,12 @@ fn vs_main(vertex: VertexInput, instance: InstanceInput) -> VertexOutput {
     out.stroke_dash = instance.stroke_dash;
     out.misc = instance.misc;
     out.group = instance.group;
+    out.rect = instance.rect;
+    out.grad_from = instance.grad_from;
+    out.grad_mid = instance.grad_mid;
+    out.grad_to = instance.grad_to;
+    out.grad_axis = instance.grad_axis;
+    out.grad_kind = instance.grad_kind;
     return out;
 }
 
@@ -539,6 +564,67 @@ fn resolve(in: VertexOutput, kind: u32, cap: u32, half_w: f32) -> Resolved {
     return out;
 }
 
+/// The ramp parameter for a **conic gradient on an `arc`**: the fragment's
+/// angle measured within the arc's *own* sweep, so `t = 0` at the arc's first
+/// end and `t = 1` at its last (RFC-0035 §"Canvas arc strokes").
+///
+/// This is the whole reason the arc is not left to the shared `conic_t`. That
+/// one measures a full turn about the centre of a box, so a 270° gauge would
+/// spend three quarters of its ramp on the ring and throw the rest away behind
+/// it — which looks *nearly* right, and is how a wrong gradient survives
+/// review.
+///
+/// The arc supplies the centre; the gradient's own `start` (`axis.z`) is an
+/// additional offset *within* the sweep, so the default of zero begins the
+/// ramp exactly where the arc begins. The gradient's `center` is ignored,
+/// because an arc has one and it is not a matter of opinion.
+///
+/// A negative `sweep` runs the arc the other way and takes the ramp with it:
+/// the direction the arc is drawn in is the direction its colour travels.
+fn arc_conic_t(params0: vec4<f32>, params1: vec4<f32>, axis: vec4<f32>, world: vec2<f32>) -> f32 {
+    let center = params0.xy;
+    let start = params0.w;
+    let sweep = params1.x;
+    let dir = select(-1.0, 1.0, sweep >= 0.0);
+    let d = world - center;
+    let rel = fract(((atan2(d.y, d.x) - start - axis.z) * dir) / TAU + 1.0);
+    let span = max(abs(sweep), 1e-5) / TAU;
+    return clamp(rel / span, 0.0, 1.0);
+}
+
+/// This fragment's stroke colour: the flat one, or the gradient's.
+///
+/// Every kind but a conic-on-an-arc resolves through the *shared*
+/// `gradient_color`, in the quad's box space, so a ring and the card behind it
+/// ramp by the same instructions rather than by two implementations that
+/// agree today.
+fn stroke_paint(in: VertexOutput, kind: u32, flat_color: vec4<f32>) -> vec4<f32> {
+    if (in.grad_kind == GRAD_NONE) {
+        return flat_color;
+    }
+    let half_size = max(in.rect.zw * 0.5, vec2<f32>(1e-5));
+    let local = in.world_pos - (in.rect.xy + half_size);
+    if (in.grad_kind == GRAD_CONIC && kind == KIND_ARC) {
+        let t = arc_conic_t(in.params0, in.params1, in.grad_axis, in.world_pos);
+        return gradient_stops(
+            t,
+            clamp(in.grad_axis.w, 0.0, 1.0),
+            in.grad_from,
+            in.grad_mid,
+            in.grad_to,
+        );
+    }
+    return gradient_color(
+        in.grad_kind,
+        in.grad_from,
+        in.grad_mid,
+        in.grad_to,
+        in.grad_axis,
+        local,
+        half_size,
+    );
+}
+
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let opacity = in.misc.x;
@@ -562,6 +648,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let thin_alpha = clamp(half_w / half_w_eff, 0.0, 1.0);
 
     let d = resolve(in, kind, cap, half_w_eff);
+    // RFC-0035 §"Canvas arc strokes": the stroke's colour, from a gradient if
+    // this shape carries one. `GRAD_NONE` is the flat stroke every shape drew
+    // before this and takes no branch beyond the test.
+    let stroke_rgba = stroke_paint(in, kind, d.stroke_color);
 
     // ── Coverages ─────────────────────────────────────────────────────────
     var stroke_cov = 1.0 - smoothstep(0.0, aa, d.stroke);
@@ -577,12 +667,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     }
 
     // ── Composite: stroke over fill ───────────────────────────────────────
-    let a_stroke = stroke_cov * d.stroke_color.a * thin_alpha;
+    let a_stroke = stroke_cov * stroke_rgba.a * thin_alpha;
     let a_fill = fill_cov * d.fill_color.a * (1.0 - a_stroke);
     let out_a = a_stroke + a_fill;
     if (out_a <= 0.001) {
         discard;
     }
-    let rgb = (d.stroke_color.rgb * a_stroke + d.fill_color.rgb * a_fill) / out_a;
+    let rgb = (stroke_rgba.rgb * a_stroke + d.fill_color.rgb * a_fill) / out_a;
     return vec4<f32>(rgb, out_a * opacity * clip_coverage(in.position.xy));
 }

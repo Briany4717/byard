@@ -183,7 +183,8 @@ fn a_missing_key_is_not_an_error_arm() {
 
 #[test]
 fn a_corrupt_store_reaches_the_err_arm_and_the_app_still_runs() {
-    // INV-4: a settings file truncated by a crash must not stop the app.
+    // No silent failures, and no crash: a settings file truncated by a crash
+    // must not stop the app.
     let dir = TempDir::new("corrupt");
     std::fs::create_dir_all(&dir.0).expect("mkdir");
     std::fs::write(dir.file(), "{ not json").expect("write");

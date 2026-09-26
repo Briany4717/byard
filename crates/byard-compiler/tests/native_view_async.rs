@@ -119,7 +119,7 @@ impl NativeView for Map {
         seen.answers.push((key.0, tile));
         // The delivery must happen on the thread the view renders on: that is
         // what makes it safe for a view to touch its own graphics-adjacent
-        // state here at all (INV-12, INV-2).
+        // state here at all (graphics state never leaves its thread).
         if self.logic_thread != Some(std::thread::current().id()) {
             seen.off_thread = true;
         }
@@ -246,7 +246,7 @@ fn a_view_asks_a_controller_and_is_answered_on_the_logic_thread() {
     );
     assert!(
         !seen.off_thread,
-        "a result must be delivered on the thread the view renders on (INV-12)"
+        "a result must be delivered on the thread the view renders on"
     );
 }
 

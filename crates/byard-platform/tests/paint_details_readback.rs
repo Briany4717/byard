@@ -24,21 +24,8 @@ const LOGICAL_W: f32 = 240.0;
 const LOGICAL_H: f32 = 60.0;
 const SCALE: f32 = 2.0;
 
-fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>)> {
-    let instance =
-        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-    let adapter =
-        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-            .ok()?;
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("paint details readback device"),
-        required_features: wgpu::Features::empty(),
-        required_limits: byard_core::engine::device_limits(&adapter),
-        memory_hints: wgpu::MemoryHints::Performance,
-        ..Default::default()
-    }))
-    .ok()?;
-    Some((Arc::new(device), Arc::new(queue)))
+fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>, byard_test_gpu::Turn)> {
+    byard_test_gpu::device(byard_core::engine::device_limits)
 }
 
 /// A read-back framebuffer, sampled in logical coordinates.
@@ -149,7 +136,7 @@ fn render(device: &Arc<wgpu::Device>, queue: &Arc<wgpu::Queue>, frame: &RenderFr
 
 #[test]
 fn an_over_large_radius_is_reduced_to_a_pill_not_a_deformed_box() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping readback");
         return;
     };
@@ -238,7 +225,7 @@ fn shimmer_frame(offset: Option<f32>) -> RenderFrame {
 
 #[test]
 fn a_gradient_paints_a_ramp_over_the_fill_and_its_offset_travels() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping readback");
         return;
     };
@@ -292,7 +279,7 @@ fn a_gradient_paints_a_ramp_over_the_fill_and_its_offset_travels() {
 /// kind of error that looks like a taste decision rather than a bug.
 #[test]
 fn a_written_colour_reaches_the_screen_as_itself() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping readback");
         return;
     };

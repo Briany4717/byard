@@ -156,7 +156,7 @@ design question with its own answer, not a consequence of this one.
 
 ---
 
-## Correction 4, §S4's representation admits a stale group (INV-26)
+## Correction 4, §S4's representation admits a stale group
 
 §S4 defines a group head and its members and says nothing about dirtiness. That
 is a real gap, not an omission of detail.
@@ -178,9 +178,10 @@ NaN` makes a group permanently dirty, which is wasteful and visible, while
 `-0.0 == 0.0` makes it permanently *clean*, which is silent and wrong.
 `group_first` is deliberately excluded, it is a pool position, not a value.
 
-This generalises past this RFC, so it is stated as an invariant:
+This generalises past this RFC, so it is stated as an invariant, the
+**digest-completeness rule**:
 
-> **INV-26, a primitive's dirtiness must cover everything that determines its
+> **A primitive's dirtiness must cover everything that determines its
 > pixels.** Any data a shader reads that lives *outside* the primitive, a
 > storage-buffer record, an atlas entry, a uniform, must be folded into that
 > primitive's digest, or a change to it renders stale.

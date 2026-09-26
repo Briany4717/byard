@@ -53,7 +53,12 @@
 //! still exists, it is what makes the logic half separable at all, but the
 //! figure §V4 requires is `owner_total_ns(DevTools)` summed over both threads.
 //!
-//! # INV-24: it must not defeat what it measures
+//! # It must not defeat what it measures
+//!
+//! No dev-only surface (statusline, HUD, overlay, indicator) may force the
+//! retained layout path off, re-dirty a clean element, or add per-frame work
+//! proportional to the app's tree. A diagnostic that makes the thing it
+//! measures slower is measuring itself.
 //!
 //! The HUD's text changes every frame, so its text leaves would be
 //! layout-dirty every frame, so they would be re-shaped every frame, exactly
@@ -104,7 +109,7 @@ const BAR_W: f32 = 6.0;
 const BAR_GAP: f32 = 3.0;
 const SPARK_H: f32 = 28.0;
 
-/// How often the HUD's fields are rebuilt (INV-24 mitigation 1).
+/// How often the HUD's fields are rebuilt (mitigation 1 in the module docs).
 const UPDATE_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
 
 /// The HUD's margin from the top-right corner of the window.
@@ -208,7 +213,7 @@ impl DevHud {
         self.latest = telemetry;
     }
 
-    /// Whether the fields are due to be rebuilt (INV-24 mitigation 1).
+    /// Whether the fields are due to be rebuilt (mitigation 1 in the module docs).
     fn due(&self, width: f32) -> bool {
         // A resize re-anchors immediately: a HUD stranded in the middle of the
         // window for a tenth of a second reads as a bug in the HUD.
@@ -274,7 +279,7 @@ impl DevHud {
     /// Builds the `DevTelemetry` record the HUD injects.
     ///
     /// Every displayed number is formatted to a fixed width here rather than
-    /// interpolated in `byld` (INV-24 mitigation 3): a `"{t.work}ms"` would
+    /// interpolated in `byld` (mitigation 3 in the module docs): a `"{t.work}ms"` would
     /// change string length as the number crossed 10, and the HUD would
     /// re-measure itself at exactly the moment something interesting was
     /// happening.
@@ -320,7 +325,7 @@ impl DevHud {
 
 /// The sparkline as records the `Canvas`'s `for` iterates.
 ///
-/// Geometry rather than text (INV-24 mitigation 2): a shape parameter is a
+/// Geometry rather than text (mitigation 2 in the module docs): a shape parameter is a
 /// paint-class change, so a moving sparkline never touches layout.
 ///
 /// Scaled against the **budget**, and plotting **work** rather than the frame
@@ -395,7 +400,7 @@ mod tests {
         assert!(
             !frame.canvas_shapes().is_empty(),
             "the sparkline must be geometry, not text, a paint-class change \
-             never touches layout (INV-24)"
+             never touches layout"
         );
     }
 
@@ -527,6 +532,7 @@ mod tests {
             text: "the app".to_string(),
             font_size: 14.0,
             weight: 400,
+            family: None,
             color: [1.0; 4],
             dirty: true,
         });
@@ -544,7 +550,7 @@ mod tests {
 
     #[test]
     fn every_displayed_number_has_a_value_independent_width() {
-        // INV-24 mitigation 3. If a field's *length* changes with its value,
+        // Mitigation 3 in the module docs. If a field's *length* changes with its value,
         // the text re-measures the moment a number crosses a power of ten,
         // which is exactly when something interesting is happening.
         assert_eq!(fixed_ms(3_400_000).len(), fixed_ms(123_400_000).len());
@@ -604,7 +610,7 @@ mod tests {
 
     #[test]
     fn the_hud_does_not_claim_the_apps_layout_path_as_its_own() {
-        // INV-24's second acceptance condition, at the unit level. The HUD runs
+        // The HUD must not re-dirty the app's own layout, at the unit level. The HUD runs
         // its own `LayoutAtlas` on the same thread, so its layout activity
         // lands in the same thread-local counters the statusline reads, and
         // `Interpreter::render` writes `set_atlas_paths` at the end of *its*
@@ -667,6 +673,7 @@ mod tests {
             text: "the app".to_string(),
             font_size: 14.0,
             weight: 400,
+            family: None,
             color: [1.0; 4],
             dirty: false,
         });

@@ -2,7 +2,7 @@
 //!
 //! Samples a multi-channel signed-distance-field (MSDF) **array-texture** atlas
 //! to draw crisp monochrome glyphs at any scale. The dev (JIT) and release
-//! (AOT-baked) paths produce the same [`VectorInstance`] shape (INV-7), so this
+//! (AOT-baked) paths produce the same [`VectorInstance`] shape, so this
 //! one pipeline serves both modes.
 //!
 //! Two byard corrections to the RFC draft are realised here and in the WGSL:
@@ -10,18 +10,18 @@
 //!   - §2-E: anti-aliasing from the baked `px_range` and the UV derivative.
 //!
 //! Atlas uploads cross `frame.rs` as data ([`AtlasUpload`]) and are applied
-//! **only** on the render thread via [`VectorAtlas::apply_uploads`] (INV-8); a
+//! **only** on the render thread via [`VectorAtlas::apply_uploads`]; a
 //! background worker never touches the `wgpu::Queue`.
 
 use crate::ByardError;
 use crate::frame::{AtlasUpload, VectorInstance};
 
 /// Default MSDF atlas edge length in texels (one layer). 2048² holds many glyph
-/// cells; the dev allocator (M48) grows layers on top of this.
+/// cells; the dev allocator grows layers on top of this.
 pub const ATLAS_SIZE: u32 = 2048;
 
-/// Array-layer count the dev atlas is created with (and, until layer-growth
-/// M48 lands, its hard cap, the JIT allocator must not exceed it).
+/// Array-layer count the dev atlas is created with (and, until the allocator
+/// can grow layers, its hard cap, the JIT allocator must not exceed it).
 ///
 /// **Must be ≥ 2.** The shader samples this atlas as a `texture_2d_array` (a
 /// `D2Array` view). On the GL backend, wgpu-hal maps a `D2` texture created with
@@ -185,7 +185,7 @@ impl VectorAtlas {
         self.layers
     }
 
-    /// Applies pending MSDF-field uploads to the atlas (RFC-0009 §2-C / INV-8).
+    /// Applies pending MSDF-field uploads to the atlas (RFC-0009 §2-C).
     /// **Render thread only**, this is the single place a `Queue::write_texture`
     /// for the atlas is issued. Out-of-bounds uploads are skipped defensively.
     /// Returns the `id` of every upload actually applied, so the caller can

@@ -237,7 +237,7 @@ impl Request {
         // is not leaves `json` as `Unit` with `body` intact, rather than
         // failing the whole request: the caller can still read what arrived,
         // which is the only way to debug a server that lies about its type
-        // (INV-4).
+        // (no silent failures).
         let parsed = if content_type.contains("json") {
             json::parse(&body).unwrap_or(HostValue::Unit)
         } else {
@@ -384,7 +384,7 @@ mod tests {
     /// Hand-written rather than pulled from a mock-server crate: the tests need
     /// to answer with a *deliberately wrong* content type and a *deliberately
     /// malformed* body, which is exactly what a polite mock library normalises
-    /// away, and those are the two cases INV-4 is about.
+    /// away, and those are the two cases that must never fail silently.
     struct Server {
         port: u16,
         handle: Option<std::thread::JoinHandle<Vec<String>>>,
@@ -486,7 +486,7 @@ mod tests {
 
     #[test]
     fn a_body_that_lies_about_being_json_does_not_fail_the_request() {
-        // INV-4 on data the app does not control. The caller can still read
+        // No silent failures, on data the app does not control. The caller can still read
         // `body`, which is the only way to debug a server like this.
         let server = Server::serve(vec![response("200 OK", "application/json", "{not json")]);
         let result = call(&Http::new(), "get", vec![HostValue::Str(server.url("/x"))])

@@ -1,0 +1,59 @@
+// RFC-0034, font families: `font:` selects a typeface declared in byard.toml.
+//
+// Run it (from the repo root):
+//   cd crates/byard-cli/examples/font_families
+//   cargo run -p byard-cli -- dev
+//
+// Until this landed, `[assets.fonts]` parsed a name and a path and then never
+// read the file, so every declared family was a string nothing answered to and
+// every line on screen was the system font. Worse, there are two font systems
+// here, one per thread: a family registered into only one of them measures in
+// one face and paints in another, which does not look broken, it looks
+// slightly wrong everywhere.
+//
+// What to verify visually:
+//   1. The two specimen columns are visibly different typefaces. Space Grotesk
+//      is geometric, with a flat-topped `a` and a distinctive `g`; Manrope is
+//      humanist and rounder. If they match, no family reached the shaper.
+//   2. The heading takes its face, its size and its weight from one `typo:`
+//      token. That is the whole reason a type scale exists, and the family
+//      half of a token was being dropped on the way through until now.
+//   3. Weight still moves *inside* a family: the third block gets heavier
+//      downward without changing typeface. A variable font answers at one
+//      weight only until every weight on its axis is declared, and getting
+//      that wrong falls back to the system font in silence.
+//   4. The closing paragraph says nothing about type at all and is still
+//      Manrope, because the theme's `body` token names a family.
+//
+// Try breaking it: change `font: display` to `font: dispaly` and re-run
+// `cargo run -p byard-cli -- check .`. An undeclared family is a compile
+// error with the nearest declared name, not text quietly set in the wrong
+// face.
+View Main() {
+    Column #[bg: 0x0E1116, p: 28, gap: 26, width: 560] {
+        Text("Aura") #[typo: hero, color: 0xE7ECF2]
+        Text("two typefaces, one theme") #[typo: label, color: 0x69737F]
+
+        Row #[gap: 32] {
+            Column #[gap: 10, grow: 1] {
+                Text("display · Space Grotesk") #[typo: label, color: 0x69737F]
+                Text("Handgloves") #[font: display, size: 34, color: 0xE7ECF2]
+                Text("Aa Bb Cc 0123") #[font: display, size: 18, color: 0x9AA3AE]
+            }
+            Column #[gap: 10, grow: 1] {
+                Text("body · Manrope") #[typo: label, color: 0x69737F]
+                Text("Handgloves") #[font: body, size: 34, color: 0xE7ECF2]
+                Text("Aa Bb Cc 0123") #[font: body, size: 18, color: 0x9AA3AE]
+            }
+        }
+
+        Column #[gap: 6] {
+            Text("the axis still moves inside a family") #[typo: label, color: 0x69737F]
+            Text("Light 300") #[font: display, size: 26, weight: 300, color: 0xE7ECF2]
+            Text("Regular 400") #[font: display, size: 26, weight: 400, color: 0xE7ECF2]
+            Text("Bold 700") #[font: display, size: 26, weight: 700, color: 0xE7ECF2]
+        }
+
+        Text("This paragraph names no family at all. It is set in Manrope because the theme's body token names one, which is how a project declares a UI face once instead of on every line.") #[typo: body, color: 0x9AA3AE]
+    }
+}

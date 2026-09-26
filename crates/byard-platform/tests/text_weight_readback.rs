@@ -24,21 +24,8 @@ use byard_core::frame::{RenderFrame, Viewport};
 
 const SIZE: u32 = 220;
 
-fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>)> {
-    let instance =
-        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-    let adapter =
-        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-            .ok()?;
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("text weight device"),
-        required_features: wgpu::Features::empty(),
-        required_limits: byard_core::engine::device_limits(&adapter),
-        memory_hints: wgpu::MemoryHints::Performance,
-        ..Default::default()
-    }))
-    .ok()?;
-    Some((Arc::new(device), Arc::new(queue)))
+fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>, byard_test_gpu::Turn)> {
+    byard_test_gpu::device(byard_core::engine::device_limits)
 }
 
 /// Renders one `.byd` source and returns the frame as RGBA.
@@ -165,7 +152,7 @@ fn source(weight: &str) -> String {
 /// changed what was rasterised.
 #[test]
 fn a_weight_change_reaches_the_glyphs() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping text weight readback");
         return;
     };
@@ -184,7 +171,7 @@ fn a_weight_change_reaches_the_glyphs() {
 /// A numeric weight reaches them too, and is not silently rounded to a keyword.
 #[test]
 fn a_numeric_weight_reaches_the_glyphs() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping text weight readback");
         return;
     };
@@ -202,7 +189,7 @@ fn a_numeric_weight_reaches_the_glyphs() {
 /// ship any particular face, only for both spellings to ask for the same one.
 #[test]
 fn a_keyword_and_its_axis_value_agree() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping text weight readback");
         return;
     };

@@ -1,13 +1,13 @@
 //! The controller boundary (RFC-0028): the `Send`-only wire type, the
 //! object-safe [`Controller`] trait, and the [`ControllerRegistry`], all in
 //! `byard-core` so the trait that both the app crate and the interpreter speak
-//! drags **no** `byard-compiler` dependency into core (INV-1). Nothing here
+//! drags **no** `byard-compiler` dependency into core. Nothing here
 //! knows about `Signal`/`Value`/views; the `Value ⇄ HostValue` conversions live
 //! one layer up in `byard-compiler`, which depends on core, never the reverse.
 //!
 //! Everything that crosses the logic ↔ Tokio-pool boundary is `Send` data
-//! (INV-2): [`HostValue`] is `Send + 'static` and holds no `Signal`, `Fn`, or
-//! view handle (INV-13, statically asserted below).
+//! (signals stay on the logic thread): [`HostValue`] is `Send + 'static` and
+//! holds no `Signal`, `Fn`, or view handle (statically asserted below).
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -42,7 +42,7 @@ pub enum HostValue {
     Record(Vec<(String, HostValue)>),
 }
 
-// INV-13: the boundary type is `Send + 'static` and owns only plain data.
+// The boundary type is `Send + 'static` and owns only plain data.
 const _: () = {
     const fn assert_send_static<T: Send + 'static>() {}
     assert_send_static::<HostValue>();
@@ -62,9 +62,9 @@ impl HostValue {
 
 /// Converts a [`HostValue`] argument into a controller method's Rust parameter
 /// type (RFC-0028 §2). Total but lenient: a mismatched shape yields the type's
-/// [`Default`]-ish fallback rather than panicking (INV-4, arguments are
-/// user-derived). Implemented for scalars, `String`, `HostValue` itself, and
-/// `Vec<T>`; `#[derive(HostValue)]` structs get it too.
+/// [`Default`]-ish fallback rather than panicking (arguments are user-derived,
+/// and user data never panics). Implemented for scalars, `String`, `HostValue`
+/// itself, and `Vec<T>`; `#[derive(HostValue)]` structs get it too.
 pub trait FromHostValue: Sized {
     /// Builds `Self` from a boundary value.
     fn from_host(value: HostValue) -> Self;
@@ -247,8 +247,8 @@ pub trait Controller: Send + Sync {
     /// Dispatches one async method by name, converting `args` into the method's
     /// Rust parameter types, awaiting it, and mapping `Ok`/`Err` back to
     /// [`HostValue`]. Returns a boxed future; it never blocks the caller (the
-    /// blocking/async work runs on the Tokio pool, INV-12). An unknown method
-    /// resolves to an `Err` reply, never a panic (INV-4).
+    /// blocking/async work runs on the Tokio pool). An unknown method
+    /// resolves to an `Err` reply, never a panic.
     fn invoke(
         &self,
         method: &str,
@@ -258,7 +258,7 @@ pub trait Controller: Send + Sync {
 
 /// A `Copy` index into the [`ControllerRegistry`]. Read only on the logic thread
 /// (it only *schedules* work onto the pool, never dereferences a controller off
-/// that thread, INV-2), so it stays arena-friendly and cheap to store in a
+/// that thread), so it stays arena-friendly and cheap to store in a
 /// `Value`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ControllerId(pub u32);
@@ -334,10 +334,10 @@ impl ControllerRegistry {
 /// A completed controller call delivered back to the logic thread (RFC-0028 §5).
 /// Sent over the relay's `io_result` channel as a `Box<dyn Any + Send>` and
 /// downcast by `Interpreter::apply_io_results`, which runs the matching `ok`/`err`
-/// arm keyed by `continuation_id` (a one-shot continuation, INV-14).
+/// arm keyed by `continuation_id` (a one-shot continuation).
 pub struct ControllerReply {
     /// The continuation this reply resumes; a reply whose id was dropped (its
-    /// view unmounted) is discarded, never applied (INV-14).
+    /// view unmounted) is discarded, never applied.
     pub continuation_id: u64,
     /// The success (`Ok`) or error (`Err`) payload, as `Send` data.
     pub result: Result<HostValue, HostValue>,
@@ -415,10 +415,10 @@ impl Dispatcher {
     /// (RFC-0029 §5), repeating every `dur_ms` when `every`, or once after it.
     ///
     /// Returns the handle whose drop **cancels** the timer. That is the whole
-    /// leak story (INV-10): the effect that armed the timer owns the handle,
-    /// and an effect that unmounts drops its state, so there is no separate
-    /// "stop" path to forget to call and no way for a task to outlive the
-    /// scope that started it.
+    /// leak story (a scope's effects die with the scope): the effect that armed
+    /// the timer owns the handle, and an effect that unmounts drops its state,
+    /// so there is no separate "stop" path to forget to call and no way for a
+    /// task to outlive the scope that started it.
     ///
     /// A `0 ms` interval is refused rather than armed: a zero-period
     /// `tokio::time::interval` fires as fast as the pool can send, which is a
@@ -474,7 +474,7 @@ impl Dispatcher {
     /// with `continuation_id` (RFC-0028 §5 steps 2–3).
     ///
     /// Returns immediately: nothing here awaits, and the controller's own work
-    /// runs entirely on the pool (INV-12). An unregistered `id` yields an
+    /// runs entirely on the pool. An unregistered `id` yields an
     /// **error reply** rather than silence, so the call site's `err` arm runs
     /// and the developer sees the mismatch instead of a call that vanished.
     pub fn spawn_call(

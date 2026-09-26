@@ -15,6 +15,7 @@
 use super::env::{SignalId, Value};
 use super::intrinsics::Rect;
 use super::reactive::ReactiveCtx;
+use byard_core::frame::Transform;
 
 /// The event kinds the Phase-2 router models.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -28,7 +29,7 @@ pub enum EventKind {
     /// Continuous pointer movement.
     PointerMove,
     /// Pointer drag: synthesized by the router from PointerMove while the button
-    /// is held (M16). Used by Slider to track the drag position.
+    /// is held. Used by Slider to track the drag position.
     PointerDrag,
     /// Continuous scroll.
     Scroll,
@@ -36,13 +37,13 @@ pub enum EventKind {
     Wheel,
     /// A value change from a value-carrying intrinsic.
     Change,
-    /// A keyboard key press; key name is in `InputEvent.value` (M17).
+    /// A keyboard key press; key name is in `InputEvent.value`.
     KeyDown,
-    /// A keyboard key release; key name is in `InputEvent.value` (M17).
+    /// A keyboard key release; key name is in `InputEvent.value`.
     KeyUp,
-    /// Printable text input; the text is in `InputEvent.value` (M17).
+    /// Printable text input; the text is in `InputEvent.value`.
     TextInput,
-    // ── M24: remaining event catalog ─────────────────────────────────────
+    // ── Remaining event catalog ─────────────────────────────────────
     /// Cursor entered an element's rect (synthesized from PointerMove).
     PointerEnter,
     /// Cursor left an element's rect (synthesized from PointerMove).
@@ -126,14 +127,14 @@ impl InputEvent {
 pub const TAP_SLOP: f32 = 8.0;
 /// Tap interval upper bound (ms), E4.
 pub const TAP_MS: u64 = 500;
-/// Long-press hold threshold (ms), M24.
+/// Long-press hold threshold (ms).
 pub const LONG_PRESS_MS: u64 = 500;
-/// Double-tap interval upper bound (ms), M24 E4.
+/// Double-tap interval upper bound (ms), E4.
 pub const DOUBLE_TAP_MS: u64 = 300;
 
 thread_local! {
     /// The position of the event currently being dispatched, for use by
-    /// handlers that need cursor position (e.g. Slider drag, M16).
+    /// handlers that need cursor position (e.g. Slider drag).
     pub static CURRENT_EVENT_POS: std::cell::Cell<(f32, f32)> =
         const { std::cell::Cell::new((0.0, 0.0)) };
 }
@@ -145,6 +146,9 @@ pub type Action = Box<dyn FnMut(&mut ReactiveCtx, Option<&Value>)>;
 struct Handler {
     elem: u32,
     rect: Rect,
+    /// The ancestors' paint transform this region is drawn under, if any
+    /// (RFC-0011). See [`EventRouter::set_hit_frame`].
+    frame: Option<Transform>,
     kind: EventKind,
     action: Action,
 }
@@ -152,6 +156,7 @@ struct Handler {
 struct Focusable {
     elem: u32,
     rect: Rect,
+    frame: Option<Transform>,
     /// The `var` bound via `#[focused: …]`.
     focused_sig: SignalId,
 }
@@ -244,9 +249,9 @@ pub struct EventRouter {
     /// held move, cleared on the next press/release. Persists across renders like
     /// the rest of the gesture state.
     dragging: Option<u32>,
-    /// Element currently under the pointer (for enter/exit synthesis, M24).
+    /// Element currently under the pointer (for enter/exit synthesis).
     hovered: Option<u32>,
-    /// Time and element of the most recent tap (for double-tap detection, M24).
+    /// Time and element of the most recent tap (for double-tap detection).
     last_tap: Option<(u64, Option<u32>)>,
     /// Elements whose `disabled:` prop resolved true this tick (RFC-0012 S5).
     /// Rebuilt every render like the handler set; a disabled element reports the
@@ -257,7 +262,11 @@ pub struct EventRouter {
     /// hover/press hit-testing so [`style_state`](Self::style_state) reports the
     /// pointer state a purely-declarative interactive style depends on. Rebuilt
     /// every render like the handler set.
-    hover_regions: Vec<(u32, Rect)>,
+    hover_regions: Vec<(u32, Rect, Option<Transform>)>,
+    /// The paint transform of the ancestors of whatever is being registered
+    /// right now (RFC-0011 hierarchical transforms). Set by the render walk
+    /// per node; every region registered while it is set remembers it.
+    current_frame: Option<Transform>,
     /// RFC-0017 modality floor: a modal `Overlay` registers a full-viewport
     /// scrim and raises this to the scrim's handler index, so every handler
     /// registered *before* it (the main tree, and any lower overlay) is
@@ -274,6 +283,21 @@ pub struct EventRouter {
     /// last). `Escape` fires the topmost one's `dismiss` action (RFC-0017
     /// resolved-questions: accessibility). Rebuilt every render.
     modal_scrims: Vec<usize>,
+    /// Light-dismiss regions for anchored overlays (RFC-0036 `on dismiss`).
+    ///
+    /// Deliberately **not** a modal scrim. A scrim covers the viewport, raises
+    /// [`modal_floor`](Self::modal_floor) and swallows every event beneath it,
+    /// which is right for a dialog and wrong for a dropdown: the page under an
+    /// autocomplete has to keep scrolling and hovering while the suggestions
+    /// are up. So this is an *observer* consulted on pointer-down, blocking
+    /// nothing.
+    ///
+    /// Each entry is the rects a press must fall outside of before the action
+    /// fires, and the action. The anchor's own rect is in that list, and that
+    /// is the non-obvious half: without it, pressing the field that opened the
+    /// panel dismisses and reopens it in one gesture, which reads as a flicker
+    /// nobody can explain.
+    light_dismiss: Vec<(Vec<Rect>, Action)>,
 }
 
 impl EventRouter {
@@ -293,9 +317,11 @@ impl EventRouter {
         self.focusables.clear();
         self.disabled.clear();
         self.hover_regions.clear();
+        self.current_frame = None;
         self.modal_floor = 0;
         self.focusable_floor = 0;
         self.modal_scrims.clear();
+        self.light_dismiss.clear();
     }
 
     /// Registers a modal `Overlay`'s full-viewport scrim (RFC-0017 §Modality).
@@ -316,17 +342,112 @@ impl EventRouter {
         self.handlers.push(Handler {
             elem,
             rect,
+            // A scrim covers the viewport in screen space whatever it was
+            // opened from, so it is never under an ancestor's transform.
+            frame: None,
             kind: EventKind::Tap,
             action: dismiss.unwrap_or_else(|| Box::new(|_, _| {})),
         });
         self.modal_scrims.push(idx);
     }
 
+    /// Registers a light dismiss for an anchored overlay (RFC-0036).
+    ///
+    /// `keep` is every rect a press may land in without dismissing: the
+    /// overlay's own, and its anchor's. Nothing is blocked and no floor is
+    /// raised, so the view underneath keeps every event it would otherwise
+    /// have had.
+    pub fn push_light_dismiss(&mut self, keep: Vec<Rect>, action: Action) {
+        self.light_dismiss.push((keep, action));
+    }
+
+    /// Fires every light dismiss unconditionally (RFC-0036, `Escape`), and
+    /// reports how many fired.
+    fn fire_light_dismiss_all(&mut self, ctx: &mut ReactiveCtx) -> usize {
+        let pending = std::mem::take(&mut self.light_dismiss);
+        let fired = pending.len();
+        for (_, mut action) in pending {
+            action(ctx, None);
+        }
+        fired
+    }
+
+    /// Fires every light dismiss whose press landed outside all of its kept
+    /// rects (RFC-0036), and reports how many fired.
+    ///
+    /// Drained rather than iterated in place: the actions are `FnMut` and this
+    /// borrows `self` mutably to run them. They are rebuilt by the next
+    /// render anyway, exactly like the hit rects.
+    fn fire_light_dismiss(&mut self, ctx: &mut ReactiveCtx, pos: (f32, f32)) -> usize {
+        if self.light_dismiss.is_empty() {
+            return 0;
+        }
+        let pending = std::mem::take(&mut self.light_dismiss);
+        let mut fired = 0;
+        let mut kept = Vec::new();
+        for (keep, mut action) in pending {
+            if keep.iter().any(|r| contains(*r, pos)) {
+                kept.push((keep, action));
+                continue;
+            }
+            action(ctx, None);
+            fired += 1;
+        }
+        self.light_dismiss = kept;
+        fired
+    }
+
+    /// Sets the ancestors' paint transform for the regions registered next,
+    /// and returns the one it replaces so the caller can restore it
+    /// (RFC-0011 hierarchical transforms).
+    ///
+    /// **The ancestors', never the element's own.** A hover-scale on a button
+    /// must not move that button's own hit target, or the pointer at its edge
+    /// flickers in and out of hover as the button grows and shrinks under it;
+    /// that rule stands exactly as it was. What changes is that a button inside
+    /// a *rotated card* is pressable where it is drawn, rather than where the
+    /// card would have put it unrotated.
+    ///
+    /// An identity *mapping* is stored as `None`, so an untransformed tree
+    /// registers and tests exactly as it did before this existed. The mapping
+    /// and not the struct: composing two identities re-anchors the pivot, so a
+    /// transform that moves nothing routinely arrives with a non-zero `origin`
+    /// and fails the bit-exact `is_identity`. With no translation, unit scale
+    /// and no rotation the pivot decides nothing, and that is the test. (The
+    /// fast-path assertion caught this on its first run: every region of an
+    /// untransformed tree was being carried as a frame.)
+    // Exact comparison on purpose: the question is "does this move anything
+    // at all", and a transform that moves a point by a rounding error is still
+    // exactly answerable by the frame path, which inverts it. Treating a
+    // near-identity as identity would be the only way this could be wrong.
+    #[allow(clippy::float_cmp)]
+    pub fn set_hit_frame(&mut self, frame: Transform) -> Option<Transform> {
+        let moves =
+            frame.translate != [0.0, 0.0] || frame.scale != [1.0, 1.0] || frame.rotate != 0.0;
+        let next = if moves { Some(frame) } else { None };
+        std::mem::replace(&mut self.current_frame, next)
+    }
+
+    /// Restores a hit frame returned by [`set_hit_frame`](Self::set_hit_frame).
+    pub fn restore_hit_frame(&mut self, frame: Option<Transform>) {
+        self.current_frame = frame;
+    }
+
+    /// How many regions registered this render are under a non-identity
+    /// ancestor transform. The fast-path assertion reads this: a tree with no
+    /// transforms must register none.
+    #[must_use]
+    pub fn framed_region_count(&self) -> usize {
+        self.handlers.iter().filter(|h| h.frame.is_some()).count()
+            + self.focusables.iter().filter(|f| f.frame.is_some()).count()
+            + self.hover_regions.iter().filter(|r| r.2.is_some()).count()
+    }
+
     /// Registers `elem`'s `rect` as a hover/press hit region (RFC-0016) so an
     /// element styled with `on hover`/`on pressed` but no event handler still
     /// reports those interaction states. Rebuilt every render.
     pub fn track_region(&mut self, elem: u32, rect: Rect) {
-        self.hover_regions.push((elem, rect));
+        self.hover_regions.push((elem, rect, self.current_frame));
     }
 
     /// Marks `elem` disabled for this tick (RFC-0012 S5): it reports the
@@ -366,6 +487,7 @@ impl EventRouter {
         self.handlers.push(Handler {
             elem,
             rect,
+            frame: self.current_frame,
             kind,
             action,
         });
@@ -379,7 +501,7 @@ impl EventRouter {
     #[must_use]
     pub fn claims_pointer(&self, pos: (f32, f32)) -> bool {
         self.handlers.iter().any(|h| {
-            contains(h.rect, pos)
+            hits(h.rect, h.frame, pos)
                 && matches!(
                     h.kind,
                     EventKind::Tap
@@ -395,16 +517,23 @@ impl EventRouter {
         self.focusables.push(Focusable {
             elem,
             rect,
+            frame: self.current_frame,
             focused_sig,
         });
     }
 
     /// Whether `elem` is the currently focused element (for focus-indicator
-    /// visuals, M19). Reflects the focus state carried across the per-tick
+    /// visuals). Reflects the focus state carried across the per-tick
     /// handler rebuild.
     #[must_use]
     pub fn is_focused(&self, elem: u32) -> bool {
         self.focused == Some(elem)
+    }
+
+    /// The element that has keyboard focus, if any.
+    #[must_use]
+    pub const fn focused(&self) -> Option<u32> {
+        self.focused
     }
 
     /// Sets the initially-focused element and its `var`.
@@ -474,6 +603,12 @@ impl EventRouter {
 
         match ev.kind {
             EventKind::PointerDown => {
+                // RFC-0036: an anchored overlay dismisses on a press outside
+                // itself and its anchor. Before the press is routed, not
+                // after: the element the press lands on is entitled to its own
+                // handler either way, and dismissing is not a substitute for
+                // it.
+                self.fire_light_dismiss(ctx, ev.pos);
                 let elem = self.hit_any(atlas, ev.pos);
                 let secondary = matches!(ev.value, Some(Value::Bool(true)));
                 self.down = Some(DownState {
@@ -511,7 +646,7 @@ impl EventRouter {
                         && elapsed < TAP_MS
                         && !down.secondary
                     {
-                        // Double-tap detection (M24).
+                        // Double-tap detection.
                         let is_double = self.last_tap.is_some_and(|(t, elem)| {
                             ev.time_ms.saturating_sub(t) < DOUBLE_TAP_MS && elem == up_elem
                         });
@@ -541,7 +676,7 @@ impl EventRouter {
             EventKind::PointerMove | EventKind::Scroll | EventKind::Wheel => {
                 self.fire(ctx, atlas, ev.kind, ev.pos, None);
                 if ev.kind == EventKind::PointerMove {
-                    // Synthesize PointerDrag when the button is held (M16: Slider).
+                    // Synthesize PointerDrag when the button is held (Slider).
                     if let Some((dpos, elem)) = self.down.as_ref().map(|d| (d.pos, d.elem)) {
                         // RFC-0024 `dragging`: latch once the pointer travels past
                         // the drag threshold from the press point.
@@ -551,7 +686,7 @@ impl EventRouter {
                         }
                         self.fire(ctx, atlas, EventKind::PointerDrag, ev.pos, None);
                     } else {
-                        // Enter / Exit / Hover (M24): compare new hovered elem to prev.
+                        // Enter / Exit / Hover: compare new hovered elem to prev.
                         let new_hover = self.hit_any(atlas, ev.pos);
                         if new_hover != self.hovered {
                             if self.hovered.is_some() {
@@ -594,18 +729,28 @@ impl EventRouter {
             | EventKind::Secondary => {
                 self.fire(ctx, atlas, ev.kind, ev.pos, None);
             }
-            // Keyboard events are routed to the focused element (M17/M18).
+            // Keyboard events are routed to the focused element.
             EventKind::KeyDown => {
-                // Tab key cycles focus (M18).
+                // Tab key cycles focus.
                 if let Some(Value::Str(key)) = &ev.value {
                     if key == "Tab" {
                         self.tab_focus(ctx, false);
                         return;
                     }
                     // RFC-0017: Escape dismisses the topmost modal overlay.
-                    if key == "Escape" && !self.modal_scrims.is_empty() {
-                        self.dismiss_topmost_modal(ctx);
-                        return;
+                    // RFC-0036: and every open anchored overlay, which has no
+                    // scrim to press but is just as much "the thing Escape is
+                    // for". Both, in that order, so a dropdown inside a dialog
+                    // closes before the dialog does.
+                    if key == "Escape" {
+                        let light = self.fire_light_dismiss_all(ctx);
+                        if light > 0 {
+                            return;
+                        }
+                        if !self.modal_scrims.is_empty() {
+                            self.dismiss_topmost_modal(ctx);
+                            return;
+                        }
                     }
                 }
                 self.fire_focused(ctx, EventKind::KeyDown, ev.value.as_ref());
@@ -720,7 +865,7 @@ impl EventRouter {
             .rev()
             // RFC-0017: a mounted modal overlay raises `modal_floor`, hiding every
             // handler beneath its scrim so input can't reach the main tree.
-            .find(|(i, h)| *i >= self.modal_floor && h.kind == kind && contains(h.rect, pos))
+            .find(|(i, h)| *i >= self.modal_floor && h.kind == kind && hits(h.rect, h.frame, pos))
             .map(|(i, _)| i)
     }
 
@@ -735,7 +880,7 @@ impl EventRouter {
             .iter()
             .enumerate()
             .rev()
-            .find(|(i, h)| *i >= self.modal_floor && contains(h.rect, pos))
+            .find(|(i, h)| *i >= self.modal_floor && hits(h.rect, h.frame, pos))
             .map(|(_, h)| h.elem)
             // Fall back to declarative hover/press regions (RFC-0016) for
             // elements that style interaction states but register no handler.
@@ -748,8 +893,8 @@ impl EventRouter {
                 self.hover_regions
                     .iter()
                     .rev()
-                    .find(|(_, rect)| contains(*rect, pos))
-                    .map(|(elem, _)| *elem)
+                    .find(|(_, rect, frame)| hits(*rect, *frame, pos))
+                    .map(|(elem, _, _)| *elem)
             })
     }
 
@@ -764,12 +909,12 @@ impl EventRouter {
             .rev()
             // RFC-0017 focus trap: a modal overlay confines focus to its own
             // scope; a press below the focus floor cannot steal focus.
-            .find(|(i, f)| *i >= self.focusable_floor && contains(f.rect, pos))
+            .find(|(i, f)| *i >= self.focusable_floor && hits(f.rect, f.frame, pos))
             .map(|(_, f)| f.elem)
     }
 
     /// Fires the handler of `kind` registered on the currently focused element,
-    /// if any (M17/M18 keyboard routing).
+    /// if any (keyboard routing).
     fn fire_focused(&mut self, ctx: &mut ReactiveCtx, kind: EventKind, payload: Option<&Value>) {
         let Some(focused) = self.focused else {
             return;
@@ -794,7 +939,7 @@ impl EventRouter {
     }
 
     /// Advances keyboard focus to the next (or previous) focusable element
-    /// (M18, Tab traversal).
+    /// (Tab traversal).
     fn tab_focus(&mut self, ctx: &mut ReactiveCtx, reverse: bool) {
         // RFC-0017 focus trap: when a modal overlay is mounted, cycle only within
         // its scope (`focusables[focusable_floor..]`), wrapping last→first inside
@@ -887,6 +1032,40 @@ pub fn write_back_action(sig: SignalId) -> Action {
 
 fn contains(r: Rect, p: (f32, f32)) -> bool {
     p.0 >= r.x && p.0 <= r.x + r.w && p.1 >= r.y && p.1 <= r.y + r.h
+}
+
+/// Whether `p` lands in `r` as it is drawn under `frame` (RFC-0011).
+///
+/// The pointer is mapped *back* through the ancestors' transform rather than
+/// the rect being mapped forward, because a rotated rectangle is not a
+/// rectangle and the inverse of a point is exact. `None` is the untransformed
+/// case and takes exactly the test it always did, which is nearly every region
+/// in every frame.
+fn hits(r: Rect, frame: Option<Transform>, p: (f32, f32)) -> bool {
+    match frame {
+        None => contains(r, p),
+        Some(t) => {
+            let q = invert_point(&t, [p.0, p.1]);
+            contains(r, (q[0], q[1]))
+        }
+    }
+}
+
+/// The inverse of [`Transform::apply_point`]: undo the translation, rotate
+/// back about the pivot, and divide the scale out.
+///
+/// A zero scale collapses the element to a line, which nothing can be pressed
+/// on; it maps to a point no rect contains rather than dividing by zero.
+fn invert_point(t: &Transform, p: [f32; 2]) -> [f32; 2] {
+    if t.scale[0] == 0.0 || t.scale[1] == 0.0 {
+        return [f32::NAN, f32::NAN];
+    }
+    let x = p[0] - t.translate[0] - t.origin[0];
+    let y = p[1] - t.translate[1] - t.origin[1];
+    let (sin, cos) = (-t.rotate).sin_cos();
+    let rx = x * cos - y * sin;
+    let ry = x * sin + y * cos;
+    [t.origin[0] + rx / t.scale[0], t.origin[1] + ry / t.scale[1]]
 }
 
 #[cfg(test)]
@@ -1168,7 +1347,7 @@ mod tests {
         assert_eq!(ctx.peek_signal(count), Value::Int(1));
     }
 
-    // ── M24: remaining event catalog ─────────────────────────────────────
+    // ── Remaining event catalog ─────────────────────────────────────
 
     #[test]
     fn double_tap_fires_within_threshold_and_not_beyond() {

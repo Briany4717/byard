@@ -1,4 +1,4 @@
-// DecoratedBox pipeline (M21, RFC-0001 §3.1): a rounded rectangle with an
+// DecoratedBox pipeline (RFC-0001 §3.1): a rounded rectangle with an
 // optional inner border, a blurred drop shadow, and an overall opacity. Plain
 // solid fills (no border/shadow/opacity) stay on the SolidBox pipeline; this one
 // is used only when the compiler promotes a box via `RenderFrame::push_decorated`.
@@ -17,7 +17,7 @@ struct InstanceInput {
     @location(6) params: vec4<f32>,
     // (opacity, depth, shadow_spread, smooth), `misc.w` is the RFC-0031 §S1
     // corner smoothing, and nothing else: the gradient's own tag lives in
-    // `grad_kind` below, one lane one owner (INV-28).
+    // `grad_kind` below, one lane one owner.
     @location(7) misc: vec4<f32>,
     // Paint-time transform (RFC-0011); identity is a free no-op below. Two
     // attributes rather than four, because 16 locations is the portable floor

@@ -124,11 +124,11 @@ fn sub_slice_clamps_to_the_slice_bounds() {
     assert_eq!(sub_slice(&s, &(5..7)), &[] as &[i32]);
 }
 
-// ── INV-8: paint-time transforms never trigger a relayout ─────────────────
+// ── Paint-time transforms never trigger a relayout ─────────────────
 
 #[test]
 fn encoder_module_never_calls_layout_atlas_compute() {
-    // RFC-0011 (INV-8): a paint-time `Transform` must never cause a Taffy
+    // RFC-0011: a paint-time `Transform` must never cause a Taffy
     // relayout. Structurally enforced by module boundaries (`encoder`
     // never imports `crate::atlas`), this test scans the encoder's own
     // sources for the literal call so a future edit can't reintroduce it
@@ -152,7 +152,7 @@ fn encoder_module_never_calls_layout_atlas_compute() {
     ] {
         assert!(
             !src.contains(&forbidden_call),
-            "{name} must never call into layout recomputation (INV-8)"
+            "{name} must never call into layout recomputation"
         );
     }
 }
@@ -590,7 +590,7 @@ fn cpu_sd_rounded_box_n(p: [f32; 2], b: [f32; 2], r: [f32; 4], n: f32) -> f32 {
     (inner + value - r_corner) / grad
 }
 
-/// INV-22, and the load-bearing test of RFC-0031 §S1: at `smooth: 0` the
+/// Pixel parity, and the load-bearing test of RFC-0031 §S1: at `smooth: 0` the
 /// field is the one that existed before the property did, **bitwise**, not
 /// approximately. `pow(x, 2)` and `x * x` differ in the last ULP, and every
 /// golden image in the repo would move with them, so the short-circuit is a
@@ -829,6 +829,7 @@ fn assert_f32_eq(actual: f32, expected: f32) {
 fn line(x: f32, y: f32, text: &str, font_size: f32, dirty: bool) -> TextLine {
     TextLine {
         weight: 400,
+        family: None,
         x,
         y,
         text: text.to_string(),
@@ -1109,7 +1110,7 @@ fn compute_scissor_is_none_when_dirty_rect_lies_entirely_outside_target() {
     assert!(compute_scissor(&ScissorInputs::text_only(&texts, &[]), 1.0, 100, 100).is_none());
 }
 
-// ── M26/M27: box / decorated / texture dirty bounds + combined scissor ────
+// ── Box / decorated / texture dirty bounds + combined scissor ────
 
 /// Builds a `BoxInstance` at `(x, y, w, h)` (colour/radii irrelevant to
 /// the bounds helpers under test).
@@ -1176,7 +1177,7 @@ fn dirty_box_bounds_unions_with_previous_frame_bounds() {
 
 #[test]
 fn compute_scissor_is_some_when_only_a_box_is_dirty_and_no_text_exists() {
-    // The M26 regression test: no text at all, one dirty box. The old
+    // The regression test for a textless dirty box: no text at all, one dirty box. The old
     // text-only `compute_scissor` returned `None` here, so `should_draw`
     // was false and the box mutation never reached the screen.
     let boxes = [box_at(10.0, 20.0, 30.0, 40.0)];
@@ -1308,10 +1309,10 @@ fn dirty_texture_bounds_unions_with_previous_frame_bounds() {
 
 #[test]
 fn compute_scissor_does_not_force_full_redraw_when_a_clean_decorated_box_is_present() {
-    // The actual point of M27: a scene with one *non-dirty* DecoratedBox
-    // and one dirty text line must scissor to the text's bounds only, not
-    // the whole viewport (which is what the old forced-`full_redraw` block,
-    // now deleted, effectively did).
+    // The actual point of per-primitive dirty bounds: a scene with one
+    // *non-dirty* DecoratedBox and one dirty text line must scissor to the
+    // text's bounds only, not the whole viewport (which is what the old
+    // forced-`full_redraw` block, now deleted, effectively did).
     let texts = [line(10.0, 20.0, "hi", 16.0, true)];
     let decorated = [decorated_at(0.0, 0.0, 999.0, 999.0, false)];
     let inputs = ScissorInputs {
@@ -1501,5 +1502,129 @@ fn decorated_instance_attributes_land_on_their_fields() {
         std::mem::size_of::<DecoratedInstance>(),
         208,
         "the packing changed which locations are read, not a byte of what is uploaded"
+    );
+}
+
+// ── Opacity groups split segments by target (RFC-0011 T4) ─────────────────
+
+fn group(start: u32, end: u32) -> crate::frame::OpacityGroup {
+    crate::frame::OpacityGroup {
+        start: mark(start),
+        end: mark(end),
+        opacity: 0.5,
+        depth: 0.0,
+    }
+}
+
+/// No groups is the segmentation it always was, byte for byte.
+#[test]
+fn no_groups_leaves_the_segments_untouched() {
+    let segs = compute_segments(&[], &[], &mark(6));
+    assert_eq!(split_groups(segs.clone(), &[]), segs);
+}
+
+/// A group in the middle of one pass becomes three pieces: before it, the
+/// group (drawn offscreen, and the last of its group), and after it.
+#[test]
+fn a_group_in_the_middle_splits_one_pass_into_three_pieces() {
+    let segs = split_groups(compute_segments(&[], &[], &mark(10)), &[group(3, 7)]);
+    assert_eq!(text_ranges(&segs), vec![0..3, 3..7, 7..10]);
+    assert_eq!(
+        segs.iter().map(|s| s.group).collect::<Vec<_>>(),
+        vec![None, Some(0), None]
+    );
+    assert_eq!(
+        segs.iter().map(|s| s.group_end).collect::<Vec<_>>(),
+        vec![None, Some(0), None],
+        "the group's picture is complete after its only piece"
+    );
+}
+
+/// A group that runs to the end of the frame still gets a pass to be
+/// composited in: an empty frame segment is appended after it.
+#[test]
+fn a_group_at_the_end_of_the_frame_gets_a_segment_to_composite_in() {
+    let segs = split_groups(compute_segments(&[], &[], &mark(5)), &[group(2, 5)]);
+    assert_eq!(text_ranges(&segs), vec![0..2, 2..5, 5..5]);
+    assert_eq!(segs.last().and_then(|s| s.group), None);
+}
+
+/// A backdrop barrier inside a group splits it into two pieces of the same
+/// group, and the barrier stays on the piece it was on.
+#[test]
+fn a_backdrop_inside_a_group_keeps_both_pieces_in_the_group() {
+    let segs = split_groups(
+        compute_segments(&[], &[mark_b(5, 0)], &mark_b(10, 1)),
+        &[group(2, 8)],
+    );
+    assert_eq!(text_ranges(&segs), vec![0..2, 2..5, 5..8, 8..10]);
+    assert_eq!(
+        segs.iter().map(|s| s.group).collect::<Vec<_>>(),
+        vec![None, Some(0), Some(0), None]
+    );
+    assert_eq!(segs[2].backdrop_after, None);
+    assert_eq!(segs[1].backdrop_after, Some(0));
+    assert_eq!(
+        segs.iter().map(|s| s.group_end).collect::<Vec<_>>(),
+        vec![None, None, Some(0), None],
+        "only the group's last piece completes it"
+    );
+}
+
+/// Two groups back to back are two pictures, not one, with a frame segment
+/// between them for the first to be composited in before the second is drawn
+/// into the same offscreen target.
+#[test]
+fn adjacent_groups_stay_separate_with_a_composite_between_them() {
+    let segs = split_groups(
+        compute_segments(&[], &[], &mark(9)),
+        &[group(1, 4), group(4, 8)],
+    );
+    assert_eq!(text_ranges(&segs), vec![0..1, 1..4, 4..4, 4..8, 8..9]);
+    assert_eq!(
+        segs.iter().map(|s| s.group).collect::<Vec<_>>(),
+        vec![None, Some(0), None, Some(1), None]
+    );
+}
+
+/// Every completed group is followed by a frame segment, which is the
+/// invariant the one-target scheme rests on, checked over a few shapes.
+#[test]
+fn every_group_end_is_followed_by_a_frame_segment() {
+    for groups in [
+        vec![group(0, 3)],
+        vec![group(2, 9)],
+        vec![group(0, 4), group(4, 9)],
+        vec![group(1, 3), group(3, 5), group(5, 9)],
+    ] {
+        let segs = split_groups(compute_segments(&[], &[], &mark(9)), &groups);
+        for (i, s) in segs.iter().enumerate() {
+            if s.group_end.is_some() {
+                assert!(
+                    segs.get(i + 1).is_some_and(|n| n.group.is_none()),
+                    "a group's last piece must be followed by a frame segment: {segs:#?}"
+                );
+            }
+        }
+    }
+}
+
+// ── Scissor intersection ────────────────────────────────────────────────────
+
+/// Two scissors that do not overlap intersect to nothing, on either axis and
+/// in either order, and that answer must not be computed by subtracting the
+/// far edge from the near one first: in `u32` that underflows, which a debug
+/// build reports as a panic in the middle of a frame. A clip scrolled wholly
+/// out of its parent's rect is the ordinary way to get here.
+#[test]
+fn disjoint_scissors_intersect_to_nothing_without_underflow() {
+    let a = (0, 0, 100, 100);
+    for b in [(200, 0, 50, 50), (0, 200, 50, 50), (100, 0, 10, 10)] {
+        assert_eq!(intersect_scissor(a, b), None, "{a:?} and {b:?}");
+        assert_eq!(intersect_scissor(b, a), None, "{b:?} and {a:?}");
+    }
+    assert_eq!(
+        intersect_scissor(a, (50, 60, 100, 100)),
+        Some((50, 60, 50, 40))
     );
 }

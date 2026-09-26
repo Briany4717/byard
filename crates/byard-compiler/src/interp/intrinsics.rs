@@ -5,8 +5,8 @@
 //! A closed table maps each reserved intrinsic name to its content arity,
 //! accepted property/event vocabulary, focusability, and children policy.
 //! [`validate_element`] applies the eight §5 rules in order, each producing a
-//! precise span-anchored [`CompileError`], no failure is ever silent (D4,
-//! INV-4). Interactive elements register a hit rect inflated to a 44×44 minimum
+//! precise span-anchored [`CompileError`], no failure is ever silent (D4).
+//! Interactive elements register a hit rect inflated to a 44×44 minimum
 //! (RFC-0003 E8), computed by [`inflate_hit_rect`].
 
 use std::collections::{HashMap, HashSet};
@@ -75,6 +75,14 @@ pub enum PropType {
     /// for. Rather than an `Enum`, because the axis is genuinely numeric and
     /// a variable font's `wght` takes the number.
     WeightAxis,
+    /// A font family declared in `[assets.fonts]` (RFC-0034).
+    ///
+    /// Written as a bare name (`font: display`) or a string, and checked
+    /// against the families the project actually declares — which cannot
+    /// happen here, because this check knows nothing of the theme. What this
+    /// type rules out is a value that could never be a family name at all;
+    /// the "is it declared" half is a separate pass with the theme in hand.
+    FontFamily,
     /// A scoped style class reference (`.title`).
     Class,
     /// A `Vec2` `(Float, Float)`.
@@ -278,6 +286,11 @@ const TEXT_PROPS: &[(&str, PropDef)] = &[
     // It was paint-class while it did nothing at all, which was harmless then
     // and would now be a lie any relayout gate built on this would believe.
     ("weight", lay(PropType::WeightAxis)),
+    // RFC-0034: selects one of the families declared in `[assets.fonts]`.
+    // Layout class for the same reason `weight` is: two faces set the same
+    // string to different widths, so a heading that changes face changes the
+    // box it needs.
+    ("font", lay(PropType::FontFamily)),
     ("align", lay(PropType::Enum(ALIGN))),
     ("lines", lay(PropType::Int)),
     ("wrap", lay(PropType::Bool)),
@@ -520,6 +533,13 @@ fn lookup_intrinsic(name: &str) -> Option<Intrinsic> {
         props.insert("anchor_align", lay(PropType::Enum(ANCHOR_ALIGN)));
         props.insert("anchor_gap", lay(PropType::Len));
         props.insert("anchor_flip", lay(PropType::Bool));
+        // RFC-0017 §Positioning: an absolute `(x, y)` offset from the
+        // viewport's top-left. Spelled `at:` rather than overloading
+        // `anchor_to:` with a pair, because `anchor_to` names an element and
+        // is compile-checked against `as` tags, and a property whose *type*
+        // decides which of two unrelated behaviours you get is a property
+        // people get wrong.
+        props.insert("at", lay(PropType::Vec2));
         // RFC-0018: grid child-placement props. Valid on any container child of a
         // `Grid`; harmless (no-op) outside a grid, like `anchor`, so they live on
         // every container rather than being special-cased.
@@ -534,7 +554,14 @@ fn lookup_intrinsic(name: &str) -> Option<Intrinsic> {
             focusable: false,
             interactive: true,
             props,
-            events: events_from(false, &[]),
+            // RFC-0036: an anchored overlay child may carry `dismiss =>`,
+            // which fires on a press outside both it and its anchor. Named
+            // like RFC-0017's modal dismissal because it is the same intent,
+            // and implemented differently because a dropdown must not swallow
+            // the events of the page beneath it. Harmless on a container that
+            // anchors to nothing, which the checker reports rather than
+            // silently ignoring.
+            events: events_from(false, &["dismiss"]),
         }
     };
     Some(match name {
@@ -778,7 +805,8 @@ fn lookup_intrinsic(name: &str) -> Option<Intrinsic> {
             // RFC-0031 §S10: `morph: <scalar>` reinterprets the canvas's shapes
             // as a *sequence* and indexes it. Paint-class, so it animates
             // through the ordinary chokepoint, a morph that relaid out the
-            // tree at the display rate is precisely what INV-8 forbids.
+            // tree at the display rate is precisely what the paint class
+            // forbids.
             props.insert("morph", pnt(PropType::Float));
             // RFC-0031 §S7: `fuse: <px>` is the smoothing radius, the distance
             // over which two surfaces bridge into one. Paint-class and
@@ -1174,10 +1202,11 @@ pub fn validate_element(
         // Rule 6, attribute value type.
         if let (AttrKind::Prop { value }, Some(def)) = (&attr.kind, prop_def) {
             let ty = def.ty;
-            // RFC-0032 §Q8 / RFC-0010 INV-8: the class comes from *this*
-            // intrinsic's own definition, not from a global name list, so
-            // `align` on a `Column` and `align` on a `Text` are answered
-            // separately and an attribute cannot be added without an answer.
+            // RFC-0032 §Q8 / RFC-0010 (animation is paint-time only): the class
+            // comes from *this* intrinsic's own definition, not from a global
+            // name list, so `align` on a `Column` and `align` on a `Text` are
+            // answered separately and an attribute cannot be added without an
+            // answer.
             let is_layout = def.class == AttrClass::Layout;
             // RFC-0010: `value with anim.*(…)`, reject an animation on a layout
             // property (it can't animate on the GPU), otherwise validate every
@@ -1221,7 +1250,7 @@ pub fn validate_element(
                 // Same rule for the keyframe form (RFC-0025 §3).
                 // RFC-0025 §3: `anim.keyframes(…)` stands in value position. It
                 // is rejected on a layout property for the same reason `with`
-                // is (a relayout every frame, INV-8), handled above, for the
+                // is (a relayout every frame), handled above, for the
                 // nested form too, and each step's value is type-checked
                 // against the property like any other value.
                 {
@@ -1373,6 +1402,9 @@ fn check_value_type(ty: PropType, value: &Expr) -> Option<CompileError> {
         (PropType::WeightAxis, Expr::StrLit(..) | Expr::FloatLit(..)) => {
             mismatch("one of the weight keywords, or a whole number 100..=900")
         }
+        (PropType::FontFamily, Expr::IntLit(..) | Expr::FloatLit(..) | Expr::ClassRef(..)) => {
+            mismatch("a font family declared in [assets.fonts]")
+        }
         (PropType::Enum(set), Expr::Ident(sym, _)) => {
             let tok = sym.as_str();
             if tok == "true" || tok == "false" || set.contains(&tok) {
@@ -1461,6 +1493,13 @@ const JOIN: &[&str] = &["miter", "round", "bevel"];
 /// (RFC-0020 §"Stroke and fill").
 const SHAPE_PAINT_PARAMS: &[(&str, PropType)] = &[
     ("stroke", PropType::Color),
+    // RFC-0035 §"Canvas arc strokes": a gradient along the *stroke*, spelled
+    // apart from `path`'s `gradient:` because they paint different things. One
+    // name meaning the fill's ramp on one command and the stroke's on another
+    // would be a rule to remember rather than a name to read. Typed loosely
+    // here for the same reason `path`'s is: the value is a named tuple that
+    // the lowering parses and reports on.
+    ("stroke_gradient", PropType::Str),
     ("stroke_width", PropType::Float),
     ("cap", PropType::Enum(CAP)),
     ("join", PropType::Enum(JOIN)),
@@ -1574,7 +1613,7 @@ fn shape_geometry(name: &str) -> (ShapeParams, ShapeParams) {
 /// Validates a `path { … }` body (RFC-0037): path commands only, each with the
 /// parameters it takes, and a first command that establishes where the path
 /// starts.
-fn validate_path_body(el: &ElementNode) -> Vec<CompileError> {
+pub fn validate_path_body(el: &ElementNode) -> Vec<CompileError> {
     let mut errs = Vec::new();
     let mut first = true;
     for member in &el.children {
@@ -1736,12 +1775,127 @@ fn validate_group_mode(el: &ElementNode, attrs: &[Attr], errs: &mut Vec<CompileE
     if let (Some(_), Some(morph)) = (fuse, mode_attr("morph")) {
         errs.push(CompileError::ConflictingGroupMode { span: morph.span });
     }
+    if fuse.is_none() && mode_attr("morph").is_some() {
+        validate_morph_paths(&el.children, errs);
+    }
     let Some(_) = fuse else { return };
 
     // Per-member stroke properties inside a fusion group. `seen` counts the
     // shapes walked so far: the first one's paint *is* the group's, so only a
     // later shape's stroke is genuinely inert.
     walk_fused_members(&el.children, &mut 0, errs);
+}
+
+/// RFC-0031 §S11: the rules a `morph:` sequence of body paths must meet.
+///
+/// Body paths morph command by command, which needs every path to have the
+/// same commands in the same order as the one it blends into, and that
+/// includes the last path blending back into the first, because the sequence
+/// wraps (§S10). The first command that disagrees is named, with the path it
+/// belongs to. A sequence that mixes body paths with any other shape, or holds
+/// a `path(d: …)`, is refused too: those morph as distance fields on the GPU
+/// and a sequence cannot be both.
+///
+/// The structure check needs the sequence's order, which only a body of
+/// literal shapes fixes. When the body chooses its members with `when` or
+/// generates them with `for`, the render pass checks the two paths it is about
+/// to blend instead, against the same rule.
+fn validate_morph_paths(members: &[Member], errs: &mut Vec<CompileError>) {
+    let mut shapes = Vec::new();
+    collect_morph_members(members, &mut shapes);
+    let is_body_path = |e: &ElementNode| e.name.as_str() == "path" && !e.children.is_empty();
+    if !shapes.iter().any(|e| is_body_path(e)) {
+        for e in shapes.iter().filter(|e| e.name.as_str() == "path") {
+            errs.push(CompileError::MorphMemberKind {
+                span: e.span,
+                reason: "`path(d: …)` cannot morph: write the path with a body of \
+                         `move`/`line`/`quad`/`cubic`/`close` commands, which morph \
+                         command by command"
+                    .to_string(),
+            });
+        }
+        return;
+    }
+    for e in shapes.iter().filter(|e| !is_body_path(e)) {
+        errs.push(CompileError::MorphMemberKind {
+            span: e.span,
+            reason: format!(
+                "`{}` cannot share a morph with body paths: paths morph command by \
+                 command and other shapes as distance fields; give each its own `Canvas`",
+                if e.name.as_str() == "path" {
+                    "path(d: …)"
+                } else {
+                    e.name.as_str()
+                }
+            ),
+        });
+    }
+    let literal = members.iter().all(|m| matches!(m, Member::Element(_)));
+    if !literal {
+        return;
+    }
+    let paths: Vec<&ElementNode> = shapes.into_iter().filter(|e| is_body_path(e)).collect();
+    let n = paths.len();
+    if n < 2 {
+        return;
+    }
+    // Every neighbouring pair, and the wrap from the last back to the first
+    // (for two paths that is the same pair, so it is not checked twice).
+    let pairs = (1..n)
+        .map(|k| (k - 1, k))
+        .chain((n > 2).then_some((n - 1, 0)));
+    for (from, to) in pairs {
+        if let Some(err) = morph_mismatch(paths[from], paths[to], to) {
+            errs.push(err);
+        }
+    }
+}
+
+/// The literal shape commands of a morph body, `when` branches included, in
+/// order. `for` bodies are skipped: what they generate is data.
+fn collect_morph_members<'a>(members: &'a [Member], out: &mut Vec<&'a ElementNode>) {
+    for member in members {
+        match member {
+            Member::Element(child) if is_shape_command(child.name.as_str()) => out.push(child),
+            Member::When { then, els, .. } => {
+                collect_morph_members(then, out);
+                if let Some(els) = els {
+                    collect_morph_members(els, out);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// The command names of a path body, in order, with their spans.
+fn path_command_names(path: &ElementNode) -> Vec<(&str, crate::diagnostics::Span)> {
+    path.children
+        .iter()
+        .filter_map(|m| match m {
+            Member::Element(cmd) => Some((cmd.name.as_str(), cmd.span)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The first command at which `to` stops matching `from`, as the diagnostic
+/// that names it; `None` when the two have the same structure.
+fn morph_mismatch(from: &ElementNode, to: &ElementNode, member: usize) -> Option<CompileError> {
+    let a = path_command_names(from);
+    let b = path_command_names(to);
+    let index =
+        (0..a.len().max(b.len())).find(|&i| a.get(i).map(|c| c.0) != b.get(i).map(|c| c.0))?;
+    let name = |c: Option<&(&str, crate::diagnostics::Span)>| {
+        c.map_or_else(|| "the end of the path".to_string(), |c| c.0.to_string())
+    };
+    Some(CompileError::MorphPathMismatch {
+        span: b.get(index).map_or(to.span, |c| c.1),
+        member,
+        index,
+        expected: name(a.get(index)),
+        found: name(b.get(index)),
+    })
 }
 
 /// RFC-0031 §S5/§Q3: a `Canvas` that declares a combine mode turns its shapes

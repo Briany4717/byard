@@ -1,6 +1,6 @@
 # RFC-0024: Extended Style States, `checked`, `selected`, `invalid`, `indeterminate`, and combined selectors
 
-- **Status:** Active, implemented. Prop and value-driven states (`checked`, `selected`, `invalid`) and combined selectors are folded in `interp/eval.rs` and guarded by `examples/style_states` (verified against the tree 2026-08-03; see `support/STATUS_RFCS.md`).
+- **Status:** Active, implemented. Prop and value-driven states (`checked`, `selected`, `invalid`) and combined selectors are folded in `interp/eval.rs` and guarded by `examples/style_states` (verified against the tree 2026-08-03).
 - **Author(s):** Briany4717
 - **Created:** 2026-07-10
 - **Last updated:** 2026-07-10

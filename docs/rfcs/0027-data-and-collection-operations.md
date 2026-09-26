@@ -57,7 +57,7 @@ View TodoList() {
 
 ## Motivation
 
-The [gap analysis](../../support/GAP_ANALYSIS_real_apps.md) identified three
+A gap analysis of what real apps need identified three
 structural blockers between Byard-the-visual-framework and Byard-the-app-
 framework. This RFC closes the first and most self-contained one: **the language
 cannot manipulate data.**
@@ -97,7 +97,7 @@ does not touch concurrency, the relay, or the render pipelines.
 - `Str` compares by value (`==`/`!=` and lexicographic ordering).
 - `Bool` compares with `==`/`!=` only.
 - Two operands of **incompatible types** are a compile error
-  (`CompileError::TypeMismatch`), not a silent `Unit` (INV-4: no silent
+  (`CompileError::TypeMismatch`), not a silent `Unit` (no silent
   failure). Comparing `List`/record values with `==` is a **structural**
   equality (element-wise), ordering (`<`) on them is a `TypeMismatch`.
 
@@ -132,7 +132,7 @@ observers, so Mark-and-Pull stays correct.
 | Form | Result | Notes |
 |---|---|---|
 | `xs.len` | `Int` | property access, not a call |
-| `xs[i]` | element | `IndexOutOfBounds` → `Unit` + logic-thread diagnostic (INV-4), never panic |
+| `xs[i]` | element | `IndexOutOfBounds` → `Unit` + logic-thread diagnostic, never panic |
 | `xs.push(v)` | new `List` with `v` appended | |
 | `xs.removeAt(i)` | new `List` without index `i` | out-of-range → unchanged list + diagnostic |
 | `xs.contains(v)` | `Bool` | structural equality (§1) |
@@ -208,13 +208,13 @@ them separate avoids overloading `Tuple`'s layout/attribute role with data
 semantics. `Value::Fn` already exists for callback props; lambdas reuse it
 (`Fn(AstId)` pointing at the lambda body plus its captured param names).
 
-INV-3 (AST immutable after parse) is preserved: these are new node kinds, not
+The AST stays immutable after parse: these are new node kinds, not
 mutations of existing nodes.
 
 ### 2. Evaluation
 
 `eval_binary` is refactored into three total functions, each pure and
-unit-testable, none panicking on user data (INV-4):
+unit-testable, none panicking on user data:
 
 ```rust
 fn eval_arith(op: BinOp, a: Value, b: Value) -> Value;    // + - * /  (existing, unchanged)
@@ -251,14 +251,14 @@ element type; a lambda's param type is inferred from the receiver's element type
 (E2 mechanism, generalized). A `filter` predicate that does not yield `Bool` is
 `CompileError::PredicateNotBool`.
 
-### 5. Diagnostics (new `CompileError` variants, INV-5, defined in `byard-compiler`)
+### 5. Diagnostics (new `CompileError` variants, defined only in `byard-compiler`)
 
 `TypeMismatch { op, lhs_ty, rhs_ty, span }`, `PredicateNotBool { span }`,
 `EffectInPureLambda { span }`, `UnknownMethod { recv_ty, name, span }` (with
 Levenshtein suggestion, matching the D4 `UnknownAttribute` treatment). Runtime
 index/removeAt out-of-range is **not** a `CompileError`, it degrades to `Unit`/
 unchanged and emits a logic-thread diagnostic, because the index may be a runtime
-`var` (INV-4: no panic on user-derived data).
+`var` (no panic on user-derived data).
 
 ---
 
@@ -338,7 +338,7 @@ RFC defines the operations; RFC-0014 can later compile them faster.
   - [x] **Precedence table.** As in §1; add a parser precedence-climbing test per
     operator pair. Ternary `? :` (already present) binds tighter than `||`.
   - [x] **`removeAt`/index bounds.** Runtime-degrade to `Unit`/unchanged +
-    diagnostic (INV-4), never a `CompileError` and never a panic, because the
+    diagnostic, never a `CompileError` and never a panic, because the
     index can be a runtime value.
   - [x] **Record key ordering.** Declaration order preserved (`SmallVec`), so
     structural equality is order-sensitive on construction but field access is

@@ -77,8 +77,8 @@ which part of the argument they disagree with.
 ---
 
 Decisions that only surface *after* merge, implementation-time trade-offs the
-design could not have anticipated, go to `support/DESICIONS.md` as `IMPL-NN`
-entries, per that file's own rule. They do not come back into the RFC.
+design could not have anticipated, are recorded with the change that makes
+them. They do not come back into the RFC.
 
 ## Future possibilities
 

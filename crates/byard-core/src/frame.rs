@@ -3107,6 +3107,14 @@ mod paint_hash {
         t.text.hash(&mut h);
         f32s(&mut h, &[t.x, t.y, t.font_size]);
         f32s(&mut h, &t.color);
+        // The face, both axes of it (RFC-0034). Both reach the shaper, so both
+        // decide this line's pixels, and a line judged clean is a line that
+        // keeps last frame's glyphs: a heading that turns bold renders
+        // correctly exactly once and then never again. Weight arrived here
+        // without this and family arrived the same way; the omission is the
+        // same one twice, which is why they are hashed together.
+        t.weight.hash(&mut h);
+        t.family.hash(&mut h);
         // The wrap width, which is not a field of the line at all (RFC-0005
         // default wrap keeps it in a parallel array). It breaks the lines, so
         // two runs that differ only in it are two different pictures.
@@ -4477,6 +4485,39 @@ mod paint_digest_tests {
             f.texts().iter().map(|t| t.dirty).collect::<Vec<_>>(),
             vec![false, true]
         );
+    }
+
+    /// A line that changed only its weight or its family is a line that
+    /// changed (INV-26).
+    ///
+    /// The digest decides whether a primitive is repainted by comparing its
+    /// own bytes at its own pool position. Weight reached the glyph run
+    /// without reaching this hash, and family arrived the same way; either
+    /// omission means a heading that turns bold, or a title that changes
+    /// typeface, is judged clean and keeps last frame's pixels. It renders
+    /// perfectly, once, and then never again.
+    #[test]
+    fn a_line_that_changed_only_its_weight_or_family_is_repainted() {
+        let heavier = TextLine {
+            weight: 700,
+            ..line("a")
+        };
+        let mut d = PaintDigest::new();
+        let _ = digest_frame(&mut d, &[], &[line("a")]);
+        let f = digest_frame(&mut d, &[], std::slice::from_ref(&heavier));
+        assert!(f.texts()[0].dirty, "a weight change must repaint");
+
+        let other_face = TextLine {
+            family: Some(std::sync::Arc::from("Space Grotesk")),
+            ..heavier
+        };
+        let f = digest_frame(&mut d, &[], std::slice::from_ref(&other_face));
+        assert!(f.texts()[0].dirty, "a family change must repaint");
+
+        // And the same line twice is still clean, so the two assertions above
+        // are not passing because everything is dirty.
+        let f = digest_frame(&mut d, &[], std::slice::from_ref(&other_face));
+        assert!(!f.texts()[0].dirty, "an unchanged line must stay clean");
     }
 
     #[test]

@@ -249,6 +249,25 @@ pub enum CompileError {
         /// The closest anchor declared before this point, if any.
         hint: Option<String>,
     },
+    /// An RFC-0036 anchor tail (`width: match(ref)`, `dismiss =>`) written
+    /// where there is no anchor to resolve it against, or naming an element
+    /// that is not tagged `as`.
+    ///
+    /// Both tails read the anchor's resolved rect: one to take its width, the
+    /// other to know which press to ignore. On an element that anchors to
+    /// nothing there is no rect, so the property would quietly do nothing, and
+    /// a `width:` or a `dismiss =>` that quietly does nothing reads as a bug
+    /// in the panel rather than as the mistake it is.
+    MisplacedAnchorTail {
+        /// Source range of the offending property.
+        span: Span,
+        /// The property, as the author would recognise it.
+        prop: String,
+        /// Why it cannot be resolved here.
+        reason: String,
+        /// The closest anchor declared before this point, if any.
+        hint: Option<String>,
+    },
     /// A `font:` names a family the project does not declare in
     /// `[assets.fonts]` (RFC-0034).
     ///
@@ -853,6 +872,7 @@ impl CompileError {
             | Self::UnmatchedRoute { span, .. }
             | Self::UnknownAnchor { span, .. }
             | Self::UnknownFontFamily { span, .. }
+            | Self::MisplacedAnchorTail { span, .. }
             | Self::UnknownShapeCommand { span, .. }
             | Self::UnknownShapeParam { span, .. }
             | Self::MissingShapeParam { span, .. }
@@ -938,6 +958,7 @@ impl CompileError {
             | Self::UnmatchedRoute { span, .. }
             | Self::UnknownAnchor { span, .. }
             | Self::UnknownFontFamily { span, .. }
+            | Self::MisplacedAnchorTail { span, .. }
             | Self::UnknownShapeCommand { span, .. }
             | Self::UnknownShapeParam { span, .. }
             | Self::MissingShapeParam { span, .. }
@@ -1025,6 +1046,7 @@ impl CompileError {
             Self::UnmatchedRoute { .. } => "UnmatchedRoute",
             Self::UnknownAnchor { .. } => "UnknownAnchor",
             Self::UnknownFontFamily { .. } => "UnknownFontFamily",
+            Self::MisplacedAnchorTail { .. } => "MisplacedAnchorTail",
             Self::UnknownShapeCommand { .. } => "UnknownShapeCommand",
             Self::UnknownShapeParam { .. } => "UnknownShapeParam",
             Self::MissingShapeParam { .. } => "MissingShapeParam",
@@ -1212,6 +1234,9 @@ impl CompileError {
             Self::UnmatchedRoute { path, .. } => {
                 format!("no route matches `{path}`; the navigation stays where it is")
             }
+            Self::MisplacedAnchorTail {
+                prop, reason, hint, ..
+            } => with_hint(format!("`{prop}` {reason}"), hint.as_deref()),
             Self::UnknownFontFamily { name, hint, .. } => with_hint(
                 format!(
                     "no font family `{name}` is declared; add it to \

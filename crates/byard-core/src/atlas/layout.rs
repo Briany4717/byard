@@ -1563,6 +1563,53 @@ impl LayoutAtlas {
         Ok(())
     }
 
+    /// Fixes `node`'s width in logical pixels **after** layout has run, and
+    /// reports whether that changed anything (RFC-0036 `width: match(ref)`).
+    ///
+    /// The one post-`compute` style change this atlas allows, and it exists
+    /// for one shape of problem: an element whose width is another element's
+    /// resolved width. A dropdown as wide as the field it hangs from cannot be
+    /// expressed as a layout relationship, because the two are in different
+    /// trees, and it cannot be applied by moving the finished rect either,
+    /// because the dropdown's own children were laid out against the width it
+    /// had.
+    ///
+    /// **This is not a cycle**, which is the thing worth checking before
+    /// reaching for it. The dependency runs one way: the main tree resolves,
+    /// the anchor's rect is a fact, and only then is a subtree that is not
+    /// part of the main tree's layout given a width. The overlay cannot
+    /// influence the anchor, so no amount of iterating would change either
+    /// answer. Feeding a *main-tree* rect back into the main tree's own layout
+    /// remains forbidden and is a different thing entirely.
+    ///
+    /// Returns `false` when the width is already exactly this, which is the
+    /// common case on a steady frame: `set_style` marks the node dirty in
+    /// Taffy unconditionally, so re-applying an unchanged width every frame
+    /// would recompute the subtree every frame and turn the retained path back
+    /// into a full one for anything with a dropdown on screen.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AtlasError::ForeignNode`] if `node` came from another atlas,
+    /// or [`AtlasError::Backend`] if the backend refuses the style.
+    pub fn set_fixed_width(&mut self, node: AtlasNodeId, width: f32) -> Result<bool, AtlasError> {
+        self.validate_node(node)?;
+        let mut style = self
+            .tree
+            .style(node.node_id)
+            .map_err(|e| AtlasError::from_taffy(&e))?
+            .clone();
+        let wanted = Dimension::from_length(width);
+        if style.size.width == wanted {
+            return Ok(false);
+        }
+        style.size.width = wanted;
+        self.tree
+            .set_style(node.node_id, style)
+            .map_err(|e| AtlasError::from_taffy(&e))?;
+        Ok(true)
+    }
+
     /// Adds a **stacking** container (RFC-0018 `ZStack`): a single-cell CSS grid
     /// in which every child is placed in the same cell, so they overlap. The
     /// lone `auto` track sizes the stack to its largest child, and `align`/`justify` position smaller children within it

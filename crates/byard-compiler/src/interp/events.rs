@@ -274,6 +274,21 @@ pub struct EventRouter {
     /// last). `Escape` fires the topmost one's `dismiss` action (RFC-0017
     /// resolved-questions: accessibility). Rebuilt every render.
     modal_scrims: Vec<usize>,
+    /// Light-dismiss regions for anchored overlays (RFC-0036 `on dismiss`).
+    ///
+    /// Deliberately **not** a modal scrim. A scrim covers the viewport, raises
+    /// [`modal_floor`](Self::modal_floor) and swallows every event beneath it,
+    /// which is right for a dialog and wrong for a dropdown: the page under an
+    /// autocomplete has to keep scrolling and hovering while the suggestions
+    /// are up. So this is an *observer* consulted on pointer-down, blocking
+    /// nothing.
+    ///
+    /// Each entry is the rects a press must fall outside of before the action
+    /// fires, and the action. The anchor's own rect is in that list, and that
+    /// is the non-obvious half: without it, pressing the field that opened the
+    /// panel dismisses and reopens it in one gesture, which reads as a flicker
+    /// nobody can explain.
+    light_dismiss: Vec<(Vec<Rect>, Action)>,
 }
 
 impl EventRouter {
@@ -296,6 +311,7 @@ impl EventRouter {
         self.modal_floor = 0;
         self.focusable_floor = 0;
         self.modal_scrims.clear();
+        self.light_dismiss.clear();
     }
 
     /// Registers a modal `Overlay`'s full-viewport scrim (RFC-0017 §Modality).
@@ -320,6 +336,52 @@ impl EventRouter {
             action: dismiss.unwrap_or_else(|| Box::new(|_, _| {})),
         });
         self.modal_scrims.push(idx);
+    }
+
+    /// Registers a light dismiss for an anchored overlay (RFC-0036).
+    ///
+    /// `keep` is every rect a press may land in without dismissing: the
+    /// overlay's own, and its anchor's. Nothing is blocked and no floor is
+    /// raised, so the view underneath keeps every event it would otherwise
+    /// have had.
+    pub fn push_light_dismiss(&mut self, keep: Vec<Rect>, action: Action) {
+        self.light_dismiss.push((keep, action));
+    }
+
+    /// Fires every light dismiss unconditionally (RFC-0036, `Escape`), and
+    /// reports how many fired.
+    fn fire_light_dismiss_all(&mut self, ctx: &mut ReactiveCtx) -> usize {
+        let pending = std::mem::take(&mut self.light_dismiss);
+        let fired = pending.len();
+        for (_, mut action) in pending {
+            action(ctx, None);
+        }
+        fired
+    }
+
+    /// Fires every light dismiss whose press landed outside all of its kept
+    /// rects (RFC-0036), and reports how many fired.
+    ///
+    /// Drained rather than iterated in place: the actions are `FnMut` and this
+    /// borrows `self` mutably to run them. They are rebuilt by the next
+    /// render anyway, exactly like the hit rects.
+    fn fire_light_dismiss(&mut self, ctx: &mut ReactiveCtx, pos: (f32, f32)) -> usize {
+        if self.light_dismiss.is_empty() {
+            return 0;
+        }
+        let pending = std::mem::take(&mut self.light_dismiss);
+        let mut fired = 0;
+        let mut kept = Vec::new();
+        for (keep, mut action) in pending {
+            if keep.iter().any(|r| contains(*r, pos)) {
+                kept.push((keep, action));
+                continue;
+            }
+            action(ctx, None);
+            fired += 1;
+        }
+        self.light_dismiss = kept;
+        fired
     }
 
     /// Registers `elem`'s `rect` as a hover/press hit region (RFC-0016) so an
@@ -474,6 +536,12 @@ impl EventRouter {
 
         match ev.kind {
             EventKind::PointerDown => {
+                // RFC-0036: an anchored overlay dismisses on a press outside
+                // itself and its anchor. Before the press is routed, not
+                // after: the element the press lands on is entitled to its own
+                // handler either way, and dismissing is not a substitute for
+                // it.
+                self.fire_light_dismiss(ctx, ev.pos);
                 let elem = self.hit_any(atlas, ev.pos);
                 let secondary = matches!(ev.value, Some(Value::Bool(true)));
                 self.down = Some(DownState {
@@ -603,9 +671,19 @@ impl EventRouter {
                         return;
                     }
                     // RFC-0017: Escape dismisses the topmost modal overlay.
-                    if key == "Escape" && !self.modal_scrims.is_empty() {
-                        self.dismiss_topmost_modal(ctx);
-                        return;
+                    // RFC-0036: and every open anchored overlay, which has no
+                    // scrim to press but is just as much "the thing Escape is
+                    // for". Both, in that order, so a dropdown inside a dialog
+                    // closes before the dialog does.
+                    if key == "Escape" {
+                        let light = self.fire_light_dismiss_all(ctx);
+                        if light > 0 {
+                            return;
+                        }
+                        if !self.modal_scrims.is_empty() {
+                            self.dismiss_topmost_modal(ctx);
+                            return;
+                        }
                     }
                 }
                 self.fire_focused(ctx, EventKind::KeyDown, ev.value.as_ref());

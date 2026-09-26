@@ -4810,6 +4810,12 @@ impl Interpreter {
             }
         }
 
+        // RFC-0036 `width: match(ref)`: the anchors' rects are facts now, so a
+        // panel that asked to be as wide as one can be given that width and
+        // laid out again. Nothing here can move an anchor, so the second pass
+        // settles in one go rather than iterating.
+        self.apply_match_widths(&overlay_layouts, width, height);
+
         // RFC-0017 overlay phase: emit each overlay's children *after* the main
         // tree, so their emission-order depth is nearer and they composite on
         // top (the shared depth buffer resolves cross-layer order, no separate
@@ -5524,9 +5530,156 @@ impl Interpreter {
                 None,
                 pools,
             );
+
+            // RFC-0036 `on dismiss`: registered after the child has painted,
+            // because the rects it keeps are the ones the child just landed
+            // on.
+            self.register_light_dismiss(slot, shift);
         }
 
         frame.end_clip();
+    }
+
+    /// Registers an anchored overlay child's `on dismiss` with the router
+    /// (RFC-0036).
+    ///
+    /// **Not** the RFC-0017 scrim, which is a different feature that happens
+    /// to share a word. A modal's scrim covers the viewport and swallows every
+    /// event beneath it, which is right for a dialog and wrong for a dropdown:
+    /// an autocomplete must not stop the page under it from scrolling. This
+    /// registers an observer that blocks nothing.
+    ///
+    /// The anchor's own rect is kept alongside the panel's, and that is the
+    /// half worth stating: without it, pressing the field that opened the
+    /// panel dismisses it and the same press reopens it, which reads as a
+    /// flicker with no cause.
+    fn register_light_dismiss(&mut self, slot: &OverlayChildSlot<'_>, shift: (f32, f32)) {
+        let RenderNode::Box { attrs, .. } = slot.node else {
+            return;
+        };
+        // `on dismiss` is spelled as an ordinary event, so it arrives as one.
+        let has_dismiss = attrs
+            .iter()
+            .any(|a| a.name.as_str() == "dismiss" && matches!(a.kind, AttrKind::Event { .. }));
+        if !has_dismiss {
+            return;
+        }
+        let Some(name) = self.eval_str_prop(attrs, "anchor_to") else {
+            return;
+        };
+        let Ok(Some(own)) = self.atlas.resolved_rect(slot.id) else {
+            return;
+        };
+        let mut keep = vec![crate::interp::intrinsics::Rect::new(
+            own.x + shift.0,
+            own.y + shift.1,
+            own.width,
+            own.height,
+        )];
+        if let Some(anchor) = self
+            .anchor_rects
+            .iter()
+            .find(|(k, _)| k.as_str() == name)
+            .map(|(_, r)| *r)
+        {
+            keep.push(anchor);
+        }
+        if let Some(action) = self.lower_overlay_dismiss(attrs) {
+            self.router.push_light_dismiss(keep, action);
+        }
+    }
+
+    /// Gives every overlay child that asked to `match` an anchor's width that
+    /// width, and re-runs layout once if any of them changed (RFC-0036).
+    ///
+    /// Runs after the main tree has painted, which is when `anchor_rects`
+    /// holds where each `as`-tagged element actually landed. The width cannot
+    /// be a layout *input* on the first pass, because on that pass the anchor
+    /// has no rect; and it cannot be applied by widening the finished rect
+    /// either, because the panel's own children were laid out against the
+    /// width it had, so its rows would sit in a box they no longer fill.
+    ///
+    /// Whether the second pass runs at all is decided by the widths, not by
+    /// the presence of the property: on a steady frame every width is already
+    /// what it should be and nothing is recomputed. That is what keeps a
+    /// screen with a dropdown open from paying a full layout every frame.
+    fn apply_match_widths(&mut self, layouts: &[OverlayLayout<'_>], width: f32, height: f32) {
+        let mut changed = false;
+        for layout in layouts {
+            for slot in &layout.children {
+                let RenderNode::Box { attrs, .. } = slot.node else {
+                    continue;
+                };
+                let Some((name, _)) = Self::match_width_ref(attrs) else {
+                    continue;
+                };
+                // Unknown at render time is silence, exactly as a missing
+                // anchor is: the compile check is what reports a misspelt
+                // name, and a frame is the wrong place to raise it again.
+                let Some(anchor) = self
+                    .anchor_rects
+                    .iter()
+                    .find(|(k, _)| k.as_str() == name)
+                    .map(|(_, r)| *r)
+                else {
+                    continue;
+                };
+                if self
+                    .atlas
+                    .set_fixed_width(slot.id, anchor.w)
+                    .unwrap_or(false)
+                {
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            return;
+        }
+        let viewport = byard_core::frame::Viewport::new(width, height);
+        let measurer = self
+            .text_measurer
+            .get_or_insert_with(byard_core::text::TextMeasurer::new);
+        let _ = self.atlas.recompute_dirty_with_text(viewport, measurer);
+    }
+
+    /// The anchor name in `width: match(<name>)`, if the attributes carry one
+    /// (RFC-0036).
+    ///
+    /// Recognised structurally rather than evaluated. `match(field)` parses as
+    /// an ordinary call, and evaluating it would either invent a number or
+    /// report an unknown function; neither is what the author asked for. It is
+    /// a *layout relationship*, and the only place that can be resolved is
+    /// after the anchor's rect is a fact.
+    fn match_width_ref(attrs: &[Attr]) -> Option<(String, Span)> {
+        attrs.iter().find_map(|a| {
+            if a.name.as_str() != "width" {
+                return None;
+            }
+            let AttrKind::Prop { value } = &a.kind else {
+                return None;
+            };
+            let Expr::Call { callee, args, span } = value else {
+                return None;
+            };
+            let Expr::Ident(name, _) = callee.as_ref() else {
+                return None;
+            };
+            if name.as_str() != "match" {
+                return None;
+            }
+            match args.as_slice() {
+                [arg] => match &arg.value {
+                    Expr::Ident(target, _) => Some((target.as_str().to_string(), *span)),
+                    Expr::StrLit(parts, _) => match parts.as_slice() {
+                        [crate::parser::ast::StrPart::Text(t)] => Some((t.clone(), *span)),
+                        _ => None,
+                    },
+                    _ => None,
+                },
+                _ => None,
+            }
+        })
     }
 
     /// How far to move an overlay child so it sits against its anchor
@@ -9145,6 +9298,12 @@ impl Interpreter {
     /// those resolved to `None` and the element silently fell back to its
     /// default size, which is the failure INV-4 exists to forbid.
     fn eval_px_prop(&mut self, attrs: &[Attr], name: &str) -> Option<f32> {
+        // RFC-0036: `width: match(ref)` is a layout relationship, not a
+        // number. It is resolved once the anchor's rect exists, and
+        // evaluating it here would call a function nobody wrote.
+        if name == "width" && Self::match_width_ref(attrs).is_some() {
+            return None;
+        }
         #[allow(clippy::cast_possible_truncation)]
         attrs.iter().find_map(|a| {
             if a.name.as_str() == name {
@@ -10659,6 +10818,56 @@ impl Interpreter {
         declared: &mut Vec<String>,
         errors: &mut Vec<CompileError>,
     ) {
+        // RFC-0036 `width: match(ref)`: checked here rather than in its own
+        // walk, because it asks the same two questions `anchor_to` does and
+        // wants the same answers. A width matched against a name nobody
+        // declared, or written on an element that anchors to nothing, is a
+        // `width:` that quietly does nothing.
+        // RFC-0036: `dismiss =>` on a container is the light-dismiss of an
+        // anchored overlay, so it needs an anchor for the same reason a
+        // matched width does: the press it ignores is the one on the anchor,
+        // and without one the panel would close the moment the user pressed
+        // the thing that opened it.
+        if el.name.as_str() != "Overlay" {
+            let dismiss = el
+                .attrs
+                .iter()
+                .find(|a| a.name.as_str() == "dismiss" && matches!(a.kind, AttrKind::Event { .. }));
+            if let Some(attr) = dismiss {
+                if !el.attrs.iter().any(|a| a.name.as_str() == "anchor_to") {
+                    errors.push(CompileError::MisplacedAnchorTail {
+                        span: attr.span,
+                        prop: "dismiss =>".to_string(),
+                        reason: "needs an `anchor_to:` on the same element: a light \
+                                 dismiss ignores presses on the anchor, and an element \
+                                 that anchors to nothing has none to ignore"
+                            .to_string(),
+                        hint: None,
+                    });
+                }
+            }
+        }
+        if let Some((name, span)) = Self::match_width_ref(&el.attrs) {
+            let anchors = el.attrs.iter().any(|a| a.name.as_str() == "anchor_to");
+            if !anchors {
+                errors.push(CompileError::MisplacedAnchorTail {
+                    span,
+                    prop: format!("width: match({name})"),
+                    reason: "needs an `anchor_to:` on the same element: the width \
+                             comes from the anchor's resolved rect, and an element \
+                             that anchors to nothing has no rect to read"
+                        .to_string(),
+                    hint: None,
+                });
+            } else if !declared.contains(&name) {
+                errors.push(CompileError::MisplacedAnchorTail {
+                    span,
+                    prop: format!("width: match({name})"),
+                    reason: "names no element tagged `as` before this overlay".to_string(),
+                    hint: closest_anchor(&name, declared),
+                });
+            }
+        }
         for attr in &el.attrs {
             if attr.name.as_str() != "anchor_to" {
                 continue;

@@ -547,7 +547,14 @@ fn lookup_intrinsic(name: &str) -> Option<Intrinsic> {
             focusable: false,
             interactive: true,
             props,
-            events: events_from(false, &[]),
+            // RFC-0036: an anchored overlay child may carry `dismiss =>`,
+            // which fires on a press outside both it and its anchor. Named
+            // like RFC-0017's modal dismissal because it is the same intent,
+            // and implemented differently because a dropdown must not swallow
+            // the events of the page beneath it. Harmless on a container that
+            // anchors to nothing, which the checker reports rather than
+            // silently ignoring.
+            events: events_from(false, &["dismiss"]),
         }
     };
     Some(match name {

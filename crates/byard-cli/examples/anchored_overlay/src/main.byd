@@ -21,9 +21,26 @@
 //   4. **Resize the window.** Every panel tracks its anchor, because the
 //      placement is computed from the anchor's rect each frame rather than from
 //      a hard-coded offset.
+//   5. Both panels are the same `Panel` view and come out different widths,
+//      because each takes its anchor's. No width is written twice:
+//      `width: match(searchField)` reads the anchor's resolved rect. The rows
+//      *inside* each panel fill it too, which is the part a rect widened after
+//      layout would get wrong.
+//   6. Click anywhere outside a panel and it closes. Click the field it hangs
+//      from and it does **not**, because that press is the one that opens it.
+//      Escape closes them all.
+//   7. While a panel is open, the button behind it still highlights on hover
+//      and still takes clicks. This is not a modal: an autocomplete that
+//      froze the page under it would be a worse bug than the one it solves.
+
+// No `width:` here at all. The panel takes the one its anchor has, so a field
+// that changes size takes its results list with it.
 View Panel(label: Str) {
-    Column #[bg: 0x1C2430, radius: 10, p: 10, gap: 6, width: 220] {
+    Column #[bg: 0x1C2430, radius: 10, p: 10, gap: 6] {
         Text(label) #[color: 0x9AA3AE, size: 12]
+        // A full-width row, so "the panel is the right width" and "the panel's
+        // contents are the right width" are two things you can see apart.
+        Box #[bg: 0x2A3442, radius: 6, height: 24] {}
         Text("Bucharest") #[color: 0xE7ECF2, size: 14]
         Text("Budapest") #[color: 0xE7ECF2, size: 14]
     }
@@ -47,15 +64,21 @@ View Main() {
 
         Spacer #[grow: 1]
         // Near the bottom on purpose: its panel has nowhere to go downward.
-        TextField #[value: lower, placeholder: "Flips upward…", width: 220]
+        // Deliberately a different width from the field above: both panels are
+        // the same `Panel` view and come out different widths, which is the
+        // whole claim of `match`.
+        TextField #[value: lower, placeholder: "Flips upward, and is wider…", width: 320]
             as bottomField => lower = it
     }
 
-    // Anchored under the search field.
+    // Anchored under the search field, as wide as it, and closing on a click
+    // outside itself and the field.
     when query != "" {
         Overlay #[modal: false] {
             Box #[anchor_to: "searchField", anchor_edge: below,
-                  anchor_align: start, anchor_gap: 6] {
+                  anchor_align: start, anchor_gap: 6,
+                  width: match(searchField),
+                  dismiss => query = ""] {
                 Panel("results")
             }
         }
@@ -77,7 +100,9 @@ View Main() {
     when lower != "" {
         Overlay #[modal: false] {
             Box #[anchor_to: "bottomField", anchor_edge: below,
-                  anchor_align: start, anchor_gap: 6] {
+                  anchor_align: start, anchor_gap: 6,
+                  width: match(bottomField),
+                  dismiss => lower = ""] {
                 Panel("flipped")
             }
         }

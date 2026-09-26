@@ -208,7 +208,7 @@ fn shift_expr(expr: &mut Expr, delta: u32) {
         Expr::StrLit(parts, span) => {
             shift(span, delta);
             for part in parts {
-                if let StrPart::Interp(inner) = part {
+                if let StrPart::Interp(inner, _) = part {
                     shift_expr(inner, delta);
                 }
             }

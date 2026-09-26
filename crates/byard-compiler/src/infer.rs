@@ -23,7 +23,7 @@ use crate::symbol::Symbol;
 
 /// The closed set of list methods (RFC-0027 §4), used for the `UnknownMethod`
 /// suggestion.
-const LIST_METHODS: [&str; 5] = ["push", "removeAt", "contains", "map", "filter"];
+const LIST_METHODS: [&str; 6] = ["push", "removeAt", "contains", "map", "filter", "slice"];
 
 /// An inferred / resolved type. Distinct from the syntactic [`Type`] AST node:
 /// `Ty` is normalized (e.g. `List<Str>` ⇒ `List(Str)`), and `Unknown` covers
@@ -223,7 +223,7 @@ impl Checker<'_> {
             Expr::FloatLit(..) => Ty::Float,
             Expr::StrLit(parts, _) => {
                 for part in parts {
-                    if let StrPart::Interp(e) = part {
+                    if let StrPart::Interp(e, _) = part {
                         self.check_expr(e);
                     }
                 }
@@ -370,7 +370,8 @@ impl Checker<'_> {
             self.check_expr(&arg.value);
         }
         match (recv, name.as_str()) {
-            (Ty::List(_), "push" | "removeAt" | "filter") => recv.clone(),
+            (Ty::List(_), "push" | "removeAt" | "filter" | "slice") => recv.clone(),
+            (Ty::Str, "slice") => Ty::Str,
             (Ty::List(_), "contains") => Ty::Bool,
             _ => Ty::Unknown,
         }

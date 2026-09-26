@@ -630,8 +630,9 @@ pub enum PostfixOp {
 pub enum StrPart {
     /// A literal text run.
     Text(String),
-    /// An interpolated `{ expr }`.
-    Interp(Box<Expr>),
+    /// An interpolated `{ expr }`, or `{ expr:.N }` with a fixed number of
+    /// decimals (RFC-0027): `{21.46:.1}` reads `21.5`.
+    Interp(Box<Expr>, Option<u8>),
 }
 
 /// An expression. Every variant carries its own [`Span`].

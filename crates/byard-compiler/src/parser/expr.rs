@@ -902,8 +902,9 @@ impl Parser<'_> {
                     parts.push(StrPart::Text(std::mem::take(&mut text)));
                 }
                 let (frag, next) = collect_interpolation(&cs, i + 1);
-                let expr = self.parse_fragment_expr(&frag, outer);
-                parts.push(StrPart::Interp(Box::new(expr)));
+                let (frag, decimals) = split_decimals(&frag);
+                let expr = self.parse_fragment_expr(frag, outer);
+                parts.push(StrPart::Interp(Box::new(expr), decimals));
                 i = next;
                 continue;
             }
@@ -926,6 +927,41 @@ impl Parser<'_> {
         expr
     }
 }
+
+/// Splits a trailing `:.N` decimals spec off an interpolation fragment:
+/// `temp:.0` is `temp` shown with no decimals.
+///
+/// Only a `:` outside brackets and strings counts, and only when what follows
+/// it is `.` and digits. That cannot be the tail of an expression, because a
+/// float literal never starts with a dot, so `a ? b : c` is never split.
+fn split_decimals(frag: &str) -> (&str, Option<u8>) {
+    let mut depth = 0i32;
+    let mut in_str = false;
+    let mut colon = None;
+    for (i, c) in frag.char_indices() {
+        match c {
+            '"' => in_str = !in_str,
+            '(' | '[' | '{' if !in_str => depth += 1,
+            ')' | ']' | '}' if !in_str => depth -= 1,
+            ':' if !in_str && depth == 0 => colon = Some(i),
+            _ => {}
+        }
+    }
+    let Some(i) = colon else {
+        return (frag, None);
+    };
+    let spec = frag[i + 1..].trim();
+    let digits = spec.strip_prefix('.').unwrap_or("");
+    match digits.parse::<u8>() {
+        Ok(n) if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) => {
+            (&frag[..i], Some(n.min(MAX_DECIMALS)))
+        }
+        _ => (frag, None),
+    }
+}
+
+/// The most decimals a `{x:.N}` spec shows; more is noise, not precision.
+const MAX_DECIMALS: u8 = 9;
 
 /// Appends the unescaped form of the character after a `\` to `text`.
 fn push_unescaped(text: &mut String, escaped: char) {

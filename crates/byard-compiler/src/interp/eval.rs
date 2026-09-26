@@ -12328,13 +12328,15 @@ impl Interpreter {
     fn lower_strlit(&mut self, parts: &[StrPart], payload_name: Option<&Symbol>) -> Lowered {
         enum Part {
             Text(String),
-            Interp(Lowered),
+            Interp(Lowered, Option<u8>),
         }
         let mut lowered: Vec<Part> = parts
             .iter()
             .map(|p| match p {
                 StrPart::Text(t) => Part::Text(t.clone()),
-                StrPart::Interp(e) => Part::Interp(self.lower_expr(e, payload_name)),
+                StrPart::Interp(e, decimals) => {
+                    Part::Interp(self.lower_expr(e, payload_name), *decimals)
+                }
             })
             .collect();
         Box::new(move |ctx| {
@@ -12342,7 +12344,8 @@ impl Interpreter {
             for part in &mut lowered {
                 match part {
                     Part::Text(t) => s.push_str(t),
-                    Part::Interp(c) => s.push_str(&format_scalar(&c(ctx))),
+                    Part::Interp(c, None) => s.push_str(&format_scalar(&c(ctx))),
+                    Part::Interp(c, Some(n)) => s.push_str(&format_fixed(&c(ctx), *n)),
                 }
             }
             Value::Str(s)
@@ -12461,6 +12464,35 @@ impl Interpreter {
                                 xs.remove(i);
                             }
                             Value::List(xs)
+                        }
+                        other => other,
+                    }
+                }))
+            }
+            "slice" => {
+                // `xs.slice(start)` or `xs.slice(start, end)`, end exclusive,
+                // on a list or on text (by character). Out-of-range bounds
+                // clamp: user data never panics.
+                let mut start = self.lower_expr(&args.first()?.value, payload_name);
+                let mut end = args.get(1).map(|a| self.lower_expr(&a.value, payload_name));
+                Some(Box::new(move |ctx| {
+                    let from = start(ctx).as_int();
+                    let to = end.as_mut().map(|e| e(ctx).as_int());
+                    let range = |len: usize| {
+                        let clamp = |i: Option<i64>, default: usize| {
+                            i.map_or(default, |i| {
+                                usize::try_from(i.max(0)).unwrap_or(len).min(len)
+                            })
+                        };
+                        let a = clamp(from, 0);
+                        let b = to.map_or(len, |t| clamp(t, len));
+                        a..b.max(a)
+                    };
+                    match base_c(ctx) {
+                        Value::List(xs) => Value::List(xs[range(xs.len())].to_vec()),
+                        Value::Str(s) => {
+                            let r = range(s.chars().count());
+                            Value::Str(s.chars().skip(r.start).take(r.len()).collect())
                         }
                         other => other,
                     }
@@ -14862,6 +14894,25 @@ fn format_scalar(v: &Value) -> String {
         Value::Bool(b) => b.to_string(),
         Value::Str(s) => s.clone(),
         _ => String::new(),
+    }
+}
+
+/// A number with exactly `decimals` decimals, for `{x:.N}` (RFC-0027).
+///
+/// A value that rounds to zero is written without a sign: a forecast of
+/// `-0.2` shown with no decimals is `0`, not `-0`. Anything that is not a
+/// number is written as `{x}` would write it.
+fn format_fixed(v: &Value, decimals: u8) -> String {
+    #[allow(clippy::cast_precision_loss)]
+    let f = match v {
+        Value::Int(n) => *n as f64,
+        Value::Float(f) => *f,
+        other => return format_scalar(other),
+    };
+    let s = format!("{f:.*}", usize::from(decimals));
+    match s.strip_prefix('-') {
+        Some(abs) if abs.bytes().all(|b| matches!(b, b'0' | b'.')) => abs.to_string(),
+        _ => s,
     }
 }
 

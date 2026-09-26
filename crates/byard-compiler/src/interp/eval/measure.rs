@@ -225,7 +225,7 @@ fn children(expr: &Expr) -> Vec<&Expr> {
         Expr::StrLit(parts, _) => parts
             .iter()
             .filter_map(|p| match p {
-                StrPart::Interp(e) => Some(e.as_ref()),
+                StrPart::Interp(e, _) => Some(e.as_ref()),
                 StrPart::Text(_) => None,
             })
             .collect(),

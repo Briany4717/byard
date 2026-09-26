@@ -371,7 +371,7 @@ fn collect_expr_tokens(expr: &Expr, out: &mut Vec<RawToken>) {
                 modifiers: 0,
             });
             for part in parts {
-                if let StrPart::Interp(inner) = part {
+                if let StrPart::Interp(inner, _) = part {
                     collect_expr_tokens(inner, out);
                 }
             }

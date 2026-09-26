@@ -60,7 +60,7 @@ pub enum Value {
     /// An injected controller handle (RFC-0028 §3): a `Copy` index into the
     /// engine's `ControllerRegistry`, resolved by `inject T as x`. Read only on
     /// the logic thread, it only *schedules* async work onto the pool, never
-    /// dereferences a controller off-thread (INV-2).
+    /// dereferences a controller off-thread.
     Controller(ControllerId),
     /// An injected design-token theme (RFC-0022). The [`SignalId`] backs the
     /// active scheme's dark flag (`Bool`): reading a token (`theme.primary`)
@@ -203,7 +203,7 @@ impl<'p> Env<'p> {
     }
 
     /// Like [`Env::resolve_inject`], but turns a missing ambient into a
-    /// [`CompileError::UnresolvedInject`] anchored at `span` (INV-4).
+    /// [`CompileError::UnresolvedInject`] anchored at `span` (no silent failures).
     ///
     /// # Errors
     ///
@@ -231,7 +231,7 @@ impl<'p> Env<'p> {
 
     /// Truncates the binding list to `len`, discarding any bindings pushed
     /// after that snapshot. Used by `for`-loop lowering to restore scope
-    /// boundaries (M20).
+    /// boundaries.
     pub fn truncate(&mut self, len: usize) {
         self.bindings.truncate(len);
     }

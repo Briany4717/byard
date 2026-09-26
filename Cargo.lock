@@ -182,6 +182,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
+name = "aura-weather"
+version = "0.0.0"
+dependencies = [
+ "byard",
+ "byard-compiler",
+ "byard-core",
+ "byard-project",
+]
+
+[[package]]
 name = "autocfg"
 version = "1.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -282,6 +292,7 @@ dependencies = [
  "byard-core",
  "byard-macro",
  "byard-platform",
+ "byard-project",
  "pollster 0.4.0",
  "wgpu",
 ]
@@ -293,8 +304,11 @@ dependencies = [
  "byard-compiler",
  "byard-core",
  "byard-platform",
+ "byard-project",
  "clap",
  "crossbeam-channel",
+ "flate2",
+ "image",
  "pollster 0.3.0",
  "serde_json",
  "sha2",
@@ -315,7 +329,9 @@ dependencies = [
  "lyon_tessellation",
  "notify",
  "proptest",
+ "rustc-hash 2.1.2",
  "smallvec",
+ "unicode-segmentation",
  "usvg",
 ]
 
@@ -325,6 +341,7 @@ version = "0.0.0"
 dependencies = [
  "arc-swap",
  "bumpalo",
+ "byard-test-gpu",
  "bytemuck",
  "crossbeam-channel",
  "directories",
@@ -338,6 +355,7 @@ dependencies = [
  "smallvec",
  "taffy",
  "tokio",
+ "ttf-parser",
  "wgpu",
 ]
 
@@ -358,10 +376,30 @@ version = "0.0.0"
 dependencies = [
  "byard-compiler",
  "byard-core",
+ "byard-test-gpu",
  "image",
  "pollster 0.3.0",
  "wgpu",
  "winit",
+]
+
+[[package]]
+name = "byard-project"
+version = "0.0.0"
+dependencies = [
+ "byard-compiler",
+ "byard-core",
+ "flate2",
+ "sha2",
+ "toml",
+]
+
+[[package]]
+name = "byard-test-gpu"
+version = "0.0.0"
+dependencies = [
+ "pollster 0.4.0",
+ "wgpu",
 ]
 
 [[package]]
@@ -3365,8 +3403,6 @@ dependencies = [
 [[package]]
 name = "swash"
 version = "0.2.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0811b01ca2c4e8718760713911feaf4675c24f94e50530a015ec646cfb622f7c"
 dependencies = [
  "skrifa 0.42.1",
  "yazi",

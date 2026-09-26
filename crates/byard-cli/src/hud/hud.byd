@@ -16,8 +16,9 @@
 //
 // The HUD's text changes every frame, so its text leaves would be layout-dirty
 // every frame, so they would be re-shaped every frame, exactly the cost the
-// retained layout path removed, reintroduced by the tool that reports on it
-// (INV-24). Three mitigations, all of them here rather than in the engine:
+// retained layout path removed, reintroduced by the tool that reports on it (a
+// dev tool must not slow down what it measures). Three mitigations, all of them
+// here rather than in the engine:
 //
 //   1. The host updates these fields at 10 Hz, not per frame. The eye cannot
 //      read a 60 Hz counter anyway, and it leaves five of six frames clean.

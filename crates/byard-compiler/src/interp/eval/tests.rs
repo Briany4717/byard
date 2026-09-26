@@ -53,7 +53,7 @@ fn vector_icon_lowers_to_a_vector_node() {
 
 #[test]
 fn vector_icon_starts_as_a_placeholder_then_becomes_resident() {
-    // Uses the real gear fixture from the M45 generator PR so this proves
+    // Uses the real gear fixture so this proves
     // the JIT dispatch end to end, not just the cache bookkeeping.
     let svg_path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/svg/gear.svg");
     let src = format!("View App() {{ VectorIcon(\"{svg_path}\") #[size: 24, color: 0xFFFFFF] }}");
@@ -65,7 +65,7 @@ fn vector_icon_starts_as_a_placeholder_then_becomes_resident() {
     let first = frame.vector_instances()[0];
     assert!(
         first.color[3] < f32::EPSILON,
-        "first tick must be a zero-opacity placeholder (INV-9), got alpha {}",
+        "first tick must be a zero-opacity placeholder, got alpha {}",
         first.color[3]
     );
 
@@ -513,7 +513,10 @@ fn a_morph_canvas_lowers_to_one_head_and_its_members() {
         "the phase reaches the head, got {}",
         head.group_param
     );
-    assert_ne!(head.member_hash, 0, "INV-26: the members are hashed in");
+    assert_ne!(
+        head.member_hash, 0,
+        "digest completeness: the members are hashed in"
+    );
     assert_eq!(frame.shape_records().len(), 3);
 
     // §S4: the head's quad is the union of its members' bounds, not its own
@@ -600,7 +603,7 @@ fn a_fusion_groups_quad_is_inflated_by_its_smoothing_radius() {
         "…on the near sides too: {plain:?} → {fused:?}"
     );
     // `fuse: 0` bulges by nothing, so it must not grow the quad either,
-    // INV-22 for the degenerate case.
+    // parity for the degenerate case.
     let zero = quad_of("fuse: 0");
     assert!(
         (zero.width - plain.width).abs() < 0.01,
@@ -641,7 +644,7 @@ fn a_fuse_canvas_lowers_to_a_fusion_group() {
     );
 }
 
-/// **INV-26, end to end.** A fusion group whose *member* moves while its
+/// **Digest completeness, end to end.** A fusion group whose *member* moves while its
 /// head does not must repaint.
 ///
 /// This is the case the invariant exists for and the one an example would
@@ -694,7 +697,7 @@ fn an_animated_member_repaints_its_fusion_group() {
             assert!(
                 head.dirty,
                 "frame {step}: an unchanged head with a moved member must \
-                     still repaint (INV-26)"
+                     still repaint (digest completeness)"
             );
         }
         previous_head = Some(bytes);
@@ -1636,7 +1639,7 @@ fn individual_margin_padding_properties_override() {
     );
 }
 
-// ── M25: `Len` padding/margin forms ──────────────────────────────────
+// ── `Len` padding/margin forms ──────────────────────────────────
 
 /// Lowers a single-`Box` view and returns the resolved padding plus any
 /// errors raised during style resolution.
@@ -2856,8 +2859,9 @@ fn stopping_the_looping_example_empties_the_active_set() {
 
 #[test]
 fn a_layout_property_cannot_be_keyframed() {
-    // RFC-0025 §3 defers to RFC-0010: keyframes on a layout prop would
-    // relayout every frame (INV-8), so they are rejected like `with` is.
+    // RFC-0025 §3 defers to RFC-0010: keyframes on a layout prop would relayout
+    // every frame (animation is paint-time only), so they are rejected like
+    // `with` is.
     let parsed = parse(
         "View V() { Box #[bg: 0x808080, height: 10, \
              width: anim.keyframes(0%: 0, 100%: 200, duration: 1s)] }",
@@ -2910,7 +2914,7 @@ fn scrollview_clips_and_translates_content_by_offset() {
     assert!(clips0 >= 1, "the ScrollView must emit a content clip");
 
     // Scroll down by 40 logical px → the content's paint translate moves up
-    // by 40, while its layout rect is unchanged (INV-8: no relayout).
+    // by 40, while its layout rect is unchanged (no relayout).
     let off = interp.var_signal(&Symbol::intern("off")).unwrap();
     interp.write_var(off, Value::Int(40));
     interp.tick();
@@ -3837,12 +3841,16 @@ fn collapse_header_fades_child_via_scroll_fraction() {
     interp.tick();
     let sy = interp.var_signal(&Symbol::intern("sy")).unwrap();
     let sub_rgb = crate::interp::intrinsics::color_to_rgba(0x00C7_BFDE, false);
+    // The alpha the subtitle reaches the screen with: its own, times the
+    // opacity of any group it is faded inside (RFC-0011 T4). A fading box
+    // with children is one picture now, so the fade lives on the group.
     let sub_alpha = |frame: &byard_core::frame::RenderFrame| -> Option<f32> {
         frame
             .texts()
             .iter()
-            .find(|t| t.color[..3] == sub_rgb[..3])
-            .map(|t| t.color[3])
+            .enumerate()
+            .find(|(_, t)| t.color[..3] == sub_rgb[..3])
+            .map(|(i, t)| t.color[3] * frame.composite_opacity(|m| m.text, i))
     };
     let mut f0 = byard_core::frame::RenderFrame::new();
     interp.render(&tree, &mut f0, 400.0, 300.0);
@@ -4530,15 +4538,19 @@ fn opacity_dims_descendant_text_not_only_the_background() {
     interp.tick();
     let mut frame = byard_core::frame::RenderFrame::new();
     interp.render(&tree, &mut frame, 400.0, 300.0);
-    let label = frame
+    let (i, label) = frame
         .texts()
         .iter()
-        .find(|t| t.text == "x")
+        .enumerate()
+        .find(|(_, t)| t.text == "x")
         .expect("the button's label was emitted");
+    // Effective alpha: a translucent Button with a label is faded as one
+    // picture (RFC-0011 T4), so the label draws opaque inside a group and the
+    // 0.4 is the group's. What must hold is that it reaches the screen at 0.4.
+    let effective = label.color[3] * frame.composite_opacity(|m| m.text, i);
     assert!(
-        (label.color[3] - 0.4).abs() < 1e-3,
-        "label alpha should inherit the 0.4 opacity, got {}",
-        label.color[3]
+        (effective - 0.4).abs() < 1e-3,
+        "label should reach the screen at the 0.4 opacity, got {effective}"
     );
 }
 
@@ -4659,6 +4671,7 @@ fn resolve_state_attrs_applies_specificity_then_declaration_order() {
     let block = |states: Vec<StyleStateKind>, v: i64| StateBlock {
         states,
         attrs: vec![prop("bg", v)],
+        viewport: None,
         span: sp,
     };
     let base = vec![prop("bg", 1)];
@@ -4669,12 +4682,12 @@ fn resolve_state_attrs_applies_specificity_then_declaration_order() {
     ];
 
     // No state active → base survives, and the borrow is cheap (no clone).
-    let none = resolve_state_attrs(&base, &blocks, StyleState::empty());
+    let none = resolve_state_attrs(&base, &blocks, StyleState::empty(), &|_| false);
     assert!(matches!(none, std::borrow::Cow::Borrowed(_)));
     assert_eq!(find_int(&none, "bg"), Some(1));
 
     // Hover alone → the hover block overlays (the combined block needs focus).
-    let hov = resolve_state_attrs(&base, &blocks, StyleState::HOVER);
+    let hov = resolve_state_attrs(&base, &blocks, StyleState::HOVER, &|_| false);
     assert_eq!(find_int(&hov, "bg"), Some(2));
 
     // Hover + disabled (equal specificity) → disabled wins by declaration
@@ -4683,13 +4696,18 @@ fn resolve_state_attrs_applies_specificity_then_declaration_order() {
         &base,
         &blocks,
         StyleState::HOVER.union(StyleState::DISABLED),
+        &|_| false,
     );
     assert_eq!(find_int(&both, "bg"), Some(3));
 
     // Hover + focused → the combined `hover+focused` block (specificity 2)
     // beats the single-state `hover` block regardless of declaration order.
-    let combined =
-        resolve_state_attrs(&base, &blocks, StyleState::HOVER.union(StyleState::FOCUSED));
+    let combined = resolve_state_attrs(
+        &base,
+        &blocks,
+        StyleState::HOVER.union(StyleState::FOCUSED),
+        &|_| false,
+    );
     assert_eq!(find_int(&combined, "bg"), Some(4));
 }
 
@@ -4928,7 +4946,7 @@ fn unknown_origin_token_is_a_compile_error_with_a_hint() {
     ));
 }
 
-// ── M16: Toggle/Slider/TextField write-back ──────────────────────────
+// ── Toggle/Slider/TextField write-back ──────────────────────────
 
 #[test]
 fn toggle_with_bg_has_no_background_slab() {
@@ -5736,7 +5754,7 @@ fn bind_to_non_var_produces_no_bound_sig() {
     assert!(bound_sig.is_none(), "let binding yields no bound_sig");
 }
 
-// ── M17: Keyboard delivery ───────────────────────────────────────────
+// ── Keyboard delivery ───────────────────────────────────────────
 
 #[test]
 fn text_field_receives_keyboard_text_input() {
@@ -5813,7 +5831,7 @@ fn text_field_receives_keyboard_text_input() {
     );
 }
 
-// ── M18: Tab focus traversal ─────────────────────────────────────────
+// ── Tab focus traversal ─────────────────────────────────────────
 
 #[test]
 fn tab_key_advances_focus_through_text_fields() {
@@ -5867,7 +5885,7 @@ fn tab_key_advances_focus_through_text_fields() {
     assert_eq!(interp.peek(fb), Value::Bool(true), "second field focused");
 }
 
-// ── M20: Structural for/when in render tree ──────────────────────────
+// ── Structural for/when in render tree ──────────────────────────
 
 #[test]
 fn when_true_includes_then_branch() {
@@ -5983,7 +6001,7 @@ fn for_reacts_to_list_growth_and_element_change() {
     assert_eq!(t3, ["7"], "shrank to 1 row");
 }
 
-// ── M23: Controller boundary ─────────────────────────────────────────
+// ── Controller boundary ─────────────────────────────────────────
 
 #[test]
 fn inject_provider_is_visible_to_view() {
@@ -6022,7 +6040,7 @@ fn apply_io_callbacks_writes_to_var_and_ticks() {
     assert_eq!(interp.peek(sig), Value::Str("loaded".to_string()));
 }
 
-// ── M25: Parameterized fn call sites ─────────────────────────────────
+// ── Parameterized fn call sites ─────────────────────────────────
 
 #[test]
 fn parameterized_fn_call_binds_args() {
@@ -6069,7 +6087,7 @@ fn parameterized_fn_reacts_to_signal_arg() {
     );
 }
 
-// ── M21: DecoratedBox / TextureSampler ───────────────────────────────
+// ── DecoratedBox / TextureSampler ───────────────────────────────
 
 #[test]
 fn image_lowers_to_texture_sampler_in_frame() {
@@ -6260,7 +6278,7 @@ fn shadow_none_and_absent_emit_no_shadow() {
     assert!(shadow_params("View C() { Box #[bg: 0x222222, shadow: \"none\"] {} }").is_empty());
 }
 
-// ── M22: Theme system ────────────────────────────────────────────────
+// ── Theme system ────────────────────────────────────────────────
 
 #[test]
 fn text_without_color_uses_theme_on_surface() {
@@ -7016,7 +7034,7 @@ fn overlay_demo_example_renders_dialog_above_the_base_app() {
         if inside {
             // Honour the wrap width (RFC-0018): a wrapped label's laid-out
             // width is bounded to it, not the full one-line measurement.
-            let (w, _) = measurer.measure_wrapped(&line.text, line.font_size, *wrap, 400);
+            let (w, _) = measurer.measure_wrapped(&line.text, line.font_size, *wrap, 400, None);
             assert!(
                 line.x + w <= surf_right + 0.5,
                 "dialog text {:?} overflows the surface: {} + {} > {}",
@@ -7696,4 +7714,154 @@ fn three_stacked_glass_panes_raise_the_overlap_warning() {
              Box #[blur: 8, width: 160, height: 160] {} } }",
     );
     assert!(interp.perf_warnings().is_empty());
+}
+
+// ── 8-digit colours: the alpha byte reaches the fill (RFC-0005 §1) ──────
+
+/// Renders `src` and returns every box fill it emitted, solid and decorated,
+/// each paired with whether it went to the blended (decorated) pass.
+fn box_fills(src: &str) -> Vec<([f32; 4], bool)> {
+    let mut interp = Interpreter::new();
+    let frame = theme_render(&mut interp, src);
+    frame
+        .instances()
+        .iter()
+        .map(|b| (b.color, false))
+        .chain(frame.decorated().iter().map(|d| {
+            let mut c = d.base.color;
+            c[3] *= d.opacity;
+            (c, true)
+        }))
+        .collect()
+}
+
+#[test]
+fn eight_digit_bg_on_a_box_keeps_its_alpha_and_blends() {
+    let fills = box_fills("View C() {\n Box #[bg: 0x801C2430, width: 40, height: 40] {}\n}");
+    let [(color, blended)] = fills.as_slice() else {
+        panic!("one fill for one box, got {fills:?}");
+    };
+    assert!(
+        (color[3] - 128.0 / 255.0).abs() < 1e-3,
+        "0x80RRGGBB paints at ~half alpha, got {color:?}"
+    );
+    let rgb = crate::interp::intrinsics::color_to_rgba(0x001C_2430, false);
+    assert!(
+        color[..3]
+            .iter()
+            .zip(&rgb[..3])
+            .all(|(a, b)| (a - b).abs() < 1e-6),
+        "the RGB is the low three bytes, got {color:?} want {rgb:?}"
+    );
+    // A translucent fill on the depth-writing solid pass would cull whatever
+    // later passes draw beneath it; it has to take the blended path.
+    assert!(blended, "a translucent bg goes to the decorated pass");
+}
+
+#[test]
+fn opaque_bg_stays_on_the_solid_path() {
+    // The control: 6-digit and an explicit `FF` alpha byte both stay flat.
+    for src in [
+        "View C() {\n Box #[bg: 0x1C2430, width: 40, height: 40] {}\n}",
+        "View C() {\n Box #[bg: 0xFF1C2430, width: 40, height: 40] {}\n}",
+    ] {
+        let fills = box_fills(src);
+        let [(color, blended)] = fills.as_slice() else {
+            panic!("one fill for one box, got {fills:?}");
+        };
+        assert!(
+            (color[3] - 1.0).abs() < 1e-6,
+            "{src}: opaque, got {color:?}"
+        );
+        assert!(!blended, "{src}: an opaque bg stays on SolidBox");
+    }
+}
+
+#[test]
+fn zero_alpha_byte_is_transparent_not_opaque() {
+    // `0x00RRGGBB` written with eight digits is alpha 0; the lexer's tag is
+    // what tells it apart from the 6-digit `0xRRGGBB`.
+    let fills = box_fills("View C() {\n Box #[bg: 0x001C2430, width: 40, height: 40] {}\n}");
+    assert!(
+        fills.iter().all(|(c, _)| c[3].abs() < 1e-6),
+        "an 8-digit 00 alpha is fully transparent, got {fills:?}"
+    );
+}
+
+#[test]
+fn eight_digit_border_keeps_its_alpha() {
+    let mut interp = Interpreter::new();
+    let frame = theme_render(
+        &mut interp,
+        "View C() {\n Box #[bg: 0x1C2430, border: 0x40FFFFFF, border_width: 2, \
+             width: 40, height: 40] {}\n}",
+    );
+    let border = frame
+        .decorated()
+        .iter()
+        .find(|d| d.border_width > 0.0)
+        .expect("a border overlay")
+        .border_color;
+    assert!(
+        (border[3] - 64.0 / 255.0).abs() < 1e-3,
+        "0x40RRGGBB border at ~quarter alpha, got {border:?}"
+    );
+}
+
+#[test]
+fn eight_digit_text_color_keeps_its_alpha() {
+    let mut interp = Interpreter::new();
+    let frame = theme_render(
+        &mut interp,
+        "View C() {\n Text(\"hi\") #[color: 0x80FFFFFF]\n}",
+    );
+    let color = frame.texts()[0].color;
+    assert!(
+        (color[3] - 128.0 / 255.0).abs() < 1e-3,
+        "0x80RRGGBB text at ~half alpha, got {color:?}"
+    );
+}
+
+#[test]
+fn eight_digit_canvas_bg_keeps_its_alpha_and_blends() {
+    let fills = box_fills("View C() {\n Canvas #[bg: 0x801C2430, width: 40, height: 40] {}\n}");
+    let [(color, blended)] = fills.as_slice() else {
+        panic!("one fill for one canvas, got {fills:?}");
+    };
+    assert!(
+        (color[3] - 128.0 / 255.0).abs() < 1e-3,
+        "0x80RRGGBB canvas bg at ~half alpha, got {color:?}"
+    );
+    assert!(
+        blended,
+        "a translucent canvas bg goes to the decorated pass"
+    );
+}
+
+#[test]
+fn eval_pure_answers_literals_with_the_value_lowering_would_give() {
+    // `eval_pure` short-circuits numeric literals and all-literal tuples; the
+    // value must be the one the lowered closure produces.
+    let parsed = parse(
+        "View V() { Box #[scale: 2, opacity: 0.5, rotate: 90deg, translate: (x: 4, y: -2.5), \
+         width: (1, 2 + 3)] {} }",
+    );
+    assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+    let el = element(&parsed.views[0].body[0]);
+    let mut interp = Interpreter::new();
+    for attr in &el.attrs {
+        let AttrKind::Prop { value } = &attr.kind else {
+            panic!("expected a property");
+        };
+        let fast = interp.eval_pure(value);
+        let mut lowered = interp.lower_expr(value, None);
+        let slow = lowered(&mut interp.ctx);
+        assert_eq!(
+            format!("{fast:?}"),
+            format!("{slow:?}"),
+            "{}",
+            attr.name.as_str()
+        );
+    }
+    assert!(interp.errors().is_empty(), "{:?}", interp.errors());
 }

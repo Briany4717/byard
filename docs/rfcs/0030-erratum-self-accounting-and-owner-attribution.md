@@ -9,7 +9,7 @@
 - **Authority:** measurements taken from `crates/byard-cli/examples/profiling`
   and from the permanent test this erratum adds
   (`hud::self_accounting` in `crates/byard-cli/src/hud/mod.rs`), in **both**
-  build profiles. Both are recorded in `support/PERF_hud_baseline.md`.
+  build profiles.
 
 ---
 
@@ -124,8 +124,7 @@ visual risk, for attribution accuracy in a dev-only path. It is declined.
 
 **It is not small, and this document previously said it was.** An earlier draft
 reported it as ~55 µs whether the HUD was open or not, and that figure came
-from a batched measurement whose baseline was taken cold (see
-`support/PERF_hud_baseline.md`). Measured in pairs, `encode.finish` grows by
+from a batched measurement whose baseline was taken cold. Measured in pairs, `encode.finish` grows by
 **~50 µs in release and ~570 µs in debug** when the HUD opens, which is ~30 %
 and ~42 % of the delta respectively.
 
@@ -155,9 +154,9 @@ on its own merits.
 
 ---
 
-## Correction 3, INV-24's third mitigation was correct and inert
+## Correction 3, the HUD's third mitigation was correct and inert
 
-§V4's INV-24 lists three mitigations for the HUD defeating the retained text
+§V4 lists three mitigations for the HUD defeating the retained text
 path, the third being fixed-width numeric formatting so a changing value does
 not change a text leaf's fingerprint. It was implemented, and it saved nothing:
 `encode.glyphs` still roughly quadrupled the moment the HUD opened.
@@ -174,7 +173,7 @@ its `shape_key`, `(text, font_size, wrap)`, differs from the key its cached
 buffer was shaped from, or the viewport changed, or index identity is not
 comparable at all. Colour and position are excluded: neither reaches the
 shaper, so folding either in would re-shape a run for a change that provably
-cannot alter a glyph, the same paint-class/layout-class distinction INV-24's
+cannot alter a glyph, the same paint-class/layout-class distinction the HUD's
 sparkline rests on, applied to the cache key.
 
 The trade is the opposite of what it looked like. An `FxHasher` pass over a
@@ -246,8 +245,8 @@ moved.
 ## What the numbers are now
 
 Medians of 15 steady-state frames on the same scene and build, Apple M2,
-`hud::self_accounting`. The full table, with the debug/release ratio per scope,
-is in `support/PERF_hud_baseline.md`.
+`hud::self_accounting`. Running it in both profiles reproduces the full table, with the
+debug/release ratio per scope.
 
 | | debug | release |
 |---|---|---|

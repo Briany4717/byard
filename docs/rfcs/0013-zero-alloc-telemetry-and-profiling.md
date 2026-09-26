@@ -1,6 +1,6 @@
 # RFC-0013: Zero-Allocation Telemetry & Profiling
 
-- **Status:** Active, implemented (M30 CPU capture + frame hand-off, M31 GPU timestamps + overlay). Decisions P1–P5 resolved; IMPL-69–75 logged in `DESICIONS.md`.
+- **Status:** Active, implemented (CPU capture + frame hand-off, then GPU timestamps + overlay). Decisions P1 to P5 resolved.
 - **Author(s):** Brian (byard_v2)
 - **Created:** 2026-07-01
 - **Last updated:** 2026-07-01
@@ -154,7 +154,7 @@ cannot affect shipped performance.
 
 - Fixed-capacity rings can drop samples under pathological over-instrumentation
   (bounded-memory trade-off; surfaced as a "dropped N samples" counter).
-- GPU timestamp support/precision varies by backend; some targets report coarse
+- GPU timestamp support and precision vary by backend; some targets report coarse
   or no timestamps (degrade gracefully to CPU-only).
 - The AOT projection is an estimate; over-trusting it is a risk (mitigated by
   always showing its basis).
@@ -194,7 +194,7 @@ Rust `tracing` span model (but allocation-free and fixed-capacity here).
 
 ## Resolved questions (formerly unresolved)
 
-- [x] **Flamegraph view:** deferred to a follow-up. M31 ships the flat-list overlay (scope name + duration, at-a-glance per P2). A flamegraph requires either a tree-structured `SampleBlock` or post-hoc tree reconstruction from the flat ring, both add complexity with no blocking use case today. The flat list is the honest first cut; flamegraph is a natural overlay-panel extension.
+- [x] **Flamegraph view:** deferred to a follow-up. The first overlay ships the flat-list overlay (scope name + duration, at-a-glance per P2). A flamegraph requires either a tree-structured `SampleBlock` or post-hoc tree reconstruction from the flat ring, both add complexity with no blocking use case today. The flat list is the honest first cut; flamegraph is a natural overlay-panel extension.
 - [x] **Calibration refresh automation:** manual per release (CI infrastructure for benchmarking is not yet in place and would couple the project to a specific CI provider). The `benches/` microbenchmarks run locally; a regression gate in CI (future possibility) is the natural automation point when CI matures.
 
 ## Future possibilities

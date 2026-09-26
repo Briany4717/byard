@@ -36,21 +36,8 @@ const SCALE: f32 = 2.0;
 /// rather than a rounding one.
 const CARD: [f32; 4] = [20.0, 20.0, 200.0, 80.0];
 
-fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>)> {
-    let instance =
-        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-    let adapter =
-        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-            .ok()?;
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("canvas fill readback device"),
-        required_features: wgpu::Features::empty(),
-        required_limits: byard_core::engine::device_limits(&adapter),
-        memory_hints: wgpu::MemoryHints::Performance,
-        ..Default::default()
-    }))
-    .ok()?;
-    Some((Arc::new(device), Arc::new(queue)))
+fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>, byard_test_gpu::Turn)> {
+    byard_test_gpu::device(byard_core::engine::device_limits)
 }
 
 struct Readback {
@@ -224,7 +211,7 @@ fn vertical_ramp() -> Gradient {
 
 #[test]
 fn a_filled_path_paints_its_interior_and_leaves_the_rest_alone() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping canvas-fill readback");
         return;
     };
@@ -244,7 +231,7 @@ fn a_filled_path_paints_its_interior_and_leaves_the_rest_alone() {
 
 #[test]
 fn a_path_gradient_runs_across_the_paths_own_bounds() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping canvas-fill readback");
         return;
     };
@@ -272,7 +259,7 @@ fn a_path_gradient_and_a_box_gradient_agree() {
     // The reason the fragment block is shared rather than copied. Same
     // descriptor, same shape, same size: any difference here is drift, and
     // drift is what a second implementation guarantees eventually.
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping canvas-fill readback");
         return;
     };
@@ -315,7 +302,7 @@ fn a_fill_with_no_alpha_paints_nothing() {
     // The fragment discards rather than blending a transparent colour over the
     // scene, which is what keeps an empty series from costing a full-screen
     // blend.
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping canvas-fill readback");
         return;
     };

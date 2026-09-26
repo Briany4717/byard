@@ -291,6 +291,10 @@ pub struct TextLeaf {
     /// Typographic weight on the CSS axis, `100..=900` (RFC-0034). Part of the
     /// leaf because it changes the shaped width, so it changes layout.
     pub weight: u16,
+    /// Resolved font family, or `None` for the system sans-serif (RFC-0034).
+    /// Part of the leaf for the same reason `weight` is: two faces set the
+    /// same string to different widths, so the family is a layout input.
+    pub family: Option<std::sync::Arc<str>>,
     /// Fixed wrap width in logical px, or `None` to wrap to the available width.
     pub width: Option<f32>,
     /// Natural single-line `(width, height)` fallback.
@@ -395,6 +399,13 @@ pub struct ContainerStyle {
     pub width: Option<f32>,
     /// Explicit height in logical pixels. `None` means "grow to fit children".
     pub height: Option<f32>,
+    /// Floor on the laid-out width in logical pixels, `None` for none.
+    pub min_width: Option<f32>,
+    /// Floor on the laid-out height in logical pixels, `None` for none. A
+    /// `Button` takes its theme's minimum touch size in both floors, so a
+    /// one-line label, or a single glyph, still yields a target a finger can
+    /// hit.
+    pub min_height: Option<f32>,
     /// Main-axis direction.
     pub direction: FlexDir,
     /// Space between children, in logical pixels.
@@ -440,6 +451,14 @@ impl ContainerStyle {
             height,
             ..Default::default()
         }
+    }
+
+    /// Sets the minimum width and height (logical px).
+    #[must_use]
+    pub fn with_min_size(mut self, min_width: Option<f32>, min_height: Option<f32>) -> Self {
+        self.min_width = min_width;
+        self.min_height = min_height;
+        self
     }
 
     /// Sets the main-axis direction.
@@ -515,6 +534,14 @@ impl ContainerStyle {
                 width: self.width.map_or(Dimension::auto(), Dimension::from_length),
                 height: self
                     .height
+                    .map_or(Dimension::auto(), Dimension::from_length),
+            },
+            min_size: Size {
+                width: self
+                    .min_width
+                    .map_or(Dimension::auto(), Dimension::from_length),
+                height: self
+                    .min_height
                     .map_or(Dimension::auto(), Dimension::from_length),
             },
             flex_direction: match self.direction {
@@ -738,8 +765,8 @@ impl From<TaffyError> for AtlasError {
 ///
 /// **Gated on the `telemetry` feature**, so the counters do not exist in a
 /// shipped build. They are thread-local: the atlas lives on the logic thread
-/// (INV-2) and a process-wide counter would be polluted by the other tests
-/// `cargo test` runs concurrently.
+/// (signals and layout are logic-thread only) and a process-wide counter would
+/// be polluted by the other tests `cargo test` runs concurrently.
 #[cfg(feature = "telemetry")]
 pub mod path_counters {
     use std::cell::Cell;
@@ -775,7 +802,7 @@ pub mod path_counters {
         /// exactly the same `clear` + full pass, so without this counter every
         /// clause of the whitelist can be deleted with the suite still green,
         /// while production quietly pays for a failed attempt before every
-        /// rebuild (INV-18).
+        /// rebuild. This counter is the assertion that catches it.
         pub retained_attempts: u64,
         /// Retained builds opened and then **discarded** (`end_retained_build`
         /// returned `false`).
@@ -1091,7 +1118,7 @@ impl LayoutAtlas {
     /// marked dirty in Taffy, and its target lands in
     /// [`Self::layout_dirty_targets`]. **Taffy then decides what to
     /// recompute**, this method never decides which *rects* changed, only
-    /// which *inputs* did (RFC-0032 §R3, INV-23).
+    /// which *inputs* did (RFC-0032 §R3: invalidation never decides geometry).
     ///
     /// The caller must finish with [`Self::end_retained_build`] and honour its
     /// verdict.
@@ -1368,6 +1395,11 @@ impl LayoutAtlas {
             // fingerprint it would keep last frame's line breaks at the new
             // weight — the silent staleness this fingerprint exists to stop.
             .f32(f32::from(spec.weight))
+            // RFC-0034: and the family, for exactly the same reason. A leaf
+            // that changed face and kept its fingerprint keeps last frame's
+            // measurement, which is the whole class of staleness digest
+            // completeness exists to prevent.
+            .str(spec.family.as_deref().unwrap_or(""))
             .opt_f32(spec.width)
             .f32(spec.fallback.0)
             .f32(spec.fallback.1);
@@ -1553,6 +1585,53 @@ impl LayoutAtlas {
             }
         }
         Ok(())
+    }
+
+    /// Fixes `node`'s width in logical pixels **after** layout has run, and
+    /// reports whether that changed anything (RFC-0036 `width: match(ref)`).
+    ///
+    /// The one post-`compute` style change this atlas allows, and it exists
+    /// for one shape of problem: an element whose width is another element's
+    /// resolved width. A dropdown as wide as the field it hangs from cannot be
+    /// expressed as a layout relationship, because the two are in different
+    /// trees, and it cannot be applied by moving the finished rect either,
+    /// because the dropdown's own children were laid out against the width it
+    /// had.
+    ///
+    /// **This is not a cycle**, which is the thing worth checking before
+    /// reaching for it. The dependency runs one way: the main tree resolves,
+    /// the anchor's rect is a fact, and only then is a subtree that is not
+    /// part of the main tree's layout given a width. The overlay cannot
+    /// influence the anchor, so no amount of iterating would change either
+    /// answer. Feeding a *main-tree* rect back into the main tree's own layout
+    /// remains forbidden and is a different thing entirely.
+    ///
+    /// Returns `false` when the width is already exactly this, which is the
+    /// common case on a steady frame: `set_style` marks the node dirty in
+    /// Taffy unconditionally, so re-applying an unchanged width every frame
+    /// would recompute the subtree every frame and turn the retained path back
+    /// into a full one for anything with a dropdown on screen.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AtlasError::ForeignNode`] if `node` came from another atlas,
+    /// or [`AtlasError::Backend`] if the backend refuses the style.
+    pub fn set_fixed_width(&mut self, node: AtlasNodeId, width: f32) -> Result<bool, AtlasError> {
+        self.validate_node(node)?;
+        let mut style = self
+            .tree
+            .style(node.node_id)
+            .map_err(|e| AtlasError::from_taffy(&e))?
+            .clone();
+        let wanted = Dimension::from_length(width);
+        if style.size.width == wanted {
+            return Ok(false);
+        }
+        style.size.width = wanted;
+        self.tree
+            .set_style(node.node_id, style)
+            .map_err(|e| AtlasError::from_taffy(&e))?;
+        Ok(true)
     }
 
     /// Adds a **stacking** container (RFC-0018 `ZStack`): a single-cell CSS grid
@@ -2053,7 +2132,7 @@ impl LayoutAtlas {
     ///
     /// This is a full `clear()` + root-to-leaf walk on every
     /// `compute`/`recompute_dirty`, regardless of how many nodes were marked
-    /// dirty. That was measured (M28) on a 200-leaf tree (the high end
+    /// dirty. That was measured on a 200-leaf tree (the high end
     /// of `EvaluatorTick`'s expected per-tick target count): the whole
     /// `recompute_dirty`, layout + this grid rebuild, costs ~24 µs with one
     /// dirty leaf and ~111 µs with every node dirty, i.e. ≲0.7% of a 60 Hz
@@ -2294,11 +2373,11 @@ impl LayoutAtlas {
         self.run_layout(root.node_id, available, sizer)?;
         path_counters::record_retained_recompute();
         // Unconditionally rebuilt from the **resolved rects**, never from the
-        // fingerprints (RFC-0032 §R3 step 4, INV-23). A node that moved only
-        // because a sibling resized was never marked by anyone here, and the
-        // full walk is what guarantees its grid entry cannot be stale, which
-        // is the difference between a wrong pixel and an element that is
-        // tappable where it used to be.
+        // fingerprints (RFC-0032 §R3 step 4; invalidation never decides
+        // geometry). A node that moved only because a sibling resized was never
+        // marked by anyone here, and the full walk is what guarantees its grid
+        // entry cannot be stale, which is the difference between a wrong pixel
+        // and an element that is tappable where it used to be.
         self.rebuild_grid();
         Ok(())
     }
@@ -2328,7 +2407,13 @@ fn measure_text_node(
         AvailableSpace::MinContent => Some(0.0),
     });
     let (width, height) = match sizer {
-        Some(s) => s.measure(&spec.content, spec.font_size, wrap_w, spec.weight),
+        Some(s) => s.measure(
+            &spec.content,
+            spec.font_size,
+            wrap_w,
+            spec.weight,
+            spec.family.as_deref(),
+        ),
         None => spec.fallback,
     };
     // Reserve a **whole pixel** of width for the glyphs. Taffy rounds resolved

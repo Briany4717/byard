@@ -1,4 +1,4 @@
-// TextureSampler pipeline (M21, RFC-0001 §3.1): a UV-mapped, optionally
+// TextureSampler pipeline (RFC-0001 §3.1): a UV-mapped, optionally
 // rounded quad that samples a decoded image. `fit` (fill/contain/cover/none) is
 // resolved on the CPU into a UV transform so the shader stays a plain sampler.
 

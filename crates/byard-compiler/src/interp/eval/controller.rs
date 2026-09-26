@@ -79,14 +79,14 @@ pub(super) struct PendingCall {
     /// before the call is placed.
     continuation: Option<u64>,
     /// The effect that owns this call, if it was raised from one. A call an
-    /// effect placed dies with that effect (INV-14).
+    /// effect placed dies with that effect.
     owner: Option<usize>,
     /// The call site, for diagnostics.
     span: Span,
 }
 
 /// The logic-thread queue an action raises calls onto. `Rc`, so it is
-/// structurally incapable of leaving the logic thread (INV-2).
+/// structurally incapable of leaving the logic thread.
 pub(super) type CallQueue = Rc<RefCell<Vec<PendingCall>>>;
 
 /// A sink for diagnostics raised from inside a lowered closure, which has no
@@ -150,7 +150,7 @@ pub(super) struct EffectSlot {
     /// The armed timer, for a [`EffectKind::Timer`] whose scope is mounted.
     /// Dropping it cancels the Tokio task, which is the entire leak story:
     /// unmounting drops this, and a cancelled timer cannot fire into a view
-    /// that is gone (INV-10).
+    /// that is gone.
     pub timer: Option<TimerHandle>,
     /// The continuation a timer's ticks resume into, so an unmount can drop it
     /// alongside the task.
@@ -163,13 +163,13 @@ pub(super) struct EffectSlot {
 pub(super) struct Bridge {
     /// The registry + runtime handle + reply channel, once a host has wired
     /// one in. `None` in a headless test, where a call degrades to a
-    /// diagnostic instead of a panic (INV-4).
+    /// diagnostic instead of a panic.
     pub dispatcher: Option<Dispatcher>,
     /// Calls raised by actions, drained at the next `&mut self` point.
     pub queue: CallQueue,
     /// Diagnostics raised from inside lowered closures.
     pub diagnostics: DiagSink,
-    /// Outstanding calls, keyed by continuation id (one-shot, INV-14).
+    /// Outstanding calls, keyed by continuation id (one-shot).
     continuations: HashMap<u64, Continuation>,
     /// The call sites of continuations that were dropped with a reply still in
     /// flight, so the discard can be reported **at the call** instead of at
@@ -482,7 +482,7 @@ impl Interpreter {
             // The view unmounted (a hot reload, a structural change) while its
             // answer was in flight. Dropped deliberately and quietly: this is
             // the expected end of a request, not a failure, and the slot may
-            // now belong to a different widget entirely (INV-14).
+            // now belong to a different widget entirely.
             return false;
         }
         let Some(view) = self.native_views.get_mut(request.slot) else {
@@ -565,8 +565,8 @@ impl Interpreter {
             return self.deliver_native(continuation_id, &payload);
         }
         let Some(continuation) = self.bridge.continuations.remove(&continuation_id) else {
-            // Its view unmounted, or a hot reload replaced the program
-            // (INV-14). Never applied to a stale `var`; reported so the
+            // Its view unmounted, or a hot reload replaced the program.
+            // Never applied to a stale `var`; reported so the
             // developer does not read the silence as "no answer came back",
             // and reported **at the call that was dropped**, which is the only
             // place the message is actionable.
@@ -702,7 +702,7 @@ impl Interpreter {
         for index in unmounted {
             // A scope that is gone cannot be resumed into, so anything it had
             // in flight is dropped now rather than applied to its corpse
-            // (INV-14, INV-10: nothing survives the scope that started it).
+            // (nothing survives the scope that started it).
             self.bridge
                 .continuations
                 .retain(|_, c| c.owner != Some(index));
@@ -757,7 +757,7 @@ impl Interpreter {
     /// Cancels effect `index`'s timer and forgets its continuation.
     fn disarm_timer(&mut self, index: usize) {
         if let Some(slot) = self.bridge.effects.get_mut(index) {
-            // Dropping the handle aborts the Tokio task (INV-10).
+            // Dropping the handle aborts the Tokio task.
             slot.timer = None;
             slot.continuation = None;
         }

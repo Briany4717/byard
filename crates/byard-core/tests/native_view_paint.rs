@@ -62,21 +62,8 @@ impl NativeView for Quad {
     }
 }
 
-fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>)> {
-    let instance =
-        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-    let adapter =
-        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-            .ok()?;
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("ByardCore - Native View Test Device"),
-        required_features: wgpu::Features::empty(),
-        required_limits: byard_core::engine::device_limits(&adapter),
-        memory_hints: wgpu::MemoryHints::Performance,
-        ..Default::default()
-    }))
-    .ok()?;
-    Some((Arc::new(device), Arc::new(queue)))
+fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>, byard_test_gpu::Turn)> {
+    byard_test_gpu::device(byard_core::engine::device_limits)
 }
 
 fn encoder(device: &Arc<wgpu::Device>, queue: &Arc<wgpu::Queue>) -> EncoderSubsystem {
@@ -200,7 +187,7 @@ fn native_frame(view: &mut Quad) -> RenderFrame {
 
 #[test]
 fn a_native_view_paints_the_pixels_an_intrinsic_would() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping native-view readback test");
         return;
     };
@@ -233,7 +220,7 @@ fn a_native_view_paints_the_pixels_an_intrinsic_would() {
 
 #[test]
 fn a_view_that_emits_nothing_leaves_the_frame_alone() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping native-view readback test");
         return;
     };
@@ -263,7 +250,7 @@ fn a_view_that_emits_nothing_leaves_the_frame_alone() {
 
 #[test]
 fn a_views_batch_is_ordered_against_core_primitives_by_depth_not_by_kind() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping native-view readback test");
         return;
     };
@@ -324,12 +311,12 @@ fn a_views_batch_is_ordered_against_core_primitives_by_depth_not_by_kind() {
 
 #[test]
 fn dispatch_stays_per_pipeline_however_many_instances_a_view_emits() {
-    // INV-30, as a number rather than as a claim. Ten instances and ten
+    // Per-pipeline dispatch, as a number rather than as a claim. Ten instances and ten
     // thousand go through the same registry call, because the erased call
     // chooses a pipeline and everything after it is the concrete type. If
     // `emit` or the draw loop ever routed instances through the trait object,
     // this is where it would show up: as a count in the thousands.
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping dispatch-count test");
         return;
     };
@@ -378,9 +365,9 @@ fn dispatch_stays_per_pipeline_however_many_instances_a_view_emits() {
 #[test]
 fn a_batch_for_a_pipeline_nobody_registered_does_not_take_the_frame_down() {
     // A view drawing through an unregistered pipeline is an app-assembly
-    // mistake. It must be survivable and it must be said out loud (INV-4): the
+    // mistake. It must be survivable and it must be said out loud: the
     // frame that follows it still renders, and the rest of the scene is intact.
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping unregistered-pipeline test");
         return;
     };
@@ -447,12 +434,12 @@ fn a_batch_for_a_pipeline_nobody_registered_does_not_take_the_frame_down() {
 
 #[test]
 fn a_view_whose_output_changed_repaints_even_though_nothing_else_did() {
-    // INV-26 for a pool whose instances are opaque bytes. A native batch has
+    // Digest completeness for a pool whose instances are opaque bytes. A native batch has
     // no dirty bit to read, so the bytes are the dirty bit: two frames whose
     // scene is otherwise identical must still repaint when the widget's own
     // output moved, or a chart animating from its own state freezes on screen
     // while the app looks perfectly clean.
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping native-view invalidation test");
         return;
     };
@@ -520,7 +507,7 @@ fn a_view_whose_output_changed_repaints_even_though_nothing_else_did() {
 /// paints, and outside it the ground stays untouched.
 #[test]
 fn a_native_views_clip_reaches_the_gpu() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping native-view clip readback");
         return;
     };

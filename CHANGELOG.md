@@ -344,7 +344,7 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   whole composition at once, while the encoder's scissor union is derived from
   what changed between two frames.
 
-- **A steady-state frame budget, enforced on every PR (INV-21).**
+- **A steady-state frame budget, enforced on every PR.**
   `crates/byard-platform/tests/frame_budget.rs` drives a checked-in reference
   scene and asserts recorded ceilings: heap allocations per frame, GPU buffer
   creations (zero), atlas rebuilds (zero), the encoder taking its scissored
@@ -367,7 +367,8 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **The PR template asks one new question**, answered even when the answer is
   no: *"Does this add or modify a path that exists to be cheaper than an
   alternative? If yes, which assertion fails when production stops taking it?"*
-  INV-18 already required this; there was nowhere anyone was asked.
+  The rule that an incremental path needs an assertion that fails when
+  production stops taking it already existed; there was nowhere anyone was asked.
 - **RFC-0017, 0019, 0021, 0022, 0023, 0025, 0026 and 0027 read `Active`, not
   `Draft`.** All eight were shipped. Each was checked against what actually
   landed rather than assumed, and each carries a status note recording what
@@ -410,7 +411,7 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   creations per frame" is a deterministic assertion, where a frame time on
   shared CI hardware is not.
 
-- **Element invalidation (RFC-0032).** `support/AUDIT_incremental_paths_and_memory_model.md`
+- **Element invalidation (RFC-0032).** An audit of the incremental paths
   found three incremental layers that production never took, and PR #148
   established they had one cause rather than three: the evaluation model did
   not produce the signal the invalidation model consumed. It does now, and the
@@ -443,7 +444,7 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - **`AttrClass` is a required field of every attribute definition**, so an
     attribute cannot be added without saying whether it can move geometry, and
     the class is answered per intrinsic (`align` on a `Column` and `align` on a
-    `Text` are different questions). RFC-0010's INV-8, "an animated property
+    `Text` are different questions). RFC-0010's rule, "an animated property
     must never trigger relayout", becomes a lower-time diagnostic rather than
     a sentence in an RFC: `#[size: 20 with anim.spring()]` on a `Text` is now a
     compile error naming `transform` as the alternative, where before it
@@ -480,7 +481,7 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     changed, because every `TextLine` is emitted `dirty: true`. Both scenes'
     numbers and what they mean for what gets optimised next are in the
     `encoder` module docs.
-  - **Assertions, not just rows** (INV-18): `byard-core/tests/instrumentation.rs`
+  - **Assertions, not just rows**: `byard-core/tests/instrumentation.rs`
     fails if a sub-scope stops being entered, if one is recorded at depth 0
     (which would double-count it into the frame total), or if the subtree's
     self-times stop summing to `encode.frame`'s inclusive time.
@@ -556,7 +557,7 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     names stays in the container's normal flow and its transitioning partner is
     laid out absolutely over the same rect, so a transition costs two `f32` and
     an alpha folded into the transform every subtree already inherits, no
-    relayout, no extra pass (INV-8), and the frames stop the moment it settles.
+    relayout, no extra pass, and the frames stop the moment it settles.
   - **`swipe_back: true`** is the Cupertino interactive edge pop: a drag from the
     leading 24 px follows the pointer in real time over the *real* preserved
     screen underneath, and on release the finger's progress hands over to the
@@ -789,7 +790,7 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`PlatformHost::wants_frames`, default `true` so no other host changes
   behaviour) and spins **only while something is in motion**, dropping back to
   `Wait` the moment everything settles. The logic thread publishes the flag
-  across the boundary as an `AtomicBool` (INV-2) and wakes the loop on the rising
+  across the boundary as an `AtomicBool` and wakes the loop on the rising
   edge, plus on a hot reload or a fresh error overlay, which change the frame
   with no input behind them, so live-reload stays immediate. Visible in
   `byard dev`: the once-a-second telemetry line stops printing when the scene
@@ -824,7 +825,7 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   elements inside a `ScrollView` registered their hit rects at the laid-out
   position: after scrolling, a button reacted at the stale location and was
   inert at its on-screen one. The scroll displacement (which paints through
-  the transform, deliberately excluded from hit-testing by RFC-0011/INV-8)
+  the transform, deliberately excluded from hit-testing by RFC-0011)
   now travels separately through the render walk and shifts every hit rect, 
   handlers, hover/press regions, focusables, to its on-screen position,
   clipped to the scroll viewport (content scrolled out of view is no longer

@@ -39,7 +39,7 @@ use super::env::{SignalId, Value};
 thread_local! {
     /// The scope currently being evaluated, or `None` outside any scope (and
     /// under [`untrack`]). Logic-thread-local: RFC-0001 §5.1 confines all of
-    /// this to one thread, so no atomics or locks are needed (INV-2).
+    /// this to one thread, so no atomics or locks are needed.
     static CURRENT_SCOPE: Cell<Option<ScopeId>> = const { Cell::new(None) };
 }
 
@@ -274,7 +274,7 @@ impl ReactiveCtx {
     }
 
     /// Replaces a scope's computation (used by the cycle fixture and by
-    /// hot-reload, M13). Marks the scope dirty.
+    /// hot-reload). Marks the scope dirty.
     pub fn set_compute(
         &mut self,
         s: ScopeId,
@@ -539,7 +539,7 @@ impl ReactiveCtx {
     /// Retires a scope on unmount: clears its subscriptions (so no `Signal` or
     /// memo keeps a stale link), drops any structural children recursively, and
     /// marks the slot dead. The §4.2 grid entry removal is the eval driver's
-    /// job (M9/M10); here we guarantee no leaked reactive subscription (§8).
+    /// job; here we guarantee no leaked reactive subscription (§8).
     fn drop_scope(&mut self, s: ScopeId) {
         if !self.scopes[s.0 as usize].live {
             return;

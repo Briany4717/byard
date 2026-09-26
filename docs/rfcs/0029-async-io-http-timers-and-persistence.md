@@ -9,7 +9,7 @@
 - **Author(s):** Briany4717
 - **Created:** 2026-07-17
 - **Last updated:** 2026-08-04
-- **Depends on:** RFC-0001 (§5.1 Tokio I/O pool, INV-12 "decode off caller" generalized to "I/O off the logic/render threads"), RFC-0028 (the controller boundary, every capability here is reached through it), RFC-0027 (`HostValue`/`Record` shapes for parsed data), RFC-0004 (tick / waker for delivering time-driven and I/O-driven updates).
+- **Depends on:** RFC-0001 (§5.1 Tokio I/O pool; its "decode off the caller's thread" rule generalized to "I/O off the logic/render threads"), RFC-0028 (the controller boundary, every capability here is reached through it), RFC-0027 (`HostValue`/`Record` shapes for parsed data), RFC-0004 (tick / waker for delivering time-driven and I/O-driven updates).
 - **Extends:** `relay.rs` (the Tokio runtime gains the `net`+`time` drivers; the frame waker fires on I/O-driven ticks), the Cargo feature set (new `runtime-io`, `net`, `json`, `storage` features, mirroring the existing `telemetry`/`image` gating).
 - **Enables:** Weather-API consumers, feed/list apps backed by remote JSON, periodic refresh, offline persistence of todos and settings, the concrete capabilities the audit's three target apps need once RFC-0028 gives `byld` a way to call Rust.
 - **Amended by:** [erratum `0029-erratum-implementation-deltas.md`](0029-erratum-implementation-deltas.md).
@@ -33,7 +33,7 @@ mapping; (O4) a **timer effect** (`every`/`after`) that delivers ticks through
 the same continuation/apply path as a controller reply, waking a `Wait`-mode
 render loop; (O5) a minimal durable key/value `Store` capability (`storage`
 feature) for offline state. Every capability runs its blocking/async work on the
-Tokio pool and delivers only `Send` `HostValue` to the logic thread, INV-12
+Tokio pool and delivers only `Send` `HostValue` to the logic thread, RFC-0001's decode rule
 generalized: **no capability ever blocks the logic or render thread.**
 
 ```byld
@@ -58,7 +58,7 @@ View Weather() {
 
 ## Motivation
 
-The [gap analysis](../../support/GAP_ANALYSIS_real_apps.md) third blocker: even
+The third blocker a gap analysis of real apps found: even
 with a bridge, there is *nothing to call*. Specifically:
 
 - **The Tokio runtime cannot do I/O.** `relay.rs` builds
@@ -124,7 +124,7 @@ returning `#[derive(HostValue)]` structs get typed parsing for free
 view: they schedule on the Tokio time driver and deliver a tick to the logic
 thread through the RFC-0028 apply path, so the action runs reference-free on the
 logic thread and its `var` writes render normally. Timers stop when their view
-unmounts (no leaked subscriptions, INV-10). A `Wait`-mode render loop is woken on
+unmounts (no leaked subscriptions). A `Wait`-mode render loop is woken on
 each timer tick via the existing frame waker.
 
 ### 5. Persistence (O5)
@@ -206,7 +206,7 @@ than armed (erratum §4). Each fire sends a
 as controller replies, RFC-0028 §7); `apply_io_results` runs the timer's action.
 Unmount cancels the Tokio task, structurally: `TimerHandle`'s `Drop` aborts it
 and the effect slot owns the handle, so there is no cancel path to forget to
-call and no tick can fire after the view is gone (INV-10, erratum §4). Durations build on the existing duration literal: today the
+call and no tick can fire after the view is gone (erratum §4). Durations build on the existing duration literal: today the
 lexer parses only the `ms` suffix (`DurationLit(u32)`, milliseconds, RFC-0010,
 `lexer/mod.rs:127`). This RFC adds `s` and `min` suffixes (a one-line regex
 extension lowering to the same millisecond `DurationLit`), so `300s`/`5min` read
@@ -348,8 +348,8 @@ YouTube-like use case.
   - [x] **HTTP defaults.** 30 s timeout, gzip, redirect-follow (≤10), bounded pool;
     all overridable via `http.request({...})`.
   - [x] **`Store` durability.** Atomic temp-file + rename write; load-once cache;
-    async `Mutex` serializes writers. Corrupt file → empty store + diagnostic
-    (INV-4), never a panic.
+    async `Mutex` serializes writers. Corrupt file → empty store + diagnostic,
+    never a panic.
   - [x] **Reserved names.** `Http`/`Json`/`Store`/`Timer` reserved;
     `ReservedControllerName` on collision.
   - [x] **Feature dependencies.** `net`/`storage` `cfg`-require `runtime-io`; a

@@ -1,10 +1,11 @@
-//! GPU readback proofs for three paint contracts (RFC-0001 §3.1): an
+//! GPU readback proofs for four paint contracts (RFC-0001 §3.1): an
 //! over-large corner radius is reduced to fit instead of deforming the box, a
 //! linear gradient paints a real ramp over the fill that a phase offset travels
-//! along, and a colour written in a `.byd` file arrives on screen as the colour
-//! that was written.
+//! along, a colour written in a `.byd` file arrives on screen as the colour
+//! that was written, and an 8-digit colour's alpha byte lets what is behind it
+//! show through.
 //!
-//! Both are things only pixels can prove: the frame data is identical either
+//! All are things only pixels can prove: the frame data is identical either
 //! way, and it is the shader that gets them right or wrong.
 //!
 //! Skips cleanly when no GPU adapter is available.
@@ -23,21 +24,8 @@ const LOGICAL_W: f32 = 240.0;
 const LOGICAL_H: f32 = 60.0;
 const SCALE: f32 = 2.0;
 
-fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>)> {
-    let instance =
-        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-    let adapter =
-        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-            .ok()?;
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("paint details readback device"),
-        required_features: wgpu::Features::empty(),
-        required_limits: byard_core::engine::device_limits(&adapter),
-        memory_hints: wgpu::MemoryHints::Performance,
-        ..Default::default()
-    }))
-    .ok()?;
-    Some((Arc::new(device), Arc::new(queue)))
+fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>, byard_test_gpu::Turn)> {
+    byard_test_gpu::device(byard_core::engine::device_limits)
 }
 
 /// A read-back framebuffer, sampled in logical coordinates.
@@ -148,7 +136,7 @@ fn render(device: &Arc<wgpu::Device>, queue: &Arc<wgpu::Queue>, frame: &RenderFr
 
 #[test]
 fn an_over_large_radius_is_reduced_to_a_pill_not_a_deformed_box() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping readback");
         return;
     };
@@ -237,7 +225,7 @@ fn shimmer_frame(offset: Option<f32>) -> RenderFrame {
 
 #[test]
 fn a_gradient_paints_a_ramp_over_the_fill_and_its_offset_travels() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping readback");
         return;
     };
@@ -291,7 +279,7 @@ fn a_gradient_paints_a_ramp_over_the_fill_and_its_offset_travels() {
 /// kind of error that looks like a taste decision rather than a bug.
 #[test]
 fn a_written_colour_reaches_the_screen_as_itself() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping readback");
         return;
     };
@@ -313,4 +301,40 @@ fn a_written_colour_reaches_the_screen_as_itself() {
             "the {channel} channel of an authored 0x808080 is 0x80 on screen, got {value:#04X}"
         );
     }
+}
+
+/// Renders a white box with a black child whose `bg` is `child_bg`, and
+/// returns the pixel at the middle of the child.
+fn child_over_white(device: &Arc<wgpu::Device>, queue: &Arc<wgpu::Queue>, child_bg: &str) -> u8 {
+    let parsed = byard_compiler::parser::parse(&format!(
+        "View Main() {{ Box #[bg: 0xFFFFFF, width: 200, height: 40] {{ \
+             Box #[bg: {child_bg}, width: 100, height: 20] {{}} }} }}"
+    ));
+    assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+    let mut interp = byard_compiler::interp::eval::Interpreter::new();
+    let tree = interp.lower_view(&parsed.views[0], &[]);
+    interp.tick();
+    let mut frame = RenderFrame::new();
+    interp.render(&tree, &mut frame, LOGICAL_W, LOGICAL_H);
+    render(device, queue, &frame).at(50.0, 10.0).1
+}
+
+/// An 8-digit `bg` is alpha-first `0xAARRGGBB` (RFC-0005 §1), so a
+/// half-transparent background shows what is painted behind it.
+///
+/// Measured against the same box with an opaque `FF` alpha byte rather than
+/// against an expected grey, so the claim is "the alpha byte did something",
+/// not a guess at the blend's exact output.
+#[test]
+fn a_half_transparent_bg_shows_what_is_behind_it() {
+    let Some((device, queue, _turn)) = try_device() else {
+        eprintln!("no GPU adapter, skipping readback");
+        return;
+    };
+    let opaque = child_over_white(&device, &queue, "0xFF000000");
+    let half = child_over_white(&device, &queue, "0x80000000");
+    assert!(
+        half > opaque.saturating_add(40),
+        "the white parent shows through a 0x80 black child: {half:#04X} vs opaque {opaque:#04X}"
+    );
 }

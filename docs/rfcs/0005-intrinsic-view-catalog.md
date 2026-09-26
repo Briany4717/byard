@@ -1,6 +1,6 @@
 # RFC-0005: Intrinsic View Catalog, content, properties, and events per built-in
 
-- **Status:** Active, implemented. All 11 Phase-2 intrinsics landed (M10, M16–M19 value widgets, M19 visual lowering); `ScrollView` added post-M25; `VectorIcon` added by RFC-0009 (M50). Validation rules enforced by checker.
+- **Status:** Active, implemented. All 11 Phase-2 intrinsics landed (including the value widgets and their visual lowering); `ScrollView` added later; `VectorIcon` added by RFC-0009. Validation rules enforced by checker.
 - **Author(s):** Briany4717
 - **Created:** 2026-06-20
 - **Last updated:** 2026-06-26

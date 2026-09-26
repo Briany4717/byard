@@ -1,0 +1,11 @@
+[project]
+name = "package_theme"
+entry = "main.byd"
+
+# The whole design system comes from here: the package's fonts, resolved
+# inside the package, and its theme under `extends`.
+[dependencies]
+brand = { path = "../brand" }
+
+[theme]
+extends = "brand"

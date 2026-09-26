@@ -1,9 +1,9 @@
 //! The typed, fully-owned AST (RFC-0002 §"Data structures"; RFC-0003 attrs/`Fn`).
 //!
-//! Every node owns all of its data, no borrows into the source text (INV-3),
+//! Every node owns all of its data, no borrows into the source text,
 //! so hot-reload can re-parse and structurally diff a new tree against the
 //! running one without lifetime entanglement, and a `CompiledView` carrying
-//! this AST is `Send` (INV-6) for the file-watcher → logic-thread channel.
+//! this AST is `Send` for the file-watcher → logic-thread channel.
 //!
 //! The AST is **immutable after parse**: reactivity/`is_reactive` metadata lives
 //! in side-tables (RFC-0002 D3, RFC-0004 §10), never on these nodes.
@@ -87,6 +87,20 @@ pub struct UseDecl {
     pub symbols: Option<Vec<(Symbol, Span)>>,
     /// Source span of the whole declaration.
     pub span: Span,
+}
+
+/// The view a program renders: the one named `Main` when there is one,
+/// otherwise the first.
+///
+/// Helper views written above `Main` are a natural way to write a file, and
+/// the runner used to render whichever came first, so an example with a
+/// helper at the top showed that helper alone and nothing said why.
+#[must_use]
+pub fn root_view(views: &[ViewDecl]) -> Option<&ViewDecl> {
+    views
+        .iter()
+        .find(|v| v.name.as_str() == "Main")
+        .or_else(|| views.first())
 }
 
 /// A whole `.byd` file is a list of [`ViewDecl`]s (D11: multiple `View`s per
@@ -224,7 +238,7 @@ pub enum Member {
     /// A structural effect like [`Member::Lifecycle`], and for the same
     /// reason: a timer belongs to the scope that declared it, so a screen that
     /// unmounts stops polling instead of leaving a task running against a view
-    /// nobody can see (INV-10).
+    /// nobody can see.
     ///
     /// Coarse by design. `every 16ms` is not a substitute for the animation
     /// runtime (RFC-0010), which evaluates on the GPU; a timer runs its action
@@ -344,7 +358,7 @@ pub struct ElementNode {
 /// One `#[...]` attribute: either a property (`name: expr`) or an engine event
 /// (`name(payload)? => expr`), RFC-0003 D4-bis. The kind is decided
 /// syntactically by the separator; a mismatch against the intrinsic's contract
-/// is a *checker* error (M10), not a parse error.
+/// is a *checker* error, not a parse error.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Attr {
     /// Attribute name.
@@ -477,8 +491,55 @@ pub struct StateBlock {
     pub states: Vec<StyleStateKind>,
     /// The attributes overlaid onto the base while every `states` entry is active.
     pub attrs: Vec<Attr>,
+    /// A viewport condition that must also hold (RFC-0016 responsive
+    /// variants): `on width >= md { … }`. `None` for an interaction-state
+    /// block, which is every block written before this existed.
+    pub viewport: Option<ViewportCond>,
     /// Source span.
     pub span: Span,
+}
+
+/// Which viewport extent a responsive block compares (RFC-0016).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ViewportAxis {
+    /// The viewport's width in logical pixels.
+    Width,
+    /// The viewport's height in logical pixels.
+    Height,
+}
+
+/// The comparison a responsive block makes. Two operators, not five: `>=`
+/// ("from this breakpoint up") and `<` ("below it") partition the axis with
+/// no gap and no overlap at the breakpoint itself, which `>` and `<=` would
+/// also do and a mix of them would not.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ViewportOp {
+    /// `>=`
+    AtLeast,
+    /// `<`
+    Below,
+}
+
+/// What a responsive block compares against: a breakpoint declared in
+/// `[theme.breakpoints]`, or a literal number of logical pixels.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Breakpoint {
+    /// A named breakpoint, resolved against the theme; an undeclared one is a
+    /// compile error with a hint.
+    Named(Symbol, Span),
+    /// A literal width in logical pixels.
+    Px(f32),
+}
+
+/// `width >= md`: one viewport condition (RFC-0016 responsive variants).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ViewportCond {
+    /// The extent compared.
+    pub axis: ViewportAxis,
+    /// The comparison.
+    pub op: ViewportOp,
+    /// What it is compared against.
+    pub breakpoint: Breakpoint,
 }
 
 /// A style rule: `. IDENT #[ attrs ]` (D5).
@@ -595,7 +656,7 @@ pub enum Expr {
     Tuple(Vec<Arg>, Span),
     /// A leading-dot class reference, e.g. the `.title` in `#[style: .title]`
     /// (RFC-0002 §"Grammar" `style_rule`; resolved against the View's style map
-    /// in M11).
+    /// by the checker).
     ClassRef(Symbol, Span),
     /// Member access `base.field`.
     Member {
@@ -691,7 +752,7 @@ pub enum Expr {
     },
     /// An index expression `base[index]` (RFC-0027 §4). Out-of-range access
     /// degrades to [`Value::Unit`](crate::interp::env::Value::Unit) with a
-    /// logic-thread diagnostic (INV-4), never a panic.
+    /// logic-thread diagnostic, never a panic.
     Index {
         /// The indexed receiver.
         base: Box<Expr>,
@@ -828,7 +889,7 @@ impl Expr {
     }
 }
 
-// INV-6: the AST must be `Send` so a `CompiledView` built from it can cross the
+// The AST must be `Send` so a `CompiledView` built from it can cross the
 // file-watcher → logic-thread channel. If any node grew a non-`Send` field
 // (e.g. an `Rc`), this would stop compiling.
 const _: () = {

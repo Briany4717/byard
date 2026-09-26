@@ -59,7 +59,8 @@
 //! *frame* from another rather than one *view* from another, so a caller
 //! could not have passed a valid dirty set even if it had one.
 //!
-//! **The rule that keeps this sound** (RFC-0032 §R3, INV-23):
+//! **The rule that keeps this sound** (RFC-0032 §R3; invalidation decides what
+//! work runs, never what the geometry is):
 //!
 //! > Fingerprints decide what to **mark**. Taffy decides what to
 //! > **recompute**. The spatial grid is rebuilt from **resolved rects**,

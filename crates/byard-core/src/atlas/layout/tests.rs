@@ -392,6 +392,7 @@ impl crate::text::TextSizer for StubSizer {
         font_size: f32,
         max_width: Option<f32>,
         _weight: u16,
+        _family: Option<&str>,
     ) -> (f32, f32) {
         let line_h = font_size * 1.2;
         #[allow(clippy::cast_precision_loss)]
@@ -413,6 +414,7 @@ fn text_leaf_wraps_to_parent_width() {
             content: "abcdefghijklmnopqrst".to_string(), // 20 chars → ~200px natural
             font_size: 20.0,
             weight: 400,
+            family: None,
             width: None,
             fallback: (200.0, 24.0),
         })
@@ -455,6 +457,7 @@ impl crate::text::TextSizer for FractionalSizer {
         font_size: f32,
         max_width: Option<f32>,
         _weight: u16,
+        _family: Option<&str>,
     ) -> (f32, f32) {
         let line_h = font_size * 1.2;
         match max_width {
@@ -477,6 +480,7 @@ fn fractional_text_width_reserves_a_whole_pixel_and_stays_one_line() {
             content: "one line".to_string(),
             font_size: 16.0,
             weight: 400,
+            family: None,
             width: None,
             fallback: (100.4, 19.2),
         })
@@ -517,6 +521,7 @@ fn text_leaf_without_sizer_uses_fallback() {
             content: "hello".to_string(),
             font_size: 16.0,
             weight: 400,
+            family: None,
             width: None,
             fallback: (42.0, 19.0),
         })

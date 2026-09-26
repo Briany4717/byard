@@ -129,6 +129,7 @@ pub fn run(opts: Options<'_>) -> Result<(), String> {
     host.run(App {
         engine: None,
         project: manifest.name.clone(),
+        http_base_url: manifest.http_base_url.clone(),
         header: Some(header),
         dev: manifest.dev.clone(),
         want_profile: profile,
@@ -812,6 +813,8 @@ struct App {
     /// writes (RFC-0029 O5): keyed on the project rather than on the path, so
     /// a store does not move when the directory does.
     project: String,
+    /// The manifest's `[http] base_url` (RFC-0029).
+    http_base_url: Option<String>,
     width_bits: Option<Arc<AtomicU32>>,
     height_bits: Option<Arc<AtomicU32>>,
     /// Mirror of the logic thread's active-animation set (RFC-0010), read by the
@@ -885,6 +888,12 @@ struct App {
 }
 
 impl App {
+    /// The capabilities a `.byd` file may `inject`, with the project's
+    /// `[http] base_url` applied.
+    fn capabilities(&self) -> byard_core::bridge::ControllerRegistry {
+        crate::capabilities::registry(&self.project, self.http_base_url.as_deref())
+    }
+
     /// Starts the file watcher and returns the two channels the logic thread
     /// drains: the latest-wins reload channel and the vector-asset changes.
     ///
@@ -1192,7 +1201,7 @@ impl PlatformHost for App {
         // with the pool that runs them and the channel their replies come back
         // on. Built here, on the main thread, because it has to be `Send` into
         // the logic-thread factory below and cannot be built inside it.
-        let dispatcher = engine.dispatcher(crate::capabilities::registry(&self.project));
+        let dispatcher = engine.dispatcher(self.capabilities());
 
         engine.start_logic_from_view(move |_arena| {
             let (mut interp, tree, current_views) = if initial_views.is_empty() {

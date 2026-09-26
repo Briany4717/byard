@@ -1,0 +1,43 @@
+// Aura Weather: the app shell. Four screens in a tab host, a tab bar, and the
+// theme's two typefaces. Each screen lives in its own file beside this one.
+View Main() {
+    inject Theme as t
+    var tab = "forecast"
+
+    let tabButton = style {
+        radius: 18, p: (vertical: 8, horizontal: 14), color: t.onSurfaceVariant
+        on selected { bg: t.primaryContainer, color: t.onPrimaryContainer }
+    }
+
+    Column #[bg: t.background, grow: 1] {
+        NavHost(active: tab) #[grow: 1, transition: fade] {
+            tab "forecast" { ForecastScreen() }
+            tab "outlook" { OutlookScreen() }
+            tab "air" { AirScreen() }
+            tab "trends" { TrendsScreen() }
+        }
+        Row #[bg: t.surfaceContainer, p: (vertical: 10, horizontal: 12), gap: 4,
+              align: center] {
+            Button("Now") #[..tabButton, typo: t.label, selected: tab == "forecast"]
+                => tab = "forecast"
+            Button("10 days") #[..tabButton, typo: t.label, selected: tab == "outlook"]
+                => tab = "outlook"
+            Button("Air") #[..tabButton, typo: t.label, selected: tab == "air"]
+                => tab = "air"
+            Button("Trends") #[..tabButton, typo: t.label, selected: tab == "trends"]
+                => tab = "trends"
+        }
+    }
+}
+
+// A screen's frame: the padding and the heading every screen shares.
+View Screen(title: Str, subtitle: Str, content) {
+    inject Theme as t
+    Column #[p: (horizontal: 24, vertical: 28), gap: 16, grow: 1] {
+        Column #[gap: 2] {
+            Text(title) #[typo: t.headline, color: t.onSurface]
+            Text(subtitle) #[typo: t.caption, color: t.onSurfaceVariant]
+        }
+        content
+    }
+}

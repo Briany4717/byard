@@ -1,0 +1,69 @@
+// RFC-0011 T4, group opacity: a translucent container is faded as one picture.
+//
+// Run it (from the repo root):
+//   cd crates/byard-cli/examples/group_opacity
+//   cargo run -p byard-cli -- dev
+//
+// Opacity used to be multiplied into every primitive a container drew. That is
+// only right while none of them overlap, and they nearly always do: a card's
+// text sits on the card's own background. At half opacity the background is
+// see-through *under* the text and the text is see-through *over* the
+// background, so each darkens the other where they cross.
+//
+// A translucent container with children now draws them opaque into an
+// offscreen picture and fades that picture once. Nothing about the children
+// changes; only where they are drawn.
+//
+// What to verify visually:
+//   1. Left card, `opacity: 0.5` on the card: the two circles cross cleanly,
+//      one simply on top of the other, and the whole card is evenly faded.
+//   2. Right card, the same content with the half-opacity written on each
+//      piece instead, which is what the left card used to be: where the
+//      circles cross there is a darker, mixed lens, and the red shows through
+//      the blue. That seam is exactly what the left card does not have.
+//   3. Press "fade" to animate the left card's opacity. It stays one picture
+//      at every value, and the stripe behind it shows through evenly.
+View Main() {
+    var faded = true
+
+    Column #[bg: 0x0E1116, p: 28, gap: 18, width: 520, height: 400] {
+        Text("Group opacity") #[color: 0xE7ECF2, size: 20]
+        Text("RFC-0011") #[color: 0x69737F, size: 13]
+        Button("fade") #[bg: 0x2A3442, radius: 8, p: 10, width: 80, color: 0xE7ECF2] => faded = !faded
+
+        ZStack {
+            // A stripe behind both cards, so "see-through" has something to
+            // be seen through to.
+            Box #[bg: 0xF2B705, width: 440, height: 24, m: (top: 60)] {}
+            Row #[gap: 40] {
+                Column #[gap: 8] {
+                    Text("opacity on the card") #[color: 0x9AA3AE, size: 12]
+                    Box #[bg: 0x1C2430, radius: 14, p: 10,
+                          opacity: (faded ? 0.5 : 1.0) with anim.spring()] {
+                        ZStack #[width: 180, height: 120] {
+                            Box #[width: 80, height: 80, radius: 40, bg: 0xE8543F,
+                                  m: (left: 30, top: 20)] {}
+                            Box #[width: 80, height: 80, radius: 40, bg: 0x4A6FD0,
+                                  m: (left: 70, top: 20)] {}
+                        }
+                    }
+                }
+                Column #[gap: 8] {
+                    Text("opacity on each child") #[color: 0x9AA3AE, size: 12]
+                    // No `opacity` on this card. Its background is a leaf of
+                    // its own at half opacity, and each circle carries its own
+                    // 0.5, which is exactly what multiplying a card's opacity
+                    // into every primitive used to produce.
+                    ZStack #[width: 200, height: 140] {
+                        Box #[bg: 0x1C2430, radius: 14, width: 200, height: 140,
+                              opacity: 0.5] {}
+                        Box #[width: 80, height: 80, radius: 40, bg: 0xE8543F,
+                              opacity: 0.5, m: (left: 40, top: 30)] {}
+                        Box #[width: 80, height: 80, radius: 40, bg: 0x4A6FD0,
+                              opacity: 0.5, m: (left: 80, top: 30)] {}
+                    }
+                }
+            }
+        }
+    }
+}

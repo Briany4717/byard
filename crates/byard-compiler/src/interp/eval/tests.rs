@@ -3837,12 +3837,16 @@ fn collapse_header_fades_child_via_scroll_fraction() {
     interp.tick();
     let sy = interp.var_signal(&Symbol::intern("sy")).unwrap();
     let sub_rgb = crate::interp::intrinsics::color_to_rgba(0x00C7_BFDE, false);
+    // The alpha the subtitle reaches the screen with: its own, times the
+    // opacity of any group it is faded inside (RFC-0011 T4). A fading box
+    // with children is one picture now, so the fade lives on the group.
     let sub_alpha = |frame: &byard_core::frame::RenderFrame| -> Option<f32> {
         frame
             .texts()
             .iter()
-            .find(|t| t.color[..3] == sub_rgb[..3])
-            .map(|t| t.color[3])
+            .enumerate()
+            .find(|(_, t)| t.color[..3] == sub_rgb[..3])
+            .map(|(i, t)| t.color[3] * frame.composite_opacity(|m| m.text, i))
     };
     let mut f0 = byard_core::frame::RenderFrame::new();
     interp.render(&tree, &mut f0, 400.0, 300.0);
@@ -4530,15 +4534,19 @@ fn opacity_dims_descendant_text_not_only_the_background() {
     interp.tick();
     let mut frame = byard_core::frame::RenderFrame::new();
     interp.render(&tree, &mut frame, 400.0, 300.0);
-    let label = frame
+    let (i, label) = frame
         .texts()
         .iter()
-        .find(|t| t.text == "x")
+        .enumerate()
+        .find(|(_, t)| t.text == "x")
         .expect("the button's label was emitted");
+    // Effective alpha: a translucent Button with a label is faded as one
+    // picture (RFC-0011 T4), so the label draws opaque inside a group and the
+    // 0.4 is the group's. What must hold is that it reaches the screen at 0.4.
+    let effective = label.color[3] * frame.composite_opacity(|m| m.text, i);
     assert!(
-        (label.color[3] - 0.4).abs() < 1e-3,
-        "label alpha should inherit the 0.4 opacity, got {}",
-        label.color[3]
+        (effective - 0.4).abs() < 1e-3,
+        "label should reach the screen at the 0.4 opacity, got {effective}"
     );
 }
 
@@ -4659,6 +4667,7 @@ fn resolve_state_attrs_applies_specificity_then_declaration_order() {
     let block = |states: Vec<StyleStateKind>, v: i64| StateBlock {
         states,
         attrs: vec![prop("bg", v)],
+        viewport: None,
         span: sp,
     };
     let base = vec![prop("bg", 1)];
@@ -4669,12 +4678,12 @@ fn resolve_state_attrs_applies_specificity_then_declaration_order() {
     ];
 
     // No state active → base survives, and the borrow is cheap (no clone).
-    let none = resolve_state_attrs(&base, &blocks, StyleState::empty());
+    let none = resolve_state_attrs(&base, &blocks, StyleState::empty(), &|_| false);
     assert!(matches!(none, std::borrow::Cow::Borrowed(_)));
     assert_eq!(find_int(&none, "bg"), Some(1));
 
     // Hover alone → the hover block overlays (the combined block needs focus).
-    let hov = resolve_state_attrs(&base, &blocks, StyleState::HOVER);
+    let hov = resolve_state_attrs(&base, &blocks, StyleState::HOVER, &|_| false);
     assert_eq!(find_int(&hov, "bg"), Some(2));
 
     // Hover + disabled (equal specificity) → disabled wins by declaration
@@ -4683,13 +4692,18 @@ fn resolve_state_attrs_applies_specificity_then_declaration_order() {
         &base,
         &blocks,
         StyleState::HOVER.union(StyleState::DISABLED),
+        &|_| false,
     );
     assert_eq!(find_int(&both, "bg"), Some(3));
 
     // Hover + focused → the combined `hover+focused` block (specificity 2)
     // beats the single-state `hover` block regardless of declaration order.
-    let combined =
-        resolve_state_attrs(&base, &blocks, StyleState::HOVER.union(StyleState::FOCUSED));
+    let combined = resolve_state_attrs(
+        &base,
+        &blocks,
+        StyleState::HOVER.union(StyleState::FOCUSED),
+        &|_| false,
+    );
     assert_eq!(find_int(&combined, "bg"), Some(4));
 }
 
@@ -7016,7 +7030,7 @@ fn overlay_demo_example_renders_dialog_above_the_base_app() {
         if inside {
             // Honour the wrap width (RFC-0018): a wrapped label's laid-out
             // width is bounded to it, not the full one-line measurement.
-            let (w, _) = measurer.measure_wrapped(&line.text, line.font_size, *wrap, 400);
+            let (w, _) = measurer.measure_wrapped(&line.text, line.font_size, *wrap, 400, None);
             assert!(
                 line.x + w <= surf_right + 0.5,
                 "dialog text {:?} overflows the surface: {} + {} > {}",

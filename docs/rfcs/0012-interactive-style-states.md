@@ -1,6 +1,6 @@
 # RFC-0012: Interactive Style States (`:hover`, `:pressed`, `:focused`, `:disabled`) & Full Event Exposure
 
-- **Status:** Active, partially implemented (M32 full event exposure + wheel origin, M37 `StyleState` mask + disabled gate landed). All design decisions (S1–S5) and formerly-unresolved questions resolved. IMPL-76–80 logged. Remaining: `checked`/`selected`/`invalid` value-widget states, combined selectors.
+- **Status:** Active, implemented. Full event exposure, the wheel origin, the `StyleState` mask and the disabled gate landed first; the value-widget states (`checked`, `selected`, `invalid`) and combined selectors that this line used to list as remaining were delivered by RFC-0024 and are resolved in `interp/eval.rs` (`StyleState::CHECKED` / `SELECTED` / `INVALID`). All design decisions (S1 to S5) and formerly unresolved questions are resolved. Corrected 2026-09-24: the header had not been updated when RFC-0024 landed.
 - **Author(s):** Brian (byard_v2)
 - **Created:** 2026-07-01
 - **Last updated:** 2026-07-01

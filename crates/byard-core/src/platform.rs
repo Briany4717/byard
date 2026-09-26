@@ -211,7 +211,13 @@ impl EventKind {
             | Self::LongPress
             | Self::DoubleTap
             | Self::Secondary => true,
-            Self::Change | Self::KeyDown | Self::KeyUp | Self::TextInput => false,
+            Self::Change
+            | Self::KeyDown
+            | Self::KeyUp
+            | Self::TextInput
+            | Self::Composition
+            | Self::CompositionCommit
+            | Self::CompositionEnd => false,
         }
     }
 }

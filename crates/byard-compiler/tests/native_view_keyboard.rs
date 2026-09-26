@@ -11,12 +11,15 @@ use byard_compiler::interp::eval::Interpreter;
 use byard_compiler::parser::parse;
 use byard_compiler::symbol::Symbol;
 use byard_core::frame::RenderFrame;
-use byard_core::platform::{EventKind, InputEvent, InputPayload};
+use byard_core::platform::{EventKind, ImeEvent, InputEvent, InputPayload};
 use byard_core::render::{
     Handled, Layout, NativeProps, NativeView, NativeViewInfo, NativeViewMeta, RenderCtx,
 };
 
-/// A view that claims every event it is offered.
+/// Every event kind a `Greedy` view was offered, in order.
+static OFFERED: std::sync::Mutex<Vec<EventKind>> = std::sync::Mutex::new(Vec::new());
+
+/// A view that claims every event it is offered, and records it.
 #[derive(Default)]
 struct Greedy;
 
@@ -27,7 +30,8 @@ impl NativeProps for Greedy {
 impl NativeView for Greedy {
     fn render(&mut self, _layout: Layout, _cx: &mut RenderCtx<'_>) {}
 
-    fn on_event(&mut self, _event: &byard_core::render::Event, _layout: Layout) -> Handled {
+    fn on_event(&mut self, event: &byard_core::render::Event, _layout: Layout) -> Handled {
+        OFFERED.lock().unwrap().push(event.kind);
         Handled::Yes
     }
 }
@@ -101,4 +105,39 @@ fn a_view_at_the_origin_does_not_take_the_focused_fields_keys() {
     interp.dispatch_events(&[ev(EventKind::KeyDown, (0.0, 0.0), key("Backspace"), 200)]);
     interp.tick();
     assert_eq!(interp.peek(text), Value::Str("h".to_string()));
+
+    // An input method's composition and commit are text too, sent at the
+    // origin the same way.
+    interp.render(&tree, &mut frame, 400.0, 300.0);
+    let composed: Vec<InputEvent> = [
+        ImeEvent::Preedit {
+            text: "\u{3042}".into(),
+            cursor: Some((3, 3)),
+        },
+        ImeEvent::Preedit {
+            text: String::new(),
+            cursor: None,
+        },
+        ImeEvent::Commit("\u{3042}".into()),
+    ]
+    .into_iter()
+    .filter_map(|e| e.into_input(300))
+    .collect();
+    interp.dispatch_events(&composed);
+    interp.tick();
+    assert_eq!(
+        interp.peek(text),
+        Value::Str("h\u{3042}".to_string()),
+        "a committed composition belongs to the focused field"
+    );
+
+    // And the view was offered the pointer events only: no key, no text, no
+    // composition, even though every one of them was sent inside its rect.
+    let offered = OFFERED.lock().unwrap().clone();
+    assert!(
+        offered
+            .iter()
+            .all(|k| matches!(k, EventKind::PointerDown | EventKind::PointerUp)),
+        "the view at the origin was offered {offered:?}"
+    );
 }

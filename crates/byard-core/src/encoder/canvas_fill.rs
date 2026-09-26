@@ -365,7 +365,7 @@ mod tests {
     fn a_solid_fill_says_it_has_no_gradient_rather_than_leaving_it_to_be_inferred() {
         // The same lane-with-one-owner rule the decorated box learned:
         // presence is answered, never inferred from whether the axis happens
-        // to look like a direction (INV-28).
+        // to look like a direction.
         let fill = CanvasFill {
             mesh: std::sync::Arc::new(FillMesh::default()),
             color: [0.0, 0.0, 1.0, 1.0],

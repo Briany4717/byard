@@ -69,7 +69,7 @@ fn a_closed_path_fills_its_interior() {
 #[test]
 fn an_unchanged_path_reuses_its_mesh_instead_of_tessellating_again() {
     // The claim the whole cache exists for, and the one that keeps a chart in
-    // budget (INV-18: an incremental path needs an assertion that fails when
+    // budget (an incremental path needs an assertion that fails when
     // production stops taking it).
     let (mut interp, tree, _) = run(&area("fill: 0xFF5B8DEF"));
     assert_eq!(interp.tessellations(), 1);

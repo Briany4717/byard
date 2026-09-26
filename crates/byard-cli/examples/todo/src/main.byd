@@ -4,7 +4,7 @@
 //   cd crates/byard-cli/examples/todo
 //   cargo run -p byard-cli -- dev
 //
-// This is the proof of RFC-0027 (IMPLEMENTATION_7 M58-cap): the whole app is
+// This is the proof of RFC-0027: the whole app is
 // pure `byld`. It *derives* state instead of replacing it wholesale,
 //
 //   • `todos = todos.push({ id: nextId, text: draft, done: false })` grows the

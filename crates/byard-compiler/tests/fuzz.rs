@@ -1,5 +1,5 @@
-//! M15 fuzz: the lexer and parser must never panic on arbitrary input, every
-//! failure is a `CompileError`, never an abort (INV-4). `proptest` reports any
+//! Fuzz: the lexer and parser must never panic on arbitrary input, every
+//! failure is a `CompileError`, never an abort. `proptest` reports any
 //! panic as a test failure.
 
 use byard_compiler::lexer::lex;

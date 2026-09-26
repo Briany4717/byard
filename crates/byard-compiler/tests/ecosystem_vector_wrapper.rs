@@ -1,4 +1,4 @@
-//! M51, Ecosystem wrapper proof (RFC-0009 §"Ecosystem Model", IMPL-67).
+//! Ecosystem wrapper proof (RFC-0009 §"Ecosystem Model").
 //!
 //! Proves the agnosticism contract end to end: a *downstream package* exposes
 //! typed `View` wrappers (e.g. `SearchIcon`, `HomeIcon`) that compile down to

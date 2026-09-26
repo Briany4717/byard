@@ -39,7 +39,7 @@
 //! corrupt store.
 //!
 //! A corrupt or unreadable file loads as an **empty store plus a diagnostic**,
-//! never a panic (INV-4). An app whose settings file was truncated should start
+//! never a panic. An app whose settings file was truncated should start
 //! with default settings, not fail to start.
 
 use std::collections::BTreeMap;
@@ -142,7 +142,7 @@ fn load(path: &Path) -> (BTreeMap<String, HostValue>, Option<String>) {
     let Some(HostValue::Record(fields)) = json::parse(&text) else {
         // Truncated by a crash, hand-edited into invalid JSON, or replaced by
         // something else entirely. Starting with defaults beats failing to
-        // start (INV-4).
+        // start.
         return (
             BTreeMap::new(),
             Some(format!(
@@ -215,7 +215,7 @@ impl Store {
         if guard.is_none() {
             let path = self.inner.path.clone();
             // The read is blocking, so it goes to the blocking pool rather than
-            // stalling an async worker (INV-12).
+            // stalling an async worker.
             let (map, note) = tokio::task::spawn_blocking(move || load(&path))
                 .await
                 .unwrap_or_else(|_| (BTreeMap::new(), Some("the store load task failed".into())));
@@ -537,7 +537,7 @@ mod tests {
 
     #[test]
     fn a_corrupt_file_starts_empty_instead_of_failing_to_start() {
-        // INV-4 on data the app does not control: a store truncated by a crash
+        // No crash on data the app does not control: a store truncated by a crash
         // must not take the app down with it.
         let temp = TempStore::new("corrupt");
         std::fs::create_dir_all(temp.store.path().parent().expect("parent")).expect("mkdir");

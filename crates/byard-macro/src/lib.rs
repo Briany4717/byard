@@ -14,7 +14,7 @@
 //!
 //! The generated code references only `::byard::bridge::*` from the *app* crate's
 //! dependency graph, so `byard-macro` keeps **no** dependency on
-//! `byard-core`/`byard-compiler` (INV-1). A controller struct must be `Clone`
+//! `byard-core`/`byard-compiler`. A controller struct must be `Clone`
 //! (the shim clones `self` into the `'static` reply future).
 
 use proc_macro::TokenStream;

@@ -177,6 +177,21 @@ impl Parser<'_> {
         let start = self.cur_span();
         self.advance(); // `on`
 
+        // RFC-0016 responsive variant: `on width >= md { … }`. Recognised by
+        // shape, an axis name followed by a comparison, so neither `width` nor
+        // `height` becomes a reserved word anywhere else.
+        if let Some(viewport) = self.parse_viewport_cond() {
+            self.expect(&Token::LBrace, "'{' after the viewport condition");
+            let attrs = self.parse_block_attrs();
+            self.expect(&Token::RBrace, "'}' to close the responsive block");
+            return Some(super::ast::StateBlock {
+                states: Vec::new(),
+                attrs,
+                viewport: Some(viewport),
+                span: self.span_from(start),
+            });
+        }
+
         // The `+`-joined state list. Every state must be known for the block to
         // apply; any unknown name is diagnosed (and the block dropped).
         let mut states = Vec::new();
@@ -209,6 +224,24 @@ impl Parser<'_> {
         }
 
         self.expect(&Token::LBrace, "'{' after the interaction state");
+        let attrs = self.parse_block_attrs();
+        self.expect(&Token::RBrace, "'}' to close the state block");
+        // Only yield a block when every state parsed, an unknown one is dropped
+        // (the error is already recorded) rather than silently mis-applied.
+        if !all_known || states.is_empty() {
+            return None;
+        }
+        Some(super::ast::StateBlock {
+            states,
+            attrs,
+            viewport: None,
+            span: self.span_from(start),
+        })
+    }
+
+    /// The attributes of an `on … { … }` block, up to (not including) its
+    /// closing brace.
+    fn parse_block_attrs(&mut self) -> Vec<super::ast::Attr> {
         let mut attrs = Vec::new();
         while !matches!(self.cur(), Some(Token::RBrace) | None) {
             let before = self.pos;
@@ -220,16 +253,54 @@ impl Parser<'_> {
             }
             self.eat(&Token::Comma);
         }
-        self.expect(&Token::RBrace, "'}' to close the state block");
-        // Only yield a block when every state parsed, an unknown one is dropped
-        // (the error is already recorded) rather than silently mis-applied.
-        if !all_known || states.is_empty() {
-            return None;
-        }
-        Some(super::ast::StateBlock {
-            states,
-            attrs,
-            span: self.span_from(start),
+        attrs
+    }
+
+    /// `width >= md` / `height < 600` after an `on` (RFC-0016), or `None`,
+    /// consuming nothing, when the cursor is not on one.
+    fn parse_viewport_cond(&mut self) -> Option<super::ast::ViewportCond> {
+        use super::ast::{Breakpoint, ViewportAxis, ViewportCond, ViewportOp};
+        let axis = match self.cur() {
+            Some(Token::Ident(s)) if s.as_str() == "width" => ViewportAxis::Width,
+            Some(Token::Ident(s)) if s.as_str() == "height" => ViewportAxis::Height,
+            _ => return None,
+        };
+        let op = match self.peek2() {
+            Some(Token::GtEq) => ViewportOp::AtLeast,
+            Some(Token::Lt) => ViewportOp::Below,
+            _ => return None,
+        };
+        self.advance(); // the axis
+        self.advance(); // the operator
+        let span = self.cur_span();
+        let breakpoint = match self.cur().cloned() {
+            Some(Token::Ident(name)) => {
+                self.advance();
+                Breakpoint::Named(name, span)
+            }
+            #[allow(clippy::cast_precision_loss)]
+            Some(Token::IntLit(n)) => {
+                self.advance();
+                Breakpoint::Px(n as f32)
+            }
+            #[allow(clippy::cast_possible_truncation)]
+            Some(Token::FloatLit(f)) => {
+                self.advance();
+                Breakpoint::Px(f as f32)
+            }
+            _ => {
+                self.errors
+                    .push(crate::diagnostics::CompileError::UnexpectedToken {
+                        span,
+                        expected: "a breakpoint name or a width in logical pixels".to_string(),
+                    });
+                Breakpoint::Px(0.0)
+            }
+        };
+        Some(ViewportCond {
+            axis,
+            op,
+            breakpoint,
         })
     }
 

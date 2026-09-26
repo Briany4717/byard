@@ -1,0 +1,6 @@
+View ForecastScreen() {
+    inject Theme as t
+    Screen(title: "Now", subtitle: "Current conditions and the next hours") {
+        Text("Coming in the next milestone.") #[typo: t.body, color: t.onSurfaceVariant]
+    }
+}

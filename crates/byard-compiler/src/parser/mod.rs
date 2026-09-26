@@ -567,7 +567,7 @@ impl<'a> Parser<'a> {
         for part in &parts {
             match part {
                 ast::StrPart::Text(t) => pattern.push_str(t.as_str()),
-                ast::StrPart::Interp(_) => self.error_at(
+                ast::StrPart::Interp(_, _) => self.error_at(
                     pattern_span,
                     "a literal route pattern (interpolation is not allowed, a route \
                      table is fixed at mount time)",

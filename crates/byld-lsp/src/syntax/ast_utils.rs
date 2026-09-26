@@ -403,7 +403,7 @@ pub fn find_in_expr(expr: &Expr, offset: usize) -> Option<HoverTarget> {
         }
         Expr::StrLit(parts, _) => {
             for part in parts {
-                if let StrPart::Interp(expr) = part {
+                if let StrPart::Interp(expr, _) = part {
                     if let Some(target) = find_in_expr(expr, offset) {
                         return Some(target);
                     }

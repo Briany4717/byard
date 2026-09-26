@@ -63,7 +63,7 @@ View Counter() {
     assert_eq!(parts.len(), 2);
     assert!(matches!(&parts[0], StrPart::Text(t) if t == "Count: "));
     assert!(
-        matches!(&parts[1], StrPart::Interp(e) if matches!(**e, Expr::Ident(ref s, _) if *s == sym("count")))
+        matches!(&parts[1], StrPart::Interp(e, _) if matches!(**e, Expr::Ident(ref s, _) if *s == sym("count")))
     );
 
     // Button("+") => count++   (action shorthand)
@@ -291,11 +291,11 @@ View ProfileCard(name: Str) {
         panic!("expected interpolated string");
     };
     // [Interp(name), Text(" "), Interp(ternary)]
-    assert!(matches!(&parts[0], StrPart::Interp(_)));
+    assert!(matches!(&parts[0], StrPart::Interp(_, _)));
     assert!(
         parts
             .iter()
-            .any(|p| matches!(p, StrPart::Interp(e) if matches!(**e, Expr::Ternary { .. })))
+            .any(|p| matches!(p, StrPart::Interp(e, _) if matches!(**e, Expr::Ternary { .. })))
     );
 
     // Button("Follow") #[... p: (8, 16)] => follow()

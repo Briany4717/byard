@@ -245,20 +245,12 @@ impl GpuTimer {
 mod tests {
     use super::*;
 
-    fn try_device() -> Option<(wgpu::Device, wgpu::Queue)> {
-        let instance =
-            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-        let adapter =
-            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-                .ok()?;
-        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("ByardCore - GpuTimer Test Device"),
-            required_features: wgpu::Features::empty(),
-            required_limits: crate::engine::device_limits(&adapter),
-            memory_hints: wgpu::MemoryHints::Performance,
-            ..Default::default()
-        }))
-        .ok()
+    fn try_device() -> Option<(
+        std::sync::Arc<wgpu::Device>,
+        std::sync::Arc<wgpu::Queue>,
+        byard_test_gpu::Turn,
+    )> {
+        byard_test_gpu::device(crate::engine::device_limits)
     }
 
     #[test]
@@ -266,7 +258,7 @@ mod tests {
         // RFC-0013 P5: a device with no TIMESTAMP_QUERY support (this test's
         // device requests `Features::empty()`) degrades to unavailable
         // rather than fabricating GPU timings.
-        let Some((device, queue)) = try_device() else {
+        let Some((device, queue, _turn)) = try_device() else {
             eprintln!("no GPU adapter, skipping GpuTimer capability test");
             return;
         };
@@ -277,31 +269,31 @@ mod tests {
         assert!(GpuTimer::new(&device, &queue, &["gpu.test_pass"]).is_none());
     }
 
-    /// Returns `(device, queue)` created with `TIMESTAMP_QUERY`, or `None` if
+    /// Returns `(device, queue, turn)` created with `TIMESTAMP_QUERY`, or `None` if
     /// no adapter is present or none supports it (headless CI safe, mirrors
-    /// `m21_pipelines.rs`'s `try_device`).
-    fn try_timestamp_device() -> Option<(wgpu::Device, wgpu::Queue)> {
-        let instance =
-            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-        let adapter =
-            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-                .ok()?;
+    /// `decorated_texture_pipelines.rs`'s `try_device`).
+    fn try_timestamp_device() -> Option<(wgpu::Device, wgpu::Queue, byard_test_gpu::Turn)> {
+        // Its own device, because the shared one requests no optional
+        // features, but from the shared adapter and under the same turn, so a
+        // test process still never has two devices in use at once.
+        let (adapter, turn) = byard_test_gpu::adapter()?;
         if !adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
             return None;
         }
-        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("ByardCore - GpuTimer Test Device (timestamps)"),
             required_features: wgpu::Features::TIMESTAMP_QUERY,
-            required_limits: crate::engine::device_limits(&adapter),
+            required_limits: crate::engine::device_limits(adapter),
             memory_hints: wgpu::MemoryHints::Performance,
             ..Default::default()
         }))
-        .ok()
+        .ok()?;
+        Some((device, queue, turn))
     }
 
     #[test]
     fn new_succeeds_and_tags_scopes_gpu_when_the_feature_is_available() {
-        let Some((device, queue)) = try_timestamp_device() else {
+        let Some((device, queue, _turn)) = try_timestamp_device() else {
             eprintln!("no TIMESTAMP_QUERY-capable adapter, skipping GpuTimer availability test");
             return;
         };
@@ -371,7 +363,7 @@ mod tests {
         // End-to-end: record a real (trivial) render pass with timestamp
         // writes, resolve + request its readback, then poll non-blockingly
         // (RFC-0013: never `PollType::Wait`) until the async map completes.
-        let Some((device, queue)) = try_timestamp_device() else {
+        let Some((device, queue, _turn)) = try_timestamp_device() else {
             eprintln!("no TIMESTAMP_QUERY-capable adapter, skipping GpuTimer round-trip test");
             return;
         };
@@ -404,7 +396,7 @@ mod tests {
         // more passes than `SLOTS` back-to-back, faster than the GPU can
         // resolve them, forces every slot to be reclaimed at least once
         // while a previous mapping may still be in flight.
-        let Some((device, queue)) = try_timestamp_device() else {
+        let Some((device, queue, _turn)) = try_timestamp_device() else {
             eprintln!("no TIMESTAMP_QUERY-capable adapter, skipping GpuTimer stress test");
             return;
         };

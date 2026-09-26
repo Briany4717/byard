@@ -994,10 +994,11 @@ mod tests {
 
     #[test]
     fn the_interpreter_tax_does_not_move_when_the_hud_opens() {
-        // INV-24. The tax answers "what would an AOT build of *this app* stop
-        // paying". The HUD is `byld` too, so its interpreter cost is real,
-        // and somebody else's. A developer must not see their tax figure rise
-        // by a millisecond because they asked to look at it.
+        // The HUD must not move what it measures. The tax answers "what would
+        // an AOT build of *this app* stop paying". The HUD is `byld` too, so
+        // its interpreter cost is real, and somebody else's. A developer must
+        // not see their tax figure rise by a millisecond because they asked to
+        // look at it.
         let (logic, render) = a_frame_with_the_hud_open();
         let with_hud = show(&logic, &render, ctx());
         let row = |out: &str| {

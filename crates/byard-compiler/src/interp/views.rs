@@ -3,7 +3,7 @@
 //!
 //! Lowering needs more than the names-only `known_views: &[&str]` slice the
 //! interpreter historically threaded for validation, to *instantiate* a call it
-//! needs the callee's [`ViewDecl`]. [`ViewTable`] owns its `ViewDecl`s (INV-3,
+//! needs the callee's [`ViewDecl`]. [`ViewTable`] owns its `ViewDecl`s (so it is
 //! `Send`), maps each name to a dense [`ViewId`], and is built once per program
 //! load from `ParsedFile::views`. The intrinsic catalog (RFC-0005) stays closed
 //! and takes precedence: a `ViewDecl` named like an intrinsic is reported as
@@ -22,7 +22,7 @@ use crate::symbol::Symbol;
 pub struct ViewId(pub u32);
 
 /// A resolved registry of the user `View`s declared in one `.byd` file
-/// (RFC-0007 §1). Owns its `ViewDecl`s so the table is fully `Send` (INV-3/6).
+/// (RFC-0007 §1). Owns its `ViewDecl`s so the table is fully `Send`.
 #[derive(Clone, Debug, Default)]
 pub struct ViewTable {
     by_name: HashMap<Symbol, ViewId>,

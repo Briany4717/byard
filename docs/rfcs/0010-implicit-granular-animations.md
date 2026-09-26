@@ -1,9 +1,9 @@
 # RFC-0010: Implicit Granular Animations (`with` syntax, GPU-analytic springs)
 
-- **Status:** Active, partially implemented (M35–M36 `with` grammar + `Motion` runtime + OKLab colour springs landed; M36 GPU spring + active-set settling pending). All design decisions (A1–A5) and formerly-unresolved questions resolved.
+- **Status:** Implemented. The `with` grammar, the `Motion` runtime, OKLab colour springs and active-set settling have landed. GPU evaluation of springs was measured and closed as not worth doing (see "Resolved questions"): springs are evaluated on the CPU. All design decisions (A1 to A5) and formerly unresolved questions are resolved.
 - **Author(s):** Brian (byard_v2)
 - **Created:** 2026-07-01
-- **Last updated:** 2026-07-01
+- **Last updated:** 2026-09-24
 - **Depends on:** RFC-0001 (§3.1 render pipelines, §5 concurrency & `!Send`/`!Sync`, `frame.rs` boundary), RFC-0002 (D1 Mark-and-Pull, D4 attribute contract, Pratt parser), RFC-0011 (transform/paint properties, the animatable set), RFC-0004 (reactive tick).
 - **Enables:** RFC-0012 (interactive style states animate through this).
 
@@ -152,7 +152,12 @@ element dirty. This is the "interruptible spring" behaviour: a mid-flight revers
 starts from the real current position and velocity, not from the old endpoint.
 Cost: one closed-form evaluation, `O(1)`, only when the target actually changes.
 
-**Frame (GPU).** The `Motion` is packed into the per-instance data of its
+**Frame (GPU), as first proposed; not built.** The measurement recorded
+under "Resolved questions" closed this: springs are sampled on the CPU, and
+the GPU receives the sampled value like any static prop. The design below is
+kept as the record of what was proposed and measured against.
+
+The `Motion` is packed into the per-instance data of its
 primitive (`BoxInstance`/`DecoratedBox`/`TextLine`/transform block, see
 RFC-0011). The shader receives the **global engine time** as a uniform and
 evaluates the curve per vertex/fragment:
@@ -263,6 +268,7 @@ already parameterize time-based effects.
 ## Resolved questions (formerly unresolved)
 
 - [x] **OKLab↔sRGB conversion placement:** resolved as **CPU-side in the interpreter** (`interp/eval.rs::oklab_from_hex`/`hex_from_oklab`). The spring runs entirely in OKLab on the logic thread; only the final packed `0xRRGGBB` crosses to the render thread via `RenderFrame`. This is zero GPU overhead, no shader permutation, no per-fragment branching, no bandwidth cost. The GPU sees a flat hex color per frame, indistinguishable from a static prop. A round-trip test (`oklab_hex_round_trips_within_one_lsb`) verifies ≤1 LSB drift. Moving to vertex/fragment would only matter for per-pixel gradients over an animated color range, that's a future `ComputePath` concern, not a spring concern.
+- [x] **Evaluating springs on the GPU:** resolved as **not worth doing**, by measurement. `cargo bench -p byard-compiler --bench spring_frame` builds a scene of N boxes whose springs never settle (`repeat: infinite`) and the same scene with the same props and no animation, and times a whole logic frame (`tick` plus `render`) of each; the bench asserts the springs really were in flight and the static scene really was static. On an Apple M2, release build: the closed form costs **about 10 ns per sample**; a frame with **1000 springs in flight costs 1.02 ms against 0.66 ms static**, and 2000 springs cost 2.05 ms against 1.34 ms. The difference is about **350 ns per animated element per frame, of which the spring maths is 10 ns**. Moving the curve into the vertex shader would remove those 10 ns and nothing else, because the interpreter still has to produce the frame the sampled value lands in; the only thing that could make a GPU move pay is skipping the logic frame entirely while only GPU-animated props change, and at 1000 simultaneous springs that whole frame is about 6% of a 60 Hz budget, spent on the logic thread in parallel with rendering. Colour springs (OKLab) measured cheaper than position springs (0.92 ms at 1000). The remaining per-element cost is the interpreter's bookkeeping for an animated attribute, which is where any future saving is, and it is not a GPU question. A profile of that bench then showed the bookkeeping was almost all heap traffic (the keyframe shape test built an error message for every value it rejected, literals and tuples were lowered to boxed closures to be called once, the curve's arguments were copied into fresh vectors, and the pair path allocated three scratch vectors and a new result tuple); with those gone the same bench reads **about 125 ns per animated element**, 1000 springs at 0.52 ms against 0.40 ms static.
 - [x] **Named-preset spring constants:** deferred to sugar phase. A2's default (`stiffness: 210, damping: 20`) has been validated on-device across 60/120/144 Hz and is the shipped default. Named presets (`.gentle`/`.snappy`/`.bouncy`) remain future sugar, they're a DX convenience, not an architectural question. When added, they'll be compile-time constants in the interpreter, zero runtime cost.
 
 ## Future possibilities

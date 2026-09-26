@@ -8,6 +8,9 @@ entry = "src/main.byd"
 [theme]
 name = "demo"
 extends = "byard-base"
+# RFC-0016: a scheme flip cross-fades every colour token over this many
+# milliseconds, in OKLab, as one picture. Remove it and the flip is a cut.
+transition = 300
 
 [theme.color.light]
 primary = "#6750A4"

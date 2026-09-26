@@ -1,4 +1,4 @@
-//! M14, the end-to-end Phase-2 thesis (RFC-0001 milestone, now driven by
+//! The end-to-end Phase-2 thesis (RFC-0001 milestone, now driven by
 //! `byld`): a `.byd` view renders through a `byard-core` `RenderFrame`, reacts
 //! to a click, and survives a hot-reload with its state intact.
 
@@ -115,7 +115,7 @@ fn hello_world_renders_reacts_and_hot_reloads() {
 }
 
 /// The demo must exercise every render pipeline so a regression in any of them
-/// (text, solid boxes, the M21 `DecoratedBox`/`TextureSampler`) is caught here.
+/// (text, solid boxes, the `DecoratedBox`/`TextureSampler`) is caught here.
 #[test]
 fn demo_exercises_all_pipelines() {
     let parsed = parse(HELLO_WORLD);

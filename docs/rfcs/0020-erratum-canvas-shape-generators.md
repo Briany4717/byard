@@ -34,7 +34,7 @@ of the language, it is a substitute for a feature it does not have.
 RFC-0030's in-window HUD is what surfaced it. The HUD's sparkline is
 `CanvasShape` geometry rather than text on purpose, a paint-class change never
 touches layout, which is what keeps the HUD from re-shaping text every frame and
-defeating the invalidation model it exists to report on (INV-24). Written
+defeating the invalidation model it exists to report on. Written
 against RFC-0020 as specified, that sparkline was inexpressible.
 
 ---

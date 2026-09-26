@@ -8,8 +8,8 @@
 //! # What crosses, and on which thread
 //!
 //! A native view runs on the **logic thread**, where the rest of the frame is
-//! assembled (INV-2). It never sees a `wgpu` type, so it cannot hold one, so
-//! the `!Send` graphics state cannot follow it anywhere (INV-12). What it
+//! assembled. It never sees a `wgpu` type, so it cannot hold one, so
+//! the `!Send` graphics state cannot follow it anywhere. What it
 //! produces is instance bytes and the identity of the pipeline that draws
 //! them, both plain data, and the encoder stages those into the persistent
 //! arena (RFC-0033) in the same single linear pass it stages every core pool
@@ -29,7 +29,7 @@
 //! Nowhere on the per-instance path. [`RenderCtx::emit`] is generic over the
 //! pipeline's own `Instance` type, so a batch of ten thousand instances is one
 //! `extend_from_slice` of a `Pod` slice, and the only indirection in the whole
-//! frame is the encoder choosing which registered pipeline draws (INV-30).
+//! frame is the encoder choosing which registered pipeline draws.
 
 pub mod batch;
 pub mod ctx;
@@ -46,7 +46,7 @@ pub use view::{Event, Handled, Layout, Measure, NativeProps, NativeView, Request
 // ── What a package needs to draw with, in one import ──────────────────────
 //
 // A native view lives in a package, and a package depends on the `byard`
-// façade, not on `byard-core` directly (INV-1). Everything a view legitimately
+// façade, not on `byard-core` directly. Everything a view legitimately
 // touches is therefore re-exported here rather than left for an author to
 // reach across the crate graph for: the core pipelines it may emit into, the
 // instance records those pipelines draw, the colour conversion the engine

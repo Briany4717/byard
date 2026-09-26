@@ -1,11 +1,11 @@
-//! AOT vector-atlas baking (RFC-0009 §4, M49).
+//! AOT vector-atlas baking (RFC-0009 §4).
 //!
 //! `byard build` closes the set of icons an app actually instantiates, bakes
 //! only those into one **tightest-fit** immutable atlas, and emits a fixed
 //! coordinate table, so a shipped binary uploads one small texture and indexes
 //! a `[BakedGlyph; N]` with no runtime SVG parsing or coordinate math. The atlas
 //! is sized to the packing (theoretical-minimum VRAM), not to a fixed sheet.
-//! Dev/prod render parity (INV-7) holds because the baked **field bytes** are
+//! Dev/prod render parity holds because the baked **field bytes** are
 //! identical to dev's, the UV only addresses them, and a self-describing atlas
 //! `size` travels with the table, so a smaller sheet changes addressing, never
 //! the sampled texels.
@@ -49,7 +49,7 @@ pub struct BakedGlyph {
     pub handle: String,
     /// Normalized UV rect `(u0, v0, u1, v1)` within this atlas ([`BakedVectorAtlas::size`]).
     /// Addresses the same field bytes the dev path samples, so the render matches
-    /// (INV-7) even though the corners differ from dev's larger sheet.
+    /// in both modes even though the corners differ from dev's larger sheet.
     pub uv_rect: [f32; 4],
     /// Array-texture layer.
     pub layer: u32,
@@ -112,7 +112,7 @@ pub fn collect_static_vector_refs(
                     handle,
                     span: el.span,
                 }),
-                Some(_) => {} // empty literal, the INV-9 placeholder, not an asset.
+                Some(_) => {} // empty literal, the not-yet-resident placeholder, not an asset.
                 None if allow_dynamic => {}
                 None => errors.push(CompileError::VectorAssetNotStatic { span: el.span }),
             }
@@ -154,7 +154,7 @@ pub fn bake_atlas(
     for r in &unique {
         let path = base.join(&r.handle);
         match std::fs::read(&path) {
-            // RFC-0009 §5 (M52): a build reuses the same on-disk field cache as
+            // RFC-0009 §5: a build reuses the same on-disk field cache as
             // the dev JIT, so an unchanged icon is not re-generated on rebuild.
             Ok(bytes) => {
                 match super::cache::generate_cached(&bytes, GRID_SIZE, PX_RANGE, r.span, cache_dir)
@@ -179,7 +179,7 @@ pub fn bake_atlas(
     // 5-icon app ships a 64² atlas (~16 KB), not a 2048² one (~16 MB). The baked
     // atlas is self-describing (`size` travels with the table), so a smaller
     // atlas changes the UV *addressing*, never the sampled texels: dev/prod
-    // render parity (INV-7) is preserved by the identical field bytes, not by a
+    // render parity is preserved by the identical field bytes, not by a
     // byte-identical UV.
     let sizes: Vec<Size> = glyphs
         .iter()
@@ -424,7 +424,7 @@ mod tests {
 
     #[test]
     fn baked_field_bytes_match_dev_and_uv_is_self_consistent() {
-        // INV-7 (dev/prod render parity) after the tightest-fit change: the baked
+        // Dev/prod render parity after the tightest-fit change: the baked
         // UV corners are relative to the *baked* atlas size (not dev's 2048²), so
         // they no longer equal dev's corners. Parity now rests on two facts,
         // both asserted here: (a) the baked field texels are byte-identical to

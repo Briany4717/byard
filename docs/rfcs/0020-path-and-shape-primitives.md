@@ -1,13 +1,14 @@
 # RFC-0020: Path & Shape Primitives, arcs, circles, and custom vector drawing
 
-- **Status:** Active, partially implemented. The Tier-1 analytic-stroke pipeline
+- **Status:** Active, implemented (Tier-2 through RFC-0037). The Tier-1 analytic-stroke pipeline
   is landed and in production use: `frame::CanvasShape`,
   `RenderFrame::push_canvas_shape`, and `encoder/canvas_shape.{rs,wgsl}`, with
   the `Canvas` intrinsic lowering `arc`/`circle`/`rect`/`line`/`ngon` to it.
   **Tier-2 tessellated custom paths landed 2026-08-05, delivered by RFC-0037**
   (`path { … }`, `encoder/canvas_fill.{rs,wgsl}`), so the deferral below is
-  history rather than a plan: what it was waiting for is here. Clip masks are
-  the part of Tier-2 still outstanding, and they are RFC-0037's to deliver too.
+  history rather than a plan: what it was waiting for is here. Clip masks,
+  the last part of Tier-2, landed through RFC-0037 as well (rounded-rect clips
+  2026-08-31, `clip(path)` 2026-09-23), so nothing in this RFC is outstanding.
   The status line previously read `Draft` while the pipeline was shipping,
   which is the kind of drift that makes every other status line unreadable.
 

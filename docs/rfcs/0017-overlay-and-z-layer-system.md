@@ -1,7 +1,15 @@
 # RFC-0017: Overlay & Z-Layer System, portals, modals, and floating surfaces
 
-- **Status:** Active, implemented; §Positioning's absolute `(x, y)` and `relative(ref)` anchoring deferred
-- **Status note (2026-07-26):** Shipped: the `Overlay` intrinsic, the overlay stack, per-layer draw batches, modality and scrim, dismissal, and the transform/animation interaction. Deferred to Future possibilities and recorded at the call site (`intrinsics.rs`'s `ANCHOR` set): coordinate anchoring beyond the edge/centre tokens.
+- **Status:** Active, implemented. §Positioning's absolute `(x, y)` anchoring
+  landed 2026-09-05 as `at: (x, y)`, spelled apart from `anchor_to:` rather
+  than overloading it with a pair: `anchor_to` names an element and is
+  compile-checked against `as` tags, and a property whose *type* decides which
+  of two unrelated behaviours you get is a property people get wrong. `at:` is
+  viewport-space unconditionally — it does not flip, it does not clamp, and
+  combining it with `anchor_to:` is a compile error rather than a precedence
+  rule to remember. `relative(ref)` anchoring is RFC-0036, which supersedes it
+  and is implemented there.
+- **Status note (2026-07-26, amended 2026-09-24):** Shipped: the `Overlay` intrinsic, the overlay stack, per-layer draw batches, modality and scrim, dismissal, and the transform/animation interaction. The coordinate anchoring this note once listed as deferred is the `at: (x, y)` above.
 - **Author(s):** Briany4717
 - **Created:** 2026-07-10
 - **Last updated:** 2026-07-10

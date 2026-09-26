@@ -1,12 +1,13 @@
-//! Shared error and span primitives (RFC-0002 §"Data structures", D6; INV-4/5).
+//! Shared error and span primitives (RFC-0002 §"Data structures", D6).
 //!
-//! [`CompileError`] lives **only** here. Per D6 (and INV-1/INV-5), `byard-core`'s
+//! [`CompileError`] lives **only** here. Per D6 (and because `byard-core`
+//! never depends on the compiler), `byard-core`'s
 //! `ByardError` gains no compiler variant, unifying the two is the job of the
 //! application crate one layer up, so the dependency edge stays
 //! `byard-compiler → byard-core` and never the reverse.
 //!
 //! Every error path in the compiler produces a `CompileError` carrying a
-//! [`Span`] (INV-4: no silent failures). The variant set starts small and grows
+//! [`Span`] (no silent failures). The variant set starts small and grows
 //! one milestone at a time as later passes need to report new conditions.
 
 /// A byte-offset range into the source text, `[start, end)`.
@@ -47,7 +48,7 @@ const _: () = {
 
 /// A structural compilation error. Each variant carries the [`Span`] of the
 /// offending source range so [`CompileError::render`] can anchor a caret under
-/// it (INV-4).
+/// it (no silent failures).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CompileError {
     /// The lexer could not turn a byte into any token (driver-level fallback
@@ -88,7 +89,7 @@ pub enum CompileError {
         span: Span,
     },
     /// `Text` was used where a type is expected; `Text` is the text *view*, the
-    /// scalar string type is `Str` (D9, INV-7).
+    /// scalar string type is `Str` (D9).
     TextUsedAsType {
         /// Source range of the offending annotation.
         span: Span,
@@ -249,6 +250,55 @@ pub enum CompileError {
         /// The closest anchor declared before this point, if any.
         hint: Option<String>,
     },
+    /// An RFC-0036 anchor tail (`width: match(ref)`, `dismiss =>`) written
+    /// where there is no anchor to resolve it against, or naming an element
+    /// that is not tagged `as`.
+    ///
+    /// Both tails read the anchor's resolved rect: one to take its width, the
+    /// other to know which press to ignore. On an element that anchors to
+    /// nothing there is no rect, so the property would quietly do nothing, and
+    /// a `width:` or a `dismiss =>` that quietly does nothing reads as a bug
+    /// in the panel rather than as the mistake it is.
+    MisplacedAnchorTail {
+        /// Source range of the offending property.
+        span: Span,
+        /// The property, as the author would recognise it.
+        prop: String,
+        /// Why it cannot be resolved here.
+        reason: String,
+        /// The closest anchor declared before this point, if any.
+        hint: Option<String>,
+    },
+    /// A responsive block (`on width >= md { … }`) names a breakpoint the
+    /// project does not declare in `[theme.breakpoints]` (RFC-0016).
+    ///
+    /// Reported for the same reason an undeclared font is: the alternative is
+    /// a block that silently never applies, which looks like a layout that
+    /// ignores the window rather than like a typo.
+    UnknownBreakpoint {
+        /// Source range of the breakpoint name.
+        span: Span,
+        /// The name that was written.
+        name: String,
+        /// The closest declared breakpoint, if any.
+        hint: Option<String>,
+    },
+    /// A `font:` names a family the project does not declare in
+    /// `[assets.fonts]` (RFC-0034).
+    ///
+    /// Reported for the same reason a misspelt anchor is: the alternative is
+    /// text that renders perfectly in the wrong face, which reads as a design
+    /// decision rather than a typo. The fallbacks (a `typo:` token's family,
+    /// then the system font) are silent by design; only a name nobody
+    /// declared is an error.
+    UnknownFontFamily {
+        /// Source range of the offending `font:`.
+        span: Span,
+        /// The name that was written.
+        name: String,
+        /// The closest declared family, if any.
+        hint: Option<String>,
+    },
     /// A `Canvas` child is not a recognized shape command (RFC-0020 §1:
     /// `Canvas` children are shape commands only, intrinsics, user views,
     /// declarations, and control flow are all rejected).
@@ -313,6 +363,36 @@ pub enum CompileError {
     ConflictingGroupMode {
         /// Source range of the second mode attribute.
         span: Span,
+    },
+    /// Two neighbouring paths in a `morph:` sequence do not have the same
+    /// command structure (RFC-0031 §S11).
+    ///
+    /// Paths morph command by command, so the `k`-th command of one has to be
+    /// the same kind as the `k`-th of the next. When they are not there is no
+    /// canonical in-between, and falling back to a cut would look like an
+    /// easing bug, so it is refused, naming the first command that disagrees.
+    MorphPathMismatch {
+        /// Source range of the disagreeing command (or of the shorter path).
+        span: Span,
+        /// Zero-based position of the path in the morph sequence.
+        member: usize,
+        /// Zero-based index of the first command that disagrees.
+        index: usize,
+        /// The command the previous path has at `index`.
+        expected: String,
+        /// The command this path has there.
+        found: String,
+    },
+    /// A `morph:` sequence mixes body paths with other shapes, or holds a
+    /// `path(d: …)` (RFC-0031 §S11).
+    ///
+    /// Body paths morph command by command on the CPU; every other shape
+    /// morphs as a distance field on the GPU. One sequence cannot be both.
+    MorphMemberKind {
+        /// Source range of the member that does not fit.
+        span: Span,
+        /// Why it does not fit.
+        reason: String,
     },
     /// A shape after the first inside a fusion group carried its own stroke
     /// properties (RFC-0031 §Q5), **a warning**.
@@ -451,7 +531,7 @@ pub enum CompileError {
     /// A `with` clause attached an animation to a layout-affecting property
     /// (`width`/`height`/`p`/`m`/`gap`/…), which cannot animate on the GPU
     /// because it would require a per-frame relayout (RFC-0010 §"Layout
-    /// properties", INV-8).
+    /// properties").
     LayoutPropNotAnimatable {
         /// Source range of the animated attribute.
         span: Span,
@@ -672,7 +752,7 @@ pub enum CompileError {
     /// A controller call was passed something with no data form, a `Signal`,
     /// a memo, a callback, a theme or another controller handle (RFC-0028 §1).
     ///
-    /// The boundary carries only `Send` data (INV-13); a handle that crossed
+    /// The boundary carries only `Send` data; a handle that crossed
     /// it would be a reference to logic-thread state observed from a pool
     /// worker, which is the one thing the thread model forbids outright.
     NonDataControllerArg {
@@ -736,7 +816,7 @@ pub enum CompileError {
         message: String,
     },
     /// A reply came back for a continuation that is gone: its view unmounted,
-    /// or a hot reload replaced the program (RFC-0028 §5, INV-14).
+    /// or a hot reload replaced the program (RFC-0028 §5).
     ///
     /// Reported rather than silently dropped, because the alternative reading,
     /// "the controller never answered", sends the developer looking in the
@@ -836,12 +916,17 @@ impl CompileError {
             | Self::InvalidRoutePattern { span, .. }
             | Self::UnmatchedRoute { span, .. }
             | Self::UnknownAnchor { span, .. }
+            | Self::UnknownFontFamily { span, .. }
+            | Self::UnknownBreakpoint { span, .. }
+            | Self::MisplacedAnchorTail { span, .. }
             | Self::UnknownShapeCommand { span, .. }
             | Self::UnknownShapeParam { span, .. }
             | Self::MissingShapeParam { span, .. }
             | Self::CanvasMissingSize { span }
             | Self::TooManyGroupMembers { span, .. }
             | Self::ConflictingGroupMode { span }
+            | Self::MorphPathMismatch { span, .. }
+            | Self::MorphMemberKind { span, .. }
             | Self::StrokeInFusionGroup { span, .. }
             | Self::DashOnFusedStroke { span }
             | Self::NotAnimatable { span, .. }
@@ -920,12 +1005,17 @@ impl CompileError {
             | Self::InvalidRoutePattern { span, .. }
             | Self::UnmatchedRoute { span, .. }
             | Self::UnknownAnchor { span, .. }
+            | Self::UnknownFontFamily { span, .. }
+            | Self::UnknownBreakpoint { span, .. }
+            | Self::MisplacedAnchorTail { span, .. }
             | Self::UnknownShapeCommand { span, .. }
             | Self::UnknownShapeParam { span, .. }
             | Self::MissingShapeParam { span, .. }
             | Self::CanvasMissingSize { span }
             | Self::TooManyGroupMembers { span, .. }
             | Self::ConflictingGroupMode { span }
+            | Self::MorphPathMismatch { span, .. }
+            | Self::MorphMemberKind { span, .. }
             | Self::StrokeInFusionGroup { span, .. }
             | Self::DashOnFusedStroke { span }
             | Self::NotAnimatable { span, .. }
@@ -1006,12 +1096,17 @@ impl CompileError {
             Self::InvalidRoutePattern { .. } => "InvalidRoutePattern",
             Self::UnmatchedRoute { .. } => "UnmatchedRoute",
             Self::UnknownAnchor { .. } => "UnknownAnchor",
+            Self::UnknownFontFamily { .. } => "UnknownFontFamily",
+            Self::UnknownBreakpoint { .. } => "UnknownBreakpoint",
+            Self::MisplacedAnchorTail { .. } => "MisplacedAnchorTail",
             Self::UnknownShapeCommand { .. } => "UnknownShapeCommand",
             Self::UnknownShapeParam { .. } => "UnknownShapeParam",
             Self::MissingShapeParam { .. } => "MissingShapeParam",
             Self::CanvasMissingSize { .. } => "CanvasMissingSize",
             Self::TooManyGroupMembers { .. } => "TooManyGroupMembers",
             Self::ConflictingGroupMode { .. } => "ConflictingGroupMode",
+            Self::MorphPathMismatch { .. } => "MorphPathMismatch",
+            Self::MorphMemberKind { .. } => "MorphMemberKind",
             Self::StrokeInFusionGroup { .. } => "StrokeInFusionGroup",
             Self::DashOnFusedStroke { .. } => "DashOnFusedStroke",
             Self::NotAnimatable { .. } => "NotAnimatable",
@@ -1193,6 +1288,23 @@ impl CompileError {
             Self::UnmatchedRoute { path, .. } => {
                 format!("no route matches `{path}`; the navigation stays where it is")
             }
+            Self::MisplacedAnchorTail {
+                prop, reason, hint, ..
+            } => with_hint(format!("`{prop}` {reason}"), hint.as_deref()),
+            Self::UnknownBreakpoint { name, hint, .. } => with_hint(
+                format!(
+                    "no breakpoint `{name}` is declared; add it to `[theme.breakpoints]` \
+                     in byard.toml, or write a width in logical pixels"
+                ),
+                hint.as_deref(),
+            ),
+            Self::UnknownFontFamily { name, hint, .. } => with_hint(
+                format!(
+                    "no font family `{name}` is declared; add it to \
+                     `[assets.fonts]` in byard.toml"
+                ),
+                hint.as_deref(),
+            ),
             Self::UnknownAnchor { name, hint, .. } => with_hint(
                 format!(
                     "no element tagged `as {name}` before this overlay; an \
@@ -1224,6 +1336,18 @@ impl CompileError {
                  morph between fused sub-groups would need nested groups"
                     .to_string()
             }
+            Self::MorphPathMismatch {
+                member,
+                index,
+                expected,
+                found,
+                ..
+            } => format!(
+                "path {member} of this morph cannot follow the one before it: command {index} \
+                 is `{found}` here and `{expected}` there; paths morph command by command, \
+                 so each needs the same commands in the same order"
+            ),
+            Self::MorphMemberKind { reason, .. } => reason.clone(),
             Self::StrokeInFusionGroup { param, .. } => {
                 format!(
                     "`{param}` is ignored here: a fused `Canvas` has one outline, \
@@ -1441,7 +1565,7 @@ fn with_hint(message: String, hint: Option<&str>) -> String {
 mod tests {
     use super::*;
 
-    /// INV-5: `CompileError` must be `Send` so a failed parse can be shipped
+    /// `CompileError` must be `Send` so a failed parse can be shipped
     /// from the watcher thread to the logic thread (RFC-0002 §"Hot-reload").
     #[test]
     fn compile_error_is_send() {

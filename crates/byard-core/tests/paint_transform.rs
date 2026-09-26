@@ -1,28 +1,15 @@
 //! RFC-0011, paint-time transform primitives: a `Transform` moves/scales/
 //! rotates the *painted* quad without touching layout. GPU-dependent tests
 //! request a real adapter and **skip gracefully** when none is available
-//! (headless CI), mirroring `m21_pipelines.rs`'s pattern.
+//! (headless CI), mirroring `decorated_texture_pipelines.rs`'s pattern.
 #![allow(clippy::cast_precision_loss)]
 
 use byard_core::encoder::EncoderSubsystem;
 use byard_core::frame::{BoxInstance, RenderFrame, Transform, Viewport};
 use std::sync::Arc;
 
-fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>)> {
-    let instance =
-        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-    let adapter =
-        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-            .ok()?;
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("ByardCore - Test Device"),
-        required_features: wgpu::Features::empty(),
-        required_limits: byard_core::engine::device_limits(&adapter),
-        memory_hints: wgpu::MemoryHints::Performance,
-        ..Default::default()
-    }))
-    .ok()?;
-    Some((Arc::new(device), Arc::new(queue)))
+fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>, byard_test_gpu::Turn)> {
+    byard_test_gpu::device(byard_core::engine::device_limits)
 }
 
 fn render_and_read(
@@ -95,7 +82,7 @@ fn render_and_read(
 
 #[test]
 fn a_translated_box_paints_at_its_transformed_position_not_its_layout_rect() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping paint-transform readback test");
         return;
     };
@@ -152,7 +139,7 @@ fn a_translated_box_paints_at_its_transformed_position_not_its_layout_rect() {
 
 #[test]
 fn identity_transform_matches_untransformed_output_byte_for_byte() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping identity-transform regression test");
         return;
     };

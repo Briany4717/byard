@@ -186,7 +186,7 @@ fn animating_a_text_size_is_rejected_and_names_transform() {
     // The class table is what makes this reachable at all: `size` is not
     // in the historical layout-name list, so before RFC-0032 an animated
     // font size compiled and quietly relayed out the tree every frame,
-    // the exact thing RFC-0010 INV-8 forbids in prose and nothing checked.
+    // the exact thing RFC-0010 forbids in prose and nothing checked.
     let e = errs(r#"View V() { Text("hi") #[size: 20 with anim.spring()] {} }"#);
     assert!(
         matches!(&e[0], CompileError::LayoutPropNotAnimatable { prop, .. } if prop == "size"),
@@ -281,7 +281,7 @@ fn keyframes_check_their_steps_and_are_rejected_on_a_layout_prop() {
         .is_empty(),
         "a well-formed sequence on a paint prop checks clean"
     );
-    // …on a layout property it would relayout every frame (INV-8).
+    // …on a layout property it would relayout every frame.
     let e = errs("View V() { Box #[width: anim.keyframes(0%: 0, 100%: 200, duration: 1s)] {} }");
     assert!(
         matches!(&e[0], CompileError::LayoutPropNotAnimatable { prop, .. } if prop == "width"),
@@ -789,7 +789,7 @@ fn a_ninth_shape_in_a_group_is_an_error_naming_that_shape() {
 fn morph_is_a_paint_class_canvas_attribute() {
     let canvas = lookup("Canvas").expect("Canvas is an intrinsic");
     assert_eq!(canvas.property_class("morph"), Some(AttrClass::Paint));
-    // §S10 × INV-8: the whole point is that the Material 3 loader is one
+    // §S10, paint-time only: the whole point is that the Material 3 loader is one
     // animated scalar. A layout classification would refuse it.
     let e = canvas_errs(
         "View V() { Canvas #[width: 48, height: 48, \

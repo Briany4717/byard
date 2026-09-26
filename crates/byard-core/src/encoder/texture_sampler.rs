@@ -1,4 +1,4 @@
-//! `TextureSampler` render pipeline (M21, RFC-0001 §3.1).
+//! `TextureSampler` render pipeline (RFC-0001 §3.1).
 //!
 //! Draws a decoded image into a (optionally rounded) quad with a `fit` policy.
 //! Host-side decode uses the `image` crate: the runner owns decode, the
@@ -17,7 +17,7 @@ use crate::frame::{ImageFit, TextureSampler};
 /// `relay::DecodeResult`'s sender. Spelled out here (rather than imported
 /// from `relay`) so the encoder never gains a dependency on the relay
 /// subsystem, the async-decode result flows through the existing type-erased
-/// channel, not a new cross-module call (RFC-0001 §9 / INV-11).
+/// channel, not a new cross-module call (RFC-0001 §9: subsystems meet only at `frame.rs`).
 ///
 /// This is the **render** thread's half of the split channel (RFC-0028 §7): a
 /// decoded image is addressed to the thread that owns the `Device`/`Queue`,
@@ -25,7 +25,7 @@ use crate::frame::{ImageFit, TextureSampler};
 pub type DecodeResultSender = UnboundedSender<Box<dyn Any + Send>>;
 
 /// Raw decoded RGBA8 pixels produced off the render thread by the I/O pool
-/// (M29). Carries no `wgpu` handles, `Device`/`Queue` are used only on their
+/// Carries no `wgpu` handles, `Device`/`Queue` are used only on their
 /// owning (render) thread, where [`TextureCache::apply_decoded`] performs the
 /// upload.
 #[derive(Debug)]
@@ -94,7 +94,7 @@ pub struct TextureEntry {
     pub height: u32,
 }
 
-/// Lifecycle of a single cached texture (M29).
+/// Lifecycle of a single cached texture.
 ///
 /// Replaces the old `Option<TextureEntry>` (which conflated "decode failed"
 /// with "not yet decoded"). The render thread observes `Pending` for a freshly
@@ -129,8 +129,9 @@ impl TextureCache {
     /// call for a still-`Pending` (or already-resolved) `src` is a no-op, the
     /// `contains_key` guard ensures exactly one decode task per source.
     ///
-    /// Decode happens entirely off the calling thread (INV-12); only the cheap
-    /// GPU upload, later, runs on the render thread.
+    /// Decode happens entirely off the calling thread (the render and logic
+    /// threads never block on I/O); only the cheap GPU upload, later, runs on
+    /// the render thread.
     pub fn ensure(
         &mut self,
         io_handle: &tokio::runtime::Handle,
@@ -580,7 +581,7 @@ impl super::pipeline::RenderPipeline for TextureSamplerPipeline {
         // A view that draws images registers its own pipeline with its own
         // binding, which is what the extension ABI is for, and it is a better
         // answer than a texture id smuggled through an instance field would
-        // be. Said out loud rather than silently drawn as nothing (INV-4).
+        // be. Said out loud rather than silently drawn as nothing.
         if cx.count > 0 {
             log_unbatchable();
         }
@@ -625,14 +626,15 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let path = std::env::temp_dir().join(format!("byard_m29_{tag}_{pid}_{nanos}.png"));
+        let path = std::env::temp_dir().join(format!("byard_decode_{tag}_{pid}_{nanos}.png"));
         let img = image::RgbaImage::from_pixel(w, h, image::Rgba([10, 20, 30, 255]));
         img.save(&path).expect("save fixture png");
         path
     }
 
-    /// INV-12: `ensure` must return without doing the decode itself, the
-    /// blocking `image::open` runs on the I/O pool, not the calling thread.
+    /// The render thread never blocks on I/O: `ensure` must return without
+    /// doing the decode itself, the blocking `image::open` runs on the I/O
+    /// pool, not the calling thread.
     #[test]
     fn ensure_does_not_block_when_decoding_a_slow_fixture() {
         let rt = io_runtime();
@@ -657,7 +659,7 @@ mod tests {
         cache.ensure(rt.handle(), &tx, src);
         let elapsed = start.elapsed();
 
-        // The load-bearing INV-12 check is *structural*, not a tight timing
+        // The load-bearing never-block check is *structural*, not a tight timing
         // bound (CI runners are too jittery for sub-millisecond wall-clock
         // assertions): immediately after `ensure` returns, the decode result
         // has **not** arrived on the channel. A blocking `ensure` (one that ran
@@ -716,16 +718,9 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
-    /// Returns `(device, queue)` for a real adapter, or `None` headless.
-    fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>)> {
-        let instance =
-            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-        let adapter =
-            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-                .ok()?;
-        let (device, queue) =
-            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).ok()?;
-        Some((Arc::new(device), Arc::new(queue)))
+    /// Returns the shared `(device, queue)` and the turn to use them, for a real adapter, or `None` headless.
+    fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>, byard_test_gpu::Turn)> {
+        byard_test_gpu::device(crate::engine::device_limits)
     }
 
     /// A texture is `Pending` (drawing nothing) until its decode result is
@@ -734,7 +729,7 @@ mod tests {
     /// frame with no extra dirty signal needed.
     #[test]
     fn texture_becomes_ready_after_io_result_drain() {
-        let Some((device, queue)) = try_device() else {
+        let Some((device, queue, _turn)) = try_device() else {
             eprintln!("no GPU adapter, skipping texture-ready drain test");
             return;
         };
@@ -766,7 +761,7 @@ mod tests {
     /// `get` keeps returning `None`.
     #[test]
     fn missing_image_resolves_to_failed_not_panic() {
-        let Some((device, queue)) = try_device() else {
+        let Some((device, queue, _turn)) = try_device() else {
             eprintln!("no GPU adapter, skipping failed-decode test");
             return;
         };

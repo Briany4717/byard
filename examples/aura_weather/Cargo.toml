@@ -1,0 +1,23 @@
+[package]
+name = "aura-weather"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+byard = { path = "../../crates/byard" }
+
+[lints]
+workspace = true
+
+# The tests read the app as its runtime does (the project, then the program)
+# and drive it through the interpreter, with no window.
+[dev-dependencies]
+byard-project  = { path = "../../crates/byard-project" }
+byard-compiler = { path = "../../crates/byard-compiler" }
+byard-core     = { path = "../../crates/byard-core" }

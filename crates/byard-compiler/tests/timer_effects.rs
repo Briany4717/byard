@@ -212,7 +212,7 @@ View Main() {
     assert_eq!(harness.text(), "0");
 }
 
-// ── scope (INV-10) ───────────────────────────────────────────────────────
+// ── scope (a timer dies with its scope) ───────────────────────────────────────────────────────
 
 #[test]
 fn an_unmounted_scope_stops_ticking() {

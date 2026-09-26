@@ -200,7 +200,7 @@ not a depth texture. They are ordinary per-instance data and go into the same
 arena as another region, there is no reason for them to be separate allocations,
 and merging them removes two of the nine per-frame creations outright.
 
-### G5, Observability (INV-18)
+### G5, Observability
 
 The same discipline PR #148 established: this path must be assertable, not
 merely benchmarkable.
@@ -245,8 +245,7 @@ observable through the counter, so it is diagnosable rather than mysterious.
 
 **The win is projected, not yet measured per-term.** `encode.frame` is ~6 ms in
 total; buffer creation is the leading suspect but the sub-scope breakdown does not
-exist yet. The implementation plan therefore measures first (see
-`IMPLEMENTATION_10.md` M87). If the sub-scopes show buffer creation is a minor
+exist yet. The implementation plan therefore measures first. If the sub-scopes show buffer creation is a minor
 term, this RFC is still correct on thesis grounds but drops in priority, and
 that outcome must be recorded rather than quietly ignored.
 
@@ -331,7 +330,7 @@ allocation, and merging removes two of the nine per-frame creations.
 **Resolution: either; they are independent (G6).** Different causes, no shared
 code. On the current numbers `encode.frame` (~6 ms) is an order of magnitude
 above `layout.taffy` (~0.4 ms), so on impact alone this one is first, but
-`IMPLEMENTATION_10.md` M87 measures the sub-terms before committing, because
+the implementation plan measures the sub-terms before committing, because
 "leading suspect" is not a measurement and this project does not act on those.
 
 ### Q6, How is correctness established for a pure-refactor change?
@@ -344,8 +343,8 @@ substitutes for the other.
 
 ---
 
-Implementation-time decisions that surface after merge go to
-`support/DESICIONS.md` as `IMPL-NN` entries. This RFC carries no open questions.
+Implementation-time decisions that surface after merge are recorded with the
+change that makes them, not back in this RFC. This RFC carries no open questions.
 
 ---
 

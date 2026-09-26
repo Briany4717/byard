@@ -4,13 +4,13 @@
 //! Two claims that only a running encoder can settle, because both are about
 //! what the *frame* does rather than what the registry contains:
 //!
-//! 1. **The dynamic dispatch is per-pipeline, not per-instance** (INV-30). This
+//! 1. **The dynamic dispatch is per-pipeline, not per-instance**. This
 //!    is the sentence the whole ABI rests on: a package's pipeline is as cheap
 //!    as a core one because the only indirect call chooses *which* pipeline
 //!    runs. A frame with ten thousand boxes and a frame with ten make the same
 //!    number of those calls, or the claim is false.
-//! 2. **The order is declared and reproducible** (INV-32), including across
-//!    encoders built independently — the property a `HashMap` of pipelines
+//! 2. **The order is declared and reproducible**, including across
+//!    encoders built independently: the property a `HashMap` of pipelines
 //!    would not have.
 //!
 //! Skips cleanly when no GPU adapter is available.
@@ -27,21 +27,8 @@ use std::sync::Arc;
 
 const LOGICAL: f32 = 200.0;
 
-fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>)> {
-    let instance =
-        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-    let adapter =
-        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-            .ok()?;
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("pipeline registry device"),
-        required_features: wgpu::Features::empty(),
-        required_limits: adapter.limits(),
-        memory_hints: wgpu::MemoryHints::Performance,
-        ..Default::default()
-    }))
-    .ok()?;
-    Some((Arc::new(device), Arc::new(queue)))
+fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>, byard_test_gpu::Turn)> {
+    byard_test_gpu::device(byard_core::engine::device_limits)
 }
 
 fn encoder(device: &Arc<wgpu::Device>, queue: &Arc<wgpu::Queue>) -> EncoderSubsystem {
@@ -110,7 +97,7 @@ fn encode(enc: &mut EncoderSubsystem, device: &wgpu::Device, queue: &wgpu::Queue
 
 #[test]
 fn dispatch_cost_tracks_the_pipeline_count_and_not_the_instance_count() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping registry test");
         return;
     };
@@ -120,7 +107,7 @@ fn dispatch_cost_tracks_the_pipeline_count_and_not_the_instance_count() {
     assert_eq!(
         few, many,
         "a thousand times the instances made {many} erased calls against {few}: \
-         the per-instance path is going through the trait object (INV-30)"
+         the per-instance path is going through the trait object"
     );
     assert_eq!(
         few,
@@ -131,7 +118,7 @@ fn dispatch_cost_tracks_the_pipeline_count_and_not_the_instance_count() {
 
 #[test]
 fn the_draw_order_is_declared_and_two_encoders_agree_on_it() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping registry test");
         return;
     };
@@ -140,13 +127,13 @@ fn the_draw_order_is_declared_and_two_encoders_agree_on_it() {
     assert_eq!(
         first.pipeline_order(),
         second.pipeline_order(),
-        "two encoders built the same way draw in the same order (INV-32)"
+        "two encoders built the same way draw in the same order"
     );
     // The historical order, which is what made the registry a parity change:
     // these are the same pipelines, drawn at the same points, as before it
     // existed. `canvas_fill` (RFC-0037) is the first pipeline that is not one
     // of them, and it is *after* them, which is where a registration lands
-    // that did not exist when the order was written down (INV-32).
+    // that did not exist when the order was written down.
     assert_eq!(
         first.pipeline_order(),
         vec![

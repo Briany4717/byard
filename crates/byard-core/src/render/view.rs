@@ -13,13 +13,13 @@
 //! Async is deliberately not a fifth responsibility. A native view does no
 //! I/O: it calls a controller (RFC-0028) and the result comes back through
 //! [`NativeView::on_result`] on the logic thread, so no graphics state ever
-//! goes near another thread (INV-12).
+//! goes near another thread.
 //!
 //! # Where a view's state lives
 //!
 //! In the view. The engine owns the boxed view for exactly as long as the
 //! element that declared it is mounted, and drops it in the same linear pass
-//! that releases the rest of that element (INV-31). There is no separate
+//! that releases the rest of that element. There is no separate
 //! lifetime for extension state, and no way to ask for one: a view that seems
 //! to need a resource outliving its own mount is describing a cache the app
 //! should own, not a gap in this trait.
@@ -218,7 +218,7 @@ pub trait NativeView: NativeProps + 'static {
     /// Draws the view into the frame, given the box layout resolved for it.
     ///
     /// The only required method. Everything emitted here reaches the GPU by
-    /// the same path a core intrinsic's instances do (INV-30).
+    /// the same path a core intrinsic's instances do.
     fn render(&mut self, layout: Layout, cx: &mut RenderCtx<'_>);
 
     /// Handles one routed input event.
@@ -240,7 +240,7 @@ pub trait NativeView: NativeProps + 'static {
     /// For symmetry and for a view that wants to notice; it is **not** where
     /// memory is released. The view is dropped either way, in the single
     /// linear pass that releases the element around it, and a view that
-    /// forgets to implement this leaks nothing (INV-31).
+    /// forgets to implement this leaks nothing.
     fn on_unmount(&mut self) {}
 
     /// Delivers the result of a controller request this view issued.

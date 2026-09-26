@@ -30,21 +30,8 @@ const SCALE: f32 = 2.0;
 const HOME_HEX: &str = "0xFF2020";
 const DETAIL_HEX: &str = "0x2020FF";
 
-fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>)> {
-    let instance =
-        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-    let adapter =
-        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-            .ok()?;
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("nav transition readback device"),
-        required_features: wgpu::Features::empty(),
-        required_limits: byard_core::engine::device_limits(&adapter),
-        memory_hints: wgpu::MemoryHints::Performance,
-        ..Default::default()
-    }))
-    .ok()?;
-    Some((Arc::new(device), Arc::new(queue)))
+fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>, byard_test_gpu::Turn)> {
+    byard_test_gpu::device(byard_core::engine::device_limits)
 }
 
 /// One scanline of the rendered frame, as `(b, g, r)` triples in logical-x
@@ -144,12 +131,14 @@ struct Driver {
     queue: Arc<wgpu::Queue>,
     interp: Interpreter,
     tree: Vec<RenderNode>,
+    /// Held for as long as the driver can draw.
+    _turn: byard_test_gpu::Turn,
 }
 
 impl Driver {
     /// Lowers `src`, or returns `None` when there is no GPU to render it with.
     fn new(src: &str) -> Option<Self> {
-        let (device, queue) = try_device()?;
+        let (device, queue, turn) = try_device()?;
         let parsed = parse(src);
         assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
         let mut interp = Interpreter::new();
@@ -161,6 +150,7 @@ impl Driver {
             queue,
             interp,
             tree,
+            _turn: turn,
         })
     }
 

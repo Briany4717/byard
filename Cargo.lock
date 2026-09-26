@@ -329,6 +329,7 @@ dependencies = [
  "lyon_tessellation",
  "notify",
  "proptest",
+ "rustc-hash 2.1.2",
  "smallvec",
  "unicode-segmentation",
  "usvg",

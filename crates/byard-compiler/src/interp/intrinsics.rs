@@ -533,6 +533,13 @@ fn lookup_intrinsic(name: &str) -> Option<Intrinsic> {
         props.insert("anchor_align", lay(PropType::Enum(ANCHOR_ALIGN)));
         props.insert("anchor_gap", lay(PropType::Len));
         props.insert("anchor_flip", lay(PropType::Bool));
+        // RFC-0017 §Positioning: an absolute `(x, y)` offset from the
+        // viewport's top-left. Spelled `at:` rather than overloading
+        // `anchor_to:` with a pair, because `anchor_to` names an element and
+        // is compile-checked against `as` tags, and a property whose *type*
+        // decides which of two unrelated behaviours you get is a property
+        // people get wrong.
+        props.insert("at", lay(PropType::Vec2));
         // RFC-0018: grid child-placement props. Valid on any container child of a
         // `Grid`; harmless (no-op) outside a grid, like `anchor`, so they live on
         // every container rather than being special-cased.

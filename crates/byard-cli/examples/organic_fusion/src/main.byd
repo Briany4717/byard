@@ -66,7 +66,7 @@ View Main() {
         // ── 2. The approach: an animated member, a static smoothing radius ─
         //
         // Note that it is the *member* that moves here, not the head. That is
-        // the case RFC-0031's INV-26 exists for: the head's own bytes never
+        // the case RFC-0031's member hash exists for: the head's own bytes never
         // change, and without the member hash folded into it the group would be
         // judged clean and would paint last frame's shape forever.
         Text("an approaching member, fusion is local, and the bridge grows before contact")

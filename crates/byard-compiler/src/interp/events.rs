@@ -29,7 +29,7 @@ pub enum EventKind {
     /// Continuous pointer movement.
     PointerMove,
     /// Pointer drag: synthesized by the router from PointerMove while the button
-    /// is held (M16). Used by Slider to track the drag position.
+    /// is held. Used by Slider to track the drag position.
     PointerDrag,
     /// Continuous scroll.
     Scroll,
@@ -37,13 +37,13 @@ pub enum EventKind {
     Wheel,
     /// A value change from a value-carrying intrinsic.
     Change,
-    /// A keyboard key press; key name is in `InputEvent.value` (M17).
+    /// A keyboard key press; key name is in `InputEvent.value`.
     KeyDown,
-    /// A keyboard key release; key name is in `InputEvent.value` (M17).
+    /// A keyboard key release; key name is in `InputEvent.value`.
     KeyUp,
-    /// Printable text input; the text is in `InputEvent.value` (M17).
+    /// Printable text input; the text is in `InputEvent.value`.
     TextInput,
-    // ── M24: remaining event catalog ─────────────────────────────────────
+    // ── Remaining event catalog ─────────────────────────────────────
     /// Cursor entered an element's rect (synthesized from PointerMove).
     PointerEnter,
     /// Cursor left an element's rect (synthesized from PointerMove).
@@ -127,14 +127,14 @@ impl InputEvent {
 pub const TAP_SLOP: f32 = 8.0;
 /// Tap interval upper bound (ms), E4.
 pub const TAP_MS: u64 = 500;
-/// Long-press hold threshold (ms), M24.
+/// Long-press hold threshold (ms).
 pub const LONG_PRESS_MS: u64 = 500;
-/// Double-tap interval upper bound (ms), M24 E4.
+/// Double-tap interval upper bound (ms), E4.
 pub const DOUBLE_TAP_MS: u64 = 300;
 
 thread_local! {
     /// The position of the event currently being dispatched, for use by
-    /// handlers that need cursor position (e.g. Slider drag, M16).
+    /// handlers that need cursor position (e.g. Slider drag).
     pub static CURRENT_EVENT_POS: std::cell::Cell<(f32, f32)> =
         const { std::cell::Cell::new((0.0, 0.0)) };
 }
@@ -249,9 +249,9 @@ pub struct EventRouter {
     /// held move, cleared on the next press/release. Persists across renders like
     /// the rest of the gesture state.
     dragging: Option<u32>,
-    /// Element currently under the pointer (for enter/exit synthesis, M24).
+    /// Element currently under the pointer (for enter/exit synthesis).
     hovered: Option<u32>,
-    /// Time and element of the most recent tap (for double-tap detection, M24).
+    /// Time and element of the most recent tap (for double-tap detection).
     last_tap: Option<(u64, Option<u32>)>,
     /// Elements whose `disabled:` prop resolved true this tick (RFC-0012 S5).
     /// Rebuilt every render like the handler set; a disabled element reports the
@@ -523,7 +523,7 @@ impl EventRouter {
     }
 
     /// Whether `elem` is the currently focused element (for focus-indicator
-    /// visuals, M19). Reflects the focus state carried across the per-tick
+    /// visuals). Reflects the focus state carried across the per-tick
     /// handler rebuild.
     #[must_use]
     pub fn is_focused(&self, elem: u32) -> bool {
@@ -646,7 +646,7 @@ impl EventRouter {
                         && elapsed < TAP_MS
                         && !down.secondary
                     {
-                        // Double-tap detection (M24).
+                        // Double-tap detection.
                         let is_double = self.last_tap.is_some_and(|(t, elem)| {
                             ev.time_ms.saturating_sub(t) < DOUBLE_TAP_MS && elem == up_elem
                         });
@@ -676,7 +676,7 @@ impl EventRouter {
             EventKind::PointerMove | EventKind::Scroll | EventKind::Wheel => {
                 self.fire(ctx, atlas, ev.kind, ev.pos, None);
                 if ev.kind == EventKind::PointerMove {
-                    // Synthesize PointerDrag when the button is held (M16: Slider).
+                    // Synthesize PointerDrag when the button is held (Slider).
                     if let Some((dpos, elem)) = self.down.as_ref().map(|d| (d.pos, d.elem)) {
                         // RFC-0024 `dragging`: latch once the pointer travels past
                         // the drag threshold from the press point.
@@ -686,7 +686,7 @@ impl EventRouter {
                         }
                         self.fire(ctx, atlas, EventKind::PointerDrag, ev.pos, None);
                     } else {
-                        // Enter / Exit / Hover (M24): compare new hovered elem to prev.
+                        // Enter / Exit / Hover: compare new hovered elem to prev.
                         let new_hover = self.hit_any(atlas, ev.pos);
                         if new_hover != self.hovered {
                             if self.hovered.is_some() {
@@ -729,9 +729,9 @@ impl EventRouter {
             | EventKind::Secondary => {
                 self.fire(ctx, atlas, ev.kind, ev.pos, None);
             }
-            // Keyboard events are routed to the focused element (M17/M18).
+            // Keyboard events are routed to the focused element.
             EventKind::KeyDown => {
-                // Tab key cycles focus (M18).
+                // Tab key cycles focus.
                 if let Some(Value::Str(key)) = &ev.value {
                     if key == "Tab" {
                         self.tab_focus(ctx, false);
@@ -914,7 +914,7 @@ impl EventRouter {
     }
 
     /// Fires the handler of `kind` registered on the currently focused element,
-    /// if any (M17/M18 keyboard routing).
+    /// if any (keyboard routing).
     fn fire_focused(&mut self, ctx: &mut ReactiveCtx, kind: EventKind, payload: Option<&Value>) {
         let Some(focused) = self.focused else {
             return;
@@ -939,7 +939,7 @@ impl EventRouter {
     }
 
     /// Advances keyboard focus to the next (or previous) focusable element
-    /// (M18, Tab traversal).
+    /// (Tab traversal).
     fn tab_focus(&mut self, ctx: &mut ReactiveCtx, reverse: bool) {
         // RFC-0017 focus trap: when a modal overlay is mounted, cycle only within
         // its scope (`focusables[focusable_floor..]`), wrapping last→first inside
@@ -1347,7 +1347,7 @@ mod tests {
         assert_eq!(ctx.peek_signal(count), Value::Int(1));
     }
 
-    // ── M24: remaining event catalog ─────────────────────────────────────
+    // ── Remaining event catalog ─────────────────────────────────────
 
     #[test]
     fn double_tap_fires_within_threshold_and_not_beyond() {

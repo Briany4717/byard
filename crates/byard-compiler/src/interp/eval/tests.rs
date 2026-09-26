@@ -53,7 +53,7 @@ fn vector_icon_lowers_to_a_vector_node() {
 
 #[test]
 fn vector_icon_starts_as_a_placeholder_then_becomes_resident() {
-    // Uses the real gear fixture from the M45 generator PR so this proves
+    // Uses the real gear fixture so this proves
     // the JIT dispatch end to end, not just the cache bookkeeping.
     let svg_path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/svg/gear.svg");
     let src = format!("View App() {{ VectorIcon(\"{svg_path}\") #[size: 24, color: 0xFFFFFF] }}");
@@ -65,7 +65,7 @@ fn vector_icon_starts_as_a_placeholder_then_becomes_resident() {
     let first = frame.vector_instances()[0];
     assert!(
         first.color[3] < f32::EPSILON,
-        "first tick must be a zero-opacity placeholder (INV-9), got alpha {}",
+        "first tick must be a zero-opacity placeholder, got alpha {}",
         first.color[3]
     );
 
@@ -513,7 +513,10 @@ fn a_morph_canvas_lowers_to_one_head_and_its_members() {
         "the phase reaches the head, got {}",
         head.group_param
     );
-    assert_ne!(head.member_hash, 0, "INV-26: the members are hashed in");
+    assert_ne!(
+        head.member_hash, 0,
+        "digest completeness: the members are hashed in"
+    );
     assert_eq!(frame.shape_records().len(), 3);
 
     // §S4: the head's quad is the union of its members' bounds, not its own
@@ -600,7 +603,7 @@ fn a_fusion_groups_quad_is_inflated_by_its_smoothing_radius() {
         "…on the near sides too: {plain:?} → {fused:?}"
     );
     // `fuse: 0` bulges by nothing, so it must not grow the quad either,
-    // INV-22 for the degenerate case.
+    // parity for the degenerate case.
     let zero = quad_of("fuse: 0");
     assert!(
         (zero.width - plain.width).abs() < 0.01,
@@ -641,7 +644,7 @@ fn a_fuse_canvas_lowers_to_a_fusion_group() {
     );
 }
 
-/// **INV-26, end to end.** A fusion group whose *member* moves while its
+/// **Digest completeness, end to end.** A fusion group whose *member* moves while its
 /// head does not must repaint.
 ///
 /// This is the case the invariant exists for and the one an example would
@@ -694,7 +697,7 @@ fn an_animated_member_repaints_its_fusion_group() {
             assert!(
                 head.dirty,
                 "frame {step}: an unchanged head with a moved member must \
-                     still repaint (INV-26)"
+                     still repaint (digest completeness)"
             );
         }
         previous_head = Some(bytes);
@@ -1636,7 +1639,7 @@ fn individual_margin_padding_properties_override() {
     );
 }
 
-// ── M25: `Len` padding/margin forms ──────────────────────────────────
+// ── `Len` padding/margin forms ──────────────────────────────────
 
 /// Lowers a single-`Box` view and returns the resolved padding plus any
 /// errors raised during style resolution.
@@ -2856,8 +2859,9 @@ fn stopping_the_looping_example_empties_the_active_set() {
 
 #[test]
 fn a_layout_property_cannot_be_keyframed() {
-    // RFC-0025 §3 defers to RFC-0010: keyframes on a layout prop would
-    // relayout every frame (INV-8), so they are rejected like `with` is.
+    // RFC-0025 §3 defers to RFC-0010: keyframes on a layout prop would relayout
+    // every frame (animation is paint-time only), so they are rejected like
+    // `with` is.
     let parsed = parse(
         "View V() { Box #[bg: 0x808080, height: 10, \
              width: anim.keyframes(0%: 0, 100%: 200, duration: 1s)] }",
@@ -2910,7 +2914,7 @@ fn scrollview_clips_and_translates_content_by_offset() {
     assert!(clips0 >= 1, "the ScrollView must emit a content clip");
 
     // Scroll down by 40 logical px → the content's paint translate moves up
-    // by 40, while its layout rect is unchanged (INV-8: no relayout).
+    // by 40, while its layout rect is unchanged (no relayout).
     let off = interp.var_signal(&Symbol::intern("off")).unwrap();
     interp.write_var(off, Value::Int(40));
     interp.tick();
@@ -4942,7 +4946,7 @@ fn unknown_origin_token_is_a_compile_error_with_a_hint() {
     ));
 }
 
-// ── M16: Toggle/Slider/TextField write-back ──────────────────────────
+// ── Toggle/Slider/TextField write-back ──────────────────────────
 
 #[test]
 fn toggle_with_bg_has_no_background_slab() {
@@ -5750,7 +5754,7 @@ fn bind_to_non_var_produces_no_bound_sig() {
     assert!(bound_sig.is_none(), "let binding yields no bound_sig");
 }
 
-// ── M17: Keyboard delivery ───────────────────────────────────────────
+// ── Keyboard delivery ───────────────────────────────────────────
 
 #[test]
 fn text_field_receives_keyboard_text_input() {
@@ -5827,7 +5831,7 @@ fn text_field_receives_keyboard_text_input() {
     );
 }
 
-// ── M18: Tab focus traversal ─────────────────────────────────────────
+// ── Tab focus traversal ─────────────────────────────────────────
 
 #[test]
 fn tab_key_advances_focus_through_text_fields() {
@@ -5881,7 +5885,7 @@ fn tab_key_advances_focus_through_text_fields() {
     assert_eq!(interp.peek(fb), Value::Bool(true), "second field focused");
 }
 
-// ── M20: Structural for/when in render tree ──────────────────────────
+// ── Structural for/when in render tree ──────────────────────────
 
 #[test]
 fn when_true_includes_then_branch() {
@@ -5997,7 +6001,7 @@ fn for_reacts_to_list_growth_and_element_change() {
     assert_eq!(t3, ["7"], "shrank to 1 row");
 }
 
-// ── M23: Controller boundary ─────────────────────────────────────────
+// ── Controller boundary ─────────────────────────────────────────
 
 #[test]
 fn inject_provider_is_visible_to_view() {
@@ -6036,7 +6040,7 @@ fn apply_io_callbacks_writes_to_var_and_ticks() {
     assert_eq!(interp.peek(sig), Value::Str("loaded".to_string()));
 }
 
-// ── M25: Parameterized fn call sites ─────────────────────────────────
+// ── Parameterized fn call sites ─────────────────────────────────
 
 #[test]
 fn parameterized_fn_call_binds_args() {
@@ -6083,7 +6087,7 @@ fn parameterized_fn_reacts_to_signal_arg() {
     );
 }
 
-// ── M21: DecoratedBox / TextureSampler ───────────────────────────────
+// ── DecoratedBox / TextureSampler ───────────────────────────────
 
 #[test]
 fn image_lowers_to_texture_sampler_in_frame() {
@@ -6274,7 +6278,7 @@ fn shadow_none_and_absent_emit_no_shadow() {
     assert!(shadow_params("View C() { Box #[bg: 0x222222, shadow: \"none\"] {} }").is_empty());
 }
 
-// ── M22: Theme system ────────────────────────────────────────────────
+// ── Theme system ────────────────────────────────────────────────
 
 #[test]
 fn text_without_color_uses_theme_on_surface() {

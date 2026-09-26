@@ -1,4 +1,4 @@
-//! `byard build [file]`, the AOT vector-atlas bake (RFC-0009 §4, M49).
+//! `byard build [file]`, the AOT vector-atlas bake (RFC-0009 §4).
 //!
 //! Resolves the whole module graph, statically closes the set of icons the app
 //! instantiates (tree-shaking dormant assets, guarding non-literal handles),
@@ -44,8 +44,8 @@ pub fn run(file: Option<&Path>) -> Result<(), String> {
         ));
     }
 
-    // Stages 2–3: generate + dedup + pack. Fields are read through the shared
-    // on-disk cache (RFC-0009 §5, M52), so an unchanged icon is not regenerated
+    // Stages 2 and 3: generate + dedup + pack. Fields are read through the
+    // shared on-disk cache (RFC-0009 §5), so an unchanged icon is not regenerated
     // on a rebuild.
     let cache_dir = manifest
         .project_root

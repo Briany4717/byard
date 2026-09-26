@@ -8,7 +8,7 @@
 //!   `Arc`, so [`Symbol`] equality is an `Arc::ptr_eq`, the fast path the
 //!   hot-reload structural diff (RFC-0002 §"Hot-reload boundary") needs.
 //! - **`Send`.** `CompiledView` must cross the file-watcher → logic-thread
-//!   channel (RFC-0002 §"Integration with Engine", INV-6), and every `Symbol`
+//!   channel (RFC-0002 §"Integration with Engine"), and every `Symbol`
 //!   in its AST has to satisfy that bound. `Arc<str>` is `Send`; `Rc<str>`
 //!   would not be.
 //!
@@ -99,7 +99,7 @@ const _: () = {
 mod tests {
     use super::*;
 
-    /// Compile-time proof that `Symbol` is `Send` (INV-6): if it were not, this
+    /// Compile-time proof that `Symbol` is `Send`: if it were not, this
     /// would fail to type-check.
     #[test]
     fn symbol_is_send() {

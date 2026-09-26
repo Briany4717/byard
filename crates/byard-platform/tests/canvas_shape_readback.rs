@@ -367,7 +367,7 @@ fn a_morph_reaches_its_endpoints_blends_between_them_and_wraps() {
 /// Four claims, in the order they can go wrong:
 ///
 /// 1. **`fuse: 0` is ungrouped.** A zero smoothing radius degenerates to a hard
-///    union, which is exactly the two shapes drawn separately (INV-22).
+///    union, which is exactly the two shapes drawn separately, pixel for pixel.
 /// 2. **Far apart, nothing bridges.** Fusion is local; two circles at opposite
 ///    ends of a canvas must not grow a bar between them.
 /// 3. **Close, they bridge.** The midpoint between two shapes that neither

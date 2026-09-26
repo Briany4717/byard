@@ -5,7 +5,7 @@
 //! one function per production, following the EBNF. Expressions use the Pratt
 //! parser in [`expr`]. Error recovery records a [`CompileError`], substitutes an
 //! [`Expr::Error`] (or skips one token at member level), and continues, so a
-//! single pass collects multiple diagnostics (INV-4).
+//! single pass collects multiple diagnostics.
 
 pub mod ast;
 mod expr;

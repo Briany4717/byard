@@ -352,7 +352,7 @@ fn what_reaches_a_view_is_data_and_only_data() {
     let _serial = SERIAL
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    // INV-13, the same rule the controller boundary follows. A prop value is
+    // Props are data only, the same rule the controller boundary follows. A prop value is
     // evaluated first, so what a view can be handed is whatever the evaluator
     // produces: numbers, strings, lists, records. There is deliberately no
     // spelling that hands over the signal itself, and the conversion refuses

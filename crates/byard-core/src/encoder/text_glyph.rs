@@ -142,11 +142,13 @@ static DEV_GLYPHS_SCOPE: std::sync::OnceLock<crate::telemetry::ScopeId> =
 /// will observe, and the alternative, comparing the string itself, costs a
 /// heap copy per line to retain it.
 /// Loads every face in `fonts` that `loaded` does not already name, and
-/// returns how many were loaded (RFC-0034, INV-27).
+/// returns how many were loaded (RFC-0034; the font-agreement rule on
+/// [`crate::frame::FontTable`]).
 ///
 /// A free function over the `fontdb::Database` rather than a method, so the
-/// registration half of INV-27 can be exercised without a GPU: the pipeline
-/// that owns the `FontSystem` needs a device, and the invariant does not.
+/// registration half of the font-agreement rule can be exercised without a GPU:
+/// the pipeline that owns the `FontSystem` needs a device, and the invariant
+/// does not.
 fn load_missing(
     db: &mut glyphon::fontdb::Database,
     loaded: &mut std::collections::HashSet<String>,
@@ -160,14 +162,14 @@ fn load_missing(
         // Loaded through the same helper as the measurement side, so the two
         // `FontSystem`s cannot be handed the bytes by subtly different routes.
         let here = crate::text::register_into(db, &face.bytes);
-        // INV-27 checked at the seam it can break at. The logic thread
+        // The font-agreement rule checked at the seam it can break at. The logic thread
         // resolved this face's family name from the same bytes; if this side
         // reads a different one, every line naming that family shapes in the
         // fallback font and no test of *this* frame would notice.
         debug_assert_eq!(
             here.as_deref(),
             Some(face.resolved.as_ref()),
-            "family `{}` resolves differently on the paint side (INV-27)",
+            "family `{}` resolves differently on the paint side",
             face.declared
         );
         loaded.insert(face.resolved.to_string());
@@ -181,9 +183,9 @@ fn load_missing(
 ///
 /// Free rather than inlined into `shape_range` so the attributes it resolves,
 /// family above all, can be checked against the measurement path without a
-/// device (INV-27). If this and `TextMeasurer::shape` ever stop agreeing about
-/// which face a line is in, the test that compares them is reading the real
-/// code on both sides rather than two transcriptions of it.
+/// device (the font-agreement rule). If this and `TextMeasurer::shape` ever
+/// stop agreeing about which face a line is in, the test that compares them is
+/// reading the real code on both sides rather than two transcriptions of it.
 fn shape_line(
     font_system: &mut FontSystem,
     buffer: &mut Buffer,
@@ -450,7 +452,8 @@ impl TextGlyphPipeline {
     }
 
     /// Brings the paint `FontSystem` level with the logic thread's by loading
-    /// every family in `fonts` it has not seen (RFC-0034, INV-27).
+    /// every family in `fonts` it has not seen (RFC-0034; the
+    /// font-agreement rule on [`crate::frame::FontTable`]).
     ///
     /// Must run **before** any shaping in the frame: a line whose `family`
     /// names a face this `FontSystem` does not hold shapes in the system font
@@ -903,7 +906,7 @@ mod tests {
         }
     }
 
-    // ── INV-27: measurement and paint resolve the same font ────────────────
+    // ── Measurement and paint resolve the same font ────────────────
 
     /// A shipped example asset, read from the tree rather than synthesised.
     ///
@@ -929,9 +932,9 @@ mod tests {
     /// The invariant Phase 13 wrote and nothing has ever checked: a family
     /// registered from one source of truth measures and paints identically.
     ///
-    /// Not a pixel test and not a magnitude test. It compares two
-    /// numbers the engine produces for the same string, and the only way they
-    /// can differ is the one INV-27 names: one `FontSystem` holding the face
+    /// Not a pixel test and not a magnitude test. It compares two numbers the
+    /// engine produces for the same string, and the only way they can differ is
+    /// the one the font-agreement rule names: one `FontSystem` holding the face
     /// and the other silently falling back.
     #[test]
     fn a_registered_family_measures_and_paints_the_same_width() {
@@ -954,7 +957,7 @@ mod tests {
         assert!(
             (from_layout - painted).abs() < 0.01,
             "measured {from_layout} vs painted {painted}: the two font systems \
-             disagree about `{resolved}` (INV-27)"
+             disagree about `{resolved}`"
         );
 
         // The control, and the reason this test cannot pass vacuously: with
@@ -1047,7 +1050,7 @@ mod tests {
 
     #[test]
     fn a_fixed_width_number_keeps_its_key_stable_until_the_value_actually_moves() {
-        // RFC-0030 §V4's INV-24 mitigation 3, now load-bearing rather than
+        // RFC-0030 §V4's fixed-width HUD numbers, now load-bearing rather than
         // decorative: the HUD re-emits the same padded string on five of every
         // six frames, and those five must not re-shape.
         let a = shape_key(&line(&format!("{:>5.1}", 3.4), 12.0), None);
@@ -1060,8 +1063,9 @@ mod tests {
     #[test]
     fn a_colour_change_alone_never_re_shapes() {
         // Colour is applied per-`TextArea`, so it provably cannot alter a
-        // glyph. The whole INV-24 argument, a paint-class change never
-        // touches layout, is only true if the cache key agrees.
+        // glyph. The whole argument that the HUD costs the app nothing (a
+        // paint-class change never touches layout) is only true if the cache
+        // key agrees.
         let before = shape_key(&line("tap me", 16.0), None);
         let after = shape_key(&line("tap me", 16.0), None);
         assert_eq!(before, after);

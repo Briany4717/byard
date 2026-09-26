@@ -268,8 +268,9 @@ fn a_continuation_is_one_shot() {
 
 #[test]
 fn a_reply_for_a_reloaded_program_is_discarded_not_applied() {
-    // INV-14. The `var` must keep the value it had; the alternative, writing
-    // it, would apply an answer to a question a different program asked.
+    // A reply is one-shot and scope-bound. The `var` must keep the value it
+    // had; the alternative, writing it, would apply an answer to a question a
+    // different program asked.
     let mut harness = Harness::new(SAY_VIEW);
     harness.tap(50.0, 40.0);
     assert_eq!(harness.interp.outstanding_continuations(), 1);
@@ -343,7 +344,7 @@ View Main() {
 
 #[test]
 fn a_signal_cannot_cross_the_boundary() {
-    // INV-13: the boundary carries data. Passing the `var` itself (not its
+    // The boundary carries data. Passing the `var` itself (not its
     // value) would put logic-thread state on a pool worker.
     let mut harness = Harness::new(
         r#"
@@ -495,8 +496,8 @@ View Main() {
 
 #[test]
 fn an_unmounted_scopes_in_flight_call_is_dropped_with_it() {
-    // INV-10/INV-14: a screen that asked for data and then left must not have
-    // its answer written into it afterwards.
+    // Nothing survives the scope that started it: a screen that asked for data
+    // and then left must not have its answer written into it afterwards.
     let mut harness = Harness::new(
         r#"
 View Main() {

@@ -118,11 +118,11 @@ pub fn run(opts: Options<'_>) -> Result<(), String> {
 
     // RFC-0030 §P6: the counters the statusline reads. `reloads` and
     // `reload_pending` are written by the logic thread and read by the render
-    // thread, so they cross as atomics, the only way anything may (INV-2).
+    // thread, so they cross as atomics, the only way anything may.
     let reloads = Arc::new(AtomicU32::new(0));
     let reload_pending = Arc::new(AtomicBool::new(false));
     // `Mod+Shift+D` (or `[dev] hud`): written by the render thread, read by
-    // the logic thread, so it crosses as an atomic (INV-2).
+    // the logic thread, so it crosses as an atomic.
     let hud_visible = Arc::new(AtomicBool::new(manifest.dev.hud));
 
     let host = WinitHost::new(&title, 1280, 720).with_poll();
@@ -198,7 +198,7 @@ fn now_ms() -> u64 {
 struct PendingReload {
     slot: Option<(Vec<ViewDecl>, ReloadKind)>,
     /// Mirrored to the render thread as an `AtomicBool`, the only way state
-    /// may cross (INV-2).
+    /// may cross between the threads.
     published: Arc<AtomicBool>,
 }
 
@@ -348,7 +348,7 @@ struct ByldRuntime {
     current_views: Vec<ViewDecl>,
     reload_channel: Arc<LatestWins<ParsedFile>>,
     /// Changed `.svg` paths from the file watcher: each is invalidated in the
-    /// vector JIT so the field regenerates live (RFC-0009 §3, M47).
+    /// vector JIT so the field regenerates live (RFC-0009 §3).
     asset_changes: crossbeam_channel::Receiver<std::path::PathBuf>,
     /// A structure-incompatible reload held during an in-flight gesture (E5),
     /// together with the indicator that says so (RFC-0006 C1).
@@ -372,7 +372,7 @@ struct ByldRuntime {
     /// The render thread's mirror of `reload_count`.
     reloads_pub: Arc<AtomicU32>,
     /// The RFC-0010 active-animation set, published for the render thread
-    /// (`AtomicBool` because that is the only way it may cross, INV-2).
+    /// (`AtomicBool` because that is the only way it may cross).
     ///
     /// The logic thread writes it after every render; the event loop reads it to
     /// decide whether to keep spinning. Without this the accessor existed and
@@ -614,7 +614,8 @@ impl ByldRuntime {
     /// emitted.
     ///
     /// Both are dev-only overlays; neither may change what the app's own
-    /// measurement says about it (INV-24).
+    /// measurement says about it (see the HUD module docs: a dev tool must
+    /// not slow down what it measures).
     fn render_dev_surfaces(&mut self, frame: &mut RenderFrame, w: f32, h: f32, elapsed: u32) {
         // Where the app's primitives end and the dev runner's begin, recorded
         // unconditionally, including on frames that emit no dev surface at
@@ -821,7 +822,7 @@ struct App {
     file_override: Option<PathBuf>,
     /// Directories the watcher covers: project sources + `path` deps (D-J).
     watch_paths: Vec<PathBuf>,
-    /// Persistent MSDF field cache (`.byard/cache/vectors/`, RFC-0009 §5, M52),
+    /// Persistent MSDF field cache (`.byard/cache/vectors/`, RFC-0009 §5),
     /// installed on the interpreter so cold starts skip regeneration.
     vector_cache_dir: PathBuf,
     initial_views: Vec<ViewDecl>,
@@ -905,7 +906,7 @@ impl App {
         let watcher_channel = Arc::clone(&reload_channel);
         // Vector-asset (`.svg`) change channel: the watcher forwards changed
         // paths, the logic thread drains them each tick and invalidates the
-        // matching MSDF field so it regenerates live (RFC-0009 §3, M47).
+        // matching MSDF field so it regenerates live (RFC-0009 §3).
         let (asset_tx, asset_rx) = crossbeam_channel::unbounded::<std::path::PathBuf>();
         let file_override = self.file_override.clone();
         let watcher = start_watcher(&self.watch_paths, watcher_channel, asset_tx, move || {
@@ -1460,8 +1461,8 @@ impl PlatformHost for App {
             } else {
                 byard_core::platform::EventKind::KeyUp
             };
-            // The router keys `Tab` traversal (M18) and `Backspace`/edit
-            // handling (M17) off this payload, dropping it here silently
+            // The router keys `Tab` traversal and `Backspace`/edit
+            // handling off this payload, dropping it here silently
             // breaks both, since every key would otherwise look identical.
             engine.push_input(byard_core::platform::InputEvent {
                 kind,

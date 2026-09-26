@@ -311,7 +311,7 @@ fn a_views_batch_is_ordered_against_core_primitives_by_depth_not_by_kind() {
 
 #[test]
 fn dispatch_stays_per_pipeline_however_many_instances_a_view_emits() {
-    // INV-30, as a number rather than as a claim. Ten instances and ten
+    // Per-pipeline dispatch, as a number rather than as a claim. Ten instances and ten
     // thousand go through the same registry call, because the erased call
     // chooses a pipeline and everything after it is the concrete type. If
     // `emit` or the draw loop ever routed instances through the trait object,
@@ -365,7 +365,7 @@ fn dispatch_stays_per_pipeline_however_many_instances_a_view_emits() {
 #[test]
 fn a_batch_for_a_pipeline_nobody_registered_does_not_take_the_frame_down() {
     // A view drawing through an unregistered pipeline is an app-assembly
-    // mistake. It must be survivable and it must be said out loud (INV-4): the
+    // mistake. It must be survivable and it must be said out loud: the
     // frame that follows it still renders, and the rest of the scene is intact.
     let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping unregistered-pipeline test");
@@ -434,7 +434,7 @@ fn a_batch_for_a_pipeline_nobody_registered_does_not_take_the_frame_down() {
 
 #[test]
 fn a_view_whose_output_changed_repaints_even_though_nothing_else_did() {
-    // INV-26 for a pool whose instances are opaque bytes. A native batch has
+    // Digest completeness for a pool whose instances are opaque bytes. A native batch has
     // no dirty bit to read, so the bytes are the dirty bit: two frames whose
     // scene is otherwise identical must still repaint when the widget's own
     // output moved, or a chart animating from its own state freezes on screen

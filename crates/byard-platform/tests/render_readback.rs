@@ -198,7 +198,7 @@ fn vector_icon_paints_after_generation_lands() {
     assert!(interp.errors().is_empty(), "{:?}", interp.errors());
 
     // Poll ticks until the background generation lands (first tick dispatches
-    // it and only ever emits the INV-9 placeholder).
+    // it and only ever emits the not-yet-resident placeholder).
     let mut frame = RenderFrame::new();
     let mut resident_rect = None;
     for _ in 0..200 {

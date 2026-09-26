@@ -171,7 +171,7 @@ fn encoding_a_frame_enters_encode_frame() {
 // least explained one. These assertions pin the breakdown that replaced it,
 // uploads, glyphs, passes, buffers, so a sub-scope that stops being entered
 // fails here rather than quietly reading `0.000ms` in the terminal, which is
-// indistinguishable from "that work got free" (INV-18).
+// indistinguishable from "that work got free".
 //
 // `present.acquire` / `present.submit` are the two scopes this file cannot
 // cover: both live in `Engine::render_latest` and need a real window surface,
@@ -291,7 +291,7 @@ fn encode_frame_self_times_sum_to_its_inclusive_time() {
     // Every nanosecond inside `encode.frame` is attributed to exactly one
     // scope in its subtree. This is the property the whole breakdown rests on:
     // if it fails, a sub-scope was mis-nested or synthesised, and the numbers
-    // in `support/PERF_encode_baseline.md` cannot be added up by a reader.
+    // the breakdown reports cannot be added up by a reader.
     let total = subtree_self_ns(&block, root);
     assert_eq!(
         total,

@@ -18,7 +18,7 @@
 //!
 //! Plain data: a name, prop names with their types and whether each reaches
 //! layout, event names. No `byard-core` type appears in a `byard-compiler`
-//! signature because of this, and no compiler type appears here (INV-1). The
+//! signature because of this, and no compiler type appears here. The
 //! factory stays on this side, because making a view is making engine state.
 
 use std::sync::RwLock;
@@ -143,7 +143,7 @@ pub fn names() -> Vec<&'static str> {
 ///
 /// Returns `None` for a name nobody registered, which the caller turns into a
 /// diagnostic; there is no fallback view, because an element that silently
-/// renders nothing is the failure mode RFC-0039 exists to avoid (INV-4).
+/// renders nothing is the failure mode RFC-0039 exists to avoid.
 #[must_use]
 pub fn create(name: &str) -> Option<Box<dyn NativeView>> {
     let registry = REGISTRY.read().ok()?;

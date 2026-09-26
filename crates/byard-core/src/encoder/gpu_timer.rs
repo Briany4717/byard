@@ -271,7 +271,7 @@ mod tests {
 
     /// Returns `(device, queue, turn)` created with `TIMESTAMP_QUERY`, or `None` if
     /// no adapter is present or none supports it (headless CI safe, mirrors
-    /// `m21_pipelines.rs`'s `try_device`).
+    /// `decorated_texture_pipelines.rs`'s `try_device`).
     fn try_timestamp_device() -> Option<(wgpu::Device, wgpu::Queue, byard_test_gpu::Turn)> {
         // Its own device, because the shared one requests no optional
         // features, but from the shared adapter and under the same turn, so a

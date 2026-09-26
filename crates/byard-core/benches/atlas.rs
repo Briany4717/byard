@@ -163,7 +163,7 @@ fn bench_incremental_recompute(name: &str, leaf_count: usize, iters: u64) {
 /// and returns the atlas plus the `TargetId` of **every** node and of the
 /// **first leaf**.
 ///
-/// This is the M28 shape: the high end of `EvaluatorTick`'s "tens to low
+/// This is the grid-rebuild shape: the high end of `EvaluatorTick`'s "tens to low
 /// hundreds of targets" (`evaluator/tick.rs`), used to measure whether
 /// `recompute_dirty`'s full `rebuild_grid` walk is a problem when only one
 /// node is dirty versus when all of them are.
@@ -210,7 +210,7 @@ fn build_flex_tree_computed(mid: u32, per_mid: u32) -> (LayoutAtlas, Vec<TargetI
     (atlas, all_targets, first_target)
 }
 
-/// M28: compares `recompute_dirty` on a 200-leaf tree when **1** node is dirty
+/// Compares `recompute_dirty` on a 200-leaf tree when **1** node is dirty
 /// versus when **all** nodes are dirty. The gap (or lack of one) is what the
 /// decision gate turns on: `rebuild_grid` does a full tree walk either
 /// way, so if the 1-dirty case is already cheap the full walk is not worth
@@ -562,7 +562,7 @@ fn main() {
     bench_rebuild_allocations(10, 20, 1_000);
     bench_rebuild_allocations(20, 40, 1_000);
 
-    println!("\n── M28: spatial-grid rebuild cost, 1-dirty vs all-dirty (200 leaves) ──");
+    println!("\n── spatial-grid rebuild cost, 1-dirty vs all-dirty (200 leaves) ──");
     // root → 10 flex containers → 20 leaves each = 200 leaves, 211 nodes.
     bench_grid_dirty_scaling(10, 20, 10_000);
 

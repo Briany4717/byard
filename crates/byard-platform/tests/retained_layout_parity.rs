@@ -1,4 +1,4 @@
-//! Golden-image parity for the retained layout path (RFC-0032, INV-22).
+//! Golden-image parity for the retained layout path (RFC-0032).
 //!
 //! The retained path is not intended to change a single pixel: it reuses the
 //! Taffy tree instead of rebuilding it, and recomputes only what a changed

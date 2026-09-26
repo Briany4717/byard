@@ -248,7 +248,8 @@ pub const SCHEME_DARK: &str = "dark";
 /// (RFC-0034 §Reference "Asset side").
 ///
 /// Holding the bytes here rather than a path is what makes the theme the
-/// single source of truth INV-27 asks for: the measurement `FontSystem` and
+/// single source of truth the font-agreement rule asks for (see
+/// `byard_core::frame::FontTable`): the measurement `FontSystem` and
 /// the paint one are both fed from this record, so neither can be given a file
 /// the other never saw.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -283,7 +284,7 @@ pub struct Theme {
     ///
     /// The bytes are loaded when the manifest is read, not deferred: a family
     /// that resolves to nothing is a compile diagnostic, and a diagnostic that
-    /// arrives at paint time is a square box nobody can act on (INV-4).
+    /// arrives at paint time is a square box nobody can act on.
     fonts: BTreeMap<String, DeclaredFont>,
     /// Named viewport widths for responsive style variants (RFC-0016):
     /// `camelCase` name → logical pixels. A design system's breakpoints are

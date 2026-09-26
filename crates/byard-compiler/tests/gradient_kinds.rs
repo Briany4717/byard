@@ -199,7 +199,7 @@ fn the_kind_reaches_the_instance_lane() {
         byard_core::encoder::decorated_box::DecoratedInstance::from(&frame.decorated()[0]);
     assert_eq!(instance.grad_kind, GradientKind::Conic as u32);
     // …and it is not in `misc`, which belongs to opacity, depth, spread and
-    // RFC-0031's corner smoothing (INV-28).
+    // RFC-0031's corner smoothing (every lane has one owner).
     assert_eq!(
         instance.misc[3].to_bits(),
         0.0_f32.to_bits(),
@@ -273,7 +273,7 @@ fn a_stroke_gradient_alone_is_enough_to_paint_a_shape() {
 }
 
 /// The gradient is part of what decides the shape's pixels, so a shape whose
-/// gradient moved is a shape that must be repainted (INV-26).
+/// gradient moved is a shape that must be repainted.
 #[test]
 fn a_moved_stroke_gradient_is_not_judged_clean() {
     use byard_core::frame::PaintDigest;

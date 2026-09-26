@@ -1,12 +1,12 @@
 //! `Value ⇄ HostValue` conversions at the controller boundary (RFC-0028 §1).
 //!
 //! These live in `byard-compiler`, which depends on `byard-core`, never the
-//! reverse (INV-1), because they touch the interpreter's `!Send` [`Value`],
+//! reverse, because they touch the interpreter's `!Send` [`Value`],
 //! which cannot live in core. The boundary type ([`HostValue`]) is the neutral,
 //! `Send` data enum defined in `byard-core::bridge`; only the data subset of
 //! `Value` converts. A `Signal`/`Memo`/`Fn`/`Theme`/`Controller` has no
 //! `HostValue` form, passing one as a controller argument is
-//! [`CompileError::NonDataControllerArg`] (INV-13: the boundary holds only data).
+//! [`CompileError::NonDataControllerArg`] (the boundary holds only data).
 
 use byard_core::bridge::HostValue;
 
@@ -41,7 +41,7 @@ pub fn value_to_host(value: &Value) -> Option<HostValue> {
                 .map(|(_, v)| value_to_host(v))
                 .collect::<Option<_>>()?,
         ),
-        // Reactive/handle variants have no data form (INV-13).
+        // Reactive/handle variants have no data form.
         Value::Signal(_)
         | Value::Memo(_)
         | Value::Fn(_)

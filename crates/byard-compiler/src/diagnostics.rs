@@ -1,12 +1,13 @@
-//! Shared error and span primitives (RFC-0002 §"Data structures", D6; INV-4/5).
+//! Shared error and span primitives (RFC-0002 §"Data structures", D6).
 //!
-//! [`CompileError`] lives **only** here. Per D6 (and INV-1/INV-5), `byard-core`'s
+//! [`CompileError`] lives **only** here. Per D6 (and because `byard-core`
+//! never depends on the compiler), `byard-core`'s
 //! `ByardError` gains no compiler variant, unifying the two is the job of the
 //! application crate one layer up, so the dependency edge stays
 //! `byard-compiler → byard-core` and never the reverse.
 //!
 //! Every error path in the compiler produces a `CompileError` carrying a
-//! [`Span`] (INV-4: no silent failures). The variant set starts small and grows
+//! [`Span`] (no silent failures). The variant set starts small and grows
 //! one milestone at a time as later passes need to report new conditions.
 
 /// A byte-offset range into the source text, `[start, end)`.
@@ -47,7 +48,7 @@ const _: () = {
 
 /// A structural compilation error. Each variant carries the [`Span`] of the
 /// offending source range so [`CompileError::render`] can anchor a caret under
-/// it (INV-4).
+/// it (no silent failures).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CompileError {
     /// The lexer could not turn a byte into any token (driver-level fallback
@@ -88,7 +89,7 @@ pub enum CompileError {
         span: Span,
     },
     /// `Text` was used where a type is expected; `Text` is the text *view*, the
-    /// scalar string type is `Str` (D9, INV-7).
+    /// scalar string type is `Str` (D9).
     TextUsedAsType {
         /// Source range of the offending annotation.
         span: Span,
@@ -530,7 +531,7 @@ pub enum CompileError {
     /// A `with` clause attached an animation to a layout-affecting property
     /// (`width`/`height`/`p`/`m`/`gap`/…), which cannot animate on the GPU
     /// because it would require a per-frame relayout (RFC-0010 §"Layout
-    /// properties", INV-8).
+    /// properties").
     LayoutPropNotAnimatable {
         /// Source range of the animated attribute.
         span: Span,
@@ -751,7 +752,7 @@ pub enum CompileError {
     /// A controller call was passed something with no data form, a `Signal`,
     /// a memo, a callback, a theme or another controller handle (RFC-0028 §1).
     ///
-    /// The boundary carries only `Send` data (INV-13); a handle that crossed
+    /// The boundary carries only `Send` data; a handle that crossed
     /// it would be a reference to logic-thread state observed from a pool
     /// worker, which is the one thing the thread model forbids outright.
     NonDataControllerArg {
@@ -815,7 +816,7 @@ pub enum CompileError {
         message: String,
     },
     /// A reply came back for a continuation that is gone: its view unmounted,
-    /// or a hot reload replaced the program (RFC-0028 §5, INV-14).
+    /// or a hot reload replaced the program (RFC-0028 §5).
     ///
     /// Reported rather than silently dropped, because the alternative reading,
     /// "the controller never answered", sends the developer looking in the
@@ -1564,7 +1565,7 @@ fn with_hint(message: String, hint: Option<&str>) -> String {
 mod tests {
     use super::*;
 
-    /// INV-5: `CompileError` must be `Send` so a failed parse can be shipped
+    /// `CompileError` must be `Send` so a failed parse can be shipped
     /// from the watcher thread to the logic thread (RFC-0002 §"Hot-reload").
     #[test]
     fn compile_error_is_send() {

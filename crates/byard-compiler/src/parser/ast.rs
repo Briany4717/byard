@@ -1,9 +1,9 @@
 //! The typed, fully-owned AST (RFC-0002 §"Data structures"; RFC-0003 attrs/`Fn`).
 //!
-//! Every node owns all of its data, no borrows into the source text (INV-3),
+//! Every node owns all of its data, no borrows into the source text,
 //! so hot-reload can re-parse and structurally diff a new tree against the
 //! running one without lifetime entanglement, and a `CompiledView` carrying
-//! this AST is `Send` (INV-6) for the file-watcher → logic-thread channel.
+//! this AST is `Send` for the file-watcher → logic-thread channel.
 //!
 //! The AST is **immutable after parse**: reactivity/`is_reactive` metadata lives
 //! in side-tables (RFC-0002 D3, RFC-0004 §10), never on these nodes.
@@ -238,7 +238,7 @@ pub enum Member {
     /// A structural effect like [`Member::Lifecycle`], and for the same
     /// reason: a timer belongs to the scope that declared it, so a screen that
     /// unmounts stops polling instead of leaving a task running against a view
-    /// nobody can see (INV-10).
+    /// nobody can see.
     ///
     /// Coarse by design. `every 16ms` is not a substitute for the animation
     /// runtime (RFC-0010), which evaluates on the GPU; a timer runs its action
@@ -358,7 +358,7 @@ pub struct ElementNode {
 /// One `#[...]` attribute: either a property (`name: expr`) or an engine event
 /// (`name(payload)? => expr`), RFC-0003 D4-bis. The kind is decided
 /// syntactically by the separator; a mismatch against the intrinsic's contract
-/// is a *checker* error (M10), not a parse error.
+/// is a *checker* error, not a parse error.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Attr {
     /// Attribute name.
@@ -656,7 +656,7 @@ pub enum Expr {
     Tuple(Vec<Arg>, Span),
     /// A leading-dot class reference, e.g. the `.title` in `#[style: .title]`
     /// (RFC-0002 §"Grammar" `style_rule`; resolved against the View's style map
-    /// in M11).
+    /// by the checker).
     ClassRef(Symbol, Span),
     /// Member access `base.field`.
     Member {
@@ -752,7 +752,7 @@ pub enum Expr {
     },
     /// An index expression `base[index]` (RFC-0027 §4). Out-of-range access
     /// degrades to [`Value::Unit`](crate::interp::env::Value::Unit) with a
-    /// logic-thread diagnostic (INV-4), never a panic.
+    /// logic-thread diagnostic, never a panic.
     Index {
         /// The indexed receiver.
         base: Box<Expr>,
@@ -889,7 +889,7 @@ impl Expr {
     }
 }
 
-// INV-6: the AST must be `Send` so a `CompiledView` built from it can cross the
+// The AST must be `Send` so a `CompiledView` built from it can cross the
 // file-watcher → logic-thread channel. If any node grew a non-`Send` field
 // (e.g. an `Rc`), this would stop compiling.
 const _: () = {

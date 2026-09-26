@@ -60,7 +60,7 @@ const QUAD_PADDING: f32 = 2.0;
 /// Applies a paint-time transform (RFC-0011) to a world-space (logical-pixel)
 /// position: rotate + scale about `origin`, then translate. Identity inputs
 /// (`scale = (1,1)`, `rotate = 0`, `translate = (0,0)`) collapse to `world`
-/// unchanged, a few cheap ALU ops, never a relayout (INV-8).
+/// unchanged, a few cheap ALU ops, never a relayout.
 fn apply_transform(
     world: vec2<f32>,
     translate: vec2<f32>,

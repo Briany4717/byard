@@ -599,7 +599,7 @@ fn apply_theme_table(
 ///
 /// The bytes are read **here**, at manifest time, so an unreadable or
 /// unparsable font file is a compile diagnostic naming the family and the
-/// path (INV-4). It used to be deferred, and deferring it is what made a
+/// path. It used to be deferred, and deferring it is what made a
 /// declared family a name with nothing behind it.
 ///
 /// A package's assets must live inside the package (`in_package`): it is
@@ -655,7 +655,7 @@ pub fn is_inside_package(path: &str) -> bool {
 /// Both failures are errors that name the family *and* the path, because the
 /// author wrote one and the filesystem knows the other, and a message with
 /// only one of them makes them go looking. A missing font must never surface
-/// as a square box or as silence (INV-4): by the time text is painted, nobody
+/// as a square box or as silence: by the time text is painted, nobody
 /// can tell a missing file from a font that simply looks like that.
 fn load_font(family: &str, path: &str, project_root: &Path) -> Result<DeclaredFont, String> {
     let full = project_root.join(path);
@@ -1185,7 +1185,7 @@ mod tests {
     }
 
     /// A font file that is not there is a diagnostic naming the family and the
-    /// path (INV-4). By paint time nobody can tell a missing file from a
+    /// path. By paint time nobody can tell a missing file from a
     /// typeface that simply looks like that.
     #[test]
     fn a_missing_font_file_names_the_family_and_the_path() {

@@ -13,7 +13,7 @@
 //! make a collapsed element permanently *clean*, silently.
 //!
 //! **It reads layout, and never feeds it.** The rect is final for the frame
-//! before anything here runs (INV-29), and the write goes out through the
+//! before anything here runs, and the write goes out through the
 //! ordinary reactive path, so a parent measuring itself for a child's benefit
 //! is one frame of settling and then nothing. The dangerous shape, an element
 //! feeding its measured size back into its *own* layout, is caught at compile
@@ -64,7 +64,7 @@ impl Interpreter {
                 continue;
             };
             // A second declaration on one element is refused rather than
-            // silently outranked or silently doubled (INV-4): both would fire,
+            // silently outranked or silently doubled: both would fire,
             // both would write, and which one won would be an ordering detail
             // no reader of the source could see.
             if let Some(first) = first {

@@ -107,16 +107,16 @@ use vector_msdf::VectorAtlas;
 /// importing from the Encoder subsystem (RFC-0001 §9).
 pub use crate::frame::BoxInstance;
 
-/// Re-exported so the engine's render-thread drain (M29) can downcast the
+/// Re-exported so the engine's render-thread drain can downcast the
 /// type-erased I/O result back to a decoded image and hand it to
 /// [`EncoderSubsystem::apply_decoded`].
 pub use texture_sampler::DecodedImage;
 
-/// The async-decode plumbing the engine hands the encoder (M29), cloned out of
+/// The async-decode plumbing the engine hands the encoder, cloned out of
 /// `Relay`: a Tokio handle to spawn the blocking `image::open` decode on, and
 /// the type-erased result sender those tasks report back through. Held as a
 /// plain struct (not a `relay` import) so the encoder never depends on the
-/// relay subsystem (RFC-0001 §9 / INV-11).
+/// relay subsystem (RFC-0001 §9: subsystems meet only at `frame.rs`).
 struct IoContext {
     handle: tokio::runtime::Handle,
     tx: texture_sampler::DecodeResultSender,
@@ -266,8 +266,9 @@ pub struct EncoderSubsystem {
     ///
     /// Core pipelines are registered here at startup through the same call a
     /// package's pipeline uses, which is the whole of what RFC-0039 changes at
-    /// this level: the set is data, iterated in a declared order (INV-32),
-    /// rather than a sequence of names written into the pass.
+    /// this level: the set is data, iterated in a declared order (draw order is
+    /// declared, never incidental), rather than a sequence of names written
+    /// into the pass.
     pipelines: pipeline::PipelineRegistry,
     /// No-blend variant of `SolidBox`'s pipeline, used only to paint a fully
     /// transparent "clear quad" over a dirty rect before it is repainted.
@@ -309,7 +310,7 @@ pub struct EncoderSubsystem {
     texture_bind_group_layout: wgpu::BindGroupLayout,
     /// Shared linear sampler for all sampled images.
     image_sampler: wgpu::Sampler,
-    /// Path-keyed cache of decoded image textures (M21).
+    /// Path-keyed cache of decoded image textures.
     texture_cache: texture_sampler::TextureCache,
     /// `VectorMSDF` pipeline (RFC-0009 §1, the fifth pipeline), samples
     /// [`vector_atlas`](Self::vector_atlas) to draw crisp monochrome icons.
@@ -339,15 +340,16 @@ pub struct EncoderSubsystem {
     /// the cheap 0.25× tier, so a bare encoder (tests) is deterministic.
     blur_auto_capable: bool,
     /// The MSDF atlas: an array texture uploaded to by the JIT/AOT paths via
-    /// [`RenderFrame::atlas_uploads`] (RFC-0009 §2-C, INV-8, this is the only
-    /// place `Queue::write_texture` is called for it).
+    /// [`RenderFrame::atlas_uploads`] (RFC-0009 §2-C: no worker writes the GPU
+    /// directly, this is the only place `Queue::write_texture` is called for
+    /// it).
     vector_atlas: VectorAtlas,
     /// Reports applied-upload ids back to whoever is re-sending unconfirmed
     /// `AtlasUpload`s (the dev JIT cache), installed via
     /// [`set_vector_ack_sender`](Self::set_vector_ack_sender). `None` skips
     /// acknowledgment (e.g. a bare encoder with no JIT wired at all).
     vector_ack_tx: Option<crossbeam_channel::Sender<u64>>,
-    /// Async-decode plumbing (M29): the relay's I/O runtime handle and the
+    /// Async-decode plumbing: the relay's I/O runtime handle and the
     /// type-erased result sender, installed by the engine via
     /// [`set_io_context`](Self::set_io_context). `None` for a bare encoder
     /// constructed without a relay (e.g. GPU-readback tests that never load
@@ -421,7 +423,8 @@ pub struct EncoderSubsystem {
     /// the same structural-change reasoning as
     /// [`last_instance_count`](Self::last_instance_count).
     last_text_count: usize,
-    /// Digest of the previous frame's native-view batches (RFC-0039, INV-26).
+    /// Digest of the previous frame's native-view batches (RFC-0039; see the
+    /// digest-completeness rule on [`crate::frame::PaintDigest`]).
     ///
     /// A native batch carries no dirty bit, because its instances are a
     /// package's own type and nothing here can read one out of them. The bytes
@@ -441,9 +444,9 @@ pub struct EncoderSubsystem {
     /// Per-`BoxInstance` bounding boxes from the previous `encode_frame` call,
     /// positionally aligned with that call's `instances` slice. Mirrors
     /// [`last_text_bounds`](Self::last_text_bounds) for the solid-box pipeline
-    /// (M26) so a moved/shrunk box still clears its old footprint.
+    /// so a moved/shrunk box still clears its old footprint.
     last_box_bounds: Vec<Rect>,
-    /// Per-`DecoratedBox` bounding boxes from the previous call (M27), aligned
+    /// Per-`DecoratedBox` bounding boxes from the previous call, aligned
     /// with that call's `decorated` slice. Same shrink/move-safety contract.
     last_decorated_bounds: Vec<Rect>,
     /// Previous-frame bounds of every `CanvasShape` (RFC-0020), for the
@@ -460,7 +463,7 @@ pub struct EncoderSubsystem {
     /// contract. A backdrop re-samples the scene behind it whenever anything
     /// in the frame changed, so its pane is treated always-dirty like solids.
     last_backdrop_bounds: Vec<Rect>,
-    /// Per-`TextureSampler` bounding boxes from the previous call (M27),
+    /// Per-`TextureSampler` bounding boxes from the previous call,
     /// aligned with that call's `textures` slice.
     last_texture_bounds: Vec<Rect>,
     /// The [`RenderFrame::version`] (the relay's publish sequence number) of
@@ -660,9 +663,9 @@ impl EncoderSubsystem {
 
         let text_pipeline = TextGlyphPipeline::new(&device, &queue, surface_format).await?;
 
-        // M21 pipelines (RFC-0001 §3.1).
+        // Decorated-box and texture pipelines (RFC-0001 §3.1).
         let (decorated_pipeline, texture_pipeline, texture_bind_group_layout, image_sampler) =
-            build_m21_pipelines(&device, &bind_group_layout, surface_format).await?;
+            build_decorated_texture_pipelines(&device, &bind_group_layout, surface_format).await?;
 
         // `VectorMSDF` pipeline (RFC-0009 §1, the fifth pipeline).
         let vector_atlas_layout = vector_msdf::bind_group_layout(&device);
@@ -756,7 +759,7 @@ impl EncoderSubsystem {
 
         // The atlas is an *array* texture (`vector_msdf::ATLAS_LAYERS` layers):
         // it must be a real `GL_TEXTURE_2D_ARRAY` on the GL backend, so a single
-        // layer is not an option, see `ATLAS_LAYERS`. The dev allocator (M48)
+        // layer is not an option, see `ATLAS_LAYERS`. The dev allocator
         // grows layers on top of this on demand.
         let vector_atlas = VectorAtlas::new(
             &device,
@@ -777,7 +780,8 @@ impl EncoderSubsystem {
         // RFC-0039 §"Pipeline registration": the core set, registered in its
         // historical draw order. A package's pipeline goes in through the same
         // call, after these, and a frame with no package pipeline draws exactly
-        // the stream it always did (INV-22, INV-32).
+        // the stream it always did (pixel parity with the old path, and a draw
+        // order that is declared rather than incidental).
         let mut pipelines = pipeline::PipelineRegistry::new();
         pipelines.register_core(SolidBoxPipeline::new(render_pipeline))?;
         pipelines.register_core(decorated_box::DecoratedBoxPipeline::new(decorated_pipeline))?;
@@ -849,7 +853,7 @@ impl EncoderSubsystem {
     }
 
     /// The registered pipelines, in the order this encoder draws them
-    /// (RFC-0039, INV-32).
+    /// (RFC-0039; the draw order is declared, never incidental).
     ///
     /// Exposed so the order can be asserted rather than described: a set whose
     /// order is a property of registration should be readable as data.
@@ -858,7 +862,8 @@ impl EncoderSubsystem {
         self.pipelines.order()
     }
 
-    /// How many erased pipeline calls the last encoded frame made (INV-30).
+    /// How many erased pipeline calls the last encoded frame made (dispatch
+    /// is per pipeline, never per instance).
     ///
     /// The number that must scale with the pipeline count and not with the
     /// instance count. It is a measurement rather than a claim precisely
@@ -1134,7 +1139,7 @@ impl EncoderSubsystem {
         )
     }
 
-    /// Full encode path including the M21 `DecoratedBox`/`TextureSampler`
+    /// Full encode path including the `DecoratedBox`/`TextureSampler`
     /// primitives. [`encode_frame`](Self::encode_frame) forwards here with empty
     /// decoration slices, keeping the common (solid + text) path byte-identical.
     #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
@@ -1198,9 +1203,10 @@ impl EncoderSubsystem {
             // separating them is what tells a one-off upload spike apart from
             // a steady per-frame cost.
             crate::profile_scope!("encode.uploads");
-            // RFC-0009 §2-C / INV-8: the single place this atlas is ever written
-            // to. Applied unconditionally (not gated on `should_draw` below) so a
-            // pending upload is never silently dropped on a skip-frame.
+            // RFC-0009 §2-C (no side-channel GPU writes): the single place this
+            // atlas is ever written to. Applied unconditionally (not gated on
+            // `should_draw` below) so a pending upload is never silently
+            // dropped on a skip-frame.
             let applied = self.vector_atlas.apply_uploads(&self.queue, atlas_uploads);
             if let Some(tx) = &self.vector_ack_tx {
                 for id in applied {
@@ -1216,11 +1222,12 @@ impl EncoderSubsystem {
 
         self.drain_gpu_samples_into_telemetry();
 
-        // RFC-0039 × INV-26: a native view's batch is opaque bytes, so there
-        // is no per-instance dirty bit to read and no rect to union into the
-        // scissor. What there is, is the bytes themselves: a digest of this
-        // frame's batches against last frame's answers "did this widget's
-        // pixels change" exactly, and a change repaints in full.
+        // RFC-0039 and the digest-completeness rule: a native view's batch is
+        // opaque bytes, so there is no per-instance dirty bit to read and no
+        // rect to union into the scissor. What there is, is the bytes
+        // themselves: a digest of this frame's batches against last frame's
+        // answers "did this widget's pixels change" exactly, and a change
+        // repaints in full.
         //
         // Full rather than scissored because a batch's bounds are not knowable
         // from here: the instances are the package's own type, and guessing at
@@ -1237,7 +1244,7 @@ impl EncoderSubsystem {
             self.last_text_count,
             texts.len(),
         );
-        // M27: `DecoratedBox`/`TextureSampler` no longer force a full,
+        // `DecoratedBox`/`TextureSampler` no longer force a full,
         // unscissored redraw just by being present, they now carry their own
         // `dirty` bit and contribute to the same incremental scissor union as
         // text and solid boxes (RFC-0001 §3.3).
@@ -1594,9 +1601,9 @@ impl EncoderSubsystem {
         // RFC-0034: the paint `FontSystem` is brought level with the logic
         // thread's *before* anything in this frame is shaped. A family the
         // measurer knows and this side does not would shape in the system font
-        // and then be cached under a key claiming otherwise, which is INV-27's
-        // failure exactly: every string laid out to the wrong width, nothing
-        // visibly broken.
+        // and then be cached under a key claiming otherwise, which is exactly
+        // the failure the font-agreement rule (see `FontTable`) forbids: every
+        // string laid out to the wrong width, nothing visibly broken.
         self.text_pipeline.register_fonts(frame.fonts());
         let cmd = self.encode_frame_with_decorations(
             target,
@@ -1633,9 +1640,9 @@ impl EncoderSubsystem {
     }
 
     /// Requests decode of every texture source in `textures` before the render
-    /// pass (M29). With an I/O context the decode runs on the relay's pool and
+    /// pass. With an I/O context the decode runs on the relay's pool and
     /// the upload happens later via [`apply_decoded`](Self::apply_decoded), so
-    /// the render thread never blocks here (INV-12). A bare encoder with no
+    /// the render thread never blocks on I/O here. A bare encoder with no
     /// relay falls back to a synchronous decode+upload, used only by
     /// GPU-readback tests, which never carry images, so this branch is a safety
     /// net rather than a hot path.
@@ -1663,7 +1670,7 @@ impl EncoderSubsystem {
         }
     }
 
-    /// Installs the async-decode plumbing (M29): the relay's I/O runtime handle
+    /// Installs the async-decode plumbing: the relay's I/O runtime handle
     /// (decode tasks are spawned here) and the type-erased result sender (they
     /// report decoded pixels back through it). Called once by the engine after
     /// it has both a `Relay` and this encoder. Until set, image decode falls
@@ -1683,7 +1690,7 @@ impl EncoderSubsystem {
         self.vector_ack_tx = Some(tx);
     }
 
-    /// Uploads one async decode result on the render thread (M29). Called by
+    /// Uploads one async decode result on the render thread. Called by
     /// the engine for each [`DecodedImage`] drained from the relay's I/O
     /// channel, before encoding the next frame. The GPU upload is fast; the
     /// expensive decode already happened off-thread. Because every primitive is
@@ -2158,7 +2165,8 @@ fn stage_native_batches(
     }
 }
 
-/// A digest of this frame's native-view batches (RFC-0039, INV-26).
+/// A digest of this frame's native-view batches (RFC-0039; see the
+/// digest-completeness rule on [`crate::frame::PaintDigest`]).
 ///
 /// Over everything that decides the pixels: which pipeline, how many
 /// instances, the instance bytes, the clip, the depth. `to_bits` for the
@@ -2199,7 +2207,8 @@ fn native_batch_digest(batches: &[crate::render::NativeBatch]) -> u64 {
     hasher.finish()
 }
 
-/// Names a native view's batch that no registered pipeline draws (INV-4).
+/// Names a native view's batch that no registered pipeline draws (no silent
+/// failures).
 ///
 /// A view emitting into a pipeline the app never registered draws nothing, and
 /// "nothing" is indistinguishable from a widget that had nothing to say. Once
@@ -2509,8 +2518,8 @@ fn draw_ui_pass(
         registry,
         clear: clear_pipeline,
     } = *pipelines;
-    // One dispatch counter per frame (INV-30): the number this ends on must
-    // track the pipeline count, never the instance count.
+    // One dispatch counter per frame (dispatch is per pipeline): the number
+    // this ends on must track the pipeline count, never the instance count.
     registry.begin_frame();
     // Only what the *recording* half still reads directly. The pools and their
     // depth slices are consumed by `stage_segment`, which takes `primitives`
@@ -2776,8 +2785,9 @@ fn draw_ui_pass(
         // What used to be seven calls written out here is one iteration over
         // the registry. The order is the order they were registered in, which
         // is the order they were written in before, so the draw stream is the
-        // same stream (INV-22). A package's pipeline joins it after the core
-        // ones without this loop knowing anything new (INV-32).
+        // same stream, pixel for pixel. A package's pipeline joins it after the
+        // core ones without this loop knowing anything new, in an order that is
+        // declared rather than incidental.
         registry.draw_segment(
             &mut render_pass,
             &pipeline::SegmentDraw {
@@ -3070,7 +3080,7 @@ fn union_dirty_rects(items: impl Iterator<Item = (Rect, bool)>, previous: &[Rect
         .reduce(|acc, r| acc.union(&r))
 }
 
-/// `dirty_text_bounds` for the `SolidBox` pipeline (M26).
+/// `dirty_text_bounds` for the `SolidBox` pipeline.
 ///
 /// `dirty` is positionally aligned with `instances`. Each box's bounds are its
 /// paint rect directly (a solid box's geometry *is* its bounds, unlike text
@@ -3086,7 +3096,7 @@ fn dirty_box_bounds(instances: &[BoxInstance], dirty: &[bool], previous: &[Rect]
     )
 }
 
-/// `dirty_text_bounds` for the `DecoratedBox` pipeline (M27); dirtiness comes
+/// `dirty_text_bounds` for the `DecoratedBox` pipeline; dirtiness comes
 /// from each decoration's own [`DecoratedBox::dirty`](crate::frame::DecoratedBox::dirty)
 /// bit and its bounds from its `base` rect.
 fn dirty_decorated_bounds(
@@ -3148,7 +3158,7 @@ fn dirty_backdrop_bounds(backdrops: &[BackdropInstance], previous: &[Rect]) -> O
     union_dirty_rects(backdrops.iter().map(|b| (rect_of(b.rect), true)), previous)
 }
 
-/// `dirty_text_bounds` for the `TextureSampler` pipeline (M27); dirtiness comes
+/// `dirty_text_bounds` for the `TextureSampler` pipeline; dirtiness comes
 /// from each sampler's own [`TextureSampler::dirty`](crate::frame::TextureSampler::dirty)
 /// bit.
 fn dirty_texture_bounds(
@@ -3609,10 +3619,10 @@ fn needs_full_redraw_this_frame(
 /// single `push_error_scope` / `pop_error_scope` pair so that any GPU-side
 /// validation failure is captured and returned as
 /// [`ByardError::PipelineCompilation`].
-/// Builds the M21 `DecoratedBox` and `TextureSampler` pipelines plus the texture
+/// Builds the `DecoratedBox` and `TextureSampler` pipelines plus the texture
 /// bind-group layout and shared sampler. Extracted from
 /// [`EncoderSubsystem::init`] to keep that function under the line-count lint.
-async fn build_m21_pipelines(
+async fn build_decorated_texture_pipelines(
     device: &wgpu::Device,
     viewport_layout: &wgpu::BindGroupLayout,
     surface_format: wgpu::TextureFormat,
@@ -3993,8 +4003,8 @@ fn solid_depth_layout() -> wgpu::VertexBufferLayout<'static> {
 mod tests;
 
 /// `encode.submit` lives on `submit`, which is `pub(crate)`, reachable from
-/// `Engine` but not from an integration test, so its INV-18 assertion has to
-/// live in-crate. Everything else about the encode breakdown is covered by
-/// `tests/instrumentation.rs`.
+/// `Engine` but not from an integration test, so the assertion that production
+/// takes it has to live in-crate. Everything else about the encode breakdown is
+/// covered by `tests/instrumentation.rs`.
 #[cfg(all(test, feature = "telemetry"))]
 mod submit_scope_tests;

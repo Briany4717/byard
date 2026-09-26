@@ -4,7 +4,7 @@
 //! It re-exports the controller boundary from `byard-core` and the
 //! `#[byard_controller]` attribute from `byard-macro`, so the macro's generated
 //! code, which references `::byard::bridge::*`, resolves against the *app's*
-//! dependency graph (`app → byard → byard-core`, a forward edge; INV-1 holds:
+//! dependency graph (`app → byard → byard-core`, a forward edge; the direction holds:
 //! `byard-macro` still has no dependency on core/compiler).
 //!
 //! ```ignore

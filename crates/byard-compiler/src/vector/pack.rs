@@ -1,4 +1,4 @@
-//! MaxRects bounding-box packing for the AOT atlas (RFC-0009 §4, M49).
+//! MaxRects bounding-box packing for the AOT atlas (RFC-0009 §4).
 //!
 //! `byard build` bakes every statically referenced icon into one immutable
 //! array-texture. Fields are packed with the **MaxRects** algorithm (Jylänki

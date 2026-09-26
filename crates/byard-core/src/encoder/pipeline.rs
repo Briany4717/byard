@@ -13,10 +13,12 @@
 //! `Vec<Box<dyn ErasedPipeline>>`, and the core pipelines go into it through
 //! the same call a package's would. Nothing about *how* a pipeline draws
 //! changed, which is the point of the refactor: the frame it produces is
-//! byte-identical (INV-22), and the only new cost is one vtable call per
+//! byte-identical, and the only new cost is one vtable call per
 //! pipeline per segment.
 //!
-//! # Where the dynamic dispatch is, and where it is not (INV-30)
+//! # Where the dynamic dispatch is, and where it is not
+//!
+//! Dispatch is per pipeline, never per instance.
 //!
 //! Exactly one indirect call per registered pipeline per segment, to decide
 //! *which* pipeline runs. Everything downstream of that call is the concrete
@@ -50,7 +52,8 @@ use crate::ByardError;
 /// What a pipeline needs from the encoder to build itself.
 ///
 /// Handed to a pipeline's constructor at startup, never to a package's `render`
-/// (INV-31): the device is here because building a pipeline is *when* a device
+/// (a package may not hold a GPU resource past the scope that owns it): the
+/// device is here because building a pipeline is *when* a device
 /// is legitimately needed, and this context does not outlive registration.
 pub struct PipelineCtx<'a> {
     /// The device pipelines are created on.
@@ -66,7 +69,7 @@ pub struct PipelineCtx<'a> {
 /// arena (RFC-0039).
 ///
 /// The associated `Instance` type is the load-bearing part: it is what keeps
-/// the per-instance path monomorphized (INV-30). A package's instances and a
+/// the per-instance path monomorphized. A package's instances and a
 /// core intrinsic's instances reach the arena through the same generic code,
 /// specialised at compile time for each.
 pub trait RenderPipeline: 'static {
@@ -153,7 +156,7 @@ impl<P: RenderPipeline> ErasedPipeline for P {
     }
 }
 
-/// Which half of the declared draw order a pipeline belongs to (INV-32).
+/// Which half of the declared draw order a pipeline belongs to.
 ///
 /// Order is a property of the registration, not of when a `HashMap` happens to
 /// yield an entry or of the order a linker resolved static initializers in. Two
@@ -175,12 +178,15 @@ struct Registration {
     pipeline: Box<dyn ErasedPipeline>,
 }
 
-/// The ordered set of pipelines a frame draws through (RFC-0039, INV-32).
+/// The ordered set of pipelines a frame draws through (RFC-0039).
+///
+/// Draw order is declared, never incidental: it cannot depend on when a caller
+/// happened to register.
 #[derive(Default)]
 pub struct PipelineRegistry {
     entries: Vec<Registration>,
     /// Erased calls made since the last [`begin_frame`](Self::begin_frame),
-    /// the INV-30 measurement.
+    /// which is how a test proves dispatch is per pipeline, not per instance.
     dispatches: std::cell::Cell<u32>,
 }
 
@@ -195,7 +201,7 @@ impl PipelineRegistry {
     ///
     /// The entries are kept sorted by `(order, seq)` on insertion, so iteration
     /// never has to sort and the order cannot depend on when a caller happened
-    /// to register (INV-32). A stable sort on a two-part key is the whole
+    /// to register. A stable sort on a two-part key is the whole
     /// mechanism; there is deliberately no priority number for an author to
     /// tune, because a tunable order is one nobody can reason about.
     ///
@@ -265,7 +271,7 @@ impl PipelineRegistry {
         self.dispatches.set(0);
     }
 
-    /// How many erased calls this frame has made (INV-30).
+    /// How many erased calls this frame has made.
     ///
     /// The number that must stay proportional to the pipeline count and not to
     /// the instance count. A regression to per-instance dispatch shows up here
@@ -282,7 +288,7 @@ impl PipelineRegistry {
     /// is an app-assembly mistake rather than a frame-time condition: the
     /// caller names it once and the batch is skipped, because the alternative
     /// is either a panic in the render thread or a silently missing widget
-    /// (INV-4).
+    /// (no silent failures).
     pub fn draw_batch(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
@@ -423,7 +429,7 @@ pub struct BatchDraw<'a> {
     pub vector_atlas: &'a super::VectorAtlas,
 }
 
-/// A pipeline whose shader failed to compile names itself (INV-4).
+/// A pipeline whose shader failed to compile names itself.
 ///
 /// Kept here rather than at each call site so every pipeline's build failure
 /// reads the same, whether it is core's or a package's.
@@ -464,7 +470,7 @@ mod tests {
 
     #[test]
     fn core_pipelines_draw_before_package_pipelines() {
-        // INV-32: the order is declared. A package that registers first still
+        // The order is declared. A package that registers first still
         // draws after core, because "first" is not what decides.
         let mut registry = PipelineRegistry::new();
         registry
@@ -562,7 +568,7 @@ mod tests {
         // The registry is where a package pipeline first meets the engine, and
         // the last point at which "this asks for more than a GPU has" can be
         // said with the pipeline's name attached. After it, the same mistake
-        // is a driver error on someone else's machine (INV-4).
+        // is a driver error on someone else's machine.
         let mut registry = PipelineRegistry::new();
         let err = registry
             .register(PipelineOrder::Package, Box::new(Overrun))

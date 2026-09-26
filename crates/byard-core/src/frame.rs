@@ -160,9 +160,10 @@ impl Rect {
 
 /// A paint-time affine transform (RFC-0011): translate/scale/rotate about a
 /// pivot, plus an opacity multiplier. Applied in the vertex/fragment shader
-/// *after* Taffy has placed the element, layout geometry and hit-testing
-/// rects are never affected, and Taffy is never re-run because a transform
-/// changed (INV-8). The identity value is a free no-op in the shader.
+/// *after* Taffy has placed the element, layout geometry and hit-testing rects
+/// are never affected, and Taffy is never re-run because a transform changed (a
+/// paint-class attribute never relayouts). The identity value is a free no-op
+/// in the shader.
 ///
 /// Deliberately a decomposed TRS (not a baked matrix): smaller to upload,
 /// trivial to interpolate per-component (RFC-0010's GPU springs animate one
@@ -839,7 +840,7 @@ pub enum ImageFit {
 }
 
 /// A `DecoratedBox` extends a [`BoxInstance`] with an optional border and
-/// drop shadow (M21 pipeline). Fields that don't apply are zeroed.
+/// drop shadow. Fields that don't apply are zeroed.
 ///
 /// The Encoder promotes a plain `BoxInstance` to `DecoratedBox` when any of
 /// border or shadow fields are non-trivial.
@@ -911,10 +912,10 @@ impl Default for DecoratedBox {
 /// Which shape a [`Gradient`] paints (RFC-0035).
 ///
 /// The tag is a lane of its own on the instance rather than bits stolen from a
-/// neighbour (INV-28): `grad_axis` is fully occupied in every kind, and the one
-/// spare float this pipeline had was taken by RFC-0031's `smooth`. Four bytes
-/// per decorated instance is the honest price, and it keeps every lane with
-/// exactly one owner.
+/// neighbour (every instance lane has exactly one owner): `grad_axis` is fully
+/// occupied in every kind, and the one spare float this pipeline had was taken
+/// by RFC-0031's `smooth`. Four bytes per decorated instance is the honest
+/// price, and it keeps every lane with exactly one owner.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
 #[repr(u32)]
 pub enum GradientKind {
@@ -1280,7 +1281,7 @@ pub const CANVAS_CAP_SQUARE: u32 = 2;
 /// mesh onto the frame every tick would pay the cost the cache exists to
 /// avoid. The `Arc` is what crosses to the render thread, so the geometry is
 /// shared rather than cloned, and freed when the last frame holding it is
-/// (INV-12: it is plain `Send` data, no graphics state).
+/// (it is plain `Send` data, no graphics state crosses threads).
 #[derive(Clone, Debug)]
 pub struct CanvasFill {
     /// The triangles, in the canvas' logical-pixel space.
@@ -1367,7 +1368,8 @@ pub struct CanvasShape {
     pub group_first: u32,
     /// How many members this group has (`<=` [`MAX_GROUP_MEMBERS`]).
     pub group_count: u32,
-    /// Hash of this group's member records, **INV-26**.
+    /// Hash of this group's member records (the digest-completeness rule on
+    /// [`PaintDigest`]).
     ///
     /// [`PaintDigest`] compares a primitive by its own bytes at its own pool
     /// position, and a group head's bytes are its mode, its parameter, its
@@ -1448,13 +1450,13 @@ impl CanvasShape {
 }
 
 /// A texture-sampled rectangle: `Image` intrinsic lowered to a GPU primitive
-/// (M21 pipeline). Texture data is identified by a host-opaque `texture_id`
-/// (registered outside the engine boundary via the controller boundary, M23).
+/// Texture data is identified by a host-opaque `texture_id` (registered
+/// outside the engine boundary via the controller boundary).
 #[derive(Clone, Debug)]
 pub struct TextureSampler {
     /// Rectangle in logical pixels `[x, y, width, height]`.
     pub rect: [f32; 4],
-    /// Texture source path or ID (resolved by the controller boundary at M23).
+    /// Texture source path or ID (resolved by the controller boundary).
     pub src: String,
     /// How the image is scaled within the rect.
     pub fit: ImageFit,
@@ -1471,7 +1473,7 @@ pub struct TextureSampler {
     /// The `TextureSampler` analogue of [`TextLine::dirty`] (RFC-0001 §3.3),
     /// set upstream by the lowering, trusted by the Encoder's incremental
     /// scissor union. Also set by the Encoder itself the frame after an async
-    /// decode completes (M29), so a freshly-loaded image paints without a full
+    /// decode completes, so a freshly-loaded image paints without a full
     /// redraw.
     pub dirty: bool,
 }
@@ -1483,7 +1485,7 @@ pub struct TextureSampler {
 ///
 /// `#[repr(C)]` + `bytemuck` so the slice uploads to the instance buffer with
 /// zero copy, exactly like [`BoxInstance`]. The shape is identical in dev (JIT
-/// atlas) and release (AOT-baked atlas), INV-7, so the render path is the same
+/// atlas) and release (AOT-baked atlas), so the render path is the same
 /// in both modes.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -1530,12 +1532,12 @@ impl VectorInstance {
     }
 }
 
-/// An owned MSDF-field upload destined for the vector atlas (RFC-0009 §2-C /
-/// INV-8). A background worker generates the field and sends this record over a
-/// channel; the **logic thread** allocates the UV slot and records the upload on
-/// the next [`RenderFrame`]; only the **render thread** performs the actual
-/// `Queue::write_texture` during frame application. Workers never touch the GPU
-/// queue.
+/// An owned MSDF-field upload destined for the vector atlas (RFC-0009 §2-C: no
+/// side-channel GPU writes). A background worker generates the field and sends
+/// this record over a channel; the **logic thread** allocates the UV slot and
+/// records the upload on the next [`RenderFrame`]; only the **render thread**
+/// performs the actual `Queue::write_texture` during frame application. Workers
+/// never touch the GPU queue.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AtlasUpload {
     /// Destination array-texture layer.
@@ -1548,7 +1550,8 @@ pub struct AtlasUpload {
     pub width: u32,
     /// Field cell height in pixels.
     pub height: u32,
-    /// The RGBA8 MSDF field bytes (`width * height * 4`), owned (INV-3).
+    /// The RGBA8 MSDF field bytes (`width * height * 4`), owned so it can
+    /// cross threads.
     pub bytes: Vec<u8>,
     /// Caller-assigned identity for this upload (monotonic per-generator),
     /// echoed back through an acknowledgment channel once the render thread
@@ -1560,7 +1563,8 @@ pub struct AtlasUpload {
 /// One registered font family: the file's bytes plus the two names that
 /// identify it (RFC-0034 §Reference "Asset side").
 ///
-/// The engine never learns what a *theme* is (INV-1): the compiler reads the
+/// The engine never learns what a *theme* is (`byard-core` never depends on
+/// `byard-compiler`): the compiler reads the
 /// manifest, loads the bytes and hands over this record, which is an opaque
 /// blob and two strings.
 ///
@@ -1585,7 +1589,15 @@ pub struct FontFace {
 
 /// Every font family the application has registered, carried on the frame so
 /// the render thread's `FontSystem` can be brought level with the logic
-/// thread's (RFC-0034, INV-27).
+/// thread's (RFC-0034).
+///
+/// **The font-agreement rule.** The measuring `FontSystem` (logic thread,
+/// `text.rs`) and the painting one (render thread, `text_glyph.rs`) must be
+/// handed the same registered families and must resolve a `(family, weight)`
+/// pair to the same face. If they diverge, layout sizes text for one font and
+/// the GPU draws another, and no golden image catches it unless the test
+/// measures and paints the same string. Every family registration reaches both
+/// sides from this one table.
 ///
 /// **Why the whole table, every frame, rather than a drained pool.** The
 /// vector atlas ships its bytes as a pool of [`AtlasUpload`]s that the
@@ -1595,8 +1607,8 @@ pub struct FontFace {
 /// it costs one pointer clone per frame and needs no acknowledgment channel at
 /// all: the render thread loads the faces it has not seen and ignores the
 /// rest. A dropped frame then costs nothing, where a drained pool would cost a
-/// permanently unregistered family, which is exactly the failure INV-27 is
-/// about.
+/// permanently unregistered family, which is exactly the failure the
+/// font-agreement rule is about.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FontTable {
     faces: Vec<FontFace>,
@@ -1652,7 +1664,8 @@ pub struct TextLine {
     /// This is the *resolved* name from [`FontFace::resolved`], never the name
     /// the manifest declared: it is handed straight to `cosmic-text`, and both
     /// the measurement and the paint `FontSystem` must be given the identical
-    /// string or layout sizes one face and the GPU draws another (INV-27).
+    /// string or layout sizes one face and the GPU draws another (the
+    /// font-agreement rule on [`FontTable`]).
     pub family: Option<std::sync::Arc<str>>,
     /// Text colour: `[r, g, b, a]` in linear space, each component 0–1.
     pub color: [f32; 4],
@@ -1738,10 +1751,10 @@ pub struct RenderFrame {
     /// lives here.
     instances_dirty: Vec<bool>,
 
-    /// Decorated-box instances (M21), boxes with border/shadow/opacity.
+    /// Decorated-box instances, boxes with border/shadow/opacity.
     decorated: Vec<DecoratedBox>,
 
-    /// Texture-sampled image instances (M21).
+    /// Texture-sampled image instances.
     textures: Vec<TextureSampler>,
 
     /// Text lines populated by the Logic thread each tick.
@@ -1798,8 +1811,9 @@ pub struct RenderFrame {
     full_redraw: bool,
 
     /// Pending MSDF-atlas uploads recorded by the logic thread this tick
-    /// (RFC-0009 §2-C / INV-8). Applied by the render thread via a single
-    /// `Queue::write_texture` each, during frame application, before the draw.
+    /// (RFC-0009 §2-C: no side-channel GPU writes). Applied by the render
+    /// thread via a single `Queue::write_texture` each, during frame
+    /// application, before the draw.
     atlas_uploads: Vec<AtlasUpload>,
 
     /// Opacity groups (RFC-0011 T4), in the order they were closed. Empty on
@@ -2303,7 +2317,7 @@ impl RenderFrame {
         &self.instances_dirty
     }
 
-    /// Appends a [`DecoratedBox`] (border/shadow/opacity) to the frame (M21).
+    /// Appends a [`DecoratedBox`] (border/shadow/opacity) to the frame.
     pub fn push_decorated(&mut self, d: DecoratedBox) {
         let depth = self.next_depth();
         let c = self.active_clip();
@@ -2312,7 +2326,7 @@ impl RenderFrame {
         self.decorated_clips.push(c);
     }
 
-    /// Appends a [`TextureSampler`] (image) to the frame (M21).
+    /// Appends a [`TextureSampler`] (image) to the frame.
     pub fn push_texture(&mut self, t: TextureSampler) {
         let d = self.next_depth();
         let c = self.active_clip();
@@ -2487,7 +2501,8 @@ impl RenderFrame {
     ///
     /// Filling those three fields here rather than at the call site is the
     /// point of the method. `group_first`/`group_count` are pool positions only
-    /// this type knows, and `member_hash` is **INV-26**: a shader reading data
+    /// this type knows, and `member_hash` is the digest-completeness rule on
+    /// [`PaintDigest`]: a shader reading data
     /// that lives outside the primitive makes that data part of the primitive's
     /// dirtiness, or a member moves and the head is judged clean. Computing it
     /// on the same pass that appends the members means there is no way to add a
@@ -2516,7 +2531,7 @@ impl RenderFrame {
     }
 
     /// Records a pending [`AtlasUpload`] for the render thread to apply before
-    /// drawing this frame (RFC-0009 §2-C / INV-8).
+    /// drawing this frame (RFC-0009 §2-C: no side-channel GPU writes).
     pub fn push_atlas_upload(&mut self, upload: AtlasUpload) {
         self.atlas_uploads.push(upload);
     }
@@ -2739,13 +2754,13 @@ impl RenderFrame {
         &self.instances
     }
 
-    /// Returns the decorated-box instances in this frame (M21).
+    /// Returns the decorated-box instances in this frame.
     #[must_use]
     pub fn decorated(&self) -> &[DecoratedBox] {
         &self.decorated
     }
 
-    /// Returns the texture-sampled image instances in this frame (M21).
+    /// Returns the texture-sampled image instances in this frame.
     #[must_use]
     pub fn textures(&self) -> &[TextureSampler] {
         &self.textures
@@ -3116,8 +3131,13 @@ fn merge_into<T>(
 /// wrong. An attribute added tomorrow is covered the moment it changes a
 /// pixel.
 ///
-/// # Two rules
+/// # Three rules
 ///
+/// - **Everything that decides a primitive's pixels is part of its digest**
+///   (the digest-completeness rule). A shader that reads data living outside
+///   the primitive (a shape group's members, the clip it is drawn under, the
+///   weight and family of the line a glyph run belongs to) makes that data part
+///   of what is hashed; leave it out and a changed pixel compares clean.
 /// - **`f32`s are hashed through [`f32::to_bits`].** `NaN != NaN` would make a
 ///   primitive permanently dirty (wasteful, visible); `-0.0 == 0.0` would make
 ///   it permanently clean (silent, wrong). The second is the dangerous one.
@@ -3181,7 +3201,7 @@ impl PaintDigest {
     /// reason.
     pub fn apply(&mut self, frame: &mut RenderFrame) {
         let primed = self.primed;
-        // INV-26: a primitive's pixels are decided by the clip it is drawn
+        // Digest completeness: a primitive's pixels are decided by the clip it is drawn
         // under as much as by its own bytes. A box whose clip's corner radius
         // animates, or whose path mask moved, is byte-for-byte the box it was
         // last frame and must still be repainted. Each clip entry is hashed
@@ -3215,7 +3235,7 @@ impl PaintDigest {
         // wrap width lives in a parallel array, and it decides where the lines
         // break, so it decides the pixels. It is hashed here with the line it
         // belongs to rather than left out of the comparison, which is the same
-        // rule INV-26 states for a shape group's members.
+        // digest-completeness rule applied to a shape group's members.
         self.text.resize(frame.texts.len().max(self.text.len()), 0);
         for (i, line) in frame.texts.iter_mut().enumerate() {
             let h = paint_hash::text_line(line, frame.text_wrap.get(i).copied().flatten())
@@ -3239,7 +3259,7 @@ impl PaintDigest {
             primed,
             paint_hash::texture,
             // The encoder sets this bit itself the frame after an async decode
-            // lands (M29), so a freshly-loaded image paints without a full
+            // lands, so a freshly-loaded image paints without a full
             // redraw. Never clear a bit that is already set.
             |t, dirty| t.dirty |= dirty,
         );
@@ -3276,7 +3296,8 @@ impl PaintDigest {
     }
 }
 
-/// Hashes a group's member records by their **bits** (RFC-0031, INV-26).
+/// Hashes a group's member records by their **bits** (RFC-0031; the
+/// digest-completeness rule on [`PaintDigest`]).
 ///
 /// `f32::to_bits`, not `f32`, for the reason the digest's own header gives and
 /// RFC-0032's fingerprints already documented: `NaN != NaN` makes a group
@@ -3461,7 +3482,7 @@ mod paint_hash {
             None => 0u8.hash(&mut h),
         }
         transform(&mut h, &s.transform);
-        // INV-26 (RFC-0031): the group members live outside this primitive and
+        // Digest completeness (RFC-0031): the group members live outside this primitive and
         // the shader reads them, so they are part of what decides its pixels.
         // `member_hash` is that data, folded in.
         //
@@ -4456,7 +4477,7 @@ mod motion_tests {
 
     #[test]
     fn a_frame_with_no_groups_produces_no_records() {
-        // INV-22: nothing about RFC-0031 may cost a frame that does not use it.
+        // Parity: nothing about RFC-0031 may cost a frame that does not use it.
         let mut f = RenderFrame::new();
         f.push_canvas_shape(CanvasShape {
             kind: CANVAS_SHAPE_CIRCLE,
@@ -4469,7 +4490,7 @@ mod motion_tests {
         assert_eq!((s.group_first, s.group_count, s.member_hash), (0, 0, 0));
     }
 
-    /// **INV-26.** A group's members live outside the primitive `PaintDigest`
+    /// **Digest completeness.** A group's members live outside the primitive `PaintDigest`
     /// compares, and the shader reads them, so they are part of what decides
     /// its pixels, and the head folds a hash of them.
     ///
@@ -4763,7 +4784,7 @@ mod paint_digest_tests {
     }
 
     /// A line that changed only its weight or its family is a line that
-    /// changed (INV-26).
+    /// changed (digest completeness).
     ///
     /// The digest decides whether a primitive is repainted by comparing its
     /// own bytes at its own pool position. Weight reached the glyph run
@@ -4796,7 +4817,7 @@ mod paint_digest_tests {
     }
 
     /// A primitive whose *clip* changed is a primitive whose pixels changed
-    /// (INV-26).
+    /// (digest completeness).
     ///
     /// The box's own bytes are identical across all three frames; only the
     /// clip it is drawn under moves. Before the clip was folded into the hash,

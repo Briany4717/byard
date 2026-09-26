@@ -204,7 +204,7 @@ impl<T> LatestWins<T> {
     }
 }
 
-// ── M25: Notify file watcher ──────────────────────────────────────────────────
+// ── Notify file watcher ──────────────────────────────────────────────────
 
 /// Parsed file result delivered by the file-watcher thread.
 pub struct ParsedFile {
@@ -216,7 +216,7 @@ pub struct ParsedFile {
 
 /// Spawns a background OS thread that watches `paths` with `notify` and
 /// publishes the result of `reparse()` to `channel` on every relevant change
-/// (M25; generalized to the module graph by RFC-0008 Pillar E).
+/// (generalized to the module graph by RFC-0008 Pillar E).
 ///
 /// `reparse` re-derives the *whole program*, for a single-file project that
 /// is one `parse`, for a multi-file/package project the CLI passes a closure
@@ -227,7 +227,7 @@ pub struct ParsedFile {
 /// Two event classes are routed: `.byd`/`byard.toml` edits trigger `reparse()`
 /// into `channel` (structural reload); `.svg` edits send the changed path to
 /// `assets` so the runtime can invalidate that vector field and regenerate it
-/// live (RFC-0009 §3, M47). Any other change is ignored.
+/// live (RFC-0009 §3). Any other change is ignored.
 ///
 /// A parse error keeps `views` empty so the caller retains the last-good view.
 /// Returns the watcher handle, drop it to stop watching.
@@ -261,7 +261,7 @@ where
                         source_changed = true;
                     } else if p.extension().is_some_and(|e| e == "svg") {
                         // A vector asset changed, hand its path to the runtime
-                        // for live regeneration (M47). A disconnected receiver
+                        // for live regeneration. A disconnected receiver
                         // (runtime torn down) is not the watcher's problem.
                         let _ = assets.send(p.clone());
                     }

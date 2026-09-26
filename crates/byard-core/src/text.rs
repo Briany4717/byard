@@ -147,10 +147,11 @@ impl TextMeasurer {
     /// The returned name, not the name the manifest declared, is what shaping
     /// must be given: `cosmic-text` matches `Family::Name` against the face's
     /// own family record. The caller carries it to the paint side so both
-    /// `FontSystem`s resolve the identical string (INV-27).
+    /// `FontSystem`s resolve the identical string (the
+    /// font-agreement rule on [`crate::frame::FontTable`]).
     ///
     /// Returns `None` if the bytes are not a font this build can parse; the
-    /// caller turns that into a diagnostic naming the file (INV-4).
+    /// caller turns that into a diagnostic naming the file.
     pub fn register_family(&mut self, bytes: &Arc<[u8]>) -> Option<String> {
         register_into(self.font_system.db_mut(), bytes)
     }
@@ -192,9 +193,9 @@ impl TextMeasurer {
 /// The `cosmic-text` family selector for an optional resolved family name.
 ///
 /// One function rather than two call sites, because the measurement and the
-/// paint path must make this choice identically or INV-27 is violated by
-/// construction. `None` is the system sans-serif, which is the documented
-/// fallback when nothing declares a family.
+/// paint path must make this choice identically or the font-agreement rule is
+/// violated by construction. `None` is the system sans-serif, which is the
+/// documented fallback when nothing declares a family.
 #[must_use]
 pub fn family_of(family: Option<&str>) -> Family<'_> {
     family.map_or(Family::SansSerif, Family::Name)
@@ -206,7 +207,7 @@ pub fn family_of(family: Option<&str>) -> Family<'_> {
 /// Used by the manifest loader to answer two questions in one place: are these
 /// bytes a font this build can parse, and what will both `FontSystem`s call
 /// it? `None` means unparsable, which the caller reports as a diagnostic
-/// naming the file (INV-4) rather than letting it surface later as text in the
+/// naming the file rather than letting it surface later as text in the
 /// wrong face.
 #[must_use]
 pub fn family_name(bytes: &Arc<[u8]>) -> Option<String> {
@@ -217,7 +218,7 @@ pub fn family_name(bytes: &Arc<[u8]>) -> Option<String> {
 ///
 /// Shared by the measurement `FontSystem` here and the paint one in
 /// `encoder::text_glyph`, so a family cannot be loaded into one of them by a
-/// slightly different route than the other (INV-27).
+/// slightly different route than the other (the font-agreement rule).
 ///
 /// # The weight axis has to be declared, not just supported
 ///
@@ -276,7 +277,7 @@ fn declare_axis_weights(db: &mut glyphon::fontdb::Database, id: glyphon::fontdb:
 /// A `FontSystem` with the system's fonts, prepared the way every Byard
 /// `FontSystem` must be: the measuring one here and the painting one in
 /// `encoder::text_glyph` both come from this, so they cannot disagree about
-/// which face a weight selects (INV-27).
+/// which face a weight selects.
 ///
 /// # The system face at every weight
 ///

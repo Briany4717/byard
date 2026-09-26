@@ -1,5 +1,5 @@
 //! `byard clean [file]`, remove generated build artifacts and caches
-//! (RFC-0009 §5, M52): the persistent vector-field cache and the AOT bake
+//! (RFC-0009 §5): the persistent vector-field cache and the AOT bake
 //! output under `.byard/`. Lock-pinned package checkouts are left alone (they
 //! are immutable and expensive to re-fetch).
 

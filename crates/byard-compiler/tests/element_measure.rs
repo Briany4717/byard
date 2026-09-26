@@ -153,9 +153,10 @@ View Main() {
 
 #[test]
 fn an_unchanged_rect_fires_nothing() {
-    // The incremental-path assertion (INV-18/INV-29): if the fire step ever
-    // stops consulting the last delivered size, a static screen starts writing
-    // a `var` every frame and this fails.
+    // The incremental-path assertion (a post-layout resolve never writes when
+    // nothing changed): if the fire step ever stops consulting the last
+    // delivered size, a static screen starts writing a `var` every frame and
+    // this fails.
     let mut h = Harness::new(FILLING_COLUMN);
     assert_eq!(h.int("fires"), 1, "the first layout is a change");
     for _ in 0..8 {
@@ -240,7 +241,7 @@ fn a_fractional_extent_is_a_size_and_not_a_fallback() {
     // A measured rect is fractional, and layout is `f32` throughout, so a
     // `Float` width has to mean what it says. Read as an integer it resolved to
     // nothing, and the element silently took its default size, which is exactly
-    // the silent failure INV-4 forbids, and would have made every consumer of a
+    // the silent failure the engine forbids, and would have made every consumer of a
     // measured size wrong in a way that still looked plausible on screen.
     let source = r"
 View Main() {

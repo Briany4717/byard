@@ -462,7 +462,7 @@ pub struct StyleDef {
 }
 
 /// A lowered render-tree node: the interpreter's plan for one element. Reactive
-/// fields are reactive-scope ids the engine reads each tick (M14).
+/// fields are reactive-scope ids the engine reads each tick.
 #[derive(Debug, Clone, PartialEq)]
 pub enum RenderNode {
     /// A box-like container.
@@ -478,7 +478,7 @@ pub enum RenderNode {
         children: Vec<RenderNode>,
         /// Event shorthand action.
         action: Option<Expr>,
-        /// The `var` signal bound via `bind:` or `value:` (M16: value widgets).
+        /// The `var` signal bound via `bind:` or `value:` (value widgets).
         bound_sig: Option<super::env::SignalId>,
         /// The instance environment captured at lower time (RFC-0019 §2), or
         /// empty at the top level. Event attrs and the `action` are re-lowered
@@ -523,7 +523,7 @@ pub enum RenderNode {
         /// `grow` (default 1) and `basis` (default 0).
         attrs: Vec<Attr>,
     },
-    /// A texture-sampled image (M21).
+    /// A texture-sampled image.
     Image {
         /// Styling attributes (width, height, fit, radii, opacity, …).
         attrs: Vec<Attr>,
@@ -558,7 +558,8 @@ pub enum RenderNode {
         /// The instance is made when this node is lowered and dropped when the
         /// tree is lowered again, which is exactly the element's lifetime: a
         /// view's state lives and dies with the element that declared it, with
-        /// no separate lifetime to manage (INV-31).
+        /// no separate lifetime to manage (an extension never keeps a resource
+        /// alive past the scope that owns it).
         slot: usize,
     },
     /// An MSDF vector glyph, the `VectorIcon` intrinsic (RFC-0009 §1)
@@ -753,7 +754,7 @@ struct LiveScreen {
 /// are answered by this one shared cell, updated whenever the stack moves. `Rc`/
 /// `RefCell` are sound here for the same reason the radio groups' are: the
 /// interpreter and its event closures are single-threaded logic-thread state
-/// (`!Send`, INV-2).
+/// (`!Send`; signals are only ever touched on the logic thread).
 type NavSharedCell = std::rc::Rc<std::cell::RefCell<NavShared>>;
 
 #[derive(Default)]
@@ -1607,7 +1608,7 @@ pub struct Interpreter {
     /// The scheme the mix is currently heading towards, so a flip is noticed
     /// in the tick it happens in.
     theme_mix_dark: Option<bool>,
-    /// Parameterized `fn` definitions (`fn f(params) => body`, M25) *and*
+    /// Parameterized `fn` definitions (`fn f(params) => body`) *and*
     /// callback-prop bindings (RFC-0019): stored as `(param names, body expr,
     /// is_callback)` and indexed by `AstId`. Both share the invocation path in
     /// [`Self::lower_call`], a callback is a caller-supplied action block
@@ -1795,7 +1796,7 @@ pub struct Interpreter {
     /// a `var`. There is at most one, because there is at most one focus.
     composition: Option<Composition>,
     /// How many meshes have been tessellated this session, the measurement
-    /// behind the caching claim (INV-19).
+    /// behind the caching claim (a performance claim names the path it measures).
     tessellations: u64,
     /// Which view issued which of this frame's native controller requests
     /// (RFC-0039), as `(slot, range into the frame's call pool)`.
@@ -1970,7 +1971,7 @@ struct ScrollDragAxis {
 
 /// A live drag-to-scroll gesture (RFC-0005 `ScrollView`): the content follows
 /// the pointer between press and release. Captured at press so the offset is a
-/// pure function of the pointer travel, no accumulated drift (IMPL-10).
+/// pure function of the pointer travel, no accumulated drift.
 #[derive(Clone, Copy)]
 struct ScrollDrag {
     /// Pointer position at the press, in logical screen px.
@@ -2081,7 +2082,7 @@ pub enum PerfWarning {
     /// exactly like a widget with nothing to show, which is why this is
     /// surfaced rather than dropped: the mistake is in how the app was
     /// assembled (`App::provide`), and it is the same mistake on every frame
-    /// until somebody is told (INV-4).
+    /// until somebody is told (no silent failures).
     UnprovidedNativeCall {
         /// The controller name the view asked for.
         controller: String,
@@ -2322,7 +2323,7 @@ impl Interpreter {
     }
 
     /// Invalidates any cached MSDF field generated from the asset at `path`, so
-    /// a saved `.svg` regenerates live (RFC-0009 §3, M47). The dev runner calls
+    /// a saved `.svg` regenerates live (RFC-0009 §3). The dev runner calls
     /// this on the logic thread when the file watcher reports an SVG change; the
     /// regenerated field reuses the same atlas cell, so the consuming `View`
     /// never remounts. Returns `true` if a cached asset matched `path`.
@@ -2330,8 +2331,8 @@ impl Interpreter {
         self.vector_jit.invalidate_path(path)
     }
 
-    /// Points the vector JIT at a persistent on-disk field cache (RFC-0009 §5,
-    /// M52), so cold `byard dev` starts load previously generated fields instead
+    /// Points the vector JIT at a persistent on-disk field cache (RFC-0009 §5),
+    /// so cold `byard dev` starts load previously generated fields instead
     /// of regenerating them. The dev runner passes `.byard/cache/vectors/`.
     pub fn set_vector_cache_dir(&mut self, dir: std::path::PathBuf) {
         self.vector_jit.set_cache_dir(dir);
@@ -2632,7 +2633,7 @@ impl Interpreter {
 
     /// Processes the declaration-level members of a `View` body (`var`/`let`/
     /// `fn`/`inject`/bare expression). Elements are lowered by the intrinsics
-    /// layer (M10).
+    /// layer.
     pub fn eval_view_decls(&mut self, view: &ViewDecl) {
         for member in &view.body {
             self.eval_member(member);
@@ -2668,7 +2669,7 @@ impl Interpreter {
                     // No-param fn: lower body to a memo (existing behavior).
                     self.define_let(name.clone(), body);
                 } else {
-                    // Parameterized fn (M25): store params+body in fn_table,
+                    // Parameterized fn: store params+body in fn_table,
                     // bind Value::Fn(AstId) in env.
                     let id = crate::interp::env::AstId(
                         u32::try_from(self.fn_table.len()).unwrap_or(u32::MAX),
@@ -2687,7 +2688,7 @@ impl Interpreter {
                 }
             }
             Member::Inject { ty, name, span } => {
-                // Resolve `inject T as name` from the ambient environment chain (M23).
+                // Resolve `inject T as name` from the ambient environment chain.
                 let ty_name = match ty {
                     crate::parser::ast::Type::Named { name: n, .. } => n.clone(),
                     crate::parser::ast::Type::Function { .. } => Symbol::intern("?"),
@@ -2759,7 +2760,7 @@ impl Interpreter {
         self.atlas.node_count()
     }
 
-    // ── M23: Controller boundary ─────────────────────────────────────────
+    // ── Controller boundary ─────────────────────────────────────────
 
     /// Provides an ambient value keyed by `ty` to this view and its
     /// descendants (`inject T as name` resolution, RFC-0002 §inject).
@@ -2799,7 +2800,9 @@ impl Interpreter {
 
     /// Loads every family the theme declares into the measurement
     /// `FontSystem` and rebuilds the table the render thread reads
-    /// (RFC-0034 §Reference "Asset side", INV-27).
+    /// (RFC-0034 §Reference "Asset side"). The measuring and painting font
+    /// systems must resolve every family the same way, or layout sizes text for
+    /// one face while the GPU draws another.
     ///
     /// This is the single source of truth the invariant asks for. The bytes
     /// come from one place, the theme; they go to the measurer directly
@@ -2820,12 +2823,12 @@ impl Interpreter {
         for (declared, font) in self.theme.fonts() {
             let here = measurer.register_family(&font.bytes);
             // The manifest resolved this name from the same bytes when it read
-            // the file. If the measurer disagrees, one side of INV-27 is
+            // the file. If the measurer disagrees, one of the two font systems is
             // shaping against a family name the other never produced.
             debug_assert_eq!(
                 here.as_deref(),
                 Some(font.resolved.as_ref()),
-                "family `{declared}` resolves differently on the measurement side (INV-27)"
+                "family `{declared}` resolves differently on the measurement side"
             );
             table.push(byard_core::frame::FontFace {
                 declared: declared.clone(),
@@ -2897,7 +2900,8 @@ impl Interpreter {
         self.env = Env::new();
         // A reload replaces the program, so every continuation now names a
         // call site that no longer exists and every effect's mount state
-        // describes a tree that is gone (RFC-0028 §5, INV-14). The ambient
+        // describes a tree that is gone (RFC-0028 §5: a reply for a call site
+        // that no longer exists is discarded, never applied). The ambient
         // controller handles are re-provided because the environment they
         // lived in was just discarded.
         self.reset_bridge_state();
@@ -2935,7 +2939,7 @@ impl Interpreter {
     }
 
     /// Opens a value binding projecting `expr` into a fresh frame target
-    /// (used by intrinsics, M10, and by tests).
+    /// (used by intrinsics and by tests).
     pub fn bind_value(&mut self, expr: &Expr) -> ScopeId {
         let target = self.next_target();
         let compute = self.lower_expr(expr, None);
@@ -3195,7 +3199,7 @@ impl Interpreter {
 
     /// Resolves the `bind:` or `value:` attribute of a value widget to a
     /// `SignalId`. Returns `None` if no such attribute exists or it doesn't
-    /// name a `var` (M16).
+    /// name a `var`.
     fn resolve_bind_sig(&self, attrs: &[Attr]) -> Option<super::env::SignalId> {
         use crate::parser::ast::Expr;
         for attr in attrs {
@@ -3479,7 +3483,7 @@ impl Interpreter {
             // screen lazily, the first time navigation reaches it.
             "NavStack" | "NavHost" => self.lower_nav(el, &attrs, state_blocks, known_views),
             "Spacer" => RenderNode::Spacer { attrs },
-            // Image intrinsic → TextureSampler pipeline (M21).
+            // Image intrinsic → TextureSampler pipeline.
             // Syntax: Image("path.jpg") #[fit: .cover, width: 200, height: 150]
             "Image" => {
                 let src_expr = el.content.first().map_or_else(
@@ -3533,7 +3537,7 @@ impl Interpreter {
                     env_snapshot: self.capture_env_snapshot(),
                 }
             }
-            // Value widgets: resolve bound signal and keep as leaf nodes (M16/M19).
+            // Value widgets: resolve bound signal and keep as leaf nodes.
             // `Checkbox` (RFC-0018) joins them: a `bind: Bool` leaf that owns its
             // square-plus-checkmark visual and flips on tap/Space.
             "Toggle" | "Slider" | "TextField" | "Checkbox" => {
@@ -3823,7 +3827,7 @@ impl Interpreter {
             return;
         };
         // Own the callee so the `&self.view_table` borrow does not conflict with
-        // the `&mut self` lowering below (the table is `Send`/owned, INV-3).
+        // the `&mut self` lowering below (the table is `Send` and owns its declarations).
         let callee = self.view_table.decl(id).clone();
 
         // Runtime depth bound (RFC-0007 §4): a guarded recursion whose
@@ -3973,7 +3977,7 @@ impl Interpreter {
     }
 
     /// Lowers a slice of `Member`s into child `RenderNode`s, handling
-    /// `Element`, `When`, and `For` (M20).
+    /// `Element`, `When`, and `For`.
     fn lower_members(&mut self, members: &[Member], known_views: &[&str]) -> Vec<RenderNode> {
         let mut nodes = Vec::new();
         for m in members {
@@ -4046,7 +4050,7 @@ impl Interpreter {
             // RFC-0026: a `route`/`tab` case only means something as a direct
             // child of its container, the nav lowering consumes those without
             // ever coming through here, so anything reaching this arm is
-            // misplaced. Diagnosed rather than dropped (INV-4).
+            // misplaced. Diagnosed rather than dropped (no silent failures).
             Member::Route { kind, span, .. } => {
                 self.errors.push(CompileError::MisplacedNavCase {
                     span: *span,
@@ -4997,9 +5001,10 @@ impl Interpreter {
         // identity into the next frame's top-level animations.
         self.anim_slot = 0;
 
-        // Drain any MSDF generations that finished since the last tick,
-        // before the tree walk below, so a freshly-resident glyph is visible
-        // the same tick it lands (RFC-0009 §2, INV-2: logic-thread only).
+        // Drain any MSDF generations that finished since the last tick, before
+        // the tree walk below, so a freshly-resident glyph is visible the same
+        // tick it lands (RFC-0009 §2; signals are touched on the logic thread
+        // only).
         for upload in self.vector_jit.drain_ready() {
             frame.push_atlas_upload(upload);
         }
@@ -5166,7 +5171,8 @@ impl Interpreter {
 
         // RFC-0038: rects are final for this frame, so an element that asked
         // for its own is told now, before anything paints and while nothing can
-        // still move it (INV-29). Elements whose rect did not change are not
+        // still move it (a post-layout resolve reads finished rects and never
+        // feeds the same frame's layout). Elements whose rect did not change are not
         // told anything, which is what keeps a static screen at zero writes.
         self.fire_measures();
 
@@ -6657,8 +6663,9 @@ impl Interpreter {
             )
             .into_bytes()
         });
-        // Cache miss: skip this tick (INV-9, the frame ships without
-        // stalling); the generated field lands via the ordinary JIT drain.
+        // Cache miss: skip this tick (the render thread never blocks on
+        // generation, so the frame ships without stalling); the generated field
+        // lands via the ordinary JIT drain.
         let Some(glyph) = glyph else { return };
 
         // A `VectorInstance` carries no transform: bake translate/scale into
@@ -6687,7 +6694,8 @@ impl Interpreter {
     /// *tessellation* happens only when the numbers those expressions produced
     /// differ from last time, which is what keeps a live chart inside the
     /// frame budget: the expensive step is the one that is skipped
-    /// (INV-23, RFC-0032's dirty model).
+    /// (RFC-0032's dirty model: invalidation decides what work runs, never
+    /// what the geometry is).
     fn emit_filled_path(
         &mut self,
         el: &ElementNode,
@@ -6891,8 +6899,8 @@ impl Interpreter {
         out
     }
 
-    /// How many paths this interpreter has tessellated, ever (RFC-0037,
-    /// INV-18/INV-19).
+    /// How many paths this interpreter has tessellated, ever (RFC-0037). A
+    /// test reads it to prove the cached path is the one production takes.
     ///
     /// The number the caching claim is made of: a chart whose data did not
     /// change must not move it. Exposed rather than inferred, because "the
@@ -7062,7 +7070,7 @@ impl Interpreter {
             // A view that leaves both axes free is a flex leaf rather than a
             // zero-sized one: "fill" is the answer a chart or a map gives, and
             // a leaf of size zero would be an invisible widget with no error
-            // anywhere, which is the failure mode INV-4 exists to prevent.
+            // anywhere, which is exactly the silent failure the engine forbids.
             RenderNode::Native {
                 attrs,
                 env_snapshot,
@@ -7217,7 +7225,7 @@ impl Interpreter {
         flat_ids: &mut Vec<byard_core::atlas::layout::AtlasNodeId>,
     ) -> Result<byard_core::atlas::layout::AtlasNodeId, byard_core::atlas::AtlasError> {
         use byard_core::atlas::layout::LeafSize;
-        // Value widgets are leaf nodes with intrinsic default sizes (M16/M19).
+        // Value widgets are leaf nodes with intrinsic default sizes.
         match name.as_str() {
             "Toggle" => {
                 let w = self.eval_px_prop(attrs, "width").unwrap_or(50.0);
@@ -7637,7 +7645,7 @@ impl Interpreter {
         cull_clip: Option<byard_core::frame::Rect>,
         // Accumulated scroll displacement from every enclosing `ScrollView`
         // (RFC-0005), in screen px. Paint applies it through the inherited
-        // transform; **hit-testing** cannot ride that path, RFC-0011/INV-8
+        // transform; **hit-testing** cannot ride that path, RFC-0011
         // deliberately keeps paint transforms out of hit rects (a hover-scale
         // must not move its own hit target), so the scroll displacement
         // travels separately and shifts every hit rect registered inside the
@@ -7692,7 +7700,7 @@ impl Interpreter {
                         Some(Value::Str(s)) => s,
                         other => other.map_or_else(String::new, |v| format!("{v:?}")),
                     };
-                    // M22: fall back to theme on-surface color when unset.
+                    // Fall back to theme on-surface color when unset.
                     let color = self
                         .eval_color_prop(attrs, "color")
                         .unwrap_or(self.theme.on_surface());
@@ -8041,7 +8049,7 @@ impl Interpreter {
                         }
                     }
 
-                    // ── Widget-specific visual lowering & handler registration (M16/M19) ──
+                    // ── Widget-specific visual lowering & handler registration ──
                     match element_name {
                         "Toggle" => {
                             self.render_toggle(
@@ -8132,7 +8140,7 @@ impl Interpreter {
                         }
                     }
 
-                    // ── `focused:` reflected prop → register as focusable (M16/M18) ──
+                    // ── `focused:` reflected prop → register as focusable ──
                     // TextField, Checkbox, and RadioButton register their own
                     // focusable inside their render fns (they are focusable *by
                     // default*, RFC-0018), so exclude them here to avoid
@@ -8508,7 +8516,8 @@ impl Interpreter {
             // background fill; the interesting part is the per-screen transform
             //, the transition's whole cost is two `f32` offsets and an alpha,
             // composed into the transform every subtree already inherits, so a
-            // screen sliding in costs no relayout and no extra pass (INV-8).
+            // screen sliding in costs no relayout and no extra pass (a
+            // paint-class change never relayouts).
             RenderNode::Nav { pool, .. } => {
                 let Ok(Some(rect)) = self.atlas.resolved_rect(atlas_node) else {
                     return;
@@ -8568,7 +8577,7 @@ impl Interpreter {
                     let mut screen_transform = transform;
                     screen_transform.translate[0] += motion.dx * transform.scale[0];
                     screen_transform.translate[1] += motion.dy * transform.scale[1];
-                    // Hit rects ride their own channel (RFC-0011/INV-8 keep
+                    // Hit rects ride their own channel (RFC-0011 keeps
                     // paint transforms out of hit-testing), so the same offset
                     // travels separately, a half-slid screen is tappable
                     // exactly where it is drawn.
@@ -8798,7 +8807,8 @@ impl Interpreter {
 
                     // Cache hit: a resident glyph, tinted and opacity-applied.
                     // Cache miss: a zero-opacity placeholder so the frame ships
-                    // without stalling (INV-9); the dispatch itself happened
+                    // without stalling (the render thread never blocks on
+                    // generation); the dispatch itself happened
                     // inside `lookup_or_dispatch`.
                     let (uv_rect, layer, px_range, alpha) =
                         match self.vector_jit.lookup_or_dispatch(&handle) {
@@ -8965,10 +8975,10 @@ impl Interpreter {
         }
     }
 
-    // ── Widget rendering helpers (M16/M19) ─────────────────────────────
+    // ── Widget rendering helpers ─────────────────────────────
 
-    /// Renders a `Toggle` widget: track + thumb (M19), and registers a Tap
-    /// handler to flip the bound bool (M16).
+    /// Renders a `Toggle` widget: track + thumb, and registers a Tap
+    /// handler to flip the bound bool.
     #[allow(clippy::too_many_arguments)]
     fn render_toggle(
         &mut self,
@@ -9019,7 +9029,7 @@ impl Interpreter {
             smooth: 0.0,
         });
 
-        // Tap handler to flip the bool (M16).
+        // Tap handler to flip the bool.
         if let (Some(sig), Some(idx)) = (bound_sig, elem_idx) {
             let flip: super::events::Action = Box::new(move |ctx, _| {
                 let cur = ctx.peek_signal(sig).as_bool().unwrap_or(false);
@@ -9326,8 +9336,8 @@ impl Interpreter {
         }
     }
 
-    /// Renders a `Slider` widget: track + fill + thumb (M19), and registers
-    /// PointerDown + PointerDrag handlers to write the value (M16).
+    /// Renders a `Slider` widget: track + fill + thumb, and registers
+    /// PointerDown + PointerDrag handlers to write the value.
     #[allow(clippy::too_many_arguments)]
     fn render_slider(
         &mut self,
@@ -9413,7 +9423,7 @@ impl Interpreter {
             smooth: 0.0,
         });
 
-        // Handlers: PointerDown + PointerDrag (M16).
+        // Handlers: PointerDown + PointerDrag.
         if let (Some(sig), Some(idx)) = (bound_sig, elem_idx) {
             let track_x = rect.x;
             let track_w = rect.w;
@@ -9451,8 +9461,8 @@ impl Interpreter {
         }
     }
 
-    /// Renders a `TextField` widget: background box + text/placeholder (M19),
-    /// and registers keyboard handlers for text input (M16/M17).
+    /// Renders a `TextField` widget: background box + text/placeholder,
+    /// and registers keyboard handlers for text input.
     #[allow(clippy::too_many_arguments)]
     fn render_text_field(
         &mut self,
@@ -9537,7 +9547,7 @@ impl Interpreter {
             });
         }
 
-        // Caret at the end of the entered text while focused (M17/M19), or
+        // Caret at the end of the entered text while focused, or
         // at the IME's cursor inside the preedit while composing (RFC-0040).
         if is_focused {
             let measured = if is_placeholder || display_text.is_empty() {
@@ -9621,7 +9631,7 @@ impl Interpreter {
             });
         }
 
-        // Handlers: TextInput appends, KeyDown handles Backspace/Enter/Tab (M16/M17).
+        // Handlers: TextInput appends, KeyDown handles Backspace/Enter/Tab.
         if let (Some(sig), Some(idx)) = (bound_sig, elem_idx) {
             // TextInput: append typed text
             let text_input: super::events::Action = Box::new(move |ctx, payload| {
@@ -9678,7 +9688,7 @@ impl Interpreter {
                 super::events::write_back_action(sig),
             );
 
-            // Register as focusable so Tab and click steal focus (M18).
+            // Register as focusable so Tab and click steal focus.
             // TextField uses its own focused-var if provided via `focused:` attr;
             // otherwise we create a dummy signal just for the focusable registry.
             let focused_sig = self.resolve_focused_sig(attrs);
@@ -9727,7 +9737,7 @@ impl Interpreter {
                 let Some(controller) = self.controller_id_by_name(&call.controller) else {
                     // A view asking for a controller the app never provided is
                     // an assembly mistake, and a silent no-answer is the worst
-                    // possible way to learn about it (INV-4).
+                    // possible way to learn about it.
                     self.perf_warnings.push(PerfWarning::UnprovidedNativeCall {
                         controller: call.controller.clone(),
                         method: call.method.clone(),
@@ -9885,7 +9895,7 @@ impl Interpreter {
     /// as long as this lowered node does, and a re-lower (a hot reload, a
     /// structural change) drops it, which is its unmount. There is no separate
     /// bookkeeping to keep in step, and therefore nothing to get out of step
-    /// (INV-31).
+    /// (an extension never keeps a resource alive past its owning scope).
     fn mount_native_view(&mut self, name: &str, span: crate::diagnostics::Span) -> usize {
         let slot = self.native_views.len();
         if let Some(view) = byard_core::render::registry::create(name) {
@@ -9894,7 +9904,7 @@ impl Interpreter {
             // The catalog answered for this name a moment ago, so failing here
             // means the registry changed underneath the lowering, which is not
             // something an app can do by accident. Said with a span rather
-            // than papered over with a blank element (INV-4).
+            // than papered over with a blank element (no silent failures).
             self.errors.push(CompileError::UnknownView {
                 span,
                 name: name.to_string(),
@@ -9925,7 +9935,8 @@ impl Interpreter {
             };
             let evaluated = self.eval_pure(value);
             // A signal, a memo or a callback has no data form, and a view is
-            // data-only by construction (INV-13): the same rule the controller
+            // data-only by construction (only `Send` data crosses the boundary,
+            // never a signal, callback or view handle): the same rule the controller
             // boundary follows, for the same reason.
             let Some(host) = super::bridge::value_to_host(&evaluated) else {
                 self.errors.push(CompileError::NonDataViewProp {
@@ -9991,7 +10002,7 @@ impl Interpreter {
     }
 
     /// Registers an element as focusable if it has a `focused:` prop attr
-    /// (M16/M18), **or** a `focus =>`/`blur =>` handler (RFC-0012 S2), the
+    /// **or** a `focus =>`/`blur =>` handler (RFC-0012 S2), the
     /// sugar rides `focused_sig`'s edges, so an element that only wants the
     /// one-shot event (no bound `var`) still needs a signal for
     /// `steal_focus` to flip. That signal is a fresh internal one when
@@ -10166,7 +10177,7 @@ impl Interpreter {
     /// measured rect (RFC-0038) is fractional, and `800.0 / 3.0` is a perfectly
     /// ordinary width to write. Read through the integer path, every one of
     /// those resolved to `None` and the element silently fell back to its
-    /// default size, which is the failure INV-4 exists to forbid.
+    /// default size, which is exactly the silent failure the engine forbids.
     fn eval_px_prop(&mut self, attrs: &[Attr], name: &str) -> Option<f32> {
         // RFC-0036: `width: match(ref)` is a layout relationship, not a
         // number. It is resolved once the anchor's rect exists, and
@@ -11800,7 +11811,7 @@ impl Interpreter {
 
     /// Processes a whole `View`: its declarations first (so bindings can resolve
     /// names), then lowers its top-level elements into a render tree, handling
-    /// `when`/`for` structural members (M20).
+    /// `when`/`for` structural members.
     pub fn lower_view(&mut self, view: &ViewDecl, known_views: &[&str]) -> Vec<RenderNode> {
         // RFC-0032 §R4: another view is another tree, and last frame's build
         // order says nothing about it. The same view lowered again (the HUD's
@@ -11955,7 +11966,7 @@ impl Interpreter {
             }
             // Prefix unary (`!b`, `-x`), RFC-0027 §2. `!` negates a `Bool`;
             // `-` negates a numeric. A type mismatch degrades to `Unit`
-            // (the checker reports it, INV-4: no panic).
+            // (the checker reports it; user data never panics).
             Expr::Unary { op, rhs, .. } => {
                 let op = *op;
                 let mut rc = self.lower_expr(rhs, payload_name);
@@ -11967,7 +11978,7 @@ impl Interpreter {
                 })
             }
             // Indexing `base[index]` (RFC-0027 §4). Out-of-range or a
-            // non-list/non-int index degrades to `Unit` (INV-4), never a panic.
+            // non-list/non-int index degrades to `Unit`, never a panic.
             Expr::Index { base, index, .. } => {
                 let mut bc = self.lower_expr(base, payload_name);
                 let mut ic = self.lower_expr(index, payload_name);
@@ -12136,7 +12147,7 @@ impl Interpreter {
                 }
                 // Data member access (RFC-0027 §4/§6): `xs.len` (list length) and
                 // `r.field` (record field). Unknown members degrade to `Unit`;
-                // the checker reports genuinely unknown ones (INV-4).
+                // the checker reports genuinely unknown ones.
                 let field = field.clone();
                 let mut base_c = self.lower_expr(base, payload_name);
                 Box::new(move |ctx| data_member(&base_c(ctx), &field))
@@ -12269,7 +12280,7 @@ impl Interpreter {
                 Box::new(move |_| v.clone())
             }
             // An unresolved identifier is treated as an enum/style token
-            // (e.g. `center`, `cover`); intrinsics validate it (M10).
+            // (e.g. `center`, `cover`); intrinsics validate it.
             None => {
                 let token = name.as_str().to_string();
                 Box::new(move |_| Value::Str(token.clone()))
@@ -12326,7 +12337,7 @@ impl Interpreter {
                 let m = *scope;
                 return Box::new(move |ctx| ctx.read_memo(m));
             }
-            // Parameterized fn call (M25) *or* callback-prop invocation
+            // Parameterized fn call *or* callback-prop invocation
             // (RFC-0019 §3): inline the body with args bound as memos. For a
             // callback, the body is the *caller's* action block, still resolved
             // here, where the caller's `var`s remain live below the callee frame
@@ -12408,7 +12419,7 @@ impl Interpreter {
                     let i = arg(ctx).as_int().and_then(|i| usize::try_from(i).ok());
                     match base_c(ctx) {
                         Value::List(mut xs) => {
-                            // Out-of-range → unchanged list (INV-4, no panic).
+                            // Out-of-range → unchanged list (no panic on user data).
                             if let Some(i) = i.filter(|i| *i < xs.len()) {
                                 xs.remove(i);
                             }
@@ -13530,7 +13541,7 @@ impl Interpreter {
     }
 
     /// Snapshots one axis of a drag at the press: its live offset becomes the
-    /// baseline the pointer travel is subtracted from (RFC-0005, IMPL-10).
+    /// baseline the pointer travel is subtracted from (RFC-0005).
     fn capture_drag_axis(&self, axis: ScrollAxis) -> ScrollDragAxis {
         let is_int = matches!(self.peek(axis.sig), Value::Int(_));
         ScrollDragAxis {
@@ -13796,7 +13807,7 @@ impl Interpreter {
         // clamped to `[0, content − viewport]`. Wheel deltas are line-based (× a
         // per-line step); trackpad `Scroll` deltas are already pixels. Done here,
         // before the render, so the same tick paints the new offset (paint-time
-        // translate, no relayout, INV-8).
+        // translate, no relayout).
         for (i, ev) in events.iter().enumerate() {
             if consumed[i] {
                 // A native view took this wheel event (a chart panning its own
@@ -13847,7 +13858,7 @@ impl Interpreter {
         // RFC-0005 `ScrollView` drag-to-scroll: a pointer press on inert scroll
         // content starts a drag; each move slides the offset (on every writable
         // axis) so the content tracks the pointer, a pure function of the
-        // press-relative travel, no accumulated drift (IMPL-10); release ends it.
+        // press-relative travel, no accumulated drift; release ends it.
         // The press defers to interactive children via `claims_pointer`, so a
         // button or slider inside the list still wins its own gesture.
         for ev in events {
@@ -14357,7 +14368,7 @@ fn eval_binary(op: BinOp, lhs: Value, rhs: Value) -> Value {
 /// String and list concatenation (RFC-0027 §3/§4). A `Str` on either side
 /// coerces the other operand through the shared scalar formatter
 /// ([`format_scalar`]); two `List`s concatenate; anything else is `Unit` (the
-/// checker reports the mismatch, INV-4).
+/// checker reports the mismatch).
 fn eval_concat(a: Value, b: Value) -> Value {
     // A `List` operand only concatenates with another `List`, it never string-
     // coerces (RFC-0027 §3). A `Str` on either side coerces the other *scalar*.
@@ -14461,7 +14472,7 @@ fn structural_eq(a: &Value, b: &Value) -> bool {
 
 /// Resolves a data member access (RFC-0027 §4/§6): `xs.len` (list/string
 /// length → `Int`) or `r.field` (record field → its value). Anything else
-/// degrades to `Unit` (INV-4).
+/// degrades to `Unit` (the checker reports it; no panic).
 fn data_member(base: &Value, field: &Symbol) -> Value {
     let f = field.as_str();
     match base {
@@ -14490,7 +14501,7 @@ fn with_lambda_elem<F: FnOnce() -> Value>(elem: Value, f: F) -> Value {
 
 /// Indexes `base[index]` (RFC-0027 §4): a `List` at an in-range integer index
 /// yields the element; out-of-range or non-list/non-int degrades to `Unit`
-/// (INV-4, never a panic). Negative indices are out of range.
+/// (never a panic). Negative indices are out of range.
 fn index_value(base: &Value, index: &Value) -> Value {
     match (base, index) {
         (Value::List(xs), Value::Int(i)) => usize::try_from(*i)

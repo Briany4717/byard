@@ -6,7 +6,7 @@
 //! warn-on-unknown policy for this table, silently ignoring a dependency is
 //! a reproducibility hazard).
 
-use byard_compiler::interp::theme::{FontWeight, Theme, TypoToken};
+use byard_compiler::interp::theme::{DeclaredFont, FontWeight, Theme, TypoToken};
 use std::path::{Path, PathBuf};
 
 /// How a dependency is acquired (RFC-0008 D-H: git + path first; a hosted
@@ -271,7 +271,7 @@ impl Manifest {
         };
 
         // RFC-0022: `[theme]` tokens + `[assets.fonts]` layer onto `byard-base`.
-        let theme = parse_theme(&table)?;
+        let theme = parse_theme(&table, &project_root)?;
         // RFC-0030 §V2: the dev runner's own surface.
         let dev = parse_dev(&table)?;
 
@@ -363,7 +363,7 @@ fn parse_duration_ns(s: &str) -> Option<u64> {
 ///
 /// Tokens are declared `snake_case` here and canonicalized to the `camelCase`
 /// byld reference form by [`Theme::set_color`] et al.
-fn parse_theme(table: &toml::Table) -> Result<Theme, String> {
+fn parse_theme(table: &toml::Table, project_root: &Path) -> Result<Theme, String> {
     let mut theme = Theme::byard_base();
 
     if let Some(theme_tbl) = table.get("theme").and_then(toml::Value::as_table) {
@@ -411,9 +411,11 @@ fn parse_theme(table: &toml::Table) -> Result<Theme, String> {
         }
     }
 
-    // [assets.fonts], `family = "path/to/font.ttf"` (RFC-0022 §3). The bytes are
-    // not loaded yet (deferred); declaring a family here makes it resolvable by
-    // `TypoToken.family` and suppresses the `FontNotFound` fallback warning.
+    // [assets.fonts], `family = "path/to/font.ttf"` (RFC-0022 §3, RFC-0034).
+    // The bytes are read **here**, at manifest time, so an unreadable or
+    // unparsable font file is a compile diagnostic naming the family and the
+    // path (INV-4). It used to be deferred, and deferring it is what made a
+    // declared family a name with nothing behind it.
     if let Some(fonts) = table
         .get("assets")
         .and_then(|a| a.get("fonts"))
@@ -425,11 +427,41 @@ fn parse_theme(table: &toml::Table) -> Result<Theme, String> {
                     "byard.toml: [assets.fonts] `{family}` must be a string path to a font file"
                 )
             })?;
-            theme.add_font(family.clone(), path.to_string());
+            theme.add_font(family.clone(), load_font(family, path, project_root)?);
         }
     }
 
     Ok(theme)
+}
+
+/// Reads one `[assets.fonts]` entry's bytes and resolves the family name the
+/// face carries (RFC-0034 §Reference "Asset side").
+///
+/// Both failures are errors that name the family *and* the path, because the
+/// author wrote one and the filesystem knows the other, and a message with
+/// only one of them makes them go looking. A missing font must never surface
+/// as a square box or as silence (INV-4): by the time text is painted, nobody
+/// can tell a missing file from a font that simply looks like that.
+fn load_font(family: &str, path: &str, project_root: &Path) -> Result<DeclaredFont, String> {
+    let full = project_root.join(path);
+    let bytes = std::fs::read(&full).map_err(|e| {
+        format!(
+            "byard.toml: [assets.fonts] `{family}` points at `{}`, which could not be read: {e}",
+            full.display()
+        )
+    })?;
+    let bytes: std::sync::Arc<[u8]> = std::sync::Arc::from(bytes);
+    let resolved = byard_core::text::family_name(&bytes).ok_or_else(|| {
+        format!(
+            "byard.toml: [assets.fonts] `{family}` points at `{}`, which is not a font file this build can read",
+            full.display()
+        )
+    })?;
+    Ok(DeclaredFont {
+        path: path.to_string(),
+        resolved: std::sync::Arc::from(resolved),
+        bytes,
+    })
 }
 
 /// Parses one `[theme.typography]` entry: an inline table `{ size, family?,
@@ -651,7 +683,14 @@ mod tests {
 
     fn theme_of(src: &str) -> Result<Theme, String> {
         let table: toml::Table = src.parse().unwrap();
-        parse_theme(&table)
+        parse_theme(&table, &examples_root())
+    }
+
+    /// The examples directory, which is where the shipped font assets live.
+    /// Font paths in these tests resolve against it, so they exercise the real
+    /// files rather than a fixture nothing ships.
+    fn examples_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples")
     }
 
     #[test]
@@ -724,9 +763,46 @@ mod tests {
     #[test]
     fn font_assets_register_families() {
         let theme =
-            theme_of("[assets.fonts]\nroboto = \"assets/fonts/Roboto-Regular.ttf\"\n").unwrap();
-        assert!(theme.has_font("roboto"));
+            theme_of("[assets.fonts]\ndisplay = \"assets/fonts/SpaceGrotesk-Variable.ttf\"\n")
+                .unwrap();
+        assert!(theme.has_font("display"));
         assert!(!theme.has_font("sfpro"));
+    }
+
+    /// The bytes are loaded, not merely named, and the family name shaping
+    /// will match on is resolved from them (RFC-0034).
+    ///
+    /// The declared name and the resolved one differ here on purpose: that
+    /// difference is the reason the record carries both, and a loader that
+    /// kept only the manifest's spelling would shape against a family no font
+    /// answers to.
+    #[test]
+    fn a_declared_family_is_loaded_and_resolved() {
+        let theme =
+            theme_of("[assets.fonts]\ndisplay = \"assets/fonts/SpaceGrotesk-Variable.ttf\"\n")
+                .unwrap();
+        let font = theme.font("display").expect("declared");
+        assert_eq!(font.resolved.as_ref(), "Space Grotesk");
+        assert!(!font.bytes.is_empty(), "the bytes were actually read");
+    }
+
+    /// A font file that is not there is a diagnostic naming the family and the
+    /// path (INV-4). By paint time nobody can tell a missing file from a
+    /// typeface that simply looks like that.
+    #[test]
+    fn a_missing_font_file_names_the_family_and_the_path() {
+        let err = theme_of("[assets.fonts]\ndisplay = \"assets/fonts/NotHere.ttf\"\n").unwrap_err();
+        assert!(err.contains("display"), "{err}");
+        assert!(err.contains("NotHere.ttf"), "{err}");
+    }
+
+    /// And a file that is there but is not a font is the same kind of
+    /// diagnostic, for the same reason.
+    #[test]
+    fn a_file_that_is_not_a_font_is_a_diagnostic() {
+        let err = theme_of("[assets.fonts]\ndisplay = \"assets/fonts/README.md\"\n").unwrap_err();
+        assert!(err.contains("display"), "{err}");
+        assert!(err.contains("not a font file"), "{err}");
     }
 
     // ── RFC-0030 §V2: the [dev] table ─────────────────────────────────────

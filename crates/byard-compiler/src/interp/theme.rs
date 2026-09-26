@@ -231,6 +231,24 @@ pub const SCHEME_LIGHT: &str = "light";
 /// The scheme name used for the dark color scheme.
 pub const SCHEME_DARK: &str = "dark";
 
+/// A font family declared in `[assets.fonts]`, with its bytes loaded
+/// (RFC-0034 §Reference "Asset side").
+///
+/// Holding the bytes here rather than a path is what makes the theme the
+/// single source of truth INV-27 asks for: the measurement `FontSystem` and
+/// the paint one are both fed from this record, so neither can be given a file
+/// the other never saw.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DeclaredFont {
+    /// The path as written in `byard.toml`, for diagnostics.
+    pub path: String,
+    /// The family name the face itself carries, which is what shaping matches
+    /// on. Resolved once, when the bytes were read.
+    pub resolved: std::sync::Arc<str>,
+    /// The font file's bytes, shared with every `FontSystem` that loads them.
+    pub bytes: std::sync::Arc<[u8]>,
+}
+
 /// Color, typography, and shape design tokens for a view tree (RFC-0022 §1).
 ///
 /// The runtime *active scheme* is not stored here, it lives in a reactive
@@ -247,11 +265,13 @@ pub struct Theme {
     typography: BTreeMap<String, TypoToken>,
     /// `camelCase token → corner radius`.
     shapes: BTreeMap<String, f32>,
-    /// Declared font families available for `TypoToken.family` resolution
-    /// (RFC-0022 §3): `family name → asset path`. Registration of the bytes
-    /// themselves is deferred; presence here suppresses the `FontNotFound`
-    /// warning.
-    fonts: BTreeMap<String, String>,
+    /// Declared font families (RFC-0022 §3, RFC-0034): the name written in
+    /// `[assets.fonts]` → the loaded face.
+    ///
+    /// The bytes are loaded when the manifest is read, not deferred: a family
+    /// that resolves to nothing is a compile diagnostic, and a diagnostic that
+    /// arrives at paint time is a square box nobody can act on (INV-4).
+    fonts: BTreeMap<String, DeclaredFont>,
     /// The active scheme mirror for default resolution (`true` ⇒ `dark`).
     pub active_dark: bool,
     /// Default font size in logical pixels (the theme-default layer).
@@ -385,18 +405,30 @@ impl Theme {
     /// Whether a font family has been declared in `[assets.fonts]` (RFC-0022 §3).
     #[must_use]
     pub fn has_font(&self, family: &str) -> bool {
-        self.fonts.contains_key(family) || self.fonts.keys().any(|k| to_camel(k) == family)
+        self.font(family).is_some()
     }
 
-    /// Declared font families (`name → asset path`).
+    /// The declared face for `family`, under either the manifest's spelling or
+    /// its `camelCase` byld reference form (RFC-0034 `font:` resolution).
     #[must_use]
-    pub fn fonts(&self) -> &BTreeMap<String, String> {
+    pub fn font(&self, family: &str) -> Option<&DeclaredFont> {
+        self.fonts.get(family).or_else(|| {
+            self.fonts
+                .iter()
+                .find(|(k, _)| to_camel(k) == family)
+                .map(|(_, v)| v)
+        })
+    }
+
+    /// Declared font families (`declared name → loaded face`).
+    #[must_use]
+    pub fn fonts(&self) -> &BTreeMap<String, DeclaredFont> {
         &self.fonts
     }
 
-    /// Registers a font family declared in `[assets.fonts]`.
-    pub fn add_font(&mut self, name: impl Into<String>, path: impl Into<String>) {
-        self.fonts.insert(name.into(), path.into());
+    /// Registers a font family declared in `[assets.fonts]`, already loaded.
+    pub fn add_font(&mut self, name: impl Into<String>, font: DeclaredFont) {
+        self.fonts.insert(name.into(), font);
     }
 
     /// Sets (or overrides) a color token in a scheme. Keys are canonicalized to

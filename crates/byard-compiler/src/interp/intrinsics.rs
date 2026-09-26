@@ -1611,7 +1611,7 @@ fn shape_geometry(name: &str) -> (ShapeParams, ShapeParams) {
 /// Validates a `path { … }` body (RFC-0037): path commands only, each with the
 /// parameters it takes, and a first command that establishes where the path
 /// starts.
-fn validate_path_body(el: &ElementNode) -> Vec<CompileError> {
+pub fn validate_path_body(el: &ElementNode) -> Vec<CompileError> {
     let mut errs = Vec::new();
     let mut first = true;
     for member in &el.children {

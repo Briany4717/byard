@@ -1,5 +1,6 @@
 //! [`RenderCtx`], the bounded per-frame handle a native view draws through
-//! (RFC-0039 §"`RenderCtx`", INV-31).
+//! (RFC-0039 §"`RenderCtx`"). An extension may not keep a GPU resource past
+//! the scope that owns it; the borrows below are how that is enforced.
 //!
 //! # What it exposes, and why the list is short
 //!
@@ -72,7 +73,7 @@ pub enum TextureSource<'a> {
 ///
 /// The lifetime is the point. `'frame` is the borrow of the [`RenderCtx`] the
 /// handle came from, so a view can put one in an instance it emits this frame
-/// and cannot put one in a field of itself (INV-31). The engine owns the
+/// and cannot put one in a field of itself. The engine owns the
 /// texture; this is a way to name it, not a way to keep it.
 ///
 /// A view that tries to keep one does not compile, which is the whole
@@ -163,14 +164,14 @@ pub struct NativeCall {
     pub controller: String,
     /// The method to call.
     pub method: String,
-    /// The arguments, as data (INV-13).
+    /// The arguments, as data.
     pub args: Vec<crate::bridge::HostValue>,
 }
 
 /// The per-frame handle a native view's `render` receives (RFC-0039).
 ///
 /// Not `Send`, by construction: it borrows the frame's pools, which the logic
-/// thread owns while it assembles a frame (INV-2, INV-12). A view that tries
+/// thread owns while it assembles a frame. A view that tries
 /// to move one to another thread does not compile, which is the difference
 /// between an invariant and a request:
 ///
@@ -236,7 +237,7 @@ impl<'frame> RenderCtx<'frame> {
     /// A view that awaited here would be holding the logic thread, which is
     /// the one thing a widget must never do.
     ///
-    /// The arguments are data (INV-13). There is no way to pass a handle,
+    /// The arguments are data. There is no way to pass a handle,
     /// because the pool worker that runs the call is on the other side of the
     /// thread boundary that exists to keep handles here.
     pub fn call(
@@ -279,7 +280,7 @@ impl<'frame> RenderCtx<'frame> {
     /// monomorphized copy of a `Pod` slice into a buffer this pool has been
     /// reusing since the first frame. No dynamic dispatch, no allocation in
     /// the steady state, and byte-for-byte what a core intrinsic's staging
-    /// does (INV-30).
+    /// does (dispatch is per pipeline, never per instance).
     ///
     /// An empty slice emits nothing rather than an empty batch, so a view that
     /// has nothing to draw this frame costs the encoder nothing at all.
@@ -307,7 +308,7 @@ impl<'frame> RenderCtx<'frame> {
     ///
     /// The returned handle borrows `self`, which is what stops a view from
     /// keeping it: it cannot outlive the `render` call, so a texture can never
-    /// be retained past the frame that asked for it (INV-31).
+    /// be retained past the frame that asked for it.
     pub fn upload_texture(&mut self, source: &TextureSource<'_>) -> TextureHandle<'_> {
         let id = u32::try_from(self.textures.len()).unwrap_or(u32::MAX);
         let source = match *source {
@@ -399,7 +400,7 @@ mod tests {
     fn emitted_instances_are_the_bytes_a_core_pool_would_have_staged() {
         // The claim the whole ABI rests on: a package's instances reach the
         // arena as the same bytes a core intrinsic's do. Not "equivalent",
-        // the same, which is checkable (INV-30).
+        // the same, which is checkable.
         let mut pool = NativeBatches::new();
         let mut textures = Vec::new();
         let mut calls = Vec::new();

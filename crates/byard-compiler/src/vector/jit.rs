@@ -2,18 +2,17 @@
 //! icons (RFC-0009 §2 as corrected by §2-B/§2-C).
 //!
 //! Generation runs on its own one-shot worker thread, never the logic or
-//! render thread (INV-9). Results cross a `crossbeam` channel to whoever
-//! calls [`VectorJit::drain_ready`]; that must be the **logic thread**, the
-//! only place a UV slot is allocated and an `AtlasUpload` recorded (INV-2).
-//! This module never touches a `wgpu::Queue` (INV-8), the render thread
-//! alone applies the resulting uploads.
+//! render thread, so neither ever waits on it. Results cross a `crossbeam`
+//! channel to whoever calls [`VectorJit::drain_ready`]; that must be the
+//! **logic thread**, the only place a UV slot is allocated and an
+//! `AtlasUpload` recorded. This module never touches a `wgpu::Queue`: the
+//! render thread alone applies the resulting uploads.
 //!
-//! The atlas allocator is a **free-cell list with LRU eviction** (M48,
-//! IMPL-64). All glyphs are uniform `GRID_SIZE × GRID_SIZE` cells, so a
-//! shelf/skyline allocator would be overkill, a simple free-cell stack is
-//! optimal. When the atlas is full, the least-recently-sampled glyph is
-//! evicted and its cell reused; the evicted handle falls back to the
-//! placeholder → regenerate-on-next-use path (INV-9).
+//! The atlas allocator is a **free-cell list with LRU eviction**. All glyphs
+//! are uniform `GRID_SIZE × GRID_SIZE` cells, so a shelf/skyline allocator
+//! would be overkill, a simple free-cell stack is optimal. When the atlas is
+//! full, the least-recently-sampled glyph is evicted and its cell reused; the
+//! evicted handle falls back to the placeholder → regenerate-on-next-use path.
 
 use std::collections::HashMap;
 
@@ -51,12 +50,12 @@ enum CacheEntry {
         /// Set once the render thread confirms it applied `upload_id`.
         acked: bool,
         /// Tick at which this glyph was last sampled (via `lookup_or_dispatch`).
-        /// The LRU eviction policy (M48, IMPL-64) evicts the entry with the
+        /// The LRU eviction policy evicts the entry with the
         /// smallest `last_used_tick` when the atlas is full, ensuring actively
         /// displayed icons are never evicted.
         last_used_tick: u64,
     },
-    /// A hot-reload (RFC-0009 §3, M47) is regenerating this asset. The previous
+    /// A hot-reload (RFC-0009 §3) is regenerating this asset. The previous
     /// field's atlas cell is retained in `glyph` so the freshly generated field
     /// lands in the **same UV slot**, the consuming `View` does not remount and
     /// an in-flight size animation stays crisp, and a `lookup` keeps returning
@@ -88,7 +87,7 @@ pub struct VectorJit {
     entries: HashMap<String, CacheEntry>,
     sender: Sender<JitMessage>,
     receiver: Receiver<JitMessage>,
-    /// Free-cell stack (M48, IMPL-64). Each entry is `(pixel_x, pixel_y,
+    /// Free-cell stack. Each entry is `(pixel_x, pixel_y,
     /// layer)`. Initialized with every cell in the atlas; cells are popped on
     /// alloc and pushed back on eviction or `Failed` cleanup. Since all glyphs
     /// are uniform `GRID_SIZE × GRID_SIZE`, a free-cell list is optimal, a
@@ -96,14 +95,14 @@ pub struct VectorJit {
     free_cells: Vec<(u32, u32, u32)>,
     next_upload_id: u64,
     /// Monotonic tick counter, incremented once per [`drain_ready`] call.
-    /// Used for LRU tracking (INV-2: logic-thread-only).
+    /// Used for LRU tracking (logic thread only).
     tick: u64,
     /// Receives the ids of uploads the render thread has actually applied
     /// (wired in by the host via [`VectorJit::set_ack_receiver`]; `None` in
     /// contexts with no render thread, e.g. most unit tests, an upload then
     /// simply keeps resending forever, which is harmless there).
     ack_receiver: Option<Receiver<u64>>,
-    /// Persistent field-cache directory (RFC-0009 §5, M52). `None` disables the
+    /// Persistent field-cache directory (RFC-0009 §5). `None` disables the
     /// disk cache (every generation runs); the dev runner points it at
     /// `.byard/cache/vectors/` so cold starts skip regeneration.
     cache_dir: Option<std::path::PathBuf>,
@@ -151,7 +150,7 @@ impl VectorJit {
         self.ack_receiver = Some(rx);
     }
 
-    /// Points the JIT at a persistent field-cache directory (RFC-0009 §5, M52),
+    /// Points the JIT at a persistent field-cache directory (RFC-0009 §5),
     /// so generation consults `.byard/cache/vectors/` before running the field
     /// math. Call once at setup; `None` (the default) disables the disk cache.
     pub fn set_cache_dir(&mut self, dir: std::path::PathBuf) {
@@ -162,14 +161,14 @@ impl VectorJit {
     /// location if already generated; otherwise dispatches a one-shot
     /// generation task (deduped, a second miss on the same handle while one
     /// is already pending does not spawn another) and returns `None`, so the
-    /// caller emits a placeholder this tick (INV-9).
+    /// caller emits a placeholder this tick and the frame never waits.
     pub fn lookup_or_dispatch(&mut self, handle: &str) -> Option<ResidentGlyph> {
         if handle.is_empty() {
             return None;
         }
         match self.entries.get_mut(handle) {
             // While regenerating, keep returning the *old* resident glyph so the
-            // previous field stays on screen until the new one lands (M47).
+            // previous field stays on screen until the new one lands.
             Some(CacheEntry::Resident {
                 glyph,
                 last_used_tick,
@@ -228,7 +227,7 @@ impl VectorJit {
     }
 
     /// Invalidates one asset by handle (its source path string) on hot-reload
-    /// (RFC-0009 §3, M47). A resident asset re-dispatches generation while
+    /// (RFC-0009 §3). A resident asset re-dispatches generation while
     /// keeping its atlas cell, [`drain_ready`](Self::drain_ready) then reuses
     /// that slot so existing `VectorInstance`s are untouched. A failed asset is
     /// cleared so the next lookup regenerates it fresh. Returns `true` if the
@@ -237,7 +236,7 @@ impl VectorJit {
     /// Handles already `Pending`/`Regenerating` are left alone: a worker is
     /// already in flight and re-dispatching would race two writers on one cell;
     /// the freshest bytes are picked up by the *next* invalidation after it
-    /// lands. **Logic thread only** (INV-2), like every other cache mutation.
+    /// lands. **Logic thread only**, like every other cache mutation.
     pub fn invalidate(&mut self, handle: &str) -> bool {
         match self.entries.get(handle) {
             Some(CacheEntry::Resident { glyph, .. }) => {
@@ -258,7 +257,7 @@ impl VectorJit {
     }
 
     /// Invalidates whichever cached asset(s) resolve to the file at `changed`
-    /// (RFC-0009 §3, M47). The file watcher reports absolute paths while a
+    /// (RFC-0009 §3). The file watcher reports absolute paths while a
     /// handle is the (possibly relative) string from source, so both sides are
     /// canonicalized before comparison. Returns `true` if any entry matched.
     pub fn invalidate_path(&mut self, changed: &std::path::Path) -> bool {
@@ -286,7 +285,7 @@ impl VectorJit {
             let result = std::fs::read(&handle)
                 .map_err(|e| format!("failed to read {handle}: {e}"))
                 .and_then(|bytes| {
-                    // RFC-0009 §5 (M52): a disk hit skips the field math entirely.
+                    // RFC-0009 §5: a disk hit skips the field math entirely.
                     super::cache::generate_cached(
                         &bytes,
                         GRID_SIZE,
@@ -301,9 +300,9 @@ impl VectorJit {
     }
 
     /// [`dispatch`](Self::dispatch) for caller-supplied SVG bytes (RFC-0020
-    /// Tier 2), same worker-thread + channel discipline (INV-9), same
-    /// persistent field cache (the disk key hashes the bytes, so a synthetic
-    /// path caches exactly like a file-backed icon).
+    /// Tier 2), same worker-thread + channel discipline (never on the render or
+    /// logic thread), same persistent field cache (the disk key hashes the
+    /// bytes, so a synthetic path caches exactly like a file-backed icon).
     fn dispatch_bytes(&self, handle: String, bytes: Vec<u8>) {
         let tx = self.sender.clone();
         let cache_dir = self.cache_dir.clone();
@@ -325,7 +324,7 @@ impl VectorJit {
     /// [`AtlasUpload`]s to attach to this tick's frame, plus a re-send of
     /// every still-unacknowledged resident upload, so a `RenderFrame` the
     /// render thread happens to skip never permanently loses one. **Logic
-    /// thread only** (INV-2), call once per tick, before building the frame.
+    /// thread only**, call once per tick, before building the frame.
     pub fn drain_ready(&mut self) -> Vec<AtlasUpload> {
         self.tick += 1;
         let mut uploads = Vec::new();
@@ -360,7 +359,7 @@ impl VectorJit {
             match msg.result {
                 Ok(glyph) => {
                     // A hot-reload regeneration reuses the retained cell so the
-                    // UV slot is stable (M47); a first-time miss allocates one.
+                    // UV slot is stable; a first-time miss allocates one.
                     let cell = match self.entries.get(&msg.handle) {
                         Some(CacheEntry::Regenerating { glyph }) => Some(cell_of(glyph)),
                         _ => self.alloc_cell_or_evict(),
@@ -480,9 +479,9 @@ impl VectorJit {
     }
 
     /// Pops a free cell, or LRU-evicts the least-recently-sampled **acked**
-    /// resident glyph to reclaim one (M48, IMPL-64). Evicted handles are
+    /// resident glyph to reclaim one. Evicted handles are
     /// removed from `entries` so a subsequent `lookup_or_dispatch` dispatches
-    /// a fresh generation, the INV-9 placeholder path handles the one-frame
+    /// a fresh generation, the placeholder path handles the one-frame
     /// gap transparently. Returns `None` only if every cell is occupied by a
     /// non-evictable entry (Pending, Regenerating, or unacked Resident).
     fn alloc_cell_or_evict(&mut self) -> Option<(u32, u32, u32)> {
@@ -711,7 +710,7 @@ mod tests {
         assert!(jit.lookup_or_dispatch("/nonexistent/icon.svg").is_none());
     }
 
-    // ── M47: hot-reload invalidation ──────────────────────────────────────
+    // ── Hot-reload invalidation ──────────────────────────────────────
 
     /// Writes `content` to a fresh, uniquely named temp `.svg` and returns its
     /// path. Each test gets its own file so overwrites never race a sibling.
@@ -829,7 +828,7 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
-    // ── M48: LRU eviction ────────────────────────────────────────────────
+    // ── LRU eviction ────────────────────────────────────────────────
 
     #[test]
     fn free_cells_are_consumed_and_correct() {

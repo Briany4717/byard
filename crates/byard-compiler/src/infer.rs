@@ -11,7 +11,7 @@
 //!   heterogeneous array) without an annotation is [`CompileError::CannotInfer`].
 //! - **Lambda parameters are exempt** (E2): their types come from the expected
 //!   `Fn` type at the use site, so they are never flagged here.
-//! - **`Text` is a view, not a type** (INV-7): using it in any annotation is
+//! - **`Text` is a view, not a type**: using it in any annotation is
 //!   [`CompileError::TextUsedAsType`]; the scalar string type is `Str`.
 
 use std::collections::HashMap;
@@ -99,7 +99,7 @@ impl Checker<'_> {
                 self.fns.insert(name.clone(), ty);
             }
         }
-        // Collect var names for static style checks (M11)
+        // Collect var names for static style checks
         let mut vars = Vec::new();
         for member in &view.body {
             if let Member::Var { name, .. } = member {
@@ -107,7 +107,7 @@ impl Checker<'_> {
             }
         }
         self.check_members(&view.body, true);
-        // Run style check for all style blocks (M11)
+        // Run style check for all style blocks
         for member in &view.body {
             if let Member::Style { rules, .. } = member {
                 let style_errors = check_static(rules, &vars);
@@ -216,7 +216,7 @@ impl Checker<'_> {
     /// `PredicateNotBool`, `EffectInPureLambda`, `UnknownMethod`), recursing
     /// into subexpressions, and returns its best-effort inferred [`Ty`].
     /// Operands of type [`Ty::Unknown`] never trigger a diagnostic (the Dev
-    /// interpreter is dynamically evaluated, INV-4 keeps runtime lenient).
+    /// interpreter is dynamically evaluated, and user data never panics at runtime).
     fn check_expr(&mut self, expr: &Expr) -> Ty {
         match expr {
             Expr::IntLit(..) => Ty::Int,
@@ -485,8 +485,8 @@ impl Checker<'_> {
         }
     }
 
-    /// Maps a syntactic [`Type`] to a [`Ty`], enforcing INV-7 (`Text` is not a
-    /// type) and normalizing the known scalar/`List`/`Fn` forms.
+    /// Maps a syntactic [`Type`] to a [`Ty`], enforcing that `Text` is not a
+    /// type and normalizing the known scalar/`List`/`Fn` forms.
     fn resolve_type(&mut self, ty: &Type) -> Ty {
         match ty {
             Type::Named { name, args, span } => {

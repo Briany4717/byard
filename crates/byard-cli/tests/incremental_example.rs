@@ -61,7 +61,7 @@ fn the_example_animates_only_paint_class_attributes() {
             line.contains("rotate:") || line.contains("opacity:") || line.contains("scale:"),
             "the example animates a non-paint attribute, which would relayout \
              every frame and make the scene demonstrate the opposite of what \
-             it claims (RFC-0010 INV-8): {line}"
+             it claims (RFC-0010: animation is paint-time only): {line}"
         );
     }
 }
@@ -82,7 +82,7 @@ fn the_example_header_documents_what_a_reader_must_verify() {
         "encode.glyphs",   // the scope the win actually comes from
         "present.acquire", // the frame finishing early rather than late
         "STILL WRAPPED",   // RFC-0032 §R5, the most likely visible bug
-        "STILL LANDS",     // INV-23, the hazard no screenshot can show
+        "STILL LANDS",     // a stale hit rect, the hazard no screenshot can show
         "STILL REFLOWS",   // text content is layout-class
     ] {
         assert!(

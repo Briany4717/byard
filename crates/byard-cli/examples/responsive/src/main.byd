@@ -1,0 +1,76 @@
+// RFC-0016, responsive style variants: one declaration covers a phone, a
+// tablet and a desktop.
+//
+// Run it (from the repo root):
+//   cd crates/byard-cli/examples/responsive
+//   cargo run -p byard-cli -- dev
+//
+// A style can carry `on width >= md { … }` beside its `on hover { … }`, where
+// `md` is a breakpoint this project declares in byard.toml. The block applies
+// while the window is at least that wide, and it can change *layout*: padding,
+// width, direction. That is the part that needed work, because until now every
+// `on …` block was applied only when painting, so a padding written inside one
+// never reached layout.
+//
+// What to verify visually:
+//   1. Narrow the window below 640px: one column of cards, tight padding,
+//      a small heading.
+//   2. Widen past 640px: the cards pair up two to a row and the page gains
+//      breathing room.
+//   3. Widen past 1024px: three to a row, a larger heading, and the nav turns
+//      from a stack into a bar.
+//   4. The switch happens exactly at each width, not a pixel before. Drag
+//      slowly across 640px and watch the layout change in one step.
+//   5. Hover a card at any width. Its hover tint is an ordinary interaction
+//      state in the same style as its breakpoint; the two do not interfere.
+//   6. Try breaking it: change `md` to `mdd` in the source and run
+//      `cargo run -p byard-cli -- check .`. An undeclared breakpoint is a
+//      compile error with the nearest declared name, not a block that
+//      silently never applies.
+View Main() {
+    let page = style {
+        p: 12
+        gap: 12
+        on width >= md { p: 28, gap: 20 }
+        on width >= lg { p: 40, gap: 24 }
+    }
+    let heading = style {
+        size: 22
+        on width >= lg { size: 34 }
+    }
+    let nav = style {
+        direction: column
+        gap: 6
+        on width >= lg { direction: row, gap: 18 }
+    }
+    let grid = style {
+        columns: "1fr"
+        gap: 12
+        on width >= md { columns: "1fr 1fr" }
+        on width >= lg { columns: "1fr 1fr 1fr" }
+    }
+    let card = style {
+        bg: 0x1C2430
+        radius: 12
+        p: 16
+        height: 110
+        on hover { bg: 0x243042 }
+    }
+
+    Column #[..page, bg: 0x0E1116, grow: 1] {
+        Text("Forecast") #[..heading, color: 0xE7ECF2]
+        Box #[..nav] {
+            Text("Today") #[color: 0x9AA3AE, size: 14]
+            Text("10 days") #[color: 0x9AA3AE, size: 14]
+            Text("Air quality") #[color: 0x9AA3AE, size: 14]
+        }
+        Grid #[..grid] {
+            Box #[..card] { Text("Morning") #[color: 0xE7ECF2, size: 15] }
+            Box #[..card] { Text("Afternoon") #[color: 0xE7ECF2, size: 15] }
+            Box #[..card] { Text("Evening") #[color: 0xE7ECF2, size: 15] }
+            Box #[..card] { Text("Night") #[color: 0xE7ECF2, size: 15] }
+            Box #[..card] { Text("Tomorrow") #[color: 0xE7ECF2, size: 15] }
+            Box #[..card] { Text("Weekend") #[color: 0xE7ECF2, size: 15] }
+        }
+    }
+}

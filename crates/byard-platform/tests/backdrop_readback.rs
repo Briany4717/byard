@@ -19,12 +19,14 @@ use byard_core::encoder::EncoderSubsystem;
 use byard_core::frame::{BLUR_QUALITY_AUTO, BackdropInstance, RenderFrame, Transform, Viewport};
 use std::sync::Arc;
 
-fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>, bool)> {
-    let instance =
-        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-    let adapter =
-        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-            .ok()?;
+fn try_device() -> Option<(
+    Arc<wgpu::Device>,
+    Arc<wgpu::Queue>,
+    bool,
+    byard_test_gpu::Turn,
+)> {
+    let (device, queue, turn) = byard_test_gpu::device(byard_core::engine::device_limits)?;
+    let (adapter, _same_turn) = byard_test_gpu::adapter()?;
     let info = adapter.get_info();
     // Microsoft's WARP (the DX12 software rasteriser) exhibits a readback
     // anomaly on the barrier-split pass sequence: pixels in *one* corner of a
@@ -35,15 +37,7 @@ fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>, bool)> {
     // correctly, so the corner-clip assertion is skipped on WARP only.
     let is_warp = info.backend == wgpu::Backend::Dx12
         && (info.device_type == wgpu::DeviceType::Cpu || info.name.contains("Basic Render"));
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("backdrop readback device"),
-        required_features: wgpu::Features::empty(),
-        required_limits: byard_core::engine::device_limits(&adapter),
-        memory_hints: wgpu::MemoryHints::Performance,
-        ..Default::default()
-    }))
-    .ok()?;
-    Some((Arc::new(device), Arc::new(queue), is_warp))
+    Some((device, queue, is_warp, turn))
 }
 
 /// A read-back framebuffer: physical-pixel BGRA bytes plus the row stride.
@@ -187,7 +181,7 @@ fn pane(rect: [f32; 4], radii: [f32; 4], blur: f32, tint: [f32; 4]) -> BackdropI
 /// blur actually ran and stayed inside the pane.
 #[test]
 fn the_pane_blurs_the_edge_behind_it_and_only_there() {
-    let Some((device, queue, _is_warp)) = try_device() else {
+    let Some((device, queue, _is_warp, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping backdrop readback");
         return;
     };
@@ -235,7 +229,7 @@ fn the_pane_blurs_the_edge_behind_it_and_only_there() {
 /// glass, and a child emitted after the pane stays crisp above it.
 #[test]
 fn tint_corner_clip_and_children_compose_over_the_glass() {
-    let Some((device, queue, is_warp)) = try_device() else {
+    let Some((device, queue, is_warp, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping backdrop readback");
         return;
     };

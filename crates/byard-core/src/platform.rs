@@ -157,7 +157,7 @@ pub enum EventKind {
     KeyUp,
     /// Printable text input (character key or IME commit); text in `InputEvent.payload` as `InputPayload::Key`.
     TextInput,
-    // ── M24: remaining event catalog ─────────────────────────────────────
+    // ── Remaining event catalog ─────────────────────────────────────
     /// Cursor entered an element's hit rect (synthesized by the router).
     PointerEnter,
     /// Cursor left an element's hit rect (synthesized by the router).
@@ -170,6 +170,17 @@ pub enum EventKind {
     DoubleTap,
     /// Secondary (right) button tap.
     Secondary,
+    /// The IME's preedit changed (RFC-0040); the preedit and its cursor in
+    /// `InputEvent.payload` as `InputPayload::Preedit`. An empty preedit
+    /// clears it.
+    Composition,
+    /// The IME committed text (RFC-0040); the text in `InputEvent.payload` as
+    /// `InputPayload::Key`. Delivered to the field that owned the
+    /// composition, which is not always the one that has focus now.
+    CompositionCommit,
+    /// The platform turned the IME off (RFC-0040): any preedit is gone and
+    /// no commit is coming for it.
+    CompositionEnd,
 }
 
 impl EventKind {
@@ -177,6 +188,37 @@ impl EventKind {
     #[must_use]
     pub fn is_continuous(self) -> bool {
         matches!(self, Self::PointerMove | Self::Scroll | Self::Wheel)
+    }
+
+    /// Whether this event happens at a place, so `InputEvent.pos` is where
+    /// it happened and hit testing may route it.
+    ///
+    /// Keyboard, text and value-change events have no position: hosts send
+    /// them with `pos: (0.0, 0.0)`, and they go to the focused element. Routing
+    /// one by rect would hand it to whatever sits at the window's corner.
+    #[must_use]
+    pub fn is_positional(self) -> bool {
+        match self {
+            Self::PointerDown
+            | Self::PointerUp
+            | Self::Tap
+            | Self::PointerMove
+            | Self::Scroll
+            | Self::Wheel
+            | Self::PointerEnter
+            | Self::PointerExit
+            | Self::Hover
+            | Self::LongPress
+            | Self::DoubleTap
+            | Self::Secondary => true,
+            Self::Change
+            | Self::KeyDown
+            | Self::KeyUp
+            | Self::TextInput
+            | Self::Composition
+            | Self::CompositionCommit
+            | Self::CompositionEnd => false,
+        }
     }
 }
 
@@ -189,8 +231,61 @@ pub enum InputPayload {
     Bool(bool),
     /// A float payload (e.g. slider position).
     Float(f32),
-    /// A key name or printable text (keyboard events, M17).
+    /// A key name or printable text (keyboard events).
     Key(String),
+    /// An IME preedit and its cursor, a byte range inside it (RFC-0040).
+    Preedit {
+        /// The text being composed.
+        text: String,
+        /// The IME's cursor; `None` hides it.
+        cursor: Option<(usize, usize)>,
+    },
+}
+
+/// An input-method event, independent of any windowing library (RFC-0040
+/// §3). A host maps its platform's IME events onto this and hands them to
+/// [`PlatformHost::on_ime`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ImeEvent {
+    /// The platform turned the IME on for this window.
+    Enabled,
+    /// The preedit is now `text`, with the IME cursor at `cursor` (bytes).
+    /// An empty `text` clears it.
+    Preedit {
+        /// The text being composed.
+        text: String,
+        /// The IME's cursor; `None` hides it.
+        cursor: Option<(usize, usize)>,
+    },
+    /// Insert `text` into the value at the caret.
+    Commit(String),
+    /// The platform turned the IME off; any preedit is gone.
+    Disabled,
+}
+
+impl ImeEvent {
+    /// The engine input event this becomes, or `None` for one the engine
+    /// has no use for (`Enabled`: the field is already focused, which is
+    /// what asked for the IME).
+    #[must_use]
+    pub fn into_input(self, time_ms: u64) -> Option<InputEvent> {
+        let (kind, payload) = match self {
+            Self::Enabled => return None,
+            Self::Preedit { text, cursor } => (
+                EventKind::Composition,
+                Some(InputPayload::Preedit { text, cursor }),
+            ),
+            Self::Commit(text) => (EventKind::CompositionCommit, Some(InputPayload::Key(text))),
+            Self::Disabled => (EventKind::CompositionEnd, None),
+        };
+        Some(InputEvent {
+            kind,
+            pos: (0.0, 0.0),
+            delta: (0.0, 0.0),
+            payload,
+            time_ms,
+        })
+    }
 }
 
 /// A normalized, `Send`-able input event produced by the platform thread.
@@ -341,6 +436,25 @@ pub trait PlatformHost {
     /// `text` is the committed string (usually one character but may be more
     /// for IME). Defaults to a no-op.
     fn on_text(&mut self, _text: &str) {}
+
+    /// Called on an input-method event (RFC-0040): a preedit, a commit, or
+    /// the IME turning on or off. A host usually forwards
+    /// [`ImeEvent::into_input`] to its engine.
+    ///
+    /// Defaults to a no-op, so a host that does not opt in behaves exactly as
+    /// before.
+    fn on_ime(&mut self, _event: ImeEvent) {}
+
+    /// The focused text field's caret this frame, in viewport space, or
+    /// `None` when no text field has focus (RFC-0040 §4). The platform thread
+    /// reads it after each redraw to turn the IME on or off and to place its
+    /// candidate window. A host usually answers from
+    /// [`Engine::text_input`](crate::engine::Engine::text_input).
+    ///
+    /// Defaults to `None`: a host that does not opt in never enables the IME.
+    fn text_input(&self) -> Option<crate::frame::TextInputState> {
+        None
+    }
 
     /// Called on a trackpad-style scroll gesture at cursor position `(x, y)`,
     /// with `(dx, dy)` the scroll delta in logical pixels (RFC-0012 §A loose

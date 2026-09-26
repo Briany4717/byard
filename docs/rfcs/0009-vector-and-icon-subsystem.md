@@ -1,6 +1,6 @@
 # RFC-0009: Vector and Icon Subsystem (MSDF, JIT-Dev / AOT-Release Pipeline)
 
-- **Status:** Active, fully implemented (M44–M52 all landed). M53+ future pipelines deferred. IMPL-58–68 + IMPL-91–93 logged in `DESICIONS.md`, all Decided.
+- **Status:** Active, fully implemented. Further vector pipelines are deferred. Every implementation-time decision is settled.
 - **Author(s):** Briany4717
 - **Created:** 2026-06-24
 - **Last updated:** 2026-06-26
@@ -381,14 +381,14 @@ arm branch-free.
 
 ## Resolved questions (formerly unresolved)
 
-- **Before merge (all resolved, IMPL-62–63):**
-  - [x] **Generation grid size:** **32×32**, `px_range = 4` (IMPL-62). Sharp-corner and determinism tests pass; raise to 64² only if 8K regression surfaces.
-  - [x] **Edge-coloring threshold:** **48°** confirmed (IMPL-62). Channel separation holds under extreme scaling in the test suite.
-  - [x] **Generator dependency:** **`bymsdfgen-core`**, a pure-Rust, MIT, data-oriented msdfgen rewrite (IMPL-63). SVG normalization via `usvg`; path adaptation in `vector/generate.rs`.
-- **During implementation (IMPL-64–68):**
-  - [x] **Dev-atlas cap and eviction:** shelf/skyline allocator + array-texture layers + LRU-evict recommended (IMPL-64, open pending M48 implementation). Evicted handles fall back to placeholder + regenerate (INV-9).
-  - [x] **Inclusion-list ergonomics:** `byard.toml` `[assets.vectors] include = [...]` (IMPL-65, resolved). Seeds the closed set for dynamic `asset()` sites; absent = hard build error on non-literal handles.
-  - [x] **Persistent cache pruning:** deferred, cache grows unbounded until `byard clean` (IMPL-68). On-disk LRU mirrors M48's in-memory eviction, which is itself still to be tuned.
+- **Before merge (all resolved):**
+  - [x] **Generation grid size:** **32×32**, `px_range = 4`. Sharp-corner and determinism tests pass; raise to 64² only if 8K regression surfaces.
+  - [x] **Edge-coloring threshold:** **48°** confirmed. Channel separation holds under extreme scaling in the test suite.
+  - [x] **Generator dependency:** **`bymsdfgen-core`**, a pure-Rust, MIT, data-oriented msdfgen rewrite. SVG normalization via `usvg`; path adaptation in `vector/generate.rs`.
+- **During implementation:**
+  - [x] **Dev-atlas cap and eviction:** shelf/skyline allocator + array-texture layers + LRU eviction, now implemented as a free-cell list. Evicted handles fall back to placeholder + regenerate, so the render thread never waits on generation.
+  - [x] **Inclusion-list ergonomics:** `byard.toml` `[assets.vectors] include = [...]` (resolved). Seeds the closed set for dynamic `asset()` sites; absent = hard build error on non-literal handles.
+  - [x] **Persistent cache pruning:** deferred, cache grows unbounded until `byard clean`. On-disk LRU would mirror the dev atlas's in-memory eviction, which is itself still to be tuned.
 
 ## Future possibilities
 

@@ -109,26 +109,13 @@ fn publish_enters_relay_publish() {
 
 // ── `encode.frame` (needs a real adapter; skips cleanly without one) ────────
 
-fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>)> {
-    let instance =
-        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-    let adapter =
-        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-            .ok()?;
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("ByardCore - Instrumentation Test Device"),
-        required_features: wgpu::Features::empty(),
-        required_limits: byard_core::engine::device_limits(&adapter),
-        memory_hints: wgpu::MemoryHints::Performance,
-        ..Default::default()
-    }))
-    .ok()?;
-    Some((Arc::new(device), Arc::new(queue)))
+fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>, byard_test_gpu::Turn)> {
+    byard_test_gpu::device(byard_core::engine::device_limits)
 }
 
 #[test]
 fn encoding_a_frame_enters_encode_frame() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter available, skipping");
         return;
     };
@@ -184,7 +171,7 @@ fn encoding_a_frame_enters_encode_frame() {
 // least explained one. These assertions pin the breakdown that replaced it,
 // uploads, glyphs, passes, buffers, so a sub-scope that stops being entered
 // fails here rather than quietly reading `0.000ms` in the terminal, which is
-// indistinguishable from "that work got free" (INV-18).
+// indistinguishable from "that work got free".
 //
 // `present.acquire` / `present.submit` are the two scopes this file cannot
 // cover: both live in `Engine::render_latest` and need a real window surface,
@@ -195,7 +182,7 @@ fn encoding_a_frame_enters_encode_frame() {
 /// Encodes one frame carrying a solid box and a text line onto a 64×64 target,
 /// and returns the render thread's drained ring.
 fn encode_one_frame() -> Option<SampleBlock> {
-    let (device, queue) = try_device()?;
+    let (device, queue, _turn) = try_device()?;
     let mut enc = pollster::block_on(EncoderSubsystem::init(
         Arc::clone(&device),
         Arc::clone(&queue),
@@ -238,6 +225,7 @@ fn encode_one_frame() -> Option<SampleBlock> {
         text: "sub-scopes".to_string(),
         font_size: 12.0,
         weight: 400,
+        family: None,
         color: [1.0, 1.0, 1.0, 1.0],
         dirty: true,
     });
@@ -303,7 +291,7 @@ fn encode_frame_self_times_sum_to_its_inclusive_time() {
     // Every nanosecond inside `encode.frame` is attributed to exactly one
     // scope in its subtree. This is the property the whole breakdown rests on:
     // if it fails, a sub-scope was mis-nested or synthesised, and the numbers
-    // in `support/PERF_encode_baseline.md` cannot be added up by a reader.
+    // the breakdown reports cannot be added up by a reader.
     let total = subtree_self_ns(&block, root);
     assert_eq!(
         total,
@@ -332,7 +320,7 @@ fn subtree_self_ns(block: &SampleBlock, index: usize) -> u64 {
 
 #[test]
 fn a_steady_state_frame_creates_no_gpu_buffers() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter available, skipping");
         return;
     };
@@ -382,6 +370,7 @@ fn a_steady_state_frame_creates_no_gpu_buffers() {
             text: "arena".to_string(),
             font_size: 12.0,
             weight: 400,
+            family: None,
             color: [1.0, 1.0, 1.0, 1.0],
             dirty: true,
         });

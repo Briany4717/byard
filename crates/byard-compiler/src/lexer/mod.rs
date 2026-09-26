@@ -10,7 +10,7 @@
 //! [`CompileError::StringNestingTooDeep`] (D12).
 //!
 //! The driver ([`lex`]) wraps every `logos` lex failure as a [`CompileError`]
-//! with a [`Span`], there are no silent failures (INV-4).
+//! with a [`Span`], there are no silent failures.
 
 use logos::{Lexer, Logos};
 
@@ -51,7 +51,7 @@ pub const COLOR_HAS_ALPHA_TAG: i64 = 1 << 32;
 #[logos(skip r"[ \t\r\n]+")]
 #[logos(skip r"//[^\n]*")]
 pub enum Token {
-    // ---- keywords (reserved; INV-7) ----
+    // ---- keywords (reserved) ----
     /// `View`
     #[token("View")]
     View,
@@ -416,7 +416,7 @@ pub type SpannedToken = (Token, Span);
 /// The result of lexing a source file: the token stream plus any diagnostics.
 ///
 /// Lexing never aborts on the first error, it records a [`CompileError`] and
-/// continues, so one pass surfaces multiple problems (INV-4).
+/// continues, so one pass surfaces multiple problems.
 #[derive(Debug, Default)]
 pub struct LexedFile {
     /// Successfully lexed tokens, in source order.

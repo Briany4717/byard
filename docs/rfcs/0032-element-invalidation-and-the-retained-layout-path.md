@@ -6,7 +6,7 @@
 - **Last updated:** 2026-07-26
 - **Depends on:**
   - RFC-0001 (§2.2 dirty flags, §3.3 incremental scissor, §4.2 spatial grid, this RFC is what makes those three sections describe the runtime instead of the intent; see `0001-erratum-memory-and-dirty-model.md`)
-  - RFC-0004 (Mark-and-Pull, and specifically **IMPL-02**'s frame-write value-equality cut, which this RFC generalises from bindings to element attributes)
+  - RFC-0004 (Mark-and-Pull, and specifically its frame-write value-equality cut, which this RFC generalises from bindings to element attributes)
   - RFC-0013 / RFC-0030 §I1 (the instrumentation that produced the numbers this RFC acts on)
   - RFC-0025 (`endpoint_key`, the existing, blessed precedent for "hash the raw bits to answer *did this change?*" without persisting the values)
   - RFC-0005 (the text measure protocol, the largest single beneficiary, and the largest correctness hazard)
@@ -18,7 +18,7 @@
 
 ## Summary
 
-`support/AUDIT_incremental_paths_and_memory_model.md` found three incremental
+An audit of the incremental paths and the memory model found three incremental
 paths that production never takes. PR #148 measured them, refused to rewrite the
 layout path, and identified why all three fail together: **the evaluation model
 does not produce the signal the invalidation model consumes.** Element
@@ -163,7 +163,7 @@ Three reasons, in order of weight:
    composes on top of this, the fingerprint becomes a fallback for
    non-lowerable expressions.
 3. **It is a generalisation of a decision the project already made.** RFC-0004
-   **IMPL-02** chose "Mark-and-Pull with the frame-write value-equality cut only"
+   chose "Mark-and-Pull with the frame-write value-equality cut only"
    over memo value-versioning, on the same reasoning. RFC-0025's `endpoint_key`
    hashes raw bits to answer "did this retarget?" without persisting values.
    This RFC applies the same shape one level out, which means it inherits an
@@ -202,7 +202,7 @@ a heuristic and not per-value:
 | `layout` | `width`, `height`, `gap`, `p`, `m`, `grow`, `align`, `justify`, `direction`, `wrap`, `font_size`, text content, `absolute`, grid tracks/placement, `scroll_axes` |
 | `paint` | `bg`, `color`, `radius`, `smooth`, `border_*`, `shadow_*`, `opacity`, `gradient*`, `blur*`, `transform`, `dash*`, `fill`, `stroke` |
 
-**INV-8 becomes enforceable.** RFC-0010 asserts "an animated property must never
+**Paint-time animation becomes enforceable.** RFC-0010 asserts "an animated property must never
 trigger relayout"; nothing checks it today. With this table, an animated
 attribute in the `layout` column is a lower-time diagnostic
 (`AnimatedLayoutAttribute`), so the invariant is enforced at the surface rather
@@ -229,11 +229,11 @@ Concretely, per frame, when the retained path is eligible (R4):
 3. `recompute_dirty(viewport)`. **Taffy's own dirty propagation handles the
    sibling-reflow case**, a node whose rect shifted only because a sibling
    resized is recomputed by Taffy, not by us. This is precisely the hazard
-   IMPL-42 named as the reason not to hand-roll a partial grid update, and the
+   the grid's design named as the reason not to hand-roll a partial grid update, and the
    resolution is to not hand-roll it: we never compute which *rects* changed, only
    which *inputs* changed.
 4. `rebuild_grid` runs its full walk, unchanged, over the **actual resolved
-   rects**. IMPL-42 measured this and kept it deliberately; that decision stands
+   rects**. That walk was measured and kept deliberately; that decision stands
    and is now load-bearing, it is what guarantees no grid entry can be stale.
 5. `populate_frame` receives the layout-dirty target set.
 6. Primitives carry `dirty = (paint fingerprint changed) || (layout dirty)`.
@@ -260,7 +260,7 @@ retained path **must reuse the stored `AtlasNodeId`s**, `next_target_index()` is
 would silently reassign.
 
 > **Erratum, added while closing the phase.** Two corrections to this section,
-> both found by asking the question INV-18 asks, *which assertion fails when
+> both found by asking the question every incremental path must answer, *which assertion fails when
 > production stops taking this path?*, of the whitelist itself.
 >
 > 1. **The overlay/route clause is defence in depth, not the sole guard.** It
@@ -288,7 +288,7 @@ benchmark improved.**
 `recompute_dirty` runs the measure protocol **with no sizer**, so a wrapping
 `Text` leaf falls back to its natural single-line size. On a naive retained path
 this silently un-wraps every wrapping text leaf on the frame after any retained
-frame. It is documented in `DESICIONS.md` under the RFC-0005 wrap entry and is
+frame. It was recorded as a known hazard when RFC-0005's wrapping landed, and is
 the single most likely way this RFC ships a visible bug.
 
 **Resolution:** `recompute_dirty` gains a `recompute_dirty_with_text(viewport,
@@ -329,7 +329,10 @@ consequences worth stating because getting them wrong is subtle:
   forced-rebuild list, because a scheme flip typically changes nearly everything
   and the marking pass would cost more than the rebuild.
 
-### R7, Observability (INV-18)
+### R7, Observability
+
+An incremental path needs an assertion that fails when production stops taking
+it; a benchmark proves the path is fast, not that anyone walks it.
 
 The counters PR #148 added under `atlas::layout::path_counters` become the
 acceptance surface:
@@ -407,12 +410,12 @@ blocked behind the same absence.
 
 ## Prior art
 
-- **RFC-0004 IMPL-02** (this project), the frame-write value-equality cut chosen over memo versioning. Same reasoning, one level in.
+- **RFC-0004** (this project), the frame-write value-equality cut chosen over memo versioning. Same reasoning, one level in.
 - **RFC-0025 `endpoint_key`** (this project), hashing raw bits to detect change without persisting values. This RFC reuses the pattern and its justification verbatim.
 - **React's `memo` / shallow prop comparison**, the same conservative choice: compare resolved props rather than trust a dependency graph. React additionally demonstrates the failure mode of the alternative (stale closures from missing hook dependencies), which is (a)'s hazard in a language that cannot check it either.
 - **SwiftUI's `Equatable` view modifier**, an explicit opt-in to exactly this comparison, which suggests the mechanism is sound but that making it *automatic* (as here) is the better default when the values are cheap to hash.
 - **Flutter's `RenderObject.markNeedsLayout` / `markNeedsPaint` split**, the direct precedent for R2's two classes, including the invariant that a paint-only change must never mark layout. Flutter enforces it by having separate methods; this RFC enforces it by a lower-time diagnostic, which is stricter.
-- **Taffy's own dirty propagation**, R3 delegates to it rather than reimplementing, which is the lesson IMPL-42 already recorded when it declined to hand-roll a partial grid update.
+- **Taffy's own dirty propagation**, R3 delegates to it rather than reimplementing, which is the lesson the spatial grid already taught when it declined to hand-roll a partial grid update.
 
 ---
 
@@ -491,7 +494,7 @@ is left as-is; changing it is out of scope and would need its own justification.
 
 **Resolution: no, `AnimatedLayoutAttribute`, a lower-time diagnostic.**
 
-RFC-0010 INV-8 already states that an animated property must never trigger
+RFC-0010 already states that an animated property must never trigger
 relayout; nothing enforced it, and R2's table is the first structure that can.
 Allowing it would mean an animation marks layout dirty every active frame,
 recomputing the tree at the display rate, reproducing exactly the behaviour this
@@ -500,8 +503,8 @@ the supported alternative, so the error teaches the correct construct.
 
 ---
 
-Implementation-time decisions that surface after merge go to
-`support/DESICIONS.md` as `IMPL-NN` entries. This RFC carries no open questions.
+Implementation-time decisions that surface after merge are recorded with the
+change that makes them, not back in this RFC. This RFC carries no open questions.
 
 ---
 

@@ -1,12 +1,13 @@
 # RFC-0008: Package Ecosystem, Multi-File Modules, Dependencies, and Distribution
 
-- **Status:** Active, implemented 2026-07-04. Pillars A/B/C/E landed;
-  Pillar D (asset distribution) remains a design proposal. Open decisions
-  D-F…D-K are resolved; the first out-of-tree package (`byard-material`)
-  exercises the pipeline end to end.
+- **Status:** Active, implemented. Pillars A/B/C/E landed 2026-07-04;
+  Pillar D (asset distribution, D-L) and a registry source with
+  `byard publish` (D-H) landed 2026-09-24, see "Pillar D and the registry, as
+  built" below. The first out-of-tree package (`byard-material`) ships its
+  typefaces and theme through them.
 - **Author(s):** Briany4717
 - **Created:** 2026-06-24
-- **Last updated:** 2026-07-04
+- **Last updated:** 2026-09-24
 - **Depends on:**
   - **RFC-0007** (User-View Instantiation), a `View` call must expand before an
     *imported* `View` can mean anything. Hard prerequisite.
@@ -193,6 +194,73 @@ generalizes the watcher to the **module graph**:
 - Fetched (immutable, locked) cache packages are **not** watched.
 
 ---
+
+## Pillar D and the registry, as built
+
+### Assets resolve inside the package (D-L)
+
+A package declares its fonts in its own manifest, with paths relative to the
+package:
+
+```toml
+# brand/byard.toml
+[package]
+name = "brand"
+version = "0.1.0"
+
+[assets.fonts]
+Display = "fonts/SpaceGrotesk-Variable.ttf"
+
+[theme]
+seed = "#0B57D0"
+
+[theme.typography]
+headline = { size = 34, family = "Display", weight = "bold" }
+```
+
+- Every dependency's fonts are read from **that package's** root and
+  registered as `"<package>/<Family>"` (`brand/Display`), named by the
+  package's own `[package] name`, so its views can name their face without
+  knowing what a consumer calls the dependency. The virtual id this pillar
+  proposed is exactly that name.
+- A package's asset paths must stay inside it (relative, no `..`); one that
+  climbs out is an error naming the family and the path.
+- `[theme] extends = "<dependency>"` layers the package's `[theme]` under the
+  project's own. Inside it, a typography `family` the package ships means the
+  package's font (`"Display"` means `brand/Display`). The project's tokens
+  still win. `extends` naming something that is neither `byard-base` nor a
+  dependency is an error listing the declared dependencies; it used to be
+  accepted silently.
+- The lockfile checksum covers a package's declared asset files. A package
+  that declares none hashes exactly as before, so every existing lock stays
+  valid.
+
+### A registry source and `byard publish` (D-H)
+
+```toml
+[dependencies]
+brand = { registry = "../registry", version = "0.1.0" }
+```
+
+- `byard publish [dir] --registry <dir>` writes a deterministic archive of
+  exactly what the package is made of (manifest, sources, declared assets, and
+  a README and licence when present) to `<registry>/<name>/<version>.tar.gz`,
+  and one entry in `<registry>/index.toml` with the archive's hash and the
+  package checksum.
+- The archive is POSIX ustar in gzip with fixed metadata (sorted paths, mode
+  0644, mtime 0, no owner names), so the same package produces the same bytes
+  on every machine.
+- Versions are immutable. Publishing identical content again is a no-op;
+  different content under an existing version is refused.
+- `byard get` fetches a registry dependency by checking the archive's hash,
+  unpacking it (refusing any path that would leave the destination), and
+  checking the unpacked package against the indexed checksum before moving it
+  into the cache. The lock pins the same checksum a path or git source of the
+  same package gets, which is the "registry as a drop-in source" this RFC
+  deferred to.
+- A registry is a directory for now. The same layout served over HTTP is a
+  registry; fetching it over the network, and a version solver (D-K), remain
+  future work.
 
 ## Open decisions
 

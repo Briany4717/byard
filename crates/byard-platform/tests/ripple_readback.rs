@@ -19,21 +19,8 @@ use byard_core::encoder::EncoderSubsystem;
 use byard_core::frame::{RenderFrame, RippleInstance, Transform, Viewport};
 use std::sync::Arc;
 
-fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>)> {
-    let instance =
-        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-    let adapter =
-        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-            .ok()?;
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("ripple readback device"),
-        required_features: wgpu::Features::empty(),
-        required_limits: byard_core::engine::device_limits(&adapter),
-        memory_hints: wgpu::MemoryHints::Performance,
-        ..Default::default()
-    }))
-    .ok()?;
-    Some((Arc::new(device), Arc::new(queue)))
+fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>, byard_test_gpu::Turn)> {
+    byard_test_gpu::device(byard_core::engine::device_limits)
 }
 
 /// A read-back framebuffer: physical-pixel BGRA bytes plus the row stride.
@@ -171,7 +158,7 @@ fn ripple(rect: [f32; 4], params: [f32; 4], color: [f32; 4], radii: [f32; 4]) ->
 #[test]
 #[allow(clippy::many_single_char_names)]
 fn ripple_ink_composites_over_light_and_dark_and_clips_to_the_rounded_corner() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping ripple readback");
         return;
     };
@@ -273,7 +260,7 @@ fn ripple_ink_composites_over_light_and_dark_and_clips_to_the_rounded_corner() {
 /// stays crisp on top of the ink).
 #[test]
 fn ripple_depth_keeps_children_crisp_above_the_ink() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping ripple readback");
         return;
     };

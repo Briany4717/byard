@@ -38,21 +38,8 @@ const SCALE: f32 = 2.0;
 /// rather than a rounding one.
 const CARD: [f32; 4] = [20.0, 20.0, 200.0, 80.0];
 
-fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>)> {
-    let instance =
-        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-    let adapter =
-        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-            .ok()?;
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("gradient kinds readback device"),
-        required_features: wgpu::Features::empty(),
-        required_limits: byard_core::engine::device_limits(&adapter),
-        memory_hints: wgpu::MemoryHints::Performance,
-        ..Default::default()
-    }))
-    .ok()?;
-    Some((Arc::new(device), Arc::new(queue)))
+fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>, byard_test_gpu::Turn)> {
+    byard_test_gpu::device(byard_core::engine::device_limits)
 }
 
 struct Readback {
@@ -212,7 +199,7 @@ fn radial(radius: f32) -> Gradient {
 
 #[test]
 fn a_radial_glow_falls_off_from_its_centre() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping readback");
         return;
     };
@@ -235,7 +222,7 @@ fn a_radial_glow_falls_off_from_its_centre() {
 
 #[test]
 fn a_radial_centre_lands_where_it_was_asked_to() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping readback");
         return;
     };
@@ -268,7 +255,7 @@ fn a_radial_centre_lands_where_it_was_asked_to() {
 
 #[test]
 fn a_radial_glow_stays_circular_on_a_wide_card() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping readback");
         return;
     };
@@ -290,7 +277,7 @@ fn a_radial_glow_stays_circular_on_a_wide_card() {
 
 #[test]
 fn a_conic_sweep_wraps_without_a_seam() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping readback");
         return;
     };
@@ -332,7 +319,7 @@ fn a_conic_sweep_wraps_without_a_seam() {
 
 #[test]
 fn a_gradient_box_still_has_smoothed_corners() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping readback");
         return;
     };
@@ -364,7 +351,7 @@ fn a_gradient_box_still_has_smoothed_corners() {
 
 #[test]
 fn a_linear_ramp_still_draws_the_profile_it_always_did() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping readback");
         return;
     };

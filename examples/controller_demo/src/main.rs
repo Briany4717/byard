@@ -11,7 +11,7 @@
 //! keeps its layout, the window keeps dragging, and the answer appears when it
 //! arrives. That responsiveness is the thing being demonstrated, the work runs
 //! on the Tokio pool and only its `HostValue` result crosses back to the logic
-//! thread (INV-12, INV-2).
+//! thread.
 //!
 //! Ask for `""` and the controller returns an `Err`, so the `err` arm runs
 //! instead. Both arms are ordinary actions: they write a `var`, and the normal

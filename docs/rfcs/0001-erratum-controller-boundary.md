@@ -14,8 +14,7 @@ RFC-0001 describes the controller boundary as if it were complete: §"Rust
 controller" says `#[byard_controller]` "generates shared-memory bindings and a
 typed metadata file," and §5.1 lists a Tokio pool that "executes async I/O from
 Rust controllers \[and] sends results back to the logic thread via
-`tokio::sync::mpsc`." A source audit (2026-07-17,
-`support/GAP_ANALYSIS_real_apps.md`) found this path is **not wired end to end**.
+`tokio::sync::mpsc`." A source audit (2026-07-17) found this path is **not wired end to end**.
 This erratum records the true state and points to the RFCs that close the gap. As
 with the surface-syntax erratum, RFC-0001 is **Active**, so its body is not
 edited; the architectural intent stands, and RFC-0028/0029 realize it.

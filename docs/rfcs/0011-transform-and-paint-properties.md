@@ -1,9 +1,16 @@
 # RFC-0011: Transform & Paint-Time Properties
 
-- **Status:** Active, partially implemented (M33 engine primitives, M34 attribute surface, group-transform inheritance landed). All design decisions (T1–T4) and formerly-unresolved questions resolved. Remaining: hierarchical transform stack, group opacity (render-to-texture), text transforms (glyphon limitation).
+- **Status:** Active, partially implemented. M33 engine primitives, M34 attribute surface, and group-transform inheritance landed first. The **hierarchical transform stack** landed 2026-09-23: hit testing and clipping now follow an ancestor's transform the way paint already did (below). Remaining: group opacity (render-to-texture), and text transforms, which are blocked on `glyphon` taking no per-run matrix.
+
+  **What "hierarchical" turned out to mean.** Paint had already composed an ancestor's transform onto its children (`Transform::compose`); this document's §"Composition & nesting" still describes that as deferred, and it was not. What was actually missing were the two consumers that had not been told:
+
+  - **Hit testing.** A button inside a rotated card was drawn rotated and pressable where the card would have put it *unrotated*. Every region is now registered under its **ancestors'** transform and the pointer is mapped back through it, which is exact for a point where mapping a rotated rectangle forward is not. The element's **own** transform still does not move its own target: a hover-scale that grew its own hit area would flicker at its edge as it animated, and that rule stands exactly as it was. The scroll displacement is taken out of the frame, since scrolling already reaches every hit rect separately.
+  - **Clipping.** A `Clip` under a rotated ancestor clipped to an axis-aligned box placed at its rotated top-left corner, which kept a triangle of its content and lost the rest. It is now emitted as a path mask of the rotated rounded rectangle (RFC-0037 `clip(path)`), so content is cut along the edges it is drawn with. An unrotated clip is untouched and stays a scissor.
+
+  An untransformed tree registers no transformed regions at all, which is asserted rather than assumed: the assertion caught, on its first run, that a composed identity carries a non-zero pivot and failed the bit-exact identity test, so the check is on the *mapping* (no translation, unit scale, no rotation) and not on the struct.
 - **Author(s):** Brian (byard_v2)
 - **Created:** 2026-07-01
-- **Last updated:** 2026-07-01
+- **Last updated:** 2026-09-23
 - **Depends on:** RFC-0001 (§3.1 pipelines, `frame.rs` primitives), RFC-0005 (intrinsic attribute catalog & `Len` model), RFC-0002 (D4 attribute contract, D5 style layers).
 - **Pairs with:** RFC-0010 (these are exactly the GPU-animatable set), RFC-0012 (interactive states drive them).
 

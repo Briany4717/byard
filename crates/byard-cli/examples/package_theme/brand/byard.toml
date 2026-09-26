@@ -1,0 +1,20 @@
+# A design-system package (RFC-0008 pillar D): it ships a typeface and a
+# theme, and nothing about where it will be used. The font path is relative
+# to this package, and a consumer names the face `brand/Display`.
+[package]
+name = "brand"
+version = "0.1.0"
+
+[assets.fonts]
+Display = "fonts/SpaceGrotesk-Variable.ttf"
+
+[theme]
+name = "brand"
+seed = "#0B57D0"
+
+[theme.typography]
+headline = { size = 34, family = "Display", weight = "bold" }
+title = { size = 20, family = "Display", weight = "medium" }
+
+[theme.shape]
+corner_lg = 20

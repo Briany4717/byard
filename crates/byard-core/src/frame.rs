@@ -1325,6 +1325,15 @@ pub struct CanvasShape {
     pub params: [f32; 8],
     /// Stroke colour `[r, g, b, a]`; `a == 0` disables the stroke.
     pub stroke_color: [f32; 4],
+    /// A gradient painting this shape's **stroke** (RFC-0035
+    /// §"Canvas arc strokes"), or `None` for the flat `stroke_color`.
+    ///
+    /// The stroke rather than the fill, and that is the whole feature rather
+    /// than an omission: the case this exists for is a ring whose colour
+    /// sweeps around it, which a flat stroke can only approximate with dozens
+    /// of segments. A gradient *fill* of an arbitrary shape already has a
+    /// home in the Tier-2 `path`, which carries the same descriptor.
+    pub stroke_gradient: Option<Gradient>,
     /// Fill colour `[r, g, b, a]`; `a == 0` disables the fill. A filled arc
     /// paints the circular sector (pie wedge) swept by `start..start+sweep`.
     pub fill_color: [f32; 4],
@@ -1385,6 +1394,7 @@ impl Default for CanvasShape {
     fn default() -> Self {
         Self {
             kind: CANVAS_SHAPE_CIRCLE,
+            stroke_gradient: None,
             params: [0.0; 8],
             stroke_color: [0.0; 4],
             fill_color: [0.0; 4],
@@ -1547,6 +1557,70 @@ pub struct AtlasUpload {
     pub id: u64,
 }
 
+/// One registered font family: the file's bytes plus the two names that
+/// identify it (RFC-0034 §Reference "Asset side").
+///
+/// The engine never learns what a *theme* is (INV-1): the compiler reads the
+/// manifest, loads the bytes and hands over this record, which is an opaque
+/// blob and two strings.
+///
+/// The distinction between the two names is the whole reason this type exists.
+/// `declared` is what the manifest called the family, which is what a
+/// diagnostic must say back to the author. `resolved` is the family name the
+/// face itself carries, which is what `cosmic-text` matches on. They are
+/// routinely different (`display = "SpaceGrotesk-Variable.ttf"` declares
+/// `display` and resolves to `Space Grotesk`), and shaping against the wrong
+/// one silently falls back to the system font.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FontFace {
+    /// The family name as written in the manifest, used only in diagnostics.
+    pub declared: String,
+    /// The family name the face carries internally: what both `FontSystem`s
+    /// match against, and what a [`TextLine::family`] holds.
+    pub resolved: std::sync::Arc<str>,
+    /// The font file's bytes, shared rather than copied because both the
+    /// measurement and the paint `FontSystem` are handed the same blob.
+    pub bytes: std::sync::Arc<[u8]>,
+}
+
+/// Every font family the application has registered, carried on the frame so
+/// the render thread's `FontSystem` can be brought level with the logic
+/// thread's (RFC-0034, INV-27).
+///
+/// **Why the whole table, every frame, rather than a drained pool.** The
+/// vector atlas ships its bytes as a pool of [`AtlasUpload`]s that the
+/// generator resends until an acknowledgment comes back, because a frame that
+/// the relay drops takes its pool with it. A font table is small (a handful of
+/// faces for the life of the process) and is `Arc`-shared, so carrying all of
+/// it costs one pointer clone per frame and needs no acknowledgment channel at
+/// all: the render thread loads the faces it has not seen and ignores the
+/// rest. A dropped frame then costs nothing, where a drained pool would cost a
+/// permanently unregistered family, which is exactly the failure INV-27 is
+/// about.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FontTable {
+    faces: Vec<FontFace>,
+}
+
+impl FontTable {
+    /// Adds a face to the table.
+    pub fn push(&mut self, face: FontFace) {
+        self.faces.push(face);
+    }
+
+    /// The registered faces, in declaration order.
+    #[must_use]
+    pub fn faces(&self) -> &[FontFace] {
+        &self.faces
+    }
+
+    /// Whether any family has been registered.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.faces.is_empty()
+    }
+}
+
 /// A single line of text to be rendered in a frame.
 ///
 /// Shared between the logic thread (which populates [`RenderFrame::texts`]) and
@@ -1572,6 +1646,14 @@ pub struct TextLine {
     /// variable font's `wght` axis takes and how designers already write it;
     /// the keywords remain as aliases.
     pub weight: u16,
+    /// The resolved font family this line is shaped in (RFC-0034), or `None`
+    /// for the system sans-serif.
+    ///
+    /// This is the *resolved* name from [`FontFace::resolved`], never the name
+    /// the manifest declared: it is handed straight to `cosmic-text`, and both
+    /// the measurement and the paint `FontSystem` must be given the identical
+    /// string or layout sizes one face and the GPU draws another (INV-27).
+    pub family: Option<std::sync::Arc<str>>,
     /// Text colour: `[r, g, b, a]` in linear space, each component 0–1.
     pub color: [f32; 4],
     /// Whether this line's content changed since the last tick.
@@ -1600,6 +1682,16 @@ impl Viewport {
     pub const fn new(width: f32, height: f32) -> Self {
         Self { width, height }
     }
+}
+
+/// What the platform needs to know about text input this frame (RFC-0040
+/// §4): where the focused field's caret is, so the IME can put its candidate
+/// window beside it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TextInputState {
+    /// The caret, in logical pixels in viewport space: after the element's
+    /// transform and its scroll containers' offsets.
+    pub caret: Rect,
 }
 
 /// A snapshot of all render primitives for a single frame.
@@ -1709,6 +1801,32 @@ pub struct RenderFrame {
     /// (RFC-0009 §2-C / INV-8). Applied by the render thread via a single
     /// `Queue::write_texture` each, during frame application, before the draw.
     atlas_uploads: Vec<AtlasUpload>,
+
+    /// Opacity groups (RFC-0011 T4), in the order they were closed. Empty on
+    /// every frame with no translucent container that needs one.
+    groups: Vec<OpacityGroup>,
+    /// The group currently open, if any: its start mark, opacity and depth.
+    /// One at a time, see [`RenderFrame::begin_group`].
+    open_group: Option<(LayerMark, f32, f32)>,
+
+    /// This frame's clip coverage masks (RFC-0037 `clip(path)`), indexed by
+    /// [`ClipRect::mask`]. Empty on every frame that clips only rectangles,
+    /// which is nearly all of them.
+    clip_masks: Vec<ClipMask>,
+    /// Where the focused text field's caret is, in viewport space, so the
+    /// platform can place its IME candidate window (RFC-0040 §4). `None` when
+    /// no text field has focus, which is also what turns the IME off.
+    text_input: Option<TextInputState>,
+
+    /// Every font family registered so far (RFC-0034), shared with the logic
+    /// thread rather than copied.
+    ///
+    /// Deliberately **not** cleared by [`RenderFrame::clear`]: this is
+    /// registration state that outlives any one frame's primitives, not a
+    /// pool of this frame's work. The evaluator assigns it on every emit, so a
+    /// reused frame buffer can never resurrect a table the application has
+    /// replaced.
+    fonts: std::sync::Arc<FontTable>,
 
     /// Per-primitive **draw-order depth**, one parallel vec per drawable pool.
     ///
@@ -1834,6 +1952,41 @@ pub struct ClipRect {
     /// masks). All zero for a plain rectangular clip, which is the
     /// `ScrollView` case and stays a pure scissor with no shader work.
     pub radii: [f32; 4],
+    /// Index into [`RenderFrame::clip_masks`] of the coverage this clip is
+    /// additionally cut by (RFC-0037 `clip(path)`), or `None` for a clip that
+    /// is only a rounded rectangle.
+    ///
+    /// The mask *narrows* the rect rather than replacing it: the rect is still
+    /// the scissor, which is what keeps the fragment cost of an arbitrary
+    /// clip proportional to the path's own bounding box rather than to the
+    /// window.
+    pub mask: Option<u32>,
+    /// The mask's own bounds in logical pixels, which the coverage is mapped
+    /// through. Not `rect`: nesting intersects `rect` with the parent, and
+    /// sampling the mask through a shrunk rect would stretch the outline onto
+    /// the smaller box. Unused when `mask` is `None`.
+    pub mask_bounds: Rect,
+}
+
+/// A tessellated path acting as a clip mask (RFC-0037 `clip(path)`).
+///
+/// The mask is rasterised to a **coverage texture** rather than to a stencil,
+/// and the reason is not performance: a stencil is one bit, and the rounded
+/// clip that shipped alongside this cuts its edge with an analytic SDF, so it
+/// is smooth. A stencil-based path clip beside it would put a hard, aliased
+/// edge on the one boundary the user actually drew while every boundary the
+/// engine generated stayed soft, which is a worse outcome than not shipping
+/// it at all.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ClipMask {
+    /// The triangles, in logical pixels, from the same tessellator and the
+    /// same mesh cache a filled path uses. A mask whose commands have not
+    /// changed re-tessellates nothing.
+    pub mesh: std::sync::Arc<FillMesh>,
+    /// The mask's bounding box in logical pixels: the region of the coverage
+    /// texture it is rasterised into, and the rectangle the shader maps a
+    /// fragment through to sample it.
+    pub bounds: Rect,
 }
 
 /// Axis-aligned intersection of two logical-pixel rects (empty if disjoint).
@@ -1887,6 +2040,34 @@ pub struct LayerMark {
     pub fill: u32,
 }
 
+/// A subtree composited as **one image** at `opacity` (RFC-0011 T4, group
+/// opacity).
+///
+/// The difference from per-instance opacity is overlap. Two half-opaque
+/// siblings that overlap, drawn one after the other, show a darker seam where
+/// both fell; the same two drawn opaque into an offscreen target and faded
+/// together show none, because the fade is applied once to a picture in which
+/// they no longer overlap. A card's text over its own background is the
+/// everyday case: per-instance, the text blends with a background that is
+/// itself see-through.
+///
+/// `start..end` is the range of every pool the group's primitives occupy;
+/// the encoder draws exactly that range into the offscreen target and then,
+/// in the main pass, one composite at `depth`, which was reserved *before*
+/// the group's first primitive so the composite sits in front of what came
+/// before the group and behind what comes after it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct OpacityGroup {
+    /// Every pool's length when the group opened.
+    pub start: LayerMark,
+    /// Every pool's length when it closed.
+    pub end: LayerMark,
+    /// The alpha the whole picture is composited at.
+    pub opacity: f32,
+    /// The draw-order depth of the composite.
+    pub depth: f32,
+}
+
 /// Applies `set` to every element of `pool` from index `from` onward.
 fn mark_from<T>(pool: &mut [T], from: u32, mut set: impl FnMut(&mut T)) {
     let start = usize::try_from(from).unwrap_or(usize::MAX).min(pool.len());
@@ -1922,6 +2103,18 @@ impl RenderFrame {
         Self::default()
     }
 
+    /// Records the focused text field's caret rectangle, in viewport space
+    /// (RFC-0040 §4). The last call in a frame wins; there is one focus.
+    pub fn set_text_input(&mut self, state: TextInputState) {
+        self.text_input = Some(state);
+    }
+
+    /// The focused text field's caret, if a text field has focus (RFC-0040).
+    #[must_use]
+    pub const fn text_input(&self) -> Option<TextInputState> {
+        self.text_input
+    }
+
     /// Clears the frame, retaining internal buffer capacity.
     ///
     /// After the first frame, subsequent populations pay zero allocation cost
@@ -1945,6 +2138,10 @@ impl RenderFrame {
         self.backdrops.clear();
         self.backdrop_marks.clear();
         self.atlas_uploads.clear();
+        self.clip_masks.clear();
+        self.text_input = None;
+        self.groups.clear();
+        self.open_group = None;
         self.solid_depths.clear();
         self.decorated_depths.clear();
         self.texture_depths.clear();
@@ -2022,7 +2219,24 @@ impl RenderFrame {
     /// fragment the parent's corner would have cut, never cut one it kept, and
     /// the parent's own scissor still bounds it.
     pub fn begin_clip_rounded(&mut self, rect: Rect, radii: [f32; 4]) -> u16 {
-        let (clipped, radii) = match self.clip_stack.last() {
+        self.begin_clip_masked(rect, radii, None)
+    }
+
+    /// Opens a clip cut by an arbitrary **path** (RFC-0037 `clip(path)`).
+    ///
+    /// The mask's own bounding box is the clip's rectangle, so the scissor
+    /// still bounds the work to the path rather than to the window, and the
+    /// coverage narrows it from there.
+    pub fn begin_clip_path(&mut self, mask: ClipMask) -> u16 {
+        let bounds = mask.bounds;
+        let index = u32::try_from(self.clip_masks.len()).unwrap_or(u32::MAX);
+        self.clip_masks.push(mask);
+        self.begin_clip_masked(bounds, [0.0; 4], Some((index, bounds)))
+    }
+
+    /// The shared body of the three `begin_clip*` forms.
+    fn begin_clip_masked(&mut self, rect: Rect, radii: [f32; 4], mask: Option<(u32, Rect)>) -> u16 {
+        let (clipped, radii, mask) = match self.clip_stack.last() {
             Some(&parent) => {
                 let p = self.clips[parent as usize];
                 let r = intersect_rect(p.rect, rect);
@@ -2033,14 +2247,23 @@ impl RenderFrame {
                 // not compare exactly.
                 let rounds_nothing = radii.iter().all(|r| *r <= 0.0);
                 let radii = if rounds_nothing { p.radii } else { radii };
-                (r, radii)
+                // One mask per entry, and the inner one wins, on exactly the
+                // reasoning the corners follow: it is the tighter statement,
+                // and the parent still contributes its box through the
+                // intersection above. A path inside a path is therefore
+                // bounded correctly and cut by the inner outline, which is
+                // conservative in the safe direction rather than exact.
+                let inherited = p.mask.map(|m| (m, p.mask_bounds));
+                (r, radii, mask.or(inherited))
             }
-            None => (rect, radii),
+            None => (rect, radii, mask),
         };
         let id = u16::try_from(self.clips.len()).unwrap_or(u16::MAX);
         self.clips.push(ClipRect {
             rect: clipped,
             radii,
+            mask: mask.map(|(m, _)| m),
+            mask_bounds: mask.map_or(Rect::new(0.0, 0.0, 0.0, 0.0), |(_, b)| b),
         });
         self.clip_stack.push(id);
         id
@@ -2298,6 +2521,79 @@ impl RenderFrame {
         self.atlas_uploads.push(upload);
     }
 
+    /// Installs the registered font table for this frame (RFC-0034).
+    ///
+    /// Cheap: the table is `Arc`-shared, so this is a pointer clone however
+    /// many megabytes of font bytes it holds.
+    pub fn set_fonts(&mut self, fonts: std::sync::Arc<FontTable>) {
+        self.fonts = fonts;
+    }
+
+    /// Opens an opacity group (RFC-0011 T4) and returns whether it did.
+    ///
+    /// Returns `false`, and records nothing, when a group is already open. A
+    /// group inside a group is folded into its parent's picture with its own
+    /// alpha applied per primitive, which is exact whenever the inner group's
+    /// content does not overlap itself and conservative otherwise. The caller
+    /// uses the answer to decide whether to multiply the opacity into its
+    /// primitives itself, so the two cases cannot both apply it or both skip
+    /// it.
+    pub fn begin_group(&mut self, opacity: f32) -> bool {
+        if self.open_group.is_some() {
+            return false;
+        }
+        let start = self.cursor();
+        let depth = self.next_depth();
+        self.open_group = Some((start, opacity, depth));
+        true
+    }
+
+    /// Closes the open opacity group. A group that drew nothing is dropped
+    /// rather than recorded, so an empty translucent container costs no pass.
+    pub fn end_group(&mut self) {
+        let Some((start, opacity, depth)) = self.open_group.take() else {
+            return;
+        };
+        let end = self.cursor();
+        if end == start {
+            return;
+        }
+        self.groups.push(OpacityGroup {
+            start,
+            end,
+            opacity,
+            depth,
+        });
+    }
+
+    /// The frame's opacity groups (RFC-0011 T4).
+    #[must_use]
+    pub fn groups(&self) -> &[OpacityGroup] {
+        &self.groups
+    }
+
+    /// The opacity the primitive at `index` of one pool is composited at,
+    /// beyond its own alpha (RFC-0011 T4): the product of every group whose
+    /// range contains it, or `1.0` when none does.
+    ///
+    /// `pool` picks the pool's field out of a [`LayerMark`] (`|m| m.text`,
+    /// `|m| m.solid`, …), which is how a group's range is recorded. Anything
+    /// that asks "how opaque will this reach the screen" has to ask this as
+    /// well as the primitive, because inside a group the primitive draws
+    /// opaque and the fade is the group's.
+    #[must_use]
+    pub fn composite_opacity(&self, pool: impl Fn(&LayerMark) -> u32, index: usize) -> f32 {
+        self.groups
+            .iter()
+            .filter(|g| {
+                let lo = usize::try_from(pool(&g.start)).unwrap_or(usize::MAX);
+                let hi = usize::try_from(pool(&g.end)).unwrap_or(0);
+                (lo..hi).contains(&index)
+            })
+            .map(|g| g.opacity)
+            .product()
+    }
+
     /// Opens a new z-layer (RFC-0017): everything pushed from here on is drawn
     ///, solids, decorated, textures, vectors, *and text*, interleaved, after
     /// **everything** already in the frame, inside the same GPU render pass.
@@ -2509,6 +2805,19 @@ impl RenderFrame {
     #[must_use]
     pub fn atlas_uploads(&self) -> &[AtlasUpload] {
         &self.atlas_uploads
+    }
+
+    /// Returns this frame's clip coverage masks (RFC-0037 `clip(path)`).
+    #[must_use]
+    pub fn clip_masks(&self) -> &[ClipMask] {
+        &self.clip_masks
+    }
+
+    /// Returns the registered font families (RFC-0034). The render thread
+    /// loads any face its `FontSystem` has not seen before it shapes.
+    #[must_use]
+    pub fn fonts(&self) -> &FontTable {
+        &self.fonts
     }
 
     // ── Census (RFC-0030 §P6) ──────────────────────────────────────────────
@@ -2872,13 +3181,31 @@ impl PaintDigest {
     /// reason.
     pub fn apply(&mut self, frame: &mut RenderFrame) {
         let primed = self.primed;
+        // INV-26: a primitive's pixels are decided by the clip it is drawn
+        // under as much as by its own bytes. A box whose clip's corner radius
+        // animates, or whose path mask moved, is byte-for-byte the box it was
+        // last frame and must still be repainted. Each clip entry is hashed
+        // once, here, and folded into every primitive drawn under it.
+        let clip_hashes: Vec<u64> = frame
+            .clips
+            .iter()
+            .map(|c| paint_hash::clip(c, &frame.clip_masks))
+            .collect();
+        let under = |clips: &[Option<u16>], i: usize| -> u64 {
+            clips
+                .get(i)
+                .copied()
+                .flatten()
+                .and_then(|c| clip_hashes.get(c as usize).copied())
+                .unwrap_or(0)
+        };
 
         // Solids keep their dirty bit out of band, so they get their own loop
         // rather than a `set` closure over the same slice.
         self.solid
             .resize(frame.instances.len().max(self.solid.len()), 0);
         for (i, instance) in frame.instances.iter().enumerate() {
-            let h = paint_hash::box_instance(instance);
+            let h = paint_hash::box_instance(instance) ^ under(&frame.solid_clips, i);
             frame.instances_dirty[i] = !primed || self.solid[i] != h;
             self.solid[i] = h;
         }
@@ -2891,7 +3218,8 @@ impl PaintDigest {
         // rule INV-26 states for a shape group's members.
         self.text.resize(frame.texts.len().max(self.text.len()), 0);
         for (i, line) in frame.texts.iter_mut().enumerate() {
-            let h = paint_hash::text_line(line, frame.text_wrap.get(i).copied().flatten());
+            let h = paint_hash::text_line(line, frame.text_wrap.get(i).copied().flatten())
+                ^ under(&frame.text_clips, i);
             line.dirty = !primed || self.text[i] != h;
             self.text[i] = h;
         }
@@ -2899,6 +3227,7 @@ impl PaintDigest {
         Self::diff(
             &mut self.decorated,
             &mut frame.decorated,
+            &|i| under(&frame.decorated_clips, i),
             primed,
             paint_hash::decorated,
             |d, dirty| d.dirty = dirty,
@@ -2906,6 +3235,7 @@ impl PaintDigest {
         Self::diff(
             &mut self.textures,
             &mut frame.textures,
+            &|i| under(&frame.texture_clips, i),
             primed,
             paint_hash::texture,
             // The encoder sets this bit itself the frame after an async decode
@@ -2916,6 +3246,7 @@ impl PaintDigest {
         Self::diff(
             &mut self.canvas,
             &mut frame.canvas_shapes,
+            &|i| under(&frame.canvas_clips, i),
             primed,
             paint_hash::canvas,
             |s, dirty| s.dirty = dirty,
@@ -2929,13 +3260,14 @@ impl PaintDigest {
     fn diff<T>(
         previous: &mut Vec<u64>,
         items: &mut [T],
+        clip_of: &dyn Fn(usize) -> u64,
         primed: bool,
         hash: impl Fn(&T) -> u64,
         set: impl Fn(&mut T, bool),
     ) {
         previous.resize(items.len().max(previous.len()), 0);
         for (i, item) in items.iter_mut().enumerate() {
-            let h = hash(item);
+            let h = hash(item) ^ clip_of(i);
             let dirty = !primed || previous[i] != h;
             previous[i] = h;
             set(item, dirty);
@@ -3010,6 +3342,14 @@ mod paint_hash {
         t.text.hash(&mut h);
         f32s(&mut h, &[t.x, t.y, t.font_size]);
         f32s(&mut h, &t.color);
+        // The face, both axes of it (RFC-0034). Both reach the shaper, so both
+        // decide this line's pixels, and a line judged clean is a line that
+        // keeps last frame's glyphs: a heading that turns bold renders
+        // correctly exactly once and then never again. Weight arrived here
+        // without this and family arrived the same way; the omission is the
+        // same one twice, which is why they are hashed together.
+        t.weight.hash(&mut h);
+        t.family.hash(&mut h);
         // The wrap width, which is not a field of the line at all (RFC-0005
         // default wrap keeps it in a parallel array). It breaks the lines, so
         // two runs that differ only in it are two different pictures.
@@ -3071,6 +3411,31 @@ mod paint_hash {
         h.finish()
     }
 
+    /// One clip entry: its rectangle, its corners, and its path mask's
+    /// outline. The mask is hashed by its vertex positions rather than by the
+    /// `Arc` holding them, because an allocator is free to hand a new mesh the
+    /// address the old one had, and "same address" would then read as "same
+    /// outline" for a mask that moved.
+    pub(super) fn clip(c: &super::ClipRect, masks: &[super::ClipMask]) -> u64 {
+        let mut h = hasher();
+        f32s(&mut h, &[c.rect.x, c.rect.y, c.rect.width, c.rect.height]);
+        f32s(&mut h, &c.radii);
+        match c.mask.and_then(|m| masks.get(m as usize)) {
+            Some(m) => {
+                1u8.hash(&mut h);
+                f32s(&mut h, &m.mesh.bounds);
+                for v in &m.mesh.vertices {
+                    f32s(&mut h, &v.pos);
+                }
+                m.mesh.indices.hash(&mut h);
+            }
+            None => 0u8.hash(&mut h),
+        }
+        // Never zero, so "under a clip" and "under no clip" cannot fold to the
+        // same value by accident.
+        h.finish() | 1
+    }
+
     pub(super) fn canvas(s: &CanvasShape) -> u64 {
         let mut h = hasher();
         s.kind.hash(&mut h);
@@ -3080,6 +3445,21 @@ mod paint_hash {
         f32s(&mut h, &s.fill_color);
         f32s(&mut h, &s.dash);
         f32s(&mut h, &[s.stroke_width, s.dash_offset, s.opacity]);
+        // The stroke gradient, whole, for the same reason a box's is: `axis()`
+        // is by construction the four floats the shader reads, so a gradient
+        // that moved cannot be judged clean whatever its kind reinterprets
+        // those lanes as.
+        match &s.stroke_gradient {
+            Some(g) => {
+                1u8.hash(&mut h);
+                (g.kind as u32).hash(&mut h);
+                f32s(&mut h, &g.from);
+                f32s(&mut h, &g.mid);
+                f32s(&mut h, &g.to);
+                f32s(&mut h, &g.axis());
+            }
+            None => 0u8.hash(&mut h),
+        }
         transform(&mut h, &s.transform);
         // INV-26 (RFC-0031): the group members live outside this primitive and
         // the shader reads them, so they are part of what decides its pixels.
@@ -3861,6 +4241,7 @@ mod motion_tests {
             text: "hi".to_string(),
             font_size: 12.0,
             weight: 400,
+            family: None,
             color: [1.0; 4],
             dirty: true,
         });
@@ -4232,6 +4613,7 @@ mod motion_tests {
             text: text.to_string(),
             font_size: 14.0,
             weight: 400,
+            family: None,
             color: [1.0; 4],
             dirty: true,
         }
@@ -4314,6 +4696,7 @@ mod paint_digest_tests {
             text: text.to_string(),
             font_size: 12.0,
             weight: 400,
+            family: None,
             color: [1.0; 4],
             dirty: true,
         }
@@ -4376,6 +4759,70 @@ mod paint_digest_tests {
         assert_eq!(
             f.texts().iter().map(|t| t.dirty).collect::<Vec<_>>(),
             vec![false, true]
+        );
+    }
+
+    /// A line that changed only its weight or its family is a line that
+    /// changed (INV-26).
+    ///
+    /// The digest decides whether a primitive is repainted by comparing its
+    /// own bytes at its own pool position. Weight reached the glyph run
+    /// without reaching this hash, and family arrived the same way; either
+    /// omission means a heading that turns bold, or a title that changes
+    /// typeface, is judged clean and keeps last frame's pixels. It renders
+    /// perfectly, once, and then never again.
+    #[test]
+    fn a_line_that_changed_only_its_weight_or_family_is_repainted() {
+        let heavier = TextLine {
+            weight: 700,
+            ..line("a")
+        };
+        let mut d = PaintDigest::new();
+        let _ = digest_frame(&mut d, &[], &[line("a")]);
+        let f = digest_frame(&mut d, &[], std::slice::from_ref(&heavier));
+        assert!(f.texts()[0].dirty, "a weight change must repaint");
+
+        let other_face = TextLine {
+            family: Some(std::sync::Arc::from("Space Grotesk")),
+            ..heavier
+        };
+        let f = digest_frame(&mut d, &[], std::slice::from_ref(&other_face));
+        assert!(f.texts()[0].dirty, "a family change must repaint");
+
+        // And the same line twice is still clean, so the two assertions above
+        // are not passing because everything is dirty.
+        let f = digest_frame(&mut d, &[], std::slice::from_ref(&other_face));
+        assert!(!f.texts()[0].dirty, "an unchanged line must stay clean");
+    }
+
+    /// A primitive whose *clip* changed is a primitive whose pixels changed
+    /// (INV-26).
+    ///
+    /// The box's own bytes are identical across all three frames; only the
+    /// clip it is drawn under moves. Before the clip was folded into the hash,
+    /// a card whose corner radius animated kept its first frame's corners for
+    /// the rest of the animation, because the box inside it was judged clean.
+    #[test]
+    fn a_primitive_under_a_changed_clip_is_repainted() {
+        let clipped = |radius: f32| {
+            let mut f = RenderFrame::new();
+            f.begin_clip_rounded(Rect::new(0.0, 0.0, 40.0, 40.0), [radius; 4]);
+            f.push_instance(boxed(0.0, RED));
+            f.end_clip();
+            f
+        };
+        let mut d = PaintDigest::new();
+        let mut f = clipped(4.0);
+        d.apply(&mut f);
+        let mut f = clipped(4.0);
+        d.apply(&mut f);
+        assert_eq!(f.instances_dirty(), [false], "an unchanged clip is clean");
+        let mut f = clipped(12.0);
+        d.apply(&mut f);
+        assert_eq!(
+            f.instances_dirty(),
+            [true],
+            "the same box under a different clip must be repainted"
         );
     }
 

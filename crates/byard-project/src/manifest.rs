@@ -6,7 +6,7 @@
 //! warn-on-unknown policy for this table, silently ignoring a dependency is
 //! a reproducibility hazard).
 
-use byard_compiler::interp::theme::{FontWeight, Theme, TypoToken};
+use byard_compiler::interp::theme::{DeclaredFont, FontWeight, Theme, TypoToken};
 use std::path::{Path, PathBuf};
 
 /// How a dependency is acquired (RFC-0008 D-H: git + path first; a hosted
@@ -22,6 +22,16 @@ pub enum DepSource {
         url: String,
         /// The pinned ref.
         reference: GitRef,
+    },
+    /// A published package in a registry directory (RFC-0008 D-H): the
+    /// registry's `index.toml` names the archive and the checksum for each
+    /// `name` and exact `version`. A directory rather than a URL for now,
+    /// and the same layout served over HTTP is a registry.
+    Registry {
+        /// The registry directory, relative to the declaring manifest.
+        registry: PathBuf,
+        /// The exact version (no ranges: the solver is deferred, D-K).
+        version: String,
     },
 }
 
@@ -92,9 +102,11 @@ impl Default for DevConfig {
 
 /// Parsed project manifest (or a synthetic one for bare-file usage).
 pub struct Manifest {
+    /// The directory holding `byard.toml` (or the bare entry's directory).
     pub project_root: PathBuf,
     /// Absolute path to the `.byd` entry file.
     pub entry: PathBuf,
+    /// `[project] name`, or the directory's name when there is none.
     pub name: String,
     /// Declared dependencies (RFC-0008 Pillar C). Empty for bare-file usage.
     pub dependencies: Vec<Dependency>,
@@ -271,7 +283,7 @@ impl Manifest {
         };
 
         // RFC-0022: `[theme]` tokens + `[assets.fonts]` layer onto `byard-base`.
-        let theme = parse_theme(&table)?;
+        let theme = parse_theme(&table, &project_root, &dependencies)?;
         // RFC-0030 §V2: the dev runner's own surface.
         let dev = parse_dev(&table)?;
 
@@ -363,73 +375,308 @@ fn parse_duration_ns(s: &str) -> Option<u64> {
 ///
 /// Tokens are declared `snake_case` here and canonicalized to the `camelCase`
 /// byld reference form by [`Theme::set_color`] et al.
-fn parse_theme(table: &toml::Table) -> Result<Theme, String> {
+///
+/// Packages come first (RFC-0008 pillar D): every dependency's
+/// `[assets.fonts]` is read relative to *that package's* root and registered
+/// as `"<package>/<Family>"`, and `extends = "<dependency>"` layers the
+/// package's own `[theme]` under this one, so a design-system package can ship
+/// its palette, type scale and typefaces together.
+fn parse_theme(
+    table: &toml::Table,
+    project_root: &Path,
+    dependencies: &[Dependency],
+) -> Result<Theme, String> {
     let mut theme = Theme::byard_base();
 
-    if let Some(theme_tbl) = table.get("theme").and_then(toml::Value::as_table) {
-        if let Some(name) = theme_tbl.get("name").and_then(toml::Value::as_str) {
-            theme.name = name.to_string();
+    // The dependencies that are on disk, with their manifests. One that is
+    // not (a git source before `byard get`) is skipped here: the module
+    // resolver reports it with the fetch hint, and reporting it twice helps
+    // nobody. Naming it in `extends` is the exception, handled below.
+    let mut packages: Vec<(&str, String, toml::Table)> = Vec::new();
+    for dep in dependencies {
+        let Ok(root) = crate::deps::dep_root(project_root, dep) else {
+            continue;
+        };
+        let Some(pkg) = read_package_manifest(&root)? else {
+            continue;
+        };
+        // Fonts are named by the package's own `[package] name`, not by the
+        // key this project gave the dependency: the package's views name
+        // their fonts without knowing what a consumer calls them.
+        let owner = pkg
+            .get("package")
+            .and_then(|p| p.get("name"))
+            .and_then(toml::Value::as_str)
+            .unwrap_or(&dep.name)
+            .to_string();
+        let in_package = |e: String| format!("package `{owner}`: {e}");
+        for (family, font) in load_fonts(&pkg, &root, true).map_err(in_package)? {
+            theme.add_font(format!("{owner}/{family}"), font);
         }
-        // `extends` beyond the built-in `byard-base` (multi-level, cross-package)
-        // is deferred (RFC-0022 unresolved question); anything else is accepted
-        // and simply layers onto `byard-base`, the only built-in base today.
+        packages.push((dep.name.as_str(), owner, pkg));
+    }
 
-        // [theme.color.<scheme>], a table of `token = "#RRGGBB"`.
-        if let Some(colors) = theme_tbl.get("color").and_then(toml::Value::as_table) {
-            for (scheme, tokens) in colors {
-                let tokens = tokens.as_table().ok_or_else(|| {
-                    format!("byard.toml: [theme.color.{scheme}] must be a table of `token = \"#RRGGBB\"`")
-                })?;
-                for (token, value) in tokens {
-                    let hex = value.as_str().ok_or_else(|| {
-                        format!("byard.toml: theme color `{scheme}.{token}` must be a string like \"#6750A4\"")
-                    })?;
-                    let rgb = parse_hex_color(hex).ok_or_else(|| {
-                        format!("byard.toml: theme color `{scheme}.{token} = {hex:?}` is not a valid `#RRGGBB` / `#RGB` hex color")
-                    })?;
-                    theme.set_color(scheme, token, rgb);
+    if let Some(theme_tbl) = table.get("theme").and_then(toml::Value::as_table) {
+        match theme_tbl.get("extends").map(toml::Value::as_str) {
+            None | Some(Some("byard-base")) => {}
+            Some(None) => {
+                return Err(
+                    "byard.toml: [theme] `extends` must be a string naming a dependency".into(),
+                );
+            }
+            Some(Some(base)) => {
+                if let Some((_, owner, pkg)) = packages.iter().find(|(n, ..)| *n == base) {
+                    if let Some(pkg_theme) = pkg.get("theme").and_then(toml::Value::as_table) {
+                        apply_theme_table(&mut theme, pkg_theme, Some(owner))
+                            .map_err(|e| format!("package `{owner}`: {e}"))?;
+                    }
+                } else if dependencies.iter().any(|d| d.name == base) {
+                    // Declared but not on disk yet (a registry or git source
+                    // before `byard get`). Not an error here: `byard get`
+                    // loads this manifest too, and failing would block the
+                    // one command that fixes it. The module resolver reports
+                    // the missing package, with the fetch hint, everywhere
+                    // else.
+                } else {
+                    let declared: Vec<&str> =
+                        dependencies.iter().map(|d| d.name.as_str()).collect();
+                    return Err(format!(
+                        "byard.toml: [theme] extends `{base}`, which is neither `byard-base` nor a \
+                         dependency{}",
+                        if declared.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" (declared: {})", declared.join(", "))
+                        }
+                    ));
                 }
             }
         }
-
-        // [theme.typography], `token = { size, family?, weight?, tracking?, line_height? }`.
-        if let Some(typo) = theme_tbl.get("typography").and_then(toml::Value::as_table) {
-            for (token, value) in typo {
-                theme.set_typo(token, parse_typo_token(token, value)?);
-            }
-        }
-
-        // [theme.shape], `token = <radius>`.
-        if let Some(shapes) = theme_tbl.get("shape").and_then(toml::Value::as_table) {
-            for (token, value) in shapes {
-                let radius = as_number(value).ok_or_else(|| {
-                    format!("byard.toml: theme shape `{token}` must be a number (corner radius)")
-                })?;
-                #[allow(clippy::cast_possible_truncation)]
-                theme.set_shape(token, radius as f32);
-            }
-        }
+        apply_theme_table(&mut theme, theme_tbl, None)?;
     }
 
-    // [assets.fonts], `family = "path/to/font.ttf"` (RFC-0022 §3). The bytes are
-    // not loaded yet (deferred); declaring a family here makes it resolvable by
-    // `TypoToken.family` and suppresses the `FontNotFound` fallback warning.
-    if let Some(fonts) = table
-        .get("assets")
-        .and_then(|a| a.get("fonts"))
-        .and_then(toml::Value::as_table)
-    {
-        for (family, path) in fonts {
-            let path = path.as_str().ok_or_else(|| {
-                format!(
-                    "byard.toml: [assets.fonts] `{family}` must be a string path to a font file"
-                )
-            })?;
-            theme.add_font(family.clone(), path.to_string());
-        }
+    // The project's own fonts, relative to the project.
+    for (family, font) in load_fonts(table, project_root, false)? {
+        theme.add_font(family, font);
     }
 
     Ok(theme)
+}
+
+/// A package's `byard.toml`, parsed; `None` when it has none.
+fn read_package_manifest(root: &Path) -> Result<Option<toml::Table>, String> {
+    let path = root.join("byard.toml");
+    if !path.exists() {
+        return Ok(None);
+    }
+    let src = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    src.parse()
+        .map(Some)
+        .map_err(|e: toml::de::Error| format!("{}: {e}", path.display()))
+}
+
+/// Applies one `[theme]` table's tokens onto `theme`. `package` names the
+/// package the table came from, so a typography token's `family` resolves to
+/// that package's own font when it declares one (`"Roboto"` inside
+/// `material` means `"material/Roboto"`).
+fn apply_theme_table(
+    theme: &mut Theme,
+    theme_tbl: &toml::Table,
+    package: Option<&str>,
+) -> Result<(), String> {
+    if let Some(name) = theme_tbl.get("name").and_then(toml::Value::as_str) {
+        theme.name = name.to_string();
+    }
+    // `scheme = "dark"` (RFC-0022): the scheme the app starts in. Absent is
+    // light, as it always was. The runtime flag (`t.dark`) still flips it.
+    if let Some(v) = theme_tbl.get("scheme") {
+        theme.active_dark = match v.as_str() {
+            Some("light") => false,
+            Some("dark") => true,
+            _ => {
+                return Err(
+                    "byard.toml: [theme] `scheme` must be \"light\" or \"dark\"".to_string()
+                );
+            }
+        };
+    }
+    // `transition = <ms>` (RFC-0016): how long a scheme flip cross-fades
+    // the colour tokens. Absent is the cut every theme has always had.
+    if let Some(v) = theme_tbl.get("transition") {
+        let ms = as_number(v)
+            .filter(|ms| *ms >= 0.0)
+            .ok_or_else(|| {
+                "byard.toml: [theme] `transition` must be a duration in milliseconds, like `transition = 250`"
+                    .to_string()
+            })?;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        {
+            theme.transition_ms = ms.round() as u32;
+        }
+    }
+    // `seed = "#RRGGBB"` (RFC-0022 §5): derive both schemes' colour roles
+    // from one brand colour. Applied before `[theme.color.*]` below, so an
+    // explicitly declared token always beats the derived one.
+    if let Some(v) = theme_tbl.get("seed") {
+        let rgb = v.as_str().and_then(parse_hex_color).ok_or_else(|| {
+            "byard.toml: [theme] `seed` must be a hex colour string, like `seed = \"#6750A4\"`"
+                .to_string()
+        })?;
+        theme.apply_seed(rgb);
+    }
+    // `extends` beyond the built-in `byard-base` (multi-level, cross-package)
+    // is deferred (RFC-0022 unresolved question); anything else is accepted
+    // and simply layers onto `byard-base`, the only built-in base today.
+
+    // [theme.color.<scheme>], a table of `token = "#RRGGBB"`.
+    if let Some(colors) = theme_tbl.get("color").and_then(toml::Value::as_table) {
+        for (scheme, tokens) in colors {
+            let tokens = tokens.as_table().ok_or_else(|| {
+                format!(
+                    "byard.toml: [theme.color.{scheme}] must be a table of `token = \"#RRGGBB\"`"
+                )
+            })?;
+            for (token, value) in tokens {
+                let hex = value.as_str().ok_or_else(|| {
+                    format!("byard.toml: theme color `{scheme}.{token}` must be a string like \"#6750A4\"")
+                })?;
+                let rgb = parse_hex_color(hex).ok_or_else(|| {
+                    format!("byard.toml: theme color `{scheme}.{token} = {hex:?}` is not a valid `#RRGGBB` / `#RGB` hex color")
+                })?;
+                theme.set_color(scheme, token, rgb);
+            }
+        }
+    }
+
+    // [theme.typography], `token = { size, family?, weight?, tracking?, line_height? }`.
+    if let Some(typo) = theme_tbl.get("typography").and_then(toml::Value::as_table) {
+        for (token, value) in typo {
+            let mut tok = parse_typo_token(token, value)?;
+            // Inside a package, a family the package ships is that
+            // package's font, not whatever the consumer calls the same.
+            if let (Some(pkg), Some(family)) = (package, tok.family.as_ref()) {
+                let scoped = format!("{pkg}/{family}");
+                if theme.has_font(&scoped) {
+                    tok.family = Some(scoped);
+                }
+            }
+            theme.set_typo(token, tok);
+        }
+    }
+
+    // [theme.breakpoints], `name = <logical px>` (RFC-0016 responsive
+    // variants). Strict, like every other token table: a breakpoint that
+    // is not a number would make every `on width >= name` block silently
+    // never apply.
+    if let Some(bps) = theme_tbl.get("breakpoints").and_then(toml::Value::as_table) {
+        for (name, value) in bps {
+            let px = as_number(value).ok_or_else(|| {
+                format!(
+                    "byard.toml: breakpoint `{name}` must be a width in logical pixels, like `md = 600`"
+                )
+            })?;
+            #[allow(clippy::cast_possible_truncation)]
+            theme.set_breakpoint(name, px as f32);
+        }
+    }
+
+    // [theme.shape], `token = <radius>`.
+    if let Some(shapes) = theme_tbl.get("shape").and_then(toml::Value::as_table) {
+        for (token, value) in shapes {
+            let radius = as_number(value).ok_or_else(|| {
+                format!("byard.toml: theme shape `{token}` must be a number (corner radius)")
+            })?;
+            #[allow(clippy::cast_possible_truncation)]
+            theme.set_shape(token, radius as f32);
+        }
+    }
+
+    Ok(())
+}
+
+/// Reads a manifest's `[assets.fonts]`, `family = "path/to/font.ttf"`
+/// (RFC-0022 §3, RFC-0034), relative to `root`.
+///
+/// The bytes are read **here**, at manifest time, so an unreadable or
+/// unparsable font file is a compile diagnostic naming the family and the
+/// path (INV-4). It used to be deferred, and deferring it is what made a
+/// declared family a name with nothing behind it.
+///
+/// A package's assets must live inside the package (`in_package`): it is
+/// fetched and published as one directory, and a path that climbs out of it
+/// would name a file on the author's machine and nowhere else.
+fn load_fonts(
+    table: &toml::Table,
+    root: &Path,
+    in_package: bool,
+) -> Result<Vec<(String, DeclaredFont)>, String> {
+    let Some(fonts) = table
+        .get("assets")
+        .and_then(|a| a.get("fonts"))
+        .and_then(toml::Value::as_table)
+    else {
+        return Ok(Vec::new());
+    };
+    let mut out = Vec::with_capacity(fonts.len());
+    for (family, path) in fonts {
+        let path = path.as_str().ok_or_else(|| {
+            format!("byard.toml: [assets.fonts] `{family}` must be a string path to a font file")
+        })?;
+        if in_package && !is_inside_package(path) {
+            return Err(format!(
+                "byard.toml: [assets.fonts] `{family}` = {path:?} is outside the package; \
+                 a package's assets must live inside it"
+            ));
+        }
+        out.push((family.clone(), load_font(family, path, root)?));
+    }
+    Ok(out)
+}
+
+/// Whether a declared asset path stays inside the directory it is relative
+/// to: relative, and never climbing out with `..`.
+#[must_use]
+pub fn is_inside_package(path: &str) -> bool {
+    let p = Path::new(path);
+    !p.is_absolute()
+        && !path.starts_with('/')
+        && !path.starts_with('\\')
+        && p.components().all(|c| {
+            matches!(
+                c,
+                std::path::Component::Normal(_) | std::path::Component::CurDir
+            )
+        })
+}
+
+/// Reads one `[assets.fonts]` entry's bytes and resolves the family name the
+/// face carries (RFC-0034 §Reference "Asset side").
+///
+/// Both failures are errors that name the family *and* the path, because the
+/// author wrote one and the filesystem knows the other, and a message with
+/// only one of them makes them go looking. A missing font must never surface
+/// as a square box or as silence (INV-4): by the time text is painted, nobody
+/// can tell a missing file from a font that simply looks like that.
+fn load_font(family: &str, path: &str, project_root: &Path) -> Result<DeclaredFont, String> {
+    let full = project_root.join(path);
+    let bytes = std::fs::read(&full).map_err(|e| {
+        format!(
+            "byard.toml: [assets.fonts] `{family}` points at `{}`, which could not be read: {e}",
+            full.display()
+        )
+    })?;
+    let bytes: std::sync::Arc<[u8]> = std::sync::Arc::from(bytes);
+    let resolved = byard_core::text::family_name(&bytes).ok_or_else(|| {
+        format!(
+            "byard.toml: [assets.fonts] `{family}` points at `{}`, which is not a font file this build can read",
+            full.display()
+        )
+    })?;
+    Ok(DeclaredFont {
+        path: path.to_string(),
+        resolved: std::sync::Arc::from(resolved),
+        bytes,
+    })
 }
 
 /// Parses one `[theme.typography]` entry: an inline table `{ size, family?,
@@ -525,8 +772,9 @@ fn parse_dependency(name: &str, value: &toml::Value) -> Result<Dependency, Strin
 
     if value.as_str().is_some() {
         return Err(err(
-            "bare version strings need a package registry, which is deferred (RFC-0008 D-H); \
-             use `{ git = \"…\", tag|rev = \"…\" }` or `{ path = \"…\" }`",
+            "a bare version string does not say which registry to use; \
+             write `{ registry = \"…\", version = \"…\" }`, `{ git = \"…\", tag|rev = \"…\" }` \
+             or `{ path = \"…\" }`",
         ));
     }
     let spec = value.as_table().ok_or_else(|| {
@@ -534,9 +782,39 @@ fn parse_dependency(name: &str, value: &toml::Value) -> Result<Dependency, Strin
     })?;
 
     for key in spec.keys() {
-        if !matches!(key.as_str(), "path" | "git" | "rev" | "tag") {
+        if !matches!(
+            key.as_str(),
+            "path" | "git" | "rev" | "tag" | "registry" | "version"
+        ) {
             return Err(err(&format!("unknown key `{key}`")));
         }
+    }
+
+    if let Some(registry) = spec.get("registry") {
+        if ["path", "git", "rev", "tag"]
+            .iter()
+            .any(|k| spec.contains_key(*k))
+        {
+            return Err(err("`registry` cannot be combined with `path` or `git`"));
+        }
+        let registry = registry
+            .as_str()
+            .ok_or_else(|| err("`registry` must be a string"))?;
+        let version = spec
+            .get("version")
+            .ok_or_else(|| err("a registry dependency needs an exact `version = \"…\"`"))?
+            .as_str()
+            .ok_or_else(|| err("`version` must be a string"))?;
+        return Ok(Dependency {
+            name: name.to_string(),
+            source: DepSource::Registry {
+                registry: PathBuf::from(registry),
+                version: version.to_string(),
+            },
+        });
+    }
+    if spec.contains_key("version") {
+        return Err(err("`version` only applies to `registry` sources"));
     }
 
     let path = spec.get("path").map(|v| {
@@ -591,7 +869,7 @@ fn parse_dependency(name: &str, value: &toml::Value) -> Result<Dependency, Strin
                 },
             })
         }
-        (None, None) => Err(err("needs a `path` or a `git` source")),
+        (None, None) => Err(err("needs a `path`, a `git` or a `registry` source")),
     }
 }
 
@@ -651,7 +929,76 @@ mod tests {
 
     fn theme_of(src: &str) -> Result<Theme, String> {
         let table: toml::Table = src.parse().unwrap();
-        parse_theme(&table)
+        parse_theme(&table, &examples_root(), &[])
+    }
+
+    /// The examples directory, which is where the shipped font assets live.
+    /// Font paths in these tests resolve against it, so they exercise the real
+    /// files rather than a fixture nothing ships.
+    fn examples_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../byard-cli/examples")
+    }
+
+    /// A package's theme, extended by a consumer (RFC-0008 pillar D): its
+    /// font is registered under the package's name with the bytes read from
+    /// the package, its typography points at that font rather than at a
+    /// family of the same name the consumer might declare, and the
+    /// consumer's own tokens still win.
+    #[test]
+    fn an_extended_package_theme_brings_its_fonts_scoped_to_it() {
+        let dir = std::env::temp_dir().join(format!("byard-pkgtheme-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("kit/fonts")).unwrap();
+        std::fs::create_dir_all(dir.join("kit/src")).unwrap();
+        std::fs::create_dir_all(dir.join("app")).unwrap();
+        std::fs::copy(
+            examples_root().join("assets/fonts/SpaceGrotesk-Variable.ttf"),
+            dir.join("kit/fonts/Display.ttf"),
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("kit/byard.toml"),
+            "[package]\nname = \"brand\"\nversion = \"0.1.0\"\n\
+             [assets.fonts]\nDisplay = \"fonts/Display.ttf\"\n\
+             [theme.color.light]\nprimary = \"#123456\"\nsecondary = \"#654321\"\n\
+             [theme.typography]\nheadline = { size = 30, family = \"Display\" }\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("kit/src/a.byd"), "View A() { Box {} }\n").unwrap();
+        std::fs::write(dir.join("app/main.byd"), "View Main() { Box {} }\n").unwrap();
+        std::fs::write(
+            dir.join("app/byard.toml"),
+            "[project]\nname = \"app\"\nentry = \"main.byd\"\n\
+             [dependencies]\nkit = { path = \"../kit\" }\n\
+             [theme]\nextends = \"kit\"\n\
+             [theme.color.light]\nprimary = \"#ABCDEF\"\n",
+        )
+        .unwrap();
+
+        let theme = Manifest::discover(Some(&dir.join("app"))).unwrap().theme;
+        let font = theme
+            .font("brand/Display")
+            .expect("registered under the package name");
+        assert!(!font.bytes.is_empty());
+        assert_eq!(
+            theme
+                .typo("headline")
+                .and_then(|t| t.family.clone())
+                .as_deref(),
+            Some("brand/Display"),
+            "the package's typography names the package's font"
+        );
+        assert_eq!(
+            theme.color("secondary", false),
+            Some(0x0065_4321),
+            "from the package"
+        );
+        assert_eq!(
+            theme.color("primary", false),
+            Some(0x00AB_CDEF),
+            "the project wins"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -714,6 +1061,96 @@ mod tests {
         assert!(err.contains("weight") && err.contains("ultra"), "{err}");
     }
 
+    /// `[theme] scheme` picks the scheme an app starts in; absent is light,
+    /// and anything but the two names is an error rather than a guess.
+    #[test]
+    fn a_theme_can_start_dark() {
+        assert!(!theme_of("[theme]\nname = \"x\"\n").unwrap().active_dark);
+        assert!(
+            theme_of("[theme]\nscheme = \"dark\"\n")
+                .unwrap()
+                .active_dark
+        );
+        assert!(
+            !theme_of("[theme]\nscheme = \"light\"\n")
+                .unwrap()
+                .active_dark
+        );
+        let err = theme_of("[theme]\nscheme = \"night\"\n").unwrap_err();
+        assert!(err.contains("scheme"), "{err}");
+    }
+
+    /// `[theme] transition = <ms>` sets how long a scheme flip cross-fades
+    /// (RFC-0016); absent is the cut.
+    #[test]
+    fn a_theme_transition_parses_and_defaults_to_the_cut() {
+        assert_eq!(
+            theme_of("[theme]\nname = \"x\"\n").unwrap().transition_ms,
+            0
+        );
+        assert_eq!(
+            theme_of("[theme]\ntransition = 250\n")
+                .unwrap()
+                .transition_ms,
+            250
+        );
+        let err = theme_of("[theme]\ntransition = \"slow\"\n").unwrap_err();
+        assert!(
+            err.contains("transition") && err.contains("milliseconds"),
+            "{err}"
+        );
+    }
+
+    /// `[theme] seed` derives the palette, both schemes, and an explicit
+    /// `[theme.color.*]` token still wins over the derived one.
+    #[test]
+    fn a_seed_derives_both_schemes_and_explicit_tokens_win() {
+        let base = theme_of("[theme]\nname = \"x\"\n").unwrap();
+        let seeded = theme_of("[theme]\nseed = \"#1E8E3E\"\n").unwrap();
+        for dark in [false, true] {
+            assert_ne!(
+                seeded.color("primary", dark),
+                base.color("primary", dark),
+                "dark={dark}"
+            );
+        }
+        assert_ne!(
+            seeded.color("primary", false),
+            seeded.color("primary", true)
+        );
+        let overridden =
+            theme_of("[theme]\nseed = \"#1E8E3E\"\n[theme.color.light]\nprimary = \"#123456\"\n")
+                .unwrap();
+        assert_eq!(overridden.color("primary", false), Some(0x12_3456));
+        assert_eq!(
+            overridden.color("onPrimary", false),
+            seeded.color("onPrimary", false)
+        );
+        let err = theme_of("[theme]\nseed = 12\n").unwrap_err();
+        assert!(err.contains("seed"), "{err}");
+    }
+
+    /// `[theme.breakpoints]` declares named widths for responsive variants
+    /// (RFC-0016), canonicalised like every other token table.
+    #[test]
+    fn breakpoints_parse_and_canonicalize() {
+        let theme = theme_of("[theme.breakpoints]\nmd = 600\nextra_wide = 1440.5\n").unwrap();
+        assert_eq!(theme.breakpoint("md"), Some(600.0));
+        assert_eq!(theme.breakpoint("extraWide"), Some(1440.5));
+        assert_eq!(theme.breakpoint("lg"), None);
+    }
+
+    /// A breakpoint that is not a number is an error: read as anything else, it
+    /// would make every block that names it silently never apply.
+    #[test]
+    fn a_breakpoint_that_is_not_a_number_is_an_error() {
+        let err = theme_of("[theme.breakpoints]\nmd = \"wide\"\n").unwrap_err();
+        assert!(
+            err.contains("md") && err.contains("logical pixels"),
+            "{err}"
+        );
+    }
+
     #[test]
     fn shape_tokens_parse_and_canonicalize() {
         let theme = theme_of("[theme.shape]\ncorner_lg = 16\ncorner_xl = 28\n").unwrap();
@@ -724,9 +1161,46 @@ mod tests {
     #[test]
     fn font_assets_register_families() {
         let theme =
-            theme_of("[assets.fonts]\nroboto = \"assets/fonts/Roboto-Regular.ttf\"\n").unwrap();
-        assert!(theme.has_font("roboto"));
+            theme_of("[assets.fonts]\ndisplay = \"assets/fonts/SpaceGrotesk-Variable.ttf\"\n")
+                .unwrap();
+        assert!(theme.has_font("display"));
         assert!(!theme.has_font("sfpro"));
+    }
+
+    /// The bytes are loaded, not merely named, and the family name shaping
+    /// will match on is resolved from them (RFC-0034).
+    ///
+    /// The declared name and the resolved one differ here on purpose: that
+    /// difference is the reason the record carries both, and a loader that
+    /// kept only the manifest's spelling would shape against a family no font
+    /// answers to.
+    #[test]
+    fn a_declared_family_is_loaded_and_resolved() {
+        let theme =
+            theme_of("[assets.fonts]\ndisplay = \"assets/fonts/SpaceGrotesk-Variable.ttf\"\n")
+                .unwrap();
+        let font = theme.font("display").expect("declared");
+        assert_eq!(font.resolved.as_ref(), "Space Grotesk");
+        assert!(!font.bytes.is_empty(), "the bytes were actually read");
+    }
+
+    /// A font file that is not there is a diagnostic naming the family and the
+    /// path (INV-4). By paint time nobody can tell a missing file from a
+    /// typeface that simply looks like that.
+    #[test]
+    fn a_missing_font_file_names_the_family_and_the_path() {
+        let err = theme_of("[assets.fonts]\ndisplay = \"assets/fonts/NotHere.ttf\"\n").unwrap_err();
+        assert!(err.contains("display"), "{err}");
+        assert!(err.contains("NotHere.ttf"), "{err}");
+    }
+
+    /// And a file that is there but is not a font is the same kind of
+    /// diagnostic, for the same reason.
+    #[test]
+    fn a_file_that_is_not_a_font_is_a_diagnostic() {
+        let err = theme_of("[assets.fonts]\ndisplay = \"assets/fonts/README.md\"\n").unwrap_err();
+        assert!(err.contains("display"), "{err}");
+        assert!(err.contains("not a font file"), "{err}");
     }
 
     // ── RFC-0030 §V2: the [dev] table ─────────────────────────────────────

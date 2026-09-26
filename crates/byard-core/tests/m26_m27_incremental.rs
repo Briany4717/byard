@@ -10,22 +10,9 @@ use byard_core::encoder::EncoderSubsystem;
 use byard_core::frame::{BoxInstance, DecoratedBox, RenderFrame, TextLine, Transform, Viewport};
 use std::sync::Arc;
 
-/// Returns `(device, queue)` for a real adapter, or `None` if no GPU is present.
-fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>)> {
-    let instance =
-        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-    let adapter =
-        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-            .ok()?;
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("ByardCore - M26/M27 Test Device"),
-        required_features: wgpu::Features::empty(),
-        required_limits: byard_core::engine::device_limits(&adapter),
-        memory_hints: wgpu::MemoryHints::Performance,
-        ..Default::default()
-    }))
-    .ok()?;
-    Some((Arc::new(device), Arc::new(queue)))
+/// Returns the shared `(device, queue)` and the turn to use them, for a real adapter, or `None` if no GPU is present.
+fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>, byard_test_gpu::Turn)> {
+    byard_test_gpu::device(byard_core::engine::device_limits)
 }
 
 /// Encodes `frame` onto a fresh `size×size` target via the encoder (whose
@@ -131,7 +118,7 @@ fn init_encoder(device: Arc<wgpu::Device>, queue: Arc<wgpu::Queue>, size: u32) -
 /// blitted the *stale* `persistent_color`, the new colour never appeared.
 #[test]
 fn textless_box_colour_mutation_reaches_the_screen_on_an_incremental_frame() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping textless box mutation test");
         return;
     };
@@ -164,7 +151,7 @@ fn textless_box_colour_mutation_reaches_the_screen_on_an_incremental_frame() {
 /// decoration's retained pixels in `persistent_color`.
 #[test]
 fn static_decorated_box_survives_unrelated_incremental_text_frames() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping decorated-box persistence test");
         return;
     };
@@ -187,6 +174,7 @@ fn static_decorated_box_survives_unrelated_incremental_text_frames() {
             text: text.to_string(),
             font_size: 12.0,
             weight: 400,
+            family: None,
             color: [1.0, 1.0, 1.0, 1.0],
             dirty: true,
         });

@@ -89,6 +89,20 @@ pub struct UseDecl {
     pub span: Span,
 }
 
+/// The view a program renders: the one named `Main` when there is one,
+/// otherwise the first.
+///
+/// Helper views written above `Main` are a natural way to write a file, and
+/// the runner used to render whichever came first, so an example with a
+/// helper at the top showed that helper alone and nothing said why.
+#[must_use]
+pub fn root_view(views: &[ViewDecl]) -> Option<&ViewDecl> {
+    views
+        .iter()
+        .find(|v| v.name.as_str() == "Main")
+        .or_else(|| views.first())
+}
+
 /// A whole `.byd` file is a list of [`ViewDecl`]s (D11: multiple `View`s per
 /// file are allowed).
 #[derive(Clone, Debug, PartialEq)]
@@ -477,8 +491,55 @@ pub struct StateBlock {
     pub states: Vec<StyleStateKind>,
     /// The attributes overlaid onto the base while every `states` entry is active.
     pub attrs: Vec<Attr>,
+    /// A viewport condition that must also hold (RFC-0016 responsive
+    /// variants): `on width >= md { … }`. `None` for an interaction-state
+    /// block, which is every block written before this existed.
+    pub viewport: Option<ViewportCond>,
     /// Source span.
     pub span: Span,
+}
+
+/// Which viewport extent a responsive block compares (RFC-0016).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ViewportAxis {
+    /// The viewport's width in logical pixels.
+    Width,
+    /// The viewport's height in logical pixels.
+    Height,
+}
+
+/// The comparison a responsive block makes. Two operators, not five: `>=`
+/// ("from this breakpoint up") and `<` ("below it") partition the axis with
+/// no gap and no overlap at the breakpoint itself, which `>` and `<=` would
+/// also do and a mix of them would not.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ViewportOp {
+    /// `>=`
+    AtLeast,
+    /// `<`
+    Below,
+}
+
+/// What a responsive block compares against: a breakpoint declared in
+/// `[theme.breakpoints]`, or a literal number of logical pixels.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Breakpoint {
+    /// A named breakpoint, resolved against the theme; an undeclared one is a
+    /// compile error with a hint.
+    Named(Symbol, Span),
+    /// A literal width in logical pixels.
+    Px(f32),
+}
+
+/// `width >= md`: one viewport condition (RFC-0016 responsive variants).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ViewportCond {
+    /// The extent compared.
+    pub axis: ViewportAxis,
+    /// The comparison.
+    pub op: ViewportOp,
+    /// What it is compared against.
+    pub breakpoint: Breakpoint,
 }
 
 /// A style rule: `. IDENT #[ attrs ]` (D5).

@@ -806,6 +806,7 @@ mod tests {
             text: text.to_string(),
             font_size: 12.0,
             weight: 400,
+            family: None,
             color: [1.0; 4],
             dirty: true,
         }

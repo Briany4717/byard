@@ -435,12 +435,15 @@ impl ByldRuntime {
         let now = u32::try_from(self.start.elapsed().as_millis()).unwrap_or(u32::MAX);
         self.flash
             .trigger(now, kind == ReloadKind::StructureIncompatible);
-        // The rendered root is the first tracked view. Editing any view it
-        // transitively instantiates must re-derive its tree, so compute the
-        // affected set (changed views ∪ transitive callers, RFC-0007 §5) and
-        // re-lower only when the root is in it, siblings unrelated to the root
-        // keep their state.
-        if let (Some(old_root), Some(new_root)) = (self.current_views.first(), new_views.first()) {
+        // The rendered root is `Main`, or the first view when there is none
+        // (`root_view`). Editing any view it transitively instantiates must
+        // re-derive its tree, so compute the affected set (changed views ∪
+        // transitive callers, RFC-0007 §5) and re-lower only when the root is
+        // in it, siblings unrelated to the root keep their state.
+        if let (Some(old_root), Some(new_root)) = (
+            byard_compiler::parser::ast::root_view(&self.current_views),
+            byard_compiler::parser::ast::root_view(new_views),
+        ) {
             let affected =
                 byard_compiler::interp::reload::affected_views(&self.current_views, new_views);
             let diff_kind = byard_compiler::interp::reload::diff_view(old_root, new_root);
@@ -730,6 +733,7 @@ fn render_error_overlay(frame: &mut RenderFrame, errors: &[CompileError], w: f32
         text: title,
         font_size: 18.0,
         weight: 400,
+        family: None,
         color: [1.0, 0.42, 0.42, 1.0],
         dirty: true,
     });
@@ -743,6 +747,7 @@ fn render_error_overlay(frame: &mut RenderFrame, errors: &[CompileError], w: f32
             text: headline,
             font_size: 15.0,
             weight: 400,
+            family: None,
             color: [1.0, 1.0, 1.0, 1.0],
             dirty: true,
         });
@@ -757,6 +762,7 @@ fn render_error_overlay(frame: &mut RenderFrame, errors: &[CompileError], w: f32
             text: format!("… and {} more error(s)", errors.len() - OVERLAY_MAX_ERRORS),
             font_size: 13.0,
             weight: 400,
+            family: None,
             color: [0.6, 0.6, 0.6, 1.0],
             dirty: true,
         });
@@ -769,6 +775,7 @@ fn render_error_overlay(frame: &mut RenderFrame, errors: &[CompileError], w: f32
         text: "Fix the file and save to dismiss, the last good view is behind this.".to_string(),
         font_size: 13.0,
         weight: 400,
+        family: None,
         color: [0.55, 0.55, 0.58, 1.0],
         dirty: true,
     });
@@ -1202,7 +1209,7 @@ impl PlatformHost for App {
                 interp.set_theme(initial_theme);
                 interp.load_views(&initial_views);
                 let known: Vec<&str> = initial_views.iter().map(|v| v.name.as_str()).collect();
-                let tree = interp.lower_view(&initial_views[0], &known);
+                let tree = interp.lower_view(root_of(&initial_views), &known);
                 interp.tick();
                 (interp, tree, initial_views)
             };
@@ -1478,6 +1485,18 @@ impl PlatformHost for App {
         }
     }
 
+    fn on_ime(&mut self, event: byard_core::platform::ImeEvent) {
+        if let (Some(engine), Some(input)) = (&self.engine, event.into_input(now_ms())) {
+            engine.push_input(input);
+        }
+    }
+
+    fn text_input(&self) -> Option<byard_core::frame::TextInputState> {
+        self.engine
+            .as_ref()
+            .and_then(byard_core::Engine::text_input)
+    }
+
     fn on_scroll(&mut self, dx: f32, dy: f32, x: f32, y: f32) {
         if let Some(engine) = &self.engine {
             engine.push_input(byard_core::platform::InputEvent {
@@ -1538,6 +1557,14 @@ fn perf_warning_text(warning: &byard_compiler::interp::eval::PerfWarning) -> Str
              `{controller}` is provided; register it with `App::provide` (RFC-0039)"
         ),
     }
+}
+
+/// The view the runner renders (`root_view`). The caller has already handled
+/// a program with no views, so there is always one.
+fn root_of(
+    views: &[byard_compiler::parser::ast::ViewDecl],
+) -> &byard_compiler::parser::ast::ViewDecl {
+    byard_compiler::parser::ast::root_view(views).expect("the empty program is handled first")
 }
 
 #[cfg(test)]

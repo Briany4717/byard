@@ -1,7 +1,15 @@
 # RFC-0034: Typography — custom font families
 
-- **Status:** Active, the weight axis implemented 2026-09-03; font-family
-  registration still open.
+- **Status:** Active, implemented. The weight axis landed 2026-09-03 and
+  font-family registration 2026-09-23 (`[assets.fonts]`, `font:`, a `typo:`
+  token's family, both `FontSystem`s fed from one table). Three corrections
+  followed on 2026-09-24, all found by looking at running windows rather than
+  by a test: a `typo: t.token` accessor dropped the token's family and weight
+  (only the bare `typo: token` carried them); the system face, one variable
+  font recorded at 400, fell out of its family at every other weight; and
+  declaring a variable font's axis weights exposed a swash bug that leaked
+  variation coordinates between fonts, now fixed in a vendored swash
+  (`third_party/swash/BYARD.md`). A package's fonts are RFC-0008 pillar D.
 
   **The RFC's premise was wrong about the starting point.** It describes
   `weight` as "a four-value enum" to be widened. `weight` was not a four-value

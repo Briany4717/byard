@@ -18,27 +18,14 @@ fn approx4(a: [f32; 4], b: [f32; 4]) {
     }
 }
 
-/// Returns `(device, queue)` for a real adapter, or `None` if no GPU is present.
-fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>)> {
-    let instance =
-        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-    let adapter =
-        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-            .ok()?;
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("ByardCore - Test Device"),
-        required_features: wgpu::Features::empty(),
-        required_limits: byard_core::engine::device_limits(&adapter),
-        memory_hints: wgpu::MemoryHints::Performance,
-        ..Default::default()
-    }))
-    .ok()?;
-    Some((Arc::new(device), Arc::new(queue)))
+/// Returns the shared `(device, queue)` and the turn to use them, for a real adapter, or `None` if no GPU is present.
+fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>, byard_test_gpu::Turn)> {
+    byard_test_gpu::device(byard_core::engine::device_limits)
 }
 
 #[test]
 fn encoder_builds_all_pipelines_including_m21() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping pipeline build test");
         return;
     };
@@ -58,7 +45,7 @@ fn encoder_builds_all_pipelines_including_m21() {
 
 #[test]
 fn bad_shader_surfaces_pipeline_compilation_not_panic() {
-    let Some((device, _queue)) = try_device() else {
+    let Some((device, _queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping bad-shader test");
         return;
     };
@@ -173,7 +160,7 @@ fn render_and_read(
 
 #[test]
 fn solid_and_decorated_boxes_actually_paint_pixels() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping readback test");
         return;
     };

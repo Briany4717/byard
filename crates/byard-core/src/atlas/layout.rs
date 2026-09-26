@@ -291,6 +291,10 @@ pub struct TextLeaf {
     /// Typographic weight on the CSS axis, `100..=900` (RFC-0034). Part of the
     /// leaf because it changes the shaped width, so it changes layout.
     pub weight: u16,
+    /// Resolved font family, or `None` for the system sans-serif (RFC-0034).
+    /// Part of the leaf for the same reason `weight` is: two faces set the
+    /// same string to different widths, so the family is a layout input.
+    pub family: Option<std::sync::Arc<str>>,
     /// Fixed wrap width in logical px, or `None` to wrap to the available width.
     pub width: Option<f32>,
     /// Natural single-line `(width, height)` fallback.
@@ -1391,6 +1395,10 @@ impl LayoutAtlas {
             // fingerprint it would keep last frame's line breaks at the new
             // weight — the silent staleness this fingerprint exists to stop.
             .f32(f32::from(spec.weight))
+            // RFC-0034: and the family, for exactly the same reason. A leaf
+            // that changed face and kept its fingerprint keeps last frame's
+            // measurement, which is the whole class of staleness INV-26 names.
+            .str(spec.family.as_deref().unwrap_or(""))
             .opt_f32(spec.width)
             .f32(spec.fallback.0)
             .f32(spec.fallback.1);
@@ -1576,6 +1584,53 @@ impl LayoutAtlas {
             }
         }
         Ok(())
+    }
+
+    /// Fixes `node`'s width in logical pixels **after** layout has run, and
+    /// reports whether that changed anything (RFC-0036 `width: match(ref)`).
+    ///
+    /// The one post-`compute` style change this atlas allows, and it exists
+    /// for one shape of problem: an element whose width is another element's
+    /// resolved width. A dropdown as wide as the field it hangs from cannot be
+    /// expressed as a layout relationship, because the two are in different
+    /// trees, and it cannot be applied by moving the finished rect either,
+    /// because the dropdown's own children were laid out against the width it
+    /// had.
+    ///
+    /// **This is not a cycle**, which is the thing worth checking before
+    /// reaching for it. The dependency runs one way: the main tree resolves,
+    /// the anchor's rect is a fact, and only then is a subtree that is not
+    /// part of the main tree's layout given a width. The overlay cannot
+    /// influence the anchor, so no amount of iterating would change either
+    /// answer. Feeding a *main-tree* rect back into the main tree's own layout
+    /// remains forbidden and is a different thing entirely.
+    ///
+    /// Returns `false` when the width is already exactly this, which is the
+    /// common case on a steady frame: `set_style` marks the node dirty in
+    /// Taffy unconditionally, so re-applying an unchanged width every frame
+    /// would recompute the subtree every frame and turn the retained path back
+    /// into a full one for anything with a dropdown on screen.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AtlasError::ForeignNode`] if `node` came from another atlas,
+    /// or [`AtlasError::Backend`] if the backend refuses the style.
+    pub fn set_fixed_width(&mut self, node: AtlasNodeId, width: f32) -> Result<bool, AtlasError> {
+        self.validate_node(node)?;
+        let mut style = self
+            .tree
+            .style(node.node_id)
+            .map_err(|e| AtlasError::from_taffy(&e))?
+            .clone();
+        let wanted = Dimension::from_length(width);
+        if style.size.width == wanted {
+            return Ok(false);
+        }
+        style.size.width = wanted;
+        self.tree
+            .set_style(node.node_id, style)
+            .map_err(|e| AtlasError::from_taffy(&e))?;
+        Ok(true)
     }
 
     /// Adds a **stacking** container (RFC-0018 `ZStack`): a single-cell CSS grid
@@ -2351,7 +2406,13 @@ fn measure_text_node(
         AvailableSpace::MinContent => Some(0.0),
     });
     let (width, height) = match sizer {
-        Some(s) => s.measure(&spec.content, spec.font_size, wrap_w, spec.weight),
+        Some(s) => s.measure(
+            &spec.content,
+            spec.font_size,
+            wrap_w,
+            spec.weight,
+            spec.family.as_deref(),
+        ),
         None => spec.fallback,
     };
     // Reserve a **whole pixel** of width for the glyphs. Taffy rounds resolved

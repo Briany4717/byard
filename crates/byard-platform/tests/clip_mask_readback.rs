@@ -33,24 +33,12 @@ const SIZE: u32 = 128;
 const AREA: [f32; 4] = [16.0, 16.0, 96.0, 96.0];
 const RADIUS: f32 = 32.0;
 const FILL: [f32; 4] = [0.0, 0.55, 0.9, 1.0];
-/// Big enough to hold the shipped example, which is 260 logical px wide.
-const EXAMPLE: u32 = 560;
+/// Big enough to hold the shipped example: 260 logical px wide, and tall
+/// enough for all five cards, the two path-masked ones included.
+const EXAMPLE: u32 = 1000;
 
-fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>)> {
-    let instance =
-        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-    let adapter =
-        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-            .ok()?;
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("clip mask device"),
-        required_features: wgpu::Features::empty(),
-        required_limits: byard_core::engine::device_limits(&adapter),
-        memory_hints: wgpu::MemoryHints::Performance,
-        ..Default::default()
-    }))
-    .ok()?;
-    Some((Arc::new(device), Arc::new(queue)))
+fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>, byard_test_gpu::Turn)> {
+    byard_test_gpu::device(byard_core::engine::device_limits)
 }
 
 fn encoder_sized(
@@ -192,7 +180,7 @@ fn at(image: &[u8], x: u32, y: u32) -> (u8, u8, u8, u8) {
 /// separates a clip that rounds from a clip that is simply broken.
 #[test]
 fn a_rounded_clip_cuts_the_corner_and_keeps_the_middle() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping clip mask readback");
         return;
     };
@@ -243,7 +231,7 @@ fn a_rounded_clip_cuts_the_corner_and_keeps_the_middle() {
 /// partially covered pixel.
 #[test]
 fn the_clipped_corner_is_antialiased() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping clip mask readback");
         return;
     };
@@ -284,7 +272,7 @@ fn the_clipped_corner_is_antialiased() {
 /// painted — which fails the moment a radius leaks into the default.
 #[test]
 fn a_square_clip_stays_square() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping clip mask readback");
         return;
     };
@@ -363,7 +351,7 @@ fn a_square_clip_stays_square() {
 /// written down for a user".
 #[test]
 fn the_shipped_example_renders_through_the_interpreter() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping clip mask example render");
         return;
     };

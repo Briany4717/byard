@@ -47,23 +47,11 @@ View Main() {
 
 #[test]
 fn every_colour_path_paints_the_colour_it_was_given() {
-    let instance =
-        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-    let Ok(adapter) =
-        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+    let Some((device, queue, _turn)) = byard_test_gpu::device(byard_core::engine::device_limits)
     else {
-        eprintln!("no GPU adapter, skipping group opacity example readback");
+        eprintln!("no GPU adapter, skipping colour truth readback");
         return;
     };
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: None,
-        required_features: wgpu::Features::empty(),
-        required_limits: byard_core::engine::device_limits(&adapter),
-        memory_hints: wgpu::MemoryHints::Performance,
-        ..Default::default()
-    }))
-    .unwrap();
-    let (device, queue) = (Arc::new(device), Arc::new(queue));
 
     let parsed = byard_compiler::parser::parse(SRC);
     assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);

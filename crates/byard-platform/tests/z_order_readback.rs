@@ -20,21 +20,8 @@ use byard_core::encoder::EncoderSubsystem;
 use byard_core::frame::{BoxInstance, DecoratedBox, RenderFrame, TextLine, Transform, Viewport};
 use std::sync::Arc;
 
-fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>)> {
-    let instance =
-        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-    let adapter =
-        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-            .ok()?;
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("z-order readback device"),
-        required_features: wgpu::Features::empty(),
-        required_limits: byard_core::engine::device_limits(&adapter),
-        memory_hints: wgpu::MemoryHints::Performance,
-        ..Default::default()
-    }))
-    .ok()?;
-    Some((Arc::new(device), Arc::new(queue)))
+fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>, byard_test_gpu::Turn)> {
+    byard_test_gpu::device(byard_core::engine::device_limits)
 }
 
 /// A read-back framebuffer: physical-pixel BGRA bytes plus the row stride.
@@ -162,7 +149,7 @@ fn solid(rect: [f32; 4], color: [f32; 4]) -> BoxInstance {
 /// after it, straddling the top border ring. The overlap pixel must read green.
 #[test]
 fn later_child_paints_over_container_border() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping z-order readback");
         return;
     };
@@ -205,7 +192,7 @@ fn later_child_paints_over_container_border() {
 /// flip from red (glyph) to green (box).
 #[test]
 fn later_box_occludes_earlier_text() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping z-order readback");
         return;
     };
@@ -302,7 +289,7 @@ fn reddest_glyph(rb: &Readback) -> Option<((f32, f32), i32)> {
 /// occludes the text.
 #[test]
 fn transparent_geometry_over_text_does_not_cull_it() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping z-order readback");
         return;
     };
@@ -379,7 +366,7 @@ fn transparent_geometry_over_text_does_not_cull_it() {
 /// the text's layer and the text correctly paints on top.
 #[test]
 fn scrim_in_a_later_layer_dims_text_beneath_it() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping z-order readback");
         return;
     };
@@ -445,7 +432,7 @@ fn scrim_in_a_later_layer_dims_text_beneath_it() {
 /// text without a wrap width stays on one line, so that lower band is empty.
 #[test]
 fn wrapped_text_renders_multiple_lines() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping z-order readback");
         return;
     };

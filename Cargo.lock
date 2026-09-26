@@ -340,6 +340,7 @@ version = "0.0.0"
 dependencies = [
  "arc-swap",
  "bumpalo",
+ "byard-test-gpu",
  "bytemuck",
  "crossbeam-channel",
  "directories",
@@ -374,6 +375,7 @@ version = "0.0.0"
 dependencies = [
  "byard-compiler",
  "byard-core",
+ "byard-test-gpu",
  "image",
  "pollster 0.3.0",
  "wgpu",
@@ -389,6 +391,14 @@ dependencies = [
  "flate2",
  "sha2",
  "toml",
+]
+
+[[package]]
+name = "byard-test-gpu"
+version = "0.0.0"
+dependencies = [
+ "pollster 0.4.0",
+ "wgpu",
 ]
 
 [[package]]

@@ -29,21 +29,8 @@ const SIZE: u32 = 128;
 const AREA: [f32; 4] = [16.0, 16.0, 96.0, 96.0];
 const FILL: [f32; 4] = [0.0, 0.55, 0.9, 1.0];
 
-fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>)> {
-    let instance =
-        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-    let adapter =
-        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-            .ok()?;
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("clip mask device"),
-        required_features: wgpu::Features::empty(),
-        required_limits: byard_core::engine::device_limits(&adapter),
-        memory_hints: wgpu::MemoryHints::Performance,
-        ..Default::default()
-    }))
-    .ok()?;
-    Some((Arc::new(device), Arc::new(queue)))
+fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>, byard_test_gpu::Turn)> {
+    byard_test_gpu::device(byard_core::engine::device_limits)
 }
 
 fn encoder_sized(
@@ -239,7 +226,7 @@ fn rect_clipped() -> RenderFrame {
 /// box keeps both.
 #[test]
 fn a_path_clip_keeps_its_inside_and_cuts_its_outside() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping path clip readback");
         return;
     };
@@ -277,7 +264,7 @@ fn a_path_clip_keeps_its_inside_and_cuts_its_outside() {
 /// pass on a frame whose mask was a one-bit stencil.
 #[test]
 fn the_path_edge_is_antialiased() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping path clip readback");
         return;
     };
@@ -305,7 +292,7 @@ fn the_path_edge_is_antialiased() {
 /// pixel would be painted.
 #[test]
 fn a_path_inside_a_rounded_clip_is_cut_by_both() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping nested clip readback");
         return;
     };
@@ -347,7 +334,7 @@ fn a_path_inside_a_rounded_clip_is_cut_by_both() {
 /// *sampled*, not in how the path was tessellated or rasterised.
 #[test]
 fn a_mask_equal_to_its_bounds_keeps_everything() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping path clip readback");
         return;
     };
@@ -390,7 +377,7 @@ fn a_mask_equal_to_its_bounds_keeps_everything() {
 /// would pass on a frame that paid for the pass every time.
 #[test]
 fn an_unchanged_mask_is_not_rasterised_again() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping path clip readback");
         return;
     };

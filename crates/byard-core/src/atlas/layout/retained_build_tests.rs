@@ -98,6 +98,7 @@ fn a_kind_mismatch_aborts_the_retained_build() {
         content: "x".to_string(),
         font_size: 12.0,
         weight: 400,
+        family: None,
         width: None,
         fallback: (10.0, 12.0),
     });
@@ -173,6 +174,7 @@ fn text_content_is_part_of_the_layout_fingerprint() {
         content: content.to_string(),
         font_size: 14.0,
         weight: 400,
+        family: None,
         width: None,
         fallback: (10.0, 14.0),
     };
@@ -208,6 +210,7 @@ fn recompute_dirty_with_text_reaches_the_sizer() {
             _font_size: f32,
             _wrap: Option<f32>,
             _weight: u16,
+            _family: Option<&str>,
         ) -> (f32, f32) {
             (77.0, 88.0)
         }
@@ -219,6 +222,7 @@ fn recompute_dirty_with_text_reaches_the_sizer() {
             content: "hello".to_string(),
             font_size: 14.0,
             weight: 400,
+            family: None,
             width: None,
             fallback: (10.0, 14.0),
         })

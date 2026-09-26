@@ -1487,6 +1487,13 @@ impl EncoderSubsystem {
         target: &wgpu::Texture,
         frame: &RenderFrame,
     ) -> Result<wgpu::CommandBuffer, ByardError> {
+        // RFC-0034: the paint `FontSystem` is brought level with the logic
+        // thread's *before* anything in this frame is shaped. A family the
+        // measurer knows and this side does not would shape in the system font
+        // and then be cached under a key claiming otherwise, which is INV-27's
+        // failure exactly: every string laid out to the wrong width, nothing
+        // visibly broken.
+        self.text_pipeline.register_fonts(frame.fonts());
         let cmd = self.encode_frame_with_decorations(
             target,
             frame.instances(),

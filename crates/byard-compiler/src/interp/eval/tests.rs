@@ -7016,7 +7016,7 @@ fn overlay_demo_example_renders_dialog_above_the_base_app() {
         if inside {
             // Honour the wrap width (RFC-0018): a wrapped label's laid-out
             // width is bounded to it, not the full one-line measurement.
-            let (w, _) = measurer.measure_wrapped(&line.text, line.font_size, *wrap, 400);
+            let (w, _) = measurer.measure_wrapped(&line.text, line.font_size, *wrap, 400, None);
             assert!(
                 line.x + w <= surf_right + 0.5,
                 "dialog text {:?} overflows the surface: {} + {} > {}",

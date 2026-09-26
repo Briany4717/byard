@@ -1,13 +1,35 @@
 # RFC-0035: Radial and conic gradient fills
 
-- **Status:** Active, implemented for `decorated_box`. Two corrections were
-  found while building it and are recorded inline below, with their reasoning in
-  the phase's erratum: the kind tag cannot live in `misc.w`, and the surface it
-  extends is the existing `gradient:` property rather than a `gradient(…)` value
-  inside `bg:`.
+- **Status:** Active, implemented. `decorated_box` landed 2026-08-04; the
+  §"Canvas arc strokes" half landed later, and it needed three corrections of
+  its own.
+
+  - **`canvas_shape` had no gradient block at all.** This document says it
+    "gains the same kind tag on its stroke colour input", which reads as an
+    extension to something that existed. It did not: the Tier-1 shader read a
+    flat stroke colour and nothing else. What landed is the whole descriptor,
+    read by the same parser and interpolated by `gradient.wgsl`, included
+    textually the way `canvas_fill` includes it.
+  - **The property is `stroke_gradient:`, not `gradient:`.** A `path`'s
+    `gradient:` paints its fill. One name meaning the fill's ramp on one
+    command and the stroke's on another would be a rule to remember rather
+    than a name to read.
+  - **An arc's conic is measured over the arc's own sweep**, not over a full
+    turn about the centre of its box. This document's sentence ("the shader
+    maps the fragment's angle within the arc's sweep to `t` directly") is
+    exactly right and is worth restating as a *correction* to the obvious
+    implementation, which is to reuse the shared `conic_t`: over a 180° arc
+    that one reaches `t = 0.5` at the far end and spends the rest of the ramp
+    behind the shape. It looks nearly right. The shared three-stop
+    interpolation is still shared; only the ramp parameter is the arc's.
+
+  Two corrections were found while building the box half and are recorded
+  inline below, with their reasoning in the phase's erratum: the kind tag
+  cannot live in `misc.w`, and the surface it extends is the existing
+  `gradient:` property rather than a `gradient(…)` value inside `bg:`.
 - **Author(s):** Briany4717
 - **Created:** 2026-08-04
-- **Last updated:** 2026-08-04
+- **Last updated:** 2026-09-04
 
 ---
 
@@ -98,11 +120,19 @@ ry)` two-tuple, noted below as deliberately out of scope). Cost is a handful of
 ALU ops in a branch already taken for gradients; no extra texture reads, no
 overdraw.
 
-**Canvas arc strokes.** `canvas_shape.rs` (Tier-1) gains the same kind tag on its
-stroke colour input. For a conic stroke on an `arc`, the shader maps the
-fragment's angle within the arc's sweep to `t` directly, so the ring's colour
-tracks its geometry. This reuses the arc's existing analytic angle, adding no
-tessellation.
+**Canvas arc strokes.** `canvas_shape.rs` (Tier-1) carries the whole gradient
+descriptor on a new `stroke_gradient:` parameter, read by the same parser a box
+gradient goes through and interpolated by the same shared block. For a conic
+stroke on an `arc`, the shader maps the fragment's angle within the arc's sweep
+to `t` directly, so the ring's colour tracks its geometry. This reuses the arc's
+existing analytic angle, adding no tessellation.
+
+*(Corrected: this section was written as though the Tier-1 shader already had a
+gradient to tag. It did not. The pipeline is now at exactly the sixteen vertex
+attributes every adapter guarantees, which is what paid for the descriptor: the
+transform was packed into two attributes rather than four, the way
+`canvas_fill` already packs the same seven floats. The next thing added to that
+pipeline moves to the record pool.)*
 
 **Compiler.** The existing `gradient:` property gains `kind`, `center`, `radius`
 and `start` fields, parsing to a `Gradient { kind, angle, center, radius, stops,

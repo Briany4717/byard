@@ -24,8 +24,11 @@
 //      Two members and a phase in [0, 1] is the same code path as the loader.
 //   4. Circle → 7-point star: the fields are interpolated, not the vertices, so
 //      a morph between two *different kinds* is continuous.
+//   5. Tap play: two *paths* morph command by command, the icon case. The
+//      triangle folds into two bars and the colour rides the same spring.
 View Main() {
     var selected = false
+    var playing = false
 
     Column #[bg: 0x14161C, p: 32, gap: 26, width: 720] {
         Text("ngon + morph, one shape kind and one animated scalar")
@@ -78,6 +81,27 @@ View Main() {
                  tap => selected = !selected] {
             ngon(cx: 60, cy: 60, r: 44, n: 4, corner: 8, fill: 0xE8B54A)
             circle(cx: 60, cy: 60, r: 44, fill: 0xE8B54A)
+        }
+
+        // 5. Two paths, morphed command by command (RFC-0031 §S11).
+        //    Play and pause are both two four-point subpaths: the triangle is
+        //    split down the middle, so each half lines up with one bar. Same
+        //    commands in the same order is the whole rule; give one path a
+        //    `cubic` where the other has a `line` and `byard check` names it.
+        Text("tap: play and pause, two paths with the same commands")
+            #[color: 0x8A90A0, size: 13]
+        Canvas #[width: 120, height: 120, bg: 0x1C1F27,
+                 morph: playing ? 1.0 : 0.0
+                     with anim.spring(stiffness: 260, damping: 0.8),
+                 tap => playing = !playing] {
+            path(fill: 0x4CC38A) {
+                move(30, 20)  line(60, 40)  line(60, 80)  line(30, 100) close()
+                move(60, 40)  line(92, 60)  line(92, 60)  line(60, 80)  close()
+            }
+            path(fill: 0xF2F3F5) {
+                move(30, 20)  line(52, 20)  line(52, 100) line(30, 100) close()
+                move(68, 20)  line(90, 20)  line(90, 100) line(68, 100) close()
+            }
         }
     }
 }

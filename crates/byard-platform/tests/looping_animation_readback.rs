@@ -23,21 +23,8 @@ const LOGICAL_W: f32 = 320.0;
 const LOGICAL_H: f32 = 80.0;
 const SCALE: f32 = 2.0;
 
-fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>)> {
-    let instance =
-        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-    let adapter =
-        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-            .ok()?;
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("looping animation readback device"),
-        required_features: wgpu::Features::empty(),
-        required_limits: byard_core::engine::device_limits(&adapter),
-        memory_hints: wgpu::MemoryHints::Performance,
-        ..Default::default()
-    }))
-    .ok()?;
-    Some((Arc::new(device), Arc::new(queue)))
+fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>, byard_test_gpu::Turn)> {
+    byard_test_gpu::device(byard_core::engine::device_limits)
 }
 
 /// Renders `frame` off-screen and returns the horizontal centre (in logical px)
@@ -143,7 +130,7 @@ fn marker_center_x(
 /// Renders `src` at each engine time in `times` and returns the on-screen
 /// centre of the marker at each.
 fn positions_over_time(src: &str, times: &[u32]) -> Vec<f32> {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         return Vec::new();
     };
     let parsed = parse(src);

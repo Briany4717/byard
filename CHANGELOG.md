@@ -410,7 +410,7 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   creations per frame" is a deterministic assertion, where a frame time on
   shared CI hardware is not.
 
-- **Element invalidation (RFC-0032).** `support/AUDIT_incremental_paths_and_memory_model.md`
+- **Element invalidation (RFC-0032).** An audit of the incremental paths
   found three incremental layers that production never took, and PR #148
   established they had one cause rather than three: the evaluation model did
   not produce the signal the invalidation model consumed. It does now, and the

@@ -1,7 +1,7 @@
 # RFC-0022: Theme Runtime & Asset Distribution, Pillar D complete
 
-- **Status:** Active, implemented; §5 dynamic colour (Material You) deferred
-- **Status note (2026-07-26):** Shipped: manifest tokens, the reactive scheme signal, the provider model, asset loading, `Typo` token resolution and `byard-base`. Deferred: §5's dynamic colour extraction from a source image, which needs a quantisation step nothing else in the engine has.
+- **Status:** Active, implemented; §5 seed-colour schemes implemented, colour extraction from an image deferred
+- **Status note (2026-09-24):** Shipped: manifest tokens, the reactive scheme signal, the provider model, asset loading, `Typo` token resolution, `byard-base`, and §5's seed-colour schemes (`[theme] seed`). Deferred: deriving the seed from a source image, which needs a quantisation step nothing else in the engine has.
 - **Author(s):** Briany4717
 - **Created:** 2026-07-10
 - **Last updated:** 2026-07-10
@@ -243,21 +243,51 @@ The `typo` prop (RFC-0005) is currently unresolved. This RFC completes it:
 
 ### 5. Dynamic color (Material You)
 
-Material You derives a color scheme from a user-provided seed color. This is
-a controller concern:
+Material You derives a colour scheme from one seed colour. Byard does this at
+theme construction, from the manifest:
 
-```rust
-#[byard_controller]
-impl MaterialTheme {
-    fn from_seed(seed: Color) -> ColorScheme {
-        // HCT (Hue-Chroma-Tone) algorithm → M3 tonal palettes
-        // Returns a full ColorScheme
-    }
-}
+```toml
+[theme]
+seed = "#1E8E3E"
+
+[theme.color.light]
+primary = "#0B57D0"   # optional: an explicit token beats the derived one
 ```
 
-The controller computes the scheme; the theme provider receives it as a `var`
-and updates all `provide` bindings. The byld side is unchanged.
+**What is derived.** Five tonal palettes, as Material 3 builds them: primary
+at the seed's hue and chroma (floored, so a nearly grey seed still yields a
+colour), secondary at a third of that chroma, tertiary sixty degrees round the
+hue at half of it, and two low-chroma neutrals at the seed's hue. Error is a
+fixed red that does not follow the seed. Every role `byard-base` declares, plus
+the tertiary, surface-variant and error-container roles, takes a tone from one
+palette, using M3's tables: primary is tone 40 in light and 80 in dark,
+onPrimary 100 and 20, containers 90 and 30, surface 98 and 6, and so on. Both
+schemes come from the one seed.
+
+**How it differs from Google's.** Material You builds the palettes in HCT
+(CAM16 hue and chroma, CIELAB L* as tone). Byard builds them in OKLCH, the space
+it already blends colours in, and places each tone by solving for its CIELAB
+L*, which is exactly HCT's tone. Chroma is reduced only as far as the sRGB gamut
+requires. So a tone here is the same tone as there, and the legibility that
+rests on tone differences holds: every text pair a scheme defines meets WCAG AA
+(4.5:1) in both schemes, which the tests check across seeds spanning the hue
+circle and a grey one, and which the seed example checks against what it
+actually paints. The hues and chromas are close to Material's, not equal to
+them: a seed run through Google's tooling and through Byard gives related but
+different hex values.
+
+**Order and precedence.** The seed is applied before `[theme.color.*]`, so any
+token declared explicitly wins, and a token the derivation does not fill keeps
+its base value. The derivation is pure and deterministic, so the same seed is
+the same table on every platform.
+
+**Why not a controller.** This section first proposed a `from_seed` controller.
+A seed is almost always a brand constant, and deriving it in the manifest keeps
+the byld side unchanged and every derived token checkable: `byard check` knows
+`t.tertiary` exists because the seed produced it. The derivation is exposed as
+`Theme::apply_seed` for a host that wants to reseed at runtime; reseeding from
+byld, and extracting a seed from a wallpaper image (which needs colour
+quantisation), are deferred.
 
 ### 6. `byard-base`, the engine's built-in theme
 

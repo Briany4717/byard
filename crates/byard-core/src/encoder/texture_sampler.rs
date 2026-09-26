@@ -716,16 +716,9 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
-    /// Returns `(device, queue)` for a real adapter, or `None` headless.
-    fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>)> {
-        let instance =
-            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-        let adapter =
-            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-                .ok()?;
-        let (device, queue) =
-            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).ok()?;
-        Some((Arc::new(device), Arc::new(queue)))
+    /// Returns the shared `(device, queue)` and the turn to use them, for a real adapter, or `None` headless.
+    fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>, byard_test_gpu::Turn)> {
+        byard_test_gpu::device(crate::engine::device_limits)
     }
 
     /// A texture is `Pending` (drawing nothing) until its decode result is
@@ -734,7 +727,7 @@ mod tests {
     /// frame with no extra dirty signal needed.
     #[test]
     fn texture_becomes_ready_after_io_result_drain() {
-        let Some((device, queue)) = try_device() else {
+        let Some((device, queue, _turn)) = try_device() else {
             eprintln!("no GPU adapter, skipping texture-ready drain test");
             return;
         };
@@ -766,7 +759,7 @@ mod tests {
     /// `get` keeps returning `None`.
     #[test]
     fn missing_image_resolves_to_failed_not_panic() {
-        let Some((device, queue)) = try_device() else {
+        let Some((device, queue, _turn)) = try_device() else {
             eprintln!("no GPU adapter, skipping failed-decode test");
             return;
         };

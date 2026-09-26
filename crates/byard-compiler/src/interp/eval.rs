@@ -225,6 +225,37 @@ pub(crate) struct ShapeGroupSink {
     ///
     /// [`MAX_GROUP_MEMBERS`]: byard_core::frame::MAX_GROUP_MEMBERS
     overflowed: usize,
+    /// `Some` in a `morph:` canvas: the body paths it holds, in order, which
+    /// morph command by command on the CPU rather than as distance fields
+    /// (RFC-0031 §S11).
+    morph_paths: Option<Vec<FilledPath>>,
+}
+
+/// An IME composition (RFC-0040 §1): the preedit, drawn at the caret of the
+/// field that owns it, and never part of that field's value.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Composition {
+    /// The element the composition belongs to. Kept after focus leaves it,
+    /// with the preedit cleared, so a platform that commits on blur still
+    /// commits into the right field (§6).
+    owner: u32,
+    /// The text being composed; empty once cleared.
+    text: String,
+    /// The IME's cursor inside `text`, as a byte range; `None` hides it.
+    cursor: Option<(usize, usize)>,
+}
+
+/// A body path's evaluated geometry and paint, before tessellation
+/// (RFC-0037), which is also one member of a path morph (RFC-0031 §S11).
+#[derive(Clone, Debug)]
+pub(crate) struct FilledPath {
+    commands: Vec<PathCommand>,
+    fill: [f32; 4],
+    gradient: Option<byard_core::frame::Gradient>,
+    even_odd: bool,
+    /// The path's own `opacity:`, before the canvas's is applied.
+    alpha: f32,
+    span: Span,
 }
 
 impl ShapeGroupSink {
@@ -466,6 +497,15 @@ pub enum RenderNode {
         /// the element and the rect it wants are only in the same hand during
         /// the layout build; `None` is the whole cost of not using the feature.
         measure: Option<u32>,
+        /// The `path { … }` child of a `Clip`, lifted out of the children and
+        /// used as the clip's mask (RFC-0037 `clip(path)`). `None` for every
+        /// other box, and for a `Clip` that only rounds its corners.
+        ///
+        /// Kept as the unevaluated element rather than as a mesh because its
+        /// commands are ordinary expressions: a mask whose outline follows a
+        /// `var` has to be re-evaluated on the frame the `var` moves, exactly as
+        /// a filled path in a `Canvas` is.
+        clip_path: Option<std::rc::Rc<ElementNode>>,
     },
     /// A text run.
     Text {
@@ -925,6 +965,19 @@ enum PathCommand {
     Close,
 }
 
+impl PathCommand {
+    /// The command as it is written in byld.
+    const fn name(&self) -> &'static str {
+        match self {
+            Self::Move(_) => "move",
+            Self::Line(_) => "line",
+            Self::Quad(..) => "quad",
+            Self::Cubic(..) => "cubic",
+            Self::Close => "close",
+        }
+    }
+}
+
 /// The fingerprint a mesh is cached under (RFC-0037, RFC-0032's rule).
 ///
 /// `to_bits` rather than the float itself, because hashing an `f32` directly
@@ -933,6 +986,62 @@ enum PathCommand {
 /// coordinate that is no number at all would fingerprint differently every
 /// frame. The tolerance and the fill rule are in the key too, since both
 /// change the triangles the same commands produce.
+/// The outline of a rounded rectangle, mapped through `t` (RFC-0011 ×
+/// RFC-0037): what a `Clip` looks like once an ancestor has rotated it.
+///
+/// A rotated rectangle is not a rectangle, so the scissor and the clip
+/// table's axis-aligned entry cannot express it; a path mask can. Each corner
+/// is the standard four-point cubic approximation of a quarter circle
+/// (`k = 0.5523`), which is within a fraction of a pixel of the SDF the
+/// unrotated clip uses at any radius a UI draws, and the mapping is applied
+/// to the control points, which is exact for an affine transform.
+fn transformed_rrect_outline(
+    rect: crate::interp::intrinsics::Rect,
+    radii: [f32; 4],
+    t: &byard_core::frame::Transform,
+) -> Vec<PathCommand> {
+    const K: f32 = 0.552_284_8;
+    let (x0, y0, x1, y1) = (rect.x, rect.y, rect.x + rect.w, rect.y + rect.h);
+    let cap = (rect.w.min(rect.h) * 0.5).max(0.0);
+    let [tl, tr, br, bl] = radii.map(|r| r.clamp(0.0, cap));
+    let p = |x: f32, y: f32| t.apply_point([x, y]);
+    let mut out = vec![PathCommand::Move(p(x0 + tl, y0))];
+    out.push(PathCommand::Line(p(x1 - tr, y0)));
+    if tr > 0.0 {
+        out.push(PathCommand::Cubic(
+            p(x1 - tr + tr * K, y0),
+            p(x1, y0 + tr - tr * K),
+            p(x1, y0 + tr),
+        ));
+    }
+    out.push(PathCommand::Line(p(x1, y1 - br)));
+    if br > 0.0 {
+        out.push(PathCommand::Cubic(
+            p(x1, y1 - br + br * K),
+            p(x1 - br + br * K, y1),
+            p(x1 - br, y1),
+        ));
+    }
+    out.push(PathCommand::Line(p(x0 + bl, y1)));
+    if bl > 0.0 {
+        out.push(PathCommand::Cubic(
+            p(x0 + bl - bl * K, y1),
+            p(x0, y1 - bl + bl * K),
+            p(x0, y1 - bl),
+        ));
+    }
+    out.push(PathCommand::Line(p(x0, y0 + tl)));
+    if tl > 0.0 {
+        out.push(PathCommand::Cubic(
+            p(x0, y0 + tl - tl * K),
+            p(x0 + tl - tl * K, y0),
+            p(x0 + tl, y0),
+        ));
+    }
+    out.push(PathCommand::Close);
+    out
+}
+
 fn path_fingerprint(commands: &[PathCommand], tolerance: f32, even_odd: bool) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -1468,11 +1577,36 @@ pub struct Interpreter {
     text_measurer: Option<byard_core::text::TextMeasurer>,
     /// Active design-token theme (RFC-0022; the theme-default layer).
     pub theme: super::theme::Theme,
+    /// The viewport this frame is rendered at, in logical pixels: what a
+    /// responsive block (RFC-0016 `on width >= md`) compares against. Set at
+    /// the top of every render, before layout reads it.
+    viewport: (f32, f32),
+    /// The registered font families, in the shape the render thread reads
+    /// them (RFC-0034), rebuilt whenever the theme changes and handed to
+    /// every frame.
+    ///
+    /// One table rather than a per-frame pool: see
+    /// [`FontTable`](byard_core::frame::FontTable). Kept beside the theme it
+    /// was built from so a hot-reload that swaps the theme swaps this in the
+    /// same breath, rather than leaving the render thread holding faces the
+    /// measurer no longer knows about.
+    fonts: std::sync::Arc<byard_core::frame::FontTable>,
     /// The reactive `Bool` signal backing the theme's active scheme (`true` ⇒
     /// dark), created by [`set_theme`](Self::set_theme). `theme.primary` reads it
     /// (tracked) and `theme.dark = …` / `bind: theme.dark` writes it, so a scheme
     /// flip drives Mark-and-Pull across every token reference (RFC-0022 §1).
     theme_scheme: Option<SignalId>,
+    /// How far the colour tokens are from the *previous* scheme's appearance
+    /// to the current one's, `0.0..=1.0`, as a reactive `Float` (RFC-0016
+    /// animated token transitions). `1.0` at rest, which is where every token
+    /// reads exactly its scheme's value and nothing is blended.
+    theme_mix: Option<SignalId>,
+    /// The mix as last written, and the engine time it was written at.
+    theme_mix_value: f32,
+    theme_mix_at: Option<u32>,
+    /// The scheme the mix is currently heading towards, so a flip is noticed
+    /// in the tick it happens in.
+    theme_mix_dark: Option<bool>,
     /// Parameterized `fn` definitions (`fn f(params) => body`, M25) *and*
     /// callback-prop bindings (RFC-0019): stored as `(param names, body expr,
     /// is_callback)` and indexed by `AstId`. Both share the invocation path in
@@ -1651,6 +1785,15 @@ pub struct Interpreter {
     /// re-evaluated every tick, and the mesh is rebuilt only when the numbers
     /// they produced actually changed.
     path_meshes: std::collections::HashMap<u64, CachedMesh>,
+    /// The view [`lower_view`](Self::lower_view) last lowered, by name and
+    /// declaration span: lowering a different one is a new tree (RFC-0032
+    /// §R4).
+    lowered_view: Option<(crate::symbol::Symbol, Span)>,
+    /// The IME composition in progress, if any (RFC-0040 §2).
+    ///
+    /// Engine state, not app state: it has no name in byld and never touches
+    /// a `var`. There is at most one, because there is at most one focus.
+    composition: Option<Composition>,
     /// How many meshes have been tessellated this session, the measurement
     /// behind the caching claim (INV-19).
     tessellations: u64,
@@ -2085,8 +2228,81 @@ impl Interpreter {
         // very frame that tap produced (RFC-0028 §5 step 2).
         self.drain_calls();
         self.drain_closure_diagnostics();
+        // In the tick the flip happens in, and before the pull. The first is
+        // the requirement: a restart deferred to a later tick would paint one
+        // frame of the new scheme at full strength and then jump back into the
+        // blend, which is a flash rather than a transition. Before the pull
+        // rather than after it is only economy (render re-pulls before it
+        // paints, so either order reaches the frame), but it lets the token
+        // bindings be computed once with both the new scheme and the restarted
+        // mix instead of twice.
+        self.advance_theme_mix();
         let epoch = self.ctx.begin_tick();
         self.ctx.pull(epoch);
+    }
+
+    /// Moves the colour tokens' cross-fade on by the time since it last moved,
+    /// and restarts it when the scheme has flipped (RFC-0016 animated token
+    /// transitions).
+    ///
+    /// One mix for the whole theme rather than one animation per token, still
+    /// less one per element: every token is heading from the same scheme to the
+    /// same scheme, so a single number describes all of them, and a theme with
+    /// forty tokens flips for the price of one.
+    ///
+    /// A flip half way through a transition does not restart from the far end.
+    /// The appearance at `mix` is the same colour as the reverse blend at
+    /// `1 - mix`, so the mix is simply replaced by that and the picture
+    /// continues from where it was.
+    fn advance_theme_mix(&mut self) {
+        let (Some(scheme), Some(mix_sig)) = (self.theme_scheme, self.theme_mix) else {
+            return;
+        };
+        let dark = self.ctx.peek_signal(scheme).as_bool().unwrap_or(false);
+        let duration = self.theme.transition_ms;
+        match self.theme_mix_dark {
+            None => {
+                // The first scheme a view is shown in is not a flip.
+                self.theme_mix_dark = Some(dark);
+                return;
+            }
+            Some(previous) if previous != dark => {
+                self.theme_mix_dark = Some(dark);
+                // No transition configured, or no clock to run one on: the
+                // cut, exactly as before.
+                if duration == 0 || !self.clock_set {
+                    return;
+                }
+                self.theme_mix_value = 1.0 - self.theme_mix_value;
+                self.theme_mix_at = Some(self.now_ms);
+                self.ctx
+                    .write_signal(mix_sig, Value::Float(f64::from(self.theme_mix_value)));
+                return;
+            }
+            Some(_) => {}
+        }
+        if self.theme_mix_value >= 1.0 || duration == 0 {
+            return;
+        }
+        let at = self.theme_mix_at.unwrap_or(self.now_ms);
+        #[allow(clippy::cast_precision_loss)]
+        let step = self.now_ms.saturating_sub(at) as f32 / duration as f32;
+        self.theme_mix_at = Some(self.now_ms);
+        if step <= 0.0 {
+            return;
+        }
+        self.theme_mix_value = (self.theme_mix_value + step).min(1.0);
+        self.ctx
+            .write_signal(mix_sig, Value::Float(f64::from(self.theme_mix_value)));
+    }
+
+    /// Whether the colour tokens are part way through a scheme flip.
+    ///
+    /// Asked of the signal's existence first: the fields default to zero, and
+    /// an interpreter with no theme reading "zero of the way through" would
+    /// keep the runner awake for ever.
+    fn theme_transitioning(&self) -> bool {
+        self.theme_mix.is_some() && self.theme_mix_value < 1.0
     }
 
     /// Sets the current engine time (ms since the runner's epoch) that `with`
@@ -2126,7 +2342,7 @@ impl Interpreter {
     /// is true and lets the app idle (0 frames) once every animation settles.
     #[must_use]
     pub fn has_active_animations(&self) -> bool {
-        self.any_active
+        self.any_active || self.theme_transitioning()
     }
 
     /// The most recently projected value of a value binding (for tests).
@@ -2145,7 +2361,7 @@ impl Interpreter {
     /// Glyph-accurate `(width, height)` of `text` at `font_size`, lazily
     /// initializing the font system on first use.
     fn measure_text(&mut self, text: &str, font_size: f32) -> (f32, f32) {
-        self.measure_text_wrapped(text, font_size, None, 400)
+        self.measure_text_wrapped(text, font_size, None, 400, None)
     }
 
     /// Measures `text`, wrapping to `max_width` logical pixels when `Some`
@@ -2156,10 +2372,11 @@ impl Interpreter {
         font_size: f32,
         max_width: Option<f32>,
         weight: u16,
+        family: Option<&str>,
     ) -> (f32, f32) {
         self.text_measurer
             .get_or_insert_with(byard_core::text::TextMeasurer::new)
-            .measure_wrapped(text, font_size, max_width, weight)
+            .measure_wrapped(text, font_size, max_width, weight, family)
     }
 
     /// The `weight:` of a text-bearing element on the CSS axis (RFC-0034).
@@ -2192,6 +2409,223 @@ impl Interpreter {
             Some(n) => (n.round().clamp(100.0, 900.0)) as u16,
             None => 400,
         }
+    }
+
+    /// The attributes that describe *type* rather than *box*, copied so a
+    /// wrapper element can hand them to the text it contains.
+    ///
+    /// The list is exactly the text properties the intrinsic catalogue puts on
+    /// a text-bearing widget. A widget that wraps its label in a box has to
+    /// forward them or accept them into a void.
+    fn text_shaping_attrs(attrs: &[Attr]) -> Vec<Attr> {
+        const TYPE_PROPS: &[&str] = &[
+            "typo", "size", "weight", "font", "color", "align", "wrap", "lines",
+        ];
+        attrs
+            .iter()
+            .filter(|a| TYPE_PROPS.contains(&a.name.as_str()))
+            .cloned()
+            .collect()
+    }
+
+    /// The resolved font family a text-bearing element shapes in (RFC-0034).
+    ///
+    /// Three layers, in this order, and only the first can be wrong:
+    ///
+    /// 1. an explicit `font:`, which names a family in `[assets.fonts]`. A
+    ///    name nobody declared was already reported when the view was lowered,
+    ///    so reaching here with one means the fallback below is the honest
+    ///    answer rather than a second, quieter diagnostic every frame.
+    /// 2. the family of the `typo:` token the element names. The token has
+    ///    carried a family since the theme runtime landed and it has been
+    ///    dropped on the floor the whole time, which is exactly what made a
+    ///    two-typeface theme impossible to express.
+    /// 3. the theme's body family, so a project that declares one gets it
+    ///    everywhere without repeating itself.
+    ///
+    /// `None` at the end is the system font, and it is silent by design: a
+    /// project that declares no fonts is not making a mistake.
+    fn resolve_family(&mut self, attrs: &[Attr]) -> Option<std::sync::Arc<str>> {
+        if let Some(name) = self.font_prop(attrs) {
+            return self.theme.font(&name).map(|f| f.resolved.clone());
+        }
+        if let Some(name) = self.typo_family(attrs) {
+            return self.theme.font(&name).map(|f| f.resolved.clone());
+        }
+        self.theme_body_family()
+    }
+
+    /// The `font:` an element names, written bare (`font: display`) or as a
+    /// string. Both spellings are accepted for the same reason `weight:` takes
+    /// both a keyword and a number: neither is more correct, and rejecting one
+    /// only makes the language harder to guess at.
+    fn font_prop(&mut self, attrs: &[Attr]) -> Option<String> {
+        let value = attrs.iter().find_map(|a| match &a.kind {
+            AttrKind::Prop { value } if a.name.as_str() == "font" => Some(value.clone()),
+            _ => None,
+        })?;
+        // A bare identifier is read as a *value* first and as a family name
+        // second. `font: display` names the family `display`; `font: family`
+        // inside a view that takes a `family: Str` parameter means that
+        // parameter, and reading it the other way round would make a
+        // reusable specimen view impossible to write.
+        if let Value::Str(s) = self.eval_pure(&value) {
+            return Some(s);
+        }
+        if let Expr::Ident(sym, _) = &value {
+            return Some(sym.as_str().to_string());
+        }
+        None
+    }
+
+    /// The family named by the `typo:` token an element carries, if any.
+    fn typo_family(&mut self, attrs: &[Attr]) -> Option<String> {
+        let token = self.typo_token_name(attrs)?;
+        self.theme.typo(&token)?.family.clone()
+    }
+
+    /// The theme typography token a `typo:` names, in either spelling: bare
+    /// (`typo: headline`) or through the injected theme (`typo: t.headline`).
+    ///
+    /// Both have to come here, because the accessor *evaluates* to the token's
+    /// size, and a size carries neither family nor weight. Reading only the
+    /// bare spelling dropped both on the spelling everyone writes.
+    fn typo_token_name(&self, attrs: &[Attr]) -> Option<String> {
+        let value = attrs.iter().find_map(|a| match (&a.name, &a.kind) {
+            (n, AttrKind::Prop { value }) if n.as_str() == "typo" => Some(value),
+            _ => None,
+        })?;
+        match value {
+            Expr::Ident(sym, _) => Some(sym.as_str().to_string()),
+            Expr::Member { base, field, .. } => match base.as_ref() {
+                Expr::Ident(name, _) if matches!(self.env.lookup(name), Some(Value::Theme(_))) => {
+                    Some(field.as_str().to_string())
+                }
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// The family the theme's `body` token names, if it names one.
+    ///
+    /// The default face for everything that says nothing. A theme pairing a
+    /// display face with a UI face wants the UI face on ordinary text, and
+    /// making every `Text` repeat that is how a type scale stops being used.
+    fn theme_body_family(&mut self) -> Option<std::sync::Arc<str>> {
+        let name = self.theme.typo("body")?.family.clone()?;
+        self.theme.font(&name).map(|f| f.resolved.clone())
+    }
+
+    /// Checks every literal `font:` in `view` against the declared families
+    /// (RFC-0034).
+    ///
+    /// Once, when the view is lowered, rather than on every render: a
+    /// diagnostic re-reported sixty times a second is a diagnostic nobody
+    /// reads. Only a literal name is checked; a computed one is allowed
+    /// through, because the check exists to catch typos and not to forbid the
+    /// rare deliberate dynamic case, exactly as the anchor check does.
+    fn check_font_families(&mut self, view: &ViewDecl) {
+        let declared: Vec<String> = self.theme.fonts().keys().cloned().collect();
+        // A name the view binds is a value reference, not a family literal:
+        // `View Specimen(family: Str)` writing `font: family` means the
+        // parameter. Treating those as literals would make a reusable
+        // type-specimen view unwritable, which is the first thing anyone
+        // builds with a font selector. Kept apart from `declared` so a bound
+        // name is skipped without ever being offered as a spelling hint.
+        let mut bound: Vec<String> = view
+            .params
+            .iter()
+            .map(|p| p.name.as_str().to_string())
+            .collect();
+        bound.extend(view.body.iter().filter_map(|m| match m {
+            Member::Var { name, .. } | Member::Let { name, .. } | Member::Fn { name, .. } => {
+                Some(name.as_str().to_string())
+            }
+            _ => None,
+        }));
+        Self::walk_font_members(&view.body, &declared, &mut bound, &mut self.errors);
+    }
+
+    fn walk_font_members(
+        members: &[Member],
+        declared: &[String],
+        bound: &mut Vec<String>,
+        errors: &mut Vec<CompileError>,
+    ) {
+        for member in members {
+            match member {
+                Member::Element(el) => Self::walk_font_element(el, declared, bound, errors),
+                Member::For {
+                    var, index, body, ..
+                } => {
+                    // The loop variables are in scope for the body and no
+                    // further, so they are pushed and popped rather than
+                    // collected up front.
+                    let depth = bound.len();
+                    bound.push(var.as_str().to_string());
+                    if let Some(i) = index {
+                        bound.push(i.as_str().to_string());
+                    }
+                    Self::walk_font_members(body, declared, bound, errors);
+                    bound.truncate(depth);
+                }
+                Member::Route { body, .. } => {
+                    Self::walk_font_members(body, declared, bound, errors);
+                }
+                Member::When { then, els, .. } => {
+                    Self::walk_font_members(then, declared, bound, errors);
+                    if let Some(e) = els {
+                        Self::walk_font_members(e, declared, bound, errors);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn walk_font_element(
+        el: &ElementNode,
+        declared: &[String],
+        bound: &mut Vec<String>,
+        errors: &mut Vec<CompileError>,
+    ) {
+        for attr in &el.attrs {
+            if attr.name.as_str() != "font" {
+                continue;
+            }
+            let AttrKind::Prop { value } = &attr.kind else {
+                continue;
+            };
+            // Only a name written literally can be checked. Anything computed
+            // is allowed through: the check exists to catch typos, not to
+            // forbid the deliberate dynamic case, exactly as the anchor check
+            // does.
+            let (name, span) = match value {
+                Expr::Ident(sym, span) => (sym.as_str().to_string(), *span),
+                Expr::StrLit(parts, span) => {
+                    let [crate::parser::ast::StrPart::Text(name)] = parts.as_slice() else {
+                        continue;
+                    };
+                    (name.clone(), *span)
+                }
+                _ => continue,
+            };
+            if bound.contains(&name)
+                || declared
+                    .iter()
+                    .any(|d| *d == name || super::theme::to_camel(d) == name)
+            {
+                continue;
+            }
+            errors.push(CompileError::UnknownFontFamily {
+                span,
+                name: name.clone(),
+                hint: crate::util::closest_match(&name, declared.iter().map(String::as_str))
+                    .map(str::to_string),
+            });
+        }
+        Self::walk_font_members(&el.children, declared, bound, errors);
     }
 
     // ── declarations ────────────────────────────────────────────────────
@@ -2345,6 +2779,7 @@ impl Interpreter {
     pub fn set_theme(&mut self, theme: super::theme::Theme) {
         let dark = theme.active_dark;
         self.theme = theme;
+        self.register_theme_fonts();
         // A whole new token set: every resolved colour, size and typo scale
         // may differ, so the next frame rebuilds (RFC-0032 §Q6).
         self.invalidate_retained_layout();
@@ -2356,6 +2791,49 @@ impl Interpreter {
             sig
         };
         self.env.provide(Symbol::intern("Theme"), Value::Theme(sig));
+        if self.theme_mix.is_none() {
+            self.theme_mix = Some(self.ctx.create_signal(Value::Float(1.0)));
+            self.theme_mix_value = 1.0;
+        }
+    }
+
+    /// Loads every family the theme declares into the measurement
+    /// `FontSystem` and rebuilds the table the render thread reads
+    /// (RFC-0034 §Reference "Asset side", INV-27).
+    ///
+    /// This is the single source of truth the invariant asks for. The bytes
+    /// come from one place, the theme; they go to the measurer directly
+    /// because it lives on this thread, and to the paint `FontSystem` on the
+    /// frame, because it does not. Neither side ever reads a font file.
+    fn register_theme_fonts(&mut self) {
+        if self.theme.fonts().is_empty() {
+            // Nothing declared: leave the table empty and, crucially, do not
+            // force the lazy measurer into existence. A project with no fonts
+            // must not start paying for a `FontSystem` because this ran.
+            self.fonts = std::sync::Arc::default();
+            return;
+        }
+        let measurer = self
+            .text_measurer
+            .get_or_insert_with(byard_core::text::TextMeasurer::new);
+        let mut table = byard_core::frame::FontTable::default();
+        for (declared, font) in self.theme.fonts() {
+            let here = measurer.register_family(&font.bytes);
+            // The manifest resolved this name from the same bytes when it read
+            // the file. If the measurer disagrees, one side of INV-27 is
+            // shaping against a family name the other never produced.
+            debug_assert_eq!(
+                here.as_deref(),
+                Some(font.resolved.as_ref()),
+                "family `{declared}` resolves differently on the measurement side (INV-27)"
+            );
+            table.push(byard_core::frame::FontFace {
+                declared: declared.clone(),
+                resolved: font.resolved.clone(),
+                bytes: font.bytes.clone(),
+            });
+        }
+        self.fonts = std::sync::Arc::new(table);
     }
 
     /// Flips the active color scheme (RFC-0022 §1): writes the reactive scheme
@@ -2949,6 +3427,7 @@ impl Interpreter {
         // intrinsic's contract (an `on hover { bg: … }` must obey the same §5
         // rules as an inline `bg:`); the state attrs are validation-only and do
         // not affect the emitted base set.
+        self.check_breakpoints(&state_blocks);
         let to_validate = attrs_with_states(&attrs, &state_blocks);
         self.errors
             .extend(validate_element(el, &to_validate, known_views));
@@ -2962,14 +3441,21 @@ impl Interpreter {
             "Text" | "Button" if !el.content.is_empty() => {
                 let content = self.bind_value(&el.content[0].value);
                 if el.name.as_str() == "Button" {
-                    // A Button is a decorated box wrapping its label.
+                    // A Button is a decorated box wrapping its label, and the
+                    // label is where every typographic property has to land.
+                    // The button's box cannot use `size`, `weight`, `font` or
+                    // `color` for anything, so leaving them on it made all
+                    // four accepted, type-checked and completely inert: a
+                    // `Button` set in bold rendered at the theme default with
+                    // nothing to say so.
+                    let label_attrs = Self::text_shaping_attrs(&attrs);
                     RenderNode::Box {
                         name: Symbol::intern("Button"),
                         attrs,
                         state_blocks,
                         anchor_name: el.anchor_name.clone(),
                         children: vec![RenderNode::Text {
-                            attrs: Vec::new(),
+                            attrs: label_attrs,
                             state_blocks: Vec::new(),
                             content,
                         }],
@@ -2977,6 +3463,7 @@ impl Interpreter {
                         bound_sig: None,
                         env_snapshot: self.capture_env_snapshot(),
                         measure,
+                        clip_path: None,
                     }
                 } else {
                     RenderNode::Text {
@@ -3061,6 +3548,7 @@ impl Interpreter {
                     bound_sig,
                     env_snapshot: self.capture_env_snapshot(),
                     measure,
+                    clip_path: None,
                 }
             }
             // RFC-0018 `RadioButton`: like the value widgets, but its `value:` is a
@@ -3079,6 +3567,7 @@ impl Interpreter {
                     bound_sig,
                     env_snapshot: self.capture_env_snapshot(),
                     measure,
+                    clip_path: None,
                 }
             }
             // RFC-0039: a package's native view. Reached here because the
@@ -3106,6 +3595,13 @@ impl Interpreter {
                 // `bound_sig` (unused by a ScrollView) so `render` can drive it.
                 let collapse = el.name.as_str() == "ScrollView"
                     && Self::enum_prop(&attrs, "collapse_header") == Some("true");
+                // RFC-0037 `clip(path)`: a `Clip`'s `path { … }` child is its
+                // mask, not content. Lifted out here so it never reaches the
+                // child list, which is what keeps `path` a hard error
+                // everywhere else: the slot is claimed by exactly one parent,
+                // not by a rule relaxed for everyone.
+                let (clip_path, el_children) = self.lift_clip_path(el, el_children);
+                let el_children: &[Member] = &el_children;
                 let (children, bound_sig) = if collapse && !el_children.is_empty() {
                     let frac = self.ctx.create_signal(Value::Float(0.0));
                     let snap = self.env.len();
@@ -3128,8 +3624,160 @@ impl Interpreter {
                     bound_sig,
                     env_snapshot: self.capture_env_snapshot(),
                     measure,
+                    clip_path,
                 }
             }
+        }
+    }
+
+    /// Evaluates a `Clip`'s mask and opens it as a path clip (RFC-0037
+    /// `clip(path)`), returning whether a clip was opened.
+    ///
+    /// The commands are measured from the `Clip`'s own top-left, the way a
+    /// `Canvas`'s are from its own, so a mask is written in the same
+    /// coordinates as the content it cuts. Tessellated through the same
+    /// cache a filled path uses and keyed the same way, so a mask whose
+    /// commands have not changed costs a lookup and not a tessellation.
+    ///
+    /// A mask that tessellates to nothing opens nothing, and that is not a
+    /// silent failure dressed up: an outline with no area encloses no content,
+    /// and the honest rendering of that is the clip's rectangle alone, which
+    /// is what the enclosing entry already is.
+    fn begin_clip_path_mask(
+        &mut self,
+        mask: &ElementNode,
+        rect: byard_core::frame::Rect,
+        frame: &mut byard_core::frame::RenderFrame,
+    ) -> bool {
+        let origin = crate::interp::intrinsics::Rect::new(rect.x, rect.y, rect.width, rect.height);
+        let commands = self.eval_path_commands(&mask.children, origin);
+        if commands.len() < 2 {
+            return false;
+        }
+        let even_odd = Self::shape_token(mask, "winding").as_deref() == Some("even_odd");
+        let extent = rect.width.max(rect.height).max(1.0);
+        self.open_mask(&commands, extent, even_odd, frame)
+    }
+
+    /// Opens a path clip over commands already in absolute pixels: the
+    /// outline of a `Clip` under a rotated ancestor (RFC-0011).
+    fn begin_clip_commands(
+        &mut self,
+        commands: &[PathCommand],
+        frame: &mut byard_core::frame::RenderFrame,
+    ) -> bool {
+        let (mut lo, mut hi) = ([f32::MAX; 2], [f32::MIN; 2]);
+        for c in commands {
+            if let PathCommand::Move(p) | PathCommand::Line(p) | PathCommand::Cubic(_, _, p) = c {
+                lo = [lo[0].min(p[0]), lo[1].min(p[1])];
+                hi = [hi[0].max(p[0]), hi[1].max(p[1])];
+            }
+        }
+        let extent = (hi[0] - lo[0]).max(hi[1] - lo[1]).max(1.0);
+        self.open_mask(commands, extent, false, frame)
+    }
+
+    /// Tessellates `commands` through the shared mesh cache and opens the
+    /// result as a path clip, returning whether anything was opened.
+    fn open_mask(
+        &mut self,
+        commands: &[PathCommand],
+        extent: f32,
+        even_odd: bool,
+        frame: &mut byard_core::frame::RenderFrame,
+    ) -> bool {
+        let tolerance = (extent / 800.0).clamp(0.05, 0.5);
+        let key = path_fingerprint(commands, tolerance, even_odd);
+        let mesh = if let Some(cached) = self.path_meshes.get_mut(&key) {
+            cached.last_used = self.frame_seq;
+            std::sync::Arc::clone(&cached.mesh)
+        } else {
+            let mesh = std::sync::Arc::new(tessellate_path(commands, tolerance, even_odd));
+            self.tessellations += 1;
+            self.path_meshes.insert(
+                key,
+                CachedMesh {
+                    mesh: std::sync::Arc::clone(&mesh),
+                    last_used: self.frame_seq,
+                },
+            );
+            mesh
+        };
+        if mesh.indices.is_empty() {
+            return false;
+        }
+        let [bx, by, bw, bh] = mesh.bounds;
+        frame.begin_clip_path(byard_core::frame::ClipMask {
+            mesh,
+            bounds: byard_core::frame::Rect::new(bx, by, bw, bh),
+        });
+        true
+    }
+
+    /// Splits a `Clip`'s `path { … }` child off its content (RFC-0037
+    /// `clip(path)`), returning the mask and the members that remain.
+    ///
+    /// Only a `Clip` has the slot, and only one: a second `path` is left in the
+    /// children, where the ordinary validator reports it as a shape outside a
+    /// `Canvas` with its existing message. Widening that rule to let a mask in
+    /// would have let the next thing in by the same door. The mask's own body
+    /// is checked here with the same validator a canvas path gets, so a
+    /// misspelt command in a mask reads exactly as it would anywhere else.
+    fn lift_clip_path(
+        &mut self,
+        el: &ElementNode,
+        members: &[Member],
+    ) -> (Option<std::rc::Rc<ElementNode>>, Vec<Member>) {
+        if el.name.as_str() != "Clip" {
+            return (None, members.to_vec());
+        }
+        let mut mask = None;
+        let mut rest = Vec::with_capacity(members.len());
+        for m in members {
+            match m {
+                Member::Element(child) if child.name.as_str() == "path" && mask.is_none() => {
+                    self.errors
+                        .extend(crate::interp::intrinsics::validate_path_body(child));
+                    mask = Some(std::rc::Rc::new(child.clone()));
+                }
+                _ => rest.push(m.clone()),
+            }
+        }
+        (mask, rest)
+    }
+
+    /// Reports every responsive block that names a breakpoint the theme does
+    /// not declare (RFC-0016), once per written block.
+    ///
+    /// Once per *span*, because the same element is lowered again for every
+    /// row of a `for` and on every re-lowering, and a diagnostic repeated per
+    /// row is a diagnostic nobody reads.
+    fn check_breakpoints(&mut self, blocks: &[StateBlock]) {
+        for block in blocks {
+            let Some(crate::parser::ast::ViewportCond {
+                breakpoint: crate::parser::ast::Breakpoint::Named(name, span),
+                ..
+            }) = &block.viewport
+            else {
+                continue;
+            };
+            if self.theme.breakpoint(name.as_str()).is_some() {
+                continue;
+            }
+            let already = self
+                .errors
+                .iter()
+                .any(|e| matches!(e, CompileError::UnknownBreakpoint { span: s, .. } if s == span));
+            if already {
+                continue;
+            }
+            let names = self.theme.breakpoint_names();
+            self.errors.push(CompileError::UnknownBreakpoint {
+                span: *span,
+                name: name.as_str().to_string(),
+                hint: crate::util::closest_match(name.as_str(), names.iter().map(String::as_str))
+                    .map(str::to_string),
+            });
         }
     }
 
@@ -4252,6 +4900,19 @@ impl Interpreter {
     ) {
         use byard_core::frame::Viewport;
 
+        // RFC-0016 responsive variants compare against this. Before layout,
+        // because a breakpoint can change padding, width or direction, and a
+        // layout built against last frame's viewport would lay out one width's
+        // variant and paint another's.
+        self.viewport = (width, height);
+
+        // RFC-0034: the registered families ride every frame, not just the one
+        // after registration. The relay keeps only the latest frame, so a pool
+        // handed over once is a pool a dropped frame loses for good; the table
+        // is `Arc`-shared, so carrying all of it is a pointer clone and the
+        // render thread skips what it already holds.
+        frame.set_fonts(self.fonts.clone());
+
         // RFC-0030 §I1. `layout.taffy` (Native) nests strictly inside this
         // scope, the interpreter owns the `LayoutAtlas` and drives it from
         // here, which is exactly why the interpreter tax is self-time and
@@ -4541,6 +5202,12 @@ impl Interpreter {
                 );
             }
         }
+
+        // RFC-0036 `width: match(ref)`: the anchors' rects are facts now, so a
+        // panel that asked to be as wide as one can be given that width and
+        // laid out again. Nothing here can move an anchor, so the second pass
+        // settles in one go rather than iterating.
+        self.apply_match_widths(&overlay_layouts, width, height);
 
         // RFC-0017 overlay phase: emit each overlay's children *after* the main
         // tree, so their emission-order depth is nearer and they composite on
@@ -5132,7 +5799,7 @@ impl Interpreter {
             // content size, because that size is exactly what the placement
             // measures against — a panel stretched to the viewport would be
             // "placed" correctly and still cover the screen.
-            let style = if self.anchor_ref(child).is_some() {
+            let style = if self.is_pass_placed(child) {
                 anchor_wrapper_style(Some("__anchored"))
             } else {
                 anchor_wrapper_style(self.anchor_token(child).as_deref())
@@ -5167,6 +5834,26 @@ impl Interpreter {
                 self.eval_str_prop(&attrs, "anchor_to")
             }
             _ => None,
+        }
+    }
+
+    /// Whether the overlay pass, rather than the viewport wrapper, decides
+    /// where this child goes.
+    ///
+    /// True for an element-relative anchor (RFC-0036) and for an absolute
+    /// `at:` (RFC-0017 §Positioning). Both are placed from a resolved rect, so
+    /// both need the child to arrive at its own content size: a stretched
+    /// panel would be "placed" correctly and still cover the screen.
+    fn is_pass_placed(&mut self, child: &RenderNode) -> bool {
+        if self.anchor_ref(child).is_some() {
+            return true;
+        }
+        match child {
+            RenderNode::Box { attrs, .. } => {
+                let attrs = attrs.clone();
+                attrs.iter().any(|a| a.name.as_str() == "at")
+            }
+            _ => false,
         }
     }
 
@@ -5256,9 +5943,156 @@ impl Interpreter {
                 None,
                 pools,
             );
+
+            // RFC-0036 `on dismiss`: registered after the child has painted,
+            // because the rects it keeps are the ones the child just landed
+            // on.
+            self.register_light_dismiss(slot, shift);
         }
 
         frame.end_clip();
+    }
+
+    /// Registers an anchored overlay child's `on dismiss` with the router
+    /// (RFC-0036).
+    ///
+    /// **Not** the RFC-0017 scrim, which is a different feature that happens
+    /// to share a word. A modal's scrim covers the viewport and swallows every
+    /// event beneath it, which is right for a dialog and wrong for a dropdown:
+    /// an autocomplete must not stop the page under it from scrolling. This
+    /// registers an observer that blocks nothing.
+    ///
+    /// The anchor's own rect is kept alongside the panel's, and that is the
+    /// half worth stating: without it, pressing the field that opened the
+    /// panel dismisses it and the same press reopens it, which reads as a
+    /// flicker with no cause.
+    fn register_light_dismiss(&mut self, slot: &OverlayChildSlot<'_>, shift: (f32, f32)) {
+        let RenderNode::Box { attrs, .. } = slot.node else {
+            return;
+        };
+        // `on dismiss` is spelled as an ordinary event, so it arrives as one.
+        let has_dismiss = attrs
+            .iter()
+            .any(|a| a.name.as_str() == "dismiss" && matches!(a.kind, AttrKind::Event { .. }));
+        if !has_dismiss {
+            return;
+        }
+        let Some(name) = self.eval_str_prop(attrs, "anchor_to") else {
+            return;
+        };
+        let Ok(Some(own)) = self.atlas.resolved_rect(slot.id) else {
+            return;
+        };
+        let mut keep = vec![crate::interp::intrinsics::Rect::new(
+            own.x + shift.0,
+            own.y + shift.1,
+            own.width,
+            own.height,
+        )];
+        if let Some(anchor) = self
+            .anchor_rects
+            .iter()
+            .find(|(k, _)| k.as_str() == name)
+            .map(|(_, r)| *r)
+        {
+            keep.push(anchor);
+        }
+        if let Some(action) = self.lower_overlay_dismiss(attrs) {
+            self.router.push_light_dismiss(keep, action);
+        }
+    }
+
+    /// Gives every overlay child that asked to `match` an anchor's width that
+    /// width, and re-runs layout once if any of them changed (RFC-0036).
+    ///
+    /// Runs after the main tree has painted, which is when `anchor_rects`
+    /// holds where each `as`-tagged element actually landed. The width cannot
+    /// be a layout *input* on the first pass, because on that pass the anchor
+    /// has no rect; and it cannot be applied by widening the finished rect
+    /// either, because the panel's own children were laid out against the
+    /// width it had, so its rows would sit in a box they no longer fill.
+    ///
+    /// Whether the second pass runs at all is decided by the widths, not by
+    /// the presence of the property: on a steady frame every width is already
+    /// what it should be and nothing is recomputed. That is what keeps a
+    /// screen with a dropdown open from paying a full layout every frame.
+    fn apply_match_widths(&mut self, layouts: &[OverlayLayout<'_>], width: f32, height: f32) {
+        let mut changed = false;
+        for layout in layouts {
+            for slot in &layout.children {
+                let RenderNode::Box { attrs, .. } = slot.node else {
+                    continue;
+                };
+                let Some((name, _)) = Self::match_width_ref(attrs) else {
+                    continue;
+                };
+                // Unknown at render time is silence, exactly as a missing
+                // anchor is: the compile check is what reports a misspelt
+                // name, and a frame is the wrong place to raise it again.
+                let Some(anchor) = self
+                    .anchor_rects
+                    .iter()
+                    .find(|(k, _)| k.as_str() == name)
+                    .map(|(_, r)| *r)
+                else {
+                    continue;
+                };
+                if self
+                    .atlas
+                    .set_fixed_width(slot.id, anchor.w)
+                    .unwrap_or(false)
+                {
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            return;
+        }
+        let viewport = byard_core::frame::Viewport::new(width, height);
+        let measurer = self
+            .text_measurer
+            .get_or_insert_with(byard_core::text::TextMeasurer::new);
+        let _ = self.atlas.recompute_dirty_with_text(viewport, measurer);
+    }
+
+    /// The anchor name in `width: match(<name>)`, if the attributes carry one
+    /// (RFC-0036).
+    ///
+    /// Recognised structurally rather than evaluated. `match(field)` parses as
+    /// an ordinary call, and evaluating it would either invent a number or
+    /// report an unknown function; neither is what the author asked for. It is
+    /// a *layout relationship*, and the only place that can be resolved is
+    /// after the anchor's rect is a fact.
+    fn match_width_ref(attrs: &[Attr]) -> Option<(String, Span)> {
+        attrs.iter().find_map(|a| {
+            if a.name.as_str() != "width" {
+                return None;
+            }
+            let AttrKind::Prop { value } = &a.kind else {
+                return None;
+            };
+            let Expr::Call { callee, args, span } = value else {
+                return None;
+            };
+            let Expr::Ident(name, _) = callee.as_ref() else {
+                return None;
+            };
+            if name.as_str() != "match" {
+                return None;
+            }
+            match args.as_slice() {
+                [arg] => match &arg.value {
+                    Expr::Ident(target, _) => Some((target.as_str().to_string(), *span)),
+                    Expr::StrLit(parts, _) => match parts.as_slice() {
+                        [crate::parser::ast::StrPart::Text(t)] => Some((t.clone(), *span)),
+                        _ => None,
+                    },
+                    _ => None,
+                },
+                _ => None,
+            }
+        })
     }
 
     /// How far to move an overlay child so it sits against its anchor
@@ -5271,6 +6105,17 @@ impl Interpreter {
         let RenderNode::Box { attrs, .. } = slot.node else {
             return (0.0, 0.0);
         };
+        // RFC-0017 §Positioning: an absolute offset from the viewport's
+        // top-left, unconditionally. It does not flip and it does not clamp: a
+        // panel placed off-screen stays off-screen, because silently pulling
+        // it back would make a wrong coordinate look like a layout decision.
+        if attrs.iter().any(|a| a.name.as_str() == "at") {
+            let (ax, ay) = self.resolve_axis_pair(attrs, "at", (0.0, 0.0));
+            let Ok(Some(own)) = self.atlas.resolved_rect(slot.id) else {
+                return (0.0, 0.0);
+            };
+            return (ax - own.x, ay - own.y);
+        }
         let Some(name) = self.eval_str_prop(attrs, "anchor_to") else {
             return (0.0, 0.0);
         };
@@ -5519,6 +6364,19 @@ impl Interpreter {
             return;
         }
         if name == "path" {
+            // In a `morph:` canvas a body path is a member of the sequence,
+            // blended with its neighbour once the whole body has been read.
+            if let Some(paths) = group
+                .as_deref_mut()
+                .and_then(|sink| sink.morph_paths.as_mut())
+            {
+                if !el.children.is_empty() {
+                    if let Some(path) = self.eval_filled_path(el, canvas) {
+                        paths.push(path);
+                    }
+                    return;
+                }
+            }
             self.emit_canvas_path(el, canvas, opacity, transform, frame);
             return;
         }
@@ -5527,7 +6385,19 @@ impl Interpreter {
         // neither stroke nor fill paints nothing, skip it entirely.
         let stroke_color = self.shape_color(el, "stroke").unwrap_or([0.0; 4]);
         let fill_color = self.shape_color(el, "fill").unwrap_or([0.0; 4]);
-        if stroke_color[3] <= 0.0 && fill_color[3] <= 0.0 {
+        // RFC-0035 §"Canvas arc strokes": a ramp along the stroke, read by the
+        // same parser a box gradient and a filled path use, so there is one
+        // spelling of a gradient rather than three that agree today.
+        let stroke_gradient = Self::shape_arg(el, "stroke_gradient")
+            .cloned()
+            .and_then(|expr| self.resolve_gradient_expr(&expr, 0.0));
+        // A shape with neither stroke nor fill paints nothing; skip it
+        // entirely. A stroke *gradient* counts as a stroke: writing one and
+        // no `stroke:` is a reasonable thing to do, and dropping the shape
+        // because the flat colour it never set is transparent would be the
+        // silent failure this check exists to avoid, wearing the check's own
+        // clothes.
+        if stroke_color[3] <= 0.0 && fill_color[3] <= 0.0 && stroke_gradient.is_none() {
             return;
         }
         let stroke_width = self.shape_num(el, "stroke_width").unwrap_or(1.0);
@@ -5552,6 +6422,7 @@ impl Interpreter {
             dash_offset,
             opacity: shape_opacity,
             transform,
+            stroke_gradient,
             dirty: true,
             ..CanvasShape::default()
         };
@@ -5825,22 +6696,52 @@ impl Interpreter {
         transform: byard_core::frame::Transform,
         frame: &mut byard_core::frame::RenderFrame,
     ) {
+        if let Some(path) = self.eval_filled_path(el, canvas) {
+            self.push_filled_path(&path, canvas, opacity, transform, frame);
+        }
+    }
+
+    /// Evaluates a body path's commands and paint; `None` when there is
+    /// nothing to draw.
+    fn eval_filled_path(
+        &mut self,
+        el: &ElementNode,
+        canvas: crate::interp::intrinsics::Rect,
+    ) -> Option<FilledPath> {
         let commands = self.eval_path_commands(&el.children, canvas);
         if commands.len() < 2 {
             // One point is not a shape. Silent rather than an error, because
             // an empty `for` over an empty series is a perfectly ordinary
             // frame of a chart that has no data yet.
-            return;
+            return None;
         }
         let fill = self.shape_color(el, "fill").unwrap_or([0.0; 4]);
         let gradient = Self::shape_arg(el, "gradient")
             .cloned()
             .and_then(|expr| self.resolve_gradient_expr(&expr, 0.0));
         if gradient.is_none() && fill[3] <= 0.0 {
-            return; // nothing to paint
+            return None; // nothing to paint
         }
-        let even_odd = Self::shape_token(el, "winding").as_deref() == Some("even_odd");
+        Some(FilledPath {
+            commands,
+            fill,
+            gradient,
+            even_odd: Self::shape_token(el, "winding").as_deref() == Some("even_odd"),
+            alpha: self.shape_num(el, "opacity").unwrap_or(1.0),
+            span: el.span,
+        })
+    }
 
+    /// Tessellates an evaluated path if its numbers changed, and pushes the
+    /// mesh.
+    fn push_filled_path(
+        &mut self,
+        path: &FilledPath,
+        canvas: crate::interp::intrinsics::Rect,
+        opacity: f32,
+        transform: byard_core::frame::Transform,
+        frame: &mut byard_core::frame::RenderFrame,
+    ) {
         // The flattening tolerance is derived from the path's on-screen size:
         // a sparkline in a 40px card and a chart across a 4K window are the
         // same commands and want very different triangle counts (RFC-0037).
@@ -5851,12 +6752,13 @@ impl Interpreter {
         let extent = (canvas.w.max(canvas.h) * scale).max(1.0);
         let tolerance = (extent / 800.0).clamp(0.05, 0.5);
 
-        let key = path_fingerprint(&commands, tolerance, even_odd);
+        let key = path_fingerprint(&path.commands, tolerance, path.even_odd);
         let mesh = if let Some(cached) = self.path_meshes.get_mut(&key) {
             cached.last_used = self.frame_seq;
             std::sync::Arc::clone(&cached.mesh)
         } else {
-            let mesh = std::sync::Arc::new(tessellate_path(&commands, tolerance, even_odd));
+            let mesh =
+                std::sync::Arc::new(tessellate_path(&path.commands, tolerance, path.even_odd));
             self.tessellations += 1;
             self.path_meshes.insert(
                 key,
@@ -5870,16 +6772,80 @@ impl Interpreter {
         if mesh.indices.is_empty() {
             return;
         }
-
-        let shape_opacity = opacity * self.shape_num(el, "opacity").unwrap_or(1.0);
         frame.push_fill(byard_core::frame::CanvasFill {
             mesh,
-            color: fill,
-            gradient,
+            color: path.fill,
+            gradient: path.gradient,
             transform,
-            opacity: shape_opacity,
+            opacity: opacity * path.alpha,
             dirty: true,
         });
+    }
+
+    /// Draws a `morph:` canvas's body paths (RFC-0031 §S11): the two members
+    /// the phase falls between, blended command by command, as one filled
+    /// path.
+    ///
+    /// The phase indexes the sequence exactly as §S10's does for distance
+    /// fields, wrapping, so a scalar sweeping `0..N` returns to the first path.
+    /// The blend is geometry, so it is tessellated like any path whose numbers
+    /// changed: once per frame while the phase moves, and not at all once it
+    /// settles, because a settled phase produces the same numbers and the
+    /// mesh cache answers.
+    #[allow(clippy::too_many_arguments)]
+    fn push_morph_paths(
+        &mut self,
+        paths: &[FilledPath],
+        phase: f32,
+        canvas: crate::interp::intrinsics::Rect,
+        opacity: f32,
+        transform: byard_core::frame::Transform,
+        frame: &mut byard_core::frame::RenderFrame,
+    ) {
+        let Some((i0, i1, t)) = morph_indices(phase, paths.len()) else {
+            return;
+        };
+        let (a, b) = (&paths[i0], &paths[i1]);
+        if i0 == i1 || t <= 0.0 {
+            self.push_filled_path(a, canvas, opacity, transform, frame);
+            return;
+        }
+        match lerp_path_commands(&a.commands, &b.commands, t) {
+            Ok(commands) => {
+                let blended = FilledPath {
+                    commands,
+                    fill: mix_rgba_oklab(a.fill, b.fill, t),
+                    gradient: if t < 0.5 { a.gradient } else { b.gradient },
+                    even_odd: a.even_odd,
+                    alpha: a.alpha + (b.alpha - a.alpha) * t,
+                    span: a.span,
+                };
+                self.push_filled_path(&blended, canvas, opacity, transform, frame);
+            }
+            Err(index) => {
+                // The check pass refuses this for a body of literal paths; a
+                // `when` or a `for` can still bring two unlike paths together,
+                // and only here is it known which two. Reported once, and the
+                // nearer path drawn whole, so the error is what the author
+                // sees rather than a shape that stops moving.
+                if !self.errors.iter().any(|e| {
+                    matches!(e, CompileError::MorphPathMismatch { span, .. } if *span == b.span)
+                }) {
+                    let name = |c: Option<&PathCommand>| {
+                        c.map_or_else(|| "the end of the path".to_string(), |c| c.name().to_string())
+                    };
+                    self.errors.push(CompileError::MorphPathMismatch {
+                        span: b.span,
+                        member: i1,
+                        index,
+                        expected: name(a.commands.get(index)),
+                        found: name(b.commands.get(index)),
+                    });
+                }
+                let nearer = if t < 0.5 { a } else { b };
+                self.push_filled_path(nearer, canvas, opacity, transform, frame);
+            }
+        }
     }
 
     /// Evaluates a path body into absolute points (RFC-0037).
@@ -5980,6 +6946,7 @@ impl Interpreter {
             text,
             font_size: size * transform.uniform_scale(),
             weight: 400,
+            family: None,
             color: dim_alpha(color, opacity),
             dirty: true,
         });
@@ -6137,7 +7104,20 @@ impl Interpreter {
                 flat_ids.push(id);
                 Ok(id)
             }
-            RenderNode::Text { attrs, content, .. } => {
+            RenderNode::Text {
+                attrs,
+                content,
+                state_blocks,
+            } => {
+                // RFC-0016: a responsive `size:` changes what is measured, so
+                // it has to be seen here as well as at paint.
+                let attrs = resolve_state_attrs(
+                    attrs,
+                    state_blocks,
+                    crate::interp::events::StyleState::empty(),
+                    &|c| viewport_holds(c, self.viewport, &self.theme),
+                );
+                let attrs: &[Attr] = &attrs;
                 let text = match self.binding_value(*content) {
                     Some(Value::Str(s)) => s,
                     other => other.map_or_else(String::new, |v| format!("{v:?}")),
@@ -6156,7 +7136,9 @@ impl Interpreter {
                 // a fixed natural single-line leaf (may overflow, the caller's
                 // choice). `fallback` is the natural size for the no-sizer path.
                 let weight = self.resolve_weight(attrs);
-                let (nat_w, nat_h) = self.measure_text_wrapped(&text, font_size, None, weight);
+                let family = self.resolve_family(attrs);
+                let (nat_w, nat_h) =
+                    self.measure_text_wrapped(&text, font_size, None, weight, family.as_deref());
                 if self.eval_bool_prop(attrs, "wrap") == Some(false) {
                     let id = self.atlas.add_leaf(LeafSize::new(nat_w, nat_h))?;
                     flat_ids.push(id);
@@ -6168,6 +7150,7 @@ impl Interpreter {
                     content: text,
                     font_size,
                     weight,
+                    family,
                     width: explicit_w,
                     fallback: (nat_w, nat_h),
                 })?;
@@ -6177,11 +7160,26 @@ impl Interpreter {
             RenderNode::Box {
                 name,
                 attrs,
+                state_blocks,
                 children,
                 env_snapshot,
                 measure,
                 ..
             } => {
+                // RFC-0016 responsive variants reach layout here, one pass ahead
+                // of paint and with no interaction state, so only viewport
+                // blocks can apply. An interaction block's layout properties
+                // still do not relayout (hover must not move its own box), and
+                // a breakpoint's do, since a narrow window is exactly when a
+                // padding or a direction should change. Borrowed unchanged when
+                // the box has no blocks, which is nearly every box.
+                let attrs = resolve_state_attrs(
+                    attrs,
+                    state_blocks,
+                    crate::interp::events::StyleState::empty(),
+                    &|c| viewport_holds(c, self.viewport, &self.theme),
+                );
+                let attrs: &[Attr] = &attrs;
                 // The same restore the paint walk does, for the same reason and
                 // one pass earlier: a box's *size* is as much a function of the
                 // scope it was instantiated in as its colour is. `width: row.w`
@@ -6558,9 +7556,62 @@ impl Interpreter {
         Ok(id)
     }
 
+    /// Renders one node, with its hit regions registered under its
+    /// ancestors' paint transform (RFC-0011 hierarchical transforms).
+    ///
+    /// A wrapper rather than a line at the top of the body because the body has
+    /// a dozen return paths, and a hit frame that leaked from one node into its
+    /// next sibling would be the kind of bug that only shows under a rotated
+    /// parent. Set on the way in and restored on the way out, unconditionally.
+    ///
+    /// The frame is the inherited transform **minus the scroll displacement**:
+    /// scrolling already reaches every hit rect through `scroll_shift`, and
+    /// applying it a second time through the transform would put a scrolled
+    /// button's target one scroll offset away from the button.
+    #[allow(clippy::too_many_arguments, clippy::similar_names)]
+    fn render_node_with_atlas(
+        &mut self,
+        node: &RenderNode,
+        atlas_node: byard_core::atlas::layout::AtlasNodeId,
+        frame: &mut byard_core::frame::RenderFrame,
+        flat_ids: &[byard_core::atlas::layout::AtlasNodeId],
+        flat_idx: &mut usize,
+        parent_rect: crate::interp::intrinsics::Rect,
+        inherited_opacity: f32,
+        inherited_transform: byard_core::frame::Transform,
+        cull_clip: Option<byard_core::frame::Rect>,
+        scroll_shift: (f32, f32),
+        window: Option<WindowSpec>,
+        pools: Pools<'_>,
+    ) {
+        let mut hit = inherited_transform;
+        hit.translate[0] -= scroll_shift.0;
+        hit.translate[1] -= scroll_shift.1;
+        // Opacity decides nothing about where a press lands.
+        hit.opacity = 1.0;
+        let previous = self.router.set_hit_frame(hit);
+        self.render_node_with_atlas_inner(
+            node,
+            atlas_node,
+            frame,
+            flat_ids,
+            flat_idx,
+            parent_rect,
+            inherited_opacity,
+            inherited_transform,
+            cull_clip,
+            scroll_shift,
+            window,
+            pools,
+        );
+        self.router.restore_hit_frame(previous);
+    }
+
+    /// The body of [`render_node_with_atlas`](Self::render_node_with_atlas),
+    /// which owns the hit-frame bookkeeping around it.
     #[allow(clippy::similar_names)]
     #[allow(clippy::too_many_arguments)]
-    fn render_node_with_atlas(
+    fn render_node_with_atlas_inner(
         &mut self,
         node: &RenderNode,
         atlas_node: byard_core::atlas::layout::AtlasNodeId,
@@ -6633,7 +7684,9 @@ impl Interpreter {
                             self.router.style_state(i)
                         })
                         .union(self.prop_style_state(attrs, None, ""));
-                    let attrs = resolve_state_attrs(attrs, state_blocks, state);
+                    let attrs = resolve_state_attrs(attrs, state_blocks, state, &|c| {
+                        viewport_holds(c, self.viewport, &self.theme)
+                    });
                     let attrs = attrs.as_ref();
                     let text = match self.binding_value(*content) {
                         Some(Value::Str(s)) => s,
@@ -6667,6 +7720,7 @@ impl Interpreter {
                     // atlas's measure pass, so the rendered line breaks match the
                     // laid-out height.
                     let weight = self.resolve_weight(attrs);
+                    let family = self.resolve_family(attrs);
                     let wrap_w = if self.eval_bool_prop(attrs, "wrap") == Some(false) {
                         None
                     } else {
@@ -6679,6 +7733,7 @@ impl Interpreter {
                             text,
                             font_size: scaled_size,
                             weight,
+                            family,
                             color: rgba,
                             dirty: true,
                         },
@@ -6714,6 +7769,7 @@ impl Interpreter {
                 env_snapshot,
                 anchor_name,
                 measure: _,
+                clip_path,
             } => {
                 // RFC-0019 §2: restore the instance environment captured at lower
                 // time so event actions re-lowered below (a forwarded callback,
@@ -6728,6 +7784,9 @@ impl Interpreter {
                 // when it has a resolved rect (set below), else whatever it
                 // inherited unchanged.
                 let mut child_opacity = inherited_opacity;
+                // Whether this box opened an opacity group (RFC-0011 T4), so the
+                // group is closed on the way out of exactly the box that opened it.
+                let mut grouped = false;
                 // Likewise the composed paint transform children inherit (RFC-0011
                 // group transforms): this box's own transform ∘ its ancestors',
                 // set once the rect is known, else passed through unchanged.
@@ -6783,7 +7842,9 @@ impl Interpreter {
                             self.router.style_state(i)
                         })
                         .union(self.prop_style_state(attrs, *bound_sig, name.as_str()));
-                    let paint_attrs = resolve_state_attrs(attrs, state_blocks, paint_state);
+                    let paint_attrs = resolve_state_attrs(attrs, state_blocks, paint_state, &|c| {
+                        viewport_holds(c, self.viewport, &self.theme)
+                    });
                     let paint_attrs = paint_attrs.as_ref();
                     // Resolve the paint-time transform once, up front, so it can
                     // be applied both to a plain container's `bg` fill *and* to
@@ -6835,6 +7896,19 @@ impl Interpreter {
                         * self
                             .eval_float_prop(paint_attrs, "opacity")
                             .map_or(1.0, |v| v as f32);
+                    // RFC-0011 T4: a translucent box with children is faded as
+                    // one picture rather than by multiplying its alpha into
+                    // every primitive it contains. The difference is overlap:
+                    // its text over its own background, two children crossing,
+                    // each darkening the other where they meet. Inside the
+                    // group everything draws opaque and the composite applies
+                    // the alpha once. A leaf has nothing to overlap, and a box
+                    // inside an open group falls back to per-instance, so both
+                    // keep the path they always had.
+                    grouped = (opacity - 1.0).abs() > f32::EPSILON
+                        && !children.is_empty()
+                        && frame.begin_group(opacity);
+                    let opacity = if grouped { 1.0 } else { opacity };
                     child_opacity = opacity;
                     let translucent = (opacity - 1.0).abs() > f32::EPSILON;
                     // RFC-0001 §3.1: a gradient is a `DecoratedBox` feature, so
@@ -7083,7 +8157,36 @@ impl Interpreter {
                 // plain rectangular clip, which costs exactly what a
                 // `ScrollView`'s does — a scissor — so wrapping content in a
                 // square `Clip` is not a new expense.
-                let mask_clip = if name.as_str() == "Clip" {
+                let mask_clip = if name.as_str() == "Clip" && inherited_transform.rotate != 0.0 {
+                    // RFC-0011: under a rotated ancestor the clip's outline is
+                    // a rotated rectangle, which neither the scissor nor an
+                    // axis-aligned clip entry can express. It becomes a path
+                    // mask instead, so the content is cut along the edges it
+                    // is drawn with. Its own `path` child, if it has one, nests
+                    // inside that as it would anywhere else.
+                    let mut radii = self.resolve_radii(attrs, "rrect");
+                    for r in &mut radii {
+                        *r *= inherited_transform.scale[0];
+                    }
+                    let outline =
+                        transformed_rrect_outline(current_rect, radii, &inherited_transform);
+                    let opened = self.begin_clip_commands(&outline, frame);
+                    let pathed = clip_path.as_ref().is_some_and(|p| {
+                        let tl = inherited_transform.apply_point([current_rect.x, current_rect.y]);
+                        let rect = byard_core::frame::Rect::new(
+                            tl[0],
+                            tl[1],
+                            current_rect.w * inherited_transform.scale[0],
+                            current_rect.h * inherited_transform.scale[1],
+                        );
+                        self.begin_clip_path_mask(p, rect, frame)
+                    });
+                    match (opened, pathed) {
+                        (true, pathed) => Some(pathed),
+                        (false, true) => Some(false),
+                        (false, false) => None,
+                    }
+                } else if name.as_str() == "Clip" {
                     let tl = inherited_transform.apply_point([current_rect.x, current_rect.y]);
                     let rect = byard_core::frame::Rect::new(
                         tl[0],
@@ -7101,7 +8204,15 @@ impl Interpreter {
                         *r *= inherited_transform.scale[0];
                     }
                     frame.begin_clip_rounded(rect, radii);
-                    Some(())
+                    // RFC-0037 `clip(path)`: the mask opens *inside* the
+                    // rounded clip rather than replacing it, so the two
+                    // coverages multiply and `rrect` still means what it says
+                    // on a clip that also has a path. Two entries, closed in
+                    // reverse below.
+                    let pathed = clip_path
+                        .as_ref()
+                        .is_some_and(|p| self.begin_clip_path_mask(p, rect, frame));
+                    Some(pathed)
                 } else {
                     None
                 };
@@ -7377,8 +8488,16 @@ impl Interpreter {
                 if scroll_clip.is_some() {
                     frame.end_clip();
                 }
-                if mask_clip.is_some() {
+                if let Some(pathed) = mask_clip {
+                    if pathed {
+                        frame.end_clip();
+                    }
                     frame.end_clip();
+                }
+                // After the clips it contains, so the group's picture includes
+                // everything its box drew, clipped the way it was drawn.
+                if grouped {
+                    frame.end_group();
                 }
                 // Close the RFC-0019 instance-env scope opened at the top of this
                 // arm (balanced with `env_base`), restoring the caller's env for
@@ -7405,7 +8524,9 @@ impl Interpreter {
                         self.router.style_state(i)
                     })
                     .union(self.prop_style_state(&p.attrs, None, ""));
-                let paint_attrs = resolve_state_attrs(&p.attrs, &p.state_blocks, state);
+                let paint_attrs = resolve_state_attrs(&p.attrs, &p.state_blocks, state, &|c| {
+                    viewport_holds(c, self.viewport, &self.theme)
+                });
                 let paint_attrs = paint_attrs.as_ref();
                 let own_transform = self.resolve_transform(paint_attrs, nav_rect);
                 let transform = inherited_transform.compose(&own_transform);
@@ -7509,7 +8630,9 @@ impl Interpreter {
                             self.router.style_state(i)
                         })
                         .union(self.prop_style_state(attrs, None, ""));
-                    let attrs = resolve_state_attrs(attrs, state_blocks, state);
+                    let attrs = resolve_state_attrs(attrs, state_blocks, state, &|c| {
+                        viewport_holds(c, self.viewport, &self.theme)
+                    });
                     let attrs = attrs.as_ref();
                     let src_val = self
                         .binding_value(*src)
@@ -7565,7 +8688,9 @@ impl Interpreter {
                             self.router.style_state(i)
                         })
                         .union(self.prop_style_state(attrs, None, ""));
-                    let paint_attrs = resolve_state_attrs(attrs, state_blocks, state);
+                    let paint_attrs = resolve_state_attrs(attrs, state_blocks, state, &|c| {
+                        viewport_holds(c, self.viewport, &self.theme)
+                    });
                     let paint_attrs = paint_attrs.as_ref();
 
                     // RFC-0019 §2: prop expressions resolve against the scope
@@ -7721,7 +8846,9 @@ impl Interpreter {
                             self.router.style_state(i)
                         })
                         .union(self.prop_style_state(attrs, None, ""));
-                    let paint_attrs = resolve_state_attrs(attrs, state_blocks, state);
+                    let paint_attrs = resolve_state_attrs(attrs, state_blocks, state, &|c| {
+                        viewport_holds(c, self.viewport, &self.theme)
+                    });
                     let paint_attrs = paint_attrs.as_ref();
 
                     // RFC-0019 §2: restore the instance environment so shape
@@ -7760,7 +8887,10 @@ impl Interpreter {
                     // (RFC-0031 §S4) collects them into one group instead, and
                     // pushes its head once at the end.
                     let combine = self.resolve_group_mode(paint_attrs);
-                    let mut sink = combine.map(|_| ShapeGroupSink::default());
+                    let mut sink = combine.map(|(mode, _)| ShapeGroupSink {
+                        morph_paths: (mode == byard_core::frame::GROUP_MORPH).then(Vec::new),
+                        ..ShapeGroupSink::default()
+                    });
                     self.emit_canvas_items(
                         shapes,
                         canvas_rect,
@@ -7769,7 +8899,17 @@ impl Interpreter {
                         sink.as_mut(),
                         frame,
                     );
-                    if let (Some((mode, param)), Some(sink)) = (combine, sink) {
+                    if let (Some((mode, param)), Some(mut sink)) = (combine, sink) {
+                        if let Some(paths) = sink.morph_paths.take() {
+                            self.push_morph_paths(
+                                &paths,
+                                param,
+                                canvas_rect,
+                                opacity,
+                                inherited_transform,
+                                frame,
+                            );
+                        }
                         self.push_shape_group(
                             mode,
                             param,
@@ -8333,7 +9473,16 @@ impl Interpreter {
             })
             .unwrap_or_default();
 
-        let (display_text, is_placeholder) = if cur_text.is_empty() {
+        let is_focused = elem_idx.is_some_and(|i| self.router.is_focused(i));
+        // RFC-0040: the preedit this field owns, drawn after the value (the
+        // caret is at the end, §8) and never part of it.
+        let preedit = self
+            .composition
+            .as_ref()
+            .filter(|c| is_focused && elem_idx == Some(c.owner) && !c.text.is_empty())
+            .map(|c| (c.text.clone(), c.cursor));
+
+        let (display_text, is_placeholder) = if cur_text.is_empty() && preedit.is_none() {
             (placeholder, true)
         } else {
             (cur_text, false)
@@ -8345,7 +9494,6 @@ impl Interpreter {
             0x00ff_ffff_i64
         };
         let font_size = self.eval_int_prop(attrs, "size").unwrap_or(16) as f32;
-        let is_focused = elem_idx.is_some_and(|i| self.router.is_focused(i));
 
         // Focus underline (Material-style): a thin accent bar along the bottom
         // edge when the field holds focus.
@@ -8370,9 +9518,16 @@ impl Interpreter {
         // only box primitives were given one), so the field's *text* does not
         // follow `translate`/`scale`/`rotate`, the box visuals below (underline,
         // caret) and its `bg` fill do. Same limitation as the `Text` intrinsic.
+        // The field's own type properties, which it accepts from the
+        // intrinsic catalogue and, until now, ignored: a field set in a
+        // declared family rendered in the system font, which is the shape of
+        // defect this whole change exists to remove.
+        let weight = self.resolve_weight(attrs);
+        let family = self.resolve_family(attrs);
         if !display_text.is_empty() {
             frame.push_text(byard_core::TextLine {
-                weight: 400,
+                weight,
+                family: family.clone(),
                 x: text_x,
                 y: text_y,
                 text: display_text.clone(),
@@ -8382,19 +9537,87 @@ impl Interpreter {
             });
         }
 
-        // Caret at the end of the entered text while focused (M17/M19).
+        // Caret at the end of the entered text while focused (M17/M19), or
+        // at the IME's cursor inside the preedit while composing (RFC-0040).
         if is_focused {
-            let measured = if is_placeholder {
+            let measured = if is_placeholder || display_text.is_empty() {
                 0.0
             } else {
-                self.measure_text(&display_text, font_size).0
+                self.measure_text_wrapped(&display_text, font_size, None, weight, family.as_deref())
+                    .0
             };
-            frame.push_instance(byard_core::BoxInstance {
-                rect: [text_x + measured + 1.0, text_y, 1.5, font_size],
-                color: dim_alpha([1.0, 1.0, 1.0, 1.0], opacity),
-                radii: [0.0; 4],
-                transform,
-                smooth: 0.0,
+            let mut caret_x = text_x + measured + 1.0;
+            if let Some((text, cursor)) = &preedit {
+                let color = dim_alpha(super::intrinsics::color_to_rgba(text_color, false), opacity);
+                let start = text_x + measured;
+                let mut width_of = |upto: usize| -> f32 {
+                    let end = floor_char_boundary(text, upto);
+                    if end == 0 {
+                        0.0
+                    } else {
+                        self.measure_text_wrapped(
+                            &text[..end],
+                            font_size,
+                            None,
+                            weight,
+                            family.as_deref(),
+                        )
+                        .0
+                    }
+                };
+                let full = width_of(text.len());
+                let range = cursor.map(|(b, e)| (width_of(b), width_of(e)));
+                frame.push_text(byard_core::TextLine {
+                    weight,
+                    family: family.clone(),
+                    x: start,
+                    y: text_y,
+                    text: text.clone(),
+                    font_size,
+                    color,
+                    dirty: true,
+                });
+                // §5: the whole preedit thinly underlined, the IME's cursor
+                // range, the active clause on IMEs that use it, thickly.
+                let underline_y = text_y + font_size + 1.0;
+                let mut bar = |x: f32, w: f32, h: f32| {
+                    frame.push_instance(byard_core::BoxInstance {
+                        rect: [x, underline_y, w, h],
+                        color,
+                        radii: [0.0; 4],
+                        transform,
+                        smooth: 0.0,
+                    });
+                };
+                bar(start, full, 1.0);
+                if let Some((b, e)) = range.filter(|(b, e)| e > b) {
+                    bar(start + b, e - b, 2.0);
+                }
+                caret_x = start + range.map_or(full, |(_, e)| e) + 1.0;
+            }
+            // `None` from the IME hides its cursor; the caret rectangle is
+            // still reported, since the candidate window needs a place.
+            let caret_visible = preedit.as_ref().is_none_or(|(_, c)| c.is_some());
+            if caret_visible {
+                frame.push_instance(byard_core::BoxInstance {
+                    rect: [caret_x, text_y, 1.5, font_size],
+                    color: dim_alpha([1.0, 1.0, 1.0, 1.0], opacity),
+                    radii: [0.0; 4],
+                    transform,
+                    smooth: 0.0,
+                });
+            }
+            // RFC-0040 §4: where the platform puts its candidate window, in
+            // viewport space, so through the field's transform.
+            let a = transform.apply_point([caret_x, text_y]);
+            let b = transform.apply_point([caret_x + 1.5, text_y + font_size]);
+            frame.set_text_input(byard_core::frame::TextInputState {
+                caret: byard_core::frame::Rect::new(
+                    a[0].min(b[0]),
+                    a[1].min(b[1]),
+                    (b[0] - a[0]).abs(),
+                    (b[1] - a[1]).abs(),
+                ),
             });
         }
 
@@ -8426,9 +9649,16 @@ impl Interpreter {
                                 Value::Str(s) => s,
                                 _ => String::new(),
                             };
-                            let mut s = cur;
-                            s.pop();
-                            ctx.write_signal(sig, Value::Str(s));
+                            // RFC-0040 §7: one press, one grapheme cluster. A
+                            // decomposed accent, an emoji with a modifier and a
+                            // flag each go whole.
+                            let keep = unicode_segmentation::UnicodeSegmentation::grapheme_indices(
+                                cur.as_str(),
+                                true,
+                            )
+                            .next_back()
+                            .map_or(0, |(i, _)| i);
+                            ctx.write_signal(sig, Value::Str(cur[..keep].to_string()));
                         }
                         "Delete" => {
                             ctx.write_signal(sig, Value::Str(String::new()));
@@ -8509,6 +9739,94 @@ impl Interpreter {
             }
         }
         self.drain_calls();
+    }
+
+    /// Applies this tick's IME events to the composition, and marks them, and
+    /// any editing key the IME owns, as consumed (RFC-0040 §3, §6).
+    ///
+    /// - A preedit belongs to the focused field and replaces the last one; an
+    ///   empty preedit clears the text but keeps the owner, because winit
+    ///   sends one right before every commit.
+    /// - A commit goes to the owner, which is not always the focused field,
+    ///   through the same `TextInput` handler typing uses: committed text and
+    ///   typed text are the same thing once they reach the field.
+    /// - The IME turning off ends the composition, with nothing committed.
+    /// - Backspace, Delete and Enter are the IME's while a preedit is showing,
+    ///   so they never also edit the committed value.
+    fn apply_composition(&mut self, events: &[byard_core::InputEvent], consumed: &mut [bool]) {
+        use byard_core::platform::{EventKind as CoreKind, InputPayload};
+        for (i, ev) in events.iter().enumerate() {
+            match ev.kind {
+                CoreKind::Composition => {
+                    consumed[i] = true;
+                    let Some(InputPayload::Preedit { text, cursor }) = &ev.payload else {
+                        continue;
+                    };
+                    if text.is_empty() {
+                        if let Some(c) = self.composition.as_mut() {
+                            c.text.clear();
+                            c.cursor = None;
+                        }
+                    } else if let Some(owner) = self.router.focused() {
+                        self.composition = Some(Composition {
+                            owner,
+                            text: text.clone(),
+                            cursor: *cursor,
+                        });
+                    }
+                }
+                CoreKind::CompositionCommit => {
+                    consumed[i] = true;
+                    let target = self
+                        .composition
+                        .take()
+                        .map(|c| c.owner)
+                        .or_else(|| self.router.focused());
+                    if let (Some(target), Some(InputPayload::Key(text))) = (target, &ev.payload) {
+                        self.router.fire_event(
+                            &mut self.ctx,
+                            target,
+                            super::events::EventKind::TextInput,
+                            Some(&Value::Str(text.clone())),
+                        );
+                    }
+                }
+                CoreKind::CompositionEnd => {
+                    consumed[i] = true;
+                    self.composition = None;
+                }
+                CoreKind::KeyDown | CoreKind::KeyUp if self.composing() => {
+                    if let Some(InputPayload::Key(key)) = &ev.payload {
+                        if matches!(key.as_str(), "Backspace" | "Delete" | "Enter") {
+                            consumed[i] = true;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Whether a preedit is showing in the focused field.
+    fn composing(&self) -> bool {
+        self.composition
+            .as_ref()
+            .is_some_and(|c| !c.text.is_empty() && self.router.is_focused(c.owner))
+    }
+
+    /// Discards the preedit of a field that has lost focus (RFC-0040 §6).
+    ///
+    /// The engine never commits it: it does not know the IME's conversion
+    /// state, and a platform that commits on blur would then insert the text
+    /// twice. The owner is kept so that platform's commit still lands in the
+    /// field the text was typed into.
+    fn drop_unfocused_preedit(&mut self) {
+        if let Some(c) = self.composition.as_mut() {
+            if !self.router.is_focused(c.owner) {
+                c.text.clear();
+                c.cursor = None;
+            }
+        }
     }
 
     /// Offers each event to the native views under the pointer, innermost
@@ -8850,6 +10168,12 @@ impl Interpreter {
     /// those resolved to `None` and the element silently fell back to its
     /// default size, which is the failure INV-4 exists to forbid.
     fn eval_px_prop(&mut self, attrs: &[Attr], name: &str) -> Option<f32> {
+        // RFC-0036: `width: match(ref)` is a layout relationship, not a
+        // number. It is resolved once the anchor's rect exists, and
+        // evaluating it here would call a function nobody wrote.
+        if name == "width" && Self::match_width_ref(attrs).is_some() {
+            return None;
+        }
         #[allow(clippy::cast_possible_truncation)]
         attrs.iter().find_map(|a| {
             if a.name.as_str() == name {
@@ -8902,17 +10226,8 @@ impl Interpreter {
     /// The weight of the `typo:` token an element names, if it names one
     /// (RFC-0034).
     fn typo_weight(&mut self, attrs: &[Attr]) -> Option<u16> {
-        let value = attrs.iter().find_map(|a| match (&a.name, &a.kind) {
-            (n, AttrKind::Prop { value }) if n.as_str() == "typo" => Some(value.clone()),
-            _ => None,
-        })?;
-        // A bare token reads as an identifier; a theme accessor has already
-        // resolved to a size and carries no weight with it, which is exactly
-        // the gap this closes.
-        if let Expr::Ident(sym, _) = &value {
-            return self.theme.typo_weight(sym.as_str());
-        }
-        None
+        let token = self.typo_token_name(attrs)?;
+        self.theme.typo_weight(&token)
     }
 
     fn eval_typo_size(&mut self, attrs: &[Attr]) -> Option<i64> {
@@ -9264,6 +10579,18 @@ impl Interpreter {
         if element_name == "ScrollView" {
             style = style.with_scroll_axes(false, true);
         }
+        // A `Button` starts from the theme's defaults: padding around its
+        // label, the label centred on both axes, and a minimum touch size.
+        // They are seeded before the attribute loop, so anything the author
+        // wrote (`p:`, one side, `align:`, `justify:`) simply overwrites them.
+        if element_name == "Button" {
+            let (v, h) = self.theme.button_padding;
+            style.padding = byard_core::atlas::layout::Spacing::symmetric(v, h);
+            style.align = Align::Center;
+            style.justify = Justify::Center;
+            let min = Some(self.theme.button_min_size);
+            style = style.with_min_size(min, min);
+        }
         for attr in attrs {
             if let AttrKind::Prop { value } = &attr.kind {
                 // Evaluate only the layout props this resolver consumes.
@@ -9410,6 +10737,14 @@ impl Interpreter {
                     _ => {}
                 }
             }
+        }
+        // An explicit `width:`/`height:` is the author's call; the touch floor
+        // never overrides it.
+        if style.width.is_some() {
+            style.min_width = None;
+        }
+        if style.height.is_some() {
+            style.min_height = None;
         }
         style
     }
@@ -10364,6 +11699,73 @@ impl Interpreter {
         declared: &mut Vec<String>,
         errors: &mut Vec<CompileError>,
     ) {
+        // RFC-0036 `width: match(ref)`: checked here rather than in its own
+        // walk, because it asks the same two questions `anchor_to` does and
+        // wants the same answers. A width matched against a name nobody
+        // declared, or written on an element that anchors to nothing, is a
+        // `width:` that quietly does nothing.
+        // RFC-0017 §Positioning: `at:` is viewport-space and unconditional;
+        // `anchor_to:` is element-relative and flips. Writing both is not a
+        // precedence question to settle in the docs, it is two answers to one
+        // question, so it is refused.
+        if let Some(at) = el.attrs.iter().find(|a| a.name.as_str() == "at") {
+            if el.attrs.iter().any(|a| a.name.as_str() == "anchor_to") {
+                errors.push(CompileError::MisplacedAnchorTail {
+                    span: at.span,
+                    prop: "at:".to_string(),
+                    reason: "cannot be combined with `anchor_to:`: one places the \
+                             overlay in the viewport and the other against an \
+                             element, and there is no sensible order for both"
+                        .to_string(),
+                    hint: None,
+                });
+            }
+        }
+        // RFC-0036: `dismiss =>` on a container is the light-dismiss of an
+        // anchored overlay, so it needs an anchor for the same reason a
+        // matched width does: the press it ignores is the one on the anchor,
+        // and without one the panel would close the moment the user pressed
+        // the thing that opened it.
+        if el.name.as_str() != "Overlay" {
+            let dismiss = el
+                .attrs
+                .iter()
+                .find(|a| a.name.as_str() == "dismiss" && matches!(a.kind, AttrKind::Event { .. }));
+            if let Some(attr) = dismiss {
+                if !el.attrs.iter().any(|a| a.name.as_str() == "anchor_to") {
+                    errors.push(CompileError::MisplacedAnchorTail {
+                        span: attr.span,
+                        prop: "dismiss =>".to_string(),
+                        reason: "needs an `anchor_to:` on the same element: a light \
+                                 dismiss ignores presses on the anchor, and an element \
+                                 that anchors to nothing has none to ignore"
+                            .to_string(),
+                        hint: None,
+                    });
+                }
+            }
+        }
+        if let Some((name, span)) = Self::match_width_ref(&el.attrs) {
+            let anchors = el.attrs.iter().any(|a| a.name.as_str() == "anchor_to");
+            if !anchors {
+                errors.push(CompileError::MisplacedAnchorTail {
+                    span,
+                    prop: format!("width: match({name})"),
+                    reason: "needs an `anchor_to:` on the same element: the width \
+                             comes from the anchor's resolved rect, and an element \
+                             that anchors to nothing has no rect to read"
+                        .to_string(),
+                    hint: None,
+                });
+            } else if !declared.contains(&name) {
+                errors.push(CompileError::MisplacedAnchorTail {
+                    span,
+                    prop: format!("width: match({name})"),
+                    reason: "names no element tagged `as` before this overlay".to_string(),
+                    hint: closest_anchor(&name, declared),
+                });
+            }
+        }
         for attr in &el.attrs {
             if attr.name.as_str() != "anchor_to" {
                 continue;
@@ -10400,7 +11802,18 @@ impl Interpreter {
     /// names), then lowers its top-level elements into a render tree, handling
     /// `when`/`for` structural members (M20).
     pub fn lower_view(&mut self, view: &ViewDecl, known_views: &[&str]) -> Vec<RenderNode> {
+        // RFC-0032 §R4: another view is another tree, and last frame's build
+        // order says nothing about it. The same view lowered again (the HUD's
+        // periodic refresh) keeps its eligibility: its structure is compared
+        // as it always was. A hot reload of the same view invalidates in
+        // `reload`, which knows the AST changed.
+        let identity = (view.name.clone(), view.span);
+        if self.lowered_view.as_ref() != Some(&identity) {
+            self.invalidate_retained_layout();
+            self.lowered_view = Some(identity);
+        }
         self.check_anchor_refs(view);
+        self.check_font_families(view);
         // RFC-0018: a fresh tree gets fresh `when`/`for` pools; the previous
         // tree's pool ids are discarded with it (hot-reload re-lowers the tree).
         self.for_pools.clear();
@@ -10765,14 +12178,35 @@ impl Interpreter {
         let light = self.theme.color(f, false);
         let dark = self.theme.color(f, true);
         if light.is_some() || dark.is_some() {
+            let mix_sig = self.theme_mix;
             return Some(Box::new(move |ctx| {
                 let is_dark = ctx.read_signal(sig).as_bool().unwrap_or(false);
-                let v = if is_dark {
-                    dark.or(light)
+                let (current, previous) = if is_dark {
+                    (dark.or(light), light.or(dark))
                 } else {
-                    light.or(dark)
+                    (light.or(dark), dark.or(light))
                 };
-                Value::Int(v.unwrap_or(0))
+                let current = current.unwrap_or(0);
+                // RFC-0016 animated token transitions: while a flip is under
+                // way the token reads a blend from the scheme it is leaving.
+                // At rest (`mix == 1`) it returns exactly the value it always
+                // did, not a blend that happens to land on it, so a theme with
+                // no transition is byte-identical to one written before this.
+                #[allow(clippy::cast_possible_truncation)]
+                let mix = match mix_sig.map(|m| ctx.read_signal(m)) {
+                    Some(Value::Float(m)) => m as f32,
+                    _ => 1.0,
+                };
+                if mix >= 1.0 {
+                    return Value::Int(current);
+                }
+                // Smoothstep, which is symmetric about one half: reversing a
+                // flip half way through replaces `mix` with `1 - mix`, and the
+                // eased value is continuous across that, so a second tap never
+                // jumps.
+                let t = mix.clamp(0.0, 1.0);
+                let eased = t * t * (3.0 - 2.0 * t);
+                Value::Int(mix_hex_oklab(previous.unwrap_or(current), current, eased))
             }));
         }
 
@@ -12305,7 +13739,10 @@ impl Interpreter {
         // handles one stops it there, which is the rule an intrinsic's handler
         // follows; a view that declines is invisible to the rest of routing,
         // which is the rule an element with no listener follows (RFC-0003).
-        let consumed = self.dispatch_to_native_views(events);
+        let mut consumed = self.dispatch_to_native_views(events);
+        // RFC-0040: composition is engine state, applied here rather than
+        // routed to an app handler, and never offered to anything else.
+        self.apply_composition(events, &mut consumed);
 
         let comp_events: Vec<CompEvent> = events
             .iter()
@@ -12329,12 +13766,20 @@ impl Interpreter {
                     CoreKind::LongPress => CompKind::LongPress,
                     CoreKind::DoubleTap => CompKind::DoubleTap,
                     CoreKind::Secondary => CompKind::Secondary,
+                    // Consumed by `apply_composition` above, never routed.
+                    CoreKind::Composition
+                    | CoreKind::CompositionCommit
+                    | CoreKind::CompositionEnd => {
+                        unreachable!("composition events are consumed before routing")
+                    }
                 };
                 let value = ev.payload.as_ref().map(|p| match p {
                     InputPayload::Str(s) => Value::Str(s.clone()),
                     InputPayload::Bool(b) => Value::Bool(*b),
                     InputPayload::Float(f) => Value::Float(f64::from(*f)),
                     InputPayload::Key(k) => Value::Str(k.clone()),
+                    // Only a `Composition` carries one, and those are consumed.
+                    InputPayload::Preedit { text, .. } => Value::Str(text.clone()),
                 });
                 CompEvent {
                     kind,
@@ -12507,6 +13952,8 @@ impl Interpreter {
 
         self.router
             .dispatch_tick(&mut self.ctx, Some(&self.atlas), comp_events);
+        // RFC-0040 §6: routing may have moved focus away from a composition.
+        self.drop_unfocused_preedit();
     }
 }
 
@@ -12735,6 +14182,35 @@ fn state_bit(kind: StyleStateKind) -> crate::interp::events::StyleState {
     }
 }
 
+/// Whether a responsive block's viewport condition holds (RFC-0016).
+///
+/// A breakpoint nobody declared never holds. It has already been reported
+/// when the view was lowered, and reading it as "always" or as zero would make
+/// the block apply at every size, which is the one outcome worse than not
+/// applying at all.
+fn viewport_holds(
+    cond: &crate::parser::ast::ViewportCond,
+    viewport: (f32, f32),
+    theme: &super::theme::Theme,
+) -> bool {
+    use crate::parser::ast::{Breakpoint, ViewportAxis, ViewportOp};
+    let at = match &cond.breakpoint {
+        Breakpoint::Px(px) => *px,
+        Breakpoint::Named(name, _) => match theme.breakpoint(name.as_str()) {
+            Some(px) => px,
+            None => return false,
+        },
+    };
+    let extent = match cond.axis {
+        ViewportAxis::Width => viewport.0,
+        ViewportAxis::Height => viewport.1,
+    };
+    match cond.op {
+        ViewportOp::AtLeast => extent >= at,
+        ViewportOp::Below => extent < at,
+    }
+}
+
 /// The combined-selector mask a state block requires (RFC-0024): every state in
 /// `states` must be active for the block to apply.
 fn state_block_mask(sb: &StateBlock) -> crate::interp::events::StyleState {
@@ -12753,10 +14229,17 @@ fn state_block_mask(sb: &StateBlock) -> crate::interp::events::StyleState {
 /// then **declaration order** for equal specificity.
 ///
 /// The common stateless case (no blocks) borrows the base with no allocation.
+///
+/// A responsive block (RFC-0016, `on width >= md`) also has to have its viewport
+/// condition hold, which `holds` answers. It counts as one unit of specificity,
+/// the same as a single interaction state, so declaration order settles a tie
+/// between `on hover` and `on width >= md` exactly as it settles one between two
+/// states.
 fn resolve_state_attrs<'a>(
     base: &'a [Attr],
     state_blocks: &[StateBlock],
     active: crate::interp::events::StyleState,
+    holds: &dyn Fn(&crate::parser::ast::ViewportCond) -> bool,
 ) -> std::borrow::Cow<'a, [Attr]> {
     if state_blocks.is_empty() {
         return std::borrow::Cow::Borrowed(base);
@@ -12767,7 +14250,9 @@ fn resolve_state_attrs<'a>(
         .enumerate()
         .filter_map(|(i, sb)| {
             let required = state_block_mask(sb);
-            active.contains(required).then_some((required.count(), i))
+            let viewport_ok = sb.viewport.as_ref().is_none_or(holds);
+            let spec = required.count() + u32::from(sb.viewport.is_some());
+            (active.contains(required) && viewport_ok).then_some((spec, i))
         })
         .collect();
     if matching.is_empty() {
@@ -13141,6 +14626,82 @@ fn color_from_channels(ch: [f32; 4]) -> i64 {
 fn mix_hex_oklab(a: i64, b: i64, t: f32) -> i64 {
     let (from, to) = (color_channels(a), color_channels(b));
     color_from_channels(std::array::from_fn(|i| from[i] + (to[i] - from[i]) * t))
+}
+
+/// The largest char boundary in `s` at or before `i`, so an IME's byte
+/// offset that lands inside a character (or past the end) still slices.
+fn floor_char_boundary(s: &str, i: usize) -> usize {
+    let mut i = i.min(s.len());
+    while !s.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
+}
+
+/// Mixes two linear RGBA colours in OKLab at factor `t`, alpha linearly, so
+/// a path morph blends its fill the way every other colour animation does
+/// (RFC-0031 §S10).
+fn mix_rgba_oklab(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let hex = |c: [f32; 4]| -> i64 {
+        let byte = |v: f32| i64::from((linear_to_srgb(v.clamp(0.0, 1.0)) * 255.0).round() as u8);
+        (byte(c[0]) << 16) | (byte(c[1]) << 8) | byte(c[2])
+    };
+    let (la, lb) = (oklab_from_hex(hex(a)), oklab_from_hex(hex(b)));
+    let rgb = super::intrinsics::color_to_rgba(
+        hex_from_oklab(std::array::from_fn(|i| la[i] + (lb[i] - la[i]) * t)),
+        false,
+    );
+    [rgb[0], rgb[1], rgb[2], a[3] + (b[3] - a[3]) * t]
+}
+
+/// The two members a morph phase falls between and the blend factor, for a
+/// sequence of `count` (RFC-0031 §S10): the phase wraps, so negative and
+/// past-the-end values index the sequence cyclically.
+fn morph_indices(phase: f32, count: usize) -> Option<(usize, usize, f32)> {
+    if count == 0 || !phase.is_finite() {
+        return None;
+    }
+    #[allow(clippy::cast_precision_loss)]
+    let n = count as f32;
+    let ph = phase.rem_euclid(n);
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let i0 = (ph.floor() as usize).min(count - 1);
+    #[allow(clippy::cast_precision_loss)]
+    let t = (ph - i0 as f32).clamp(0.0, 1.0);
+    Some((i0, (i0 + 1) % count, t))
+}
+
+/// Two paths blended command by command at factor `t`; `Err` carries the
+/// index of the first command that is not the same kind in both (or where
+/// one path ends before the other).
+#[allow(clippy::many_single_char_names)] // points of the two paths: p/q, c/d
+fn lerp_path_commands(
+    from: &[PathCommand],
+    to: &[PathCommand],
+    t: f32,
+) -> Result<Vec<PathCommand>, usize> {
+    let mix = |p: [f32; 2], q: [f32; 2]| [p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t];
+    let mut out = Vec::with_capacity(from.len());
+    for (i, pair) in from.iter().zip(to).enumerate() {
+        out.push(match (*pair.0, *pair.1) {
+            (PathCommand::Move(p), PathCommand::Move(q)) => PathCommand::Move(mix(p, q)),
+            (PathCommand::Line(p), PathCommand::Line(q)) => PathCommand::Line(mix(p, q)),
+            (PathCommand::Quad(c, p), PathCommand::Quad(d, q)) => {
+                PathCommand::Quad(mix(c, d), mix(p, q))
+            }
+            (PathCommand::Cubic(c1, c2, p), PathCommand::Cubic(d1, d2, q)) => {
+                PathCommand::Cubic(mix(c1, d1), mix(c2, d2), mix(p, q))
+            }
+            (PathCommand::Close, PathCommand::Close) => PathCommand::Close,
+            _ => return Err(i),
+        });
+    }
+    if from.len() == to.len() {
+        Ok(out)
+    } else {
+        Err(from.len().min(to.len()))
+    }
 }
 
 /// sRGB gamma → linear (per channel).

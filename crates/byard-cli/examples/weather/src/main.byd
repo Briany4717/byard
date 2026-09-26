@@ -41,7 +41,7 @@ View Main() {
     // well as on a press. `every 30s` is short for an example; a real app says
     // `every 5min`, which is the unit the lexer learned for exactly this
     // sentence. The timer is scoped to this view, so closing the window stops
-    // the polling rather than leaving it running (INV-10).
+    // the polling rather than leaving it running.
     every 30s => {
         refreshes = refreshes + 1
         http.get("https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,wind_speed_10m&daily=temperature_2m_max,temperature_2m_min&forecast_days=1")

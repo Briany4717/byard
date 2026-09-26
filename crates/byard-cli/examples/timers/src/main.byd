@@ -50,7 +50,7 @@ View Main() {
         }
 
         // The scoped timer lives inside the `when`, so collapsing the panel
-        // cancels it (INV-10: nothing survives the scope that started it) and
+        // cancels it (nothing survives the scope that started it) and
         // re-opening arms a fresh one. Watch `beats` freeze and resume.
         when live {
             Column #[bg: 0x1E1E2A, radius: 14, p: 20, gap: 8] {

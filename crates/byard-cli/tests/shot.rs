@@ -61,5 +61,21 @@ fn a_shot_is_the_project_at_the_asked_size_in_its_own_colours() {
     let literal = img.get_pixel(150, 40);
     assert!(close(token, [105, 115, 127]), "the theme token: {token:?}");
     assert!(close(literal, [232, 84, 63]), "the literal: {literal:?}");
+
+    // Where the app drew nothing, the shot is what the window shows: opaque
+    // black, not transparent.
+    std::fs::write(
+        dir.join("main.byd"),
+        "View Main() { Box #[bg: 0xE8543F, width: 20, height: 20] {} }\n",
+    )
+    .unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_byard"))
+        .args(["shot", dir.to_str().unwrap(), "-o", png.to_str().unwrap()])
+        .args(["--size", "100x40", "--scale", "1", "--at", "0"])
+        .output()
+        .expect("run byard shot");
+    assert!(out.status.success());
+    let empty = *image::open(&png).unwrap().to_rgba8().get_pixel(80, 30);
+    assert_eq!(empty.0, [0, 0, 0, 255], "an empty area is opaque black");
     let _ = std::fs::remove_dir_all(&dir);
 }

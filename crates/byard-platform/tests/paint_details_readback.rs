@@ -327,7 +327,7 @@ fn child_over_white(device: &Arc<wgpu::Device>, queue: &Arc<wgpu::Queue>, child_
 /// not a guess at the blend's exact output.
 #[test]
 fn a_half_transparent_bg_shows_what_is_behind_it() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping readback");
         return;
     };

@@ -67,6 +67,7 @@
 pub mod backdrop;
 pub mod canvas_fill;
 pub mod canvas_shape;
+pub mod clip_mask;
 pub mod decorated_box;
 pub mod gpu_timer;
 pub mod instance_arena;
@@ -293,6 +294,9 @@ pub struct EncoderSubsystem {
     clip_buffer: wgpu::Buffer,
     /// How many aligned entries [`clip_buffer`](Self::clip_buffer) can hold.
     clip_capacity: u32,
+    /// The coverage strip for `clip(path)` (RFC-0037), bound beside the clip
+    /// table so every clippable pipeline can sample it.
+    clip_masks: clip_mask::ClipMaskAtlas,
     viewport_bind_group: wgpu::BindGroup,
     /// Kept so the bind group can be rebuilt when the clip buffer grows.
     viewport_layout: wgpu::BindGroupLayout,
@@ -578,6 +582,26 @@ impl EncoderSubsystem {
                     },
                     count: None,
                 },
+                // The clip coverage strip (RFC-0037 `clip(path)`). Always
+                // bound, even by a frame with no path clip at all: a binding
+                // that only sometimes exists would mean two shader variants of
+                // every clippable pipeline, and the placeholder is one texel.
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
             ],
         });
 
@@ -590,8 +614,14 @@ impl EncoderSubsystem {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let viewport_bind_group =
-            build_viewport_bind_group(&device, &bind_group_layout, &viewport_buffer, &clip_buffer);
+        let clip_masks = clip_mask::ClipMaskAtlas::new(&device, &queue).await?;
+        let viewport_bind_group = build_viewport_bind_group(
+            &device,
+            &bind_group_layout,
+            &viewport_buffer,
+            &clip_buffer,
+            &clip_masks,
+        );
 
         let quad_layout = quad_vertex_layout();
 
@@ -766,6 +796,7 @@ impl EncoderSubsystem {
             viewport_buffer,
             clip_buffer,
             clip_capacity,
+            clip_masks,
             viewport_bind_group,
             viewport_layout: bind_group_layout,
             text_pipeline,
@@ -964,9 +995,15 @@ impl EncoderSubsystem {
                 &self.viewport_layout,
                 &self.viewport_buffer,
                 &self.clip_buffer,
+                &self.clip_masks,
             );
         }
-        let data = clip_entries(table, self.scale_factor);
+        let data = clip_entries(
+            table,
+            self.scale_factor,
+            self.clip_masks.slots(),
+            self.clip_masks.size(),
+        );
         self.queue
             .write_buffer(&self.clip_buffer, 0, bytemuck::cast_slice(&data));
     }
@@ -1335,17 +1372,40 @@ impl EncoderSubsystem {
         }
         self.viewport_dirty = false;
 
-        // The clip table the fragment shaders will read (RFC-0037). Written
-        // once per frame, before any pass: a clip is frame data, and the
-        // dynamic offset the draw loop sets is the only per-run cost.
-        self.upload_clips(clips.table);
-
         // ── Command encoding ──────────────────────────────────────────────────
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("ByardCore - Frame Command Encoder"),
             });
+
+        // RFC-0037 `clip(path)`: the masks are rasterised first, in the same
+        // command buffer and before the pass that samples them, so the
+        // coverage a fragment reads is this frame's and never last frame's.
+        // A frame with no path clip records nothing here.
+        let masks_moved = self.clip_masks.prepare(
+            &self.device,
+            &self.queue,
+            &mut encoder,
+            clips.masks,
+            self.scale_factor,
+        );
+        if masks_moved {
+            // The strip grew, so the bind group that names it is stale.
+            self.viewport_bind_group = build_viewport_bind_group(
+                &self.device,
+                &self.viewport_layout,
+                &self.viewport_buffer,
+                &self.clip_buffer,
+                &self.clip_masks,
+            );
+        }
+
+        // The clip table the fragment shaders will read (RFC-0037). Written
+        // once per frame, before any pass: a clip is frame data, and the
+        // dynamic offset the draw loop sets is the only per-run cost. After
+        // the masks, because an entry that names one carries where it landed.
+        self.upload_clips(clips.table);
 
         if should_draw {
             let mut backdrop_draw = BackdropDraw {
@@ -1460,6 +1520,14 @@ impl EncoderSubsystem {
         // single largest unexplained term in `encode.frame`.
         crate::profile_scope!("encode.finish");
         Ok(encoder.finish())
+    }
+
+    /// How many times the clip-mask strip has been rasterised (RFC-0037
+    /// `clip(path)`). A frame whose path clips did not change must not add to
+    /// it; that is the whole of the steady-state guarantee for masks.
+    #[must_use]
+    pub const fn clip_mask_rasterisations(&self) -> u64 {
+        self.clip_masks.rasterised()
     }
 
     /// Encodes a frame from a [`RenderFrame`] published by the Relay.
@@ -1840,6 +1908,8 @@ pub struct FrameClips<'a> {
     /// slices because it is another per-text-line parallel slice consumed by the
     /// same text `prepare` call.
     pub text_wrap: &'a [Option<f32>],
+    /// The path masks a clip entry may name (RFC-0037 `clip(path)`).
+    pub masks: &'a [crate::frame::ClipMask],
 }
 
 /// Bundles a frame's clip table and per-pool clip slices into a [`FrameClips`].
@@ -1855,6 +1925,7 @@ fn frame_clips(frame: &RenderFrame) -> FrameClips<'_> {
         ripple: frame.ripple_clips(),
         backdrop: frame.backdrop_clips(),
         text_wrap: frame.text_wraps(),
+        masks: frame.clip_masks(),
     }
 }
 
@@ -2962,6 +3033,7 @@ fn build_viewport_bind_group(
     layout: &wgpu::BindGroupLayout,
     viewport_buffer: &wgpu::Buffer,
     clip_buffer: &wgpu::Buffer,
+    masks: &clip_mask::ClipMaskAtlas,
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("ByardCore - Viewport Bind Group"),
@@ -2978,6 +3050,14 @@ fn build_viewport_bind_group(
                     offset: 0,
                     size: wgpu::BufferSize::new(CLIP_ENTRY_SIZE),
                 }),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::TextureView(masks.view()),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::Sampler(masks.sampler()),
             },
         ],
     })
@@ -3010,7 +3090,12 @@ pub(crate) const CLIP_ENTRY_SIZE: u64 = CLIP_STRIDE;
 /// The sentinel is a rect large enough to contain any viewport with zero
 /// radii, which makes the shader's test uniform: there is no "is there a clip"
 /// branch, only a test every fragment passes when nothing is clipping.
-pub(crate) fn clip_entries(clips: &[crate::frame::ClipRect], scale: f32) -> Vec<f32> {
+pub(crate) fn clip_entries(
+    clips: &[crate::frame::ClipRect],
+    scale: f32,
+    slots: &[clip_mask::MaskSlot],
+    strip: (u32, u32),
+) -> Vec<f32> {
     let stride = (CLIP_STRIDE / 4) as usize;
     let mut out = vec![0.0_f32; stride * (clips.len() + 1)];
     // The sentinel.
@@ -3030,6 +3115,34 @@ pub(crate) fn clip_entries(clips: &[crate::frame::ClipRect], scale: f32) -> Vec<
         ]);
         for (o, r) in c.radii.iter().enumerate() {
             out[base + 4 + o] = r * scale;
+        }
+        // RFC-0037 `clip(path)`: where this clip's mask sits in the strip, as
+        // the physical rect it covers and the UV rect it was rasterised into.
+        // An entry with no mask leaves both at zero, which the shader reads as
+        // "no path": a zero-width mask rect is not a region anything can fall
+        // inside, so the test is a width check rather than a flag.
+        if let Some(slot) = c.mask.and_then(|m| slots.get(m as usize)) {
+            #[allow(clippy::cast_precision_loss)]
+            let (sw, sh) = (strip.0.max(1) as f32, strip.1.max(1) as f32);
+            #[allow(clippy::cast_precision_loss)]
+            let uv = [
+                slot.x as f32 / sw,
+                0.0,
+                (slot.x + slot.width) as f32 / sw,
+                slot.height as f32 / sh,
+            ];
+            // The mask's rect is the clip's own rect *before* nesting
+            // intersected it: `begin_clip_path` opened it at the mask's
+            // bounds, so a nested parent can only have shrunk `rect`. The
+            // mapping must use the unshrunk bounds or the coverage would be
+            // stretched onto the smaller box.
+            out[base + 8..base + 12].copy_from_slice(&[
+                c.mask_bounds.x * scale,
+                c.mask_bounds.y * scale,
+                c.mask_bounds.width * scale,
+                c.mask_bounds.height * scale,
+            ]);
+            out[base + 12..base + 16].copy_from_slice(&uv);
         }
     }
     out

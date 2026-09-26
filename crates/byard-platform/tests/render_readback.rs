@@ -16,32 +16,14 @@ use std::sync::Arc;
 
 const SRC: &str = include_str!("../../byard-compiler/examples/hello_world.byd");
 
-fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>)> {
-    let instance =
-        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-    let adapter =
-        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-            .ok()?;
-    let info = adapter.get_info();
-    eprintln!(
-        "  GPU adapter: {} ({:?}, {:?} backend, driver: {})",
-        info.name, info.device_type, info.backend, info.driver
-    );
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("readback device"),
-        required_features: wgpu::Features::empty(),
-        required_limits: byard_core::engine::device_limits(&adapter),
-        memory_hints: wgpu::MemoryHints::Performance,
-        ..Default::default()
-    }))
-    .ok()?;
-    Some((Arc::new(device), Arc::new(queue)))
+fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>, byard_test_gpu::Turn)> {
+    byard_test_gpu::device(byard_core::engine::device_limits)
 }
 
 #[test]
 #[allow(clippy::too_many_lines)]
 fn demo_boxes_are_actually_painted_on_screen() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping readback");
         return;
     };
@@ -189,7 +171,7 @@ fn demo_boxes_are_actually_painted_on_screen() {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn vector_icon_paints_after_generation_lands() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping readback");
         return;
     };
@@ -335,7 +317,7 @@ fn vector_icon_paints_after_generation_lands() {
 #[test]
 #[allow(clippy::too_many_lines)]
 fn widget_inside_bordered_card_is_not_occluded() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping readback");
         return;
     };
@@ -476,7 +458,7 @@ fn content_clip_scissors_overflow_to_the_viewport() {
     use byard_core::BoxInstance;
     use byard_core::frame::{Rect, TextLine, Transform};
 
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping readback");
         return;
     };
@@ -511,6 +493,7 @@ fn content_clip_scissors_overflow_to_the_viewport() {
             text: (*s).to_string(),
             font_size: 18.0,
             weight: 400,
+            family: None,
             color: [1.0, 1.0, 1.0, 1.0],
             dirty: true,
         });
@@ -644,7 +627,7 @@ fn content_clip_scissors_overflow_to_the_viewport() {
 #[test]
 #[allow(clippy::too_many_lines, clippy::many_single_char_names)]
 fn scrollview_scrolls_and_clips_end_to_end() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping readback");
         return;
     };

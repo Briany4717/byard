@@ -1,0 +1,16 @@
+[project]
+name = "seed_scheme"
+entry = "src/main.byd"
+
+# RFC-0022 §5: one brand colour, and the engine derives every colour role of
+# both schemes from it. Change the seed and run again: the whole app moves to
+# the new hue, and every text colour stays readable on what it sits on.
+[theme]
+name = "seeded"
+seed = "#1E8E3E"
+transition = 300
+
+# An explicit token still wins over the derived one. Uncomment to see the
+# light-scheme primary pinned while everything else follows the seed.
+# [theme.color.light]
+# primary = "#0B57D0"

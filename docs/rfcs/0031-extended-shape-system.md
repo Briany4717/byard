@@ -1,11 +1,13 @@
 # RFC-0031: Extended Shape System, superelliptical corners, shape groups, organic fusion, and morphing
 
-- **Status:** Active, **partially implemented**. §S1–§S10 have landed:
-  superelliptical corners across every pipeline that clips to a rounded rect,
-  the shape group and its storage buffer, `ngon`, sequence morphing, and
-  organic fusion. §S11's general path morphing, compile-time feature
-  correspondence plus the analytic cubic-path pipeline needed to render its
-  output, is **deferred**, as §S11 itself proposes.
+- **Status:** Active, **implemented except general path correspondence**.
+  §S1 to §S10 have landed: superelliptical corners across every pipeline that
+  clips to a rounded rect, the shape group and its storage buffer, `ngon`,
+  sequence morphing, and organic fusion. §S11 has landed in its narrow form:
+  body paths with the same command structure morph command by command, and
+  paths that differ are a compile error naming the first command that
+  disagrees. General correspondence between two arbitrary paths stays
+  **deferred**, with the reasons in §S11.
 
   Eight corrections were found while implementing it and are recorded in
   [the erratum](0031-erratum-implementation-deltas.md); the body below has been
@@ -13,7 +15,7 @@
   erratum is where the *reasons* are.
 - **Author(s):** Briany4717
 - **Created:** 2026-07-25
-- **Last updated:** 2026-07-31
+- **Last updated:** 2026-09-24
 - **Depends on:**
   - RFC-0020 (`Canvas`, `CanvasShape`, the analytic per-fragment SDF evaluator in `canvas_shape.wgsl`, this RFC extends that shader rather than adding a pipeline). *RFC-0020's status line has since been corrected to `Active, partially implemented`, and its Tier-2 deferral re-checked against what this RFC added to Tier-1.*
   - RFC-0001 (§3.1 render pipelines and the rounded-box field clamp; `frame.rs` as the sole cross-subsystem boundary)
@@ -490,6 +492,47 @@ demands. `ngon` plus field interpolation covers the M3E vocabulary; the general
 case can be built when a real use case names it, and S9's grammar accommodates it
 without change (a `path` member in a morph group).
 
+#### S11, what was built: same-structure path morphing
+
+The blocker above is about rendering a morphed path through the MSDF
+pipeline. It does not apply to a **body path** (RFC-0037), which is already
+tessellated on the CPU and cached by its numbers. Morphing two body paths
+that have the same commands needs no correspondence and no new pipeline:
+
+```byld
+Canvas #[width: 120, height: 120,
+         morph: playing ? 1.0 : 0.0 with anim.spring(stiffness: 260, damping: 0.8)] {
+    path(fill: 0x4CC38A) { move(30, 20) line(60, 40) line(60, 80) line(30, 100) close() … }
+    path(fill: 0xF2F3F5) { move(30, 20) line(52, 20) line(52, 100) line(30, 100) close() … }
+}
+```
+
+- **The rule.** Each path must have the same commands in the same order as
+  the one it blends into, including the last blending back into the first,
+  because the sequence wraps (§S10). The `k`-th points of the two are
+  interpolated; the fill blends in OKLab on the same phase, and the
+  `opacity:` linearly.
+- **A mismatch is refused, not approximated.** `byard check` reports
+  `MorphPathMismatch` at the first command that disagrees, naming the path's
+  position in the sequence and both commands. A morph that silently fell back
+  to a cut would look like an easing bug. When the body picks its members
+  with `when` or `for`, the order is only known while rendering, and the same
+  rule is applied there and reported once.
+- **One sequence, one kind.** A `morph:` canvas holds either body paths or
+  distance-field shapes, never both (`MorphMemberKind`): the first blend on
+  the CPU and the second on the GPU, and one phase cannot index both. A
+  `path(d: …)` cannot morph, because it is baked into the MSDF atlas.
+- **Cost.** The blend is new geometry each frame the phase moves, so it is
+  tessellated once per such frame; a settled phase produces the same numbers
+  and the mesh cache answers, so a morph at rest costs no tessellation. Both
+  halves are asserted by counting tessellations.
+
+What stays deferred is exactly the general case: two paths whose structures
+differ, where a correspondence has to be invented. The workaround is the one
+designers already use for icon morphs: author both states with the same
+commands (split a triangle down the middle so each half lines up with a
+pause bar), which is what the example does.
+
 ### 5. Grammar
 
 Two attributes on `Canvas` and one new shape command:
@@ -769,9 +812,11 @@ questions.
 
 ## Future possibilities
 
-- **General path morphing (S11).** Compile-time feature correspondence emitted as
-  fixed-length control-point arrays, plus the Tier-1.5 analytic cubic-path SDF
-  needed to render the result. The grammar already accommodates it.
+- **General path morphing (S11).** Same-structure body paths morph today.
+  Arbitrary pairs need compile-time feature correspondence emitted as
+  fixed-length control-point arrays; rendering the result can reuse the body
+  path's tessellation rather than the Tier-1.5 SDF first proposed. The grammar
+  already accommodates it.
 - **Backdrop refraction.** Displacing the backdrop sample by the shape field's
   gradient produces edge refraction. It composes with fusion to give the current
   "liquid glass" idiom, but it belongs to RFC-0023's paint-effect stack rather

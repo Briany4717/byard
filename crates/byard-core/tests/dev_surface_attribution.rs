@@ -30,21 +30,8 @@ use byard_core::telemetry::{Owner, SampleBlock, drain_samples, scope_name};
 
 // ── Harness ────────────────────────────────────────────────────────────────
 
-fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>)> {
-    let instance =
-        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-    let adapter =
-        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-            .ok()?;
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("ByardCore - Dev Surface Attribution Test Device"),
-        required_features: wgpu::Features::empty(),
-        required_limits: byard_core::engine::device_limits(&adapter),
-        memory_hints: wgpu::MemoryHints::Performance,
-        ..Default::default()
-    }))
-    .ok()?;
-    Some((Arc::new(device), Arc::new(queue)))
+fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>, byard_test_gpu::Turn)> {
+    byard_test_gpu::device(byard_core::engine::device_limits)
 }
 
 /// An encoder and a 256×256 offscreen target, ready to encode frames into.
@@ -53,11 +40,13 @@ struct Harness {
     queue: Arc<wgpu::Queue>,
     enc: EncoderSubsystem,
     target: wgpu::Texture,
+    /// Held for as long as the harness can draw.
+    _turn: byard_test_gpu::Turn,
 }
 
 impl Harness {
     fn new() -> Option<Self> {
-        let (device, queue) = try_device()?;
+        let (device, queue, turn) = try_device()?;
         let mut enc = pollster::block_on(EncoderSubsystem::init(
             Arc::clone(&device),
             Arc::clone(&queue),
@@ -89,6 +78,7 @@ impl Harness {
             queue,
             enc,
             target,
+            _turn: turn,
         })
     }
 
@@ -116,6 +106,7 @@ fn line(y: f32, text: &str) -> TextLine {
         text: text.to_string(),
         font_size: 12.0,
         weight: 400,
+        family: None,
         color: [1.0, 1.0, 1.0, 1.0],
         // What the interpreter always sends. These tests are only meaningful
         // because it is `true` here: the point is that it is not the signal.

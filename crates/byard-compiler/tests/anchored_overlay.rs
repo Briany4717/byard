@@ -293,3 +293,262 @@ fn a_computed_anchor_name_resolves() {
          anchor {anchor:?} panel {panel:?}"
     );
 }
+
+// ── `width: match(ref)`: a panel as wide as the element it hangs from ──────
+
+/// Errors reported for `src`, without asserting the frame.
+fn errors_of(src: &str) -> Vec<String> {
+    let parsed = parse(src);
+    assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+    let mut interp = Interpreter::new();
+    let known: Vec<&str> = parsed.views.iter().map(|v| v.name.as_str()).collect();
+    interp.load_views(&parsed.views);
+    let _ = interp.lower_view(&parsed.views[0], &known);
+    interp.errors().iter().map(|e| format!("{e:?}")).collect()
+}
+
+/// A view whose field is `field_w` wide and whose panel matches it.
+fn matched(field_w: i32) -> String {
+    format!(
+        "View Main() {{
+    Column #[bg: 0x101010, p: 20, gap: 10, width: 400, height: 300] {{
+        Box #[bg: 0x223344, width: {field_w}, height: 30] as field {{}}
+    }}
+    Overlay #[modal: false] {{
+        Box #[bg: 0xAA3344, height: 40, anchor_to: \"field\", width: match(field)] {{
+            Box #[bg: 0x115522, height: 12] {{}}
+        }}
+    }}
+}}"
+    )
+}
+
+/// The panel ends up exactly as wide as its anchor, whatever that is.
+///
+/// Two widths rather than one, because a single case passes for a panel that
+/// happened to be that wide already, which is the shape of test this project
+/// keeps having to rewrite.
+#[test]
+fn a_matched_panel_is_exactly_as_wide_as_its_anchor() {
+    for field_w in [120.0_f32, 260.0] {
+        #[allow(clippy::cast_possible_truncation)]
+        let rects = boxes(&matched(field_w as i32));
+        let panel = find(&rects, field_w, 40.0);
+        assert!(
+            (panel[2] - field_w).abs() < 0.5,
+            "the panel must be {field_w} wide, got {panel:?}"
+        );
+        // And it is still placed against the anchor, so matching the width did
+        // not cost the placement.
+        let anchor = find(&rects, field_w, 30.0);
+        assert!(
+            (panel[0] - anchor[0]).abs() < 0.5,
+            "anchor {anchor:?} panel {panel:?}"
+        );
+    }
+}
+
+/// The panel's *children* are laid out at the matched width too.
+///
+/// This is the assertion that rules out the cheap version of this feature.
+/// Widening the finished rect and calling it done leaves every row inside the
+/// panel at the width the panel used to have, so the panel is the right size
+/// and its contents rattle around inside it.
+#[test]
+fn the_matched_width_reaches_the_panels_children() {
+    let rects = boxes(&matched(260));
+    let row = rects
+        .iter()
+        .find(|r| (r[3] - 12.0).abs() < 0.5)
+        .unwrap_or_else(|| panic!("no row in {rects:?}"));
+    assert!(
+        (row[2] - 260.0).abs() < 0.5,
+        "the row inside the panel must fill the matched width, got {row:?}: \
+         a rect widened after layout leaves its children where they were"
+    );
+}
+
+/// A width matched against a name nobody tagged is a diagnostic naming the
+/// nearest one, not a panel that silently keeps its own width.
+#[test]
+fn a_matched_width_naming_no_anchor_is_a_diagnostic() {
+    let src = matched(120).replace("match(field)", "match(feild)");
+    let errs = errors_of(&src);
+    assert_eq!(errs.len(), 1, "{errs:?}");
+    assert!(errs[0].contains("MisplacedAnchorTail"), "{errs:?}");
+    assert!(errs[0].contains("feild"), "{errs:?}");
+    assert!(
+        errs[0].contains("field"),
+        "the nearest tag must be offered: {errs:?}"
+    );
+}
+
+/// And on an element that anchors to nothing it is a diagnostic too: the width
+/// comes from the anchor's rect, and there is no anchor to read one from.
+#[test]
+fn a_matched_width_without_an_anchor_is_a_diagnostic() {
+    let src = "View Main() {
+    Column #[width: 400, height: 300] {
+        Box #[bg: 0x223344, width: 120, height: 30] as field {}
+        Box #[bg: 0xAA3344, height: 40, width: match(field)] {}
+    }
+}";
+    let errs = errors_of(src);
+    assert_eq!(errs.len(), 1, "{errs:?}");
+    assert!(errs[0].contains("MisplacedAnchorTail"), "{errs:?}");
+    assert!(errs[0].contains("anchor_to"), "{errs:?}");
+}
+
+/// A matched width costs a second layout pass on the frame it changes, and on
+/// no other.
+///
+/// Stated as a *difference* against the same screen with a fixed width rather
+/// than as an absolute count, because a frame already runs one retained pass
+/// of its own and that number is nobody's invariant. What is an invariant is
+/// that matching a width adds nothing to a steady frame.
+///
+/// This is the assertion that keeps the feature affordable, and the one that
+/// would fail if the width were re-applied unconditionally: `set_style` marks
+/// a node dirty in Taffy whether or not the value moved, so writing the same
+/// width every frame would recompute the panel every frame and turn the
+/// retained path back into a full one for any screen with a dropdown open.
+#[test]
+fn a_matched_width_adds_no_layout_work_to_a_steady_frame() {
+    use byard_core::atlas::layout::path_counters;
+
+    fn steady_recomputes(src: &str) -> u64 {
+        let parsed = parse(src);
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let mut interp = Interpreter::new();
+        let known: Vec<&str> = parsed.views.iter().map(|v| v.name.as_str()).collect();
+        interp.load_views(&parsed.views);
+        let tree = interp.lower_view(&parsed.views[0], &known);
+        assert!(interp.errors().is_empty(), "{:?}", interp.errors());
+        let mut render_once = || {
+            path_counters::reset();
+            interp.tick();
+            let mut f = RenderFrame::new();
+            interp.render(&tree, &mut f, W, H);
+            path_counters::snapshot()
+        };
+        // First frame builds, second settles; the third is the steady one.
+        let _ = render_once();
+        let _ = render_once();
+        let steady = render_once();
+        assert_eq!(steady.full_computes, 0, "steady frame rebuilt: {steady:?}");
+        steady.retained_recomputes
+    }
+
+    let fixed = matched(120).replace("width: match(field)", "width: 120");
+    assert_eq!(
+        steady_recomputes(&matched(120)),
+        steady_recomputes(&fixed),
+        "a matched width must cost a steady frame nothing over a fixed one"
+    );
+}
+
+// ── RFC-0017 §Positioning: an absolute `(x, y)` in the viewport ────────────
+
+/// A view placing an 80×40 panel at an absolute offset.
+fn placed_at(x: i32, y: i32) -> String {
+    format!(
+        "View Main() {{
+    Column #[bg: 0x101010, p: 20, width: 400, height: 300] {{
+        Box #[bg: 0x223344, width: 120, height: 30] as field {{}}
+    }}
+    Overlay #[modal: false] {{
+        Box #[bg: 0xAA3344, width: 80, height: 40, at: ({x}, {y})] {{}}
+    }}
+}}"
+    )
+}
+
+/// The panel's top-left is exactly the offset written, measured from the
+/// viewport's own top-left.
+#[test]
+fn an_absolute_overlay_lands_at_the_offset_it_was_given() {
+    let panel = find(&boxes(&placed_at(120, 48)), 80.0, 40.0);
+    assert!(
+        (panel[0] - 120.0).abs() < 0.5 && (panel[1] - 48.0).abs() < 0.5,
+        "the panel must sit at (120, 48), got {panel:?}"
+    );
+}
+
+/// The offset is viewport-space, not centre-relative and not
+/// content-relative.
+///
+/// The two window sizes are the whole test: an offset measured from anything
+/// that moves with the window would give two different answers here, and one
+/// of them would look right.
+#[test]
+fn an_absolute_offset_is_measured_from_the_viewport_origin() {
+    fn panel_at(src: &str, w: f32, h: f32) -> [f32; 4] {
+        let parsed = parse(src);
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let mut interp = Interpreter::new();
+        let known: Vec<&str> = parsed.views.iter().map(|v| v.name.as_str()).collect();
+        interp.load_views(&parsed.views);
+        let tree = interp.lower_view(&parsed.views[0], &known);
+        assert!(interp.errors().is_empty(), "{:?}", interp.errors());
+        interp.tick();
+        let mut frame = RenderFrame::new();
+        interp.render(&tree, &mut frame, w, h);
+        let rects: Vec<[f32; 4]> = frame
+            .instances()
+            .iter()
+            .map(|b| {
+                [
+                    b.rect[0] + b.transform.translate[0],
+                    b.rect[1] + b.transform.translate[1],
+                    b.rect[2],
+                    b.rect[3],
+                ]
+            })
+            .collect();
+        find(&rects, 80.0, 40.0)
+    }
+    let src = placed_at(120, 48);
+    let small = panel_at(&src, 400.0, 300.0);
+    let large = panel_at(&src, 900.0, 700.0);
+    assert_eq!(
+        (small[0], small[1]),
+        (large[0], large[1]),
+        "the offset moved with the window, so it is not viewport-space"
+    );
+    // And it is *the* offset, not merely a stable one: without this the test
+    // passes with the feature switched off, because a panel left at the
+    // wrapper's origin is viewport-invariant too.
+    assert!(
+        (small[0] - 120.0).abs() < 0.5 && (small[1] - 48.0).abs() < 0.5,
+        "got {small:?}"
+    );
+}
+
+/// An off-screen offset stays off-screen. Quietly pulling it back would make a
+/// wrong coordinate look like a layout decision, which is the harder bug.
+#[test]
+fn an_absolute_overlay_off_the_viewport_is_not_clamped_back() {
+    let panel = find(&boxes(&placed_at(600, 500)), 80.0, 40.0);
+    assert!(
+        panel[0] > 500.0 && panel[1] > 400.0,
+        "the panel must stay where it was put, got {panel:?}"
+    );
+}
+
+/// `at:` and `anchor_to:` are two answers to one question, so writing both is
+/// refused rather than resolved by a precedence rule nobody would remember.
+#[test]
+fn an_absolute_offset_together_with_an_anchor_is_a_diagnostic() {
+    let src = "View Main() {
+    Column #[width: 400, height: 300] {
+        Box #[bg: 0x223344, width: 120, height: 30] as field {}
+    }
+    Overlay #[modal: false] {
+        Box #[width: 80, height: 40, at: (10, 10), anchor_to: \"field\"] {}
+    }
+}";
+    let errs = errors_of(src);
+    assert_eq!(errs.len(), 1, "{errs:?}");
+    assert!(errs[0].contains("MisplacedAnchorTail"), "{errs:?}");
+    assert!(errs[0].contains("anchor_to"), "{errs:?}");
+}

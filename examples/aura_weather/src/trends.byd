@@ -1,0 +1,6 @@
+View TrendsScreen() {
+    inject Theme as t
+    Screen(title: "Trends", subtitle: "Temperature over the week") {
+        Text("Coming in the next milestone.") #[typo: t.body, color: t.onSurfaceVariant]
+    }
+}

@@ -20,10 +20,10 @@
   dev-owner total it displays covers 0.107 ms of that; the rest is
   `encode.finish`, which is not separable per owner and has its own row. Two
   earlier figures are superseded: ~12 %
-  was taken on an occluded window where `encode.frame` never ran (corrected in
-  `support/DESICIONS.md`), and 3.6 % was `hud.render`'s inclusive time on a
+  was taken on an occluded window where `encode.frame` never ran (since
+  corrected), and 3.6 % was `hud.render`'s inclusive time on a
   **debug** build, a partial figure from the wrong profile. Both, and the
-  debug/release ratio, are in `support/PERF_hud_baseline.md`. The HUD still
+  debug/release ratio, are reproduced by the `hud::self_accounting` test. The HUD still
   displays and colours its own cost, so the reading is checkable rather than
   quoted.
 - **Author(s):** Briany4717
@@ -649,7 +649,7 @@ where decoration provably costs something, so the accounting is explicit:
    all times.
 
 If `hud.render` ever exceeds ~5 % of the budget, the HUD has failed its own test
-and the finding belongs in `DESICIONS.md`, not in a mitigation.
+and the finding belongs in a recorded design decision, not in a mitigation.
 
 ### 8. Trace export (V5)
 
@@ -958,9 +958,9 @@ from its sole justifying use case and leave it firing only when it is redundant.
 
 ---
 
-Implementation-time decisions that surface after merge go to
-`support/DESICIONS.md` as `IMPL-NN` entries, per that file's own rule. This RFC
-carries no open questions.
+Implementation-time decisions that surface after merge are recorded with the
+change that makes them, not back in this RFC. This RFC carries no open
+questions.
 
 ---
 

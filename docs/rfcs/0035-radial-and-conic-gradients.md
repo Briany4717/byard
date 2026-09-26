@@ -95,9 +95,9 @@ reinterpreted per kind, and a **`grad_kind` lane of its own** carries the tag:
 
 *(Corrected: this RFC originally put the tag in "the currently-unused high bits
 of the gradient present/absent flag (`misc.w`)". `misc.w` is RFC-0031's corner
-smoothing, and there is no present/absent flag — presence was inferred from
+smoothing, and there is no present/absent flag; presence was inferred from
 `grad_axis.xy` being a unit vector, which only worked while every gradient was
-linear. The tag needs a lane with exactly one owner, INV-28.)*
+linear. The tag needs a lane with exactly one owner.)*
 
 The geometry still re-uses `grad_axis`:
 

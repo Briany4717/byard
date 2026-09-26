@@ -1,6 +1,6 @@
 # RFC-0018: Extended Intrinsic Catalog II, Checkbox, RadioButton, Grid, ZStack
 
-- **Status:** Active, implemented. `Checkbox`, `RadioButton`, `Grid`, and `ZStack` are registered intrinsics with committed examples and tests (verified against the tree 2026-08-03; see `support/STATUS_RFCS.md`).
+- **Status:** Active, implemented. `Checkbox`, `RadioButton`, `Grid`, and `ZStack` are registered intrinsics with committed examples and tests (verified against the tree 2026-08-03).
 - **Author(s):** Briany4717
 - **Created:** 2026-07-10
 - **Last updated:** 2026-07-10

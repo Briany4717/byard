@@ -157,7 +157,7 @@ pub enum EventKind {
     KeyUp,
     /// Printable text input (character key or IME commit); text in `InputEvent.payload` as `InputPayload::Key`.
     TextInput,
-    // ── M24: remaining event catalog ─────────────────────────────────────
+    // ── Remaining event catalog ─────────────────────────────────────
     /// Cursor entered an element's hit rect (synthesized by the router).
     PointerEnter,
     /// Cursor left an element's hit rect (synthesized by the router).
@@ -200,7 +200,7 @@ pub enum InputPayload {
     Bool(bool),
     /// A float payload (e.g. slider position).
     Float(f32),
-    /// A key name or printable text (keyboard events, M17).
+    /// A key name or printable text (keyboard events).
     Key(String),
     /// An IME preedit and its cursor, a byte range inside it (RFC-0040).
     Preedit {

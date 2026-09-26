@@ -1,7 +1,7 @@
 //! RFC-0011, paint-time transform primitives: a `Transform` moves/scales/
 //! rotates the *painted* quad without touching layout. GPU-dependent tests
 //! request a real adapter and **skip gracefully** when none is available
-//! (headless CI), mirroring `m21_pipelines.rs`'s pattern.
+//! (headless CI), mirroring `decorated_texture_pipelines.rs`'s pattern.
 #![allow(clippy::cast_precision_loss)]
 
 use byard_core::encoder::EncoderSubsystem;

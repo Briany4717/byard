@@ -284,7 +284,7 @@
 //      is not the cost of a HUD. The tell is `encode.frame` at zero, check it
 //      before believing any number from that session.
 //
-//   M. IT DOES NOT PUSH THE APP OFF THE FAST PATH (INV-24). With the HUD open,
+//   M. IT DOES NOT PUSH THE APP OFF THE FAST PATH. With the HUD open,
 //      press `Mod+Shift+P` and check the `layout path` row still reads
 //      `retained`. That is not automatic: the HUD runs its own layout atlas on
 //      the same thread, into the same thread-local counters, so the app's

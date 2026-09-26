@@ -1,8 +1,8 @@
-//! The steady-state frame budget, enforced (INV-21).
+//! The steady-state frame budget, enforced.
 //!
 //! # Why this file is the one that matters
 //!
-//! `support/AUDIT_incremental_paths_and_memory_model.md` found three
+//! An audit of the incremental paths and the memory model found three
 //! incremental layers that had been built, validated in isolation, and then
 //! silently bypassed for entire phases without anything failing. The fixes are
 //! elsewhere; this file is the only part of that work that changes whether it
@@ -32,7 +32,7 @@
 //!
 //! **Timing ceilings are advisory on CI**, shared runners are noisy, and a
 //! flaky budget test gets disabled, which is strictly worse than no budget
-//! test. They are recorded in `support/PERF_frame_budget.md` and read locally.
+//! test. They are recorded here and read locally.
 //!
 //! # Why it lives in `byard-platform`
 //!
@@ -62,7 +62,7 @@ use byard_core::frame::{RenderFrame, Viewport};
 // ── The ceilings ───────────────────────────────────────────────────────────
 //
 // Recorded on Apple M2, debug build. See this file's header for the rule that
-// governs changing them, and `support/PERF_frame_budget.md` for their history.
+// governs changing them, and this file's git history for how they moved.
 
 /// Heap allocations during one steady-state frame (tick + render + encode).
 ///

@@ -16,7 +16,7 @@
 //   2. The shadow and the border follow the *same* profile as the fill, a
 //      shadow with a different corner than its caster reads as a bug (§Q2).
 //   3. Tap the card: `smooth` animates. It is a paint property, so the spring
-//      runs entirely in the shader's exponent, nothing relaid out (INV-8).
+//      runs entirely in the shader's exponent, nothing relaid out.
 //   4. The `Canvas` row: the `rect` shape kind takes the same scalar.
 View Main() {
     var squircled = false

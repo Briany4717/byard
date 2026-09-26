@@ -59,7 +59,7 @@ use crate::relay::Relay;
 /// symptom is a pipeline-compilation error nobody could reproduce. Requesting
 /// the floor makes the device validate against it, so the overrun fails the
 /// same way on every machine, which is the only way it gets noticed where it
-/// was written (INV-4).
+/// was written.
 ///
 /// Every other limit stays the adapter's: nothing else here is a portability
 /// cliff Byard has walked off, and lowering limits the engine does honour would
@@ -613,7 +613,7 @@ impl Engine {
     /// the factory builds the `!Send` running interpreter (holding `Signal`s
     /// and a logic-thread-local reactive scope) on the logic thread, where it
     /// is then driven once per tick. The `Send + 'static` bound is on the
-    /// factory only, never on the [`LogicRuntime`] it produces (INV-6).
+    /// factory only, never on the [`LogicRuntime`] it produces.
     ///
     /// Use this **instead of** [`start_logic`](Engine::start_logic); call it at
     /// most once.
@@ -699,10 +699,10 @@ impl Engine {
             }
         };
 
-        // Drain any completed async image decodes (M29) and upload them on this
+        // Drain any completed async image decodes and upload them on this
         // (render) thread before encoding, so a freshly-decoded texture is
         // `Ready` for this frame. The decode itself already ran on the relay's
-        // I/O pool, only the cheap GPU upload happens here (INV-12).
+        // I/O pool, only the cheap GPU upload happens here.
         while let Some(result) = self.relay.try_recv_decode_result() {
             match result.downcast::<crate::encoder::DecodedImage>() {
                 Ok(decoded) => self.encoder.apply_decoded(*decoded),

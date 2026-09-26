@@ -1,4 +1,4 @@
-//! M21, `DecoratedBox` / `TextureSampler` pipeline tests (RFC-0001 §3.1, §8).
+//! `DecoratedBox` / `TextureSampler` pipeline tests (RFC-0001 §3.1, §8).
 //!
 //! GPU-dependent tests request a real adapter and **skip gracefully** when none
 //! is available (headless CI), so they assert on machines with a GPU without
@@ -24,13 +24,13 @@ fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>, byard_test_gpu::
 }
 
 #[test]
-fn encoder_builds_all_pipelines_including_m21() {
+fn encoder_builds_all_pipelines_including_decorated_and_texture() {
     let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping pipeline build test");
         return;
     };
     // init() builds SolidBox, clear, text, DecoratedBox and TextureSampler
-    // pipelines. Success means the two new M21 WGSL shaders compiled and their
+    // pipelines. Success means the decorated-box and texture WGSL shaders compiled and their
     // pipelines passed GPU validation (RFC-0001 §8).
     let result = pollster::block_on(EncoderSubsystem::init(
         device,

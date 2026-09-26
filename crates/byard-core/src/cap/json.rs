@@ -122,7 +122,7 @@ impl Controller for Json {
             "parse" => match args.first() {
                 Some(HostValue::Str(text)) => parse(text).ok_or_else(|| {
                     // Malformed input is an ordinary failure of a parse, not a
-                    // panic and not a silent `Unit` (INV-4): the caller's `err`
+                    // panic and not a silent `Unit`: the caller's `err`
                     // arm is exactly where it belongs.
                     error("invalid_json", "the text is not valid JSON")
                 }),

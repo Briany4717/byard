@@ -1,4 +1,4 @@
-//! Rounded clip masks, in pixels (RFC-0037 clip masks, M125).
+//! Rounded clip masks, in pixels (RFC-0037 clip masks).
 //!
 //! The claim is narrow and entirely visual: content inside a rounded clip
 //! survives, and the corner the clip rounds off does not. Nothing short of a

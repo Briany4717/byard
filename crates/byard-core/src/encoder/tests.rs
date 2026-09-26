@@ -124,11 +124,11 @@ fn sub_slice_clamps_to_the_slice_bounds() {
     assert_eq!(sub_slice(&s, &(5..7)), &[] as &[i32]);
 }
 
-// ── INV-8: paint-time transforms never trigger a relayout ─────────────────
+// ── Paint-time transforms never trigger a relayout ─────────────────
 
 #[test]
 fn encoder_module_never_calls_layout_atlas_compute() {
-    // RFC-0011 (INV-8): a paint-time `Transform` must never cause a Taffy
+    // RFC-0011: a paint-time `Transform` must never cause a Taffy
     // relayout. Structurally enforced by module boundaries (`encoder`
     // never imports `crate::atlas`), this test scans the encoder's own
     // sources for the literal call so a future edit can't reintroduce it
@@ -152,7 +152,7 @@ fn encoder_module_never_calls_layout_atlas_compute() {
     ] {
         assert!(
             !src.contains(&forbidden_call),
-            "{name} must never call into layout recomputation (INV-8)"
+            "{name} must never call into layout recomputation"
         );
     }
 }
@@ -590,7 +590,7 @@ fn cpu_sd_rounded_box_n(p: [f32; 2], b: [f32; 2], r: [f32; 4], n: f32) -> f32 {
     (inner + value - r_corner) / grad
 }
 
-/// INV-22, and the load-bearing test of RFC-0031 §S1: at `smooth: 0` the
+/// Pixel parity, and the load-bearing test of RFC-0031 §S1: at `smooth: 0` the
 /// field is the one that existed before the property did, **bitwise**, not
 /// approximately. `pow(x, 2)` and `x * x` differ in the last ULP, and every
 /// golden image in the repo would move with them, so the short-circuit is a
@@ -1110,7 +1110,7 @@ fn compute_scissor_is_none_when_dirty_rect_lies_entirely_outside_target() {
     assert!(compute_scissor(&ScissorInputs::text_only(&texts, &[]), 1.0, 100, 100).is_none());
 }
 
-// ── M26/M27: box / decorated / texture dirty bounds + combined scissor ────
+// ── Box / decorated / texture dirty bounds + combined scissor ────
 
 /// Builds a `BoxInstance` at `(x, y, w, h)` (colour/radii irrelevant to
 /// the bounds helpers under test).
@@ -1177,7 +1177,7 @@ fn dirty_box_bounds_unions_with_previous_frame_bounds() {
 
 #[test]
 fn compute_scissor_is_some_when_only_a_box_is_dirty_and_no_text_exists() {
-    // The M26 regression test: no text at all, one dirty box. The old
+    // The regression test for a textless dirty box: no text at all, one dirty box. The old
     // text-only `compute_scissor` returned `None` here, so `should_draw`
     // was false and the box mutation never reached the screen.
     let boxes = [box_at(10.0, 20.0, 30.0, 40.0)];
@@ -1309,10 +1309,10 @@ fn dirty_texture_bounds_unions_with_previous_frame_bounds() {
 
 #[test]
 fn compute_scissor_does_not_force_full_redraw_when_a_clean_decorated_box_is_present() {
-    // The actual point of M27: a scene with one *non-dirty* DecoratedBox
-    // and one dirty text line must scissor to the text's bounds only, not
-    // the whole viewport (which is what the old forced-`full_redraw` block,
-    // now deleted, effectively did).
+    // The actual point of per-primitive dirty bounds: a scene with one
+    // *non-dirty* DecoratedBox and one dirty text line must scissor to the
+    // text's bounds only, not the whole viewport (which is what the old
+    // forced-`full_redraw` block, now deleted, effectively did).
     let texts = [line(10.0, 20.0, "hi", 16.0, true)];
     let decorated = [decorated_at(0.0, 0.0, 999.0, 999.0, false)];
     let inputs = ScissorInputs {

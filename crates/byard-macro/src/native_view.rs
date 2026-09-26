@@ -17,7 +17,7 @@
 //! view of a package widget cannot drift from the widget.
 //!
 //! Like the controller macro, everything emitted names `::byard::…`, so this
-//! crate keeps no dependency on `byard-core` (INV-1).
+//! crate keeps no dependency on `byard-core`.
 
 use proc_macro::TokenStream;
 use quote::quote;

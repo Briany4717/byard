@@ -320,7 +320,7 @@ pub struct CanvasShape {
     pub group_first: u32,
     /// How many members it has (`<= MAX_GROUP_MEMBERS`).
     pub group_count: u32,
-    /// Hash of the member records, INV-26, see below.
+    /// Hash of the member records, see below.
     pub member_hash: u64,
 }
 ```
@@ -331,9 +331,10 @@ instance packs them into one `vec4` as `(mode, param, first, count)` at staging
 time, which is the only place the packing matters.)
 
 The head also carries a `member_hash`: a hash of its members' bytes, folded in
-by `push_shape_group` on the same pass that appends them. It is **INV-26**, and
-without it a fusion group with a static `k` whose member moves would be judged
-clean by `PaintDigest`, whose comparison is over a primitive's *own* bytes, 
+by `push_shape_group` on the same pass that appends them. It is the
+**digest-completeness rule** (a primitive's dirtiness covers everything that
+determines its pixels), and without it a fusion group with a static `k` whose member moves would be judged
+clean by `PaintDigest`, whose comparison is over a primitive's *own* bytes,
 and would render the previous frame's shape. See the erratum, correction 4.
 
 When `group_mode != GROUP_NONE`, the instance is the **group head**: its

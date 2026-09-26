@@ -75,6 +75,14 @@ pub enum PropType {
     /// for. Rather than an `Enum`, because the axis is genuinely numeric and
     /// a variable font's `wght` takes the number.
     WeightAxis,
+    /// A font family declared in `[assets.fonts]` (RFC-0034).
+    ///
+    /// Written as a bare name (`font: display`) or a string, and checked
+    /// against the families the project actually declares — which cannot
+    /// happen here, because this check knows nothing of the theme. What this
+    /// type rules out is a value that could never be a family name at all;
+    /// the "is it declared" half is a separate pass with the theme in hand.
+    FontFamily,
     /// A scoped style class reference (`.title`).
     Class,
     /// A `Vec2` `(Float, Float)`.
@@ -278,6 +286,11 @@ const TEXT_PROPS: &[(&str, PropDef)] = &[
     // It was paint-class while it did nothing at all, which was harmless then
     // and would now be a lie any relayout gate built on this would believe.
     ("weight", lay(PropType::WeightAxis)),
+    // RFC-0034: selects one of the families declared in `[assets.fonts]`.
+    // Layout class for the same reason `weight` is: two faces set the same
+    // string to different widths, so a heading that changes face changes the
+    // box it needs.
+    ("font", lay(PropType::FontFamily)),
     ("align", lay(PropType::Enum(ALIGN))),
     ("lines", lay(PropType::Int)),
     ("wrap", lay(PropType::Bool)),
@@ -1372,6 +1385,9 @@ fn check_value_type(ty: PropType, value: &Expr) -> Option<CompileError> {
         }
         (PropType::WeightAxis, Expr::StrLit(..) | Expr::FloatLit(..)) => {
             mismatch("one of the weight keywords, or a whole number 100..=900")
+        }
+        (PropType::FontFamily, Expr::IntLit(..) | Expr::FloatLit(..) | Expr::ClassRef(..)) => {
+            mismatch("a font family declared in [assets.fonts]")
         }
         (PropType::Enum(set), Expr::Ident(sym, _)) => {
             let tok = sym.as_str();

@@ -238,7 +238,15 @@ impl App {
                 names.join(", ")
             )));
         }
-        let (views, theme) = load_program(&self.entry)?;
+        let Program {
+            views,
+            theme,
+            http_base_url,
+        } = load_program(&self.entry)?;
+        let mut registry = self.registry;
+        if let Some(base) = &http_base_url {
+            byard_core::cap::set_http_base_url(&mut registry, base);
+        }
 
         let (width, height) = self.size;
         // Wait mode: a shipped app redraws when something changed, and the
@@ -250,11 +258,19 @@ impl App {
             engine: None,
             views,
             theme: Some(theme),
-            registry: self.registry,
+            registry,
             width_bits: Arc::new(AtomicU32::new(w0.to_bits())),
             height_bits: Arc::new(AtomicU32::new(h0.to_bits())),
         })
     }
+}
+
+/// What [`load_program`] reads from a project.
+struct Program {
+    views: Vec<ViewDecl>,
+    theme: byard_compiler::interp::theme::Theme,
+    /// `[http] base_url`, for the built-in `Http` (RFC-0029).
+    http_base_url: Option<String>,
 }
 
 /// Reads the program an app runs and the theme it runs in, the same way
@@ -268,9 +284,7 @@ impl App {
 /// A shipped app with a broken view has nothing to fall back on, so a program
 /// that does not compile fails here with its diagnostics rather than opening
 /// a window onto nothing. (`byard dev` is the one that keeps going.)
-fn load_program(
-    entry: &Path,
-) -> Result<(Vec<ViewDecl>, byard_compiler::interp::theme::Theme), ByardError> {
+fn load_program(entry: &Path) -> Result<Program, ByardError> {
     let manifest = byard_project::manifest::Manifest::discover(Some(entry))
         .map_err(|e| ByardError::Platform(format!("`{}`: {e}", entry.display())))?;
     let (program, _) = byard_project::deps::resolve_project(&manifest)
@@ -293,7 +307,11 @@ fn load_program(
             entry.display()
         )));
     }
-    Ok((program.views, manifest.theme))
+    Ok(Program {
+        views: program.views,
+        theme: manifest.theme,
+        http_base_url: manifest.http_base_url,
+    })
 }
 
 /// The `PlatformHost` half: owns the `Engine`, forwards OS input, and starts
@@ -540,7 +558,8 @@ mod tests {
             dir.join("byard.toml"),
             "[project]\nname = \"shipped\"\nentry = \"main.byd\"\n\
              [assets.fonts]\nBody = \"fonts/Body.ttf\"\n\
-             [theme.color.light]\nprimary = \"#123456\"\n",
+             [theme.color.light]\nprimary = \"#123456\"\n\
+             [http]\nbase_url = \"https://api.example.com\"\n",
         )
         .unwrap();
         std::fs::write(dir.join("main.byd"), "View Main() { Card() }\n").unwrap();
@@ -550,20 +569,29 @@ mod tests {
         )
         .unwrap();
 
-        let (views, theme) = load_program(&dir).expect("the project loads");
+        let Program {
+            views,
+            theme,
+            http_base_url,
+        } = load_program(&dir).expect("the project loads");
+        assert_eq!(http_base_url.as_deref(), Some("https://api.example.com"));
         let names: Vec<&str> = views.iter().map(|v| v.name.as_str()).collect();
         assert!(names.contains(&"Card"), "the sibling view: {names:?}");
         assert_eq!(theme.color("primary", false), Some(0x0012_3456));
         assert!(theme.font("Body").is_some(), "the declared font");
 
         // A lone file still runs by itself, in the built-in theme.
-        let (views, theme) = load_program(&dir.join("card.byd")).expect("a lone file loads");
+        let Program { views, theme, .. } =
+            load_program(&dir.join("card.byd")).expect("a lone file loads");
         assert_eq!(views.len(), 1);
         assert!(theme.font("Body").is_none());
 
         // And a program that does not compile fails with its diagnostics.
         std::fs::write(dir.join("main.byd"), "View Main( {").unwrap();
-        let err = load_program(&dir).unwrap_err().to_string();
+        let Err(err) = load_program(&dir) else {
+            panic!("a broken program must not load");
+        };
+        let err = err.to_string();
         assert!(err.contains("did not compile"), "{err}");
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -29,7 +29,11 @@
 //   6. Click anywhere outside a panel and it closes. Click the field it hangs
 //      from and it does **not**, because that press is the one that opens it.
 //      Escape closes them all.
-//   7. While a panel is open, the button behind it still highlights on hover
+//   7. The badge in the top-right corner is placed with `at: (x, y)`: a plain
+//      viewport offset, no anchor, no flip, no clamp. It stays put when the
+//      window resizes because the offset is measured from the viewport's own
+//      origin, which is the whole of what `at:` means.
+//   8. While a panel is open, the button behind it still highlights on hover
 //      and still takes clicks. This is not a modal: an autocomplete that
 //      froze the page under it would be a worse bug than the one it solves.
 
@@ -81,6 +85,15 @@ View Main() {
                   dismiss => query = ""] {
                 Panel("results")
             }
+        }
+    }
+
+    // No anchor at all: an absolute offset from the viewport's top-left. It
+    // does not flip and it does not clamp, so a coordinate off the window
+    // stays off the window rather than being quietly pulled back into it.
+    Overlay #[modal: false] {
+        Box #[at: (300, 24), bg: 0x2A3442, radius: 6, p: 8] {
+            Text("at: (300, 24)") #[color: 0x9AA3AE, size: 11]
         }
     }
 

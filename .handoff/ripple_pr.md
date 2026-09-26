@@ -44,7 +44,7 @@ Closes #136
 - [x] `cargo test --workspace` passes
 - [x] New public items have doc comments
 - [x] `CHANGELOG.md` updated under `[Unreleased]` (Added: Material ripple ink, RFC-0023)
-- [x] Consistent with RFC-0001: the ripple pool crosses subsystems only through `frame.rs` (§9 dependency graph); the pipeline wraps its whole create sequence in a validation error scope (§8); paint-time only, never touches layout (INV-8).
+- [x] Consistent with RFC-0001: the ripple pool crosses subsystems only through `frame.rs` (§9 dependency graph); the pipeline wraps its whole create sequence in a validation error scope (§8); paint-time only, never touches layout.
 
 ## Notes for reviewers
 

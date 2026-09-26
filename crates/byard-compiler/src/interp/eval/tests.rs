@@ -7715,3 +7715,153 @@ fn three_stacked_glass_panes_raise_the_overlap_warning() {
     );
     assert!(interp.perf_warnings().is_empty());
 }
+
+// ── 8-digit colours: the alpha byte reaches the fill (RFC-0005 §1) ──────
+
+/// Renders `src` and returns every box fill it emitted, solid and decorated,
+/// each paired with whether it went to the blended (decorated) pass.
+fn box_fills(src: &str) -> Vec<([f32; 4], bool)> {
+    let mut interp = Interpreter::new();
+    let frame = theme_render(&mut interp, src);
+    frame
+        .instances()
+        .iter()
+        .map(|b| (b.color, false))
+        .chain(frame.decorated().iter().map(|d| {
+            let mut c = d.base.color;
+            c[3] *= d.opacity;
+            (c, true)
+        }))
+        .collect()
+}
+
+#[test]
+fn eight_digit_bg_on_a_box_keeps_its_alpha_and_blends() {
+    let fills = box_fills("View C() {\n Box #[bg: 0x801C2430, width: 40, height: 40] {}\n}");
+    let [(color, blended)] = fills.as_slice() else {
+        panic!("one fill for one box, got {fills:?}");
+    };
+    assert!(
+        (color[3] - 128.0 / 255.0).abs() < 1e-3,
+        "0x80RRGGBB paints at ~half alpha, got {color:?}"
+    );
+    let rgb = crate::interp::intrinsics::color_to_rgba(0x001C_2430, false);
+    assert!(
+        color[..3]
+            .iter()
+            .zip(&rgb[..3])
+            .all(|(a, b)| (a - b).abs() < 1e-6),
+        "the RGB is the low three bytes, got {color:?} want {rgb:?}"
+    );
+    // A translucent fill on the depth-writing solid pass would cull whatever
+    // later passes draw beneath it; it has to take the blended path.
+    assert!(blended, "a translucent bg goes to the decorated pass");
+}
+
+#[test]
+fn opaque_bg_stays_on_the_solid_path() {
+    // The control: 6-digit and an explicit `FF` alpha byte both stay flat.
+    for src in [
+        "View C() {\n Box #[bg: 0x1C2430, width: 40, height: 40] {}\n}",
+        "View C() {\n Box #[bg: 0xFF1C2430, width: 40, height: 40] {}\n}",
+    ] {
+        let fills = box_fills(src);
+        let [(color, blended)] = fills.as_slice() else {
+            panic!("one fill for one box, got {fills:?}");
+        };
+        assert!(
+            (color[3] - 1.0).abs() < 1e-6,
+            "{src}: opaque, got {color:?}"
+        );
+        assert!(!blended, "{src}: an opaque bg stays on SolidBox");
+    }
+}
+
+#[test]
+fn zero_alpha_byte_is_transparent_not_opaque() {
+    // `0x00RRGGBB` written with eight digits is alpha 0; the lexer's tag is
+    // what tells it apart from the 6-digit `0xRRGGBB`.
+    let fills = box_fills("View C() {\n Box #[bg: 0x001C2430, width: 40, height: 40] {}\n}");
+    assert!(
+        fills.iter().all(|(c, _)| c[3].abs() < 1e-6),
+        "an 8-digit 00 alpha is fully transparent, got {fills:?}"
+    );
+}
+
+#[test]
+fn eight_digit_border_keeps_its_alpha() {
+    let mut interp = Interpreter::new();
+    let frame = theme_render(
+        &mut interp,
+        "View C() {\n Box #[bg: 0x1C2430, border: 0x40FFFFFF, border_width: 2, \
+             width: 40, height: 40] {}\n}",
+    );
+    let border = frame
+        .decorated()
+        .iter()
+        .find(|d| d.border_width > 0.0)
+        .expect("a border overlay")
+        .border_color;
+    assert!(
+        (border[3] - 64.0 / 255.0).abs() < 1e-3,
+        "0x40RRGGBB border at ~quarter alpha, got {border:?}"
+    );
+}
+
+#[test]
+fn eight_digit_text_color_keeps_its_alpha() {
+    let mut interp = Interpreter::new();
+    let frame = theme_render(
+        &mut interp,
+        "View C() {\n Text(\"hi\") #[color: 0x80FFFFFF]\n}",
+    );
+    let color = frame.texts()[0].color;
+    assert!(
+        (color[3] - 128.0 / 255.0).abs() < 1e-3,
+        "0x80RRGGBB text at ~half alpha, got {color:?}"
+    );
+}
+
+#[test]
+fn eight_digit_canvas_bg_keeps_its_alpha_and_blends() {
+    let fills = box_fills("View C() {\n Canvas #[bg: 0x801C2430, width: 40, height: 40] {}\n}");
+    let [(color, blended)] = fills.as_slice() else {
+        panic!("one fill for one canvas, got {fills:?}");
+    };
+    assert!(
+        (color[3] - 128.0 / 255.0).abs() < 1e-3,
+        "0x80RRGGBB canvas bg at ~half alpha, got {color:?}"
+    );
+    assert!(
+        blended,
+        "a translucent canvas bg goes to the decorated pass"
+    );
+}
+
+#[test]
+fn eval_pure_answers_literals_with_the_value_lowering_would_give() {
+    // `eval_pure` short-circuits numeric literals and all-literal tuples; the
+    // value must be the one the lowered closure produces.
+    let parsed = parse(
+        "View V() { Box #[scale: 2, opacity: 0.5, rotate: 90deg, translate: (x: 4, y: -2.5), \
+         width: (1, 2 + 3)] {} }",
+    );
+    assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+    let el = element(&parsed.views[0].body[0]);
+    let mut interp = Interpreter::new();
+    for attr in &el.attrs {
+        let AttrKind::Prop { value } = &attr.kind else {
+            panic!("expected a property");
+        };
+        let fast = interp.eval_pure(value);
+        let mut lowered = interp.lower_expr(value, None);
+        let slow = lowered(&mut interp.ctx);
+        assert_eq!(
+            format!("{fast:?}"),
+            format!("{slow:?}"),
+            "{}",
+            attr.name.as_str()
+        );
+    }
+    assert!(interp.errors().is_empty(), "{:?}", interp.errors());
+}

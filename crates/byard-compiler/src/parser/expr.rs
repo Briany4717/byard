@@ -800,29 +800,35 @@ impl Parser<'_> {
     /// Splits a raw `StrLit` (whose `span` covers the quoted source) into text
     /// and interpolation parts, recursively parsing each `{ expr }` (PEP 701).
     pub(super) fn parse_string_literal(&mut self, span: Span) -> Vec<StrPart> {
-        let raw = &self.source[span.start as usize..span.end as usize];
+        let raw = self.text(span);
         // Strip the surrounding quotes; a malformed (unclosed) literal is
         // already reported by the lexer, so guard the slice defensively.
-        let inner = raw
-            .strip_prefix('"')
-            .and_then(|s| s.strip_suffix('"'))
-            .unwrap_or("")
-            .to_string();
-        self.split_interpolations(&inner, span)
+        let Some(inner) = raw.strip_prefix('"').and_then(|s| s.strip_suffix('"')) else {
+            return vec![StrPart::Text(String::new())];
+        };
+        // Each character of the inner text, paired with its file offset, so an
+        // interpolation's spans can be placed where it is written.
+        let base = self.local_offset(span.start) + 1;
+        let cs: Vec<(char, u32)> = inner
+            .char_indices()
+            .map(|(i, c)| (c, self.file_offset(base + i)))
+            .collect();
+        let end = self.file_offset(base + inner.len());
+        self.split_interpolations(&cs, end)
     }
 
     /// The interpolation splitter, operating on the already-quote-stripped
-    /// inner text. Text runs are unescaped; each `{ … }` becomes an
-    /// [`StrPart::Interp`] parsed as an expression.
-    fn split_interpolations(&mut self, inner: &str, outer: Span) -> Vec<StrPart> {
-        let cs: Vec<char> = inner.chars().collect();
+    /// inner text (`end` is the file offset just past it). Text runs are
+    /// unescaped; each `{ … }` becomes an [`StrPart::Interp`] parsed as an
+    /// expression.
+    fn split_interpolations(&mut self, cs: &[(char, u32)], end: u32) -> Vec<StrPart> {
         let mut parts = Vec::new();
         let mut text = String::new();
         let mut i = 0;
         while i < cs.len() {
-            let c = cs[i];
+            let c = cs[i].0;
             if c == '\\' && i + 1 < cs.len() {
-                push_unescaped(&mut text, cs[i + 1]);
+                push_unescaped(&mut text, cs[i + 1].0);
                 i += 2;
                 continue;
             }
@@ -830,8 +836,8 @@ impl Parser<'_> {
                 if !text.is_empty() {
                     parts.push(StrPart::Text(std::mem::take(&mut text)));
                 }
-                let (frag, next) = collect_interpolation(&cs, i + 1);
-                let expr = self.parse_fragment_expr(&frag, outer);
+                let (frag, offsets, next) = collect_interpolation(cs, i + 1, end);
+                let expr = self.parse_fragment_expr(&frag, offsets);
                 parts.push(StrPart::Interp(Box::new(expr)));
                 i = next;
                 continue;
@@ -846,10 +852,11 @@ impl Parser<'_> {
     }
 
     /// Parses an interpolation fragment as a standalone expression on a fresh
-    /// sub-parser. Inner spans are relative to the fragment (coarse), which is
-    /// acceptable for Phase 2 Dev diagnostics; the outer span anchors errors.
-    fn parse_fragment_expr(&mut self, frag: &str, _outer: Span) -> Expr {
-        let mut sub = Parser::new(frag);
+    /// sub-parser. `offsets` places each fragment byte in the file, so the
+    /// sub-parser's spans (and its diagnostics) point where the code is
+    /// written, not at the file's start.
+    fn parse_fragment_expr(&mut self, frag: &str, offsets: Vec<u32>) -> Expr {
+        let mut sub = Parser::new_fragment(frag, offsets);
         let expr = sub.parse_expr(0);
         self.errors.append(&mut sub.errors);
         expr
@@ -873,54 +880,59 @@ fn push_unescaped(text: &mut String, escaped: char) {
 }
 
 /// Collects the source of an interpolation starting at `cs[from]` (just after
-/// the opening `{`), up to the matching `}`. Returns the fragment and the index
-/// just past the closing `}`.
+/// the opening `{`), up to the matching `}`. Returns the fragment, the file
+/// offset of each of its bytes (plus one for its end, the closing `}`, or
+/// `end` when the interpolation is unclosed), and the index just past the
+/// closing `}`.
 ///
 /// Because the interpolation lives inside the outer string literal, every quote
 /// that delimits a *nested* string was escaped as `\"` in the source. Those
 /// escapes are removed here so the fragment can be re-lexed as ordinary code:
 /// an un-escaped `\"` becomes a real `"` and toggles in-string tracking, while
-/// `{`/`}` outside a nested string balance the interpolation depth.
-fn collect_interpolation(cs: &[char], from: usize) -> (String, usize) {
+/// `{`/`}` outside a nested string balance the interpolation depth. A byte an
+/// escape produces is placed at the escape's backslash.
+fn collect_interpolation(cs: &[(char, u32)], from: usize, end: u32) -> (String, Vec<u32>, usize) {
     let mut frag = String::new();
+    let mut offsets = Vec::new();
+    let mut push = |c: char, at: u32| {
+        frag.push(c);
+        offsets.extend((0..c.len_utf8() as u32).map(|k| at + k));
+    };
     let mut depth = 1usize;
     let mut in_str = false;
     let mut j = from;
     while j < cs.len() {
-        let d = cs[j];
+        let (d, at) = cs[j];
         if d == '\\' && j + 1 < cs.len() {
-            let n = cs[j + 1];
+            let (n, n_at) = cs[j + 1];
             match n {
                 // An escaped quote is a nested-string delimiter: un-escape and
                 // toggle string state.
                 '"' => {
-                    frag.push('"');
+                    push('"', at);
                     in_str = !in_str;
                 }
-                '\\' => frag.push('\\'),
+                '\\' => push('\\', at),
                 other => {
-                    frag.push('\\');
-                    frag.push(other);
+                    push('\\', at);
+                    push(other, n_at);
                 }
             }
             j += 2;
             continue;
         }
-        if in_str {
-            frag.push(d);
-        } else if d == '{' {
+        if !in_str && d == '{' {
             depth += 1;
-            frag.push(d);
-        } else if d == '}' {
+        } else if !in_str && d == '}' {
             depth -= 1;
             if depth == 0 {
-                return (frag, j + 1);
+                offsets.push(at);
+                return (frag, offsets, j + 1);
             }
-            frag.push(d);
-        } else {
-            frag.push(d);
         }
+        push(d, at);
         j += 1;
     }
-    (frag, j)
+    offsets.push(end);
+    (frag, offsets, j)
 }

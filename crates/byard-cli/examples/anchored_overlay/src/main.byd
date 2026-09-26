@@ -67,7 +67,7 @@ View Main() {
             as searchField => query = it
 
         Box #[height: 150] {}
-        Button("Hover target") #[bg: 0x2A3242, color: 0xE7ECF2, radius: 8,
+        Button("Hover target") #[width: 140, bg: 0x2A3242, color: 0xE7ECF2, radius: 8,
                                  p: (vertical: 8, horizontal: 14)]
             as tipTarget => hovering = !hovering
 

@@ -2,6 +2,10 @@
 name = "aura_weather"
 entry = "src/main.byd"
 
+# The forecast's requests name a path; this is the host they go to.
+[http]
+base_url = "https://api.open-meteo.com"
+
 # Two typefaces: a display face for numbers and headings, a UI face for
 # everything you read. Both ship with the app, under ./fonts (SIL OFL).
 [assets.fonts]
@@ -40,6 +44,7 @@ on_error = "#5C0B06"
 
 # The type scale. Screens say `typo: t.display`, never three loose props.
 [theme.typography]
+hero = { size = 104, family = "Display", weight = "bold" }
 display = { size = 88, family = "Display", weight = "light" }
 headline = { size = 28, family = "Display", weight = "regular" }
 title = { size = 18, family = "Display", weight = "medium" }

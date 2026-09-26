@@ -1,6 +1,136 @@
+// The forecast: the temperature now, how it feels, and the next twelve hours,
+// over live data from open-meteo (no API key). The request names a path, and
+// byard.toml names the host under `[http] base_url`, which is how the tests
+// point this same screen at a local server.
+//
+// The screen is the three states a request has: asking, answered, failed.
+// Each is an arm of the one request, not a timer pretending to be one.
 View ForecastScreen() {
     inject Theme as t
-    Screen(title: "Now", subtitle: "Current conditions and the next hours") {
-        Text("Coming in the next milestone.") #[typo: t.body, color: t.onSurfaceVariant]
+    inject Http as http
+
+    // "loading" · "ok" · "error"
+    var state: Str = "loading"
+    var message: Str = ""
+
+    // One place until location search exists.
+    var place: Str = "Madrid"
+    var lat: Float = 40.42
+    var lon: Float = -3.70
+
+    var temp: Float = 0.0
+    var feels: Float = 0.0
+    var humidity: Int = 0
+    var wind: Float = 0.0
+    var code: Int = 0
+    var high: Float = 0.0
+    var low: Float = 0.0
+    // Two parallel lists, as the API sends them: an hour and its temperature.
+    var hours: List<Str> = []
+    var temps: List<Float> = []
+    var hoursX: Float = 0.0
+
+    // The WMO weather code, in words.
+    fn describe(code: Int) -> Str => code == 0 ? "Clear sky"
+        : code <= 2 ? "Partly cloudy"
+        : code == 3 ? "Overcast"
+        : code <= 48 ? "Fog"
+        : code <= 57 ? "Drizzle"
+        : code <= 67 ? "Rain"
+        : code <= 77 ? "Snow"
+        : code <= 82 ? "Showers"
+        : code <= 86 ? "Snow showers"
+        : "Thunderstorm"
+
+    let load = () => {
+        state = "loading"
+        http.get("/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,apparent_temperature,relative_humidity_2m,wind_speed_10m,weather_code&hourly=temperature_2m&daily=temperature_2m_max,temperature_2m_min&forecast_days=1&forecast_hours=12&timezone=auto")
+            ok res => {
+                temp = res.json.current.temperature_2m
+                feels = res.json.current.apparent_temperature
+                humidity = res.json.current.relative_humidity_2m
+                wind = res.json.current.wind_speed_10m
+                code = res.json.current.weather_code
+                high = res.json.daily.temperature_2m_max[0]
+                low = res.json.daily.temperature_2m_min[0]
+                hours = res.json.hourly.time
+                temps = res.json.hourly.temperature_2m
+                state = "ok"
+            }
+            err e => {
+                message = e.message
+                state = "error"
+            }
+    }
+
+    on mount => load()
+
+    Screen(title: place, subtitle: "Current conditions and the next hours") {
+        when state == "loading" {
+            Row #[gap: 12, align: center, p: (vertical: 48)] {
+                Canvas #[width: 22, height: 22] {
+                    arc(cx: 11, cy: 11, r: 9, start: 0deg,
+                        sweep: 300deg with anim.linear(900ms, repeat: infinite),
+                        stroke: t.primary, stroke_width: 3)
+                }
+                Text("Asking the sky") #[typo: t.body, color: t.onSurfaceVariant]
+            }
+        }
+
+        when state == "error" {
+            Column #[bg: t.surfaceContainer, radius: 22, p: 20, gap: 8] {
+                Text("The forecast did not arrive") #[typo: t.title, color: t.onSurface]
+                Text(message) #[typo: t.caption, color: t.error]
+                Row #[p: (top: 8)] {
+                    Button("Try again") #[typo: t.label, bg: t.primaryContainer,
+                                         color: t.onPrimaryContainer, radius: 18]
+                        => load()
+                }
+            }
+        }
+
+        when state == "ok" {
+            // The hero: a blue glow from the top edge behind the number.
+            Column #[bg: t.surfaceContainerLow, radius: 28, p: (horizontal: 24, vertical: 20),
+                     gap: 2,
+                     gradient: (kind: radial, center: (0.5, 0.0), radius: 1.1,
+                                from: 0x993B82F6, mid: 0x331D4ED8, to: 0x00121A31)] {
+                Text("{temp:.0}°") #[typo: t.hero, color: t.onSurface]
+                Text(describe(code)) #[typo: t.title, color: t.onSurface]
+                Text("High {high:.0}°  ·  Low {low:.0}°") #[typo: t.body, color: t.onSurfaceVariant]
+            }
+
+            Row #[gap: 10] {
+                Detail(label: "Feels like", value: "{feels:.0}°")
+                Detail(label: "Humidity", value: "{humidity}%")
+                Detail(label: "Wind", value: "{wind:.0} km/h")
+            }
+
+            Text("Next hours") #[typo: t.label, color: t.onSurfaceVariant, p: (top: 6)]
+            ScrollView #[axis: horizontal, height: 92, offset: (hoursX, 0)] {
+                Row #[gap: 8] {
+                    for i, hour in hours {
+                        Column #[width: 62, p: (vertical: 14), gap: 6, radius: 18, align: center,
+                                 bg: i == 0 ? t.primaryContainer : t.surfaceContainer] {
+                            Text(i == 0 ? "Now" : hour.slice(11, 16))
+                                #[typo: t.caption,
+                                  color: i == 0 ? t.onPrimaryContainer : t.onSurfaceVariant]
+                            Text("{temps[i]:.0}°")
+                                #[typo: t.title,
+                                  color: i == 0 ? t.onPrimaryContainer : t.onSurface]
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// One reading under the hero: a small label over its value.
+View Detail(label: Str, value: Str) {
+    inject Theme as t
+    Column #[grow: 1, bg: t.surfaceContainer, radius: 18, p: 14, gap: 4] {
+        Text(label) #[typo: t.caption, color: t.onSurfaceVariant]
+        Text(value) #[typo: t.title, color: t.onSurface]
     }
 }

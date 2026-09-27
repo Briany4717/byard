@@ -1,0 +1,59 @@
+// RFC-0022 §5, seed-colour schemes: the palette below is derived, not declared.
+//
+// Run it (from the repo root):
+//   cargo run -p byard-cli -- dev crates/byard-cli/examples/seed_scheme
+//
+// `byard.toml` names one colour, `seed = "#1E8E3E"`, and no `[theme.color]`
+// table at all. Every token this file reads comes from that seed. What to
+// verify:
+//   1. The app is green: primary, containers and the tinted surfaces all
+//      share the seed's hue, and the error chip stays red.
+//   2. Flip the scheme. The dark scheme is derived from the same seed, so it
+//      is the same green, lighter where it sits on dark.
+//   3. Change the seed to "#D93025" (or any colour) and save. The whole app
+//      moves to the new hue, and every label stays readable.
+View Main() {
+    inject Theme as t
+
+    Column #[bg: t.surface, p: 32, gap: 16, width: 560] {
+        Text("Seed-colour scheme") #[size: 28, color: t.onSurface]
+        Text("Every colour here comes from one seed in byard.toml.")
+            #[size: 15, color: t.onSurfaceVariant]
+
+        Row #[gap: 12] {
+            Box #[bg: t.primary, radius: 12, p: (10, 16)] {
+                Text("Primary") #[size: 14, color: t.onPrimary]
+            }
+            Box #[bg: t.secondary, radius: 12, p: (10, 16)] {
+                Text("Secondary") #[size: 14, color: t.onSecondary]
+            }
+            Box #[bg: t.tertiary, radius: 12, p: (10, 16)] {
+                Text("Tertiary") #[size: 14, color: t.onTertiary]
+            }
+            Box #[bg: t.error, radius: 12, p: (10, 16)] {
+                Text("Error") #[size: 14, color: t.onError]
+            }
+        }
+
+        Row #[gap: 12] {
+            Box #[bg: t.primaryContainer, radius: 16, p: 16] {
+                Text("Primary container") #[size: 14, color: t.onPrimaryContainer]
+            }
+            Box #[bg: t.secondaryContainer, radius: 16, p: 16] {
+                Text("Secondary container") #[size: 14, color: t.onSecondaryContainer]
+            }
+            Box #[bg: t.tertiaryContainer, radius: 16, p: 16] {
+                Text("Tertiary container") #[size: 14, color: t.onTertiaryContainer]
+            }
+        }
+
+        Box #[bg: t.surfaceContainer, radius: 16, p: 16, border: t.outlineVariant, border_width: 1] {
+            Text("A surface container, outlined") #[size: 14, color: t.onSurface]
+        }
+
+        Row #[gap: 12, align: center] {
+            Toggle #[bind: t.dark, bg: t.primary, width: 52, height: 30]
+            Text("Scheme: {t.mode}") #[size: 15, color: t.onSurfaceVariant]
+        }
+    }
+}

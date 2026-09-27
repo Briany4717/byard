@@ -1792,6 +1792,13 @@ pub struct RenderFrame {
     /// `Queue::write_texture` each, during frame application, before the draw.
     atlas_uploads: Vec<AtlasUpload>,
 
+    /// Opacity groups (RFC-0011 T4), in the order they were closed. Empty on
+    /// every frame with no translucent container that needs one.
+    groups: Vec<OpacityGroup>,
+    /// The group currently open, if any: its start mark, opacity and depth.
+    /// One at a time, see [`RenderFrame::begin_group`].
+    open_group: Option<(LayerMark, f32, f32)>,
+
     /// This frame's clip coverage masks (RFC-0037 `clip(path)`), indexed by
     /// [`ClipRect::mask`]. Empty on every frame that clips only rectangles,
     /// which is nearly all of them.
@@ -2019,6 +2026,34 @@ pub struct LayerMark {
     pub fill: u32,
 }
 
+/// A subtree composited as **one image** at `opacity` (RFC-0011 T4, group
+/// opacity).
+///
+/// The difference from per-instance opacity is overlap. Two half-opaque
+/// siblings that overlap, drawn one after the other, show a darker seam where
+/// both fell; the same two drawn opaque into an offscreen target and faded
+/// together show none, because the fade is applied once to a picture in which
+/// they no longer overlap. A card's text over its own background is the
+/// everyday case: per-instance, the text blends with a background that is
+/// itself see-through.
+///
+/// `start..end` is the range of every pool the group's primitives occupy;
+/// the encoder draws exactly that range into the offscreen target and then,
+/// in the main pass, one composite at `depth`, which was reserved *before*
+/// the group's first primitive so the composite sits in front of what came
+/// before the group and behind what comes after it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct OpacityGroup {
+    /// Every pool's length when the group opened.
+    pub start: LayerMark,
+    /// Every pool's length when it closed.
+    pub end: LayerMark,
+    /// The alpha the whole picture is composited at.
+    pub opacity: f32,
+    /// The draw-order depth of the composite.
+    pub depth: f32,
+}
+
 /// Applies `set` to every element of `pool` from index `from` onward.
 fn mark_from<T>(pool: &mut [T], from: u32, mut set: impl FnMut(&mut T)) {
     let start = usize::try_from(from).unwrap_or(usize::MAX).min(pool.len());
@@ -2078,6 +2113,8 @@ impl RenderFrame {
         self.backdrop_marks.clear();
         self.atlas_uploads.clear();
         self.clip_masks.clear();
+        self.groups.clear();
+        self.open_group = None;
         self.solid_depths.clear();
         self.decorated_depths.clear();
         self.texture_depths.clear();
@@ -2463,6 +2500,71 @@ impl RenderFrame {
     /// many megabytes of font bytes it holds.
     pub fn set_fonts(&mut self, fonts: std::sync::Arc<FontTable>) {
         self.fonts = fonts;
+    }
+
+    /// Opens an opacity group (RFC-0011 T4) and returns whether it did.
+    ///
+    /// Returns `false`, and records nothing, when a group is already open. A
+    /// group inside a group is folded into its parent's picture with its own
+    /// alpha applied per primitive, which is exact whenever the inner group's
+    /// content does not overlap itself and conservative otherwise. The caller
+    /// uses the answer to decide whether to multiply the opacity into its
+    /// primitives itself, so the two cases cannot both apply it or both skip
+    /// it.
+    pub fn begin_group(&mut self, opacity: f32) -> bool {
+        if self.open_group.is_some() {
+            return false;
+        }
+        let start = self.cursor();
+        let depth = self.next_depth();
+        self.open_group = Some((start, opacity, depth));
+        true
+    }
+
+    /// Closes the open opacity group. A group that drew nothing is dropped
+    /// rather than recorded, so an empty translucent container costs no pass.
+    pub fn end_group(&mut self) {
+        let Some((start, opacity, depth)) = self.open_group.take() else {
+            return;
+        };
+        let end = self.cursor();
+        if end == start {
+            return;
+        }
+        self.groups.push(OpacityGroup {
+            start,
+            end,
+            opacity,
+            depth,
+        });
+    }
+
+    /// The frame's opacity groups (RFC-0011 T4).
+    #[must_use]
+    pub fn groups(&self) -> &[OpacityGroup] {
+        &self.groups
+    }
+
+    /// The opacity the primitive at `index` of one pool is composited at,
+    /// beyond its own alpha (RFC-0011 T4): the product of every group whose
+    /// range contains it, or `1.0` when none does.
+    ///
+    /// `pool` picks the pool's field out of a [`LayerMark`] (`|m| m.text`,
+    /// `|m| m.solid`, …), which is how a group's range is recorded. Anything
+    /// that asks "how opaque will this reach the screen" has to ask this as
+    /// well as the primitive, because inside a group the primitive draws
+    /// opaque and the fade is the group's.
+    #[must_use]
+    pub fn composite_opacity(&self, pool: impl Fn(&LayerMark) -> u32, index: usize) -> f32 {
+        self.groups
+            .iter()
+            .filter(|g| {
+                let lo = usize::try_from(pool(&g.start)).unwrap_or(usize::MAX);
+                let hi = usize::try_from(pool(&g.end)).unwrap_or(0);
+                (lo..hi).contains(&index)
+            })
+            .map(|g| g.opacity)
+            .product()
     }
 
     /// Opens a new z-layer (RFC-0017): everything pushed from here on is drawn

@@ -370,6 +370,20 @@ fn parse_theme(table: &toml::Table, project_root: &Path) -> Result<Theme, String
         if let Some(name) = theme_tbl.get("name").and_then(toml::Value::as_str) {
             theme.name = name.to_string();
         }
+        // `transition = <ms>` (RFC-0016): how long a scheme flip cross-fades
+        // the colour tokens. Absent is the cut every theme has always had.
+        if let Some(v) = theme_tbl.get("transition") {
+            let ms = as_number(v)
+                .filter(|ms| *ms >= 0.0)
+                .ok_or_else(|| {
+                    "byard.toml: [theme] `transition` must be a duration in milliseconds, like `transition = 250`"
+                        .to_string()
+                })?;
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            {
+                theme.transition_ms = ms.round() as u32;
+            }
+        }
         // `extends` beyond the built-in `byard-base` (multi-level, cross-package)
         // is deferred (RFC-0022 unresolved question); anything else is accepted
         // and simply layers onto `byard-base`, the only built-in base today.
@@ -767,6 +781,27 @@ mod tests {
         let err = theme_of("[theme.typography]\ntitle_large = { size = 22, weight = \"ultra\" }\n")
             .unwrap_err();
         assert!(err.contains("weight") && err.contains("ultra"), "{err}");
+    }
+
+    /// `[theme] transition = <ms>` sets how long a scheme flip cross-fades
+    /// (RFC-0016); absent is the cut.
+    #[test]
+    fn a_theme_transition_parses_and_defaults_to_the_cut() {
+        assert_eq!(
+            theme_of("[theme]\nname = \"x\"\n").unwrap().transition_ms,
+            0
+        );
+        assert_eq!(
+            theme_of("[theme]\ntransition = 250\n")
+                .unwrap()
+                .transition_ms,
+            250
+        );
+        let err = theme_of("[theme]\ntransition = \"slow\"\n").unwrap_err();
+        assert!(
+            err.contains("transition") && err.contains("milliseconds"),
+            "{err}"
+        );
     }
 
     /// `[theme.breakpoints]` declares named widths for responsive variants

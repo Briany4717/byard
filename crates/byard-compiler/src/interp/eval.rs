@@ -1552,6 +1552,17 @@ pub struct Interpreter {
     /// (tracked) and `theme.dark = …` / `bind: theme.dark` writes it, so a scheme
     /// flip drives Mark-and-Pull across every token reference (RFC-0022 §1).
     theme_scheme: Option<SignalId>,
+    /// How far the colour tokens are from the *previous* scheme's appearance
+    /// to the current one's, `0.0..=1.0`, as a reactive `Float` (RFC-0016
+    /// animated token transitions). `1.0` at rest, which is where every token
+    /// reads exactly its scheme's value and nothing is blended.
+    theme_mix: Option<SignalId>,
+    /// The mix as last written, and the engine time it was written at.
+    theme_mix_value: f32,
+    theme_mix_at: Option<u32>,
+    /// The scheme the mix is currently heading towards, so a flip is noticed
+    /// in the tick it happens in.
+    theme_mix_dark: Option<bool>,
     /// Parameterized `fn` definitions (`fn f(params) => body`, M25) *and*
     /// callback-prop bindings (RFC-0019): stored as `(param names, body expr,
     /// is_callback)` and indexed by `AstId`. Both share the invocation path in
@@ -2164,8 +2175,81 @@ impl Interpreter {
         // very frame that tap produced (RFC-0028 §5 step 2).
         self.drain_calls();
         self.drain_closure_diagnostics();
+        // In the tick the flip happens in, and before the pull. The first is
+        // the requirement: a restart deferred to a later tick would paint one
+        // frame of the new scheme at full strength and then jump back into the
+        // blend, which is a flash rather than a transition. Before the pull
+        // rather than after it is only economy (render re-pulls before it
+        // paints, so either order reaches the frame), but it lets the token
+        // bindings be computed once with both the new scheme and the restarted
+        // mix instead of twice.
+        self.advance_theme_mix();
         let epoch = self.ctx.begin_tick();
         self.ctx.pull(epoch);
+    }
+
+    /// Moves the colour tokens' cross-fade on by the time since it last moved,
+    /// and restarts it when the scheme has flipped (RFC-0016 animated token
+    /// transitions).
+    ///
+    /// One mix for the whole theme rather than one animation per token, still
+    /// less one per element: every token is heading from the same scheme to the
+    /// same scheme, so a single number describes all of them, and a theme with
+    /// forty tokens flips for the price of one.
+    ///
+    /// A flip half way through a transition does not restart from the far end.
+    /// The appearance at `mix` is the same colour as the reverse blend at
+    /// `1 - mix`, so the mix is simply replaced by that and the picture
+    /// continues from where it was.
+    fn advance_theme_mix(&mut self) {
+        let (Some(scheme), Some(mix_sig)) = (self.theme_scheme, self.theme_mix) else {
+            return;
+        };
+        let dark = self.ctx.peek_signal(scheme).as_bool().unwrap_or(false);
+        let duration = self.theme.transition_ms;
+        match self.theme_mix_dark {
+            None => {
+                // The first scheme a view is shown in is not a flip.
+                self.theme_mix_dark = Some(dark);
+                return;
+            }
+            Some(previous) if previous != dark => {
+                self.theme_mix_dark = Some(dark);
+                // No transition configured, or no clock to run one on: the
+                // cut, exactly as before.
+                if duration == 0 || !self.clock_set {
+                    return;
+                }
+                self.theme_mix_value = 1.0 - self.theme_mix_value;
+                self.theme_mix_at = Some(self.now_ms);
+                self.ctx
+                    .write_signal(mix_sig, Value::Float(f64::from(self.theme_mix_value)));
+                return;
+            }
+            Some(_) => {}
+        }
+        if self.theme_mix_value >= 1.0 || duration == 0 {
+            return;
+        }
+        let at = self.theme_mix_at.unwrap_or(self.now_ms);
+        #[allow(clippy::cast_precision_loss)]
+        let step = self.now_ms.saturating_sub(at) as f32 / duration as f32;
+        self.theme_mix_at = Some(self.now_ms);
+        if step <= 0.0 {
+            return;
+        }
+        self.theme_mix_value = (self.theme_mix_value + step).min(1.0);
+        self.ctx
+            .write_signal(mix_sig, Value::Float(f64::from(self.theme_mix_value)));
+    }
+
+    /// Whether the colour tokens are part way through a scheme flip.
+    ///
+    /// Asked of the signal's existence first: the fields default to zero, and
+    /// an interpreter with no theme reading "zero of the way through" would
+    /// keep the runner awake for ever.
+    fn theme_transitioning(&self) -> bool {
+        self.theme_mix.is_some() && self.theme_mix_value < 1.0
     }
 
     /// Sets the current engine time (ms since the runner's epoch) that `with`
@@ -2205,7 +2289,7 @@ impl Interpreter {
     /// is true and lets the app idle (0 frames) once every animation settles.
     #[must_use]
     pub fn has_active_animations(&self) -> bool {
-        self.any_active
+        self.any_active || self.theme_transitioning()
     }
 
     /// The most recently projected value of a value binding (for tests).
@@ -2640,6 +2724,10 @@ impl Interpreter {
             sig
         };
         self.env.provide(Symbol::intern("Theme"), Value::Theme(sig));
+        if self.theme_mix.is_none() {
+            self.theme_mix = Some(self.ctx.create_signal(Value::Float(1.0)));
+            self.theme_mix_value = 1.0;
+        }
     }
 
     /// Loads every family the theme declares into the measurement
@@ -11711,14 +11799,35 @@ impl Interpreter {
         let light = self.theme.color(f, false);
         let dark = self.theme.color(f, true);
         if light.is_some() || dark.is_some() {
+            let mix_sig = self.theme_mix;
             return Some(Box::new(move |ctx| {
                 let is_dark = ctx.read_signal(sig).as_bool().unwrap_or(false);
-                let v = if is_dark {
-                    dark.or(light)
+                let (current, previous) = if is_dark {
+                    (dark.or(light), light.or(dark))
                 } else {
-                    light.or(dark)
+                    (light.or(dark), dark.or(light))
                 };
-                Value::Int(v.unwrap_or(0))
+                let current = current.unwrap_or(0);
+                // RFC-0016 animated token transitions: while a flip is under
+                // way the token reads a blend from the scheme it is leaving.
+                // At rest (`mix == 1`) it returns exactly the value it always
+                // did, not a blend that happens to land on it, so a theme with
+                // no transition is byte-identical to one written before this.
+                #[allow(clippy::cast_possible_truncation)]
+                let mix = match mix_sig.map(|m| ctx.read_signal(m)) {
+                    Some(Value::Float(m)) => m as f32,
+                    _ => 1.0,
+                };
+                if mix >= 1.0 {
+                    return Value::Int(current);
+                }
+                // Smoothstep, which is symmetric about one half: reversing a
+                // flip half way through replaces `mix` with `1 - mix`, and the
+                // eased value is continuous across that, so a second tap never
+                // jumps.
+                let t = mix.clamp(0.0, 1.0);
+                let eased = t * t * (3.0 - 2.0 * t);
+                Value::Int(mix_hex_oklab(previous.unwrap_or(current), current, eased))
             }));
         }
 

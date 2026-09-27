@@ -7,22 +7,31 @@
 // `[theme]`, not from hex literals in this file. `inject Theme as t` binds the
 // engine-resolved theme; `t.primary`, `t.titleLarge`, `t.cornerLg` resolve
 // against the *active* scheme. Tapping either control flips `t.dark`, which is a
-// single reactive write that recolours the entire tree in one tick, every `bg`
-// / `color` that reads a token animates via `with anim` (RFC-0010).
+// single reactive write that recolours the entire tree.
+//
+// The recolouring is a cross-fade (RFC-0016 animated token transitions), set
+// once by `transition = 300` in byard.toml. What to verify:
+//   1. Flip the scheme. *Every* token-coloured surface fades, text included,
+//      and they all move together. This file used to put `with anim.spring()`
+//      on some token reads and not others, so the backgrounds eased while the
+//      text snapped; one theme-level transition replaces all of that.
+//   2. Flip it again half way through. The fade turns round from wherever it
+//      had got to, without jumping to either end.
+//   3. Delete the `transition` line and flip: the scheme cuts, as it always did.
 View Main() {
     inject Theme as t
 
-    Column #[bg: t.surface with anim.spring(), p: 32, gap: 20, width: 520] {
+    Column #[bg: t.surface, p: 32, gap: 20, width: 520] {
         Text("Theme runtime") #[typo: t.headlineLarge, color: t.onSurface]
         Text("Colour, type, and shape from the manifest, no hex literals here.")
             #[typo: t.bodyLarge, color: t.onSurfaceVariant]
 
         // A filled card painted entirely from tokens.
-        Column #[bg: t.primaryContainer with anim.spring(), radius: t.cornerXl,
+        Column #[bg: t.primaryContainer, radius: t.cornerXl,
                  p: 20, gap: 8] {
             Text("Primary container") #[typo: t.titleLarge,
-                                        color: t.onPrimaryContainer with anim.spring()]
-            Box #[bg: t.primary with anim.spring(), radius: t.cornerMd,
+                                        color: t.onPrimaryContainer]
+            Box #[bg: t.primary, radius: t.cornerMd,
                   p: (10, 16)] {
                 Text("Primary") #[typo: t.labelLarge, color: t.onPrimary]
             }

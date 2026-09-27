@@ -363,6 +363,36 @@ pub enum CompileError {
         /// Source range of the second mode attribute.
         span: Span,
     },
+    /// Two neighbouring paths in a `morph:` sequence do not have the same
+    /// command structure (RFC-0031 §S11).
+    ///
+    /// Paths morph command by command, so the `k`-th command of one has to be
+    /// the same kind as the `k`-th of the next. When they are not there is no
+    /// canonical in-between, and falling back to a cut would look like an
+    /// easing bug, so it is refused, naming the first command that disagrees.
+    MorphPathMismatch {
+        /// Source range of the disagreeing command (or of the shorter path).
+        span: Span,
+        /// Zero-based position of the path in the morph sequence.
+        member: usize,
+        /// Zero-based index of the first command that disagrees.
+        index: usize,
+        /// The command the previous path has at `index`.
+        expected: String,
+        /// The command this path has there.
+        found: String,
+    },
+    /// A `morph:` sequence mixes body paths with other shapes, or holds a
+    /// `path(d: …)` (RFC-0031 §S11).
+    ///
+    /// Body paths morph command by command on the CPU; every other shape
+    /// morphs as a distance field on the GPU. One sequence cannot be both.
+    MorphMemberKind {
+        /// Source range of the member that does not fit.
+        span: Span,
+        /// Why it does not fit.
+        reason: String,
+    },
     /// A shape after the first inside a fusion group carried its own stroke
     /// properties (RFC-0031 §Q5), **a warning**.
     ///
@@ -894,6 +924,8 @@ impl CompileError {
             | Self::CanvasMissingSize { span }
             | Self::TooManyGroupMembers { span, .. }
             | Self::ConflictingGroupMode { span }
+            | Self::MorphPathMismatch { span, .. }
+            | Self::MorphMemberKind { span, .. }
             | Self::StrokeInFusionGroup { span, .. }
             | Self::DashOnFusedStroke { span }
             | Self::NotAnimatable { span, .. }
@@ -981,6 +1013,8 @@ impl CompileError {
             | Self::CanvasMissingSize { span }
             | Self::TooManyGroupMembers { span, .. }
             | Self::ConflictingGroupMode { span }
+            | Self::MorphPathMismatch { span, .. }
+            | Self::MorphMemberKind { span, .. }
             | Self::StrokeInFusionGroup { span, .. }
             | Self::DashOnFusedStroke { span }
             | Self::NotAnimatable { span, .. }
@@ -1070,6 +1104,8 @@ impl CompileError {
             Self::CanvasMissingSize { .. } => "CanvasMissingSize",
             Self::TooManyGroupMembers { .. } => "TooManyGroupMembers",
             Self::ConflictingGroupMode { .. } => "ConflictingGroupMode",
+            Self::MorphPathMismatch { .. } => "MorphPathMismatch",
+            Self::MorphMemberKind { .. } => "MorphMemberKind",
             Self::StrokeInFusionGroup { .. } => "StrokeInFusionGroup",
             Self::DashOnFusedStroke { .. } => "DashOnFusedStroke",
             Self::NotAnimatable { .. } => "NotAnimatable",
@@ -1299,6 +1335,18 @@ impl CompileError {
                  morph between fused sub-groups would need nested groups"
                     .to_string()
             }
+            Self::MorphPathMismatch {
+                member,
+                index,
+                expected,
+                found,
+                ..
+            } => format!(
+                "path {member} of this morph cannot follow the one before it: command {index} \
+                 is `{found}` here and `{expected}` there; paths morph command by command, \
+                 so each needs the same commands in the same order"
+            ),
+            Self::MorphMemberKind { reason, .. } => reason.clone(),
             Self::StrokeInFusionGroup { param, .. } => {
                 format!(
                     "`{param}` is ignored here: a fused `Canvas` has one outline, \

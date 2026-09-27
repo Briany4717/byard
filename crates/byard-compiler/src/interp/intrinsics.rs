@@ -1773,12 +1773,127 @@ fn validate_group_mode(el: &ElementNode, attrs: &[Attr], errs: &mut Vec<CompileE
     if let (Some(_), Some(morph)) = (fuse, mode_attr("morph")) {
         errs.push(CompileError::ConflictingGroupMode { span: morph.span });
     }
+    if fuse.is_none() && mode_attr("morph").is_some() {
+        validate_morph_paths(&el.children, errs);
+    }
     let Some(_) = fuse else { return };
 
     // Per-member stroke properties inside a fusion group. `seen` counts the
     // shapes walked so far: the first one's paint *is* the group's, so only a
     // later shape's stroke is genuinely inert.
     walk_fused_members(&el.children, &mut 0, errs);
+}
+
+/// RFC-0031 §S11: the rules a `morph:` sequence of body paths must meet.
+///
+/// Body paths morph command by command, which needs every path to have the
+/// same commands in the same order as the one it blends into, and that
+/// includes the last path blending back into the first, because the sequence
+/// wraps (§S10). The first command that disagrees is named, with the path it
+/// belongs to. A sequence that mixes body paths with any other shape, or holds
+/// a `path(d: …)`, is refused too: those morph as distance fields on the GPU
+/// and a sequence cannot be both.
+///
+/// The structure check needs the sequence's order, which only a body of
+/// literal shapes fixes. When the body chooses its members with `when` or
+/// generates them with `for`, the render pass checks the two paths it is about
+/// to blend instead, against the same rule.
+fn validate_morph_paths(members: &[Member], errs: &mut Vec<CompileError>) {
+    let mut shapes = Vec::new();
+    collect_morph_members(members, &mut shapes);
+    let is_body_path = |e: &ElementNode| e.name.as_str() == "path" && !e.children.is_empty();
+    if !shapes.iter().any(|e| is_body_path(e)) {
+        for e in shapes.iter().filter(|e| e.name.as_str() == "path") {
+            errs.push(CompileError::MorphMemberKind {
+                span: e.span,
+                reason: "`path(d: …)` cannot morph: write the path with a body of \
+                         `move`/`line`/`quad`/`cubic`/`close` commands, which morph \
+                         command by command"
+                    .to_string(),
+            });
+        }
+        return;
+    }
+    for e in shapes.iter().filter(|e| !is_body_path(e)) {
+        errs.push(CompileError::MorphMemberKind {
+            span: e.span,
+            reason: format!(
+                "`{}` cannot share a morph with body paths: paths morph command by \
+                 command and other shapes as distance fields; give each its own `Canvas`",
+                if e.name.as_str() == "path" {
+                    "path(d: …)"
+                } else {
+                    e.name.as_str()
+                }
+            ),
+        });
+    }
+    let literal = members.iter().all(|m| matches!(m, Member::Element(_)));
+    if !literal {
+        return;
+    }
+    let paths: Vec<&ElementNode> = shapes.into_iter().filter(|e| is_body_path(e)).collect();
+    let n = paths.len();
+    if n < 2 {
+        return;
+    }
+    // Every neighbouring pair, and the wrap from the last back to the first
+    // (for two paths that is the same pair, so it is not checked twice).
+    let pairs = (1..n)
+        .map(|k| (k - 1, k))
+        .chain((n > 2).then_some((n - 1, 0)));
+    for (from, to) in pairs {
+        if let Some(err) = morph_mismatch(paths[from], paths[to], to) {
+            errs.push(err);
+        }
+    }
+}
+
+/// The literal shape commands of a morph body, `when` branches included, in
+/// order. `for` bodies are skipped: what they generate is data.
+fn collect_morph_members<'a>(members: &'a [Member], out: &mut Vec<&'a ElementNode>) {
+    for member in members {
+        match member {
+            Member::Element(child) if is_shape_command(child.name.as_str()) => out.push(child),
+            Member::When { then, els, .. } => {
+                collect_morph_members(then, out);
+                if let Some(els) = els {
+                    collect_morph_members(els, out);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// The command names of a path body, in order, with their spans.
+fn path_command_names(path: &ElementNode) -> Vec<(&str, crate::diagnostics::Span)> {
+    path.children
+        .iter()
+        .filter_map(|m| match m {
+            Member::Element(cmd) => Some((cmd.name.as_str(), cmd.span)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The first command at which `to` stops matching `from`, as the diagnostic
+/// that names it; `None` when the two have the same structure.
+fn morph_mismatch(from: &ElementNode, to: &ElementNode, member: usize) -> Option<CompileError> {
+    let a = path_command_names(from);
+    let b = path_command_names(to);
+    let index =
+        (0..a.len().max(b.len())).find(|&i| a.get(i).map(|c| c.0) != b.get(i).map(|c| c.0))?;
+    let name = |c: Option<&(&str, crate::diagnostics::Span)>| {
+        c.map_or_else(|| "the end of the path".to_string(), |c| c.0.to_string())
+    };
+    Some(CompileError::MorphPathMismatch {
+        span: b.get(index).map_or(to.span, |c| c.1),
+        member,
+        index,
+        expected: name(a.get(index)),
+        found: name(b.get(index)),
+    })
 }
 
 /// RFC-0031 §S5/§Q3: a `Canvas` that declares a combine mode turns its shapes

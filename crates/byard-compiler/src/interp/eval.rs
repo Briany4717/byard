@@ -942,6 +942,62 @@ enum PathCommand {
 /// coordinate that is no number at all would fingerprint differently every
 /// frame. The tolerance and the fill rule are in the key too, since both
 /// change the triangles the same commands produce.
+/// The outline of a rounded rectangle, mapped through `t` (RFC-0011 ×
+/// RFC-0037): what a `Clip` looks like once an ancestor has rotated it.
+///
+/// A rotated rectangle is not a rectangle, so the scissor and the clip
+/// table's axis-aligned entry cannot express it; a path mask can. Each corner
+/// is the standard four-point cubic approximation of a quarter circle
+/// (`k = 0.5523`), which is within a fraction of a pixel of the SDF the
+/// unrotated clip uses at any radius a UI draws, and the mapping is applied
+/// to the control points, which is exact for an affine transform.
+fn transformed_rrect_outline(
+    rect: crate::interp::intrinsics::Rect,
+    radii: [f32; 4],
+    t: &byard_core::frame::Transform,
+) -> Vec<PathCommand> {
+    const K: f32 = 0.552_284_8;
+    let (x0, y0, x1, y1) = (rect.x, rect.y, rect.x + rect.w, rect.y + rect.h);
+    let cap = (rect.w.min(rect.h) * 0.5).max(0.0);
+    let [tl, tr, br, bl] = radii.map(|r| r.clamp(0.0, cap));
+    let p = |x: f32, y: f32| t.apply_point([x, y]);
+    let mut out = vec![PathCommand::Move(p(x0 + tl, y0))];
+    out.push(PathCommand::Line(p(x1 - tr, y0)));
+    if tr > 0.0 {
+        out.push(PathCommand::Cubic(
+            p(x1 - tr + tr * K, y0),
+            p(x1, y0 + tr - tr * K),
+            p(x1, y0 + tr),
+        ));
+    }
+    out.push(PathCommand::Line(p(x1, y1 - br)));
+    if br > 0.0 {
+        out.push(PathCommand::Cubic(
+            p(x1, y1 - br + br * K),
+            p(x1 - br + br * K, y1),
+            p(x1 - br, y1),
+        ));
+    }
+    out.push(PathCommand::Line(p(x0 + bl, y1)));
+    if bl > 0.0 {
+        out.push(PathCommand::Cubic(
+            p(x0 + bl - bl * K, y1),
+            p(x0, y1 - bl + bl * K),
+            p(x0, y1 - bl),
+        ));
+    }
+    out.push(PathCommand::Line(p(x0, y0 + tl)));
+    if tl > 0.0 {
+        out.push(PathCommand::Cubic(
+            p(x0, y0 + tl - tl * K),
+            p(x0 + tl - tl * K, y0),
+            p(x0 + tl, y0),
+        ));
+    }
+    out.push(PathCommand::Close);
+    out
+}
+
 fn path_fingerprint(commands: &[PathCommand], tolerance: f32, even_odd: bool) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -3440,13 +3496,43 @@ impl Interpreter {
         }
         let even_odd = Self::shape_token(mask, "winding").as_deref() == Some("even_odd");
         let extent = rect.width.max(rect.height).max(1.0);
+        self.open_mask(&commands, extent, even_odd, frame)
+    }
+
+    /// Opens a path clip over commands already in absolute pixels: the
+    /// outline of a `Clip` under a rotated ancestor (RFC-0011).
+    fn begin_clip_commands(
+        &mut self,
+        commands: &[PathCommand],
+        frame: &mut byard_core::frame::RenderFrame,
+    ) -> bool {
+        let (mut lo, mut hi) = ([f32::MAX; 2], [f32::MIN; 2]);
+        for c in commands {
+            if let PathCommand::Move(p) | PathCommand::Line(p) | PathCommand::Cubic(_, _, p) = c {
+                lo = [lo[0].min(p[0]), lo[1].min(p[1])];
+                hi = [hi[0].max(p[0]), hi[1].max(p[1])];
+            }
+        }
+        let extent = (hi[0] - lo[0]).max(hi[1] - lo[1]).max(1.0);
+        self.open_mask(commands, extent, false, frame)
+    }
+
+    /// Tessellates `commands` through the shared mesh cache and opens the
+    /// result as a path clip, returning whether anything was opened.
+    fn open_mask(
+        &mut self,
+        commands: &[PathCommand],
+        extent: f32,
+        even_odd: bool,
+        frame: &mut byard_core::frame::RenderFrame,
+    ) -> bool {
         let tolerance = (extent / 800.0).clamp(0.05, 0.5);
-        let key = path_fingerprint(&commands, tolerance, even_odd);
+        let key = path_fingerprint(commands, tolerance, even_odd);
         let mesh = if let Some(cached) = self.path_meshes.get_mut(&key) {
             cached.last_used = self.frame_seq;
             std::sync::Arc::clone(&cached.mesh)
         } else {
-            let mesh = std::sync::Arc::new(tessellate_path(&commands, tolerance, even_odd));
+            let mesh = std::sync::Arc::new(tessellate_path(commands, tolerance, even_odd));
             self.tessellations += 1;
             self.path_meshes.insert(
                 key,
@@ -7133,9 +7219,62 @@ impl Interpreter {
         Ok(id)
     }
 
+    /// Renders one node, with its hit regions registered under its
+    /// ancestors' paint transform (RFC-0011 hierarchical transforms).
+    ///
+    /// A wrapper rather than a line at the top of the body because the body has
+    /// a dozen return paths, and a hit frame that leaked from one node into its
+    /// next sibling would be the kind of bug that only shows under a rotated
+    /// parent. Set on the way in and restored on the way out, unconditionally.
+    ///
+    /// The frame is the inherited transform **minus the scroll displacement**:
+    /// scrolling already reaches every hit rect through `scroll_shift`, and
+    /// applying it a second time through the transform would put a scrolled
+    /// button's target one scroll offset away from the button.
+    #[allow(clippy::too_many_arguments, clippy::similar_names)]
+    fn render_node_with_atlas(
+        &mut self,
+        node: &RenderNode,
+        atlas_node: byard_core::atlas::layout::AtlasNodeId,
+        frame: &mut byard_core::frame::RenderFrame,
+        flat_ids: &[byard_core::atlas::layout::AtlasNodeId],
+        flat_idx: &mut usize,
+        parent_rect: crate::interp::intrinsics::Rect,
+        inherited_opacity: f32,
+        inherited_transform: byard_core::frame::Transform,
+        cull_clip: Option<byard_core::frame::Rect>,
+        scroll_shift: (f32, f32),
+        window: Option<WindowSpec>,
+        pools: Pools<'_>,
+    ) {
+        let mut hit = inherited_transform;
+        hit.translate[0] -= scroll_shift.0;
+        hit.translate[1] -= scroll_shift.1;
+        // Opacity decides nothing about where a press lands.
+        hit.opacity = 1.0;
+        let previous = self.router.set_hit_frame(hit);
+        self.render_node_with_atlas_inner(
+            node,
+            atlas_node,
+            frame,
+            flat_ids,
+            flat_idx,
+            parent_rect,
+            inherited_opacity,
+            inherited_transform,
+            cull_clip,
+            scroll_shift,
+            window,
+            pools,
+        );
+        self.router.restore_hit_frame(previous);
+    }
+
+    /// The body of [`render_node_with_atlas`](Self::render_node_with_atlas),
+    /// which owns the hit-frame bookkeeping around it.
     #[allow(clippy::similar_names)]
     #[allow(clippy::too_many_arguments)]
-    fn render_node_with_atlas(
+    fn render_node_with_atlas_inner(
         &mut self,
         node: &RenderNode,
         atlas_node: byard_core::atlas::layout::AtlasNodeId,
@@ -7661,7 +7800,36 @@ impl Interpreter {
                 // plain rectangular clip, which costs exactly what a
                 // `ScrollView`'s does — a scissor — so wrapping content in a
                 // square `Clip` is not a new expense.
-                let mask_clip = if name.as_str() == "Clip" {
+                let mask_clip = if name.as_str() == "Clip" && inherited_transform.rotate != 0.0 {
+                    // RFC-0011: under a rotated ancestor the clip's outline is
+                    // a rotated rectangle, which neither the scissor nor an
+                    // axis-aligned clip entry can express. It becomes a path
+                    // mask instead, so the content is cut along the edges it
+                    // is drawn with. Its own `path` child, if it has one, nests
+                    // inside that as it would anywhere else.
+                    let mut radii = self.resolve_radii(attrs, "rrect");
+                    for r in &mut radii {
+                        *r *= inherited_transform.scale[0];
+                    }
+                    let outline =
+                        transformed_rrect_outline(current_rect, radii, &inherited_transform);
+                    let opened = self.begin_clip_commands(&outline, frame);
+                    let pathed = clip_path.as_ref().is_some_and(|p| {
+                        let tl = inherited_transform.apply_point([current_rect.x, current_rect.y]);
+                        let rect = byard_core::frame::Rect::new(
+                            tl[0],
+                            tl[1],
+                            current_rect.w * inherited_transform.scale[0],
+                            current_rect.h * inherited_transform.scale[1],
+                        );
+                        self.begin_clip_path_mask(p, rect, frame)
+                    });
+                    match (opened, pathed) {
+                        (true, pathed) => Some(pathed),
+                        (false, true) => Some(false),
+                        (false, false) => None,
+                    }
+                } else if name.as_str() == "Clip" {
                     let tl = inherited_transform.apply_point([current_rect.x, current_rect.y]);
                     let rect = byard_core::frame::Rect::new(
                         tl[0],

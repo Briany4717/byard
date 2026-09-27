@@ -3837,12 +3837,16 @@ fn collapse_header_fades_child_via_scroll_fraction() {
     interp.tick();
     let sy = interp.var_signal(&Symbol::intern("sy")).unwrap();
     let sub_rgb = crate::interp::intrinsics::color_to_rgba(0x00C7_BFDE, false);
+    // The alpha the subtitle reaches the screen with: its own, times the
+    // opacity of any group it is faded inside (RFC-0011 T4). A fading box
+    // with children is one picture now, so the fade lives on the group.
     let sub_alpha = |frame: &byard_core::frame::RenderFrame| -> Option<f32> {
         frame
             .texts()
             .iter()
-            .find(|t| t.color[..3] == sub_rgb[..3])
-            .map(|t| t.color[3])
+            .enumerate()
+            .find(|(_, t)| t.color[..3] == sub_rgb[..3])
+            .map(|(i, t)| t.color[3] * frame.composite_opacity(|m| m.text, i))
     };
     let mut f0 = byard_core::frame::RenderFrame::new();
     interp.render(&tree, &mut f0, 400.0, 300.0);
@@ -4530,15 +4534,19 @@ fn opacity_dims_descendant_text_not_only_the_background() {
     interp.tick();
     let mut frame = byard_core::frame::RenderFrame::new();
     interp.render(&tree, &mut frame, 400.0, 300.0);
-    let label = frame
+    let (i, label) = frame
         .texts()
         .iter()
-        .find(|t| t.text == "x")
+        .enumerate()
+        .find(|(_, t)| t.text == "x")
         .expect("the button's label was emitted");
+    // Effective alpha: a translucent Button with a label is faded as one
+    // picture (RFC-0011 T4), so the label draws opaque inside a group and the
+    // 0.4 is the group's. What must hold is that it reaches the screen at 0.4.
+    let effective = label.color[3] * frame.composite_opacity(|m| m.text, i);
     assert!(
-        (label.color[3] - 0.4).abs() < 1e-3,
-        "label alpha should inherit the 0.4 opacity, got {}",
-        label.color[3]
+        (effective - 0.4).abs() < 1e-3,
+        "label should reach the screen at the 0.4 opacity, got {effective}"
     );
 }
 

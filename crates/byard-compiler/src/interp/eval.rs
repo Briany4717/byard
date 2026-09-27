@@ -1533,6 +1533,10 @@ pub struct Interpreter {
     text_measurer: Option<byard_core::text::TextMeasurer>,
     /// Active design-token theme (RFC-0022; the theme-default layer).
     pub theme: super::theme::Theme,
+    /// The viewport this frame is rendered at, in logical pixels: what a
+    /// responsive block (RFC-0016 `on width >= md`) compares against. Set at
+    /// the top of every render, before layout reads it.
+    viewport: (f32, f32),
     /// The registered font families, in the shape the render thread reads
     /// them (RFC-0034), rebuilt whenever the theme changes and handed to
     /// every frame.
@@ -3268,6 +3272,7 @@ impl Interpreter {
         // intrinsic's contract (an `on hover { bg: … }` must obey the same §5
         // rules as an inline `bg:`); the state attrs are validation-only and do
         // not affect the emitted base set.
+        self.check_breakpoints(&state_blocks);
         let to_validate = attrs_with_states(&attrs, &state_blocks);
         self.errors
             .extend(validate_element(el, &to_validate, known_views));
@@ -3584,6 +3589,41 @@ impl Interpreter {
             }
         }
         (mask, rest)
+    }
+
+    /// Reports every responsive block that names a breakpoint the theme does
+    /// not declare (RFC-0016), once per written block.
+    ///
+    /// Once per *span*, because the same element is lowered again for every
+    /// row of a `for` and on every re-lowering, and a diagnostic repeated per
+    /// row is a diagnostic nobody reads.
+    fn check_breakpoints(&mut self, blocks: &[StateBlock]) {
+        for block in blocks {
+            let Some(crate::parser::ast::ViewportCond {
+                breakpoint: crate::parser::ast::Breakpoint::Named(name, span),
+                ..
+            }) = &block.viewport
+            else {
+                continue;
+            };
+            if self.theme.breakpoint(name.as_str()).is_some() {
+                continue;
+            }
+            let already = self
+                .errors
+                .iter()
+                .any(|e| matches!(e, CompileError::UnknownBreakpoint { span: s, .. } if s == span));
+            if already {
+                continue;
+            }
+            let names = self.theme.breakpoint_names();
+            self.errors.push(CompileError::UnknownBreakpoint {
+                span: *span,
+                name: name.as_str().to_string(),
+                hint: crate::util::closest_match(name.as_str(), names.iter().map(String::as_str))
+                    .map(str::to_string),
+            });
+        }
     }
 
     /// Captures the instance environment for a box being lowered (RFC-0019 §2),
@@ -4704,6 +4744,12 @@ impl Interpreter {
         height: f32,
     ) {
         use byard_core::frame::Viewport;
+
+        // RFC-0016 responsive variants compare against this. Before layout,
+        // because a breakpoint can change padding, width or direction, and a
+        // layout built against last frame's viewport would lay out one width's
+        // variant and paint another's.
+        self.viewport = (width, height);
 
         // RFC-0034: the registered families ride every frame, not just the one
         // after registration. The relay keeps only the latest frame, so a pool
@@ -6795,7 +6841,20 @@ impl Interpreter {
                 flat_ids.push(id);
                 Ok(id)
             }
-            RenderNode::Text { attrs, content, .. } => {
+            RenderNode::Text {
+                attrs,
+                content,
+                state_blocks,
+            } => {
+                // RFC-0016: a responsive `size:` changes what is measured, so
+                // it has to be seen here as well as at paint.
+                let attrs = resolve_state_attrs(
+                    attrs,
+                    state_blocks,
+                    crate::interp::events::StyleState::empty(),
+                    &|c| viewport_holds(c, self.viewport, &self.theme),
+                );
+                let attrs: &[Attr] = &attrs;
                 let text = match self.binding_value(*content) {
                     Some(Value::Str(s)) => s,
                     other => other.map_or_else(String::new, |v| format!("{v:?}")),
@@ -6838,11 +6897,26 @@ impl Interpreter {
             RenderNode::Box {
                 name,
                 attrs,
+                state_blocks,
                 children,
                 env_snapshot,
                 measure,
                 ..
             } => {
+                // RFC-0016 responsive variants reach layout here, one pass ahead
+                // of paint and with no interaction state, so only viewport
+                // blocks can apply. An interaction block's layout properties
+                // still do not relayout (hover must not move its own box), and
+                // a breakpoint's do, since a narrow window is exactly when a
+                // padding or a direction should change. Borrowed unchanged when
+                // the box has no blocks, which is nearly every box.
+                let attrs = resolve_state_attrs(
+                    attrs,
+                    state_blocks,
+                    crate::interp::events::StyleState::empty(),
+                    &|c| viewport_holds(c, self.viewport, &self.theme),
+                );
+                let attrs: &[Attr] = &attrs;
                 // The same restore the paint walk does, for the same reason and
                 // one pass earlier: a box's *size* is as much a function of the
                 // scope it was instantiated in as its colour is. `width: row.w`
@@ -7347,7 +7421,9 @@ impl Interpreter {
                             self.router.style_state(i)
                         })
                         .union(self.prop_style_state(attrs, None, ""));
-                    let attrs = resolve_state_attrs(attrs, state_blocks, state);
+                    let attrs = resolve_state_attrs(attrs, state_blocks, state, &|c| {
+                        viewport_holds(c, self.viewport, &self.theme)
+                    });
                     let attrs = attrs.as_ref();
                     let text = match self.binding_value(*content) {
                         Some(Value::Str(s)) => s,
@@ -7503,7 +7579,9 @@ impl Interpreter {
                             self.router.style_state(i)
                         })
                         .union(self.prop_style_state(attrs, *bound_sig, name.as_str()));
-                    let paint_attrs = resolve_state_attrs(attrs, state_blocks, paint_state);
+                    let paint_attrs = resolve_state_attrs(attrs, state_blocks, paint_state, &|c| {
+                        viewport_holds(c, self.viewport, &self.theme)
+                    });
                     let paint_attrs = paint_attrs.as_ref();
                     // Resolve the paint-time transform once, up front, so it can
                     // be applied both to a plain container's `bg` fill *and* to
@@ -8183,7 +8261,9 @@ impl Interpreter {
                         self.router.style_state(i)
                     })
                     .union(self.prop_style_state(&p.attrs, None, ""));
-                let paint_attrs = resolve_state_attrs(&p.attrs, &p.state_blocks, state);
+                let paint_attrs = resolve_state_attrs(&p.attrs, &p.state_blocks, state, &|c| {
+                    viewport_holds(c, self.viewport, &self.theme)
+                });
                 let paint_attrs = paint_attrs.as_ref();
                 let own_transform = self.resolve_transform(paint_attrs, nav_rect);
                 let transform = inherited_transform.compose(&own_transform);
@@ -8287,7 +8367,9 @@ impl Interpreter {
                             self.router.style_state(i)
                         })
                         .union(self.prop_style_state(attrs, None, ""));
-                    let attrs = resolve_state_attrs(attrs, state_blocks, state);
+                    let attrs = resolve_state_attrs(attrs, state_blocks, state, &|c| {
+                        viewport_holds(c, self.viewport, &self.theme)
+                    });
                     let attrs = attrs.as_ref();
                     let src_val = self
                         .binding_value(*src)
@@ -8343,7 +8425,9 @@ impl Interpreter {
                             self.router.style_state(i)
                         })
                         .union(self.prop_style_state(attrs, None, ""));
-                    let paint_attrs = resolve_state_attrs(attrs, state_blocks, state);
+                    let paint_attrs = resolve_state_attrs(attrs, state_blocks, state, &|c| {
+                        viewport_holds(c, self.viewport, &self.theme)
+                    });
                     let paint_attrs = paint_attrs.as_ref();
 
                     // RFC-0019 §2: prop expressions resolve against the scope
@@ -8499,7 +8583,9 @@ impl Interpreter {
                             self.router.style_state(i)
                         })
                         .union(self.prop_style_state(attrs, None, ""));
-                    let paint_attrs = resolve_state_attrs(attrs, state_blocks, state);
+                    let paint_attrs = resolve_state_attrs(attrs, state_blocks, state, &|c| {
+                        viewport_holds(c, self.viewport, &self.theme)
+                    });
                     let paint_attrs = paint_attrs.as_ref();
 
                     // RFC-0019 §2: restore the instance environment so shape
@@ -13595,6 +13681,35 @@ fn state_bit(kind: StyleStateKind) -> crate::interp::events::StyleState {
     }
 }
 
+/// Whether a responsive block's viewport condition holds (RFC-0016).
+///
+/// A breakpoint nobody declared never holds. It has already been reported
+/// when the view was lowered, and reading it as "always" or as zero would make
+/// the block apply at every size, which is the one outcome worse than not
+/// applying at all.
+fn viewport_holds(
+    cond: &crate::parser::ast::ViewportCond,
+    viewport: (f32, f32),
+    theme: &super::theme::Theme,
+) -> bool {
+    use crate::parser::ast::{Breakpoint, ViewportAxis, ViewportOp};
+    let at = match &cond.breakpoint {
+        Breakpoint::Px(px) => *px,
+        Breakpoint::Named(name, _) => match theme.breakpoint(name.as_str()) {
+            Some(px) => px,
+            None => return false,
+        },
+    };
+    let extent = match cond.axis {
+        ViewportAxis::Width => viewport.0,
+        ViewportAxis::Height => viewport.1,
+    };
+    match cond.op {
+        ViewportOp::AtLeast => extent >= at,
+        ViewportOp::Below => extent < at,
+    }
+}
+
 /// The combined-selector mask a state block requires (RFC-0024): every state in
 /// `states` must be active for the block to apply.
 fn state_block_mask(sb: &StateBlock) -> crate::interp::events::StyleState {
@@ -13613,10 +13728,17 @@ fn state_block_mask(sb: &StateBlock) -> crate::interp::events::StyleState {
 /// then **declaration order** for equal specificity.
 ///
 /// The common stateless case (no blocks) borrows the base with no allocation.
+///
+/// A responsive block (RFC-0016, `on width >= md`) also has to have its viewport
+/// condition hold, which `holds` answers. It counts as one unit of specificity,
+/// the same as a single interaction state, so declaration order settles a tie
+/// between `on hover` and `on width >= md` exactly as it settles one between two
+/// states.
 fn resolve_state_attrs<'a>(
     base: &'a [Attr],
     state_blocks: &[StateBlock],
     active: crate::interp::events::StyleState,
+    holds: &dyn Fn(&crate::parser::ast::ViewportCond) -> bool,
 ) -> std::borrow::Cow<'a, [Attr]> {
     if state_blocks.is_empty() {
         return std::borrow::Cow::Borrowed(base);
@@ -13627,7 +13749,9 @@ fn resolve_state_attrs<'a>(
         .enumerate()
         .filter_map(|(i, sb)| {
             let required = state_block_mask(sb);
-            active.contains(required).then_some((required.count(), i))
+            let viewport_ok = sb.viewport.as_ref().is_none_or(holds);
+            let spec = required.count() + u32::from(sb.viewport.is_some());
+            (active.contains(required) && viewport_ok).then_some((spec, i))
         })
         .collect();
     if matching.is_empty() {

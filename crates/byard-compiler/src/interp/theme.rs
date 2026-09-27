@@ -272,6 +272,11 @@ pub struct Theme {
     /// that resolves to nothing is a compile diagnostic, and a diagnostic that
     /// arrives at paint time is a square box nobody can act on (INV-4).
     fonts: BTreeMap<String, DeclaredFont>,
+    /// Named viewport widths for responsive style variants (RFC-0016):
+    /// `camelCase` name → logical pixels. A design system's breakpoints are
+    /// part of the design system, so they are declared here rather than baked
+    /// into the language as a fixed `sm`/`md`/`lg`.
+    breakpoints: BTreeMap<String, f32>,
     /// The active scheme mirror for default resolution (`true` ⇒ `dark`).
     pub active_dark: bool,
     /// Default font size in logical pixels (the theme-default layer).
@@ -323,6 +328,7 @@ impl Theme {
             typography,
             shapes,
             fonts: BTreeMap::new(),
+            breakpoints: BTreeMap::new(),
             active_dark: false,
             font_size: DEFAULT_FONT_SIZE,
         }
@@ -418,6 +424,29 @@ impl Theme {
                 .find(|(k, _)| to_camel(k) == family)
                 .map(|(_, v)| v)
         })
+    }
+
+    /// The width in logical pixels a named breakpoint stands for, under
+    /// either its manifest spelling or its `camelCase` form (RFC-0016).
+    #[must_use]
+    pub fn breakpoint(&self, name: &str) -> Option<f32> {
+        self.breakpoints.get(name).copied().or_else(|| {
+            self.breakpoints
+                .iter()
+                .find(|(k, _)| to_camel(k) == name)
+                .map(|(_, v)| *v)
+        })
+    }
+
+    /// Every declared breakpoint name, for diagnostics.
+    #[must_use]
+    pub fn breakpoint_names(&self) -> Vec<String> {
+        self.breakpoints.keys().cloned().collect()
+    }
+
+    /// Declares a breakpoint (RFC-0016).
+    pub fn set_breakpoint(&mut self, name: &str, px: f32) {
+        self.breakpoints.insert(to_camel(name), px);
     }
 
     /// Declared font families (`declared name → loaded face`).

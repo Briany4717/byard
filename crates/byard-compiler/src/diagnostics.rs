@@ -268,6 +268,20 @@ pub enum CompileError {
         /// The closest anchor declared before this point, if any.
         hint: Option<String>,
     },
+    /// A responsive block (`on width >= md { … }`) names a breakpoint the
+    /// project does not declare in `[theme.breakpoints]` (RFC-0016).
+    ///
+    /// Reported for the same reason an undeclared font is: the alternative is
+    /// a block that silently never applies, which looks like a layout that
+    /// ignores the window rather than like a typo.
+    UnknownBreakpoint {
+        /// Source range of the breakpoint name.
+        span: Span,
+        /// The name that was written.
+        name: String,
+        /// The closest declared breakpoint, if any.
+        hint: Option<String>,
+    },
     /// A `font:` names a family the project does not declare in
     /// `[assets.fonts]` (RFC-0034).
     ///
@@ -872,6 +886,7 @@ impl CompileError {
             | Self::UnmatchedRoute { span, .. }
             | Self::UnknownAnchor { span, .. }
             | Self::UnknownFontFamily { span, .. }
+            | Self::UnknownBreakpoint { span, .. }
             | Self::MisplacedAnchorTail { span, .. }
             | Self::UnknownShapeCommand { span, .. }
             | Self::UnknownShapeParam { span, .. }
@@ -958,6 +973,7 @@ impl CompileError {
             | Self::UnmatchedRoute { span, .. }
             | Self::UnknownAnchor { span, .. }
             | Self::UnknownFontFamily { span, .. }
+            | Self::UnknownBreakpoint { span, .. }
             | Self::MisplacedAnchorTail { span, .. }
             | Self::UnknownShapeCommand { span, .. }
             | Self::UnknownShapeParam { span, .. }
@@ -1046,6 +1062,7 @@ impl CompileError {
             Self::UnmatchedRoute { .. } => "UnmatchedRoute",
             Self::UnknownAnchor { .. } => "UnknownAnchor",
             Self::UnknownFontFamily { .. } => "UnknownFontFamily",
+            Self::UnknownBreakpoint { .. } => "UnknownBreakpoint",
             Self::MisplacedAnchorTail { .. } => "MisplacedAnchorTail",
             Self::UnknownShapeCommand { .. } => "UnknownShapeCommand",
             Self::UnknownShapeParam { .. } => "UnknownShapeParam",
@@ -1237,6 +1254,13 @@ impl CompileError {
             Self::MisplacedAnchorTail {
                 prop, reason, hint, ..
             } => with_hint(format!("`{prop}` {reason}"), hint.as_deref()),
+            Self::UnknownBreakpoint { name, hint, .. } => with_hint(
+                format!(
+                    "no breakpoint `{name}` is declared; add it to `[theme.breakpoints]` \
+                     in byard.toml, or write a width in logical pixels"
+                ),
+                hint.as_deref(),
+            ),
             Self::UnknownFontFamily { name, hint, .. } => with_hint(
                 format!(
                     "no font family `{name}` is declared; add it to \

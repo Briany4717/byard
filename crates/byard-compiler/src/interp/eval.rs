@@ -225,6 +225,23 @@ pub(crate) struct ShapeGroupSink {
     ///
     /// [`MAX_GROUP_MEMBERS`]: byard_core::frame::MAX_GROUP_MEMBERS
     overflowed: usize,
+    /// `Some` in a `morph:` canvas: the body paths it holds, in order, which
+    /// morph command by command on the CPU rather than as distance fields
+    /// (RFC-0031 §S11).
+    morph_paths: Option<Vec<FilledPath>>,
+}
+
+/// A body path's evaluated geometry and paint, before tessellation
+/// (RFC-0037), which is also one member of a path morph (RFC-0031 §S11).
+#[derive(Clone, Debug)]
+pub(crate) struct FilledPath {
+    commands: Vec<PathCommand>,
+    fill: [f32; 4],
+    gradient: Option<byard_core::frame::Gradient>,
+    even_odd: bool,
+    /// The path's own `opacity:`, before the canvas's is applied.
+    alpha: f32,
+    span: Span,
 }
 
 impl ShapeGroupSink {
@@ -932,6 +949,19 @@ enum PathCommand {
     Cubic([f32; 2], [f32; 2], [f32; 2]),
     /// Close the current subpath back to its start.
     Close,
+}
+
+impl PathCommand {
+    /// The command as it is written in byld.
+    const fn name(&self) -> &'static str {
+        match self {
+            Self::Move(_) => "move",
+            Self::Line(_) => "line",
+            Self::Quad(..) => "quad",
+            Self::Cubic(..) => "cubic",
+            Self::Close => "close",
+        }
+    }
 }
 
 /// The fingerprint a mesh is cached under (RFC-0037, RFC-0032's rule).
@@ -6297,6 +6327,19 @@ impl Interpreter {
             return;
         }
         if name == "path" {
+            // In a `morph:` canvas a body path is a member of the sequence,
+            // blended with its neighbour once the whole body has been read.
+            if let Some(paths) = group
+                .as_deref_mut()
+                .and_then(|sink| sink.morph_paths.as_mut())
+            {
+                if !el.children.is_empty() {
+                    if let Some(path) = self.eval_filled_path(el, canvas) {
+                        paths.push(path);
+                    }
+                    return;
+                }
+            }
             self.emit_canvas_path(el, canvas, opacity, transform, frame);
             return;
         }
@@ -6616,22 +6659,52 @@ impl Interpreter {
         transform: byard_core::frame::Transform,
         frame: &mut byard_core::frame::RenderFrame,
     ) {
+        if let Some(path) = self.eval_filled_path(el, canvas) {
+            self.push_filled_path(&path, canvas, opacity, transform, frame);
+        }
+    }
+
+    /// Evaluates a body path's commands and paint; `None` when there is
+    /// nothing to draw.
+    fn eval_filled_path(
+        &mut self,
+        el: &ElementNode,
+        canvas: crate::interp::intrinsics::Rect,
+    ) -> Option<FilledPath> {
         let commands = self.eval_path_commands(&el.children, canvas);
         if commands.len() < 2 {
             // One point is not a shape. Silent rather than an error, because
             // an empty `for` over an empty series is a perfectly ordinary
             // frame of a chart that has no data yet.
-            return;
+            return None;
         }
         let fill = self.shape_color(el, "fill").unwrap_or([0.0; 4]);
         let gradient = Self::shape_arg(el, "gradient")
             .cloned()
             .and_then(|expr| self.resolve_gradient_expr(&expr, 0.0));
         if gradient.is_none() && fill[3] <= 0.0 {
-            return; // nothing to paint
+            return None; // nothing to paint
         }
-        let even_odd = Self::shape_token(el, "winding").as_deref() == Some("even_odd");
+        Some(FilledPath {
+            commands,
+            fill,
+            gradient,
+            even_odd: Self::shape_token(el, "winding").as_deref() == Some("even_odd"),
+            alpha: self.shape_num(el, "opacity").unwrap_or(1.0),
+            span: el.span,
+        })
+    }
 
+    /// Tessellates an evaluated path if its numbers changed, and pushes the
+    /// mesh.
+    fn push_filled_path(
+        &mut self,
+        path: &FilledPath,
+        canvas: crate::interp::intrinsics::Rect,
+        opacity: f32,
+        transform: byard_core::frame::Transform,
+        frame: &mut byard_core::frame::RenderFrame,
+    ) {
         // The flattening tolerance is derived from the path's on-screen size:
         // a sparkline in a 40px card and a chart across a 4K window are the
         // same commands and want very different triangle counts (RFC-0037).
@@ -6642,12 +6715,13 @@ impl Interpreter {
         let extent = (canvas.w.max(canvas.h) * scale).max(1.0);
         let tolerance = (extent / 800.0).clamp(0.05, 0.5);
 
-        let key = path_fingerprint(&commands, tolerance, even_odd);
+        let key = path_fingerprint(&path.commands, tolerance, path.even_odd);
         let mesh = if let Some(cached) = self.path_meshes.get_mut(&key) {
             cached.last_used = self.frame_seq;
             std::sync::Arc::clone(&cached.mesh)
         } else {
-            let mesh = std::sync::Arc::new(tessellate_path(&commands, tolerance, even_odd));
+            let mesh =
+                std::sync::Arc::new(tessellate_path(&path.commands, tolerance, path.even_odd));
             self.tessellations += 1;
             self.path_meshes.insert(
                 key,
@@ -6661,16 +6735,80 @@ impl Interpreter {
         if mesh.indices.is_empty() {
             return;
         }
-
-        let shape_opacity = opacity * self.shape_num(el, "opacity").unwrap_or(1.0);
         frame.push_fill(byard_core::frame::CanvasFill {
             mesh,
-            color: fill,
-            gradient,
+            color: path.fill,
+            gradient: path.gradient,
             transform,
-            opacity: shape_opacity,
+            opacity: opacity * path.alpha,
             dirty: true,
         });
+    }
+
+    /// Draws a `morph:` canvas's body paths (RFC-0031 §S11): the two members
+    /// the phase falls between, blended command by command, as one filled
+    /// path.
+    ///
+    /// The phase indexes the sequence exactly as §S10's does for distance
+    /// fields, wrapping, so a scalar sweeping `0..N` returns to the first path.
+    /// The blend is geometry, so it is tessellated like any path whose numbers
+    /// changed: once per frame while the phase moves, and not at all once it
+    /// settles, because a settled phase produces the same numbers and the
+    /// mesh cache answers.
+    #[allow(clippy::too_many_arguments)]
+    fn push_morph_paths(
+        &mut self,
+        paths: &[FilledPath],
+        phase: f32,
+        canvas: crate::interp::intrinsics::Rect,
+        opacity: f32,
+        transform: byard_core::frame::Transform,
+        frame: &mut byard_core::frame::RenderFrame,
+    ) {
+        let Some((i0, i1, t)) = morph_indices(phase, paths.len()) else {
+            return;
+        };
+        let (a, b) = (&paths[i0], &paths[i1]);
+        if i0 == i1 || t <= 0.0 {
+            self.push_filled_path(a, canvas, opacity, transform, frame);
+            return;
+        }
+        match lerp_path_commands(&a.commands, &b.commands, t) {
+            Ok(commands) => {
+                let blended = FilledPath {
+                    commands,
+                    fill: mix_rgba_oklab(a.fill, b.fill, t),
+                    gradient: if t < 0.5 { a.gradient } else { b.gradient },
+                    even_odd: a.even_odd,
+                    alpha: a.alpha + (b.alpha - a.alpha) * t,
+                    span: a.span,
+                };
+                self.push_filled_path(&blended, canvas, opacity, transform, frame);
+            }
+            Err(index) => {
+                // The check pass refuses this for a body of literal paths; a
+                // `when` or a `for` can still bring two unlike paths together,
+                // and only here is it known which two. Reported once, and the
+                // nearer path drawn whole, so the error is what the author
+                // sees rather than a shape that stops moving.
+                if !self.errors.iter().any(|e| {
+                    matches!(e, CompileError::MorphPathMismatch { span, .. } if *span == b.span)
+                }) {
+                    let name = |c: Option<&PathCommand>| {
+                        c.map_or_else(|| "the end of the path".to_string(), |c| c.name().to_string())
+                    };
+                    self.errors.push(CompileError::MorphPathMismatch {
+                        span: b.span,
+                        member: i1,
+                        index,
+                        expected: name(a.commands.get(index)),
+                        found: name(b.commands.get(index)),
+                    });
+                }
+                let nearer = if t < 0.5 { a } else { b };
+                self.push_filled_path(nearer, canvas, opacity, transform, frame);
+            }
+        }
     }
 
     /// Evaluates a path body into absolute points (RFC-0037).
@@ -8712,7 +8850,10 @@ impl Interpreter {
                     // (RFC-0031 §S4) collects them into one group instead, and
                     // pushes its head once at the end.
                     let combine = self.resolve_group_mode(paint_attrs);
-                    let mut sink = combine.map(|_| ShapeGroupSink::default());
+                    let mut sink = combine.map(|(mode, _)| ShapeGroupSink {
+                        morph_paths: (mode == byard_core::frame::GROUP_MORPH).then(Vec::new),
+                        ..ShapeGroupSink::default()
+                    });
                     self.emit_canvas_items(
                         shapes,
                         canvas_rect,
@@ -8721,7 +8862,17 @@ impl Interpreter {
                         sink.as_mut(),
                         frame,
                     );
-                    if let (Some((mode, param)), Some(sink)) = (combine, sink) {
+                    if let (Some((mode, param)), Some(mut sink)) = (combine, sink) {
+                        if let Some(paths) = sink.morph_paths.take() {
+                            self.push_morph_paths(
+                                &paths,
+                                param,
+                                canvas_rect,
+                                opacity,
+                                inherited_transform,
+                                frame,
+                            );
+                        }
                         self.push_shape_group(
                             mode,
                             param,
@@ -14234,6 +14385,72 @@ fn color_from_channels(ch: [f32; 4]) -> i64 {
 fn mix_hex_oklab(a: i64, b: i64, t: f32) -> i64 {
     let (from, to) = (color_channels(a), color_channels(b));
     color_from_channels(std::array::from_fn(|i| from[i] + (to[i] - from[i]) * t))
+}
+
+/// Mixes two linear RGBA colours in OKLab at factor `t`, alpha linearly, so
+/// a path morph blends its fill the way every other colour animation does
+/// (RFC-0031 §S10).
+fn mix_rgba_oklab(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let hex = |c: [f32; 4]| -> i64 {
+        let byte = |v: f32| i64::from((linear_to_srgb(v.clamp(0.0, 1.0)) * 255.0).round() as u8);
+        (byte(c[0]) << 16) | (byte(c[1]) << 8) | byte(c[2])
+    };
+    let (la, lb) = (oklab_from_hex(hex(a)), oklab_from_hex(hex(b)));
+    let rgb = super::intrinsics::color_to_rgba(
+        hex_from_oklab(std::array::from_fn(|i| la[i] + (lb[i] - la[i]) * t)),
+        false,
+    );
+    [rgb[0], rgb[1], rgb[2], a[3] + (b[3] - a[3]) * t]
+}
+
+/// The two members a morph phase falls between and the blend factor, for a
+/// sequence of `count` (RFC-0031 §S10): the phase wraps, so negative and
+/// past-the-end values index the sequence cyclically.
+fn morph_indices(phase: f32, count: usize) -> Option<(usize, usize, f32)> {
+    if count == 0 || !phase.is_finite() {
+        return None;
+    }
+    #[allow(clippy::cast_precision_loss)]
+    let n = count as f32;
+    let ph = phase.rem_euclid(n);
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let i0 = (ph.floor() as usize).min(count - 1);
+    #[allow(clippy::cast_precision_loss)]
+    let t = (ph - i0 as f32).clamp(0.0, 1.0);
+    Some((i0, (i0 + 1) % count, t))
+}
+
+/// Two paths blended command by command at factor `t`; `Err` carries the
+/// index of the first command that is not the same kind in both (or where
+/// one path ends before the other).
+#[allow(clippy::many_single_char_names)] // points of the two paths: p/q, c/d
+fn lerp_path_commands(
+    from: &[PathCommand],
+    to: &[PathCommand],
+    t: f32,
+) -> Result<Vec<PathCommand>, usize> {
+    let mix = |p: [f32; 2], q: [f32; 2]| [p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t];
+    let mut out = Vec::with_capacity(from.len());
+    for (i, pair) in from.iter().zip(to).enumerate() {
+        out.push(match (*pair.0, *pair.1) {
+            (PathCommand::Move(p), PathCommand::Move(q)) => PathCommand::Move(mix(p, q)),
+            (PathCommand::Line(p), PathCommand::Line(q)) => PathCommand::Line(mix(p, q)),
+            (PathCommand::Quad(c, p), PathCommand::Quad(d, q)) => {
+                PathCommand::Quad(mix(c, d), mix(p, q))
+            }
+            (PathCommand::Cubic(c1, c2, p), PathCommand::Cubic(d1, d2, q)) => {
+                PathCommand::Cubic(mix(c1, d1), mix(c2, d2), mix(p, q))
+            }
+            (PathCommand::Close, PathCommand::Close) => PathCommand::Close,
+            _ => return Err(i),
+        });
+    }
+    if from.len() == to.len() {
+        Ok(out)
+    } else {
+        Err(from.len().min(to.len()))
+    }
 }
 
 /// sRGB gamma → linear (per channel).

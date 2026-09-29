@@ -35,7 +35,7 @@ View Main() {
         Text("the second field is inside a ScrollView") #[color: 0x8A90A0, size: 13]
         ScrollView #[width: 440, height: 120, offset: (0, scroll), bg: 0x1C1F27] {
             Column #[gap: 12, p: 10] {
-                Box #[height: 60] {}
+                Box #[height: 40] {}
                 TextField #[bind: note, placeholder: "A note", bg: 0x1F222B,
                             width: 400, height: 44, size: 18]
                 Box #[height: 160] {}

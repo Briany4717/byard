@@ -435,12 +435,15 @@ impl ByldRuntime {
         let now = u32::try_from(self.start.elapsed().as_millis()).unwrap_or(u32::MAX);
         self.flash
             .trigger(now, kind == ReloadKind::StructureIncompatible);
-        // The rendered root is the first tracked view. Editing any view it
-        // transitively instantiates must re-derive its tree, so compute the
-        // affected set (changed views ∪ transitive callers, RFC-0007 §5) and
-        // re-lower only when the root is in it, siblings unrelated to the root
-        // keep their state.
-        if let (Some(old_root), Some(new_root)) = (self.current_views.first(), new_views.first()) {
+        // The rendered root is `Main`, or the first view when there is none
+        // (`root_view`). Editing any view it transitively instantiates must
+        // re-derive its tree, so compute the affected set (changed views ∪
+        // transitive callers, RFC-0007 §5) and re-lower only when the root is
+        // in it, siblings unrelated to the root keep their state.
+        if let (Some(old_root), Some(new_root)) = (
+            byard_compiler::parser::ast::root_view(&self.current_views),
+            byard_compiler::parser::ast::root_view(new_views),
+        ) {
             let affected =
                 byard_compiler::interp::reload::affected_views(&self.current_views, new_views);
             let diff_kind = byard_compiler::interp::reload::diff_view(old_root, new_root);
@@ -1206,7 +1209,7 @@ impl PlatformHost for App {
                 interp.set_theme(initial_theme);
                 interp.load_views(&initial_views);
                 let known: Vec<&str> = initial_views.iter().map(|v| v.name.as_str()).collect();
-                let tree = interp.lower_view(&initial_views[0], &known);
+                let tree = interp.lower_view(root_of(&initial_views), &known);
                 interp.tick();
                 (interp, tree, initial_views)
             };
@@ -1554,6 +1557,14 @@ fn perf_warning_text(warning: &byard_compiler::interp::eval::PerfWarning) -> Str
              `{controller}` is provided; register it with `App::provide` (RFC-0039)"
         ),
     }
+}
+
+/// The view the runner renders (`root_view`). The caller has already handled
+/// a program with no views, so there is always one.
+fn root_of(
+    views: &[byard_compiler::parser::ast::ViewDecl],
+) -> &byard_compiler::parser::ast::ViewDecl {
+    byard_compiler::parser::ast::root_view(views).expect("the empty program is handled first")
 }
 
 #[cfg(test)]

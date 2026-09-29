@@ -231,6 +231,20 @@ pub(crate) struct ShapeGroupSink {
     morph_paths: Option<Vec<FilledPath>>,
 }
 
+/// An IME composition (RFC-0040 §1): the preedit, drawn at the caret of the
+/// field that owns it, and never part of that field's value.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Composition {
+    /// The element the composition belongs to. Kept after focus leaves it,
+    /// with the preedit cleared, so a platform that commits on blur still
+    /// commits into the right field (§6).
+    owner: u32,
+    /// The text being composed; empty once cleared.
+    text: String,
+    /// The IME's cursor inside `text`, as a byte range; `None` hides it.
+    cursor: Option<(usize, usize)>,
+}
+
 /// A body path's evaluated geometry and paint, before tessellation
 /// (RFC-0037), which is also one member of a path morph (RFC-0031 §S11).
 #[derive(Clone, Debug)]
@@ -1771,6 +1785,11 @@ pub struct Interpreter {
     /// re-evaluated every tick, and the mesh is rebuilt only when the numbers
     /// they produced actually changed.
     path_meshes: std::collections::HashMap<u64, CachedMesh>,
+    /// The IME composition in progress, if any (RFC-0040 §2).
+    ///
+    /// Engine state, not app state: it has no name in byld and never touches
+    /// a `var`. There is at most one, because there is at most one focus.
+    composition: Option<Composition>,
     /// How many meshes have been tessellated this session, the measurement
     /// behind the caching claim (INV-19).
     tessellations: u64,
@@ -9436,7 +9455,16 @@ impl Interpreter {
             })
             .unwrap_or_default();
 
-        let (display_text, is_placeholder) = if cur_text.is_empty() {
+        let is_focused = elem_idx.is_some_and(|i| self.router.is_focused(i));
+        // RFC-0040: the preedit this field owns, drawn after the value (the
+        // caret is at the end, §8) and never part of it.
+        let preedit = self
+            .composition
+            .as_ref()
+            .filter(|c| is_focused && elem_idx == Some(c.owner) && !c.text.is_empty())
+            .map(|c| (c.text.clone(), c.cursor));
+
+        let (display_text, is_placeholder) = if cur_text.is_empty() && preedit.is_none() {
             (placeholder, true)
         } else {
             (cur_text, false)
@@ -9448,7 +9476,6 @@ impl Interpreter {
             0x00ff_ffff_i64
         };
         let font_size = self.eval_int_prop(attrs, "size").unwrap_or(16) as f32;
-        let is_focused = elem_idx.is_some_and(|i| self.router.is_focused(i));
 
         // Focus underline (Material-style): a thin accent bar along the bottom
         // edge when the field holds focus.
@@ -9492,20 +9519,87 @@ impl Interpreter {
             });
         }
 
-        // Caret at the end of the entered text while focused (M17/M19).
+        // Caret at the end of the entered text while focused (M17/M19), or
+        // at the IME's cursor inside the preedit while composing (RFC-0040).
         if is_focused {
-            let measured = if is_placeholder {
+            let measured = if is_placeholder || display_text.is_empty() {
                 0.0
             } else {
                 self.measure_text_wrapped(&display_text, font_size, None, weight, family.as_deref())
                     .0
             };
-            frame.push_instance(byard_core::BoxInstance {
-                rect: [text_x + measured + 1.0, text_y, 1.5, font_size],
-                color: dim_alpha([1.0, 1.0, 1.0, 1.0], opacity),
-                radii: [0.0; 4],
-                transform,
-                smooth: 0.0,
+            let mut caret_x = text_x + measured + 1.0;
+            if let Some((text, cursor)) = &preedit {
+                let color = dim_alpha(super::intrinsics::color_to_rgba(text_color, false), opacity);
+                let start = text_x + measured;
+                let mut width_of = |upto: usize| -> f32 {
+                    let end = floor_char_boundary(text, upto);
+                    if end == 0 {
+                        0.0
+                    } else {
+                        self.measure_text_wrapped(
+                            &text[..end],
+                            font_size,
+                            None,
+                            weight,
+                            family.as_deref(),
+                        )
+                        .0
+                    }
+                };
+                let full = width_of(text.len());
+                let range = cursor.map(|(b, e)| (width_of(b), width_of(e)));
+                frame.push_text(byard_core::TextLine {
+                    weight,
+                    family: family.clone(),
+                    x: start,
+                    y: text_y,
+                    text: text.clone(),
+                    font_size,
+                    color,
+                    dirty: true,
+                });
+                // §5: the whole preedit thinly underlined, the IME's cursor
+                // range, the active clause on IMEs that use it, thickly.
+                let underline_y = text_y + font_size + 1.0;
+                let mut bar = |x: f32, w: f32, h: f32| {
+                    frame.push_instance(byard_core::BoxInstance {
+                        rect: [x, underline_y, w, h],
+                        color,
+                        radii: [0.0; 4],
+                        transform,
+                        smooth: 0.0,
+                    });
+                };
+                bar(start, full, 1.0);
+                if let Some((b, e)) = range.filter(|(b, e)| e > b) {
+                    bar(start + b, e - b, 2.0);
+                }
+                caret_x = start + range.map_or(full, |(_, e)| e) + 1.0;
+            }
+            // `None` from the IME hides its cursor; the caret rectangle is
+            // still reported, since the candidate window needs a place.
+            let caret_visible = preedit.as_ref().is_none_or(|(_, c)| c.is_some());
+            if caret_visible {
+                frame.push_instance(byard_core::BoxInstance {
+                    rect: [caret_x, text_y, 1.5, font_size],
+                    color: dim_alpha([1.0, 1.0, 1.0, 1.0], opacity),
+                    radii: [0.0; 4],
+                    transform,
+                    smooth: 0.0,
+                });
+            }
+            // RFC-0040 §4: where the platform puts its candidate window, in
+            // viewport space, so through the field's transform.
+            let a = transform.apply_point([caret_x, text_y]);
+            let b = transform.apply_point([caret_x + 1.5, text_y + font_size]);
+            frame.set_text_input(byard_core::frame::TextInputState {
+                caret: byard_core::frame::Rect::new(
+                    a[0].min(b[0]),
+                    a[1].min(b[1]),
+                    (b[0] - a[0]).abs(),
+                    (b[1] - a[1]).abs(),
+                ),
             });
         }
 
@@ -9537,9 +9631,16 @@ impl Interpreter {
                                 Value::Str(s) => s,
                                 _ => String::new(),
                             };
-                            let mut s = cur;
-                            s.pop();
-                            ctx.write_signal(sig, Value::Str(s));
+                            // RFC-0040 §7: one press, one grapheme cluster. A
+                            // decomposed accent, an emoji with a modifier and a
+                            // flag each go whole.
+                            let keep = unicode_segmentation::UnicodeSegmentation::grapheme_indices(
+                                cur.as_str(),
+                                true,
+                            )
+                            .next_back()
+                            .map_or(0, |(i, _)| i);
+                            ctx.write_signal(sig, Value::Str(cur[..keep].to_string()));
                         }
                         "Delete" => {
                             ctx.write_signal(sig, Value::Str(String::new()));
@@ -9620,6 +9721,94 @@ impl Interpreter {
             }
         }
         self.drain_calls();
+    }
+
+    /// Applies this tick's IME events to the composition, and marks them, and
+    /// any editing key the IME owns, as consumed (RFC-0040 §3, §6).
+    ///
+    /// - A preedit belongs to the focused field and replaces the last one; an
+    ///   empty preedit clears the text but keeps the owner, because winit
+    ///   sends one right before every commit.
+    /// - A commit goes to the owner, which is not always the focused field,
+    ///   through the same `TextInput` handler typing uses: committed text and
+    ///   typed text are the same thing once they reach the field.
+    /// - The IME turning off ends the composition, with nothing committed.
+    /// - Backspace, Delete and Enter are the IME's while a preedit is showing,
+    ///   so they never also edit the committed value.
+    fn apply_composition(&mut self, events: &[byard_core::InputEvent], consumed: &mut [bool]) {
+        use byard_core::platform::{EventKind as CoreKind, InputPayload};
+        for (i, ev) in events.iter().enumerate() {
+            match ev.kind {
+                CoreKind::Composition => {
+                    consumed[i] = true;
+                    let Some(InputPayload::Preedit { text, cursor }) = &ev.payload else {
+                        continue;
+                    };
+                    if text.is_empty() {
+                        if let Some(c) = self.composition.as_mut() {
+                            c.text.clear();
+                            c.cursor = None;
+                        }
+                    } else if let Some(owner) = self.router.focused() {
+                        self.composition = Some(Composition {
+                            owner,
+                            text: text.clone(),
+                            cursor: *cursor,
+                        });
+                    }
+                }
+                CoreKind::CompositionCommit => {
+                    consumed[i] = true;
+                    let target = self
+                        .composition
+                        .take()
+                        .map(|c| c.owner)
+                        .or_else(|| self.router.focused());
+                    if let (Some(target), Some(InputPayload::Key(text))) = (target, &ev.payload) {
+                        self.router.fire_event(
+                            &mut self.ctx,
+                            target,
+                            super::events::EventKind::TextInput,
+                            Some(&Value::Str(text.clone())),
+                        );
+                    }
+                }
+                CoreKind::CompositionEnd => {
+                    consumed[i] = true;
+                    self.composition = None;
+                }
+                CoreKind::KeyDown | CoreKind::KeyUp if self.composing() => {
+                    if let Some(InputPayload::Key(key)) = &ev.payload {
+                        if matches!(key.as_str(), "Backspace" | "Delete" | "Enter") {
+                            consumed[i] = true;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Whether a preedit is showing in the focused field.
+    fn composing(&self) -> bool {
+        self.composition
+            .as_ref()
+            .is_some_and(|c| !c.text.is_empty() && self.router.is_focused(c.owner))
+    }
+
+    /// Discards the preedit of a field that has lost focus (RFC-0040 §6).
+    ///
+    /// The engine never commits it: it does not know the IME's conversion
+    /// state, and a platform that commits on blur would then insert the text
+    /// twice. The owner is kept so that platform's commit still lands in the
+    /// field the text was typed into.
+    fn drop_unfocused_preedit(&mut self) {
+        if let Some(c) = self.composition.as_mut() {
+            if !self.router.is_focused(c.owner) {
+                c.text.clear();
+                c.cursor = None;
+            }
+        }
     }
 
     /// Offers each event to the native views under the pointer, innermost
@@ -13511,7 +13700,10 @@ impl Interpreter {
         // handles one stops it there, which is the rule an intrinsic's handler
         // follows; a view that declines is invisible to the rest of routing,
         // which is the rule an element with no listener follows (RFC-0003).
-        let consumed = self.dispatch_to_native_views(events);
+        let mut consumed = self.dispatch_to_native_views(events);
+        // RFC-0040: composition is engine state, applied here rather than
+        // routed to an app handler, and never offered to anything else.
+        self.apply_composition(events, &mut consumed);
 
         let comp_events: Vec<CompEvent> = events
             .iter()
@@ -13535,12 +13727,20 @@ impl Interpreter {
                     CoreKind::LongPress => CompKind::LongPress,
                     CoreKind::DoubleTap => CompKind::DoubleTap,
                     CoreKind::Secondary => CompKind::Secondary,
+                    // Consumed by `apply_composition` above, never routed.
+                    CoreKind::Composition
+                    | CoreKind::CompositionCommit
+                    | CoreKind::CompositionEnd => {
+                        unreachable!("composition events are consumed before routing")
+                    }
                 };
                 let value = ev.payload.as_ref().map(|p| match p {
                     InputPayload::Str(s) => Value::Str(s.clone()),
                     InputPayload::Bool(b) => Value::Bool(*b),
                     InputPayload::Float(f) => Value::Float(f64::from(*f)),
                     InputPayload::Key(k) => Value::Str(k.clone()),
+                    // Only a `Composition` carries one, and those are consumed.
+                    InputPayload::Preedit { text, .. } => Value::Str(text.clone()),
                 });
                 CompEvent {
                     kind,
@@ -13713,6 +13913,8 @@ impl Interpreter {
 
         self.router
             .dispatch_tick(&mut self.ctx, Some(&self.atlas), comp_events);
+        // RFC-0040 §6: routing may have moved focus away from a composition.
+        self.drop_unfocused_preedit();
     }
 }
 
@@ -14385,6 +14587,16 @@ fn color_from_channels(ch: [f32; 4]) -> i64 {
 fn mix_hex_oklab(a: i64, b: i64, t: f32) -> i64 {
     let (from, to) = (color_channels(a), color_channels(b));
     color_from_channels(std::array::from_fn(|i| from[i] + (to[i] - from[i]) * t))
+}
+
+/// The largest char boundary in `s` at or before `i`, so an IME's byte
+/// offset that lands inside a character (or past the end) still slices.
+fn floor_char_boundary(s: &str, i: usize) -> usize {
+    let mut i = i.min(s.len());
+    while !s.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
 }
 
 /// Mixes two linear RGBA colours in OKLab at factor `t`, alpha linearly, so

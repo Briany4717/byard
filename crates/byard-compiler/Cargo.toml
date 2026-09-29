@@ -20,6 +20,9 @@ usvg = { version = "0.45", default-features = false }
 # Rust ecosystem's tessellator and runs happily off the paint path, which is
 # the whole reason the RFC chose CPU tessellation over a compute shader.
 lyon_tessellation = "1"
+# RFC-0040 §7: Backspace removes a grapheme cluster, not a code point. Already
+# in the tree through the text stack, so this adds no new crate.
+unicode-segmentation = "1"
 
 
 [features]

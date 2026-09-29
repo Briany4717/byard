@@ -530,6 +530,12 @@ impl EventRouter {
         self.focused == Some(elem)
     }
 
+    /// The element that has keyboard focus, if any.
+    #[must_use]
+    pub const fn focused(&self) -> Option<u32> {
+        self.focused
+    }
+
     /// Sets the initially-focused element and its `var`.
     pub fn set_focus(&mut self, ctx: &mut ReactiveCtx, elem: u32) {
         self.steal_focus(ctx, Some(elem));

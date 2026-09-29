@@ -316,6 +316,7 @@ dependencies = [
  "notify",
  "proptest",
  "smallvec",
+ "unicode-segmentation",
  "usvg",
 ]
 

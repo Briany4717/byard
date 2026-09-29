@@ -2476,17 +2476,31 @@ impl Interpreter {
 
     /// The family named by the `typo:` token an element carries, if any.
     fn typo_family(&mut self, attrs: &[Attr]) -> Option<String> {
+        let token = self.typo_token_name(attrs)?;
+        self.theme.typo(&token)?.family.clone()
+    }
+
+    /// The theme typography token a `typo:` names, in either spelling: bare
+    /// (`typo: headline`) or through the injected theme (`typo: t.headline`).
+    ///
+    /// Both have to come here, because the accessor *evaluates* to the token's
+    /// size, and a size carries neither family nor weight. Reading only the
+    /// bare spelling dropped both on the spelling everyone writes.
+    fn typo_token_name(&self, attrs: &[Attr]) -> Option<String> {
         let value = attrs.iter().find_map(|a| match (&a.name, &a.kind) {
-            (n, AttrKind::Prop { value }) if n.as_str() == "typo" => Some(value.clone()),
+            (n, AttrKind::Prop { value }) if n.as_str() == "typo" => Some(value),
             _ => None,
         })?;
-        // A bare token reads as an identifier; a theme accessor has already
-        // resolved to a size and carries no family with it, which is the same
-        // gap the token's weight had.
-        if let Expr::Ident(sym, _) = &value {
-            return self.theme.typo(sym.as_str())?.family.clone();
+        match value {
+            Expr::Ident(sym, _) => Some(sym.as_str().to_string()),
+            Expr::Member { base, field, .. } => match base.as_ref() {
+                Expr::Ident(name, _) if matches!(self.env.lookup(name), Some(Value::Theme(_))) => {
+                    Some(field.as_str().to_string())
+                }
+                _ => None,
+            },
+            _ => None,
         }
-        None
     }
 
     /// The family the theme's `body` token names, if it names one.
@@ -10208,17 +10222,8 @@ impl Interpreter {
     /// The weight of the `typo:` token an element names, if it names one
     /// (RFC-0034).
     fn typo_weight(&mut self, attrs: &[Attr]) -> Option<u16> {
-        let value = attrs.iter().find_map(|a| match (&a.name, &a.kind) {
-            (n, AttrKind::Prop { value }) if n.as_str() == "typo" => Some(value.clone()),
-            _ => None,
-        })?;
-        // A bare token reads as an identifier; a theme accessor has already
-        // resolved to a size and carries no weight with it, which is exactly
-        // the gap this closes.
-        if let Expr::Ident(sym, _) = &value {
-            return self.theme.typo_weight(sym.as_str());
-        }
-        None
+        let token = self.typo_token_name(attrs)?;
+        self.theme.typo_weight(&token)
     }
 
     fn eval_typo_size(&mut self, attrs: &[Attr]) -> Option<i64> {

@@ -41,3 +41,8 @@ pedantic = { level = "warn", priority = -1 }
 # Allow these pedantic lints that are too noisy for a young codebase:
 module_name_repetitions = "allow"
 missing_errors_doc      = "allow"
+
+# A one-line fix to swash 0.2.9's variation coordinates, which leaked from
+# one font to the next. See third_party/swash/BYARD.md.
+[patch.crates-io]
+swash = { path = "third_party/swash" }

@@ -19,6 +19,8 @@ wgpu = "29.0"
 winit = "0.30"
 
 [dev-dependencies]
+# The one device every GPU test in a process shares, one test at a time.
+byard-test-gpu = { path = "../byard-test-gpu" }
 # Visual verification example (examples/hello_world.rs).
 # Minimal async executor for blocking on `Engine::init` inside `on_resume`.
 pollster = "0.3"

@@ -87,6 +87,33 @@ enum Command {
     },
     /// Fetch dependencies and write byard.lock (the only lock writer).
     Get,
+    /// Render the project to a PNG, headlessly (no window).
+    Shot {
+        /// The project directory, `byard.toml` or `.byd`. Defaults to the
+        /// current project.
+        path: Option<PathBuf>,
+        /// Where to write the PNG.
+        #[arg(short, long, value_name = "PNG", default_value = "shot.png")]
+        out: PathBuf,
+        /// Logical size, `WIDTHxHEIGHT`.
+        #[arg(long, default_value = "440x880", value_parser = parse_size)]
+        size: (u32, u32),
+        /// Device pixels per logical pixel.
+        #[arg(long, default_value_t = 2.0)]
+        scale: f32,
+        /// Milliseconds of app time to run first, so animations settle.
+        #[arg(long, value_name = "MS", default_value_t = 1500)]
+        at: u32,
+        /// Force the dark scheme.
+        #[arg(long, conflicts_with = "light")]
+        dark: bool,
+        /// Force the light scheme.
+        #[arg(long)]
+        light: bool,
+        /// Tap a logical point before the picture, `X,Y`; repeatable.
+        #[arg(long, value_name = "X,Y", value_parser = parse_point)]
+        tap: Vec<(f32, f32)>,
+    },
     /// Publish the package in this directory to a registry (RFC-0008).
     Publish {
         /// The package directory. Defaults to the current directory.
@@ -100,6 +127,34 @@ enum Command {
         /// Path to a `.byd` file or project dir. Defaults to `byard.toml`.
         file: Option<PathBuf>,
     },
+}
+
+/// `WIDTHxHEIGHT`, for `byard shot --size`.
+fn parse_size(s: &str) -> Result<(u32, u32), String> {
+    let (w, h) = s
+        .split_once('x')
+        .ok_or("expected WIDTHxHEIGHT, like 440x880")?;
+    Ok((
+        w.trim()
+            .parse()
+            .map_err(|_| format!("`{w}` is not a width"))?,
+        h.trim()
+            .parse()
+            .map_err(|_| format!("`{h}` is not a height"))?,
+    ))
+}
+
+/// `X,Y`, for `byard shot --tap`.
+fn parse_point(s: &str) -> Result<(f32, f32), String> {
+    let (x, y) = s.split_once(',').ok_or("expected X,Y, like 120,840")?;
+    Ok((
+        x.trim()
+            .parse()
+            .map_err(|_| format!("`{x}` is not a number"))?,
+        y.trim()
+            .parse()
+            .map_err(|_| format!("`{y}` is not a number"))?,
+    ))
 }
 
 fn main() {
@@ -134,6 +189,30 @@ fn main() {
             rev: rev.as_deref(),
         }),
         Command::Get => commands::get::run(),
+        Command::Shot {
+            path,
+            out,
+            size,
+            scale,
+            at,
+            dark,
+            light,
+            tap,
+        } => commands::shot::run(&commands::shot::ShotArgs {
+            path: path.as_deref(),
+            out: &out,
+            size,
+            scale,
+            at_ms: at,
+            dark: if dark {
+                Some(true)
+            } else if light {
+                Some(false)
+            } else {
+                None
+            },
+            taps: &tap,
+        }),
         Command::Publish { package, registry } => {
             commands::publish::run(&commands::publish::PublishArgs {
                 package: package.as_deref(),

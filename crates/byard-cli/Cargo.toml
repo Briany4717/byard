@@ -24,6 +24,8 @@ sha2           = "0.10"
 pollster       = "0.3"
 wgpu           = "29.0"
 crossbeam-channel = "0.5"
+# `byard shot` writes PNGs. Already in the tree through the image stack.
+image = { version = "0.25", default-features = false, features = ["png"] }
 # RFC-0008 D-H: package archives are gzip-compressed. Already in the tree
 # (through the image stack), so this adds no new crate.
 flate2 = "1"

@@ -1,6 +1,6 @@
 # RFC-0016: Style System, styles as first-class values (Hybrid D+B+C)
 
-- **Status:** Active, partially implemented (M38 first-class `Style` values + `..` spread, M39 recipes/variants + `merge`, M40 `on <state> {}` blocks landed). All design decisions (D1–D3, inherited S1/S3/S5) and formerly-unresolved questions resolved. **Responsive variants and animated token transitions landed 2026-09-24.** Nothing in this RFC's deferred list remains unbuilt except the platform axis, noted below as deliberately not built.
+- **Status:** Active, implemented, except the platform axis, which is deliberately not built (below). First-class `Style` values with `..` spread, recipes and variants with `merge`, and `on <state> {}` blocks landed first. All design decisions (D1 to D3, inherited S1/S3/S5) and formerly-unresolved questions resolved. **Responsive variants and animated token transitions landed 2026-09-24.** Nothing in this RFC's deferred list remains unbuilt except the platform axis, noted below as deliberately not built.
 
   **Responsive variants, as built.** A style carries `on width >= md { … }` (and `on width < md`, and the `height` forms) beside its `on hover { … }`, where `md` is a breakpoint the project declares:
 

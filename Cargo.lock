@@ -295,6 +295,7 @@ dependencies = [
  "byard-platform",
  "clap",
  "crossbeam-channel",
+ "flate2",
  "pollster 0.3.0",
  "serde_json",
  "sha2",

@@ -7,6 +7,7 @@
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
+mod archive;
 mod capabilities;
 mod commands;
 mod deps;
@@ -88,6 +89,14 @@ enum Command {
     },
     /// Fetch dependencies and write byard.lock (the only lock writer).
     Get,
+    /// Publish the package in this directory to a registry (RFC-0008).
+    Publish {
+        /// The package directory. Defaults to the current directory.
+        package: Option<PathBuf>,
+        /// The registry directory. Defaults to `BYARD_REGISTRY`.
+        #[arg(long, value_name = "DIR")]
+        registry: Option<PathBuf>,
+    },
     /// Remove generated artifacts and caches under `.byard/` (RFC-0009 §5).
     Clean {
         /// Path to a `.byd` file or project dir. Defaults to `byard.toml`.
@@ -127,6 +136,12 @@ fn main() {
             rev: rev.as_deref(),
         }),
         Command::Get => commands::get::run(),
+        Command::Publish { package, registry } => {
+            commands::publish::run(&commands::publish::PublishArgs {
+                package: package.as_deref(),
+                registry: registry.as_deref(),
+            })
+        }
     };
     if let Err(e) = result {
         // An empty message is a silent failure sentinel (e.g. `check` already

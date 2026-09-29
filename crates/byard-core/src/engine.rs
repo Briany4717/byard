@@ -631,6 +631,14 @@ impl Engine {
         Ok(())
     }
 
+    /// The caret of the focused text field in the latest published frame,
+    /// in viewport space (RFC-0040 §4). The platform reads it after each
+    /// redraw to place the IME's candidate window.
+    #[must_use]
+    pub fn text_input(&self) -> Option<crate::frame::TextInputState> {
+        self.relay.current().and_then(|f| f.text_input())
+    }
+
     /// Renders the latest [`RenderFrame`](crate::frame::RenderFrame) published
     /// by the logic thread to the window surface.
     ///

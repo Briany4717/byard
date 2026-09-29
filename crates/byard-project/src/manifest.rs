@@ -102,9 +102,11 @@ impl Default for DevConfig {
 
 /// Parsed project manifest (or a synthetic one for bare-file usage).
 pub struct Manifest {
+    /// The directory holding `byard.toml` (or the bare entry's directory).
     pub project_root: PathBuf,
     /// Absolute path to the `.byd` entry file.
     pub entry: PathBuf,
+    /// `[project] name`, or the directory's name when there is none.
     pub name: String,
     /// Declared dependencies (RFC-0008 Pillar C). Empty for bare-file usage.
     pub dependencies: Vec<Dependency>,
@@ -620,6 +622,7 @@ fn load_fonts(
 
 /// Whether a declared asset path stays inside the directory it is relative
 /// to: relative, and never climbing out with `..`.
+#[must_use]
 pub fn is_inside_package(path: &str) -> bool {
     let p = Path::new(path);
     !p.is_absolute()
@@ -920,7 +923,7 @@ mod tests {
     /// Font paths in these tests resolve against it, so they exercise the real
     /// files rather than a fixture nothing ships.
     fn examples_root() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples")
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../byard-cli/examples")
     }
 
     /// A package's theme, extended by a consumer (RFC-0008 pillar D): its

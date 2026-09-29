@@ -23,6 +23,9 @@ sha2           = "0.10"
 pollster       = "0.3"
 wgpu           = "29.0"
 crossbeam-channel = "0.5"
+# RFC-0008 D-H: package archives are gzip-compressed. Already in the tree
+# (through the image stack), so this adds no new crate.
+flate2 = "1"
 
 # Test-only, and only to *parse* what `trace.rs` writes. Hand-rolling a JSON
 # reader to validate a JSON writer is the classic version of this mistake: the

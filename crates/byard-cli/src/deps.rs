@@ -52,11 +52,22 @@ pub fn git_cache_path(name: &str, url: &str, reference: &GitRef) -> PathBuf {
 /// Content-hashes a package directory: every `.byd` file plus `byard.toml`,
 /// in sorted relative-path order (path, NUL, length, bytes). Deterministic
 /// across machines, the lockfile pin.
+///
+/// A package that declares assets (`[assets.fonts]`, RFC-0008 pillar D) has
+/// those files hashed too, under their declared paths, so a swapped font is a
+/// checksum mismatch like a swapped source file. A package that declares none
+/// hashes exactly as it did before assets existed, which is what keeps every
+/// lockfile written until then valid.
 pub fn package_checksum(root: &Path) -> Result<String, String> {
     let mut files = collect_byd_files(root)?;
     let manifest = root.join("byard.toml");
     if manifest.exists() {
         files.push(("byard.toml".to_string(), manifest));
+    }
+    for (rel, path) in declared_assets(root)? {
+        if !files.iter().any(|(r, _)| *r == rel) {
+            files.push((rel, path));
+        }
     }
     files.sort_by(|a, b| a.0.cmp(&b.0));
 
@@ -70,6 +81,83 @@ pub fn package_checksum(root: &Path) -> Result<String, String> {
     }
     let digest = hasher.finalize();
     Ok(format!("sha256:{}", hex_encode(&digest)))
+}
+
+/// The asset files a package's manifest declares, as `(normalised relative
+/// path, absolute path)`. Only fonts are declared by path today.
+pub fn declared_assets(root: &Path) -> Result<Vec<(String, PathBuf)>, String> {
+    let manifest = root.join("byard.toml");
+    if !manifest.exists() {
+        return Ok(Vec::new());
+    }
+    let src =
+        std::fs::read_to_string(&manifest).map_err(|e| format!("{}: {e}", manifest.display()))?;
+    let table: toml::Table = src
+        .parse()
+        .map_err(|e: toml::de::Error| format!("{}: {e}", manifest.display()))?;
+    let Some(fonts) = table
+        .get("assets")
+        .and_then(|a| a.get("fonts"))
+        .and_then(toml::Value::as_table)
+    else {
+        return Ok(Vec::new());
+    };
+    let mut out = Vec::new();
+    for (family, path) in fonts {
+        let Some(path) = path.as_str() else {
+            return Err(format!(
+                "{}: [assets.fonts] `{family}` must be a string path",
+                manifest.display()
+            ));
+        };
+        if !crate::manifest::is_inside_package(path) {
+            return Err(format!(
+                "{}: [assets.fonts] `{family}` = {path:?} is outside the package",
+                manifest.display()
+            ));
+        }
+        let rel = path.trim_start_matches("./").replace('\\', "/");
+        out.push((rel, root.join(path)));
+    }
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out.dedup_by(|a, b| a.0 == b.0);
+    Ok(out)
+}
+
+/// Every file a published package carries, as `(relative path, absolute
+/// path)`: its manifest, its sources, its declared assets, and a README and
+/// licence when present. Exactly what [`package_checksum`] covers, plus the
+/// documentation, which is shipped but not pinned.
+pub fn publishable_files(root: &Path) -> Result<Vec<(String, PathBuf)>, String> {
+    let mut files = collect_byd_files(root)?;
+    files.push(("byard.toml".to_string(), root.join("byard.toml")));
+    files.extend(declared_assets(root)?);
+    let mut entries: Vec<PathBuf> = std::fs::read_dir(root)
+        .map_err(|e| format!("{}: {e}", root.display()))?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .collect();
+    entries.sort();
+    for path in entries {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let upper = name.to_ascii_uppercase();
+        if path.is_file() && (upper.starts_with("README") || upper.starts_with("LICENSE")) {
+            files.push((name, path));
+        }
+    }
+    files.sort_by(|a, b| a.0.cmp(&b.0));
+    files.dedup_by(|a, b| a.0 == b.0);
+    for (rel, path) in &files {
+        if !path.is_file() {
+            return Err(format!(
+                "`{rel}` is declared but `{}` does not exist",
+                path.display()
+            ));
+        }
+    }
+    Ok(files)
 }
 
 /// Collects `(relative path, absolute path)` for every `.byd` under `root`
@@ -222,6 +310,9 @@ pub fn source_string(dep: &Dependency) -> String {
             GitRef::Rev(r) => format!("git+{url}#rev={r}"),
             GitRef::Tag(t) => format!("git+{url}#tag={t}"),
         },
+        DepSource::Registry { registry, version } => {
+            format!("registry+{}#{}@{version}", registry.display(), dep.name)
+        }
     }
 }
 
@@ -245,6 +336,20 @@ pub fn dep_root(declarer_root: &Path, dep: &Dependency) -> Result<PathBuf, Strin
                 ));
             }
             Ok(root)
+        }
+        DepSource::Registry { registry, version } => {
+            let root = registry_cache_path(&dep.name, &declarer_root.join(registry), version);
+            if root.is_dir() {
+                Ok(root)
+            } else {
+                Err(format!(
+                    "dependency `{}` ({}@{version} from `{}`) is not in the cache yet\n\
+                     hint: run `byard get` to fetch dependencies",
+                    dep.name,
+                    dep.name,
+                    registry.display()
+                ))
+            }
         }
         DepSource::Git { url, reference } => {
             let root = git_cache_path(&dep.name, url, reference);
@@ -311,6 +416,160 @@ pub fn fetch_git(url: &str, reference: &GitRef, dest: &Path) -> Result<String, S
         }
     }
     run(&["rev-parse", "HEAD"], Some(dest))
+}
+
+// ── Registry (D-H) ────────────────────────────────────────────────────────────
+
+/// The cache directory for one published package version. Keyed by the
+/// registry's location too, so the same name and version from two
+/// registries never share a directory.
+pub fn registry_cache_path(name: &str, registry: &Path, version: &str) -> PathBuf {
+    let mut hasher = Sha256::new();
+    hasher.update(registry.to_string_lossy().as_bytes());
+    let digest = hasher.finalize();
+    cache_dir()
+        .join("registry")
+        .join(format!("{name}-{version}-{}", hex_encode(&digest[..6])))
+}
+
+/// One published version in a registry's `index.toml`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IndexEntry {
+    pub name: String,
+    pub version: String,
+    /// [`package_checksum`] of the package: the value a lockfile pins, the
+    /// same whether the package arrived from git, a path or here.
+    pub checksum: String,
+    /// The archive, relative to the registry root.
+    pub archive: String,
+    /// `sha256:` of the archive bytes, checked before unpacking.
+    pub archive_sha256: String,
+}
+
+/// A registry's `index.toml`: every published version.
+#[derive(Clone, Debug, Default)]
+pub struct RegistryIndex {
+    pub entries: Vec<IndexEntry>,
+}
+
+impl RegistryIndex {
+    /// Reads `index.toml` under `registry`; an absent file is an empty index.
+    pub fn read(registry: &Path) -> Result<Self, String> {
+        let path = registry.join("index.toml");
+        if !path.exists() {
+            return Ok(Self::default());
+        }
+        let src = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let table: toml::Table = src
+            .parse()
+            .map_err(|e: toml::de::Error| format!("{}: {e}", path.display()))?;
+        let mut entries = Vec::new();
+        if let Some(toml::Value::Array(items)) = table.get("package") {
+            for item in items {
+                let get = |key: &str| {
+                    item.get(key)
+                        .and_then(toml::Value::as_str)
+                        .map(str::to_string)
+                        .ok_or_else(|| format!("{}: an entry is missing `{key}`", path.display()))
+                };
+                entries.push(IndexEntry {
+                    name: get("name")?,
+                    version: get("version")?,
+                    checksum: get("checksum")?,
+                    archive: get("archive")?,
+                    archive_sha256: get("archive_sha256")?,
+                });
+            }
+        }
+        Ok(Self { entries })
+    }
+
+    /// Writes `index.toml` under `registry`, sorted by name then version.
+    pub fn write(&self, registry: &Path) -> Result<(), String> {
+        let mut entries = self.entries.clone();
+        entries.sort_by(|a, b| (&a.name, &a.version).cmp(&(&b.name, &b.version)));
+        let mut out = String::from(
+            "# A Byard package registry (RFC-0008). Written by `byard publish`.\n\
+             version = 1\n",
+        );
+        for e in &entries {
+            let _ = writeln!(
+                out,
+                "\n[[package]]\nname = {:?}\nversion = {:?}\nchecksum = {:?}\narchive = {:?}\narchive_sha256 = {:?}",
+                e.name, e.version, e.checksum, e.archive, e.archive_sha256
+            );
+        }
+        let path = registry.join("index.toml");
+        std::fs::write(&path, out).map_err(|e| format!("{}: {e}", path.display()))
+    }
+
+    /// The entry for `name` at exactly `version`.
+    #[must_use]
+    pub fn get(&self, name: &str, version: &str) -> Option<&IndexEntry> {
+        self.entries
+            .iter()
+            .find(|e| e.name == name && e.version == version)
+    }
+}
+
+/// `sha256:<hex>` of some bytes.
+pub fn sha256_tag(bytes: &[u8]) -> String {
+    format!("sha256:{}", hex_encode(&Sha256::digest(bytes)))
+}
+
+/// Fetches a published version into the cache and returns its root,
+/// verifying the archive's hash before unpacking and the package's checksum
+/// after, both against the registry's index. Already cached is not refetched:
+/// a published version is immutable.
+pub fn fetch_registry(name: &str, registry: &Path, version: &str) -> Result<PathBuf, String> {
+    let dest = registry_cache_path(name, registry, version);
+    if dest.is_dir() {
+        return Ok(dest);
+    }
+    let index = RegistryIndex::read(registry)?;
+    let entry = index.get(name, version).ok_or_else(|| {
+        let known: Vec<&str> = index
+            .entries
+            .iter()
+            .filter(|e| e.name == name)
+            .map(|e| e.version.as_str())
+            .collect();
+        format!(
+            "`{name}@{version}` is not in the registry at `{}`{}",
+            registry.display(),
+            if known.is_empty() {
+                String::new()
+            } else {
+                format!(" (published: {})", known.join(", "))
+            }
+        )
+    })?;
+    let archive_path = registry.join(&entry.archive);
+    let bytes =
+        std::fs::read(&archive_path).map_err(|e| format!("{}: {e}", archive_path.display()))?;
+    let actual = sha256_tag(&bytes);
+    if actual != entry.archive_sha256 {
+        return Err(format!(
+            "`{name}@{version}`: the archive does not match the index\nindexed: {}\nfound:   {actual}",
+            entry.archive_sha256
+        ));
+    }
+    // Unpacked beside the destination and renamed into place, so a failure
+    // part way through never leaves a directory that looks fetched.
+    let staging = dest.with_extension("partial");
+    let _ = std::fs::remove_dir_all(&staging);
+    std::fs::create_dir_all(&staging).map_err(|e| format!("{}: {e}", staging.display()))?;
+    crate::archive::unpack(&bytes, &staging).map_err(|e| format!("`{name}@{version}`: {e}"))?;
+    let unpacked = package_checksum(&staging)?;
+    if unpacked != entry.checksum {
+        let _ = std::fs::remove_dir_all(&staging);
+        return Err(format!(
+            "`{name}@{version}`: the unpacked package does not match the index\nindexed: {}\nfound:   {unpacked}",
+            entry.checksum
+        ));
+    }
+    std::fs::rename(&staging, &dest).map_err(|e| format!("{}: {e}", dest.display()))?;
+    Ok(dest)
 }
 
 // ── The filesystem PackageProvider ────────────────────────────────────────────
@@ -391,9 +650,13 @@ impl PackageProvider for FsProvider {
 
         let root = dep_root(&declarer_root, dep)?;
 
-        // Verify fetched content against the lock pin (D-I). Path deps float
+        // Verify fetched content against the lock pin (D-I), for every source
+        // that is immutable once fetched. Path deps float
         // (they are the cooperative-dev loophole, like Cargo's path deps).
-        if matches!(dep.source, DepSource::Git { .. }) {
+        if matches!(
+            dep.source,
+            DepSource::Git { .. } | DepSource::Registry { .. }
+        ) {
             if let Some(locked) = self.lock.as_ref().and_then(|l| l.get(package)) {
                 let actual = package_checksum(&root)?;
                 if actual != locked.checksum {
@@ -592,6 +855,30 @@ mod tests {
         let read = Lockfile::read(&dir).unwrap().unwrap();
         assert_eq!(read.packages, lock.packages);
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A lockfile written before packages could ship assets must still match
+    /// the packages it pinned: a package that declares no assets hashes to
+    /// exactly what it always did. The expected value was computed from the
+    /// documented algorithm (path, NUL, little-endian length, bytes, in path
+    /// order) independently of this code, and checked against it before the
+    /// algorithm learned about assets.
+    #[test]
+    fn an_asset_free_package_hashes_as_it_always_did() {
+        let dir = std::env::temp_dir().join(format!("byard-hash-legacy-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(
+            dir.join("byard.toml"),
+            "[package]\nname = \"kit\"\nversion = \"0.1.0\"\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("src/a.byd"), "View A() { Box {} }\n").unwrap();
+        assert_eq!(
+            package_checksum(&dir).unwrap(),
+            "sha256:dd130c6b14c3ba2be36f02204ec479a1d3efb94d0574d8ff5b31fcce4c884956"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

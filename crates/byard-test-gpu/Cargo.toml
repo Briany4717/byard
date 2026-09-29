@@ -1,0 +1,19 @@
+[package]
+name = "byard-test-gpu"
+description = "One GPU device per test process, used by one test at a time."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+# Test support only: a dev-dependency of the crates whose tests draw.
+publish = false
+
+[dependencies]
+wgpu = "29.0"
+pollster = "0.4"
+
+[lints]
+workspace = true

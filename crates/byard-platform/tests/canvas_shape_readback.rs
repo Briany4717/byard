@@ -19,21 +19,8 @@ use byard_core::frame::{
 };
 use std::sync::Arc;
 
-fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>)> {
-    let instance =
-        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-    let adapter =
-        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-            .ok()?;
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("canvas-shape readback device"),
-        required_features: wgpu::Features::empty(),
-        required_limits: byard_core::engine::device_limits(&adapter),
-        memory_hints: wgpu::MemoryHints::Performance,
-        ..Default::default()
-    }))
-    .ok()?;
-    Some((Arc::new(device), Arc::new(queue)))
+fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>, byard_test_gpu::Turn)> {
+    byard_test_gpu::device(byard_core::engine::device_limits)
 }
 
 /// A read-back framebuffer: physical-pixel BGRA bytes plus the row stride.
@@ -156,7 +143,7 @@ fn render(
 #[test]
 #[allow(clippy::many_single_char_names)]
 fn a_group_head_draws_its_member_record_and_not_its_own_params() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping canvas-shape readback");
         return;
     };
@@ -212,7 +199,7 @@ fn a_group_head_draws_its_member_record_and_not_its_own_params() {
 #[test]
 #[allow(clippy::many_single_char_names)]
 fn an_ngon_reaches_its_circumradius_at_its_points_and_its_inner_ratio_between() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping canvas-shape readback");
         return;
     };
@@ -267,7 +254,7 @@ fn an_ngon_reaches_its_circumradius_at_its_points_and_its_inner_ratio_between() 
 #[test]
 #[allow(clippy::many_single_char_names)]
 fn a_morph_reaches_its_endpoints_blends_between_them_and_wraps() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping canvas-shape readback");
         return;
     };
@@ -391,7 +378,7 @@ fn a_morph_reaches_its_endpoints_blends_between_them_and_wraps() {
 #[test]
 #[allow(clippy::many_single_char_names)]
 fn fusion_bridges_nearby_shapes_and_carries_their_colours_across() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping canvas-shape readback");
         return;
     };
@@ -480,7 +467,7 @@ fn fusion_bridges_nearby_shapes_and_carries_their_colours_across() {
 #[test]
 #[allow(clippy::many_single_char_names)]
 fn a_fused_stroke_outlines_the_union_and_not_its_members() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping canvas-shape readback");
         return;
     };
@@ -545,7 +532,7 @@ fn a_fused_stroke_outlines_the_union_and_not_its_members() {
 #[test]
 #[allow(clippy::many_single_char_names)]
 fn a_morphs_colour_blends_in_oklab_not_linearly() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping canvas-shape readback");
         return;
     };
@@ -604,7 +591,7 @@ fn a_morphs_colour_blends_in_oklab_not_linearly() {
 #[test]
 #[allow(clippy::many_single_char_names)]
 fn circle_stroke_paints_the_ring_and_not_the_interior() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping canvas-shape readback");
         return;
     };
@@ -640,7 +627,7 @@ fn circle_stroke_paints_the_ring_and_not_the_interior() {
 #[test]
 #[allow(clippy::many_single_char_names)]
 fn arc_sweep_and_rect_fill_cover_exactly_their_regions() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping canvas-shape readback");
         return;
     };
@@ -709,7 +696,7 @@ fn arc_sweep_and_rect_fill_cover_exactly_their_regions() {
 #[test]
 #[allow(clippy::many_single_char_names)]
 fn a_conic_stroke_ramps_with_the_angle_and_not_with_the_radius() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping conic stroke readback");
         return;
     };
@@ -789,7 +776,7 @@ fn a_conic_stroke_ramps_with_the_angle_and_not_with_the_radius() {
 #[test]
 #[allow(clippy::many_single_char_names)]
 fn a_conic_on_an_arc_spans_the_arcs_own_sweep() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping arc conic readback");
         return;
     };

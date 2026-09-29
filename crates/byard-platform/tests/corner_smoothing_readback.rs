@@ -36,21 +36,8 @@ const BOX_Y: f32 = 30.0;
 const BOX_SIDE: f32 = 100.0;
 const RADIUS: f32 = 40.0;
 
-fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>)> {
-    let instance =
-        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-    let adapter =
-        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-            .ok()?;
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("corner smoothing readback device"),
-        required_features: wgpu::Features::empty(),
-        required_limits: byard_core::engine::device_limits(&adapter),
-        memory_hints: wgpu::MemoryHints::Performance,
-        ..Default::default()
-    }))
-    .ok()?;
-    Some((Arc::new(device), Arc::new(queue)))
+fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>, byard_test_gpu::Turn)> {
+    byard_test_gpu::device(byard_core::engine::device_limits)
 }
 
 struct Readback {
@@ -180,7 +167,7 @@ const DIAGONAL: [f32; 2] = [std::f32::consts::FRAC_1_SQRT_2; 2];
 
 #[test]
 fn smooth_zero_draws_the_circular_corner_and_smooth_one_extends_it() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping readback");
         return;
     };
@@ -225,7 +212,7 @@ fn smooth_zero_draws_the_circular_corner_and_smooth_one_extends_it() {
 
 #[test]
 fn the_corner_fringe_is_as_wide_as_the_edge_fringe() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping readback");
         return;
     };
@@ -247,7 +234,7 @@ fn the_corner_fringe_is_as_wide_as_the_edge_fringe() {
 
 #[test]
 fn a_shadow_follows_its_casters_corner_profile() {
-    let Some((device, queue)) = try_device() else {
+    let Some((device, queue, _turn)) = try_device() else {
         eprintln!("no GPU adapter, skipping readback");
         return;
     };

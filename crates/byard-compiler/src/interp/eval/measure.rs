@@ -175,6 +175,7 @@ impl Interpreter {
                 (Symbol::intern("h"), Value::Float(f64::from(rect.height))),
             ]);
             (action.borrow_mut())(&mut self.ctx, Some(&payload));
+            self.measure_fired = true;
             if let Some(span) = warn {
                 self.perf_warnings
                     .push(PerfWarning::MeasureFeedback { span });

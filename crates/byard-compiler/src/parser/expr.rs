@@ -907,9 +907,14 @@ impl Parser<'_> {
                 if !text.is_empty() {
                     parts.push(StrPart::Text(std::mem::take(&mut text)));
                 }
-                let (frag, offsets, next) = collect_interpolation(cs, i + 1, end);
-                let expr = self.parse_fragment_expr(&frag, offsets);
-                parts.push(StrPart::Interp(Box::new(expr)));
+                let (frag, mut offsets, next) = collect_interpolation(cs, i + 1, end);
+                // A trailing `:.N` is not part of the expression: the
+                // expression ends at the colon, and its end offset is the
+                // colon's.
+                let (len, decimals) = split_decimals(&frag);
+                offsets.truncate(len + 1);
+                let expr = self.parse_fragment_expr(&frag[..len], offsets);
+                parts.push(StrPart::Interp(Box::new(expr), decimals));
                 i = next;
                 continue;
             }
@@ -933,6 +938,42 @@ impl Parser<'_> {
         expr
     }
 }
+
+/// Finds a trailing `:.N` decimals spec in an interpolation fragment and
+/// returns how many bytes of it are the expression: for `temp:.0`, 4 and
+/// `Some(0)`; with no spec, the whole length and `None`.
+///
+/// Only a `:` outside brackets and strings counts, and only when what follows
+/// it is `.` and digits. That cannot be the tail of an expression, because a
+/// float literal never starts with a dot, so `a ? b : c` is never split.
+fn split_decimals(frag: &str) -> (usize, Option<u8>) {
+    let mut depth = 0i32;
+    let mut in_str = false;
+    let mut colon = None;
+    for (i, c) in frag.char_indices() {
+        match c {
+            '"' => in_str = !in_str,
+            '(' | '[' | '{' if !in_str => depth += 1,
+            ')' | ']' | '}' if !in_str => depth -= 1,
+            ':' if !in_str && depth == 0 => colon = Some(i),
+            _ => {}
+        }
+    }
+    let Some(i) = colon else {
+        return (frag.len(), None);
+    };
+    let spec = frag[i + 1..].trim();
+    let digits = spec.strip_prefix('.').unwrap_or("");
+    match digits.parse::<u8>() {
+        Ok(n) if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) => {
+            (i, Some(n.min(MAX_DECIMALS)))
+        }
+        _ => (frag.len(), None),
+    }
+}
+
+/// The most decimals a `{x:.N}` spec shows; more is noise, not precision.
+const MAX_DECIMALS: u8 = 9;
 
 /// Appends the unescaped form of the character after a `\` to `text`.
 fn push_unescaped(text: &mut String, escaped: char) {

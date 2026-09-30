@@ -321,8 +321,9 @@ fn assert_dirty_flag_consistency(hash_changed: bool, line_dirty: bool) {
 /// apart between the two calls.
 #[derive(Clone, Copy)]
 struct ShapePass {
-    /// How long the shaped-buffer cache was *before* this frame grew it: any
-    /// index at or past it has never been shaped.
+    /// How long the shaped-buffer cache was *before* this frame resized it,
+    /// which is the previous frame's pool length: any index at or past it has
+    /// never been shaped.
     preexisting_len: usize,
     /// Whether the text pool's length changed, which makes index-wise
     /// comparison illegal for the whole pool. See [`index_is_identity_stable`].
@@ -588,6 +589,12 @@ impl TextGlyphPipeline {
         // here, because "which index shifted" is not knowable from two
         // lengths.
         let length_changed = preexisting_len != text_lines.len();
+        // The cache is as long as this frame's pool, never longer. Left at its
+        // high-water length after an unmount, every later frame would compare
+        // "shorter" against it and reshape the whole pool, forever; and a pool
+        // growing back to exactly that length would count as unchanged while
+        // the previous frame was shorter.
+        self.cache.truncate(text_lines.len());
         while self.cache.len() < text_lines.len() {
             let metrics = Metrics::new(12.0, 14.0); // placeholder; overwritten below
             let buffer = Buffer::new(&mut self.font_system, metrics);

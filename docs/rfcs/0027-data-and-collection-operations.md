@@ -3,6 +3,7 @@
 - **Status:** Active, implemented
 - **Status note (2026-07-26):** Shipped in full: comparison and short-circuiting logical operators, string concatenation and interpolation, the pure list operations, lambdas in value position, records, and the inference and diagnostics that go with them.
 - **Status note (2026-09-26):** Two items from Future possibilities landed: `slice` on lists and strings, and the decimals spec in interpolation, `{x:.N}`. See "Landed from Future possibilities" below.
+- **Status note (2026-09-30):** The second batch landed: `sort`, `sortBy`, `reduce`, `find`, `indexOf`, `min`, `max`.
 - **Author(s):** Briany4717
 - **Created:** 2026-07-17
 - **Last updated:** 2026-07-17
@@ -349,8 +350,7 @@ RFC defines the operations; RFC-0014 can later compile them faster.
 
 ## Future possibilities
 
-- **`sort`/`reduce`/`find`/`indexOf`** as a second closed batch once the
-  v1 set proves the dispatch design. (`slice` landed; see below.)
+- The second closed batch landed in full; see below.
 - **Keyed `for` reconciliation** (RFC-0002 D7) consuming a stable-id lambda
   (`for t in todos key t.id`) so `map`/`filter`-derived lists diff instead of
   rebuild.
@@ -360,6 +360,19 @@ RFC defines the operations; RFC-0014 can later compile them faster.
   RFC-0028 controllers).
 
 ### Landed from Future possibilities
+
+- **`sort()`, `sortBy(x => key)`, `reduce(init, (acc, x) => …)`,
+  `find(x => …)`, `indexOf(v)`, `min()`, `max()`** on a `List`. All return
+  new values. `sort`, `sortBy`, `min` and `max` share one order: numbers by
+  value (an `Int` and a `Float` compare as numbers), text by code point,
+  `false` before `true`; anything else is equal to everything, so a stable
+  sort leaves it in place. `sortBy` computes each key once and is stable.
+  `find` returns the first match or `Unit`; `indexOf` uses structural
+  equality and returns `-1` when absent; `min`/`max` of an empty list are
+  `Unit`. Their lambdas follow the purity rule of `map`/`filter`, and
+  `find`'s must be a `Bool`. `reduce` is the first lambda with two
+  parameters; its names are bound for the body alone, and a nested
+  one-parameter lambda that reuses a name reads its own.
 
 - **`slice(start, end?)`** on a `List` and on a `Str`. `end` is exclusive and
   optional, and a string is cut by character, not by byte. Bounds clamp to

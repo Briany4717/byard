@@ -1766,6 +1766,12 @@ pub struct Interpreter {
     /// Whether an `on measure` ran during the last [`render`](Self::render).
     /// Its writes land after layout, so only the next frame shows them.
     measure_fired: bool,
+    /// The program's top-level functions (RFC-0002), by canonical name, as
+    /// entries of `fn_table`. Rebuilt by [`Self::load_views`].
+    top_fns: std::collections::HashMap<Symbol, super::env::AstId>,
+    /// The top-level functions being inlined right now, outermost first, so a
+    /// cycle is reported instead of lowered forever.
+    inlining: Vec<Symbol>,
     /// Names bound as parameters of a multi-parameter lambda while its body is
     /// being lowered; `lower_ident` reads them from [`LAMBDA_ARGS`].
     lambda_params: Vec<Symbol>,
@@ -2226,6 +2232,17 @@ impl Interpreter {
     /// unguarded-cycle `RecursiveView` (RFC-0007 §4), which are also
     /// recorded in [`Interpreter::errors`].
     pub fn load_views(&mut self, views: &[ViewDecl]) -> Vec<CompileError> {
+        // Every view carries the same program-wide function table; register
+        // it once, fresh, so a reload replaces rather than accumulates names.
+        self.top_fns.clear();
+        if let Some(first) = views.first() {
+            for decl in first.helpers.iter() {
+                let id = super::env::AstId(u32::try_from(self.fn_table.len()).unwrap_or(u32::MAX));
+                let params = decl.params.iter().map(|p| p.name.clone()).collect();
+                self.fn_table.push((params, decl.body.clone(), false));
+                self.top_fns.insert(decl.name.clone(), id);
+            }
+        }
         let (table, mut diags) = super::views::ViewTable::build(views);
         // Static cycle detection over the call graph.
         let graph = super::views::CallGraph::build(&table);
@@ -12494,6 +12511,12 @@ impl Interpreter {
             // callback, the body is the *caller's* action block, still resolved
             // here, where the caller's `var`s remain live below the callee frame
             // in the shared flat env, so `count++` routes to the caller's signal.
+            // A top-level function, when nothing in the view has the name.
+            if self.env.lookup(name).is_none() {
+                if let Some(&id) = self.top_fns.get(name) {
+                    return self.inline_top_fn(name, id, callee.span(), args, payload_name);
+                }
+            }
             if let Some(Value::Fn(id)) = self.env.lookup(name).cloned() {
                 if (id.0 as usize) < self.fn_table.len() {
                     let (params, body, is_callback) = self.fn_table[id.0 as usize].clone();
@@ -12538,6 +12561,42 @@ impl Interpreter {
             return lowered;
         }
         Box::new(|_| Value::Unit)
+    }
+
+    /// Inlines a call to a top-level function. Its arguments are lowered in
+    /// the caller's environment; its body in an environment holding only its
+    /// parameters, so it reads nothing of the view that calls it (a function
+    /// shared by every view cannot depend on which one called it).
+    fn inline_top_fn(
+        &mut self,
+        name: &Symbol,
+        id: super::env::AstId,
+        span: Span,
+        args: &[crate::parser::ast::Arg],
+        payload_name: Option<&Symbol>,
+    ) -> Lowered {
+        if self.inlining.contains(name) {
+            self.errors.push(CompileError::RecursiveFunction {
+                span,
+                name: name.as_str().to_string(),
+            });
+            return Box::new(|_| Value::Unit);
+        }
+        let (params, body, _) = self.fn_table[id.0 as usize].clone();
+        let mut bound = Vec::with_capacity(params.len());
+        for (param, arg) in params.iter().zip(args.iter()) {
+            let arg_lowered = self.lower_expr(&arg.value, payload_name);
+            bound.push((param.clone(), self.ctx.open_memo(arg_lowered)));
+        }
+        let caller = std::mem::replace(&mut self.env, Env::new());
+        for (param, scope) in bound {
+            self.env.push(param, Value::Memo(scope));
+        }
+        self.inlining.push(name.clone());
+        let body_lowered = self.lower_expr(&body, None);
+        self.inlining.pop();
+        self.env = caller;
+        body_lowered
     }
 
     /// Lowers a collection method call (RFC-0027 §4). Returns `None` for a

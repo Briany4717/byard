@@ -650,6 +650,33 @@ pub enum CompileError {
         /// root package).
         package: String,
     },
+    /// The same top-level `fn` is declared twice within one package's files.
+    DuplicateFunction {
+        /// Source range of the second declaration.
+        span: Span,
+        /// The duplicated function name.
+        name: String,
+        /// The package whose namespace is ambiguous ("this project" for the
+        /// root package).
+        package: String,
+    },
+    /// A top-level `fn` writes state, reaches a controller, or reads a name
+    /// that is not one of its parameters. It is shared by every view, so it
+    /// must be a pure expression of its parameters.
+    ImpureFunction {
+        /// Source range of the write or call.
+        span: Span,
+        /// The function's name.
+        name: String,
+    },
+    /// A function calls itself, directly or through others. Functions are
+    /// inlined where they are called, so a cycle would never finish lowering.
+    RecursiveFunction {
+        /// Source range of the call that closes the cycle.
+        span: Span,
+        /// The function called again.
+        name: String,
+    },
     /// A project-level failure outside any single source file, a broken
     /// `byard.toml`, an unreadable dependency, a corrupt lockfile. Carried as
     /// a `CompileError` so the dev overlay and `check` report it through the
@@ -970,6 +997,9 @@ impl CompileError {
             | Self::NameCollision { span, .. }
             | Self::PackageCycle { span, .. }
             | Self::DuplicateViewName { span, .. }
+            | Self::DuplicateFunction { span, .. }
+            | Self::ImpureFunction { span, .. }
+            | Self::RecursiveFunction { span, .. }
             | Self::Project { span, .. }
             | Self::SvgUnsupportedFeatures { span }
             | Self::SvgTooComplexForMssdf { span, .. }
@@ -1060,6 +1090,9 @@ impl CompileError {
             | Self::NameCollision { span, .. }
             | Self::PackageCycle { span, .. }
             | Self::DuplicateViewName { span, .. }
+            | Self::DuplicateFunction { span, .. }
+            | Self::ImpureFunction { span, .. }
+            | Self::RecursiveFunction { span, .. }
             | Self::Project { span, .. }
             | Self::SvgUnsupportedFeatures { span }
             | Self::SvgTooComplexForMssdf { span, .. }
@@ -1152,6 +1185,9 @@ impl CompileError {
             Self::NameCollision { .. } => "NameCollision",
             Self::PackageCycle { .. } => "PackageCycle",
             Self::DuplicateViewName { .. } => "DuplicateViewName",
+            Self::DuplicateFunction { .. } => "DuplicateFunction",
+            Self::ImpureFunction { .. } => "ImpureFunction",
+            Self::RecursiveFunction { .. } => "RecursiveFunction",
             Self::Project { .. } => "Project",
             Self::SvgUnsupportedFeatures { .. } => "SvgUnsupportedFeatures",
             Self::SvgTooComplexForMssdf { .. } => "SvgTooComplexForMssdf",
@@ -1499,6 +1535,18 @@ impl CompileError {
             Self::DuplicateViewName { name, package, .. } => {
                 format!("view `{name}` is declared more than once in {package}")
             }
+            Self::DuplicateFunction { name, package, .. } => {
+                format!("function `{name}` is declared more than once in {package}")
+            }
+            Self::ImpureFunction { name, .. } => format!(
+                "function `{name}` must be pure: it may read only its parameters (and call \
+                 other functions), and may not assign or reach a controller, because it \
+                 is shared by every view"
+            ),
+            Self::RecursiveFunction { name, .. } => format!(
+                "function `{name}` calls itself; functions are inlined where they are \
+                 called, so recursion is not supported"
+            ),
             Self::SvgUnsupportedFeatures { .. } => {
                 "SVG uses a gradient, pattern, or filter; the MSDF vector pipeline only \
                  supports flat monochrome fills, use `Image` instead"

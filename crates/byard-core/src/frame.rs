@@ -1819,9 +1819,15 @@ pub struct RenderFrame {
     /// Opacity groups (RFC-0011 T4), in the order they were closed. Empty on
     /// every frame with no translucent container that needs one.
     groups: Vec<OpacityGroup>,
-    /// The group currently open, if any: its start mark, opacity and depth.
-    /// One at a time, see [`RenderFrame::begin_group`].
-    open_group: Option<(LayerMark, f32, f32)>,
+    /// The group currently open, if any: its start mark, opacity, depth,
+    /// rotation and pivot. One at a time, see [`RenderFrame::begin_group`].
+    open_group: Option<(LayerMark, f32, f32, f32, [f32; 2])>,
+    /// While a rotated group is open, the rotation that undoes it about its
+    /// pivot. Every primitive pushed meanwhile is stored upright (its own
+    /// transform with the group's rotation taken out), and the composite
+    /// rotates the whole picture back, text included (RFC-0011 text
+    /// transforms).
+    unrotate: Option<Transform>,
 
     /// This frame's clip coverage masks (RFC-0037 `clip(path)`), indexed by
     /// [`ClipRect::mask`]. Empty on every frame that clips only rectangles,
@@ -2080,6 +2086,14 @@ pub struct OpacityGroup {
     pub opacity: f32,
     /// The draw-order depth of the composite.
     pub depth: f32,
+    /// The rotation the composite applies, in radians, about [`pivot`]; `0.0`
+    /// for a plain opacity group. The group's primitives were stored upright,
+    /// so this is what turns them, text included.
+    ///
+    /// [`pivot`]: Self::pivot
+    pub rotate: f32,
+    /// The point the picture rotates about, in logical pixels.
+    pub pivot: [f32; 2],
 }
 
 /// Applies `set` to every element of `pool` from index `from` onward.
@@ -2155,6 +2169,7 @@ impl RenderFrame {
         self.clip_masks.clear();
         self.text_input = None;
         self.groups.clear();
+        self.unrotate = None;
         self.open_group = None;
         self.solid_depths.clear();
         self.decorated_depths.clear();
@@ -2293,7 +2308,8 @@ impl RenderFrame {
     /// The instance is recorded **dirty**, see
     /// [`instances_dirty`](Self::instances_dirty) for why that is the only
     /// safe default and what narrows it.
-    pub fn push_instance(&mut self, instance: BoxInstance) {
+    pub fn push_instance(&mut self, mut instance: BoxInstance) {
+        instance.transform = self.upright(instance.transform);
         let d = self.next_depth();
         let c = self.active_clip();
         self.instances.push(instance);
@@ -2318,7 +2334,8 @@ impl RenderFrame {
     }
 
     /// Appends a [`DecoratedBox`] (border/shadow/opacity) to the frame.
-    pub fn push_decorated(&mut self, d: DecoratedBox) {
+    pub fn push_decorated(&mut self, mut d: DecoratedBox) {
+        d.base.transform = self.upright(d.base.transform);
         let depth = self.next_depth();
         let c = self.active_clip();
         self.decorated.push(d);
@@ -2327,7 +2344,8 @@ impl RenderFrame {
     }
 
     /// Appends a [`TextureSampler`] (image) to the frame.
-    pub fn push_texture(&mut self, t: TextureSampler) {
+    pub fn push_texture(&mut self, mut t: TextureSampler) {
+        [t.rect[0], t.rect[1]] = self.upright_point([t.rect[0], t.rect[1]]);
         let d = self.next_depth();
         let c = self.active_clip();
         self.textures.push(t);
@@ -2343,7 +2361,10 @@ impl RenderFrame {
     /// Appends a [`TextLine`] shaped to an optional wrap width (RFC-0018 text
     /// wrap). `Some(w)` wraps the line onto multiple lines bounded to `w`
     /// logical pixels; `None` behaves exactly like [`push_text`](Self::push_text).
-    pub fn push_text_wrapped(&mut self, text: TextLine, wrap_width: Option<f32>) {
+    pub fn push_text_wrapped(&mut self, mut text: TextLine, wrap_width: Option<f32>) {
+        let [x, y] = self.upright_point([text.x, text.y]);
+        text.x = x;
+        text.y = y;
         let d = self.next_depth();
         let c = self.active_clip();
         self.texts.push(text);
@@ -2354,6 +2375,9 @@ impl RenderFrame {
 
     /// Appends a [`VectorInstance`] (MSDF glyph) to the frame (RFC-0009 §1).
     pub fn push_vector(&mut self, mut v: VectorInstance) {
+        let [x, y] = self.upright_point([v.screen_rect[0], v.screen_rect[1]]);
+        v.screen_rect[0] = x;
+        v.screen_rect[1] = y;
         v.depth = self.next_depth();
         let c = self.active_clip();
         self.vector_instances.push(v);
@@ -2468,7 +2492,8 @@ impl RenderFrame {
     }
 
     /// Appends a tessellated filled path (RFC-0037 Tier-2) to the frame.
-    pub fn push_fill(&mut self, fill: CanvasFill) {
+    pub fn push_fill(&mut self, mut fill: CanvasFill) {
+        fill.transform = self.upright(fill.transform);
         let depth = self.next_depth();
         self.fills.push(fill);
         self.fill_depths.push(depth);
@@ -2487,7 +2512,8 @@ impl RenderFrame {
     }
 
     /// Appends a [`CanvasShape`] (RFC-0020 Tier-1 shape command) to the frame.
-    pub fn push_canvas_shape(&mut self, s: CanvasShape) {
+    pub fn push_canvas_shape(&mut self, mut s: CanvasShape) {
+        s.transform = self.upright(s.transform);
         let d = self.next_depth();
         let c = self.active_clip();
         self.canvas_shapes.push(s);
@@ -2554,21 +2580,61 @@ impl RenderFrame {
     /// primitives itself, so the two cases cannot both apply it or both skip
     /// it.
     pub fn begin_group(&mut self, opacity: f32) -> bool {
+        self.begin_group_rotated(opacity, 0.0, [0.0, 0.0])
+    }
+
+    /// Opens a group that is also rotated by `rotate` radians about `pivot`
+    /// (RFC-0011 text transforms): its primitives are stored upright and the
+    /// composite turns the picture, which is how text, which glyphon cannot
+    /// rotate, turns with its container. Same one-at-a-time rule as
+    /// [`begin_group`](Self::begin_group).
+    pub fn begin_group_rotated(&mut self, opacity: f32, rotate: f32, pivot: [f32; 2]) -> bool {
         if self.open_group.is_some() {
             return false;
         }
         let start = self.cursor();
         let depth = self.next_depth();
-        self.open_group = Some((start, opacity, depth));
+        self.open_group = Some((start, opacity, depth, rotate, pivot));
+        self.unrotate = (rotate != 0.0).then_some(Transform {
+            rotate: -rotate,
+            origin: pivot,
+            ..Transform::IDENTITY
+        });
         true
+    }
+
+    /// `t` as it is stored inside the open group: with the group's rotation
+    /// taken out, or unchanged outside a rotated group.
+    ///
+    /// Every `push_*` applies this itself. It is public for what the frame
+    /// cannot see coming, a clip the caller builds from a transform: inside a
+    /// rotated group that clip has to be cut in the same upright space the
+    /// content it cuts is stored in.
+    #[must_use]
+    pub fn upright(&self, t: Transform) -> Transform {
+        self.unrotate.map_or(t, |inv| inv.compose(&t))
+    }
+
+    /// A point as it is stored inside the open group (see [`Self::upright`]).
+    fn upright_point(&self, p: [f32; 2]) -> [f32; 2] {
+        self.unrotate.map_or(p, |inv| inv.apply_point(p))
+    }
+
+    /// Whether any group this frame rotates its picture. Such a frame is
+    /// drawn in full: a changed primitive's region is known upright, not
+    /// where the rotation puts it on screen.
+    #[must_use]
+    pub fn has_rotated_group(&self) -> bool {
+        self.groups.iter().any(|g| g.rotate != 0.0)
     }
 
     /// Closes the open opacity group. A group that drew nothing is dropped
     /// rather than recorded, so an empty translucent container costs no pass.
     pub fn end_group(&mut self) {
-        let Some((start, opacity, depth)) = self.open_group.take() else {
+        let Some((start, opacity, depth, rotate, pivot)) = self.open_group.take() else {
             return;
         };
+        self.unrotate = None;
         let end = self.cursor();
         if end == start {
             return;
@@ -2578,6 +2644,8 @@ impl RenderFrame {
             end,
             opacity,
             depth,
+            rotate,
+            pivot,
         });
     }
 

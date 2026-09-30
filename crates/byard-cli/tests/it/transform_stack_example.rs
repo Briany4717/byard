@@ -3,8 +3,9 @@
 //!
 //! The press is aimed from the frame rather than from a hand-computed
 //! coordinate: the button's drawn centre is its laid-out centre mapped through
-//! the transform the frame carries for it, so the test cannot pass by aiming
-//! at a point that is correct for some other angle.
+//! the transform the frame carries for it and then turned by the card's
+//! rotated group, which is where its rotation lives, so the test cannot pass
+//! by aiming at a point that is correct for some other angle.
 
 use byard_compiler::interp::env::Value;
 use byard_compiler::interp::eval::Interpreter;
@@ -66,7 +67,19 @@ fn at_a_tilt_the_button_is_pressed_where_it_is_drawn() {
         .expect("the +1 button is emitted");
     let [x, y, w, h] = rect;
     let laid_out = (x + w / 2.0, y + h / 2.0);
-    let drawn = transform.apply_point([laid_out.0, laid_out.1]);
+    // Inside the card's rotated group the button is stored upright; the
+    // composite turns the picture about the group's pivot.
+    let group = *frame
+        .groups()
+        .iter()
+        .find(|g| (g.rotate - 60f32.to_radians()).abs() < 1e-4)
+        .expect("the card tilted 60° is a rotated group");
+    let turn = byard_core::frame::Transform {
+        rotate: group.rotate,
+        origin: group.pivot,
+        ..byard_core::frame::Transform::IDENTITY
+    };
+    let drawn = turn.apply_point(transform.apply_point([laid_out.0, laid_out.1]));
     assert!(
         (drawn[0] - laid_out.0).abs() + (drawn[1] - laid_out.1).abs() > 40.0,
         "at 60° the drawn and laid-out centres must be far apart, or this test \

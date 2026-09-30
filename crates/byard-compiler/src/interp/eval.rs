@@ -7818,14 +7818,36 @@ impl Interpreter {
                             .unwrap_or(self.theme.font_size as i64) as f32;
                     let mut rgba = super::intrinsics::color_rgba_auto(color);
                     rgba[3] *= inherited_opacity;
-                    // RFC-0011 group transforms: a `Text` carries no transform of
-                    // its own, so an ancestor's scale/translate is baked into the
-                    // baseline anchor and the font size (glyph extents scale from
-                    // the anchor, so this scales the run about the ancestor pivot).
-                    // Rotation can't be baked per-glyph and is left to box
-                    // primitives (shader-applied), a documented limitation.
-                    let anchor = inherited_transform.apply_point([rect.x, rect.y]);
-                    let scaled_size = size * inherited_transform.uniform_scale();
+                    // RFC-0011: the run's own transform, composed with its
+                    // ancestors'. Scale and translate are baked into the baseline
+                    // anchor and the font size (glyph extents scale from the
+                    // anchor, so this scales the run about the pivot), which
+                    // keeps it shaped at its drawn size and sharp. Rotation is
+                    // not something glyphon can draw, so a rotated run of its
+                    // own opens a rotated group: the frame stores the run
+                    // upright and the composite turns it. Inside a rotated
+                    // ancestor, that ancestor's group already turns it.
+                    let own = self.resolve_transform(
+                        attrs,
+                        crate::interp::intrinsics::Rect::new(
+                            rect.x,
+                            rect.y,
+                            rect.width,
+                            rect.height,
+                        ),
+                    );
+                    let transform = inherited_transform.compose(&own);
+                    let own_group = own.rotate.abs() > f32::EPSILON
+                        && frame.begin_group_rotated(
+                            1.0,
+                            transform.rotate,
+                            [
+                                transform.origin[0] + transform.translate[0],
+                                transform.origin[1] + transform.translate[1],
+                            ],
+                        );
+                    let anchor = transform.apply_point([rect.x, rect.y]);
+                    let scaled_size = size * transform.uniform_scale();
                     // RFC-0005 default text wrap: shape the run to the width layout
                     // resolved for this leaf (its parent-offered width), scaled by
                     // any ancestor scale (the run's glyphs scale about the pivot).
@@ -7837,7 +7859,7 @@ impl Interpreter {
                     let wrap_w = if self.eval_bool_prop(attrs, "wrap") == Some(false) {
                         None
                     } else {
-                        Some(rect.width * inherited_transform.uniform_scale())
+                        Some(rect.width * transform.uniform_scale())
                     };
                     frame.push_text_wrapped(
                         byard_core::TextLine {
@@ -7852,6 +7874,9 @@ impl Interpreter {
                         },
                         wrap_w,
                     );
+                    if own_group {
+                        frame.end_group();
+                    }
 
                     let has_events = attrs
                         .iter()
@@ -8018,9 +8043,26 @@ impl Interpreter {
                     // the alpha once. A leaf has nothing to overlap, and a box
                     // inside an open group falls back to per-instance, so both
                     // keep the path they always had.
-                    grouped = (opacity - 1.0).abs() > f32::EPSILON
+                    //
+                    // RFC-0011 text transforms: a rotated box with children is
+                    // grouped too. Its subtree is stored upright and the
+                    // composite turns the picture about the transform's pivot,
+                    // which is how its text, which glyphon cannot rotate, turns
+                    // with it. Scale and translate stay per primitive, where
+                    // text is already shaped at its scaled size, so a rotated
+                    // label is as sharp as an upright one of the same size.
+                    let rotated = transform.rotate.abs() > f32::EPSILON;
+                    let pivot = [
+                        transform.origin[0] + transform.translate[0],
+                        transform.origin[1] + transform.translate[1],
+                    ];
+                    grouped = ((opacity - 1.0).abs() > f32::EPSILON || rotated)
                         && !children.is_empty()
-                        && frame.begin_group(opacity);
+                        && frame.begin_group_rotated(
+                            opacity,
+                            if rotated { transform.rotate } else { 0.0 },
+                            pivot,
+                        );
                     let opacity = if grouped { 1.0 } else { opacity };
                     child_opacity = opacity;
                     // An 8-digit `bg` carries its own alpha byte (RFC-0005 §1).
@@ -8275,7 +8317,11 @@ impl Interpreter {
                 // plain rectangular clip, which costs exactly what a
                 // `ScrollView`'s does — a scissor — so wrapping content in a
                 // square `Clip` is not a new expense.
-                let mask_clip = if name.as_str() == "Clip" && inherited_transform.rotate != 0.0 {
+                // Clips are cut where their content is stored: inside a rotated
+                // group that is upright, and the composite turns clip and content
+                // together (RFC-0011 text transforms).
+                let clip_transform = frame.upright(inherited_transform);
+                let mask_clip = if name.as_str() == "Clip" && clip_transform.rotate != 0.0 {
                     // RFC-0011: under a rotated ancestor the clip's outline is
                     // a rotated rectangle, which neither the scissor nor an
                     // axis-aligned clip entry can express. It becomes a path
@@ -8284,18 +8330,17 @@ impl Interpreter {
                     // inside that as it would anywhere else.
                     let mut radii = self.resolve_radii(attrs, "rrect");
                     for r in &mut radii {
-                        *r *= inherited_transform.scale[0];
+                        *r *= clip_transform.scale[0];
                     }
-                    let outline =
-                        transformed_rrect_outline(current_rect, radii, &inherited_transform);
+                    let outline = transformed_rrect_outline(current_rect, radii, &clip_transform);
                     let opened = self.begin_clip_commands(&outline, frame);
                     let pathed = clip_path.as_ref().is_some_and(|p| {
-                        let tl = inherited_transform.apply_point([current_rect.x, current_rect.y]);
+                        let tl = clip_transform.apply_point([current_rect.x, current_rect.y]);
                         let rect = byard_core::frame::Rect::new(
                             tl[0],
                             tl[1],
-                            current_rect.w * inherited_transform.scale[0],
-                            current_rect.h * inherited_transform.scale[1],
+                            current_rect.w * clip_transform.scale[0],
+                            current_rect.h * clip_transform.scale[1],
                         );
                         self.begin_clip_path_mask(p, rect, frame)
                     });
@@ -8305,12 +8350,12 @@ impl Interpreter {
                         (false, false) => None,
                     }
                 } else if name.as_str() == "Clip" {
-                    let tl = inherited_transform.apply_point([current_rect.x, current_rect.y]);
+                    let tl = clip_transform.apply_point([current_rect.x, current_rect.y]);
                     let rect = byard_core::frame::Rect::new(
                         tl[0],
                         tl[1],
-                        current_rect.w * inherited_transform.scale[0],
-                        current_rect.h * inherited_transform.scale[1],
+                        current_rect.w * clip_transform.scale[0],
+                        current_rect.h * clip_transform.scale[1],
                     );
                     // Read the same way a box's `radius` is, so `rrect: 16`
                     // and `rrect: (16, 0, 0, 16)` both mean here what they
@@ -8319,7 +8364,7 @@ impl Interpreter {
                     // has to keep matching the card.
                     let mut radii = self.resolve_radii(attrs, "rrect");
                     for r in &mut radii {
-                        *r *= inherited_transform.scale[0];
+                        *r *= clip_transform.scale[0];
                     }
                     frame.begin_clip_rounded(rect, radii);
                     // RFC-0037 `clip(path)`: the mask opens *inside* the
@@ -8336,12 +8381,12 @@ impl Interpreter {
                 };
                 let scroll_clip = if name.as_str() == "ScrollView" {
                     let (ox, oy) = self.resolve_axis_pair(attrs, "offset", (0.0, 0.0));
-                    let tl = inherited_transform.apply_point([current_rect.x, current_rect.y]);
+                    let tl = clip_transform.apply_point([current_rect.x, current_rect.y]);
                     let clip = byard_core::frame::Rect::new(
                         tl[0],
                         tl[1],
-                        current_rect.w * inherited_transform.scale[0],
-                        current_rect.h * inherited_transform.scale[1],
+                        current_rect.w * clip_transform.scale[0],
+                        current_rect.h * clip_transform.scale[1],
                     );
                     frame.begin_clip(clip);
                     child_transform.translate[0] -= ox * inherited_transform.scale[0];

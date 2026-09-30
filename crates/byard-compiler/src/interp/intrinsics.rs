@@ -236,9 +236,10 @@ const DECORATION: &[(&str, PropDef)] = &[
 ///
 /// Attached everywhere [`DECORATION`] is (every intrinsic sharing the
 /// generic container/`Box` render path: `Box`/`Column`/`Row`/`Button`/
-/// `TextField`/`Toggle`/`Slider`/`ScrollView`), **not** `Text`/`Image`,
-/// whose engine primitives (`TextLine`/`TextureSampler`) have no `Transform`
-/// field yet (see the RFC-0011 engine-slice decision log).
+/// `TextField`/`Toggle`/`Slider`/`ScrollView`) and to `Text`, whose scale
+/// and translate are baked into its anchor and font size and whose rotation
+/// goes through a rotated group. Not `Image`, whose sampler primitive has no
+/// `Transform` field yet (see the RFC-0011 engine-slice decision log).
 const TRANSFORM: &[(&str, PropDef)] = &[
     ("translate", pnt(PropType::Vec2)),
     ("scale", pnt(PropType::Vec2)),
@@ -584,6 +585,7 @@ fn lookup_intrinsic(name: &str) -> Option<Intrinsic> {
             interactive: true,
             props: props_from(&[
                 TEXT_PROPS,
+                TRANSFORM,
                 &[("m", lay(PropType::Len)), ("width", lay(PropType::Int))],
             ]),
             events: events_from(false, &[]),

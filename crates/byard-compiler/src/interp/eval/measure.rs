@@ -259,6 +259,12 @@ fn children(expr: &Expr) -> Vec<&Expr> {
         Expr::Ternary {
             cond, then, els, ..
         } => vec![cond.as_ref(), then.as_ref(), els.as_ref()],
+        Expr::If {
+            cond, then, els, ..
+        } => [cond.as_ref(), then.as_ref()]
+            .into_iter()
+            .chain(els.as_deref())
+            .collect(),
         Expr::StyleValue { attrs, states, .. } => attrs
             .iter()
             .chain(states.iter().flat_map(|s| s.attrs.iter()))

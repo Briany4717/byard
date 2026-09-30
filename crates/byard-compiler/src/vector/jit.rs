@@ -583,6 +583,31 @@ mod tests {
         Vec::new()
     }
 
+    /// Drains and acknowledges until every handle in `handles` is resident
+    /// and a drain returns nothing, which only happens once every upload has
+    /// been acknowledged (an unacknowledged one is re-sent on every drain).
+    ///
+    /// Acknowledging only some drains is a race: a glyph that completes in an
+    /// unacknowledged drain stays unacked, so it cannot be evicted, and its
+    /// resends look like new uploads to whatever the test checks next.
+    fn settle_acked(
+        jit: &mut VectorJit,
+        ack_tx: &crossbeam_channel::Sender<u64>,
+        handles: &[&str],
+    ) {
+        for _ in 0..500 {
+            let uploads = jit.drain_ready();
+            for up in &uploads {
+                ack_tx.send(up.id).unwrap();
+            }
+            if uploads.is_empty() && handles.iter().all(|h| jit.lookup_or_dispatch(h).is_some()) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!("the glyphs did not become resident and acknowledged within 5s");
+    }
+
     #[test]
     fn first_miss_returns_none_and_dispatches() {
         let path = write_gear_fixture();
@@ -854,19 +879,10 @@ mod tests {
             assert!(jit.lookup_or_dispatch(&path).is_none());
             paths.push(path);
         }
-        // Drain all at once, each gets a cell.
-        loop {
-            let uploads = jit.drain_ready();
-            for up in &uploads {
-                ack_tx.send(up.id).unwrap();
-            }
-            jit.drain_ready();
-            let all_resident = paths.iter().all(|p| jit.lookup_or_dispatch(p).is_some());
-            if all_resident {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
+        // Each gets a cell, and every upload is acknowledged, so each is
+        // evictable.
+        let handles: Vec<&str> = paths.iter().map(String::as_str).collect();
+        settle_acked(&mut jit, &ack_tx, &handles);
         assert_eq!(jit.free_cell_count(), 0, "atlas should be full");
 
         // Access all except the first one to make it the LRU.
@@ -878,11 +894,8 @@ mod tests {
         // Now add one more, it should evict the LRU (paths[0]).
         let extra = temp_svg("lru_extra", SQUARE_SMALL);
         assert!(jit.lookup_or_dispatch(&extra).is_none());
-        let uploads = wait_for_drain(&mut jit);
-        assert!(
-            !uploads.is_empty(),
-            "the new glyph must have been placed via LRU eviction"
-        );
+        // On a full atlas it can only be placed by evicting one.
+        settle_acked(&mut jit, &ack_tx, &[&extra]);
 
         // The evicted glyph (paths[0]) should no longer be resident.
         assert!(
@@ -917,17 +930,8 @@ mod tests {
             assert!(jit.lookup_or_dispatch(&path).is_none());
             paths.push(path);
         }
-        loop {
-            let uploads = jit.drain_ready();
-            for up in &uploads {
-                ack_tx.send(up.id).unwrap();
-            }
-            jit.drain_ready();
-            if paths.iter().all(|p| jit.lookup_or_dispatch(p).is_some()) {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
+        let handles: Vec<&str> = paths.iter().map(String::as_str).collect();
+        settle_acked(&mut jit, &ack_tx, &handles);
 
         // Make paths[0] the LRU.
         jit.drain_ready();
@@ -939,17 +943,7 @@ mod tests {
         let extra = temp_svg("recall_extra", SQUARE_SMALL);
         jit.lookup_or_dispatch(&extra);
         // Drain and ack the extra glyph so its resends don't pollute later drains.
-        loop {
-            let uploads = jit.drain_ready();
-            for up in &uploads {
-                ack_tx.send(up.id).unwrap();
-            }
-            jit.drain_ready();
-            if jit.lookup_or_dispatch(&extra).is_some() {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
+        settle_acked(&mut jit, &ack_tx, &[&extra]);
 
         // paths[0] was evicted. Look it up again, must re-dispatch.
         assert!(
@@ -957,17 +951,7 @@ mod tests {
             "evicted glyph must return None (placeholder)"
         );
         // Drain and ack until the re-dispatched glyph becomes resident.
-        loop {
-            let uploads = jit.drain_ready();
-            for up in &uploads {
-                ack_tx.send(up.id).unwrap();
-            }
-            jit.drain_ready();
-            if jit.lookup_or_dispatch(&paths[0]).is_some() {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
+        settle_acked(&mut jit, &ack_tx, &[&paths[0]]);
         assert!(
             jit.lookup_or_dispatch(&paths[0]).is_some(),
             "re-dispatched glyph must be resident again"

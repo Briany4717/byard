@@ -1021,3 +1021,103 @@ fn a_misplaced_case_still_parses_so_the_checker_can_explain_it() {
     let column = as_element(&parsed.views[0].body[0]);
     assert!(matches!(column.children[0], Member::Route { .. }));
 }
+
+// ---------------------------------------------------------------------------
+// Interpolation spans are file spans
+// ---------------------------------------------------------------------------
+
+/// The one interpolated string in `src`'s single `Text(...)` element.
+fn text_parts(src: &str) -> Vec<StrPart> {
+    let view = one_view(src);
+    let text = as_element(&view.body[0]);
+    let Expr::StrLit(parts, _) = &text.content[0].value else {
+        panic!("expected string literal content");
+    };
+    parts.clone()
+}
+
+/// The expression of the `n`th interpolation in `parts`.
+fn interp(parts: &[StrPart], n: usize) -> &Expr {
+    parts
+        .iter()
+        .filter_map(|p| match p {
+            StrPart::Interp(e) => Some(&**e),
+            StrPart::Text(_) => None,
+        })
+        .nth(n)
+        .expect("interpolation")
+}
+
+#[test]
+fn lex_error_inside_an_interpolation_points_at_the_character() {
+    // Braces start an interpolation, so `path { … }` is lexed as code and the
+    // ellipsis is rejected; the diagnostic must land on it, not on whatever
+    // happens to sit at the same offset from the start of the file.
+    let src = "// a first-line comment\nView Main() {\n    Column {\n        \
+               Text(\"Clip { path { … } }\")\n    }\n}\n";
+    let parsed = parse(src);
+    let err = parsed
+        .errors
+        .iter()
+        .find(|e| matches!(e, crate::diagnostics::CompileError::UnexpectedChar { .. }))
+        .expect("an UnexpectedChar diagnostic");
+    let span = err.span();
+    assert_eq!(&src[span.start as usize..span.end as usize], "…");
+    let (line, col) = crate::resolve::line_col(src, span.start as usize);
+    assert_eq!((line, col), (4, 29), "{err:?}");
+}
+
+#[test]
+fn parse_error_inside_an_interpolation_points_into_the_string() {
+    let src = "View Main() {\n    Text(\"sum: {1 + }\")\n}\n";
+    let parsed = parse(src);
+    let err = parsed.errors.first().expect("a diagnostic");
+    let (line, col) = crate::resolve::line_col(src, err.span().start as usize);
+    // The expression is cut short at the closing `}`, column 21.
+    assert_eq!((line, col), (2, 21), "{err:?}");
+}
+
+#[test]
+fn interpolation_node_spans_cover_their_source() {
+    let at = |src: &str, e: &Expr| {
+        let s = e.span();
+        src[s.start as usize..s.end as usize].to_string()
+    };
+
+    let src = "View Main() {\n    Text(\"n: {count}\")\n}\n";
+    assert_eq!(at(src, interp(&text_parts(src), 0)), "count");
+
+    // A nested string's quotes arrive escaped, so the fragment is shorter than
+    // the source it came from; spans after the escape must not drift.
+    let src = "View Main() {\n    Text(\"{f(\\\"ab\\\") + x}\")\n}\n";
+    let parts = text_parts(src);
+    let Expr::Binary { lhs, rhs, .. } = interp(&parts, 0) else {
+        panic!("expected a binary expression");
+    };
+    assert_eq!(at(src, rhs), "x");
+    let Expr::Call { args, .. } = &**lhs else {
+        panic!("expected a call");
+    };
+    assert_eq!(at(src, &args[0].value), "\\\"ab\\\"");
+
+    // An interpolation inside a nested string, two re-lexes deep.
+    let src = "View Main() {\n    Text(\"{g(\\\"v{yy}\\\")}\")\n}\n";
+    let parts = text_parts(src);
+    let Expr::Call { args, .. } = interp(&parts, 0) else {
+        panic!("expected a call");
+    };
+    let Expr::StrLit(nested, _) = &args[0].value else {
+        panic!("expected a nested string");
+    };
+    assert_eq!(at(src, interp(nested, 0)), "yy");
+}
+
+#[test]
+fn escaped_braces_are_literal_text_not_an_interpolation() {
+    let src = "View Main() {\n    Text(\"Clip \\{ path \\{ … \\} \\}\")\n}\n";
+    let parts = text_parts(src);
+    assert!(
+        matches!(&parts[..], [StrPart::Text(t)] if t == "Clip { path { … } }"),
+        "{parts:?}"
+    );
+}

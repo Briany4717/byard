@@ -192,6 +192,12 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Text is not reshaped every frame after something unmounts.** The shaped
+  text cache kept its longest length, so once a panel or a dropdown closed,
+  every later frame looked shorter than the cache and reshaped every line on
+  screen. The cache now follows the frame's own length: the frame something
+  unmounts on reshapes, and the still frames after it reshape nothing.
+
 - **Two quick taps on a button are two taps.** A second tap within the
   double-tap window became a double tap instead of a tap, whether or not
   anything listened for double taps, so clicking a `+` twice quickly counted

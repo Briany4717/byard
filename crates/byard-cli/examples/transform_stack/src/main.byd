@@ -27,6 +27,11 @@
 //      target does not move under the pointer. An element's *own* transform
 //      still leaves its own target alone; only its ancestors' move it. That is
 //      what keeps a hover-scale from flickering at its edge.
+//   5. The "+1" label turns with its card, and the "tilted" tag below the
+//      card turns on its own, by half the card's angle, the other way. Text
+//      used to stay flat at any angle: its glyphs cannot be rotated one by
+//      one, so a rotated run is drawn upright into its own picture and the
+//      picture is turned. It stays as sharp as upright text of the same size.
 View Main() {
     var angle = 0
     var presses = 0
@@ -64,5 +69,10 @@ View Main() {
                 }
             }
         }
+
+        // A text's box is as wide as its column offers, so it gets a width of
+        // its own: `origin: center` is then the middle of the words.
+        Text("tilted {angle}°") #[color: 0xF2B705, size: 16, width: 110,
+                                  rotate: angle * -0.5deg, origin: center]
     }
 }

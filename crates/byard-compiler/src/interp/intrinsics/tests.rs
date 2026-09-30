@@ -37,7 +37,7 @@ fn valid_intrinsics_pass() {
 }
 
 #[test]
-fn transform_props_are_accepted_on_containers_but_not_text_or_image() {
+fn transform_props_are_accepted_on_containers_and_text_but_not_image() {
     assert!(
         errs(
             "View V() { Box #[translate: (0, 2), scale: 1.05, rotate: 90deg, origin: center] {} }"
@@ -49,11 +49,14 @@ fn transform_props_are_accepted_on_containers_but_not_text_or_image() {
         "sub-property axis form"
     );
 
-    // `Text`/`Image` don't have a `Transform` field on their engine
-    // primitives yet (RFC-0011 engine-slice decision log), these must
-    // still report `UnknownAttribute`, not silently accept and drop.
-    let e = errs("View V() { Text(\"hi\") #[rotate: 90deg] }");
-    assert!(matches!(&e[0], CompileError::UnknownAttribute { .. }));
+    // `Text` bakes scale/translate into its run and turns through a rotated
+    // group (RFC-0011 text transforms).
+    assert!(
+        errs("View V() { Text(\"hi\") #[rotate: 90deg, scale: 2, origin: center] }").is_empty()
+    );
+    // `Image`'s sampler has no `Transform` field yet (RFC-0011 engine-slice
+    // decision log), so it must still report `UnknownAttribute`, not
+    // silently accept and drop.
     let e = errs("View V() { Image(\"x\") #[translate: (0, 2)] }");
     assert!(matches!(&e[0], CompileError::UnknownAttribute { .. }));
 }

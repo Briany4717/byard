@@ -1485,6 +1485,7 @@ impl EncoderSubsystem {
                 GroupDraw {
                     compositor: &self.groups,
                     groups,
+                    scale: self.scale_factor,
                 },
                 self.gpu_timer.as_ref(),
                 &mut self.arena,
@@ -1625,7 +1626,9 @@ impl EncoderSubsystem {
             frame_clips(frame),
             FrameDirty {
                 instances: frame.instances_dirty(),
-                full: frame.wants_full_redraw(),
+                // A rotated group's changed regions are known upright, not
+                // where its rotation puts them on screen: draw such a frame whole.
+                full: frame.wants_full_redraw() || frame.has_rotated_group(),
             },
             frame.layer_marks(),
             frame.groups(),
@@ -2459,6 +2462,9 @@ struct GroupDraw<'a> {
     compositor: &'a group::GroupCompositor,
     /// The frame's groups, indexed by `SegmentRanges::group`.
     groups: &'a [crate::frame::OpacityGroup],
+    /// Device pixels per logical pixel: a rotated group's pivot is logical,
+    /// the composite turns physical pixels.
+    scale: f32,
 }
 
 /// Everything `draw_ui_pass` needs to honour RFC-0023 backdrop barriers,
@@ -2623,8 +2629,15 @@ fn draw_ui_pass(
             staging.backdrops.push(regions);
         }
         for g in groups.groups {
+            let (sin, cos) = g.rotate.sin_cos();
             let region = arena.push_vertex(&[group::GroupInstance {
                 params: [g.opacity, g.depth],
+                rotation: [
+                    cos,
+                    sin,
+                    g.pivot[0] * groups.scale,
+                    g.pivot[1] * groups.scale,
+                ],
             }]);
             staging.groups.push(region);
         }

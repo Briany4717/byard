@@ -68,6 +68,19 @@ pub trait LogicRuntime {
     fn apply_io_results(&mut self, _results: Vec<relay::IoResult>) -> bool {
         false
     }
+
+    /// Whether the frame just produced is not the last word: something is
+    /// still moving, or this tick changed state that only the next tick can
+    /// show (an `on measure` that wrote a `var` after layout). The relay then
+    /// wakes a `Wait`-mode render loop and ticks again without parking, as
+    /// it does for input, so the change appears without the user having to
+    /// move the mouse.
+    ///
+    /// Defaulted to `false`, so a runtime that never animates idles as
+    /// before.
+    fn wants_another_frame(&self) -> bool {
+        false
+    }
 }
 
 use std::fmt;

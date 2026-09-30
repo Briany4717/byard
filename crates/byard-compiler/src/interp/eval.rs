@@ -1758,6 +1758,9 @@ pub struct Interpreter {
     /// a second walk would have to re-derive that pairing and could disagree
     /// with it.
     measure_targets: Vec<(byard_core::atlas::layout::AtlasNodeId, u32)>,
+    /// Whether an `on measure` ran during the last [`render`](Self::render).
+    /// Its writes land after layout, so only the next frame shows them.
+    measure_fired: bool,
     /// The element instance the render walk is currently inside, the `slot`
     /// half of an [`AnimKey`].
     ///
@@ -2357,6 +2360,16 @@ impl Interpreter {
     #[must_use]
     pub fn has_active_animations(&self) -> bool {
         self.any_active || self.theme_transitioning()
+    }
+
+    /// Whether the host should produce another frame without waiting for an
+    /// event: an animation is still in flight, or an `on measure` ran in the
+    /// last [`render`](Self::render) and its writes (made after layout) are
+    /// only visible in the next one. A measure that did not change its
+    /// element's rect does not run, so a still screen settles at zero frames.
+    #[must_use]
+    pub fn needs_another_frame(&self) -> bool {
+        self.has_active_animations() || self.measure_fired
     }
 
     /// The most recently projected value of a value binding (for tests).
@@ -4949,6 +4962,9 @@ impl Interpreter {
         // layout built against last frame's viewport would lay out one width's
         // variant and paint another's.
         self.viewport = (width, height);
+        // Every frame answers `needs_another_frame` for itself, including one
+        // that returns before layout.
+        self.measure_fired = false;
 
         // RFC-0034: the registered families ride every frame, not just the one
         // after registration. The relay keeps only the latest frame, so a pool

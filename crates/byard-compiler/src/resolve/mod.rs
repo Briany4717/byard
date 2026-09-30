@@ -296,6 +296,13 @@ pub fn resolve_program(
         }
     }
 
+    // The type checks run over the merged, rebased views, so their spans are
+    // already program-wide. Held back while the program has parse or resolve
+    // errors: a broken tree would only add follow-on noise to the real one.
+    if r.errors.is_empty() {
+        r.errors.extend(crate::infer::check_views(&views).errors);
+    }
+
     ResolvedProgram {
         views,
         errors: r.errors,

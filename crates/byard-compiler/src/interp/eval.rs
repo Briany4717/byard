@@ -1564,7 +1564,7 @@ fn is_callback_param(param: &Param) -> bool {
 /// (RFC-0007 D-A). A `View` declaring a `content` parameter accepts a
 /// `{ ... }` block at its call sites; referencing `content` as an element inside
 /// the body splices the caller-supplied block.
-const RESERVED_CONTENT: &str = "content";
+pub(crate) const RESERVED_CONTENT: &str = "content";
 
 thread_local! {
     /// Thread-local storage holding the active payload of the event currently being processed.

@@ -397,13 +397,26 @@ pub(crate) struct Concrete<'a> {
 /// endpoints as last frame?". A hash of the raw bits answers exactly that, for
 /// one scalar or four colour channels alike.
 fn endpoint_key(motions: &[byard_core::frame::Motion]) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    use std::hash::Hasher;
+    // Runs for every repeating animation on every frame, and only has to tell
+    // this frame's endpoints from last frame's, so a fast hash is enough.
+    let mut hasher = rustc_hash::FxHasher::default();
     for motion in motions {
-        motion.from.to_bits().hash(&mut hasher);
-        motion.to.to_bits().hash(&mut hasher);
+        hasher.write_u64(u64::from(motion.from.to_bits()) << 32 | u64::from(motion.to.to_bits()));
     }
     hasher.finish()
+}
+
+/// The value of a numeric literal, exactly as [`Interpreter::lower_expr`]
+/// would compute it, or `None` for any other expression. Literals need no
+/// context, so [`Interpreter::eval_pure`] answers them without lowering.
+const fn numeric_literal(expr: &Expr) -> Option<Value> {
+    match expr {
+        Expr::IntLit(n, _) => Some(Value::Int(*n)),
+        // An angle is already in radians (RFC-0011 T1), a plain `Float`.
+        Expr::FloatLit(f, _) | Expr::AngleLit(f, _) => Some(Value::Float(*f)),
+        _ => None,
+    }
 }
 
 /// Interpolates between two evaluated keyframe values (RFC-0025 §3).
@@ -1699,20 +1712,20 @@ pub struct Interpreter {
     /// rows sharing one `Motion`.
     /// A mid-flight target change reseeds `from` to the current sampled value
     /// (interruptible springs).
-    animations: std::collections::HashMap<AnimKey, byard_core::frame::Motion>,
+    animations: rustc_hash::FxHashMap<AnimKey, byard_core::frame::Motion>,
     /// Persisted colour-animation state (RFC-0010 A3): one `Motion` per OKLab
     /// channel (`L`, `a`, `b`) plus one for the alpha byte, so a
     /// `bg`/`color`/`border`/`backdrop_tint` transition interpolates in a
     /// perceptually-uniform space, no muddy mid-points, with translucency
     /// animating alongside (RFC-0023: a tint fading in is an alpha ramp), and
     /// is interruptible like the scalar props. Keyed by the `with` node's span.
-    color_animations: std::collections::HashMap<AnimKey, [byard_core::frame::Motion; 4]>,
+    color_animations: rustc_hash::FxHashMap<AnimKey, [byard_core::frame::Motion; 4]>,
     /// Loop clocks for repeating, delayed and keyframed animations (RFC-0025),
     /// keyed by the animation node's span like the two maps above. A repeating
     /// animation cannot sample against `now − start_ms` the way a one-shot does:
     /// it needs its own timeline, which is what a [`LoopClock`] carries, plus
     /// the last-sampled stamp that implements §2's offscreen pause.
-    anim_clocks: std::collections::HashMap<AnimKey, LoopClock>,
+    anim_clocks: rustc_hash::FxHashMap<AnimKey, LoopClock>,
     /// Live ripple ink reveals (RFC-0023), spawned by a press gesture over an
     /// element whose resolved `ripple_active` is true. Gesture-like state: it
     /// persists across renders (a ripple keeps fading after release) and is
@@ -12549,6 +12562,25 @@ impl Interpreter {
         if crate::interp::anim::is_keyframes_call(expr) {
             return self.eval_keyframes(expr);
         }
+        if let Some(value) = numeric_literal(expr) {
+            return value;
+        }
+        // A tuple of numeric literals (`translate: (40, 0)`, an animation's
+        // target or `from:`) is the commonest animated value. Lowering it would
+        // box a closure per component only to call each once, so it is built
+        // directly, the same value `lower_expr` would produce.
+        if let Expr::Tuple(args, _) = expr {
+            if args.iter().all(|arg| numeric_literal(&arg.value).is_some()) {
+                return Value::Tuple(
+                    args.iter()
+                        .map(|arg| {
+                            let value = numeric_literal(&arg.value).unwrap_or(Value::Unit);
+                            (arg.name.clone(), value)
+                        })
+                        .collect(),
+                );
+            }
+        }
         let mut compute = self.lower_expr(expr, None);
         compute(&mut self.ctx)
     }
@@ -12570,11 +12602,11 @@ impl Interpreter {
             // The checker already reported this; render the target inertly.
             return target_value;
         };
-        let target_val = match &target_value {
+        let target_val = match target_value {
             #[allow(clippy::cast_possible_truncation)]
-            Value::Float(f) => *f as f32,
+            Value::Float(f) => f as f32,
             #[allow(clippy::cast_precision_loss)]
-            Value::Int(n) => *n as f32,
+            Value::Int(n) => n as f32,
             // A coordinate pair animates component-wise off one shared clock, so
             // `translate: (0, 0) with anim.spring(delay: i * 50ms)` (RFC-0025's
             // stagger shape) moves as one. Only the RFC-0025 paths handle a pair;
@@ -12584,7 +12616,7 @@ impl Interpreter {
             }
             // Anything else can't be interpolated, pass it through untouched
             // (the checker already restricts `with` to numeric props).
-            _ => return target_value,
+            other => return other,
         };
         // RFC-0025: a repeating, delayed or explicitly-started animation runs on
         // its own timeline; everything else keeps the original single-shot path
@@ -12666,58 +12698,52 @@ impl Interpreter {
     /// a pair or a scalar broadcast to both axes.
     fn eval_looped_pair(
         &mut self,
-        items: &[(Option<Symbol>, Value)],
+        mut items: Vec<(Option<Symbol>, Value)>,
         spec: &crate::interp::anim::MotionSpec<'_>,
         key: AnimKey,
     ) -> Value {
-        let Some(targets) = items
-            .iter()
-            .map(|(_, v)| spacing_value(v))
-            .collect::<Option<Vec<f32>>>()
-        else {
-            // A non-numeric component can't be interpolated; pass the pair
-            // through as written.
-            return Value::Tuple(items.to_vec());
-        };
+        // A non-numeric component can't be interpolated; pass the pair through
+        // as written.
+        if items.iter().any(|(_, v)| spacing_value(v).is_none()) {
+            return Value::Tuple(items);
+        }
         let from_value = spec.from.map(|expr| self.eval_pure(expr));
-        let froms: Vec<f32> = targets
-            .iter()
-            .enumerate()
-            .map(|(axis, target)| match &from_value {
-                Some(Value::Tuple(from_items)) => from_items
-                    .get(axis)
-                    .and_then(|(_, v)| spacing_value(v))
-                    .unwrap_or(*target),
-                Some(scalar) => spacing_value(scalar).unwrap_or(*target),
-                None => *target,
-            })
-            .collect();
         let curve = pack_curve(spec.curve);
         let now = self.now_ms;
-        let motions: Vec<byard_core::frame::Motion> = froms
+        // A pair has two components, so this only reaches the heap for a wider
+        // tuple.
+        let motions: smallvec::SmallVec<[byard_core::frame::Motion; 2]> = items
             .iter()
-            .zip(&targets)
-            .map(|(from, to)| byard_core::frame::Motion {
-                from: *from,
-                to: *to,
-                start_ms: now,
-                curve,
+            .enumerate()
+            .map(|(axis, (_, v))| {
+                let to = spacing_value(v).unwrap_or_default();
+                let from = match &from_value {
+                    Some(Value::Tuple(from_items)) => from_items
+                        .get(axis)
+                        .and_then(|(_, v)| spacing_value(v))
+                        .unwrap_or(to),
+                    Some(scalar) => spacing_value(scalar).unwrap_or(to),
+                    None => to,
+                };
+                byard_core::frame::Motion {
+                    from,
+                    to,
+                    start_ms: now,
+                    curve,
+                }
             })
             .collect();
         let phase = self.loop_at(&motions, spec, key);
-        Value::Tuple(
-            items
-                .iter()
-                .zip(&motions)
-                .map(|((name, _), motion)| {
-                    let sampled = match phase {
-                        Some(t_secs) => motion.sample_secs(t_secs),
-                        None => motion.from,
-                    };
-                    (name.clone(), Value::Float(f64::from(sampled)))
-                })
-                .collect(),
-        )
+        // The sampled pair keeps the target's field names, so it is written
+        // over the target's own components rather than into a fresh tuple.
+        for ((_, value), motion) in items.iter_mut().zip(&motions) {
+            let sampled = match phase {
+                Some(t_secs) => motion.sample_secs(t_secs),
+                None => motion.from,
+            };
+            *value = Value::Float(f64::from(sampled));
+        }
+        Value::Tuple(items)
     }
 
     /// The shared body of every repeating animation (RFC-0025 §1, §5): advances

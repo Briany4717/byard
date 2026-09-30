@@ -288,8 +288,30 @@ fn declare_axis_weights(db: &mut glyphon::fontdb::Database, id: glyphon::fontdb:
 /// Rounded, with its spaces from Apple Color Emoji) and `weight: bold` in
 /// Menlo. So the face the default sans-serif family resolves to has its axis
 /// weights declared exactly as a project's own variable fonts do.
+///
+/// # Scanned once
+///
+/// Reading the system's font files is most of what building a `FontSystem`
+/// costs (tens of milliseconds on a desktop, every time). The scan, and the
+/// weight declaration above, happen once per process in [`system_fonts`];
+/// each `FontSystem` starts from a copy of that database, which is a list of
+/// face records and costs microseconds. Faces registered afterwards (a
+/// project's own fonts) go into that copy only.
 #[must_use]
 pub fn new_font_system() -> FontSystem {
+    let (locale, db) = system_fonts();
+    FontSystem::new_with_locale_and_db(locale.clone(), db.clone())
+}
+
+/// The system's fonts and locale, scanned and prepared once per process.
+fn system_fonts() -> &'static (String, glyphon::fontdb::Database) {
+    static FONTS: std::sync::OnceLock<(String, glyphon::fontdb::Database)> =
+        std::sync::OnceLock::new();
+    FONTS.get_or_init(|| scan_system_fonts().into_locale_and_db())
+}
+
+/// Reads every system font and declares the system face's axis weights.
+fn scan_system_fonts() -> FontSystem {
     let mut fs = FontSystem::new();
     let mut probe = Buffer::new(&mut fs, Metrics::new(16.0, 20.0));
     probe.set_text(
@@ -589,6 +611,35 @@ mod tests {
     ///
     /// Only meaningful where the system face is variable; elsewhere it says so
     /// and returns.
+    /// Every `FontSystem` starts from the same scanned database, and a face
+    /// registered into one stays in that one: two apps' measuring and
+    /// painting systems, or two tests in one process, never see each other's
+    /// fonts.
+    #[test]
+    fn font_systems_share_the_scan_but_not_what_is_registered_later() {
+        let mut first = new_font_system();
+        let second = new_font_system();
+        assert_eq!(
+            first.db().len(),
+            second.db().len(),
+            "both start from the one scan"
+        );
+
+        let before = first.db().len();
+        first.db_mut().load_font_data(DISPLAY.to_vec());
+        assert!(first.db().len() > before, "the registration landed");
+        assert_eq!(
+            second.db().len(),
+            before,
+            "and only in the system it was registered into"
+        );
+        assert_eq!(
+            new_font_system().db().len(),
+            before,
+            "nor in the cached scan a later system starts from"
+        );
+    }
+
     #[test]
     fn the_system_face_answers_to_every_weight() {
         use glyphon::{Attrs, Buffer, Metrics, Shaping};

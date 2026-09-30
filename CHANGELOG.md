@@ -43,6 +43,12 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`sort`, `sortBy`, `reduce`, `find`, `indexOf`, `min` and `max` on lists.**
+  A week's range is `highs.max()` and `lows.min()`, a total is
+  `xs.reduce(0, (acc, x) => acc + x)`, and `days.sortBy(d => d.high)` orders
+  records by a field, keeping ties in place. Like every list operation they
+  return new values, and `byard check` knows them (a typo suggests the name).
+
 - **`if` in actions.** `if cond { … }`, `else if` and `else` run inside
   any action: a button's, `on mount`, a `let` action, an `ok`/`err` arm. It
   used to parse as three unrelated statements, check clean and do nothing, so

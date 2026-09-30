@@ -211,7 +211,7 @@ fn the_shipped_weather_example_compiles_and_injects_the_provided_capability() {
     // The example is pure `byld` and reaches the network only through the
     // capability the engine provides, so "does it still compile against the
     // capability set" is the thing that can rot, and this is what asserts it.
-    const WEATHER: &str = include_str!("../../byard-cli/examples/weather/src/main.byd");
+    const WEATHER: &str = include_str!("../../../byard-cli/examples/weather/src/main.byd");
     let server = Server::serve("200 OK", "application/json", FORECAST);
     let mut harness = Harness::new(WEATHER, &server.base_url());
     harness.render();
@@ -240,7 +240,7 @@ fn a_narrower_viewport_marks_the_lines_whose_wrap_width_it_changed() {
     // without changing any `var`, so if the interpreter reports the line clean
     // the incremental scissor is built from a region that no longer describes
     // it.
-    const WEATHER: &str = include_str!("../../byard-cli/examples/weather/src/main.byd");
+    const WEATHER: &str = include_str!("../../../byard-cli/examples/weather/src/main.byd");
     let server = Server::serve("200 OK", "application/json", FORECAST);
     let mut harness = Harness::new(WEATHER, &server.base_url());
 

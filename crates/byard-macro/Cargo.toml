@@ -6,6 +6,9 @@ license.workspace = true
 
 [lib]
 proc-macro = true
+# No runnable doc examples here: skip the rustdoc pass that `cargo test`
+# would otherwise spend on this crate. Turn it back on with the first one.
+doctest = false
 
 [dependencies]
 syn = { version = "2", features = ["full"] }

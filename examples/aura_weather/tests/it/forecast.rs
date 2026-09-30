@@ -1,11 +1,11 @@
 //! The forecast screen over a local server: the request it makes, the three
 //! states the request has, and every reading reaching the screen.
 
-mod common;
+use crate::common;
 
 use common::{App, Server};
 
-const FORECAST: &str = include_str!("fixtures/forecast.json");
+const FORECAST: &str = include_str!("../fixtures/forecast.json");
 
 #[test]
 fn the_screen_asks_for_the_forecast_by_path_when_it_opens() {

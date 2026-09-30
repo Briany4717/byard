@@ -15,7 +15,7 @@ use byard_compiler::symbol::Symbol;
 use byard_core::frame::RenderFrame;
 use byard_core::{EventKind, InputEvent};
 
-const HELLO_WORLD: &str = include_str!("../examples/hello_world.byd");
+const HELLO_WORLD: &str = include_str!("../../examples/hello_world.byd");
 
 const W: f32 = 800.0;
 const H: f32 = 600.0;

@@ -23,8 +23,8 @@ use byard_core::frame::{FontFace, FontTable, RenderFrame, TextLine, Viewport};
 const SIZE: u32 = 256;
 
 const DISPLAY: &[u8] =
-    include_bytes!("../../byard-cli/examples/assets/fonts/SpaceGrotesk-Variable.ttf");
-const BODY: &[u8] = include_bytes!("../../byard-cli/examples/assets/fonts/Manrope-Variable.ttf");
+    include_bytes!("../../../byard-cli/examples/assets/fonts/SpaceGrotesk-Variable.ttf");
+const BODY: &[u8] = include_bytes!("../../../byard-cli/examples/assets/fonts/Manrope-Variable.ttf");
 
 fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>, byard_test_gpu::Turn)> {
     byard_test_gpu::device(byard_core::engine::device_limits)

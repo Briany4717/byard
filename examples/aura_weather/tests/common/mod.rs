@@ -82,7 +82,7 @@ impl App {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let manifest = byard_project::manifest::Manifest::discover(Some(dir)).unwrap();
         assert_eq!(
-            manifest.http_base_url.as_deref(),
+            manifest.http.base_url.as_deref(),
             Some("https://api.open-meteo.com"),
             "the app itself talks to open-meteo; only the tests swap the host"
         );

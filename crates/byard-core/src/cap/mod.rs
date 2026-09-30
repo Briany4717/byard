@@ -99,19 +99,28 @@ pub fn default_registry(app: &str) -> crate::bridge::ControllerRegistry {
     registry
 }
 
-/// Points the registry's built-in `Http` at `base_url`, the project's
-/// `[http] base_url`, so a relative `http.get("/path")` resolves against it.
+/// Points the registry's built-in `Http` at the project's `[http]` origins:
+/// `base_url` for `http.get("/path")`, and each named host for
+/// `http.get("name:/path")`.
 ///
 /// A registry without `Http` (an app that opted out of the defaults) is left
-/// alone: configuring the base must never bring back a capability the app
+/// alone: configuring origins must never bring back a capability the app
 /// removed.
-pub fn set_http_base_url(registry: &mut crate::bridge::ControllerRegistry, base_url: &str) {
+pub fn configure_http(
+    registry: &mut crate::bridge::ControllerRegistry,
+    base_url: Option<&str>,
+    hosts: &[(String, String)],
+) {
     #[cfg(feature = "net")]
     if registry.contains("Http") {
-        registry.insert(std::sync::Arc::new(Http::with_base_url(base_url)));
+        let http = hosts.iter().fold(
+            Http::with_base_url(base_url.unwrap_or_default()),
+            |http, (name, origin)| http.with_host(name, origin),
+        );
+        registry.insert(std::sync::Arc::new(http));
     }
     #[cfg(not(feature = "net"))]
-    let _ = (registry, base_url);
+    let _ = (registry, base_url, hosts);
 }
 
 #[cfg(test)]

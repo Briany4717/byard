@@ -9,7 +9,9 @@
 //
 // The requests name a path, `/v1/forecast?...`, and `byard.toml` names the
 // host once, under `[http] base_url`. Change it there to point the whole app
-// at another server (a local mock, say) without touching a view.
+// at another server (a local mock, say) without touching a view. Air quality
+// lives on a second host, so `byard.toml` names it under `[http.hosts]` and
+// the request says `air:/v1/air-quality?...`.
 //
 // Nothing here is application code in disguise: `Http` and `Json` are ordinary
 // controllers the engine provides (RFC-0029 §7), reached through the same
@@ -31,6 +33,7 @@ View Main() {
     var lat: Float = 35.68
     var lon: Float = 139.69
     var refreshes: Int = 0
+    var aqi: Str = "…"
 
     // Latitude/longitude per city, so the example needs no geocoding round
     // trip and stays about the one thing it is demonstrating.
@@ -80,6 +83,9 @@ View Main() {
                         lat = place.lat
                         lon = place.lon
                         message = ""
+                        http.get("air:/v1/air-quality?latitude={place.lat}&longitude={place.lon}&current=us_aqi")
+                            ok res => { aqi = "{res.json.current.us_aqi}" }
+                            err e => { aqi = "unavailable ({e.kind})" }
                         http.get("/v1/forecast?latitude={place.lat}&longitude={place.lon}&current=temperature_2m,wind_speed_10m&daily=temperature_2m_max,temperature_2m_min&forecast_days=1")
                             ok res => {
                                 state = "ok"
@@ -117,6 +123,7 @@ View Main() {
                     Text("high {day_high}°") #[color: 0x9AA0AC, size: 14]
                     Text("low {day_low}°") #[color: 0x9AA0AC, size: 14]
                     Text("wind {wind} km/h") #[color: 0x9AA0AC, size: 14]
+                    Text("US AQI {aqi}") #[color: 0x9AA0AC, size: 14]
                 }
                 Text("auto-refreshed {refreshes} times") #[color: 0x6A7080, size: 12]
             }

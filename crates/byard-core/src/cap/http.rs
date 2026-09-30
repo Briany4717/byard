@@ -71,6 +71,10 @@ pub struct Http {
     /// Prepended to any request path that is not already absolute, so an app
     /// can write `http.get("/weather?q=Tokyo")`. Empty by default.
     base_url: String,
+    /// Named origins, for an app that talks to more than one host:
+    /// `http.get("air:/v1/air-quality")` resolves against the origin named
+    /// `air`. Declared in `byard.toml` under `[http.hosts]`.
+    hosts: Vec<(String, String)>,
 }
 
 impl Http {
@@ -85,7 +89,17 @@ impl Http {
     pub fn with_base_url(base_url: impl Into<String>) -> Self {
         Self {
             base_url: base_url.into(),
+            hosts: Vec::new(),
         }
+    }
+
+    /// Adds a named origin: a request to `name:/path` goes to `origin/path`.
+    #[must_use]
+    pub fn with_host(mut self, name: impl Into<String>, origin: impl Into<String>) -> Self {
+        let name = name.into();
+        self.hosts.retain(|(n, _)| *n != name);
+        self.hosts.push((name, origin.into()));
+        self
     }
 
     /// The process-wide client.
@@ -109,17 +123,49 @@ impl Http {
             .as_ref()
     }
 
-    /// Resolves `url` against the base URL, if it is not already absolute.
-    fn resolve(&self, url: &str) -> String {
-        if self.base_url.is_empty() || url.starts_with("http://") || url.starts_with("https://") {
-            return url.to_string();
+    /// Resolves `url`: an absolute URL as written, `name:/path` against the
+    /// named origin, and anything else against the base URL.
+    ///
+    /// A name that was never declared is an `unknown_host` error rather than
+    /// a request somewhere, so a typo reaches the view's `err` arm.
+    fn resolve(&self, url: &str) -> Result<String, HostValue> {
+        if url.starts_with("http://") || url.starts_with("https://") {
+            return Ok(url.to_string());
         }
-        format!(
-            "{}/{}",
-            self.base_url.trim_end_matches('/'),
-            url.trim_start_matches('/')
-        )
+        let join = |origin: &str, path: &str| {
+            format!(
+                "{}/{}",
+                origin.trim_end_matches('/'),
+                path.trim_start_matches('/')
+            )
+        };
+        if let Some((name, path)) = named_host(url) {
+            return match self.hosts.iter().find(|(n, _)| n == name) {
+                Some((_, origin)) => Ok(join(origin, path)),
+                None => Err(json::error(
+                    "unknown_host",
+                    &format!("no host named `{name}`; declare it under [http.hosts] in byard.toml"),
+                )),
+            };
+        }
+        if self.base_url.is_empty() {
+            return Ok(url.to_string());
+        }
+        Ok(join(&self.base_url, url))
     }
+}
+
+/// Splits `name:/path` into its host name and path. The name is lowercase
+/// letters, digits, `_` and `-`, starting with a letter, and the path starts
+/// with a single `/` (a URL's `//` never is one), so neither a relative path
+/// nor a full URL is mistaken for one.
+fn named_host(url: &str) -> Option<(&str, &str)> {
+    let (name, path) = url.split_once(':')?;
+    let valid = name.starts_with(|c: char| c.is_ascii_lowercase())
+        && name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-');
+    (valid && path.starts_with('/') && !path.starts_with("//")).then_some((name, path))
 }
 
 /// One request, already normalised from whichever method built it.
@@ -144,7 +190,7 @@ impl Request {
     /// Reads the `http.request({ … })` record form (RFC-0029 §3).
     fn from_record(http: &Http, record: &HostValue) -> Result<Self, HostValue> {
         let url = match record.field("url") {
-            Some(HostValue::Str(url)) => http.resolve(url),
+            Some(HostValue::Str(url)) => http.resolve(url)?,
             _ => {
                 return Err(json::error(
                     "bad_request",
@@ -321,9 +367,9 @@ impl Controller for Http {
         let mut args = args.into_iter();
         let request = match method {
             "get" => match args.next() {
-                Some(HostValue::Str(url)) => Ok(Request {
+                Some(HostValue::Str(url)) => self.resolve(&url).map(|url| Request {
                     method: "GET".to_string(),
-                    url: self.resolve(&url),
+                    url,
                     headers: Vec::new(),
                     body: None,
                     body_is_json: false,
@@ -338,9 +384,9 @@ impl Controller for Http {
                         Some(HostValue::Str(s)) => (Some(s), false),
                         Some(other) => (Some(json::host_to_json(&other).to_string()), true),
                     };
-                    Ok(Request {
+                    self.resolve(&url).map(|url| Request {
                         method: "POST".to_string(),
-                        url: self.resolve(&url),
+                        url,
                         headers: Vec::new(),
                         body,
                         body_is_json,
@@ -630,7 +676,7 @@ mod tests {
         // `Http`, not a new one, answers relative paths from that origin.
         let server = Server::serve(vec![response("200 OK", "text/plain", "ok")]);
         let mut registry = crate::cap::default_registry("test");
-        crate::cap::set_http_base_url(&mut registry, &server.url(""));
+        crate::cap::configure_http(&mut registry, Some(&server.url("")), &[]);
         let id = registry.id_of("Http").expect("Http is registered");
         let http = registry.get(id).expect("the controller");
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -643,10 +689,42 @@ mod tests {
 
         // An app that dropped the defaults does not get `Http` back.
         let mut bare = crate::bridge::ControllerRegistry::new();
-        crate::cap::set_http_base_url(&mut bare, &server.url(""));
+        crate::cap::configure_http(&mut bare, Some(&server.url("")), &[]);
         assert!(!bare.contains("Http"));
 
         assert!(server.requests()[0].starts_with("GET /wx"));
+    }
+
+    #[test]
+    fn a_named_host_resolves_against_its_own_origin() {
+        let base = Server::serve(vec![response("200 OK", "text/plain", "base")]);
+        let air = Server::serve(vec![response("200 OK", "text/plain", "air")]);
+        let http = Http::with_base_url(base.url("")).with_host("air", air.url(""));
+        call(&http, "get", vec![HostValue::Str("air:/v1/aq?x=1".into())]).expect("fetched");
+        call(&http, "get", vec![HostValue::Str("/wx".into())]).expect("fetched");
+        let (air_seen, base_seen) = (air.requests(), base.requests());
+        assert!(air_seen[0].starts_with("GET /v1/aq?x=1"), "{air_seen:?}");
+        assert!(base_seen[0].starts_with("GET /wx"), "{base_seen:?}");
+        assert_eq!(
+            (air_seen.len(), base_seen.len()),
+            (1, 1),
+            "each went to its own"
+        );
+    }
+
+    #[test]
+    fn an_undeclared_host_is_an_error_not_a_request() {
+        let http = Http::with_base_url("http://127.0.0.1:1").with_host("air", "http://127.0.0.1:1");
+        let error = call(&http, "get", vec![HostValue::Str("aqi:/v1".into())]).unwrap_err();
+        assert!(
+            matches!(error.field("kind"), Some(HostValue::Str(k)) if k == "unknown_host"),
+            "{error:?}"
+        );
+        // Neither a relative path nor a full URL is read as a host name.
+        assert_eq!(named_host("/v1/a:b"), None);
+        assert_eq!(named_host("https://a.com/x"), None);
+        assert_eq!(named_host("Air:/x"), None);
+        assert_eq!(named_host("air:/x"), Some(("air", "/x")));
     }
 
     #[test]

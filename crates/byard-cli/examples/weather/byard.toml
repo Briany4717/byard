@@ -5,3 +5,7 @@ entry = "src/main.byd"
 # Where a relative `http.get("/path")` goes.
 [http]
 base_url = "https://api.open-meteo.com"
+
+# Air quality comes from a second host; `http.get("air:/...")` goes here.
+[http.hosts]
+air = "https://air-quality-api.open-meteo.com"

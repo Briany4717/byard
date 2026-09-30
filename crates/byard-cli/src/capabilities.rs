@@ -32,14 +32,12 @@ use byard_core::bridge::ControllerRegistry;
 /// on the path, so a store does not move when the directory does, and two
 /// projects never share one settings file.
 ///
-/// `http_base_url` is the manifest's `[http] base_url`, applied through the
-/// same `byard-core` function a shipped `App` uses.
+/// `http` is the manifest's `[http]` table, applied through the same
+/// `byard-core` function a shipped `App` uses.
 #[must_use]
-pub fn registry(project: &str, http_base_url: Option<&str>) -> ControllerRegistry {
+pub fn registry(project: &str, http: &byard_project::manifest::HttpConfig) -> ControllerRegistry {
     let mut registry = byard_core::cap::default_registry(project);
-    if let Some(base) = http_base_url {
-        byard_core::cap::set_http_base_url(&mut registry, base);
-    }
+    byard_core::cap::configure_http(&mut registry, http.base_url.as_deref(), &http.hosts);
     registry
 }
 
@@ -53,7 +51,7 @@ mod tests {
         // (RFC-0029 §7 reserved names), so the set is asserted rather than
         // assumed: a capability added without a decision would silently take
         // a name out of the app's vocabulary.
-        for name in registry("demo", None).names() {
+        for name in registry("demo", &byard_project::manifest::HttpConfig::default()).names() {
             assert!(
                 byard_core::cap::is_reserved(name),
                 "`{name}` is offered but not reserved"
@@ -63,7 +61,9 @@ mod tests {
 
     #[test]
     fn the_dev_runner_offers_the_same_set_a_shipped_app_does() {
-        let dev: Vec<&str> = registry("demo", None).names().collect();
+        let dev: Vec<&str> = registry("demo", &byard_project::manifest::HttpConfig::default())
+            .names()
+            .collect();
         let shipped: Vec<&str> = byard_core::cap::default_registry("demo").names().collect();
         assert_eq!(dev, shipped);
     }

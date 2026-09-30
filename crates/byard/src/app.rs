@@ -238,15 +238,9 @@ impl App {
                 names.join(", ")
             )));
         }
-        let Program {
-            views,
-            theme,
-            http_base_url,
-        } = load_program(&self.entry)?;
+        let Program { views, theme, http } = load_program(&self.entry)?;
         let mut registry = self.registry;
-        if let Some(base) = &http_base_url {
-            byard_core::cap::set_http_base_url(&mut registry, base);
-        }
+        byard_core::cap::configure_http(&mut registry, http.base_url.as_deref(), &http.hosts);
 
         let (width, height) = self.size;
         // Wait mode: a shipped app redraws when something changed, and the
@@ -269,8 +263,8 @@ impl App {
 struct Program {
     views: Vec<ViewDecl>,
     theme: byard_compiler::interp::theme::Theme,
-    /// `[http] base_url`, for the built-in `Http` (RFC-0029).
-    http_base_url: Option<String>,
+    /// The `[http]` origins, for the built-in `Http` (RFC-0029).
+    http: byard_project::manifest::HttpConfig,
 }
 
 /// Reads the program an app runs and the theme it runs in, the same way
@@ -310,7 +304,7 @@ fn load_program(entry: &Path) -> Result<Program, ByardError> {
     Ok(Program {
         views: program.views,
         theme: manifest.theme,
-        http_base_url: manifest.http_base_url,
+        http: manifest.http,
     })
 }
 
@@ -569,12 +563,8 @@ mod tests {
         )
         .unwrap();
 
-        let Program {
-            views,
-            theme,
-            http_base_url,
-        } = load_program(&dir).expect("the project loads");
-        assert_eq!(http_base_url.as_deref(), Some("https://api.example.com"));
+        let Program { views, theme, http } = load_program(&dir).expect("the project loads");
+        assert_eq!(http.base_url.as_deref(), Some("https://api.example.com"));
         let names: Vec<&str> = views.iter().map(|v| v.name.as_str()).collect();
         assert!(names.contains(&"Card"), "the sibling view: {names:?}");
         assert_eq!(theme.color("primary", false), Some(0x0012_3456));

@@ -837,7 +837,7 @@ mod tests {
             vector_includes: Vec::new(),
             theme: byard_compiler::interp::theme::Theme::byard_base(),
             dev: crate::manifest::DevConfig::default(),
-            http_base_url: None,
+            http: crate::manifest::HttpConfig::default(),
         };
         let (program, provider) = resolve_project(&manifest).unwrap();
         assert!(program.errors.is_empty(), "{:?}", program.errors);

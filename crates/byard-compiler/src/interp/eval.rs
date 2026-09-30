@@ -12217,6 +12217,22 @@ impl Interpreter {
                     last
                 })
             }
+            // An `if` statement: only the taken branch runs, so a guard's write
+            // and the reads inside the branch not taken never happen.
+            Expr::If {
+                cond, then, els, ..
+            } => {
+                let mut cc = self.lower_expr(cond, payload_name);
+                let mut tc = self.lower_expr(then, payload_name);
+                let mut ec = els.as_deref().map(|e| self.lower_expr(e, payload_name));
+                Box::new(move |ctx| {
+                    if cc(ctx).as_bool().unwrap_or(false) {
+                        tc(ctx)
+                    } else {
+                        ec.as_mut().map_or(Value::Unit, |ec| ec(ctx))
+                    }
+                })
+            }
             // A `theme.<token>` access (RFC-0022): reads the reactive scheme
             // signal and projects the token's value for the active scheme. Any
             // other member access needs controller metadata (not modeled in
@@ -12639,6 +12655,17 @@ impl Interpreter {
                     last = self.eval_action(stmt)?;
                 }
                 Ok(last)
+            }
+            Expr::If {
+                cond, then, els, ..
+            } => {
+                if self.eval_pure(cond).as_bool().unwrap_or(false) {
+                    self.eval_action(then)
+                } else if let Some(els) = els {
+                    self.eval_action(els)
+                } else {
+                    Ok(Value::Unit)
+                }
             }
             other => Ok(self.eval_pure(other)),
         }

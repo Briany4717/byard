@@ -253,6 +253,11 @@ extension of the existing parameter model.
   - [x] **Multi-statement callbacks.** Yes. `{ a++; b = 0 }` is valid. The
     callback body is a `Vec<ActionExpr>`, identical to an event handler body.
     Statements execute sequentially within one tick.
+    A statement may be `if cond { … }`, optionally followed by `else if …` and
+    `else { … }`; only the taken branch runs, so `n = n + 1  if n > 10 { n = 10 }`
+    is a clamp. `if` is contextual (it stays a valid identifier where no
+    condition follows), and only means anything in an action: the structural
+    form in a view body is `when`.
   - [x] **Naming convention.** **Lint warning (not yet enforced).** Decision:
     the compiler should emit `Warning::CallbackNamingConvention` if a `Fn()`
     parameter does not start with `on_` (e.g., `tap: Fn()` warns, `on_tap:

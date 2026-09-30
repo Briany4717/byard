@@ -66,6 +66,7 @@ impl Parser<'_> {
                 let parts = self.parse_string_literal(span);
                 Expr::StrLit(parts, span)
             }
+            Some(Token::Ident(_)) if self.at_if_statement() => self.parse_if(),
             Some(Token::Ident(sym)) => {
                 self.advance();
                 // A bare single-parameter lambda `x => body` (RFC-0027 §5, used
@@ -130,6 +131,74 @@ impl Parser<'_> {
             states,
             span: self.span_from(start),
         }
+    }
+
+    /// True when the cursor is on an `if` statement. `if` is contextual, like
+    /// `ok`/`err`: it is a statement only when an expression follows, so a
+    /// `var if` (or `if = 1`, `if.x`, `if => …`) is still an identifier.
+    fn at_if_statement(&self) -> bool {
+        matches!(self.cur(), Some(Token::Ident(s)) if s.as_str() == "if")
+            && !matches!(
+                self.peek2(),
+                None | Some(
+                    Token::Arrow
+                        | Token::Eq
+                        | Token::PlusEq
+                        | Token::MinusEq
+                        | Token::Dot
+                        | Token::Comma
+                        | Token::RParen
+                        | Token::RBrace
+                        | Token::LBrace
+                )
+            )
+    }
+
+    /// `if cond { stmt* } (else if … | else { stmt* })?`, an action statement.
+    fn parse_if(&mut self) -> Expr {
+        let start = self.cur_span();
+        self.advance(); // if
+        let cond = Box::new(self.parse_expr(0));
+        let then = Box::new(self.parse_stmt_block("'{' to open the `if` body"));
+        let els = if self.eat(&Token::Else) {
+            if self.at_if_statement() {
+                Some(Box::new(self.parse_if()))
+            } else {
+                Some(Box::new(self.parse_stmt_block("'{' after `else`")))
+            }
+        } else {
+            None
+        };
+        Expr::If {
+            cond,
+            then,
+            els,
+            span: self.span_from(start),
+        }
+    }
+
+    /// `"{" stmt* "}"` as an [`Expr::Block`].
+    fn parse_stmt_block(&mut self, what: &str) -> Expr {
+        let start = self.cur_span();
+        self.expect(&Token::LBrace, what);
+        let stmts = self.parse_block_stmts();
+        self.expect(&Token::RBrace, "'}' to close the block");
+        Expr::Block(stmts, self.span_from(start))
+    }
+
+    /// Statements up to (not including) the closing `}`.
+    fn parse_block_stmts(&mut self) -> Vec<Expr> {
+        let mut stmts = Vec::new();
+        while !matches!(self.cur(), Some(Token::RBrace) | None) {
+            let before = self.pos;
+            stmts.push(self.parse_expr(0));
+            // Guard against a non-advancing parse (a stray token that is neither
+            // a statement start nor `}`) so recovery never spins.
+            if self.pos == before {
+                self.advance();
+            }
+        }
+        stmts
     }
 
     /// True when the cursor is on the result arm named `keyword` (RFC-0028 §4):
@@ -778,16 +847,7 @@ impl Parser<'_> {
             self.expect(&Token::Pipe, "'|' to close the callback parameter list");
         }
         // Body statements up to `}`.
-        let mut stmts = Vec::new();
-        while !matches!(self.cur(), Some(Token::RBrace) | None) {
-            let before = self.pos;
-            stmts.push(self.parse_expr(0));
-            // Guard against a non-advancing parse (a stray token that is neither
-            // a statement start nor `}`) so recovery never spins.
-            if self.pos == before {
-                self.advance();
-            }
-        }
+        let stmts = self.parse_block_stmts();
         self.expect(&Token::RBrace, "'}' to close the callback block");
         let span = self.span_from(start);
         Expr::Lambda {

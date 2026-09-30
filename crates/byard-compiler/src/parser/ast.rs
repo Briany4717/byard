@@ -800,6 +800,20 @@ pub enum Expr {
         /// Source span.
         span: Span,
     },
+    /// An action statement `if cond { stmt* } (else if … | else { stmt* })?`.
+    /// `then` is an [`Expr::Block`]; `els` is an [`Expr::Block`] or, for an
+    /// `else if` chain, another [`Expr::If`]. Runs only inside actions: the
+    /// structural counterpart in a view body is `when`.
+    If {
+        /// The condition.
+        cond: Box<Expr>,
+        /// The then-branch block.
+        then: Box<Expr>,
+        /// The optional else branch.
+        els: Option<Box<Expr>>,
+        /// Source span.
+        span: Span,
+    },
     /// An animated attribute value `value with anim.*(…)` (RFC-0010): `value`
     /// is the (usually ternary) target and `anim` is the `anim.*` curve call,
     /// resolved to a typed `Curve` at lowering. `with` binds below the ternary,
@@ -881,6 +895,7 @@ impl Expr {
             | Self::Record { span, .. }
             | Self::Binary { span, .. }
             | Self::Ternary { span, .. }
+            | Self::If { span, .. }
             | Self::Animated { span, .. }
             | Self::KeyframeStep { span, .. }
             | Self::StyleValue { span, .. }

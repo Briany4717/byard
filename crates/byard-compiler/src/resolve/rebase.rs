@@ -287,6 +287,19 @@ fn shift_expr(expr: &mut Expr, delta: u32) {
                 shift_expr(spread, delta);
             }
         }
+        Expr::If {
+            cond,
+            then,
+            els,
+            span,
+        } => {
+            shift(span, delta);
+            shift_expr(cond, delta);
+            shift_expr(then, delta);
+            if let Some(els) = els {
+                shift_expr(els, delta);
+            }
+        }
         Expr::Ternary {
             cond,
             then,

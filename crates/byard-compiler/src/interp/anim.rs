@@ -20,6 +20,12 @@ use crate::parser::ast::{Arg, Expr};
 use crate::symbol::Symbol;
 use crate::util::closest_match;
 use byard_core::frame::{MAX_KEYFRAME_STEPS, MotionCurve, RepeatMode};
+use smallvec::SmallVec;
+
+/// A call's borrowed arguments. `with` clauses are resolved on every frame an
+/// animated element renders, and a curve rarely has more than a handful of
+/// arguments, so they live on the stack.
+type ArgList<'a> = SmallVec<[&'a Arg; 8]>;
 
 /// The easing family for `anim.ease(…)`. `InOut` is the default when no family
 /// is named (the most common, symmetric ease).
@@ -265,10 +271,10 @@ pub fn resolve_motion(anim: &Expr) -> Result<MotionSpec<'_>, CompileError> {
         });
     }
     if name.as_str() == "stagger" {
-        return resolve_stagger(&args, name_span);
+        return resolve_stagger(args, name_span);
     }
-    let (curve_args, mods) = split_modifiers(&args)?;
-    let curve = resolve_named_curve(&name, name_span, &curve_args, mods.duration_ms)?;
+    let (curve_args, mods) = split_modifiers(args)?;
+    let curve = resolve_named_curve(name, name_span, &curve_args, mods.duration_ms)?;
     Ok(MotionSpec {
         curve,
         repeat: mods.repeat.unwrap_or_default(),
@@ -294,22 +300,31 @@ pub fn resolve_keyframes(expr: &Expr) -> Option<Result<KeyframeTrack<'_>, Compil
     if name.as_str() != "keyframes" {
         return None;
     }
-    Some(resolve_keyframe_args(&args, name_span))
+    Some(resolve_keyframe_args(args, name_span))
 }
 
 /// Whether `expr` is an `anim.keyframes(…)` call, the cheap shape test the
 /// evaluation chokepoint runs before doing any resolution work.
+///
+/// Every value evaluation asks this, so it reads the shape directly rather
+/// than going through [`destructure_anim_call`], whose "not a curve" error
+/// would allocate a message for every ordinary expression.
 #[must_use]
 pub fn is_keyframes_call(expr: &Expr) -> bool {
-    matches!(
-        destructure_anim_call(expr, true),
-        Ok((name, ..)) if name.as_str() == "keyframes"
-    )
+    let field = match expr {
+        Expr::Call { callee, .. } => match callee.as_ref() {
+            Expr::Member { base, field, .. } if is_anim_base(base) => field,
+            _ => return false,
+        },
+        Expr::Member { base, field, .. } if is_anim_base(base) => field,
+        _ => return false,
+    };
+    field.as_str() == "keyframes"
 }
 
 /// Validates the argument list of an `anim.keyframes(…)` call (RFC-0025 §3/§4).
 fn resolve_keyframe_args<'a>(
-    args: &[&'a Arg],
+    args: &'a [Arg],
     call_span: Span,
 ) -> Result<KeyframeTrack<'a>, CompileError> {
     let (step_args, mods) = split_modifiers(args)?;
@@ -392,7 +407,7 @@ fn resolve_keyframe_args<'a>(
 /// sugar for the `delay: index * step` pattern, with the non-cancellable delay
 /// semantics of an entrance cascade. Arguments are positional or named
 /// (`base`/`step`/`index`).
-fn resolve_stagger<'a>(args: &[&'a Arg], call_span: Span) -> Result<MotionSpec<'a>, CompileError> {
+fn resolve_stagger<'a>(args: &'a [Arg], call_span: Span) -> Result<MotionSpec<'a>, CompileError> {
     const FIELDS: [&str; 3] = ["base", "step", "index"];
     // Modifiers may sit on the stagger itself (`anim.stagger(spring(), 90ms, i,
     // restart: attempt)`) as well as on its base curve, the outer position is
@@ -433,8 +448,8 @@ fn resolve_stagger<'a>(args: &[&'a Arg], call_span: Span) -> Result<MotionSpec<'
     // The base curve may be written bare (`spring()`) inside `stagger`, since
     // the `anim.` namespace is already established by the enclosing call.
     let (name, name_span, curve_args) = destructure_anim_call(base, false)?;
-    let (curve_args, mods) = split_modifiers(&curve_args)?;
-    let curve = resolve_named_curve(&name, name_span, &curve_args, mods.duration_ms)?;
+    let (curve_args, mods) = split_modifiers(curve_args)?;
+    let curve = resolve_named_curve(name, name_span, &curve_args, mods.duration_ms)?;
     let step_ms = duration_literal(step, "anim.stagger's step")?;
     Ok(MotionSpec {
         curve,
@@ -478,15 +493,17 @@ struct Modifiers<'a> {
 
 /// Splits a curve call's arguments into the curve's own arguments and the
 /// shared RFC-0025 modifiers, validating each modifier's value.
-fn split_modifiers<'a>(args: &[&'a Arg]) -> Result<(Vec<&'a Arg>, Modifiers<'a>), CompileError> {
-    let mut rest = Vec::with_capacity(args.len());
+fn split_modifiers<'a>(
+    args: impl IntoIterator<Item = &'a Arg>,
+) -> Result<(ArgList<'a>, Modifiers<'a>), CompileError> {
+    let mut rest = ArgList::new();
     let mut mods = Modifiers::default();
     // `loop:` and `repeat:` are two spellings of one field; writing both is
     // contradictory in either order.
     let mut repeat_written = None;
     for arg in args {
         let Some(name) = &arg.name else {
-            rest.push(*arg);
+            rest.push(arg);
             continue;
         };
         let span = arg.value.span();
@@ -513,7 +530,7 @@ fn split_modifiers<'a>(args: &[&'a Arg]) -> Result<(Vec<&'a Arg>, Modifiers<'a>)
             "duration" => mods.duration_ms = Some(duration_literal(&arg.value, "duration")?),
             "from" => mods.from = Some(&arg.value),
             "restart" => mods.restart = Some(&arg.value),
-            _ => rest.push(*arg),
+            _ => rest.push(arg),
         }
     }
     Ok((rest, mods))
@@ -614,26 +631,19 @@ fn resolve_named_curve(
 fn destructure_anim_call(
     anim: &Expr,
     require_namespace: bool,
-) -> Result<(Symbol, Span, Vec<&Arg>), CompileError> {
-    fn borrowed(args: &[Arg]) -> Vec<&Arg> {
-        args.iter().collect()
-    }
+) -> Result<(&Symbol, Span, &[Arg]), CompileError> {
     match anim {
         // `anim.spring(...)` / `spring(...)`, a call.
         Expr::Call { callee, args, span } => match callee.as_ref() {
             Expr::Member { base, field, span } if is_anim_base(base) => {
-                Ok((field.clone(), *span, borrowed(args)))
+                Ok((field, *span, args.as_slice()))
             }
-            Expr::Ident(name, span) if !require_namespace => {
-                Ok((name.clone(), *span, borrowed(args)))
-            }
+            Expr::Ident(name, span) if !require_namespace => Ok((name, *span, args.as_slice())),
             _ => Err(not_a_curve(*span)),
         },
         // `anim.spring` / `spring`, the bare form, all defaults.
-        Expr::Member { base, field, span } if is_anim_base(base) => {
-            Ok((field.clone(), *span, Vec::new()))
-        }
-        Expr::Ident(name, span) if !require_namespace => Ok((name.clone(), *span, Vec::new())),
+        Expr::Member { base, field, span } if is_anim_base(base) => Ok((field, *span, &[])),
+        Expr::Ident(name, span) if !require_namespace => Ok((name, *span, &[])),
         other => Err(not_a_curve(other.span())),
     }
 }
@@ -1153,5 +1163,36 @@ mod tests {
             message("anim.linear(rpeat: 3)").contains("did you mean `repeat`"),
             "…on a fixed-duration curve too"
         );
+    }
+
+    #[test]
+    fn keyframes_shape_test_agrees_with_the_full_destructure() {
+        // The shape test skips `destructure_anim_call` for speed, so it must
+        // accept exactly the expressions that would destructure to `keyframes`.
+        for (src, expected) in [
+            ("anim.keyframes(0%: 1, 100%: 2, duration: 1s)", true),
+            ("anim.keyframes", true),
+            ("anim.spring(stiffness: 1)", false),
+            ("anim.spring", false),
+            ("keyframes(1)", false),
+            ("other.keyframes(1)", false),
+            ("1", false),
+            ("(1, 2)", false),
+        ] {
+            let parsed = parse(&format!("View V() {{ Box #[scale: {src}] {{}} }}"));
+            assert!(parsed.errors.is_empty(), "{src}: {:?}", parsed.errors);
+            let Member::Element(el) = &parsed.views[0].body[0] else {
+                panic!("expected an element");
+            };
+            let AttrKind::Prop { value } = &el.attrs[0].kind else {
+                panic!("expected a property");
+            };
+            let full = matches!(
+                destructure_anim_call(value, true),
+                Ok((name, ..)) if name.as_str() == "keyframes"
+            );
+            assert_eq!(is_keyframes_call(value), expected, "{src}");
+            assert_eq!(full, expected, "{src}");
+        }
     }
 }

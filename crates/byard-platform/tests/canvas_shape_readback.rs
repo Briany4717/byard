@@ -824,3 +824,60 @@ fn a_conic_on_an_arc_spans_the_arcs_own_sweep() {
         (end.0, end.1, end.2)
     );
 }
+
+/// A round cap on a conic arc takes the colour of the end it caps.
+///
+/// The cap reaches a little past the arc's first angle, where the angle wraps
+/// to the far end of the turn. Measured as a position along the sweep, that
+/// is "almost 1", so the start cap used to be painted with the `to` stop: a
+/// gauge ramping green to red showed a red dot at its green end.
+#[test]
+fn a_round_cap_takes_the_colour_of_its_own_end() {
+    let Some((device, queue, _turn)) = try_device() else {
+        eprintln!("no GPU adapter, skipping arc cap readback");
+        return;
+    };
+
+    let (w, h) = (240.0_f32, 240.0_f32);
+    let mut frame = RenderFrame::new();
+    // A half turn from due east, clockwise through south to west, red to blue.
+    frame.push_canvas_shape(CanvasShape {
+        kind: CANVAS_SHAPE_ARC,
+        params: [120.0, 120.0, 90.0, 0.0, std::f32::consts::PI, 0.0, 0.0, 0.0],
+        stroke_width: 24.0,
+        cap: byard_core::frame::CANVAS_CAP_ROUND,
+        stroke_gradient: Some(byard_core::frame::Gradient {
+            kind: byard_core::frame::GradientKind::Conic,
+            angle: 0.0,
+            center: [0.5, 0.5],
+            radius: 0.5,
+            from: [1.0, 0.0, 0.0, 1.0],
+            mid: [0.5, 0.0, 0.5, 1.0],
+            to: [0.0, 0.0, 1.0, 1.0],
+            mid_pos: 0.5,
+            offset: 0.0,
+        }),
+        ..CanvasShape::default()
+    });
+    let rb = render(&device, &queue, &frame, w, h);
+
+    // Inside the start cap: just north of the east end, before the arc's
+    // first angle. And inside the end cap: just north of the west end, past
+    // its last angle.
+    let start_cap = rb.at(212.0, 112.0);
+    let end_cap = rb.at(28.0, 112.0);
+    assert!(
+        start_cap.3 > 200 && end_cap.3 > 200,
+        "both caps must be painted"
+    );
+    assert!(
+        start_cap.2 > 180 && start_cap.0 < 80,
+        "the start cap must be the `from` colour, got BGR={:?}",
+        (start_cap.0, start_cap.1, start_cap.2)
+    );
+    assert!(
+        end_cap.0 > 180 && end_cap.2 < 80,
+        "the end cap must be the `to` colour, got BGR={:?}",
+        (end_cap.0, end_cap.1, end_cap.2)
+    );
+}

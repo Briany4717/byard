@@ -27,15 +27,15 @@ use byard_compiler::vector::aot::collect_static_vector_refs;
 /// around `VectorIcon`, mapping a design-token name to an internal asset path.
 /// The package owns its SVG paths; the consumer only knows the wrapper names.
 const MATERIAL_LIB: &str = r#"
-View SearchIcon(size, color) {
+View SearchIcon(size: Int, color: Int) {
     VectorIcon("icons/search.svg") #[size: size, color: color]
 }
 
-View HomeIcon(size, color) {
+View HomeIcon(size: Int, color: Int) {
     VectorIcon("icons/home.svg") #[size: size, color: color]
 }
 
-View StarIcon(size, color) {
+View StarIcon(size: Int, color: Int) {
     VectorIcon("icons/star.svg") #[size: size, color: color]
 }
 "#;

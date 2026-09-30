@@ -52,6 +52,12 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   paths must have the same number of subpaths. See section 6 of
   `crates/byard-cli/examples/shape_morph`.
 
+- **`sort`, `sortBy`, `reduce`, `find`, `indexOf`, `min` and `max` on lists.**
+  A week's range is `highs.max()` and `lows.min()`, a total is
+  `xs.reduce(0, (acc, x) => acc + x)`, and `days.sortBy(d => d.high)` orders
+  records by a field, keeping ties in place. Like every list operation they
+  return new values, and `byard check` knows them (a typo suggests the name).
+
 - **`if` in actions.** `if cond { … }`, `else if` and `else` run inside
   any action: a button's, `on mount`, a `let` action, an `ok`/`err` arm. It
   used to parse as three unrelated statements, check clean and do nothing, so
@@ -200,6 +206,12 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   an error.
 
 ### Fixed
+
+- **Text is not reshaped every frame after something unmounts.** The shaped
+  text cache kept its longest length, so once a panel or a dropdown closed,
+  every later frame looked shorter than the cache and reshaped every line on
+  screen. The cache now follows the frame's own length: the frame something
+  unmounts on reshapes, and the still frames after it reshape nothing.
 
 - **Two quick taps on a button are two taps.** A second tap within the
   double-tap window became a double tap instead of a tap, whether or not

@@ -15,7 +15,7 @@ use ast::{
 };
 
 use crate::diagnostics::{CompileError, Span};
-use crate::lexer::{SpannedToken, Token, lex};
+use crate::lexer::{SpannedToken, Token, lex, lex_remapped};
 use crate::symbol::Symbol;
 
 /// The result of parsing a whole `.byd` file.
@@ -48,6 +48,12 @@ pub(crate) struct Parser<'a> {
     tokens: Vec<SpannedToken>,
     pos: usize,
     errors: Vec<CompileError>,
+    /// For a sub-parser over a string interpolation's fragment: the file byte
+    /// offset of each fragment byte, plus one past the end. The fragment is
+    /// not a verbatim slice of the file (nested quotes arrive escaped as `\"`),
+    /// so a single base offset is not enough. `None` for a whole file, whose
+    /// offsets are already the file's.
+    offsets: Option<Vec<u32>>,
 }
 
 impl<'a> Parser<'a> {
@@ -60,7 +66,45 @@ impl<'a> Parser<'a> {
             tokens: lexed.tokens,
             pos: 0,
             errors: lexed.errors,
+            offsets: None,
         }
+    }
+
+    /// A parser over an interpolation fragment whose byte `i` sits at file
+    /// offset `offsets[i]` (`offsets` has one extra entry, for the end). Every
+    /// span it produces, token, node and diagnostic alike, is a file span.
+    fn new_fragment(source: &'a str, offsets: Vec<u32>) -> Self {
+        debug_assert_eq!(offsets.len(), source.len() + 1);
+        let lexed = lex_remapped(source, |span| {
+            Span::new(offsets[span.start as usize], offsets[span.end as usize])
+        });
+        Self {
+            source,
+            tokens: lexed.tokens,
+            pos: 0,
+            errors: lexed.errors,
+            offsets: Some(offsets),
+        }
+    }
+
+    /// The file offset of byte `local` of this parser's source.
+    fn file_offset(&self, local: usize) -> u32 {
+        self.offsets
+            .as_ref()
+            .map_or(local as u32, |offsets| offsets[local])
+    }
+
+    /// The byte of this parser's source at file offset `file` (the inverse of
+    /// [`Parser::file_offset`], for offsets that start or end a token).
+    fn local_offset(&self, file: u32) -> usize {
+        self.offsets.as_ref().map_or(file as usize, |offsets| {
+            offsets.binary_search(&file).unwrap_or_else(|i| i)
+        })
+    }
+
+    /// The source text a (file) `span` covers.
+    fn text(&self, span: Span) -> &'a str {
+        &self.source[self.local_offset(span.start)..self.local_offset(span.end)]
     }
 
     // ---- token cursor ----
@@ -80,7 +124,7 @@ impl<'a> Parser<'a> {
     fn cur_span(&self) -> Span {
         self.tokens.get(self.pos).map_or_else(
             || {
-                let n = self.source.len() as u32;
+                let n = self.file_offset(self.source.len());
                 Span::new(n, n)
             },
             |(_, s)| *s,
@@ -135,7 +179,7 @@ impl<'a> Parser<'a> {
             }
             Some(tok) if is_keyword(tok) => {
                 let span = self.cur_span();
-                let sym = Symbol::intern(&self.source[span.start as usize..span.end as usize]);
+                let sym = Symbol::intern(self.text(span));
                 self.advance();
                 Some(sym)
             }

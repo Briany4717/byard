@@ -201,7 +201,16 @@ fn paint(frame: &RenderFrame, size: (u32, u32), scale: f32) -> Result<Vec<u8>, S
         .map_err(|e| e.to_string())?;
     queue.submit(std::iter::once(cmd));
 
-    Ok(read_back(&device, &queue, &target, pw, ph))
+    let mut pixels = read_back(&device, &queue, &target, pw, ph);
+    // The window's surface is opaque, so wherever the app drew nothing it
+    // shows black. The offscreen target keeps alpha, which a PNG viewer would
+    // show as white or a checkerboard; flattening onto black makes the shot
+    // the picture the window shows. The colour is premultiplied, so black is
+    // already underneath and only the alpha changes.
+    for alpha in pixels.iter_mut().skip(3).step_by(4) {
+        *alpha = 255;
+    }
+    Ok(pixels)
 }
 
 /// Copies `target` out of the GPU as tightly packed RGBA8 rows.

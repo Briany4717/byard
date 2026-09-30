@@ -124,6 +124,9 @@ pub struct Manifest {
     pub theme: Theme,
     /// The `[dev]` table (RFC-0030 §V2).
     pub dev: DevConfig,
+    /// `[http] base_url`: what a relative `http.get("/path")` resolves
+    /// against (RFC-0029). `None` means every request names its whole URL.
+    pub http_base_url: Option<String>,
 }
 
 impl Manifest {
@@ -187,6 +190,7 @@ impl Manifest {
                 vector_includes: Vec::new(),
                 theme: Theme::byard_base(),
                 dev: DevConfig::default(),
+                http_base_url: None,
             });
         }
 
@@ -214,6 +218,7 @@ impl Manifest {
             vector_includes: Vec::new(),
             theme: Theme::byard_base(),
             dev: DevConfig::default(),
+            http_base_url: None,
         }
     }
 
@@ -231,7 +236,7 @@ impl Manifest {
         for key in table.keys() {
             if !matches!(
                 key.as_str(),
-                "project" | "dependencies" | "package" | "assets" | "theme" | "dev"
+                "project" | "dependencies" | "package" | "assets" | "theme" | "dev" | "http"
             ) {
                 eprintln!("byard.toml: warning: unknown key `{key}` (ignored)");
             }
@@ -286,6 +291,7 @@ impl Manifest {
         let theme = parse_theme(&table, &project_root, &dependencies)?;
         // RFC-0030 §V2: the dev runner's own surface.
         let dev = parse_dev(&table)?;
+        let http_base_url = parse_http(&table)?;
 
         Ok(Self {
             project_root,
@@ -296,8 +302,40 @@ impl Manifest {
             vector_includes,
             theme,
             dev,
+            http_base_url,
         })
     }
+}
+
+/// Parses the `[http]` table: `base_url`, the origin a relative request
+/// resolves against.
+///
+/// It exists so an app's requests name a path and not a host. The host then
+/// lives in one place, and a test can point the same views at a loopback
+/// server without rewriting them.
+fn parse_http(table: &toml::Table) -> Result<Option<String>, String> {
+    let Some(tbl) = table.get("http").and_then(toml::Value::as_table) else {
+        return Ok(None);
+    };
+    let mut base = None;
+    for (key, value) in tbl {
+        match key.as_str() {
+            "base_url" => {
+                let url = value
+                    .as_str()
+                    .ok_or_else(|| "byard.toml: [http] `base_url` must be a string".to_string())?;
+                if !(url.starts_with("http://") || url.starts_with("https://")) {
+                    return Err(format!(
+                        "byard.toml: [http] `base_url = {url:?}` must start with \
+                         `http://` or `https://`"
+                    ));
+                }
+                base = Some(url.trim_end_matches('/').to_string());
+            }
+            other => return Err(format!("byard.toml: [http]: unknown key `{other}`")),
+        }
+    }
+    Ok(base)
 }
 
 /// Parses the `[dev]` table (RFC-0030 §V2).
@@ -1201,6 +1239,29 @@ mod tests {
         let err = theme_of("[assets.fonts]\ndisplay = \"assets/fonts/README.md\"\n").unwrap_err();
         assert!(err.contains("display"), "{err}");
         assert!(err.contains("not a font file"), "{err}");
+    }
+
+    // ── RFC-0029: the [http] table ────────────────────────────────────────
+
+    fn http_of(src: &str) -> Result<Option<String>, String> {
+        parse_http(&src.parse::<toml::Table>().unwrap())
+    }
+
+    #[test]
+    fn http_base_url_is_optional_and_read_without_its_trailing_slash() {
+        assert_eq!(http_of("[project]\nname = \"a\"\n"), Ok(None));
+        assert_eq!(
+            http_of("[http]\nbase_url = \"https://api.example.com/\"\n"),
+            Ok(Some("https://api.example.com".to_string()))
+        );
+    }
+
+    #[test]
+    fn http_base_url_must_be_an_http_origin() {
+        let err = http_of("[http]\nbase_url = \"api.example.com\"\n").unwrap_err();
+        assert!(err.contains("must start with"), "{err}");
+        let err = http_of("[http]\nbase = \"https://a.com\"\n").unwrap_err();
+        assert!(err.contains("unknown key `base`"), "{err}");
     }
 
     // ── RFC-0030 §V2: the [dev] table ─────────────────────────────────────

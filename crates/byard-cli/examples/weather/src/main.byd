@@ -7,6 +7,10 @@
 // It fetches live data from open-meteo.com, which needs no API key, so this
 // runs as written. Pick a city and the panel repaints when the answer lands.
 //
+// The requests name a path, `/v1/forecast?...`, and `byard.toml` names the
+// host once, under `[http] base_url`. Change it there to point the whole app
+// at another server (a local mock, say) without touching a view.
+//
 // Nothing here is application code in disguise: `Http` and `Json` are ordinary
 // controllers the engine provides (RFC-0029 §7), reached through the same
 // `inject` any app controller uses, and answering through the same `ok`/`err`
@@ -44,7 +48,7 @@ View Main() {
     // the polling rather than leaving it running.
     every 30s => {
         refreshes = refreshes + 1
-        http.get("https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,wind_speed_10m&daily=temperature_2m_max,temperature_2m_min&forecast_days=1")
+        http.get("/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,wind_speed_10m&daily=temperature_2m_max,temperature_2m_min&forecast_days=1")
             ok res => {
                 state = "ok"
                 temp = res.json.current.temperature_2m
@@ -76,7 +80,7 @@ View Main() {
                         lat = place.lat
                         lon = place.lon
                         message = ""
-                        http.get("https://api.open-meteo.com/v1/forecast?latitude={place.lat}&longitude={place.lon}&current=temperature_2m,wind_speed_10m&daily=temperature_2m_max,temperature_2m_min&forecast_days=1")
+                        http.get("/v1/forecast?latitude={place.lat}&longitude={place.lon}&current=temperature_2m,wind_speed_10m&daily=temperature_2m_max,temperature_2m_min&forecast_days=1")
                             ok res => {
                                 state = "ok"
                                 temp = res.json.current.temperature_2m

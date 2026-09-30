@@ -625,6 +625,31 @@ mod tests {
     }
 
     #[test]
+    fn the_registry_http_takes_the_projects_base_url() {
+        // What both hosts do with `[http] base_url`: the registry's own
+        // `Http`, not a new one, answers relative paths from that origin.
+        let server = Server::serve(vec![response("200 OK", "text/plain", "ok")]);
+        let mut registry = crate::cap::default_registry("test");
+        crate::cap::set_http_base_url(&mut registry, &server.url(""));
+        let id = registry.id_of("Http").expect("Http is registered");
+        let http = registry.get(id).expect("the controller");
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        runtime
+            .block_on(http.invoke("get", vec![HostValue::Str("/wx".into())]))
+            .expect("fetched");
+
+        // An app that dropped the defaults does not get `Http` back.
+        let mut bare = crate::bridge::ControllerRegistry::new();
+        crate::cap::set_http_base_url(&mut bare, &server.url(""));
+        assert!(!bare.contains("Http"));
+
+        assert!(server.requests()[0].starts_with("GET /wx"));
+    }
+
+    #[test]
     fn a_relative_path_resolves_against_the_base_url() {
         let server = Server::serve(vec![response("200 OK", "text/plain", "ok")]);
         let http = Http::with_base_url(server.url(""));

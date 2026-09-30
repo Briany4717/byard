@@ -1,3 +1,7 @@
 [project]
 name = "weather"
 entry = "src/main.byd"
+
+# Where a relative `http.get("/path")` goes.
+[http]
+base_url = "https://api.open-meteo.com"

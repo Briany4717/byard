@@ -291,6 +291,46 @@ fn a_steady_scene_re_shapes_nothing_after_the_first_frame() {
 }
 
 #[test]
+fn a_still_scene_after_an_unmount_re_shapes_nothing() {
+    // A panel of four lines unmounts, leaving eight. The frame it unmounts on
+    // shifts indices, so reshaping there is right. The frames after it are
+    // the same eight lines, and must be compared line by line again: the
+    // cache used to keep its high-water length, so every later frame looked
+    // "shorter" than the cache and reshaped the whole pool, forever.
+    let Some(mut h) = Harness::new() else {
+        eprintln!("no GPU adapter available, skipping");
+        return;
+    };
+    let app = app_lines();
+    let mut with_panel = app.clone();
+    with_panel.extend((0..4).map(|i| format!("panel row {i}")));
+
+    h.encode(&frame_with(&with_panel, None));
+    let without = frame_with(&app, None);
+    h.encode(&without);
+    for _ in 0..3 {
+        h.encode(&without);
+        assert_eq!(
+            h.reshapes(),
+            0,
+            "the same eight lines, after the panel is gone, reshape nothing"
+        );
+    }
+
+    // And growing back to the old length is a length change like any other:
+    // the returning panel is shaped, not assumed from what that index held
+    // two frames ago.
+    let mut other_panel = app.clone();
+    other_panel.extend((0..4).map(|i| format!("other row {i}")));
+    h.encode(&frame_with(&other_panel, None));
+    assert!(
+        h.reshapes() >= 4,
+        "a panel mounting at the old high-water length is shaped: {}",
+        h.reshapes()
+    );
+}
+
+#[test]
 fn opening_the_hud_on_a_steady_scene_re_shapes_nothing() {
     // §A2's acceptance, counted rather than timed. `encode.glyphs` roughly
     // quadrupled when the HUD opened because its twenty-odd fixed-width fields

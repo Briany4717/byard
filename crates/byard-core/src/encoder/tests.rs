@@ -1513,6 +1513,8 @@ fn group(start: u32, end: u32) -> crate::frame::OpacityGroup {
         end: mark(end),
         opacity: 0.5,
         depth: 0.0,
+        rotate: 0.0,
+        pivot: [0.0, 0.0],
     }
 }
 

@@ -12,6 +12,15 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **`byard check` and `byard dev` run the type checker.** It used to run only
+  in the editor, so a misspelt method (`xs.pusj(1)`), a type mismatch or an
+  impure lambda passed the command line clean and failed silently at runtime.
+  An unknown method on a list or a string is now an error with a suggestion
+  (`did you mean push?`), and every other check the editor showed now stops
+  `byard check` too. One consequence: a view parameter with no type,
+  `View Card(label)`, is now an error; write `View Card(label: Str)`. The
+  `content` slot is the one parameter written bare.
+
 - **The system fonts are read once per process.** Building a font system scans
   every font installed on the machine, tens of milliseconds each time, and the
   engine builds two (one to measure text, one to paint it), so every app paid

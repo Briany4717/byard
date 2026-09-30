@@ -25,7 +25,10 @@ use crate::symbol::Symbol;
 
 /// The closed set of list methods (RFC-0027 §4), used for the `UnknownMethod`
 /// suggestion.
-const LIST_METHODS: [&str; 6] = ["push", "removeAt", "contains", "map", "filter", "slice"];
+const LIST_METHODS: [&str; 13] = [
+    "push", "removeAt", "contains", "map", "filter", "slice", "sort", "sortBy", "reduce", "find",
+    "indexOf", "min", "max",
+];
 
 /// The methods a `Str` has at runtime: `slice` is the only one the interpreter
 /// runs on text (`len` is a field). Any other call on a `Str` silently
@@ -610,10 +613,16 @@ impl Checker<'_> {
                 });
             }
         }
-        // Lambda-bearing methods: purity + (for filter) Bool predicate.
+        // Lambda-bearing methods: purity + (for filter and find) a Bool
+        // predicate. `reduce` takes its lambda second, after the initial value.
+        let lambda_at = match name.as_str() {
+            "map" | "filter" | "sortBy" | "find" => Some(0),
+            "reduce" => Some(1),
+            _ => None,
+        };
         let mut lambda_body_ty = None;
-        if matches!(name.as_str(), "map" | "filter") {
-            if let Some(Expr::Lambda { params, body, .. }) = args.first().map(|a| &a.value) {
+        if let Some(at) = lambda_at {
+            if let Some(Expr::Lambda { params, body, .. }) = args.get(at).map(|a| &a.value) {
                 if let Some(eff) = effect_span(body) {
                     self.errors
                         .push(CompileError::EffectInPureLambda { span: eff });
@@ -628,7 +637,8 @@ impl Checker<'_> {
                 }
                 let bt = self.check_expr(body);
                 self.leave(mark);
-                if name.as_str() == "filter" && is_concrete(&bt) && bt != Ty::Bool {
+                if matches!(name.as_str(), "filter" | "find") && is_concrete(&bt) && bt != Ty::Bool
+                {
                     self.errors
                         .push(CompileError::PredicateNotBool { span: body.span() });
                 }
@@ -636,13 +646,16 @@ impl Checker<'_> {
             }
         }
         for (i, arg) in args.iter().enumerate() {
-            if i == 0 && lambda_body_ty.is_some() {
+            if Some(i) == lambda_at && lambda_body_ty.is_some() {
                 continue;
             }
             self.check_expr(&arg.value);
         }
         match (recv, name.as_str()) {
-            (Ty::List(_), "push" | "removeAt" | "filter" | "slice") => recv.clone(),
+            (Ty::List(_), "push" | "removeAt" | "filter" | "slice" | "sort" | "sortBy") => {
+                recv.clone()
+            }
+            (Ty::List(_), "indexOf") => Ty::Int,
             (Ty::Str, "slice") => Ty::Str,
             (Ty::List(_), "contains") => Ty::Bool,
             (Ty::List(_), "map") => Ty::List(Box::new(lambda_body_ty.unwrap_or(Ty::Unknown))),

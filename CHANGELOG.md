@@ -34,6 +34,11 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`if` in actions.** `if cond { … }`, `else if` and `else` run inside
+  any action: a button's, `on mount`, a `let` action, an `ok`/`err` arm. It
+  used to parse as three unrelated statements, check clean and do nothing, so
+  a guard like `if n > max { n = max }` was silently inert.
+
 - **A package can ship a widget that draws itself (RFC-0039).** A native view is
   a Rust type in a package that lays out, draws and handles events like an
   intrinsic, and costs what one costs, because it is compiled into the same

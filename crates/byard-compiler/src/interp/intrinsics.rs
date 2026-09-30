@@ -1326,6 +1326,13 @@ fn animated_anywhere(value: &Expr) -> bool {
         Expr::Ternary {
             cond, then, els, ..
         } => animated_anywhere(cond) || animated_anywhere(then) || animated_anywhere(els),
+        Expr::If {
+            cond, then, els, ..
+        } => {
+            animated_anywhere(cond)
+                || animated_anywhere(then)
+                || els.as_deref().is_some_and(animated_anywhere)
+        }
         Expr::KeyframeStep { value, .. } => animated_anywhere(value),
 
     }

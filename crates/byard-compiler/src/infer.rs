@@ -603,6 +603,11 @@ fn effect_span(expr: &Expr) -> Option<Span> {
         } => effect_span(cond)
             .or_else(|| effect_span(then))
             .or_else(|| effect_span(els)),
+        Expr::If {
+            cond, then, els, ..
+        } => effect_span(cond)
+            .or_else(|| effect_span(then))
+            .or_else(|| els.as_deref().and_then(effect_span)),
         Expr::Index { base, index, .. } => effect_span(base).or_else(|| effect_span(index)),
         Expr::Member { base, .. } => effect_span(base),
         Expr::Call { callee, args, .. } => {

@@ -8,6 +8,9 @@
 //   • the "n −" / "n +" buttons change a number `n`;
 //   • the "push n" / "drop first" buttons grow/shrink a list `xs`;
 //   • the "score +10" button updates a record immutably.
+// "n +" is a clamped counter: its action ends with `if n > 10 { n = 10 }`, so
+// hold it down past 10 and n stops there (and `n > 5`, `0 < n < 10` below
+// keep reacting) instead of growing without bound.
 // Every readout to the right of a label is a *derived* value that recomputes
 // reactively the instant you touch a control, proving comparison, logic,
 // string concat, indexing, `len`, `contains`, `map`, `filter`, records, and
@@ -38,7 +41,10 @@ View Main() {
                 => n = n - 1
             Text("n = {n}") #[color: 0xFFD479, size: 20, weight: bold, width: 90]
             Button("n +") #[bg: 0x3C3C52, radius: 8, p: (vertical: 8, horizontal: 16)]
-                => n = n + 1
+                => {
+                    n = n + 1
+                    if n > 10 { n = 10 }
+                }
         }
 
         // ── comparison (§1) → Bool ──────────────────────────────────────

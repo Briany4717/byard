@@ -262,6 +262,15 @@ fn collect_name_spans_in_expr(expr: &Expr, target_name: &str, out: &mut Vec<Span
         Expr::Postfix { target, .. } => {
             collect_name_spans_in_expr(target, target_name, out);
         }
+        Expr::If {
+            cond, then, els, ..
+        } => {
+            collect_name_spans_in_expr(cond, target_name, out);
+            collect_name_spans_in_expr(then, target_name, out);
+            if let Some(els) = els {
+                collect_name_spans_in_expr(els, target_name, out);
+            }
+        }
         Expr::Unary { rhs, .. } => {
             collect_name_spans_in_expr(rhs, target_name, out);
         }

@@ -526,6 +526,10 @@ impl LogicRuntime for AppRuntime {
     fn apply_io_results(&mut self, results: Vec<IoResult>) -> bool {
         self.interp.apply_io_results(results)
     }
+
+    fn wants_another_frame(&self) -> bool {
+        self.interp.needs_another_frame()
+    }
 }
 
 #[cfg(test)]

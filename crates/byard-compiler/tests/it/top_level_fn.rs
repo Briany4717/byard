@@ -266,3 +266,18 @@ fn reloading_a_changed_helper_updates_its_callers() {
     interp.render(&tree, &mut frame, 400.0, 400.0);
     assert_eq!(frame.texts()[0].text, "Sunny");
 }
+
+/// Both parameters of a two-parameter lambda are the lambda's own names, not
+/// free names the purity check has to reject.
+#[test]
+fn a_helper_can_reduce_with_a_two_parameter_lambda() {
+    let program = resolve(&[
+        ("main.byd", "View Main() { Text(\"{total([1, 2, 3])}\") }"),
+        (
+            "helpers.byd",
+            "fn total(xs: List<Int>) -> Int => xs.reduce(0, (acc, x) => acc + x)",
+        ),
+    ]);
+    assert!(program.errors.is_empty(), "{:?}", program.errors);
+    assert_eq!(render(&program), ["6"]);
+}

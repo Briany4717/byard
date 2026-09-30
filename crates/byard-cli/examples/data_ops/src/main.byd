@@ -19,6 +19,11 @@
 // The DECIMALS AND SLICE block: `{x:.2}` shows n / 7 with exactly two
 // decimals as n changes, and `slice` cuts the list and a timestamp. "drop
 // first" until xs is short, and xs.slice(1, 3) shrinks without failing.
+//
+// The SORT, REDUCE, FIND block: press "push n" a few times with different
+// n. The sum, the largest and smallest, the first value above 2, n's index
+// (-1 when it is not in the list) and the list sorted largest first all
+// follow.
 View Main() {
     var n = 3
     var xs = [1, 2, 3]
@@ -99,6 +104,19 @@ View Main() {
         Text("xs.slice(1, 3).len →  {xs.slice(1, 3).len}") #[color: 0xCCD2E0, size: 15]
         Text("\"2026-09-26T14:00\".slice(11, 16) →  {stamp.slice(11, 16)}")
             #[color: 0xCCD2E0, size: 15]
+
+        // ── sort, reduce and the rest of the second batch ────────────────
+        Text("SORT, REDUCE, FIND") #[color: 0x6750A4, size: 12, weight: bold]
+        Text("sum  →  {xs.reduce(0, (acc, x) => acc + x)}   max  →  {xs.max()}   min  →  {xs.min()}")
+            #[color: 0xCCD2E0, size: 15]
+        Text("first above 2  →  {xs.find(x => x > 2)}   index of n  →  {xs.indexOf(n)}")
+            #[color: 0xCCD2E0, size: 15]
+        Row #[gap: 8] {
+            Text("sorted, largest first:") #[color: 0x9AA0AC, size: 13]
+            for x in xs.sortBy(x => 0 - x) {
+                Text("{x}") #[color: 0x8AD1A0, size: 14]
+            }
+        }
 
         // ── records + immutable spread update (§6) ───────────────────────
         Text("RECORDS  \{ ..r, k: v \}") #[color: 0x6750A4, size: 12, weight: bold]

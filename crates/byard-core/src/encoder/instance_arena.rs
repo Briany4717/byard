@@ -150,7 +150,8 @@ impl InstanceArena {
     /// `Pod` bytes with an instance stride. That is exactly the information
     /// [`push_vertex`](Self::push_vertex) has after `cast_slice`, so the two
     /// land the same bytes at the same alignment, and a package pool and a
-    /// core pool are indistinguishable to the arena (INV-30).
+    /// core pool are indistinguishable to the arena (dispatch
+    /// is per pipeline, never per instance).
     pub fn push_vertex_bytes(&mut self, bytes: &[u8]) -> Region {
         self.push_bytes(bytes, VERTEX_ALIGNMENT, false)
     }
@@ -411,7 +412,7 @@ mod tests {
         // RFC-0039's zero-cost claim, at the one place it can be checked
         // without a GPU: the arena cannot tell a package's instances from a
         // core intrinsic's, because by the time they reach it there is nothing
-        // left to tell them apart by (INV-30).
+        // left to tell them apart by.
         let Some((device, _queue, _turn)) = try_device() else {
             eprintln!("no GPU adapter, skipping arena test");
             return;

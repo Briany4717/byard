@@ -1,4 +1,4 @@
-// RFC-0009 §3 (M47), live hot-reload of a vector icon.
+// RFC-0009 §3, live hot-reload of a vector icon.
 //
 // Run it (from the repo root):
 //   cd crates/byard-cli/examples/hot_reload_icon

@@ -1,6 +1,6 @@
 # RFC-0003: Interactive Events and View Mutation (reference-free)
 
-- **Status:** Active, implemented (M12 events, M16–M18 write-back/keyboard/focus, M24 full catalog, M32 extended exposure). All design decisions (E1–E8) resolved 2026-06-20; code landed and verified green.
+- **Status:** Active, implemented (events, write-back, keyboard and focus, the full event catalog, and extended exposure). All design decisions (E1 to E8) resolved 2026-06-20; code landed and verified green.
 - **Author(s):** Briany4717
 - **Created:** 2026-06-20
 - **Last updated:** 2026-06-20

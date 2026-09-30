@@ -1,4 +1,4 @@
-//! `DecoratedBox` render pipeline (M21, RFC-0001 §3.1).
+//! `DecoratedBox` render pipeline (RFC-0001 §3.1).
 //!
 //! Draws a rounded rectangle with an optional inner border, a blurred drop
 //! shadow, and an overall opacity. The compiler promotes a box to this pipeline
@@ -37,7 +37,7 @@ pub struct DecoratedInstance {
     /// Only the geometric fields (`translate`/`scale`/`rotate`/`origin`) are
     /// read here, `d.base.transform.opacity` is **not** consulted; `misc.x`
     /// (above) is the authoritative opacity for decorated boxes, unchanged
-    /// since M21.
+    /// since the pipeline was introduced.
     pub t_translate: [f32; 2],
     /// Paint-time transform per-axis scale (RFC-0011).
     pub t_scale: [f32; 2],
@@ -66,7 +66,7 @@ pub struct DecoratedInstance {
     /// Which shape the gradient paints, or [`GRADIENT_NONE`] for an instance
     /// with no gradient at all (RFC-0035).
     ///
-    /// **This lane has exactly one owner** (INV-28). The obvious cheaper
+    /// **This lane has exactly one owner**, like every instance lane. The obvious cheaper
     /// alternatives were both wrong: `misc.w` is RFC-0031's `smooth`, and
     /// inferring presence from `grad_axis.xy` only ever worked because every
     /// gradient was linear, a radial centred on the box's top-left corner is

@@ -658,8 +658,8 @@ needs today.
 
 **During implementation:**
 
-- [x] **Error overlay position and opacity.** Resolved by implementation: the overlay renders headline-only (file, line, error kind), long messages are truncated to fit. The telemetry overlay (M31) reuses the same screen space with a throttled refresh. No scrolling needed at current diagnostic verbosity.
-- [x] **Multiple view files.** Resolved by RFC-0008 (M35): `use` imports + module resolver + `PackageProvider` trait landed. `byard.toml` still specifies one entry file; the resolver discovers all `.byd` files in the project and dependency trees.
+- [x] **Error overlay position and opacity.** Resolved by implementation: the overlay renders headline-only (file, line, error kind), long messages are truncated to fit. The telemetry overlay (RFC-0013) reuses the same screen space with a throttled refresh. No scrolling needed at current diagnostic verbosity.
+- [x] **Multiple view files.** Resolved by RFC-0008: `use` imports + module resolver + `PackageProvider` trait landed. `byard.toml` still specifies one entry file; the resolver discovers all `.byd` files in the project and dependency trees.
 - [x] **`byard check` exit code for warnings.** Resolved: exit 0 on warnings. A `--strict` flag is a future CLI addition, not an architectural question. `byard check` currently treats `UnknownAttribute` and all catalog violations as hard errors (exit 1), the boundary between error and warning is defined by the diagnostics, not a flag.
 
 ---

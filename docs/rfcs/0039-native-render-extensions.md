@@ -193,7 +193,7 @@ scope — soundness is preserved by construction, not by convention.
 controllers (RFC-0028) for network/disk work; results (`HostValue`, or a
 `TextureHandle` for decoded imagery) arrive on the logic thread via `frame.rs` and are
 handed to the view through an `on_result` callback keyed to the request. This keeps
-INV-12/INV-2 intact: only `Send` handles cross threads, never `!Send` graphics state.
+the thread rule intact: only `Send` handles cross threads, never `!Send` graphics state.
 
 **Compiler & dev-loop.** `#[native_view]` generates the same intrinsic-catalog entry
 an in-tree intrinsic has (name, prop types, events), so type-checking, prop

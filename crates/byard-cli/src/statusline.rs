@@ -37,7 +37,7 @@
 //! and usually fixes, instead of something they deduce from a timing that never
 //! got smaller.
 //!
-//! # The terminal is left as it was found (INV-25)
+//! # The terminal is left as it was found
 //!
 //! This module writes exactly two kinds of byte sequence: SGR colour (always
 //! closed by a reset within the same write) and `\r\x1b[2K` (carriage return,
@@ -268,8 +268,8 @@ fn install_panic_hook() {
 /// Erases the statusline for the rest of the process.
 ///
 /// Called from [`StatusLine`]'s `Drop`. Not the thing correctness depends on,
-/// see the module docs on INV-25, but it is what makes a clean exit leave no
-/// stale line behind.
+/// see the module docs on leaving the terminal as it was found, but it is what
+/// makes a clean exit leave no stale line behind.
 fn retire() {
     let mut p = painter();
     p.erase();
@@ -707,7 +707,8 @@ impl StatusLine {
     ///
     /// Everything here is a counter bump or a `Vec::len` read; the composition
     /// happens at most ten times a second. The per-frame cost is one `u32`
-    /// increment, one `u16` store, one shift, and three `len`s (INV-24).
+    /// increment, one `u16` store, one shift, and three `len`s (a dev tool must not
+    /// slow down what it measures).
     pub fn on_frame(&mut self, f: FrameInputs<'_>) {
         if !self.enabled {
             return;
@@ -769,7 +770,7 @@ impl StatusLine {
             // the whole sample set, and the ring it came from is drained on the
             // next redraw. One clone per frame while a developer is explicitly
             // looking at a profiler is a cost they have asked for; paying it on
-            // every frame of every session would not be (INV-24).
+            // every frame of every session would not be.
             self.last = LastFrame {
                 logic: logic.clone(),
                 render: render.clone(),
@@ -1035,11 +1036,11 @@ three",
 
     #[test]
     fn nothing_written_hides_the_cursor_or_takes_the_alternate_screen() {
-        // INV-25, structurally. A `Drop` guard does not run on `SIGINT`, so the
-        // only state safe to write is state already scoped to the line being
-        // drawn. A hidden cursor or an alternate screen buffer would be state
-        // this module might fail to restore, on the exit path people actually
-        // use.
+        // The terminal is left as it was found, structurally. A `Drop` guard
+        // does not run on `SIGINT`, so the only state safe to write is state
+        // already scoped to the line being drawn. A hidden cursor or an
+        // alternate screen buffer would be state this module might fail to
+        // restore, on the exit path people actually use.
         let mut out = Vec::new();
         erase_block(&mut out, 8);
         draw_block(&mut out, " ● 60fps\nsecond line");
@@ -1432,7 +1433,7 @@ three",
 
     #[test]
     fn the_repaint_buffer_stops_growing_once_it_has_seen_a_full_line() {
-        // INV-24: a diagnostic that allocates per frame is competing with the
+        // A diagnostic that allocates per frame is competing with the
         // thing it measures.
         let mut s = StatusLine::new(false, BUDGET);
         s.enabled = true;

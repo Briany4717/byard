@@ -472,7 +472,7 @@ impl SampleBlock {
     /// `byld` too, so its interpreter cost is real interpreter cost belonging
     /// to somebody else. Without the narrowing, opening the HUD raises the
     /// developer's tax figure by the HUD's own tree, an observer effect
-    /// reported as an app regression (RFC-0030 INV-24).
+    /// reported as an app regression (RFC-0030).
     #[must_use]
     pub fn owner_kind_self_ns(&self, owner: Owner, kind: ScopeKind) -> u64 {
         let names = registry()

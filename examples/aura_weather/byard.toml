@@ -6,6 +6,10 @@ entry = "src/main.byd"
 [http]
 base_url = "https://api.open-meteo.com"
 
+# Air quality is served from a second host; the air screen asks `air:/...`.
+[http.hosts]
+air = "https://air-quality-api.open-meteo.com"
+
 # Two typefaces: a display face for numbers and headings, a UI face for
 # everything you read. Both ship with the app, under ./fonts (SIL OFL).
 [assets.fonts]

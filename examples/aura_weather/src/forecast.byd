@@ -5,18 +5,13 @@
 //
 // The screen is the three states a request has: asking, answered, failed.
 // Each is an arm of the one request, not a timer pretending to be one.
-View ForecastScreen() {
+View ForecastScreen(place: Str, lat: Float, lon: Float) {
     inject Theme as t
     inject Http as http
 
     // "loading" · "ok" · "error"
     var state: Str = "loading"
     var message: Str = ""
-
-    // One place until location search exists.
-    var place: Str = "Madrid"
-    var lat: Float = 40.42
-    var lon: Float = -3.70
 
     var temp: Float = 0.0
     var feels: Float = 0.0

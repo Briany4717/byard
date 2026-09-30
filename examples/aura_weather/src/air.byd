@@ -1,6 +1,124 @@
-View AirScreen() {
+// The air: the US AQI on a gauge, what that number means, and the four
+// pollutants behind it. Air quality comes from open-meteo's second host,
+// named `air` under `[http.hosts]` in byard.toml.
+View AirScreen(place: Str, lat: Float, lon: Float) {
     inject Theme as t
+    inject Http as http
+
+    // "loading" · "ok" · "error"
+    var state: Str = "loading"
+    var message: Str = ""
+    var aqi: Int = 0
+    var pm25: Float = 0.0
+    var pm10: Float = 0.0
+    var ozone: Float = 0.0
+    var no2: Float = 0.0
+
+    // The gauge's card measures itself, and the gauge is drawn from that, so
+    // nothing here states a width twice.
+    var cardW: Float = 0.0
+    let size = cardW - 40.0 < 260.0 ? cardW - 40.0 : 260.0
+    let r = size * 0.38
+    // 270 degrees of arc for 0 to 300 on the US scale; past 300 it stays full.
+    let sweep = aqi >= 300 ? 270.0 : aqi * 0.9
+
+    fn category(aqi: Int) -> Str => aqi <= 50 ? "Good"
+        : aqi <= 100 ? "Moderate"
+        : aqi <= 150 ? "Unhealthy for sensitive groups"
+        : aqi <= 200 ? "Unhealthy"
+        : aqi <= 300 ? "Very unhealthy"
+        : "Hazardous"
+
+    // The category's colour, on the scale every AQI chart uses: the gauge's
+    // arc and its glow both say which band the reading is in.
+    fn tone(aqi: Int) -> Int => aqi <= 50 ? 0xFF34D399
+        : aqi <= 100 ? 0xFFFBBF24
+        : aqi <= 150 ? 0xFFFB923C
+        : aqi <= 200 ? 0xFFEF4444
+        : aqi <= 300 ? 0xFFA855F7
+        : 0xFFBE185D
+    fn glow(aqi: Int) -> Int => aqi <= 50 ? 0x5534D399
+        : aqi <= 100 ? 0x55FBBF24
+        : aqi <= 150 ? 0x55FB923C
+        : aqi <= 200 ? 0x55EF4444
+        : aqi <= 300 ? 0x55A855F7
+        : 0x55BE185D
+
+    let load = () => {
+        state = "loading"
+        http.get("air:/v1/air-quality?latitude={lat}&longitude={lon}&current=us_aqi,pm2_5,pm10,ozone,nitrogen_dioxide&timezone=auto")
+            ok res => {
+                aqi = res.json.current.us_aqi
+                pm25 = res.json.current.pm2_5
+                pm10 = res.json.current.pm10
+                ozone = res.json.current.ozone
+                no2 = res.json.current.nitrogen_dioxide
+                state = "ok"
+            }
+            err e => {
+                message = e.message
+                state = "error"
+            }
+    }
+
+    on mount => load()
+
     Screen(title: "Air quality", subtitle: "What you are breathing") {
-        Text("Coming in the next milestone.") #[typo: t.body, color: t.onSurfaceVariant]
+        when state == "loading" {
+            Text("Asking about the air") #[typo: t.body, color: t.onSurfaceVariant,
+                                           m: (vertical: 48)]
+        }
+
+        when state == "error" {
+            Column #[bg: t.surfaceContainer, radius: 22, p: 20, gap: 8] {
+                Text("The air quality did not arrive") #[typo: t.title, color: t.onSurface]
+                Text(message) #[typo: t.caption, color: t.error]
+                Row #[p: (top: 8)] {
+                    Button("Try again") #[typo: t.label, bg: t.primaryContainer,
+                                         color: t.onPrimaryContainer, radius: 18]
+                        => load()
+                }
+            }
+        }
+
+        when state == "ok" {
+            // The glow is centred behind the gauge: a radial falloff, which a
+            // linear ramp cannot draw.
+            Column #[bg: t.surfaceContainerLow, radius: 28, p: 20, gap: 4, align: center,
+                     gradient: (kind: radial, center: (0.5, 0.42), radius: 0.75,
+                                from: glow(aqi), to: 0x00121A31)] {
+                on measure => { cardW = it.w }
+
+                Canvas #[width: size, height: size * 0.82] {
+                    arc(cx: size / 2.0, cy: size / 2.0, r: r, start: 135, sweep: 270,
+                        stroke: 0xFF1D2947, stroke_width: 16, cap: round)
+                    arc(cx: size / 2.0, cy: size / 2.0, r: r, start: 135, sweep: sweep,
+                        stroke: tone(aqi), stroke_width: 16, cap: round)
+                    text("{aqi}", x: size / 2.0, y: size / 2.0 + 12.0,
+                         color: 0xFFE8EEF9, size: 44, align: center)
+                    text("US AQI", x: size / 2.0, y: size / 2.0 + 36.0,
+                         color: 0xFF9AA8C2, size: 12, align: center)
+                }
+                Text(category(aqi)) #[typo: t.title, color: t.onSurface]
+                Text(place) #[typo: t.caption, color: t.onSurfaceVariant]
+            }
+
+            Column #[bg: t.surfaceContainer, radius: 22, p: (vertical: 6, horizontal: 16)] {
+                Pollutant(name: "PM2.5", value: "{pm25:.1} µg/m³")
+                Pollutant(name: "PM10", value: "{pm10:.1} µg/m³")
+                Pollutant(name: "Ozone", value: "{ozone:.0} µg/m³")
+                Pollutant(name: "Nitrogen dioxide", value: "{no2:.0} µg/m³")
+            }
+        }
+    }
+}
+
+// One pollutant: its name and how much of it there is.
+View Pollutant(name: Str, value: Str) {
+    inject Theme as t
+    Row #[p: (vertical: 12), align: center] {
+        Text(name) #[typo: t.body, color: t.onSurfaceVariant]
+        Spacer #[grow: 1]
+        Text(value) #[typo: t.label, color: t.onSurface]
     }
 }

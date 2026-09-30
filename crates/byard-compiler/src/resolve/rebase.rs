@@ -10,8 +10,8 @@
 
 use crate::diagnostics::Span;
 use crate::parser::ast::{
-    Arg, Attr, AttrKind, ElementNode, Expr, Member, Param, StateBlock, StrPart, StyleRule, Type,
-    UseDecl, ViewDecl,
+    Arg, Attr, AttrKind, ElementNode, Expr, FnDecl, Member, Param, StateBlock, StrPart, StyleRule,
+    Type, UseDecl, ViewDecl,
 };
 
 fn shift(span: &mut Span, delta: u32) {
@@ -29,6 +29,18 @@ pub(super) fn shift_view(view: &mut ViewDecl, delta: u32) {
     for member in &mut view.body {
         shift_member(member, delta);
     }
+}
+
+/// Rebases a top-level `fn` (params, return type, body) by `delta` bytes.
+pub(super) fn shift_fn(decl: &mut FnDecl, delta: u32) {
+    shift(&mut decl.span, delta);
+    for param in &mut decl.params {
+        shift_param(param, delta);
+    }
+    if let Some(ret) = &mut decl.ret {
+        shift_type(ret, delta);
+    }
+    shift_expr(&mut decl.body, delta);
 }
 
 /// Rebases a `use` declaration by `delta` bytes.

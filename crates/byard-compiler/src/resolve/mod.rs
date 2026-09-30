@@ -30,13 +30,14 @@
 //! parse-time or lower-time, can be located back to `file:line:col`.
 
 mod rebase;
+pub(crate) mod walk;
 
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 
 use crate::diagnostics::{CompileError, Span};
 use crate::interp::intrinsics;
-use crate::parser::ast::{ElementNode, Member, UseDecl, ViewDecl};
+use crate::parser::ast::{ElementNode, Expr, FnDecl, Member, UseDecl, ViewDecl};
 use crate::parser::parse;
 use crate::symbol::Symbol;
 use crate::util::closest_match;
@@ -236,6 +237,21 @@ pub struct ResolvedProgram {
     pub packages: Vec<String>,
 }
 
+/// The names a view binds itself (its parameters and its top-level `var`,
+/// `let` and `fn` members), which shadow a package function of the same name.
+fn view_bindings(view: &ViewDecl) -> std::collections::HashSet<Symbol> {
+    let mut names: std::collections::HashSet<Symbol> =
+        view.params.iter().map(|p| p.name.clone()).collect();
+    for member in &view.body {
+        if let Member::Var { name, .. } | Member::Let { name, .. } | Member::Fn { name, .. } =
+            member
+        {
+            names.insert(name.clone());
+        }
+    }
+    names
+}
+
 /// Human name of a package for diagnostics.
 fn pkg_display(name: &str) -> String {
     if name == ROOT_PACKAGE {
@@ -249,6 +265,7 @@ fn pkg_display(name: &str) -> String {
 struct ParsedModule {
     imports: Vec<UseDecl>,
     views: Vec<ViewDecl>,
+    fns: Vec<FnDecl>,
 }
 
 /// A loaded package: its parsed files and flat export table.
@@ -257,6 +274,8 @@ struct PackageData {
     modules: Vec<ParsedModule>,
     /// Bare view name → span of its declaration.
     exports: HashMap<Symbol, Span>,
+    /// Bare top-level function name → span of its declaration.
+    fn_exports: HashMap<Symbol, Span>,
 }
 
 struct Resolver<'p> {
@@ -288,12 +307,19 @@ pub fn resolve_program(
 
     // Merge: root first (file order), then packages in load order.
     let mut views = Vec::new();
+    let mut fns = Vec::new();
     for name in &r.order {
         if let Some(pkg) = r.packages.get(name) {
             for module in &pkg.modules {
                 views.extend(module.views.iter().cloned());
+                fns.extend(module.fns.iter().cloned());
             }
         }
+    }
+    // One table of every function, canonically named, shared by every view.
+    let helpers = std::sync::Arc::new(fns);
+    for view in &mut views {
+        view.helpers = std::sync::Arc::clone(&helpers);
     }
 
     // The type checks run over the merged, rebased views, so their spans are
@@ -323,6 +349,7 @@ impl Resolver<'_> {
 
         let mut modules = Vec::new();
         let mut exports: HashMap<Symbol, Span> = HashMap::new();
+        let mut fn_exports: HashMap<Symbol, Span> = HashMap::new();
         let mut dep_requests: Vec<(String, Span)> = Vec::new();
 
         for file in files {
@@ -352,12 +379,31 @@ impl Resolver<'_> {
                     }),
                 }
             }
-            modules.push(ParsedModule { imports, views });
+            let mut fns = parsed.fns;
+            for decl in &mut fns {
+                rebase::shift_fn(decl, base);
+                match fn_exports.entry(decl.name.clone()) {
+                    Entry::Vacant(v) => {
+                        v.insert(decl.span);
+                    }
+                    Entry::Occupied(_) => self.errors.push(CompileError::DuplicateFunction {
+                        span: decl.span,
+                        name: decl.name.as_str().to_string(),
+                        package: pkg_display(name),
+                    }),
+                }
+            }
+            modules.push(ParsedModule {
+                imports,
+                views,
+                fns,
+            });
         }
 
         if let Some(pkg) = self.packages.get_mut(name) {
             pkg.modules = modules;
             pkg.exports = exports;
+            pkg.fn_exports = fn_exports;
         }
 
         // Load dependencies depth-first, in first-`use` order (deterministic).
@@ -460,8 +506,87 @@ impl Resolver<'_> {
                 self.rewrite_member(member, pkg_name, &local, &aliases, &bare, &mut errors);
             }
         }
-        self.packages.get_mut(pkg_name).unwrap().modules[module_idx].views = views;
+        // Function calls: `alias.helper(...)` becomes the canonical
+        // `pkg.helper(...)`, and inside a package a bare call to one of its own
+        // functions becomes canonical too, unless the view shadows the name.
+        let mut fns =
+            std::mem::take(&mut self.packages.get_mut(pkg_name).unwrap().modules[module_idx].fns);
+        let own_fns: std::collections::HashSet<Symbol> =
+            self.packages[pkg_name].fn_exports.keys().cloned().collect();
+        for view in &mut views {
+            let shadowed = view_bindings(view);
+            for member in &mut view.body {
+                walk::member_exprs(member, &mut |e| {
+                    self.rewrite_call(e, pkg_name, &own_fns, &shadowed, &aliases, &mut errors);
+                });
+            }
+        }
+        for decl in &mut fns {
+            let shadowed: std::collections::HashSet<Symbol> =
+                decl.params.iter().map(|p| p.name.clone()).collect();
+            walk::expr(&mut decl.body, &mut |e| {
+                self.rewrite_call(e, pkg_name, &own_fns, &shadowed, &aliases, &mut errors);
+            });
+            if pkg_name != ROOT_PACKAGE {
+                decl.name = Symbol::intern(&format!("{pkg_name}.{}", decl.name.as_str()));
+            }
+        }
+        let module = &mut self.packages.get_mut(pkg_name).unwrap().modules[module_idx];
+        module.views = views;
+        module.fns = fns;
         self.errors.extend(errors);
+    }
+
+    /// Rewrites one call to a top-level function to its canonical name.
+    fn rewrite_call(
+        &self,
+        e: &mut Expr,
+        pkg_name: &str,
+        own_fns: &std::collections::HashSet<Symbol>,
+        shadowed: &std::collections::HashSet<Symbol>,
+        aliases: &HashMap<Symbol, String>,
+        errors: &mut Vec<CompileError>,
+    ) {
+        let Expr::Call { callee, .. } = e else {
+            return;
+        };
+        match callee.as_mut() {
+            Expr::Member { base, field, span } => {
+                let Expr::Ident(alias, _) = base.as_ref() else {
+                    return;
+                };
+                let Some(target) = aliases.get(alias) else {
+                    return; // not a package: a controller handle, a record
+                };
+                if self.packages[target].fn_exports.contains_key(field) {
+                    let span = *span;
+                    **callee = Expr::Ident(
+                        Symbol::intern(&format!("{target}.{}", field.as_str())),
+                        span,
+                    );
+                } else {
+                    let hint = closest_match(
+                        field.as_str(),
+                        self.packages[target].fn_exports.keys().map(Symbol::as_str),
+                    )
+                    .map(str::to_string);
+                    errors.push(CompileError::UnknownImportSymbol {
+                        span: *span,
+                        package: target.clone(),
+                        name: field.as_str().to_string(),
+                        hint,
+                    });
+                }
+            }
+            Expr::Ident(name, _)
+                if pkg_name != ROOT_PACKAGE
+                    && own_fns.contains(name)
+                    && !shadowed.contains(name) =>
+            {
+                *name = Symbol::intern(&format!("{pkg_name}.{}", name.as_str()));
+            }
+            _ => {}
+        }
     }
 
     /// Validates one `use pkg.{sym}` entry and records the bare binding.

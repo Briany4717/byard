@@ -1,6 +1,6 @@
 # RFC-0011: Transform & Paint-Time Properties
 
-- **Status:** Active, partially implemented. The engine primitives, the attribute surface, and group-transform inheritance landed first. The **hierarchical transform stack** landed 2026-09-23: hit testing and clipping now follow an ancestor's transform the way paint already did (below). Group opacity (render-to-texture) landed the same day. Remaining: text transforms, which are blocked on `glyphon` taking no per-run matrix.
+- **Status:** Active, partially implemented. The engine primitives, the attribute surface, and group-transform inheritance landed first. The **hierarchical transform stack** landed 2026-09-23: hit testing and clipping now follow an ancestor's transform the way paint already did (below). Group opacity (render-to-texture) landed the same day. **Text transforms** landed 2026-09-30 on the same offscreen target (below), which completes this RFC.
 
   **What "hierarchical" turned out to mean.** Paint had already composed an ancestor's transform onto its children (`Transform::compose`); this document's §"Composition & nesting" still describes that as deferred, and it was not. What was actually missing were the two consumers that had not been told:
 
@@ -15,10 +15,19 @@
   - **The composite is premultiplied.** The picture is drawn with ordinary alpha blending over a transparent target, which leaves its colour premultiplied by its own alpha; compositing it with `SrcAlpha` again would darken every translucent edge in it.
   - A backdrop pane inside a group blurs what is behind the *group*, not the group's own content drawn so far, because the region is copied from the frame. Recorded as the known limit.
 
+  **Text transforms are implemented.** `glyphon` takes no matrix per run, so the part of a transform a run can carry is baked into it and the part it cannot goes through a group:
+
+  - **Scale and translate stay on the direct path.** They are folded into the run's anchor and font size, so the run is shaped at the size it is drawn and stays as sharp as upright text of that size. `Text` now takes `translate`/`scale`/`rotate`/`origin` of its own, composed with its ancestors' like any box's.
+  - **Rotation opens a rotated group.** A rotated box with children, or a rotated `Text`, opens a group exactly as a translucent container does. Every primitive pushed while it is open is stored *upright*: the frame takes the group's rotation out of each one's transform (or anchor) about the pivot, and the composite samples the picture back through the rotation, bilinearly, so its edges are smooth. The groups share the one offscreen target; opacity and rotation are one composite.
+  - **Clips are cut upright too.** A `Clip` inside a rotated group reads its transform through the frame's un-rotation, so it is an ordinary rounded rectangle in the group's space and turns with its content. Cut on screen, the outline would be rotated twice. The path-mask route above remains for a rotated clip no group holds.
+  - **Hit testing is unchanged.** Regions are still registered under the full transform, since the pointer sees the turned picture.
+  - **A frame with a rotated group is redrawn in full.** A changed primitive's dirty region is known upright, not where the rotation puts it on screen. An upright frame is untouched and keeps its incremental path, which is asserted.
+  - **Limits.** The one-level rule holds: a rotated element inside an open group (a rotated label on a translucent card) falls back to its parent's picture, and its own rotation is dropped for its text. The picture is a resample, so rotated text is antialiased by the bilinear filter rather than hinted at its angle.
+
   An untransformed tree registers no transformed regions at all, which is asserted rather than assumed: the assertion caught, on its first run, that a composed identity carries a non-zero pivot and failed the bit-exact identity test, so the check is on the *mapping* (no translation, unit scale, no rotation) and not on the struct.
 - **Author(s):** Brian (byard_v2)
 - **Created:** 2026-07-01
-- **Last updated:** 2026-09-23
+- **Last updated:** 2026-09-30
 - **Depends on:** RFC-0001 (§3.1 pipelines, `frame.rs` primitives), RFC-0005 (intrinsic attribute catalog & `Len` model), RFC-0002 (D4 attribute contract, D5 style layers).
 - **Pairs with:** RFC-0010 (these are exactly the GPU-animatable set), RFC-0012 (interactive states drive them).
 
@@ -251,7 +260,7 @@ standard game-engine model-matrix-in-vertex-shader approach.
 ## Resolved questions (formerly unresolved)
 
 - [x] **std430 field ordering/padding for `Transform`:** resolved by implementation. `Transform` is a plain Rust struct with `translate: [f32; 2]`, `scale: [f32; 2]`, `rotate: f32`, `origin: [f32; 2]`, `opacity: f32`, no explicit `#[repr(C)]` padding needed because the fields are passed to the GPU through `BoxInstance`'s existing per-instance vertex buffer layout (already std430-aligned and validated by `wgsl_validation.rs`). `DecoratedBox` reads transform fields individually from `base.transform` into `DecoratedInstance::from`, not as a raw copy, so field ordering in the Rust struct has no cross-backend consequence. The key invariant: the GPU never sees a `Transform` struct directly; it sees the unpacked fields in the vertex buffer.
-- [x] **Group-opacity compositing path:** implemented 2026-09-23; see the status line. Originally deferred by design (T4): Per-instance opacity landed for `BoxInstance` (via `Transform.opacity`) and `DecoratedBox` (via its own `opacity` field). **Group opacity** (a container's opacity applied to its composited subtree, not per-child) requires render-to-texture and is explicitly deferred to the hierarchical transform stack, a separate, larger RFC. `TextLine` also lacks transform support because `glyphon`'s API has no transform matrix per `TextArea`. Both gaps are documented; neither blocks the current feature set.
+- [x] **Group-opacity compositing path:** implemented 2026-09-23; see the status line. Originally deferred by design (T4): Per-instance opacity landed for `BoxInstance` (via `Transform.opacity`) and `DecoratedBox` (via its own `opacity` field). **Group opacity** (a container's opacity applied to its composited subtree, not per-child) requires render-to-texture and is explicitly deferred to the hierarchical transform stack, a separate, larger RFC. `TextLine` also lacked transform support because `glyphon`'s API has no transform matrix per `TextArea`; that gap closed 2026-09-30 with the rotated group (see the status line).
 
 ## Future possibilities
 

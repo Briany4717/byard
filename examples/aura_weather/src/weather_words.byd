@@ -1,0 +1,23 @@
+// Weather codes and dates in words, shared by every screen. Top-level
+// functions: pure, visible to every view of the project.
+
+// The WMO weather code, in words.
+fn describe(code: Int) -> Str => code == 0 ? "Clear sky"
+    : code <= 2 ? "Partly cloudy"
+    : code == 3 ? "Overcast"
+    : code <= 48 ? "Fog"
+    : code <= 57 ? "Drizzle"
+    : code <= 67 ? "Rain"
+    : code <= 77 ? "Snow"
+    : code <= 82 ? "Showers"
+    : code <= 86 ? "Snow showers"
+    : "Thunderstorm"
+
+// The same, short enough for a row: two words shorter where it matters.
+fn sky(code: Int) -> Str => code == 0 ? "Clear" : code >= 95 ? "Storms" : describe(code)
+
+// A month number, "01" to "12", as its short name.
+fn month(mm: Str) -> Str => mm == "01" ? "Jan" : mm == "02" ? "Feb"
+    : mm == "03" ? "Mar" : mm == "04" ? "Apr" : mm == "05" ? "May"
+    : mm == "06" ? "Jun" : mm == "07" ? "Jul" : mm == "08" ? "Aug"
+    : mm == "09" ? "Sep" : mm == "10" ? "Oct" : mm == "11" ? "Nov" : "Dec"

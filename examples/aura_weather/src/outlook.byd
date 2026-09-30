@@ -14,23 +14,6 @@ View OutlookScreen(place: Str, lat: Float, lon: Float) {
     var lows: List<Float> = []
     var rain: List<Int> = []
 
-    // The WMO weather code, short enough for a row.
-    fn sky(code: Int) -> Str => code == 0 ? "Clear"
-        : code <= 2 ? "Partly cloudy"
-        : code == 3 ? "Overcast"
-        : code <= 48 ? "Fog"
-        : code <= 57 ? "Drizzle"
-        : code <= 67 ? "Rain"
-        : code <= 77 ? "Snow"
-        : code <= 82 ? "Showers"
-        : code <= 86 ? "Snow showers"
-        : "Storms"
-
-    fn month(mm: Str) -> Str => mm == "01" ? "Jan" : mm == "02" ? "Feb"
-        : mm == "03" ? "Mar" : mm == "04" ? "Apr" : mm == "05" ? "May"
-        : mm == "06" ? "Jun" : mm == "07" ? "Jul" : mm == "08" ? "Aug"
-        : mm == "09" ? "Sep" : mm == "10" ? "Oct" : mm == "11" ? "Nov" : "Dec"
-
     let load = () => {
         state = "loading"
         http.get("/v1/forecast?latitude={lat}&longitude={lon}&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max&forecast_days=10&timezone=auto")

@@ -75,6 +75,7 @@ pub fn check_views(views: &[ViewDecl]) -> Inference {
             errors: &mut out.errors,
             bindings: &mut out.bindings,
             env: HashMap::new(),
+            undo: Vec::new(),
             fns: HashMap::new(),
         };
         checker.check_view(view);
@@ -87,6 +88,10 @@ struct Checker<'a> {
     bindings: &'a mut Vec<(Symbol, Ty)>,
     /// Known binding types in scope (params, vars, lets).
     env: HashMap<Symbol, Ty>,
+    /// Undo log for `env`: each binding pushes the value it replaced (or
+    /// `None`), and leaving a scope pops back to the length it saved, so a
+    /// scope costs its own bindings rather than a copy of the whole map.
+    undo: Vec<(Symbol, Option<Ty>)>,
     /// Declared return types of named `fn`s, for call inference.
     fns: HashMap<Symbol, Option<Ty>>,
 }
@@ -121,10 +126,34 @@ impl Checker<'_> {
         }
     }
 
+    /// Binds `name` in the current scope, logging what it replaces.
+    fn bind(&mut self, name: Symbol, ty: Ty) {
+        let previous = self.env.insert(name.clone(), ty);
+        self.undo.push((name, previous));
+    }
+
+    /// Ends the scope opened when the log had length `mark`, restoring every
+    /// binding it replaced, newest first.
+    fn leave(&mut self, mark: usize) {
+        while self.undo.len() > mark {
+            let Some((name, previous)) = self.undo.pop() else {
+                break;
+            };
+            match previous {
+                Some(ty) => {
+                    self.env.insert(name, ty);
+                }
+                None => {
+                    self.env.remove(&name);
+                }
+            }
+        }
+    }
+
     fn check_param(&mut self, param: &Param, what: &str) {
         if let Some(ty) = &param.ty {
             let resolved = self.resolve_type(ty);
-            self.env.insert(param.name.clone(), resolved);
+            self.bind(param.name.clone(), resolved);
         } else {
             // `content` is the child-block slot (RFC-0007 D-A): it holds the
             // caller's `{ ... }` block, has no value type to write, and is
@@ -135,7 +164,7 @@ impl Checker<'_> {
                     what: what.to_string(),
                 });
             }
-            self.env.insert(param.name.clone(), Ty::Unknown);
+            self.bind(param.name.clone(), Ty::Unknown);
         }
     }
 
@@ -150,24 +179,24 @@ impl Checker<'_> {
     /// they can neither leak out nor leave a stale type behind for a name the
     /// enclosing view also uses.
     fn check_scoped(&mut self, members: &[Member], shadow: &[(&Symbol, Ty)]) {
-        let saved = self.env.clone();
+        let mark = self.undo.len();
         for (name, ty) in shadow {
-            self.env.insert((*name).clone(), ty.clone());
+            self.bind((*name).clone(), ty.clone());
         }
         self.check_members(members, false);
-        self.env = saved;
+        self.leave(mark);
     }
 
     /// Checks `expr` with `names` bound to [`Ty::Unknown`] (an event payload,
     /// a callback parameter): they shadow any same-named `var`, so a payload
     /// called `xs` is never mistaken for the list of that name.
     fn check_shadowed(&mut self, expr: &Expr, names: &[&Symbol]) -> Ty {
-        let saved = self.env.clone();
+        let mark = self.undo.len();
         for name in names {
-            self.env.insert((*name).clone(), Ty::Unknown);
+            self.bind((*name).clone(), Ty::Unknown);
         }
         let ty = self.check_expr(expr);
-        self.env = saved;
+        self.leave(mark);
         ty
     }
 
@@ -202,7 +231,7 @@ impl Checker<'_> {
                 span,
             } => {
                 let inferred = self.infer_binding(ty.as_ref(), init, *span);
-                self.env.insert(name.clone(), inferred.clone());
+                self.bind(name.clone(), inferred.clone());
                 if top_level {
                     self.bindings.push((name.clone(), inferred));
                 }
@@ -211,7 +240,7 @@ impl Checker<'_> {
                 params, ret, body, ..
             } => {
                 // The parameters are in scope for the body alone.
-                let saved = self.env.clone();
+                let mark = self.undo.len();
                 for param in params {
                     self.check_param(param, "function parameter");
                 }
@@ -222,11 +251,11 @@ impl Checker<'_> {
                     });
                 }
                 self.check_expr(body);
-                self.env = saved;
+                self.leave(mark);
             }
             Member::Inject { ty, name, .. } => {
                 let resolved = self.resolve_type(ty);
-                self.env.insert(name.clone(), resolved);
+                self.bind(name.clone(), resolved);
             }
             Member::Element(el) => {
                 for arg in &el.content {
@@ -510,12 +539,12 @@ impl Checker<'_> {
                 // turn every lambda over a typed list into a checked position,
                 // and the `Ty` of an element is only as good as the literal
                 // it was inferred from.
-                let saved = self.env.clone();
+                let mark = self.undo.len();
                 for p in params {
-                    self.env.insert(p.clone(), Ty::Unknown);
+                    self.bind(p.clone(), Ty::Unknown);
                 }
                 let bt = self.check_expr(body);
-                self.env = saved;
+                self.leave(mark);
                 if name.as_str() == "filter" && is_concrete(&bt) && bt != Ty::Bool {
                     self.errors
                         .push(CompileError::PredicateNotBool { span: body.span() });

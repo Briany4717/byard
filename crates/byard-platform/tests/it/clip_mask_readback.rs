@@ -356,7 +356,7 @@ fn the_shipped_example_renders_through_the_interpreter() {
         return;
     };
 
-    const SRC: &str = include_str!("../../byard-cli/examples/clip_mask/src/main.byd");
+    const SRC: &str = include_str!("../../../byard-cli/examples/clip_mask/src/main.byd");
     let parsed = byard_compiler::parser::parse(SRC);
     assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
 

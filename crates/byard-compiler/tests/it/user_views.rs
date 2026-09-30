@@ -7,7 +7,7 @@ use byard_compiler::interp::eval::Interpreter;
 use byard_compiler::parser::parse;
 use byard_core::frame::RenderFrame;
 
-const USER_VIEWS: &str = include_str!("../examples/user_views.byd");
+const USER_VIEWS: &str = include_str!("../../examples/user_views.byd");
 
 fn texts(frame: &RenderFrame) -> Vec<String> {
     frame.texts().iter().map(|t| t.text.clone()).collect()

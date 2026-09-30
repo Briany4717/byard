@@ -74,6 +74,19 @@ cargo build --workspace
 CI runs all of the above on every pull request. A PR cannot be merged until it is
 green.
 
+### Where integration tests live
+
+Each crate's integration tests are **one** test binary, `tests/it/main.rs`,
+with one module per subject (`tests/it/clip_path.rs` and so on). A new file
+under `tests/it/` needs its `mod` line in `main.rs`; a new file directly under
+`tests/` would build a separate binary that links the whole engine again,
+which is what used to make every edit cost a minute before a test could run.
+
+Tests in one binary share a process. GPU tests take the one device through
+`byard_test_gpu::device`, which also hands out turns, so they never overlap.
+To run one subject, filter by its module: `cargo test -p byard-platform --test
+it clip_path`.
+
 ### Benchmarks
 
 The Evaluator subsystem ships with benchmarks under `crates/byard-core/benches/`.

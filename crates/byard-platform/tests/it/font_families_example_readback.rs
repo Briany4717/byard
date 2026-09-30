@@ -71,7 +71,7 @@ fn the_shipped_example_renders_two_families_through_the_interpreter() {
         },
     );
 
-    const SRC: &str = include_str!("../../byard-cli/examples/font_families/src/main.byd");
+    const SRC: &str = include_str!("../../../byard-cli/examples/font_families/src/main.byd");
     let parsed = byard_compiler::parser::parse(SRC);
     assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
     let mut interp = byard_compiler::interp::eval::Interpreter::new();

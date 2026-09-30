@@ -16,7 +16,7 @@ use byard_compiler::parser::parse;
 use byard_core::frame::RenderFrame;
 use byard_core::{EventKind, InputEvent};
 
-const LIST: &str = include_str!("../examples/list_animations/src/main.byd");
+const LIST: &str = include_str!("../../examples/list_animations/src/main.byd");
 const W: f32 = 700.0;
 const H: f32 = 500.0;
 /// The bar inside each row, by its written height, the element whose `rotate`

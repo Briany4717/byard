@@ -613,7 +613,7 @@ fn a_headless_check_reports_an_unknown_inject_as_a_warning_and_still_checks_the_
 
 /// The `.byd` half of `examples/controller_demo`, compiled into the test so
 /// the example cannot drift away from the feature it demonstrates.
-const DEMO_VIEW: &str = include_str!("../../../examples/controller_demo/src/main.byd");
+const DEMO_VIEW: &str = include_str!("../../../../examples/controller_demo/src/main.byd");
 
 #[test]
 fn the_controller_demo_view_mounts_and_places_its_call_against_a_real_registry() {

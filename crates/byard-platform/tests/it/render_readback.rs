@@ -14,7 +14,7 @@ use byard_core::encoder::EncoderSubsystem;
 use byard_core::frame::{RenderFrame, Viewport};
 use std::sync::Arc;
 
-const SRC: &str = include_str!("../../byard-compiler/examples/hello_world.byd");
+const SRC: &str = include_str!("../../../byard-compiler/examples/hello_world.byd");
 
 fn try_device() -> Option<(Arc<wgpu::Device>, Arc<wgpu::Queue>, byard_test_gpu::Turn)> {
     byard_test_gpu::device(byard_core::engine::device_limits)

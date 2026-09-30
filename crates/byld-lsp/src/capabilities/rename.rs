@@ -315,7 +315,7 @@ fn collect_name_spans_in_expr(expr: &Expr, target_name: &str, out: &mut Vec<Span
         // `Text("{count}")` reads the binding just as much as `count + 1` does.
         Expr::StrLit(parts, _) => {
             for part in parts {
-                if let StrPart::Interp(inner) = part {
+                if let StrPart::Interp(inner, _) = part {
                     collect_name_spans_in_expr(inner, target_name, out);
                 }
             }

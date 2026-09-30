@@ -63,7 +63,7 @@ View Counter() {
     assert_eq!(parts.len(), 2);
     assert!(matches!(&parts[0], StrPart::Text(t) if t == "Count: "));
     assert!(
-        matches!(&parts[1], StrPart::Interp(e) if matches!(**e, Expr::Ident(ref s, _) if *s == sym("count")))
+        matches!(&parts[1], StrPart::Interp(e, _) if matches!(**e, Expr::Ident(ref s, _) if *s == sym("count")))
     );
 
     // Button("+") => count++   (action shorthand)
@@ -291,11 +291,11 @@ View ProfileCard(name: Str) {
         panic!("expected interpolated string");
     };
     // [Interp(name), Text(" "), Interp(ternary)]
-    assert!(matches!(&parts[0], StrPart::Interp(_)));
+    assert!(matches!(&parts[0], StrPart::Interp(_, _)));
     assert!(
         parts
             .iter()
-            .any(|p| matches!(p, StrPart::Interp(e) if matches!(**e, Expr::Ternary { .. })))
+            .any(|p| matches!(p, StrPart::Interp(e, _) if matches!(**e, Expr::Ternary { .. })))
     );
 
     // Button("Follow") #[... p: (8, 16)] => follow()
@@ -1041,7 +1041,7 @@ fn interp(parts: &[StrPart], n: usize) -> &Expr {
     parts
         .iter()
         .filter_map(|p| match p {
-            StrPart::Interp(e) => Some(&**e),
+            StrPart::Interp(e, _) => Some(&**e),
             StrPart::Text(_) => None,
         })
         .nth(n)
@@ -1110,6 +1110,13 @@ fn interpolation_node_spans_cover_their_source() {
         panic!("expected a nested string");
     };
     assert_eq!(at(src, interp(nested, 0)), "yy");
+
+    // A decimals spec is not part of the expression: the span stops at the
+    // colon, and the spec is kept on the part.
+    let src = "View Main() {\n    Text(\"{temp + 1:.0}\u{b0}\")\n}\n";
+    let parts = text_parts(src);
+    assert_eq!(at(src, interp(&parts, 0)), "temp + 1");
+    assert!(matches!(parts[0], StrPart::Interp(_, Some(0))), "{parts:?}");
 }
 
 #[test]

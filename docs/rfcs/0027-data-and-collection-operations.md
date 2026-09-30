@@ -2,6 +2,7 @@
 
 - **Status:** Active, implemented
 - **Status note (2026-07-26):** Shipped in full: comparison and short-circuiting logical operators, string concatenation and interpolation, the pure list operations, lambdas in value position, records, and the inference and diagnostics that go with them.
+- **Status note (2026-09-26):** Two items from Future possibilities landed: `slice` on lists and strings, and the decimals spec in interpolation, `{x:.N}`. See "Landed from Future possibilities" below.
 - **Author(s):** Briany4717
 - **Created:** 2026-07-17
 - **Last updated:** 2026-07-17
@@ -348,8 +349,8 @@ RFC defines the operations; RFC-0014 can later compile them faster.
 
 ## Future possibilities
 
-- **`sort`/`reduce`/`find`/`slice`/`indexOf`** as a second closed batch once the
-  v1 set proves the dispatch design.
+- **`sort`/`reduce`/`find`/`indexOf`** as a second closed batch once the
+  v1 set proves the dispatch design. (`slice` landed; see below.)
 - **Keyed `for` reconciliation** (RFC-0002 D7) consuming a stable-id lambda
   (`for t in todos key t.id`) so `map`/`filter`-derived lists diff instead of
   rebuild.
@@ -357,5 +358,18 @@ RFC defines the operations; RFC-0014 can later compile them faster.
   O(log n) without changing the surface.
 - **`Map`/`Set` value kinds** for keyed collections (e.g. entity caches from
   RFC-0028 controllers).
-- **Numeric formatting spec** in interpolation (`{price:.2}`) built on
-  `format_scalar`.
+
+### Landed from Future possibilities
+
+- **`slice(start, end?)`** on a `List` and on a `Str`. `end` is exclusive and
+  optional, and a string is cut by character, not by byte. Bounds clamp to
+  the value's length, and an `end` before `start` gives an empty result. As
+  with `removeAt`, user data never panics. The checker types a list's slice
+  as the list and a string's slice as `Str`.
+- **The decimals spec** in interpolation, `{x:.N}`: a number shown with exactly
+  `N` decimals (at most 9), `{21.46:.1}` reading `21.5`. It applies to an
+  `Int` too (`{3:.2}` is `3.00`). A value that rounds to zero loses its
+  sign, so a temperature never reads `-0`. Anything that is not a number is
+  written as plain `{x}` would write it. Only a `:` outside brackets and
+  strings, followed by `.` and digits, is a spec. A float literal never
+  starts with a dot, so the `:` of a ternary is never mistaken for one.

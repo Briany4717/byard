@@ -1569,6 +1569,11 @@ pub(crate) const RESERVED_CONTENT: &str = "content";
 thread_local! {
     /// Thread-local storage holding the active payload of the event currently being processed.
     pub static CURRENT_PAYLOAD: std::cell::RefCell<Option<Value>> = const { std::cell::RefCell::new(None) };
+
+    /// The arguments of the lambda currently running, by name, for a lambda
+    /// with more than one parameter (`reduce`'s `(acc, x) => …`). The single
+    /// parameter of `map`/`filter` still goes through [`CURRENT_PAYLOAD`].
+    static LAMBDA_ARGS: std::cell::RefCell<Vec<(Symbol, Value)>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// The Dev-mode interpreter for one `View` instance: a reactive context plus
@@ -1761,6 +1766,9 @@ pub struct Interpreter {
     /// Whether an `on measure` ran during the last [`render`](Self::render).
     /// Its writes land after layout, so only the next frame shows them.
     measure_fired: bool,
+    /// Names bound as parameters of a multi-parameter lambda while its body is
+    /// being lowered; `lower_ident` reads them from [`LAMBDA_ARGS`].
+    lambda_params: Vec<Symbol>,
     /// The element instance the render walk is currently inside, the `slot`
     /// half of an [`AnimKey`].
     ///
@@ -12388,6 +12396,20 @@ impl Interpreter {
                 });
             }
         }
+        // After the single-parameter slot, so a nested `map(x => …)` inside a
+        // `reduce(…, (acc, x) => …)` reads its own `x`, the innermost binding.
+        if self.lambda_params.contains(name) {
+            let name = name.clone();
+            return Box::new(move |_| {
+                LAMBDA_ARGS.with(|args| {
+                    args.borrow()
+                        .iter()
+                        .rev()
+                        .find(|(n, _)| *n == name)
+                        .map_or(Value::Unit, |(_, v)| v.clone())
+                })
+            });
+        }
         match name.as_str() {
             "true" => return Box::new(|_| Value::Bool(true)),
             "false" => return Box::new(|_| Value::Bool(false)),
@@ -12598,6 +12620,106 @@ impl Interpreter {
                         }
                         _ => Value::Bool(false),
                     }
+                }))
+            }
+            "sort" => Some(Box::new(move |ctx| match base_c(ctx) {
+                Value::List(mut xs) => {
+                    xs.sort_by(value_order);
+                    Value::List(xs)
+                }
+                other => other,
+            })),
+            "min" | "max" => {
+                let is_max = name.as_str() == "max";
+                Some(Box::new(move |ctx| match base_c(ctx) {
+                    Value::List(xs) => {
+                        let pick = if is_max {
+                            xs.into_iter().max_by(value_order)
+                        } else {
+                            xs.into_iter().min_by(value_order)
+                        };
+                        pick.unwrap_or(Value::Unit)
+                    }
+                    _ => Value::Unit,
+                }))
+            }
+            "indexOf" => {
+                let mut arg = self.lower_expr(&args.first()?.value, payload_name);
+                Some(Box::new(move |ctx| {
+                    let needle = arg(ctx);
+                    let found = match base_c(ctx) {
+                        Value::List(xs) => xs.iter().position(|x| structural_eq(x, &needle)),
+                        _ => None,
+                    };
+                    Value::Int(found.and_then(|i| i64::try_from(i).ok()).unwrap_or(-1))
+                }))
+            }
+            "sortBy" | "find" => {
+                let (param, body) = match &args.first()?.value {
+                    Expr::Lambda { params, body, .. } => (params.first().cloned(), body.clone()),
+                    _ => return None,
+                };
+                let mut body_c = self.lower_expr(&body, param.as_ref());
+                let is_find = name.as_str() == "find";
+                Some(Box::new(move |ctx| {
+                    let Value::List(xs) = base_c(ctx) else {
+                        return if is_find {
+                            Value::Unit
+                        } else {
+                            Value::List(Vec::new())
+                        };
+                    };
+                    if is_find {
+                        return xs
+                            .into_iter()
+                            .find(|x| {
+                                with_lambda_elem(x.clone(), || body_c(ctx))
+                                    .as_bool()
+                                    .unwrap_or(false)
+                            })
+                            .unwrap_or(Value::Unit);
+                    }
+                    // Each key computed once, then a stable sort by it.
+                    let mut keyed: Vec<(Value, Value)> = xs
+                        .into_iter()
+                        .map(|x| (with_lambda_elem(x.clone(), || body_c(ctx)), x))
+                        .collect();
+                    keyed.sort_by(|a, b| value_order(&a.0, &b.0));
+                    Value::List(keyed.into_iter().map(|(_, x)| x).collect())
+                }))
+            }
+            "reduce" => {
+                // `xs.reduce(init, (acc, x) => body)`: two parameters, bound by
+                // name through `LAMBDA_ARGS` while the body is lowered.
+                let mut init = self.lower_expr(&args.first()?.value, payload_name);
+                let (params, body) = match &args.get(1)?.value {
+                    Expr::Lambda { params, body, .. } if params.len() == 2 => {
+                        (params.clone(), body.clone())
+                    }
+                    _ => return None,
+                };
+                let mark = self.lambda_params.len();
+                self.lambda_params.extend(params.iter().cloned());
+                let mut body_c = self.lower_expr(&body, payload_name);
+                self.lambda_params.truncate(mark);
+                let (acc_name, elem_name) = (params[0].clone(), params[1].clone());
+                Some(Box::new(move |ctx| {
+                    let mut acc = init(ctx);
+                    let Value::List(xs) = base_c(ctx) else {
+                        return acc;
+                    };
+                    for x in xs {
+                        let base = LAMBDA_ARGS.with(|a| {
+                            let mut a = a.borrow_mut();
+                            let base = a.len();
+                            a.push((acc_name.clone(), acc.clone()));
+                            a.push((elem_name.clone(), x));
+                            base
+                        });
+                        acc = body_c(ctx);
+                        LAMBDA_ARGS.with(|a| a.borrow_mut().truncate(base));
+                    }
+                    acc
                 }))
             }
             "map" | "filter" => {
@@ -14675,6 +14797,29 @@ fn data_member(base: &Value, field: &Symbol) -> Value {
 /// (RFC-0027 §5), reusing the payload slot the lambda body was lowered against.
 /// The previous slot value is saved and restored so a `map`/`filter` nested in
 /// an event action never clobbers that action's payload.
+/// The order `sort`, `sortBy`, `min` and `max` use (RFC-0027): numbers by
+/// value (an `Int` and a `Float` compare as numbers), text by code point,
+/// `false` before `true`. Anything else is equal to everything, so a stable
+/// sort leaves it where it was rather than inventing an order.
+fn value_order(a: &Value, b: &Value) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    #[allow(clippy::cast_precision_loss)]
+    let num = |v: &Value| match v {
+        Value::Int(n) => Some(*n as f64),
+        Value::Float(f) => Some(*f),
+        _ => None,
+    };
+    match (a, b) {
+        (Value::Int(x), Value::Int(y)) => x.cmp(y),
+        (Value::Str(x), Value::Str(y)) => x.cmp(y),
+        (Value::Bool(x), Value::Bool(y)) => x.cmp(y),
+        _ => match (num(a), num(b)) {
+            (Some(x), Some(y)) => x.total_cmp(&y),
+            _ => Ordering::Equal,
+        },
+    }
+}
+
 fn with_lambda_elem<F: FnOnce() -> Value>(elem: Value, f: F) -> Value {
     let prev = CURRENT_PAYLOAD.with(|cell| cell.borrow_mut().replace(elem));
     let out = f();

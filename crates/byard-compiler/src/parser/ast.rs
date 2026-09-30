@@ -115,6 +115,30 @@ pub struct ViewDecl {
     pub body: Vec<Member>,
     /// Source span.
     pub span: Span,
+    /// The program's top-level functions, shared by every view of the
+    /// program (one `Arc`, set by `parse` for a lone file and by
+    /// `resolve_program` for a project). Carried on each view so that any
+    /// path that loads views loads the functions with them, and none can
+    /// forget to.
+    pub helpers: std::sync::Arc<Vec<FnDecl>>,
+}
+
+/// A top-level `fn` (RFC-0002, top-level functions): a pure helper visible to
+/// every view of its project, and to other projects through its package's
+/// name (`b.helper(...)`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct FnDecl {
+    /// The name; a package's functions are canonical (`brand.helper`) once
+    /// resolved.
+    pub name: Symbol,
+    /// Declared parameters.
+    pub params: Vec<Param>,
+    /// Declared return type, if written.
+    pub ret: Option<Type>,
+    /// The body, a pure expression of the parameters.
+    pub body: Expr,
+    /// Source span.
+    pub span: Span,
 }
 
 /// A member of a `View` body. Replaces the prior draft's flat `Stmt`: a View
@@ -954,6 +978,7 @@ mod tests {
             anchor_name: None,
         };
         let view = ViewDecl {
+            helpers: std::sync::Arc::default(),
             name: Symbol::intern("Counter"),
             params: Vec::new(),
             body: vec![

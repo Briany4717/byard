@@ -1670,6 +1670,7 @@ mod tests {
 
     fn views(name: &str) -> Vec<ViewDecl> {
         vec![ViewDecl {
+            helpers: std::sync::Arc::default(),
             name: byard_compiler::Symbol::intern(name),
             params: Vec::new(),
             body: Vec::new(),

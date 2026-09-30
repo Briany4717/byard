@@ -18,12 +18,17 @@ use std::collections::HashMap;
 
 use crate::diagnostics::{CompileError, Span};
 use crate::interp::style::check_static;
-use crate::parser::ast::{BinOp, Expr, Member, Param, StrPart, Type, UnOp, ViewDecl};
+use crate::parser::ast::{AttrKind, BinOp, Expr, Member, Param, StrPart, Type, UnOp, ViewDecl};
 use crate::symbol::Symbol;
 
 /// The closed set of list methods (RFC-0027 §4), used for the `UnknownMethod`
 /// suggestion.
 const LIST_METHODS: [&str; 6] = ["push", "removeAt", "contains", "map", "filter", "slice"];
+
+/// The methods a `Str` has at runtime: `slice` is the only one the interpreter
+/// runs on text (`len` is a field). Any other call on a `Str` silently
+/// evaluates to nothing, which is exactly what this diagnostic exists to stop.
+const STR_METHODS: [&str; 1] = ["slice"];
 
 /// An inferred / resolved type. Distinct from the syntactic [`Type`] AST node:
 /// `Ty` is normalized (e.g. `List<Str>` ⇒ `List(Str)`), and `Unknown` covers
@@ -121,10 +126,15 @@ impl Checker<'_> {
             let resolved = self.resolve_type(ty);
             self.env.insert(param.name.clone(), resolved);
         } else {
-            self.errors.push(CompileError::MissingAnnotation {
-                span: param.span,
-                what: what.to_string(),
-            });
+            // `content` is the child-block slot (RFC-0007 D-A): it holds the
+            // caller's `{ ... }` block, has no value type to write, and is
+            // written bare by design.
+            if param.name.as_str() != crate::interp::eval::RESERVED_CONTENT {
+                self.errors.push(CompileError::MissingAnnotation {
+                    span: param.span,
+                    what: what.to_string(),
+                });
+            }
             self.env.insert(param.name.clone(), Ty::Unknown);
         }
     }
@@ -132,6 +142,48 @@ impl Checker<'_> {
     fn check_members(&mut self, members: &[Member], top_level: bool) {
         for member in members {
             self.check_member(member, top_level);
+        }
+    }
+
+    /// Checks a nested member list in its own scope: bindings a block declares
+    /// (a `for` variable, a `let` in a `when` branch) end with the block, so
+    /// they can neither leak out nor leave a stale type behind for a name the
+    /// enclosing view also uses.
+    fn check_scoped(&mut self, members: &[Member], shadow: &[(&Symbol, Ty)]) {
+        let saved = self.env.clone();
+        for (name, ty) in shadow {
+            self.env.insert((*name).clone(), ty.clone());
+        }
+        self.check_members(members, false);
+        self.env = saved;
+    }
+
+    /// Checks `expr` with `names` bound to [`Ty::Unknown`] (an event payload,
+    /// a callback parameter): they shadow any same-named `var`, so a payload
+    /// called `xs` is never mistaken for the list of that name.
+    fn check_shadowed(&mut self, expr: &Expr, names: &[&Symbol]) -> Ty {
+        let saved = self.env.clone();
+        for name in names {
+            self.env.insert((*name).clone(), Ty::Unknown);
+        }
+        let ty = self.check_expr(expr);
+        self.env = saved;
+        ty
+    }
+
+    fn check_attrs(&mut self, attrs: &[crate::parser::ast::Attr]) {
+        let it = Symbol::intern("it");
+        for attr in attrs {
+            match &attr.kind {
+                AttrKind::Prop { value } | AttrKind::Spread { value } => {
+                    self.check_expr(value);
+                }
+                AttrKind::Event { payload, action } => {
+                    let mut names = vec![&it];
+                    names.extend(payload.as_ref());
+                    self.check_shadowed(action, &names);
+                }
+            }
         }
     }
 
@@ -155,7 +207,11 @@ impl Checker<'_> {
                     self.bindings.push((name.clone(), inferred));
                 }
             }
-            Member::Fn { params, ret, .. } => {
+            Member::Fn {
+                params, ret, body, ..
+            } => {
+                // The parameters are in scope for the body alone.
+                let saved = self.env.clone();
                 for param in params {
                     self.check_param(param, "function parameter");
                 }
@@ -165,33 +221,64 @@ impl Checker<'_> {
                         what: "function return".to_string(),
                     });
                 }
+                self.check_expr(body);
+                self.env = saved;
             }
             Member::Inject { ty, name, .. } => {
                 let resolved = self.resolve_type(ty);
                 self.env.insert(name.clone(), resolved);
             }
             Member::Element(el) => {
+                for arg in &el.content {
+                    self.check_expr(&arg.value);
+                }
+                self.check_attrs(&el.attrs);
+                if let Some(action) = &el.action {
+                    self.check_shadowed(action, &[&Symbol::intern("it")]);
+                }
                 // Nested members in children keep the same View scope.
-                self.check_members(&el.children, false);
+                self.check_scoped(&el.children, &[]);
             }
             // RFC-0026: a `route`/`tab` body is an ordinary member list in the
             // same View scope, like a `for` body or a `when` branch.
-            Member::For { body, .. } | Member::Route { body, .. } => {
-                self.check_members(body, false);
+            Member::Route { params, body, .. } => {
+                let shadow: Vec<(&Symbol, Ty)> = params.iter().map(|p| (p, Ty::Unknown)).collect();
+                self.check_scoped(body, &shadow);
             }
-            Member::When { then, els, .. } => {
-                self.check_members(then, false);
+            Member::For {
+                var,
+                index,
+                iter,
+                body,
+                ..
+            } => {
+                self.check_expr(iter);
+                let mut shadow = vec![(var, Ty::Unknown)];
+                shadow.extend(index.as_ref().map(|i| (i, Ty::Int)));
+                self.check_scoped(body, &shadow);
+            }
+            Member::When {
+                cond, then, els, ..
+            } => {
+                self.check_expr(cond);
+                self.check_scoped(then, &[]);
                 if let Some(els) = els {
-                    self.check_members(els, false);
+                    self.check_scoped(els, &[]);
                 }
             }
             // A lifecycle effect's body is an action, checked like any other
             // action expression; it declares no bindings of its own.
-            Member::Lifecycle { .. }
-            | Member::Timer { .. }
-            | Member::Measure { .. }
-            | Member::Style { .. }
-            | Member::Expr(_) => {}
+            Member::Lifecycle { action, .. } | Member::Timer { action, .. } => {
+                self.check_expr(action);
+            }
+            // The measured rect arrives as `it`.
+            Member::Measure { action, .. } => {
+                self.check_shadowed(action, &[&Symbol::intern("it")]);
+            }
+            Member::Expr(expr) => {
+                self.check_expr(expr);
+            }
+            Member::Style { .. } => {}
         }
     }
 
@@ -307,7 +394,56 @@ impl Checker<'_> {
                 }
             }
             Expr::Call { callee, args, .. } => self.check_call(callee, args),
-            _ => Ty::Unknown,
+            Expr::Tuple(args, _) => {
+                for arg in args {
+                    self.check_expr(&arg.value);
+                }
+                Ty::Unknown
+            }
+            Expr::Lambda { params, body, .. } => {
+                self.check_shadowed(body, &params.iter().collect::<Vec<_>>());
+                Ty::Unknown
+            }
+            Expr::Block(stmts, _) => {
+                for stmt in stmts {
+                    self.check_expr(stmt);
+                }
+                Ty::Unknown
+            }
+            Expr::Assign { target, value, .. } => {
+                self.check_expr(target);
+                self.check_expr(value);
+                Ty::Unknown
+            }
+            Expr::Postfix { target, .. } => {
+                self.check_expr(target);
+                Ty::Unknown
+            }
+            Expr::ControllerCall { call, ok, err, .. } => {
+                self.check_expr(call);
+                for arm in [ok, err].into_iter().flatten() {
+                    self.check_shadowed(&arm.action, &[&arm.binding]);
+                }
+                Ty::Unknown
+            }
+            Expr::Animated { value, anim, .. } => {
+                self.check_expr(anim);
+                self.check_expr(value)
+            }
+            Expr::KeyframeStep { value, .. } => self.check_expr(value),
+            Expr::StyleValue { attrs, states, .. } => {
+                self.check_attrs(attrs);
+                for state in states {
+                    self.check_attrs(&state.attrs);
+                }
+                Ty::Unknown
+            }
+            Expr::Merge { left, right, .. } => {
+                self.check_expr(left);
+                self.check_expr(right);
+                Ty::Unknown
+            }
+            Expr::AngleLit(..) | Expr::ClassRef(..) | Expr::Error(_) => Ty::Unknown,
         }
     }
 
@@ -328,10 +464,10 @@ impl Checker<'_> {
         }
     }
 
-    /// Checks a collection method call against a `List` receiver (RFC-0027 §4):
+    /// Checks a method call against a `List` or `Str` receiver (RFC-0027 §4):
     /// unknown methods are `UnknownMethod`; `map`/`filter` lambdas must be pure
     /// (`EffectInPureLambda`) and a `filter` predicate must be `Bool`
-    /// (`PredicateNotBool`). A non-`List` (or `Unknown`) receiver stays lenient.
+    /// (`PredicateNotBool`). Any other receiver (or `Unknown`) stays lenient.
     fn check_method(
         &mut self,
         recv: &Ty,
@@ -339,40 +475,65 @@ impl Checker<'_> {
         span: Span,
         args: &[crate::parser::ast::Arg],
     ) -> Ty {
-        let is_list = matches!(recv, Ty::List(_));
-        if is_list && !LIST_METHODS.contains(&name.as_str()) {
-            let hint = crate::util::closest_match(name.as_str(), LIST_METHODS.iter().copied())
-                .map(str::to_string);
-            self.errors.push(CompileError::UnknownMethod {
-                span,
-                recv_ty: ty_name(recv),
-                name: name.as_str().to_string(),
-                hint,
-            });
+        let known: Option<&[&str]> = match recv {
+            Ty::List(_) => Some(&LIST_METHODS),
+            Ty::Str => Some(&STR_METHODS),
+            // Anything else (a controller handle, a record, an `anim.*` curve,
+            // an unresolved type) is not modelled, so nothing is claimed.
+            _ => None,
+        };
+        if let Some(known) = known {
+            if !known.contains(&name.as_str()) {
+                let hint = crate::util::closest_match(name.as_str(), known.iter().copied())
+                    .map(str::to_string);
+                // The member's span runs from the receiver to the end of the
+                // name; the diagnostic points at the name alone.
+                let len = u32::try_from(name.as_str().len()).unwrap_or(0);
+                let span = Span::new(span.end.saturating_sub(len).max(span.start), span.end);
+                self.errors.push(CompileError::UnknownMethod {
+                    span,
+                    recv_ty: ty_name(recv),
+                    name: name.as_str().to_string(),
+                    hint,
+                });
+            }
         }
         // Lambda-bearing methods: purity + (for filter) Bool predicate.
+        let mut lambda_body_ty = None;
         if matches!(name.as_str(), "map" | "filter") {
-            if let Some(Expr::Lambda { body, .. }) = args.first().map(|a| &a.value) {
+            if let Some(Expr::Lambda { params, body, .. }) = args.first().map(|a| &a.value) {
                 if let Some(eff) = effect_span(body) {
                     self.errors
                         .push(CompileError::EffectInPureLambda { span: eff });
                 }
-                if name.as_str() == "filter" {
-                    let bt = self.check_expr(body);
-                    if is_concrete(&bt) && bt != Ty::Bool {
-                        self.errors
-                            .push(CompileError::PredicateNotBool { span: body.span() });
-                    }
+                // The parameter's type is left unknown: element typing would
+                // turn every lambda over a typed list into a checked position,
+                // and the `Ty` of an element is only as good as the literal
+                // it was inferred from.
+                let saved = self.env.clone();
+                for p in params {
+                    self.env.insert(p.clone(), Ty::Unknown);
                 }
+                let bt = self.check_expr(body);
+                self.env = saved;
+                if name.as_str() == "filter" && is_concrete(&bt) && bt != Ty::Bool {
+                    self.errors
+                        .push(CompileError::PredicateNotBool { span: body.span() });
+                }
+                lambda_body_ty = Some(bt);
             }
         }
-        for arg in args {
+        for (i, arg) in args.iter().enumerate() {
+            if i == 0 && lambda_body_ty.is_some() {
+                continue;
+            }
             self.check_expr(&arg.value);
         }
         match (recv, name.as_str()) {
             (Ty::List(_), "push" | "removeAt" | "filter" | "slice") => recv.clone(),
             (Ty::Str, "slice") => Ty::Str,
             (Ty::List(_), "contains") => Ty::Bool,
+            (Ty::List(_), "map") => Ty::List(Box::new(lambda_body_ty.unwrap_or(Ty::Unknown))),
             _ => Ty::Unknown,
         }
     }
@@ -438,6 +599,9 @@ impl Checker<'_> {
         if elems.is_empty() {
             self.errors.push(CompileError::CannotInfer { span });
             return Ty::Unknown;
+        }
+        for e in elems {
+            self.check_expr(e);
         }
         let mut element_ty: Option<Ty> = None;
         for e in elems {

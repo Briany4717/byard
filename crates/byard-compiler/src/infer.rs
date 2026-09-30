@@ -18,7 +18,9 @@ use std::collections::HashMap;
 
 use crate::diagnostics::{CompileError, Span};
 use crate::interp::style::check_static;
-use crate::parser::ast::{AttrKind, BinOp, Expr, Member, Param, StrPart, Type, UnOp, ViewDecl};
+use crate::parser::ast::{
+    AttrKind, BinOp, Expr, FnDecl, Member, Param, StrPart, Type, UnOp, ViewDecl,
+};
 use crate::symbol::Symbol;
 
 /// The closed set of list methods (RFC-0027 §4), used for the `UnknownMethod`
@@ -70,17 +72,86 @@ pub struct Inference {
 #[must_use]
 pub fn check_views(views: &[ViewDecl]) -> Inference {
     let mut out = Inference::default();
+    // Every view carries the same table of top-level functions.
+    let helpers = views
+        .first()
+        .map(|v| std::sync::Arc::clone(&v.helpers))
+        .unwrap_or_default();
+    let top_fns = check_top_fns(&helpers, &mut out);
     for view in views {
         let mut checker = Checker {
             errors: &mut out.errors,
             bindings: &mut out.bindings,
             env: HashMap::new(),
             undo: Vec::new(),
-            fns: HashMap::new(),
+            fns: top_fns.clone(),
         };
         checker.check_view(view);
     }
     out
+}
+
+/// Checks the program's top-level functions once (annotations, purity, and
+/// that each reads only its own parameters) and returns their declared
+/// return types, so every view types its calls to them.
+fn check_top_fns(helpers: &[FnDecl], out: &mut Inference) -> HashMap<Symbol, Option<Ty>> {
+    let names: std::collections::HashSet<&Symbol> = helpers.iter().map(|f| &f.name).collect();
+    let mut checker = Checker {
+        errors: &mut out.errors,
+        bindings: &mut out.bindings,
+        env: HashMap::new(),
+        undo: Vec::new(),
+        fns: HashMap::new(),
+    };
+    let mut top = HashMap::new();
+    for decl in helpers {
+        let ty = decl.ret.as_ref().map(|t| checker.resolve_type(t));
+        top.insert(decl.name.clone(), ty);
+    }
+    checker.fns.clone_from(&top);
+    for decl in helpers {
+        let mark = checker.undo.len();
+        for param in &decl.params {
+            checker.check_param(param, "function parameter");
+        }
+        if decl.ret.is_none() {
+            checker.errors.push(CompileError::MissingAnnotation {
+                span: decl.span,
+                what: "function return".to_string(),
+            });
+        }
+        checker.check_expr(&decl.body);
+        checker.leave(mark);
+
+        let impure = |span: Span| CompileError::ImpureFunction {
+            span,
+            name: decl.name.as_str().to_string(),
+        };
+        if let Some(span) = effect_span(&decl.body) {
+            checker.errors.push(impure(span));
+        }
+        // A name the body reads that is none of: its parameters, a lambda's
+        // parameters inside it, another function, a literal keyword. That is
+        // the calling view's state or a controller, neither of which a shared
+        // function may reach.
+        let mut body = decl.body.clone();
+        let mut bound: std::collections::HashSet<Symbol> =
+            decl.params.iter().map(|p| p.name.clone()).collect();
+        let mut used: Vec<(Symbol, Span)> = Vec::new();
+        crate::resolve::walk::expr(&mut body, &mut |e| match e {
+            Expr::Lambda { params, .. } => bound.extend(params.iter().cloned()),
+            Expr::Ident(name, span) => used.push((name.clone(), *span)),
+            _ => {}
+        });
+        for (name, span) in used {
+            let keyword = matches!(name.as_str(), "true" | "false");
+            if !keyword && !bound.contains(&name) && !names.contains(&name) {
+                checker.errors.push(impure(span));
+                break;
+            }
+        }
+    }
+    top
 }
 
 struct Checker<'a> {

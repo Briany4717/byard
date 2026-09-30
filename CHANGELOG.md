@@ -43,6 +43,13 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Top-level functions.** `fn describe(code: Int) -> Str => …` at file level
+  is visible to every view of the project, and to other projects as
+  `w.describe(…)` through the package's name. A function may read only its
+  parameters, so it cannot depend on which view called it; a view's own name
+  wins over it; recursion and duplicates are errors. There is still no
+  top-level state.
+
 - **`if` in actions.** `if cond { … }`, `else if` and `else` run inside
   any action: a button's, `on mount`, a `let` action, an `ok`/`err` arm. It
   used to parse as three unrelated statements, check clean and do nothing, so

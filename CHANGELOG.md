@@ -178,6 +178,12 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Two quick taps on a button are two taps.** A second tap within the
+  double-tap window became a double tap instead of a tap, whether or not
+  anything listened for double taps, so clicking a `+` twice quickly counted
+  once. A second tap now becomes a double tap only where a `double_tap`
+  handler is under the pointer.
+
 - **An animation belongs to an element, not to the line that wrote it.**
   Animation state was keyed by the source span of the `with` node alone, and a
   `for` body is lowered once per row but *written* once, so every row in a list

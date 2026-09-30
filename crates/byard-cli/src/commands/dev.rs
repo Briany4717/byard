@@ -90,6 +90,9 @@ pub fn run(opts: Options<'_>) -> Result<(), String> {
         .unwrap_or(Path::new("."))
         .to_path_buf();
     let mut watch_paths = vec![entry_dir];
+    // The manifest and a theme's seed image live beside the sources, not in
+    // them, and each changes what the app looks like (RFC-0022).
+    watch_paths.extend(manifest.watch_files.iter().filter(|p| p.exists()).cloned());
     for root in provider.resolved_roots().values() {
         if !root.starts_with(&cache) {
             watch_paths.push(root.clone());
@@ -157,14 +160,17 @@ pub fn run(opts: Options<'_>) -> Result<(), String> {
 }
 
 /// Re-derives the whole program for the watcher thread (RFC-0008 Pillar E):
-/// re-discovers the manifest (so `byard.toml` edits apply live), re-runs the
-/// module resolver, and folds any project-level failure into the same error
-/// channel the overlay renders.
+/// re-discovers the manifest (so `byard.toml` edits apply live, its theme
+/// included), re-runs the module resolver, and folds any project-level
+/// failure into the same error channel the overlay renders.
 fn reresolve(file_override: Option<&Path>) -> ParsedFile {
-    match Manifest::discover(file_override).and_then(|m| resolve_project(&m)) {
-        Ok((program, _)) => ParsedFile {
+    let resolved = Manifest::discover(file_override)
+        .and_then(|m| resolve_project(&m).map(|(program, _)| (program, m.theme)));
+    match resolved {
+        Ok((program, theme)) => ParsedFile {
             views: program.views,
             errors: program.errors,
+            theme: Some(theme),
         },
         Err(message) => ParsedFile {
             views: Vec::new(),
@@ -172,8 +178,48 @@ fn reresolve(file_override: Option<&Path>) -> ParsedFile {
                 span: byard_compiler::Span::new(0, 0),
                 message,
             }],
+            theme: None,
         },
     }
+}
+
+/// Applies a new program to a running interpreter and returns the root's
+/// new tree when it had to be lowered again (RFC-0007 §5).
+///
+/// The rendered root is `Main`, or the first view when there is none
+/// (`root_view`). Editing any view it transitively instantiates must re-derive
+/// its tree, so the affected set (changed views and their transitive callers)
+/// decides; siblings unrelated to the root keep their state.
+///
+/// `reload` starts the root's environment afresh, which is only right when
+/// the root is lowered again straight after: names bound while lowering, an
+/// `inject Theme as t` among them, live in that environment. A reload that
+/// leaves the root alone (a manifest or seed-image edit, or a view the root
+/// does not use) must not reset it, or every `t.token` in the existing tree
+/// resolves to nothing and the app draws without its colours.
+fn reload_views(
+    interp: &mut Interpreter,
+    old: &[ViewDecl],
+    new: &[ViewDecl],
+) -> Option<Vec<RenderNode>> {
+    let (old_root, new_root) = (
+        byard_compiler::parser::ast::root_view(old)?,
+        byard_compiler::parser::ast::root_view(new)?,
+    );
+    let relower = byard_compiler::interp::reload::affected_views(old, new).contains(&new_root.name);
+    if relower {
+        interp.reload(
+            new_root,
+            byard_compiler::interp::reload::diff_view(old_root, new_root),
+        );
+    }
+    // Rebuild the user-`View` registry so reloaded sibling views resolve and
+    // expand (RFC-0007 §1/§5).
+    interp.load_views(new);
+    relower.then(|| {
+        let known: Vec<&str> = new.iter().map(|v| v.name.as_str()).collect();
+        interp.lower_view(new_root, &known)
+    })
 }
 
 fn now_ms() -> u64 {
@@ -441,21 +487,8 @@ impl ByldRuntime {
         // re-derive its tree, so compute the affected set (changed views ∪
         // transitive callers, RFC-0007 §5) and re-lower only when the root is
         // in it, siblings unrelated to the root keep their state.
-        if let (Some(old_root), Some(new_root)) = (
-            byard_compiler::parser::ast::root_view(&self.current_views),
-            byard_compiler::parser::ast::root_view(new_views),
-        ) {
-            let affected =
-                byard_compiler::interp::reload::affected_views(&self.current_views, new_views);
-            let diff_kind = byard_compiler::interp::reload::diff_view(old_root, new_root);
-            self.interp.reload(new_root, diff_kind);
-            // Rebuild the user-`View` registry so reloaded sibling views resolve
-            // and expand (RFC-0007 §1/§5).
-            self.interp.load_views(new_views);
-            if affected.contains(&new_root.name) {
-                let known: Vec<&str> = new_views.iter().map(|v| v.name.as_str()).collect();
-                self.tree = self.interp.lower_view(new_root, &known);
-            }
+        if let Some(tree) = reload_views(&mut self.interp, &self.current_views, new_views) {
+            self.tree = tree;
         }
         self.current_views = new_views.to_vec();
         self.error_state = None;
@@ -485,6 +518,17 @@ impl LogicRuntime for ByldRuntime {
         // ── Step 0: drain latest-wins reload channel (RFC-0006 §3.2 C3) ───────
         if let Some(parsed) = self.reload_channel.take() {
             if parsed.errors.is_empty() {
+                // A `[theme]` edit or a new seed image (RFC-0022): replaced
+                // before the views are lowered again, so they resolve their
+                // tokens against it. Only when it changed, since replacing
+                // it re-registers fonts and rebuilds the layout. The scheme
+                // the app is showing is kept: its signal outlives the swap.
+                if let Some(mut theme) = parsed.theme.filter(|t| !t.same_tokens(&self.interp.theme))
+                {
+                    theme.active_dark = self.interp.theme.active_dark;
+                    self.interp.set_theme(theme);
+                    self.wake_render_loop();
+                }
                 let pointer_pressed = self.interp.router.is_pointer_pressed();
                 // Classify the worst-case kind across all changed views.
                 let diffs = diff_program(&self.current_views, &parsed.views);
@@ -1584,6 +1628,45 @@ fn root_of(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A reload that leaves the root alone (a manifest or seed-image edit, or
+    /// here a change to a view the root never uses) keeps the root's theme
+    /// tokens. It used to reset the environment `inject Theme as t` had bound
+    /// `t` in without lowering the root again, and every `t.token` then
+    /// resolved to nothing: the app drew without its colours.
+    #[test]
+    fn a_reload_that_leaves_the_root_alone_keeps_its_theme_tokens() {
+        let parse = |src: &str| byard_compiler::parser::parse(src).views;
+        let main = "View Main() {\n inject Theme as t\n \
+                    Box #[bg: t.primary, width: 40, height: 40] {} }\n";
+        let old = parse(&format!("{main}View Unused() {{ Text(\"a\") }}"));
+        let new = parse(&format!("{main}View Unused() {{ Text(\"b\") }}"));
+        let mut interp = Interpreter::new();
+        interp.set_theme(byard_compiler::interp::theme::Theme::byard_base());
+        interp.load_views(&old);
+        let known: Vec<&str> = old.iter().map(|v| v.name.as_str()).collect();
+        let mut tree = interp.lower_view(
+            byard_compiler::parser::ast::root_view(&old).unwrap(),
+            &known,
+        );
+        let paint = |interp: &mut Interpreter, tree: &[RenderNode]| {
+            interp.tick();
+            let mut frame = RenderFrame::new();
+            interp.render(tree, &mut frame, 300.0, 200.0);
+            frame
+                .instances()
+                .iter()
+                .map(|b| b.color)
+                .chain(frame.decorated().iter().map(|d| d.base.color))
+                .collect::<Vec<_>>()
+        };
+        let before = paint(&mut interp, &tree);
+        assert_eq!(before.len(), 1, "the primary box");
+        if let Some(t) = reload_views(&mut interp, &old, &new) {
+            tree = t;
+        }
+        assert_eq!(paint(&mut interp, &tree), before);
+    }
 
     fn views(name: &str) -> Vec<ViewDecl> {
         vec![ViewDecl {

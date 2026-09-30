@@ -19,6 +19,7 @@ doctest = false
 byard-compiler = { path = "../byard-compiler" }
 byard-core     = { path = "../byard-core" }
 toml           = { version = "0.8", features = ["preserve_order"] }
+image          = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 sha2           = "0.10"
 flate2         = "1"
 

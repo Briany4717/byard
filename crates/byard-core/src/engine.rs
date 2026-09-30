@@ -418,7 +418,13 @@ impl Engine {
         // half of the split result channel (RFC-0028 §7), which
         // `render_latest` drains. Controller replies travel the other half and
         // are never seen here.
-        encoder.set_io_context(relay.io_handle(), relay.decode_result_sender());
+        encoder.set_io_context(
+            relay.io_handle(),
+            crate::encoder::texture_sampler::DecodeResultSender::new(
+                relay.decode_result_sender(),
+                relay.renderer_wake(),
+            ),
+        );
         let (label_tx, label_rx) = crossbeam_channel::unbounded::<String>();
 
         Ok(Self {

@@ -1,0 +1,50 @@
+// RFC-0022 §5, a seed colour taken from an image.
+//
+// Run it (from the example's directory, so the picture is found):
+//   cd crates/byard-cli/examples/seed_image
+//   cargo run -p byard-cli -- dev
+//
+// `byard.toml` says `seed = { image = "brand.png" }`. The picture is shown
+// here beside what was derived from it. What to verify:
+//   1. The palette is orange, the kite's colour, although almost all of the
+//      picture is grey: population is weighted by colourfulness, and near
+//      greys cannot win while any colour is present.
+//   2. Flip the scheme. Both schemes come from the one image.
+//   3. Replace brand.png with another picture while `byard dev` runs. The
+//      palette moves to the new picture's colour at once. The picture shown
+//      here is the old one until the next run: image files are not reloaded
+//      live yet, only the theme derived from them is. A missing or broken
+//      file is a `byard.toml` error naming it.
+View Main() {
+    inject Theme as t
+
+    Column #[bg: t.surface, p: 32, gap: 16, width: 560] {
+        Text("Seed from an image") #[size: 28, color: t.onSurface]
+        Text("The colours below come from the picture, not from a hex code.")
+            #[size: 15, color: t.onSurfaceVariant]
+
+        Row #[gap: 16, align: center] {
+            Image("brand.png") #[width: 240, height: 150, radius: 12]
+            Column #[gap: 8] {
+                Box #[bg: t.primary, radius: 12, p: (10, 16)] {
+                    Text("Primary") #[size: 14, color: t.onPrimary]
+                }
+                Box #[bg: t.primaryContainer, radius: 12, p: (10, 16)] {
+                    Text("Primary container") #[size: 14, color: t.onPrimaryContainer]
+                }
+                Box #[bg: t.tertiary, radius: 12, p: (10, 16)] {
+                    Text("Tertiary") #[size: 14, color: t.onTertiary]
+                }
+            }
+        }
+
+        Box #[bg: t.surfaceContainer, radius: 16, p: 16, border: t.outlineVariant, border_width: 1] {
+            Text("A surface container, tinted by the same seed") #[size: 14, color: t.onSurface]
+        }
+
+        Row #[gap: 12, align: center] {
+            Toggle #[bind: t.dark, bg: t.primary, width: 52, height: 30]
+            Text("Scheme: {t.mode}") #[size: 15, color: t.onSurfaceVariant]
+        }
+    }
+}

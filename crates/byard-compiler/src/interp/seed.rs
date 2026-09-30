@@ -117,6 +117,141 @@ pub fn derive(seed: i64) -> (Scheme, Scheme) {
     (light, dark)
 }
 
+/// The longest side an image is sampled down to before quantising. The
+/// dominant colour of a logo or a photo does not live in its fine detail, and
+/// this bounds the work at 16,384 pixels whatever the file's size.
+const SAMPLE_SIDE: u32 = 128;
+/// How many colours the image is quantised to.
+const CLUSTERS: usize = 16;
+/// Below this colourfulness (the spread between an sRGB pixel's largest and
+/// smallest channel, `0..=255`) a cluster counts as grey and cannot be the
+/// seed while a colourful one exists: a photo's large grey sky is not its
+/// brand.
+const GREY_BELOW: u32 = 24;
+
+/// The seed colour (`0xRRGGBB`) of an image, from its RGBA8 pixels (RFC-0022
+/// §5): the cluster that maximises population weighted by colourfulness,
+/// near-greys rejected. `None` when the image has no opaque pixel.
+///
+/// Median cut to [`CLUSTERS`] colours over at most [`SAMPLE_SIDE`] pixels on
+/// the long side, in **integer sRGB** throughout, so the same bytes are the
+/// same seed on every platform to the bit. OKLab would be the more perceptual
+/// space to cut in, but it needs a cube root, whose last bit is the maths
+/// library's choice, and a seed that changed with the machine building it
+/// would make a theme change with it. The seed then goes through [`derive`],
+/// which works in OKLCH as before.
+///
+/// This is close to what Material's image scoring picks, not the same
+/// algorithm: Material quantises in CAM16 and scores with its own weights.
+#[must_use]
+pub fn seed_from_rgba(rgba: &[u8], width: u32, height: u32) -> Option<i64> {
+    let step = width.max(height).div_ceil(SAMPLE_SIDE).max(1);
+    let mut pixels: Vec<[u8; 3]> = Vec::new();
+    for y in (0..height).step_by(step as usize) {
+        for x in (0..width).step_by(step as usize) {
+            let i = ((y as usize) * (width as usize) + x as usize) * 4;
+            let Some(px) = rgba.get(i..i + 4) else {
+                continue;
+            };
+            // A transparent pixel is not part of the picture.
+            if px[3] >= 128 {
+                pixels.push([px[0], px[1], px[2]]);
+            }
+        }
+    }
+    if pixels.is_empty() {
+        return None;
+    }
+    let clusters = median_cut(pixels);
+    let colourful = |c: &[u8; 3]| {
+        u32::from(*c.iter().max().unwrap_or(&0)) - u32::from(*c.iter().min().unwrap_or(&0))
+    };
+    let pack = |c: [u8; 3]| (i64::from(c[0]) << 16) | (i64::from(c[1]) << 8) | i64::from(c[2]);
+    // Highest score first; ties go to the smaller colour, so the choice never
+    // depends on the order the clusters came out in.
+    let best = |score: &dyn Fn(&Cluster) -> u64| {
+        clusters
+            .iter()
+            .max_by(|a, b| score(a).cmp(&score(b)).then(pack(b.0).cmp(&pack(a.0))))
+            .map(|c| pack(c.0))
+    };
+    if clusters.iter().any(|(c, _)| colourful(c) >= GREY_BELOW) {
+        best(&|(c, n)| {
+            let k = colourful(c);
+            if k >= GREY_BELOW {
+                u64::from(*n) * u64::from(k)
+            } else {
+                0
+            }
+        })
+    } else {
+        // Only greys: the most common one, which `derive` floors to a colour.
+        best(&|(_, n)| u64::from(*n))
+    }
+}
+
+/// A quantised colour and how many sampled pixels it stands for.
+type Cluster = ([u8; 3], u32);
+
+/// Median cut: splits the pixels into at most [`CLUSTERS`] boxes, each time
+/// cutting the box with the widest channel range at the median of that
+/// channel, and returns each box's mean colour and population.
+fn median_cut(pixels: Vec<[u8; 3]>) -> Vec<Cluster> {
+    // A box's widest channel and its range.
+    let widest = |b: &[[u8; 3]]| -> (usize, u8) {
+        (0..3)
+            .map(|ch| {
+                let (lo, hi) = b
+                    .iter()
+                    .fold((u8::MAX, 0), |(lo, hi), p| (lo.min(p[ch]), hi.max(p[ch])));
+                (ch, hi.saturating_sub(lo))
+            })
+            .max_by(|a, b| a.1.cmp(&b.1).then(b.0.cmp(&a.0)))
+            .unwrap_or((0, 0))
+    };
+    let mut boxes = vec![pixels];
+    while boxes.len() < CLUSTERS {
+        // The box to cut: widest range, then most pixels, then first.
+        let Some((i, (ch, range))) = boxes
+            .iter()
+            .enumerate()
+            .map(|(i, b)| (i, widest(b)))
+            .max_by(|a, b| {
+                (a.1.1, boxes[a.0].len())
+                    .cmp(&(b.1.1, boxes[b.0].len()))
+                    .then(b.0.cmp(&a.0))
+            })
+        else {
+            break;
+        };
+        if range == 0 {
+            break;
+        }
+        let mut b = boxes.swap_remove(i);
+        // A total order, so equal channels still sort the same way every run.
+        b.sort_unstable_by_key(|p| (p[ch], *p));
+        let upper = b.split_off(b.len() / 2);
+        boxes.push(b);
+        boxes.push(upper);
+    }
+    boxes
+        .into_iter()
+        .filter(|b| !b.is_empty())
+        .map(|b| {
+            let n = u32::try_from(b.len()).unwrap_or(u32::MAX);
+            let sum = b.iter().fold([0u64; 3], |mut acc, p| {
+                for ch in 0..3 {
+                    acc[ch] += u64::from(p[ch]);
+                }
+                acc
+            });
+            let len = b.len() as u64;
+            let mean = sum.map(|s| u8::try_from((s + len / 2) / len).unwrap_or(u8::MAX));
+            (mean, n)
+        })
+        .collect()
+}
+
 /// The sRGB colour at OKLCH hue `h` and (at most) chroma `c` whose CIELAB
 /// lightness is `target` (`0..=100`), with the chroma reduced only as far as
 /// the sRGB gamut requires.
@@ -305,4 +440,84 @@ mod tests {
         assert_ne!(role(&blue, "primary"), role(&green, "primary"));
         assert_eq!(role(&blue, "error"), role(&green, "error"));
     }
+
+    /// An RGBA8 image of `w` x `h` filled by `f(x, y)`.
+    fn image(w: u32, h: u32, f: impl Fn(u32, u32) -> [u8; 4]) -> Vec<u8> {
+        (0..h)
+            .flat_map(|y| (0..w).map(move |x| (x, y)))
+            .flat_map(|(x, y)| f(x, y))
+            .collect()
+    }
+
+    #[test]
+    fn a_solid_image_is_its_own_seed() {
+        for rgb in [[0x1E, 0x8E, 0x3E], [0xD9, 0x30, 0x25], [0x80, 0x80, 0x80]] {
+            let px = image(40, 30, |_, _| [rgb[0], rgb[1], rgb[2], 255]);
+            let want = (i64::from(rgb[0]) << 16) | (i64::from(rgb[1]) << 8) | i64::from(rgb[2]);
+            assert_eq!(seed_from_rgba(&px, 40, 30), Some(want));
+        }
+    }
+
+    /// A photo's large grey area is not its colour: a small saturated patch
+    /// wins over nine times as many grey pixels.
+    #[test]
+    fn a_small_saturated_area_beats_a_large_grey_one() {
+        let px = image(100, 100, |x, y| {
+            if x < 30 && y < 30 {
+                [0xE8, 0x54, 0x3F, 255]
+            } else {
+                // A grey with some noise, as a real sky or wall has.
+                let n = u8::try_from((x * 7 + y * 13) % 9).unwrap();
+                [120 + n, 122 + n, 125 + n, 255]
+            }
+        });
+        let seed = seed_from_rgba(&px, 100, 100).unwrap();
+        assert_eq!(seed, 0xE8_543F, "{seed:06X}");
+    }
+
+    /// Of two colours, population weighted by colourfulness decides: the
+    /// larger one wins at equal colourfulness, the more colourful one at
+    /// equal size.
+    #[test]
+    fn population_and_colourfulness_both_count() {
+        let (blue, teal) = ([0x30, 0x60, 0xD0, 255], [0x40, 0x90, 0x88, 255]);
+        let larger_blue = image(10, 10, |x, _| if x < 7 { blue } else { teal });
+        assert_eq!(seed_from_rgba(&larger_blue, 10, 10), Some(0x30_60D0));
+        let (vivid, dull) = ([0xF0, 0x20, 0x20, 255], [0xA0, 0x60, 0x60, 255]);
+        let half = image(10, 10, |x, _| if x < 5 { dull } else { vivid });
+        assert_eq!(seed_from_rgba(&half, 10, 10), Some(0xF0_2020));
+    }
+
+    #[test]
+    fn transparent_pixels_are_not_the_picture() {
+        let px = image(20, 20, |x, _| {
+            if x < 15 {
+                [0, 0, 255, 0]
+            } else {
+                [0xE8, 0xB5, 0x4A, 255]
+            }
+        });
+        assert_eq!(seed_from_rgba(&px, 20, 20), Some(0xE8_B54A));
+        assert_eq!(
+            seed_from_rgba(&image(4, 4, |_, _| [9, 9, 9, 0]), 4, 4),
+            None
+        );
+    }
+
+    /// Pinned: this constant is asserted on every platform CI runs, which is
+    /// the cross-platform half of "the same bytes are the same seed". A
+    /// 600 x 400 gradient is sampled down, cut into sixteen and scored, all in
+    /// integers, so no maths library can move it.
+    #[test]
+    fn the_same_bytes_are_the_same_seed_everywhere() {
+        let px = image(600, 400, |x, y| {
+            let r = u8::try_from(x * 255 / 599).unwrap();
+            let g = u8::try_from(y * 255 / 399).unwrap();
+            [r, g, 255 - r / 2, 255]
+        });
+        let first = seed_from_rgba(&px, 600, 400);
+        assert_eq!(first, seed_from_rgba(&px, 600, 400));
+        assert_eq!(first, Some(PINNED), "{:06X}", first.unwrap());
+    }
+    const PINNED: i64 = 0x1E_1EF0;
 }

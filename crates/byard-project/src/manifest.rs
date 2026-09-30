@@ -127,6 +127,11 @@ pub struct Manifest {
     /// The `[http]` table (RFC-0029): where a request that names only a
     /// path goes.
     pub http: HttpConfig,
+    /// The files outside the source tree the project is built from: the
+    /// manifest itself and a `[theme] seed = { image = "…" }` picture. What a
+    /// dev runner watches besides the sources, so editing either applies
+    /// live. Empty for bare-file usage.
+    pub watch_files: Vec<PathBuf>,
 }
 
 /// The `[http]` table: the origins an app's requests resolve against, so its
@@ -204,6 +209,7 @@ impl Manifest {
                 theme: Theme::byard_base(),
                 dev: DevConfig::default(),
                 http: HttpConfig::default(),
+                watch_files: Vec::new(),
             });
         }
 
@@ -232,6 +238,7 @@ impl Manifest {
             theme: Theme::byard_base(),
             dev: DevConfig::default(),
             http: HttpConfig::default(),
+            watch_files: Vec::new(),
         }
     }
 
@@ -302,6 +309,15 @@ impl Manifest {
 
         // RFC-0022: `[theme]` tokens + `[assets.fonts]` layer onto `byard-base`.
         let theme = parse_theme(&table, &project_root, &dependencies)?;
+        let mut watch_files = vec![path.to_path_buf()];
+        if let Some(image) = table
+            .get("theme")
+            .and_then(|t| t.get("seed"))
+            .and_then(|s| s.get("image"))
+            .and_then(toml::Value::as_str)
+        {
+            watch_files.push(project_root.join(image));
+        }
         // RFC-0030 §V2: the dev runner's own surface.
         let dev = parse_dev(&table)?;
         let http = parse_http(&table)?;
@@ -316,6 +332,7 @@ impl Manifest {
             theme,
             dev,
             http,
+            watch_files,
         })
     }
 }
@@ -444,6 +461,41 @@ fn parse_duration_ns(s: &str) -> Option<u64> {
     Some((value * scale).round() as u64)
 }
 
+/// The seed colour of `seed = { image = "…" }`, the image read relative to
+/// `root` (RFC-0022 §5). A missing, unreadable or empty image is an error
+/// naming the file: a theme that silently fell back to grey would look like
+/// a derivation bug.
+fn seed_from_image(table: &toml::Table, root: &Path) -> Result<i64, String> {
+    let (Some(rel), 1) = (
+        table.get("image").and_then(toml::Value::as_str),
+        table.len(),
+    ) else {
+        return Err(
+            "byard.toml: [theme] `seed` as a table takes one key, `image`, like \
+             `seed = { image = \"brand.png\" }`"
+                .to_string(),
+        );
+    };
+    let path = root.join(rel);
+    let bytes = std::fs::read(&path).map_err(|e| {
+        format!(
+            "byard.toml: [theme] seed image `{rel}` could not be read ({}): {e}",
+            path.display()
+        )
+    })?;
+    let img = image::load_from_memory(&bytes)
+        .map_err(|e| {
+            format!("byard.toml: [theme] seed image `{rel}` is not a PNG or JPEG image: {e}")
+        })?
+        .into_rgba8();
+    byard_compiler::interp::seed::seed_from_rgba(img.as_raw(), img.width(), img.height())
+        .ok_or_else(|| {
+            format!(
+                "byard.toml: [theme] seed image `{rel}` has no opaque pixel to take a colour from"
+            )
+        })
+}
+
 /// Parses the `[theme]` table and `[assets.fonts]` into a [`Theme`] layered over
 /// the built-in `byard-base` (RFC-0022). Every malformed token is an **error**
 /// (a silently-dropped theme token is a hard-to-debug visual regression); the
@@ -468,7 +520,7 @@ fn parse_theme(
     // not (a git source before `byard get`) is skipped here: the module
     // resolver reports it with the fetch hint, and reporting it twice helps
     // nobody. Naming it in `extends` is the exception, handled below.
-    let mut packages: Vec<(&str, String, toml::Table)> = Vec::new();
+    let mut packages: Vec<(&str, String, toml::Table, std::path::PathBuf)> = Vec::new();
     for dep in dependencies {
         let Ok(root) = crate::deps::dep_root(project_root, dep) else {
             continue;
@@ -489,7 +541,7 @@ fn parse_theme(
         for (family, font) in load_fonts(&pkg, &root, true).map_err(in_package)? {
             theme.add_font(format!("{owner}/{family}"), font);
         }
-        packages.push((dep.name.as_str(), owner, pkg));
+        packages.push((dep.name.as_str(), owner, pkg, root));
     }
 
     if let Some(theme_tbl) = table.get("theme").and_then(toml::Value::as_table) {
@@ -501,9 +553,9 @@ fn parse_theme(
                 );
             }
             Some(Some(base)) => {
-                if let Some((_, owner, pkg)) = packages.iter().find(|(n, ..)| *n == base) {
+                if let Some((_, owner, pkg, root)) = packages.iter().find(|(n, ..)| *n == base) {
                     if let Some(pkg_theme) = pkg.get("theme").and_then(toml::Value::as_table) {
-                        apply_theme_table(&mut theme, pkg_theme, Some(owner))
+                        apply_theme_table(&mut theme, pkg_theme, Some(owner), root)
                             .map_err(|e| format!("package `{owner}`: {e}"))?;
                     }
                 } else if dependencies.iter().any(|d| d.name == base) {
@@ -528,7 +580,7 @@ fn parse_theme(
                 }
             }
         }
-        apply_theme_table(&mut theme, theme_tbl, None)?;
+        apply_theme_table(&mut theme, theme_tbl, None, project_root)?;
     }
 
     // The project's own fonts, relative to the project.
@@ -554,11 +606,13 @@ fn read_package_manifest(root: &Path) -> Result<Option<toml::Table>, String> {
 /// Applies one `[theme]` table's tokens onto `theme`. `package` names the
 /// package the table came from, so a typography token's `family` resolves to
 /// that package's own font when it declares one (`"Roboto"` inside
-/// `material` means `"material/Roboto"`).
+/// `material` means `"material/Roboto"`). `root` is the directory of the
+/// manifest the table came from, which a seed image is read relative to.
 fn apply_theme_table(
     theme: &mut Theme,
     theme_tbl: &toml::Table,
     package: Option<&str>,
+    root: &Path,
 ) -> Result<(), String> {
     if let Some(name) = theme_tbl.get("name").and_then(toml::Value::as_str) {
         theme.name = name.to_string();
@@ -590,14 +644,19 @@ fn apply_theme_table(
             theme.transition_ms = ms.round() as u32;
         }
     }
-    // `seed = "#RRGGBB"` (RFC-0022 §5): derive both schemes' colour roles
-    // from one brand colour. Applied before `[theme.color.*]` below, so an
-    // explicitly declared token always beats the derived one.
+    // `seed = "#RRGGBB"` or `seed = { image = "brand.png" }` (RFC-0022 §5):
+    // derive both schemes' colour roles from one brand colour, or from the
+    // dominant colour of an image. Applied before `[theme.color.*]` below, so
+    // an explicitly declared token always beats the derived one.
     if let Some(v) = theme_tbl.get("seed") {
-        let rgb = v.as_str().and_then(parse_hex_color).ok_or_else(|| {
-            "byard.toml: [theme] `seed` must be a hex colour string, like `seed = \"#6750A4\"`"
-                .to_string()
-        })?;
+        let rgb = match v {
+            toml::Value::Table(t) => seed_from_image(t, root)?,
+            _ => v.as_str().and_then(parse_hex_color).ok_or_else(|| {
+                "byard.toml: [theme] `seed` must be a hex colour string, like \
+                 `seed = \"#6750A4\"`, or an image, like `seed = { image = \"brand.png\" }`"
+                    .to_string()
+            })?,
+        };
         theme.apply_seed(rgb);
     }
     // `extends` beyond the built-in `byard-base` (multi-level, cross-package)
@@ -1154,6 +1213,67 @@ mod tests {
         );
         let err = theme_of("[theme]\nscheme = \"night\"\n").unwrap_err();
         assert!(err.contains("scheme"), "{err}");
+    }
+
+    /// A directory of its own for a test that writes files.
+    fn scratch(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("byard-seed-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn theme_in(dir: &Path, src: &str) -> Result<Theme, String> {
+        let table: toml::Table = src.parse().unwrap();
+        parse_theme(&table, dir, &[])
+    }
+
+    /// `seed = { image = "…" }` (RFC-0022 §5): the image's dominant colour is
+    /// the seed, so a one-colour image derives exactly what that colour as a
+    /// hex seed does, and an explicit token still wins.
+    #[test]
+    fn an_image_seed_derives_what_its_colour_would() {
+        let dir = scratch("solid");
+        image::RgbaImage::from_pixel(32, 32, image::Rgba([0x1E, 0x8E, 0x3E, 255]))
+            .save(dir.join("brand.png"))
+            .unwrap();
+        let from_image = theme_in(&dir, "[theme]\nseed = { image = \"brand.png\" }\n").unwrap();
+        let from_hex = theme_in(&dir, "[theme]\nseed = \"#1E8E3E\"\n").unwrap();
+        for dark in [false, true] {
+            for role in ["primary", "onPrimary", "tertiary", "surface"] {
+                assert_eq!(
+                    from_image.color(role, dark),
+                    from_hex.color(role, dark),
+                    "{role}"
+                );
+            }
+        }
+        let pinned = theme_in(
+            &dir,
+            "[theme]\nseed = { image = \"brand.png\" }\n[theme.color.light]\nprimary = \"#123456\"\n",
+        )
+        .unwrap();
+        assert_eq!(pinned.color("primary", false), Some(0x12_3456));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A seed image that is not there, or is not an image, is an error that
+    /// names it, not a theme quietly left grey.
+    #[test]
+    fn a_missing_or_broken_seed_image_is_named() {
+        let dir = scratch("broken");
+        std::fs::write(dir.join("notes.png"), b"not a picture").unwrap();
+        for (file, says) in [
+            ("gone.png", "could not be read"),
+            ("notes.png", "not a PNG or JPEG"),
+        ] {
+            let err =
+                theme_in(&dir, &format!("[theme]\nseed = {{ image = \"{file}\" }}\n")).unwrap_err();
+            assert!(err.contains(file) && err.contains(says), "{err}");
+        }
+        let err = theme_in(&dir, "[theme]\nseed = { picture = \"x.png\" }\n").unwrap_err();
+        assert!(err.contains("`image`"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// `[theme] transition = <ms>` sets how long a scheme flip cross-fades

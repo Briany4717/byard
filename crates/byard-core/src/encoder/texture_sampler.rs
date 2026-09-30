@@ -22,7 +22,34 @@ use crate::frame::{ImageFit, TextureSampler};
 /// This is the **render** thread's half of the split channel (RFC-0028 §7): a
 /// decoded image is addressed to the thread that owns the `Device`/`Queue`,
 /// and never reaches the logic thread's controller-reply drain.
-pub type DecodeResultSender = UnboundedSender<Box<dyn Any + Send>>;
+///
+/// It carries the render loop's wake with it. A decode finishes with no
+/// input and no publish behind it, so an event-driven (`Wait`) loop that is
+/// not told would leave the image undrawn until the pointer next moved.
+#[derive(Clone)]
+pub struct DecodeResultSender {
+    tx: UnboundedSender<Box<dyn Any + Send>>,
+    wake: std::sync::Arc<dyn Fn() + Send + Sync>,
+}
+
+impl DecodeResultSender {
+    /// A sender that queues on `tx` and then calls `wake`.
+    #[must_use]
+    pub fn new(
+        tx: UnboundedSender<Box<dyn Any + Send>>,
+        wake: std::sync::Arc<dyn Fn() + Send + Sync>,
+    ) -> Self {
+        Self { tx, wake }
+    }
+
+    /// Queues a result for the render thread and wakes its loop. A dropped
+    /// receiver (shutdown) is fine: there is nothing left to paint into.
+    fn send(&self, result: Box<dyn Any + Send>) {
+        if self.tx.send(result).is_ok() {
+            (self.wake)();
+        }
+    }
+}
 
 /// Raw decoded RGBA8 pixels produced off the render thread by the I/O pool
 /// Carries no `wgpu` handles, `Device`/`Queue` are used only on their
@@ -149,10 +176,10 @@ impl TextureCache {
             let result = decode_rgba(&src_owned);
             // The receiver (the render thread) may already be gone on shutdown;
             // a dropped send is fine, nothing left to paint into.
-            let _ = tx.send(Box::new(DecodedImage {
+            tx.send(Box::new(DecodedImage {
                 src: src_owned,
                 result,
-            }) as Box<dyn Any + Send>);
+            }));
         });
     }
 
@@ -639,6 +666,7 @@ mod tests {
     fn ensure_does_not_block_when_decoding_a_slow_fixture() {
         let rt = io_runtime();
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Box<dyn Any + Send>>();
+        let tx = DecodeResultSender::new(tx, std::sync::Arc::new(|| {}));
         // A 1024×1024 PNG: its decode (inflate + unfilter) takes many
         // milliseconds, far longer than the microseconds `ensure` needs just
         // to spawn the task and return.
@@ -699,6 +727,7 @@ mod tests {
     fn ensure_called_twice_for_the_same_pending_path_spawns_one_decode_task() {
         let rt = io_runtime();
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Box<dyn Any + Send>>();
+        let tx = DecodeResultSender::new(tx, std::sync::Arc::new(|| {}));
         let path = write_png_fixture("dedup", 8, 8);
         let src = path.to_str().unwrap();
 
@@ -738,6 +767,7 @@ mod tests {
 
         let rt = io_runtime();
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Box<dyn Any + Send>>();
+        let tx = DecodeResultSender::new(tx, std::sync::Arc::new(|| {}));
         let path = write_png_fixture("ready", 16, 16);
         let src = path.to_str().unwrap();
 
@@ -776,5 +806,34 @@ mod tests {
         assert!(decoded.result.is_err(), "missing file must fail to decode");
         cache.apply_decoded(&device, &queue, &layout, &smp, decoded);
         assert!(cache.get("/no/such/byard/image.png").is_none());
+    }
+
+    /// A decode finishes with no input and no publish behind it, so the
+    /// sender wakes the render loop itself. Without that an event-driven
+    /// window showed the image only after the pointer next moved.
+    #[test]
+    fn a_finished_decode_wakes_the_render_loop() {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .build()
+            .unwrap();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Box<dyn Any + Send>>();
+        let (woke_tx, woke_rx) = std::sync::mpsc::channel::<()>();
+        let woke_tx = std::sync::Mutex::new(woke_tx);
+        let tx = DecodeResultSender::new(
+            tx,
+            std::sync::Arc::new(move || {
+                let _ = woke_tx.lock().unwrap().send(());
+            }),
+        );
+        let path = write_png_fixture("wake", 8, 8);
+        let mut cache = TextureCache::default();
+        cache.ensure(rt.handle(), &tx, path.to_str().unwrap());
+        // Waited for, not read: the wake runs on the pool, after the send.
+        woke_rx
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .expect("the decode woke the render loop");
+        assert!(rx.try_recv().is_ok(), "and its result is waiting");
+        assert!(woke_rx.try_recv().is_err(), "exactly once");
     }
 }

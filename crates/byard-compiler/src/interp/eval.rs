@@ -2672,26 +2672,12 @@ impl Interpreter {
                             .push(CompileError::NotAStyle { span: init.span() }),
                     }
                 } else {
-                    self.define_let(name.clone(), init);
+                    self.define_let_or_fn(name, init);
                 }
             }
             Member::Fn {
                 name, params, body, ..
-            } => {
-                if params.is_empty() {
-                    // No-param fn: lower body to a memo (existing behavior).
-                    self.define_let(name.clone(), body);
-                } else {
-                    // Parameterized fn: store params+body in fn_table,
-                    // bind Value::Fn(AstId) in env.
-                    let id = crate::interp::env::AstId(
-                        u32::try_from(self.fn_table.len()).unwrap_or(u32::MAX),
-                    );
-                    let param_names: Vec<Symbol> = params.iter().map(|p| p.name.clone()).collect();
-                    self.fn_table.push((param_names, body.clone(), false));
-                    self.env.push(name.clone(), Value::Fn(id));
-                }
-            }
+            } => self.define_fn(name, params, body),
             Member::Expr(e) => {
                 // A bare statement member is an action, so a call written
                 // there is in effect position like any other (RFC-0028 §4).
@@ -2932,18 +2918,59 @@ impl Interpreter {
                     }
                     self.define_var(name.clone(), init);
                 }
-                Member::Let { name, init, .. }
-                | Member::Fn {
-                    name, body: init, ..
-                } => {
-                    self.define_let(name.clone(), init);
-                }
+                Member::Let { name, init, .. } => self.define_let_or_fn(name, init),
+                Member::Fn {
+                    name, params, body, ..
+                } => self.define_fn(name, params, body),
                 _ => {}
             }
         }
     }
 
-    /// `let y = init` (and `fn`), open a computed memo.
+    /// `fn f(params) => body`. With no parameters it is a memo, read by
+    /// `f()`; with parameters its body is inlined at each call with the
+    /// arguments bound, which is what [`Self::lower_call`] does for it.
+    fn define_fn(&mut self, name: &Symbol, params: &[Param], body: &Expr) {
+        if params.is_empty() {
+            self.define_let(name.clone(), body);
+        } else {
+            let names: Vec<Symbol> = params.iter().map(|p| p.name.clone()).collect();
+            self.define_callable(name, names, body);
+        }
+    }
+
+    /// `let f = (params) => body` is a function like `fn`, called the same
+    /// way: `f()` runs the body, which in an action can be an action block
+    /// (`let load = () => { state = "loading" http.get(...) ... }`). Any
+    /// other `let` is a memo.
+    fn define_let_or_fn(&mut self, name: &Symbol, init: &Expr) {
+        if let Expr::Lambda { params, body, .. } = init {
+            // `() => { ... }` parses its block as a block literal, which is a
+            // parameterless lambda of its own (the `on_tap: { count++ }`
+            // form). The body to inline is the block, not a lambda that would
+            // only produce itself when called.
+            let body = match body.as_ref() {
+                Expr::Lambda {
+                    params: inner,
+                    body: block,
+                    ..
+                } if inner.is_empty() && matches!(block.as_ref(), Expr::Block(..)) => block,
+                other => other,
+            };
+            self.define_callable(name, params.clone(), body);
+        } else {
+            self.define_let(name.clone(), init);
+        }
+    }
+
+    /// Binds `name` to a body [`Self::lower_call`] inlines at each call.
+    fn define_callable(&mut self, name: &Symbol, params: Vec<Symbol>, body: &Expr) {
+        let id = crate::interp::env::AstId(u32::try_from(self.fn_table.len()).unwrap_or(u32::MAX));
+        self.fn_table.push((params, body.clone(), false));
+        self.env.push(name.clone(), Value::Fn(id));
+    }
+
+    /// `let y = init` (and a `fn` with no parameters), open a computed memo.
     pub fn define_let(&mut self, name: Symbol, init: &Expr) -> ScopeId {
         let compute = self.lower_expr(init, None);
         let scope = self.ctx.open_memo(compute);

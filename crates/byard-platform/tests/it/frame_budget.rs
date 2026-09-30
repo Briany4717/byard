@@ -110,7 +110,7 @@ const H: f32 = 480.0;
 const PHYS_W: u32 = 640;
 const PHYS_H: u32 = 480;
 
-const SCENE: &str = include_str!("fixtures/budget_scene.byd");
+const SCENE: &str = include_str!("../fixtures/budget_scene.byd");
 
 // ── Counting allocator ─────────────────────────────────────────────────────
 

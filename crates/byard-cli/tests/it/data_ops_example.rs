@@ -12,7 +12,7 @@ use byard_compiler::parser::parse;
 use byard_core::frame::RenderFrame;
 use byard_core::{EventKind, InputEvent};
 
-const SRC: &str = include_str!("../examples/data_ops/src/main.byd");
+const SRC: &str = include_str!("../../examples/data_ops/src/main.byd");
 const W: f32 = 900.0;
 const H: f32 = 1000.0;
 

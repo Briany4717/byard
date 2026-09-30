@@ -22,30 +22,33 @@
 use naga::valid::{Capabilities, ValidationFlags, Validator};
 
 /// The shared gradient block, prepended by the pipelines that paint one.
-const GRADIENT: &str = include_str!("../src/encoder/gradient.wgsl");
+const GRADIENT: &str = include_str!("../../src/encoder/gradient.wgsl");
 
 /// The shared clip block, prepended by every pipeline that can be clipped.
-const CLIP: &str = include_str!("../src/encoder/clip.wgsl");
+const CLIP: &str = include_str!("../../src/encoder/clip.wgsl");
 
 /// Every pipeline shader, assembled the way its pipeline assembles it.
 fn shaders() -> Vec<(&'static str, String)> {
     vec![
         (
             "solid_box",
-            format!("{CLIP}\n{}", include_str!("../src/encoder/solid_box.wgsl")),
+            format!(
+                "{CLIP}\n{}",
+                include_str!("../../src/encoder/solid_box.wgsl")
+            ),
         ),
         (
             "decorated_box",
             format!(
                 "{CLIP}\n{GRADIENT}\n{}",
-                include_str!("../src/encoder/decorated_box.wgsl")
+                include_str!("../../src/encoder/decorated_box.wgsl")
             ),
         ),
         (
             "canvas_fill",
             format!(
                 "{CLIP}\n{GRADIENT}\n{}",
-                include_str!("../src/encoder/canvas_fill.wgsl")
+                include_str!("../../src/encoder/canvas_fill.wgsl")
             ),
         ),
         // Neither of these was listed before; both are clippable, so both
@@ -54,29 +57,29 @@ fn shaders() -> Vec<(&'static str, String)> {
             "canvas_shape",
             format!(
                 "{CLIP}\n{GRADIENT}\n{}",
-                include_str!("../src/encoder/canvas_shape.wgsl")
+                include_str!("../../src/encoder/canvas_shape.wgsl")
             ),
         ),
         (
             "clip_mask",
-            include_str!("../src/encoder/clip_mask.wgsl").to_string(),
+            include_str!("../../src/encoder/clip_mask.wgsl").to_string(),
         ),
         (
             "ripple",
-            format!("{CLIP}\n{}", include_str!("../src/encoder/ripple.wgsl")),
+            format!("{CLIP}\n{}", include_str!("../../src/encoder/ripple.wgsl")),
         ),
         (
             "texture_sampler",
             format!(
                 "{CLIP}\n{}",
-                include_str!("../src/encoder/texture_sampler.wgsl")
+                include_str!("../../src/encoder/texture_sampler.wgsl")
             ),
         ),
         (
             "vector_msdf",
             format!(
                 "{CLIP}\n{}",
-                include_str!("../src/encoder/vector_msdf.wgsl")
+                include_str!("../../src/encoder/vector_msdf.wgsl")
             ),
         ),
     ]
@@ -102,15 +105,15 @@ fn the_gradient_block_is_included_rather_than_copied() {
     for (name, src) in [
         (
             "decorated_box",
-            include_str!("../src/encoder/decorated_box.wgsl"),
+            include_str!("../../src/encoder/decorated_box.wgsl"),
         ),
         (
             "canvas_fill",
-            include_str!("../src/encoder/canvas_fill.wgsl"),
+            include_str!("../../src/encoder/canvas_fill.wgsl"),
         ),
         (
             "canvas_shape",
-            include_str!("../src/encoder/canvas_shape.wgsl"),
+            include_str!("../../src/encoder/canvas_shape.wgsl"),
         ),
     ] {
         assert!(

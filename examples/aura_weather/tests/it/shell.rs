@@ -1,11 +1,11 @@
 //! The app shell: the tab host, the tab bar, the theme and its two faces.
 
-mod common;
+use crate::common;
 
 use common::{App, Server};
 
 /// What the forecast screen asks for, trimmed to the fields it reads.
-const FORECAST: &str = include_str!("fixtures/forecast.json");
+const FORECAST: &str = include_str!("../fixtures/forecast.json");
 
 #[test]
 fn the_app_starts_on_the_forecast_and_every_tab_reaches_its_screen() {

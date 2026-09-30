@@ -10,7 +10,7 @@ use byard_compiler::parser::parse;
 use byard_compiler::symbol::Symbol;
 use byard_core::frame::RenderFrame;
 
-const HELLO_WORLD: &str = include_str!("../examples/hello_world.byd");
+const HELLO_WORLD: &str = include_str!("../../examples/hello_world.byd");
 
 fn texts(frame: &RenderFrame) -> Vec<String> {
     frame.texts().iter().map(|t| t.text.clone()).collect()

@@ -252,7 +252,7 @@ View Inner(on_tap: Fn() = {}) {
 /// caller's state on screen.
 #[test]
 fn visual_example_forwards_every_button() {
-    const EXAMPLE: &str = include_str!("../../byard-cli/examples/callbacks/src/main.byd");
+    const EXAMPLE: &str = include_str!("../../../byard-cli/examples/callbacks/src/main.byd");
     let (mut interp, _frame) = boot(EXAMPLE);
     let count = sig(&interp, "count");
     assert_eq!(interp.peek(count), Value::Int(0));
@@ -293,7 +293,7 @@ fn visual_example_forwards_every_button() {
 /// Moving the pointer onto a button must change at least one rendered fill.
 #[test]
 fn visual_example_hover_tints_a_button() {
-    const EXAMPLE: &str = include_str!("../../byard-cli/examples/callbacks/src/main.byd");
+    const EXAMPLE: &str = include_str!("../../../byard-cli/examples/callbacks/src/main.byd");
     let parsed = parse(EXAMPLE);
     assert!(
         parsed.errors.is_empty(),

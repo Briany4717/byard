@@ -11,6 +11,12 @@ rust-version.workspace = true
 # Test support only: a dev-dependency of the crates whose tests draw.
 publish = false
 
+
+[lib]
+# No runnable doc examples here: skip the rustdoc pass that `cargo test`
+# would otherwise spend on this crate. Turn it back on with the first one.
+doctest = false
+
 [dependencies]
 wgpu = "29.0"
 pollster = "0.4"

@@ -239,7 +239,7 @@ View Main() {
 
 #[test]
 fn the_persistent_todo_example_loads_on_mount() {
-    const EXAMPLE: &str = include_str!("../../byard-cli/examples/persistent_todo/src/main.byd");
+    const EXAMPLE: &str = include_str!("../../../byard-cli/examples/persistent_todo/src/main.byd");
     let dir = TempDir::new("example");
     let mut harness = Harness::new(EXAMPLE, &dir.file());
     let hard: Vec<&byard_compiler::CompileError> = harness

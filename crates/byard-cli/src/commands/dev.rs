@@ -81,18 +81,32 @@ pub fn run(opts: Options<'_>) -> Result<(), String> {
         started,
     };
 
-    // Watch the project source directory plus every resolved `path`
-    // dependency (D-J); cache checkouts are pinned/immutable → not watched.
+    // Watch the whole project plus every resolved `path` dependency (D-J);
+    // cache checkouts are pinned/immutable → not watched. The whole project,
+    // not only the entry's directory: the manifest, a seed image and the
+    // images `Image` draws usually live beside the sources (`assets/`), and
+    // each changes what the app looks like. The watcher skips build output
+    // and caches. A lone `.byd` is not a project: only its directory.
     let cache = cache_dir();
-    let entry_dir = manifest
-        .entry
-        .parent()
-        .unwrap_or(Path::new("."))
-        .to_path_buf();
-    let mut watch_paths = vec![entry_dir];
-    // The manifest and a theme's seed image live beside the sources, not in
-    // them, and each changes what the app looks like (RFC-0022).
-    watch_paths.extend(manifest.watch_files.iter().filter(|p| p.exists()).cloned());
+    let project_dir = if manifest.single_file {
+        manifest
+            .entry
+            .parent()
+            .unwrap_or(Path::new("."))
+            .to_path_buf()
+    } else {
+        manifest.project_root.clone()
+    };
+    // A seed image outside the project (`image = "../brand.png"`) is
+    // watched as a file of its own.
+    let outside: Vec<PathBuf> = manifest
+        .watch_files
+        .iter()
+        .filter(|p| p.exists() && !p.starts_with(&project_dir))
+        .cloned()
+        .collect();
+    let mut watch_paths = vec![project_dir];
+    watch_paths.extend(outside);
     for root in provider.resolved_roots().values() {
         if !root.starts_with(&cache) {
             watch_paths.push(root.clone());
@@ -220,6 +234,15 @@ fn reload_views(
         let known: Vec<&str> = new.iter().map(|v| v.name.as_str()).collect();
         interp.lower_view(new_root, &known)
     })
+}
+
+/// A window's size in logical pixels, which is what layout works in.
+#[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+fn logical_size(size: WindowSize) -> (f32, f32) {
+    (
+        size.width as f32 / size.scale_factor as f32,
+        size.height as f32 / size.scale_factor as f32,
+    )
 }
 
 fn now_ms() -> u64 {
@@ -397,6 +420,8 @@ struct ByldRuntime {
     /// Changed `.svg` paths from the file watcher: each is invalidated in the
     /// vector JIT so the field regenerates live (RFC-0009 §3).
     asset_changes: crossbeam_channel::Receiver<std::path::PathBuf>,
+    /// Where changed image files go: the render thread decodes them again.
+    image_reloader: byard_core::engine::ImageReloader,
     /// A structure-incompatible reload held during an in-flight gesture (E5),
     /// together with the indicator that says so (RFC-0006 C1).
     pending_reload: PendingReload,
@@ -574,7 +599,13 @@ impl LogicRuntime for ByldRuntime {
         // invalidate its MSDF field; the regenerated field reuses the same atlas
         // cell, so the icon updates in place without remounting its `View`.
         while let Ok(path) = self.asset_changes.try_recv() {
-            self.interp.invalidate_vector_asset(&path);
+            // A raster image is decoded again on the render thread, which
+            // owns the texture cache; a vector's field is regenerated here.
+            if byard_compiler::interp::reload::is_raster(&path) {
+                self.image_reloader.reload(path);
+            } else {
+                self.interp.invalidate_vector_asset(&path);
+            }
         }
 
         // ── Step 1: dispatch input events ─────────────────────────────────────
@@ -1188,10 +1219,7 @@ impl PlatformHost for App {
         size: WindowSize,
         waker: byard_core::relay::FrameWaker,
     ) -> Result<(), ByardError> {
-        #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
-        let w = size.width as f32 / size.scale_factor as f32;
-        #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
-        let h = size.height as f32 / size.scale_factor as f32;
+        let (w, h) = logical_size(size);
         let width_bits = Arc::new(AtomicU32::new(w.to_bits()));
         let height_bits = Arc::new(AtomicU32::new(h.to_bits()));
         let w_clone = Arc::clone(&width_bits);
@@ -1250,6 +1278,7 @@ impl PlatformHost for App {
         // on. Built here, on the main thread, because it has to be `Send` into
         // the logic-thread factory below and cannot be built inside it.
         let dispatcher = engine.dispatcher(self.capabilities());
+        let image_reloader = engine.image_reloader();
 
         engine.start_logic_from_view(move |_arena| {
             let (mut interp, tree, current_views) = if initial_views.is_empty() {
@@ -1280,6 +1309,7 @@ impl PlatformHost for App {
                 current_views,
                 reload_channel,
                 asset_changes: asset_rx,
+                image_reloader,
                 pending_reload: PendingReload::new(reload_pending_logic),
                 error_state: initial_errors,
                 width_bits: w_clone,

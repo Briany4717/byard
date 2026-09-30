@@ -135,6 +135,10 @@ enum TextureState {
     Ready(TextureEntry),
     /// Decode failed (logged once). Draws nothing.
     Failed,
+    /// The file changed on disk and is being decoded again (dev hot reload).
+    /// The previous texture keeps drawing until the new one is uploaded, so
+    /// an edited image swaps in place instead of blinking out.
+    Reloading(TextureEntry),
 }
 
 /// Path-keyed cache of decoded textures so a static image uploads once.
@@ -169,18 +173,44 @@ impl TextureCache {
             return;
         }
         self.entries.insert(src.to_string(), TextureState::Pending);
+        spawn_decode(io_handle, io_tx, src);
+    }
 
-        let src_owned = src.to_string();
-        let tx = io_tx.clone();
-        io_handle.spawn(async move {
-            let result = decode_rgba(&src_owned);
-            // The receiver (the render thread) may already be gone on shutdown;
-            // a dropped send is fine, nothing left to paint into.
-            tx.send(Box::new(DecodedImage {
-                src: src_owned,
-                result,
-            }));
-        });
+    /// Decodes again every entry that is the file at `changed` (dev hot
+    /// reload), returning how many. An entry drawn so far keeps drawing until
+    /// the new pixels are uploaded; one that had failed (the file was missing
+    /// or broken) is simply retried. An entry still `Pending` is left alone:
+    /// its decode reads the file when it runs, which is after the change.
+    ///
+    /// Matched by file rather than by string, since a view names the image
+    /// relative to where the app runs and a watcher reports it absolute.
+    pub fn reload(
+        &mut self,
+        io_handle: &tokio::runtime::Handle,
+        io_tx: &DecodeResultSender,
+        changed: &std::path::Path,
+    ) -> usize {
+        let changed = std::fs::canonicalize(changed).unwrap_or_else(|_| changed.to_path_buf());
+        let same = |src: &str| {
+            std::fs::canonicalize(src)
+                .map_or_else(|_| std::path::Path::new(src) == changed, |p| p == changed)
+        };
+        let mut reloaded = 0;
+        for (src, state) in &mut self.entries {
+            if !same(src) {
+                continue;
+            }
+            *state = match std::mem::replace(state, TextureState::Pending) {
+                TextureState::Ready(entry) | TextureState::Reloading(entry) => {
+                    TextureState::Reloading(entry)
+                }
+                TextureState::Failed => TextureState::Pending,
+                TextureState::Pending => continue,
+            };
+            spawn_decode(io_handle, io_tx, src);
+            reloaded += 1;
+        }
+        reloaded
     }
 
     /// Uploads an async decode result on the render thread, transitioning the
@@ -196,6 +226,24 @@ impl TextureCache {
     ) {
         let state = match decoded.result {
             Ok(rgba) => TextureState::Ready(upload_rgba(device, queue, layout, sampler, &rgba)),
+            // A reload that could not be read, most often a file caught half
+            // written by the editor saving it: keep drawing what was there.
+            // The save that completes it is another change, and another try.
+            Err(err)
+                if matches!(
+                    self.entries.get(&decoded.src),
+                    Some(TextureState::Reloading(_))
+                ) =>
+            {
+                eprintln!(
+                    "byard: warning: image changed but could not be decoded, keeping the previous one: '{}': {err}",
+                    decoded.src
+                );
+                match self.entries.remove(&decoded.src) {
+                    Some(TextureState::Reloading(entry)) => TextureState::Ready(entry),
+                    _ => TextureState::Failed,
+                }
+            }
             Err(err) => {
                 // A missing/corrupt image simply does not draw. The
                 // warning fires once per path (the entry is now `Failed`, so
@@ -216,10 +264,26 @@ impl TextureCache {
     #[must_use]
     pub fn get(&self, src: &str) -> Option<&TextureEntry> {
         match self.entries.get(src) {
-            Some(TextureState::Ready(entry)) => Some(entry),
+            Some(TextureState::Ready(entry) | TextureState::Reloading(entry)) => Some(entry),
             _ => None,
         }
     }
+}
+
+/// Spawns the decode of `src` on the I/O pool; the result comes back through
+/// `tx`, which also wakes the render loop.
+fn spawn_decode(io_handle: &tokio::runtime::Handle, tx: &DecodeResultSender, src: &str) {
+    let src_owned = src.to_string();
+    let tx = tx.clone();
+    io_handle.spawn(async move {
+        let result = decode_rgba(&src_owned);
+        // The receiver (the render thread) may already be gone on shutdown;
+        // a dropped send is fine, nothing left to paint into.
+        tx.send(Box::new(DecodedImage {
+            src: src_owned,
+            result,
+        }));
+    });
 }
 
 /// Decodes an image file to RGBA8 **off the render thread** (no `wgpu` calls).
@@ -785,6 +849,78 @@ mod tests {
         );
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// Dev hot reload: a changed file is decoded again, the old picture keeps
+    /// drawing until the new one lands, and a reload that cannot be decoded
+    /// (a file caught half written) keeps the old one rather than blanking.
+    /// Matched by file: the watcher reports an absolute path, the view names
+    /// the image however it likes.
+    #[test]
+    fn a_changed_image_is_decoded_again_and_swaps_in_place() {
+        let Some((device, queue, _turn)) = try_device() else {
+            eprintln!("no GPU adapter, skipping image reload test");
+            return;
+        };
+        let layout = bind_group_layout(&device);
+        let smp = sampler(&device);
+        let rt = io_runtime();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Box<dyn Any + Send>>();
+        let tx = DecodeResultSender::new(tx, std::sync::Arc::new(|| {}));
+        let mut drain = |cache: &mut TextureCache| {
+            let received = rt.block_on(rx.recv()).expect("decode result");
+            cache.apply_decoded(
+                &device,
+                &queue,
+                &layout,
+                &smp,
+                *received.downcast().unwrap(),
+            );
+        };
+
+        let path = write_png_fixture("reload", 16, 16);
+        // Named the way a view might: through a `..` the watcher never uses.
+        let dir = path.parent().unwrap();
+        let src = format!(
+            "{}/../{}/{}",
+            dir.display(),
+            dir.file_name().unwrap().to_str().unwrap(),
+            path.file_name().unwrap().to_str().unwrap()
+        );
+        let mut cache = TextureCache::default();
+        cache.ensure(rt.handle(), &tx, &src);
+        drain(&mut cache);
+        assert_eq!(cache.get(&src).map(|e| e.width), Some(16));
+
+        // The file changes: one entry is decoded again, and until the new
+        // pixels land the old ones still draw.
+        image::RgbaImage::from_pixel(32, 8, image::Rgba([200, 20, 30, 255]))
+            .save(&path)
+            .unwrap();
+        assert_eq!(cache.reload(rt.handle(), &tx, &path), 1);
+        assert_eq!(
+            cache.get(&src).map(|e| e.width),
+            Some(16),
+            "old picture meanwhile"
+        );
+        drain(&mut cache);
+        assert_eq!(cache.get(&src).map(|e| (e.width, e.height)), Some((32, 8)));
+
+        // Caught half written: the previous picture stays.
+        std::fs::write(&path, b"\x89PNG half").unwrap();
+        assert_eq!(cache.reload(rt.handle(), &tx, &path), 1);
+        drain(&mut cache);
+        assert_eq!(
+            cache.get(&src).map(|e| e.width),
+            Some(32),
+            "kept, not blanked"
+        );
+
+        // Another file changing touches nothing.
+        let other = write_png_fixture("other", 4, 4);
+        assert_eq!(cache.reload(rt.handle(), &tx, &other), 0);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(&other);
     }
 
     /// A bad path decodes to `Failed` (drawing nothing), never a panic, and

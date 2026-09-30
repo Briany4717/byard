@@ -838,6 +838,7 @@ mod tests {
             theme: byard_compiler::interp::theme::Theme::byard_base(),
             dev: crate::manifest::DevConfig::default(),
             http: crate::manifest::HttpConfig::default(),
+            watch_files: Vec::new(),
         };
         let (program, provider) = resolve_project(&manifest).unwrap();
         assert!(program.errors.is_empty(), "{:?}", program.errors);

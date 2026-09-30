@@ -28,6 +28,7 @@ mod radio_button_example;
 mod responsive_example;
 mod ripple_example;
 mod scroll_snap_example;
+mod seed_image_example;
 mod seed_scheme_example;
 mod self_measurement_example;
 mod shape_morph_example;

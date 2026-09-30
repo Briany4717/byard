@@ -309,6 +309,29 @@ pub struct Theme {
 }
 
 impl Theme {
+    /// Whether `other` declares the same tokens, fonts and defaults as this
+    /// theme. Floats compare by bits: both sides were read from a manifest,
+    /// so "the same" means the same number, not a nearby one. `active_dark` is left out: it is the scheme the app is showing,
+    /// which the running app flips, not something a manifest edit changes.
+    ///
+    /// What a dev reload asks before replacing the running theme: replacing
+    /// it re-registers every font and rebuilds the layout, which a save that
+    /// touched only a view should not pay for.
+    #[must_use]
+    pub fn same_tokens(&self, other: &Self) -> bool {
+        self.name == other.name
+            && self.schemes == other.schemes
+            && self.typography == other.typography
+            && self.shapes == other.shapes
+            && self.fonts == other.fonts
+            && self.breakpoints == other.breakpoints
+            && self.font_size.to_bits() == other.font_size.to_bits()
+            && self.button_padding.0.to_bits() == other.button_padding.0.to_bits()
+            && self.button_padding.1.to_bits() == other.button_padding.1.to_bits()
+            && self.button_min_size.to_bits() == other.button_min_size.to_bits()
+            && self.transition_ms == other.transition_ms
+    }
+
     /// The engine's built-in `byard-base` theme (RFC-0022 §6): a neutral gray
     /// palette, the M3 type scale, and the 0/4/8/12/16/28 shape scale.
     #[must_use]

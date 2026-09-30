@@ -41,6 +41,7 @@ mod retained_across_views;
 mod runner_loop;
 mod store_persistence;
 mod text_weight;
+mod theme_swap;
 mod timer_effects;
 mod token_transitions;
 mod transform_hit_test;

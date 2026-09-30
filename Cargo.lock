@@ -390,6 +390,7 @@ dependencies = [
  "byard-compiler",
  "byard-core",
  "flate2",
+ "image",
  "sha2",
  "toml",
 ]

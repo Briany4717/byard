@@ -1,7 +1,7 @@
 # RFC-0022: Theme Runtime & Asset Distribution, Pillar D complete
 
-- **Status:** Active, implemented; §5 seed-colour schemes implemented, colour extraction from an image deferred
-- **Status note (2026-09-24):** Shipped: manifest tokens, the reactive scheme signal, the provider model, asset loading, `Typo` token resolution, `byard-base`, and §5's seed-colour schemes (`[theme] seed`). Deferred: deriving the seed from a source image, which needs a quantisation step nothing else in the engine has.
+- **Status:** Active, implemented; §5 seed-colour schemes implemented, from a hex colour or from an image
+- **Status note (2026-09-24):** Shipped: manifest tokens, the reactive scheme signal, the provider model, asset loading, `Typo` token resolution, `byard-base`, and §5's seed-colour schemes (`[theme] seed`). Deriving the seed from a source image landed 2026-09-30 (§5, "A seed from an image").
 - **Author(s):** Briany4717
 - **Created:** 2026-07-10
 - **Last updated:** 2026-07-10
@@ -286,8 +286,36 @@ A seed is almost always a brand constant, and deriving it in the manifest keeps
 the byld side unchanged and every derived token checkable: `byard check` knows
 `t.tertiary` exists because the seed produced it. The derivation is exposed as
 `Theme::apply_seed` for a host that wants to reseed at runtime; reseeding from
-byld, and extracting a seed from a wallpaper image (which needs colour
-quantisation), are deferred.
+byld is deferred.
+
+**A seed from an image** (2026-09-30). `seed = { image = "brand.png" }`, the
+path relative to the manifest, takes the seed from a picture, at load, like
+the hex seed; the result is the same table, so nothing downstream knows.
+
+- **Algorithm.** The image is sampled down to at most 128 pixels on its long
+  side, transparent pixels dropped, and quantised to 16 colours by median cut
+  (the box with the widest channel range is cut at that channel's median,
+  ties broken by population and then position). Each cluster scores its
+  population times its colourfulness, the spread between its largest and
+  smallest sRGB channel; a cluster below 24 counts as grey and cannot win
+  while any colourful one exists, so a photo's large grey sky loses to its
+  small orange kite. An image of only greys gives its most common grey,
+  which the derivation floors to a colour as it does a grey hex seed.
+- **Integer sRGB, not OKLab.** Quantising in OKLab would be more perceptual,
+  but it needs a cube root whose last bit is the maths library's choice, and
+  a seed that changed with the machine building it would make the theme
+  change with it. Every step here is integer arithmetic, so the same bytes
+  are the same seed on every platform; a test pins one image's seed as a
+  constant, which every platform CI runs on has to reproduce.
+- **Not Material's algorithm.** Material quantises in CAM16 with its own
+  scoring weights. This picks the same kind of colour, not the same one.
+- **Errors.** A missing, unreadable or undecodable file (PNG and JPEG are
+  read) is a manifest error naming it, and so is a picture with no opaque
+  pixel: a theme that quietly fell back to grey would look like a derivation
+  bug. An explicit `[theme.color.*]` token still wins.
+- **Live in `byard dev`.** The manifest and the seed image are watched, and a
+  reload that brings a different theme replaces the running one, keeping
+  the scheme the app is showing.
 
 ### 6. `byard-base`, the engine's built-in theme
 

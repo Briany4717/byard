@@ -455,6 +455,18 @@ impl Checker<'_> {
                 }
                 Ty::Unknown
             }
+            // Each branch is a block of its own, so nothing it binds outlives it.
+            Expr::If {
+                cond, then, els, ..
+            } => {
+                self.check_expr(cond);
+                for branch in std::iter::once(then).chain(els) {
+                    let mark = self.undo.len();
+                    self.check_expr(branch);
+                    self.leave(mark);
+                }
+                Ty::Unknown
+            }
             Expr::Animated { value, anim, .. } => {
                 self.check_expr(anim);
                 self.check_expr(value)

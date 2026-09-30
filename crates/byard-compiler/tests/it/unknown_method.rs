@@ -284,3 +284,28 @@ fn the_content_slot_needs_no_annotation_but_another_bare_parameter_does() {
         "{errors:?}"
     );
 }
+
+#[test]
+fn a_misspelt_method_in_an_if_body_and_an_else_branch_is_reported() {
+    let found = unknown_methods(
+        "var xs = [1, 2, 3]\nButton(\"Add\") => { if xs.len > 2 { xs = xs.pusj(4) } else { xs = xs.removeat(0) } }",
+    );
+    assert_eq!(
+        found,
+        [
+            ("pusj".to_string(), Some("push".to_string())),
+            ("removeat".to_string(), Some("removeAt".to_string())),
+        ]
+    );
+}
+
+#[test]
+fn an_else_if_chain_is_checked_and_real_methods_are_clean() {
+    let found = unknown_methods(
+        "var xs = [1]\nButton(\"Go\") => { if xs.len > 2 { xs = xs.push(1) } else if xs.len > 1 { xs = xs.contain(1) } }",
+    );
+    assert_eq!(found, one("contain", Some("contains")));
+    assert_clean(
+        "var xs = [1]\nButton(\"Go\") => { if xs.len > 2 { xs = xs.push(1) } else { xs = xs.removeAt(0) } }",
+    );
+}

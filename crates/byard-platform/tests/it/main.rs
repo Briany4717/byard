@@ -18,6 +18,7 @@ mod frame_budget;
 mod gradient_kinds_readback;
 mod group_opacity_example_readback;
 mod group_opacity_readback;
+mod late_mark_keeps_dirty_bits;
 mod looping_animation_readback;
 mod nav_transition_readback;
 mod paint_details_readback;

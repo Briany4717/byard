@@ -25,18 +25,6 @@ View ForecastScreen(place: Str, lat: Float, lon: Float) {
     var temps: List<Float> = []
     var hoursX: Float = 0.0
 
-    // The WMO weather code, in words.
-    fn describe(code: Int) -> Str => code == 0 ? "Clear sky"
-        : code <= 2 ? "Partly cloudy"
-        : code == 3 ? "Overcast"
-        : code <= 48 ? "Fog"
-        : code <= 57 ? "Drizzle"
-        : code <= 67 ? "Rain"
-        : code <= 77 ? "Snow"
-        : code <= 82 ? "Showers"
-        : code <= 86 ? "Snow showers"
-        : "Thunderstorm"
-
     let load = () => {
         state = "loading"
         http.get("/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,apparent_temperature,relative_humidity_2m,wind_speed_10m,weather_code&hourly=temperature_2m&daily=temperature_2m_max,temperature_2m_min&forecast_days=1&forecast_hours=12&timezone=auto")

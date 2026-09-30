@@ -12,6 +12,13 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **The system fonts are read once per process.** Building a font system scans
+  every font installed on the machine, tens of milliseconds each time, and the
+  engine builds two (one to measure text, one to paint it), so every app paid
+  the scan twice at startup. The scan now happens once, and each font system
+  starts from a copy of its result; a font a project registers still goes into
+  its own copy only.
+
 - **A pipeline may only ask for the vertex attributes every GPU has.** The
   engine requests the adapter's limits with the attribute budget held down to
   the sixteen the WebGPU specification guarantees, so a layout that overruns
@@ -26,6 +33,11 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   colour lighter than it was written.
 
 ### Added
+
+- **`if` in actions.** `if cond { … }`, `else if` and `else` run inside
+  any action: a button's, `on mount`, a `let` action, an `ok`/`err` arm. It
+  used to parse as three unrelated statements, check clean and do nothing, so
+  a guard like `if n > max { n = max }` was silently inert.
 
 - **A package can ship a widget that draws itself (RFC-0039).** A native view is
   a Rust type in a package that lays out, draws and handles events like an
@@ -170,6 +182,12 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   an error.
 
 ### Fixed
+
+- **Two quick taps on a button are two taps.** A second tap within the
+  double-tap window became a double tap instead of a tap, whether or not
+  anything listened for double taps, so clicking a `+` twice quickly counted
+  once. A second tap now becomes a double tap only where a `double_tap`
+  handler is under the pointer.
 
 - **An animation belongs to an element, not to the line that wrote it.**
   Animation state was keyed by the source span of the `with` node alone, and a

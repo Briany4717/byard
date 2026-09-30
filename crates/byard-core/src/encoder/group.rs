@@ -20,21 +20,29 @@
 
 use super::instance_arena::{InstanceArena, Region};
 
-/// One group's per-instance data: `(opacity, depth)`.
+/// One group's per-instance data.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct GroupInstance {
     /// The alpha the picture is composited at, and its draw-order depth.
     pub params: [f32; 2],
+    /// `(cos, sin, pivot_x, pivot_y)` of the rotation the composite applies,
+    /// pivot in physical pixels; `(1, 0, _, _)` for a plain opacity group.
+    pub rotation: [f32; 4],
 }
 
-/// The composite's per-instance attribute: `(opacity, depth)` at location 1.
-const INSTANCE: &[wgpu::VertexAttribute] = &wgpu::vertex_attr_array![1 => Float32x2];
+/// The composite's per-instance attributes: `(opacity, depth)` at location 1,
+/// the rotation at location 2.
+const INSTANCE: &[wgpu::VertexAttribute] =
+    &wgpu::vertex_attr_array![1 => Float32x2, 2 => Float32x4];
 
 /// The offscreen target and the composite pipeline.
 pub struct GroupCompositor {
     pipeline: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
+    /// Linear, for a rotated picture: its texels no longer land on pixel
+    /// centres. An unrotated one is read texel for texel and never filtered.
+    sampler: wgpu::Sampler,
     target: Option<Target>,
 }
 
@@ -66,16 +74,30 @@ impl GroupCompositor {
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("ByardCore - Group Layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    multisampled: false,
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
                 },
-                count: None,
-            }],
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("ByardCore - Group Sampler"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("ByardCore - Group Pipeline Layout"),
@@ -135,6 +157,7 @@ impl GroupCompositor {
         Ok(Self {
             pipeline,
             layout,
+            sampler,
             target: None,
         })
     }
@@ -175,10 +198,16 @@ impl GroupCompositor {
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("ByardCore - Group Bind Group"),
             layout: &self.layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(&color_view),
-            }],
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&color_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+            ],
         });
         self.target = Some(Target {
             size,

@@ -43,6 +43,15 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Text turns with its transform.** `Text` takes `translate`, `scale`,
+  `rotate` and `origin`, and a label inside a rotated card now turns with the
+  card instead of staying flat. Scale and translate are applied to the run
+  itself, so scaled text is shaped at its drawn size and stays sharp; a
+  rotation draws the run, or the rotated card, upright into an offscreen
+  picture and turns the picture. A `Clip` inside a rotated card is cut along
+  the card's edges as before. Run `crates/byard-cli/examples/transform_stack`
+  and press "tilt" to see both.
+
 - **Top-level functions.** `fn describe(code: Int) -> Str => …` at file level
   is visible to every view of the project, and to other projects as
   `w.describe(…)` through the package's name. A function may read only its

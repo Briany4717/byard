@@ -28,5 +28,6 @@ mod retained_layout_parity;
 mod ripple_readback;
 mod rotated_clip_readback;
 mod text_colour_readback;
+mod text_transform_readback;
 mod text_weight_readback;
 mod z_order_readback;

@@ -5,6 +5,7 @@
 //! relinking all of them was most of the time an edit spent before a test
 //! could run.
 
+mod action_if;
 mod all_events;
 mod anchored_overlay;
 mod button_defaults;

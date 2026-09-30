@@ -252,6 +252,34 @@ View Main() {
 }
 
 #[test]
+fn an_if_runs_inside_the_ok_and_err_arms() {
+    // A guard in a result arm used to check clean and never run.
+    let view = |call: &str| {
+        format!(
+            r#"
+View Main() {{
+    inject Echo as echo
+    var status: Str = "idle"
+    Column {{
+        Text("{{status}}")
+        Button("go") #[width: 100, height: 40]
+            => {{ echo.{call} ok r => {{ if r.text == "hi" {{ status = "ok-guard" }} else {{ status = "wrong" }} }} err e => {{ if e.message == "nope" {{ status = "err-guard" }} }} }}
+    }}
+}}
+"#
+        )
+    };
+    let mut ok = Harness::new(&view(r#"say("hi")"#));
+    ok.tap(50.0, 40.0);
+    ok.pump();
+    assert_eq!(ok.texts()[0], "ok-guard");
+    let mut err = Harness::new(&view("fail()"));
+    err.tap(50.0, 40.0);
+    err.pump();
+    assert_eq!(err.texts()[0], "err-guard");
+}
+
+#[test]
 fn a_continuation_is_one_shot() {
     // RFC-0028 §5 step 4: applied, then removed. Two taps must leave two
     // continuations and clear both, not accumulate.

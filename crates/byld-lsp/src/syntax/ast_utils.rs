@@ -393,6 +393,13 @@ pub fn find_in_expr(expr: &Expr, offset: usize) -> Option<HoverTarget> {
             }
             None
         }
+        Expr::If {
+            cond, then, els, ..
+        } => [Some(cond), Some(then), els.as_ref()]
+            .into_iter()
+            .flatten()
+            .find(|e| span_contains(e.span(), offset))
+            .and_then(|e| find_in_expr(e, offset)),
         Expr::Block(stmts, _) => {
             for stmt in stmts {
                 if span_contains(stmt.span(), offset) {
@@ -685,6 +692,12 @@ pub fn find_class_ref_in_expr(expr: &Expr, offset: usize) -> Option<String> {
             find_class_ref_in_expr(value, offset)
         }
         Expr::Postfix { target, .. } => find_class_ref_in_expr(target, offset),
+        Expr::If {
+            cond, then, els, ..
+        } => [Some(cond), Some(then), els.as_ref()]
+            .into_iter()
+            .flatten()
+            .find_map(|e| find_class_ref_in_expr(e, offset)),
         Expr::Ternary {
             cond, then, els, ..
         } => {

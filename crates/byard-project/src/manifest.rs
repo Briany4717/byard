@@ -124,9 +124,22 @@ pub struct Manifest {
     pub theme: Theme,
     /// The `[dev]` table (RFC-0030 §V2).
     pub dev: DevConfig,
-    /// `[http] base_url`: what a relative `http.get("/path")` resolves
-    /// against (RFC-0029). `None` means every request names its whole URL.
-    pub http_base_url: Option<String>,
+    /// The `[http]` table (RFC-0029): where a request that names only a
+    /// path goes.
+    pub http: HttpConfig,
+}
+
+/// The `[http]` table: the origins an app's requests resolve against, so its
+/// views name paths and the hosts live in one place. A test points the same
+/// views at a loopback server by swapping these.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct HttpConfig {
+    /// `base_url`: what `http.get("/path")` resolves against. `None` means a
+    /// request with no host names its whole URL.
+    pub base_url: Option<String>,
+    /// `[http.hosts]`: named origins, `http.get("air:/path")` resolving
+    /// against the one named `air`. In declaration order.
+    pub hosts: Vec<(String, String)>,
 }
 
 impl Manifest {
@@ -190,7 +203,7 @@ impl Manifest {
                 vector_includes: Vec::new(),
                 theme: Theme::byard_base(),
                 dev: DevConfig::default(),
-                http_base_url: None,
+                http: HttpConfig::default(),
             });
         }
 
@@ -218,7 +231,7 @@ impl Manifest {
             vector_includes: Vec::new(),
             theme: Theme::byard_base(),
             dev: DevConfig::default(),
-            http_base_url: None,
+            http: HttpConfig::default(),
         }
     }
 
@@ -291,7 +304,7 @@ impl Manifest {
         let theme = parse_theme(&table, &project_root, &dependencies)?;
         // RFC-0030 §V2: the dev runner's own surface.
         let dev = parse_dev(&table)?;
-        let http_base_url = parse_http(&table)?;
+        let http = parse_http(&table)?;
 
         Ok(Self {
             project_root,
@@ -302,40 +315,65 @@ impl Manifest {
             vector_includes,
             theme,
             dev,
-            http_base_url,
+            http,
         })
     }
 }
 
-/// Parses the `[http]` table: `base_url`, the origin a relative request
-/// resolves against.
+/// Parses the `[http]` table: `base_url`, the origin a request that names
+/// only a path resolves against, and `[http.hosts]`, named origins for an
+/// app that talks to more than one host.
 ///
-/// It exists so an app's requests name a path and not a host. The host then
-/// lives in one place, and a test can point the same views at a loopback
+/// It exists so an app's requests name a path and not a host. The hosts then
+/// live in one place, and a test can point the same views at a loopback
 /// server without rewriting them.
-fn parse_http(table: &toml::Table) -> Result<Option<String>, String> {
+fn parse_http(table: &toml::Table) -> Result<HttpConfig, String> {
+    let mut http = HttpConfig::default();
     let Some(tbl) = table.get("http").and_then(toml::Value::as_table) else {
-        return Ok(None);
+        return Ok(http);
     };
-    let mut base = None;
     for (key, value) in tbl {
         match key.as_str() {
-            "base_url" => {
-                let url = value
-                    .as_str()
-                    .ok_or_else(|| "byard.toml: [http] `base_url` must be a string".to_string())?;
-                if !(url.starts_with("http://") || url.starts_with("https://")) {
-                    return Err(format!(
-                        "byard.toml: [http] `base_url = {url:?}` must start with \
-                         `http://` or `https://`"
-                    ));
+            "base_url" => http.base_url = Some(http_origin("base_url", value)?),
+            "hosts" => {
+                let hosts = value.as_table().ok_or_else(|| {
+                    "byard.toml: [http.hosts] must be a table of `name = \"https://...\"`"
+                        .to_string()
+                })?;
+                for (name, origin) in hosts {
+                    let valid = name.starts_with(|c: char| c.is_ascii_lowercase())
+                        && name.chars().all(|c| {
+                            c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-'
+                        });
+                    if !valid || matches!(name.as_str(), "http" | "https") {
+                        return Err(format!(
+                            "byard.toml: [http.hosts] `{name}` is not a host name: use \
+                             lowercase letters, digits, `_` and `-`, starting with a letter \
+                             (and not `http` or `https`)"
+                        ));
+                    }
+                    let origin = http_origin(&format!("hosts.{name}"), origin)?;
+                    http.hosts.push((name.clone(), origin));
                 }
-                base = Some(url.trim_end_matches('/').to_string());
             }
             other => return Err(format!("byard.toml: [http]: unknown key `{other}`")),
         }
     }
-    Ok(base)
+    Ok(http)
+}
+
+/// One `[http]` origin: a string starting with `http://` or `https://`, read
+/// without its trailing slash.
+fn http_origin(key: &str, value: &toml::Value) -> Result<String, String> {
+    let url = value
+        .as_str()
+        .ok_or_else(|| format!("byard.toml: [http] `{key}` must be a string"))?;
+    if !(url.starts_with("http://") || url.starts_with("https://")) {
+        return Err(format!(
+            "byard.toml: [http] `{key} = {url:?}` must start with `http://` or `https://`"
+        ));
+    }
+    Ok(url.trim_end_matches('/').to_string())
 }
 
 /// Parses the `[dev]` table (RFC-0030 §V2).
@@ -1243,17 +1281,52 @@ mod tests {
 
     // ── RFC-0029: the [http] table ────────────────────────────────────────
 
-    fn http_of(src: &str) -> Result<Option<String>, String> {
+    fn http_of(src: &str) -> Result<HttpConfig, String> {
         parse_http(&src.parse::<toml::Table>().unwrap())
     }
 
     #[test]
     fn http_base_url_is_optional_and_read_without_its_trailing_slash() {
-        assert_eq!(http_of("[project]\nname = \"a\"\n"), Ok(None));
         assert_eq!(
-            http_of("[http]\nbase_url = \"https://api.example.com/\"\n"),
+            http_of("[project]\nname = \"a\"\n"),
+            Ok(HttpConfig::default())
+        );
+        assert_eq!(
+            http_of("[http]\nbase_url = \"https://api.example.com/\"\n").map(|h| h.base_url),
             Ok(Some("https://api.example.com".to_string()))
         );
+    }
+
+    #[test]
+    fn http_hosts_are_named_origins_in_declaration_order() {
+        let http = http_of(
+            "[http]\nbase_url = \"https://api.example.com\"\n\
+             [http.hosts]\nair = \"https://air.example.com/\"\nmaps-2 = \"http://127.0.0.1:9\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            http.hosts,
+            [
+                ("air".to_string(), "https://air.example.com".to_string()),
+                ("maps-2".to_string(), "http://127.0.0.1:9".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_host_needs_a_plain_name_and_an_http_origin() {
+        for (src, says) in [
+            ("[http.hosts]\nAir = \"https://a.com\"\n", "not a host name"),
+            (
+                "[http.hosts]\nhttps = \"https://a.com\"\n",
+                "not a host name",
+            ),
+            ("[http.hosts]\nair = \"a.com\"\n", "must start with"),
+            ("[http]\nhosts = 3\n", "must be a table"),
+        ] {
+            let err = http_of(src).unwrap_err();
+            assert!(err.contains(says), "{src}: {err}");
+        }
     }
 
     #[test]

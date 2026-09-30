@@ -129,7 +129,7 @@ pub fn run(opts: Options<'_>) -> Result<(), String> {
     host.run(App {
         engine: None,
         project: manifest.name.clone(),
-        http_base_url: manifest.http_base_url.clone(),
+        http: manifest.http.clone(),
         header: Some(header),
         dev: manifest.dev.clone(),
         want_profile: profile,
@@ -813,8 +813,8 @@ struct App {
     /// writes (RFC-0029 O5): keyed on the project rather than on the path, so
     /// a store does not move when the directory does.
     project: String,
-    /// The manifest's `[http] base_url` (RFC-0029).
-    http_base_url: Option<String>,
+    /// The manifest's `[http]` table (RFC-0029).
+    http: byard_project::manifest::HttpConfig,
     width_bits: Option<Arc<AtomicU32>>,
     height_bits: Option<Arc<AtomicU32>>,
     /// Mirror of the logic thread's active-animation set (RFC-0010), read by the
@@ -889,9 +889,9 @@ struct App {
 
 impl App {
     /// The capabilities a `.byd` file may `inject`, with the project's
-    /// `[http] base_url` applied.
+    /// `[http]` origins applied.
     fn capabilities(&self) -> byard_core::bridge::ControllerRegistry {
-        crate::capabilities::registry(&self.project, self.http_base_url.as_deref())
+        crate::capabilities::registry(&self.project, &self.http)
     }
 
     /// Starts the file watcher and returns the two channels the logic thread

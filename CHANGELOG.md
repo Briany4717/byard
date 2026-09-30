@@ -50,6 +50,13 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   machine. A missing or unreadable image is a `byard.toml` error that names
   it. See `crates/byard-cli/examples/seed_image`.
 
+- **Top-level functions.** `fn describe(code: Int) -> Str => …` at file level
+  is visible to every view of the project, and to other projects as
+  `w.describe(…)` through the package's name. A function may read only its
+  parameters, so it cannot depend on which view called it; a view's own name
+  wins over it; recursion and duplicates are errors. There is still no
+  top-level state.
+
 - **`sort`, `sortBy`, `reduce`, `find`, `indexOf`, `min` and `max` on lists.**
   A week's range is `highs.max()` and `lows.min()`, a total is
   `xs.reduce(0, (acc, x) => acc + x)`, and `days.sortBy(d => d.high)` orders

@@ -11,7 +11,8 @@ pub mod ast;
 mod expr;
 
 use ast::{
-    Attr, AttrKind, ElementNode, Member, Param, RouteKind, StyleRule, Type, UseDecl, ViewDecl,
+    Attr, AttrKind, ElementNode, FnDecl, Member, Param, RouteKind, StyleRule, Type, UseDecl,
+    ViewDecl,
 };
 
 use crate::diagnostics::{CompileError, Span};
@@ -26,6 +27,9 @@ pub struct ParsedFile {
     pub imports: Vec<UseDecl>,
     /// The parsed views (D11: a file may declare several).
     pub views: Vec<ViewDecl>,
+    /// The file's top-level functions, also shared into every view's
+    /// `helpers`.
+    pub fns: Vec<FnDecl>,
     /// All diagnostics from lexing and parsing, in source order.
     pub errors: Vec<CompileError>,
 }
@@ -34,10 +38,17 @@ pub struct ParsedFile {
 #[must_use]
 pub fn parse(source: &str) -> ParsedFile {
     let mut parser = Parser::new(source);
-    let (imports, views) = parser.parse_file();
+    let (imports, mut views, fns) = parser.parse_file();
+    // A lone file's views see its own functions; a project's are replaced by
+    // the program-wide table when it is resolved.
+    let helpers = std::sync::Arc::new(fns.clone());
+    for view in &mut views {
+        view.helpers = std::sync::Arc::clone(&helpers);
+    }
     ParsedFile {
         imports,
         views,
+        fns,
         errors: parser.errors,
     }
 }
@@ -217,13 +228,32 @@ impl<'a> Parser<'a> {
 
     // ---- file / view ----
 
-    fn parse_file(&mut self) -> (Vec<UseDecl>, Vec<ViewDecl>) {
+    fn parse_file(&mut self) -> (Vec<UseDecl>, Vec<ViewDecl>, Vec<FnDecl>) {
         let mut imports = Vec::new();
         let mut views = Vec::new();
+        let mut fns = Vec::new();
         while self.cur().is_some() {
             let before = self.pos;
             match self.cur() {
                 Some(Token::View) => views.push(self.parse_view()),
+                Some(Token::Fn) => {
+                    if let Member::Fn {
+                        name,
+                        params,
+                        ret,
+                        body,
+                        span,
+                    } = self.parse_fn()
+                    {
+                        fns.push(FnDecl {
+                            name,
+                            params,
+                            ret,
+                            body,
+                            span,
+                        });
+                    }
+                }
                 Some(Token::Use) => {
                     let import = self.parse_use();
                     // Imports are legal only at file top, before any `View`
@@ -235,13 +265,13 @@ impl<'a> Parser<'a> {
                     }
                     imports.push(import);
                 }
-                _ => self.error("'View' or 'use'"),
+                _ => self.error("'View', 'use' or 'fn'"),
             }
             if self.pos == before {
                 self.advance(); // guaranteed progress on unrecognized input
             }
         }
-        (imports, views)
+        (imports, views, fns)
     }
 
     /// `use_decl := "use" IDENT ("as" IDENT | "." "{" IDENT ("," IDENT)* "}")?`
@@ -298,6 +328,7 @@ impl<'a> Parser<'a> {
             params,
             body,
             span: self.span_from(start),
+            helpers: std::sync::Arc::default(),
         }
     }
 

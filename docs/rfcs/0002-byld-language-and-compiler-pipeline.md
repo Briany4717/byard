@@ -1,6 +1,7 @@
 # RFC-0002: `byld` Language Definition (Lume surface), Compiler Pipeline, Automatic Reactivity, and Dev-Mode Interpreter
 
 - **Status:** Active, implemented (core language, then the interactive widgets). All design decisions (D1 to D12, D4-bis) resolved 2026-06-20; code landed in `byard-compiler` and verified green.
+- **Amended 2026-09-30:** top-level functions (see "Amendment: top-level functions").
 - **Author(s):** Briany4717
 - **Created:** 2026-06-20
 - **Last updated:** 2026-06-20
@@ -974,6 +975,39 @@ cleanly, rather than overflowing the array). Beyond three levels the visual
 cleanliness and DX are gone anyway, so the cap costs nothing real.
 
 ---
+
+## Amendment: top-level functions (2026-09-30)
+
+A file may declare `fn` at the top level, beside its views:
+
+```byld
+// weather_words.byd
+fn describe(code: Int) -> Str => code == 0 ? "Clear sky" : code <= 3 ? "Cloudy" : "Rain"
+fn sky(code: Int) -> Str => code == 0 ? "Clear" : describe(code)
+```
+
+- **Visibility.** A top-level function is visible to every view of its
+  project, across files, like a view. Another project calls it through the
+  package's name: `use weather as w` then `w.describe(3)`. Inside its own
+  package it is called bare. A view's own `fn`, `let`, `var` or parameter of
+  the same name wins over it.
+- **Purity.** The body may read only its parameters (and a lambda's inside
+  it) and call other functions. It may not assign, reach a controller, or
+  read a view's state: a function shared by every view cannot depend on which
+  one called it. The checker reports each violation as `ImpureFunction`; the
+  interpreter lowers the body in an environment holding only the parameters,
+  so nothing of the caller is reachable even in principle.
+- **Annotations.** Parameters and the return type are written, as for a
+  view's `fn` (D9).
+- **Recursion** is reported (`RecursiveFunction`): functions are inlined
+  where they are called, so a cycle would never finish lowering.
+- **No top-level state.** A top-level `let` or `var` stays illegal. State
+  has one owner, a view; a shared mutable value is the kind of global this
+  language exists to avoid.
+- **Duplicates** within one package are `DuplicateFunction`.
+
+Every view carries the program's function table (`ViewDecl::helpers`, one
+shared `Arc`), so any path that loads views loads the functions with them.
 
 ## Future possibilities
 

@@ -8,6 +8,12 @@ homepage.workspace = true
 authors.workspace = true
 rust-version.workspace = true
 
+
+[lib]
+# No runnable doc examples here: skip the rustdoc pass that `cargo test`
+# would otherwise spend on this crate. Turn it back on with the first one.
+doctest = false
+
 [dependencies]
 byard-core = { path = "../byard-core" }
 wgpu = "29.0"

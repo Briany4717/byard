@@ -335,7 +335,7 @@ View Main() {
 
 #[test]
 fn the_timers_example_arms_its_timers_on_mount() {
-    const TIMERS: &str = include_str!("../../byard-cli/examples/timers/src/main.byd");
+    const TIMERS: &str = include_str!("../../../byard-cli/examples/timers/src/main.byd");
     let mut harness = Harness::new(TIMERS);
     let hard: Vec<&byard_compiler::CompileError> = harness
         .interp

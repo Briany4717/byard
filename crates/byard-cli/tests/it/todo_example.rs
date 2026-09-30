@@ -14,7 +14,7 @@ use byard_compiler::symbol::Symbol;
 use byard_core::frame::RenderFrame;
 use byard_core::{EventKind, InputEvent};
 
-const TODO: &str = include_str!("../examples/todo/src/main.byd");
+const TODO: &str = include_str!("../../examples/todo/src/main.byd");
 const W: f32 = 800.0;
 const H: f32 = 900.0;
 

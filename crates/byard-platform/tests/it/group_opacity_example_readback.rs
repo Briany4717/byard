@@ -32,7 +32,7 @@ fn the_faded_card_hides_its_overlap_and_the_per_piece_card_does_not() {
         return;
     };
 
-    const SRC: &str = include_str!("../../byard-cli/examples/group_opacity/src/main.byd");
+    const SRC: &str = include_str!("../../../byard-cli/examples/group_opacity/src/main.byd");
     let parsed = byard_compiler::parser::parse(SRC);
     assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
     let mut interp = byard_compiler::interp::eval::Interpreter::new();

@@ -1,14 +1,14 @@
 //! The 10-day outlook and the air quality screen, over a local server that
 //! answers both hosts the app declares.
 
-mod common;
+use crate::common;
 
 use byard_core::frame::{CANVAS_SHAPE_ARC, GradientKind};
 use common::{App, Server};
 
-const FORECAST: &str = include_str!("fixtures/forecast.json");
-const OUTLOOK: &str = include_str!("fixtures/outlook.json");
-const AIR: &str = include_str!("fixtures/air.json");
+const FORECAST: &str = include_str!("../fixtures/forecast.json");
+const OUTLOOK: &str = include_str!("../fixtures/outlook.json");
+const AIR: &str = include_str!("../fixtures/air.json");
 
 fn server() -> Server {
     Server::routes(vec![

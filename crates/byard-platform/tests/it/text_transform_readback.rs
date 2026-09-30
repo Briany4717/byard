@@ -1,9 +1,11 @@
 //! Rotated text on the GPU (RFC-0011): the ink turns, not just the boxes.
 //!
-//! The same word, set upright and at 90°, on a white page. Upright its ink is
-//! a wide, short strip; turned it must be a tall, narrow one. The claim is on
-//! the ink's extents, not on how much ink there is, so it holds whatever font
-//! the machine resolves.
+//! The same scene is drawn upright and turned 90°, and the turned ink must be
+//! the upright ink with its width and height swapped. A relation between two
+//! frames of the same machine, not an absolute shape: which pixels count as
+//! ink differs by backend (on the Windows runner the upright ink box is far
+//! taller than one line), and a claim on extents rather than on how much ink
+//! there is holds whatever font the machine resolves.
 //!
 //! `BYARD_DUMP_PNG=1` writes each frame out as well.
 #![allow(
@@ -140,40 +142,50 @@ fn ink_box(src: &str, name: &str) -> Option<[u32; 4]> {
 const PAGE: &str = "View Main() { Column #[bg: 0xFFFFFF, width: 400, height: 400, \
                     justify: center, align: center] { TEXT } }";
 
-#[test]
-fn a_word_turned_ninety_degrees_stands_up() {
-    let upright = PAGE.replace("TEXT", "Text(\"WWWWWWWW\") #[color: 0x000000, size: 28]");
-    let turned = PAGE.replace(
-        "TEXT",
-        "Text(\"WWWWWWWW\") #[color: 0x000000, size: 28, rotate: 90deg]",
-    );
-    let Some(a) = ink_box(&upright, "upright") else {
-        eprintln!("no GPU adapter, skipping text transform readback");
-        return;
-    };
-    let b = ink_box(&turned, "turned").unwrap();
-    let (aw, ah) = (a[2] - a[0], a[3] - a[1]);
-    let (bw, bh) = (b[2] - b[0], b[3] - b[1]);
-    assert!(aw > 2 * ah, "upright ink should be wide: {aw}x{ah}");
-    assert!(bh > 2 * bw, "turned ink should be tall: {bw}x{bh}");
-    // A quarter turn swaps the extents; allow for the resample's soft edge.
+/// Asserts `turned` is `upright` a quarter turn round: extents swapped, with
+/// room for the resample's soft edge. The upright box must not be square, or
+/// a turn that did nothing would pass.
+fn assert_quarter_turn(upright: [u32; 4], turned: [u32; 4], what: &str) {
+    let (aw, ah) = (upright[2] - upright[0], upright[3] - upright[1]);
+    let (bw, bh) = (turned[2] - turned[0], turned[3] - turned[1]);
     assert!(
-        bh.abs_diff(aw) <= 4 && bw.abs_diff(ah) <= 4,
-        "{aw}x{ah} vs {bw}x{bh}"
+        aw.abs_diff(ah) > 20,
+        "{what}: the upright ink is too square to tell a turn from none: {aw}x{ah}"
+    );
+    assert!(
+        bw.abs_diff(ah) <= 4 && bh.abs_diff(aw) <= 4,
+        "{what}: turned ink {bw}x{bh} is not the upright {aw}x{ah} turned"
     );
 }
 
 #[test]
-fn a_rotated_card_turns_the_label_inside_it() {
-    let card = PAGE.replace(
-        "TEXT",
-        "Box #[width: 260, height: 50, rotate: 90deg, origin: center, justify: center, \
-         align: center] { Text(\"WWWWWWWW\") #[color: 0x000000, size: 28] }",
-    );
-    let Some(b) = ink_box(&card, "card") else {
+fn a_word_turned_ninety_degrees_stands_up() {
+    let word = "Text(\"WWWWWWWW\") #[color: 0x000000, size: 28, ROT]";
+    let Some(upright) = ink_box(&PAGE.replace("TEXT", &word.replace(", ROT", "")), "upright")
+    else {
         eprintln!("no GPU adapter, skipping text transform readback");
         return;
     };
-    let (bw, bh) = (b[2] - b[0], b[3] - b[1]);
-    assert!(bh > 2 * bw, "the label must turn with its card: {bw}x{bh}");
+    let turned = ink_box(
+        &PAGE.replace("TEXT", &word.replace("ROT", "rotate: 90deg")),
+        "turned",
+    )
+    .unwrap();
+    assert_quarter_turn(upright, turned, "a rotated word");
+}
+
+#[test]
+fn a_rotated_card_turns_the_label_inside_it() {
+    let card = "Box #[width: 260, height: 50, ROT origin: center, justify: center, \
+                align: center] { Text(\"WWWWWWWW\") #[color: 0x000000, size: 28] }";
+    let Some(upright) = ink_box(&PAGE.replace("TEXT", &card.replace("ROT", "")), "card") else {
+        eprintln!("no GPU adapter, skipping text transform readback");
+        return;
+    };
+    let turned = ink_box(
+        &PAGE.replace("TEXT", &card.replace("ROT", "rotate: 90deg,")),
+        "card_turned",
+    )
+    .unwrap();
+    assert_quarter_turn(upright, turned, "a label in a rotated card");
 }

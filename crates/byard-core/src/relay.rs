@@ -679,6 +679,7 @@ impl Relay {
                     let had_input = !inputs.is_empty();
                     runtime.evaluate_tick(&mut frame, &inputs, &[]);
                     relay.publish(frame);
+                    let more = runtime.wants_another_frame();
 
                     // Idle throttle: a UI with no pending input re-publishes an
                     // identical frame every iteration, so a tight `yield_now`
@@ -687,7 +688,7 @@ impl Relay {
                     // speed so bursts drain immediately; only an idle tick parks
                     // briefly, capping idle CPU while keeping first-input latency
                     // under one short park. (RFC-0001 leaves pacing to the caller.)
-                    if had_input || applied {
+                    if had_input || applied || more {
                         // The frame just published reflects this input, or an
                         // async result that landed with no input at all. Either
                         // way, wake an event-driven (`Wait`-mode) render thread
@@ -699,6 +700,10 @@ impl Relay {
                         // then sit unseen, which reads as "the app ignored the
                         // response" and is indistinguishable from a bug in the
                         // request.
+                        //
+                        // `more` is the same promise for a change with no
+                        // event behind it at all: an animation in flight, or
+                        // an `on measure` whose write only the next tick shows.
                         relay.wake_renderer();
                         thread::yield_now();
                     } else {
@@ -1593,6 +1598,56 @@ mod tests {
             woke.load(Ordering::SeqCst) >= 1,
             "an I/O-applied tick must wake the renderer"
         );
+    }
+
+    /// A runtime whose first `frames` ticks each ask for another, the way an
+    /// `on measure` write or an animation does, with no input and no reply.
+    struct AskingRuntime {
+        frames: usize,
+    }
+
+    impl LogicRuntime for AskingRuntime {
+        fn evaluate_tick(
+            &mut self,
+            _frame: &mut RenderFrame,
+            _input_events: &[InputEvent],
+            _dirty: &[crate::frame::TargetId],
+        ) {
+            self.frames = self.frames.saturating_sub(1);
+        }
+
+        fn wants_another_frame(&self) -> bool {
+            self.frames > 0
+        }
+    }
+
+    /// Runs an `AskingRuntime` until it settles and returns how many times it
+    /// woke the renderer.
+    fn wakes_for(frames: usize) -> usize {
+        let relay = Arc::new(Relay::new().unwrap());
+        let woke = Arc::new(AtomicUsize::new(0));
+        let woke_cb = Arc::clone(&woke);
+        relay.set_frame_waker(Arc::new(move || {
+            woke_cb.fetch_add(1, Ordering::SeqCst);
+        }));
+        let handle =
+            Relay::spawn_logic_from_view(&relay, move |_arena| Box::new(AskingRuntime { frames }))
+                .unwrap();
+        // Long enough for every asked-for tick and then many idle parks: a
+        // settled runtime must stay asleep through them.
+        thread::sleep(IDLE_PARK * 20);
+        relay.request_shutdown();
+        relay.wake_logic();
+        handle.join().unwrap();
+        woke.load(Ordering::SeqCst)
+    }
+
+    #[test]
+    fn a_runtime_that_wants_another_frame_wakes_the_renderer_with_no_input() {
+        // The frame that shows an `on measure` write has no event behind it;
+        // without this it waited for the next mouse move.
+        assert_eq!(wakes_for(3), 2, "one wake per tick that asked for another");
+        assert_eq!(wakes_for(0), 0, "and a runtime that never asks idles");
     }
 
     #[test]

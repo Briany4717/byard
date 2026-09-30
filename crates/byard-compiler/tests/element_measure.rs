@@ -402,3 +402,46 @@ View Main() {
         "an alternating rect should be reported once it is unmistakable"
     );
 }
+
+/// A write from `on measure` lands after layout, so only the next frame can
+/// show it; the interpreter has to say so, or a host that draws on demand
+/// leaves the stale frame up until the mouse moves. It says so exactly on the
+/// frames a measure ran, so a still screen settles.
+#[test]
+fn a_measure_that_wrote_asks_for_the_next_frame_and_a_still_one_does_not() {
+    let mut h = Harness::new(
+        r"
+View Main() {
+    var w: Float = 0.0
+    Column #[p: 20] {
+        Column #[grow: 1] {
+            on measure => { w = it.w }
+            Box #[width: w - 40.0, height: 10] {}
+        }
+    }
+}
+",
+    );
+    assert!(
+        h.interp.needs_another_frame(),
+        "the first frame measured, and its write is not on screen yet"
+    );
+    h.render();
+    assert!(
+        !h.interp.needs_another_frame(),
+        "the rect did not change again, so nothing is pending"
+    );
+    h.render();
+    assert!(
+        !h.interp.needs_another_frame(),
+        "and a still screen stays still"
+    );
+
+    h.resize(500.0, 600.0);
+    assert!(
+        h.interp.needs_another_frame(),
+        "a resize moves the rect, which is a new write"
+    );
+    h.render();
+    assert!(!h.interp.needs_another_frame());
+}

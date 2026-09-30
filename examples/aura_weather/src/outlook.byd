@@ -1,6 +1,89 @@
-View OutlookScreen() {
+// The next ten days, one row each: the date, what it will be like, the
+// chance of rain, and the low and the high.
+View OutlookScreen(place: Str, lat: Float, lon: Float) {
     inject Theme as t
-    Screen(title: "10 days", subtitle: "The outlook, day by day") {
-        Text("Coming in the next milestone.") #[typo: t.body, color: t.onSurfaceVariant]
+    inject Http as http
+
+    // "loading" · "ok" · "error"
+    var state: Str = "loading"
+    var message: Str = ""
+    // Parallel lists, as the API sends them: one entry per day.
+    var days: List<Str> = []
+    var codes: List<Int> = []
+    var highs: List<Float> = []
+    var lows: List<Float> = []
+    var rain: List<Int> = []
+
+    // The WMO weather code, short enough for a row.
+    fn sky(code: Int) -> Str => code == 0 ? "Clear"
+        : code <= 2 ? "Partly cloudy"
+        : code == 3 ? "Overcast"
+        : code <= 48 ? "Fog"
+        : code <= 57 ? "Drizzle"
+        : code <= 67 ? "Rain"
+        : code <= 77 ? "Snow"
+        : code <= 82 ? "Showers"
+        : code <= 86 ? "Snow showers"
+        : "Storms"
+
+    fn month(mm: Str) -> Str => mm == "01" ? "Jan" : mm == "02" ? "Feb"
+        : mm == "03" ? "Mar" : mm == "04" ? "Apr" : mm == "05" ? "May"
+        : mm == "06" ? "Jun" : mm == "07" ? "Jul" : mm == "08" ? "Aug"
+        : mm == "09" ? "Sep" : mm == "10" ? "Oct" : mm == "11" ? "Nov" : "Dec"
+
+    let load = () => {
+        state = "loading"
+        http.get("/v1/forecast?latitude={lat}&longitude={lon}&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max&forecast_days=10&timezone=auto")
+            ok res => {
+                days = res.json.daily.time
+                codes = res.json.daily.weather_code
+                highs = res.json.daily.temperature_2m_max
+                lows = res.json.daily.temperature_2m_min
+                rain = res.json.daily.precipitation_probability_max
+                state = "ok"
+            }
+            err e => {
+                message = e.message
+                state = "error"
+            }
+    }
+
+    on mount => load()
+
+    Screen(title: place, subtitle: "The outlook, day by day") {
+        when state == "loading" {
+            Text("Asking about the next ten days") #[typo: t.body, color: t.onSurfaceVariant,
+                                                     m: (vertical: 48)]
+        }
+
+        when state == "error" {
+            Column #[bg: t.surfaceContainer, radius: 22, p: 20, gap: 8] {
+                Text("The outlook did not arrive") #[typo: t.title, color: t.onSurface]
+                Text(message) #[typo: t.caption, color: t.error]
+                Row #[p: (top: 8)] {
+                    Button("Try again") #[typo: t.label, bg: t.primaryContainer,
+                                         color: t.onPrimaryContainer, radius: 18]
+                        => load()
+                }
+            }
+        }
+
+        when state == "ok" {
+            Column #[bg: t.surfaceContainerLow, radius: 24, p: (vertical: 6, horizontal: 16)] {
+                for i, day in days {
+                    Row #[p: (vertical: 12), gap: 12, align: center] {
+                        Column #[width: 64, gap: 2] {
+                            Text(i == 0 ? "Today" : "{day.slice(8, 10)} {month(day.slice(5, 7))}")
+                                #[typo: t.label, color: t.onSurface]
+                        }
+                        Text(sky(codes[i])) #[typo: t.body, color: t.onSurfaceVariant]
+                        Spacer #[grow: 1]
+                        Text("{rain[i]}%") #[typo: t.caption, color: t.primary, width: 44]
+                        Text("{lows[i]:.0}°") #[typo: t.body, color: t.onSurfaceVariant, width: 34]
+                        Text("{highs[i]:.0}°") #[typo: t.title, color: t.onSurface, width: 38]
+                    }
+                }
+            }
+        }
     }
 }

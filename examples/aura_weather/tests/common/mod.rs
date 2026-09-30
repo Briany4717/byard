@@ -18,15 +18,25 @@ use byard_core::relay::Relay;
 pub const W: f32 = 440.0;
 pub const H: f32 = 852.0;
 
-/// A local server that answers every request with one response and keeps
-/// the request lines it saw.
+/// A local server that answers each request from the first route whose key
+/// its request line contains, and keeps the request lines it saw.
 pub struct Server {
     port: u16,
     seen: Arc<Mutex<Vec<String>>>,
 }
 
+/// A route: a substring of the request line, the status, and the body.
+pub type Route = (&'static str, &'static str, &'static str);
+
 impl Server {
+    /// Answers every request with one response.
     pub fn serve(status: &'static str, body: &'static str) -> Self {
+        Self::routes(vec![("", status, body)])
+    }
+
+    /// Answers each request from `routes`, by the first key its request line
+    /// contains; anything unmatched is a 404.
+    pub fn routes(routes: Vec<Route>) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
         let port = listener.local_addr().expect("addr").port();
         let seen = Arc::new(Mutex::new(Vec::new()));
@@ -35,17 +45,21 @@ impl Server {
             while let Ok((mut stream, _)) = listener.accept() {
                 let mut reader = BufReader::new(stream.try_clone().expect("clone"));
                 let mut line = String::new();
-                let mut first = true;
+                let mut request = String::new();
                 while reader.read_line(&mut line).unwrap_or(0) > 0 {
-                    if first {
-                        log.lock().unwrap().push(line.trim_end().to_string());
-                        first = false;
+                    if request.is_empty() {
+                        request = line.trim_end().to_string();
+                        log.lock().unwrap().push(request.clone());
                     }
                     if line == "\r\n" {
                         break;
                     }
                     line.clear();
                 }
+                let (status, body) = routes
+                    .iter()
+                    .find(|(key, _, _)| request.contains(key))
+                    .map_or(("404 Not Found", "{}"), |(_, s, b)| (*s, *b));
                 let response = format!(
                     "HTTP/1.1 {status}\r\nContent-Type: application/json\r\n\
                      Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
@@ -74,6 +88,7 @@ pub struct App {
     pub frame: RenderFrame,
     relay: Relay,
     now: u32,
+    width: f32,
 }
 
 impl App {
@@ -91,7 +106,15 @@ impl App {
 
         let relay = Relay::new().expect("relay");
         let mut registry = ControllerRegistry::new();
-        registry.insert(Arc::new(Http::with_base_url(server.base_url())));
+        // Every origin the app declares goes to the one local server.
+        let http = manifest
+            .http
+            .hosts
+            .iter()
+            .fold(Http::with_base_url(server.base_url()), |http, (name, _)| {
+                http.with_host(name, server.base_url())
+            });
+        registry.insert(Arc::new(http));
         let dispatcher = Dispatcher::new(registry, relay.io_handle(), relay.io_result_sender());
 
         let mut interp = Interpreter::new();
@@ -108,6 +131,7 @@ impl App {
             frame: RenderFrame::new(),
             relay,
             now: 0,
+            width: W,
         };
         app.step(&[]);
         app
@@ -117,9 +141,16 @@ impl App {
         self.interp.set_now_ms(self.now);
         self.interp.dispatch_events(events);
         self.interp.tick();
-        self.frame = RenderFrame::new();
-        self.interp.render(&self.tree, &mut self.frame, W, H);
+        self.frame.clear();
+        self.interp
+            .render(&self.tree, &mut self.frame, self.width, H);
         self.now += 16;
+    }
+
+    /// Resizes the window and lets the layout settle.
+    pub fn resize(&mut self, width: f32) {
+        self.width = width;
+        self.settle();
     }
 
     /// Runs long enough for a transition to finish.

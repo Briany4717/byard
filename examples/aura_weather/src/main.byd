@@ -3,6 +3,10 @@
 View Main() {
     inject Theme as t
     var tab = "forecast"
+    // The place every screen reports on. One place until location search.
+    var place: Str = "Madrid"
+    var lat: Float = 40.42
+    var lon: Float = -3.70
 
     let tabButton = style {
         radius: 18, p: (vertical: 8, horizontal: 14), color: t.onSurfaceVariant
@@ -11,9 +15,9 @@ View Main() {
 
     Column #[bg: t.background, grow: 1] {
         NavHost(active: tab) #[grow: 1, transition: fade] {
-            tab "forecast" { ForecastScreen() }
-            tab "outlook" { OutlookScreen() }
-            tab "air" { AirScreen() }
+            tab "forecast" { ForecastScreen(place: place, lat: lat, lon: lon) }
+            tab "outlook" { OutlookScreen(place: place, lat: lat, lon: lon) }
+            tab "air" { AirScreen(place: place, lat: lat, lon: lon) }
             tab "trends" { TrendsScreen() }
         }
         Row #[bg: t.surfaceContainer, p: (vertical: 10, horizontal: 12), gap: 4,

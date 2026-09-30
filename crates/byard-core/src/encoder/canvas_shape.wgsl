@@ -589,7 +589,15 @@ fn arc_conic_t(params0: vec4<f32>, params1: vec4<f32>, axis: vec4<f32>, world: v
     let d = world - center;
     let rel = fract(((atan2(d.y, d.x) - start - axis.z) * dir) / TAU + 1.0);
     let span = max(abs(sweep), 1e-5) / TAU;
-    return clamp(rel / span, 0.0, 1.0);
+    // Outside the sweep is a cap: the part just past the end, or the part just
+    // before the start, which wrapped to the top of the turn. Each takes the
+    // colour of the end it is nearer to, split at the middle of the gap, so a
+    // start cap is never painted with the `to` stop.
+    let past_end = rel - span;
+    if (past_end > 0.0) {
+        return select(0.0, 1.0, past_end < (1.0 - span) * 0.5);
+    }
+    return rel / span;
 }
 
 /// This fragment's stroke colour: the flat one, or the gradient's.

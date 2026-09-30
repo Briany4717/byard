@@ -646,10 +646,14 @@ impl EventRouter {
                         && elapsed < TAP_MS
                         && !down.secondary
                     {
-                        // Double-tap detection.
-                        let is_double = self.last_tap.is_some_and(|(t, elem)| {
-                            ev.time_ms.saturating_sub(t) < DOUBLE_TAP_MS && elem == up_elem
-                        });
+                        // Double-tap detection. The second tap becomes a
+                        // double tap only where something listens for one;
+                        // elsewhere it is an ordinary tap, so clicking a "+"
+                        // twice quickly counts twice instead of once.
+                        let is_double =
+                            self.last_tap.is_some_and(|(t, elem)| {
+                                ev.time_ms.saturating_sub(t) < DOUBLE_TAP_MS && elem == up_elem
+                            }) && self.hit(atlas, ev.pos, EventKind::DoubleTap).is_some();
                         if is_double {
                             self.fire(ctx, atlas, EventKind::DoubleTap, ev.pos, None);
                             self.last_tap = None;
@@ -1348,6 +1352,29 @@ mod tests {
     }
 
     // ── Remaining event catalog ─────────────────────────────────────
+
+    /// Two quick taps on an element that does not listen for `double_tap` are
+    /// two taps: a "+" button clicked twice counts twice. A double tap only
+    /// replaces the second tap where someone is listening for it.
+    #[test]
+    fn quick_taps_without_a_double_tap_listener_are_all_taps() {
+        let mut ctx = ReactiveCtx::new();
+        let taps = ctx.create_signal(Value::Int(0));
+        let mut router = EventRouter::new();
+        router.on(1, rect(), EventKind::Tap, inc(taps));
+
+        for i in 0..4_u64 {
+            router.dispatch_tick(
+                &mut ctx,
+                None,
+                vec![
+                    InputEvent::pointer(EventKind::PointerDown, (5.0, 5.0), i * 100),
+                    InputEvent::pointer(EventKind::PointerUp, (5.0, 5.0), i * 100 + 40),
+                ],
+            );
+        }
+        assert_eq!(ctx.peek_signal(taps), Value::Int(4), "no tap was swallowed");
+    }
 
     #[test]
     fn double_tap_fires_within_threshold_and_not_beyond() {

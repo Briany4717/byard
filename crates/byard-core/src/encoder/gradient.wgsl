@@ -28,7 +28,7 @@ const TAU: f32 = 6.28318530718;
 ///
 /// Kept expression for expression as it was written, because every gradient in
 /// every file written before this was extracted takes this path and has to
-/// keep producing the same bits (INV-22).
+/// keep producing the same bits.
 fn linear_t(axis: vec4<f32>, local: vec2<f32>, half_size: vec2<f32>) -> f32 {
     let dir = axis.xy;
     // Half-extent of the shape measured along `dir` (a box is convex, so the

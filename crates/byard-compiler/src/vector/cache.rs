@@ -1,16 +1,17 @@
-//! Persistent content-addressed field cache (RFC-0009 §5, M52).
+//! Persistent content-addressed field cache (RFC-0009 §5).
 //!
 //! Generating an MSDF field parses the SVG and runs the distance-field math;
 //! doing it on every cold `byard dev` start (or `byard build`) re-pays a cost
-//! whose result is deterministic (the M45 guarantee). This cache keys a
-//! generated field by `hash(svg-bytes ‖ grid ‖ px_range ‖ generator-version)`
-//! and stores its bytes under `.byard/cache/vectors/<key>.msdf`, so a second run
-//! over unchanged input loads from disk and skips generation entirely.
+//! whose result is deterministic (the generator is byte-for-byte reproducible).
+//! This cache keys a generated field by `hash(svg-bytes ‖ grid ‖ px_range ‖
+//! generator-version)` and stores its bytes under
+//! `.byard/cache/vectors/<key>.msdf`, so a second run over unchanged input
+//! loads from disk and skips generation entirely.
 //!
 //! The generator version is part of the key, so a toolchain/algorithm bump
 //! invalidates every entry with no explicit purge (and `byard clean` wipes the
 //! directory). A corrupt or truncated file is treated as a miss and safely
-//! regenerated, never a panic (INV-3: the loaded payload is fully owned).
+//! regenerated, never a panic (the loaded payload is fully owned).
 
 use std::path::{Path, PathBuf};
 

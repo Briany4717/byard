@@ -61,8 +61,8 @@ RFC-0029. Basic in-app push/pop navigation depends only on RFC-0027.
 
 Implement in this order: **RFC-0027 → RFC-0028 → RFC-0029 → RFC-0026**. RFC-0027
 alone unblocks in-app navigation (push/pop/replace over a `var` stack); RFC-0028/
-0029 unblock deep linking and data-backed screens. The IMPLEMENTATION_7 milestone
-plan schedules 0027–0029 only; navigation gets its own milestone set once this
+0029 unblock deep linking and data-backed screens. The implementation
+plan schedules 0027 to 0029 only; navigation gets its own milestone set once this
 cluster is green.
 
 ---

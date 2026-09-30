@@ -18,7 +18,7 @@
 //!
 //! The pool serves two different consumers, and they run on different
 //! threads. A controller reply has to reach the **logic** thread, which is
-//! the only place a `Signal` may be written (INV-2); a decoded image has to
+//! the only place a `Signal` may be written; a decoded image has to
 //! reach the **render** thread, which is the only place a texture may be
 //! uploaded. A single channel would mean each thread receiving the other's
 //! traffic and having to put it back, which RFC-0028 §7 rejects on the
@@ -631,7 +631,7 @@ impl Relay {
     /// stateful interpreter: the running runtime holds `!Send` data
     /// (`Signal`s, a `ViewArena`, a logic-thread-local reactive scope), so it
     /// can never cross a thread boundary. Only the **factory** is bounded
-    /// `Send + 'static` (INV-6), it closes over plain owned data (a
+    /// `Send + 'static`, it closes over plain owned data (a
     /// `CompiledView`) and is moved into the thread, where it builds the arena
     /// and the borrowing runtime in place. The `for<'a>` HRTB ties the
     /// runtime's borrow to the thread-local arena's lifetime.
@@ -1127,7 +1127,7 @@ mod tests {
 
     #[test]
     fn real_image_decode_on_the_io_pool_is_received_after_it_completes() {
-        // The M29 shape end-to-end at the relay level: a deliberately slow
+        // The async-decode shape end-to-end at the relay level: a deliberately slow
         // (sleep + real decode) task on the I/O pool reports its result back
         // through the type-erased channel, exactly as `TextureCache::ensure`
         // does, proving a blocking `image` decode never touches the caller.

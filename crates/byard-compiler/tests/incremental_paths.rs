@@ -7,7 +7,7 @@
 //! `recompute_dirty` in layout, the dirty-target set at the atlas→frame
 //! boundary, and the encoder's scissor. Each was validated **in isolation**,
 //! `recompute_dirty` has benchmarks, `TargetId` has generation tests, the
-//! scissor has `tests/m26_m27_incremental.rs`, and none of them had an
+//! scissor has `tests/incremental_scissor.rs`, and none of them had an
 //! assertion that fails when production takes the slow path instead. So when
 //! the interpreter was built taking the simple path, nothing protested, and
 //! nothing kept protesting for several phases afterwards.
@@ -190,7 +190,7 @@ fn the_counters_do_not_fire_when_nothing_renders() {
 /// whitelist rejected outright. Every §R4 clause could therefore be deleted
 /// with this file still green, while production walked the tree twice on every
 /// overlay toggle and every route change. `retained_attempts` is what tells the
-/// two apart (INV-18: the assertion must fail when production stops taking the
+/// two apart (the assertion must fail when production stops taking the
 /// cheaper path, here, the cheap *early-out*).
 fn assert_rebuilt(counts: &path_counters::Counts, why: &str) {
     assert_eq!(counts.clears, 1, "{why} must force a full rebuild");
@@ -362,7 +362,7 @@ fn unmounting_an_overlay_forces_a_full_rebuild() {
     // catches it even if the overlay clause were missing; an unmount *removes*
     // them, which is the direction where a surviving stale entry is a rect the
     // spatial grid still answers from, a dismissed dialog that keeps eating
-    // taps over the screen behind it (INV-23's failure mode, and invisible in a
+    // taps over the screen behind it (invalidation deciding geometry, and invisible in a
     // screenshot).
     const OVERLAY_SRC: &str = r"
 View Probe() {
@@ -804,13 +804,14 @@ fn an_unchanged_frame_marks_nothing_dirty_at_all() {
     );
 }
 
-/// RFC-0031 §S1 × RFC-0010 INV-8: an animating `smooth` is paint, and the
-/// layout tree must never hear about it.
+/// RFC-0031 §S1 and RFC-0010 (animation is paint-time only): an animating
+/// `smooth` is paint, and the layout tree must never hear about it.
 ///
 /// This is the assertion that makes the property's `AttrClass::Paint`
 /// classification mean something at runtime. A corner profile animating at the
 /// display rate that relaid out the tree on every frame is precisely the shape
-/// of defect INV-8 exists to forbid, and it would be invisible in a screenshot:
+/// of defect the paint class exists to forbid, and it would be invisible in a
+/// screenshot:
 /// the picture would be right and the frame cost wrong.
 #[test]
 fn an_animating_corner_profile_never_reaches_layout() {
@@ -854,9 +855,9 @@ View Probe() {
         let now = f.instances()[0].smooth;
         if now.to_bits() != previous.to_bits() {
             moved = true;
-            // The other half of INV-26's rule, one primitive down: a value the
-            // shader reads must reach the digest, or a corner profile animates
-            // on the CPU and never repaints.
+            // The other half of the digest-completeness rule, one primitive
+            // down: a value the shader reads must reach the digest, or a corner
+            // profile animates on the CPU and never repaints.
             assert!(
                 f.instances_dirty()[0],
                 "frame {step}: `smooth` moved {previous} → {now} without \
@@ -889,7 +890,7 @@ fn the_first_frame_reports_everything_dirty() {
 
 #[test]
 fn a_retained_frame_is_byte_identical_to_a_forced_full_rebuild() {
-    // INV-22: the retained path is not intended to change any output, so any
+    // Parity: the retained path is not intended to change any output, so any
     // difference is a bug. Comparing the emitted primitives rather than pixels
     // makes the check exact and cheap enough to run on every commit, a pixel
     // comparison of the same frame lives in `byard-platform`'s readback tests.

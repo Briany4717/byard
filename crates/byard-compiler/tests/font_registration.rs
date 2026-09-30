@@ -1,4 +1,4 @@
-//! Font families reach the frame from one source of truth (RFC-0034, INV-27).
+//! Font families reach the frame from one source of truth (RFC-0034).
 //!
 //! The engine-side halves of this live in `byard-core`: that the measurement
 //! and paint `FontSystem`s agree, and that a face is loaded once. What is left

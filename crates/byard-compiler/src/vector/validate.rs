@@ -7,7 +7,7 @@
 
 use crate::diagnostics::{CompileError, Span};
 
-/// Default path-segment budget before a shape is rejected (IMPL-62, tunable).
+/// Default path-segment budget before a shape is rejected (tunable).
 pub const MAX_NODES: usize = 500;
 
 /// Walks a parsed SVG tree, rejecting gradients/filters/patterns and counting

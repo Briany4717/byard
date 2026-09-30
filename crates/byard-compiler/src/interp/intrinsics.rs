@@ -5,8 +5,8 @@
 //! A closed table maps each reserved intrinsic name to its content arity,
 //! accepted property/event vocabulary, focusability, and children policy.
 //! [`validate_element`] applies the eight §5 rules in order, each producing a
-//! precise span-anchored [`CompileError`], no failure is ever silent (D4,
-//! INV-4). Interactive elements register a hit rect inflated to a 44×44 minimum
+//! precise span-anchored [`CompileError`], no failure is ever silent (D4).
+//! Interactive elements register a hit rect inflated to a 44×44 minimum
 //! (RFC-0003 E8), computed by [`inflate_hit_rect`].
 
 use std::collections::{HashMap, HashSet};
@@ -805,7 +805,8 @@ fn lookup_intrinsic(name: &str) -> Option<Intrinsic> {
             // RFC-0031 §S10: `morph: <scalar>` reinterprets the canvas's shapes
             // as a *sequence* and indexes it. Paint-class, so it animates
             // through the ordinary chokepoint, a morph that relaid out the
-            // tree at the display rate is precisely what INV-8 forbids.
+            // tree at the display rate is precisely what the paint class
+            // forbids.
             props.insert("morph", pnt(PropType::Float));
             // RFC-0031 §S7: `fuse: <px>` is the smoothing radius, the distance
             // over which two surfaces bridge into one. Paint-class and
@@ -1201,10 +1202,11 @@ pub fn validate_element(
         // Rule 6, attribute value type.
         if let (AttrKind::Prop { value }, Some(def)) = (&attr.kind, prop_def) {
             let ty = def.ty;
-            // RFC-0032 §Q8 / RFC-0010 INV-8: the class comes from *this*
-            // intrinsic's own definition, not from a global name list, so
-            // `align` on a `Column` and `align` on a `Text` are answered
-            // separately and an attribute cannot be added without an answer.
+            // RFC-0032 §Q8 / RFC-0010 (animation is paint-time only): the class
+            // comes from *this* intrinsic's own definition, not from a global
+            // name list, so `align` on a `Column` and `align` on a `Text` are
+            // answered separately and an attribute cannot be added without an
+            // answer.
             let is_layout = def.class == AttrClass::Layout;
             // RFC-0010: `value with anim.*(…)`, reject an animation on a layout
             // property (it can't animate on the GPU), otherwise validate every
@@ -1248,7 +1250,7 @@ pub fn validate_element(
                 // Same rule for the keyframe form (RFC-0025 §3).
                 // RFC-0025 §3: `anim.keyframes(…)` stands in value position. It
                 // is rejected on a layout property for the same reason `with`
-                // is (a relayout every frame, INV-8), handled above, for the
+                // is (a relayout every frame), handled above, for the
                 // nested form too, and each step's value is type-checked
                 // against the property like any other value.
                 {

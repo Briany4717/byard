@@ -23,7 +23,7 @@
 //! path, and it is the most likely visible bug in this area.
 //!
 //! GPU-dependent tests request a real adapter and **skip gracefully** when none
-//! is available (headless CI), mirroring `m21_pipelines.rs`'s pattern.
+//! is available (headless CI), mirroring `decorated_texture_pipelines.rs`'s pattern.
 #![allow(clippy::cast_precision_loss)]
 
 use byard_core::encoder::EncoderSubsystem;

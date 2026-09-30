@@ -765,8 +765,8 @@ impl From<TaffyError> for AtlasError {
 ///
 /// **Gated on the `telemetry` feature**, so the counters do not exist in a
 /// shipped build. They are thread-local: the atlas lives on the logic thread
-/// (INV-2) and a process-wide counter would be polluted by the other tests
-/// `cargo test` runs concurrently.
+/// (signals and layout are logic-thread only) and a process-wide counter would
+/// be polluted by the other tests `cargo test` runs concurrently.
 #[cfg(feature = "telemetry")]
 pub mod path_counters {
     use std::cell::Cell;
@@ -802,7 +802,7 @@ pub mod path_counters {
         /// exactly the same `clear` + full pass, so without this counter every
         /// clause of the whitelist can be deleted with the suite still green,
         /// while production quietly pays for a failed attempt before every
-        /// rebuild (INV-18).
+        /// rebuild. This counter is the assertion that catches it.
         pub retained_attempts: u64,
         /// Retained builds opened and then **discarded** (`end_retained_build`
         /// returned `false`).
@@ -1118,7 +1118,7 @@ impl LayoutAtlas {
     /// marked dirty in Taffy, and its target lands in
     /// [`Self::layout_dirty_targets`]. **Taffy then decides what to
     /// recompute**, this method never decides which *rects* changed, only
-    /// which *inputs* did (RFC-0032 §R3, INV-23).
+    /// which *inputs* did (RFC-0032 §R3: invalidation never decides geometry).
     ///
     /// The caller must finish with [`Self::end_retained_build`] and honour its
     /// verdict.
@@ -1397,7 +1397,8 @@ impl LayoutAtlas {
             .f32(f32::from(spec.weight))
             // RFC-0034: and the family, for exactly the same reason. A leaf
             // that changed face and kept its fingerprint keeps last frame's
-            // measurement, which is the whole class of staleness INV-26 names.
+            // measurement, which is the whole class of staleness digest
+            // completeness exists to prevent.
             .str(spec.family.as_deref().unwrap_or(""))
             .opt_f32(spec.width)
             .f32(spec.fallback.0)
@@ -2131,7 +2132,7 @@ impl LayoutAtlas {
     ///
     /// This is a full `clear()` + root-to-leaf walk on every
     /// `compute`/`recompute_dirty`, regardless of how many nodes were marked
-    /// dirty. That was measured (M28) on a 200-leaf tree (the high end
+    /// dirty. That was measured on a 200-leaf tree (the high end
     /// of `EvaluatorTick`'s expected per-tick target count): the whole
     /// `recompute_dirty`, layout + this grid rebuild, costs ~24 µs with one
     /// dirty leaf and ~111 µs with every node dirty, i.e. ≲0.7% of a 60 Hz
@@ -2372,11 +2373,11 @@ impl LayoutAtlas {
         self.run_layout(root.node_id, available, sizer)?;
         path_counters::record_retained_recompute();
         // Unconditionally rebuilt from the **resolved rects**, never from the
-        // fingerprints (RFC-0032 §R3 step 4, INV-23). A node that moved only
-        // because a sibling resized was never marked by anyone here, and the
-        // full walk is what guarantees its grid entry cannot be stale, which
-        // is the difference between a wrong pixel and an element that is
-        // tappable where it used to be.
+        // fingerprints (RFC-0032 §R3 step 4; invalidation never decides
+        // geometry). A node that moved only because a sibling resized was never
+        // marked by anyone here, and the full walk is what guarantees its grid
+        // entry cannot be stale, which is the difference between a wrong pixel
+        // and an element that is tappable where it used to be.
         self.rebuild_grid();
         Ok(())
     }

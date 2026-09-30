@@ -6,7 +6,7 @@
 
 Closes #
 
-## Cheaper paths (INV-18)
+## Cheaper paths
 
 **Does this add or modify a path that exists to be cheaper than an alternative?
 If yes, which assertion fails when production stops taking it?**

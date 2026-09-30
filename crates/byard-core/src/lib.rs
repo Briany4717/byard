@@ -56,7 +56,7 @@ pub trait LogicRuntime {
     /// Applies everything the async I/O pool completed since the last tick,
     /// **before** input is processed and before the pull (tick step 0,
     /// RFC-0028 §6). Each payload is type-erased; the implementation downcasts
-    /// the shapes it understands and drops the rest (INV-4, never a panic).
+    /// the shapes it understands and drops the rest (never a panic).
     ///
     /// Returns whether any result actually changed state. The relay uses that
     /// answer to decide whether to wake a `Wait`-mode render loop: a reply

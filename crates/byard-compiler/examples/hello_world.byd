@@ -280,8 +280,8 @@ View Main() {
                 // viewport, so scroll the list with the mouse wheel (or drive
                 // `listScroll` two-way). The content is measured at natural
                 // height, clipped to the viewport (GPU scissor), and translated
-                // by −offset at paint time, scrolling never re-runs layout
-                // (INV-8). The wheel also bumps the raw `wheel`/`scroll` counters
+                // by −offset at paint time, scrolling never re-runs layout.
+                // The wheel also bumps the raw `wheel`/`scroll` counters
                 // shown below.
                 ScrollView #[
                     bg: 0x1E1E2A, radius: 10, width: 320, height: 96,

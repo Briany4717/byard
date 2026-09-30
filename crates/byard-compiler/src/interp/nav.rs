@@ -59,7 +59,7 @@ impl RoutePattern {
     /// Returns [`CompileError::InvalidRoutePattern`] for an unnamed `:`
     /// segment, a `*` that is not the final segment, or a repeated parameter
     /// name, each of which would otherwise match in a way the author did not
-    /// write (INV-4: never a silent surprise).
+    /// write (never a silent surprise).
     pub fn compile(raw: &str, span: Span) -> Result<Self, CompileError> {
         let bad = |reason: &str| CompileError::InvalidRoutePattern {
             span,

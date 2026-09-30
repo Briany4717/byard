@@ -411,8 +411,15 @@ View Main() {
 "#,
     );
     assert_eq!(harness.texts()[0], "loading");
-    assert_eq!(harness.calls.load(Ordering::SeqCst), 1);
+    // Placing the call is synchronous; running it is the pool's, so the
+    // controller's own count is read only once its reply has arrived.
+    assert_eq!(
+        harness.interp.outstanding_continuations(),
+        1,
+        "mounting placed exactly one call"
+    );
     harness.pump();
+    assert_eq!(harness.calls.load(Ordering::SeqCst), 1);
     assert_eq!(harness.texts()[0], "auto");
 }
 

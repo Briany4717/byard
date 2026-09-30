@@ -12,6 +12,13 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **The system fonts are read once per process.** Building a font system scans
+  every font installed on the machine, tens of milliseconds each time, and the
+  engine builds two (one to measure text, one to paint it), so every app paid
+  the scan twice at startup. The scan now happens once, and each font system
+  starts from a copy of its result; a font a project registers still goes into
+  its own copy only.
+
 - **A pipeline may only ask for the vertex attributes every GPU has.** The
   engine requests the adapter's limits with the attribute budget held down to
   the sixteen the WebGPU specification guarantees, so a layout that overruns

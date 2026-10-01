@@ -535,7 +535,17 @@ impl Registry {
     }
 
     /// Reads one file of the registry, by its path relative to the root.
+    ///
+    /// `rel` comes from an index, so it must stay inside the registry: a
+    /// path that is absolute or climbs out with `..` is refused before
+    /// anything is read, from a directory or a server.
     pub fn read(&self, rel: &str) -> Result<Vec<u8>, String> {
+        if !crate::manifest::is_inside_package(rel) || rel.contains("://") {
+            return Err(format!(
+                "the registry at `{}` names {rel:?}, which is outside it",
+                self.label()
+            ));
+        }
         match self {
             Self::Dir(dir) => {
                 let path = dir.join(rel);
@@ -584,10 +594,29 @@ fn http_get(url: &str) -> Result<Vec<u8>, String> {
     if !status.is_success() {
         return Err(format!("GET {url}: {status}"));
     }
-    response
-        .bytes()
-        .map(|b| b.to_vec())
-        .map_err(|e| format!("GET {url}: {e}"))
+    read_capped(response, MAX_DOWNLOAD).map_err(|e| format!("GET {url}: {e}"))
+}
+
+/// The most `byard get` reads from one registry response. An index or a
+/// package archive is kilobytes to a few megabytes; a server that sends more
+/// is broken or hostile, and is stopped before it fills memory.
+const MAX_DOWNLOAD: u64 = 128 * 1024 * 1024;
+
+/// Reads `body` to the end, or fails once it passes `cap` bytes: the limit
+/// is enforced on what arrives, not on what the server says it will send.
+fn read_capped(body: impl std::io::Read, cap: u64) -> Result<Vec<u8>, String> {
+    use std::io::Read as _;
+    let mut out = Vec::new();
+    body.take(cap + 1)
+        .read_to_end(&mut out)
+        .map_err(|e| e.to_string())?;
+    if out.len() as u64 > cap {
+        return Err(format!(
+            "the response is larger than {} MiB, more than any index or package",
+            cap / (1024 * 1024)
+        ));
+    }
+    Ok(out)
 }
 
 /// One dependency of a published version, as its index entry records it, so
@@ -1066,6 +1095,40 @@ mod tests {
             registry_cache_path("a", "bc", "x"),
             "fields are separated in the key"
         );
+    }
+
+    /// A response is read up to the cap and refused past it, whatever the
+    /// server claimed it would send.
+    #[test]
+    fn a_response_past_the_cap_is_refused() {
+        let cap = 4 * 1024 * 1024;
+        let exact = vec![7u8; usize::try_from(cap).unwrap()];
+        assert_eq!(
+            read_capped(exact.as_slice(), cap).unwrap().len(),
+            exact.len()
+        );
+        let over = vec![7u8; exact.len() + 1];
+        let err = read_capped(over.as_slice(), cap).unwrap_err();
+        assert!(err.contains("larger than 4 MiB"), "{err}");
+    }
+
+    /// A file the index names must be inside the registry, from a
+    /// directory or a server.
+    #[test]
+    fn a_registry_read_cannot_leave_the_registry() {
+        let dir = Registry::Dir(std::env::temp_dir());
+        let web = Registry::Http("http://127.0.0.1:9".to_string());
+        for rel in [
+            "../secret",
+            "/etc/hosts",
+            "a/../../b",
+            "http://elsewhere/x.tar.gz",
+        ] {
+            for registry in [&dir, &web] {
+                let err = registry.read(rel).unwrap_err();
+                assert!(err.contains("outside it"), "{rel}: {err}");
+            }
+        }
     }
 
     #[test]

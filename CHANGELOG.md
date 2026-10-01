@@ -12,6 +12,14 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **A registry `version` is a requirement now, not an exact version.**
+  `version = "0.1.0"` accepts any compatible `0.1.x` (Cargo's rules), where it
+  used to accept `0.1.0` only. Write `"=0.1.0"` to keep exactly one. An
+  existing `byard.lock` keeps its pins, but the package cache is now keyed by
+  content, so run `byard get` once to fill it again before `check` or `dev`. A
+  published package can depend only on registry packages, and `byard publish`
+  refuses one with a path or git dependency.
+
 - **`byard check` and `byard dev` run the type checker.** It used to run only
   in the editor, so a misspelt method (`xs.pusj(1)`), a type mismatch or an
   impure lambda passed the command line clean and failed silently at runtime.
@@ -42,6 +50,17 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   colour lighter than it was written.
 
 ### Added
+
+- **Registries over HTTP, and version requirements.** A dependency can come
+  from a registry served over HTTP, `registry = "https://…"`, and name a
+  version requirement, `version = "^0.3"` (Cargo's rules). `byard get` picks
+  the highest version that satisfies everything and pins it in `byard.lock`;
+  when nothing can, it explains which requirements conflict and lists the
+  versions published. A lock that still satisfies the manifest is kept, and
+  no registry is contacted. Any static file server over a directory `byard
+  publish` wrote is a registry. `byard add weather --registry <url>` writes
+  `^` the newest version published. See
+  `crates/byard-cli/examples/package_theme/app_http`.
 
 - **A theme can take its colour from an image.** `[theme] seed = { image =
   "brand.png" }` derives both schemes from the picture's dominant colour: the

@@ -14,7 +14,8 @@
 //      then in app/byard.toml write
 //        brand = { registry = "/tmp/reg", version = "0.1.0" }
 //      and run `byard get`: the lock pins the same checksum the path source
-//      gets, and the app looks the same.
+//      gets, and the app looks the same. ../app_http does the same over
+//      HTTP, with a version requirement.
 use brand as b
 
 View Main() {

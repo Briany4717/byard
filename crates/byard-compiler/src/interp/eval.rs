@@ -6893,6 +6893,7 @@ impl Interpreter {
         &mut self,
         paths: &[FilledPath],
         phase: f32,
+        resample: bool,
         canvas: crate::interp::intrinsics::Rect,
         opacity: f32,
         transform: byard_core::frame::Transform,
@@ -6906,7 +6907,12 @@ impl Interpreter {
             self.push_filled_path(a, canvas, opacity, transform, frame);
             return;
         }
-        match lerp_path_commands(&a.commands, &b.commands, t) {
+        let blended = if resample {
+            resample_path_commands(&a.commands, &b.commands, t).map_err(Mismatch::Subpaths)
+        } else {
+            lerp_path_commands(&a.commands, &b.commands, t).map_err(Mismatch::Command)
+        };
+        match blended {
             Ok(commands) => {
                 let blended = FilledPath {
                     commands,
@@ -6918,24 +6924,40 @@ impl Interpreter {
                 };
                 self.push_filled_path(&blended, canvas, opacity, transform, frame);
             }
-            Err(index) => {
+            Err(mismatch) => {
                 // The check pass refuses this for a body of literal paths; a
                 // `when` or a `for` can still bring two unlike paths together,
                 // and only here is it known which two. Reported once, and the
                 // nearer path drawn whole, so the error is what the author
                 // sees rather than a shape that stops moving.
-                if !self.errors.iter().any(|e| {
-                    matches!(e, CompileError::MorphPathMismatch { span, .. } if *span == b.span)
-                }) {
+                let reported = self.errors.iter().any(|e| match e {
+                    CompileError::MorphPathMismatch { span, .. }
+                    | CompileError::MorphSubpathMismatch { span, .. } => *span == b.span,
+                    _ => false,
+                });
+                if !reported {
                     let name = |c: Option<&PathCommand>| {
-                        c.map_or_else(|| "the end of the path".to_string(), |c| c.name().to_string())
+                        c.map_or_else(
+                            || "the end of the path".to_string(),
+                            |c| c.name().to_string(),
+                        )
                     };
-                    self.errors.push(CompileError::MorphPathMismatch {
-                        span: b.span,
-                        member: i1,
-                        index,
-                        expected: name(a.commands.get(index)),
-                        found: name(b.commands.get(index)),
+                    self.errors.push(match mismatch {
+                        Mismatch::Command(index) => CompileError::MorphPathMismatch {
+                            span: b.span,
+                            member: i1,
+                            index,
+                            expected: name(a.commands.get(index)),
+                            found: name(b.commands.get(index)),
+                        },
+                        Mismatch::Subpaths((expected, found)) => {
+                            CompileError::MorphSubpathMismatch {
+                                span: b.span,
+                                member: i1,
+                                expected,
+                                found,
+                            }
+                        }
                     });
                 }
                 let nearer = if t < 0.5 { a } else { b };
@@ -7803,14 +7825,36 @@ impl Interpreter {
                             .unwrap_or(self.theme.font_size as i64) as f32;
                     let mut rgba = super::intrinsics::color_rgba_auto(color);
                     rgba[3] *= inherited_opacity;
-                    // RFC-0011 group transforms: a `Text` carries no transform of
-                    // its own, so an ancestor's scale/translate is baked into the
-                    // baseline anchor and the font size (glyph extents scale from
-                    // the anchor, so this scales the run about the ancestor pivot).
-                    // Rotation can't be baked per-glyph and is left to box
-                    // primitives (shader-applied), a documented limitation.
-                    let anchor = inherited_transform.apply_point([rect.x, rect.y]);
-                    let scaled_size = size * inherited_transform.uniform_scale();
+                    // RFC-0011: the run's own transform, composed with its
+                    // ancestors'. Scale and translate are baked into the baseline
+                    // anchor and the font size (glyph extents scale from the
+                    // anchor, so this scales the run about the pivot), which
+                    // keeps it shaped at its drawn size and sharp. Rotation is
+                    // not something glyphon can draw, so a rotated run of its
+                    // own opens a rotated group: the frame stores the run
+                    // upright and the composite turns it. Inside a rotated
+                    // ancestor, that ancestor's group already turns it.
+                    let own = self.resolve_transform(
+                        attrs,
+                        crate::interp::intrinsics::Rect::new(
+                            rect.x,
+                            rect.y,
+                            rect.width,
+                            rect.height,
+                        ),
+                    );
+                    let transform = inherited_transform.compose(&own);
+                    let own_group = own.rotate.abs() > f32::EPSILON
+                        && frame.begin_group_rotated(
+                            1.0,
+                            transform.rotate,
+                            [
+                                transform.origin[0] + transform.translate[0],
+                                transform.origin[1] + transform.translate[1],
+                            ],
+                        );
+                    let anchor = transform.apply_point([rect.x, rect.y]);
+                    let scaled_size = size * transform.uniform_scale();
                     // RFC-0005 default text wrap: shape the run to the width layout
                     // resolved for this leaf (its parent-offered width), scaled by
                     // any ancestor scale (the run's glyphs scale about the pivot).
@@ -7822,7 +7866,7 @@ impl Interpreter {
                     let wrap_w = if self.eval_bool_prop(attrs, "wrap") == Some(false) {
                         None
                     } else {
-                        Some(rect.width * inherited_transform.uniform_scale())
+                        Some(rect.width * transform.uniform_scale())
                     };
                     frame.push_text_wrapped(
                         byard_core::TextLine {
@@ -7837,6 +7881,9 @@ impl Interpreter {
                         },
                         wrap_w,
                     );
+                    if own_group {
+                        frame.end_group();
+                    }
 
                     let has_events = attrs
                         .iter()
@@ -8003,9 +8050,26 @@ impl Interpreter {
                     // the alpha once. A leaf has nothing to overlap, and a box
                     // inside an open group falls back to per-instance, so both
                     // keep the path they always had.
-                    grouped = (opacity - 1.0).abs() > f32::EPSILON
+                    //
+                    // RFC-0011 text transforms: a rotated box with children is
+                    // grouped too. Its subtree is stored upright and the
+                    // composite turns the picture about the transform's pivot,
+                    // which is how its text, which glyphon cannot rotate, turns
+                    // with it. Scale and translate stay per primitive, where
+                    // text is already shaped at its scaled size, so a rotated
+                    // label is as sharp as an upright one of the same size.
+                    let rotated = transform.rotate.abs() > f32::EPSILON;
+                    let pivot = [
+                        transform.origin[0] + transform.translate[0],
+                        transform.origin[1] + transform.translate[1],
+                    ];
+                    grouped = ((opacity - 1.0).abs() > f32::EPSILON || rotated)
                         && !children.is_empty()
-                        && frame.begin_group(opacity);
+                        && frame.begin_group_rotated(
+                            opacity,
+                            if rotated { transform.rotate } else { 0.0 },
+                            pivot,
+                        );
                     let opacity = if grouped { 1.0 } else { opacity };
                     child_opacity = opacity;
                     // An 8-digit `bg` carries its own alpha byte (RFC-0005 §1).
@@ -8260,7 +8324,11 @@ impl Interpreter {
                 // plain rectangular clip, which costs exactly what a
                 // `ScrollView`'s does — a scissor — so wrapping content in a
                 // square `Clip` is not a new expense.
-                let mask_clip = if name.as_str() == "Clip" && inherited_transform.rotate != 0.0 {
+                // Clips are cut where their content is stored: inside a rotated
+                // group that is upright, and the composite turns clip and content
+                // together (RFC-0011 text transforms).
+                let clip_transform = frame.upright(inherited_transform);
+                let mask_clip = if name.as_str() == "Clip" && clip_transform.rotate != 0.0 {
                     // RFC-0011: under a rotated ancestor the clip's outline is
                     // a rotated rectangle, which neither the scissor nor an
                     // axis-aligned clip entry can express. It becomes a path
@@ -8269,18 +8337,17 @@ impl Interpreter {
                     // inside that as it would anywhere else.
                     let mut radii = self.resolve_radii(attrs, "rrect");
                     for r in &mut radii {
-                        *r *= inherited_transform.scale[0];
+                        *r *= clip_transform.scale[0];
                     }
-                    let outline =
-                        transformed_rrect_outline(current_rect, radii, &inherited_transform);
+                    let outline = transformed_rrect_outline(current_rect, radii, &clip_transform);
                     let opened = self.begin_clip_commands(&outline, frame);
                     let pathed = clip_path.as_ref().is_some_and(|p| {
-                        let tl = inherited_transform.apply_point([current_rect.x, current_rect.y]);
+                        let tl = clip_transform.apply_point([current_rect.x, current_rect.y]);
                         let rect = byard_core::frame::Rect::new(
                             tl[0],
                             tl[1],
-                            current_rect.w * inherited_transform.scale[0],
-                            current_rect.h * inherited_transform.scale[1],
+                            current_rect.w * clip_transform.scale[0],
+                            current_rect.h * clip_transform.scale[1],
                         );
                         self.begin_clip_path_mask(p, rect, frame)
                     });
@@ -8290,12 +8357,12 @@ impl Interpreter {
                         (false, false) => None,
                     }
                 } else if name.as_str() == "Clip" {
-                    let tl = inherited_transform.apply_point([current_rect.x, current_rect.y]);
+                    let tl = clip_transform.apply_point([current_rect.x, current_rect.y]);
                     let rect = byard_core::frame::Rect::new(
                         tl[0],
                         tl[1],
-                        current_rect.w * inherited_transform.scale[0],
-                        current_rect.h * inherited_transform.scale[1],
+                        current_rect.w * clip_transform.scale[0],
+                        current_rect.h * clip_transform.scale[1],
                     );
                     // Read the same way a box's `radius` is, so `rrect: 16`
                     // and `rrect: (16, 0, 0, 16)` both mean here what they
@@ -8304,7 +8371,7 @@ impl Interpreter {
                     // has to keep matching the card.
                     let mut radii = self.resolve_radii(attrs, "rrect");
                     for r in &mut radii {
-                        *r *= inherited_transform.scale[0];
+                        *r *= clip_transform.scale[0];
                     }
                     frame.begin_clip_rounded(rect, radii);
                     // RFC-0037 `clip(path)`: the mask opens *inside* the
@@ -8321,12 +8388,12 @@ impl Interpreter {
                 };
                 let scroll_clip = if name.as_str() == "ScrollView" {
                     let (ox, oy) = self.resolve_axis_pair(attrs, "offset", (0.0, 0.0));
-                    let tl = inherited_transform.apply_point([current_rect.x, current_rect.y]);
+                    let tl = clip_transform.apply_point([current_rect.x, current_rect.y]);
                     let clip = byard_core::frame::Rect::new(
                         tl[0],
                         tl[1],
-                        current_rect.w * inherited_transform.scale[0],
-                        current_rect.h * inherited_transform.scale[1],
+                        current_rect.w * clip_transform.scale[0],
+                        current_rect.h * clip_transform.scale[1],
                     );
                     frame.begin_clip(clip);
                     child_transform.translate[0] -= ox * inherited_transform.scale[0];
@@ -9010,9 +9077,18 @@ impl Interpreter {
                     );
                     if let (Some((mode, param)), Some(mut sink)) = (combine, sink) {
                         if let Some(paths) = sink.morph_paths.take() {
+                            let resample = paint_attrs
+                                .iter()
+                                .find(|a| a.name.as_str() == "morph_mode")
+                                .and_then(|a| match &a.kind {
+                                    AttrKind::Prop { value } => Self::enum_token(value),
+                                    _ => None,
+                                })
+                                == Some("resample");
                             self.push_morph_paths(
                                 &paths,
                                 param,
+                                resample,
                                 canvas_rect,
                                 opacity,
                                 inherited_transform,
@@ -15094,6 +15170,208 @@ fn lerp_path_commands(
     } else {
         Err(from.len().min(to.len()))
     }
+}
+
+/// Why two paths of a morph could not be blended.
+enum Mismatch {
+    /// Strict: the index of the first command that differs.
+    Command(usize),
+    /// Resampled: the two subpath counts, previous path first.
+    Subpaths((usize, usize)),
+}
+
+/// Spacing, in logical pixels, of the points a resampled morph places along
+/// the longer of two outlines.
+const RESAMPLE_SPACING: f32 = 2.0;
+/// Fewest points per outline, so a small icon still morphs smoothly.
+const RESAMPLE_MIN: usize = 24;
+/// Most points per outline. Alignment is quadratic in this, so it is what
+/// bounds a morph's per-frame cost; 192 points are finer than the tessellator
+/// needs at any size a UI draws a morphing shape.
+const RESAMPLE_MAX: usize = 192;
+/// Segments a curve is flattened into before resampling. Only the flattened
+/// arc length depends on it, and resampling spreads the points evenly after.
+const CURVE_STEPS: usize = 16;
+
+/// Two paths of any structure blended at factor `t` (RFC-0031 §S11,
+/// `morph_mode: resample`).
+///
+/// Each subpath is flattened to a closed polyline and resampled to the same
+/// number of points by arc length. The second is turned to the first's
+/// winding, then its start is moved to the rotation that minimises the total
+/// squared distance to the first: without that, a square morphing into a
+/// square drawn from another corner would twist through its own centre.
+/// `Err` carries the two subpath counts when they differ.
+#[allow(clippy::many_single_char_names)] // outlines a/b, points p/q, count n, factor t
+fn resample_path_commands(
+    from: &[PathCommand],
+    to: &[PathCommand],
+    t: f32,
+) -> Result<Vec<PathCommand>, (usize, usize)> {
+    let (a, b) = (flatten_subpaths(from), flatten_subpaths(to));
+    if a.len() != b.len() {
+        return Err((a.len(), b.len()));
+    }
+    let mut out = Vec::new();
+    for (sa, sb) in a.iter().zip(&b) {
+        let longer = polyline_length(sa).max(polyline_length(sb));
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let n = ((longer / RESAMPLE_SPACING).ceil() as usize).clamp(RESAMPLE_MIN, RESAMPLE_MAX);
+        let ra = resample_closed(sa, n);
+        let mut rb = resample_closed(sb, n);
+        if signed_area(&ra) * signed_area(&rb) < 0.0 {
+            rb.reverse();
+        }
+        let shift = best_rotation(&ra, &rb);
+        let mix = |i: usize| {
+            let (p, q) = (ra[i], rb[(i + shift) % n]);
+            [p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t]
+        };
+        out.push(PathCommand::Move(mix(0)));
+        out.extend((1..n).map(|i| PathCommand::Line(mix(i))));
+        out.push(PathCommand::Close);
+    }
+    Ok(out)
+}
+
+/// A path's subpaths as polylines, curves flattened. Every subpath is
+/// treated as closed, which a fill is anyway.
+fn flatten_subpaths(commands: &[PathCommand]) -> Vec<Vec<[f32; 2]>> {
+    let mut out: Vec<Vec<[f32; 2]>> = Vec::new();
+    let mut pen = [0.0, 0.0];
+    #[allow(clippy::cast_precision_loss)]
+    let steps = (1..=CURVE_STEPS).map(|k| k as f32 / CURVE_STEPS as f32);
+    for cmd in commands {
+        match *cmd {
+            PathCommand::Move(p) => {
+                out.push(vec![p]);
+                pen = p;
+            }
+            PathCommand::Line(p) => {
+                current(&mut out, pen).push(p);
+                pen = p;
+            }
+            PathCommand::Quad(c, p) => {
+                let sub = current(&mut out, pen);
+                for s in steps.clone() {
+                    let u = 1.0 - s;
+                    sub.push(std::array::from_fn(|i| {
+                        u * u * pen[i] + 2.0 * u * s * c[i] + s * s * p[i]
+                    }));
+                }
+                pen = p;
+            }
+            PathCommand::Cubic(c1, c2, p) => {
+                let sub = current(&mut out, pen);
+                for s in steps.clone() {
+                    let u = 1.0 - s;
+                    sub.push(std::array::from_fn(|i| {
+                        u * u * u * pen[i]
+                            + 3.0 * u * u * s * c1[i]
+                            + 3.0 * u * s * s * c2[i]
+                            + s * s * s * p[i]
+                    }));
+                }
+                pen = p;
+            }
+            PathCommand::Close => {
+                if let Some(first) = out.last().and_then(|s| s.first()) {
+                    pen = *first;
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The subpath being drawn, opening one at the pen when a path draws before
+/// its first `move`.
+fn current(subpaths: &mut Vec<Vec<[f32; 2]>>, pen: [f32; 2]) -> &mut Vec<[f32; 2]> {
+    if subpaths.is_empty() {
+        subpaths.push(vec![pen]);
+    }
+    let last = subpaths.len() - 1;
+    &mut subpaths[last]
+}
+
+/// The perimeter of a closed polyline.
+fn polyline_length(points: &[[f32; 2]]) -> f32 {
+    let n = points.len();
+    (0..n)
+        .map(|i| {
+            let (p, q) = (points[i], points[(i + 1) % n]);
+            (q[0] - p[0]).hypot(q[1] - p[1])
+        })
+        .sum()
+}
+
+/// `n` points spaced evenly by arc length round a closed polyline, the first
+/// on its first vertex. A degenerate outline (one point, or no length)
+/// becomes `n` copies of that point, which morphs as a shape growing from it.
+fn resample_closed(points: &[[f32; 2]], n: usize) -> Vec<[f32; 2]> {
+    let total = polyline_length(points);
+    let Some(&first) = points.first() else {
+        return vec![[0.0, 0.0]; n];
+    };
+    if total <= f32::EPSILON {
+        return vec![first; n];
+    }
+    #[allow(clippy::cast_precision_loss)]
+    let step = total / n as f32;
+    let mut out = Vec::with_capacity(n);
+    let (mut seg, mut walked) = (0, 0.0);
+    let len = points.len();
+    for k in 0..n {
+        #[allow(clippy::cast_precision_loss)]
+        let target = k as f32 * step;
+        loop {
+            let (p, q) = (points[seg % len], points[(seg + 1) % len]);
+            let seg_len = (q[0] - p[0]).hypot(q[1] - p[1]);
+            if walked + seg_len >= target || seg >= len {
+                let u = if seg_len > 0.0 {
+                    ((target - walked) / seg_len).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                out.push([p[0] + (q[0] - p[0]) * u, p[1] + (q[1] - p[1]) * u]);
+                break;
+            }
+            walked += seg_len;
+            seg += 1;
+        }
+    }
+    out
+}
+
+/// Twice the signed area of a closed polyline; its sign is the winding.
+fn signed_area(points: &[[f32; 2]]) -> f32 {
+    let n = points.len();
+    (0..n)
+        .map(|i| {
+            let (p, q) = (points[i], points[(i + 1) % n]);
+            p[0] * q[1] - q[0] * p[1]
+        })
+        .sum()
+}
+
+/// The shift of `b`'s start that brings it closest to `a`, point for point,
+/// by total squared distance. Ties go to the smallest shift, so the choice is
+/// the same on every run.
+#[allow(clippy::many_single_char_names)] // outlines a/b, points p/q, count n
+fn best_rotation(a: &[[f32; 2]], b: &[[f32; 2]]) -> usize {
+    let n = a.len();
+    let cost = |shift: usize| -> f32 {
+        (0..n)
+            .map(|i| {
+                let (p, q) = (a[i], b[(i + shift) % n]);
+                (q[0] - p[0]).powi(2) + (q[1] - p[1]).powi(2)
+            })
+            .sum()
+    };
+    (0..n)
+        .map(|shift| (shift, cost(shift)))
+        .min_by(|x, y| x.1.total_cmp(&y.1).then(x.0.cmp(&y.0)))
+        .map_or(0, |(shift, _)| shift)
 }
 
 /// sRGB gamma → linear (per channel).

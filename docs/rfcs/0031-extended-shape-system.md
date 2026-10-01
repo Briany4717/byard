@@ -1,13 +1,15 @@
 # RFC-0031: Extended Shape System, superelliptical corners, shape groups, organic fusion, and morphing
 
-- **Status:** Active, **implemented except general path correspondence**.
+- **Status:** Active, **implemented except feature correspondence**.
   §S1 to §S10 have landed: superelliptical corners across every pipeline that
   clips to a rounded rect, the shape group and its storage buffer, `ngon`,
-  sequence morphing, and organic fusion. §S11 has landed in its narrow form:
-  body paths with the same command structure morph command by command, and
-  paths that differ are a compile error naming the first command that
-  disagrees. General correspondence between two arbitrary paths stays
-  **deferred**, with the reasons in §S11.
+  sequence morphing, and organic fusion. §S11 has landed in two forms: body
+  paths with the same command structure morph command by command, and, when
+  the author opts in with `morph_mode: resample`, body paths of any structure
+  morph outline to outline by arc-length resampling (2026-09-30). Without the
+  opt-in, paths that differ are a compile error naming the first command that
+  disagrees and the way out. Feature correspondence (Material's
+  corner-matching) stays **deferred**, with the reasons in §S11.
 
   Eight corrections were found while implementing it and are recorded in
   [the erratum](0031-erratum-implementation-deltas.md); the body below has been
@@ -809,15 +811,55 @@ Implementation-time findings are recorded in
 [the erratum](0031-erratum-implementation-deltas.md). This RFC carries no open
 questions.
 
+#### S11, what was built next: `morph_mode: resample`
+
+"No canonical correspondence" is still true, which is why the strict rule
+stays the default. Resampling is *a* correspondence, a good one for outlines
+that are roughly the same kind of blob, and the author asks for it:
+
+```byld
+Canvas #[width: 120, height: 120, morph_mode: resample,
+         morph: 1.0 with anim.ease_in_out(900ms, from: 0.0, repeat: infinite, reverse: true)] {
+    path(fill: 0xE8546A) { move(60, 100) cubic(20, 72, 12, 40, 36, 30) … close() }
+    path(fill: 0xE8B54A) { move(60, 18) line(71.2, 46.6) line(101.8, 48.4) … close() }
+}
+```
+
+- **The algorithm.** Each subpath is flattened to a closed polyline (a curve
+  into 16 segments; only its arc length depends on that, since the points are
+  spread evenly after). Both outlines are resampled to the same number of
+  points by arc length: one per 2 px of the longer outline, at least 24 and
+  at most 192. The second is turned to the first's winding if the signed
+  areas disagree, then its start is moved to the rotation that minimises the
+  total squared distance to the first, ties to the smallest shift so the
+  result is the same on every run. The `k`-th points are interpolated and the
+  result drawn as `move` plus `line`s.
+- **Why the alignment is not optional.** Without it a square morphing into a
+  square drawn from the opposite corner sends every point through the centre:
+  half way, a speck. Without the winding match the same happens to a square
+  drawn the other way round. Both are asserted, and each assertion fails with
+  its step removed.
+- **Subpaths must match in count** (`MorphSubpathMismatch`). Which of three
+  holes becomes nothing is a guess, and a morph that guesses looks broken.
+- **Cost.** Alignment is quadratic in the point count, which the cap bounds
+  at 192² ≈ 37,000 squared distances per blended pair, well below the tessellation the
+  blend needs anyway each frame the phase moves. At rest the phase is still
+  and the mesh cache answers, as before.
+- **Not Material's algorithm.** Material matches features (corners to
+  corners) before interpolating, which keeps a star's points pointed through
+  the morph. Arc-length resampling does not; a point may slide along an edge.
+  That is the deferred half above, and it would slot in as another
+  `morph_mode`.
+
 ---
 
 ## Future possibilities
 
-- **General path morphing (S11).** Same-structure body paths morph today.
-  Arbitrary pairs need compile-time feature correspondence emitted as
-  fixed-length control-point arrays; rendering the result can reuse the body
-  path's tessellation rather than the Tier-1.5 SDF first proposed. The grammar
-  already accommodates it.
+- **Feature correspondence (S11).** Same-structure body paths morph today, and
+  any pair morphs by arc-length resampling. Matching corners to corners, the
+  Material approach, would keep sharp features sharp through the morph; it can
+  reuse the body path's tessellation rather than the Tier-1.5 SDF first
+  proposed, and would be another `morph_mode`.
 - **Backdrop refraction.** Displacing the backdrop sample by the shape field's
   gradient produces edge refraction. It composes with fusion to give the current
   "liquid glass" idiom, but it belongs to RFC-0023's paint-effect stack rather

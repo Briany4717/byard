@@ -810,6 +810,11 @@ fn lookup_intrinsic(name: &str) -> Option<Intrinsic> {
             // tree at the display rate is precisely what the paint class
             // forbids.
             props.insert("morph", pnt(PropType::Float));
+            // RFC-0031 §S11: how two body paths of different structure
+            // morph. `strict`, the default, needs the same commands in the
+            // same order; `resample` flattens both outlines and pairs them by
+            // arc length. A static setting, read at paint like `morph` is.
+            props.insert("morph_mode", pnt(PropType::Enum(&["strict", "resample"])));
             // RFC-0031 §S7: `fuse: <px>` is the smoothing radius, the distance
             // over which two surfaces bridge into one. Paint-class and
             // animatable for the same reason `morph` is: `k` is an ordinary
@@ -1785,7 +1790,18 @@ fn validate_group_mode(el: &ElementNode, attrs: &[Attr], errs: &mut Vec<CompileE
         errs.push(CompileError::ConflictingGroupMode { span: morph.span });
     }
     if fuse.is_none() && mode_attr("morph").is_some() {
-        validate_morph_paths(&el.children, errs);
+        // Read the way the renderer reads a keyword: a bare word, or a
+        // plain string holding one.
+        let resample = mode_attr("morph_mode").is_some_and(|a| match &a.kind {
+            AttrKind::Prop {
+                value: Expr::Ident(word, _),
+            } => word.as_str() == "resample",
+            AttrKind::Prop {
+                value: Expr::StrLit(parts, _),
+            } => matches!(parts.as_slice(), [crate::parser::ast::StrPart::Text(s)] if s == "resample"),
+            _ => false,
+        });
+        validate_morph_paths(&el.children, resample, errs);
     }
     let Some(_) = fuse else { return };
 
@@ -1809,7 +1825,10 @@ fn validate_group_mode(el: &ElementNode, attrs: &[Attr], errs: &mut Vec<CompileE
 /// literal shapes fixes. When the body chooses its members with `when` or
 /// generates them with `for`, the render pass checks the two paths it is about
 /// to blend instead, against the same rule.
-fn validate_morph_paths(members: &[Member], errs: &mut Vec<CompileError>) {
+///
+/// Under `morph_mode: resample` the commands may differ, and what has to
+/// agree is the number of subpaths: resampling pairs outline with outline.
+fn validate_morph_paths(members: &[Member], resample: bool, errs: &mut Vec<CompileError>) {
     let mut shapes = Vec::new();
     collect_morph_members(members, &mut shapes);
     let is_body_path = |e: &ElementNode| e.name.as_str() == "path" && !e.children.is_empty();
@@ -1854,10 +1873,33 @@ fn validate_morph_paths(members: &[Member], errs: &mut Vec<CompileError>) {
         .map(|k| (k - 1, k))
         .chain((n > 2).then_some((n - 1, 0)));
     for (from, to) in pairs {
-        if let Some(err) = morph_mismatch(paths[from], paths[to], to) {
+        let err = if resample {
+            subpath_mismatch(paths[from], paths[to], to)
+        } else {
+            morph_mismatch(paths[from], paths[to], to)
+        };
+        if let Some(err) = err {
             errs.push(err);
         }
     }
+}
+
+/// The diagnostic for two paths of a resampled morph whose subpath counts
+/// differ; `None` when they agree.
+fn subpath_mismatch(from: &ElementNode, to: &ElementNode, member: usize) -> Option<CompileError> {
+    let count = |p: &ElementNode| {
+        path_command_names(p)
+            .iter()
+            .filter(|(name, _)| *name == "move")
+            .count()
+    };
+    let (expected, found) = (count(from), count(to));
+    (expected != found).then_some(CompileError::MorphSubpathMismatch {
+        span: to.span,
+        member,
+        expected,
+        found,
+    })
 }
 
 /// The literal shape commands of a morph body, `when` branches included, in

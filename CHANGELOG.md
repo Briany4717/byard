@@ -43,6 +43,14 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Paths of different structure can morph.** `morph_mode: resample` on a
+  morphing `Canvas` lets two body paths morph even when their commands differ,
+  a heart of cubics into a star of lines, for example. Both outlines are
+  resampled to the same number of points and lined up so the shape turns
+  into the other rather than twisting through itself. Without it, a mismatch
+  is still an error, and the message now names `morph_mode: resample`. The
+  paths must have the same number of subpaths. See section 6 of
+  `crates/byard-cli/examples/shape_morph`.
 - **Text turns with its transform.** `Text` takes `translate`, `scale`,
   `rotate` and `origin`, and a label inside a rotated card now turns with the
   card instead of staying flat. Scale and translate are applied to the run

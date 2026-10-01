@@ -37,6 +37,7 @@ mod native_view_keyboard;
 mod navigation;
 mod overlay_dismiss;
 mod path_morph;
+mod path_morph_resample;
 mod responsive_variants;
 mod retained_across_views;
 mod runner_loop;

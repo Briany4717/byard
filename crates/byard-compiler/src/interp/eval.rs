@@ -6886,6 +6886,7 @@ impl Interpreter {
         &mut self,
         paths: &[FilledPath],
         phase: f32,
+        resample: bool,
         canvas: crate::interp::intrinsics::Rect,
         opacity: f32,
         transform: byard_core::frame::Transform,
@@ -6899,7 +6900,12 @@ impl Interpreter {
             self.push_filled_path(a, canvas, opacity, transform, frame);
             return;
         }
-        match lerp_path_commands(&a.commands, &b.commands, t) {
+        let blended = if resample {
+            resample_path_commands(&a.commands, &b.commands, t).map_err(Mismatch::Subpaths)
+        } else {
+            lerp_path_commands(&a.commands, &b.commands, t).map_err(Mismatch::Command)
+        };
+        match blended {
             Ok(commands) => {
                 let blended = FilledPath {
                     commands,
@@ -6911,24 +6917,40 @@ impl Interpreter {
                 };
                 self.push_filled_path(&blended, canvas, opacity, transform, frame);
             }
-            Err(index) => {
+            Err(mismatch) => {
                 // The check pass refuses this for a body of literal paths; a
                 // `when` or a `for` can still bring two unlike paths together,
                 // and only here is it known which two. Reported once, and the
                 // nearer path drawn whole, so the error is what the author
                 // sees rather than a shape that stops moving.
-                if !self.errors.iter().any(|e| {
-                    matches!(e, CompileError::MorphPathMismatch { span, .. } if *span == b.span)
-                }) {
+                let reported = self.errors.iter().any(|e| match e {
+                    CompileError::MorphPathMismatch { span, .. }
+                    | CompileError::MorphSubpathMismatch { span, .. } => *span == b.span,
+                    _ => false,
+                });
+                if !reported {
                     let name = |c: Option<&PathCommand>| {
-                        c.map_or_else(|| "the end of the path".to_string(), |c| c.name().to_string())
+                        c.map_or_else(
+                            || "the end of the path".to_string(),
+                            |c| c.name().to_string(),
+                        )
                     };
-                    self.errors.push(CompileError::MorphPathMismatch {
-                        span: b.span,
-                        member: i1,
-                        index,
-                        expected: name(a.commands.get(index)),
-                        found: name(b.commands.get(index)),
+                    self.errors.push(match mismatch {
+                        Mismatch::Command(index) => CompileError::MorphPathMismatch {
+                            span: b.span,
+                            member: i1,
+                            index,
+                            expected: name(a.commands.get(index)),
+                            found: name(b.commands.get(index)),
+                        },
+                        Mismatch::Subpaths((expected, found)) => {
+                            CompileError::MorphSubpathMismatch {
+                                span: b.span,
+                                member: i1,
+                                expected,
+                                found,
+                            }
+                        }
                     });
                 }
                 let nearer = if t < 0.5 { a } else { b };
@@ -9048,9 +9070,18 @@ impl Interpreter {
                     );
                     if let (Some((mode, param)), Some(mut sink)) = (combine, sink) {
                         if let Some(paths) = sink.morph_paths.take() {
+                            let resample = paint_attrs
+                                .iter()
+                                .find(|a| a.name.as_str() == "morph_mode")
+                                .and_then(|a| match &a.kind {
+                                    AttrKind::Prop { value } => Self::enum_token(value),
+                                    _ => None,
+                                })
+                                == Some("resample");
                             self.push_morph_paths(
                                 &paths,
                                 param,
+                                resample,
                                 canvas_rect,
                                 opacity,
                                 inherited_transform,
@@ -15132,6 +15163,208 @@ fn lerp_path_commands(
     } else {
         Err(from.len().min(to.len()))
     }
+}
+
+/// Why two paths of a morph could not be blended.
+enum Mismatch {
+    /// Strict: the index of the first command that differs.
+    Command(usize),
+    /// Resampled: the two subpath counts, previous path first.
+    Subpaths((usize, usize)),
+}
+
+/// Spacing, in logical pixels, of the points a resampled morph places along
+/// the longer of two outlines.
+const RESAMPLE_SPACING: f32 = 2.0;
+/// Fewest points per outline, so a small icon still morphs smoothly.
+const RESAMPLE_MIN: usize = 24;
+/// Most points per outline. Alignment is quadratic in this, so it is what
+/// bounds a morph's per-frame cost; 192 points are finer than the tessellator
+/// needs at any size a UI draws a morphing shape.
+const RESAMPLE_MAX: usize = 192;
+/// Segments a curve is flattened into before resampling. Only the flattened
+/// arc length depends on it, and resampling spreads the points evenly after.
+const CURVE_STEPS: usize = 16;
+
+/// Two paths of any structure blended at factor `t` (RFC-0031 §S11,
+/// `morph_mode: resample`).
+///
+/// Each subpath is flattened to a closed polyline and resampled to the same
+/// number of points by arc length. The second is turned to the first's
+/// winding, then its start is moved to the rotation that minimises the total
+/// squared distance to the first: without that, a square morphing into a
+/// square drawn from another corner would twist through its own centre.
+/// `Err` carries the two subpath counts when they differ.
+#[allow(clippy::many_single_char_names)] // outlines a/b, points p/q, count n, factor t
+fn resample_path_commands(
+    from: &[PathCommand],
+    to: &[PathCommand],
+    t: f32,
+) -> Result<Vec<PathCommand>, (usize, usize)> {
+    let (a, b) = (flatten_subpaths(from), flatten_subpaths(to));
+    if a.len() != b.len() {
+        return Err((a.len(), b.len()));
+    }
+    let mut out = Vec::new();
+    for (sa, sb) in a.iter().zip(&b) {
+        let longer = polyline_length(sa).max(polyline_length(sb));
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let n = ((longer / RESAMPLE_SPACING).ceil() as usize).clamp(RESAMPLE_MIN, RESAMPLE_MAX);
+        let ra = resample_closed(sa, n);
+        let mut rb = resample_closed(sb, n);
+        if signed_area(&ra) * signed_area(&rb) < 0.0 {
+            rb.reverse();
+        }
+        let shift = best_rotation(&ra, &rb);
+        let mix = |i: usize| {
+            let (p, q) = (ra[i], rb[(i + shift) % n]);
+            [p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t]
+        };
+        out.push(PathCommand::Move(mix(0)));
+        out.extend((1..n).map(|i| PathCommand::Line(mix(i))));
+        out.push(PathCommand::Close);
+    }
+    Ok(out)
+}
+
+/// A path's subpaths as polylines, curves flattened. Every subpath is
+/// treated as closed, which a fill is anyway.
+fn flatten_subpaths(commands: &[PathCommand]) -> Vec<Vec<[f32; 2]>> {
+    let mut out: Vec<Vec<[f32; 2]>> = Vec::new();
+    let mut pen = [0.0, 0.0];
+    #[allow(clippy::cast_precision_loss)]
+    let steps = (1..=CURVE_STEPS).map(|k| k as f32 / CURVE_STEPS as f32);
+    for cmd in commands {
+        match *cmd {
+            PathCommand::Move(p) => {
+                out.push(vec![p]);
+                pen = p;
+            }
+            PathCommand::Line(p) => {
+                current(&mut out, pen).push(p);
+                pen = p;
+            }
+            PathCommand::Quad(c, p) => {
+                let sub = current(&mut out, pen);
+                for s in steps.clone() {
+                    let u = 1.0 - s;
+                    sub.push(std::array::from_fn(|i| {
+                        u * u * pen[i] + 2.0 * u * s * c[i] + s * s * p[i]
+                    }));
+                }
+                pen = p;
+            }
+            PathCommand::Cubic(c1, c2, p) => {
+                let sub = current(&mut out, pen);
+                for s in steps.clone() {
+                    let u = 1.0 - s;
+                    sub.push(std::array::from_fn(|i| {
+                        u * u * u * pen[i]
+                            + 3.0 * u * u * s * c1[i]
+                            + 3.0 * u * s * s * c2[i]
+                            + s * s * s * p[i]
+                    }));
+                }
+                pen = p;
+            }
+            PathCommand::Close => {
+                if let Some(first) = out.last().and_then(|s| s.first()) {
+                    pen = *first;
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The subpath being drawn, opening one at the pen when a path draws before
+/// its first `move`.
+fn current(subpaths: &mut Vec<Vec<[f32; 2]>>, pen: [f32; 2]) -> &mut Vec<[f32; 2]> {
+    if subpaths.is_empty() {
+        subpaths.push(vec![pen]);
+    }
+    let last = subpaths.len() - 1;
+    &mut subpaths[last]
+}
+
+/// The perimeter of a closed polyline.
+fn polyline_length(points: &[[f32; 2]]) -> f32 {
+    let n = points.len();
+    (0..n)
+        .map(|i| {
+            let (p, q) = (points[i], points[(i + 1) % n]);
+            (q[0] - p[0]).hypot(q[1] - p[1])
+        })
+        .sum()
+}
+
+/// `n` points spaced evenly by arc length round a closed polyline, the first
+/// on its first vertex. A degenerate outline (one point, or no length)
+/// becomes `n` copies of that point, which morphs as a shape growing from it.
+fn resample_closed(points: &[[f32; 2]], n: usize) -> Vec<[f32; 2]> {
+    let total = polyline_length(points);
+    let Some(&first) = points.first() else {
+        return vec![[0.0, 0.0]; n];
+    };
+    if total <= f32::EPSILON {
+        return vec![first; n];
+    }
+    #[allow(clippy::cast_precision_loss)]
+    let step = total / n as f32;
+    let mut out = Vec::with_capacity(n);
+    let (mut seg, mut walked) = (0, 0.0);
+    let len = points.len();
+    for k in 0..n {
+        #[allow(clippy::cast_precision_loss)]
+        let target = k as f32 * step;
+        loop {
+            let (p, q) = (points[seg % len], points[(seg + 1) % len]);
+            let seg_len = (q[0] - p[0]).hypot(q[1] - p[1]);
+            if walked + seg_len >= target || seg >= len {
+                let u = if seg_len > 0.0 {
+                    ((target - walked) / seg_len).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                out.push([p[0] + (q[0] - p[0]) * u, p[1] + (q[1] - p[1]) * u]);
+                break;
+            }
+            walked += seg_len;
+            seg += 1;
+        }
+    }
+    out
+}
+
+/// Twice the signed area of a closed polyline; its sign is the winding.
+fn signed_area(points: &[[f32; 2]]) -> f32 {
+    let n = points.len();
+    (0..n)
+        .map(|i| {
+            let (p, q) = (points[i], points[(i + 1) % n]);
+            p[0] * q[1] - q[0] * p[1]
+        })
+        .sum()
+}
+
+/// The shift of `b`'s start that brings it closest to `a`, point for point,
+/// by total squared distance. Ties go to the smallest shift, so the choice is
+/// the same on every run.
+#[allow(clippy::many_single_char_names)] // outlines a/b, points p/q, count n
+fn best_rotation(a: &[[f32; 2]], b: &[[f32; 2]]) -> usize {
+    let n = a.len();
+    let cost = |shift: usize| -> f32 {
+        (0..n)
+            .map(|i| {
+                let (p, q) = (a[i], b[(i + shift) % n]);
+                (q[0] - p[0]).powi(2) + (q[1] - p[1]).powi(2)
+            })
+            .sum()
+    };
+    (0..n)
+        .map(|shift| (shift, cost(shift)))
+        .min_by(|x, y| x.1.total_cmp(&y.1).then(x.0.cmp(&y.0)))
+        .map_or(0, |(shift, _)| shift)
 }
 
 /// sRGB gamma → linear (per channel).

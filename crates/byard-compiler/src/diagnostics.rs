@@ -383,6 +383,22 @@ pub enum CompileError {
         /// The command this path has there.
         found: String,
     },
+    /// Two neighbouring paths in a `morph_mode: resample` sequence have a
+    /// different number of subpaths (RFC-0031 §S11).
+    ///
+    /// Resampling finds a correspondence between two outlines, not between a
+    /// ring and a hole that one of them lacks: which of three holes becomes
+    /// nothing is a guess, and a morph that guesses looks broken.
+    MorphSubpathMismatch {
+        /// Source range of the path whose count disagrees.
+        span: Span,
+        /// Zero-based position of the path in the morph sequence.
+        member: usize,
+        /// How many subpaths the previous path has.
+        expected: usize,
+        /// How many this one has.
+        found: usize,
+    },
     /// A `morph:` sequence mixes body paths with other shapes, or holds a
     /// `path(d: …)` (RFC-0031 §S11).
     ///
@@ -954,6 +970,7 @@ impl CompileError {
             | Self::ConflictingGroupMode { span }
             | Self::MorphPathMismatch { span, .. }
             | Self::MorphMemberKind { span, .. }
+            | Self::MorphSubpathMismatch { span, .. }
             | Self::StrokeInFusionGroup { span, .. }
             | Self::DashOnFusedStroke { span }
             | Self::NotAnimatable { span, .. }
@@ -1046,6 +1063,7 @@ impl CompileError {
             | Self::ConflictingGroupMode { span }
             | Self::MorphPathMismatch { span, .. }
             | Self::MorphMemberKind { span, .. }
+            | Self::MorphSubpathMismatch { span, .. }
             | Self::StrokeInFusionGroup { span, .. }
             | Self::DashOnFusedStroke { span }
             | Self::NotAnimatable { span, .. }
@@ -1140,6 +1158,7 @@ impl CompileError {
             Self::ConflictingGroupMode { .. } => "ConflictingGroupMode",
             Self::MorphPathMismatch { .. } => "MorphPathMismatch",
             Self::MorphMemberKind { .. } => "MorphMemberKind",
+            Self::MorphSubpathMismatch { .. } => "MorphSubpathMismatch",
             Self::StrokeInFusionGroup { .. } => "StrokeInFusionGroup",
             Self::DashOnFusedStroke { .. } => "DashOnFusedStroke",
             Self::NotAnimatable { .. } => "NotAnimatable",
@@ -1381,7 +1400,18 @@ impl CompileError {
             } => format!(
                 "path {member} of this morph cannot follow the one before it: command {index} \
                  is `{found}` here and `{expected}` there; paths morph command by command, \
-                 so each needs the same commands in the same order"
+                 so each needs the same commands in the same order, or set \
+                 `morph_mode: resample` on the `Canvas` to morph outlines of any structure"
+            ),
+            Self::MorphSubpathMismatch {
+                member,
+                expected,
+                found,
+                ..
+            } => format!(
+                "path {member} of this morph has {found} subpaths and the one before it has \
+                 {expected}; a resampled morph pairs outline with outline, so each path \
+                 needs the same number of `move`s"
             ),
             Self::MorphMemberKind { reason, .. } => reason.clone(),
             Self::StrokeInFusionGroup { param, .. } => {
@@ -1398,7 +1428,8 @@ impl CompileError {
             }
             Self::TooManyGroupMembers { max, found, .. } => {
                 format!(
-                    "a shape group holds at most {max} shapes; this one holds {found}.                      Split it into several groups, or drop a shape"
+                    "a shape group holds at most {max} shapes; this one holds {found}. \
+                     Split it into several groups, or drop a shape"
                 )
             }
             Self::NotAnimatable {

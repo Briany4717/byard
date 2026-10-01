@@ -1022,7 +1022,6 @@ impl EventRouter {
 /// Reflected write-back with value-dedup (E1): builds a `Change` action that
 /// writes `sig` only when the incoming value differs from the current one, so a
 /// two-way binding loop terminates at length 1.
-#[must_use]
 pub fn write_back_action(sig: SignalId) -> Action {
     Box::new(move |ctx, payload| {
         if let Some(new) = payload {

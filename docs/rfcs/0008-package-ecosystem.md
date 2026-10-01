@@ -279,7 +279,9 @@ brand = { registry = "https://registry.example", version = "0.1" }
   comparators combine (`">=1.2, <1.5"`). A bare `"0.1.0"` therefore means
   `^0.1.0`, as in Cargo, where it used to mean exactly `0.1.0`; a lock written
   before keeps its pin. A requirement that does not parse is a manifest error.
-  Pre-release versions are never chosen.
+  Pre-release versions are never chosen, and a requirement naming one
+  (`"=1.2.3-alpha"`) is a manifest error rather than quietly a requirement on
+  the release.
 - **The solver is PubGrub** (the `pubgrub` crate). Its failure is a
   derivation, so "no versions satisfy" comes with the chain of requirements
   that made it so, followed by the versions published of each package it

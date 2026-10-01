@@ -18,7 +18,8 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   existing `byard.lock` keeps its pins, but the package cache is now keyed by
   content, so run `byard get` once to fill it again before `check` or `dev`. A
   published package can depend only on registry packages, and `byard publish`
-  refuses one with a path or git dependency.
+  refuses one with a path or git dependency. A requirement naming a
+  pre-release (`"=1.2.3-alpha"`) is an error: pre-releases are never chosen.
 
 - **`byard check` and `byard dev` run the type checker.** It used to run only
   in the editor, so a misspelt method (`xs.pusj(1)`), a type mismatch or an

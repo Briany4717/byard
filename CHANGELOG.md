@@ -248,6 +248,16 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A theme's seed image is followed through every change in `byard dev`.**
+  It is matched by its path, so one with an unusual extension (`brand.asset`)
+  is seen; deleting it re-reads the manifest and shows the missing-file
+  error; and when `byard.toml` points the seed at another image, that image
+  is watched from the same save on, even outside the project.
+- **A package's seed image is published with it.** `byard publish` left a
+  theme's `seed = { image = "…" }` out of the archive and the checksum, so a
+  package theme that worked from a path failed once installed. It is now a
+  declared asset, and must live inside the package.
+
 - **`byard dev` reloads a changed image.** Editing or replacing a PNG or
   JPEG while the app runs now updates every `Image` drawn from it on save;
   it used to keep showing the old picture until restart. The old picture

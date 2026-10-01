@@ -15,7 +15,15 @@ pub fn run(file: Option<&Path>, short: bool) -> Result<(), String> {
     let started = std::time::Instant::now();
     let manifest = Manifest::discover(file)?;
 
-    style::action(&format!("checking {}", manifest.entry.display()));
+    if manifest.library {
+        style::action(&format!(
+            "checking package `{}` ({})",
+            manifest.name,
+            manifest.project_root.display()
+        ));
+    } else {
+        style::action(&format!("checking {}", manifest.entry.display()));
+    }
 
     let (program, _provider) = resolve_project(&manifest)?;
     let n_files = program.source_map.files().count();

@@ -97,5 +97,5 @@ fn an_opaque_container_opens_no_group() {
             Box #[width: 40, height: 40, bg: 0x0000FF] {}
         } } }",
     );
-    assert!(frame.groups().is_empty());
+    assert!(frame.groups().is_empty(), "{:?}", frame.groups());
 }

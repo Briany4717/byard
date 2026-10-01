@@ -29,20 +29,24 @@ fn errs(src: &str) -> Vec<CompileError> {
     validate_element(&el, &el.attrs, &[])
 }
 
+/// Asserts `src` validates with no diagnostics, printing them if it does not.
+#[track_caller]
+fn assert_clean(src: &str) {
+    let found = errs(src);
+    assert!(found.is_empty(), "{found:?}");
+}
+
 #[test]
 fn valid_intrinsics_pass() {
-    assert!(errs("View V() { Text(\"hi\") #[color: 0xFFFFFF, align: center] }").is_empty());
-    assert!(errs("View V() { Column #[gap: 8, p: 16] { } }").is_empty());
-    assert!(errs("View V() { Button(\"+\") #[bg: 0x3B82F6] => x }").is_empty());
+    assert_clean("View V() { Text(\"hi\") #[color: 0xFFFFFF, align: center] }");
+    assert_clean("View V() { Column #[gap: 8, p: 16] { } }");
+    assert_clean("View V() { Button(\"+\") #[bg: 0x3B82F6] => x }");
 }
 
 #[test]
 fn transform_props_are_accepted_on_containers_and_text_but_not_image() {
-    assert!(
-        errs(
-            "View V() { Box #[translate: (0, 2), scale: 1.05, rotate: 90deg, origin: center] {} }"
-        )
-        .is_empty()
+    assert_clean(
+        "View V() { Box #[translate: (0, 2), scale: 1.05, rotate: 90deg, origin: center] {} }",
     );
     assert!(
         errs("View V() { Row #[scale.y: 1.2] {} }").is_empty(),
@@ -51,9 +55,7 @@ fn transform_props_are_accepted_on_containers_and_text_but_not_image() {
 
     // `Text` bakes scale/translate into its run and turns through a rotated
     // group (RFC-0011 text transforms).
-    assert!(
-        errs("View V() { Text(\"hi\") #[rotate: 90deg, scale: 2, origin: center] }").is_empty()
-    );
+    assert_clean("View V() { Text(\"hi\") #[rotate: 90deg, scale: 2, origin: center] }");
     // `Image`'s sampler has no `Transform` field yet (RFC-0011 engine-slice
     // decision log), so it must still report `UnknownAttribute`, not
     // silently accept and drop.
@@ -74,7 +76,7 @@ fn rotate_verbose_form_still_rejects_a_bare_number() {
     let e = errs("View V() { Box #[rotate: (angle: 90)] {} }");
     assert!(matches!(&e[0], CompileError::AttributeTypeMismatch { .. }));
     // …but the properly-suffixed verbose form is accepted.
-    assert!(errs("View V() { Box #[rotate: (angle: 90deg)] {} }").is_empty());
+    assert_clean("View V() { Box #[rotate: (angle: 90deg)] {} }");
     // A verbose tuple with the wrong field name is a mismatch too.
     let e = errs("View V() { Box #[rotate: (deg: 90deg)] {} }");
     assert!(matches!(&e[0], CompileError::AttributeTypeMismatch { .. }));
@@ -83,32 +85,26 @@ fn rotate_verbose_form_still_rejects_a_bare_number() {
 #[test]
 fn with_animation_on_a_paint_prop_is_accepted() {
     // RFC-0010: paint-time animatable props accept a `with` curve.
-    assert!(errs("View V() { Box #[scale: 1 with anim.spring()] {} }").is_empty());
-    assert!(errs("View V() { Box #[opacity: 0.5 with anim.linear(200ms)] {} }").is_empty());
+    assert_clean("View V() { Box #[scale: 1 with anim.spring()] {} }");
+    assert_clean("View V() { Box #[opacity: 0.5 with anim.linear(200ms)] {} }");
 }
 
 #[test]
 fn ripple_props_are_accepted_on_the_box_render_path() {
     // RFC-0023: the four ripple effect props, on containers and `Button`.
-    assert!(
-        errs(
-            "View V() { Box #[ripple: 0x80FFFFFF, ripple_active: true, \
-                 ripple_radius: 24.0, ripple_duration: 200] {} }"
-        )
-        .is_empty()
+    assert_clean(
+        "View V() { Box #[ripple: 0x80FFFFFF, ripple_active: true, \
+                 ripple_radius: 24.0, ripple_duration: 200] {} }",
     );
-    assert!(errs("View V() { Button(\"Save\") #[ripple: 0xFFFFFF] }").is_empty());
+    assert_clean("View V() { Button(\"Save\") #[ripple: 0xFFFFFF] }");
 }
 
 #[test]
 fn blur_props_are_accepted_and_quality_is_a_closed_token_set() {
     // RFC-0023 §2: the four backdrop props on the box render path.
-    assert!(
-        errs(
-            "View V() { Box #[blur: 20, backdrop_tint: 0x80FFFFFF, \
-                 blur_saturation: 1.8, blur_quality: high] {} }"
-        )
-        .is_empty()
+    assert_clean(
+        "View V() { Box #[blur: 20, backdrop_tint: 0x80FFFFFF, \
+                 blur_saturation: 1.8, blur_quality: high] {} }",
     );
     // An unknown quality token is rejected against the closed set.
     let e = errs("View V() { Box #[blur: 20, blur_quality: ultra] {} }");
@@ -335,7 +331,11 @@ fn rule1_unknown_view_suggests() {
 fn rule1_known_user_view_is_ok() {
     // `Card` is not an intrinsic but is a known view in scope.
     let el = first_element("View V() { Card #[gap: 8] {} }");
-    assert!(validate_element(&el, &el.attrs, &["Card"]).is_empty());
+    assert!(
+        validate_element(&el, &el.attrs, &["Card"]).is_empty(),
+        "{:?}",
+        validate_element(&el, &el.attrs, &["Card"])
+    );
 }
 
 #[test]
@@ -428,9 +428,7 @@ fn hit_rect_inflates_small_button_clamped_to_parent() {
 #[test]
 fn vector_icon_validates_like_an_asset_handle_intrinsic() {
     // Valid: arity-1 asset handle + size/color props.
-    assert!(
-        errs("View V() { VectorIcon(\"icons/gear.svg\") #[size: 24, color: 0xFFFFFF] }").is_empty()
-    );
+    assert_clean("View V() { VectorIcon(\"icons/gear.svg\") #[size: 24, color: 0xFFFFFF] }");
     // Arity 0 and 2 → ArityMismatch.
     assert!(
         errs("View V() { VectorIcon() }")
@@ -466,15 +464,12 @@ fn vector_icon_validates_like_an_asset_handle_intrinsic() {
 #[test]
 fn overlay_validates_as_a_childful_layout_intrinsic() {
     // Valid: modal overlay with a scrim + content, and a `dismiss` event.
-    assert!(
-        errs(
-            "View V() { Overlay #[modal: true] { Box #[bg: 0x000000, opacity: 0.3, grow: 1] {} \
-                 Column #[anchor: center, bg: 0xFFFFFF] { Text(\"hi\") } } }"
-        )
-        .is_empty()
+    assert_clean(
+        "View V() { Overlay #[modal: true] { Box #[bg: 0x000000, opacity: 0.3, grow: 1] {} \
+                 Column #[anchor: center, bg: 0xFFFFFF] { Text(\"hi\") } } }",
     );
     // `dismiss` is an event, so `=>` is correct.
-    assert!(errs("View V() { Overlay #[dismiss => x] { Box {} } }").is_empty());
+    assert_clean("View V() { Overlay #[dismiss => x] { Box {} } }");
     // Content args are rejected (arity 0).
     assert!(
         errs("View V() { Overlay(\"x\") { Box {} } }")
@@ -498,10 +493,10 @@ fn overlay_validates_as_a_childful_layout_intrinsic() {
 #[test]
 fn checkbox_validates_as_a_focusable_bool_widget() {
     // Valid: `value` (Bool) with the mixed-state flag and a `change` event.
-    assert!(errs("View V() { Checkbox #[value: false, indeterminate: true] }").is_empty());
-    assert!(errs("View V() { Checkbox #[value: true, change => f()] }").is_empty());
+    assert_clean("View V() { Checkbox #[value: false, indeterminate: true] }");
+    assert_clean("View V() { Checkbox #[value: true, change => f()] }");
     // Focusable by default → key events are in-vocabulary.
-    assert!(errs("View V() { Checkbox #[value: false, key_down => f()] }").is_empty());
+    assert_clean("View V() { Checkbox #[value: false, key_down => f()] }");
     // `value` must be a Bool: a string is a type mismatch.
     assert!(
         errs("View V() { Checkbox #[value: \"x\"] }")
@@ -538,14 +533,10 @@ fn checkbox_validates_as_a_focusable_bool_widget() {
 #[test]
 fn radiobutton_validates_as_a_focusable_group_member() {
     // Valid: a value + a group bind, and a `change` event.
-    assert!(errs("View V() { RadioButton #[value: \"home\", bind: \"home\"] }").is_empty());
-    assert!(
-        errs("View V() { RadioButton #[value: \"a\", bind: \"a\", change => f()] }").is_empty()
-    );
+    assert_clean("View V() { RadioButton #[value: \"home\", bind: \"home\"] }");
+    assert_clean("View V() { RadioButton #[value: \"a\", bind: \"a\", change => f()] }");
     // Focusable by default → key events are in-vocabulary (arrow keys).
-    assert!(
-        errs("View V() { RadioButton #[value: \"a\", bind: \"a\", key_down => f()] }").is_empty()
-    );
+    assert_clean("View V() { RadioButton #[value: \"a\", bind: \"a\", key_down => f()] }");
     // `value` must be a Str: an int is a type mismatch.
     assert!(
         errs("View V() { RadioButton #[value: 5, bind: \"a\"] }")
@@ -583,14 +574,12 @@ fn radiobutton_validates_as_a_focusable_group_member() {
 fn grid_validates_as_a_childful_container() {
     use byard_core::atlas::GridTrack;
     // Valid: templates, gaps, and children.
-    assert!(
-        errs("View V() { Grid #[columns: \"1fr 1fr\", rows: \"auto\", gap: 8] { Box {} Box {} } }")
-            .is_empty()
+    assert_clean(
+        "View V() { Grid #[columns: \"1fr 1fr\", rows: \"auto\", gap: 8] { Box {} Box {} } }",
     );
     // Child placement props are accepted on a grid child.
-    assert!(
-        errs("View V() { Grid #[columns: \"1fr 1fr\"] { Box #[col: 1, row: 2, col_span: 2] {} } }")
-            .is_empty()
+    assert_clean(
+        "View V() { Grid #[columns: \"1fr 1fr\"] { Box #[col: 1, row: 2, col_span: 2] {} } }",
     );
     // Content args are rejected (arity 0).
     assert!(
@@ -634,8 +623,8 @@ fn grid_validates_as_a_childful_container() {
 #[test]
 fn zstack_validates_as_a_childful_container() {
     // Valid: an alignment token and overlapping children.
-    assert!(errs("View V() { ZStack #[alignment: top_end] { Box {} Box {} } }").is_empty());
-    assert!(errs("View V() { ZStack { Box {} } }").is_empty());
+    assert_clean("View V() { ZStack #[alignment: top_end] { Box {} Box {} } }");
+    assert_clean("View V() { ZStack { Box {} } }");
     // Content args are rejected (arity 0).
     assert!(
         errs("View V() { ZStack(\"x\") { Box {} } }")
@@ -655,8 +644,8 @@ fn zstack_validates_as_a_childful_container() {
 
 #[test]
 fn anchor_enum_is_accepted_on_containers_and_rejects_unknown_tokens() {
-    assert!(errs("View V() { Column #[anchor: bottom] {} }").is_empty());
-    assert!(errs("View V() { Box #[anchor: center] {} }").is_empty());
+    assert_clean("View V() { Column #[anchor: bottom] {} }");
+    assert_clean("View V() { Box #[anchor: center] {} }");
     let e = errs("View V() { Box #[anchor: middle] {} }");
     assert!(matches!(&e[0], CompileError::AttributeTypeMismatch { .. }));
 }
@@ -779,7 +768,11 @@ fn a_ninth_shape_in_a_group_is_an_error_naming_that_shape() {
     let eight = members.rsplit_once(" ngon(").expect("nine members").0;
     let ok = format!("View V() {{ Canvas #[width: 200, height: 48, morph: 0.0] {{ {eight} }} }}");
     let el = first_element(&ok);
-    assert!(validate_canvas(&el, &el.attrs).is_empty());
+    assert!(
+        validate_canvas(&el, &el.attrs).is_empty(),
+        "{:?}",
+        validate_canvas(&el, &el.attrs)
+    );
     let ungrouped = format!("View V() {{ Canvas #[width: 200, height: 48] {{ {members} }} }}");
     let el = first_element(&ungrouped);
     assert!(

@@ -1054,7 +1054,7 @@ mod tests {
             "lowering must be clean: {:?}",
             interp.errors()
         );
-        assert!(!tree.is_empty());
+        assert!(!tree.is_empty(), "{:?}", tree);
     }
 
     #[test]

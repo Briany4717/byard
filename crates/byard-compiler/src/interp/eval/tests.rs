@@ -437,7 +437,11 @@ fn an_empty_list_in_a_canvas_for_emits_nothing_rather_than_failing() {
     interp.tick();
     let mut frame = byard_core::frame::RenderFrame::new();
     interp.render(&tree, &mut frame, 400.0, 300.0);
-    assert!(frame.canvas_shapes().is_empty());
+    assert!(
+        frame.canvas_shapes().is_empty(),
+        "{:?}",
+        frame.canvas_shapes()
+    );
 }
 
 #[test]
@@ -558,7 +562,11 @@ fn a_canvas_without_a_combine_mode_is_untouched() {
     let mut frame = byard_core::frame::RenderFrame::new();
     interp.render(&tree, &mut frame, 400.0, 300.0);
     assert_eq!(frame.canvas_shapes().len(), 3);
-    assert!(frame.shape_records().is_empty());
+    assert!(
+        frame.shape_records().is_empty(),
+        "{:?}",
+        frame.shape_records()
+    );
     assert!(
         frame
             .canvas_shapes()
@@ -835,7 +843,11 @@ fn a_shapeless_paintless_command_emits_nothing() {
     interp.tick();
     let mut frame = byard_core::frame::RenderFrame::new();
     interp.render(&tree, &mut frame, 400.0, 300.0);
-    assert!(frame.canvas_shapes().is_empty());
+    assert!(
+        frame.canvas_shapes().is_empty(),
+        "{:?}",
+        frame.canvas_shapes()
+    );
 }
 
 #[test]
@@ -6274,8 +6286,16 @@ fn layered_shadows_emit_one_instance_each() {
 
 #[test]
 fn shadow_none_and_absent_emit_no_shadow() {
-    assert!(shadow_params("View C() { Box #[bg: 0x222222] {} }").is_empty());
-    assert!(shadow_params("View C() { Box #[bg: 0x222222, shadow: \"none\"] {} }").is_empty());
+    assert!(
+        shadow_params("View C() { Box #[bg: 0x222222] {} }").is_empty(),
+        "{:?}",
+        shadow_params("View C() { Box #[bg: 0x222222] {} }")
+    );
+    assert!(
+        shadow_params("View C() { Box #[bg: 0x222222, shadow: \"none\"] {} }").is_empty(),
+        "{:?}",
+        shadow_params("View C() { Box #[bg: 0x222222, shadow: \"none\"] {} }")
+    );
 }
 
 // ── Theme system ────────────────────────────────────────────────
@@ -7713,7 +7733,11 @@ fn three_stacked_glass_panes_raise_the_overlap_warning() {
              Box #[blur: 8, width: 180, height: 180] {} \
              Box #[blur: 8, width: 160, height: 160] {} } }",
     );
-    assert!(interp.perf_warnings().is_empty());
+    assert!(
+        interp.perf_warnings().is_empty(),
+        "{:?}",
+        interp.perf_warnings()
+    );
 }
 
 // ── 8-digit colours: the alpha byte reaches the fill (RFC-0005 §1) ──────

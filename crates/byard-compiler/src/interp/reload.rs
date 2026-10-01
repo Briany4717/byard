@@ -212,6 +212,10 @@ pub struct ParsedFile {
     pub views: Vec<crate::parser::ast::ViewDecl>,
     /// Diagnostics from the last parse attempt.
     pub errors: Vec<crate::diagnostics::CompileError>,
+    /// The theme the manifest describes now, when the reparse read one: a
+    /// `[theme]` edit, or a new seed image, applies without a restart.
+    /// `None` leaves the running theme as it is.
+    pub theme: Option<crate::interp::theme::Theme>,
 }
 
 /// Spawns a background OS thread that watches `paths` with `notify` and
@@ -255,9 +259,7 @@ where
                 }
                 let mut source_changed = false;
                 for p in &event.paths {
-                    if p.extension().is_some_and(|e| e == "byd")
-                        || p.file_name().is_some_and(|f| f == "byard.toml")
-                    {
+                    if reparses_on(p) {
                         source_changed = true;
                     } else if p.extension().is_some_and(|e| e == "svg") {
                         // A vector asset changed, hand its path to the runtime
@@ -284,9 +286,41 @@ where
     Ok(watcher)
 }
 
+/// Whether a change to `path` re-reads the project: a source file, the
+/// manifest, or a raster image, since the manifest can derive its theme from
+/// one (`[theme] seed = { image = "…" }`, RFC-0022 §5) and replacing that
+/// picture has to move the palette the way editing a hex seed does. An image
+/// the theme does not use costs one resolve that finds nothing changed.
+fn reparses_on(path: &std::path::Path) -> bool {
+    path.file_name().is_some_and(|f| f == "byard.toml")
+        || path.extension().is_some_and(|e| {
+            ["byd", "png", "jpg", "jpeg"]
+                .iter()
+                .any(|x| e.eq_ignore_ascii_case(x))
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_seed_image_edit_reparses_and_a_vector_does_not() {
+        use std::path::Path;
+        for yes in [
+            "src/main.byd",
+            "byard.toml",
+            "brand.png",
+            "photo.JPG",
+            "a.jpeg",
+        ] {
+            assert!(reparses_on(Path::new(yes)), "{yes}");
+        }
+        // An `.svg` is regenerated in place by the runtime instead.
+        for no in ["icon.svg", "notes.md", "byard.lock"] {
+            assert!(!reparses_on(Path::new(no)), "{no}");
+        }
+    }
     use crate::interp::env::Value;
     use crate::interp::eval::Interpreter;
     use crate::parser::parse;

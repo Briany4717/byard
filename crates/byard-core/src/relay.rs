@@ -254,7 +254,7 @@ pub struct Relay {
     // [`Relay::set_frame_waker`]; a continuously-redrawing (`Poll`) host can
     // leave it unset. Set rarely (once at startup), read once per published
     // frame, the mutex is never contended.
-    frame_waker: Mutex<Option<FrameWaker>>,
+    frame_waker: Arc<Mutex<Option<FrameWaker>>>,
     /// Monotonic count of frames published through [`Relay::publish`], stamped
     /// onto each frame as its [`RenderFrame::version`]. The encoder uses the
     /// gap between consecutive versions it *encodes* to detect that the render
@@ -338,7 +338,7 @@ impl Relay {
             decode_result_rx: Mutex::new(decode_result_rx),
             input_tx,
             input_rx,
-            frame_waker: Mutex::new(None),
+            frame_waker: Arc::new(Mutex::new(None)),
             idle: Arc::new(IdleGate::default()),
             publish_seq: AtomicU64::new(0),
             rendered_version: AtomicU64::new(0),
@@ -357,6 +357,21 @@ impl Relay {
             .frame_waker
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = Some(waker);
+    }
+
+    /// A callback that fires whatever [`FrameWaker`] is installed when it
+    /// runs, for work that finishes off both the logic and render threads (an
+    /// image decode) and has to get a frame presented. Read at call time, so
+    /// it can be handed out before the host installs its waker.
+    #[must_use]
+    pub fn renderer_wake(&self) -> FrameWaker {
+        let slot = Arc::clone(&self.frame_waker);
+        Arc::new(move || {
+            let waker = slot.lock().unwrap_or_else(PoisonError::into_inner).clone();
+            if let Some(waker) = waker {
+                waker();
+            }
+        })
     }
 
     /// Fires the installed [`FrameWaker`], if any. The `Arc` is cloned out of

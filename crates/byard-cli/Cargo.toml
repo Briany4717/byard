@@ -19,6 +19,7 @@ byard-core     = { path = "../byard-core" }
 byard-project  = { path = "../byard-project" }
 clap           = { version = "4", features = ["derive"] }
 toml           = { version = "0.8", features = ["preserve_order"] }
+semver         = "1"
 toml_edit      = "0.22"
 sha2           = "0.10"
 pollster       = "0.3"

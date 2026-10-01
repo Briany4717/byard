@@ -9,6 +9,8 @@
 //! builds reproducible.
 
 use std::collections::BTreeMap;
+
+use crate::manifest::RegistryLocation;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
@@ -224,6 +226,9 @@ pub struct LockedPackage {
     pub source: String,
     /// The exact commit a git ref resolved to (empty for path sources).
     pub commit: String,
+    /// The exact version a registry requirement resolved to (empty for path
+    /// and git sources).
+    pub version: String,
     /// `sha256:<hex>` over the package contents.
     pub checksum: String,
 }
@@ -257,14 +262,31 @@ impl Lockfile {
                         .map(str::to_string)
                         .ok_or_else(|| format!("byard.lock: package entry missing `{key}`"))
                 };
+                let mut source = get("source")?;
+                let mut version = entry
+                    .get("version")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                // A lock written before version requirements carried the
+                // exact version in the source, `registry+<at>#<name>@<ver>`.
+                if version.is_empty() && source.starts_with("registry+") {
+                    if let Some((head, ver)) = source.rsplit_once('@') {
+                        if head.contains('#') {
+                            version = ver.to_string();
+                            source = head.to_string();
+                        }
+                    }
+                }
                 packages.push(LockedPackage {
                     name: get("name")?,
-                    source: get("source")?,
+                    source,
                     commit: entry
                         .get("commit")
                         .and_then(|v| v.as_str())
                         .unwrap_or("")
                         .to_string(),
+                    version,
                     checksum: get("checksum")?,
                 });
             }
@@ -290,6 +312,9 @@ impl Lockfile {
             if !p.commit.is_empty() {
                 let _ = writeln!(out, "commit = {:?}", p.commit);
             }
+            if !p.version.is_empty() {
+                let _ = writeln!(out, "version = {:?}", p.version);
+            }
             let _ = writeln!(out, "checksum = {:?}", p.checksum);
         }
         let path = project_root.join("byard.lock");
@@ -312,10 +337,15 @@ pub fn source_string(dep: &Dependency) -> String {
             GitRef::Rev(r) => format!("git+{url}#rev={r}"),
             GitRef::Tag(t) => format!("git+{url}#tag={t}"),
         },
-        DepSource::Registry { registry, version } => {
-            format!("registry+{}#{}@{version}", registry.display(), dep.name)
-        }
+        DepSource::Registry { registry, .. } => registry_source(registry, &dep.name),
     }
+}
+
+/// The lockfile source string of a registry package: where it was asked
+/// for, as written, and its name. The version is a field of its own.
+#[must_use]
+pub fn registry_source(registry: &RegistryLocation, name: &str) -> String {
+    format!("registry+{}#{name}", registry.as_written())
 }
 
 // ── Dependency root resolution ────────────────────────────────────────────────
@@ -323,7 +353,15 @@ pub fn source_string(dep: &Dependency) -> String {
 /// Resolves one dependency to its package root directory. `declarer_root` is
 /// the directory of the manifest that declared it (path deps are relative to
 /// their declarer, exactly like Cargo).
-pub fn dep_root(declarer_root: &Path, dep: &Dependency) -> Result<PathBuf, String> {
+///
+/// A registry dependency names a requirement, not a version: the version is
+/// whatever `byard get` resolved and pinned in `lock`, so without a lock
+/// entry it is "not fetched yet". Nothing here ever re-solves (D-I).
+pub fn dep_root(
+    declarer_root: &Path,
+    dep: &Dependency,
+    lock: Option<&Lockfile>,
+) -> Result<PathBuf, String> {
     match &dep.source {
         DepSource::Path(rel) => {
             let root = declarer_root.join(rel);
@@ -340,17 +378,34 @@ pub fn dep_root(declarer_root: &Path, dep: &Dependency) -> Result<PathBuf, Strin
             Ok(root)
         }
         DepSource::Registry { registry, version } => {
-            let root = registry_cache_path(&dep.name, &declarer_root.join(registry), version);
+            let not_fetched = || {
+                format!(
+                    "dependency `{}` ({} {version} from `{}`) is not fetched yet\n\
+                     hint: run `byard get` to resolve and fetch dependencies",
+                    dep.name,
+                    dep.name,
+                    registry.as_written()
+                )
+            };
+            let locked = lock
+                .and_then(|l| l.get(&dep.name))
+                .filter(|l| !l.version.is_empty())
+                .ok_or_else(not_fetched)?;
+            let req = semver::VersionReq::parse(version).map_err(|e| e.to_string())?;
+            let pinned = semver::Version::parse(&locked.version)
+                .map_err(|e| format!("byard.lock: `{}` version: {e}", dep.name))?;
+            if !req.matches(&pinned) {
+                return Err(format!(
+                    "dependency `{}`: byard.toml asks for {version} but byard.lock pins {pinned}\n\
+                     hint: run `byard get` to resolve again",
+                    dep.name
+                ));
+            }
+            let root = registry_cache_path(&dep.name, &locked.version, &locked.checksum);
             if root.is_dir() {
                 Ok(root)
             } else {
-                Err(format!(
-                    "dependency `{}` ({}@{version} from `{}`) is not in the cache yet\n\
-                     hint: run `byard get` to fetch dependencies",
-                    dep.name,
-                    dep.name,
-                    registry.display()
-                ))
+                Err(not_fetched())
             }
         }
         DepSource::Git { url, reference } => {
@@ -420,19 +475,131 @@ pub fn fetch_git(url: &str, reference: &GitRef, dest: &Path) -> Result<String, S
     run(&["rev-parse", "HEAD"], Some(dest))
 }
 
-// ── Registry (D-H) ────────────────────────────────────────────────────────────
+// ── Registry (D-H, D-K) ───────────────────────────────────────────────────────
 
-/// The cache directory for one published package version. Keyed by the
-/// registry's location too, so the same name and version from two
-/// registries never share a directory.
+/// The cache directory for one published package version, keyed by its
+/// content: the name, the exact version and the checksum the index and the
+/// lock both carry. Not by where it was fetched from, so a package reached
+/// through two spellings of one registry, or through a mirror, is one entry,
+/// and `byard check` finds it from the lock alone.
+///
+/// The directory is the full SHA-256 of the three, never the values
+/// themselves: they come from an index nobody here controls, and a name or a
+/// checksum holding `/` or `..` must not become a path out of the cache.
 #[must_use]
-pub fn registry_cache_path(name: &str, registry: &Path, version: &str) -> PathBuf {
+pub fn registry_cache_path(name: &str, version: &str, checksum: &str) -> PathBuf {
     let mut hasher = Sha256::new();
-    hasher.update(registry.to_string_lossy().as_bytes());
-    let digest = hasher.finalize();
+    for part in [name, version, checksum] {
+        hasher.update(part.as_bytes());
+        // A separator no field can contain, so ("a", "bc") and ("ab", "c")
+        // are different keys.
+        hasher.update([0]);
+    }
     cache_dir()
         .join("registry")
-        .join(format!("{name}-{version}-{}", hex_encode(&digest[..6])))
+        .join(hex_encode(&hasher.finalize()))
+}
+
+/// A registry, located: a directory on disk or a base URL.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Registry {
+    /// A registry directory.
+    Dir(PathBuf),
+    /// A registry served over HTTP(S), without a trailing slash.
+    Http(String),
+}
+
+impl Registry {
+    /// `location` as declared by the manifest in `declarer_root`.
+    #[must_use]
+    pub fn at(declarer_root: &Path, location: &RegistryLocation) -> Self {
+        match location {
+            // Canonical when it exists, so two spellings of one directory
+            // (`../registry` from here, `../../registry` from a package
+            // below) are one registry, not two that clash.
+            RegistryLocation::Dir(rel) => {
+                let dir = declarer_root.join(rel);
+                Self::Dir(dir.canonicalize().unwrap_or(dir))
+            }
+            RegistryLocation::Http(url) => Self::Http(url.clone()),
+        }
+    }
+
+    /// The registry as a message names it.
+    #[must_use]
+    pub fn label(&self) -> String {
+        match self {
+            Self::Dir(dir) => dir.display().to_string(),
+            Self::Http(url) => url.clone(),
+        }
+    }
+
+    /// Reads one file of the registry, by its path relative to the root.
+    pub fn read(&self, rel: &str) -> Result<Vec<u8>, String> {
+        match self {
+            Self::Dir(dir) => {
+                let path = dir.join(rel);
+                std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))
+            }
+            Self::Http(base) => http_get(&format!("{base}/{rel}")),
+        }
+    }
+
+    /// The registry's `index.toml`. A directory without one is an empty
+    /// registry; a server without one is an error, since a URL that serves
+    /// no index is more likely mistyped than empty.
+    pub fn index(&self) -> Result<RegistryIndex, String> {
+        match self {
+            Self::Dir(dir) => RegistryIndex::read(dir),
+            Self::Http(base) => {
+                let bytes = self.read("index.toml")?;
+                let src = String::from_utf8(bytes)
+                    .map_err(|_| format!("{base}/index.toml is not UTF-8 text"))?;
+                RegistryIndex::parse(&src, &format!("{base}/index.toml"))
+            }
+        }
+    }
+}
+
+/// `GET url`, the whole body, or an error naming the URL and the status.
+fn http_get(url: &str) -> Result<Vec<u8>, String> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(60))
+        .user_agent(concat!("byard/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .map_err(|e| format!("GET {url}: {e}"))?;
+    let response = client.get(url).send().map_err(|e| {
+        // reqwest's own message is "error sending request"; the reason a
+        // user can act on (refused, timed out, bad certificate) is in its
+        // sources, so they are spelled out.
+        let mut reason = e.to_string();
+        let mut source = std::error::Error::source(&e);
+        while let Some(inner) = source {
+            reason = format!("{reason}: {inner}");
+            source = inner.source();
+        }
+        format!("GET {url}: {reason}")
+    })?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!("GET {url}: {status}"));
+    }
+    response
+        .bytes()
+        .map(|b| b.to_vec())
+        .map_err(|e| format!("GET {url}: {e}"))
+}
+
+/// One dependency of a published version, as its index entry records it, so
+/// `byard get` can solve without downloading every candidate's archive.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IndexDep {
+    /// The dependency's package name.
+    pub name: String,
+    /// Its version requirement, Cargo's semantics.
+    pub version: String,
+    /// The registry it comes from; `None` for the registry this index is in.
+    pub registry: Option<String>,
 }
 
 /// One published version in a registry's `index.toml`.
@@ -449,6 +616,9 @@ pub struct IndexEntry {
     pub archive: String,
     /// `sha256:` of the archive bytes, checked before unpacking.
     pub archive_sha256: String,
+    /// What this version depends on. `None` for an entry written before
+    /// indexes recorded it, whose dependencies are read from its archive.
+    pub dependencies: Option<Vec<IndexDep>>,
 }
 
 /// A registry's `index.toml`: every published version.
@@ -466,9 +636,14 @@ impl RegistryIndex {
             return Ok(Self::default());
         }
         let src = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        Self::parse(&src, &path.display().to_string())
+    }
+
+    /// Parses the text of an `index.toml`; `label` names it in errors.
+    pub fn parse(src: &str, label: &str) -> Result<Self, String> {
         let table: toml::Table = src
             .parse()
-            .map_err(|e: toml::de::Error| format!("{}: {e}", path.display()))?;
+            .map_err(|e: toml::de::Error| format!("{label}: {e}"))?;
         let mut entries = Vec::new();
         if let Some(toml::Value::Array(items)) = table.get("package") {
             for item in items {
@@ -476,7 +651,31 @@ impl RegistryIndex {
                     item.get(key)
                         .and_then(toml::Value::as_str)
                         .map(str::to_string)
-                        .ok_or_else(|| format!("{}: an entry is missing `{key}`", path.display()))
+                        .ok_or_else(|| format!("{label}: an entry is missing `{key}`"))
+                };
+                let dependencies = match item.get("dependencies") {
+                    None => None,
+                    Some(toml::Value::Array(deps)) => Some(
+                        deps.iter()
+                            .map(|d| {
+                                let field = |key: &str| d.get(key).and_then(toml::Value::as_str);
+                                Ok(IndexDep {
+                                    name: field("name")
+                                        .ok_or_else(|| {
+                                            format!("{label}: a dependency has no `name`")
+                                        })?
+                                        .to_string(),
+                                    version: field("version")
+                                        .ok_or_else(|| {
+                                            format!("{label}: a dependency has no `version`")
+                                        })?
+                                        .to_string(),
+                                    registry: field("registry").map(str::to_string),
+                                })
+                            })
+                            .collect::<Result<Vec<_>, String>>()?,
+                    ),
+                    Some(_) => return Err(format!("{label}: `dependencies` must be an array")),
                 };
                 entries.push(IndexEntry {
                     name: get("name")?,
@@ -484,6 +683,7 @@ impl RegistryIndex {
                     checksum: get("checksum")?,
                     archive: get("archive")?,
                     archive_sha256: get("archive_sha256")?,
+                    dependencies,
                 });
             }
         }
@@ -504,6 +704,19 @@ impl RegistryIndex {
                 "\n[[package]]\nname = {:?}\nversion = {:?}\nchecksum = {:?}\narchive = {:?}\narchive_sha256 = {:?}",
                 e.name, e.version, e.checksum, e.archive, e.archive_sha256
             );
+            if let Some(deps) = &e.dependencies {
+                let items: Vec<String> = deps
+                    .iter()
+                    .map(|d| match &d.registry {
+                        Some(r) => format!(
+                            "{{ name = {:?}, version = {:?}, registry = {r:?} }}",
+                            d.name, d.version
+                        ),
+                        None => format!("{{ name = {:?}, version = {:?} }}", d.name, d.version),
+                    })
+                    .collect();
+                let _ = writeln!(out, "dependencies = [{}]", items.join(", "));
+            }
         }
         let path = registry.join("index.toml");
         std::fs::write(&path, out).map_err(|e| format!("{}: {e}", path.display()))
@@ -524,40 +737,28 @@ pub fn sha256_tag(bytes: &[u8]) -> String {
     format!("sha256:{}", hex_encode(&Sha256::digest(bytes)))
 }
 
-/// Fetches a published version into the cache and returns its root,
-/// verifying the archive's hash before unpacking and the package's checksum
-/// after, both against the registry's index. Already cached is not refetched:
-/// a published version is immutable.
-pub fn fetch_registry(name: &str, registry: &Path, version: &str) -> Result<PathBuf, String> {
-    let dest = registry_cache_path(name, registry, version);
+/// Fetches one published version, as its index `entry` describes it, into the
+/// cache and returns its root: the archive's hash is checked before
+/// unpacking and the package's checksum after, both against the entry.
+/// Already cached is not refetched, since a published version is immutable
+/// and the cache is keyed by its checksum.
+pub fn fetch_registry(registry: &Registry, entry: &IndexEntry) -> Result<PathBuf, String> {
+    let (name, version) = (&entry.name, &entry.version);
+    let dest = registry_cache_path(name, version, &entry.checksum);
     if dest.is_dir() {
-        return Ok(dest);
+        // Trusted only once its content is what the index says: a cache
+        // someone edited is fetched again rather than locked.
+        if package_checksum(&dest).ok().as_deref() == Some(entry.checksum.as_str()) {
+            return Ok(dest);
+        }
+        std::fs::remove_dir_all(&dest).map_err(|e| format!("{}: {e}", dest.display()))?;
     }
-    let index = RegistryIndex::read(registry)?;
-    let entry = index.get(name, version).ok_or_else(|| {
-        let known: Vec<&str> = index
-            .entries
-            .iter()
-            .filter(|e| e.name == name)
-            .map(|e| e.version.as_str())
-            .collect();
-        format!(
-            "`{name}@{version}` is not in the registry at `{}`{}",
-            registry.display(),
-            if known.is_empty() {
-                String::new()
-            } else {
-                format!(" (published: {})", known.join(", "))
-            }
-        )
-    })?;
-    let archive_path = registry.join(&entry.archive);
-    let bytes =
-        std::fs::read(&archive_path).map_err(|e| format!("{}: {e}", archive_path.display()))?;
+    let bytes = registry.read(&entry.archive)?;
     let actual = sha256_tag(&bytes);
     if actual != entry.archive_sha256 {
         return Err(format!(
-            "`{name}@{version}`: the archive does not match the index\nindexed: {}\nfound:   {actual}",
+            "`{name}@{version}` from `{}`: the archive does not match the index\nindexed: {}\nfound:   {actual}",
+            registry.label(),
             entry.archive_sha256
         ));
     }
@@ -658,7 +859,7 @@ impl PackageProvider for FsProvider {
             )
         })?;
 
-        let root = dep_root(&declarer_root, dep)?;
+        let root = dep_root(&declarer_root, dep, self.lock.as_ref())?;
 
         // Verify fetched content against the lock pin (D-I), for every source
         // that is immutable once fetched. Path deps float
@@ -849,6 +1050,24 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Index values are untrusted: whatever they hold, the cache entry is one
+    /// directory directly under the registry cache, named by a full-width
+    /// hash, and distinct tuples never share it.
+    #[test]
+    fn a_registry_cache_path_cannot_leave_the_cache() {
+        let base = cache_dir().join("registry");
+        let hostile = registry_cache_path("../../etc", "1/../../2", "sha256:../../../x");
+        assert_eq!(hostile.parent(), Some(base.as_path()));
+        let name = hostile.file_name().unwrap().to_str().unwrap();
+        assert_eq!(name.len(), 64);
+        assert!(name.chars().all(|c| c.is_ascii_hexdigit()), "{name}");
+        assert_ne!(
+            registry_cache_path("ab", "c", "x"),
+            registry_cache_path("a", "bc", "x"),
+            "fields are separated in the key"
+        );
+    }
+
     #[test]
     fn lockfile_round_trips() {
         let dir = std::env::temp_dir().join(format!("byard-lock-test-{}", std::process::id()));
@@ -856,16 +1075,38 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
 
         let lock = Lockfile {
-            packages: vec![LockedPackage {
-                name: "material".into(),
-                source: "git+https://example.com/mat#tag=v1".into(),
-                commit: "abc123".into(),
-                checksum: "sha256:00ff".into(),
-            }],
+            packages: vec![
+                LockedPackage {
+                    name: "material".into(),
+                    source: "git+https://example.com/mat#tag=v1".into(),
+                    commit: "abc123".into(),
+                    version: String::new(),
+                    checksum: "sha256:00ff".into(),
+                },
+                LockedPackage {
+                    name: "weather".into(),
+                    source: "registry+https://reg.example#weather".into(),
+                    commit: String::new(),
+                    version: "0.2.3".into(),
+                    checksum: "sha256:11ee".into(),
+                },
+            ],
         };
         lock.write(&dir).unwrap();
         let read = Lockfile::read(&dir).unwrap().unwrap();
         assert_eq!(read.packages, lock.packages);
+
+        // A lock from before version requirements kept the version in the
+        // source; it still reads as the same pin.
+        std::fs::write(
+            dir.join("byard.lock"),
+            "version = 1\n\n[[package]]\nname = \"brand\"\n\
+             source = \"registry+../registry#brand@0.1.0\"\nchecksum = \"sha256:22dd\"\n",
+        )
+        .unwrap();
+        let old = Lockfile::read(&dir).unwrap().unwrap();
+        assert_eq!(old.packages[0].version, "0.1.0");
+        assert_eq!(old.packages[0].source, "registry+../registry#brand");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

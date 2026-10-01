@@ -23,16 +23,49 @@ pub enum DepSource {
         /// The pinned ref.
         reference: GitRef,
     },
-    /// A published package in a registry directory (RFC-0008 D-H): the
-    /// registry's `index.toml` names the archive and the checksum for each
-    /// `name` and exact `version`. A directory rather than a URL for now,
-    /// and the same layout served over HTTP is a registry.
+    /// A published package in a registry (RFC-0008 D-H, D-K): the registry's
+    /// `index.toml` names every published version, its archive, its checksum
+    /// and its dependencies. `byard get` picks the version, the lock pins it.
     Registry {
-        /// The registry directory, relative to the declaring manifest.
-        registry: PathBuf,
-        /// The exact version (no ranges: the solver is deferred, D-K).
+        /// Where the registry is: a directory, or the same layout over HTTP.
+        registry: RegistryLocation,
+        /// The version requirement, Cargo's semantics: `"0.3"` and `"^0.3"`
+        /// accept any `0.3.x`, `"~1.2"` any `1.2.x`, `"=1.2.3"` only that
+        /// one, and comparators combine (`">=1.2, <1.5"`). Checked when the
+        /// manifest is read.
         version: String,
     },
+}
+
+/// Where a registry lives.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RegistryLocation {
+    /// A registry directory, relative to the declaring manifest.
+    Dir(PathBuf),
+    /// A registry served over HTTP(S): `index.toml` and the archives it names
+    /// are read from under this URL, which has no trailing slash.
+    Http(String),
+}
+
+impl RegistryLocation {
+    /// The location as written in a manifest.
+    #[must_use]
+    pub fn parse(written: &str) -> Self {
+        if written.starts_with("https://") || written.starts_with("http://") {
+            Self::Http(written.trim_end_matches('/').to_string())
+        } else {
+            Self::Dir(PathBuf::from(written))
+        }
+    }
+
+    /// The location as it is written back (lock source strings, messages).
+    #[must_use]
+    pub fn as_written(&self) -> String {
+        match self {
+            Self::Dir(p) => p.display().to_string(),
+            Self::Http(url) => url.clone(),
+        }
+    }
 }
 
 /// The pin of a git dependency.
@@ -520,9 +553,11 @@ fn parse_theme(
     // not (a git source before `byard get`) is skipped here: the module
     // resolver reports it with the fetch hint, and reporting it twice helps
     // nobody. Naming it in `extends` is the exception, handled below.
+    // A registry package's version is the one the lock pins (D-I).
+    let lock = crate::deps::Lockfile::read(project_root).ok().flatten();
     let mut packages: Vec<(&str, String, toml::Table, std::path::PathBuf)> = Vec::new();
     for dep in dependencies {
-        let Ok(root) = crate::deps::dep_root(project_root, dep) else {
+        let Ok(root) = crate::deps::dep_root(project_root, dep, lock.as_ref()) else {
             continue;
         };
         let Some(pkg) = read_package_manifest(&root)? else {
@@ -902,6 +937,48 @@ pub fn parse_dependencies(deps: &toml::Value) -> Result<Vec<Dependency>, String>
     Ok(out)
 }
 
+/// A `{ registry = "…", version = "…" }` entry.
+fn parse_registry_dependency(
+    name: &str,
+    registry: &toml::Value,
+    spec: &toml::Table,
+) -> Result<Dependency, String> {
+    let err = |msg: &str| format!("byard.toml: dependency `{name}`: {msg}");
+    if ["path", "git", "rev", "tag"]
+        .iter()
+        .any(|k| spec.contains_key(*k))
+    {
+        return Err(err("`registry` cannot be combined with `path` or `git`"));
+    }
+    let registry = registry
+        .as_str()
+        .ok_or_else(|| err("`registry` must be a string"))?;
+    let version = spec
+        .get("version")
+        .ok_or_else(|| err("a registry dependency needs a `version = \"…\"` requirement"))?
+        .as_str()
+        .ok_or_else(|| err("`version` must be a string"))?;
+    let req = semver::VersionReq::parse(version).map_err(|e| {
+        err(&format!(
+            "`version = {version:?}` is not a version requirement ({e}); \
+             write one like \"0.3\", \"^1.2\", \"~1.2.3\" or \">=1.0, <2.0\""
+        ))
+    })?;
+    if req.comparators.iter().any(|c| !c.pre.is_empty()) {
+        return Err(err(&format!(
+            "`version = {version:?}` names a pre-release; pre-release versions are \
+             never chosen, so this would resolve to a release instead"
+        )));
+    }
+    Ok(Dependency {
+        name: name.to_string(),
+        source: DepSource::Registry {
+            registry: RegistryLocation::parse(registry),
+            version: version.to_string(),
+        },
+    })
+}
+
 fn parse_dependency(name: &str, value: &toml::Value) -> Result<Dependency, String> {
     let err = |msg: &str| format!("byard.toml: dependency `{name}`: {msg}");
 
@@ -926,27 +1003,7 @@ fn parse_dependency(name: &str, value: &toml::Value) -> Result<Dependency, Strin
     }
 
     if let Some(registry) = spec.get("registry") {
-        if ["path", "git", "rev", "tag"]
-            .iter()
-            .any(|k| spec.contains_key(*k))
-        {
-            return Err(err("`registry` cannot be combined with `path` or `git`"));
-        }
-        let registry = registry
-            .as_str()
-            .ok_or_else(|| err("`registry` must be a string"))?;
-        let version = spec
-            .get("version")
-            .ok_or_else(|| err("a registry dependency needs an exact `version = \"…\"`"))?
-            .as_str()
-            .ok_or_else(|| err("`version` must be a string"))?;
-        return Ok(Dependency {
-            name: name.to_string(),
-            source: DepSource::Registry {
-                registry: PathBuf::from(registry),
-                version: version.to_string(),
-            },
-        });
+        return parse_registry_dependency(name, registry, spec);
     }
     if spec.contains_key("version") {
         return Err(err("`version` only applies to `registry` sources"));
@@ -1039,6 +1096,15 @@ mod tests {
         let err =
             deps("[dependencies]\nmat = { git = \"https://example.com/mat\" }\n").unwrap_err();
         assert!(err.contains("rev") && err.contains("tag"), "{err}");
+    }
+
+    #[test]
+    fn a_pre_release_version_requirement_is_a_manifest_error() {
+        let deps: toml::Value =
+            toml::from_str("w = { registry = \"https://r.example\", version = \"=1.2.3-alpha\" }")
+                .unwrap();
+        let err = parse_dependencies(&deps).unwrap_err();
+        assert!(err.contains("pre-release"), "{err}");
     }
 
     #[test]

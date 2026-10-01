@@ -25,6 +25,7 @@ mod organic_fusion_example;
 mod package_distribution;
 mod profiling_example;
 mod radio_button_example;
+mod registry_http;
 mod responsive_example;
 mod ripple_example;
 mod scroll_snap_example;

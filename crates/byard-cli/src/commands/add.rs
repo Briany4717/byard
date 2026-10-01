@@ -6,6 +6,9 @@
 //! - `byard add kit --path ../kit`, a local package (cooperative dev);
 //! - `byard add material --git <url> --tag v0.1.0` (or `--rev <hash>`),
 //!   a pinned git source (D-H);
+//! - `byard add weather --registry <url|dir> [--version <req>]`, a registry
+//!   package (D-K). Without `--version` the requirement is `^` the highest
+//!   version published, as `cargo add` does;
 //! - `byard add material`, bare names resolve through a small **built-in
 //!   index** of well-known packages, a deliberate stopgap until the hosted
 //!   registry (deferred by D-H) exists. The resolved git source is written
@@ -28,6 +31,8 @@ pub struct AddArgs<'a> {
     pub git: Option<&'a str>,
     pub tag: Option<&'a str>,
     pub rev: Option<&'a str>,
+    pub registry: Option<&'a str>,
+    pub version: Option<&'a str>,
 }
 
 pub fn run(args: &AddArgs) -> Result<(), String> {
@@ -44,7 +49,22 @@ pub fn run(args: &AddArgs) -> Result<(), String> {
     validate_dep_name(args.name)?;
 
     // ── Decide the source ─────────────────────────────────────────────────────
+    if args.version.is_some() && args.registry.is_none() {
+        return Err("`--version` only applies to `--registry` sources".into());
+    }
     let entry_toml = match (args.path, args.git) {
+        _ if args.registry.is_some() => {
+            if args.path.is_some() || args.git.is_some() || args.tag.is_some() || args.rev.is_some()
+            {
+                return Err("`--registry` cannot be combined with `--path` or `--git`".into());
+            }
+            registry_entry(
+                &manifest.project_root,
+                args.name,
+                args.registry.unwrap_or_default(),
+                args.version,
+            )?
+        }
         (Some(_), Some(_)) => return Err("`--path` and `--git` are mutually exclusive".into()),
         (Some(path), None) => {
             if args.tag.is_some() || args.rev.is_some() {
@@ -101,6 +121,38 @@ pub fn run(args: &AddArgs) -> Result<(), String> {
 
     // ── Fetch + lock (the `get` pass) ─────────────────────────────────────────
     super::get::run()
+}
+
+/// A `{ registry, version }` entry. Without a requirement, `^` the highest
+/// version the registry has published, which is the newest one and every
+/// compatible release after it.
+fn registry_entry(
+    project_root: &Path,
+    name: &str,
+    registry: &str,
+    version: Option<&str>,
+) -> Result<String, String> {
+    let requirement = if let Some(req) = version {
+        semver::VersionReq::parse(req)
+            .map_err(|e| format!("`--version {req}` is not a version requirement: {e}"))?;
+        req.to_string()
+    } else {
+        let location = crate::manifest::RegistryLocation::parse(registry);
+        let index = crate::deps::Registry::at(project_root, &location).index()?;
+        let newest = index
+            .entries
+            .iter()
+            .filter(|e| e.name == name)
+            .filter_map(|e| semver::Version::parse(&e.version).ok())
+            .filter(|v| v.pre.is_empty())
+            .max()
+            .ok_or_else(|| format!("`{name}` has no version published in `{registry}`"))?;
+        style::info(&format!("newest published: {name} {newest}"));
+        format!("^{newest}")
+    };
+    Ok(format!(
+        "{{ registry = {registry:?}, version = {requirement:?} }}"
+    ))
 }
 
 fn git_entry(url: &str, tag: Option<&str>, rev: Option<&str>) -> Result<String, String> {

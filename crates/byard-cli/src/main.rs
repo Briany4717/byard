@@ -84,6 +84,13 @@ enum Command {
         /// Pin the git source to an exact commit.
         #[arg(long)]
         rev: Option<String>,
+        /// Use a registry, a directory or an `http(s)://` URL.
+        #[arg(long)]
+        registry: Option<String>,
+        /// The version requirement for `--registry` (Cargo's rules, e.g.
+        /// `^0.3`). Defaults to `^` the newest version published.
+        #[arg(long)]
+        version: Option<String>,
     },
     /// Fetch dependencies and write byard.lock (the only lock writer).
     Get,
@@ -181,12 +188,16 @@ fn main() {
             git,
             tag,
             rev,
+            registry,
+            version,
         } => commands::add::run(&commands::add::AddArgs {
             name: &name,
             path: path.as_deref(),
             git: git.as_deref(),
             tag: tag.as_deref(),
             rev: rev.as_deref(),
+            registry: registry.as_deref(),
+            version: version.as_deref(),
         }),
         Command::Get => commands::get::run(),
         Command::Shot {

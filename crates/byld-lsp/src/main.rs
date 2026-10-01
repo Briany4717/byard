@@ -620,7 +620,7 @@ mod tests {
 
         let result = capabilities::semantic_tokens::handle_semantic_tokens(&doc).unwrap();
         if let lsp_types::SemanticTokensResult::Tokens(tokens) = result {
-            assert!(!tokens.data.is_empty());
+            assert!(!tokens.data.is_empty(), "{:?}", tokens.data);
         } else {
             panic!("Expected SemanticTokensResult::Tokens");
         }

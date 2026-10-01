@@ -971,7 +971,7 @@ three",
             "a retired painter must have nothing to erase, or a later Drop              erases whatever printed after it"
         );
         assert!(!p.active);
-        assert!(p.drawn.is_empty());
+        assert!(p.drawn.is_empty(), "{:?}", p.drawn);
     }
 
     #[test]
@@ -1017,7 +1017,7 @@ three",
         // would climb into the log above.
         let mut out = Vec::new();
         erase_block(&mut out, 0);
-        assert!(out.is_empty());
+        assert!(out.is_empty(), "{out:?}");
     }
 
     #[test]

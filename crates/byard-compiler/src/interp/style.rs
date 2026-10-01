@@ -228,6 +228,10 @@ mod tests {
                 rules = r.clone();
             }
         }
-        assert!(check_static(&rules, &[sym("c")]).is_empty());
+        assert!(
+            check_static(&rules, &[sym("c")]).is_empty(),
+            "{:?}",
+            check_static(&rules, &[sym("c")])
+        );
     }
 }

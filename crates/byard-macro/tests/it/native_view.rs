@@ -108,7 +108,7 @@ fn a_view_with_no_props_declares_none() {
     let info = <Divider as NativeViewMeta>::INFO;
     assert_eq!(info.name, "Divider", "the name defaults to the type's");
     assert!(info.props.is_empty());
-    assert!(info.events.is_empty());
+    assert!(info.events.is_empty(), "{:?}", info.events);
 }
 
 #[test]
@@ -140,7 +140,7 @@ fn a_name_nobody_declared_changes_nothing() {
     let mut chart = Chart::default();
     chart.set_prop("colour", &HostValue::Int(1));
     assert_eq!(chart.stroke, 0);
-    assert!(chart.title.is_empty());
+    assert!(chart.title.is_empty(), "{:?}", chart.title);
 }
 
 #[test]

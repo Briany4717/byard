@@ -601,7 +601,7 @@ mod tests {
     #[test]
     fn interpolated_string_is_a_single_strlit_with_correct_span() {
         let lexed = lex("\"Clicks: {clicks}\"");
-        assert!(lexed.errors.is_empty());
+        assert!(lexed.errors.is_empty(), "{:?}", lexed.errors);
         assert_eq!(lexed.tokens.len(), 1);
         let (tok, span) = &lexed.tokens[0];
         assert_eq!(*tok, Token::StrLit);

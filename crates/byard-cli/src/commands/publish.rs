@@ -12,7 +12,10 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::deps::{IndexEntry, RegistryIndex, package_checksum, publishable_files, sha256_tag};
+use crate::deps::{
+    IndexDep, IndexEntry, RegistryIndex, package_checksum, publishable_files, sha256_tag,
+};
+use crate::manifest::{DepSource, RegistryLocation, parse_dependencies};
 use crate::style;
 
 /// What `byard publish` was asked to do.
@@ -80,8 +83,10 @@ pub fn publish(root: &Path, registry: &Path) -> Result<IndexEntry, String> {
                 .map_err(|e| format!("{}: {e}", path.display()))
         })
         .collect::<Result<Vec<_>, String>>()?;
+    let dependencies = published_dependencies(&table, root, registry)?;
     let archive = crate::archive::pack(&files)?;
     let entry = IndexEntry {
+        dependencies: Some(dependencies),
         archive: format!("{name}/{version}.tar.gz"),
         archive_sha256: sha256_tag(&archive),
         checksum: package_checksum(root)?,
@@ -109,4 +114,55 @@ pub fn publish(root: &Path, registry: &Path) -> Result<IndexEntry, String> {
     index.entries.push(entry.clone());
     index.write(registry)?;
     Ok(entry)
+}
+
+/// What the index records a published version as depending on, so `byard
+/// get` can solve without downloading it (RFC-0008 D-K).
+///
+/// Only registry packages: a path or a git checkout means nothing to whoever
+/// installs this from the registry. A dependency in the registry being
+/// published to is recorded without a location, "this registry", which stays
+/// true wherever the registry is served from; one elsewhere must be a URL,
+/// since a directory on the publisher's disk is nowhere for anyone else.
+fn published_dependencies(
+    table: &toml::Table,
+    root: &Path,
+    registry: &Path,
+) -> Result<Vec<IndexDep>, String> {
+    let Some(deps) = table.get("dependencies") else {
+        return Ok(Vec::new());
+    };
+    let target = registry.canonicalize().ok();
+    parse_dependencies(deps)?
+        .into_iter()
+        .map(|dep| match dep.source {
+            DepSource::Registry {
+                registry: at,
+                version,
+            } => Ok(IndexDep {
+                registry: match at {
+                    RegistryLocation::Http(url) => Some(url),
+                    RegistryLocation::Dir(rel) if root.join(&rel).canonicalize().ok() == target => {
+                        None
+                    }
+                    RegistryLocation::Dir(rel) => {
+                        return Err(format!(
+                            "dependency `{}` comes from the registry directory `{}`, which is not \
+                             the one being published to; a published package can name another \
+                             registry only by its URL",
+                            dep.name,
+                            rel.display()
+                        ));
+                    }
+                },
+                name: dep.name,
+                version,
+            }),
+            _ => Err(format!(
+                "dependency `{}` is a path or git dependency; a published package can depend \
+                 only on registry packages, since nobody installing it has that path or checkout",
+                dep.name
+            )),
+        })
+        .collect()
 }

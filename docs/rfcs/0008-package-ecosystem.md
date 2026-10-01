@@ -4,10 +4,12 @@
   Pillar D (asset distribution, D-L) and a registry source with
   `byard publish` (D-H) landed 2026-09-24, see "Pillar D and the registry, as
   built" below. The first out-of-tree package (`byard-material`) ships its
-  typefaces and theme through them.
+  typefaces and theme through them. A registry over HTTP and version
+  requirements with a solver (D-K) landed 2026-10-01, see "Registries over
+  HTTP and version requirements" below.
 - **Author(s):** Briany4717
 - **Created:** 2026-06-24
-- **Last updated:** 2026-09-24
+- **Last updated:** 2026-10-01
 - **Depends on:**
   - **RFC-0007** (User-View Instantiation), a `View` call must expand before an
     *imported* `View` can mean anything. Hard prerequisite.
@@ -258,9 +260,55 @@ brand = { registry = "../registry", version = "0.1.0" }
   into the cache. The lock pins the same checksum a path or git source of the
   same package gets, which is the "registry as a drop-in source" this RFC
   deferred to.
-- A registry is a directory for now. The same layout served over HTTP is a
-  registry; fetching it over the network, and a version solver (D-K), remain
-  future work.
+- A registry is a directory, or the same layout served over HTTP (below).
+
+### Registries over HTTP and version requirements (D-K, as built)
+
+```toml
+[dependencies]
+brand = { registry = "https://registry.example", version = "0.1" }
+```
+
+- **`registry` is a directory or an `http(s)://` URL.** Over HTTP,
+  `index.toml` and the archives it names are read from under the URL, which
+  is all a registry server is: any static file server over a directory
+  `byard publish` wrote will do. The archive's hash and the package checksum
+  are checked exactly as for a directory.
+- **`version` is a requirement, with Cargo's semantics.** `"0.3"` and `"^0.3"`
+  accept any `0.3.x`; `"~1.2"` any `1.2.x`; `"=1.2.3"` only that one;
+  comparators combine (`">=1.2, <1.5"`). A bare `"0.1.0"` therefore means
+  `^0.1.0`, as in Cargo, where it used to mean exactly `0.1.0`; a lock written
+  before keeps its pin. A requirement that does not parse is a manifest error.
+  Pre-release versions are never chosen.
+- **The solver is PubGrub** (the `pubgrub` crate). Its failure is a
+  derivation, so "no versions satisfy" comes with the chain of requirements
+  that made it so, followed by the versions published of each package it
+  names. A hand-written solver would be the first one that is wrong on the
+  third transitive constraint.
+- **The index records each version's dependencies**, written by `byard
+  publish`, so solving reads one index per registry and downloads only what
+  it chose. A dependency in the same registry is recorded without a location
+  ("this registry"), which stays true wherever the registry is served from;
+  one elsewhere must be a URL. A published package can depend only on
+  registry packages. An index entry written before this has no dependency
+  list; its archive is read instead.
+- **Path and git packages are fixed.** Each takes part in the solve with one
+  version, its `[package] version` (or `0.0.0`), so a registry package that
+  asks for one by a range it does not meet is a conflict with a name, not a
+  silent override.
+- **One source per name.** The namespace is flat; asking for a name from two
+  registries is an error before solving.
+- **The lock stays authoritative.** `byard get` is still the only command
+  that writes it, and `check`/`dev` never solve: a registry dependency's
+  version is the one the lock pins, checked against the manifest's
+  requirement. A lock that still satisfies every requirement, with every
+  package cached, is kept as it is and no registry is contacted. When `get`
+  does solve (a requirement changed or was added), it prefers every version
+  the lock already chose that still fits, so adding one dependency does not
+  quietly upgrade the others.
+- **The cache is keyed by content** (name, version, checksum), not by where a
+  package came from, so a package reached through a mirror or two spellings
+  of one URL is one entry, and `check` finds it from the lock alone.
 
 ## Open decisions
 
@@ -276,7 +324,9 @@ brand = { registry = "../registry", version = "0.1.0" }
   in `byard dev`. *Recommendation:* yes.
 - **D-K, Version resolution.** With git-first, do we need SemVer range solving
   now, or pin exact refs and defer a solver to the registry phase?
-  *Recommendation:* defer the solver; exact refs + lock first.
+  *Recommendation:* defer the solver; exact refs + lock first. **Resolved
+  2026-10-01:** Cargo-semantics requirements and PubGrub, once a registry
+  existed; see "Registries over HTTP and version requirements".
 - **D-L, Asset manifest schema.** How a package declares fonts/icons/themes and
   how the resolver validates them against the engine's asset-loading model.
 
@@ -334,5 +384,6 @@ brand = { registry = "../registry", version = "0.1.0" }
 - **Prod build packaging.** How fetched packages and their assets are embedded by
   the future `byard build` AOT path (RFC-0001 §7.3), a Prod-mode sub-RFC.
 - **Transitive dependency conflicts.** Two deps requiring incompatible versions
-  of a third, resolution strategy is tied to D-K and likely a registry-phase
-  concern.
+  of a third: resolved with D-K. There is one version per name, and a
+  conflict is reported with PubGrub's explanation rather than resolved by
+  duplicating the package.

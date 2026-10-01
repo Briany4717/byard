@@ -1,0 +1,37 @@
+// RFC-0008 D-K: the package_theme design system from a registry over HTTP,
+// by a version requirement rather than a path.
+//
+// Run it (from the repo root). Publish the package into a directory, serve
+// that directory (any static file server is a registry), then resolve:
+//   cargo run -p byard-cli -- publish crates/byard-cli/examples/package_theme/brand --registry /tmp/byard-registry
+//   python3 -m http.server 8765 --directory /tmp/byard-registry
+// and in a second terminal:
+//   cd crates/byard-cli/examples/package_theme/app_http
+//   cargo run -p byard-cli -- get
+//   cargo run -p byard-cli -- dev
+//
+// What to verify:
+//   1. `byard get` prints `reg  brand 0.1.0` and writes byard.lock with
+//      `version = "0.1.0"`: the requirement "0.1" resolved to the highest
+//      0.1.x published.
+//   2. The app looks exactly like ../app: the same fonts, colours and badge,
+//      unpacked from the archive the server sent.
+//   3. Stop the server and run `byard get` again: it succeeds without it,
+//      because the lock still satisfies byard.toml.
+//   4. Write `version = "0.2"` and run `byard get`: it fails, saying no
+//      version satisfies the requirement, and names it.
+use brand as b
+
+View Main() {
+    inject Theme as t
+    Column #[bg: t.surface, p: 32, gap: 14, width: 560] {
+        Text("A theme from a package") #[typo: t.headline, color: t.onSurface]
+        Text("Type, colour and shape, from a registry over HTTP") #[typo: t.title, color: t.onSurfaceVariant]
+        Row #[gap: 10, align: center] {
+            b.Badge(label: "exported view")
+            Box #[bg: t.primary, radius: t.cornerLg, p: (vertical: 10, horizontal: 18)] {
+                Text("Primary") #[size: 15, weight: medium, color: t.onPrimary]
+            }
+        }
+    }
+}

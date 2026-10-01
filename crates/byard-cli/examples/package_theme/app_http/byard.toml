@@ -1,0 +1,13 @@
+[project]
+name = "package_theme_http"
+entry = "main.byd"
+
+# The same design system as ../app, from a registry served over HTTP and
+# chosen by a version requirement (RFC-0008 D-K). The steps are at the top of
+# main.byd. `byard get` picks the highest 0.1.x the registry has and pins it
+# in byard.lock; `byard check` and `byard dev` never contact the server.
+[dependencies]
+brand = { registry = "http://127.0.0.1:8765", version = "0.1" }
+
+[theme]
+extends = "brand"

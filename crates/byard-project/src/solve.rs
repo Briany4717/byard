@@ -91,14 +91,20 @@ pub fn resolve(fixed: &[FixedPackage], previous: Option<&Lockfile>) -> Result<Re
     let mut graph = build_graph(fixed, &mut sources)?;
     if let Some(lock) = previous {
         for p in &lock.packages {
-            if let Ok(v) = semver::Version::parse(&p.version) {
-                graph.locked.insert(p.name.clone(), version_of(&v));
+            if let Some(v) = semver::Version::parse(&p.version)
+                .ok()
+                .as_ref()
+                .and_then(version_of)
+            {
+                graph.locked.insert(p.name.clone(), v);
             }
         }
     }
 
-    let solution = pubgrub::resolve(&graph, root.name.clone(), version_of(&root.version)).map_err(
-        |e| match e {
+    let root_version = version_of(&root.version)
+        .ok_or_else(|| format!("`{}` {}: version out of range", root.name, root.version))?;
+    let solution =
+        pubgrub::resolve(&graph, root.name.clone(), root_version).map_err(|e| match e {
             // Not collapsed: "there is no version of X in that range" is
             // the most useful step of the explanation, and collapsing drops
             // exactly that one.
@@ -110,8 +116,7 @@ pub fn resolve(fixed: &[FixedPackage], previous: Option<&Lockfile>) -> Result<Re
                 )
             }
             other => format!("resolving dependencies failed: {other}"),
-        },
-    )?;
+        })?;
 
     let mut packages = Vec::new();
     for (name, version) in solution {
@@ -164,7 +169,15 @@ fn build_graph(fixed: &[FixedPackage], sources: &mut Sources) -> Result<Graph, S
             };
             deps.insert(dep.name.clone(), range);
         }
-        graph.add(&pkg.name, version_of(&pkg.version), deps);
+        let version = version_of(&pkg.version).ok_or_else(|| {
+            format!(
+                "`{}` {}: version parts above {} are not supported",
+                pkg.name,
+                pkg.version,
+                u32::MAX
+            )
+        })?;
+        graph.add(&pkg.name, version, deps);
     }
 
     // Every registry package reachable from them, every published version.
@@ -176,11 +189,14 @@ fn build_graph(fixed: &[FixedPackage], sources: &mut Sources) -> Result<Graph, S
         let index = sources.index(&registry)?;
         let mut published = 0;
         for entry in index.entries.iter().filter(|e| e.name == name) {
-            // A pre-release is never chosen by a plain requirement; skipped
-            // rather than half-supported.
-            let Some(version) = semver::Version::parse(&entry.version)
+            // A pre-release is never chosen by a plain requirement, and a
+            // version out of the solver's range cannot be told apart from
+            // its neighbours: both are skipped rather than half-supported.
+            let Some(key) = semver::Version::parse(&entry.version)
                 .ok()
                 .filter(|v| v.pre.is_empty())
+                .as_ref()
+                .and_then(version_of)
             else {
                 continue;
             };
@@ -202,10 +218,8 @@ fn build_graph(fixed: &[FixedPackage], sources: &mut Sources) -> Result<Graph, S
                 }
                 deps.insert(dep.name.clone(), requirement(&dep.name, &dep.version)?);
             }
-            graph.add(&name, version_of(&version), deps);
-            graph
-                .entries
-                .insert((name.clone(), version_of(&version)), entry.clone());
+            graph.add(&name, key, deps);
+            graph.entries.insert((name.clone(), key), entry.clone());
             published += 1;
         }
         if published == 0 {
@@ -226,7 +240,10 @@ fn from_lock(
     previous: Option<&Lockfile>,
 ) -> Option<Vec<(LockedPackage, PathBuf)>> {
     let lock = previous?;
-    let fixed_names: Vec<&str> = fixed.iter().map(|p| p.name.as_str()).collect();
+    let fixed_versions: BTreeMap<&str, &semver::Version> = fixed
+        .iter()
+        .map(|p| (p.name.as_str(), &p.version))
+        .collect();
     let mut chosen: BTreeMap<String, (LockedPackage, PathBuf)> = BTreeMap::new();
     // (declarer root, its dependencies), walked through cached packages.
     let mut queue: Vec<(PathBuf, Vec<Dependency>)> = fixed
@@ -238,23 +255,31 @@ fn from_lock(
             let DepSource::Registry { registry, version } = &dep.source else {
                 continue;
             };
-            if fixed_names.contains(&dep.name.as_str()) {
+            let req = semver::VersionReq::parse(version).ok()?;
+            // A registry requirement on a path or git package is met by that
+            // package's one version, or the solve has a conflict to report.
+            if let Some(fixed_version) = fixed_versions.get(dep.name.as_str()) {
+                if !req.matches(fixed_version) {
+                    return None;
+                }
                 continue;
             }
             let locked = lock.get(&dep.name)?;
-            let req = semver::VersionReq::parse(version).ok()?;
             if !req.matches(&semver::Version::parse(&locked.version).ok()?) {
+                return None;
+            }
+            // The source is checked for every declaration, before the
+            // duplicate below is skipped: two declarers asking for one name
+            // from two places is for the solve to report. The one exemption is
+            // a registry directory named from inside the cache, which is
+            // relative to a copy and says nothing about where the lock got it.
+            let is_cached = declarer.starts_with(crate::deps::cache_dir());
+            let relative_in_cache = is_cached && matches!(registry, RegistryLocation::Dir(_));
+            if !relative_in_cache && locked.source != registry_source(registry, &dep.name) {
                 return None;
             }
             if chosen.contains_key(&dep.name) {
                 continue;
-            }
-            // A package declared from its own registry's cache entry names
-            // that registry relatively, which says nothing about where the
-            // lock got it from; only a top-level declaration is compared.
-            let is_cached = declarer.starts_with(crate::deps::cache_dir());
-            if !is_cached && locked.source != registry_source(registry, &dep.name) {
-                return None;
             }
             let root = registry_cache_path(&dep.name, &locked.version, &locked.checksum);
             if !root.is_dir() || package_checksum(&root).ok()? != locked.checksum {
@@ -331,10 +356,16 @@ fn source_registry(source: &str) -> &str {
         .map_or(source, |(at, _)| at)
 }
 
-/// `semver` to the solver's version type. Build metadata never orders.
-fn version_of(v: &semver::Version) -> SemanticVersion {
-    let part = |n: u64| u32::try_from(n).unwrap_or(u32::MAX);
-    SemanticVersion::new(part(v.major), part(v.minor), part(v.patch))
+/// `semver` to the solver's version type, or `None` for a version whose
+/// parts do not fit it: two such versions would otherwise collapse into one
+/// key. Build metadata never orders.
+fn version_of(v: &semver::Version) -> Option<SemanticVersion> {
+    let part = |n: u64| u32::try_from(n).ok();
+    Some(SemanticVersion::new(
+        part(v.major)?,
+        part(v.minor)?,
+        part(v.patch)?,
+    ))
 }
 
 /// A requirement, Cargo's semantics, as the solver's range.
@@ -342,53 +373,67 @@ fn requirement(name: &str, written: &str) -> Result<Range, String> {
     let req = semver::VersionReq::parse(written).map_err(|e| {
         format!("dependency `{name}`: `{written}` is not a version requirement: {e}")
     })?;
+    if req.comparators.iter().any(|c| !c.pre.is_empty()) {
+        // Pre-release versions are never chosen, so a requirement naming one
+        // would be resolved to a release it did not ask for.
+        return Err(format!(
+            "dependency `{name}`: `{written}` names a pre-release, which byard does not resolve"
+        ));
+    }
     req.comparators.iter().try_fold(Range::full(), |acc, c| {
         Ok(acc.intersection(&comparator(c).ok_or_else(|| {
-            format!("dependency `{name}`: `{written}` uses a comparator byard does not support")
+            format!(
+                "dependency `{name}`: `{written}` uses a comparator byard does not support, \
+                 or a version part above {}",
+                u32::MAX
+            )
         })?))
     })
 }
 
 /// One comparator as a range. A partial version (`1`, `1.2`) means what Cargo
-/// means by it: every version it does not rule out.
+/// means by it: every version it does not rule out. `None` for an operator
+/// this does not know, or a version part (or the one after it) that does not
+/// fit the solver's version type.
 fn comparator(c: &semver::Comparator) -> Option<Range> {
     use semver::Op;
     let v = |major: u64, minor: u64, patch: u64| {
-        SemanticVersion::new(
-            u32::try_from(major).unwrap_or(u32::MAX),
-            u32::try_from(minor).unwrap_or(u32::MAX),
-            u32::try_from(patch).unwrap_or(u32::MAX),
-        )
+        Some(SemanticVersion::new(
+            u32::try_from(major).ok()?,
+            u32::try_from(minor).ok()?,
+            u32::try_from(patch).ok()?,
+        ))
     };
+    let next = |n: u64| n.checked_add(1);
     let (major, minor, patch) = (c.major, c.minor, c.patch);
-    let low = v(major, minor.unwrap_or(0), patch.unwrap_or(0));
+    let low = v(major, minor.unwrap_or(0), patch.unwrap_or(0))?;
     // The first version past everything the written prefix names.
-    let past_prefix = match (minor, patch) {
-        (None, _) => v(major + 1, 0, 0),
-        (Some(m), None) => v(major, m + 1, 0),
-        (Some(m), Some(p)) => v(major, m, p + 1),
+    let past_prefix = || match (minor, patch) {
+        (None, _) => v(next(major)?, 0, 0),
+        (Some(m), None) => v(major, next(m)?, 0),
+        (Some(m), Some(p)) => v(major, m, next(p)?),
     };
     Some(match c.op {
-        Op::Exact | Op::Wildcard => Range::between(low, past_prefix),
+        Op::Exact | Op::Wildcard => Range::between(low, past_prefix()?),
         Op::Greater => match (minor, patch) {
             (Some(_), Some(_)) => Range::strictly_higher_than(low),
-            _ => Range::higher_than(past_prefix),
+            _ => Range::higher_than(past_prefix()?),
         },
         Op::GreaterEq => Range::higher_than(low),
         Op::Less => Range::strictly_lower_than(low),
-        Op::LessEq => Range::strictly_lower_than(past_prefix),
+        Op::LessEq => Range::strictly_lower_than(past_prefix()?),
         Op::Tilde => match minor {
-            None => Range::between(low, v(major + 1, 0, 0)),
-            Some(m) => Range::between(low, v(major, m + 1, 0)),
+            None => Range::between(low, v(next(major)?, 0, 0)?),
+            Some(m) => Range::between(low, v(major, next(m)?, 0)?),
         },
         Op::Caret => {
             let upper = match (major, minor, patch) {
                 (0, None, _) => v(1, 0, 0),
                 (0, Some(0), None) => v(0, 1, 0),
-                (0, Some(0), Some(p)) => v(0, 0, p + 1),
-                (0, Some(m), _) => v(0, m + 1, 0),
-                (maj, _, _) => v(maj + 1, 0, 0),
-            };
+                (0, Some(0), Some(p)) => v(0, 0, next(p)?),
+                (0, Some(m), _) => v(0, next(m)?, 0),
+                (maj, _, _) => v(next(maj)?, 0, 0),
+            }?;
             Range::between(low, upper)
         }
         _ => return None,
@@ -559,7 +604,35 @@ mod tests {
 
     fn contains(req: &str, version: &str) -> bool {
         let v = semver::Version::parse(version).unwrap();
-        requirement("x", req).unwrap().contains(&version_of(&v))
+        requirement("x", req)
+            .unwrap()
+            .contains(&version_of(&v).unwrap())
+    }
+
+    /// A version part the solver's type cannot hold is refused, never
+    /// saturated into another version's key, and the `+1` past a prefix
+    /// cannot overflow.
+    #[test]
+    fn versions_out_of_range_are_refused_not_folded() {
+        assert!(version_of(&semver::Version::new(u64::from(u32::MAX) + 1, 0, 0)).is_none());
+        assert!(version_of(&semver::Version::new(1, 2, 3)).is_some());
+        for req in [
+            "^4294967295",
+            "=1.4294967296",
+            "~4294967295",
+            "<=4294967295",
+        ] {
+            assert!(requirement("x", req).is_err(), "{req}");
+        }
+        assert!(requirement("x", "^4294967294").is_ok());
+    }
+
+    /// Pre-releases are never chosen, so a requirement naming one is an
+    /// error, not quietly a requirement on the release.
+    #[test]
+    fn a_pre_release_requirement_is_refused() {
+        let err = requirement("x", "=1.2.3-alpha").unwrap_err();
+        assert!(err.contains("pre-release"), "{err}");
     }
 
     /// The range of every requirement agrees with `semver`'s own `matches`,

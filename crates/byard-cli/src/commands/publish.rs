@@ -132,7 +132,13 @@ fn published_dependencies(
     let Some(deps) = table.get("dependencies") else {
         return Ok(Vec::new());
     };
-    let target = registry.canonicalize().ok();
+    // The registry may not exist yet on a first publish; created here so it
+    // has a concrete path to compare against. A dependency directory that
+    // does not exist is then never mistaken for it.
+    std::fs::create_dir_all(registry).map_err(|e| format!("{}: {e}", registry.display()))?;
+    let target = registry
+        .canonicalize()
+        .map_err(|e| format!("{}: {e}", registry.display()))?;
     parse_dependencies(deps)?
         .into_iter()
         .map(|dep| match dep.source {
@@ -142,7 +148,9 @@ fn published_dependencies(
             } => Ok(IndexDep {
                 registry: match at {
                     RegistryLocation::Http(url) => Some(url),
-                    RegistryLocation::Dir(rel) if root.join(&rel).canonicalize().ok() == target => {
+                    RegistryLocation::Dir(rel)
+                        if root.join(&rel).canonicalize().ok().as_ref() == Some(&target) =>
+                    {
                         None
                     }
                     RegistryLocation::Dir(rel) => {

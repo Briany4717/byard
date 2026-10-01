@@ -958,12 +958,18 @@ fn parse_registry_dependency(
         .ok_or_else(|| err("a registry dependency needs a `version = \"…\"` requirement"))?
         .as_str()
         .ok_or_else(|| err("`version` must be a string"))?;
-    semver::VersionReq::parse(version).map_err(|e| {
+    let req = semver::VersionReq::parse(version).map_err(|e| {
         err(&format!(
             "`version = {version:?}` is not a version requirement ({e}); \
              write one like \"0.3\", \"^1.2\", \"~1.2.3\" or \">=1.0, <2.0\""
         ))
     })?;
+    if req.comparators.iter().any(|c| !c.pre.is_empty()) {
+        return Err(err(&format!(
+            "`version = {version:?}` names a pre-release; pre-release versions are \
+             never chosen, so this would resolve to a release instead"
+        )));
+    }
     Ok(Dependency {
         name: name.to_string(),
         source: DepSource::Registry {
@@ -1090,6 +1096,15 @@ mod tests {
         let err =
             deps("[dependencies]\nmat = { git = \"https://example.com/mat\" }\n").unwrap_err();
         assert!(err.contains("rev") && err.contains("tag"), "{err}");
+    }
+
+    #[test]
+    fn a_pre_release_version_requirement_is_a_manifest_error() {
+        let deps: toml::Value =
+            toml::from_str("w = { registry = \"https://r.example\", version = \"=1.2.3-alpha\" }")
+                .unwrap();
+        let err = parse_dependencies(&deps).unwrap_err();
+        assert!(err.contains("pre-release"), "{err}");
     }
 
     #[test]

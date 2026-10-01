@@ -228,6 +228,14 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`byard dev` reloads a changed image.** Editing or replacing a PNG or
+  JPEG while the app runs now updates every `Image` drawn from it on save;
+  it used to keep showing the old picture until restart. The old picture
+  stays up until the new one has loaded, and a file caught half written
+  keeps it rather than going blank. The whole project directory is watched
+  now, so images in `assets/` beside `src/` count, while `target/`,
+  `.byard/` and `.git/` are ignored.
+
 - **`byard dev` applies `byard.toml` edits live, theme included.** Only the
   source directory was watched, so a manifest next to it was never seen, and
   a reload never replaced the theme even when it was. Both the manifest and a

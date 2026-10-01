@@ -258,13 +258,15 @@ where
                     return;
                 }
                 let mut source_changed = false;
-                for p in &event.paths {
+                for p in event.paths.iter().filter(|p| !is_generated(p)) {
                     if reparses_on(p) {
                         source_changed = true;
-                    } else if p.extension().is_some_and(|e| e == "svg") {
-                        // A vector asset changed, hand its path to the runtime
-                        // for live regeneration. A disconnected receiver
-                        // (runtime torn down) is not the watcher's problem.
+                    }
+                    if is_raster(p) || p.extension().is_some_and(|e| e == "svg") {
+                        // An image or vector asset changed: hand its path to
+                        // the runtime, which decodes or regenerates it in
+                        // place. A disconnected receiver (runtime torn down)
+                        // is not the watcher's problem.
                         let _ = assets.send(p.clone());
                     }
                 }
@@ -293,11 +295,32 @@ where
 /// the theme does not use costs one resolve that finds nothing changed.
 fn reparses_on(path: &std::path::Path) -> bool {
     path.file_name().is_some_and(|f| f == "byard.toml")
-        || path.extension().is_some_and(|e| {
-            ["byd", "png", "jpg", "jpeg"]
-                .iter()
-                .any(|x| e.eq_ignore_ascii_case(x))
-        })
+        || path.extension().is_some_and(|e| e == "byd")
+        || is_raster(path)
+}
+
+/// Whether `path` lies in a directory tools write into rather than the
+/// author: build output, caches, version control. The project root is
+/// watched whole, so a build or a cache write there must not look like an
+/// edit.
+fn is_generated(path: &std::path::Path) -> bool {
+    path.components().any(|c| {
+        matches!(
+            c.as_os_str().to_str(),
+            Some(".byard" | "target" | ".git" | "node_modules")
+        )
+    })
+}
+
+/// Whether `path` is a raster image an `Image` can draw, which the runtime
+/// decodes again when it changes (sent on the asset channel, like `.svg`).
+#[must_use]
+pub fn is_raster(path: &std::path::Path) -> bool {
+    path.extension().is_some_and(|e| {
+        ["png", "jpg", "jpeg"]
+            .iter()
+            .any(|x| e.eq_ignore_ascii_case(x))
+    })
 }
 
 #[cfg(test)]
@@ -320,6 +343,22 @@ mod tests {
         for no in ["icon.svg", "notes.md", "byard.lock"] {
             assert!(!reparses_on(Path::new(no)), "{no}");
         }
+    }
+
+    #[test]
+    fn build_output_and_caches_are_not_edits() {
+        use std::path::Path;
+        for no in [
+            "app/.byard/cache/vectors/a.png",
+            "app/target/debug/x.png",
+            "app/.git/index",
+        ] {
+            assert!(is_generated(Path::new(no)), "{no}");
+        }
+        for yes in ["app/assets/logo.png", "app/src/main.byd", "app/byard.toml"] {
+            assert!(!is_generated(Path::new(yes)), "{yes}");
+        }
+        assert!(is_raster(Path::new("a/logo.PNG")) && !is_raster(Path::new("icon.svg")));
     }
     use crate::interp::env::Value;
     use crate::interp::eval::Interpreter;

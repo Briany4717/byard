@@ -11,10 +11,8 @@
 //      greys cannot win while any colour is present.
 //   2. Flip the scheme. Both schemes come from the one image.
 //   3. Replace brand.png with another picture while `byard dev` runs. The
-//      palette moves to the new picture's colour at once. The picture shown
-//      here is the old one until the next run: image files are not reloaded
-//      live yet, only the theme derived from them is. A missing or broken
-//      file is a `byard.toml` error naming it.
+//      picture and the palette both change on save, with no restart. A
+//      missing or broken file is a `byard.toml` error naming it.
 View Main() {
     inject Theme as t
 

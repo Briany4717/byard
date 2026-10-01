@@ -126,6 +126,11 @@ pub struct Engine {
     /// Receiver half, taken by `start_logic` when the logic thread is spawned.
     /// `None` after `start_logic` is called.
     label_rx: Option<crossbeam_channel::Receiver<String>>,
+    /// Image files changed on disk, reported through [`ImageReloader`] from
+    /// any thread and drained by the render thread, which owns the texture
+    /// cache.
+    image_reload_tx: crossbeam_channel::Sender<std::path::PathBuf>,
+    image_reload_rx: crossbeam_channel::Receiver<std::path::PathBuf>,
     /// Handle to the logic thread, taken and joined in `Drop`.
     logic_handle: Option<JoinHandle<()>>,
 }
@@ -426,8 +431,11 @@ impl Engine {
             ),
         );
         let (label_tx, label_rx) = crossbeam_channel::unbounded::<String>();
+        let (image_reload_tx, image_reload_rx) = crossbeam_channel::unbounded();
 
         Ok(Self {
+            image_reload_tx,
+            image_reload_rx,
             encoder,
             surface,
             surface_config,
@@ -456,6 +464,17 @@ impl Engine {
     /// Pushes an input event into the engine's logic queue.
     pub fn push_input(&self, event: InputEvent) {
         self.relay.push_input(event);
+    }
+
+    /// A handle any thread can use to report that an image file changed on
+    /// disk (dev hot reload). Every `Image` drawn from it is decoded again,
+    /// and the render loop is woken to show it.
+    #[must_use]
+    pub fn image_reloader(&self) -> ImageReloader {
+        ImageReloader {
+            tx: self.image_reload_tx.clone(),
+            wake: self.relay.renderer_wake(),
+        }
     }
 
     /// Installs a callback the logic thread fires after it publishes a frame
@@ -704,6 +723,13 @@ impl Engine {
                 }
             }
         };
+
+        // Image files changed on disk (dev hot reload): decode them again.
+        // The previous picture keeps drawing meanwhile, and the new decode
+        // wakes the loop again when it lands.
+        while let Ok(path) = self.image_reload_rx.try_recv() {
+            self.encoder.reload_image(&path);
+        }
 
         // Drain any completed async image decodes and upload them on this
         // (render) thread before encoding, so a freshly-decoded texture is
@@ -1261,5 +1287,22 @@ mod tests {
         let viewport = logical_viewport(7680, 4320, 1.0);
         assert_f32_eq(viewport.width, 7680.0);
         assert_f32_eq(viewport.height, 4320.0);
+    }
+}
+
+/// Reports changed image files to the render thread (see
+/// [`Engine::image_reloader`]). Cheap to clone and `Send`.
+#[derive(Clone)]
+pub struct ImageReloader {
+    tx: crossbeam_channel::Sender<std::path::PathBuf>,
+    wake: crate::relay::FrameWaker,
+}
+
+impl ImageReloader {
+    /// The file at `path` changed: decode every image drawn from it again.
+    pub fn reload(&self, path: std::path::PathBuf) {
+        if self.tx.send(path).is_ok() {
+            (self.wake)();
+        }
     }
 }

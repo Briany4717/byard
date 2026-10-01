@@ -1693,6 +1693,15 @@ impl EncoderSubsystem {
         self.vector_ack_tx = Some(tx);
     }
 
+    /// Decodes again every image drawn from the file at `changed` (dev hot
+    /// reload); the previous picture keeps drawing until the new one lands.
+    /// A bare encoder with no I/O context has nothing cached to reload.
+    pub fn reload_image(&mut self, changed: &std::path::Path) {
+        if let Some(io) = &self.io {
+            self.texture_cache.reload(&io.handle, &io.tx, changed);
+        }
+    }
+
     /// Uploads one async decode result on the render thread. Called by
     /// the engine for each [`DecodedImage`] drained from the relay's I/O
     /// channel, before encoding the next frame. The GPU upload is fast; the

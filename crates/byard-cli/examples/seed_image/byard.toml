@@ -1,0 +1,12 @@
+[project]
+name = "seed_image"
+entry = "src/main.byd"
+
+# RFC-0022 §5: the seed is taken from a picture. `brand.png` is mostly a grey
+# sky over grey ground, with one small orange kite; the kite is the seed,
+# because a large grey area is not a colour. Replace the file with your own
+# logo or photo while `byard dev` runs: the palette follows it.
+[theme]
+name = "from-an-image"
+seed = { image = "brand.png" }
+transition = 300

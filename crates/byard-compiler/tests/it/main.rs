@@ -44,6 +44,7 @@ mod runner_loop;
 mod store_persistence;
 mod text_transform;
 mod text_weight;
+mod theme_swap;
 mod timer_effects;
 mod token_transitions;
 mod top_level_fn;

@@ -2943,6 +2943,13 @@ impl Interpreter {
         // lived in was just discarded.
         self.reset_bridge_state();
         self.provide_controllers();
+        // The theme is ambient too, and lived in the environment just
+        // discarded. Without it every `inject Theme` fails after a hot
+        // reload and every token resolves to nothing (RFC-0022). The same
+        // scheme signal, so the scheme the app is showing survives.
+        if let Some(sig) = self.theme_scheme {
+            self.env.provide(Symbol::intern("Theme"), Value::Theme(sig));
+        }
         for member in &new_view.body {
             match member {
                 Member::Var { name, init, .. } => {

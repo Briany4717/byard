@@ -43,6 +43,12 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A theme can take its colour from an image.** `[theme] seed = { image =
+  "brand.png" }` derives both schemes from the picture's dominant colour: the
+  most common colour weighted by how colourful it is, so a small logo on a
+  large grey background is still the brand. The result is the same on every
+  machine. A missing or unreadable image is a `byard.toml` error that names
+  it. See `crates/byard-cli/examples/seed_image`.
 - **Paths of different structure can morph.** `morph_mode: resample` on a
   morphing `Canvas` lets two body paths morph even when their commands differ,
   a heart of cubics into a star of lines, for example. Both outlines are
@@ -221,6 +227,18 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   an error.
 
 ### Fixed
+
+- **`byard dev` applies `byard.toml` edits live, theme included.** Only the
+  source directory was watched, so a manifest next to it was never seen, and
+  a reload never replaced the theme even when it was. Both the manifest and a
+  seed image are now watched, and a changed theme takes effect on save.
+
+- **A hot reload no longer drops the theme.** After any reload, an app that
+  used `inject Theme` lost it: its theme colours resolved to nothing and it
+  drew nearly black until restarted.
+
+- **An `Image` appears as soon as it has loaded.** It used to stay blank until
+  something else redrew the window, such as moving the pointer.
 
 - **Text is not reshaped every frame after something unmounts.** The shaped
   text cache kept its longest length, so once a panel or a dropdown closed,

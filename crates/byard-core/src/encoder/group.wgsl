@@ -15,14 +15,19 @@
 struct GroupInstance {
     // (opacity, depth)
     @location(1) params: vec2<f32>,
+    // (cos, sin, pivot_x, pivot_y): the rotation the composite applies, pivot
+    // in physical pixels. (1, 0, _, _) for a plain opacity group.
+    @location(2) rotation: vec4<f32>,
 };
 
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) @interpolate(flat) opacity: f32,
+    @location(1) @interpolate(flat) rotation: vec4<f32>,
 };
 
 @group(0) @binding(0) var picture: texture_2d<f32>;
+@group(0) @binding(1) var picture_sampler: sampler;
 
 @vertex
 fn vs_main(@location(0) quad_pos: vec2<f32>, instance: GroupInstance) -> VertexOutput {
@@ -34,6 +39,7 @@ fn vs_main(@location(0) quad_pos: vec2<f32>, instance: GroupInstance) -> VertexO
         1.0,
     );
     out.opacity = instance.params.x;
+    out.rotation = instance.rotation;
     return out;
 }
 
@@ -43,6 +49,23 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // transparent target, which leaves its colour premultiplied by its own
     // alpha. Scaling all four channels by the opacity keeps it premultiplied,
     // and the pipeline's blend state is the premultiplied one to match.
-    let texel = textureLoad(picture, vec2<i32>(floor(in.position.xy)), 0);
+    let c = in.rotation.x;
+    let s = in.rotation.y;
+    if (s == 0.0 && c == 1.0) {
+        // Unrotated: the picture is in this pass's own pixel space.
+        let texel = textureLoad(picture, vec2<i32>(floor(in.position.xy)), 0);
+        return texel * in.opacity;
+    }
+    // Rotated (RFC-0011 text transforms): the picture was drawn upright, so
+    // each screen pixel reads the upright position the rotation carried here,
+    // turning back about the pivot. Between texel centres, so filtered.
+    let pivot = in.rotation.zw;
+    let d = in.position.xy - pivot;
+    let upright = pivot + vec2<f32>(c * d.x + s * d.y, -s * d.x + c * d.y);
+    let size = vec2<f32>(textureDimensions(picture));
+    if (any(upright < vec2<f32>(0.0)) || any(upright >= size)) {
+        return vec4<f32>(0.0);
+    }
+    let texel = textureSampleLevel(picture, picture_sampler, upright / size, 0.0);
     return texel * in.opacity;
 }

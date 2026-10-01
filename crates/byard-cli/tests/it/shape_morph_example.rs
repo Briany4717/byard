@@ -32,10 +32,10 @@ fn shape_morph_example_checks_clean() {
 /// The play/pause canvas (RFC-0031 §S11) draws one blended path, and tapping
 /// it carries the outline from the triangle to the two bars.
 ///
-/// Read off the frame's fills: the example's only body paths are these two,
-/// so the one fill on the frame is the morph. The triangle's tip reaches
-/// x = 92 on the canvas and the bars stop at 90, which is how the two ends
-/// are told apart.
+/// Read off the frame's fills: the example has two body-path morphs, this one
+/// and the resampled heart and star below it, and each draws one fill, so the
+/// upper fill is this morph. The triangle's tip reaches x = 92 on the canvas
+/// and the bars stop at 90, which is how the two ends are told apart.
 #[test]
 fn the_play_pause_paths_morph_when_tapped() {
     use byard_compiler::interp::env::Value;
@@ -59,8 +59,16 @@ fn the_play_pause_paths_morph_when_tapped() {
         let mut frame = RenderFrame::new();
         interp.render(&tree, &mut frame, 720.0, 900.0);
         let fills = frame.fills();
-        assert_eq!(fills.len(), 1, "the morph draws one path, not both");
-        let b = fills[0].mesh.bounds;
+        assert_eq!(
+            fills.len(),
+            2,
+            "each morph draws one path, not both of its own"
+        );
+        let b = fills
+            .iter()
+            .map(|f| f.mesh.bounds)
+            .min_by(|a, b| a[1].total_cmp(&b[1]))
+            .unwrap();
         (b[0], b[0] + b[2])
     };
     let (left, play) = right_edge(&mut interp, 1000);

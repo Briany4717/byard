@@ -482,13 +482,22 @@ pub fn fetch_git(url: &str, reference: &GitRef, dest: &Path) -> Result<String, S
 /// lock both carry. Not by where it was fetched from, so a package reached
 /// through two spellings of one registry, or through a mirror, is one entry,
 /// and `byard check` finds it from the lock alone.
+///
+/// The directory is the full SHA-256 of the three, never the values
+/// themselves: they come from an index nobody here controls, and a name or a
+/// checksum holding `/` or `..` must not become a path out of the cache.
 #[must_use]
 pub fn registry_cache_path(name: &str, version: &str, checksum: &str) -> PathBuf {
-    let digest = checksum.rsplit(':').next().unwrap_or(checksum);
-    cache_dir().join("registry").join(format!(
-        "{name}-{version}-{}",
-        &digest[..digest.len().min(12)]
-    ))
+    let mut hasher = Sha256::new();
+    for part in [name, version, checksum] {
+        hasher.update(part.as_bytes());
+        // A separator no field can contain, so ("a", "bc") and ("ab", "c")
+        // are different keys.
+        hasher.update([0]);
+    }
+    cache_dir()
+        .join("registry")
+        .join(hex_encode(&hasher.finalize()))
 }
 
 /// A registry, located: a directory on disk or a base URL.
@@ -505,7 +514,13 @@ impl Registry {
     #[must_use]
     pub fn at(declarer_root: &Path, location: &RegistryLocation) -> Self {
         match location {
-            RegistryLocation::Dir(rel) => Self::Dir(declarer_root.join(rel)),
+            // Canonical when it exists, so two spellings of one directory
+            // (`../registry` from here, `../../registry` from a package
+            // below) are one registry, not two that clash.
+            RegistryLocation::Dir(rel) => {
+                let dir = declarer_root.join(rel);
+                Self::Dir(dir.canonicalize().unwrap_or(dir))
+            }
             RegistryLocation::Http(url) => Self::Http(url.clone()),
         }
     }
@@ -731,7 +746,12 @@ pub fn fetch_registry(registry: &Registry, entry: &IndexEntry) -> Result<PathBuf
     let (name, version) = (&entry.name, &entry.version);
     let dest = registry_cache_path(name, version, &entry.checksum);
     if dest.is_dir() {
-        return Ok(dest);
+        // Trusted only once its content is what the index says: a cache
+        // someone edited is fetched again rather than locked.
+        if package_checksum(&dest).ok().as_deref() == Some(entry.checksum.as_str()) {
+            return Ok(dest);
+        }
+        std::fs::remove_dir_all(&dest).map_err(|e| format!("{}: {e}", dest.display()))?;
     }
     let bytes = registry.read(&entry.archive)?;
     let actual = sha256_tag(&bytes);
@@ -1028,6 +1048,24 @@ mod tests {
         assert!(provider.resolved_roots().contains_key("kit"));
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Index values are untrusted: whatever they hold, the cache entry is one
+    /// directory directly under the registry cache, named by a full-width
+    /// hash, and distinct tuples never share it.
+    #[test]
+    fn a_registry_cache_path_cannot_leave_the_cache() {
+        let base = cache_dir().join("registry");
+        let hostile = registry_cache_path("../../etc", "1/../../2", "sha256:../../../x");
+        assert_eq!(hostile.parent(), Some(base.as_path()));
+        let name = hostile.file_name().unwrap().to_str().unwrap();
+        assert_eq!(name.len(), 64);
+        assert!(name.chars().all(|c| c.is_ascii_hexdigit()), "{name}");
+        assert_ne!(
+            registry_cache_path("ab", "c", "x"),
+            registry_cache_path("a", "bc", "x"),
+            "fields are separated in the key"
+        );
     }
 
     #[test]

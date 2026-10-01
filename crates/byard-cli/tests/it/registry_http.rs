@@ -485,3 +485,167 @@ fn add_from_a_registry_requires_the_newest_compatible_release() {
     assert!(out.status.success(), "{}", text(&out));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// The one directory under the test's registry cache, its single package.
+fn cached_package(home: &Path) -> PathBuf {
+    let dir = home.join(".byard/cache/registry");
+    let mut entries: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.is_dir())
+        .collect();
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    entries.pop().unwrap()
+}
+
+/// A cached package whose content was edited is not trusted: the solve
+/// fetches it again rather than locking what `check` would then reject.
+#[test]
+fn a_tampered_cache_is_fetched_again() {
+    let dir = scratch("cache");
+    let registry = dir.join("registry");
+    publish(&dir, &registry, "weather", "0.2.0", "");
+    let server = Server::serve(registry);
+    let app = dir.join("app");
+    let dep = format!(
+        "weather = {{ registry = \"{}\", version = \"0.2\" }}",
+        server.url
+    );
+    make_app(&app, &dep, "weather");
+    let out = byard(&app, &dir, &["get"]);
+    assert!(out.status.success(), "{}", text(&out));
+
+    let cached = cached_package(&dir);
+    write(
+        &cached.join("src/tag.byd"),
+        "View WeatherTag() { Text(\"edited\") }\n",
+    );
+    let out = byard(&app, &dir, &["get"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let restored = std::fs::read_to_string(cached.join("src/tag.byd")).unwrap();
+    assert!(
+        restored.contains("weather 0.2.0"),
+        "fetched again: {restored}"
+    );
+    let out = byard(&app, &dir, &["check"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The first publish into a registry that does not exist yet still records
+/// a dependency on that registry as "this registry", and a dependency on a
+/// directory that exists nowhere is refused rather than taken for it.
+#[test]
+fn a_first_publish_tells_this_registry_from_a_missing_one() {
+    let dir = scratch("firstpub");
+    let registry = dir.join("fresh-registry");
+    publish(
+        &dir,
+        &registry,
+        "forecast",
+        "1.0.0",
+        "units = { registry = \"../fresh-registry\", version = \"^0.3\" }",
+    );
+    let index = std::fs::read_to_string(registry.join("index.toml")).unwrap();
+    assert!(
+        index.contains("dependencies = [{ name = \"units\", version = \"^0.3\" }]"),
+        "recorded as this registry: {index}"
+    );
+
+    let pkg = dir.join("other");
+    write(
+        &pkg.join("byard.toml"),
+        "[package]\nname = \"other\"\nversion = \"0.1.0\"\n\n[dependencies]\n\
+         units = { registry = \"../nowhere\", version = \"1\" }\n",
+    );
+    write(&pkg.join("src/a.byd"), "View OtherTag() { Text(\"o\") }\n");
+    let out = byard(
+        &dir,
+        &dir,
+        &[
+            "publish",
+            pkg.to_str().unwrap(),
+            "--registry",
+            registry.to_str().unwrap(),
+        ],
+    );
+    let said = text(&out);
+    assert!(!out.status.success(), "{said}");
+    assert!(said.contains("not the one being published to"), "{said}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A path package with a `[package] version` and a manifest around it.
+fn path_package(root: &Path, name: &str, version: &str, deps: &str) {
+    write(
+        &root.join("byard.toml"),
+        &format!(
+            "[package]\nname = \"{name}\"\nversion = \"{version}\"\n\n[dependencies]\n{deps}\n"
+        ),
+    );
+    let view = name[..1].to_uppercase() + &name[1..];
+    write(
+        &root.join("src/tag.byd"),
+        &format!("View {view}Tag() {{ Text(\"{name}\") }}\n"),
+    );
+}
+
+/// With a lock in place, changing a path package to require a version of
+/// another path package that it does not have is still the conflict a full
+/// solve reports: the lock is not a way around a requirement.
+#[test]
+fn a_requirement_on_a_path_package_is_checked_even_with_a_lock() {
+    let dir = scratch("fixedreq");
+    path_package(&dir.join("kit"), "kit", "0.1.0", "");
+    let widgets = dir.join("widgets");
+    let on_kit =
+        |req: &str| format!("kit = {{ registry = \"http://127.0.0.1:9\", version = \"{req}\" }}");
+    path_package(&widgets, "widgets", "0.1.0", &on_kit("^0.1"));
+    let app = dir.join("app");
+    make_app(
+        &app,
+        "kit = { path = \"../kit\" }\nwidgets = { path = \"../widgets\" }",
+        "widgets",
+    );
+    let out = byard(&app, &dir, &["get"]);
+    assert!(out.status.success(), "kit 0.1.0 meets ^0.1: {}", text(&out));
+
+    path_package(&widgets, "widgets", "0.1.0", &on_kit("^0.2"));
+    let out = byard(&app, &dir, &["get"]);
+    let said = text(&out);
+    assert!(!out.status.success(), "{said}");
+    assert!(said.contains("kit"), "{said}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A second declaration of a locked name, from a different registry, is
+/// checked even though the name is already chosen: two sources for one name
+/// is an error, lock or not. The lock comes from a path package's
+/// declaration, and the app's own, from elsewhere, is the one met second.
+#[test]
+fn a_second_source_for_a_locked_name_is_not_waved_through() {
+    let dir = scratch("twosources");
+    let (reg_a, reg_b) = (dir.join("reg-a"), dir.join("reg-b"));
+    publish(&dir, &reg_a, "units", "1.0.0", "");
+    publish(&dir, &reg_b, "units", "1.0.0", "");
+    let (a, b) = (Server::serve(reg_a), Server::serve(reg_b));
+    path_package(
+        &dir.join("widgets"),
+        "widgets",
+        "0.1.0",
+        &format!("units = {{ registry = \"{}\", version = \"1\" }}", a.url),
+    );
+    let app = dir.join("app");
+    let widgets = "widgets = { path = \"../widgets\" }";
+    make_app(&app, widgets, "widgets");
+    let out = byard(&app, &dir, &["get"]);
+    assert!(out.status.success(), "{}", text(&out));
+
+    let from_b = format!("units = {{ registry = \"{}\", version = \"1\" }}", b.url);
+    make_app(&app, &format!("{widgets}\n{from_b}"), "widgets");
+    let out = byard(&app, &dir, &["get"]);
+    let said = text(&out);
+    assert!(!out.status.success(), "{said}");
+    assert!(said.contains("two registries"), "{said}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

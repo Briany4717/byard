@@ -198,7 +198,8 @@ mod tests {
     #[test]
     fn empty_tick_produces_no_dirty_targets() {
         let mut tick = EvaluatorTick::new();
-        assert!(tick.collect_dirty().is_empty());
+        let dirty = tick.collect_dirty();
+        assert!(dirty.is_empty(), "{dirty:?}");
     }
 
     #[test]
@@ -210,7 +211,8 @@ mod tests {
         let mut tick = EvaluatorTick::new();
         tick.register(signal);
 
-        assert!(tick.collect_dirty().is_empty());
+        let dirty = tick.collect_dirty();
+        assert!(dirty.is_empty(), "{dirty:?}");
     }
 
     #[test]

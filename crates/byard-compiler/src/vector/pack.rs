@@ -322,7 +322,7 @@ mod tests {
     #[test]
     fn empty_input_packs_to_zero_boxes_one_layer() {
         let (ps, layers) = pack_layers(&[], 128, 128).unwrap();
-        assert!(ps.is_empty());
+        assert!(ps.is_empty(), "{:?}", ps);
         assert_eq!(layers, 1);
     }
 }

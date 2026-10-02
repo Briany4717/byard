@@ -98,7 +98,8 @@ fn example_composes_views_and_binds_arguments() {
 fn example_registry_loads_all_views() {
     let parsed = parse(USER_VIEWS);
     let mut interp = Interpreter::new();
-    assert!(interp.load_views(&parsed.views).is_empty());
+    let load_errors = interp.load_views(&parsed.views);
+    assert!(load_errors.is_empty(), "{load_errors:?}");
     for name in ["Badge", "StatCard", "Panel", "Main"] {
         assert!(
             interp

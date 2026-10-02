@@ -3694,7 +3694,11 @@ mod tests {
         assert_eq!(frame.atlas_uploads().len(), 1);
         frame.clear();
         assert!(frame.vector_instances().is_empty());
-        assert!(frame.atlas_uploads().is_empty());
+        assert!(
+            frame.atlas_uploads().is_empty(),
+            "{:?}",
+            frame.atlas_uploads()
+        );
     }
 
     #[test]
@@ -3771,7 +3775,7 @@ mod tests {
     #[test]
     fn render_frame_starts_empty() {
         let frame = RenderFrame::new();
-        assert!(frame.rects().is_empty());
+        assert!(frame.rects().is_empty(), "{:?}", frame.rects());
     }
 
     #[test]
@@ -3782,8 +3786,8 @@ mod tests {
         assert_eq!(frame.rects().len(), 2);
 
         frame.clear();
-        assert!(frame.rects().is_empty());
-        assert!(frame.dirty().is_empty());
+        assert!(frame.rects().is_empty(), "{:?}", frame.rects());
+        assert!(frame.dirty().is_empty(), "{:?}", frame.dirty());
     }
 
     #[test]
@@ -3902,7 +3906,7 @@ mod tests {
     #[test]
     fn render_frame_starts_with_no_dirty_entries() {
         let frame = RenderFrame::new();
-        assert!(frame.dirty().is_empty());
+        assert!(frame.dirty().is_empty(), "{:?}", frame.dirty());
     }
 
     #[test]
@@ -4310,8 +4314,8 @@ mod motion_tests {
         f.push_instance(box_at(0.0, 0.0));
         // Deliberately leave the clip open, then clear.
         f.clear();
-        assert!(f.clips().is_empty());
-        assert!(f.solid_clips().is_empty());
+        assert!(f.clips().is_empty(), "{:?}", f.clips());
+        assert!(f.solid_clips().is_empty(), "{:?}", f.solid_clips());
         // The stack is empty, so a fresh push is unclipped.
         f.push_instance(box_at(0.0, 0.0));
         assert_eq!(f.solid_clips(), &[None]);
@@ -4373,9 +4377,9 @@ mod motion_tests {
         f.begin_layer();
         assert_eq!(f.layer_marks()[0].canvas, 1);
         f.clear();
-        assert!(f.canvas_shapes().is_empty());
-        assert!(f.canvas_depths().is_empty());
-        assert!(f.canvas_clips().is_empty());
+        assert!(f.canvas_shapes().is_empty(), "{:?}", f.canvas_shapes());
+        assert!(f.canvas_depths().is_empty(), "{:?}", f.canvas_depths());
+        assert!(f.canvas_clips().is_empty(), "{:?}", f.canvas_clips());
     }
 
     // ── Ripple pool (RFC-0023) ──────────────────────────────────────────────
@@ -4412,8 +4416,8 @@ mod motion_tests {
         f.begin_layer();
         assert_eq!(f.layer_marks()[0].ripple, 1);
         f.clear();
-        assert!(f.ripples().is_empty());
-        assert!(f.ripple_clips().is_empty());
+        assert!(f.ripples().is_empty(), "{:?}", f.ripples());
+        assert!(f.ripple_clips().is_empty(), "{:?}", f.ripple_clips());
     }
 
     // ── Backdrop pool (RFC-0023 §2) ─────────────────────────────────────────
@@ -4456,9 +4460,9 @@ mod motion_tests {
         f.begin_layer();
         assert_eq!(f.layer_marks()[0].backdrop, 1);
         f.clear();
-        assert!(f.backdrops().is_empty());
-        assert!(f.backdrop_marks().is_empty());
-        assert!(f.backdrop_clips().is_empty());
+        assert!(f.backdrops().is_empty(), "{:?}", f.backdrops());
+        assert!(f.backdrop_marks().is_empty(), "{:?}", f.backdrop_marks());
+        assert!(f.backdrop_clips().is_empty(), "{:?}", f.backdrop_clips());
     }
 
     #[test]
@@ -4552,7 +4556,7 @@ mod motion_tests {
             params: [10.0, 10.0, 5.0, 0.0, 0.0, 0.0, 0.0, 0.0],
             ..CanvasShape::default()
         });
-        assert!(f.shape_records().is_empty());
+        assert!(f.shape_records().is_empty(), "{:?}", f.shape_records());
         let s = &f.canvas_shapes()[0];
         assert_eq!(s.group_mode, GROUP_NONE);
         assert_eq!((s.group_first, s.group_count, s.member_hash), (0, 0, 0));
@@ -4686,11 +4690,11 @@ mod motion_tests {
     fn a_frame_with_no_layers_has_no_marks_and_clear_resets_them() {
         let mut f = RenderFrame::new();
         f.push_instance(box_at(0.0, 0.0));
-        assert!(f.layer_marks().is_empty());
+        assert!(f.layer_marks().is_empty(), "{:?}", f.layer_marks());
         f.begin_layer();
         f.push_instance(box_at(1.0, 1.0));
         f.clear();
-        assert!(f.layer_marks().is_empty());
+        assert!(f.layer_marks().is_empty(), "{:?}", f.layer_marks());
     }
 
     // ── The dev-surface partition (RFC-0030 erratum "self-accounting") ─────

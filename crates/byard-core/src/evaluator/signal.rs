@@ -454,7 +454,11 @@ mod tests {
     fn subscribers_start_empty() {
         let arena = ViewArena::new();
         let signal = Signal::new_in(&arena, 0_u32);
-        assert!(signal.subscribers().is_empty());
+        assert!(
+            signal.subscribers().is_empty(),
+            "{:?}",
+            signal.subscribers()
+        );
     }
 
     #[test]

@@ -248,6 +248,13 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`byard check` works inside a library package.** In a package with
+  `[package]` and no `[project]`, it failed looking for a `main.byd` the
+  package never declared. It now checks the package's own files, the ones an
+  app gets through `use`, with its fonts and theme named as that app sees
+  them. `byard dev`, `shot` and `build` there say it is a library and point
+  at `check`.
+
 - **`byard dev` reloads a changed image.** Editing or replacing a PNG or
   JPEG while the app runs now updates every `Image` drawn from it on save;
   it used to keep showing the old picture until restart. The old picture

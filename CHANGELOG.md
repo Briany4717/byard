@@ -248,6 +248,11 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`byard get` limits what a registry can send and where it can point.** A
+  response over 128 MiB is refused instead of read into memory, and a path
+  an index names (an archive) must be inside the registry, so an index cannot
+  point `byard get` at a file elsewhere on disk or another server.
+
 - **`byard dev` reloads a changed image.** Editing or replacing a PNG or
   JPEG while the app runs now updates every `Image` drawn from it on save;
   it used to keep showing the old picture until restart. The old picture

@@ -1164,6 +1164,8 @@ mod tests {
                 assert!(err.contains("outside it"), "{rel}: {err}");
             }
         }
+    }
+
     /// A package's seed image is one of its assets: published with it and
     /// covered by its checksum, so a theme that works from a path still
     /// works once the package is installed from a registry.

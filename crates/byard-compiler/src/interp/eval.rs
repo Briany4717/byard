@@ -6978,9 +6978,61 @@ impl Interpreter {
         canvas: crate::interp::intrinsics::Rect,
     ) -> Vec<PathCommand> {
         let mut out = Vec::new();
+        self.push_path_commands(members, canvas, &mut out);
+        out
+    }
+
+    /// The commands `members` write, in order, into `out`. A `for` writes its
+    /// body once per item, with the loop variable (and index) bound for it,
+    /// and a `when` writes the branch it takes: a path drawn from data, a
+    /// chart's curve, is a `for` over the samples.
+    fn push_path_commands(
+        &mut self,
+        members: &[Member],
+        canvas: crate::interp::intrinsics::Rect,
+        out: &mut Vec<PathCommand>,
+    ) {
         for member in members {
-            let Member::Element(cmd) = member else {
-                continue;
+            let cmd = match member {
+                Member::Element(cmd) => cmd,
+                Member::For {
+                    var,
+                    index,
+                    iter,
+                    body,
+                    ..
+                } => {
+                    // Cloned for the reason a canvas's own `for` clones: the
+                    // body is evaluated with `&mut self`.
+                    let Some(items) = self.eval_pure(iter).as_list().map(<[Value]>::to_vec) else {
+                        continue;
+                    };
+                    let base = self.env.len();
+                    for (i, value) in items.into_iter().enumerate() {
+                        self.env.truncate(base);
+                        if let Some(index) = index {
+                            self.env.push(
+                                index.clone(),
+                                Value::Int(i64::try_from(i).unwrap_or(i64::MAX)),
+                            );
+                        }
+                        self.env.push(var.clone(), value);
+                        self.push_path_commands(body, canvas, out);
+                    }
+                    self.env.truncate(base);
+                    continue;
+                }
+                Member::When {
+                    cond, then, els, ..
+                } => {
+                    if self.eval_pure(cond).as_bool().unwrap_or(false) {
+                        self.push_path_commands(then, canvas, out);
+                    } else if let Some(els) = els {
+                        self.push_path_commands(els, canvas, out);
+                    }
+                    continue;
+                }
+                _ => continue,
             };
             let coords: Vec<f32> = {
                 let params = super::intrinsics::path_command_params(cmd.name.as_str());
@@ -7006,7 +7058,6 @@ impl Interpreter {
                 _ => {}
             }
         }
-        out
     }
 
     /// How many paths this interpreter has tessellated, ever (RFC-0037). A

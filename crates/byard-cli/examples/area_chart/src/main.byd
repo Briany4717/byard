@@ -17,8 +17,14 @@
 //      is Tier-2 (tessellated). Two pipelines, one canvas, one draw order.
 //   4. The ring below is a hole, not a disc: two squares traced the same way
 //      with `winding: even_odd`, which is the fill rule doing its job.
+//   5. The last chart is drawn from a list: a `for` inside the path body
+//      writes one `line` per sample. Press "another week" and the same path
+//      redraws from the new numbers; press nothing and it is not tessellated
+//      again.
 View Main() {
     var peak: Float = 120.0
+    var week: List<Float> = [14.0, 17.5, 21.0, 19.0, 24.5, 22.0, 16.0]
+    var other = false
 
     Column #[bg: 0x14141C, p: 32, gap: 20, width: 620] {
         Text("Weather trends") #[color: 0xF2F2F7, size: 22, weight: bold]
@@ -67,6 +73,32 @@ View Main() {
                     move(240, 35) line(300, 35) line(300, 85) line(240, 85) close()
                 }
             }
+        }
+
+        Text("From data: one line per sample, written by a for")
+            #[color: 0x9A9AA8, size: 14]
+        Box #[bg: 0x1C1C26, radius: 16, p: 16] {
+            Canvas #[width: 540, height: 160] {
+                // 90 px between samples, 5 px per degree, up from the baseline.
+                path(
+                    fill: 0x00000000,
+                    gradient: (kind: linear, angle: 90deg,
+                               from: 0xFF7CC4FF, mid: 0x667CC4FF, to: 0x007CC4FF)
+                ) {
+                    move(0, 160)
+                    for i, t in week { line(i * 90, 160 - t * 5) }
+                    line(540, 160)
+                    close()
+                }
+            }
+        }
+        Row #[gap: 16, align: center] {
+            Button("another week") #[bg: 0x2A3442, radius: 8, p: 10, color: 0xE7ECF2] => {
+                other = !other
+                week = other ? [22.0, 12.0, 15.5, 27.0, 18.0, 13.0, 25.0]
+                             : [14.0, 17.5, 21.0, 19.0, 24.5, 22.0, 16.0]
+            }
+            Text("high {week.max()}°, low {week.min()}°") #[color: 0xF2F2F7, size: 14]
         }
     }
 }

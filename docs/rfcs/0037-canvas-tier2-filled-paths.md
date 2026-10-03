@@ -199,6 +199,28 @@ common case (clipping an image or card content); arbitrary-path clips tessellate
 like fills. Clip regions integrate with the existing z-layer/overlay stacking
 (RFC-0017) by scoping to the subtree's layer.
 
+**A path from data (2026-10-03).** A path body admits `for` and `when`, as a
+`Canvas` body does (the RFC-0020 erratum): a `for` writes its body's commands
+once per item, with the loop variable and index bound, and a `when` writes the
+branch it takes. A chart's curve is therefore a `for` over its samples,
+
+```byld
+path(fill: 0xFF5B8DEF) {
+    move(0, 160)
+    for i, t in week { line(i * 90, 160 - t * 5) }
+    line(540, 160)
+    close()
+}
+```
+
+which is the motivating case of this RFC with real data: until this, the
+body skipped anything that was not a written command, in silence, so a chart
+over a list drew nothing and reported nothing. The commands inside a `for` or
+a `when` are validated like written ones (name, arity, parameter types), and
+"a path starts with a `move`" looks into a `for` or `when` that leads the body.
+The mesh is still cached by the commands' numbers: unchanged data is not
+tessellated again.
+
 **Compiler.** `path { … }` gains `fill` (colour or `gradient(...)`), `winding`,
 and keeps Tier-1 `stroke`/`width`/`cap`/`join`. `clip(kind) { children }` is a
 new container form. Path command builders (`move`, `line`, `cubic`, `quad`,

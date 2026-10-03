@@ -1626,16 +1626,51 @@ fn shape_geometry(name: &str) -> (ShapeParams, ShapeParams) {
 
 /// Validates a `path { … }` body (RFC-0037): path commands only, each with the
 /// parameters it takes, and a first command that establishes where the path
-/// starts.
+/// starts. A `for` or a `when` in the body writes commands from data, and the
+/// commands inside it are checked exactly as written ones are.
 pub fn validate_path_body(el: &ElementNode) -> Vec<CompileError> {
     let mut errs = Vec::new();
-    let mut first = true;
-    for member in &el.children {
-        let Member::Element(cmd) = member else {
-            // A `for` or a `when` inside a path body is a shape the language
-            // cannot check the arity of yet; the shape commands have the same
-            // restriction, and lifting it is a change to both.
-            continue;
+    // A path that starts with a `line` has no start point to draw from, and
+    // picking one silently (the origin, the last path's end) is how a chart
+    // ends up with a stray triangle nobody can explain. The first command is
+    // the first one written, looking into a `for` or `when` that leads.
+    if let Some(first) = first_path_command(&el.children) {
+        if first.name.as_str() != "move" && is_path_command(first.name.as_str()) {
+            errs.push(CompileError::PathMustStartWithMove { span: first.span });
+        }
+    }
+    validate_path_members(&el.children, &mut errs);
+    errs
+}
+
+/// The first command a path body writes, in source order.
+fn first_path_command(members: &[Member]) -> Option<&ElementNode> {
+    members.iter().find_map(|member| match member {
+        Member::Element(cmd) => Some(cmd),
+        Member::For { body, .. } => first_path_command(body),
+        Member::When { then, els, .. } => {
+            first_path_command(then).or_else(|| els.as_deref().and_then(first_path_command))
+        }
+        _ => None,
+    })
+}
+
+fn validate_path_members(members: &[Member], errs: &mut Vec<CompileError>) {
+    for member in members {
+        let cmd = match member {
+            Member::Element(cmd) => cmd,
+            Member::For { body, .. } => {
+                validate_path_members(body, errs);
+                continue;
+            }
+            Member::When { then, els, .. } => {
+                validate_path_members(then, errs);
+                if let Some(els) = els {
+                    validate_path_members(els, errs);
+                }
+                continue;
+            }
+            _ => continue,
         };
         let name = cmd.name.as_str();
         if !is_path_command(name) {
@@ -1646,13 +1681,6 @@ pub fn validate_path_body(el: &ElementNode) -> Vec<CompileError> {
             });
             continue;
         }
-        if first && name != "move" {
-            // A path that starts with a `line` has no start point to draw
-            // from, and picking one silently (the origin, the last path's end)
-            // is how a chart ends up with a stray triangle nobody can explain.
-            errs.push(CompileError::PathMustStartWithMove { span: cmd.span });
-        }
-        first = false;
 
         let params = path_command_params(name);
         let positional = cmd.content.iter().filter(|a| a.name.is_none()).count();
@@ -1692,7 +1720,6 @@ pub fn validate_path_body(el: &ElementNode) -> Vec<CompileError> {
             });
         }
     }
-    errs
 }
 
 /// Validates a `Canvas` element (RFC-0020 §1): required `width`/`height`

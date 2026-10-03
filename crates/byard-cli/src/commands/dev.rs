@@ -98,16 +98,7 @@ pub fn run(opts: Options<'_>) -> Result<(), String> {
     } else {
         manifest.project_root.clone()
     };
-    // A seed image outside the project (`image = "../brand.png"`) is
-    // watched as a file of its own.
-    let outside: Vec<PathBuf> = manifest
-        .watch_files
-        .iter()
-        .filter(|p| p.exists() && !p.starts_with(&project_dir))
-        .cloned()
-        .collect();
     let mut watch_paths = vec![project_dir];
-    watch_paths.extend(outside);
     for root in provider.resolved_roots().values() {
         if !root.starts_with(&cache) {
             watch_paths.push(root.clone());
@@ -157,6 +148,7 @@ pub fn run(opts: Options<'_>) -> Result<(), String> {
         animating: None,
         file_override: file.map(Path::to_path_buf),
         watch_paths,
+        watch_files: manifest.watch_files.clone(),
         vector_cache_dir,
         initial_views,
         initial_errors,
@@ -180,12 +172,13 @@ pub fn run(opts: Options<'_>) -> Result<(), String> {
 /// failure into the same error channel the overlay renders.
 fn reresolve(file_override: Option<&Path>) -> ParsedFile {
     let resolved = Manifest::discover(file_override)
-        .and_then(|m| resolve_project(&m).map(|(program, _)| (program, m.theme)));
+        .and_then(|m| resolve_project(&m).map(|(program, _)| (program, m.theme, m.watch_files)));
     match resolved {
-        Ok((program, theme)) => ParsedFile {
+        Ok((program, theme, watch_files)) => ParsedFile {
             views: program.views,
             errors: program.errors,
             theme: Some(theme),
+            watch_files,
         },
         Err(message) => ParsedFile {
             views: Vec::new(),
@@ -194,6 +187,7 @@ fn reresolve(file_override: Option<&Path>) -> ParsedFile {
                 message,
             }],
             theme: None,
+            watch_files: Vec::new(),
         },
     }
 }
@@ -905,6 +899,9 @@ struct App {
     file_override: Option<PathBuf>,
     /// Directories the watcher covers: project sources + `path` deps (D-J).
     watch_paths: Vec<PathBuf>,
+    /// The manifest's files besides the sources (itself, a seed image), which
+    /// the watcher matches by path.
+    watch_files: Vec<PathBuf>,
     /// Persistent MSDF field cache (`.byard/cache/vectors/`, RFC-0009 §5),
     /// installed on the interpreter so cold starts skip regeneration.
     vector_cache_dir: PathBuf,
@@ -998,9 +995,13 @@ impl App {
         // matching MSDF field so it regenerates live (RFC-0009 §3).
         let (asset_tx, asset_rx) = crossbeam_channel::unbounded::<std::path::PathBuf>();
         let file_override = self.file_override.clone();
-        let watcher = start_watcher(&self.watch_paths, watcher_channel, asset_tx, move || {
-            reresolve(file_override.as_deref())
-        })
+        let watcher = start_watcher(
+            &self.watch_paths,
+            &self.watch_files,
+            watcher_channel,
+            asset_tx,
+            move || reresolve(file_override.as_deref()),
+        )
         .map_err(|e| ByardError::RenderSurface(format!("file watcher error: {e}")))?;
         // Keep the watcher alive for the entire process lifetime. Intentional:
         // file watching must persist even if the logic thread is restarted by

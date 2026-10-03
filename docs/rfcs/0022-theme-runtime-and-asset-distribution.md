@@ -293,7 +293,9 @@ path relative to the manifest, takes the seed from a picture, at load, like
 the hex seed; the result is the same table, so nothing downstream knows.
 
 - **Algorithm.** The image is sampled down to at most 128 pixels on its long
-  side, transparent pixels dropped, and quantised to 16 colours by median cut
+  side, pixels under half opaque (alpha below 128) dropped, so a logo's
+  anti-aliased edge counts and the faint halo round it does not, and
+  quantised to 16 colours by median cut
   (the box with the widest channel range is cut at that channel's median,
   ties broken by population and then position). Each cluster scores its
   population times its colourfulness, the spread between its largest and
@@ -310,9 +312,13 @@ the hex seed; the result is the same table, so nothing downstream knows.
 - **Not Material's algorithm.** Material quantises in CAM16 with its own
   scoring weights. This picks the same kind of colour, not the same one.
 - **Errors.** A missing, unreadable or undecodable file (PNG and JPEG are
-  read) is a manifest error naming it, and so is a picture with no opaque
-  pixel: a theme that quietly fell back to grey would look like a derivation
-  bug. An explicit `[theme.color.*]` token still wins.
+  read) is a manifest error naming it, and so is a picture with no pixel at
+  least half opaque: a theme that quietly fell back to grey would look like
+  a derivation bug. An explicit `[theme.color.*]` token still wins.
+- **A package's seed image is one of its assets.** It must live inside the
+  package, and it is published with it and covered by its checksum, like a
+  declared font: a consumer extending the package's theme reads it from the
+  package.
 - **Live in `byard dev`.** The manifest and the seed image are watched, and a
   reload that brings a different theme replaces the running one, keeping
   the scheme the app is showing.

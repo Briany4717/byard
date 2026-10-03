@@ -216,6 +216,11 @@ pub struct ParsedFile {
     /// `[theme]` edit, or a new seed image, applies without a restart.
     /// `None` leaves the running theme as it is.
     pub theme: Option<crate::interp::theme::Theme>,
+    /// Files outside the watched directories the project is built from (a
+    /// seed image elsewhere), as the manifest names them now. The watcher
+    /// starts watching any it did not know, so one the manifest moves to is
+    /// followed from that save on.
+    pub watch_files: Vec<std::path::PathBuf>,
 }
 
 /// Spawns a background OS thread that watches `paths` with `notify` and
@@ -228,10 +233,17 @@ pub struct ParsedFile {
 /// (project sources and cooperative-dev `path` dependencies, D-J). Fetched,
 /// lock-pinned cache packages are immutable and must not be in `paths`.
 ///
-/// Two event classes are routed: `.byd`/`byard.toml` edits trigger `reparse()`
-/// into `channel` (structural reload); `.svg` edits send the changed path to
-/// `assets` so the runtime can invalidate that vector field and regenerate it
-/// live (RFC-0009 §3). Any other change is ignored.
+/// `files` are the files the project is built from besides its sources (the
+/// manifest, a seed image, RFC-0022 §5). A change to one re-reads the project
+/// whatever its extension, and one outside every directory in `paths` is
+/// watched through its own directory, so an editor that saves by replacing
+/// the file is still seen. After each re-read, the files the manifest names
+/// then replace them, so a seed image it moves to is followed from that save.
+///
+/// Two event classes are routed: a source, the manifest, a raster image or
+/// a watched file being written, created or removed triggers `reparse()` into
+/// `channel`; an image or `.svg` changing sends its path to `assets` so the
+/// runtime decodes or regenerates it in place (RFC-0009 §3).
 ///
 /// A parse error keeps `views` empty so the caller retains the last-good view.
 /// Returns the watcher handle, drop it to stop watching.
@@ -242,50 +254,128 @@ pub struct ParsedFile {
 /// a path (e.g. file does not exist).
 pub fn start_watcher<F>(
     paths: &[std::path::PathBuf],
+    files: &[std::path::PathBuf],
     channel: std::sync::Arc<LatestWins<ParsedFile>>,
     assets: crossbeam_channel::Sender<std::path::PathBuf>,
     reparse: F,
-) -> Result<notify::RecommendedWatcher, notify::Error>
+) -> Result<Watching, notify::Error>
 where
     F: Fn() -> ParsedFile + Send + 'static,
 {
     use notify::{EventKind, RecursiveMode, Watcher};
+    use std::collections::HashSet;
+    use std::sync::{Arc, Mutex};
 
-    let mut watcher = notify::RecommendedWatcher::new(
+    let dirs: Vec<std::path::PathBuf> = paths.iter().map(|d| normal(d)).collect();
+    let outside_of = |dirs: &[std::path::PathBuf], file: &std::path::Path| {
+        !dirs.iter().any(|d| file.starts_with(d))
+    };
+    let outside = {
+        let dirs = dirs.clone();
+        move |file: &std::path::Path| outside_of(&dirs, file)
+    };
+    let initial: Vec<std::path::PathBuf> = files.iter().map(|f| normal(f)).collect();
+    // Matched by path, whatever their extension.
+    let files: Arc<Mutex<HashSet<std::path::PathBuf>>> =
+        Arc::new(Mutex::new(initial.iter().cloned().collect()));
+    // Directories to start watching, registered from a thread of their own:
+    // `notify` must not be asked to watch from inside its own event handler.
+    let (rewatch_tx, rewatch_rx) = crossbeam_channel::unbounded::<std::path::PathBuf>();
+    let watched_files = Arc::clone(&files);
+
+    let watcher = notify::RecommendedWatcher::new(
         move |result: notify::Result<notify::Event>| {
-            if let Ok(event) = result {
-                if !matches!(event.kind, EventKind::Modify(_) | EventKind::Create(_)) {
-                    return;
+            let Ok(event) = result else { return };
+            if !matches!(
+                event.kind,
+                EventKind::Modify(_) | EventKind::Create(_) | EventKind::Remove(_)
+            ) {
+                return;
+            }
+            let mut source_changed = false;
+            for p in event.paths.iter().filter(|p| !is_generated(p)) {
+                let named = watched_files
+                    .lock()
+                    .is_ok_and(|f| f.contains(p) || f.contains(&normal(p)));
+                if named || reparses_on(p) {
+                    source_changed = true;
                 }
-                let mut source_changed = false;
-                for p in event.paths.iter().filter(|p| !is_generated(p)) {
-                    if reparses_on(p) {
-                        source_changed = true;
+                if is_raster(p) || p.extension().is_some_and(|e| e == "svg") {
+                    // An image or vector asset changed: hand its path to
+                    // the runtime, which decodes or regenerates it in
+                    // place. A disconnected receiver (runtime torn down)
+                    // is not the watcher's problem.
+                    let _ = assets.send(p.clone());
+                }
+            }
+            if source_changed {
+                let parsed = reparse();
+                if let Ok(mut known) = watched_files.lock() {
+                    // The manifest's files now, not added to the old: a seed
+                    // image it no longer names is not the project's any more.
+                    // A failed re-read names none, so the set is kept.
+                    if !parsed.watch_files.is_empty() {
+                        let now: HashSet<_> =
+                            parsed.watch_files.iter().map(|f| normal(f)).collect();
+                        for file in now.difference(&known) {
+                            if let Some(parent) = file.parent().filter(|_| outside(file)) {
+                                let _ = rewatch_tx.send(parent.to_path_buf());
+                            }
+                        }
+                        *known = now;
                     }
-                    if is_raster(p) || p.extension().is_some_and(|e| e == "svg") {
-                        // An image or vector asset changed: hand its path to
-                        // the runtime, which decodes or regenerates it in
-                        // place. A disconnected receiver (runtime torn down)
-                        // is not the watcher's problem.
-                        let _ = assets.send(p.clone());
-                    }
                 }
-                if source_changed {
-                    channel.publish(reparse());
-                }
+                channel.publish(parsed);
             }
         },
         notify::Config::default(),
     )?;
-    for path in paths {
-        let mode = if path.is_dir() {
-            RecursiveMode::Recursive
-        } else {
-            RecursiveMode::NonRecursive
-        };
-        watcher.watch(path, mode)?;
+    let watcher = Arc::new(Mutex::new(watcher));
+    {
+        let mut w = watcher
+            .lock()
+            .map_err(|_| notify::Error::generic("watcher lock"))?;
+        for path in paths {
+            w.watch(path, RecursiveMode::Recursive)?;
+        }
+        // A file's directory may not exist (a seed image not written yet):
+        // that is the manifest's error to report, not the watcher's.
+        for file in initial.iter().filter(|f| outside_of(&dirs, f)) {
+            if let Some(parent) = file.parent() {
+                let _ = w.watch(parent, RecursiveMode::NonRecursive);
+            }
+        }
     }
-    Ok(watcher)
+    // Ends when the watcher (which owns the sender) is dropped.
+    let weak = Arc::downgrade(&watcher);
+    std::thread::spawn(move || {
+        while let Ok(dir) = rewatch_rx.recv() {
+            let Some(watcher) = weak.upgrade() else { break };
+            if let Ok(mut w) = watcher.lock() {
+                let _ = w.watch(&dir, RecursiveMode::NonRecursive);
+            }
+        }
+    });
+    Ok(Watching { _watcher: watcher })
+}
+
+/// A running file watcher; dropping it stops watching.
+pub struct Watching {
+    _watcher: std::sync::Arc<std::sync::Mutex<notify::RecommendedWatcher>>,
+}
+
+/// `path` as the watcher reports it: canonical, or for a file that is gone,
+/// its directory canonical and its name kept.
+fn normal(path: &std::path::Path) -> std::path::PathBuf {
+    path.canonicalize().unwrap_or_else(|_| {
+        match (
+            path.parent().and_then(|d| d.canonicalize().ok()),
+            path.file_name(),
+        ) {
+            (Some(dir), Some(name)) => dir.join(name),
+            _ => path.to_path_buf(),
+        }
+    })
 }
 
 /// Whether a change to `path` re-reads the project: a source file, the

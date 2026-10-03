@@ -87,7 +87,9 @@ pub fn package_checksum(root: &Path) -> Result<String, String> {
 }
 
 /// The asset files a package's manifest declares, as `(normalised relative
-/// path, absolute path)`. Only fonts are declared by path today.
+/// path, absolute path)`: its fonts, and the image its theme's seed is taken
+/// from (`[theme] seed = { image = "…" }`), which a consumer reads from the
+/// package when it extends the theme, so it has to be published and pinned.
 pub fn declared_assets(root: &Path) -> Result<Vec<(String, PathBuf)>, String> {
     let manifest = root.join("byard.toml");
     if !manifest.exists() {
@@ -98,15 +100,27 @@ pub fn declared_assets(root: &Path) -> Result<Vec<(String, PathBuf)>, String> {
     let table: toml::Table = src
         .parse()
         .map_err(|e: toml::de::Error| format!("{}: {e}", manifest.display()))?;
-    let Some(fonts) = table
+    let mut out = Vec::new();
+    if let Some(image) = table
+        .get("theme")
+        .and_then(|t| t.get("seed"))
+        .and_then(|s| s.get("image"))
+        .and_then(toml::Value::as_str)
+    {
+        if !crate::manifest::is_inside_package(image) {
+            return Err(format!(
+                "{}: [theme] seed image {image:?} is outside the package",
+                manifest.display()
+            ));
+        }
+        let rel = image.trim_start_matches("./").replace('\\', "/");
+        out.push((rel, root.join(image)));
+    }
+    let fonts = table
         .get("assets")
         .and_then(|a| a.get("fonts"))
-        .and_then(toml::Value::as_table)
-    else {
-        return Ok(Vec::new());
-    };
-    let mut out = Vec::new();
-    for (family, path) in fonts {
+        .and_then(toml::Value::as_table);
+    for (family, path) in fonts.into_iter().flatten() {
         let Some(path) = path.as_str() else {
             return Err(format!(
                 "{}: [assets.fonts] `{family}` must be a string path",
@@ -1087,6 +1101,50 @@ mod tests {
             registry_cache_path("a", "bc", "x"),
             "fields are separated in the key"
         );
+    }
+
+    /// A package's seed image is one of its assets: published with it and
+    /// covered by its checksum, so a theme that works from a path still
+    /// works once the package is installed from a registry.
+    #[test]
+    fn a_package_seed_image_is_published_and_pinned() {
+        let dir = std::env::temp_dir().join(format!("byard-seedasset-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("art")).unwrap();
+        std::fs::write(
+            dir.join("byard.toml"),
+            "[package]\nname = \"brand\"\nversion = \"0.1.0\"\n\n\
+             [theme]\nseed = { image = \"art/logo.png\" }\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("art/logo.png"), b"one").unwrap();
+        let assets = declared_assets(&dir).unwrap();
+        assert_eq!(assets.len(), 1);
+        assert_eq!(assets[0].0, "art/logo.png");
+        assert!(
+            publishable_files(&dir)
+                .unwrap()
+                .iter()
+                .any(|(rel, _)| rel == "art/logo.png"),
+            "published"
+        );
+        let before = package_checksum(&dir).unwrap();
+        std::fs::write(dir.join("art/logo.png"), b"two").unwrap();
+        assert_ne!(
+            package_checksum(&dir).unwrap(),
+            before,
+            "pinned by the checksum"
+        );
+
+        std::fs::write(
+            dir.join("byard.toml"),
+            "[package]\nname = \"brand\"\nversion = \"0.1.0\"\n\n\
+             [theme]\nseed = { image = \"../logo.png\" }\n",
+        )
+        .unwrap();
+        let err = declared_assets(&dir).unwrap_err();
+        assert!(err.contains("outside the package"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

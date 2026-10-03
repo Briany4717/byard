@@ -255,6 +255,15 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A theme's seed image is followed through every change in `byard dev`.**
+  It is matched by its path, so one with an unusual extension (`brand.asset`)
+  is seen; deleting it re-reads the manifest and shows the missing-file
+  error; and when `byard.toml` points the seed at another image, that image
+  is watched from the same save on, even outside the project.
+- **A package's seed image is published with it.** `byard publish` left a
+  theme's `seed = { image = "…" }` out of the archive and the checksum, so a
+  package theme that worked from a path failed once installed. It is now a
+  declared asset, and must live inside the package.
 - **`byard check` works inside a library package.** In a package with
   `[package]` and no `[project]`, it failed looking for a `main.byd` the
   package never declared. It now checks the package's own files, the ones an

@@ -926,6 +926,26 @@ impl PackageProvider for FsProvider {
 /// sibling (recursive under the entry's directory), sorted, the root package
 /// is one namespace (RFC-0008), so sibling views need no `use`.
 pub fn project_source_files(manifest: &Manifest) -> Result<Vec<SourceFile>, String> {
+    // A library package is checked as the files a consumer gets, from its
+    // `src/` (or its root without one), with no entry first.
+    if manifest.library {
+        let files = collect_byd_files(&manifest.project_root)?;
+        if files.is_empty() {
+            return Err(format!(
+                "package `{}` at `{}` contains no `.byd` files",
+                manifest.name,
+                manifest.project_root.display()
+            ));
+        }
+        return files
+            .into_iter()
+            .map(|(name, path)| {
+                let source = std::fs::read_to_string(&path)
+                    .map_err(|e| format!("{}: {e}", path.display()))?;
+                Ok(SourceFile { name, source })
+            })
+            .collect();
+    }
     let entry_dir = manifest
         .entry
         .parent()
@@ -1049,6 +1069,7 @@ mod tests {
                 source: DepSource::Path(PathBuf::from("../kit")),
             }],
             single_file: false,
+            library: false,
             vector_includes: Vec::new(),
             theme: byard_compiler::interp::theme::Theme::byard_base(),
             dev: crate::manifest::DevConfig::default(),

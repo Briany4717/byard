@@ -18,6 +18,7 @@ mod frosted_glass_example;
 mod gradient_kinds_example;
 mod grid_example;
 mod incremental_example;
+mod library_check;
 mod list_animations_example;
 mod looping_animations_example;
 mod navigation_example;

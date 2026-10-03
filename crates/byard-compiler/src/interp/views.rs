@@ -264,7 +264,7 @@ mod tests {
         let vs =
             views("View A() { Text(\"a\") }\nView B() { Text(\"b\") }\nView C() { Text(\"c\") }");
         let (table, errs) = ViewTable::build(&vs);
-        assert!(errs.is_empty());
+        assert!(errs.is_empty(), "{:?}", errs);
         assert_eq!(table.len(), 3);
         for name in ["A", "B", "C"] {
             assert!(table.contains(&Symbol::intern(name)), "missing {name}");

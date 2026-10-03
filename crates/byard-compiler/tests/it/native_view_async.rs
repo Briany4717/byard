@@ -324,7 +324,7 @@ fn a_controller_nobody_provided_is_reported_rather_than_silently_unanswered() {
         )),
         "a widget waiting forever for an answer nobody will send has to be said out loud"
     );
-    assert!(seen().answers.is_empty());
+    assert!(seen().answers.is_empty(), "{:?}", seen().answers);
 }
 
 #[test]

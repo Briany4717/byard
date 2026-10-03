@@ -772,7 +772,7 @@ mod tests {
     fn acquire_recycled_returns_empty_frame() {
         let relay = Relay::new().unwrap();
         let frame = relay.acquire_recycled();
-        assert!(frame.rects().is_empty());
+        assert!(frame.rects().is_empty(), "{:?}", frame.rects());
     }
 
     #[test]
@@ -988,7 +988,7 @@ mod tests {
         // it held before.
         for _ in 0..RECYCLE_POOL_SIZE {
             let frame = relay.acquire_recycled();
-            assert!(frame.rects().is_empty());
+            assert!(frame.rects().is_empty(), "{:?}", frame.rects());
         }
     }
 
@@ -1004,7 +1004,7 @@ mod tests {
         // One more acquire must still succeed (falls back to a fresh
         // allocation) rather than panicking or blocking.
         let frame = relay.acquire_recycled();
-        assert!(frame.rects().is_empty());
+        assert!(frame.rects().is_empty(), "{:?}", frame.rects());
     }
 
     #[test]

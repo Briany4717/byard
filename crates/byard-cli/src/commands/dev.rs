@@ -58,6 +58,7 @@ pub fn run(opts: Options<'_>) -> Result<(), String> {
         profile,
     } = opts;
     let manifest = Manifest::discover(file)?;
+    manifest.require_app("run")?;
 
     // Initial resolve on the main thread: catch errors before opening the
     // window. This covers the whole module graph (RFC-0008), not just the

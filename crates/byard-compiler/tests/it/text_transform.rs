@@ -71,7 +71,7 @@ fn a_still_upright_scene_is_not_a_full_redraw() {
     let frame = frame_of(
         "View Main() { Column { Text(\"a\") Box #[width: 10, height: 10, bg: 0xFF0000] {} } }",
     );
-    assert!(frame.groups().is_empty());
+    assert!(frame.groups().is_empty(), "{:?}", frame.groups());
     assert!(!frame.has_rotated_group());
 }
 

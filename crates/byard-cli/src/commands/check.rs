@@ -344,7 +344,7 @@ mod tests {
     #[test]
     fn parse_error_short_circuits() {
         let errs = check_source("View Main() { Column #[gap: ");
-        assert!(!errs.is_empty());
+        assert!(!errs.is_empty(), "{errs:?}");
     }
 
     #[test]

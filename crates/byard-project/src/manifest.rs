@@ -147,6 +147,12 @@ pub struct Manifest {
     /// project: only the entry file is compiled, sibling `.byd`s are ignored.
     /// A real project (a `byard.toml`) treats every sibling as one namespace.
     pub single_file: bool,
+    /// True for a library package: a `[package]` table and no `[project]`,
+    /// and no entry file. Its views are meant to be used through `use` by an
+    /// app, so it can be checked but not run, and its sources are the files a
+    /// consumer gets (`src/`, or the package root without one). `entry` is
+    /// then the package directory.
+    pub library: bool,
     /// `[assets.vectors] include`, the RFC-0009 §4 escape hatch: handles the
     /// AOT packer must bake even though no `VectorIcon("literal")` names them
     /// (e.g. a `VectorIcon(someVar)` resolved at runtime). Empty by default.
@@ -181,6 +187,19 @@ pub struct HttpConfig {
 }
 
 impl Manifest {
+    /// An error for the commands that run an app, when this is a library
+    /// package: it has views but nothing to open.
+    pub fn require_app(&self, command: &str) -> Result<(), String> {
+        if self.library {
+            return Err(format!(
+                "`{}` is a library package: it has no entry to {command}\n\
+                 hint: run it through an app that depends on it; `byard check` works here",
+                self.name
+            ));
+        }
+        Ok(())
+    }
+
     /// Discover the manifest by walking up from `CWD`, or fall back to
     /// `main.byd` in the current directory (C1).  If `override_path` is given,
     /// it is used as the entry file directly (no manifest required).
@@ -238,6 +257,7 @@ impl Manifest {
                 name,
                 dependencies: Vec::new(),
                 single_file: false,
+                library: false,
                 vector_includes: Vec::new(),
                 theme: Theme::byard_base(),
                 dev: DevConfig::default(),
@@ -267,6 +287,7 @@ impl Manifest {
             name,
             dependencies: Vec::new(),
             single_file: true,
+            library: false,
             vector_includes: Vec::new(),
             theme: Theme::byard_base(),
             dev: DevConfig::default(),
@@ -309,6 +330,7 @@ impl Manifest {
             .unwrap_or_default();
 
         let name = project
+            .or_else(|| table.get("package"))
             .and_then(|p| p.get("name"))
             .and_then(|v| v.as_str())
             .map_or_else(
@@ -327,8 +349,15 @@ impl Manifest {
             .and_then(|v| v.as_str())
             .unwrap_or("main.byd");
 
-        let entry = project_root.join(entry_rel);
-        if !entry.exists() {
+        // A manifest with `[package]` and no `[project]` is a library: no
+        // entry to run, its views checked as the files a consumer gets.
+        let library = project.is_none() && table.contains_key("package");
+        let entry = if library {
+            project_root.clone()
+        } else {
+            project_root.join(entry_rel)
+        };
+        if !library && !entry.exists() {
             return Err(format!(
                 "entry file `{}` not found (set in byard.toml [project].entry)",
                 entry.display()
@@ -361,6 +390,7 @@ impl Manifest {
             name,
             dependencies,
             single_file: false,
+            library,
             vector_includes,
             theme,
             dev,
@@ -548,6 +578,16 @@ fn parse_theme(
     dependencies: &[Dependency],
 ) -> Result<Theme, String> {
     let mut theme = Theme::byard_base();
+    // A library package (`[package]`, no `[project]`) is read as its
+    // consumers read it.
+    let library_name = if table.contains_key("project") {
+        None
+    } else {
+        table
+            .get("package")
+            .and_then(|p| p.get("name"))
+            .and_then(toml::Value::as_str)
+    };
 
     // The dependencies that are on disk, with their manifests. One that is
     // not (a git source before `byard get`) is skipped here: the module
@@ -615,12 +655,17 @@ fn parse_theme(
                 }
             }
         }
-        apply_theme_table(&mut theme, theme_tbl, None, project_root)?;
+        apply_theme_table(&mut theme, theme_tbl, library_name, project_root)?;
     }
 
-    // The project's own fonts, relative to the project.
-    for (family, font) in load_fonts(table, project_root, false)? {
-        theme.add_font(family, font);
+    // The project's own fonts, relative to the project. A library package's
+    // are named as its consumers name them, `"<package>/<Family>"`, and must
+    // live inside it, so checking the package sees what a consumer will.
+    for (family, font) in load_fonts(table, project_root, library_name.is_some())? {
+        match library_name {
+            Some(owner) => theme.add_font(format!("{owner}/{family}"), font),
+            None => theme.add_font(family, font),
+        }
     }
 
     Ok(theme)

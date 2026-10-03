@@ -393,7 +393,7 @@ fn bare_minus_without_a_number_is_a_targeted_error() {
     // `-` not followed by a number must report the specific diagnostic, not a
     // silent drop or a generic "expected an expression".
     let parsed = parse("View V() { Box #[translate: (-, 4)] }");
-    assert!(!parsed.errors.is_empty());
+    assert!(!parsed.errors.is_empty(), "{:?}", parsed.errors);
 }
 
 #[test]
@@ -580,7 +580,7 @@ fn function_types_parse() {
 #[test]
 fn multiple_views_per_file() {
     let parsed = parse("View A() {}\nView B() {}");
-    assert!(parsed.errors.is_empty());
+    assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
     assert_eq!(parsed.views.len(), 2);
     assert_eq!(parsed.views[0].name, sym("A"));
     assert_eq!(parsed.views[1].name, sym("B"));
@@ -645,7 +645,7 @@ fn callback_block_with_params_and_empty_default() {
             view.params[0].default
         );
     };
-    assert!(params.is_empty());
+    assert!(params.is_empty(), "{:?}", params);
     assert!(matches!(body.as_ref(), Expr::Block(s, _) if s.is_empty()));
     // The call-site block names its parameter.
     let field = as_element(&view.body[0]);
@@ -1009,7 +1009,7 @@ fn route_and_tab_stay_ordinary_identifiers_elsewhere() {
 fn a_case_pattern_may_not_interpolate() {
     // A route table is fixed at mount time, so a computed pattern is an error.
     let parsed = parse(r#"View App() { NavStack(path: p) { route "/x/{p}" { Text("x") } } }"#);
-    assert!(!parsed.errors.is_empty());
+    assert!(!parsed.errors.is_empty(), "{:?}", parsed.errors);
 }
 
 #[test]

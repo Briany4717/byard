@@ -957,7 +957,11 @@ View App() {
         app.frame();
     }
     assert_eq!(app.interp.nav_depths(), [13]);
-    assert!(app.interp.perf_warnings().is_empty());
+    assert!(
+        app.interp.perf_warnings().is_empty(),
+        "{:?}",
+        app.interp.perf_warnings()
+    );
 }
 
 /// Lowers `src` and returns the diagnostics its nav containers produce.

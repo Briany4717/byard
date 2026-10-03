@@ -408,7 +408,11 @@ mod tests {
         // A file that is not a font at all stands in for "no `fvar`": the
         // question `axis_weights` answers is whether the bytes declare an
         // axis, and bytes that declare nothing must yield nothing.
-        assert!(axis_weights(b"not a font at all").is_empty());
+        assert!(
+            axis_weights(b"not a font at all").is_empty(),
+            "{:?}",
+            axis_weights(b"not a font at all")
+        );
     }
 
     /// The axis is reported from the font, not assumed. Both shipped faces

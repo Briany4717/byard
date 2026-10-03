@@ -1,6 +1,140 @@
-View TrendsScreen() {
+// The week's temperatures as a chart: the highs as a smooth curve with the
+// area under it faded to the baseline, the lows as a thinner line beneath.
+// Both are drawn from the lists the API sends, by a `for` inside the path,
+// on a canvas as wide as the card it sits in.
+View TrendsScreen(place: Str, lat: Float, lon: Float) {
     inject Theme as t
-    Screen(title: "Trends", subtitle: "Temperature over the week") {
-        Text("Coming in the next milestone.") #[typo: t.body, color: t.onSurfaceVariant]
+    inject Http as http
+
+    // "loading" · "ok" · "error"
+    var state: Str = "loading"
+    var message: Str = ""
+    // Parallel lists, as the API sends them: one entry per day.
+    var days: List<Str> = []
+    var highs: List<Float> = []
+    var lows: List<Float> = []
+    // The card's own width, measured; the chart is drawn to it.
+    var cardW: Float = 320.0
+
+    // The plot: inset from the card's padding, and from its own edges so the
+    // first and last labels have room.
+    let plotH = 170.0
+    let inset = 16.0
+    let w = cardW - 40.0
+    let warmest = highs.max()
+    let coldest = lows.min()
+    let span = warmest - coldest
+    let step = (w - inset * 2.0) / 6.0
+
+    // A day's position across, and a temperature's position down.
+    fn across(i: Int) -> Float => inset + i * step
+    fn down(temp: Float) -> Float =>
+        plotH - 14.0 - (temp - coldest) / (span > 0.0 ? span : 1.0) * (plotH - 34.0)
+
+    let load = () => {
+        state = "loading"
+        http.get("/v1/forecast?latitude={lat}&longitude={lon}&daily=temperature_2m_max,temperature_2m_min&forecast_days=7&timezone=auto")
+            ok res => {
+                days = res.json.daily.time
+                highs = res.json.daily.temperature_2m_max
+                lows = res.json.daily.temperature_2m_min
+                state = "ok"
+            }
+            err e => {
+                message = e.message
+                state = "error"
+            }
+    }
+
+    on mount => load()
+
+    Screen(title: place, subtitle: "Temperature over the week") {
+        when state == "loading" {
+            Text("Asking about the week") #[typo: t.body, color: t.onSurfaceVariant,
+                                            m: (vertical: 48)]
+        }
+
+        when state == "error" {
+            Column #[bg: t.surfaceContainer, radius: 22, p: 20, gap: 8] {
+                Text("The week did not arrive") #[typo: t.title, color: t.onSurface]
+                Text(message) #[typo: t.caption, color: t.error]
+                Row #[p: (top: 8)] {
+                    Button("Try again") #[typo: t.label, bg: t.primaryContainer,
+                                         color: t.onPrimaryContainer, radius: 18]
+                        => load()
+                }
+            }
+        }
+
+        when state == "ok" {
+            Column #[bg: t.surfaceContainerLow, radius: 24, p: 20, gap: 14] {
+                on measure => { cardW = it.w }
+
+                Row #[gap: 18, align: center] {
+                    Column #[gap: 2] {
+                        Text("{warmest:.0}°") #[typo: t.headline, color: t.onSurface]
+                        Text("warmest") #[typo: t.caption, color: t.onSurfaceVariant]
+                    }
+                    Column #[gap: 2] {
+                        Text("{coldest:.0}°") #[typo: t.headline, color: t.primary]
+                        Text("coldest") #[typo: t.caption, color: t.onSurfaceVariant]
+                    }
+                }
+
+                Canvas #[width: w, height: plotH + 22.0] {
+                    // The area under the highs. Each day joins the next with
+                    // a curve that leaves and arrives level, so the line is
+                    // smooth and never overshoots a reading.
+                    path(
+                        fill: 0x00000000,
+                        gradient: (kind: linear, angle: 90deg,
+                                   from: 0xCCFFC46B, mid: 0x44FFC46B, to: 0x00FFC46B)
+                    ) {
+                        move(across(0), plotH)
+                        line(across(0), down(highs[0]))
+                        for i, temp in highs.slice(1) {
+                            cubic(across(i) + step / 2.0, down(highs[i]),
+                                  across(i) + step / 2.0, down(temp),
+                                  across(i + 1), down(temp))
+                        }
+                        line(across(6), plotH)
+                        close()
+                    }
+
+                    // The two lines themselves, on top of the area.
+                    for i, temp in highs.slice(1) {
+                        bezier(across(i), down(highs[i]),
+                               across(i) + step / 2.0, down(highs[i]),
+                               across(i) + step / 2.0, down(temp),
+                               across(i + 1), down(temp),
+                               stroke: 0xFFFFC46B, stroke_width: 3, cap: round)
+                    }
+                    for i, temp in lows.slice(1) {
+                        bezier(across(i), down(lows[i]),
+                               across(i) + step / 2.0, down(lows[i]),
+                               across(i) + step / 2.0, down(temp),
+                               across(i + 1), down(temp),
+                               stroke: 0xFF7CC4FF, stroke_width: 2, cap: round)
+                    }
+
+                    // The day of the month under each reading.
+                    for i, day in days {
+                        text("{day.slice(8, 10)}", x: across(i), y: plotH + 12.0,
+                             color: 0xFF9AA8C2, size: 11, align: center)
+                    }
+                }
+
+                Row #[gap: 16, align: center] {
+                    Row #[gap: 6, align: center] {
+                        Box #[width: 14, height: 3, radius: 2, bg: t.secondary] {}
+                        Text("High") #[typo: t.caption, color: t.onSurfaceVariant]
+                    }
+                    Row #[gap: 6, align: center] {
+                        Box #[width: 14, height: 3, radius: 2, bg: t.primary] {}
+                        Text("Low") #[typo: t.caption, color: t.onSurfaceVariant]
+                    }
+                }
+            }
+        }
     }
 }

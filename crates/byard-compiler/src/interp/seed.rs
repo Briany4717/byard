@@ -121,6 +121,8 @@ pub fn derive(seed: i64) -> (Scheme, Scheme) {
 /// dominant colour of a logo or a photo does not live in its fine detail, and
 /// this bounds the work at 16,384 pixels whatever the file's size.
 const SAMPLE_SIDE: u32 = 128;
+/// The least alpha a pixel needs to count as part of the picture.
+const HALF_OPAQUE: u8 = 128;
 /// How many colours the image is quantised to.
 const CLUSTERS: usize = 16;
 /// Below this colourfulness (the spread between an sRGB pixel's largest and
@@ -131,7 +133,9 @@ const GREY_BELOW: u32 = 24;
 
 /// The seed colour (`0xRRGGBB`) of an image, from its RGBA8 pixels (RFC-0022
 /// §5): the cluster that maximises population weighted by colourfulness,
-/// near-greys rejected. `None` when the image has no opaque pixel.
+/// near-greys rejected. Only pixels at least half opaque (alpha 128 or more)
+/// are the picture: a logo's anti-aliased edge counts, the faint halo round
+/// it does not. `None` when no pixel is.
 ///
 /// Median cut to [`CLUSTERS`] colours over at most [`SAMPLE_SIDE`] pixels on
 /// the long side, in **integer sRGB** throughout, so the same bytes are the
@@ -153,8 +157,8 @@ pub fn seed_from_rgba(rgba: &[u8], width: u32, height: u32) -> Option<i64> {
             let Some(px) = rgba.get(i..i + 4) else {
                 continue;
             };
-            // A transparent pixel is not part of the picture.
-            if px[3] >= 128 {
+            // Under half opaque is not part of the picture.
+            if px[3] >= HALF_OPAQUE {
                 pixels.push([px[0], px[1], px[2]]);
             }
         }
@@ -486,6 +490,14 @@ mod tests {
         let (vivid, dull) = ([0xF0, 0x20, 0x20, 255], [0xA0, 0x60, 0x60, 255]);
         let half = image(10, 10, |x, _| if x < 5 { dull } else { vivid });
         assert_eq!(seed_from_rgba(&half, 10, 10), Some(0xF0_2020));
+    }
+
+    /// The cutoff is exactly half opaque: 128 counts, 127 does not.
+    #[test]
+    fn a_pixel_counts_from_half_opaque() {
+        let at = |alpha: u8| image(4, 4, move |_, _| [0xE8, 0x54, 0x3F, alpha]);
+        assert_eq!(seed_from_rgba(&at(128), 4, 4), Some(0xE8_543F));
+        assert_eq!(seed_from_rgba(&at(127), 4, 4), None);
     }
 
     #[test]

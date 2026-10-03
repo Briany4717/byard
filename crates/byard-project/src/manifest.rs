@@ -554,7 +554,7 @@ fn seed_from_image(table: &toml::Table, root: &Path) -> Result<i64, String> {
     byard_compiler::interp::seed::seed_from_rgba(img.as_raw(), img.width(), img.height())
         .ok_or_else(|| {
             format!(
-                "byard.toml: [theme] seed image `{rel}` has no opaque pixel to take a colour from"
+                "byard.toml: [theme] seed image `{rel}` has no pixel at least half opaque to take a colour from"
             )
         })
 }

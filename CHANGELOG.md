@@ -248,6 +248,11 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`byard get` limits what a registry can send and where it can point.** A
+  response over 128 MiB is refused instead of read into memory, and a path
+  an index names (an archive) must be inside the registry, so an index cannot
+  point `byard get` at a file elsewhere on disk or another server.
+
 - **A theme's seed image is followed through every change in `byard dev`.**
   It is matched by its path, so one with an unusual extension (`brand.asset`)
   is seen; deleting it re-reads the manifest and shows the missing-file

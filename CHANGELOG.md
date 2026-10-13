@@ -52,6 +52,12 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`text.urlEncoded()` makes text safe to put in a URL.** A request is a
+  string with values interpolated into it, and a value could not be made
+  safe: a `&` or a `#` typed into a search field cut the query short. Write
+  `http.get("/search?name={query.urlEncoded()}")`. Letters, digits and
+  `- . _ ~` stay; everything else, a space included, becomes `%XX`.
+
 - **A path can be drawn from data.** `for` and `when` work inside a `path`
   body: `for i, t in temps { line(i * 40, 120 - t) }` writes one command per
   sample, so a chart's curve comes straight from a list. It used to be skipped

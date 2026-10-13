@@ -12772,6 +12772,12 @@ impl Interpreter {
                     }
                 }))
             }
+            // `text.urlEncoded()`: text made safe to put in a URL, as one
+            // query value or one path segment.
+            "urlEncoded" => Some(Box::new(move |ctx| match base_c(ctx) {
+                Value::Str(s) => Value::Str(url_encoded(&s)),
+                other => other,
+            })),
             "contains" => {
                 let mut arg = self.lower_expr(&args.first()?.value, payload_name);
                 Some(Box::new(move |ctx| {
@@ -14935,6 +14941,22 @@ fn structural_eq(a: &Value, b: &Value) -> bool {
         }
         _ => false,
     }
+}
+
+/// Percent-encodes `text` for use as one value in a URL (RFC 3986): letters,
+/// digits and `-`, `.`, `_`, `~` stay, and every other byte of its UTF-8
+/// becomes `%XX`. A space is `%20`, which is right in a query and in a path.
+fn url_encoded(text: &str) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::with_capacity(text.len());
+    for byte in text.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            out.push(char::from(byte));
+        } else {
+            let _ = write!(out, "%{byte:02X}");
+        }
+    }
+    out
 }
 
 /// Resolves a data member access (RFC-0027 §4/§6): `xs.len` (list/string

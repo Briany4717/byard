@@ -73,6 +73,7 @@ fn derived_readouts_are_correct_and_reactive() {
     // String concat + scalar coercion.
     has_readout(&lines, "\"n = \" + n", "n = 3");
     has_readout(&lines, "count message", "you have 3 items");
+    has_readout(&lines, "urlEncoded", "/search?q=Tom%20%26%20Jerry&n=3");
     // List ops.
     has_readout(&lines, "xs.len", "3");
     has_readout(&lines, "xs[0]", "1");

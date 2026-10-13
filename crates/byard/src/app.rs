@@ -43,7 +43,7 @@ use byard_core::{
 /// A Byard application: a `.byd` entry view, the controllers it may `inject`,
 /// and the window it runs in.
 pub struct App {
-    entry: PathBuf,
+    pub(crate) entry: PathBuf,
     /// The stable identity this app's persistent state is filed under
     /// (RFC-0029 O5).
     ///
@@ -59,8 +59,8 @@ pub struct App {
     )]
     app_id: String,
     title: String,
-    size: (u32, u32),
-    registry: ControllerRegistry,
+    pub(crate) size: (u32, u32),
+    pub(crate) registry: ControllerRegistry,
     /// Controllers rejected for taking a reserved capability name (RFC-0029
     /// §7), reported by [`App::run`].
     ///
@@ -197,14 +197,27 @@ impl App {
         self
     }
 
-    /// Opens the window and runs until it closes.
+    /// Registers a shader of the app's own, so a native view can draw
+    /// through it (RFC-0039).
     ///
-    /// # Errors
+    /// ```ignore
+    /// byard::App::new("src/main.byd")
+    ///     .shader::<MapTiles>()
+    ///     .native_view::<Map>()
+    ///     .run()
+    /// ```
     ///
-    /// Returns [`ByardError::Platform`] if the entry file cannot be read or
-    /// does not parse, and whatever engine/platform error initialisation or
-    /// the event loop produces.
-    pub fn run(self) -> Result<(), ByardError> {
+    /// The engine builds the pipeline when the window opens. A shader that
+    /// does not compile is reported there, by name.
+    #[must_use]
+    pub fn shader<S: byard_core::render::Shader>(self) -> Self {
+        byard_core::render::register_shader::<S>();
+        self
+    }
+
+    /// Refuses a set of registrations [`run`](Self::run) could not honour: a
+    /// controller under a reserved name, or two native views under one name.
+    pub(crate) fn check_registrations(&self) -> Result<(), ByardError> {
         if !self.reserved.is_empty() {
             // Deduplicated, because two controllers rejected for the same name
             // is one problem stated twice, and sorted so the message does not
@@ -238,6 +251,18 @@ impl App {
                 names.join(", ")
             )));
         }
+        Ok(())
+    }
+
+    /// Opens the window and runs until it closes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ByardError::Platform`] if the entry file cannot be read or
+    /// does not parse, and whatever engine/platform error initialisation or
+    /// the event loop produces.
+    pub fn run(self) -> Result<(), ByardError> {
+        self.check_registrations()?;
         let Program { views, theme, http } = load_program(&self.entry)?;
         let mut registry = self.registry;
         byard_core::cap::configure_http(&mut registry, http.base_url.as_deref(), &http.hosts);
@@ -260,11 +285,11 @@ impl App {
 }
 
 /// What [`load_program`] reads from a project.
-struct Program {
-    views: Vec<ViewDecl>,
-    theme: byard_compiler::interp::theme::Theme,
+pub(crate) struct Program {
+    pub(crate) views: Vec<ViewDecl>,
+    pub(crate) theme: byard_compiler::interp::theme::Theme,
     /// The `[http]` origins, for the built-in `Http` (RFC-0029).
-    http: byard_project::manifest::HttpConfig,
+    pub(crate) http: byard_project::manifest::HttpConfig,
 }
 
 /// Reads the program an app runs and the theme it runs in, the same way
@@ -278,7 +303,7 @@ struct Program {
 /// A shipped app with a broken view has nothing to fall back on, so a program
 /// that does not compile fails here with its diagnostics rather than opening
 /// a window onto nothing. (`byard dev` is the one that keeps going.)
-fn load_program(entry: &Path) -> Result<Program, ByardError> {
+pub(crate) fn load_program(entry: &Path) -> Result<Program, ByardError> {
     let manifest = byard_project::manifest::Manifest::discover(Some(entry))
         .map_err(|e| ByardError::Platform(format!("`{}`: {e}", entry.display())))?;
     let (program, _) = byard_project::deps::resolve_project(&manifest)

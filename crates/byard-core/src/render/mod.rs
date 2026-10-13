@@ -36,9 +36,16 @@ pub mod ctx;
 pub mod registry;
 pub mod view;
 
+pub use crate::encoder::package_shader::{
+    Lane, Layers, Shader, ShaderPipeline, register as register_shader,
+};
 pub use batch::{ClipShape, NativeBatch, NativeBatches, PipelineKey};
+/// The crate a [`Shader`]'s instance record derives `Pod` from, re-exported
+/// so an app needs no dependency of its own to write one.
+pub use bytemuck;
 pub use ctx::{
-    NativeCall, PipelineHandle, RenderCtx, TextureHandle, TextureRequest, TextureSource,
+    NativeCall, OwnedTextureSource, PipelineHandle, RenderCtx, TextureHandle, TextureRequest,
+    TextureSource,
 };
 pub use registry::{NativeProp, NativePropType, NativeViewInfo, NativeViewMeta};
 pub use view::{Event, Handled, Layout, Measure, NativeProps, NativeView, RequestKey};

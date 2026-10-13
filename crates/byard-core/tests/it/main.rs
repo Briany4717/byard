@@ -11,5 +11,6 @@ mod error_overlay_layer;
 mod incremental_scissor;
 mod instrumentation;
 mod native_view_paint;
+mod package_shader;
 mod paint_transform;
 mod wgsl_validation;

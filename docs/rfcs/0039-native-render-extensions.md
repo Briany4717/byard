@@ -38,6 +38,29 @@
     unit of work is one image, because sampling means binding *that* image
     before the draw, and a batch of instances names no image. A view that draws
     images registers a pipeline of its own, which is what this ABI is for.
+
+  **A package's own pipeline, completed 2026-10-13.** The last delta above
+  said a view that draws images "registers a pipeline of its own", and there
+  was no way for an app to do it: the registry took a built pipeline, and
+  nothing outside the encoder had a device to build one with. A package now
+  *describes* a pipeline (`render::Shader`: an instance record, its lanes and
+  the WGSL that draws a quad per instance) and the engine builds it
+  (`App::shader::<S>()`, `encoder/package_shader.rs`). No `wgpu` type reaches
+  the package, so there is still nothing for it to keep past a frame.
+
+  Images go through **layers**: a shader may declare one array texture of
+  equal-sized layers. A view writes pixels into a layer once, when it has
+  them (`RenderCtx::write_layer`), and names the layer in its instances, so
+  any number of images draw in one batch and dispatch stays per pipeline,
+  never per image. Which image is in which layer is the view's bookkeeping;
+  the engine keeps the pixels. A layer written on a frame the relay dropped
+  is carried to the next (`RenderFrame::merge_dirty_from`), because it is
+  written once.
+
+  `RenderCtx::upload_texture` and `TextureHandle`, as this document sketches
+  them, are still recorded and still drawn by nothing: a per-frame handle
+  names one texture per draw, which is the shape `texture_sampler` has and a
+  batch does not. Layers are what replaced them in practice.
 - **Author(s):** Briany4717
 - **Created:** 2026-08-04
 - **Last updated:** 2026-08-04

@@ -61,6 +61,22 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **An app can draw with a shader of its own.** A native view could only
+  emit into the engine's pipelines. Now the app describes one
+  (`byard::render::Shader`: the instance record, its fields, and the WGSL for
+  a quad per instance), registers it with `App::shader::<S>()`, and a view
+  draws through it with `cx.shader::<S>()`. The engine builds the pipeline;
+  the app never holds a GPU object. A shader may declare **layers**, one
+  array texture a view writes images into once (`cx.write_layer`) and samples
+  by index, so any number of images draw in one batch. See the glow behind
+  the bars in `examples/sparkline_view`.
+
+- **`App::shot(path, run_ms)` draws an app to a PNG without a window.** The
+  same program `App::run` opens, with its controllers, native views and
+  shaders, run for a stretch of real time: controller calls are made and
+  their answers applied. `byard shot` cannot draw an app with a Rust half;
+  this can. Try `cargo run -p sparkline-view -- --shot out.png`.
+
 - **`on change(a, b) => action` runs an action when a value changes.** A
   screen that loads in `on mount` had no way to load again when the place it
   was asked for changed; now it writes `on change(lat, lon) => load()` beside

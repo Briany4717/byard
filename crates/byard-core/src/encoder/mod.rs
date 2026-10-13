@@ -72,6 +72,7 @@ pub mod decorated_box;
 pub mod gpu_timer;
 pub mod group;
 pub mod instance_arena;
+pub mod package_shader;
 pub mod pipeline;
 pub mod ripple;
 pub mod text_glyph;
@@ -795,6 +796,17 @@ impl EncoderSubsystem {
         // which is where a fill belongs: a stroke over its own fill is the
         // shape everybody draws, and the depth each carries orders the rest.
         pipelines.register_core(canvas_fill::CanvasFillPipeline::new(canvas_fill_pipeline))?;
+        // The shaders packages registered, after every core pipeline and in
+        // the order they were registered.
+        let package_pipelines = package_shader::build_registered(&pipeline::PipelineCtx {
+            device: &device,
+            format: surface_format,
+            viewport_layout: &bind_group_layout,
+        })
+        .await?;
+        for built in package_pipelines {
+            pipelines.register(pipeline::PipelineOrder::Package, built)?;
+        }
 
         Ok(Self {
             device,
@@ -1207,6 +1219,24 @@ impl EncoderSubsystem {
             // atlas is ever written to. Applied unconditionally (not gated on
             // `should_draw` below) so a pending upload is never silently
             // dropped on a skip-frame.
+            // The layers native views wrote this frame (RFC-0039), under the
+            // same rule: written here and nowhere else, whether or not the
+            // frame goes on to draw.
+            for request in native.textures {
+                if let crate::render::OwnedTextureSource::Layer {
+                    pipeline,
+                    layer,
+                    pixels,
+                } = &request.source
+                {
+                    if !self
+                        .pipelines
+                        .write_layer(&self.queue, *pipeline, *layer, pixels)
+                    {
+                        refused_layer(pipeline.name(), *layer);
+                    }
+                }
+            }
             let applied = self.vector_atlas.apply_uploads(&self.queue, atlas_uploads);
             if let Some(tx) = &self.vector_ack_tx {
                 for id in applied {
@@ -3432,6 +3462,20 @@ pub(crate) fn clip_offset(idx: Option<u16>) -> u32 {
     {
         slot * CLIP_STRIDE as u32
     }
+}
+
+/// Names a layer write the pipeline refused, once per process: the layer is
+/// out of range, the pixels are not one layer's worth, or the pipeline has no
+/// layers. A mistake in how a view was written, true on every frame or none.
+fn refused_layer(pipeline: &str, layer: u32) {
+    static SAID: std::sync::Once = std::sync::Once::new();
+    SAID.call_once(|| {
+        eprintln!(
+            "  a native view wrote layer {layer} of `{pipeline}`, which refused it: the \
+             shader declares no such layer, or the pixels are not exactly one layer \
+             (width x height x 4 bytes)."
+        );
+    });
 }
 
 /// The physical scissor for a native view's batch (RFC-0039): the frame's base

@@ -22,6 +22,8 @@ byard-platform = { path = "../byard-platform" }
 byard-project = { path = "../byard-project" }
 wgpu = "29.0"
 pollster = "0.4"
+# `App::shot` writes a PNG.
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 [lints]
 workspace = true

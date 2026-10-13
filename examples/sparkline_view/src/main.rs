@@ -157,14 +157,26 @@ impl NativeView for Sparkline {
     }
 }
 
-fn main() -> Result<(), byard::ByardError> {
+/// The app: its views, its shader and its controller.
+fn app() -> byard::App {
     byard::App::new(concat!(env!("CARGO_MANIFEST_DIR"), "/src/main.byd"))
         .title("Sparkline, a native view")
         .size(760, 560)
+        .shader::<GlowShader>()
+        .native_view::<Glow>()
         .native_view::<Sparkline>()
         .native_view::<MeanLine>()
         .provide(Stats)
-        .run()
+}
+
+fn main() -> Result<(), byard::ByardError> {
+    // `cargo run -p sparkline-view -- --shot out.png` draws the app to a PNG
+    // instead of opening it, after a second of running.
+    let mut args = std::env::args().skip(1);
+    match (args.next().as_deref(), args.next()) {
+        (Some("--shot"), Some(out)) => app().shot(out, 1000),
+        _ => app().run(),
+    }
 }
 
 /// The Rust half of the average: an ordinary controller (RFC-0028), which is
@@ -271,5 +283,151 @@ impl NativeView for MeanLine {
                 self.mean = Some(*mean as f32);
             }
         }
+    }
+}
+
+/// What the glow's shader draws per instance: where, in which colour, and how
+/// far along its drift it is.
+#[repr(C)]
+#[derive(Clone, Copy, byard::render::bytemuck::Pod, byard::render::bytemuck::Zeroable)]
+#[bytemuck(crate = "byard::render::bytemuck")]
+struct GlowInstance {
+    rect: [f32; 4],
+    tint: [f32; 4],
+    phase: f32,
+}
+
+/// A shader of the app's own: three soft bands of light drifting across a
+/// rectangle.
+///
+/// This is the other half of the extension ABI. A view that only needs boxes
+/// emits into a core pipeline, as the two above do; one that needs pixels no
+/// core pipeline draws describes its own. It names the instance record, lists
+/// its fields, and writes the WGSL. The engine builds the pipeline, and the
+/// app never holds a GPU object.
+struct GlowShader;
+
+impl byard::render::Shader for GlowShader {
+    const NAME: &'static str = "sparkline_glow";
+    type Instance = GlowInstance;
+
+    fn lanes() -> &'static [byard::render::Lane] {
+        use byard::render::Lane;
+        &[Lane::Vec4, Lane::Vec4, Lane::F32]
+    }
+
+    fn wgsl() -> &'static str {
+        "
+struct Out {
+    @builtin(position) position: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+    @location(1) tint: vec4<f32>,
+    @location(2) phase: f32,
+};
+
+@vertex
+fn vs_main(
+    @location(0) quad: vec2<f32>,
+    @location(1) rect: vec4<f32>,
+    @location(2) tint: vec4<f32>,
+    @location(3) phase: f32,
+    @location(15) depth: f32,
+) -> Out {
+    var out: Out;
+    out.position = to_clip(rect.xy + quad * rect.zw, depth);
+    out.uv = quad;
+    out.tint = tint;
+    out.phase = phase;
+    return out;
+}
+
+@fragment
+fn fs_main(in: Out) -> @location(0) vec4<f32> {
+    // Three bands, each a sine across the width at its own pace, brightest
+    // along its own wavering line and fading towards the edges of the card.
+    var light = 0.0;
+    for (var i = 0; i < 3; i++) {
+        let k = f32(i);
+        let line = 0.5 + 0.22 * sin(in.uv.x * (3.0 + k * 1.7) + in.phase * (0.6 + k * 0.35) + k * 2.1);
+        let d = abs(in.uv.y - line);
+        light += 0.012 / (d * d + 0.012);
+    }
+    let edge = smoothstep(0.0, 0.25, in.uv.x) * smoothstep(1.0, 0.75, in.uv.x);
+    let alpha = clamp(light * 0.16, 0.0, 0.6) * edge;
+    return vec4<f32>(in.tint.rgb, alpha * in.tint.a);
+}
+"
+    }
+}
+
+/// The glow behind the chart: one instance of [`GlowShader`], redrawn every
+/// frame with the time.
+#[byard::native_view(name = "Glow")]
+#[derive(Default)]
+struct Glow {
+    /// The colour of the light.
+    #[prop]
+    tint: u32,
+    /// When the view first drew, which is where its drift starts.
+    started: Option<std::time::Instant>,
+}
+
+impl NativeView for Glow {
+    fn render(&mut self, layout: Layout, cx: &mut RenderCtx<'_>) {
+        let started = *self.started.get_or_insert_with(std::time::Instant::now);
+        let shader = cx.shader::<GlowShader>();
+        cx.emit(
+            shader,
+            &[GlowInstance {
+                rect: layout.rect,
+                tint: byard::render::rgba(self.tint),
+                phase: started.elapsed().as_secs_f32(),
+            }],
+        );
+        // It moves, so it asks for the next frame.
+        cx.request_repaint();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// The whole app, Rust half included, drawn without a window: the glow's
+    /// shader lights the card behind the bars, and the mean line is there,
+    /// which means the controller was really asked and really answered.
+    #[test]
+    fn the_app_draws_its_shader_and_its_answer() {
+        let out = std::env::temp_dir().join(format!("sparkline-{}.png", std::process::id()));
+        match super::app().shot(&out, 600) {
+            Ok(()) => {}
+            Err(e) if e.to_string().contains("no GPU") => {
+                eprintln!("no GPU adapter, skipping: {e}");
+                return;
+            }
+            Err(e) => panic!("{e}"),
+        }
+        let image = image::open(&out).expect("the PNG").to_rgba8();
+        let _ = std::fs::remove_file(&out);
+        assert_eq!(
+            image.dimensions(),
+            (1520, 1120),
+            "760x560 at two pixels each"
+        );
+
+        // Between two bars, inside the card: the card's own colour is
+        // (28, 28, 38), and the glow adds blue to it.
+        let lit = image.get_pixel(590, 400).0;
+        assert!(
+            lit[2] > 60 && lit[2] > lit[0] + 20,
+            "the glow lights the card: {lit:?}"
+        );
+        // The dashed mean line is the one yellow thing on screen.
+        let yellow = image
+            .pixels()
+            .filter(|p| p.0[0] > 220 && p.0[1] > 180 && p.0[2] < 160)
+            .count();
+        assert!(
+            yellow > 500,
+            "the mean line arrived: {yellow} yellow pixels"
+        );
     }
 }

@@ -146,6 +146,15 @@ pub enum OwnedTextureSource {
     },
     /// A path for the decode cache.
     Path(String),
+    /// One layer of a package shader's array texture.
+    Layer {
+        /// The pipeline whose texture it is.
+        pipeline: PipelineKey,
+        /// Which layer.
+        layer: u32,
+        /// Tightly packed 8-bit sRGB RGBA, exactly one layer's worth.
+        pixels: Vec<u8>,
+    },
 }
 
 /// One controller request a view issued this frame (RFC-0039 §"Async across
@@ -272,6 +281,36 @@ impl<'frame> RenderCtx<'frame> {
             key: PipelineKey::of::<P>(),
             _pipeline: PhantomData,
         }
+    }
+
+    /// A handle to the pipeline the engine built for the package shader `S`.
+    #[must_use]
+    pub fn shader<S: crate::encoder::package_shader::Shader>(
+        &self,
+    ) -> PipelineHandle<crate::encoder::package_shader::ShaderPipeline<S>> {
+        self.pipeline()
+    }
+
+    /// Writes `pixels` into layer `layer` of the shader `S`'s array texture.
+    ///
+    /// Called once, when the view has the pixels: the engine keeps them until
+    /// the layer is written again, so a view does not send an image every
+    /// frame. `pixels` is tightly packed 8-bit sRGB RGBA, exactly the size
+    /// `S::LAYERS` declares. Which image is in which layer is the view's own
+    /// bookkeeping.
+    pub fn write_layer<S: crate::encoder::package_shader::Shader>(
+        &mut self,
+        layer: u32,
+        pixels: &[u8],
+    ) {
+        self.textures.push(TextureRequest {
+            id: layer,
+            source: OwnedTextureSource::Layer {
+                pipeline: PipelineKey::of::<crate::encoder::package_shader::ShaderPipeline<S>>(),
+                layer,
+                pixels: pixels.to_vec(),
+            },
+        });
     }
 
     /// Appends `instances` to this frame's batch for `handle`'s pipeline.

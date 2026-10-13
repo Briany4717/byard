@@ -293,6 +293,7 @@ dependencies = [
  "byard-macro",
  "byard-platform",
  "byard-project",
+ "image",
  "pollster 0.4.0",
  "wgpu",
 ]
@@ -3387,6 +3388,7 @@ name = "sparkline-view"
 version = "0.0.0"
 dependencies = [
  "byard",
+ "image",
  "tokio",
 ]
 

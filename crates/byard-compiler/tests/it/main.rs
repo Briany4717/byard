@@ -12,6 +12,7 @@ mod button_defaults;
 mod callback_props;
 mod canvas_filled_paths;
 mod clip_path;
+mod control_grow;
 mod controller_boundary;
 mod disabled_gate;
 mod ecosystem_vector_wrapper;

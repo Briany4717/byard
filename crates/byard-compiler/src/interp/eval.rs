@@ -7419,7 +7419,8 @@ impl Interpreter {
             "Slider" => {
                 let w = self.eval_px_prop(attrs, "width").unwrap_or(200.0);
                 let h = self.eval_px_prop(attrs, "height").unwrap_or(24.0);
-                let id = self.atlas.add_leaf(LeafSize::new(w, h))?;
+                let grow = self.eval_float_prop(attrs, "grow").unwrap_or(0.0) as f32;
+                let id = self.atlas.add_growing_leaf(LeafSize::new(w, h), grow)?;
                 flat_ids.push(id);
                 return Ok(id);
             }
@@ -7444,7 +7445,8 @@ impl Interpreter {
             "TextField" => {
                 let w = self.eval_px_prop(attrs, "width").unwrap_or(200.0);
                 let h = self.eval_px_prop(attrs, "height").unwrap_or(36.0);
-                let id = self.atlas.add_leaf(LeafSize::new(w, h))?;
+                let grow = self.eval_float_prop(attrs, "grow").unwrap_or(0.0) as f32;
+                let id = self.atlas.add_growing_leaf(LeafSize::new(w, h), grow)?;
                 flat_ids.push(id);
                 return Ok(id);
             }

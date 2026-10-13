@@ -107,7 +107,8 @@ fn a_word_an_element_understands_is_not_a_name() {
         "Box #[scale: 1.0 with anim.spring(bouncy)] {}",
         "Canvas #[width: 20, height: 20] { circle(cx: 10, cy: 10, r: 5, fill: 0xFF0000) }",
     ] {
-        assert!(unknown(body).is_empty(), "{body}: {:?}", unknown(body));
+        let names = unknown(body);
+        assert!(names.is_empty(), "{body}: {names:?}");
     }
 }
 
@@ -146,7 +147,8 @@ View Card(title: Str, shown: Bool, content) {
 /// A `let` may read a `var` written below it.
 #[test]
 fn the_order_of_declarations_does_not_matter() {
-    assert!(unknown("let later = below + 1\nvar below: Int = 2\nText(\"{later}\")").is_empty());
+    let names = unknown("let later = below + 1\nvar below: Int = 2\nText(\"{later}\")");
+    assert!(names.is_empty(), "{names:?}");
 }
 
 /// What a view is called with is a value, named or not.

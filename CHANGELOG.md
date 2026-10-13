@@ -255,6 +255,14 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A `TextField` reads its `color:`, its padding and its `typo:` size.** The
+  text was always white, the placeholder always the same grey and both
+  always 10 from the left edge, so a field on a light theme drew white on
+  white. `color:` now colours the text and the caret, and the placeholder is
+  that colour fainter; `p:` or `pl:` sets where the text starts; a `typo:`
+  token gives its size as it does for a `Text`. A field that writes none of
+  them looks as it did.
+
 - **`byard get` limits what a registry can send and where it can point.** A
   response over 128 MiB is refused instead of read into memory, and a path
   an index names (an archive) must be inside the registry, so an index cannot

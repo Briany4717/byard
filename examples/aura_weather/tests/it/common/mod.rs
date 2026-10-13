@@ -12,7 +12,7 @@ use byard_compiler::interp::eval::{Interpreter, RenderNode};
 use byard_core::bridge::{ControllerRegistry, Dispatcher};
 use byard_core::cap::Http;
 use byard_core::frame::RenderFrame;
-use byard_core::platform::{EventKind, InputEvent};
+use byard_core::platform::{EventKind, InputEvent, InputPayload};
 use byard_core::relay::Relay;
 
 pub const W: f32 = 440.0;
@@ -37,36 +37,49 @@ impl Server {
     /// Answers each request from `routes`, by the first key its request line
     /// contains; anything unmatched is a 404.
     pub fn routes(routes: Vec<Route>) -> Self {
+        Self::slow_routes(routes.into_iter().map(|(k, s, b)| (k, s, b, 0)).collect())
+    }
+
+    /// Like [`Server::routes`], with a delay in milliseconds before each
+    /// route's answer, so a test can make one reply arrive after another.
+    /// Each request is answered on its own thread.
+    pub fn slow_routes(routes: Vec<(&'static str, &'static str, &'static str, u64)>) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
         let port = listener.local_addr().expect("addr").port();
         let seen = Arc::new(Mutex::new(Vec::new()));
         let log = Arc::clone(&seen);
+        let routes = Arc::new(routes);
         std::thread::spawn(move || {
             while let Ok((mut stream, _)) = listener.accept() {
-                let mut reader = BufReader::new(stream.try_clone().expect("clone"));
-                let mut line = String::new();
-                let mut request = String::new();
-                while reader.read_line(&mut line).unwrap_or(0) > 0 {
-                    if request.is_empty() {
-                        request = line.trim_end().to_string();
-                        log.lock().unwrap().push(request.clone());
+                let log = Arc::clone(&log);
+                let routes = Arc::clone(&routes);
+                std::thread::spawn(move || {
+                    let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+                    let mut line = String::new();
+                    let mut request = String::new();
+                    while reader.read_line(&mut line).unwrap_or(0) > 0 {
+                        if request.is_empty() {
+                            request = line.trim_end().to_string();
+                            log.lock().unwrap().push(request.clone());
+                        }
+                        if line == "\r\n" {
+                            break;
+                        }
+                        line.clear();
                     }
-                    if line == "\r\n" {
-                        break;
-                    }
-                    line.clear();
-                }
-                let (status, body) = routes
-                    .iter()
-                    .find(|(key, _, _)| request.contains(key))
-                    .map_or(("404 Not Found", "{}"), |(_, s, b)| (*s, *b));
-                let response = format!(
-                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\n\
-                     Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                    body.len()
-                );
-                let _ = stream.write_all(response.as_bytes());
-                let _ = stream.flush();
+                    let (status, body, delay) = routes
+                        .iter()
+                        .find(|(key, _, _, _)| request.contains(key))
+                        .map_or(("404 Not Found", "{}", 0), |(_, s, b, d)| (*s, *b, *d));
+                    std::thread::sleep(std::time::Duration::from_millis(delay));
+                    let response = format!(
+                        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\n\
+                         Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = stream.write_all(response.as_bytes());
+                    let _ = stream.flush();
+                });
             }
         });
         Self { port, seen }
@@ -145,6 +158,55 @@ impl App {
         self.interp
             .render(&self.tree, &mut self.frame, self.width, H);
         self.now += 16;
+    }
+
+    /// Types `text` into whatever has the focus, one character at a time, as
+    /// a keyboard would.
+    pub fn type_text(&mut self, text: &str) {
+        for c in text.chars() {
+            let t = u64::from(self.now);
+            self.step(&[InputEvent {
+                kind: EventKind::TextInput,
+                pos: (0.0, 0.0),
+                delta: (0.0, 0.0),
+                payload: Some(InputPayload::Key(c.to_string())),
+                time_ms: t,
+            }]);
+        }
+    }
+
+    /// Presses and releases at a point of the window.
+    pub fn tap_at(&mut self, pos: (f32, f32)) {
+        let at = |kind, t| InputEvent {
+            kind,
+            pos,
+            delta: (0.0, 0.0),
+            payload: None,
+            time_ms: t,
+        };
+        let t = u64::from(self.now);
+        self.step(&[
+            at(EventKind::PointerDown, t),
+            at(EventKind::PointerUp, t + 8),
+        ]);
+        self.settle();
+    }
+
+    /// Every solid box as painted, `[x, y, w, h]`: where layout put it plus
+    /// the paint transform an anchored overlay is moved by.
+    pub fn boxes(&self) -> Vec<[f32; 4]> {
+        self.frame
+            .instances()
+            .iter()
+            .map(|b| {
+                [
+                    b.rect[0] + b.transform.translate[0],
+                    b.rect[1] + b.transform.translate[1],
+                    b.rect[2],
+                    b.rect[3],
+                ]
+            })
+            .collect()
     }
 
     /// Resizes the window and lets the layout settle.

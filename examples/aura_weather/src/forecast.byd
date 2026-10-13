@@ -47,6 +47,8 @@ View ForecastScreen(place: Str, lat: Float, lon: Float) {
     }
 
     on mount => load()
+    // Another place was picked: ask again.
+    on change(lat, lon) => load()
 
     Screen(title: place, subtitle: "Current conditions and the next hours") {
         when state == "loading" {

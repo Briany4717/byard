@@ -62,6 +62,8 @@ View AirScreen(place: Str, lat: Float, lon: Float) {
     }
 
     on mount => load()
+    // Another place was picked: ask again.
+    on change(lat, lon) => load()
 
     Screen(title: "Air quality", subtitle: "What you are breathing") {
         when state == "loading" {

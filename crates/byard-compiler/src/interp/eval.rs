@@ -1567,6 +1567,12 @@ fn is_callback_param(param: &Param) -> bool {
 /// the body splices the caller-supplied block.
 pub(crate) const RESERVED_CONTENT: &str = "content";
 
+/// How far a `TextField`'s text sits from its left edge when the field writes
+/// no padding.
+const FIELD_PAD_X: f32 = 10.0;
+/// A placeholder is drawn in the field's `color:` at this share of its alpha.
+const PLACEHOLDER_ALPHA: f32 = 0.55;
+
 thread_local! {
     /// Thread-local storage holding the active payload of the event currently being processed.
     pub static CURRENT_PAYLOAD: std::cell::RefCell<Option<Value>> = const { std::cell::RefCell::new(None) };
@@ -9726,6 +9732,7 @@ impl Interpreter {
     /// Renders a `TextField` widget: background box + text/placeholder,
     /// and registers keyboard handlers for text input.
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_lines)]
     fn render_text_field(
         &mut self,
         bound_sig: Option<super::env::SignalId>,
@@ -9760,12 +9767,25 @@ impl Interpreter {
             (cur_text, false)
         };
 
-        let text_color = if is_placeholder {
-            0x0088_8888_i64
-        } else {
-            0x00ff_ffff_i64
+        // The field's own `color:` for what is typed, and the same colour
+        // fainter for the placeholder. Unwritten, the field keeps the white
+        // on grey it always had.
+        let written = self
+            .eval_color_prop(attrs, "color")
+            .map(super::intrinsics::color_rgba_auto);
+        let value_rgba =
+            written.unwrap_or_else(|| super::intrinsics::color_to_rgba(0x00ff_ffff, false));
+        let text_rgba = match (is_placeholder, written) {
+            (false, _) => value_rgba,
+            (true, Some(c)) => [c[0], c[1], c[2], c[3] * PLACEHOLDER_ALPHA],
+            (true, None) => super::intrinsics::color_to_rgba(0x0088_8888, false),
         };
-        let font_size = self.eval_int_prop(attrs, "size").unwrap_or(16) as f32;
+        // `size:` first, then the `typo:` token's size, as a `Text` does.
+        let typo_size = self.eval_typo_size(attrs);
+        let font_size = self
+            .eval_int_prop(attrs, "size")
+            .or(typo_size)
+            .unwrap_or(16) as f32;
 
         // Focus underline (Material-style): a thin accent bar along the bottom
         // edge when the field holds focus.
@@ -9783,7 +9803,18 @@ impl Interpreter {
             });
         }
 
-        let pad_x = 10.0_f32;
+        // The text starts at the field's left padding when it writes one.
+        let pads = attrs.iter().any(|a| {
+            matches!(
+                a.name.as_str(),
+                "p" | "padding" | "pl" | "padding_left" | "padding-left"
+            )
+        });
+        let pad_x = if pads {
+            self.eval_container_style("Box", attrs).padding.left
+        } else {
+            FIELD_PAD_X
+        };
         let text_x = rect.x + pad_x;
         let text_y = rect.y + (rect.h - font_size) / 2.0;
         // NOTE: `TextLine` carries no `Transform` field (RFC-0011 engine slice:
@@ -9804,7 +9835,7 @@ impl Interpreter {
                 y: text_y,
                 text: display_text.clone(),
                 font_size,
-                color: dim_alpha(super::intrinsics::color_to_rgba(text_color, false), opacity),
+                color: dim_alpha(text_rgba, opacity),
                 dirty: true,
             });
         }
@@ -9820,7 +9851,7 @@ impl Interpreter {
             };
             let mut caret_x = text_x + measured + 1.0;
             if let Some((text, cursor)) = &preedit {
-                let color = dim_alpha(super::intrinsics::color_to_rgba(text_color, false), opacity);
+                let color = dim_alpha(text_rgba, opacity);
                 let start = text_x + measured;
                 let mut width_of = |upto: usize| -> f32 {
                     let end = floor_char_boundary(text, upto);
@@ -9873,7 +9904,7 @@ impl Interpreter {
             if caret_visible {
                 frame.push_instance(byard_core::BoxInstance {
                     rect: [caret_x, text_y, 1.5, font_size],
-                    color: dim_alpha([1.0, 1.0, 1.0, 1.0], opacity),
+                    color: dim_alpha(value_rgba, opacity),
                     radii: [0.0; 4],
                     transform,
                     smooth: 0.0,

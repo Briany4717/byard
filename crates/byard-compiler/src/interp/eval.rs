@@ -9893,9 +9893,27 @@ impl Interpreter {
             });
         }
 
-        // Handlers: TextInput appends, KeyDown handles Backspace/Enter/Tab.
+        // The field's own events. The router runs one handler per event kind
+        // on the focused element, the last one registered, so the handlers
+        // written on the field are registered first (pointer events, focus,
+        // blur, key_up reach them as on any element) and the ones that share
+        // a kind with the field's own editing are folded into it below.
+        self.register_event_attrs(attrs, hit_rect, elem_idx);
+        let mut on_edit = self.field_actions(attrs, &["input", "change"]);
+        let mut on_typed = self.field_actions(attrs, &["text_input"]);
+        let mut on_key = self.field_actions(attrs, &["key_down"]);
+        let mut on_submit = self.field_actions(attrs, &["submit"]);
+
+        // Handlers: TextInput appends, KeyDown handles Backspace/Delete/Enter.
         if let (Some(sig), Some(idx)) = (bound_sig, elem_idx) {
-            // TextInput: append typed text
+            // What the field holds now, for the handlers that are told.
+            let value_of = move |ctx: &mut ReactiveCtx| match ctx.peek_signal(sig) {
+                Value::Str(s) => Value::Str(s),
+                _ => Value::Str(String::new()),
+            };
+            // TextInput: append typed text, then `input` and `change`, which
+            // see the value already written.
+            let mut edited = self.field_actions(attrs, &["input", "change"]);
             let text_input: super::events::Action = Box::new(move |ctx, payload| {
                 if let Some(Value::Str(ch)) = payload {
                     let cur = match ctx.peek_signal(sig) {
@@ -9903,6 +9921,13 @@ impl Interpreter {
                         _ => String::new(),
                     };
                     ctx.write_signal(sig, Value::Str(cur + ch.as_str()));
+                    for action in &mut on_typed {
+                        action(ctx, payload);
+                    }
+                    let now = value_of(ctx);
+                    for action in &mut edited {
+                        action(ctx, Some(&now));
+                    }
                 }
             });
             self.router.on(
@@ -9912,9 +9937,10 @@ impl Interpreter {
                 text_input,
             );
 
-            // KeyDown: Backspace deletes, Enter/Escape handled (submit fires via Change)
+            // KeyDown: Backspace and Delete edit, Enter submits.
             let key_down: super::events::Action = Box::new(move |ctx, payload| {
                 if let Some(Value::Str(key)) = payload {
+                    let before = value_of(ctx);
                     match key.as_str() {
                         "Backspace" => {
                             let cur = match ctx.peek_signal(sig) {
@@ -9936,6 +9962,21 @@ impl Interpreter {
                             ctx.write_signal(sig, Value::Str(String::new()));
                         }
                         _ => {}
+                    }
+                    for action in &mut on_key {
+                        action(ctx, payload);
+                    }
+                    let now = value_of(ctx);
+                    // A Backspace in an empty field edits nothing.
+                    if now != before {
+                        for action in &mut on_edit {
+                            action(ctx, Some(&now));
+                        }
+                    }
+                    if key.as_str() == "Enter" {
+                        for action in &mut on_submit {
+                            action(ctx, Some(&now));
+                        }
                     }
                 }
             });
@@ -10216,6 +10257,22 @@ impl Interpreter {
                 view.set_prop(prop.name, &host);
             }
         }
+    }
+
+    /// The actions written on a field for the events in `names`, lowered.
+    /// The handler's own payload name (`input(text) => …`) is honoured.
+    fn field_actions(&mut self, attrs: &[Attr], names: &[&str]) -> Vec<super::events::Action> {
+        let mut out = Vec::new();
+        for attr in attrs {
+            if let AttrKind::Event { payload, action } = &attr.kind {
+                if names.contains(&attr.name.as_str()) {
+                    if let Ok(lowered) = self.lower_action(action, payload.clone()) {
+                        out.push(lowered);
+                    }
+                }
+            }
+        }
+        out
     }
 
     fn register_event_attrs(

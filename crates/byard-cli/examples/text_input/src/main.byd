@@ -20,17 +20,25 @@
 //   6. The second field sits inside a scrolled ScrollView. Scroll it, focus
 //      it and compose: the candidate window follows the caret to where the
 //      field actually is on screen.
+//
+// The first field also counts its edits (`input`) and remembers what was
+// last sent with Enter (`submit`). A composition is not an edit until it is
+// committed.
 View Main() {
     var name = ""
     var note = ""
     var scroll = 0
+    var edits = 0
+    var sent = ""
 
     Column #[bg: 0x14161C, p: 32, gap: 16, width: 560] {
         Text("Text input, with an input method") #[color: 0xF2F3F5, size: 20]
 
         TextField #[bind: name, placeholder: "Type a name, in any script",
-                    bg: 0x1F222B, width: 420, height: 44, size: 18]
+                    bg: 0x1F222B, width: 420, height: 44, size: 18,
+                    input => edits++, submit => sent = name]
         Text("name = \"{name}\"") #[color: 0x8A90A0, size: 14]
+        Text("{edits} edits, sent \"{sent}\" (press Enter)") #[color: 0x8A90A0, size: 14]
 
         Text("the second field is inside a ScrollView") #[color: 0x8A90A0, size: 13]
         ScrollView #[width: 440, height: 120, offset: (0, scroll), bg: 0x1C1F27] {

@@ -275,6 +275,15 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   now keeps its function's parameters as they were when it was placed, each
   outstanding call its own.
 
+- **The events written on a `TextField` run.** `input`, `change`, `submit`,
+  `key_down`, `key_up`, `focus`, `blur` and the pointer events were accepted
+  on a field and never ran: the field registered its own editing and nothing
+  else. Now `input` and `change` run after every edit (typed text, Backspace,
+  Delete, a committed composition) and see the value already written,
+  `submit` runs on Enter, and the rest run as on any element. A handler can
+  name what it is told: `input(text) => search(text)`. A `key_down` written
+  on a field does not replace the field's own editing.
+
 - **`byard get` limits what a registry can send and where it can point.** A
   response over 128 MiB is refused instead of read into memory, and a path
   an index names (an archive) must be inside the registry, so an index cannot

@@ -12,6 +12,15 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **A name nothing declares is an error.** `Text("{cuont}")` drew the word
+  "cuont" and `count = cuont + 1` wrote text into a number, and `byard check`
+  passed both. A bare name read as a value (in a text, an expression, a
+  condition, a loop, an action, an argument to a view) now has to be
+  declared, and the error suggests the closest name in scope
+  (`did you mean count?`). A word an element understands (`align: center`,
+  `repeat: infinite`) is still the element's to judge. A project that passed
+  `byard check` with a misspelt name in it now fails there.
+
 - **A registry `version` is a requirement now, not an exact version.**
   `version = "0.1.0"` accepts any compatible `0.1.x` (Cargo's rules), where it
   used to accept `0.1.0` only. Write `"=0.1.0"` to keep exactly one. An

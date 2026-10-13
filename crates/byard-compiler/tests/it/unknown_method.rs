@@ -55,6 +55,18 @@ fn one(name: &str, hint: Option<&str>) -> Vec<(String, Option<String>)> {
     vec![(name.to_string(), hint.map(str::to_string))]
 }
 
+/// `body` reports exactly one thing: that `name` is not declared.
+fn assert_only_an_unknown_name(body: &str, name: &str) {
+    let errors = resolve(body).errors;
+    assert!(
+        matches!(
+            errors.as_slice(),
+            [CompileError::UnknownName { name: n, .. }] if n == name
+        ),
+        "{errors:?}"
+    );
+}
+
 #[test]
 fn a_misspelt_method_on_a_list_var_is_reported() {
     let found = unknown_methods("var xs = [1, 2, 3]\nlet ys = xs.pusj(1)");
@@ -244,21 +256,24 @@ fn a_name_that_shadows_a_list_is_not_taken_for_the_list() {
 
 #[test]
 fn a_binding_local_to_a_block_does_not_outlive_it() {
-    // `xs` is a list only inside the `when` branch; outside it is unknown.
-    assert_clean(
+    // `xs` is a list only inside the `when` branch; outside it is no name
+    // at all, which is what is reported, and not a method missing from a list.
+    assert_only_an_unknown_name(
         "when true {\n\
              let xs = [1]\n\
              Text(\"{xs.len}\")\n\
          }\n\
          Text(\"{xs.shout()}\")",
+        "xs",
     );
 }
 
 #[test]
 fn a_fn_parameter_does_not_leak_into_the_view() {
-    assert_clean(
+    assert_only_an_unknown_name(
         "fn head(xs: List<Int>) -> Int => xs.len\n\
          Text(\"{xs.shout()}\")",
+        "xs",
     );
 }
 

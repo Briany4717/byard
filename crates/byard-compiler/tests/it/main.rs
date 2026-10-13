@@ -57,5 +57,7 @@ mod top_level_fn;
 mod transform_hit_test;
 mod unknown_method;
 mod url_encoded;
+
+mod unknown_name;
 mod user_views;
 mod watcher_files;

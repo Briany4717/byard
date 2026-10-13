@@ -12,6 +12,15 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **A name nothing declares is an error.** `Text("{cuont}")` drew the word
+  "cuont" and `count = cuont + 1` wrote text into a number, and `byard check`
+  passed both. A bare name read as a value (in a text, an expression, a
+  condition, a loop, an action, an argument to a view) now has to be
+  declared, and the error suggests the closest name in scope
+  (`did you mean count?`). A word an element understands (`align: center`,
+  `repeat: infinite`) is still the element's to judge. A project that passed
+  `byard check` with a misspelt name in it now fails there.
+
 - **A registry `version` is a requirement now, not an exact version.**
   `version = "0.1.0"` accepts any compatible `0.1.x` (Cargo's rules), where it
   used to accept `0.1.0` only. Write `"=0.1.0"` to keep exactly one. An
@@ -51,6 +60,19 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   colour lighter than it was written.
 
 ### Added
+
+- **`on change(a, b) => action` runs an action when a value changes.** A
+  screen that loads in `on mount` had no way to load again when the place it
+  was asked for changed; now it writes `on change(lat, lon) => load()` beside
+  it. It runs once per change, not on mount, not when a value is written to
+  what it already was, and not while its view is off screen. Coming back on
+  screen is a mount, not a change. See `crates/byard-cli/examples/on_change`.
+
+- **`text.urlEncoded()` makes text safe to put in a URL.** A request is a
+  string with values interpolated into it, and a value could not be made
+  safe: a `&` or a `#` typed into a search field cut the query short. Write
+  `http.get("/search?name={query.urlEncoded()}")`. Letters, digits and
+  `- . _ ~` stay; everything else, a space included, becomes `%XX`.
 
 - **A path can be drawn from data.** `for` and `when` work inside a `path`
   body: `for i, t in temps { line(i * 40, 120 - t) }` writes one command per
@@ -254,6 +276,36 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   an error.
 
 ### Fixed
+
+- **A `TextField` or a `Slider` with `grow: 1` fills its row.** Both stayed
+  200 wide whatever `grow` said, and nothing reported it, so a search field
+  could not span its window. `grow` now gives them their share of the free
+  space, as it does for a `Box`; without it they keep their width.
+
+- **A reply's `ok` and `err` arms see the arguments their function was called
+  with.** In `let search = (asked) => { http.get(...) ok res => { ... } }`,
+  `asked` inside the arm read the argument again when the answer arrived, so
+  after `search(query)` it was whatever `query` had become by then. A late
+  answer to an old question could not be told from the current one. The call
+  now keeps its function's parameters as they were when it was placed, each
+  outstanding call its own.
+
+- **The events written on a `TextField` run.** `input`, `change`, `submit`,
+  `key_down`, `key_up`, `focus`, `blur` and the pointer events were accepted
+  on a field and never ran: the field registered its own editing and nothing
+  else. Now `input` and `change` run after every edit (typed text, Backspace,
+  Delete, a committed composition) and see the value already written,
+  `submit` runs on Enter, and the rest run as on any element. A handler can
+  name what it is told: `input(text) => search(text)`. A `key_down` written
+  on a field does not replace the field's own editing.
+
+- **A `TextField` reads its `color:`, its padding and its `typo:` size.** The
+  text was always white, the placeholder always the same grey and both
+  always 10 from the left edge, so a field on a light theme drew white on
+  white. `color:` now colours the text and the caret, and the placeholder is
+  that colour fainter; `p:` or `pl:` sets where the text starts; a `typo:`
+  token gives its size as it does for a `Text`. A field that writes none of
+  them looks as it did.
 
 - **`byard get` limits what a registry can send and where it can point.** A
   response over 128 MiB is refused instead of read into memory, and a path

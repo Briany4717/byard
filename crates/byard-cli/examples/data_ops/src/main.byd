@@ -69,6 +69,9 @@ View Main() {
         Text("\"n = \" + n   →  {\"n = \" + n}") #[color: 0xCCD2E0, size: 15]
         Text("count message →  {\"you have \" + xs.len + \" items\"}")
             #[color: 0xCCD2E0, size: 15]
+        // Text made safe for a URL: the `&` stays part of the value.
+        Text("urlEncoded   →  /search?q={\"Tom & Jerry\".urlEncoded()}&n={n}")
+            #[color: 0xCCD2E0, size: 15]
 
         // ── list controls + ops (§4) ────────────────────────────────────
         Row #[gap: 10, p: (vertical: 8, horizontal: 0)] {

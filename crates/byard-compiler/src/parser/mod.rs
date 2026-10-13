@@ -421,6 +421,15 @@ impl<'a> Parser<'a> {
             {
                 Some(self.parse_measure())
             }
+            // `on change(a, b) => …`. Contextual like the three above, and the
+            // parenthesis is part of it: `on change => …` is not this form.
+            Some(Token::Ident(name))
+                if name.as_str() == "on"
+                    && matches!(self.peek2(), Some(Token::Ident(ref s))
+                        if s.as_str() == "change") =>
+            {
+                Some(self.parse_change())
+            }
             // RFC-0029 §5 `every <dur> => …` / `after <dur> => …`. Contextual,
             // like `on mount`: the keyword is only special when a duration
             // literal follows it, so `every` and `after` stay ordinary
@@ -531,6 +540,33 @@ impl<'a> Parser<'a> {
         self.expect(&Token::Arrow, "'=>'");
         let action = self.parse_expr(0);
         Member::Measure {
+            action,
+            span: self.span_from(start),
+        }
+    }
+
+    /// `change := "on" "change" "(" expr ("," expr)* ")" "=>" action`.
+    ///
+    /// The watched values sit in parentheses because `on change lat => load()`
+    /// would read `lat => load()` as a lambda.
+    fn parse_change(&mut self) -> Member {
+        let start = self.cur_span();
+        self.advance(); // on
+        self.advance(); // change
+        self.expect(&Token::LParen, "'('");
+        let mut watched = Vec::new();
+        while !matches!(self.cur(), Some(Token::RParen) | None) {
+            watched.push(self.parse_expr(0));
+            if !matches!(self.cur(), Some(Token::Comma)) {
+                break;
+            }
+            self.advance();
+        }
+        self.expect(&Token::RParen, "')'");
+        self.expect(&Token::Arrow, "'=>'");
+        let action = self.parse_expr(0);
+        Member::Change {
+            watched,
             action,
             span: self.span_from(start),
         }

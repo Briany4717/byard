@@ -1,0 +1,54 @@
+// `on change`: an action that runs when a value it names changes.
+//
+// Run it (from the repo root):
+//   cd crates/byard-cli/examples/on_change
+//   cargo run -p byard-cli -- dev
+//
+// Pick a city. The card below is a separate view that receives the city as a
+// parameter: it loads once in `on mount`, and again in `on change(place)`
+// each time the parameter changes. Pressing the city already selected writes
+// the same value, which is not a change, so the count stays where it is.
+//
+// "Hide" unmounts the card. Cities picked while it is hidden are not counted,
+// and showing it again is a mount, not a change.
+View Main() {
+    var city = "Tokyo"
+    var shown = true
+
+    let chip = style {
+        radius: 16, p: (vertical: 8, horizontal: 14), bg: 0x1E2433, color: 0x9AA8C2
+        on selected { bg: 0x3B82F6, color: 0xFFFFFF }
+    }
+
+    Column #[bg: 0x0E1220, p: 28, gap: 18, grow: 1] {
+        Text("on change") #[size: 24, weight: bold, color: 0xFFFFFF]
+        Row #[gap: 8] {
+            Button("Tokyo") #[..chip, selected: city == "Tokyo"] => city = "Tokyo"
+            Button("Nairobi") #[..chip, selected: city == "Nairobi"] => city = "Nairobi"
+            Button("Santiago") #[..chip, selected: city == "Santiago"] => city = "Santiago"
+        }
+        when shown {
+            CityCard(place: city)
+        }
+        Button(shown ? "Hide" : "Show") #[..chip] => shown = !shown
+    }
+}
+
+// Loads when it appears, and again whenever `place` changes.
+View CityCard(place: Str) {
+    var loaded = ""
+    var loads = 0
+    let load = () => {
+        loaded = place
+        loads++
+    }
+
+    on mount => load()
+    on change(place) => load()
+
+    Column #[bg: 0x161C2C, radius: 18, p: 20, gap: 6] {
+        Text(loaded) #[size: 20, color: 0xFFFFFF]
+        Text("loaded {loads} {loads == 1 ? "time" : "times"} since it appeared")
+            #[size: 13, color: 0x9AA8C2]
+    }
+}

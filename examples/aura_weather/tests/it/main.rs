@@ -8,5 +8,6 @@
 mod common;
 mod forecast;
 mod outlook_and_air;
+mod search;
 mod shell;
 mod trends;

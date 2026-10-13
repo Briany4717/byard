@@ -22,6 +22,7 @@ mod library_check;
 mod list_animations_example;
 mod looping_animations_example;
 mod navigation_example;
+mod on_change_example;
 mod organic_fusion_example;
 mod package_distribution;
 mod profiling_example;

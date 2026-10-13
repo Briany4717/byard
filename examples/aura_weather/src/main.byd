@@ -1,12 +1,64 @@
-// Aura Weather: the app shell. Four screens in a tab host, a tab bar, and the
-// theme's two typefaces. Each screen lives in its own file beside this one.
+// Aura Weather: the app shell. A search field, four screens in a tab host, a
+// tab bar, and the theme's two typefaces. Each screen lives in its own file
+// beside this one.
 View Main() {
     inject Theme as t
+    inject Http as http
     var tab = "forecast"
-    // The place every screen reports on. One place until location search.
+    // The place every screen reports on. Search changes it, and each screen
+    // asks again when it does.
     var place: Str = "Madrid"
     var lat: Float = 40.42
     var lon: Float = -3.70
+
+    // Location search. `found` is what the geocoder last answered, and `open`
+    // is whether its list is showing under the field.
+    var query: Str = ""
+    var found: List<Place> = []
+    var open: Bool = false
+    var searching: Bool = false
+
+    // Asks for places named like `asked`. Replies can arrive out of order, so
+    // one that is no longer what the field says is dropped.
+    let search = (asked) => {
+        if asked.len < 2 {
+            open = false
+            found = []
+        } else {
+            open = true
+            searching = true
+            http.get("geo:/v1/search?name={asked.urlEncoded()}&count=5&language=en&format=json")
+                ok res => {
+                    if asked == query {
+                        // The geocoder leaves `results` out when it finds nothing.
+                        if res.json.results.len > 0 {
+                            found = res.json.results
+                        } else {
+                            found = []
+                        }
+                        searching = false
+                    }
+                }
+                err e => {
+                    if asked == query {
+                        found = []
+                        searching = false
+                    }
+                }
+        }
+    }
+
+    // Every edit of the field is a new question.
+    on change(query) => search(query)
+
+    let choose = (name, latitude, longitude) => {
+        place = name
+        lat = latitude
+        lon = longitude
+        query = ""
+        found = []
+        open = false
+    }
 
     let tabButton = style {
         radius: 18, p: (vertical: 8, horizontal: 14), color: t.onSurfaceVariant
@@ -14,6 +66,11 @@ View Main() {
     }
 
     Column #[bg: t.background, grow: 1] {
+        Row #[p: (top: 20, horizontal: 24)] {
+            TextField #[bind: query, placeholder: "Search for a city", grow: 1, height: 44,
+                        bg: t.surfaceContainer, radius: 22, p: (horizontal: 18),
+                        typo: t.body, color: t.onSurface] as searchField
+        }
         NavHost(active: tab) #[grow: 1, transition: fade] {
             tab "forecast" { ForecastScreen(place: place, lat: lat, lon: lon) }
             tab "outlook" { OutlookScreen(place: place, lat: lat, lon: lon) }
@@ -30,6 +87,32 @@ View Main() {
                 => tab = "air"
             Button("Trends") #[..tabButton, typo: t.label, selected: tab == "trends"]
                 => tab = "trends"
+        }
+    }
+
+    // The results hang from the field: under it, as wide as it is, and above
+    // it when there is no room below. A press anywhere else closes them.
+    when open {
+        Overlay #[modal: false] {
+            Column #[anchor_to: "searchField", anchor_edge: below, anchor_gap: 6,
+                     width: match(searchField), bg: t.surfaceContainerHigh, radius: 18,
+                     p: 6, dismiss => open = false] {
+                when searching && found.len == 0 {
+                    Text("Looking for {query}") #[typo: t.caption, color: t.onSurfaceVariant,
+                                                 p: (vertical: 10, horizontal: 12)]
+                }
+                when !searching && found.len == 0 {
+                    Text("No place by that name") #[typo: t.caption, color: t.onSurfaceVariant,
+                                                   p: (vertical: 10, horizontal: 12)]
+                }
+                for hit in found {
+                    Column #[p: (vertical: 8, horizontal: 12), radius: 12, gap: 2,
+                             tap => choose(hit.name, hit.latitude, hit.longitude)] {
+                        Text(hit.name) #[typo: t.body, color: t.onSurface]
+                        Text(hit.country) #[typo: t.caption, color: t.onSurfaceVariant]
+                    }
+                }
+            }
         }
     }
 }

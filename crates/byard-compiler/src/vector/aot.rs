@@ -316,6 +316,7 @@ fn walk_members(members: &[Member], visit: &mut impl FnMut(&ElementNode)) {
             | Member::Lifecycle { .. }
             | Member::Timer { .. }
             | Member::Measure { .. }
+            | Member::Change { .. }
             | Member::Style { .. }
             | Member::Expr(_) => {}
         }

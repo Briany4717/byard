@@ -764,3 +764,124 @@ View Main() {
         "a runtime failure must not be reported as a missing method"
     );
 }
+
+// ── what an arm sees of the function it was written in ───────────────────
+
+/// A function's parameter read inside an arm is what the function was called
+/// with, not what its argument has become since. The argument here is `word`,
+/// and it is rewritten before the answer arrives.
+#[test]
+fn an_arm_reads_the_argument_the_call_was_placed_with() {
+    let mut harness = Harness::new(
+        r#"
+View Main() {
+    inject Echo as echo
+    var word: Str = "first"
+    var heard: Str = "nothing"
+    let ask = (w) => {
+        echo.say(w) ok r => { heard = "{w} / {r.text}" }
+    }
+    Column {
+        Text("{heard}")
+        Button("go") #[width: 100, height: 40] => {
+            ask(word)
+            word = "second"
+        }
+    }
+}
+"#,
+    );
+    harness.tap(50.0, 40.0);
+    assert!(harness.pump());
+    assert_eq!(harness.texts()[0], "first / first");
+}
+
+/// Two calls outstanding at once each keep their own argument.
+#[test]
+fn two_outstanding_calls_keep_their_own_arguments() {
+    let mut harness = Harness::new(
+        r#"
+View Main() {
+    inject Echo as echo
+    var word: Str = "a"
+    var heard: Str = ""
+    let ask = (w) => {
+        echo.say("x") ok r => { heard = "{heard}{w}" }
+    }
+    Column {
+        Text("heard {heard}")
+        Button("go") #[width: 100, height: 40] => {
+            ask(word)
+            word = "b"
+            ask(word)
+            word = "c"
+        }
+    }
+}
+"#,
+    );
+    harness.tap(50.0, 40.0);
+    while harness.interp.outstanding_continuations() > 0 {
+        assert!(harness.pump());
+    }
+    // Whichever answer lands first.
+    let line = harness.texts()[0].clone();
+    assert!(line == "heard ab" || line == "heard ba", "{line}");
+}
+
+/// A call placed from inside an arm carries the captured value on.
+#[test]
+fn a_call_placed_in_an_arm_passes_the_argument_on() {
+    let mut harness = Harness::new(
+        r#"
+View Main() {
+    inject Echo as echo
+    var word: Str = "first"
+    var heard: Str = "nothing"
+    let ask = (w) => {
+        echo.say("one") ok r => {
+            echo.say("two") ok again => { heard = w }
+        }
+    }
+    Column {
+        Text("{heard}")
+        Button("go") #[width: 100, height: 40] => {
+            ask(word)
+            word = "second"
+        }
+    }
+}
+"#,
+    );
+    harness.tap(50.0, 40.0);
+    assert!(harness.pump());
+    assert!(harness.pump());
+    assert_eq!(harness.texts()[0], "first");
+}
+
+/// The `err` arm sees it too.
+#[test]
+fn the_err_arm_reads_the_argument_as_well() {
+    let mut harness = Harness::new(
+        r#"
+View Main() {
+    inject Echo as echo
+    var word: Str = "first"
+    var heard: Str = "nothing"
+    let ask = (w) => {
+        echo.fail() ok r => { heard = "ok" } err e => { heard = w }
+    }
+    Column {
+        Text("{heard}")
+        Button("go") #[width: 100, height: 40] => {
+            ask(word)
+            word = "second"
+        }
+    }
+}
+"#,
+    );
+    harness.tap(50.0, 40.0);
+    assert!(harness.pump());
+    assert_eq!(harness.texts()[0], "first");
+}

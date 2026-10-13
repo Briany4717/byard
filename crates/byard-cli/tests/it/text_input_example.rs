@@ -79,6 +79,8 @@ fn a_composition_shows_but_only_the_commit_reaches_the_echo() {
     let texts = step(&mut interp, vec![preedit]);
     assert!(texts.iter().any(|t| t == "にほん"), "{texts:?}");
     assert!(texts.iter().any(|t| t == "name = \"\""), "{texts:?}");
+    // A composition is not an edit: `input` has not run.
+    assert!(texts.iter().any(|t| t.starts_with("0 edits")), "{texts:?}");
 
     let commit: Vec<InputEvent> = [
         ImeEvent::Preedit {
@@ -92,6 +94,8 @@ fn a_composition_shows_but_only_the_commit_reaches_the_echo() {
     .collect();
     let texts = step(&mut interp, commit);
     assert!(texts.iter().any(|t| t == "name = \"日本\""), "{texts:?}");
+    // The commit is one edit, whatever its length.
+    assert!(texts.iter().any(|t| t.starts_with("1 edits")), "{texts:?}");
     let sig = interp.var_signal(&Symbol::intern("name")).unwrap();
     assert_eq!(interp.peek(sig), Value::Str("日本".into()));
 }

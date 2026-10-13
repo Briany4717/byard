@@ -253,6 +253,20 @@ fn collect_member_symbols(doc: &Document, members: &[Member], out: &mut Vec<Docu
                     children: None,
                 });
             }
+            Member::Change { span, .. } => {
+                let range = doc.line_index.span_to_range(&doc.content, *span);
+                #[allow(deprecated)]
+                out.push(DocumentSymbol {
+                    name: "on change".to_string(),
+                    detail: Some("Change effect".to_string()),
+                    kind: SymbolKind::EVENT,
+                    tags: None,
+                    deprecated: None,
+                    range,
+                    selection_range: range,
+                    children: None,
+                });
+            }
             Member::Measure { span, .. } => {
                 let range = doc.line_index.span_to_range(&doc.content, *span);
                 #[allow(deprecated)]

@@ -132,6 +132,7 @@ fn members_span(members: &[Member]) -> Span {
             | Member::Lifecycle { span, .. }
             | Member::Timer { span, .. }
             | Member::Measure { span, .. }
+            | Member::Change { span, .. }
             | Member::Style { span, .. } => *span,
             Member::Element(el) => el.span,
             Member::Expr(expr) => expr.span(),
@@ -1566,6 +1567,12 @@ fn is_callback_param(param: &Param) -> bool {
 /// the body splices the caller-supplied block.
 pub(crate) const RESERVED_CONTENT: &str = "content";
 
+/// How far a `TextField`'s text sits from its left edge when the field writes
+/// no padding.
+const FIELD_PAD_X: f32 = 10.0;
+/// A placeholder is drawn in the field's `color:` at this share of its alpha.
+const PLACEHOLDER_ALPHA: f32 = 0.55;
+
 thread_local! {
     /// Thread-local storage holding the active payload of the event currently being processed.
     pub static CURRENT_PAYLOAD: std::cell::RefCell<Option<Value>> = const { std::cell::RefCell::new(None) };
@@ -1775,6 +1782,12 @@ pub struct Interpreter {
     /// Names bound as parameters of a multi-parameter lambda while its body is
     /// being lowered; `lower_ident` reads them from [`LAMBDA_ARGS`].
     lambda_params: Vec<Symbol>,
+    /// The parameters of the functions being inlined right now, each with the
+    /// memo of the argument it was called with. A controller call written
+    /// inside one reads them when it is placed, so its arms see what the
+    /// function was called with rather than what the argument has become by
+    /// the time the answer arrives.
+    inlined_params: Vec<(Symbol, ScopeId)>,
     /// The element instance the render walk is currently inside, the `slot`
     /// half of an [`AnimKey`].
     ///
@@ -4129,6 +4142,24 @@ impl Interpreter {
                         },
                         lowered,
                     );
+                    out.push(RenderNode::Effect { index });
+                }
+            }
+            // `on change(a, b) => …`: one memo per watched value, read when
+            // the effects settle.
+            Member::Change {
+                watched, action, ..
+            } => {
+                if let Ok(lowered) = self.lower_action(action, None) {
+                    let watched = watched
+                        .iter()
+                        .map(|value| {
+                            let compute = self.lower_expr(value, None);
+                            self.ctx.open_memo(compute)
+                        })
+                        .collect();
+                    let index =
+                        self.register_effect(controller::EffectKind::Change { watched }, lowered);
                     out.push(RenderNode::Effect { index });
                 }
             }
@@ -7400,7 +7431,8 @@ impl Interpreter {
             "Slider" => {
                 let w = self.eval_px_prop(attrs, "width").unwrap_or(200.0);
                 let h = self.eval_px_prop(attrs, "height").unwrap_or(24.0);
-                let id = self.atlas.add_leaf(LeafSize::new(w, h))?;
+                let grow = self.eval_float_prop(attrs, "grow").unwrap_or(0.0) as f32;
+                let id = self.atlas.add_growing_leaf(LeafSize::new(w, h), grow)?;
                 flat_ids.push(id);
                 return Ok(id);
             }
@@ -7425,7 +7457,8 @@ impl Interpreter {
             "TextField" => {
                 let w = self.eval_px_prop(attrs, "width").unwrap_or(200.0);
                 let h = self.eval_px_prop(attrs, "height").unwrap_or(36.0);
-                let id = self.atlas.add_leaf(LeafSize::new(w, h))?;
+                let grow = self.eval_float_prop(attrs, "grow").unwrap_or(0.0) as f32;
+                let id = self.atlas.add_growing_leaf(LeafSize::new(w, h), grow)?;
                 flat_ids.push(id);
                 return Ok(id);
             }
@@ -9699,6 +9732,7 @@ impl Interpreter {
     /// Renders a `TextField` widget: background box + text/placeholder,
     /// and registers keyboard handlers for text input.
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_lines)]
     fn render_text_field(
         &mut self,
         bound_sig: Option<super::env::SignalId>,
@@ -9733,12 +9767,25 @@ impl Interpreter {
             (cur_text, false)
         };
 
-        let text_color = if is_placeholder {
-            0x0088_8888_i64
-        } else {
-            0x00ff_ffff_i64
+        // The field's own `color:` for what is typed, and the same colour
+        // fainter for the placeholder. Unwritten, the field keeps the white
+        // on grey it always had.
+        let written = self
+            .eval_color_prop(attrs, "color")
+            .map(super::intrinsics::color_rgba_auto);
+        let value_rgba =
+            written.unwrap_or_else(|| super::intrinsics::color_to_rgba(0x00ff_ffff, false));
+        let text_rgba = match (is_placeholder, written) {
+            (false, _) => value_rgba,
+            (true, Some(c)) => [c[0], c[1], c[2], c[3] * PLACEHOLDER_ALPHA],
+            (true, None) => super::intrinsics::color_to_rgba(0x0088_8888, false),
         };
-        let font_size = self.eval_int_prop(attrs, "size").unwrap_or(16) as f32;
+        // `size:` first, then the `typo:` token's size, as a `Text` does.
+        let typo_size = self.eval_typo_size(attrs);
+        let font_size = self
+            .eval_int_prop(attrs, "size")
+            .or(typo_size)
+            .unwrap_or(16) as f32;
 
         // Focus underline (Material-style): a thin accent bar along the bottom
         // edge when the field holds focus.
@@ -9756,7 +9803,18 @@ impl Interpreter {
             });
         }
 
-        let pad_x = 10.0_f32;
+        // The text starts at the field's left padding when it writes one.
+        let pads = attrs.iter().any(|a| {
+            matches!(
+                a.name.as_str(),
+                "p" | "padding" | "pl" | "padding_left" | "padding-left"
+            )
+        });
+        let pad_x = if pads {
+            self.eval_container_style("Box", attrs).padding.left
+        } else {
+            FIELD_PAD_X
+        };
         let text_x = rect.x + pad_x;
         let text_y = rect.y + (rect.h - font_size) / 2.0;
         // NOTE: `TextLine` carries no `Transform` field (RFC-0011 engine slice:
@@ -9777,7 +9835,7 @@ impl Interpreter {
                 y: text_y,
                 text: display_text.clone(),
                 font_size,
-                color: dim_alpha(super::intrinsics::color_to_rgba(text_color, false), opacity),
+                color: dim_alpha(text_rgba, opacity),
                 dirty: true,
             });
         }
@@ -9793,7 +9851,7 @@ impl Interpreter {
             };
             let mut caret_x = text_x + measured + 1.0;
             if let Some((text, cursor)) = &preedit {
-                let color = dim_alpha(super::intrinsics::color_to_rgba(text_color, false), opacity);
+                let color = dim_alpha(text_rgba, opacity);
                 let start = text_x + measured;
                 let mut width_of = |upto: usize| -> f32 {
                     let end = floor_char_boundary(text, upto);
@@ -9846,7 +9904,7 @@ impl Interpreter {
             if caret_visible {
                 frame.push_instance(byard_core::BoxInstance {
                     rect: [caret_x, text_y, 1.5, font_size],
-                    color: dim_alpha([1.0, 1.0, 1.0, 1.0], opacity),
+                    color: dim_alpha(value_rgba, opacity),
                     radii: [0.0; 4],
                     transform,
                     smooth: 0.0,
@@ -9866,9 +9924,27 @@ impl Interpreter {
             });
         }
 
-        // Handlers: TextInput appends, KeyDown handles Backspace/Enter/Tab.
+        // The field's own events. The router runs one handler per event kind
+        // on the focused element, the last one registered, so the handlers
+        // written on the field are registered first (pointer events, focus,
+        // blur, key_up reach them as on any element) and the ones that share
+        // a kind with the field's own editing are folded into it below.
+        self.register_event_attrs(attrs, hit_rect, elem_idx);
+        let mut on_edit = self.field_actions(attrs, &["input", "change"]);
+        let mut on_typed = self.field_actions(attrs, &["text_input"]);
+        let mut on_key = self.field_actions(attrs, &["key_down"]);
+        let mut on_submit = self.field_actions(attrs, &["submit"]);
+
+        // Handlers: TextInput appends, KeyDown handles Backspace/Delete/Enter.
         if let (Some(sig), Some(idx)) = (bound_sig, elem_idx) {
-            // TextInput: append typed text
+            // What the field holds now, for the handlers that are told.
+            let value_of = move |ctx: &mut ReactiveCtx| match ctx.peek_signal(sig) {
+                Value::Str(s) => Value::Str(s),
+                _ => Value::Str(String::new()),
+            };
+            // TextInput: append typed text, then `input` and `change`, which
+            // see the value already written.
+            let mut edited = self.field_actions(attrs, &["input", "change"]);
             let text_input: super::events::Action = Box::new(move |ctx, payload| {
                 if let Some(Value::Str(ch)) = payload {
                     let cur = match ctx.peek_signal(sig) {
@@ -9876,6 +9952,13 @@ impl Interpreter {
                         _ => String::new(),
                     };
                     ctx.write_signal(sig, Value::Str(cur + ch.as_str()));
+                    for action in &mut on_typed {
+                        action(ctx, payload);
+                    }
+                    let now = value_of(ctx);
+                    for action in &mut edited {
+                        action(ctx, Some(&now));
+                    }
                 }
             });
             self.router.on(
@@ -9885,9 +9968,10 @@ impl Interpreter {
                 text_input,
             );
 
-            // KeyDown: Backspace deletes, Enter/Escape handled (submit fires via Change)
+            // KeyDown: Backspace and Delete edit, Enter submits.
             let key_down: super::events::Action = Box::new(move |ctx, payload| {
                 if let Some(Value::Str(key)) = payload {
+                    let before = value_of(ctx);
                     match key.as_str() {
                         "Backspace" => {
                             let cur = match ctx.peek_signal(sig) {
@@ -9909,6 +9993,21 @@ impl Interpreter {
                             ctx.write_signal(sig, Value::Str(String::new()));
                         }
                         _ => {}
+                    }
+                    for action in &mut on_key {
+                        action(ctx, payload);
+                    }
+                    let now = value_of(ctx);
+                    // A Backspace in an empty field edits nothing.
+                    if now != before {
+                        for action in &mut on_edit {
+                            action(ctx, Some(&now));
+                        }
+                    }
+                    if key.as_str() == "Enter" {
+                        for action in &mut on_submit {
+                            action(ctx, Some(&now));
+                        }
                     }
                 }
             });
@@ -10189,6 +10288,22 @@ impl Interpreter {
                 view.set_prop(prop.name, &host);
             }
         }
+    }
+
+    /// The actions written on a field for the events in `names`, lowered.
+    /// The handler's own payload name (`input(text) => …`) is honoured.
+    fn field_actions(&mut self, attrs: &[Attr], names: &[&str]) -> Vec<super::events::Action> {
+        let mut out = Vec::new();
+        for attr in attrs {
+            if let AttrKind::Event { payload, action } = &attr.kind {
+                if names.contains(&attr.name.as_str()) {
+                    if let Ok(lowered) = self.lower_action(action, payload.clone()) {
+                        out.push(lowered);
+                    }
+                }
+            }
+        }
+        out
     }
 
     fn register_event_attrs(
@@ -12637,15 +12752,18 @@ impl Interpreter {
                     // Bind each arg as a reactive memo so signal reads inside the
                     // body are tracked by the enclosing scope.
                     let snapshot = self.env.len();
+                    let inlined = self.inlined_params.len();
                     for (param, arg) in params.iter().zip(args.iter()) {
                         let arg_lowered = self.lower_expr(&arg.value, payload_name);
                         let scope = self.ctx.open_memo(arg_lowered);
                         self.env.push(param.clone(), Value::Memo(scope));
+                        self.inlined_params.push((param.clone(), scope));
                     }
                     // Lower the body with arg bindings in scope.
                     let body_lowered = self.lower_expr(&body, payload_name);
                     // Restore env.
                     self.env.truncate(snapshot);
+                    self.inlined_params.truncate(inlined);
                     return body_lowered;
                 }
             }
@@ -12772,6 +12890,12 @@ impl Interpreter {
                     }
                 }))
             }
+            // `text.urlEncoded()`: text made safe to put in a URL, as one
+            // query value or one path segment.
+            "urlEncoded" => Some(Box::new(move |ctx| match base_c(ctx) {
+                Value::Str(s) => Value::Str(url_encoded(&s)),
+                other => other,
+            })),
             "contains" => {
                 let mut arg = self.lower_expr(&args.first()?.value, payload_name);
                 Some(Box::new(move |ctx| {
@@ -14935,6 +15059,22 @@ fn structural_eq(a: &Value, b: &Value) -> bool {
         }
         _ => false,
     }
+}
+
+/// Percent-encodes `text` for use as one value in a URL (RFC 3986): letters,
+/// digits and `-`, `.`, `_`, `~` stay, and every other byte of its UTF-8
+/// becomes `%XX`. A space is `%20`, which is right in a query and in a path.
+fn url_encoded(text: &str) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::with_capacity(text.len());
+    for byte in text.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+            out.push(char::from(byte));
+        } else {
+            let _ = write!(out, "%{byte:02X}");
+        }
+    }
+    out
 }
 
 /// Resolves a data member access (RFC-0027 §4/§6): `xs.len` (list/string

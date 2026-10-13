@@ -44,6 +44,7 @@ use crate::diagnostics::{CompileError, Span};
 use crate::interp::bridge::{host_to_value, value_to_host};
 use crate::interp::env::Value;
 use crate::interp::events::Action;
+use crate::interp::reactive::ScopeId;
 use crate::parser::ast::{Arg, Expr, ResultArm};
 use crate::symbol::Symbol;
 
@@ -83,6 +84,9 @@ pub(super) struct PendingCall {
     owner: Option<usize>,
     /// The call site, for diagnostics.
     span: Span,
+    /// What the parameters of the enclosing function were when the call was
+    /// placed, for its arms to read.
+    captured: Vec<(Symbol, Value)>,
 }
 
 /// The logic-thread queue an action raises calls onto. `Rc`, so it is
@@ -105,6 +109,9 @@ struct Continuation {
     /// one-shot; an `every` timer's is not, because it resumes into the same
     /// written action on every tick.
     repeating: bool,
+    /// The enclosing function's parameters as they were when the call was
+    /// placed. Installed while an arm runs.
+    captured: Vec<(Symbol, Value)>,
 }
 
 /// What kind of structural effect a slot holds.
@@ -120,6 +127,13 @@ pub(crate) enum EffectKind {
         every: bool,
         /// The interval or delay, in milliseconds.
         dur_ms: u64,
+    },
+    /// `on change(a, b) => …`: run when a watched value differs from what it
+    /// was when the scope last settled. One memo per watched value, so an
+    /// effect whose values were not written costs a flag read per frame.
+    Change {
+        /// The memo of each watched value.
+        watched: Vec<ScopeId>,
     },
 }
 
@@ -155,6 +169,10 @@ pub(super) struct EffectSlot {
     /// The continuation a timer's ticks resume into, so an unmount can drop it
     /// alongside the task.
     pub continuation: Option<u64>,
+    /// What each watched value of an [`EffectKind::Change`] was when the
+    /// scope last settled. Empty while unmounted, so a scope that comes back
+    /// starts from what it finds rather than from what it left.
+    pub last: Vec<Value>,
 }
 
 /// Everything the interpreter needs to reach the async world, kept in one
@@ -217,6 +235,7 @@ impl Bridge {
         owner: Option<usize>,
         span: Span,
         repeating: bool,
+        captured: Vec<(Symbol, Value)>,
     ) -> u64 {
         self.next_id = self.next_id.wrapping_add(1);
         let id = self.next_id;
@@ -227,6 +246,7 @@ impl Bridge {
                 owner,
                 span,
                 repeating,
+                captured,
             },
         );
         id
@@ -370,6 +390,21 @@ impl Interpreter {
         // them somewhere else: the row, the branch, the instance the call
         // belongs to may all be out of scope by then, and the arm would
         // resolve `t` against an environment that no longer has one.
+        //
+        // A parameter of the function the call is written in is the one name
+        // an arm must not resolve there: a parameter reads its argument each
+        // time it is read, and by the time the answer arrives the argument
+        // may have moved on (`search(query)` while the user keeps typing). So
+        // the arms read those names from what the call captured when it was
+        // placed.
+        let in_scope = if ok.is_some() || err.is_some() {
+            self.inlined_params.clone()
+        } else {
+            Vec::new()
+        };
+        let shadowed = self.lambda_params.len();
+        self.lambda_params
+            .extend(in_scope.iter().map(|(name, _)| name.clone()));
         let arms = if ok.is_some() || err.is_some() {
             let ok_action = ok.and_then(|arm| {
                 self.lower_action(&arm.action, Some(arm.binding.clone()))
@@ -386,6 +421,7 @@ impl Interpreter {
         } else {
             None
         };
+        self.lambda_params.truncate(shadowed);
 
         let queue = Rc::clone(&self.bridge.queue);
         let diagnostics = Rc::clone(&self.bridge.diagnostics);
@@ -409,6 +445,21 @@ impl Interpreter {
                 };
                 host_args.push(host);
             }
+            // A call placed from inside another call's arm is already
+            // running on captured values, and those win over the argument.
+            let captured = in_scope
+                .iter()
+                .map(|(name, memo)| {
+                    let held = super::LAMBDA_ARGS.with(|args| {
+                        args.borrow()
+                            .iter()
+                            .rev()
+                            .find(|(n, _)| n == name)
+                            .map(|(_, v)| v.clone())
+                    });
+                    (name.clone(), held.unwrap_or_else(|| ctx.read_memo(*memo)))
+                })
+                .collect();
             queue.borrow_mut().push(PendingCall {
                 controller,
                 method: method.clone(),
@@ -417,6 +468,7 @@ impl Interpreter {
                 continuation: None,
                 owner: running_effect.get(),
                 span,
+                captured,
             });
             Value::Unit
         }))
@@ -460,6 +512,7 @@ impl Interpreter {
             continuation: Some(continuation),
             owner: None,
             span: Span::new(0, 0),
+            captured: Vec::new(),
         });
     }
 
@@ -514,7 +567,10 @@ impl Interpreter {
             let continuation = match (call.continuation, call.arms) {
                 // Already opened by whoever queued it (RFC-0039).
                 (Some(id), _) => id,
-                (None, Some(arms)) => self.bridge.open(arms, call.owner, call.span, false),
+                (None, Some(arms)) => {
+                    self.bridge
+                        .open(arms, call.owner, call.span, false, call.captured)
+                }
                 // Fire-and-forget still gets an id, so the reply has somewhere
                 // to be discarded rather than being an untracked message.
                 (None, None) => 0,
@@ -598,7 +654,14 @@ impl Interpreter {
             }
             return false;
         };
+        let base = super::LAMBDA_ARGS.with(|args| {
+            let mut args = args.borrow_mut();
+            let base = args.len();
+            args.extend(continuation.captured.iter().cloned());
+            base
+        });
         arm(&mut self.ctx, Some(&value));
+        super::LAMBDA_ARGS.with(|args| args.borrow_mut().truncate(base));
         true
     }
 
@@ -664,6 +727,7 @@ impl Interpreter {
             mounted: false,
             timer: None,
             continuation: None,
+            last: Vec::new(),
         });
         index
     }
@@ -707,6 +771,9 @@ impl Interpreter {
                 .continuations
                 .retain(|_, c| c.owner != Some(index));
             self.disarm_timer(index);
+            if let Some(slot) = self.bridge.effects.get_mut(index) {
+                slot.last.clear();
+            }
             self.run_effect(index, &EffectKind::Unmount);
         }
         let fired = !mounted.is_empty();
@@ -714,8 +781,49 @@ impl Interpreter {
             self.arm_timer(index);
             self.run_effect(index, &EffectKind::Mount);
         }
+        let fired_change = self.settle_changes();
         self.drain_calls();
-        fired || fired_unmount
+        fired || fired_unmount || fired_change
+    }
+
+    /// Runs every mounted `on change` whose watched values moved.
+    ///
+    /// After the mount edges, so a value an `on mount` wrote is part of what
+    /// the scope starts from rather than a change to it.
+    fn settle_changes(&mut self) -> bool {
+        let mut fired = false;
+        for index in 0..self.bridge.effects.len() {
+            let slot = &self.bridge.effects[index];
+            let EffectKind::Change { watched } = &slot.kind else {
+                continue;
+            };
+            if !slot.mounted {
+                continue;
+            }
+            let starting = slot.last.is_empty();
+            if !starting && !watched.iter().any(|&memo| self.ctx.is_dirty(memo)) {
+                continue;
+            }
+            let watched = watched.clone();
+            let now: Vec<Value> = watched
+                .iter()
+                .map(|&memo| self.ctx.read_memo(memo))
+                .collect();
+            let slot = &mut self.bridge.effects[index];
+            let moved = !starting && slot.last != now;
+            slot.last = now;
+            if !moved {
+                continue;
+            }
+            fired = true;
+            let action = Rc::clone(&slot.action);
+            self.bridge.running_effect.set(Some(index));
+            if let Some(run) = action.borrow_mut().ok.as_mut() {
+                run(&mut self.ctx, None);
+            }
+            self.bridge.running_effect.set(None);
+        }
+        fired
     }
 
     /// Arms effect `index`'s timer, if it is one (RFC-0029 §5).
@@ -738,7 +846,9 @@ impl Interpreter {
             // arm against and nothing is waiting for a tick.
             return;
         };
-        let continuation = self.bridge.open(arms, Some(index), Span::new(0, 0), every);
+        let continuation = self
+            .bridge
+            .open(arms, Some(index), Span::new(0, 0), every, Vec::new());
         let Some(handle) = dispatcher.spawn_timer(every, dur_ms, continuation) else {
             // The driver refused it (a zero interval). Nothing will ever
             // resume this continuation, so it is withdrawn rather than left

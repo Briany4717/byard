@@ -163,6 +163,17 @@ fn shift_member(member: &mut Member, delta: u32) {
             shift(span, delta);
             shift_expr(action, delta);
         }
+        Member::Change {
+            watched,
+            action,
+            span,
+        } => {
+            shift(span, delta);
+            for value in watched {
+                shift_expr(value, delta);
+            }
+            shift_expr(action, delta);
+        }
         Member::Expr(expr) => shift_expr(expr, delta),
     }
 }

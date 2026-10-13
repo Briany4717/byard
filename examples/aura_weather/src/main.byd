@@ -18,7 +18,7 @@ View Main() {
             tab "forecast" { ForecastScreen(place: place, lat: lat, lon: lon) }
             tab "outlook" { OutlookScreen(place: place, lat: lat, lon: lon) }
             tab "air" { AirScreen(place: place, lat: lat, lon: lon) }
-            tab "trends" { TrendsScreen() }
+            tab "trends" { TrendsScreen(place: place, lat: lat, lon: lon) }
         }
         Row #[bg: t.surfaceContainer, p: (vertical: 10, horizontal: 12), gap: 4,
               align: center] {

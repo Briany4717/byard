@@ -9,3 +9,4 @@ mod common;
 mod forecast;
 mod outlook_and_air;
 mod shell;
+mod trends;

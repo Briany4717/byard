@@ -174,7 +174,7 @@ fn main() -> Result<(), byard::ByardError> {
     // instead of opening it, after a second of running.
     let mut args = std::env::args().skip(1);
     match (args.next().as_deref(), args.next()) {
-        (Some("--shot"), Some(out)) => app().shot(out, 1000),
+        (Some("--shot"), Some(out)) => app().shot(out, &byard::Shot::after(1000)),
         _ => app().run(),
     }
 }
@@ -397,7 +397,7 @@ mod tests {
     #[test]
     fn the_app_draws_its_shader_and_its_answer() {
         let out = std::env::temp_dir().join(format!("sparkline-{}.png", std::process::id()));
-        match super::app().shot(&out, 600) {
+        match super::app().shot(&out, &byard::Shot::after(600)) {
             Ok(()) => {}
             Err(e) if e.to_string().contains("no GPU") => {
                 eprintln!("no GPU adapter, skipping: {e}");

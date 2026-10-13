@@ -72,10 +72,12 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   view an image as `HostValue::Bytes`. See the glow behind the bars in
   `examples/sparkline_view`.
 
-- **`App::shot(path, run_ms)` draws an app to a PNG without a window.** The
+- **`App::shot(path, &Shot::after(ms))` draws an app to a PNG without a
+  window.** The
   same program `App::run` opens, with its controllers, native views and
   shaders, run for a stretch of real time: controller calls are made and
-  their answers applied. `byard shot` cannot draw an app with a Rust half;
+  their answers applied, and `.tap(x, y)` opens the screen wanted first.
+  `byard shot` cannot draw an app with a Rust half;
   this can. Try `cargo run -p sparkline-view -- --shot out.png`.
 
 - **`on change(a, b) => action` runs an action when a value changes.** A

@@ -17,6 +17,7 @@ use byard_core::ByardError;
 use byard_core::bridge::Dispatcher;
 use byard_core::encoder::EncoderSubsystem;
 use byard_core::frame::{RenderFrame, Viewport};
+use byard_core::platform::{EventKind, InputEvent};
 use byard_core::relay::Relay;
 
 use crate::app::{App, Program, load_program};
@@ -24,21 +25,47 @@ use crate::app::{App, Program, load_program};
 /// One frame's worth of real time between steps.
 const STEP: std::time::Duration = std::time::Duration::from_millis(16);
 
+/// What [`App::shot`] does before it takes the picture.
+#[derive(Clone, Debug, Default)]
+pub struct Shot {
+    run_ms: u32,
+    taps: Vec<(f32, f32)>,
+}
+
+impl Shot {
+    /// Runs the app for `run_ms` milliseconds, then takes the picture.
+    #[must_use]
+    pub const fn after(run_ms: u32) -> Self {
+        Self {
+            run_ms,
+            taps: Vec::new(),
+        }
+    }
+
+    /// Taps a logical point first. Taps happen in order, one per frame, at
+    /// the start of the run, so a shot can open the screen it wants.
+    #[must_use]
+    pub fn tap(mut self, x: f32, y: f32) -> Self {
+        self.taps.push((x, y));
+        self
+    }
+}
+
 fn gpu(what: &str, detail: impl std::fmt::Display) -> ByardError {
     ByardError::Platform(format!("{what}: {detail}"))
 }
 
 impl App {
-    /// Renders the app to a PNG at `out` after running it for `run_ms`
-    /// milliseconds, at the size given to [`size`](App::size) and two device
-    /// pixels per logical pixel.
+    /// Renders the app to a PNG at `out` after the taps and the stretch of
+    /// running `plan` describes, at the size given to [`size`](App::size) and
+    /// two device pixels per logical pixel.
     ///
     /// # Errors
     ///
     /// Whatever [`run`](App::run) would report before opening its window, and
     /// [`ByardError::Platform`] if there is no GPU to draw with or the file
     /// cannot be written.
-    pub fn shot(self, out: impl AsRef<Path>, run_ms: u32) -> Result<(), ByardError> {
+    pub fn shot(self, out: impl AsRef<Path>, plan: &Shot) -> Result<(), ByardError> {
         self.check_registrations()?;
         let Program { views, theme, http } = load_program(&self.entry)?;
         let mut registry = self.registry;
@@ -64,6 +91,7 @@ impl App {
         let mut target = Target::new(pw, ph, scale, (w, h))?;
 
         let mut now = 0_u32;
+        let mut taps = plan.taps.iter();
         loop {
             let mut replies = Vec::new();
             while let Some(reply) = relay.try_recv_io_result() {
@@ -73,6 +101,20 @@ impl App {
                 let _ = interp.apply_io_results(replies);
             }
             interp.set_now_ms(now);
+            // The first frame draws the app as it opens; each one after it
+            // delivers the next tap, to whatever that frame put there.
+            if now > 0 {
+                if let Some(&pos) = taps.next() {
+                    let at = |kind| InputEvent {
+                        kind,
+                        pos,
+                        delta: (0.0, 0.0),
+                        payload: None,
+                        time_ms: u64::from(now),
+                    };
+                    interp.dispatch_events(&[at(EventKind::PointerDown), at(EventKind::PointerUp)]);
+                }
+            }
             interp.tick();
             let mut frame = RenderFrame::new();
             frame.request_full_redraw();
@@ -80,7 +122,7 @@ impl App {
             // Every frame is drawn, not only the last: a layer a view wrote on
             // an earlier frame has to reach the texture it lives in.
             target.draw(&frame)?;
-            if now >= run_ms {
+            if now >= plan.run_ms && taps.len() == 0 {
                 break;
             }
             now += 16;

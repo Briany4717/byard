@@ -1325,6 +1325,44 @@ impl LayoutAtlas {
         self.place(NodeKind::Leaf, fp.finish(), style, &[], None)
     }
 
+    /// Adds a leaf with an explicit size that also takes a share of its
+    /// parent's free main-axis space: a text field or a slider written with
+    /// `grow: 1`. `size` is what it measures before growing, and it never
+    /// shrinks below it. A `grow` of `0` is [`Self::add_leaf`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if the atlas is in the `Computed` state. Call [`Self::clear`]
+    /// before adding new nodes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AtlasError::Backend`] if the backend refuses the node.
+    pub fn add_growing_leaf(
+        &mut self,
+        size: LeafSize,
+        grow: f32,
+    ) -> Result<AtlasNodeId, AtlasError> {
+        if grow <= 0.0 {
+            return self.add_leaf(size);
+        }
+        self.assert_building("add_growing_leaf");
+
+        let style = Style {
+            size: Size {
+                width: Dimension::from_length(size.width),
+                height: Dimension::from_length(size.height),
+            },
+            flex_grow: grow,
+            flex_shrink: 0.0,
+            ..Default::default()
+        };
+
+        let mut fp = LayoutFingerprint::new(NodeKind::Leaf);
+        fp.f32(size.width).f32(size.height).f32(grow);
+        self.place(NodeKind::Leaf, fp.finish(), style, &[], None)
+    }
+
     /// Adds a **flexible leaf**, a node with no intrinsic size that absorbs the
     /// free space of its parent's main axis (RFC-0005 `Spacer`: "flexible gap",
     /// `grow` / `basis`).

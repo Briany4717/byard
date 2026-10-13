@@ -255,6 +255,11 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A `TextField` or a `Slider` with `grow: 1` fills its row.** Both stayed
+  200 wide whatever `grow` said, and nothing reported it, so a search field
+  could not span its window. `grow` now gives them their share of the free
+  space, as it does for a `Box`; without it they keep their width.
+
 - **`byard get` limits what a registry can send and where it can point.** A
   response over 128 MiB is refused instead of read into memory, and a path
   an index names (an archive) must be inside the registry, so an index cannot

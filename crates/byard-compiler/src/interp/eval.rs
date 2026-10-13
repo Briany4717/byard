@@ -1776,6 +1776,12 @@ pub struct Interpreter {
     /// Names bound as parameters of a multi-parameter lambda while its body is
     /// being lowered; `lower_ident` reads them from [`LAMBDA_ARGS`].
     lambda_params: Vec<Symbol>,
+    /// The parameters of the functions being inlined right now, each with the
+    /// memo of the argument it was called with. A controller call written
+    /// inside one reads them when it is placed, so its arms see what the
+    /// function was called with rather than what the argument has become by
+    /// the time the answer arrives.
+    inlined_params: Vec<(Symbol, ScopeId)>,
     /// The element instance the render walk is currently inside, the `slot`
     /// half of an [`AnimKey`].
     ///
@@ -12658,15 +12664,18 @@ impl Interpreter {
                     // Bind each arg as a reactive memo so signal reads inside the
                     // body are tracked by the enclosing scope.
                     let snapshot = self.env.len();
+                    let inlined = self.inlined_params.len();
                     for (param, arg) in params.iter().zip(args.iter()) {
                         let arg_lowered = self.lower_expr(&arg.value, payload_name);
                         let scope = self.ctx.open_memo(arg_lowered);
                         self.env.push(param.clone(), Value::Memo(scope));
+                        self.inlined_params.push((param.clone(), scope));
                     }
                     // Lower the body with arg bindings in scope.
                     let body_lowered = self.lower_expr(&body, payload_name);
                     // Restore env.
                     self.env.truncate(snapshot);
+                    self.inlined_params.truncate(inlined);
                     return body_lowered;
                 }
             }

@@ -68,8 +68,9 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   draws through it with `cx.shader::<S>()`. The engine builds the pipeline;
   the app never holds a GPU object. A shader may declare **layers**, one
   array texture a view writes images into once (`cx.write_layer`) and samples
-  by index, so any number of images draw in one batch. See the glow behind
-  the bars in `examples/sparkline_view`.
+  by index, so any number of images draw in one batch. A controller hands a
+  view an image as `HostValue::Bytes`. See the glow behind the bars in
+  `examples/sparkline_view`.
 
 - **`App::shot(path, run_ms)` draws an app to a PNG without a window.** The
   same program `App::run` opens, with its controllers, native views and

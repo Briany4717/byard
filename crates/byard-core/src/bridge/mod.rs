@@ -40,6 +40,10 @@ pub enum HostValue {
     List(Vec<HostValue>),
     /// A name-keyed, ordered record (RFC-0027 §6 shape).
     Record(Vec<(String, HostValue)>),
+    /// Raw bytes: decoded pixels, a file's contents. What a controller hands
+    /// a native view that draws an image (RFC-0039). `byld` has no value for
+    /// it, so a view written in `byld` reads it as nothing.
+    Bytes(Vec<u8>),
 }
 
 // The boundary type is `Send + 'static` and owns only plain data.

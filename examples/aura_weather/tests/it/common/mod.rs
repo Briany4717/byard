@@ -239,6 +239,14 @@ impl App {
         self.settle();
     }
 
+    /// Waits until nothing the app asked is still unanswered. Typing three
+    /// letters asks twice, and the answers come back in either order.
+    pub fn answer_all(&mut self) {
+        while self.interp.outstanding_continuations() > 0 {
+            self.answer();
+        }
+    }
+
     pub fn texts(&self) -> Vec<String> {
         self.frame.texts().iter().map(|t| t.text.clone()).collect()
     }

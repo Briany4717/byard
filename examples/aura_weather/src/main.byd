@@ -27,7 +27,7 @@ View Main() {
         } else {
             open = true
             searching = true
-            http.get("geo:/v1/search?name={asked}&count=5&language=en&format=json")
+            http.get("geo:/v1/search?name={asked.urlEncoded()}&count=5&language=en&format=json")
                 ok res => {
                     if asked == query {
                         // The geocoder leaves `results` out when it finds nothing.

@@ -30,10 +30,10 @@ const LIST_METHODS: [&str; 13] = [
     "indexOf", "min", "max",
 ];
 
-/// The methods a `Str` has at runtime: `slice` is the only one the interpreter
-/// runs on text (`len` is a field). Any other call on a `Str` silently
-/// evaluates to nothing, which is exactly what this diagnostic exists to stop.
-const STR_METHODS: [&str; 1] = ["slice"];
+/// The methods a `Str` has at runtime (`len` is a field). Any other call on a
+/// `Str` silently evaluates to nothing, which is exactly what this diagnostic
+/// exists to stop.
+const STR_METHODS: [&str; 2] = ["slice", "urlEncoded"];
 
 /// An inferred / resolved type. Distinct from the syntactic [`Type`] AST node:
 /// `Ty` is normalized (e.g. `List<Str>` ⇒ `List(Str)`), and `Unknown` covers
@@ -664,7 +664,7 @@ impl Checker<'_> {
                 recv.clone()
             }
             (Ty::List(_), "indexOf") => Ty::Int,
-            (Ty::Str, "slice") => Ty::Str,
+            (Ty::Str, "slice" | "urlEncoded") => Ty::Str,
             (Ty::List(_), "contains") => Ty::Bool,
             (Ty::List(_), "map") => Ty::List(Box::new(lambda_body_ty.unwrap_or(Ty::Unknown))),
             _ => Ty::Unknown,

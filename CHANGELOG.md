@@ -52,6 +52,13 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A path can be drawn from data.** `for` and `when` work inside a `path`
+  body: `for i, t in temps { line(i * 40, 120 - t) }` writes one command per
+  sample, so a chart's curve comes straight from a list. It used to be skipped
+  in silence, and a chart over data drew nothing. The commands inside are
+  checked like written ones, and unchanged data is not tessellated again. See
+  the last chart of `crates/byard-cli/examples/area_chart`.
+
 - **Registries over HTTP, and version requirements.** A dependency can come
   from a registry served over HTTP, `registry = "https://…"`, and name a
   version requirement, `version = "^0.3"` (Cargo's rules). `byard get` picks

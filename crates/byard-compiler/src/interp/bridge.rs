@@ -56,7 +56,9 @@ pub fn value_to_host(value: &Value) -> Option<HostValue> {
 #[must_use]
 pub fn host_to_value(host: &HostValue) -> Value {
     match host {
-        HostValue::Unit => Value::Unit,
+        // Bytes are for a native view, which receives the `HostValue` itself.
+        // `byld` has no value for them.
+        HostValue::Unit | HostValue::Bytes(_) => Value::Unit,
         HostValue::Bool(b) => Value::Bool(*b),
         HostValue::Int(n) => Value::Int(*n),
         HostValue::Float(f) => Value::Float(*f),
@@ -68,9 +70,6 @@ pub fn host_to_value(host: &HostValue) -> Value {
                 .map(|(k, v)| (Symbol::intern(k), host_to_value(v)))
                 .collect(),
         ),
-        // Bytes are for a native view, which receives the `HostValue` itself.
-        // `byld` has no value for them.
-        HostValue::Bytes(_) => Value::Unit,
     }
 }
 

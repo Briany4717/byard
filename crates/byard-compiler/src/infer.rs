@@ -14,7 +14,7 @@
 //! - **`Text` is a view, not a type**: using it in any annotation is
 //!   [`CompileError::TextUsedAsType`]; the scalar string type is `Str`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::diagnostics::{CompileError, Span};
 use crate::interp::style::check_static;
@@ -34,6 +34,11 @@ const LIST_METHODS: [&str; 13] = [
 /// runs on text (`len` is a field). Any other call on a `Str` silently
 /// evaluates to nothing, which is exactly what this diagnostic exists to stop.
 const STR_METHODS: [&str; 1] = ["slice"];
+
+/// Names the engine puts in scope itself: the animation namespace
+/// (`anim.spring`), a collapsing header's `scroll_fraction`, and the `route`
+/// of the screen a navigation case draws.
+const BUILT_IN_NAMES: [&str; 3] = ["anim", "scroll_fraction", "route"];
 
 /// An inferred / resolved type. Distinct from the syntactic [`Type`] AST node:
 /// `Ty` is normalized (e.g. `List<Str>` ⇒ `List(Str)`), and `Unknown` covers
@@ -81,6 +86,7 @@ pub fn check_views(views: &[ViewDecl]) -> Inference {
         .map(|v| std::sync::Arc::clone(&v.helpers))
         .unwrap_or_default();
     let top_fns = check_top_fns(&helpers, &mut out);
+    let names: HashSet<Symbol> = views.iter().map(|v| v.name.clone()).collect();
     for view in views {
         let mut checker = Checker {
             errors: &mut out.errors,
@@ -88,6 +94,9 @@ pub fn check_views(views: &[ViewDecl]) -> Inference {
             env: HashMap::new(),
             undo: Vec::new(),
             fns: top_fns.clone(),
+            declared: HashSet::new(),
+            views: &names,
+            strict: true,
         };
         checker.check_view(view);
     }
@@ -99,12 +108,18 @@ pub fn check_views(views: &[ViewDecl]) -> Inference {
 /// return types, so every view types its calls to them.
 fn check_top_fns(helpers: &[FnDecl], out: &mut Inference) -> HashMap<Symbol, Option<Ty>> {
     let names: std::collections::HashSet<&Symbol> = helpers.iter().map(|f| &f.name).collect();
+    let no_views = HashSet::new();
     let mut checker = Checker {
         errors: &mut out.errors,
         bindings: &mut out.bindings,
         env: HashMap::new(),
         undo: Vec::new(),
         fns: HashMap::new(),
+        declared: HashSet::new(),
+        views: &no_views,
+        // A name a shared function cannot reach is reported below, as
+        // impurity, which says more than "unknown".
+        strict: false,
     };
     let mut top = HashMap::new();
     for decl in helpers {
@@ -168,6 +183,15 @@ struct Checker<'a> {
     undo: Vec<(Symbol, Option<Ty>)>,
     /// Declared return types of named `fn`s, for call inference.
     fns: HashMap<Symbol, Option<Ty>>,
+    /// Every name the view declares at its top level, whatever the order: a
+    /// `let` may read a `var` written below it.
+    declared: HashSet<Symbol>,
+    /// The program's views, whose call arguments are values.
+    views: &'a HashSet<Symbol>,
+    /// Whether a bare name being checked has to be a value. `false` where it
+    /// may be a word the element understands (`align: center`), which only
+    /// the element can judge.
+    strict: bool,
 }
 
 impl Checker<'_> {
@@ -181,6 +205,15 @@ impl Checker<'_> {
             if let Member::Fn { name, ret, .. } = member {
                 let ty = ret.as_ref().map(|t| self.resolve_type(t));
                 self.fns.insert(name.clone(), ty);
+            }
+        }
+        for member in &view.body {
+            if let Member::Var { name, .. }
+            | Member::Let { name, .. }
+            | Member::Fn { name, .. }
+            | Member::Inject { name, .. } = member
+            {
+                self.declared.insert(name.clone());
             }
         }
         // Collect var names for static style checks
@@ -222,6 +255,49 @@ impl Checker<'_> {
                 }
             }
         }
+    }
+
+    /// Checks `expr` as a value: a bare name in it has to be declared.
+    fn value(&mut self, expr: &Expr) -> Ty {
+        let was = std::mem::replace(&mut self.strict, true);
+        let ty = self.check_expr(expr);
+        self.strict = was;
+        ty
+    }
+
+    /// Checks `expr` where a bare name may be a word for the element to
+    /// judge: a property's value, a named argument.
+    fn word(&mut self, expr: &Expr) -> Ty {
+        let was = std::mem::replace(&mut self.strict, false);
+        let ty = self.check_expr(expr);
+        self.strict = was;
+        ty
+    }
+
+    /// Whether anything in scope is called `name`.
+    fn knows(&self, name: &Symbol) -> bool {
+        self.env.contains_key(name)
+            || self.declared.contains(name)
+            || self.fns.contains_key(name)
+            || BUILT_IN_NAMES.contains(&name.as_str())
+    }
+
+    /// Reports `name` as undeclared, suggesting the closest name in scope.
+    fn unknown_name(&mut self, name: &Symbol, span: Span) {
+        let hint = crate::util::closest_match(
+            name.as_str(),
+            self.env
+                .keys()
+                .chain(self.declared.iter())
+                .chain(self.fns.keys())
+                .map(Symbol::as_str),
+        )
+        .map(str::to_string);
+        self.errors.push(CompileError::UnknownName {
+            span,
+            name: name.as_str().to_string(),
+            hint,
+        });
     }
 
     fn check_param(&mut self, param: &Param, what: &str) {
@@ -269,7 +345,7 @@ impl Checker<'_> {
         for name in names {
             self.bind((*name).clone(), Ty::Unknown);
         }
-        let ty = self.check_expr(expr);
+        let ty = self.value(expr);
         self.leave(mark);
         ty
     }
@@ -278,8 +354,11 @@ impl Checker<'_> {
         let it = Symbol::intern("it");
         for attr in attrs {
             match &attr.kind {
-                AttrKind::Prop { value } | AttrKind::Spread { value } => {
-                    self.check_expr(value);
+                AttrKind::Prop { value } => {
+                    self.word(value);
+                }
+                AttrKind::Spread { value } => {
+                    self.value(value);
                 }
                 AttrKind::Event { payload, action } => {
                     let mut names = vec![&it];
@@ -324,7 +403,7 @@ impl Checker<'_> {
                         what: "function return".to_string(),
                     });
                 }
-                self.check_expr(body);
+                self.value(body);
                 self.leave(mark);
             }
             Member::Inject { ty, name, .. } => {
@@ -332,8 +411,15 @@ impl Checker<'_> {
                 self.bind(name.clone(), resolved);
             }
             Member::Element(el) => {
+                // What a view is called with is a value. An intrinsic's named
+                // argument may be one of its own words.
+                let is_view = self.views.contains(&el.name);
                 for arg in &el.content {
-                    self.check_expr(&arg.value);
+                    if is_view || arg.name.is_none() {
+                        self.value(&arg.value);
+                    } else {
+                        self.word(&arg.value);
+                    }
                 }
                 self.check_attrs(&el.attrs);
                 if let Some(action) = &el.action {
@@ -355,7 +441,7 @@ impl Checker<'_> {
                 body,
                 ..
             } => {
-                self.check_expr(iter);
+                self.value(iter);
                 let mut shadow = vec![(var, Ty::Unknown)];
                 shadow.extend(index.as_ref().map(|i| (i, Ty::Int)));
                 self.check_scoped(body, &shadow);
@@ -363,7 +449,7 @@ impl Checker<'_> {
             Member::When {
                 cond, then, els, ..
             } => {
-                self.check_expr(cond);
+                self.value(cond);
                 self.check_scoped(then, &[]);
                 if let Some(els) = els {
                     self.check_scoped(els, &[]);
@@ -372,14 +458,14 @@ impl Checker<'_> {
             // A lifecycle effect's body is an action, checked like any other
             // action expression; it declares no bindings of its own.
             Member::Lifecycle { action, .. } | Member::Timer { action, .. } => {
-                self.check_expr(action);
+                self.value(action);
             }
             // The measured rect arrives as `it`.
             Member::Measure { action, .. } => {
                 self.check_shadowed(action, &[&Symbol::intern("it")]);
             }
             Member::Expr(expr) => {
-                self.check_expr(expr);
+                self.value(expr);
             }
             Member::Style { .. } => {}
         }
@@ -393,12 +479,12 @@ impl Checker<'_> {
             // Still walk the initializer for operator/collection diagnostics,
             // but the annotation, not inference, decides the binding type, so
             // an empty/heterogeneous array never trips `CannotInfer` here.
-            self.check_expr(init);
+            self.value(init);
             return self.resolve_type(ty);
         }
         match init {
             Expr::Array(elems, _) => self.infer_array(elems, span),
-            other => self.check_expr(other),
+            other => self.value(other),
         }
     }
 
@@ -414,15 +500,18 @@ impl Checker<'_> {
             Expr::StrLit(parts, _) => {
                 for part in parts {
                     if let StrPart::Interp(e, _) = part {
-                        self.check_expr(e);
+                        self.value(e);
                     }
                 }
                 Ty::Str
             }
-            Expr::Ident(sym, _) => {
+            Expr::Ident(sym, span) => {
                 if sym.as_str() == "true" || sym.as_str() == "false" {
                     Ty::Bool
                 } else {
+                    if self.strict && !self.knows(sym) {
+                        self.unknown_name(sym, *span);
+                    }
                     self.env.get(sym).cloned().unwrap_or(Ty::Unknown)
                 }
             }
@@ -440,7 +529,7 @@ impl Checker<'_> {
                 Ty::List(Box::new(elem_ty.unwrap_or(Ty::Unknown)))
             }
             Expr::Unary { op, rhs, span } => {
-                let t = self.check_expr(rhs);
+                let t = self.value(rhs);
                 match op {
                     UnOp::Not => {
                         if is_concrete(&t) && t != Ty::Bool {
@@ -459,21 +548,21 @@ impl Checker<'_> {
             Expr::Binary {
                 op, lhs, rhs, span, ..
             } => {
-                let l = self.check_expr(lhs);
-                let r = self.check_expr(rhs);
+                let l = self.value(lhs);
+                let r = self.value(rhs);
                 self.check_binary(*op, &l, &r, *span)
             }
             Expr::Ternary {
                 cond, then, els, ..
             } => {
-                self.check_expr(cond);
+                self.value(cond);
                 let t = self.check_expr(then);
                 let e = self.check_expr(els);
                 if t == e { t } else { Ty::Unknown }
             }
             Expr::Index { base, index, .. } => {
-                let b = self.check_expr(base);
-                self.check_expr(index);
+                let b = self.value(base);
+                self.value(index);
                 match b {
                     Ty::List(elem) => *elem,
                     _ => Ty::Unknown,
@@ -481,15 +570,15 @@ impl Checker<'_> {
             }
             Expr::Record { fields, spread, .. } => {
                 if let Some(s) = spread {
-                    self.check_expr(s);
+                    self.value(s);
                 }
                 for (_, v) in fields {
-                    self.check_expr(v);
+                    self.value(v);
                 }
                 Ty::Unknown
             }
             Expr::Member { base, field, .. } => {
-                let b = self.check_expr(base);
+                let b = self.value(base);
                 if field.as_str() == "len" && matches!(b, Ty::List(_) | Ty::Str) {
                     Ty::Int
                 } else {
@@ -497,9 +586,10 @@ impl Checker<'_> {
                 }
             }
             Expr::Call { callee, args, .. } => self.check_call(callee, args),
+            // `(vertical: 8)`, `(kind: radial, …)`: a property's own shape.
             Expr::Tuple(args, _) => {
                 for arg in args {
-                    self.check_expr(&arg.value);
+                    self.word(&arg.value);
                 }
                 Ty::Unknown
             }
@@ -509,21 +599,21 @@ impl Checker<'_> {
             }
             Expr::Block(stmts, _) => {
                 for stmt in stmts {
-                    self.check_expr(stmt);
+                    self.value(stmt);
                 }
                 Ty::Unknown
             }
             Expr::Assign { target, value, .. } => {
-                self.check_expr(target);
-                self.check_expr(value);
+                self.value(target);
+                self.value(value);
                 Ty::Unknown
             }
             Expr::Postfix { target, .. } => {
-                self.check_expr(target);
+                self.value(target);
                 Ty::Unknown
             }
             Expr::ControllerCall { call, ok, err, .. } => {
-                self.check_expr(call);
+                self.value(call);
                 for arm in [ok, err].into_iter().flatten() {
                     self.check_shadowed(&arm.action, &[&arm.binding]);
                 }
@@ -533,16 +623,16 @@ impl Checker<'_> {
             Expr::If {
                 cond, then, els, ..
             } => {
-                self.check_expr(cond);
+                self.value(cond);
                 for branch in std::iter::once(then).chain(els) {
                     let mark = self.undo.len();
-                    self.check_expr(branch);
+                    self.value(branch);
                     self.leave(mark);
                 }
                 Ty::Unknown
             }
             Expr::Animated { value, anim, .. } => {
-                self.check_expr(anim);
+                self.word(anim);
                 self.check_expr(value)
             }
             Expr::KeyframeStep { value, .. } => self.check_expr(value),
@@ -554,8 +644,8 @@ impl Checker<'_> {
                 Ty::Unknown
             }
             Expr::Merge { left, right, .. } => {
-                self.check_expr(left);
-                self.check_expr(right);
+                self.value(left);
+                self.value(right);
                 Ty::Unknown
             }
             Expr::AngleLit(..) | Expr::ClassRef(..) | Expr::Error(_) => Ty::Unknown,
@@ -567,11 +657,24 @@ impl Checker<'_> {
     /// declared return type.
     fn check_call(&mut self, callee: &Expr, args: &[crate::parser::ast::Arg]) -> Ty {
         if let Expr::Member { base, field, span } = callee {
-            let recv = self.check_expr(base);
-            return self.check_method(&recv, field, *span, args);
+            let recv = self.value(base);
+            // What a method of a value is called with is a value. An
+            // animation curve takes words of its own (`anim.spring(bouncy)`).
+            let curve = matches!(base.as_ref(), Expr::Ident(n, _) if n.as_str() == "anim");
+            let was = std::mem::replace(&mut self.strict, !curve);
+            let ty = self.check_method(&recv, field, *span, args);
+            self.strict = was;
+            return ty;
         }
+        // A named argument may be a word of the function it is passed to
+        // (`repeat: infinite`); a positional one is a value wherever a value
+        // is expected.
         for arg in args {
-            self.check_expr(&arg.value);
+            if arg.name.is_some() {
+                self.word(&arg.value);
+            } else {
+                self.check_expr(&arg.value);
+            }
         }
         match callee {
             Expr::Ident(name, _) => self.fns.get(name).cloned().flatten().unwrap_or(Ty::Unknown),
@@ -635,7 +738,7 @@ impl Checker<'_> {
                 for p in params {
                     self.bind(p.clone(), Ty::Unknown);
                 }
-                let bt = self.check_expr(body);
+                let bt = self.value(body);
                 self.leave(mark);
                 if matches!(name.as_str(), "filter" | "find") && is_concrete(&bt) && bt != Ty::Bool
                 {
@@ -649,7 +752,11 @@ impl Checker<'_> {
             if Some(i) == lambda_at && lambda_body_ty.is_some() {
                 continue;
             }
-            self.check_expr(&arg.value);
+            if arg.name.is_some() {
+                self.word(&arg.value);
+            } else {
+                self.check_expr(&arg.value);
+            }
         }
         match (recv, name.as_str()) {
             (Ty::List(_), "push" | "removeAt" | "filter" | "slice" | "sort" | "sortBy") => {

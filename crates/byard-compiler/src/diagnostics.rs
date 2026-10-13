@@ -780,6 +780,18 @@ pub enum CompileError {
         /// The closest known method, if any.
         hint: Option<String>,
     },
+    /// An expression read a name nothing declares: a misspelt `var`, a
+    /// parameter that was renamed. At runtime such a name is its own text,
+    /// which is how an enum word like `center` works and why a typo in a
+    /// value drew the typo instead of failing.
+    UnknownName {
+        /// Source range of the name.
+        span: Span,
+        /// The name as written.
+        name: String,
+        /// The closest name in scope, if any.
+        hint: Option<String>,
+    },
     /// A controller call named a method the controller does not expose
     /// (RFC-0028 §9). Raised at **runtime**, when the reply comes back saying
     /// so: the dev interpreter cannot know an app's Rust types ahead of time,
@@ -1010,7 +1022,8 @@ impl CompileError {
             | Self::TypeMismatch { span, .. }
             | Self::PredicateNotBool { span }
             | Self::EffectInPureLambda { span }
-            | Self::UnknownMethod { span, .. } => *span,
+            | Self::UnknownMethod { span, .. }
+            | Self::UnknownName { span, .. } => *span,
         }
     }
 
@@ -1103,7 +1116,8 @@ impl CompileError {
             | Self::TypeMismatch { span, .. }
             | Self::PredicateNotBool { span }
             | Self::EffectInPureLambda { span }
-            | Self::UnknownMethod { span, .. } => {
+            | Self::UnknownMethod { span, .. }
+            | Self::UnknownName { span, .. } => {
                 span.start = (i64::from(span.start) + delta).max(0) as u32;
                 span.end = (i64::from(span.end) + delta).max(0) as u32;
             }
@@ -1199,6 +1213,7 @@ impl CompileError {
             Self::PredicateNotBool { .. } => "PredicateNotBool",
             Self::EffectInPureLambda { .. } => "EffectInPureLambda",
             Self::UnknownMethod { .. } => "UnknownMethod",
+            Self::UnknownName { .. } => "UnknownName",
         }
     }
 
@@ -1596,6 +1611,9 @@ impl CompileError {
                 format!("`{recv_ty}` has no method `{name}`"),
                 hint.as_deref(),
             ),
+            Self::UnknownName { name, hint, .. } => {
+                with_hint(format!("nothing here is named `{name}`"), hint.as_deref())
+            }
         }
     }
 

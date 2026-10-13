@@ -83,6 +83,9 @@ pub(super) struct PendingCall {
     owner: Option<usize>,
     /// The call site, for diagnostics.
     span: Span,
+    /// What the parameters of the enclosing function were when the call was
+    /// placed, for its arms to read.
+    captured: Vec<(Symbol, Value)>,
 }
 
 /// The logic-thread queue an action raises calls onto. `Rc`, so it is
@@ -105,6 +108,9 @@ struct Continuation {
     /// one-shot; an `every` timer's is not, because it resumes into the same
     /// written action on every tick.
     repeating: bool,
+    /// The enclosing function's parameters as they were when the call was
+    /// placed. Installed while an arm runs.
+    captured: Vec<(Symbol, Value)>,
 }
 
 /// What kind of structural effect a slot holds.
@@ -217,6 +223,7 @@ impl Bridge {
         owner: Option<usize>,
         span: Span,
         repeating: bool,
+        captured: Vec<(Symbol, Value)>,
     ) -> u64 {
         self.next_id = self.next_id.wrapping_add(1);
         let id = self.next_id;
@@ -227,6 +234,7 @@ impl Bridge {
                 owner,
                 span,
                 repeating,
+                captured,
             },
         );
         id
@@ -370,6 +378,21 @@ impl Interpreter {
         // them somewhere else: the row, the branch, the instance the call
         // belongs to may all be out of scope by then, and the arm would
         // resolve `t` against an environment that no longer has one.
+        //
+        // A parameter of the function the call is written in is the one name
+        // an arm must not resolve there: a parameter reads its argument each
+        // time it is read, and by the time the answer arrives the argument
+        // may have moved on (`search(query)` while the user keeps typing). So
+        // the arms read those names from what the call captured when it was
+        // placed.
+        let in_scope = if ok.is_some() || err.is_some() {
+            self.inlined_params.clone()
+        } else {
+            Vec::new()
+        };
+        let shadowed = self.lambda_params.len();
+        self.lambda_params
+            .extend(in_scope.iter().map(|(name, _)| name.clone()));
         let arms = if ok.is_some() || err.is_some() {
             let ok_action = ok.and_then(|arm| {
                 self.lower_action(&arm.action, Some(arm.binding.clone()))
@@ -386,6 +409,7 @@ impl Interpreter {
         } else {
             None
         };
+        self.lambda_params.truncate(shadowed);
 
         let queue = Rc::clone(&self.bridge.queue);
         let diagnostics = Rc::clone(&self.bridge.diagnostics);
@@ -409,6 +433,21 @@ impl Interpreter {
                 };
                 host_args.push(host);
             }
+            // A call placed from inside another call's arm is already
+            // running on captured values, and those win over the argument.
+            let captured = in_scope
+                .iter()
+                .map(|(name, memo)| {
+                    let held = super::LAMBDA_ARGS.with(|args| {
+                        args.borrow()
+                            .iter()
+                            .rev()
+                            .find(|(n, _)| n == name)
+                            .map(|(_, v)| v.clone())
+                    });
+                    (name.clone(), held.unwrap_or_else(|| ctx.read_memo(*memo)))
+                })
+                .collect();
             queue.borrow_mut().push(PendingCall {
                 controller,
                 method: method.clone(),
@@ -417,6 +456,7 @@ impl Interpreter {
                 continuation: None,
                 owner: running_effect.get(),
                 span,
+                captured,
             });
             Value::Unit
         }))
@@ -460,6 +500,7 @@ impl Interpreter {
             continuation: Some(continuation),
             owner: None,
             span: Span::new(0, 0),
+            captured: Vec::new(),
         });
     }
 
@@ -514,7 +555,10 @@ impl Interpreter {
             let continuation = match (call.continuation, call.arms) {
                 // Already opened by whoever queued it (RFC-0039).
                 (Some(id), _) => id,
-                (None, Some(arms)) => self.bridge.open(arms, call.owner, call.span, false),
+                (None, Some(arms)) => {
+                    self.bridge
+                        .open(arms, call.owner, call.span, false, call.captured)
+                }
                 // Fire-and-forget still gets an id, so the reply has somewhere
                 // to be discarded rather than being an untracked message.
                 (None, None) => 0,
@@ -598,7 +642,14 @@ impl Interpreter {
             }
             return false;
         };
+        let base = super::LAMBDA_ARGS.with(|args| {
+            let mut args = args.borrow_mut();
+            let base = args.len();
+            args.extend(continuation.captured.iter().cloned());
+            base
+        });
         arm(&mut self.ctx, Some(&value));
+        super::LAMBDA_ARGS.with(|args| args.borrow_mut().truncate(base));
         true
     }
 
@@ -738,7 +789,9 @@ impl Interpreter {
             // arm against and nothing is waiting for a tick.
             return;
         };
-        let continuation = self.bridge.open(arms, Some(index), Span::new(0, 0), every);
+        let continuation = self
+            .bridge
+            .open(arms, Some(index), Span::new(0, 0), every, Vec::new());
         let Some(handle) = dispatcher.spawn_timer(every, dur_ms, continuation) else {
             // The driver refused it (a zero interval). Nothing will ever
             // resume this continuation, so it is withdrawn rather than left

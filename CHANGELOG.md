@@ -255,6 +255,14 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A reply's `ok` and `err` arms see the arguments their function was called
+  with.** In `let search = (asked) => { http.get(...) ok res => { ... } }`,
+  `asked` inside the arm read the argument again when the answer arrived, so
+  after `search(query)` it was whatever `query` had become by then. A late
+  answer to an old question could not be told from the current one. The call
+  now keeps its function's parameters as they were when it was placed, each
+  outstanding call its own.
+
 - **`byard get` limits what a registry can send and where it can point.** A
   response over 128 MiB is refused instead of read into memory, and a path
   an index names (an archive) must be inside the registry, so an index cannot

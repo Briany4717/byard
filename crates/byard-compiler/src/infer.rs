@@ -374,6 +374,14 @@ impl Checker<'_> {
             Member::Lifecycle { action, .. } | Member::Timer { action, .. } => {
                 self.check_expr(action);
             }
+            Member::Change {
+                watched, action, ..
+            } => {
+                for value in watched {
+                    self.check_expr(value);
+                }
+                self.check_expr(action);
+            }
             // The measured rect arrives as `it`.
             Member::Measure { action, .. } => {
                 self.check_shadowed(action, &[&Symbol::intern("it")]);
@@ -923,6 +931,7 @@ fn member_span(member: &Member) -> Span {
         | Member::Lifecycle { span, .. }
         | Member::Timer { span, .. }
         | Member::Measure { span, .. }
+        | Member::Change { span, .. }
         | Member::Style { span, .. } => *span,
         Member::Element(el) => el.span,
         Member::Expr(e) => e.span(),

@@ -170,6 +170,14 @@ fn collect_name_spans_in_members(members: &[Member], target_name: &str, out: &mu
             | Member::Measure { action, .. } => {
                 collect_name_spans_in_expr(action, target_name, out);
             }
+            Member::Change {
+                watched, action, ..
+            } => {
+                for value in watched {
+                    collect_name_spans_in_expr(value, target_name, out);
+                }
+                collect_name_spans_in_expr(action, target_name, out);
+            }
             Member::Style { .. } => {}
         }
     }

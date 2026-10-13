@@ -44,6 +44,7 @@ use crate::diagnostics::{CompileError, Span};
 use crate::interp::bridge::{host_to_value, value_to_host};
 use crate::interp::env::Value;
 use crate::interp::events::Action;
+use crate::interp::reactive::ScopeId;
 use crate::parser::ast::{Arg, Expr, ResultArm};
 use crate::symbol::Symbol;
 
@@ -121,6 +122,13 @@ pub(crate) enum EffectKind {
         /// The interval or delay, in milliseconds.
         dur_ms: u64,
     },
+    /// `on change(a, b) => …`: run when a watched value differs from what it
+    /// was when the scope last settled. One memo per watched value, so an
+    /// effect whose values were not written costs a flag read per frame.
+    Change {
+        /// The memo of each watched value.
+        watched: Vec<ScopeId>,
+    },
 }
 
 /// One structural effect and the mount state it is tracking (RFC-0028 §4b).
@@ -155,6 +163,10 @@ pub(super) struct EffectSlot {
     /// The continuation a timer's ticks resume into, so an unmount can drop it
     /// alongside the task.
     pub continuation: Option<u64>,
+    /// What each watched value of an [`EffectKind::Change`] was when the
+    /// scope last settled. Empty while unmounted, so a scope that comes back
+    /// starts from what it finds rather than from what it left.
+    pub last: Vec<Value>,
 }
 
 /// Everything the interpreter needs to reach the async world, kept in one
@@ -664,6 +676,7 @@ impl Interpreter {
             mounted: false,
             timer: None,
             continuation: None,
+            last: Vec::new(),
         });
         index
     }
@@ -707,6 +720,9 @@ impl Interpreter {
                 .continuations
                 .retain(|_, c| c.owner != Some(index));
             self.disarm_timer(index);
+            if let Some(slot) = self.bridge.effects.get_mut(index) {
+                slot.last.clear();
+            }
             self.run_effect(index, &EffectKind::Unmount);
         }
         let fired = !mounted.is_empty();
@@ -714,8 +730,49 @@ impl Interpreter {
             self.arm_timer(index);
             self.run_effect(index, &EffectKind::Mount);
         }
+        let fired_change = self.settle_changes();
         self.drain_calls();
-        fired || fired_unmount
+        fired || fired_unmount || fired_change
+    }
+
+    /// Runs every mounted `on change` whose watched values moved.
+    ///
+    /// After the mount edges, so a value an `on mount` wrote is part of what
+    /// the scope starts from rather than a change to it.
+    fn settle_changes(&mut self) -> bool {
+        let mut fired = false;
+        for index in 0..self.bridge.effects.len() {
+            let slot = &self.bridge.effects[index];
+            let EffectKind::Change { watched } = &slot.kind else {
+                continue;
+            };
+            if !slot.mounted {
+                continue;
+            }
+            let starting = slot.last.is_empty();
+            if !starting && !watched.iter().any(|&memo| self.ctx.is_dirty(memo)) {
+                continue;
+            }
+            let watched = watched.clone();
+            let now: Vec<Value> = watched
+                .iter()
+                .map(|&memo| self.ctx.read_memo(memo))
+                .collect();
+            let slot = &mut self.bridge.effects[index];
+            let moved = !starting && slot.last != now;
+            slot.last = now;
+            if !moved {
+                continue;
+            }
+            fired = true;
+            let action = Rc::clone(&slot.action);
+            self.bridge.running_effect.set(Some(index));
+            if let Some(run) = action.borrow_mut().ok.as_mut() {
+                run(&mut self.ctx, None);
+            }
+            self.bridge.running_effect.set(None);
+        }
+        fired
     }
 
     /// Arms effect `index`'s timer, if it is one (RFC-0029 §5).

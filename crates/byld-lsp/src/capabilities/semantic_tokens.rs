@@ -294,6 +294,21 @@ fn collect_member_tokens(members: &[Member], out: &mut Vec<RawToken>) {
                 });
                 collect_expr_tokens(action, out);
             }
+            Member::Change {
+                watched,
+                action,
+                span,
+            } => {
+                out.push(RawToken {
+                    span: Span::new(span.start, span.start + 2), // "on"
+                    token_type: 0,                               // KEYWORD
+                    modifiers: 0,
+                });
+                for value in watched {
+                    collect_expr_tokens(value, out);
+                }
+                collect_expr_tokens(action, out);
+            }
             Member::Inject { name, span, .. } => {
                 out.push(RawToken {
                     span: Span::new(span.start, span.start + 6), // "inject"

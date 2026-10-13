@@ -614,6 +614,13 @@ impl ReactiveCtx {
 
     // ── observability (tests) ───────────────────────────────────────────
 
+    /// Whether `s` is waiting to be recomputed: something it read was written
+    /// since it last ran.
+    #[must_use]
+    pub fn is_dirty(&self, s: ScopeId) -> bool {
+        self.scopes[s.0 as usize].dirty
+    }
+
     /// How many times `s` has been evaluated since creation.
     #[must_use]
     pub fn eval_count(&self, s: ScopeId) -> u32 {

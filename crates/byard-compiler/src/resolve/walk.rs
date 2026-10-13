@@ -56,6 +56,14 @@ pub(crate) fn member_exprs(member: &mut Member, f: &mut dyn FnMut(&mut Expr)) {
         Member::Timer { action, .. }
         | Member::Lifecycle { action, .. }
         | Member::Measure { action, .. } => expr(action, f),
+        Member::Change {
+            watched, action, ..
+        } => {
+            for value in watched {
+                expr(value, f);
+            }
+            expr(action, f);
+        }
         Member::Expr(e) => expr(e, f),
     }
 }

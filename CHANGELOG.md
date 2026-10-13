@@ -52,6 +52,13 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`on change(a, b) => action` runs an action when a value changes.** A
+  screen that loads in `on mount` had no way to load again when the place it
+  was asked for changed; now it writes `on change(lat, lon) => load()` beside
+  it. It runs once per change, not on mount, not when a value is written to
+  what it already was, and not while its view is off screen. Coming back on
+  screen is a mount, not a change. See `crates/byard-cli/examples/on_change`.
+
 - **A path can be drawn from data.** `for` and `when` work inside a `path`
   body: `for i, t in temps { line(i * 40, 120 - t) }` writes one command per
   sample, so a chart's curve comes straight from a list. It used to be skipped

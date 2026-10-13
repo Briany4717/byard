@@ -132,6 +132,7 @@ fn members_span(members: &[Member]) -> Span {
             | Member::Lifecycle { span, .. }
             | Member::Timer { span, .. }
             | Member::Measure { span, .. }
+            | Member::Change { span, .. }
             | Member::Style { span, .. } => *span,
             Member::Element(el) => el.span,
             Member::Expr(expr) => expr.span(),
@@ -4129,6 +4130,24 @@ impl Interpreter {
                         },
                         lowered,
                     );
+                    out.push(RenderNode::Effect { index });
+                }
+            }
+            // `on change(a, b) => …`: one memo per watched value, read when
+            // the effects settle.
+            Member::Change {
+                watched, action, ..
+            } => {
+                if let Ok(lowered) = self.lower_action(action, None) {
+                    let watched = watched
+                        .iter()
+                        .map(|value| {
+                            let compute = self.lower_expr(value, None);
+                            self.ctx.open_memo(compute)
+                        })
+                        .collect();
+                    let index =
+                        self.register_effect(controller::EffectKind::Change { watched }, lowered);
                     out.push(RenderNode::Effect { index });
                 }
             }

@@ -296,6 +296,22 @@ pub enum Member {
         /// Source span.
         span: Span,
     },
+    /// `on change(a, b) => action`, an action run when a value it names
+    /// changes while the scope is mounted.
+    ///
+    /// A structural effect like [`Member::Lifecycle`]: it belongs to the scope
+    /// that declared it and stops with it. It does not run on mount, which is
+    /// what `on mount` is for; the two together are "load, and load again when
+    /// what was asked for changes".
+    Change {
+        /// The values watched. The action runs when any of them differs from
+        /// what it was the last time the scope settled.
+        watched: Vec<Expr>,
+        /// The action to run.
+        action: Expr,
+        /// Source span.
+        span: Span,
+    },
     /// `style { .class #[...] ... }`, scoped style rules (static; D5).
     Style {
         /// The style rules.

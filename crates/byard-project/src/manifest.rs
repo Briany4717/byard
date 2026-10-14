@@ -171,6 +171,19 @@ pub struct Manifest {
     /// dev runner watches besides the sources, so editing either applies
     /// live. Empty for bare-file usage.
     pub watch_files: Vec<PathBuf>,
+    /// The `[native_views]` table (RFC-0039): the elements the app's Rust
+    /// half draws, declared so that tools which cannot link that Rust
+    /// (`byard check`, `byard dev`, the editor) still know them.
+    pub native_views: Vec<NativeViewDecl>,
+}
+
+/// One element of `[native_views]`: a name and the properties it takes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NativeViewDecl {
+    /// The element's name, as `byld` writes it.
+    pub name: String,
+    /// Its properties, in the order written.
+    pub props: Vec<byard_core::render::registry::DeclaredProp>,
 }
 
 /// The `[http]` table: the origins an app's requests resolve against, so its
@@ -263,6 +276,7 @@ impl Manifest {
                 dev: DevConfig::default(),
                 http: HttpConfig::default(),
                 watch_files: Vec::new(),
+                native_views: Vec::new(),
             });
         }
 
@@ -293,6 +307,7 @@ impl Manifest {
             dev: DevConfig::default(),
             http: HttpConfig::default(),
             watch_files: Vec::new(),
+            native_views: Vec::new(),
         }
     }
 
@@ -310,7 +325,14 @@ impl Manifest {
         for key in table.keys() {
             if !matches!(
                 key.as_str(),
-                "project" | "dependencies" | "package" | "assets" | "theme" | "dev" | "http"
+                "project"
+                    | "dependencies"
+                    | "package"
+                    | "assets"
+                    | "theme"
+                    | "dev"
+                    | "http"
+                    | "native_views"
             ) {
                 eprintln!("byard.toml: warning: unknown key `{key}` (ignored)");
             }
@@ -383,6 +405,7 @@ impl Manifest {
         // RFC-0030 §V2: the dev runner's own surface.
         let dev = parse_dev(&table)?;
         let http = parse_http(&table)?;
+        let native_views = parse_native_views(&table)?;
 
         Ok(Self {
             project_root,
@@ -396,8 +419,95 @@ impl Manifest {
             dev,
             http,
             watch_files,
+            native_views,
         })
     }
+}
+
+/// Parses `[native_views]`: one table per element, a property per key.
+///
+/// ```toml
+/// [native_views.Map]
+/// lat = "float"
+/// zoom = { type = "float", layout = true }
+/// ```
+///
+/// A property's type is one of `int`, `float`, `bool`, `str`, `color`, `vec2`
+/// or `floats`. `layout = true` says a change to it can change the element's
+/// size, which is what the Rust side's `#[prop(layout)]` says.
+fn parse_native_views(table: &toml::Table) -> Result<Vec<NativeViewDecl>, String> {
+    use byard_core::render::registry::{DeclaredProp, NativePropType};
+    let Some(value) = table.get("native_views") else {
+        return Ok(Vec::new());
+    };
+    let err = |what: String| format!("byard.toml: [native_views]: {what}");
+    let views = value
+        .as_table()
+        .ok_or_else(|| err("must be a table of elements".to_string()))?;
+    let prop_type = |view: &str, prop: &str, written: &str| match written {
+        "int" => Ok(NativePropType::Int),
+        "float" => Ok(NativePropType::Float),
+        "bool" => Ok(NativePropType::Bool),
+        "str" => Ok(NativePropType::Str),
+        "color" => Ok(NativePropType::Color),
+        "vec2" => Ok(NativePropType::Vec2),
+        "floats" => Ok(NativePropType::Floats),
+        other => Err(err(format!(
+            "`{view}.{prop}`: unknown type `{other}` (one of int, float, bool, str, color, \
+             vec2, floats)"
+        ))),
+    };
+    let mut out = Vec::new();
+    for (name, body) in views {
+        if !name.chars().next().is_some_and(char::is_uppercase) {
+            return Err(err(format!(
+                "`{name}`: an element's name starts with a capital letter"
+            )));
+        }
+        let body = body
+            .as_table()
+            .ok_or_else(|| err(format!("`{name}` must be a table of properties")))?;
+        let mut props = Vec::new();
+        for (prop, spec) in body {
+            let (ty, layout) = match spec {
+                toml::Value::String(written) => (prop_type(name, prop, written)?, false),
+                toml::Value::Table(spec) => {
+                    for key in spec.keys() {
+                        if !matches!(key.as_str(), "type" | "layout") {
+                            return Err(err(format!("`{name}.{prop}`: unknown key `{key}`")));
+                        }
+                    }
+                    let written = spec
+                        .get("type")
+                        .and_then(toml::Value::as_str)
+                        .ok_or_else(|| err(format!("`{name}.{prop}` needs a `type`")))?;
+                    let layout = match spec.get("layout") {
+                        None => false,
+                        Some(toml::Value::Boolean(b)) => *b,
+                        Some(_) => {
+                            return Err(err(format!("`{name}.{prop}`: `layout` is true or false")));
+                        }
+                    };
+                    (prop_type(name, prop, written)?, layout)
+                }
+                _ => {
+                    return Err(err(format!(
+                        "`{name}.{prop}` is a type name, or `{{ type = …, layout = … }}`"
+                    )));
+                }
+            };
+            props.push(DeclaredProp {
+                name: prop.clone(),
+                ty,
+                layout,
+            });
+        }
+        out.push(NativeViewDecl {
+            name: name.clone(),
+            props,
+        });
+    }
+    Ok(out)
 }
 
 /// Parses the `[http]` table: `base_url`, the origin a request that names
@@ -1637,5 +1747,51 @@ mod tests {
         let theme = theme_of("[project]\nname = \"x\"\n").unwrap();
         assert_eq!(theme.name, "byard-base");
         assert!(theme.color("primary", false).is_some());
+    }
+    fn native_views_of(src: &str) -> Result<Vec<NativeViewDecl>, String> {
+        parse_native_views(&src.parse::<toml::Table>().unwrap())
+    }
+
+    #[test]
+    fn native_views_are_read_with_their_property_types() {
+        let views = native_views_of(
+            "[native_views.Map]\nlat = \"float\"\npin = \"color\"\n\
+             zoom = { type = \"float\", layout = true }\n",
+        )
+        .unwrap();
+        let [map] = views.as_slice() else {
+            panic!("{views:?}");
+        };
+        assert_eq!(map.name, "Map");
+        let props: Vec<(&str, bool)> = map
+            .props
+            .iter()
+            .map(|p| (p.name.as_str(), p.layout))
+            .collect();
+        assert_eq!(props, [("lat", false), ("pin", false), ("zoom", true)]);
+        assert_eq!(
+            map.props[1].ty,
+            byard_core::render::registry::NativePropType::Color
+        );
+    }
+
+    #[test]
+    fn a_native_view_declaration_that_is_wrong_says_how() {
+        for (src, says) in [
+            (
+                "[native_views.Map]\nlat = \"number\"\n",
+                "unknown type `number`",
+            ),
+            ("[native_views.map]\nlat = \"float\"\n", "capital"),
+            ("[native_views.Map]\nlat = 3\n", "is a type name"),
+            (
+                "[native_views.Map]\nlat = { type = \"float\", relayout = true }\n",
+                "unknown key `relayout`",
+            ),
+            ("native_views = 3\n", "table of elements"),
+        ] {
+            let err = native_views_of(src).unwrap_err();
+            assert!(err.contains(says), "{src}: {err}");
+        }
     }
 }

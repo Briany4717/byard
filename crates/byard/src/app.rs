@@ -326,6 +326,7 @@ pub(crate) fn load_program(entry: &Path) -> Result<Program, ByardError> {
             entry.display()
         )));
     }
+    check_declared_views(&manifest.native_views)?;
     Ok(Program {
         views: program.views,
         theme: manifest.theme,
@@ -395,6 +396,12 @@ impl PlatformHost for Host {
             let root = byard_compiler::parser::ast::root_view(&views)
                 .expect("a program with no views is rejected before this");
             let tree = interp.lower_view(root, &known);
+            // The program resolved, and lowering can still refuse part of it
+            // (an attribute an element does not take). A shipped app has no
+            // overlay to show that in, so it says it where it will be read.
+            for error in interp.errors() {
+                eprintln!("  {}", error.headline());
+            }
             interp.tick();
             Box::new(AppRuntime {
                 interp,
@@ -557,9 +564,114 @@ impl LogicRuntime for AppRuntime {
     }
 }
 
+/// Refuses a manifest whose `[native_views]` describes an element differently
+/// from the view the app registered under that name.
+///
+/// The declaration is what `byard check` and the editor go by, and the
+/// registered view is what runs. If the two disagree, a program that checks
+/// clean can fail in the app, or the other way round, so the app says which
+/// property is off instead of starting.
+fn check_declared_views(
+    declared: &[byard_project::manifest::NativeViewDecl],
+) -> Result<(), ByardError> {
+    use byard_core::render::registry;
+    for view in declared {
+        let Some(info) = registry::info(&view.name) else {
+            continue;
+        };
+        let registered: Vec<registry::DeclaredProp> = info
+            .props
+            .iter()
+            .map(|p| registry::DeclaredProp {
+                name: p.name.to_string(),
+                ty: p.ty,
+                layout: p.layout,
+            })
+            .collect();
+        let describe = |props: &[registry::DeclaredProp]| {
+            let mut all: Vec<String> = props
+                .iter()
+                .map(|p| {
+                    format!(
+                        "{}: {:?}{}",
+                        p.name,
+                        p.ty,
+                        if p.layout { " (layout)" } else { "" }
+                    )
+                })
+                .collect();
+            all.sort();
+            all
+        };
+        let (written, real) = (describe(&view.props), describe(&registered));
+        if written != real {
+            return Err(ByardError::Platform(format!(
+                "byard.toml declares `{}` with the properties [{}], and the view registered \
+                 under that name has [{}]. `[native_views.{}]` is what `byard check` and the \
+                 editor go by, so it has to say what the view takes.",
+                view.name,
+                written.join(", "),
+                real.join(", "),
+                view.name
+            )));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A declaration that has drifted from the view registered under its name
+    /// stops the app, naming both sides.
+    #[test]
+    fn a_declaration_that_does_not_match_its_view_is_refused() {
+        use byard_core::render::registry::{self, DeclaredProp, NativePropType};
+        use byard_project::manifest::NativeViewDecl;
+
+        // What the app registered, standing in for a `#[native_view]` type.
+        registry::declare(
+            "DriftGauge",
+            &[DeclaredProp {
+                name: "value".into(),
+                ty: NativePropType::Float,
+                layout: false,
+            }],
+        );
+        let declared = |props: Vec<DeclaredProp>| {
+            vec![NativeViewDecl {
+                name: "DriftGauge".into(),
+                props,
+            }]
+        };
+        let prop = |name: &str, ty| DeclaredProp {
+            name: name.into(),
+            ty,
+            layout: false,
+        };
+
+        assert!(
+            check_declared_views(&declared(vec![prop("value", NativePropType::Float)])).is_ok()
+        );
+        let renamed = check_declared_views(&declared(vec![prop("level", NativePropType::Float)]))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            renamed.contains("DriftGauge")
+                && renamed.contains("level")
+                && renamed.contains("value"),
+            "{renamed}"
+        );
+        let retyped = check_declared_views(&declared(vec![prop("value", NativePropType::Color)]));
+        assert!(retyped.is_err(), "a different type is a different property");
+        // A name nothing registered is not this check's business.
+        let other = vec![NativeViewDecl {
+            name: "NobodyRegisteredThis".into(),
+            props: Vec::new(),
+        }];
+        assert!(check_declared_views(&other).is_ok());
+    }
 
     /// A shipped app reads its project as `byard dev` does: the theme's
     /// tokens and declared fonts arrive, and a view in a sibling file is part

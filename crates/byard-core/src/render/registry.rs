@@ -120,6 +120,80 @@ pub fn register<V: NativeViewMeta>() -> bool {
     true
 }
 
+/// One property of a view declared by name rather than by type.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DeclaredProp {
+    /// The name it is written under in `byld`.
+    pub name: String,
+    /// The value type it accepts.
+    pub ty: NativePropType,
+    /// Whether changing it can move geometry.
+    pub layout: bool,
+}
+
+/// A view that stands in for one whose Rust is not linked into this program.
+///
+/// It takes its place in the layout and draws a faint panel there, so a
+/// screen that uses the real view still lays out and still reads as a screen.
+struct StandIn;
+
+impl super::NativeProps for StandIn {}
+
+impl NativeView for StandIn {
+    fn measure(&self, known: super::Measure) -> super::Measure {
+        known.keep()
+    }
+
+    fn render(&mut self, layout: super::Layout, cx: &mut super::RenderCtx<'_>) {
+        let pipeline = cx.pipeline::<crate::encoder::SolidBoxPipeline>();
+        cx.emit(
+            pipeline,
+            &[crate::frame::BoxInstance {
+                rect: layout.rect,
+                color: [1.0, 1.0, 1.0, 0.008],
+                radii: [8.0; 4],
+                transform: crate::frame::Transform::IDENTITY,
+                smooth: 0.0,
+            }],
+        );
+    }
+}
+
+/// Declares a view by name and properties, for a program that names it and
+/// cannot link the Rust that draws it (RFC-0039): `byard check`, `byard dev`
+/// and the editor, reading `[native_views]` from a project's manifest.
+///
+/// A name already registered is left alone and this returns `false`: the
+/// app's own view is the real one. Otherwise the name is registered with a
+/// stand-in that takes the declared properties and draws a faint panel.
+pub fn declare(name: &str, props: &[DeclaredProp]) -> bool {
+    let Ok(mut registry) = REGISTRY.write() else {
+        return false;
+    };
+    if registry.iter().any(|e| e.info.name == name) {
+        return false;
+    }
+    // A registration lives as long as the process, which is the lifetime the
+    // catalog entry's `&'static` fields have for a view written in Rust.
+    let props: Vec<NativeProp> = props
+        .iter()
+        .map(|p| NativeProp {
+            name: Box::leak(p.name.clone().into_boxed_str()),
+            ty: p.ty,
+            layout: p.layout,
+        })
+        .collect();
+    registry.push(Entry {
+        info: NativeViewInfo {
+            name: Box::leak(name.to_string().into_boxed_str()),
+            props: Box::leak(props.into_boxed_slice()),
+            events: &[],
+        },
+        factory: || Box::new(StandIn),
+    });
+    true
+}
+
 /// The catalog entry registered under `name`, if any.
 #[must_use]
 pub fn info(name: &str) -> Option<NativeViewInfo> {

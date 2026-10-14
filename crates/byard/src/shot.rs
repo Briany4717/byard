@@ -81,6 +81,18 @@ impl App {
         let root = byard_compiler::parser::ast::root_view(&views)
             .ok_or_else(|| ByardError::Platform("the program declares no `View`".to_string()))?;
         let tree = interp.lower_view(root, &known);
+        if !interp.errors().is_empty() {
+            let report: Vec<String> = interp
+                .errors()
+                .iter()
+                .map(|e| format!("  {}", e.headline()))
+                .collect();
+            return Err(ByardError::Platform(format!(
+                "`{}` did not compile:\n{}",
+                self.entry.display(),
+                report.join("\n")
+            )));
+        }
 
         let scale = 2.0_f32;
         let (width, height) = self.size;

@@ -159,7 +159,7 @@ impl NativeView for Sparkline {
 
 /// The app: its views, its shader and its controller.
 fn app() -> byard::App {
-    byard::App::new(concat!(env!("CARGO_MANIFEST_DIR"), "/src/main.byd"))
+    byard::App::new(env!("CARGO_MANIFEST_DIR"))
         .title("Sparkline, a native view")
         .size(760, 560)
         .shader::<GlowShader>()

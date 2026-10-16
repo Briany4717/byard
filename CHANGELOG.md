@@ -12,6 +12,11 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **A canvas shape's numeric argument reads a bare name as a name.**
+  `circle(r: raduis)` and `line(x: wdth, y: 40)` checked clean and drew with
+  nothing; now the misspelling is told, with the name it meant. An argument
+  that takes a word (`cap: round`) keeps it.
+
 - **`byard check` catches three more kinds of misspelling.** A property that
   takes a number, a colour, a length, an angle or a list reads a bare name
   as a name, so `bg: prmary` is told (`did you mean primary?`) where it used

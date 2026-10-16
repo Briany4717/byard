@@ -79,6 +79,10 @@ Worked around in the app, and not yet fixed in Byard:
   being matched against `Place`, so a field it leaves out reads as nothing.
 - **One kind of misspelling still checks clean**: a name passed to an
   intrinsic's named argument, where the argument may also be a word.
+- **A misspelt JSON field reads as nothing.** `??` gives a missing field a
+  default, but `res.json.resluts` is a missing field too, and nothing says so.
+- **A JSON list of records has no type.** `var found: List<Place>` names a
+  type nothing defines and nothing checks.
 - **The Rust half has no hot reload.** `byard dev examples/aura_weather`
   reloads every screen but draws a plain panel where the map is; the map
   itself changes only when the app is rebuilt.

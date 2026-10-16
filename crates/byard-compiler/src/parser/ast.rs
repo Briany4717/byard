@@ -633,6 +633,9 @@ pub enum BinOp {
     And,
     /// `||` (short-circuit)
     Or,
+    /// `??`: the left value, or the right one when the left is nothing (a
+    /// missing JSON field, an empty `find`). Short-circuit.
+    Otherwise,
 }
 
 /// Prefix unary operators (RFC-0027 §2): boolean `!` and numeric negation `-`.

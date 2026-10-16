@@ -74,7 +74,14 @@ pub struct App {
     /// [`reserved`](Self::reserved) is: a builder step that returns `Self`
     /// cannot fail, and a name collision is too consequential to drop.
     duplicate_views: Vec<&'static str>,
+    /// Whether the running app follows its project's files: see
+    /// [`hot_reload`](App::hot_reload).
+    hot_reload: bool,
 }
+
+/// The program a running app reloads into, and the watcher that sends it.
+type Reloads =
+    Arc<byard_compiler::interp::reload::LatestWins<byard_compiler::interp::reload::ParsedFile>>;
 
 impl App {
     /// Starts an app rooted at `entry`: a project (its directory or its
@@ -102,7 +109,26 @@ impl App {
             size: (1280, 720),
             reserved: Vec::new(),
             duplicate_views: Vec::new(),
+            hot_reload: false,
         }
+    }
+
+    /// Follows the project's files while the app runs: editing a `.byd`, the
+    /// manifest or its theme applies to the open window, as under
+    /// `byard dev`, with the app's own Rust (its controllers, native views
+    /// and shaders) linked in. A program that stops compiling is reported on
+    /// standard error and the last one that compiled keeps running.
+    ///
+    /// For development: a shipped app has no project beside it to follow.
+    ///
+    /// ```ignore
+    /// let dev = std::env::args().any(|a| a == "--dev");
+    /// byard::App::new(env!("CARGO_MANIFEST_DIR")).hot_reload(dev).run()
+    /// ```
+    #[must_use]
+    pub const fn hot_reload(mut self, on: bool) -> Self {
+        self.hot_reload = on;
+        self
     }
 
     /// Drops the framework's built-in capabilities, so a view can `inject`
@@ -264,6 +290,11 @@ impl App {
     pub fn run(self) -> Result<(), ByardError> {
         self.check_registrations()?;
         let Program { views, theme, http } = load_program(&self.entry)?;
+        let reloads = if self.hot_reload {
+            Some(self.follow_project()?)
+        } else {
+            None
+        };
         let mut registry = self.registry;
         byard_core::cap::configure_http(&mut registry, http.base_url.as_deref(), &http.hosts);
 
@@ -280,7 +311,34 @@ impl App {
             registry,
             width_bits: Arc::new(AtomicU32::new(w0.to_bits())),
             height_bits: Arc::new(AtomicU32::new(h0.to_bits())),
+            reloads,
         })
+    }
+
+    /// Starts watching the project, and returns where its re-read program
+    /// arrives. The watcher lives as long as the process, as under
+    /// `byard dev`.
+    fn follow_project(&self) -> Result<Reloads, ByardError> {
+        let fail = |e: String| ByardError::Platform(format!("hot reload: {e}"));
+        let manifest =
+            byard_project::manifest::Manifest::discover(Some(&self.entry)).map_err(fail)?;
+        let (_, provider) = byard_project::deps::resolve_project(&manifest).map_err(fail)?;
+        let paths = byard_project::live::watch_paths(&manifest, &provider);
+        let reloads: Reloads = Arc::default();
+        // Images the app draws are decoded by the engine, which a running app
+        // already re-reads when they change; only the program is followed here.
+        let (assets, _ignored) = crossbeam_channel::unbounded();
+        let entry = self.entry.clone();
+        let watcher = byard_compiler::interp::reload::start_watcher(
+            &paths,
+            &manifest.watch_files,
+            Arc::clone(&reloads),
+            assets,
+            move || byard_project::live::reresolve(Some(&entry)),
+        )
+        .map_err(|e| fail(e.to_string()))?;
+        std::mem::forget(watcher);
+        Ok(reloads)
     }
 }
 
@@ -345,6 +403,8 @@ struct Host {
     registry: ControllerRegistry,
     width_bits: Arc<AtomicU32>,
     height_bits: Arc<AtomicU32>,
+    /// Where a re-read program arrives, when the app follows its project.
+    reloads: Option<Reloads>,
 }
 
 impl PlatformHost for Host {
@@ -382,6 +442,7 @@ impl PlatformHost for Host {
         let theme = self.theme.take();
         let width_bits = Arc::clone(&self.width_bits);
         let height_bits = Arc::clone(&self.height_bits);
+        let reloads = self.reloads.clone();
 
         engine.start_logic_from_view(move |_arena| {
             let mut interp = Interpreter::new();
@@ -402,6 +463,7 @@ impl PlatformHost for Host {
             for error in interp.errors() {
                 eprintln!("  {}", error.headline());
             }
+            let errors_told = interp.errors().len();
             interp.tick();
             Box::new(AppRuntime {
                 interp,
@@ -409,6 +471,10 @@ impl PlatformHost for Host {
                 start: std::time::Instant::now(),
                 width_bits,
                 height_bits,
+                views,
+                reloads,
+                reloaded: std::cell::Cell::new(false),
+                errors_told,
             })
         })?;
 
@@ -537,6 +603,57 @@ struct AppRuntime {
     start: std::time::Instant,
     width_bits: Arc<AtomicU32>,
     height_bits: Arc<AtomicU32>,
+    /// The program running now, which a reload is diffed against.
+    views: Vec<ViewDecl>,
+    /// Where a re-read program arrives, when the app follows its project.
+    reloads: Option<Reloads>,
+    /// Whether a reload changed the frame since it was last asked for, with
+    /// no input behind it to ask for the next one.
+    reloaded: std::cell::Cell<bool>,
+    /// How many of the interpreter's errors have been printed.
+    errors_told: usize,
+}
+
+impl AppRuntime {
+    /// Prints what the program reported since the last frame: a reply that
+    /// did not match its record type, a reload's lowering errors. A shipped
+    /// app has no overlay, so standard error is where it can be read.
+    fn tell_new_errors(&mut self) {
+        let errors = self.interp.errors();
+        for error in errors.iter().skip(self.errors_told) {
+            eprintln!("  {}", error.headline());
+        }
+        self.errors_told = errors.len();
+    }
+
+    /// Applies a re-read program, if one arrived: the theme if it changed,
+    /// then the views. A program that does not compile is reported and the
+    /// running one is kept.
+    fn follow(&mut self) {
+        let Some(parsed) = self.reloads.as_ref().and_then(|r| r.take()) else {
+            return;
+        };
+        if !parsed.errors.is_empty() {
+            eprintln!("  the edit does not compile; the app keeps the last program that did:");
+            for error in &parsed.errors {
+                eprintln!("    {}", error.headline());
+            }
+            return;
+        }
+        if let Some(mut theme) = parsed.theme.filter(|t| !t.same_tokens(&self.interp.theme)) {
+            theme.active_dark = self.interp.theme.active_dark;
+            self.interp.set_theme(theme);
+        }
+        if let Some(tree) = byard_compiler::interp::reload::apply_program(
+            &mut self.interp,
+            &self.views,
+            &parsed.views,
+        ) {
+            self.tree = tree;
+        }
+        self.views = parsed.views;
+        self.reloaded.set(true);
+    }
 }
 
 impl LogicRuntime for AppRuntime {
@@ -546,6 +663,7 @@ impl LogicRuntime for AppRuntime {
         input_events: &[InputEvent],
         _dirty: &[TargetId],
     ) {
+        self.follow();
         self.interp.dispatch_events(input_events);
         self.interp.tick();
         let elapsed = u32::try_from(self.start.elapsed().as_millis()).unwrap_or(u32::MAX);
@@ -553,6 +671,7 @@ impl LogicRuntime for AppRuntime {
         let w = f32::from_bits(self.width_bits.load(Ordering::Relaxed));
         let h = f32::from_bits(self.height_bits.load(Ordering::Relaxed));
         self.interp.render(&self.tree, frame, w, h);
+        self.tell_new_errors();
     }
 
     fn apply_io_results(&mut self, results: Vec<IoResult>) -> bool {
@@ -560,7 +679,7 @@ impl LogicRuntime for AppRuntime {
     }
 
     fn wants_another_frame(&self) -> bool {
-        self.interp.needs_another_frame()
+        self.interp.needs_another_frame() || self.reloaded.take()
     }
 }
 
@@ -622,6 +741,131 @@ fn check_declared_views(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A project in a fresh directory: `main.byd` holding `body`.
+    fn hot_project(name: &str, body: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("byard-hot-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(
+            dir.join("byard.toml"),
+            "[project]\nname = \"hot\"\nentry = \"src/main.byd\"\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("src/main.byd"), body).unwrap();
+        dir
+    }
+
+    /// The app's logic runtime over `dir`, as `run` builds it, following a
+    /// channel the test fills.
+    fn runtime(dir: &Path, reloads: &Reloads) -> AppRuntime {
+        let Program { views, theme, .. } = load_program(dir).unwrap();
+        let mut interp = Interpreter::new();
+        interp.set_theme(theme);
+        interp.load_views(&views);
+        let known: Vec<&str> = views.iter().map(|v| v.name.as_str()).collect();
+        let root = byard_compiler::parser::ast::root_view(&views).unwrap();
+        let tree = interp.lower_view(root, &known);
+        AppRuntime {
+            interp,
+            tree,
+            start: std::time::Instant::now(),
+            width_bits: Arc::new(AtomicU32::new(400.0_f32.to_bits())),
+            height_bits: Arc::new(AtomicU32::new(300.0_f32.to_bits())),
+            views,
+            reloads: Some(Arc::clone(reloads)),
+            reloaded: std::cell::Cell::new(false),
+            errors_told: 0,
+        }
+    }
+
+    fn texts(app: &mut AppRuntime) -> Vec<String> {
+        let mut frame = RenderFrame::new();
+        app.evaluate_tick(&mut frame, &[], &[]);
+        frame.texts().iter().map(|t| t.text.clone()).collect()
+    }
+
+    /// An edit to a view reaches the running app, and asks for the frame that
+    /// shows it.
+    #[test]
+    fn an_edit_reaches_the_running_app() {
+        let dir = hot_project("edit", "View Main() { Text(\"before\") }");
+        let reloads: Reloads = Arc::default();
+        let mut app = runtime(&dir, &reloads);
+        assert_eq!(texts(&mut app), ["before"]);
+        assert!(!app.wants_another_frame());
+
+        std::fs::write(dir.join("src/main.byd"), "View Main() { Text(\"after\") }").unwrap();
+        reloads.publish(byard_project::live::reresolve(Some(&dir)));
+        assert_eq!(texts(&mut app), ["after"]);
+        assert!(app.wants_another_frame(), "the reload asks for its frame");
+        assert!(!app.wants_another_frame(), "once");
+    }
+
+    /// An edit that does not compile leaves the running program alone.
+    #[test]
+    fn an_edit_that_does_not_compile_keeps_the_last_good_program() {
+        let dir = hot_project("broken", "View Main() { Text(\"good\") }");
+        let reloads: Reloads = Arc::default();
+        let mut app = runtime(&dir, &reloads);
+        std::fs::write(dir.join("src/main.byd"), "View Main() { Text(\"good\" }").unwrap();
+        reloads.publish(byard_project::live::reresolve(Some(&dir)));
+        assert_eq!(texts(&mut app), ["good"]);
+    }
+
+    /// State survives a reload that only changes how it is shown.
+    #[test]
+    fn state_survives_an_edit_to_how_it_is_shown() {
+        let dir = hot_project(
+            "state",
+            "View Main() { var n: Int = 0\n Button(\"add\") => n++\n Text(\"n {n}\") }",
+        );
+        let reloads: Reloads = Arc::default();
+        let mut app = runtime(&dir, &reloads);
+        assert!(texts(&mut app).contains(&"n 0".to_string()));
+        app.interp.dispatch_events(&[]);
+        let n = app
+            .interp
+            .var_signal(&byard_compiler::Symbol::intern("n"))
+            .unwrap();
+        app.interp
+            .write_var(n, byard_compiler::interp::env::Value::Int(5));
+        assert!(texts(&mut app).contains(&"n 5".to_string()));
+
+        std::fs::write(
+            dir.join("src/main.byd"),
+            "View Main() { var n: Int = 0\n Button(\"add\") => n++\n Text(\"count {n}\") }",
+        )
+        .unwrap();
+        reloads.publish(byard_project::live::reresolve(Some(&dir)));
+        assert!(
+            texts(&mut app).contains(&"count 5".to_string()),
+            "{:?}",
+            texts(&mut app)
+        );
+    }
+
+    /// The watcher an app starts sends the re-read program when a file
+    /// changes.
+    #[test]
+    fn the_app_watches_its_project() {
+        let dir = hot_project("watch", "View Main() { Text(\"one\") }");
+        let app = App::new(&dir).hot_reload(true);
+        let reloads = app.follow_project().unwrap();
+        // Give the watcher a moment to register before the edit.
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        std::fs::write(dir.join("src/main.byd"), "View Main() { Text(\"two\") }").unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let parsed = loop {
+            if let Some(parsed) = reloads.take() {
+                break parsed;
+            }
+            assert!(std::time::Instant::now() < deadline, "no reload within 5 s");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        assert_eq!(parsed.views.len(), 1);
+    }
 
     /// A declaration that has drifted from the view registered under its name
     /// stops the app, naming both sides.

@@ -1598,6 +1598,11 @@ pub struct Interpreter {
     /// `var` name → its `Signal`, so a hot-reload can preserve state by
     /// rebinding instead of re-initializing (RFC-0004 §11).
     var_sigs: std::collections::HashMap<Symbol, SignalId>,
+    /// The `var`s a reactive-compatible reload kept, until the root is
+    /// lowered again. Lowering evaluates the view's declarations, and a kept
+    /// `var` must keep its signal there too, or the state the reload kept is
+    /// replaced by its initial value one step later.
+    kept_vars: std::collections::HashSet<Symbol>,
     /// The program's record types (`type Place = …`), by name.
     records: std::rc::Rc<super::shape::Records>,
     /// The declared type of each `var` whose type names a record, which is
@@ -2729,6 +2734,13 @@ impl Interpreter {
     fn eval_member(&mut self, member: &Member) {
         match member {
             Member::Var { name, init, ty, .. } => {
+                // A `var` the last reload kept is the signal it already has.
+                if self.kept_vars.remove(name) {
+                    if let Some(&sig) = self.var_sigs.get(name) {
+                        self.env.push(name.clone(), Value::Signal(sig));
+                        return;
+                    }
+                }
                 let sig = self.define_var(name.clone(), init);
                 if let Some(ty) = ty
                     .as_ref()
@@ -2999,6 +3011,7 @@ impl Interpreter {
                             // Keep the live Signal (and its value).
                             self.env.push(name.clone(), Value::Signal(sig));
                             self.var_sigs.insert(name.clone(), sig);
+                            self.kept_vars.insert(name.clone());
                             continue;
                         }
                     }

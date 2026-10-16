@@ -15,6 +15,13 @@ running so its data has arrived (`now`, `days`, `air`, `trends` or `map`):
 cargo run -p aura-weather -- --shot map.png map
 ```
 
+Or follow the project while editing: every screen and the manifest apply to
+the open window, map included.
+
+```bash
+cargo run -p aura-weather -- --dev
+```
+
 ## What it is made of
 
 Every screen is `byld`, in `src/`:
@@ -61,17 +68,21 @@ Each of these was found by building a screen, and each is now in Byard.
 | Map | `zoom: "near"` checked clean for a number, and so did `bg: prmary` and `serach(q)`. | `byard check` reads a value property's bare name as a name, checks called names, and rejects text for a number (#314) |
 | Search | A named action's parameters could not say their types, so its body was checked against nothing. | `(asked: Str) => …` |
 | Search | A JSON list of records had no type, so `hit.nmae` checked clean. | `type Place = { name: Str, … }` |
+| Map | An app with a Rust half could not hot-reload: `byard dev` cannot link the map, so it drew a panel there. | `App::hot_reload(true)`, `--dev` |
+| Search | A reply was assigned to `List<Place>` without being compared with it, so a field the server left out read as nothing. | A value written into a record-typed `var` is compared, and the first difference reported; `country: Str?` may be absent |
 
 ## What it still could not be built with
 
 Worked around in the app, and not yet fixed in Byard:
 
-- **A JSON reply is not checked against its type.** A record type checks
-  the code that reads a value; the geocoder's reply is assigned without
-  being matched against `Place`, so a field it leaves out reads as nothing.
 - **One kind of misspelling still checks clean**: a name passed to an
   intrinsic's named argument, where the argument may also be a word.
 - **The Rust half has no hot reload.** `byard dev examples/aura_weather`
   reloads every screen but draws a plain panel where the map is; the map
   itself changes only when the app is rebuilt.
+- **A lambda's parameters take no type**: `(asked) => …`, never
+  `(asked: Str) => …`.
+- **The Rust half itself does not reload.** `cargo run -p aura-weather --
+  --dev` follows every `.byd` and the manifest with the map linked in, but
+  an edit to `map.rs` still needs the app rebuilt.
 - **Not measured**: the frame time while panning the map.

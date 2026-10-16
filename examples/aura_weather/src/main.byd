@@ -7,12 +7,25 @@ type Place = { name: Str, country: Str, latitude: Float, longitude: Float }
 View Main() {
     inject Theme as t
     inject Http as http
+    inject Store as store
     var tab = "forecast"
     // The place every screen reports on. Search changes it, and each screen
-    // asks again when it does.
+    // asks again when it does. The last one chosen is kept between runs.
     var place: Str = "Madrid"
     var lat: Float = 40.42
     var lon: Float = -3.70
+
+    on mount => {
+        store.get("place", {})
+            ok saved => {
+                if (saved.name ?? "") != "" {
+                    place = saved.name
+                    lat = saved.latitude
+                    lon = saved.longitude
+                }
+            }
+            err e => {}
+    }
 
     // Location search. `found` is what the geocoder last answered, and `open`
     // is whether its list is showing under the field.
@@ -54,6 +67,7 @@ View Main() {
         place = name
         lat = latitude
         lon = longitude
+        store.set("place", { name: name, latitude: latitude, longitude: longitude })
         query = ""
         found = []
         open = false

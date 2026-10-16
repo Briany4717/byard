@@ -48,8 +48,7 @@ fn differ(value: &Value, ty: &Type, records: &Records, depth: usize) -> Option<S
     };
     let kind = |v: &Value| match v {
         Value::Unit => "nothing".to_string(),
-        Value::Int(_) => "a number".to_string(),
-        Value::Float(_) => "a number".to_string(),
+        Value::Int(_) | Value::Float(_) => "a number".to_string(),
         Value::Str(_) => "text".to_string(),
         Value::Bool(_) => "true or false".to_string(),
         Value::List(_) => "a list".to_string(),

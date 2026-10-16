@@ -31,11 +31,7 @@ View Main() {
                 ok res => {
                     if asked == query {
                         // The geocoder leaves `results` out when it finds nothing.
-                        if res.json.results.len > 0 {
-                            found = res.json.results
-                        } else {
-                            found = []
-                        }
+                        found = res.json.results ?? []
                         searching = false
                     }
                 }

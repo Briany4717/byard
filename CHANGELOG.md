@@ -12,6 +12,14 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **`byard check` catches three more kinds of misspelling.** A property that
+  takes a number, a colour, a length, an angle or a list reads a bare name
+  as a name, so `bg: prmary` is told (`did you mean primary?`) where it used
+  to draw nothing. A called name has to be a function (`serach(query)`). And
+  text given to a number property (`zoom: "near"`) is a type mismatch, for an
+  intrinsic and for a native view alike. A project that checked clean with
+  one of these in it now fails there.
+
 - **A name nothing declares is an error.** `Text("{cuont}")` drew the word
   "cuont" and `count = cuont + 1` wrote text into a number, and `byard check`
   passed both. A bare name read as a value (in a text, an expression, a

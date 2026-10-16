@@ -1,4 +1,4 @@
-// Aura Weather: the app shell. A search field, four screens in a tab host, a
+// Aura Weather: the app shell. A search field, five screens in a tab host, a
 // tab bar, and the theme's two typefaces. Each screen lives in its own file
 // beside this one.
 View Main() {
@@ -76,6 +76,7 @@ View Main() {
             tab "outlook" { OutlookScreen(place: place, lat: lat, lon: lon) }
             tab "air" { AirScreen(place: place, lat: lat, lon: lon) }
             tab "trends" { TrendsScreen(place: place, lat: lat, lon: lon) }
+            tab "map" { MapScreen(place: place, lat: lat, lon: lon) }
         }
         Row #[bg: t.surfaceContainer, p: (vertical: 10, horizontal: 12), gap: 4,
               align: center] {
@@ -87,6 +88,8 @@ View Main() {
                 => tab = "air"
             Button("Trends") #[..tabButton, typo: t.label, selected: tab == "trends"]
                 => tab = "trends"
+            Button("Map") #[..tabButton, typo: t.label, selected: tab == "map"]
+                => tab = "map"
         }
     }
 

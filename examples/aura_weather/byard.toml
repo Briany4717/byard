@@ -62,3 +62,13 @@ caption = { size = 12, family = "Body", weight = "regular" }
 corner_md = 14
 corner_lg = 22
 corner_xl = 28
+
+# The map is drawn in Rust (src/map.rs). Declared here so `byard check`,
+# `byard dev` and the editor know the element; the app checks this against
+# the view it registers.
+[native_views.Map]
+lat = "float"
+lon = "float"
+zoom = "float"
+radius = "float"
+pin = "color"

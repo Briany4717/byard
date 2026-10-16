@@ -33,7 +33,7 @@ const LIST_METHODS: [&str; 13] = [
 /// The methods a `Str` has at runtime (`len` is a field). Any other call on a
 /// `Str` silently evaluates to nothing, which is exactly what this diagnostic
 /// exists to stop.
-const STR_METHODS: [&str; 2] = ["slice", "urlEncoded"];
+const STR_METHODS: [&str; 3] = ["slice", "urlEncoded", "formatDate"];
 
 /// Names the engine puts in scope itself: the animation namespace
 /// (`anim.spring`), a collapsing header's `scroll_fraction`, and the `route`
@@ -898,7 +898,7 @@ impl Checker<'_> {
                 recv.clone()
             }
             (Ty::List(_), "indexOf") => Ty::Int,
-            (Ty::Str, "slice" | "urlEncoded") => Ty::Str,
+            (Ty::Str, "slice" | "urlEncoded" | "formatDate") => Ty::Str,
             (Ty::List(_), "contains") => Ty::Bool,
             (Ty::List(_), "map") => Ty::List(Box::new(lambda_body_ty.unwrap_or(Ty::Unknown))),
             _ => Ty::Unknown,

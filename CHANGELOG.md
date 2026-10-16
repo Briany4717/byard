@@ -69,6 +69,13 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`text.formatDate(pattern)` writes out an ISO date or date-time.** An API
+  sends `2026-10-16T14:00` and a screen shows `Fri 16 Oct` or `14:00`; the
+  weekday was out of reach in `byld`, and month names were a table every app
+  wrote. Tokens: `YYYY`, `MMMM`, `MMM`, `MM`, `M`, `DD`, `D`, `dddd`, `ddd`,
+  `HH`, `H`, `mm`; anything else is kept. Text that is not a date reads as
+  nothing, so `?? "—"` gives it a default. English names only for now.
+
 - **`type Place = { name: Str, latitude: Float }` declares a record type.**
   Data that arrives as records (JSON) had no declaration, so a misspelt field
   checked clean and drew nothing. A declared type gives a `var`, a loop

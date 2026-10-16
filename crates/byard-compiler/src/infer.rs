@@ -899,6 +899,7 @@ impl Checker<'_> {
             }
             (Ty::List(_), "indexOf") => Ty::Int,
             (Ty::Str, "slice" | "urlEncoded") => Ty::Str,
+            (Ty::Int, "alpha") => Ty::Int,
             (Ty::List(_), "contains") => Ty::Bool,
             (Ty::List(_), "map") => Ty::List(Box::new(lambda_body_ty.unwrap_or(Ty::Unknown))),
             _ => Ty::Unknown,

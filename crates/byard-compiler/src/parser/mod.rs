@@ -11,8 +11,8 @@ pub mod ast;
 mod expr;
 
 use ast::{
-    Attr, AttrKind, ElementNode, FnDecl, Member, Param, RecordDecl, RouteKind, StyleRule, Type,
-    UseDecl, ViewDecl,
+    Attr, AttrKind, ElementNode, FnDecl, Member, Param, RecordDecl, RecordField, RouteKind,
+    StyleRule, Type, UseDecl, ViewDecl,
 };
 
 use crate::diagnostics::{CompileError, Span};
@@ -312,7 +312,7 @@ impl<'a> Parser<'a> {
         (imports, views, fns, records)
     }
 
-    /// `record_decl := "type" IDENT "=" "{" (IDENT ":" type ","?)* "}"`.
+    /// `record_decl := "type" IDENT "=" "{" (IDENT ":" type "?"? ","?)* "}"`.
     fn parse_record_decl(&mut self) -> RecordDecl {
         let start = self.cur_span();
         self.advance(); // type
@@ -328,7 +328,12 @@ impl<'a> Parser<'a> {
             };
             self.expect(&Token::Colon, "':'");
             let ty = self.parse_type();
-            fields.push((field, ty));
+            let optional = self.eat(&Token::Question);
+            fields.push(RecordField {
+                name: field,
+                ty,
+                optional,
+            });
             self.eat(&Token::Comma);
         }
         self.expect(&Token::RBrace, "'}'");

@@ -69,6 +69,13 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A value written into a `var` of a record type is compared with it.** A
+  record type checked the code that reads a value; a JSON reply is whatever
+  the server sent. Now, when a reply is written into `var found: List<Place>`,
+  the first difference is reported once, where the assignment is written:
+  "the value written into `found` is not a `List<Place>`: item 3 has no
+  `country`". A field written `country: Str?` may be left out.
+
 - **`type Place = { name: Str, latitude: Float }` declares a record type.**
   Data that arrives as records (JSON) had no declaration, so a misspelt field
   checked clean and drew nothing. A declared type gives a `var`, a loop

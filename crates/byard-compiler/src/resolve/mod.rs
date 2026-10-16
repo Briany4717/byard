@@ -413,8 +413,8 @@ impl Resolver<'_> {
             let mut records = parsed.records;
             for record in &mut records {
                 rebase::shift(&mut record.span, base);
-                for (_, ty) in &mut record.fields {
-                    rebase::shift_type(ty, base);
+                for field in &mut record.fields {
+                    rebase::shift_type(&mut field.ty, base);
                 }
             }
             modules.push(ParsedModule {

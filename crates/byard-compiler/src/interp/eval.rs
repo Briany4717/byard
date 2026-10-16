@@ -1598,6 +1598,15 @@ pub struct Interpreter {
     /// `var` name → its `Signal`, so a hot-reload can preserve state by
     /// rebinding instead of re-initializing (RFC-0004 §11).
     var_sigs: std::collections::HashMap<Symbol, SignalId>,
+    /// The program's record types (`type Place = …`), by name.
+    records: std::rc::Rc<super::shape::Records>,
+    /// The declared type of each `var` whose type names a record, which is
+    /// what a value written into it is compared with.
+    var_types: std::collections::HashMap<SignalId, Type>,
+    /// The assignments a shape mismatch has been reported for, by span. Kept
+    /// here rather than in the lowered action, because actions are lowered
+    /// again every render and a flag in one would be a fresh flag each frame.
+    shapes_told: std::rc::Rc<std::cell::RefCell<std::collections::HashSet<(u32, u32)>>>,
     /// Incremental LayoutAtlas.
     pub atlas: byard_core::atlas::layout::LayoutAtlas,
     /// Interactive events router.
@@ -2253,6 +2262,15 @@ impl Interpreter {
         // it once, fresh, so a reload replaces rather than accumulates names.
         self.top_fns.clear();
         if let Some(first) = views.first() {
+            self.records = std::rc::Rc::new(
+                first
+                    .records
+                    .iter()
+                    .map(|r| (r.name.clone(), r.clone()))
+                    .collect(),
+            );
+        }
+        if let Some(first) = views.first() {
             for decl in first.helpers.iter() {
                 let id = super::env::AstId(u32::try_from(self.fn_table.len()).unwrap_or(u32::MAX));
                 let params = decl.params.iter().map(|p| p.name.clone()).collect();
@@ -2710,8 +2728,14 @@ impl Interpreter {
 
     fn eval_member(&mut self, member: &Member) {
         match member {
-            Member::Var { name, init, .. } => {
-                self.define_var(name.clone(), init);
+            Member::Var { name, init, ty, .. } => {
+                let sig = self.define_var(name.clone(), init);
+                if let Some(ty) = ty
+                    .as_ref()
+                    .filter(|t| super::shape::names_a_record(t, &self.records))
+                {
+                    self.var_types.insert(sig, ty.clone());
+                }
             }
             Member::Let { name, init, .. } => {
                 // `let x = style { … }` / `let x = a merge b` (RFC-0016) register
@@ -12452,6 +12476,19 @@ impl Interpreter {
                 if let Ok(sig) = self.resolve_var(target, *span) {
                     let op = *op;
                     let mut rhs = self.lower_expr(value, payload_name);
+                    // A `var` of a record type: what arrives is compared with
+                    // the type, and the first difference is reported, once
+                    // for this assignment.
+                    let shape = self.var_types.get(&sig).cloned().map(|ty| {
+                        (
+                            ty,
+                            std::rc::Rc::clone(&self.records),
+                            std::rc::Rc::clone(&self.bridge.diagnostics),
+                            std::rc::Rc::clone(&self.shapes_told),
+                            target_name(target),
+                            *span,
+                        )
+                    });
                     Box::new(move |ctx| {
                         let val = rhs(ctx);
                         let new = match op {
@@ -12465,6 +12502,20 @@ impl Interpreter {
                                 Value::Int(cur - val.as_int().unwrap_or(0))
                             }
                         };
+                        if let Some((ty, records, diagnostics, told, var, span)) = &shape {
+                            let at = (span.start, span.end);
+                            if !told.borrow().contains(&at) {
+                                if let Some(problem) = super::shape::difference(&new, ty, records) {
+                                    told.borrow_mut().insert(at);
+                                    diagnostics.borrow_mut().push(CompileError::ShapeMismatch {
+                                        span: *span,
+                                        var: var.clone(),
+                                        expected: super::shape::written(ty),
+                                        problem,
+                                    });
+                                }
+                            }
+                        }
                         ctx.write_signal(sig, new);
                         Value::Unit
                     })
@@ -15100,6 +15151,14 @@ fn url_encoded(text: &str) -> String {
         }
     }
     out
+}
+
+/// The name an assignment writes, for a message: `found` in `found = …`.
+fn target_name(target: &Expr) -> String {
+    match target {
+        Expr::Ident(name, _) => name.as_str().to_string(),
+        _ => "a var".to_string(),
+    }
 }
 
 /// Resolves a data member access (RFC-0027 §4/§6): `xs.len` (list/string

@@ -57,6 +57,12 @@
   than a property that quietly does nothing.
 
   [`UnknownAnchor`]: the compile error raised for an unknown or forward anchor.
+
+  **The case it was written for, built (2026-10-16).** Aura Weather's location
+  search is "a results list anchored to the search field": `as searchField`,
+  `anchor_to`, `width: match(searchField)` and `dismiss`, all four used and
+  none added for it. The flip is not exercised there, because the field sits
+  at the top of the window and there is never room above it.
 - **Author(s):** Briany4717
 - **Created:** 2026-08-04
 - **Last updated:** 2026-09-05

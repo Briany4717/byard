@@ -85,6 +85,11 @@
     and a second spelling is a second thing to keep in step.
   - A point is two numbers (`cubic(c1x, c1y, c2x, c2y, x, y)`), as in every
     other canvas command, rather than the `Vec2` arguments the guide sketches.
+
+  **Its motivating case, built (2026-10-16).** Aura Weather's Trends screen is
+  the area under a smooth temperature curve from a week of real readings,
+  which needed `for` and `when` inside a `path` body (section below): a body
+  that skipped them in silence drew nothing from data.
 - **Author(s):** Briany4717
 - **Created:** 2026-08-04
 - **Last updated:** 2026-08-04

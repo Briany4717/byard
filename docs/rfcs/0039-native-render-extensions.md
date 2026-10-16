@@ -61,6 +61,18 @@
   them, are still recorded and still drawn by nothing: a per-frame handle
   names one texture per draw, which is the shape `texture_sampler` has and a
   batch does not. Layers are what replaced them in practice.
+
+  **The case it was written for, built (2026-10-16).** Aura Weather's map is
+  a native view with a shader of its own: OpenStreetMap tiles fetched by a
+  controller, written into layers once, and drawn in one batch however many
+  are on screen. Building it is what found the gaps the two corrections above
+  close: an app could not register a pipeline, had no way to hand a view
+  pixels (`HostValue::Bytes`), and the tools outside the app did not know its
+  elements (`[native_views]` in `byard.toml`).
+
+  **Open, found by it:** a native view is offered a pointer press before the
+  elements drawn over it, so a view that claims presses starves a button
+  placed on top. The map claims only drags for that reason.
 - **Author(s):** Briany4717
 - **Created:** 2026-08-04
 - **Last updated:** 2026-08-04

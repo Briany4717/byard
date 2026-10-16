@@ -121,6 +121,22 @@ pub struct ViewDecl {
     /// path that loads views loads the functions with them, and none can
     /// forget to.
     pub helpers: std::sync::Arc<Vec<FnDecl>>,
+    /// The program's record types (`type Place = { … }`), shared like
+    /// `helpers` and for the same reason.
+    pub records: std::sync::Arc<Vec<RecordDecl>>,
+}
+
+/// A record type declared at file level: `type Place = { name: Str,
+/// latitude: Float }`. A name the type checker knows the fields of, for data
+/// that arrives as records (JSON) and has no other declaration.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RecordDecl {
+    /// The type's name.
+    pub name: Symbol,
+    /// Its fields, in the order written.
+    pub fields: Vec<(Symbol, Type)>,
+    /// Source span.
+    pub span: Span,
 }
 
 /// A top-level `fn` (RFC-0002, top-level functions): a pure helper visible to
@@ -749,8 +765,12 @@ pub enum Expr {
     },
     /// A lambda `|p| e` or `(p) => e`.
     Lambda {
-        /// Parameter names (types inferred from the use site; E2).
+        /// Parameter names.
         params: Vec<Symbol>,
+        /// The type written for each parameter, if one was (`(asked: Str) =>
+        /// …`). Parallel to `params`; an unwritten one is inferred from the
+        /// use site (E2).
+        types: Vec<Option<Type>>,
         /// The body expression.
         body: Box<Expr>,
         /// Source span.
@@ -998,6 +1018,7 @@ mod tests {
         };
         let view = ViewDecl {
             helpers: std::sync::Arc::default(),
+            records: std::sync::Arc::default(),
             name: Symbol::intern("Counter"),
             params: Vec::new(),
             body: vec![

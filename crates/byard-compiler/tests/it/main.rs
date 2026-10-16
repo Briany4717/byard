@@ -43,6 +43,7 @@ mod overlay_dismiss;
 mod path_from_data;
 mod path_morph;
 mod path_morph_resample;
+mod record_types;
 mod responsive_variants;
 mod retained_across_views;
 mod runner_loop;
@@ -57,6 +58,7 @@ mod timer_effects;
 mod token_transitions;
 mod top_level_fn;
 mod transform_hit_test;
+mod typed_lambda_params;
 mod unknown_method;
 mod url_encoded;
 

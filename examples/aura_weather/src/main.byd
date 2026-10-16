@@ -1,3 +1,6 @@
+// A place the geocoder answers with: the fields the search reads.
+type Place = { name: Str, country: Str, latitude: Float, longitude: Float }
+
 // Aura Weather: the app shell. A search field, five screens in a tab host, a
 // tab bar, and the theme's two typefaces. Each screen lives in its own file
 // beside this one.
@@ -20,7 +23,7 @@ View Main() {
 
     // Asks for places named like `asked`. Replies can arrive out of order, so
     // one that is no longer what the field says is dropped.
-    let search = (asked) => {
+    let search = (asked: Str) => {
         if asked.len < 2 {
             open = false
             found = []
@@ -47,7 +50,7 @@ View Main() {
     // Every edit of the field is a new question.
     on change(query) => search(query)
 
-    let choose = (name, latitude, longitude) => {
+    let choose = (name: Str, latitude: Float, longitude: Float) => {
         place = name
         lat = latitude
         lon = longitude
@@ -108,7 +111,7 @@ View Main() {
                     Column #[p: (vertical: 8, horizontal: 12), radius: 12, gap: 2,
                              tap => choose(hit.name, hit.latitude, hit.longitude)] {
                         Text(hit.name) #[typo: t.body, color: t.onSurface]
-                        Text(hit.country) #[typo: t.caption, color: t.onSurfaceVariant]
+                        Text(hit.country ?? "") #[typo: t.caption, color: t.onSurfaceVariant]
                     }
                 }
             }

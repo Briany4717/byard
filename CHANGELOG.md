@@ -69,6 +69,13 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`scheme = "system"` follows the system's light or dark appearance.** A
+  theme could start light or dark and flip on `t.dark = …`, but not follow
+  the operating system. Now the window reports its appearance when it opens
+  and whenever the user changes it, and a theme declared `scheme = "system"`
+  takes it, with its `transition` if it has one. `byard dev` and `App` both
+  report it; `App::shot` takes `Shot::system_dark(…)` in its place.
+
 - **`App::hot_reload(true)` follows the project while an app runs.** An app
   with a Rust half (controllers, native views, shaders) could not be
   developed live: `byard dev` cannot link that Rust, and the app itself read

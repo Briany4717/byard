@@ -14377,6 +14377,20 @@ impl Interpreter {
         // RFC-0040: composition is engine state, applied here rather than
         // routed to an app handler, and never offered to anything else.
         self.apply_composition(events, &mut consumed);
+        // The system's appearance is the theme's to follow, when it was told
+        // to (`scheme = "system"`), and nothing for any element to route.
+        for (i, ev) in events.iter().enumerate() {
+            if ev.kind == CoreKind::SystemScheme {
+                consumed[i] = true;
+                if let (true, Some(InputPayload::Bool(dark))) =
+                    (self.theme.follows_system, ev.payload.as_ref())
+                {
+                    if self.theme_is_dark() != *dark {
+                        self.set_theme_dark(*dark);
+                    }
+                }
+            }
+        }
 
         let comp_events: Vec<CompEvent> = events
             .iter()
@@ -14403,8 +14417,9 @@ impl Interpreter {
                     // Consumed by `apply_composition` above, never routed.
                     CoreKind::Composition
                     | CoreKind::CompositionCommit
-                    | CoreKind::CompositionEnd => {
-                        unreachable!("composition events are consumed before routing")
+                    | CoreKind::CompositionEnd
+                    | CoreKind::SystemScheme => {
+                        unreachable!("composition and scheme events are consumed before routing")
                     }
                 };
                 let value = ev.payload.as_ref().map(|p| match p {

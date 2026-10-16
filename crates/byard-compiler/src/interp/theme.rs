@@ -293,6 +293,9 @@ pub struct Theme {
     breakpoints: BTreeMap<String, f32>,
     /// The active scheme mirror for default resolution (`true` ⇒ `dark`).
     pub active_dark: bool,
+    /// Whether the scheme follows the system's appearance (`scheme =
+    /// "system"`): the host reports it at start and whenever it changes.
+    pub follows_system: bool,
     /// Default font size in logical pixels (the theme-default layer).
     pub font_size: f32,
     /// Padding a `Button` gets when no `p:`/side is written, as
@@ -378,6 +381,7 @@ impl Theme {
             fonts: BTreeMap::new(),
             breakpoints: BTreeMap::new(),
             active_dark: false,
+            follows_system: false,
             font_size: DEFAULT_FONT_SIZE,
             button_padding: BUTTON_PADDING,
             button_min_size: BUTTON_MIN_SIZE,

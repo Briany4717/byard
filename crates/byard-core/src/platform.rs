@@ -181,6 +181,10 @@ pub enum EventKind {
     /// The platform turned the IME off (RFC-0040): any preedit is gone and
     /// no commit is coming for it.
     CompositionEnd,
+    /// The system's appearance is light or dark, reported by the host when
+    /// the window opens and whenever the user changes it; `true` in
+    /// `InputEvent.payload` as `InputPayload::Bool` means dark.
+    SystemScheme,
 }
 
 impl EventKind {
@@ -217,7 +221,8 @@ impl EventKind {
             | Self::TextInput
             | Self::Composition
             | Self::CompositionCommit
-            | Self::CompositionEnd => false,
+            | Self::CompositionEnd
+            | Self::SystemScheme => false,
         }
     }
 }
@@ -403,6 +408,12 @@ pub trait PlatformHost {
     /// Defaults to a no-op.
     fn on_pointer_input(&mut self, _button: PointerButton, _state: PointerState, _x: f32, _y: f32) {
     }
+
+    /// Called with the system's appearance (`true` ⇒ dark) when the window
+    /// opens and whenever it changes.
+    ///
+    /// Defaults to a no-op.
+    fn on_system_scheme(&mut self, _dark: bool) {}
 
     /// Called when the cursor moves to coordinates (x, y).
     ///

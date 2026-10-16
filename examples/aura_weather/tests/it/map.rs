@@ -212,3 +212,56 @@ fn dragging_pans_the_map() {
         "{asked:?}"
     );
 }
+
+/// Panning over tiles the map already has costs a frame and nothing else:
+/// no tile is asked for again, no layer is written again, the tiles stay one
+/// batch, and the frame time is printed for a person to read (shared CI
+/// runners are too noisy to hold to a number).
+#[test]
+fn panning_over_tiles_it_has_writes_and_asks_nothing() {
+    use byard_core::platform::{EventKind, InputEvent};
+
+    let server = server();
+    let mut app = on_the_map(&server);
+    let asked = tiles_asked(&server).len();
+    let at = |kind, pos, t| InputEvent {
+        kind,
+        pos,
+        delta: (0.0, 0.0),
+        payload: None,
+        time_ms: t,
+    };
+
+    // Small moves back and forth: everything on screen stays among the
+    // tiles already loaded.
+    let (x, y) = (220.0, 400.0);
+    app.step(&[at(EventKind::PointerDown, (x, y), 9000)]);
+    let mut slowest = std::time::Duration::ZERO;
+    let mut total = std::time::Duration::ZERO;
+    let frames = 60_u16;
+    for i in 1..=frames {
+        let dx = if i % 2 == 0 { 6.0 } else { -6.0 };
+        let started = std::time::Instant::now();
+        app.step(&[at(
+            EventKind::PointerMove,
+            (x + dx, y),
+            9000 + u64::from(i) * 16,
+        )]);
+        let took = started.elapsed();
+        slowest = slowest.max(took);
+        total += took;
+
+        assert!(
+            app.frame.native_textures().is_empty(),
+            "frame {i} wrote a layer again"
+        );
+        assert_eq!(tile_batches(&app).len(), 1, "frame {i}: one batch");
+    }
+    app.step(&[at(EventKind::PointerUp, (x, y), 10_200)]);
+    assert_eq!(tiles_asked(&server).len(), asked, "nothing asked again");
+    eprintln!(
+        "map pan, logic per frame (tick + render, whole app): mean {:?}, slowest {:?}",
+        total / u32::from(frames),
+        slowest
+    );
+}

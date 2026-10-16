@@ -88,3 +88,8 @@ Worked around in the app, and not yet fixed in Byard:
   --dev` follows every `.byd` and the manifest with the map linked in, but
   an edit to `map.rs` still needs the app rebuilt.
 - **Not measured**: the frame time while panning the map.
+- **Measured only on the logic side**: panning over tiles the map has costs
+  about 0.04 ms of tick and render for the whole app in a release build
+  (0.4 ms in debug), and asks for and writes nothing
+  (`panning_over_tiles_it_has_writes_and_asks_nothing`). The GPU side of a
+  panning frame is not measured.

@@ -7,6 +7,7 @@
 
 mod common;
 mod forecast;
+mod map;
 mod outlook_and_air;
 mod search;
 mod shell;

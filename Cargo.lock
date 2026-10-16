@@ -189,6 +189,8 @@ dependencies = [
  "byard-compiler",
  "byard-core",
  "byard-project",
+ "image",
+ "reqwest",
 ]
 
 [[package]]

@@ -5,6 +5,10 @@
   delivered in the frame's own coordinate space, not in physical pixels, because
   in this engine those are not the same thing and the RFC's stated reason
   ("the space paint and hit-testing use") describes the frame's space.
+
+  **Used by the case it was written for (2026-10-16).** Aura Weather's charts
+  and its map size themselves to their card with `on measure`, at any window
+  width.
 - **Author(s):** Briany4717
 - **Created:** 2026-08-04
 - **Last updated:** 2026-08-04

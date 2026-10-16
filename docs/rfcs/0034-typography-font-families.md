@@ -46,6 +46,11 @@
   **Still open: font families.** `font <name> = asset(path)`, the `font` prop,
   `fontdb` registration and the family half of the glyph cache key. The family
   remains hardcoded `Family::SansSerif` in both paths.
+
+  **The case it was written for, built (2026-10-16).** Aura Weather sets every
+  heading in a display face and everything read in a UI face, both shipped
+  with the app and named through the theme's type scale (`typo: t.headline`,
+  `typo: t.body`). Its shell test reads both families off one frame.
 - **Author(s):** Briany4717
 - **Created:** 2026-08-04
 - **Last updated:** 2026-09-03

@@ -14,7 +14,7 @@ use crate::parser::ast::{
     Type, UseDecl, ViewDecl,
 };
 
-fn shift(span: &mut Span, delta: u32) {
+pub(super) fn shift(span: &mut Span, delta: u32) {
     span.start += delta;
     span.end += delta;
 }
@@ -63,7 +63,7 @@ fn shift_param(param: &mut Param, delta: u32) {
     }
 }
 
-fn shift_type(ty: &mut Type, delta: u32) {
+pub(super) fn shift_type(ty: &mut Type, delta: u32) {
     match ty {
         Type::Named { args, span, .. } => {
             shift(span, delta);

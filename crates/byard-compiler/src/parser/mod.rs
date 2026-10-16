@@ -11,8 +11,8 @@ pub mod ast;
 mod expr;
 
 use ast::{
-    Attr, AttrKind, ElementNode, FnDecl, Member, Param, RouteKind, StyleRule, Type, UseDecl,
-    ViewDecl,
+    Attr, AttrKind, ElementNode, FnDecl, Member, Param, RecordDecl, RouteKind, StyleRule, Type,
+    UseDecl, ViewDecl,
 };
 
 use crate::diagnostics::{CompileError, Span};
@@ -30,6 +30,8 @@ pub struct ParsedFile {
     /// The file's top-level functions, also shared into every view's
     /// `helpers`.
     pub fns: Vec<FnDecl>,
+    /// The file's record types, also shared into every view's `records`.
+    pub records: Vec<RecordDecl>,
     /// All diagnostics from lexing and parsing, in source order.
     pub errors: Vec<CompileError>,
 }
@@ -38,17 +40,20 @@ pub struct ParsedFile {
 #[must_use]
 pub fn parse(source: &str) -> ParsedFile {
     let mut parser = Parser::new(source);
-    let (imports, mut views, fns) = parser.parse_file();
-    // A lone file's views see its own functions; a project's are replaced by
-    // the program-wide table when it is resolved.
+    let (imports, mut views, fns, records) = parser.parse_file();
+    // A lone file's views see its own functions and types; a project's are
+    // replaced by the program-wide tables when it is resolved.
     let helpers = std::sync::Arc::new(fns.clone());
+    let shared_records = std::sync::Arc::new(records.clone());
     for view in &mut views {
         view.helpers = std::sync::Arc::clone(&helpers);
+        view.records = std::sync::Arc::clone(&shared_records);
     }
     ParsedFile {
         imports,
         views,
         fns,
+        records,
         errors: parser.errors,
     }
 }
@@ -250,14 +255,25 @@ impl<'a> Parser<'a> {
 
     // ---- file / view ----
 
-    fn parse_file(&mut self) -> (Vec<UseDecl>, Vec<ViewDecl>, Vec<FnDecl>) {
+    #[allow(clippy::type_complexity)]
+    fn parse_file(&mut self) -> (Vec<UseDecl>, Vec<ViewDecl>, Vec<FnDecl>, Vec<RecordDecl>) {
         let mut imports = Vec::new();
         let mut views = Vec::new();
         let mut fns = Vec::new();
+        let mut records = Vec::new();
         while self.cur().is_some() {
             let before = self.pos;
             match self.cur() {
                 Some(Token::View) => views.push(self.parse_view()),
+                // `type Name = { … }`. Contextual: `type` is an ordinary name
+                // anywhere else.
+                Some(Token::Ident(word))
+                    if word.as_str() == "type"
+                        && matches!(self.peek2(), Some(Token::Ident(_)))
+                        && matches!(self.peek3(), Some(Token::Eq)) =>
+                {
+                    records.push(self.parse_record_decl());
+                }
                 Some(Token::Fn) => {
                     if let Member::Fn {
                         name,
@@ -287,13 +303,40 @@ impl<'a> Parser<'a> {
                     }
                     imports.push(import);
                 }
-                _ => self.error("'View', 'use' or 'fn'"),
+                _ => self.error("'View', 'use', 'fn' or 'type'"),
             }
             if self.pos == before {
                 self.advance(); // guaranteed progress on unrecognized input
             }
         }
-        (imports, views, fns)
+        (imports, views, fns, records)
+    }
+
+    /// `record_decl := "type" IDENT "=" "{" (IDENT ":" type ","?)* "}"`.
+    fn parse_record_decl(&mut self) -> RecordDecl {
+        let start = self.cur_span();
+        self.advance(); // type
+        let name = self
+            .expect_ident("a type name")
+            .unwrap_or_else(|| Symbol::intern(""));
+        self.expect(&Token::Eq, "'='");
+        self.expect(&Token::LBrace, "'{'");
+        let mut fields = Vec::new();
+        while !matches!(self.cur(), Some(Token::RBrace) | None) {
+            let Some(field) = self.expect_ident("a field name") else {
+                break;
+            };
+            self.expect(&Token::Colon, "':'");
+            let ty = self.parse_type();
+            fields.push((field, ty));
+            self.eat(&Token::Comma);
+        }
+        self.expect(&Token::RBrace, "'}'");
+        RecordDecl {
+            name,
+            fields,
+            span: self.span_from(start),
+        }
     }
 
     /// `use_decl := "use" IDENT ("as" IDENT | "." "{" IDENT ("," IDENT)* "}")?`
@@ -346,6 +389,7 @@ impl<'a> Parser<'a> {
         self.expect(&Token::LBrace, "'{'");
         let body = self.parse_block_members();
         ViewDecl {
+            records: std::sync::Arc::default(),
             name,
             params,
             body,

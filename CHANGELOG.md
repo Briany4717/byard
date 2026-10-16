@@ -69,6 +69,14 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`type Place = { name: Str, latitude: Float }` declares a record type.**
+  Data that arrives as records (JSON) had no declaration, so a misspelt field
+  checked clean and drew nothing. A declared type gives a `var`, a loop
+  variable over a list of them, a parameter or an indexed element its fields:
+  `hit.nmae` is an error (`did you mean name?`), and each field's own type is
+  checked further. Types are the program's, across files; two of one name
+  are an error. `type` stays an ordinary name everywhere else.
+
 - **A lambda's parameters can say their types.** `let search = (asked: Str,
   page: Int) => { … }` used to be a parse error, so a named action took its
   values untyped and its body was checked against nothing. A written type is

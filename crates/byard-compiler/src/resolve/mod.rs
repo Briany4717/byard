@@ -266,6 +266,7 @@ struct ParsedModule {
     imports: Vec<UseDecl>,
     views: Vec<ViewDecl>,
     fns: Vec<FnDecl>,
+    records: Vec<crate::parser::ast::RecordDecl>,
 }
 
 /// A loaded package: its parsed files and flat export table.
@@ -308,18 +309,34 @@ pub fn resolve_program(
     // Merge: root first (file order), then packages in load order.
     let mut views = Vec::new();
     let mut fns = Vec::new();
+    let mut records: Vec<crate::parser::ast::RecordDecl> = Vec::new();
     for name in &r.order {
         if let Some(pkg) = r.packages.get(name) {
             for module in &pkg.modules {
                 views.extend(module.views.iter().cloned());
                 fns.extend(module.fns.iter().cloned());
+                for record in &module.records {
+                    // A type's name is the program's: two of one name are
+                    // one name too many, wherever each was written.
+                    if records.iter().any(|r| r.name == record.name) {
+                        r.errors.push(CompileError::DuplicateRecordType {
+                            span: record.span,
+                            name: record.name.as_str().to_string(),
+                        });
+                    } else {
+                        records.push(record.clone());
+                    }
+                }
             }
         }
     }
-    // One table of every function, canonically named, shared by every view.
+    // One table of every function, canonically named, and one of every
+    // record type, shared by every view.
     let helpers = std::sync::Arc::new(fns);
+    let records = std::sync::Arc::new(records);
     for view in &mut views {
         view.helpers = std::sync::Arc::clone(&helpers);
+        view.records = std::sync::Arc::clone(&records);
     }
 
     // The type checks run over the merged, rebased views, so their spans are
@@ -393,10 +410,18 @@ impl Resolver<'_> {
                     }),
                 }
             }
+            let mut records = parsed.records;
+            for record in &mut records {
+                rebase::shift(&mut record.span, base);
+                for (_, ty) in &mut record.fields {
+                    rebase::shift_type(ty, base);
+                }
+            }
             modules.push(ParsedModule {
                 imports,
                 views,
                 fns,
+                records,
             });
         }
 

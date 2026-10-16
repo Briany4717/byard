@@ -780,6 +780,25 @@ pub enum CompileError {
         /// The closest known method, if any.
         hint: Option<String>,
     },
+    /// Two record types of one name in a program (`type Place = …` twice).
+    DuplicateRecordType {
+        /// The second declaration.
+        span: Span,
+        /// The name.
+        name: String,
+    },
+    /// A record type has no field of that name: `place.nmae` where `place`
+    /// is a `Place`.
+    UnknownField {
+        /// Source range of the field name.
+        span: Span,
+        /// The record type.
+        record: String,
+        /// The field as written.
+        name: String,
+        /// The closest field the type has, if any.
+        hint: Option<String>,
+    },
     /// An expression read a name nothing declares: a misspelt `var`, a
     /// parameter that was renamed. At runtime such a name is its own text,
     /// which is how an enum word like `center` works and why a typo in a
@@ -1023,7 +1042,9 @@ impl CompileError {
             | Self::PredicateNotBool { span }
             | Self::EffectInPureLambda { span }
             | Self::UnknownMethod { span, .. }
-            | Self::UnknownName { span, .. } => *span,
+            | Self::UnknownName { span, .. }
+            | Self::DuplicateRecordType { span, .. }
+            | Self::UnknownField { span, .. } => *span,
         }
     }
 
@@ -1117,7 +1138,9 @@ impl CompileError {
             | Self::PredicateNotBool { span }
             | Self::EffectInPureLambda { span }
             | Self::UnknownMethod { span, .. }
-            | Self::UnknownName { span, .. } => {
+            | Self::UnknownName { span, .. }
+            | Self::DuplicateRecordType { span, .. }
+            | Self::UnknownField { span, .. } => {
                 span.start = (i64::from(span.start) + delta).max(0) as u32;
                 span.end = (i64::from(span.end) + delta).max(0) as u32;
             }
@@ -1214,6 +1237,8 @@ impl CompileError {
             Self::EffectInPureLambda { .. } => "EffectInPureLambda",
             Self::UnknownMethod { .. } => "UnknownMethod",
             Self::UnknownName { .. } => "UnknownName",
+            Self::DuplicateRecordType { .. } => "DuplicateRecordType",
+            Self::UnknownField { .. } => "UnknownField",
         }
     }
 
@@ -1609,6 +1634,15 @@ impl CompileError {
                 ..
             } => with_hint(
                 format!("`{recv_ty}` has no method `{name}`"),
+                hint.as_deref(),
+            ),
+            Self::DuplicateRecordType { name, .. } => {
+                format!("the type `{name}` is declared twice in this program")
+            }
+            Self::UnknownField {
+                record, name, hint, ..
+            } => with_hint(
+                format!("a `{record}` has no field `{name}`"),
                 hint.as_deref(),
             ),
             Self::UnknownName { name, hint, .. } => {

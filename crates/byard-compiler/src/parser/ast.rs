@@ -749,8 +749,12 @@ pub enum Expr {
     },
     /// A lambda `|p| e` or `(p) => e`.
     Lambda {
-        /// Parameter names (types inferred from the use site; E2).
+        /// Parameter names.
         params: Vec<Symbol>,
+        /// The type written for each parameter, if one was (`(asked: Str) =>
+        /// …`). Parallel to `params`; an unwritten one is inferred from the
+        /// use site (E2).
+        types: Vec<Option<Type>>,
         /// The body expression.
         body: Box<Expr>,
         /// Source span.

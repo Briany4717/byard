@@ -57,6 +57,7 @@ Each of these was found by building a screen, and each is now in Byard.
 | Map | An app could not register a pipeline; a view could not be handed pixels; an app with a Rust half could not be drawn to a PNG. | `render::Shader` with layers, `HostValue::Bytes`, `App::shot` (#308) |
 | Map | `byard check` and the editor did not know an element drawn in Rust. | `[native_views]` in `byard.toml` (#309) |
 | Map | A native view heard a press before the zoom buttons drawn over it. | What is drawn on top gets the press first |
+| Search | A named action's parameters could not say their types, so its body was checked against nothing. | `(asked: Str) => …` |
 
 ## What it still could not be built with
 
@@ -71,8 +72,6 @@ Worked around in the app, and not yet fixed in Byard:
   value (`bg: prmary`), an intrinsic's named argument, a function's name.
 - **A native view's property type is not checked** at check time:
   `zoom: "near"` passes for a float.
-- **A lambda's parameters take no type**: `(asked) => …`, never
-  `(asked: Str) => …`.
 - **The Rust half has no hot reload.** `byard dev examples/aura_weather`
   reloads every screen but draws a plain panel where the map is; the map
   itself changes only when the app is rebuilt.

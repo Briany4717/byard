@@ -56,14 +56,12 @@ Each of these was found by building a screen, and each is now in Byard.
 | Search | A misspelt name checked clean and drew its own spelling. | `byard check` reports undeclared names (#307) |
 | Map | An app could not register a pipeline; a view could not be handed pixels; an app with a Rust half could not be drawn to a PNG. | `render::Shader` with layers, `HostValue::Bytes`, `App::shot` (#308) |
 | Map | `byard check` and the editor did not know an element drawn in Rust. | `[native_views]` in `byard.toml` (#309) |
+| Map | A native view heard a press before the zoom buttons drawn over it. | What is drawn on top gets the press first |
 
 ## What it still could not be built with
 
 Worked around in the app, and not yet fixed in Byard:
 
-- **A native view hears a press before the elements drawn over it.** The
-  map would starve its own zoom buttons if it claimed presses, so it claims
-  only drags.
 - **A missing JSON field is silently nothing.** The geocoder leaves `results`
   out when it finds nothing; the app has to test `res.json.results.len > 0`,
   and a typo in a field name would read as nothing just the same.

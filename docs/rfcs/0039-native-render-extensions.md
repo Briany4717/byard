@@ -70,9 +70,11 @@
   pixels (`HostValue::Bytes`), and the tools outside the app did not know its
   elements (`[native_views]` in `byard.toml`).
 
-  **Open, found by it:** a native view is offered a pointer press before the
-  elements drawn over it, so a view that claims presses starves a button
-  placed on top. The map claims only drags for that reason.
+  **Fixed, found by it (2026-10-16):** a native view was offered a pointer
+  press before the elements drawn over it, so a view that claimed presses
+  starved a button placed on top. An element drawn over a view that takes
+  presses at that point now gets the event first, by the paint order the
+  router already registers handlers in.
 - **Author(s):** Briany4717
 - **Created:** 2026-08-04
 - **Last updated:** 2026-08-04

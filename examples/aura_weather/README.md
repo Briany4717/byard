@@ -56,21 +56,20 @@ Each of these was found by building a screen, and each is now in Byard.
 | Search | A misspelt name checked clean and drew its own spelling. | `byard check` reports undeclared names (#307) |
 | Map | An app could not register a pipeline; a view could not be handed pixels; an app with a Rust half could not be drawn to a PNG. | `render::Shader` with layers, `HostValue::Bytes`, `App::shot` (#308) |
 | Map | `byard check` and the editor did not know an element drawn in Rust. | `[native_views]` in `byard.toml` (#309) |
-| Map | A native view heard a press before the zoom buttons drawn over it. | What is drawn on top gets the press first |
+| Map | A native view heard a press before the zoom buttons drawn over it. | What is drawn on top gets the press first (#313) |
+| Search | A missing JSON field read as nothing, and every read of one needed a test around it. | `a ?? b`: `res.json.results ?? []` (#312) |
+| Map | `zoom: "near"` checked clean for a number, and so did `bg: prmary` and `serach(q)`. | `byard check` reads a value property's bare name as a name, checks called names, and rejects text for a number |
 
 ## What it still could not be built with
 
 Worked around in the app, and not yet fixed in Byard:
 
-- **A missing JSON field is silently nothing.** The geocoder leaves `results`
-  out when it finds nothing; the app has to test `res.json.results.len > 0`,
-  and a typo in a field name would read as nothing just the same.
+- **A misspelt JSON field reads as nothing.** `??` gives a missing field a
+  default, but `res.json.resluts` is a missing field too, and nothing says so.
 - **A JSON list of records has no type.** `var found: List<Place>` names a
   type nothing defines and nothing checks.
-- **Some misspellings still check clean**: a name that is a property's whole
-  value (`bg: prmary`), an intrinsic's named argument, a function's name.
-- **A native view's property type is not checked** at check time:
-  `zoom: "near"` passes for a float.
+- **One kind of misspelling still checks clean**: a name passed to an
+  intrinsic's named argument, where the argument may also be a word.
 - **A lambda's parameters take no type**: `(asked) => …`, never
   `(asked: Str) => …`.
 - **The Rust half has no hot reload.** `byard dev examples/aura_weather`

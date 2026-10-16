@@ -76,6 +76,7 @@ impl Parser<'_> {
                     let body = Box::new(self.parse_expr(0));
                     Expr::Lambda {
                         params: vec![sym],
+                        types: vec![None],
                         body,
                         span: self.span_from(span),
                     }
@@ -758,6 +759,7 @@ impl Parser<'_> {
                 let body = Box::new(self.parse_expr(0));
                 return Expr::Lambda {
                     params: Vec::new(),
+                    types: Vec::new(),
                     body,
                     span: self.span_from(start),
                 };
@@ -765,33 +767,35 @@ impl Parser<'_> {
             return Expr::Tuple(Vec::new(), self.span_from(start));
         }
 
-        let args = self.parse_arg_list(&Token::RParen);
-        self.expect(&Token::RParen, "')'");
-
-        // `(a, b) => body`, the items were really lambda parameters.
-        if self.eat(&Token::Arrow) {
-            let params = args
-                .iter()
-                .map(|a| {
-                    if a.name.is_some() {
-                        self.error_at(a.value.span(), "a lambda parameter name");
-                    }
-                    match &a.value {
-                        Expr::Ident(sym, _) => sym.clone(),
-                        other => {
-                            self.error_at(other.span(), "a lambda parameter name");
-                            Symbol::intern("")
-                        }
-                    }
-                })
-                .collect();
+        // `(a, b: Str) => body`: a parenthesis an arrow follows holds lambda
+        // parameters, each a name and, optionally, a type.
+        if self.paren_is_lambda() {
+            let mut params = Vec::new();
+            let mut types = Vec::new();
+            while !matches!(self.cur(), Some(Token::RParen) | None) {
+                let name = self
+                    .expect_ident("a lambda parameter name")
+                    .unwrap_or_else(|| Symbol::intern(""));
+                let ty = self.eat(&Token::Colon).then(|| self.parse_type());
+                params.push(name);
+                types.push(ty);
+                if !self.eat(&Token::Comma) {
+                    break;
+                }
+            }
+            self.expect(&Token::RParen, "')'");
+            self.expect(&Token::Arrow, "'=>'");
             let body = Box::new(self.parse_expr(0));
             return Expr::Lambda {
                 params,
+                types,
                 body,
                 span: self.span_from(start),
             };
         }
+
+        let args = self.parse_arg_list(&Token::RParen);
+        self.expect(&Token::RParen, "')'");
 
         if args.len() == 1 && args[0].name.is_none() {
             // Grouped expression, unwrap to the inner node.
@@ -819,6 +823,7 @@ impl Parser<'_> {
         self.expect(&Token::Pipe, "'|'");
         let body = Box::new(self.parse_expr(0));
         Expr::Lambda {
+            types: vec![None; params.len()],
             params,
             body,
             span: self.span_from(start),
@@ -858,6 +863,7 @@ impl Parser<'_> {
         self.expect(&Token::RBrace, "'}' to close the callback block");
         let span = self.span_from(start);
         Expr::Lambda {
+            types: vec![None; params.len()],
             params,
             body: Box::new(Expr::Block(stmts, span)),
             span,

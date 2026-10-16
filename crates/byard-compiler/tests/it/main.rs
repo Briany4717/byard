@@ -57,6 +57,7 @@ mod timer_effects;
 mod token_transitions;
 mod top_level_fn;
 mod transform_hit_test;
+mod typed_lambda_params;
 mod unknown_method;
 mod url_encoded;
 

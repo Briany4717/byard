@@ -133,6 +133,28 @@ impl<'a> Parser<'a> {
         self.tokens.get(self.pos + 1).map(|(t, _)| t.clone())
     }
 
+    /// Whether the parenthesis just opened (the cursor is on the first token
+    /// inside it) holds a lambda's parameters: whether its matching `)` is
+    /// followed by `=>`. Looked ahead rather than parsed as a tuple and
+    /// reinterpreted, because a typed parameter (`xs: List<Int>`) is not an
+    /// expression.
+    fn paren_is_lambda(&self) -> bool {
+        let mut depth = 1_usize;
+        for (at, (token, _)) in self.tokens.iter().enumerate().skip(self.pos) {
+            match token {
+                Token::LParen => depth += 1,
+                Token::RParen => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return matches!(self.tokens.get(at + 1), Some((Token::Arrow, _)));
+                    }
+                }
+                _ => {}
+            }
+        }
+        false
+    }
+
     fn peek3(&self) -> Option<Token> {
         self.tokens.get(self.pos + 2).map(|(t, _)| t.clone())
     }

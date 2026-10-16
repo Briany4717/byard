@@ -77,6 +77,12 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   checked further. Types are the program's, across files; two of one name
   are an error. `type` stays an ordinary name everywhere else.
 
+- **A lambda's parameters can say their types.** `let search = (asked: Str,
+  page: Int) => { … }` used to be a parse error, so a named action took its
+  values untyped and its body was checked against nothing. A written type is
+  checked inside the body (`asked.uper()` is an unknown method on `Str`);
+  unwritten ones are inferred as before.
+
 - **`a ?? b` is the left value, or the right one when the left has none.**
   A missing JSON field, an empty `find` or the `min` of an empty list read as
   nothing, in silence, and every such read needed a test written around it.

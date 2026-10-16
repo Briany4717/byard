@@ -56,7 +56,9 @@ pub fn value_to_host(value: &Value) -> Option<HostValue> {
 #[must_use]
 pub fn host_to_value(host: &HostValue) -> Value {
     match host {
-        HostValue::Unit => Value::Unit,
+        // Bytes are for a native view, which receives the `HostValue` itself.
+        // `byld` has no value for them.
+        HostValue::Unit | HostValue::Bytes(_) => Value::Unit,
         HostValue::Bool(b) => Value::Bool(*b),
         HostValue::Int(n) => Value::Int(*n),
         HostValue::Float(f) => Value::Float(*f),
@@ -74,6 +76,13 @@ pub fn host_to_value(host: &HostValue) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Bytes are a native view's to read; a `byld` arm that receives them
+    /// sees nothing rather than a quarter of a million numbers.
+    #[test]
+    fn bytes_have_no_byld_value() {
+        assert_eq!(host_to_value(&HostValue::Bytes(vec![1, 2, 3])), Value::Unit);
+    }
 
     #[test]
     fn data_values_round_trip_through_host() {

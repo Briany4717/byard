@@ -83,6 +83,15 @@ pub fn host_to_json(value: &HostValue) -> serde_json::Value {
                 .map(|(k, v)| (k.clone(), host_to_json(v)))
                 .collect(),
         ),
+        // JSON has no bytes. An array of numbers is the form that reads back
+        // as data, and nothing in `byld` can produce the variant to begin
+        // with: it reaches here only if a controller hands bytes to `Json`.
+        HostValue::Bytes(bytes) => serde_json::Value::Array(
+            bytes
+                .iter()
+                .map(|b| serde_json::Value::Number((*b).into()))
+                .collect(),
+        ),
     }
 }
 

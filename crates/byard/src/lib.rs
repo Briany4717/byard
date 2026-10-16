@@ -23,6 +23,8 @@
 //! ```
 
 pub mod app;
+mod shot;
+pub use shot::Shot;
 
 pub use app::App;
 

@@ -99,6 +99,13 @@ pub trait RenderPipeline: 'static {
     /// pipeline that cannot be driven this way is one no package could use,
     /// which is why it is a required method rather than a defaulted one.
     fn draw_batch(&self, pass: &mut wgpu::RenderPass<'_>, cx: &BatchDraw<'_>);
+
+    /// Writes `pixels` into layer `layer` of this pipeline's array texture,
+    /// and says whether it did. Only a package shader that declares layers
+    /// has one; every other pipeline refuses.
+    fn write_layer(&self, _queue: &wgpu::Queue, _layer: u32, _pixels: &[u8]) -> bool {
+        false
+    }
 }
 
 /// The object-safe half of [`RenderPipeline`], which is what the registry
@@ -128,6 +135,10 @@ pub trait ErasedPipeline: 'static {
 
     /// Records one native view's batch (RFC-0039).
     fn draw_native_batch(&self, pass: &mut wgpu::RenderPass<'_>, cx: &BatchDraw<'_>);
+
+    /// Writes one layer of this pipeline's array texture (see
+    /// [`RenderPipeline::write_layer`]).
+    fn write_native_layer(&self, queue: &wgpu::Queue, layer: u32, pixels: &[u8]) -> bool;
 }
 
 impl<P: RenderPipeline> ErasedPipeline for P {
@@ -153,6 +164,10 @@ impl<P: RenderPipeline> ErasedPipeline for P {
 
     fn draw_native_batch(&self, pass: &mut wgpu::RenderPass<'_>, cx: &BatchDraw<'_>) {
         self.draw_batch(pass, cx);
+    }
+
+    fn write_native_layer(&self, queue: &wgpu::Queue, layer: u32, pixels: &[u8]) -> bool {
+        self.write_layer(queue, layer, pixels)
     }
 }
 
@@ -305,6 +320,22 @@ impl PipelineRegistry {
         self.dispatches.set(self.dispatches.get() + 1);
         entry.pipeline.draw_native_batch(pass, cx);
         true
+    }
+
+    /// Writes one layer of the array texture of the pipeline `key` names.
+    /// `false` when no such pipeline is registered, it has no layers, the
+    /// layer is out of range or the pixels are not one layer's worth.
+    pub fn write_layer(
+        &self,
+        queue: &wgpu::Queue,
+        key: crate::render::PipelineKey,
+        layer: u32,
+        pixels: &[u8],
+    ) -> bool {
+        self.entries
+            .iter()
+            .find(|e| e.pipeline.key().type_id() == key.type_id())
+            .is_some_and(|e| e.pipeline.write_native_layer(queue, layer, pixels))
     }
 
     /// Draws one segment through every registered pipeline, in order.

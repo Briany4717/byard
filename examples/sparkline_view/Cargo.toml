@@ -13,5 +13,9 @@ publish = false
 byard = { path = "../../crates/byard" }
 tokio = { version = "1", features = ["time"] }
 
+[dev-dependencies]
+# The test reads back the PNG `App::shot` writes.
+image = { version = "0.25", default-features = false, features = ["png"] }
+
 [lints]
 workspace = true

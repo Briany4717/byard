@@ -15,6 +15,8 @@
 //     happens inside the Rust view, in its own coordinates, and never becomes
 //     an event handler here.
 //   • change `gap:` to something silly like 40 and watch the bars thin out.
+//   • the light drifting behind the bars is a shader of the app's own
+//     (`GlowShader` in main.rs). Change its WGSL and run again.
 View Main() {
     var series = [12.0, 30.0, 18.0, 44.0, 26.0, 51.0, 33.0]
     var next = 20.0
@@ -32,6 +34,11 @@ View Main() {
         // number and catches up a moment later.
         Box #[bg: 0x1C1C26, radius: 16, p: 20] {
             ZStack {
+                // A third native view, and the only one that brings its own
+                // shader: the bands of light behind the bars are drawn by
+                // WGSL written in `main.rs`, not by any pipeline of the
+                // engine's.
+                Glow #[tint: 0x5B8DEF, width: 680, height: 220]
                 Sparkline #[
                     data: series,
                     bar: 0x5B8DEF,

@@ -3074,6 +3074,31 @@ impl RenderFrame {
         // logic thread, which is the one thing this whole merge exists because
         // it does not.
         self.full_redraw |= previous.full_redraw;
+        // A layer a view wrote is written once. If the frame that carried it
+        // was never rendered, the write is still owed, ahead of this frame's
+        // own so a newer write to the same layer wins.
+        let owed: Vec<crate::render::TextureRequest> = previous
+            .native_textures
+            .iter()
+            .filter_map(|request| match &request.source {
+                crate::render::OwnedTextureSource::Layer {
+                    pipeline,
+                    layer,
+                    pixels,
+                } => Some(crate::render::TextureRequest {
+                    id: request.id,
+                    source: crate::render::OwnedTextureSource::Layer {
+                        pipeline: *pipeline,
+                        layer: *layer,
+                        pixels: pixels.clone(),
+                    },
+                }),
+                _ => None,
+            })
+            .collect();
+        if !owed.is_empty() {
+            self.native_textures.splice(0..0, owed);
+        }
         merge_flags(
             &mut self.instances_dirty,
             previous.instances_dirty.as_slice(),

@@ -413,6 +413,42 @@ pub fn is_raster(path: &std::path::Path) -> bool {
     })
 }
 
+/// Applies a new program to a running interpreter, and returns the root's new
+/// tree when it had to be lowered again (RFC-0007 §5).
+///
+/// The rendered root is `Main`, or the first view when there is none
+/// (`root_view`). Editing any view it transitively instantiates must re-derive
+/// its tree, so the affected set (changed views and their transitive callers)
+/// decides; siblings unrelated to the root keep their state.
+///
+/// `reload` starts the root's environment afresh, which is only right when
+/// the root is lowered again straight after: names bound while lowering, an
+/// `inject Theme as t` among them, live in that environment. A reload that
+/// leaves the root alone (a manifest or seed-image edit, or a view the root
+/// does not use) must not reset it, or every `t.token` in the existing tree
+/// resolves to nothing and the app draws without its colours.
+pub fn apply_program(
+    interp: &mut super::eval::Interpreter,
+    old: &[ViewDecl],
+    new: &[ViewDecl],
+) -> Option<Vec<super::eval::RenderNode>> {
+    let (old_root, new_root) = (
+        crate::parser::ast::root_view(old)?,
+        crate::parser::ast::root_view(new)?,
+    );
+    let relower = affected_views(old, new).contains(&new_root.name);
+    if relower {
+        interp.reload(new_root, diff_view(old_root, new_root));
+    }
+    // Rebuild the user-`View` registry so reloaded sibling views resolve and
+    // expand (RFC-0007 §1/§5).
+    interp.load_views(new);
+    relower.then(|| {
+        let known: Vec<&str> = new.iter().map(|v| v.name.as_str()).collect();
+        interp.lower_view(new_root, &known)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

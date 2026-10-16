@@ -14,6 +14,13 @@
 //! ```
 //!
 //! The last word is the tab: `now`, `days`, `air`, `trends` or `map`.
+//!
+//! Or run it following its own files, so an edit to a screen applies to the
+//! open window:
+//!
+//! ```text
+//! cargo run -p aura-weather -- --dev
+//! ```
 
 /// Where each tab's button is in the tab bar, in logical pixels.
 const TABS: [(&str, f32); 5] = [
@@ -28,6 +35,9 @@ fn main() -> Result<(), byard::ByardError> {
     let app = aura_weather::app(aura_weather::TILE_SERVER);
     let mut args = std::env::args().skip(1);
     match (args.next().as_deref(), args.next()) {
+        // Edit any `.byd` or `byard.toml` and the open window follows, map
+        // included.
+        (Some("--dev"), _) => app.hot_reload(true).run(),
         (Some("--shot"), Some(out)) => {
             let tab = args.next().unwrap_or_else(|| "now".to_string());
             let mut plan = byard::Shot::after(6000);

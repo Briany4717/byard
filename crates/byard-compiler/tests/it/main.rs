@@ -26,6 +26,7 @@ mod fuzz;
 mod gradient_kinds;
 mod group_opacity;
 mod hello_world;
+mod hot_reload_state;
 mod http_capability;
 mod ime_input;
 mod incremental_paths;

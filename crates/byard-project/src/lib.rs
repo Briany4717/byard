@@ -10,5 +10,6 @@
 
 pub mod archive;
 pub mod deps;
+pub mod live;
 pub mod manifest;
 pub mod solve;

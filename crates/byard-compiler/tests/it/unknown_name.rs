@@ -264,3 +264,25 @@ fn a_native_views_value_property_reads_a_bare_name_as_one() {
     let names = unknown("NameCheckGauge #[level: count, caption: name, width: 10, height: 10]");
     assert!(names.is_empty(), "{names:?}");
 }
+
+/// A canvas shape's numeric argument reads a bare name as a name; a word
+/// argument (`cap: round`) keeps its word.
+#[test]
+fn a_shapes_numeric_argument_reads_a_bare_name_as_one() {
+    assert_eq!(
+        unknown(
+            "Canvas #[width: 40, height: 40] {\n    circle(cx: 20, cy: 20, r: raduis, fill: 0xFF0000)\n}"
+        ),
+        ["raduis"]
+    );
+    assert_eq!(
+        unknown(
+            "Canvas #[width: 40, height: 40] {\n    path(fill: 0xFF0000) {\n        move(x: 0, y: 0)\n        line(x: wdth, y: 40)\n        close()\n    }\n}"
+        ),
+        ["wdth"]
+    );
+    let names = unknown(
+        "Canvas #[width: 40, height: 40] {\n    arc(cx: 20, cy: 20, r: count, start: 0deg, sweep: 90deg, stroke: 0xFF0000, cap: round)\n}",
+    );
+    assert!(names.is_empty(), "{names:?}");
+}

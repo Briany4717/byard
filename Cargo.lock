@@ -295,6 +295,7 @@ dependencies = [
  "byard-macro",
  "byard-platform",
  "byard-project",
+ "crossbeam-channel",
  "image",
  "pollster 0.4.0",
  "wgpu",

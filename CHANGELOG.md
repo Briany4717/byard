@@ -12,6 +12,11 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **A canvas shape's numeric argument reads a bare name as a name.**
+  `circle(r: raduis)` and `line(x: wdth, y: 40)` checked clean and drew with
+  nothing; now the misspelling is told, with the name it meant. An argument
+  that takes a word (`cap: round`) keeps it.
+
 - **`byard check` catches three more kinds of misspelling.** A property that
   takes a number, a colour, a length, an angle or a list reads a bare name
   as a name, so `bg: prmary` is told (`did you mean primary?`) where it used
@@ -75,6 +80,14 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   wrote. Tokens: `YYYY`, `MMMM`, `MMM`, `MM`, `M`, `DD`, `D`, `dddd`, `ddd`,
   `HH`, `H`, `mm`; anything else is kept. Text that is not a date reads as
   nothing, so `?? "—"` gives it a default. English names only for now.
+
+- **`App::hot_reload(true)` follows the project while an app runs.** An app
+  with a Rust half (controllers, native views, shaders) could not be
+  developed live: `byard dev` cannot link that Rust, and the app itself read
+  its project once. Now an edit to a `.byd`, the manifest or its theme
+  applies to the open window with the app's Rust linked in; an edit that does
+  not compile is reported and the last good program keeps running. For
+  development; a shipped app has no project to follow.
 
 - **`type Place = { name: Str, latitude: Float }` declares a record type.**
   Data that arrives as records (JSON) had no declaration, so a misspelt field
@@ -339,6 +352,11 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   an error.
 
 ### Fixed
+
+- **A hot reload keeps the root view's state.** A reload that changed only how
+  state is shown kept each `var`, and the root was then lowered again, which
+  gave every `var` a fresh signal at its initial value: under `byard dev`,
+  every edit reset the root's state one step after keeping it.
 
 - **An element drawn over a native view gets the press first.** A native view
   was offered every pointer event under it before any element, so a view that

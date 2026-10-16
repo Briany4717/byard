@@ -366,3 +366,110 @@ fn what_reaches_a_view_is_data_and_only_data() {
         "the view was handed the signal's value, not the signal"
     );
 }
+
+/// Renders `source`, taps at `pos`, and returns what the page counted and what
+/// the view counted.
+fn tap_through(source: &str, pos: (f32, f32)) -> (String, u32) {
+    registered();
+    *LAST.lock().unwrap() = None;
+    let parsed = parse(source);
+    assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+    let mut interp = Interpreter::new();
+    interp.load_views(&parsed.views);
+    let known: Vec<&str> = parsed.views.iter().map(|v| v.name.as_str()).collect();
+    let tree = interp.lower_view(&parsed.views[0], &known);
+    interp.tick();
+    let mut frame = RenderFrame::new();
+    interp.render(&tree, &mut frame, 400.0, 300.0);
+    interp.dispatch_events(&[byard_core::InputEvent {
+        kind: byard_core::platform::EventKind::Tap,
+        pos,
+        delta: (0.0, 0.0),
+        payload: None,
+        time_ms: 1,
+    }]);
+    interp.tick();
+    let mut frame = RenderFrame::new();
+    interp.render(&tree, &mut frame, 400.0, 300.0);
+    let line = frame
+        .texts()
+        .iter()
+        .map(|t| t.text.clone())
+        .find(|t| t.starts_with("page "))
+        .unwrap_or_default();
+    (line, seen().taps)
+}
+
+/// A button drawn over a view that claims taps gets the tap, as it would over
+/// an intrinsic: what is on top is what the pointer is on.
+#[test]
+fn an_element_drawn_over_a_view_takes_the_press_first() {
+    let _serial = SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (page, view) = tap_through(
+        "View Main() {
+    var taps = 0
+    Column {
+        Text(\"page {taps}\")
+        ZStack {
+            TestChart #[data: [1.0], width: 200, height: 100]
+            Box #[width: 80, height: 40, bg: 0x334455] => taps++
+        }
+    }
+}",
+        // A ZStack centres its children: the box is in the middle.
+        (100.0, 70.0),
+    );
+    assert_eq!(
+        page, "page 1",
+        "the button over the view was tapped (view saw {view})"
+    );
+    assert_eq!(view, 0, "and the view under it was not offered the tap");
+}
+
+/// The other way round: a view drawn over an element still takes the press.
+#[test]
+fn a_view_drawn_over_an_element_still_takes_the_press() {
+    let _serial = SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (page, view) = tap_through(
+        "View Main() {
+    var taps = 0
+    Column {
+        Text(\"page {taps}\")
+        ZStack {
+            Box #[width: 80, height: 40, bg: 0x334455] => taps++
+            TestChart #[data: [1.0], width: 200, height: 100]
+        }
+    }
+}",
+        (100.0, 70.0),
+    );
+    assert_eq!(view, 1, "the view on top took the tap");
+    assert_eq!(page, "page 0", "and the element under it did not see it");
+}
+
+/// Next to the button, on the view, the view gets it as before.
+#[test]
+fn beside_what_is_drawn_over_it_a_view_still_hears_the_press() {
+    let _serial = SERIAL
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (page, view) = tap_through(
+        "View Main() {
+    var taps = 0
+    Column {
+        Text(\"page {taps}\")
+        ZStack {
+            TestChart #[data: [1.0], width: 200, height: 100]
+            Box #[width: 80, height: 40, bg: 0x334455] => taps++
+        }
+    }
+}",
+        (180.0, 110.0),
+    );
+    assert_eq!(view, 1, "{page}");
+    assert_eq!(page, "page 0");
+}

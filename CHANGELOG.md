@@ -305,6 +305,13 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **An element drawn over a native view gets the press first.** A native view
+  was offered every pointer event under it before any element, so a view that
+  claimed presses starved a button placed on top of it. Now what is on top is
+  what the pointer is on: an element drawn over the view that takes presses
+  there gets the event, and the view is offered it only where nothing drawn
+  over it does.
+
 - **A `TextField` or a `Slider` with `grow: 1` fills its row.** Both stayed
   200 wide whatever `grow` said, and nothing reported it, so a search field
   could not span its window. `grow` now gives them their share of the free

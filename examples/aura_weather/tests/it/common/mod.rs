@@ -67,11 +67,25 @@ impl Server {
                         }
                         line.clear();
                     }
-                    let (status, body, delay) = routes
+                    let (key, status, body, delay) = routes
                         .iter()
                         .find(|(key, _, _, _)| request.contains(key))
-                        .map_or(("404 Not Found", "{}", 0), |(_, s, b, d)| (*s, *b, *d));
+                        .map_or(("", "404 Not Found", "{}", 0), |r| *r);
                     std::thread::sleep(std::time::Duration::from_millis(delay));
+                    // A map tile, unless a route of its own says otherwise:
+                    // the map's controller asks this same server.
+                    if key.is_empty() && request.contains("/tiles/") {
+                        let tile = tile_png();
+                        let head = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: image/png\r\n\
+                             Content-Length: {}\r\nConnection: close\r\n\r\n",
+                            tile.len()
+                        );
+                        let _ = stream.write_all(head.as_bytes());
+                        let _ = stream.write_all(tile);
+                        let _ = stream.flush();
+                        return;
+                    }
                     let response = format!(
                         "HTTP/1.1 {status}\r\nContent-Type: application/json\r\n\
                          Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
@@ -95,6 +109,19 @@ impl Server {
     }
 }
 
+/// One map tile, as the tile server would send it: a 256 by 256 PNG.
+fn tile_png() -> &'static [u8] {
+    static TILE: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+    TILE.get_or_init(|| {
+        let pixels = image::RgbaImage::from_pixel(256, 256, image::Rgba([200, 220, 240, 255]));
+        let mut png = std::io::Cursor::new(Vec::new());
+        pixels
+            .write_to(&mut png, image::ImageFormat::Png)
+            .expect("encode a tile");
+        png.into_inner()
+    })
+}
+
 pub struct App {
     pub interp: Interpreter,
     tree: Vec<RenderNode>,
@@ -107,6 +134,10 @@ pub struct App {
 impl App {
     /// Starts the app with its `Http` answering from `server`.
     pub fn start(server: &Server) -> Self {
+        // The app's own element, registered before the project is read, as
+        // the app does: the manifest only declares it for tools that cannot
+        // link it, and whichever is registered first is the one that draws.
+        byard_core::render::registry::register::<aura_weather::map::Map>();
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
         let manifest = byard_project::manifest::Manifest::discover(Some(dir)).unwrap();
         assert_eq!(
@@ -128,6 +159,12 @@ impl App {
                 http.with_host(name, server.base_url())
             });
         registry.insert(Arc::new(http));
+        // The controller that fetches the map's tiles, here from the same
+        // local server.
+        registry.insert(Arc::new(aura_weather::map::Tiles::at(&format!(
+            "{}/tiles",
+            server.base_url()
+        ))));
         let dispatcher = Dispatcher::new(registry, relay.io_handle(), relay.io_result_sender());
 
         let mut interp = Interpreter::new();
@@ -239,10 +276,13 @@ impl App {
         self.settle();
     }
 
-    /// Waits until nothing the app asked is still unanswered. Typing three
-    /// letters asks twice, and the answers come back in either order.
+    /// Waits until nothing the app asked is still unanswered, by a view
+    /// written in `byld` or by the map. Typing three letters asks twice, and
+    /// the answers come back in either order.
     pub fn answer_all(&mut self) {
-        while self.interp.outstanding_continuations() > 0 {
+        while self.interp.outstanding_continuations() > 0
+            || self.interp.outstanding_native_requests() > 0
+        {
             self.answer();
         }
     }

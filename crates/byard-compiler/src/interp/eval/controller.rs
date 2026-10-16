@@ -942,6 +942,14 @@ impl Interpreter {
         self.bridge.continuations.len()
     }
 
+    /// How many requests native views have made that are not yet answered
+    /// (RFC-0039). Test-facing, like its sibling above: what a harness waits
+    /// on to know a view has everything it asked for.
+    #[must_use]
+    pub fn outstanding_native_requests(&self) -> usize {
+        self.native_waiting.len()
+    }
+
     /// How many structural effects are currently mounted. Test-facing, the
     /// witness for the `on mount`/`on unmount` edges.
     #[must_use]

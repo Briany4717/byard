@@ -19,6 +19,7 @@ fn the_app_starts_on_the_forecast_and_every_tab_reaches_its_screen() {
         ("10 days", "The outlook, day by day"),
         ("Air", "What you are breathing"),
         ("Trends", "Temperature over the week"),
+        ("Map", "Where it is"),
         ("Now", "Current conditions and the next hours"),
     ] {
         app.tap(tab);

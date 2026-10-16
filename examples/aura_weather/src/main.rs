@@ -1,5 +1,4 @@
-//! Aura Weather, the reference application: every screen is `byld`, and this
-//! is its one Rust file.
+//! Aura Weather. See `lib.rs` for what it is made of.
 //!
 //! Run it from the repository root:
 //!
@@ -7,19 +6,36 @@
 //! cargo run -p aura-weather
 //! ```
 //!
-//! Or, for the `byld` half with hot reload:
+//! Or draw one screen to a PNG without opening a window, after two seconds
+//! of running (so its data has arrived):
 //!
 //! ```text
-//! cargo run -p byard-cli -- dev examples/aura_weather
+//! cargo run -p aura-weather -- --shot map.png map
 //! ```
 //!
-//! The app is the project in this directory: `byard.toml` declares the theme,
-//! its two typefaces and the type scale, and every `.byd` under `src/` is part
-//! of the program. `App::new` reads it exactly as `byard dev` does.
+//! The last word is the tab: `now`, `days`, `air`, `trends` or `map`.
+
+/// Where each tab's button is in the tab bar, in logical pixels.
+const TABS: [(&str, f32); 5] = [
+    ("now", 38.0),
+    ("days", 106.0),
+    ("air", 169.0),
+    ("trends", 231.0),
+    ("map", 296.0),
+];
 
 fn main() -> Result<(), byard::ByardError> {
-    byard::App::new(env!("CARGO_MANIFEST_DIR"))
-        .title("Aura Weather")
-        .size(440, 880)
-        .run()
+    let app = aura_weather::app(aura_weather::TILE_SERVER);
+    let mut args = std::env::args().skip(1);
+    match (args.next().as_deref(), args.next()) {
+        (Some("--shot"), Some(out)) => {
+            let tab = args.next().unwrap_or_else(|| "now".to_string());
+            let mut plan = byard::Shot::after(2000);
+            if let Some((_, x)) = TABS.iter().find(|(name, _)| *name == tab) {
+                plan = plan.tap(*x, 850.0);
+            }
+            app.shot(out, &plan)
+        }
+        _ => app.run(),
+    }
 }

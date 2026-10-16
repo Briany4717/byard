@@ -1,0 +1,44 @@
+// The map: where the place is. `Map` is not an element of the language. It is
+// written in Rust, in `map.rs`, with a shader of its own, and registered by
+// the app; here it is used like any other element.
+//
+// Drag it to look around. The buttons change the zoom, which is this
+// screen's state and reaches the map as a property.
+View MapScreen(place: Str, lat: Float, lon: Float) {
+    inject Theme as t
+    var zoom: Float = 10.0
+    // The map fills its card, at whatever width the window gives it.
+    var cardW: Float = 392.0
+
+    let round = style {
+        width: 40, height: 40, radius: 20, bg: t.surfaceContainerHigh,
+        color: t.onSurface, typo: t.title
+    }
+
+    Screen(title: place, subtitle: "Where it is") {
+        Column {
+            on measure => { cardW = it.w }
+            ZStack {
+                Map #[lat: lat, lon: lon, zoom: zoom, radius: 28.0, pin: t.primary,
+                      bg: t.surfaceContainerLow, width: cardW, height: 520]
+                Column #[width: cardW, height: 520, p: 12] {
+                    Row {
+                        Spacer()
+                        Column #[gap: 8] {
+                            Button("+") #[..round] => { if zoom < 18.0 { zoom = zoom + 1.0 } }
+                            Button("−") #[..round] => { if zoom > 2.0 { zoom = zoom - 1.0 } }
+                        }
+                    }
+                    Spacer()
+                    // The tiles are OpenStreetMap's, and say so.
+                    Row {
+                        Box #[bg: 0xB30A0F1E, radius: 8, p: (vertical: 3, horizontal: 8)] {
+                            Text("© OpenStreetMap contributors")
+                                #[typo: t.caption, color: t.onSurface]
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

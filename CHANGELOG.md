@@ -69,6 +69,22 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`App::hot_reload(true)` follows the project while an app runs.** An app
+  with a Rust half (controllers, native views, shaders) could not be
+  developed live: `byard dev` cannot link that Rust, and the app itself read
+  its project once. Now an edit to a `.byd`, the manifest or its theme
+  applies to the open window with the app's Rust linked in; an edit that does
+  not compile is reported and the last good program keeps running. For
+  development; a shipped app has no project to follow.
+
+- **`type Place = { name: Str, latitude: Float }` declares a record type.**
+  Data that arrives as records (JSON) had no declaration, so a misspelt field
+  checked clean and drew nothing. A declared type gives a `var`, a loop
+  variable over a list of them, a parameter or an indexed element its fields:
+  `hit.nmae` is an error (`did you mean name?`), and each field's own type is
+  checked further. Types are the program's, across files; two of one name
+  are an error. `type` stays an ordinary name everywhere else.
+
 - **A lambda's parameters can say their types.** `let search = (asked: Str,
   page: Int) => { … }` used to be a parse error, so a named action took its
   values untyped and its body was checked against nothing. A written type is
@@ -324,6 +340,11 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   an error.
 
 ### Fixed
+
+- **A hot reload keeps the root view's state.** A reload that changed only how
+  state is shown kept each `var`, and the root was then lowered again, which
+  gave every `var` a fresh signal at its initial value: under `byard dev`,
+  every edit reset the root's state one step after keeping it.
 
 - **An element drawn over a native view gets the press first.** A native view
   was offered every pointer event under it before any element, so a view that

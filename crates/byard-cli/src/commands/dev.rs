@@ -30,7 +30,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::deps::{cache_dir, resolve_project};
+use crate::deps::resolve_project;
 use crate::manifest::Manifest;
 
 /// Everything `byard dev` was invoked with.
@@ -88,22 +88,7 @@ pub fn run(opts: Options<'_>) -> Result<(), String> {
     // images `Image` draws usually live beside the sources (`assets/`), and
     // each changes what the app looks like. The watcher skips build output
     // and caches. A lone `.byd` is not a project: only its directory.
-    let cache = cache_dir();
-    let project_dir = if manifest.single_file {
-        manifest
-            .entry
-            .parent()
-            .unwrap_or(Path::new("."))
-            .to_path_buf()
-    } else {
-        manifest.project_root.clone()
-    };
-    let mut watch_paths = vec![project_dir];
-    for root in provider.resolved_roots().values() {
-        if !root.starts_with(&cache) {
-            watch_paths.push(root.clone());
-        }
-    }
+    let watch_paths = byard_project::live::watch_paths(&manifest, &provider);
 
     let initial_views = program.views;
     let initial_errors = program.errors;
@@ -166,30 +151,9 @@ pub fn run(opts: Options<'_>) -> Result<(), String> {
     .map_err(|e| format!("event loop error: {e}"))
 }
 
-/// Re-derives the whole program for the watcher thread (RFC-0008 Pillar E):
-/// re-discovers the manifest (so `byard.toml` edits apply live, its theme
-/// included), re-runs the module resolver, and folds any project-level
-/// failure into the same error channel the overlay renders.
+/// Re-derives the whole program for the watcher thread (RFC-0008 Pillar E).
 fn reresolve(file_override: Option<&Path>) -> ParsedFile {
-    let resolved = Manifest::discover(file_override)
-        .and_then(|m| resolve_project(&m).map(|(program, _)| (program, m.theme, m.watch_files)));
-    match resolved {
-        Ok((program, theme, watch_files)) => ParsedFile {
-            views: program.views,
-            errors: program.errors,
-            theme: Some(theme),
-            watch_files,
-        },
-        Err(message) => ParsedFile {
-            views: Vec::new(),
-            errors: vec![CompileError::Project {
-                span: byard_compiler::Span::new(0, 0),
-                message,
-            }],
-            theme: None,
-            watch_files: Vec::new(),
-        },
-    }
+    byard_project::live::reresolve(file_override)
 }
 
 /// Applies a new program to a running interpreter and returns the root's
@@ -211,24 +175,7 @@ fn reload_views(
     old: &[ViewDecl],
     new: &[ViewDecl],
 ) -> Option<Vec<RenderNode>> {
-    let (old_root, new_root) = (
-        byard_compiler::parser::ast::root_view(old)?,
-        byard_compiler::parser::ast::root_view(new)?,
-    );
-    let relower = byard_compiler::interp::reload::affected_views(old, new).contains(&new_root.name);
-    if relower {
-        interp.reload(
-            new_root,
-            byard_compiler::interp::reload::diff_view(old_root, new_root),
-        );
-    }
-    // Rebuild the user-`View` registry so reloaded sibling views resolve and
-    // expand (RFC-0007 §1/§5).
-    interp.load_views(new);
-    relower.then(|| {
-        let known: Vec<&str> = new.iter().map(|v| v.name.as_str()).collect();
-        interp.lower_view(new_root, &known)
-    })
+    byard_compiler::interp::reload::apply_program(interp, old, new)
 }
 
 /// A window's size in logical pixels, which is what layout works in.
@@ -1703,6 +1650,7 @@ mod tests {
     fn views(name: &str) -> Vec<ViewDecl> {
         vec![ViewDecl {
             helpers: std::sync::Arc::default(),
+            records: std::sync::Arc::default(),
             name: byard_compiler::Symbol::intern(name),
             params: Vec::new(),
             body: Vec::new(),

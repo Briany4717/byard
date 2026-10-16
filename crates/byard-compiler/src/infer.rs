@@ -116,6 +116,15 @@ pub fn check_views(views: &[ViewDecl]) -> Inference {
         .unwrap_or_default();
     let top_fns = check_top_fns(&helpers, &mut out);
     let names: HashSet<Symbol> = views.iter().map(|v| v.name.clone()).collect();
+    let records: HashMap<Symbol, Vec<(Symbol, Type)>> = views
+        .first()
+        .map(|v| {
+            v.records
+                .iter()
+                .map(|r| (r.name.clone(), r.fields.clone()))
+                .collect()
+        })
+        .unwrap_or_default();
     for view in views {
         let mut checker = Checker {
             errors: &mut out.errors,
@@ -125,6 +134,7 @@ pub fn check_views(views: &[ViewDecl]) -> Inference {
             fns: top_fns.clone(),
             declared: HashSet::new(),
             views: &names,
+            records: &records,
             strict: true,
         };
         checker.check_view(view);
@@ -138,6 +148,7 @@ pub fn check_views(views: &[ViewDecl]) -> Inference {
 fn check_top_fns(helpers: &[FnDecl], out: &mut Inference) -> HashMap<Symbol, Option<Ty>> {
     let names: std::collections::HashSet<&Symbol> = helpers.iter().map(|f| &f.name).collect();
     let no_views = HashSet::new();
+    let no_records = HashMap::new();
     let mut checker = Checker {
         errors: &mut out.errors,
         bindings: &mut out.bindings,
@@ -146,6 +157,7 @@ fn check_top_fns(helpers: &[FnDecl], out: &mut Inference) -> HashMap<Symbol, Opt
         fns: HashMap::new(),
         declared: HashSet::new(),
         views: &no_views,
+        records: &no_records,
         // A name a shared function cannot reach is reported below, as
         // impurity, which says more than "unknown".
         strict: false,
@@ -217,6 +229,8 @@ struct Checker<'a> {
     declared: HashSet<Symbol>,
     /// The program's views, whose call arguments are values.
     views: &'a HashSet<Symbol>,
+    /// The program's record types: name → fields.
+    records: &'a HashMap<Symbol, Vec<(Symbol, Type)>>,
     /// Whether a bare name being checked has to be a value. `false` where it
     /// may be a word the element understands (`align: center`), which only
     /// the element can judge.
@@ -484,8 +498,15 @@ impl Checker<'_> {
                 body,
                 ..
             } => {
-                self.value(iter);
-                let mut shadow = vec![(var, Ty::Unknown)];
+                // A list of records gives its loop variable the record's type,
+                // so a misspelt field inside the loop is told.
+                let element = match self.value(iter) {
+                    Ty::List(inner) if matches!(*inner, Ty::Named(ref n) if self.records.contains_key(n)) => {
+                        *inner
+                    }
+                    _ => Ty::Unknown,
+                };
+                let mut shadow = vec![(var, element)];
                 shadow.extend(index.as_ref().map(|i| (i, Ty::Int)));
                 self.check_scoped(body, &shadow);
             }
@@ -628,10 +649,12 @@ impl Checker<'_> {
                 }
                 Ty::Unknown
             }
-            Expr::Member { base, field, .. } => {
+            Expr::Member { base, field, span } => {
                 let b = self.value(base);
                 if field.as_str() == "len" && matches!(b, Ty::List(_) | Ty::Str) {
                     Ty::Int
+                } else if let Ty::Named(record) = &b {
+                    self.record_field(record, field, *span)
                 } else {
                     Ty::Unknown
                 }
@@ -717,6 +740,34 @@ impl Checker<'_> {
             }
             Expr::AngleLit(..) | Expr::ClassRef(..) | Expr::Error(_) => Ty::Unknown,
         }
+    }
+
+    /// The type of `record.field`, for a record type the program declares;
+    /// an `UnknownField` for a field it does not have. Any other named type
+    /// (a controller, a theme) is not modelled, so nothing is claimed.
+    fn record_field(&mut self, record: &Symbol, field: &Symbol, span: Span) -> Ty {
+        let Some(fields) = self.records.get(record) else {
+            return Ty::Unknown;
+        };
+        if let Some((_, ty)) = fields.iter().find(|(name, _)| name == field) {
+            let ty = ty.clone();
+            return self.resolve_type(&ty);
+        }
+        let hint = crate::util::closest_match(
+            field.as_str(),
+            fields.iter().map(|(name, _)| name.as_str()),
+        )
+        .map(str::to_string);
+        // The member's span runs from the receiver to the end of the name;
+        // the diagnostic points at the name alone.
+        let len = u32::try_from(field.as_str().len()).unwrap_or(0);
+        self.errors.push(CompileError::UnknownField {
+            span: Span::new(span.end.saturating_sub(len).max(span.start), span.end),
+            record: record.as_str().to_string(),
+            name: field.as_str().to_string(),
+            hint,
+        });
+        Ty::Unknown
     }
 
     /// Checks a call: a method call (`recv.method(args)`, RFC-0027 §4) validates

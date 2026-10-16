@@ -1491,6 +1491,28 @@ pub fn path_command_params(name: &str) -> ShapeParams {
     }
 }
 
+/// The type of the named argument `param` of the canvas shape or path
+/// command `command`, if it takes one by that name.
+#[must_use]
+pub fn shape_argument_type(command: &str, param: &str) -> Option<PropType> {
+    let find = |params: ShapeParams| {
+        params
+            .iter()
+            .find(|(name, _)| *name == param)
+            .map(|(_, ty)| *ty)
+    };
+    if is_path_command(command) {
+        return find(path_command_params(command));
+    }
+    if !is_shape_command(command) {
+        return None;
+    }
+    let (required, optional) = shape_geometry(command);
+    find(required)
+        .or_else(|| find(optional))
+        .or_else(|| find(SHAPE_PAINT_PARAMS))
+}
+
 /// Whether `name` is one of the RFC-0020 shape commands.
 #[must_use]
 pub fn is_shape_command(name: &str) -> bool {

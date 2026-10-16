@@ -197,3 +197,70 @@ fn the_message_names_it_and_suggests() {
         "{message}"
     );
 }
+
+/// A property that takes only values (a colour, a number, a length)
+/// reads a bare name as a value, so a misspelt one is told. A property that
+/// takes words keeps them.
+#[test]
+fn a_property_that_takes_values_reads_a_bare_name_as_one() {
+    for body in [
+        "Box #[bg: prmary] {}",
+        "Box #[width: cuont, height: 10] {}",
+        "Box #[opacity: nmae] {}",
+        "Box #[radius: radus] {}",
+    ] {
+        assert_eq!(unknown(body).len(), 1, "{body}");
+    }
+    for body in [
+        "Box #[origin: center, align: center] {}",
+        "Text(name) #[weight: bold, align: center]",
+        "Box #[bg: 0x112233, width: count] {}",
+    ] {
+        let names = unknown(body);
+        assert!(names.is_empty(), "{body}: {names:?}");
+    }
+}
+
+/// A called name has to be a function, where a value is read.
+#[test]
+fn a_misspelt_function_is_reported() {
+    assert_eq!(
+        unknown("let double = (n) => n * 2\nText(\"{dobule(count)}\")"),
+        ["dobule"]
+    );
+    assert_eq!(
+        unknown("let reset = () => { count = 0 }\nButton(\"x\") => rest()"),
+        ["rest"]
+    );
+    // The language's own: navigation.
+    let names = unknown("Button(\"x\") => back(\"/\")\nButton(\"y\") => navigate(\"/a\")");
+    assert!(names.is_empty(), "{names:?}");
+}
+
+/// A registered native view's properties are checked the same way: a number
+/// property reads a bare name as a value.
+#[test]
+fn a_native_views_value_property_reads_a_bare_name_as_one() {
+    use byard_core::render::registry::{DeclaredProp, NativePropType, declare};
+    declare(
+        "NameCheckGauge",
+        &[
+            DeclaredProp {
+                name: "level".into(),
+                ty: NativePropType::Float,
+                layout: false,
+            },
+            DeclaredProp {
+                name: "caption".into(),
+                ty: NativePropType::Str,
+                layout: false,
+            },
+        ],
+    );
+    assert_eq!(
+        unknown("NameCheckGauge #[level: cuont, width: 10, height: 10]"),
+        ["cuont"]
+    );
+    let names = unknown("NameCheckGauge #[level: count, caption: name, width: 10, height: 10]");
+    assert!(names.is_empty(), "{names:?}");
+}

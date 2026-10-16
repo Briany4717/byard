@@ -3,8 +3,8 @@
 //!
 //! `byard check` cannot link an app's Rust, so a project that used one of its
 //! own elements failed there with "unknown view" and checked nothing past it.
-//! A declared element is checked like any other: a property it does not take
-//! is an error.
+//! A declared element is checked like any other: a property it does not take,
+//! a value of the wrong type and a misspelt name are errors.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -83,4 +83,29 @@ fn the_native_view_example_checks_clean() {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/sparkline_view");
     let (ok, text) = check(&dir);
     assert!(ok && text.contains("0 errors"), "{text}");
+}
+
+#[test]
+fn a_property_of_the_wrong_type_is_an_error() {
+    let dir = project(
+        "wrong-type",
+        GAUGE,
+        "Gauge #[value: \"half\", width: 120, height: 40]",
+    );
+    let (ok, text) = check(&dir);
+    assert!(!ok && text.contains("AttributeTypeMismatch"), "{text}");
+}
+
+#[test]
+fn a_misspelt_name_as_a_number_property_is_an_error() {
+    let dir = project(
+        "misspelt-value",
+        GAUGE,
+        "Gauge #[value: levl, width: 120, height: 40]",
+    );
+    let (ok, text) = check(&dir);
+    assert!(
+        !ok && text.contains("levl") && text.contains("level"),
+        "{text}"
+    );
 }

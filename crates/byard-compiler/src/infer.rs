@@ -40,6 +40,35 @@ const STR_METHODS: [&str; 2] = ["slice", "urlEncoded"];
 /// of the screen a navigation case draws.
 const BUILT_IN_NAMES: [&str; 3] = ["anim", "scroll_fraction", "route"];
 
+/// Functions the language itself provides: `untrack(expr)`, the
+/// `match(element)` width of an anchored overlay, and the navigation actions
+/// (`navigate`, `back`, `replace`).
+const BUILT_IN_CALLS: [&str; 5] = ["untrack", "match", "navigate", "back", "replace"];
+
+/// Whether the property `prop` of the element `element` takes only values (a
+/// number, a colour, a length, an angle, a list) and never words. A pair and
+/// a flag are not among them: `origin: center` and `wrap: none` are words.
+/// `false` for anything not known to: a view of the program (its arguments
+/// are checked as values already), a style block, a property nothing names.
+fn takes_only_a_value(element: &str, prop: &str) -> bool {
+    use crate::interp::intrinsics::PropType;
+    // The catalogue holds the registered native views too, with their
+    // properties' types mapped onto the same ones.
+    crate::interp::intrinsics::lookup(element)
+        .and_then(|intrinsic| intrinsic.property_type(prop))
+        .is_some_and(|ty| {
+            matches!(
+                ty,
+                PropType::Int
+                    | PropType::Float
+                    | PropType::Color
+                    | PropType::Len
+                    | PropType::Angle
+                    | PropType::List
+            )
+        })
+}
+
 /// An inferred / resolved type. Distinct from the syntactic [`Type`] AST node:
 /// `Ty` is normalized (e.g. `List<Str>` ⇒ `List(Str)`), and `Unknown` covers
 /// the cases Phase 2 cannot resolve without controller metadata or a method
@@ -351,11 +380,25 @@ impl Checker<'_> {
     }
 
     fn check_attrs(&mut self, attrs: &[crate::parser::ast::Attr]) {
+        self.check_attrs_of(None, attrs);
+    }
+
+    /// Checks `attrs` as written on the element `element`, when it is known.
+    ///
+    /// A property's whole value may be a word only if the property takes
+    /// words. For one that takes a number, a colour, a length, an angle or a
+    /// list, a bare name has to be a value: `bg: prmary` is a
+    /// misspelt name, not a colour called "prmary".
+    fn check_attrs_of(&mut self, element: Option<&str>, attrs: &[crate::parser::ast::Attr]) {
         let it = Symbol::intern("it");
         for attr in attrs {
             match &attr.kind {
                 AttrKind::Prop { value } => {
-                    self.word(value);
+                    if element.is_some_and(|e| takes_only_a_value(e, attr.name.as_str())) {
+                        self.value(value);
+                    } else {
+                        self.word(value);
+                    }
                 }
                 AttrKind::Spread { value } => {
                     self.value(value);
@@ -421,7 +464,7 @@ impl Checker<'_> {
                         self.word(&arg.value);
                     }
                 }
-                self.check_attrs(&el.attrs);
+                self.check_attrs_of(Some(el.name.as_str()), &el.attrs);
                 if let Some(action) = &el.action {
                     self.check_shadowed(action, &[&Symbol::intern("it")]);
                 }
@@ -674,6 +717,14 @@ impl Checker<'_> {
             self.strict = was;
             return ty;
         }
+        // `match(searchField)` names an element by its `as` tag, which is not
+        // a value in scope.
+        if matches!(callee, Expr::Ident(name, _) if name.as_str() == "match") {
+            for arg in args {
+                self.word(&arg.value);
+            }
+            return Ty::Unknown;
+        }
         // A named argument may be a word of the function it is passed to
         // (`repeat: infinite`); a positional one is a value wherever a value
         // is expected.
@@ -685,7 +736,16 @@ impl Checker<'_> {
             }
         }
         match callee {
-            Expr::Ident(name, _) => self.fns.get(name).cloned().flatten().unwrap_or(Ty::Unknown),
+            Expr::Ident(name, span) => {
+                // A call names a function where a value is being read. Inside
+                // an animation's arguments a call names a curve
+                // (`anim.stagger(linear(320ms), …)`), which is the curve's to
+                // judge.
+                if self.strict && !self.knows(name) && !BUILT_IN_CALLS.contains(&name.as_str()) {
+                    self.unknown_name(name, *span);
+                }
+                self.fns.get(name).cloned().flatten().unwrap_or(Ty::Unknown)
+            }
             _ => Ty::Unknown,
         }
     }

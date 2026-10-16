@@ -1361,6 +1361,9 @@ fn check_value_type(ty: PropType, value: &Expr) -> Option<CompileError> {
     match (ty, value) {
         (PropType::Color, Expr::StrLit(..) | Expr::FloatLit(..)) => mismatch("a color (0xRRGGBB)"),
         (PropType::Int | PropType::Len, Expr::StrLit(..)) => mismatch("an integer length"),
+        (PropType::Float, Expr::StrLit(..)) => mismatch("a number"),
+        // A single number is a pair too (`scale: 1.2` is both axes).
+        (PropType::Vec2, Expr::StrLit(..)) => mismatch("a pair (x, y) or a number"),
         (PropType::Angle, Expr::StrLit(..) | Expr::IntLit(..) | Expr::FloatLit(..)) => {
             mismatch("an angle (e.g. 90deg, 1.5rad)")
         }

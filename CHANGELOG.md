@@ -61,6 +61,15 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`[native_views]` in `byard.toml` declares the elements an app draws in
+  Rust.** `byard check`, `byard dev` and the editor cannot link that Rust, so
+  a project using one of its own elements failed with "unknown view". Declare
+  it (`[native_views.Map]`, `lat = "float"`) and they check its properties
+  and draw a faint panel in its place. The app refuses to start if a
+  declaration stops matching the view registered under that name. An app
+  also now prints what lowering refused (an attribute an element does not
+  take) when it starts, where it used to run on without it.
+
 - **An app can draw with a shader of its own.** A native view could only
   emit into the engine's pipelines. Now the app describes one
   (`byard::render::Shader`: the instance record, its fields, and the WGSL for

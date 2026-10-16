@@ -21,6 +21,7 @@ mod incremental_example;
 mod library_check;
 mod list_animations_example;
 mod looping_animations_example;
+mod native_views_declared;
 mod navigation_example;
 mod on_change_example;
 mod organic_fusion_example;

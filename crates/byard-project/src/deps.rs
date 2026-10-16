@@ -1034,6 +1034,12 @@ pub fn resolve_project(
     let lock = Lockfile::read(&manifest.project_root)?;
     let mut provider = FsProvider::new(manifest, lock);
     let files = project_source_files(manifest)?;
+    // The elements the app's Rust half draws. An app has registered the real
+    // ones by now and these change nothing; a tool that cannot link that Rust
+    // gets a stand-in for each, so the program still means what it says.
+    for view in &manifest.native_views {
+        byard_core::render::registry::declare(&view.name, &view.props);
+    }
     let program = byard_compiler::resolve::resolve_program(files, &mut provider);
     Ok((program, provider))
 }
@@ -1104,6 +1110,7 @@ mod tests {
             dev: crate::manifest::DevConfig::default(),
             http: crate::manifest::HttpConfig::default(),
             watch_files: Vec::new(),
+            native_views: Vec::new(),
         };
         let (program, provider) = resolve_project(&manifest).unwrap();
         assert!(program.errors.is_empty(), "{:?}", program.errors);

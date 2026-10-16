@@ -1,0 +1,21 @@
+[project]
+name = "sparkline_view"
+entry = "src/main.byd"
+
+# The three elements this app draws in Rust (src/main.rs). Declared here so
+# `byard check`, `byard dev` and the editor know them without that Rust: they
+# check the properties below, and draw a faint panel where the view would be.
+# The app itself refuses to start if these stop matching the views it
+# registers.
+[native_views.Sparkline]
+data = "floats"
+bar = "color"
+highlight = "color"
+gap = { type = "float", layout = true }
+
+[native_views.MeanLine]
+of = "floats"
+stroke = "color"
+
+[native_views.Glow]
+tint = "color"

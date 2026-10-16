@@ -69,6 +69,14 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`App::hot_reload(true)` follows the project while an app runs.** An app
+  with a Rust half (controllers, native views, shaders) could not be
+  developed live: `byard dev` cannot link that Rust, and the app itself read
+  its project once. Now an edit to a `.byd`, the manifest or its theme
+  applies to the open window with the app's Rust linked in; an edit that does
+  not compile is reported and the last good program keeps running. For
+  development; a shipped app has no project to follow.
+
 - **`a ?? b` is the left value, or the right one when the left has none.**
   A missing JSON field, an empty `find` or the `min` of an empty list read as
   nothing, in silence, and every such read needed a test written around it.
@@ -318,6 +326,11 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   an error.
 
 ### Fixed
+
+- **A hot reload keeps the root view's state.** A reload that changed only how
+  state is shown kept each `var`, and the root was then lowered again, which
+  gave every `var` a fresh signal at its initial value: under `byard dev`,
+  every edit reset the root's state one step after keeping it.
 
 - **An element drawn over a native view gets the press first.** A native view
   was offered every pointer event under it before any element, so a view that

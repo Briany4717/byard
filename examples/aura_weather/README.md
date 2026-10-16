@@ -15,6 +15,13 @@ running so its data has arrived (`now`, `days`, `air`, `trends` or `map`):
 cargo run -p aura-weather -- --shot map.png map
 ```
 
+Or follow the project while editing: every screen and the manifest apply to
+the open window, map included.
+
+```bash
+cargo run -p aura-weather -- --dev
+```
+
 ## What it is made of
 
 Every screen is `byld`, in `src/`:
@@ -59,6 +66,7 @@ Each of these was found by building a screen, and each is now in Byard.
 | Map | A native view heard a press before the zoom buttons drawn over it. | What is drawn on top gets the press first (#313) |
 | Search | A missing JSON field read as nothing, and every read of one needed a test around it. | `a ?? b`: `res.json.results ?? []` (#312) |
 | Map | `zoom: "near"` checked clean for a number, and so did `bg: prmary` and `serach(q)`. | `byard check` reads a value property's bare name as a name, checks called names, and rejects text for a number |
+| Map | An app with a Rust half could not hot-reload: `byard dev` cannot link the map, so it drew a panel there. | `App::hot_reload(true)`, `--dev` |
 
 ## What it still could not be built with
 
@@ -72,7 +80,7 @@ Worked around in the app, and not yet fixed in Byard:
   intrinsic's named argument, where the argument may also be a word.
 - **A lambda's parameters take no type**: `(asked) => …`, never
   `(asked: Str) => …`.
-- **The Rust half has no hot reload.** `byard dev examples/aura_weather`
-  reloads every screen but draws a plain panel where the map is; the map
-  itself changes only when the app is rebuilt.
+- **The Rust half itself does not reload.** `cargo run -p aura-weather --
+  --dev` follows every `.byd` and the manifest with the map linked in, but
+  an edit to `map.rs` still needs the app rebuilt.
 - **Not measured**: the frame time while panning the map.

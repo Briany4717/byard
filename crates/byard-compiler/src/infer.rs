@@ -855,6 +855,14 @@ impl Checker<'_> {
         };
         match op {
             BinOp::And | BinOp::Or => Ty::Bool,
+            // Whichever side is known; when both are, they must agree.
+            BinOp::Otherwise => {
+                let scalar = |t: &Ty| matches!(t, Ty::Int | Ty::Float | Ty::Str | Ty::Bool);
+                if scalar(l) && scalar(r) && l != r && !(numeric(l) && numeric(r)) {
+                    mismatch(self);
+                }
+                if is_concrete(l) { l.clone() } else { r.clone() }
+            }
             BinOp::Eq | BinOp::Ne => {
                 if both_concrete && !eq_compatible(l, r) {
                     mismatch(self);
@@ -1022,6 +1030,7 @@ fn op_str(op: BinOp) -> &'static str {
         BinOp::Ge => ">=",
         BinOp::And => "&&",
         BinOp::Or => "||",
+        BinOp::Otherwise => "??",
     }
 }
 

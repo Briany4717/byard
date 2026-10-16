@@ -1254,6 +1254,10 @@ struct NativeTarget {
     slot: usize,
     /// Its on-screen rect in logical pixels.
     rect: crate::interp::intrinsics::Rect,
+    /// How many event handlers had been registered when the view was drawn.
+    /// Handlers are registered in paint order, so any registered after this
+    /// point belong to elements drawn over the view.
+    drawn_at: usize,
 }
 
 /// A wheel/drag-scrollable region recorded during render (RFC-0005
@@ -9002,6 +9006,7 @@ impl Interpreter {
                     self.native_targets.push(NativeTarget {
                         slot: *slot,
                         rect: hit_rect,
+                        drawn_at: self.router.handler_count(),
                     });
                     if let Some(idx) = elem_idx {
                         if state_blocks.iter().any(|sb| {
@@ -10176,6 +10181,10 @@ impl Interpreter {
     /// Offers each event to the native views under the pointer, innermost
     /// first, and reports which events a view took (RFC-0039 × RFC-0003).
     ///
+    /// An element drawn over a view that takes presses where the pointer is
+    /// (a button over a map) gets the event instead: the view is not offered
+    /// it at all, as an intrinsic underneath would not be.
+    ///
     /// Innermost first is "last recorded first": the render walk is
     /// depth-first, so a view nested inside another was pushed after it, and
     /// walking the targets in reverse is the same front-to-back order the
@@ -10203,6 +10212,11 @@ impl Interpreter {
                 let r = target.rect;
                 if px < r.x || px >= r.x + r.w || py < r.y || py >= r.y + r.h {
                     continue;
+                }
+                // Something drawn over the view that takes presses here gets
+                // this one: what is on top is what the pointer is on.
+                if self.router.claims_pointer_from((px, py), target.drawn_at) {
+                    break;
                 }
                 let Some(view) = self.native_views.get_mut(target.slot) else {
                     continue;
@@ -12314,6 +12328,11 @@ impl Interpreter {
                         } else {
                             Value::Bool(rc(ctx).as_bool().unwrap_or(false))
                         }
+                    }),
+                    // The right side is read only when the left has nothing.
+                    BinOp::Otherwise => Box::new(move |ctx| match lc(ctx) {
+                        Value::Unit => rc(ctx),
+                        value => value,
                     }),
                     _ => Box::new(move |ctx| eval_binary(op, lc(ctx), rc(ctx))),
                 }
@@ -14930,6 +14949,12 @@ fn eval_binary(op: BinOp, lhs: Value, rhs: Value) -> Value {
         }
         // `&&`/`||` never reach here (lowered as control flow); the arithmetic
         // path handles `+ - * /` with string/list concat on `+`.
+        // `??` is lowered as control flow too; reaching here it is its own
+        // answer.
+        BinOp::Otherwise => match lhs {
+            Value::Unit => rhs,
+            value => value,
+        },
         BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::And | BinOp::Or => {
             match (lhs, rhs) {
                 (Value::Int(a), Value::Int(b)) => Value::Int(match op {

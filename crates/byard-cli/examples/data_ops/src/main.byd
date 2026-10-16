@@ -127,6 +127,8 @@ View Main() {
             Button("score +10") #[bg: 0x6750A4, radius: 8, p: (vertical: 8, horizontal: 16)]
                 => user = { ..user, score: user.score + 10 }
             Text("{user.name} · score {user.score}") #[color: 0xFFD479, size: 16, weight: bold]
+            // `??`: a field the record does not have, with a default.
+            Text("user.email ?? …  →  {user.email ?? "no email yet"}") #[color: 0xCCD2E0, size: 15]
         }
     }
 }

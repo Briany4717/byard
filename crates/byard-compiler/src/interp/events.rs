@@ -500,7 +500,23 @@ impl EventRouter {
     /// (RFC-0005). Style-only hover/press regions do not claim the gesture.
     #[must_use]
     pub fn claims_pointer(&self, pos: (f32, f32)) -> bool {
-        self.handlers.iter().any(|h| {
+        self.claims_pointer_from(pos, 0)
+    }
+
+    /// How many handlers are registered so far this frame. Handlers are
+    /// registered in paint order, so this is a position in that order: a
+    /// handler registered after it belongs to something drawn on top.
+    #[must_use]
+    pub fn handler_count(&self) -> usize {
+        self.handlers.len()
+    }
+
+    /// [`claims_pointer`](Self::claims_pointer), counting only the handlers
+    /// registered from position `from` on: whether something drawn after
+    /// that point claims a press at `pos`.
+    #[must_use]
+    pub fn claims_pointer_from(&self, pos: (f32, f32), from: usize) -> bool {
+        self.handlers.iter().skip(from).any(|h| {
             hits(h.rect, h.frame, pos)
                 && matches!(
                     h.kind,

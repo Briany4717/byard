@@ -388,9 +388,9 @@ impl NativeView for Map {
         match event.kind {
             EventKind::PointerDown => {
                 self.drag = Some(event.local);
-                // Not claimed: a view is offered a press before the elements
-                // drawn over it, and the zoom buttons sit over this one.
-                Handled::No
+                // Claimed: a press on the map is the start of a drag. The zoom
+                // buttons drawn over it get their own presses first.
+                Handled::Yes
             }
             EventKind::PointerMove => {
                 let Some(last) = self.drag else {

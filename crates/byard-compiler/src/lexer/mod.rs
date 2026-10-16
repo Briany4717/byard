@@ -280,6 +280,10 @@ pub enum Token {
     /// `?` (ternary)
     #[token("?")]
     Question,
+    /// `??`, "or else": the left value, or the right one when the left has
+    /// none. Longest-match keeps it distinct from the ternary's `?`.
+    #[token("??")]
+    QuestionQuestion,
     /// `-`, the sign of a negative numeric literal (`translate: (-8, 0)`)
     /// *or* binary subtraction (part of the minimal arithmetic surface, see
     /// [`Token::Star`]). Longest-match keeps `->`, `-=` and `--` as their own

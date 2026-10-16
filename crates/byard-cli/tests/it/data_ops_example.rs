@@ -81,6 +81,7 @@ fn derived_readouts_are_correct_and_reactive() {
     has_readout(&lines, "filter(x>2).len", "1");
     // Records.
     has_readout(&lines, "Ada", "score 0");
+    has_readout(&lines, "user.email ??", "no email yet");
     // The `map(x => x*2)` list renders 2, 4, 6.
     for want in ["• 2", "• 4", "• 6"] {
         assert!(

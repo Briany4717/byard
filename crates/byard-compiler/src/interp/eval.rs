@@ -12315,6 +12315,11 @@ impl Interpreter {
                             Value::Bool(rc(ctx).as_bool().unwrap_or(false))
                         }
                     }),
+                    // The right side is read only when the left has nothing.
+                    BinOp::Otherwise => Box::new(move |ctx| match lc(ctx) {
+                        Value::Unit => rc(ctx),
+                        value => value,
+                    }),
                     _ => Box::new(move |ctx| eval_binary(op, lc(ctx), rc(ctx))),
                 }
             }
@@ -14930,6 +14935,12 @@ fn eval_binary(op: BinOp, lhs: Value, rhs: Value) -> Value {
         }
         // `&&`/`||` never reach here (lowered as control flow); the arithmetic
         // path handles `+ - * /` with string/list concat on `+`.
+        // `??` is lowered as control flow too; reaching here it is its own
+        // answer.
+        BinOp::Otherwise => match lhs {
+            Value::Unit => rhs,
+            value => value,
+        },
         BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::And | BinOp::Or => {
             match (lhs, rhs) {
                 (Value::Int(a), Value::Int(b)) => Value::Int(match op {

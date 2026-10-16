@@ -61,6 +61,12 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`a ?? b` is the left value, or the right one when the left has none.**
+  A missing JSON field, an empty `find` or the `min` of an empty list read as
+  nothing, in silence, and every such read needed a test written around it.
+  `res.json.results ?? []`, `user.email ?? "no email"`. The right side is only
+  read when it is needed; a default of another type is a type mismatch.
+
 - **`[native_views]` in `byard.toml` declares the elements an app draws in
   Rust.** `byard check`, `byard dev` and the editor cannot link that Rust, so
   a project using one of its own elements failed with "unknown view". Declare

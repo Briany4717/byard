@@ -528,7 +528,12 @@ impl Parser<'_> {
             }),
             // `merge` style composition (RFC-0016): right-assoc, above arithmetic
             // is meaningless (styles never mix with `+`), so it sits just below.
-            Token::Merge => Some(Bp {
+            //
+            // `a ?? b` shares the level: looser than arithmetic, so
+            // `count ?? 0 + 1` reads as `count ?? (0 + 1)`, and tighter than
+            // comparison, so `user.age ?? 0 == 0` compares the defaulted
+            // value. It and `merge` never meet.
+            Token::Merge | Token::QuestionQuestion => Some(Bp {
                 left: 11,
                 right: 12,
             }),
@@ -635,7 +640,8 @@ impl Parser<'_> {
                 | Token::Gt
                 | Token::GtEq
                 | Token::AmpAmp
-                | Token::PipePipe),
+                | Token::PipePipe
+                | Token::QuestionQuestion),
             ) => {
                 let op = match tok {
                     Token::Plus => BinOp::Add,
@@ -649,6 +655,7 @@ impl Parser<'_> {
                     Token::Gt => BinOp::Gt,
                     Token::GtEq => BinOp::Ge,
                     Token::AmpAmp => BinOp::And,
+                    Token::QuestionQuestion => BinOp::Otherwise,
                     _ => BinOp::Or,
                 };
                 self.advance();

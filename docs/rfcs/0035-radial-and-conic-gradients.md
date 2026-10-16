@@ -27,6 +27,10 @@
   inline below, with their reasoning in the phase's erratum: the kind tag
   cannot live in `misc.w`, and the surface it extends is the existing
   `gradient:` property rather than a `gradient(…)` value inside `bg:`.
+
+  **The case it was written for, built (2026-10-16).** Aura Weather's hero card
+  and the glow behind its air-quality gauge are radial gradients, asserted as
+  radial in its tests (`the_glow_behind_the_gauge_is_radial`).
 - **Author(s):** Briany4717
 - **Created:** 2026-08-04
 - **Last updated:** 2026-09-04

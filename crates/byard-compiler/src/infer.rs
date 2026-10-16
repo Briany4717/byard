@@ -644,8 +644,24 @@ impl Checker<'_> {
                 }
                 Ty::Unknown
             }
-            Expr::Lambda { params, body, .. } => {
-                self.check_shadowed(body, &params.iter().collect::<Vec<_>>());
+            Expr::Lambda {
+                params,
+                types,
+                body,
+                ..
+            } => {
+                // A parameter with a written type is checked as one inside the
+                // body (`asked.uper()` on a `Str`); one without is unknown.
+                let mark = self.undo.len();
+                for (i, name) in params.iter().enumerate() {
+                    let ty = types
+                        .get(i)
+                        .and_then(Option::as_ref)
+                        .map_or(Ty::Unknown, |t| self.resolve_type(t));
+                    self.bind(name.clone(), ty);
+                }
+                self.value(body);
+                self.leave(mark);
                 Ty::Unknown
             }
             Expr::Block(stmts, _) => {

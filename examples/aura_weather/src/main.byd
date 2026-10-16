@@ -20,7 +20,7 @@ View Main() {
 
     // Asks for places named like `asked`. Replies can arrive out of order, so
     // one that is no longer what the field says is dropped.
-    let search = (asked) => {
+    let search = (asked: Str) => {
         if asked.len < 2 {
             open = false
             found = []
@@ -47,7 +47,7 @@ View Main() {
     // Every edit of the field is a new question.
     on change(query) => search(query)
 
-    let choose = (name, latitude, longitude) => {
+    let choose = (name: Str, latitude: Float, longitude: Float) => {
         place = name
         lat = latitude
         lon = longitude

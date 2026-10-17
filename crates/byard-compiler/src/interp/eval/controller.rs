@@ -402,6 +402,18 @@ impl Interpreter {
         } else {
             Vec::new()
         };
+        // Names held on the stack where the call is written, a block's `let`
+        // or an enclosing arm's captures, are gone by the time the reply
+        // lands, so the call holds on to their values too.
+        let held: Vec<Symbol> = if ok.is_some() || err.is_some() {
+            self.lambda_params
+                .iter()
+                .filter(|n| !in_scope.iter().any(|(p, _)| p == *n))
+                .cloned()
+                .collect()
+        } else {
+            Vec::new()
+        };
         let shadowed = self.lambda_params.len();
         self.lambda_params
             .extend(in_scope.iter().map(|(name, _)| name.clone()));
@@ -447,18 +459,27 @@ impl Interpreter {
             }
             // A call placed from inside another call's arm is already
             // running on captured values, and those win over the argument.
+            let on_stack = |name: &Symbol| {
+                super::LAMBDA_ARGS.with(|args| {
+                    args.borrow()
+                        .iter()
+                        .rev()
+                        .find(|(n, _)| n == name)
+                        .map(|(_, v)| v.clone())
+                })
+            };
             let captured = in_scope
                 .iter()
                 .map(|(name, memo)| {
-                    let held = super::LAMBDA_ARGS.with(|args| {
-                        args.borrow()
-                            .iter()
-                            .rev()
-                            .find(|(n, _)| n == name)
-                            .map(|(_, v)| v.clone())
-                    });
-                    (name.clone(), held.unwrap_or_else(|| ctx.read_memo(*memo)))
+                    (
+                        name.clone(),
+                        on_stack(name).unwrap_or_else(|| ctx.read_memo(*memo)),
+                    )
                 })
+                .chain(
+                    held.iter()
+                        .filter_map(|name| on_stack(name).map(|v| (name.clone(), v))),
+                )
                 .collect();
             queue.borrow_mut().push(PendingCall {
                 controller,

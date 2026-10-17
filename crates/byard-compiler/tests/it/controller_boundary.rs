@@ -885,3 +885,36 @@ View Main() {
     assert!(harness.pump());
     assert_eq!(harness.texts()[0], "first");
 }
+
+/// A `let` written before a call is read by the call's arms, which run after
+/// the block has ended: the call holds on to its value, and the next tap's
+/// call holds on to its own.
+#[test]
+fn an_arm_reads_a_let_written_before_its_call() {
+    let mut harness = Harness::new(
+        r#"
+View Main() {
+    inject Echo as echo
+    var taps: Int = 0
+    var status: Str = "idle"
+    Column {
+        Text("{status}")
+        Button("go") #[width: 100, height: 40] => {
+            taps = taps + 1
+            let asked = "tap {taps}"
+            echo.say("hi") ok r => {
+                let said = r.text
+                status = "{said} after {asked}"
+            }
+        }
+    }
+}
+"#,
+    );
+    harness.tap(50.0, 40.0);
+    assert!(harness.pump());
+    assert_eq!(harness.texts()[0], "hi after tap 1");
+    harness.tap(50.0, 40.0);
+    assert!(harness.pump());
+    assert_eq!(harness.texts()[0], "hi after tap 2");
+}

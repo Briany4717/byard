@@ -236,7 +236,8 @@ fn children(expr: &Expr) -> Vec<&Expr> {
         | Expr::Postfix { target: base, .. }
         | Expr::Unary { rhs: base, .. }
         | Expr::Lambda { body: base, .. }
-        | Expr::KeyframeStep { value: base, .. } => vec![base.as_ref()],
+        | Expr::KeyframeStep { value: base, .. }
+        | Expr::Let { value: base, .. } => vec![base.as_ref()],
         Expr::Call { callee, args, .. } => std::iter::once(callee.as_ref())
             .chain(args.iter().map(|a| &a.value))
             .collect(),

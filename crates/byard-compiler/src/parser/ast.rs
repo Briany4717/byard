@@ -889,6 +889,20 @@ pub enum Expr {
         /// Source span.
         span: Span,
     },
+    /// `let name: Type = value`, a statement of an action block: `name` holds
+    /// `value` for the statements after it in the same block, and for the
+    /// arms of any call placed there. A record `Type` makes `byard check`
+    /// know its fields and compares what arrives with it.
+    Let {
+        /// The name bound.
+        name: Symbol,
+        /// The written type, if any.
+        ty: Option<Type>,
+        /// The value it holds.
+        value: Box<Expr>,
+        /// Source span.
+        span: Span,
+    },
     /// An animated attribute value `value with anim.*(…)` (RFC-0010): `value`
     /// is the (usually ternary) target and `anim` is the `anim.*` curve call,
     /// resolved to a typed `Curve` at lowering. `with` binds below the ternary,
@@ -971,6 +985,7 @@ impl Expr {
             | Self::Binary { span, .. }
             | Self::Ternary { span, .. }
             | Self::If { span, .. }
+            | Self::Let { span, .. }
             | Self::Animated { span, .. }
             | Self::KeyframeStep { span, .. }
             | Self::StyleValue { span, .. }

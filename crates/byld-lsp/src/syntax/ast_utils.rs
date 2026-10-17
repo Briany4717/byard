@@ -408,6 +408,9 @@ pub fn find_in_expr(expr: &Expr, offset: usize) -> Option<HoverTarget> {
             }
             None
         }
+        Expr::Let { value, .. } if span_contains(value.span(), offset) => {
+            find_in_expr(value, offset)
+        }
         Expr::StrLit(parts, _) => {
             for part in parts {
                 if let StrPart::Interp(expr, _) = part {
@@ -692,6 +695,7 @@ pub fn find_class_ref_in_expr(expr: &Expr, offset: usize) -> Option<String> {
             find_class_ref_in_expr(value, offset)
         }
         Expr::Postfix { target, .. } => find_class_ref_in_expr(target, offset),
+        Expr::Let { value, .. } => find_class_ref_in_expr(value, offset),
         Expr::If {
             cond, then, els, ..
         } => [Some(cond), Some(then), els.as_ref()]

@@ -311,7 +311,7 @@ fn collect_name_spans_in_expr(expr: &Expr, target_name: &str, out: &mut Vec<Span
             collect_name_spans_in_expr(value, target_name, out);
             collect_name_spans_in_expr(anim, target_name, out);
         }
-        Expr::KeyframeStep { value, .. } => {
+        Expr::KeyframeStep { value, .. } | Expr::Let { value, .. } => {
             collect_name_spans_in_expr(value, target_name, out);
         }
         Expr::StyleValue { attrs, states, .. } => {

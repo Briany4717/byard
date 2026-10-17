@@ -1721,9 +1721,10 @@ mod tests {
         let relay = Arc::new(Relay::new().unwrap());
         let ticks = Arc::new(AtomicUsize::new(0));
         let counted = Arc::clone(&ticks);
-        let handle =
-            Relay::spawn_logic_from_view(&relay, move |_arena| Box::new(Animating { ticks: counted }))
-                .unwrap();
+        let handle = Relay::spawn_logic_from_view(&relay, move |_arena| {
+            Box::new(Animating { ticks: counted })
+        })
+        .unwrap();
         let start = Instant::now();
         while start.elapsed() < run {
             match draw_every {
@@ -1748,7 +1749,10 @@ mod tests {
     #[test]
     fn an_animation_ticks_once_per_frame_drawn() {
         let ticks = animation_ticks(Duration::from_millis(300), Some(Duration::from_millis(10)));
-        assert!((15..=45).contains(&ticks), "{ticks} ticks for about 30 frames");
+        assert!(
+            (15..=45).contains(&ticks),
+            "{ticks} ticks for about 30 frames"
+        );
     }
 
     /// With no frame being drawn (a hidden window), an animation slows to a

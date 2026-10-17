@@ -74,6 +74,13 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`scheme = "system"` follows the system's light or dark appearance.** A
+  theme could start light or dark and flip on `t.dark = …`, but not follow
+  the operating system. Now the window reports its appearance when it opens
+  and whenever the user changes it, and a theme declared `scheme = "system"`
+  takes it, with its `transition` if it has one. `byard dev` and `App` both
+  report it; `App::shot` takes `Shot::system_dark(…)` in its place.
+
 - **A value written into a `var` of a record type is compared with it.** A
   record type checked the code that reads a value; a JSON reply is whatever
   the server sent. Now, when a reply is written into `var found: List<Place>`,

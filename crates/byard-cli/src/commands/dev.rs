@@ -1490,6 +1490,18 @@ impl PlatformHost for App {
         }
     }
 
+    fn on_system_scheme(&mut self, dark: bool) {
+        if let Some(engine) = &self.engine {
+            engine.push_input(byard_core::platform::InputEvent {
+                kind: byard_core::platform::EventKind::SystemScheme,
+                pos: (0.0, 0.0),
+                delta: (0.0, 0.0),
+                payload: Some(byard_core::platform::InputPayload::Bool(dark)),
+                time_ms: now_ms(),
+            });
+        }
+    }
+
     fn on_key(&mut self, key: &str, pressed: bool) {
         if let Some(engine) = &self.engine {
             let kind = if pressed {

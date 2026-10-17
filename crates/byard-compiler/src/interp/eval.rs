@@ -12561,17 +12561,74 @@ impl Interpreter {
             // Mutations inside route through the reactive system exactly like any
             // event-handler action, because each `Assign`/`Postfix` statement
             // lowers to a signal write.
+            //
+            // A `let` holds its value for the statements after it: its name is
+            // read through the same stack a lambda's parameters are, pushed
+            // when the statement runs and popped when the block ends.
             Expr::Block(stmts, _) => {
-                let mut cs: Vec<Lowered> = stmts
-                    .iter()
-                    .map(|s| self.lower_expr(s, payload_name))
-                    .collect();
-                Box::new(move |ctx| {
-                    let mut last = Value::Unit;
-                    for c in &mut cs {
-                        last = c(ctx);
+                let shadowed = self.lambda_params.len();
+                let mut cs: Vec<(Option<Symbol>, Lowered)> = Vec::with_capacity(stmts.len());
+                for stmt in stmts {
+                    if let Expr::Let { name, .. } = stmt {
+                        let c = self.lower_expr(stmt, payload_name);
+                        self.lambda_params.push(name.clone());
+                        cs.push((Some(name.clone()), c));
+                    } else {
+                        cs.push((None, self.lower_expr(stmt, payload_name)));
                     }
+                }
+                self.lambda_params.truncate(shadowed);
+                Box::new(move |ctx| {
+                    let base = LAMBDA_ARGS.with(|args| args.borrow().len());
+                    let mut last = Value::Unit;
+                    for (name, c) in &mut cs {
+                        let value = c(ctx);
+                        if let Some(name) = name {
+                            LAMBDA_ARGS.with(|args| args.borrow_mut().push((name.clone(), value)));
+                            last = Value::Unit;
+                        } else {
+                            last = value;
+                        }
+                    }
+                    LAMBDA_ARGS.with(|args| args.borrow_mut().truncate(base));
                     last
+                })
+            }
+            // A `let`'s value. Of a record type, what arrives is compared with
+            // the type and the first difference reported, once, as for a
+            // `var` of one.
+            Expr::Let {
+                name,
+                ty,
+                value,
+                span,
+            } => {
+                let mut compute = self.lower_expr(value, payload_name);
+                let Some(ty) = ty
+                    .clone()
+                    .filter(|t| super::shape::names_a_record(t, &self.records))
+                else {
+                    return compute;
+                };
+                let records = std::rc::Rc::clone(&self.records);
+                let diagnostics = std::rc::Rc::clone(&self.bridge.diagnostics);
+                let told = std::rc::Rc::clone(&self.shapes_told);
+                let (name, span) = (name.as_str().to_string(), *span);
+                Box::new(move |ctx| {
+                    let value = compute(ctx);
+                    let at = (span.start, span.end);
+                    if !told.borrow().contains(&at) {
+                        if let Some(problem) = super::shape::difference(&value, &ty, &records) {
+                            told.borrow_mut().insert(at);
+                            diagnostics.borrow_mut().push(CompileError::ShapeMismatch {
+                                span,
+                                var: name.clone(),
+                                expected: super::shape::written(&ty),
+                                problem,
+                            });
+                        }
+                    }
+                    value
                 })
             }
             // An `if` statement: only the taken branch runs, so a guard's write

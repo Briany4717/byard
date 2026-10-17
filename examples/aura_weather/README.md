@@ -93,6 +93,7 @@ Each of these was found by building a screen, and each is now in Byard.
 | Every screen | A theme was light or dark, never the system's: the app ignored the appearance the user had chosen. | `scheme = "system"` (#323) |
 | Every screen | A translucent tint of a theme colour had to be its own hex, which stayed dark on a light scheme. | `t.primary.alpha(0.6)` (#324) |
 | Shell | The window had the default icon. | `[project] icon` (#325) |
+| Search | A misspelt field of a JSON reply (`res.json.resluts`) read as nothing, and `?? []` hid it. | `let reply: GeoReply = res.json` in an action: the fields are checked, and what arrives is compared with the type |
 | Map | An app with a Rust half could not be profiled: only `byard dev` wrote a trace, so the GPU side of panning could not be measured. | `App::trace(path)`, `Shot::trace`, `Shot::drag` and `Shot::wait`. Panning measured: 0.61 ms of GPU per frame (median, 0.69 ms p95) at 880×1760, the same as a still frame |
 | Shipping | The app read its project from the path it was compiled at, so it ran on no other machine, and there was no way to package it. | `byard bundle --bin …`: a `.app` (or a directory) with the project and its packages beside the binary, which an app looks for when its build path is gone; `[bundle]` names it |
 | Trends | A misspelt name inside a gradient or a shadow (`to: blak`) checked clean. | A record value's named fields are checked as values |
@@ -103,6 +104,8 @@ Worked around in the app, and not yet fixed in Byard:
 
 - **A misspelt JSON field reads as nothing.** `??` gives a missing field a
   default, but `res.json.resluts` is a missing field too, and nothing says so.
+- **One kind of misspelling still checks clean**: a name passed to an
+  intrinsic's named argument, where the argument may also be a word.
 - **The Rust half itself does not reload.** `cargo run -p aura-weather --
   --dev` follows every `.byd` and the manifest with the map linked in, but
   an edit to `map.rs` still needs the app rebuilt.

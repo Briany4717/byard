@@ -357,6 +357,15 @@ fn shift_expr(expr: &mut Expr, delta: u32) {
             shift_expr(left, delta);
             shift_expr(right, delta);
         }
+        Expr::Let {
+            ty, value, span, ..
+        } => {
+            shift(span, delta);
+            if let Some(ty) = ty {
+                shift_type(ty, delta);
+            }
+            shift_expr(value, delta);
+        }
         Expr::KeyframeStep {
             value,
             easing,

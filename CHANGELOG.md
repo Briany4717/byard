@@ -74,6 +74,11 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`icon = "assets/icon.png"` in `[project]` gives the app's window an
+  icon.** An app had no way to set one. `App` and `byard dev` show it in the
+  title bar and taskbar on Windows and Linux; macOS takes an app's icon from
+  its bundle and ignores it. A path that is not there is a manifest error.
+
 - **A value written into a `var` of a record type is compared with it.** A
   record type checked the code that reads a value; a JSON reply is whatever
   the server sent. Now, when a reply is written into `var found: List<Place>`,

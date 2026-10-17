@@ -175,6 +175,9 @@ pub struct Manifest {
     /// half draws, declared so that tools which cannot link that Rust
     /// (`byard check`, `byard dev`, the editor) still know them.
     pub native_views: Vec<NativeViewDecl>,
+    /// `[project] icon`: the picture the app's window and taskbar show, an
+    /// absolute path. `None` when the project names none.
+    pub icon: Option<PathBuf>,
 }
 
 /// One element of `[native_views]`: a name and the properties it takes.
@@ -277,6 +280,7 @@ impl Manifest {
                 http: HttpConfig::default(),
                 watch_files: Vec::new(),
                 native_views: Vec::new(),
+                icon: None,
             });
         }
 
@@ -308,6 +312,7 @@ impl Manifest {
             http: HttpConfig::default(),
             watch_files: Vec::new(),
             native_views: Vec::new(),
+            icon: None,
         }
     }
 
@@ -406,6 +411,7 @@ impl Manifest {
         let dev = parse_dev(&table)?;
         let http = parse_http(&table)?;
         let native_views = parse_native_views(&table)?;
+        let icon = parse_icon(project, &project_root)?;
 
         Ok(Self {
             project_root,
@@ -420,8 +426,26 @@ impl Manifest {
             http,
             watch_files,
             native_views,
+            icon,
         })
     }
+}
+
+/// `[project] icon`: a path relative to the project, which has to be there.
+fn parse_icon(project: Option<&toml::Value>, root: &Path) -> Result<Option<PathBuf>, String> {
+    let Some(value) = project.and_then(|p| p.get("icon")) else {
+        return Ok(None);
+    };
+    let path = value.as_str().map(|rel| root.join(rel)).ok_or_else(|| {
+        "byard.toml: [project] `icon` is a path, like \"assets/icon.png\"".to_string()
+    })?;
+    if !path.is_file() {
+        return Err(format!(
+            "byard.toml: [project] `icon` names {}, which is not there",
+            path.display()
+        ));
+    }
+    Ok(Some(path))
 }
 
 /// Parses `[native_views]`: one table per element, a property per key.
@@ -1793,5 +1817,49 @@ mod tests {
             let err = native_views_of(src).unwrap_err();
             assert!(err.contains(says), "{src}: {err}");
         }
+    }
+
+    /// A project in a fresh directory with `extra` in its `[project]`.
+    fn project_with(name: &str, extra: &str, files: &[(&str, &[u8])]) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("byard-icon-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("byard.toml"),
+            format!("[project]\nname = \"x\"\nentry = \"main.byd\"\n{extra}\n"),
+        )
+        .unwrap();
+        std::fs::write(dir.join("main.byd"), "View Main() { Text(\"x\") }").unwrap();
+        for (file, bytes) in files {
+            std::fs::write(dir.join(file), bytes).unwrap();
+        }
+        dir
+    }
+
+    #[test]
+    fn a_project_names_its_icon() {
+        let dir = project_with("ok", "icon = \"icon.png\"", &[("icon.png", b"png")]);
+        let manifest = Manifest::discover(Some(&dir)).unwrap();
+        let icon = manifest.icon.expect("an icon");
+        assert!(
+            icon.ends_with("icon.png") && icon.is_file(),
+            "{}",
+            icon.display()
+        );
+        let none = project_with("none", "", &[]);
+        assert_eq!(Manifest::discover(Some(&none)).unwrap().icon, None);
+    }
+
+    #[test]
+    fn an_icon_that_is_not_there_or_not_a_path_is_an_error() {
+        let missing = project_with("missing", "icon = \"nope.png\"", &[]);
+        let err = Manifest::discover(Some(&missing)).err().unwrap();
+        assert!(
+            err.contains("nope.png") && err.contains("not there"),
+            "{err}"
+        );
+        let number = project_with("number", "icon = 3", &[]);
+        let err = Manifest::discover(Some(&number)).err().unwrap();
+        assert!(err.contains("is a path"), "{err}");
     }
 }

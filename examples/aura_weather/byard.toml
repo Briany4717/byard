@@ -1,6 +1,8 @@
 [project]
 name = "aura_weather"
 entry = "src/main.byd"
+# The window's icon (title bar and taskbar on Windows and Linux).
+icon = "assets/icon.png"
 
 # The forecast's requests name a path; this is the host they go to.
 [http]

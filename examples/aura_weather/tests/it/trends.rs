@@ -72,8 +72,8 @@ fn the_week_arrives_as_one_filled_curve_and_two_lines() {
         segments >= 12 * 8,
         "two lines of six curves: {segments} segments"
     );
-    // A day of the month under each reading.
-    for day in ["30", "01", "06"] {
+    // The weekday under each reading: the week runs Wednesday to Tuesday.
+    for day in ["Wed", "Thu", "Tue"] {
         assert!(app.shows(day), "{day} in {:?}", app.texts());
     }
 }

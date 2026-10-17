@@ -58,7 +58,7 @@ View OutlookScreen(place: Str, lat: Float, lon: Float) {
                 for i, day in days {
                     Row #[p: (vertical: 12), gap: 12, align: center] {
                         Column #[width: 64, gap: 2] {
-                            Text(i == 0 ? "Today" : "{day.slice(8, 10)} {month(day.slice(5, 7))}")
+                            Text(i == 0 ? "Today" : day.formatDate("ddd D") ?? day)
                                 #[typo: t.label, color: t.onSurface]
                         }
                         Text(sky(codes[i])) #[typo: t.body, color: t.onSurfaceVariant]

@@ -8,7 +8,7 @@ build an application rather than an example. Five screens over live data from
 cargo run -p aura-weather
 ```
 
-Or draw one screen to a PNG without opening a window, after two seconds of
+Or draw one screen to a PNG without opening a window, after six seconds of
 running so its data has arrived (`now`, `days`, `air`, `trends` or `map`):
 
 ```bash
@@ -69,6 +69,7 @@ Each of these was found by building a screen, and each is now in Byard.
 | Search | A named action's parameters could not say their types, so its body was checked against nothing. | `(asked: Str) => …` |
 | Search | A JSON list of records had no type, so `hit.nmae` checked clean. | `type Place = { name: Str, … }` |
 | Map | An app with a Rust half could not hot-reload: `byard dev` cannot link the map, so it drew a panel there. | `App::hot_reload(true)`, `--dev` |
+| 10 days | Dates had no words: month names were a hand-written table and a weekday could not be had at all. | `iso.formatDate("ddd D")` |
 
 ## What it still could not be built with
 

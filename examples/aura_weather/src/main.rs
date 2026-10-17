@@ -6,7 +6,7 @@
 //! cargo run -p aura-weather
 //! ```
 //!
-//! Or draw one screen to a PNG without opening a window, after two seconds
+//! Or draw one screen to a PNG without opening a window, after six seconds
 //! of running (so its data has arrived):
 //!
 //! ```text
@@ -40,7 +40,7 @@ fn main() -> Result<(), byard::ByardError> {
         (Some("--dev"), _) => app.hot_reload(true).run(),
         (Some("--shot"), Some(out)) => {
             let tab = args.next().unwrap_or_else(|| "now".to_string());
-            let mut plan = byard::Shot::after(2000);
+            let mut plan = byard::Shot::after(6000);
             if let Some((_, x)) = TABS.iter().find(|(name, _)| *name == tab) {
                 plan = plan.tap(*x, 850.0);
             }

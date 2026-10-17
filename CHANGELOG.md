@@ -74,6 +74,13 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`text.formatDate(pattern)` writes out an ISO date or date-time.** An API
+  sends `2026-10-16T14:00` and a screen shows `Fri 16 Oct` or `14:00`; the
+  weekday was out of reach in `byld`, and month names were a table every app
+  wrote. Tokens: `YYYY`, `MMMM`, `MMM`, `MM`, `M`, `DD`, `D`, `dddd`, `ddd`,
+  `HH`, `H`, `mm`; anything else is kept. Text that is not a date reads as
+  nothing, so `?? "—"` gives it a default. English names only for now.
+
 - **`App::hot_reload(true)` follows the project while an app runs.** An app
   with a Rust half (controllers, native views, shaders) could not be
   developed live: `byard dev` cannot link that Rust, and the app itself read

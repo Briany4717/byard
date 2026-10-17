@@ -1603,6 +1603,15 @@ pub struct Interpreter {
     /// `var` must keep its signal there too, or the state the reload kept is
     /// replaced by its initial value one step later.
     kept_vars: std::collections::HashSet<Symbol>,
+    /// The program's record types (`type Place = …`), by name.
+    records: std::rc::Rc<super::shape::Records>,
+    /// The declared type of each `var` whose type names a record, which is
+    /// what a value written into it is compared with.
+    var_types: std::collections::HashMap<SignalId, Type>,
+    /// The assignments a shape mismatch has been reported for, by span. Kept
+    /// here rather than in the lowered action, because actions are lowered
+    /// again every render and a flag in one would be a fresh flag each frame.
+    shapes_told: std::rc::Rc<std::cell::RefCell<std::collections::HashSet<(u32, u32)>>>,
     /// Incremental LayoutAtlas.
     pub atlas: byard_core::atlas::layout::LayoutAtlas,
     /// Interactive events router.
@@ -2258,6 +2267,15 @@ impl Interpreter {
         // it once, fresh, so a reload replaces rather than accumulates names.
         self.top_fns.clear();
         if let Some(first) = views.first() {
+            self.records = std::rc::Rc::new(
+                first
+                    .records
+                    .iter()
+                    .map(|r| (r.name.clone(), r.clone()))
+                    .collect(),
+            );
+        }
+        if let Some(first) = views.first() {
             for decl in first.helpers.iter() {
                 let id = super::env::AstId(u32::try_from(self.fn_table.len()).unwrap_or(u32::MAX));
                 let params = decl.params.iter().map(|p| p.name.clone()).collect();
@@ -2715,7 +2733,7 @@ impl Interpreter {
 
     fn eval_member(&mut self, member: &Member) {
         match member {
-            Member::Var { name, init, .. } => {
+            Member::Var { name, init, ty, .. } => {
                 // A `var` the last reload kept is the signal it already has.
                 if self.kept_vars.remove(name) {
                     if let Some(&sig) = self.var_sigs.get(name) {
@@ -2723,7 +2741,13 @@ impl Interpreter {
                         return;
                     }
                 }
-                self.define_var(name.clone(), init);
+                let sig = self.define_var(name.clone(), init);
+                if let Some(ty) = ty
+                    .as_ref()
+                    .filter(|t| super::shape::names_a_record(t, &self.records))
+                {
+                    self.var_types.insert(sig, ty.clone());
+                }
             }
             Member::Let { name, init, .. } => {
                 // `let x = style { … }` / `let x = a merge b` (RFC-0016) register
@@ -12465,6 +12489,19 @@ impl Interpreter {
                 if let Ok(sig) = self.resolve_var(target, *span) {
                     let op = *op;
                     let mut rhs = self.lower_expr(value, payload_name);
+                    // A `var` of a record type: what arrives is compared with
+                    // the type, and the first difference is reported, once
+                    // for this assignment.
+                    let shape = self.var_types.get(&sig).cloned().map(|ty| {
+                        (
+                            ty,
+                            std::rc::Rc::clone(&self.records),
+                            std::rc::Rc::clone(&self.bridge.diagnostics),
+                            std::rc::Rc::clone(&self.shapes_told),
+                            target_name(target),
+                            *span,
+                        )
+                    });
                     Box::new(move |ctx| {
                         let val = rhs(ctx);
                         let new = match op {
@@ -12478,6 +12515,20 @@ impl Interpreter {
                                 Value::Int(cur - val.as_int().unwrap_or(0))
                             }
                         };
+                        if let Some((ty, records, diagnostics, told, var, span)) = &shape {
+                            let at = (span.start, span.end);
+                            if !told.borrow().contains(&at) {
+                                if let Some(problem) = super::shape::difference(&new, ty, records) {
+                                    told.borrow_mut().insert(at);
+                                    diagnostics.borrow_mut().push(CompileError::ShapeMismatch {
+                                        span: *span,
+                                        var: var.clone(),
+                                        expected: super::shape::written(ty),
+                                        problem,
+                                    });
+                                }
+                            }
+                        }
                         ctx.write_signal(sig, new);
                         Value::Unit
                     })
@@ -12946,6 +12997,21 @@ impl Interpreter {
                 Value::Str(s) => Value::Str(url_encoded(&s)),
                 other => other,
             })),
+            // `iso.formatDate("ddd D MMM")`: an ISO date written out, or
+            // nothing when the text is not one (so `?? "—"` reads naturally).
+            "formatDate" => {
+                let mut pattern = self.lower_expr(&args.first()?.value, payload_name);
+                Some(Box::new(move |ctx| {
+                    let pattern = pattern(ctx);
+                    match (base_c(ctx), pattern) {
+                        (Value::Str(text), Value::Str(pattern)) => {
+                            super::dates::format_date(&text, &pattern)
+                                .map_or(Value::Unit, Value::Str)
+                        }
+                        _ => Value::Unit,
+                    }
+                }))
+            }
             "contains" => {
                 let mut arg = self.lower_expr(&args.first()?.value, payload_name);
                 Some(Box::new(move |ctx| {
@@ -14395,6 +14461,20 @@ impl Interpreter {
         // RFC-0040: composition is engine state, applied here rather than
         // routed to an app handler, and never offered to anything else.
         self.apply_composition(events, &mut consumed);
+        // The system's appearance is the theme's to follow, when it was told
+        // to (`scheme = "system"`), and nothing for any element to route.
+        for (i, ev) in events.iter().enumerate() {
+            if ev.kind == CoreKind::SystemScheme {
+                consumed[i] = true;
+                if let (true, Some(InputPayload::Bool(dark))) =
+                    (self.theme.follows_system, ev.payload.as_ref())
+                {
+                    if self.theme_is_dark() != *dark {
+                        self.set_theme_dark(*dark);
+                    }
+                }
+            }
+        }
 
         let comp_events: Vec<CompEvent> = events
             .iter()
@@ -14421,8 +14501,9 @@ impl Interpreter {
                     // Consumed by `apply_composition` above, never routed.
                     CoreKind::Composition
                     | CoreKind::CompositionCommit
-                    | CoreKind::CompositionEnd => {
-                        unreachable!("composition events are consumed before routing")
+                    | CoreKind::CompositionEnd
+                    | CoreKind::SystemScheme => {
+                        unreachable!("composition and scheme events are consumed before routing")
                     }
                 };
                 let value = ev.payload.as_ref().map(|p| match p {
@@ -15140,6 +15221,14 @@ fn url_encoded(text: &str) -> String {
         }
     }
     out
+}
+
+/// The name an assignment writes, for a message: `found` in `found = …`.
+fn target_name(target: &Expr) -> String {
+    match target {
+        Expr::Ident(name, _) => name.as_str().to_string(),
+        _ => "a var".to_string(),
+    }
 }
 
 /// Resolves a data member access (RFC-0027 §4/§6): `xs.len` (list/string

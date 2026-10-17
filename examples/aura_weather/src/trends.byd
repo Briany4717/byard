@@ -119,9 +119,9 @@ View TrendsScreen(place: Str, lat: Float, lon: Float) {
                                stroke: 0xFF7CC4FF, stroke_width: 2, cap: round)
                     }
 
-                    // The day of the month under each reading.
+                    // The weekday under each reading.
                     for i, day in days {
-                        text("{day.slice(8, 10)}", x: across(i), y: plotH + 12.0,
+                        text(day.formatDate("ddd") ?? "", x: across(i), y: plotH + 12.0,
                              color: 0xFF9AA8C2, size: 11, align: center)
                     }
                 }

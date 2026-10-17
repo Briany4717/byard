@@ -1,6 +1,8 @@
 // A place the geocoder answers with: the fields the search reads. A place at
 // sea has no country, so the reply may leave it out.
 type Place = { name: Str, country: Str?, latitude: Float, longitude: Float }
+// The geocoder's reply. It leaves `results` out when it finds nothing.
+type GeoReply = { results: List<Place>? }
 
 // Aura Weather: the app shell. A search field, five screens in a tab host, a
 // tab bar, and the theme's two typefaces. Each screen lives in its own file
@@ -47,8 +49,8 @@ View Main() {
             http.get("geo:/v1/search?name={asked.urlEncoded()}&count=5&language=en&format=json")
                 ok res => {
                     if asked == query {
-                        // The geocoder leaves `results` out when it finds nothing.
-                        found = res.json.results ?? []
+                        let reply: GeoReply = res.json
+                        found = reply.results ?? []
                         searching = false
                     }
                 }

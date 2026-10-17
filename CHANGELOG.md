@@ -74,6 +74,15 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`let` inside an action names a value for the statements after it.**
+  An action could only write `var`s, so a value used twice was computed
+  twice or parked in a `var` the screen never showed. Now `let next = count
+  + 1` holds for the rest of the block, an arm of a call placed after it
+  reads it when the reply lands, and a written type checks it:
+  `let reply: GeoReply = res.json` makes `reply.resluts` a `byard check`
+  error, and what the server sent is compared with `GeoReply` when it
+  arrives. A misspelt field of a JSON reply no longer reads as nothing.
+
 - **`byard bundle --bin <exe>` packages an app to run on another machine.**
   An app read its project from the path it was compiled at
   (`App::new(env!("CARGO_MANIFEST_DIR"))`), so the binary ran nowhere else,

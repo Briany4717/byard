@@ -192,6 +192,10 @@ impl Parser<'_> {
         let mut stmts = Vec::new();
         while !matches!(self.cur(), Some(Token::RBrace) | None) {
             let before = self.pos;
+            if matches!(self.cur(), Some(Token::Let)) {
+                stmts.push(self.parse_let_stmt());
+                continue;
+            }
             stmts.push(self.parse_expr(0));
             // Guard against a non-advancing parse (a stray token that is neither
             // a statement start nor `}`) so recovery never spins.
@@ -200,6 +204,28 @@ impl Parser<'_> {
             }
         }
         stmts
+    }
+
+    /// `let IDENT (":" type)? "=" expr`, a statement of an action block.
+    fn parse_let_stmt(&mut self) -> Expr {
+        let start = self.cur_span();
+        self.advance(); // let
+        let name = self
+            .expect_ident("a binding name")
+            .unwrap_or_else(|| Symbol::intern(""));
+        let ty = if self.eat(&Token::Colon) {
+            Some(self.parse_type())
+        } else {
+            None
+        };
+        self.expect(&Token::Eq, "'='");
+        let value = self.parse_expr(0);
+        Expr::Let {
+            name,
+            ty,
+            value: Box::new(value),
+            span: self.span_from(start),
+        }
     }
 
     /// True when the cursor is on the result arm named `keyword` (RFC-0028 §4):

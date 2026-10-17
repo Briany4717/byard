@@ -34,6 +34,7 @@ mod incremental_paths;
 mod input_hit_test;
 mod instrumentation;
 mod let_functions;
+mod let_in_actions;
 mod list_reductions;
 mod native_view_async;
 mod native_view_element;

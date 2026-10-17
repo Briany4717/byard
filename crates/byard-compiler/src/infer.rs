@@ -704,10 +704,23 @@ impl Checker<'_> {
                 self.leave(mark);
                 Ty::Unknown
             }
+            // A block's `let`s are in scope for the statements after them;
+            // what holds the block (a lambda, an `if` branch, an arm) ends
+            // the scope.
             Expr::Block(stmts, _) => {
                 for stmt in stmts {
                     self.value(stmt);
                 }
+                Ty::Unknown
+            }
+            Expr::Let {
+                name,
+                ty,
+                value,
+                span,
+            } => {
+                let bound = self.infer_binding(ty.as_ref(), value, *span);
+                self.bind(name.clone(), bound);
                 Ty::Unknown
             }
             Expr::Assign { target, value, .. } => {

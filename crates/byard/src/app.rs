@@ -289,7 +289,12 @@ impl App {
     /// the event loop produces.
     pub fn run(self) -> Result<(), ByardError> {
         self.check_registrations()?;
-        let Program { views, theme, http } = load_program(&self.entry)?;
+        let Program {
+            views,
+            theme,
+            http,
+            icon,
+        } = load_program(&self.entry)?;
         let reloads = if self.hot_reload {
             Some(self.follow_project()?)
         } else {
@@ -304,7 +309,11 @@ impl App {
         // controller reply arriving with no input behind it (RFC-0029 §2).
         #[allow(clippy::cast_precision_loss)]
         let (w0, h0) = (width as f32, height as f32);
-        byard_platform::WinitHost::new(self.title.clone(), width, height).run(Host {
+        let mut window = byard_platform::WinitHost::new(self.title.clone(), width, height);
+        if let Some((rgba, w, h)) = icon {
+            window = window.with_icon(rgba, w, h);
+        }
+        window.run(Host {
             engine: None,
             views,
             theme: Some(theme),
@@ -344,6 +353,8 @@ impl App {
 
 /// What [`load_program`] reads from a project.
 pub(crate) struct Program {
+    /// The window's icon, decoded, when the project names one.
+    pub(crate) icon: Option<(Vec<u8>, u32, u32)>,
     pub(crate) views: Vec<ViewDecl>,
     pub(crate) theme: byard_compiler::interp::theme::Theme,
     /// The `[http]` origins, for the built-in `Http` (RFC-0029).
@@ -385,7 +396,18 @@ pub(crate) fn load_program(entry: &Path) -> Result<Program, ByardError> {
         )));
     }
     check_declared_views(&manifest.native_views)?;
+    let icon = match &manifest.icon {
+        Some(path) => {
+            let image = image::open(path)
+                .map_err(|e| ByardError::Platform(format!("`{}`: {e}", path.display())))?
+                .to_rgba8();
+            let (w, h) = image.dimensions();
+            Some((image.into_raw(), w, h))
+        }
+        None => None,
+    };
     Ok(Program {
+        icon,
         views: program.views,
         theme: manifest.theme,
         http: manifest.http,
@@ -751,6 +773,17 @@ fn check_declared_views(
 mod tests {
     use super::*;
 
+    /// A project's icon is read and decoded when the app loads it; Aura
+    /// Weather names one.
+    #[test]
+    fn a_projects_icon_is_decoded() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/aura_weather");
+        let program = load_program(&dir).unwrap();
+        let (rgba, w, h) = program.icon.expect("Aura Weather names an icon");
+        assert_eq!((w, h), (256, 256));
+        assert_eq!(rgba.len(), 256 * 256 * 4);
+    }
+
     /// A project in a fresh directory: `main.byd` holding `body`.
     fn hot_project(name: &str, body: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("byard-hot-{name}-{}", std::process::id()));
@@ -957,7 +990,9 @@ mod tests {
         )
         .unwrap();
 
-        let Program { views, theme, http } = load_program(&dir).expect("the project loads");
+        let Program {
+            views, theme, http, ..
+        } = load_program(&dir).expect("the project loads");
         assert_eq!(http.base_url.as_deref(), Some("https://api.example.com"));
         let names: Vec<&str> = views.iter().map(|v| v.name.as_str()).collect();
         assert!(names.contains(&"Card"), "the sibling view: {names:?}");

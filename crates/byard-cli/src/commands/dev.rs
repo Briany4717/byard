@@ -119,7 +119,13 @@ pub fn run(opts: Options<'_>) -> Result<(), String> {
     // the logic thread, so it crosses as an atomic.
     let hud_visible = Arc::new(AtomicBool::new(manifest.dev.hud));
 
-    let host = WinitHost::new(&title, 1280, 720).with_poll();
+    let mut host = WinitHost::new(&title, 1280, 720).with_poll();
+    // The project's icon, if it names one: `byard dev` is the app's window too.
+    if let Some(icon) = manifest.icon.as_ref().and_then(|p| image::open(p).ok()) {
+        let icon = icon.to_rgba8();
+        let (w, h) = icon.dimensions();
+        host = host.with_icon(icon.into_raw(), w, h);
+    }
     host.run(App {
         engine: None,
         project: manifest.name.clone(),

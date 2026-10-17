@@ -79,7 +79,9 @@ impl App {
     /// cannot be written.
     pub fn shot(self, out: impl AsRef<Path>, plan: &Shot) -> Result<(), ByardError> {
         self.check_registrations()?;
-        let Program { views, theme, http } = load_program(&self.entry)?;
+        let Program {
+            views, theme, http, ..
+        } = load_program(&self.entry)?;
         let mut registry = self.registry;
         byard_core::cap::configure_http(&mut registry, http.base_url.as_deref(), &http.hosts);
 

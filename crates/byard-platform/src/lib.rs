@@ -57,6 +57,8 @@ pub struct WinitHost {
     /// for a user input event. Intended for `byard dev` where hot-reload
     /// must appear immediately after a file save.
     poll: bool,
+    /// The window's icon, as `(rgba, width, height)`.
+    icon: Option<(Vec<u8>, u32, u32)>,
 }
 
 impl WinitHost {
@@ -68,7 +70,17 @@ impl WinitHost {
             width,
             height,
             poll: false,
+            icon: None,
         }
+    }
+
+    /// Gives the window an icon: tightly packed 8-bit RGBA, `width` by
+    /// `height`. Shown in the title bar and the taskbar on Windows and Linux;
+    /// macOS takes an app's icon from its bundle instead, and ignores this.
+    #[must_use]
+    pub fn with_icon(mut self, rgba: Vec<u8>, width: u32, height: u32) -> Self {
+        self.icon = Some((rgba, width, height));
+        self
     }
 
     /// Switches the event loop to `ControlFlow::Poll`, redraws are requested
@@ -130,6 +142,7 @@ impl WinitHost {
             title: self.title,
             width: self.width,
             height: self.height,
+            icon: self.icon,
             fatal: None,
             cursor_pos: (0.0, 0.0),
             poll: self.poll,
@@ -160,6 +173,8 @@ struct WinitApp<H: PlatformHost> {
     title: String,
     width: u32,
     height: u32,
+    /// The window's icon, if the app has one.
+    icon: Option<(Vec<u8>, u32, u32)>,
     /// Set when a [`PlatformHost`] callback returns `Err`, since
     /// `ApplicationHandler`'s methods can't themselves return a `Result`.
     /// `WinitHost::run` checks this after the event loop exits and surfaces
@@ -224,10 +239,16 @@ impl<H: PlatformHost> ApplicationHandler<FramePublished> for WinitApp<H> {
             return;
         }
 
+        let icon = self.icon.take().and_then(|(rgba, width, height)| {
+            winit::window::Icon::from_rgba(rgba, width, height)
+                .map_err(|e| eprintln!("  the window icon was not used: {e}"))
+                .ok()
+        });
         let attributes = with_app_id(
             Window::default_attributes()
                 .with_title(&self.title)
-                .with_inner_size(LogicalSize::new(self.width, self.height)),
+                .with_inner_size(LogicalSize::new(self.width, self.height))
+                .with_window_icon(icon),
         );
         let window = match event_loop.create_window(attributes) {
             Ok(w) => Arc::new(w),

@@ -74,6 +74,11 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`icon = "assets/icon.png"` in `[project]` gives the app's window an
+  icon.** An app had no way to set one. `App` and `byard dev` show it in the
+  title bar and taskbar on Windows and Linux; macOS takes an app's icon from
+  its bundle and ignores it. A path that is not there is a manifest error.
+
 - **`color.alpha(0.16)` is a colour at an opacity.** A translucent tint of a
   theme colour had to be written as a hex of its own, which stayed put when
   the theme or the scheme changed. `t.primary.alpha(0.16)` follows the token.

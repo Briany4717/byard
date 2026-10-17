@@ -1111,6 +1111,7 @@ mod tests {
             http: crate::manifest::HttpConfig::default(),
             watch_files: Vec::new(),
             native_views: Vec::new(),
+            icon: None,
         };
         let (program, provider) = resolve_project(&manifest).unwrap();
         assert!(program.errors.is_empty(), "{:?}", program.errors);

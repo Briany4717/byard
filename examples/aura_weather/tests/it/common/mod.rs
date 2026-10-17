@@ -132,8 +132,20 @@ pub struct App {
 }
 
 impl App {
-    /// Starts the app with its `Http` answering from `server`.
+    /// Starts the app with its `Http` answering from `server`, and a store
+    /// of its own that nothing else uses.
     pub fn start(server: &Server) -> Self {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let store =
+            std::env::temp_dir().join(format!("aura-store-{}-{n}.json", std::process::id()));
+        let _ = std::fs::remove_file(&store);
+        Self::start_with_store(server, &store)
+    }
+
+    /// Starts the app with its `Store` kept at `store`, so a second start can
+    /// find what the first one kept.
+    pub fn start_with_store(server: &Server, store: &std::path::Path) -> Self {
         // The app's own element, registered before the project is read, as
         // the app does: the manifest only declares it for tools that cannot
         // link it, and whichever is registered first is the one that draws.
@@ -159,6 +171,7 @@ impl App {
                 http.with_host(name, server.base_url())
             });
         registry.insert(Arc::new(http));
+        registry.insert(Arc::new(byard_core::cap::Store::at(store)));
         // The controller that fetches the map's tiles, here from the same
         // local server.
         registry.insert(Arc::new(aura_weather::map::Tiles::at(&format!(

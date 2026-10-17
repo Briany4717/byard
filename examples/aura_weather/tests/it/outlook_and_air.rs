@@ -22,9 +22,9 @@ fn server() -> Server {
 fn on_tab(tab: &str) -> (App, Server) {
     let server = server();
     let mut app = App::start(&server);
-    app.answer(); // the forecast, which opens first
+    app.answer_all(); // the forecast, which opens first, and the stored place
     app.tap(tab);
-    app.answer();
+    app.answer_all();
     (app, server)
 }
 
@@ -40,8 +40,8 @@ fn the_outlook_lists_ten_days_each_with_its_own_readings() {
         server.requests()
     );
     let shown = app.texts();
-    // Today, then day and month cut out of the date.
-    for text in ["Today", "01 Oct", "09 Oct"] {
+    // Today, then each date written out with its weekday.
+    for text in ["Today", "Thu 1", "Fri 9"] {
         assert!(app.shows(text), "{text} in {shown:?}");
     }
     // A row keeps its own values: the third day is a storm, 63% rain,
@@ -49,13 +49,18 @@ fn the_outlook_lists_ten_days_each_with_its_own_readings() {
     let row: Vec<&str> = shown
         .iter()
         .map(String::as_str)
-        .skip_while(|t| *t != "02 Oct")
+        .skip_while(|t| *t != "Fri 2")
         .take(5)
         .collect();
-    assert_eq!(row, ["02 Oct", "Storms", "63%", "16°", "23°"]);
+    assert_eq!(row, ["Fri 2", "Storms", "63%", "16°", "23°"]);
     let days = shown
         .iter()
-        .filter(|t| t.ends_with(" Oct") || *t == "Today")
+        .filter(|t| {
+            *t == "Today"
+                || ["Mon ", "Tue ", "Wed ", "Thu ", "Fri ", "Sat ", "Sun "]
+                    .iter()
+                    .any(|d| t.starts_with(d))
+        })
         .count();
     assert_eq!(days, 10, "{shown:?}");
 }

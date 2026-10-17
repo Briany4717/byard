@@ -20,9 +20,9 @@ fn server(week: &'static str) -> Server {
 fn on_trends(week: &'static str) -> (App, Server) {
     let server = server(week);
     let mut app = App::start(&server);
-    app.answer(); // the forecast, which opens first
+    app.answer_all(); // the forecast, which opens first, and the stored place
     app.tap("Trends");
-    app.answer();
+    app.answer_all();
     (app, server)
 }
 
@@ -72,8 +72,8 @@ fn the_week_arrives_as_one_filled_curve_and_two_lines() {
         segments >= 12 * 8,
         "two lines of six curves: {segments} segments"
     );
-    // A day of the month under each reading.
-    for day in ["30", "01", "06"] {
+    // The weekday under each reading: the week runs Wednesday to Tuesday.
+    for day in ["Wed", "Thu", "Tue"] {
         assert!(app.shows(day), "{day} in {:?}", app.texts());
     }
 }

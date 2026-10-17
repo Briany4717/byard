@@ -6,7 +6,7 @@
 //! cargo run -p aura-weather
 //! ```
 //!
-//! Or draw one screen to a PNG without opening a window, after two seconds
+//! Or draw one screen to a PNG without opening a window, after six seconds
 //! of running (so its data has arrived):
 //!
 //! ```text
@@ -41,6 +41,7 @@ fn main() -> Result<(), byard::ByardError> {
         (Some("--dev"), _) => app.hot_reload(true).run(),
         (Some("--shot"), Some(out)) => {
             let tab = args.next().unwrap_or_else(|| "now".to_string());
+            let mut plan = byard::Shot::after(6000);
             // The app follows the system's appearance; a shot is dark unless
             // `--light` is given.
             let dark = !args.any(|a| a == "--light");

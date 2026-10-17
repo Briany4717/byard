@@ -7,6 +7,7 @@
 
 pub mod anim;
 pub mod bridge;
+pub mod dates;
 pub mod env;
 pub mod eval;
 pub mod events;
@@ -15,6 +16,7 @@ pub mod nav;
 pub mod reactive;
 pub mod reload;
 pub mod seed;
+pub mod shape;
 pub mod style;
 pub mod theme;
 pub mod views;

@@ -20,9 +20,9 @@ fn server(week: &'static str) -> Server {
 fn on_trends(week: &'static str) -> (App, Server) {
     let server = server(week);
     let mut app = App::start(&server);
-    app.answer(); // the forecast, which opens first
+    app.answer_all(); // the forecast, which opens first, and the stored place
     app.tap("Trends");
-    app.answer();
+    app.answer_all();
     (app, server)
 }
 

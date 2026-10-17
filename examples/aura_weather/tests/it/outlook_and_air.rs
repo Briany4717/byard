@@ -22,9 +22,9 @@ fn server() -> Server {
 fn on_tab(tab: &str) -> (App, Server) {
     let server = server();
     let mut app = App::start(&server);
-    app.answer(); // the forecast, which opens first
+    app.answer_all(); // the forecast, which opens first, and the stored place
     app.tap(tab);
-    app.answer();
+    app.answer_all();
     (app, server)
 }
 

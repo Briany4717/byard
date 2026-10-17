@@ -134,9 +134,21 @@ pub struct RecordDecl {
     /// The type's name.
     pub name: Symbol,
     /// Its fields, in the order written.
-    pub fields: Vec<(Symbol, Type)>,
+    pub fields: Vec<RecordField>,
     /// Source span.
     pub span: Span,
+}
+
+/// One field of a [`RecordDecl`]: `name: Type`, or `name: Type?` for one a
+/// value may leave out.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RecordField {
+    /// The field's name.
+    pub name: Symbol,
+    /// Its type.
+    pub ty: Type,
+    /// Whether a value may leave it out (`?`).
+    pub optional: bool,
 }
 
 /// A top-level `fn` (RFC-0002, top-level functions): a pure helper visible to

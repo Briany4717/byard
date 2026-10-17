@@ -97,7 +97,7 @@ View ForecastScreen(place: Str, lat: Float, lon: Float) {
                     for i, hour in hours {
                         Column #[width: 62, p: (vertical: 14), gap: 6, radius: 18, align: center,
                                  bg: i == 0 ? t.primaryContainer : t.surfaceContainer] {
-                            Text(i == 0 ? "Now" : hour.slice(11, 16))
+                            Text(i == 0 ? "Now" : hour.formatDate("HH:mm") ?? "")
                                 #[typo: t.caption,
                                   color: i == 0 ? t.onPrimaryContainer : t.onSurfaceVariant]
                             Text("{temps[i]:.0}°")

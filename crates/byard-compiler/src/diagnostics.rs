@@ -780,6 +780,20 @@ pub enum CompileError {
         /// The closest known method, if any.
         hint: Option<String>,
     },
+    /// A value written into a `var` of a record type does not have that
+    /// type's shape: a reply the server sent without a field the type
+    /// requires. Raised at runtime, where the value arrives, once per
+    /// assignment.
+    ShapeMismatch {
+        /// The assignment.
+        span: Span,
+        /// The `var` written.
+        var: String,
+        /// Its type, as written.
+        expected: String,
+        /// The first difference, in words.
+        problem: String,
+    },
     /// Two record types of one name in a program (`type Place = …` twice).
     DuplicateRecordType {
         /// The second declaration.
@@ -1044,7 +1058,8 @@ impl CompileError {
             | Self::UnknownMethod { span, .. }
             | Self::UnknownName { span, .. }
             | Self::DuplicateRecordType { span, .. }
-            | Self::UnknownField { span, .. } => *span,
+            | Self::UnknownField { span, .. }
+            | Self::ShapeMismatch { span, .. } => *span,
         }
     }
 
@@ -1140,7 +1155,8 @@ impl CompileError {
             | Self::UnknownMethod { span, .. }
             | Self::UnknownName { span, .. }
             | Self::DuplicateRecordType { span, .. }
-            | Self::UnknownField { span, .. } => {
+            | Self::UnknownField { span, .. }
+            | Self::ShapeMismatch { span, .. } => {
                 span.start = (i64::from(span.start) + delta).max(0) as u32;
                 span.end = (i64::from(span.end) + delta).max(0) as u32;
             }
@@ -1238,6 +1254,7 @@ impl CompileError {
             Self::UnknownMethod { .. } => "UnknownMethod",
             Self::UnknownName { .. } => "UnknownName",
             Self::DuplicateRecordType { .. } => "DuplicateRecordType",
+            Self::ShapeMismatch { .. } => "ShapeMismatch",
             Self::UnknownField { .. } => "UnknownField",
         }
     }
@@ -1636,6 +1653,12 @@ impl CompileError {
                 format!("`{recv_ty}` has no method `{name}`"),
                 hint.as_deref(),
             ),
+            Self::ShapeMismatch {
+                var,
+                expected,
+                problem,
+                ..
+            } => format!("the value written into `{var}` is not a `{expected}`: {problem}"),
             Self::DuplicateRecordType { name, .. } => {
                 format!("the type `{name}` is declared twice in this program")
             }

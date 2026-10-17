@@ -12,6 +12,11 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **A canvas shape's numeric argument reads a bare name as a name.**
+  `circle(r: raduis)` and `line(x: wdth, y: 40)` checked clean and drew with
+  nothing; now the misspelling is told, with the name it meant. An argument
+  that takes a word (`cap: round`) keeps it.
+
 - **`byard check` catches three more kinds of misspelling.** A property that
   takes a number, a colour, a length, an angle or a list reads a bare name
   as a name, so `bg: prmary` is told (`did you mean primary?`) where it used
@@ -68,6 +73,20 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   colour lighter than it was written.
 
 ### Added
+
+- **A value written into a `var` of a record type is compared with it.** A
+  record type checked the code that reads a value; a JSON reply is whatever
+  the server sent. Now, when a reply is written into `var found: List<Place>`,
+  the first difference is reported once, where the assignment is written:
+  "the value written into `found` is not a `List<Place>`: item 3 has no
+  `country`". A field written `country: Str?` may be left out.
+
+- **`text.formatDate(pattern)` writes out an ISO date or date-time.** An API
+  sends `2026-10-16T14:00` and a screen shows `Fri 16 Oct` or `14:00`; the
+  weekday was out of reach in `byld`, and month names were a table every app
+  wrote. Tokens: `YYYY`, `MMMM`, `MMM`, `MM`, `M`, `DD`, `D`, `dddd`, `ddd`,
+  `HH`, `H`, `mm`; anything else is kept. Text that is not a date reads as
+  nothing, so `?? "—"` gives it a default. English names only for now.
 
 - **`App::hot_reload(true)` follows the project while an app runs.** An app
   with a Rust half (controllers, native views, shaders) could not be

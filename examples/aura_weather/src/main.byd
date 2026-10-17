@@ -1,5 +1,6 @@
-// A place the geocoder answers with: the fields the search reads.
-type Place = { name: Str, country: Str, latitude: Float, longitude: Float }
+// A place the geocoder answers with: the fields the search reads. A place at
+// sea has no country, so the reply may leave it out.
+type Place = { name: Str, country: Str?, latitude: Float, longitude: Float }
 
 // Aura Weather: the app shell. A search field, five screens in a tab host, a
 // tab bar, and the theme's two typefaces. Each screen lives in its own file

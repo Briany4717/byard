@@ -35,6 +35,9 @@ Every screen is `byld`, in `src/`:
 | `trends.byd` | Trends: the week's highs as a filled curve, the lows beneath |
 | `map.byd` | Map: where the place is |
 
+The place chosen in the search is kept with `Store`, so the app opens on it
+next time.
+
 `byard.toml` holds the theme (two typefaces, a type scale, the dark palette),
 the three hosts the screens ask (forecast, air quality, geocoding), and the
 declaration of the map element.

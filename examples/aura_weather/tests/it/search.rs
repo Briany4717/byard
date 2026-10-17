@@ -219,3 +219,41 @@ fn an_answer_to_an_older_question_is_dropped() {
     assert!(app.shows("Lisbon"), "{:?}", app.texts());
     assert!(!app.shows("Lima"), "{:?}", app.texts());
 }
+
+/// The place chosen is the place the app opens on next time.
+#[test]
+fn the_place_chosen_is_kept_between_runs() {
+    let server = server(LISBON);
+    let store = std::env::temp_dir().join(format!("aura-kept-place-{}.json", std::process::id()));
+    let _ = std::fs::remove_file(&store);
+
+    let mut first = App::start_with_store(&server, &store);
+    first.answer_all();
+    first.tap("Search for a city");
+    first.type_text("lis");
+    first.answer_all();
+    first.tap("Portugal");
+    first.answer_all();
+    assert!(first.shows("Lisbon"), "{:?}", first.texts());
+
+    // A second run of the app, the same store.
+    let mut second = App::start_with_store(&server, &store);
+    second.answer_all();
+    assert!(
+        second.shows("Lisbon"),
+        "it opens on Lisbon: {:?}",
+        second.texts()
+    );
+    assert!(!second.shows("Madrid"), "{:?}", second.texts());
+    assert!(
+        server
+            .requests()
+            .iter()
+            .filter(|r| r.contains("/v1/forecast?latitude=38.72509"))
+            .count()
+            >= 2,
+        "and asks for Lisbon's forecast: {:?}",
+        server.requests()
+    );
+    let _ = std::fs::remove_file(&store);
+}

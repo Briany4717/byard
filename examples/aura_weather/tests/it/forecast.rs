@@ -12,7 +12,7 @@ fn the_screen_asks_for_the_forecast_by_path_when_it_opens() {
     let server = Server::serve("200 OK", FORECAST);
     let mut app = App::start(&server);
     assert!(app.shows("Asking the sky"), "{:?}", app.texts());
-    app.answer();
+    app.answer_all();
     let requests = server.requests();
     assert_eq!(requests.len(), 1, "one request on open: {requests:?}");
     assert!(
@@ -25,7 +25,7 @@ fn the_screen_asks_for_the_forecast_by_path_when_it_opens() {
 fn the_answer_reaches_the_hero_the_details_and_the_hours() {
     let server = Server::serve("200 OK", FORECAST);
     let mut app = App::start(&server);
-    app.answer();
+    app.answer_all();
     let shown = app.texts();
 
     // The hero, rounded; the WMO code 3 in words; the day's range.
@@ -52,7 +52,7 @@ fn the_answer_reaches_the_hero_the_details_and_the_hours() {
 fn a_failed_request_says_so_and_trying_again_asks_again() {
     let server = Server::serve("503 Service Unavailable", "{}");
     let mut app = App::start(&server);
-    app.answer();
+    app.answer_all();
     assert!(
         app.shows("The forecast did not arrive"),
         "{:?}",
@@ -65,7 +65,7 @@ fn a_failed_request_says_so_and_trying_again_asks_again() {
         app.shows("Asking the sky"),
         "retrying shows the loading state"
     );
-    app.answer();
+    app.answer_all();
     assert_eq!(server.requests().len(), 2, "and asks the server again");
     assert!(app.shows("The forecast did not arrive"));
 }

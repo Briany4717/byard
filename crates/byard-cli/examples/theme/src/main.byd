@@ -35,6 +35,11 @@ View Main() {
                   p: (10, 16)] {
                 Text("Primary") #[typo: t.labelLarge, color: t.onPrimary]
             }
+            // A tint of a token: the same colour at 16%, so it follows the
+            // theme and the scheme instead of being a hex of its own.
+            Box #[bg: t.primary.alpha(0.16), radius: t.cornerMd, p: (6, 12)] {
+                Text("Primary at 16%") #[typo: t.labelLarge, color: t.onPrimaryContainer]
+            }
         }
 
         // Two ways to switch the scheme, both writing the same reactive flag.

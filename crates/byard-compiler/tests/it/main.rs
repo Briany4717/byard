@@ -12,6 +12,7 @@ mod button_defaults;
 mod callback_props;
 mod canvas_filled_paths;
 mod clip_path;
+mod color_alpha;
 mod control_grow;
 mod controller_boundary;
 mod disabled_gate;
@@ -50,6 +51,7 @@ mod responsive_variants;
 mod retained_across_views;
 mod runner_loop;
 mod store_persistence;
+mod system_scheme;
 mod text_field_events;
 
 mod text_field_style;

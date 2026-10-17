@@ -554,6 +554,15 @@ impl PlatformHost for Host {
         self.push(kind, (x, y), (0.0, 0.0), payload);
     }
 
+    fn on_system_scheme(&mut self, dark: bool) {
+        self.push(
+            byard_core::EventKind::SystemScheme,
+            (0.0, 0.0),
+            (0.0, 0.0),
+            Some(byard_core::InputPayload::Bool(dark)),
+        );
+    }
+
     fn on_cursor_moved(&mut self, x: f32, y: f32) {
         self.push(byard_core::EventKind::PointerMove, (x, y), (0.0, 0.0), None);
     }

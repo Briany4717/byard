@@ -221,6 +221,31 @@ fn a_property_that_takes_values_reads_a_bare_name_as_one() {
     }
 }
 
+/// A record-shaped value names its fields, and a named field is a value: an
+/// offset, a colour, a length. Only `kind` names the record's shape, and an
+/// unnamed item may still be a word.
+#[test]
+fn the_named_fields_of_a_record_value_read_a_bare_name_as_one() {
+    for body in [
+        "Box #[p: (vertical: cuont, horizontal: 4)] {}",
+        "Box #[shadow: (x: 0, y: cuont, blur: 4, color: 0x33000000)] {}",
+        "Box #[gradient: (kind: linear, from: 0xFF0000, to: blak)] {}",
+        "Canvas #[width: 20, height: 20] {
+             circle(cx: 10, cy: 10, r: 5, gradient: (kind: radial, from: rd, to: 0x0000FF))
+         }",
+    ] {
+        assert_eq!(unknown(body).len(), 1, "{body}");
+    }
+    for body in [
+        "Box #[p: (vertical: count, horizontal: 4)] {}",
+        "Box #[gradient: (kind: radial, from: 0xFF0000, to: 0x0000FF)] {}",
+        "Box #[scale: (1.0, 1.0), origin: center] {}",
+    ] {
+        let names = unknown(body);
+        assert!(names.is_empty(), "{body}: {names:?}");
+    }
+}
+
 /// A called name has to be a function, where a value is read.
 #[test]
 fn a_misspelt_function_is_reported() {

@@ -80,6 +80,14 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`App::trace(path)` profiles an app with a Rust half.** Only `byard dev
+  --trace` wrote a trace, and `byard dev` cannot link an app's controllers,
+  views or shaders. Now a running app writes the same Chrome trace: the
+  logic thread, the render thread and the GPU's passes, frame by frame.
+  `Shot::trace` does the same for an offscreen run, and `Shot::drag` and
+  `Shot::wait` script what it does first, so a trace can hold the frames a
+  pan or a scroll costs. The trace writer moved into `byard_core::telemetry`.
+
 - **`let` inside an action names a value for the statements after it.**
   An action could only write `var`s, so a value used twice was computed
   twice or parked in a `var` the screen never showed. Now `let next = count

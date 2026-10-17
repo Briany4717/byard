@@ -29,8 +29,10 @@ const STEP: std::time::Duration = std::time::Duration::from_millis(16);
 #[derive(Clone, Debug, Default)]
 pub struct Shot {
     run_ms: u32,
-    taps: Vec<(f32, f32)>,
+    /// The gestures, in order: each step is one frame's input.
+    gestures: Vec<Vec<InputEvent>>,
     system_dark: Option<bool>,
+    trace: Option<std::path::PathBuf>,
 }
 
 impl Shot {
@@ -39,9 +41,61 @@ impl Shot {
     pub const fn after(run_ms: u32) -> Self {
         Self {
             run_ms,
-            taps: Vec::new(),
+            gestures: Vec::new(),
             system_dark: None,
+            trace: None,
         }
+    }
+
+    /// Writes a trace of every frame of the run to `path`, as
+    /// [`App::trace`] does for a window, GPU passes included where the GPU
+    /// can time them.
+    #[must_use]
+    pub fn trace(mut self, path: impl Into<std::path::PathBuf>) -> Self {
+        self.trace = Some(path.into());
+        self
+    }
+
+    /// Lets `ms` milliseconds of the app run before the next gesture, so one
+    /// can wait for what an earlier one started: a screen's data, a map's
+    /// tiles.
+    #[must_use]
+    pub fn wait(mut self, ms: u32) -> Self {
+        let frames = ms.div_ceil(16);
+        self.gestures.extend((0..frames).map(|_| Vec::new()));
+        self
+    }
+
+    /// Drags from `from` to `to` over `frames` frames, after any gesture
+    /// before it: a press, one move per frame, a release. A shot can pan or
+    /// scroll to the state it wants, and a trace of it measures the frames
+    /// a drag costs.
+    #[must_use]
+    pub fn drag(mut self, from: (f32, f32), to: (f32, f32), frames: u32) -> Self {
+        let event = |kind, pos: (f32, f32), delta| InputEvent {
+            kind,
+            pos,
+            delta,
+            payload: None,
+            time_ms: 0,
+        };
+        let steps = frames.max(1);
+        #[allow(clippy::cast_precision_loss)]
+        let step = (
+            (to.0 - from.0) / steps as f32,
+            (to.1 - from.1) / steps as f32,
+        );
+        self.gestures
+            .push(vec![event(EventKind::PointerDown, from, (0.0, 0.0))]);
+        for i in 1..=steps {
+            #[allow(clippy::cast_precision_loss)]
+            let at = (from.0 + step.0 * i as f32, from.1 + step.1 * i as f32);
+            self.gestures
+                .push(vec![event(EventKind::PointerMove, at, step)]);
+        }
+        self.gestures
+            .push(vec![event(EventKind::PointerUp, to, (0.0, 0.0))]);
+        self
     }
 
     /// Reports the system's appearance as dark (`true`) or light, as a
@@ -58,7 +112,15 @@ impl Shot {
     /// the start of the run, so a shot can open the screen it wants.
     #[must_use]
     pub fn tap(mut self, x: f32, y: f32) -> Self {
-        self.taps.push((x, y));
+        let at = |kind| InputEvent {
+            kind,
+            pos: (x, y),
+            delta: (0.0, 0.0),
+            payload: None,
+            time_ms: 0,
+        };
+        self.gestures
+            .push(vec![at(EventKind::PointerDown), at(EventKind::PointerUp)]);
         self
     }
 }
@@ -125,8 +187,14 @@ impl App {
                 time_ms: 0,
             }]);
         }
+        let mut trace = plan
+            .trace
+            .as_deref()
+            .map(byard_core::telemetry::trace::TraceWriter::create)
+            .transpose()
+            .map_err(ByardError::Platform)?;
         let mut now = 0_u32;
-        let mut taps = plan.taps.iter();
+        let mut gestures = plan.gestures.iter();
         loop {
             let mut replies = Vec::new();
             while let Some(reply) = relay.try_recv_io_result() {
@@ -137,17 +205,18 @@ impl App {
             }
             interp.set_now_ms(now);
             // The first frame draws the app as it opens; each one after it
-            // delivers the next tap, to whatever that frame put there.
+            // delivers the next step of a gesture, to whatever that frame put
+            // there.
             if now > 0 {
-                if let Some(&pos) = taps.next() {
-                    let at = |kind| InputEvent {
-                        kind,
-                        pos,
-                        delta: (0.0, 0.0),
-                        payload: None,
-                        time_ms: u64::from(now),
-                    };
-                    interp.dispatch_events(&[at(EventKind::PointerDown), at(EventKind::PointerUp)]);
+                if let Some(step) = gestures.next() {
+                    let events: Vec<InputEvent> = step
+                        .iter()
+                        .map(|e| InputEvent {
+                            time_ms: u64::from(now),
+                            ..e.clone()
+                        })
+                        .collect();
+                    interp.dispatch_events(&events);
                 }
             }
             interp.tick();
@@ -157,7 +226,12 @@ impl App {
             // Every frame is drawn, not only the last: a layer a view wrote on
             // an earlier frame has to reach the texture it lives in.
             target.draw(&frame)?;
-            if now >= plan.run_ms && taps.len() == 0 {
+            if let Some(trace) = trace.as_mut() {
+                // One thread does the logic and the drawing here, so its
+                // scopes are one lane.
+                trace.write_frame(None, &byard_core::telemetry::drain_samples());
+            }
+            if now >= plan.run_ms && gestures.len() == 0 {
                 break;
             }
             now += 16;
@@ -188,7 +262,9 @@ impl Target {
                 .map_err(|e| gpu("no GPU adapter", e))?;
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("byard shot"),
-            required_features: wgpu::Features::empty(),
+            // Asked for where the GPU has it, so a traced shot times its
+            // passes; nothing else depends on it.
+            required_features: adapter.features() & wgpu::Features::TIMESTAMP_QUERY,
             required_limits: byard_core::engine::device_limits(&adapter),
             memory_hints: wgpu::MemoryHints::Performance,
             ..Default::default()
@@ -240,7 +316,8 @@ impl Target {
 
     fn draw(&mut self, frame: &RenderFrame) -> Result<(), ByardError> {
         let commands = self.encoder.encode_frame_from_relay(&self.texture, frame)?;
-        self.queue.submit(std::iter::once(commands));
+        // Through the encoder, which also asks for the frame's GPU timings.
+        self.encoder.submit(commands);
         Ok(())
     }
 
@@ -295,5 +372,78 @@ impl Target {
             *alpha = 255;
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A drag is a press, one move a frame, a release, ending where it was
+    /// told to; a wait is that many frames of nothing.
+    #[test]
+    fn a_drag_and_a_wait_are_frames_of_input() {
+        let plan = Shot::after(0).wait(40).drag((0.0, 0.0), (30.0, -12.0), 3);
+        let kinds: Vec<Vec<EventKind>> = plan
+            .gestures
+            .iter()
+            .map(|step| step.iter().map(|e| e.kind).collect())
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                vec![],
+                vec![],
+                vec![],
+                vec![EventKind::PointerDown],
+                vec![EventKind::PointerMove],
+                vec![EventKind::PointerMove],
+                vec![EventKind::PointerMove],
+                vec![EventKind::PointerUp],
+            ]
+        );
+        let moves: Vec<((f32, f32), (f32, f32))> = plan.gestures[4..7]
+            .iter()
+            .map(|step| (step[0].pos, step[0].delta))
+            .collect();
+        assert_eq!(
+            moves,
+            [
+                ((10.0, -4.0), (10.0, -4.0)),
+                ((20.0, -8.0), (10.0, -4.0)),
+                ((30.0, -12.0), (10.0, -4.0)),
+            ]
+        );
+        assert_eq!(plan.gestures[7][0].pos, (30.0, -12.0));
+    }
+
+    /// A traced shot writes a frame's scopes for every frame it draws. Skipped
+    /// where there is no GPU to draw with.
+    #[test]
+    fn a_traced_shot_writes_every_frame() {
+        let dir = std::env::temp_dir().join(format!("byard-shot-trace-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("main.byd"), "View Main() { Text(\"traced\") }\n").unwrap();
+        let (png, json) = (dir.join("shot.png"), dir.join("trace.json"));
+
+        let result = App::new(dir.join("main.byd"))
+            .size(120, 80)
+            .shot(&png, &Shot::after(64).trace(&json));
+        if let Err(ByardError::Platform(message)) = &result {
+            if message.starts_with("no GPU") {
+                return;
+            }
+        }
+        result.unwrap();
+        let text = std::fs::read_to_string(&json).unwrap();
+        assert!(
+            text.starts_with('[') && text.trim_end().ends_with(']'),
+            "{text}"
+        );
+        // Frames at 0, 16, 32, 48 and 64 ms.
+        assert_eq!(text.matches("\"encode.frame\"").count(), 5, "{text}");
+        assert_eq!(text.matches("\"interp.render\"").count(), 5, "{text}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

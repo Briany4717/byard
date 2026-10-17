@@ -105,7 +105,7 @@ pub fn run(opts: Options<'_>) -> Result<(), String> {
     let trace = match trace {
         Some(path) => {
             crate::style::fact("Trace", &path.display().to_string());
-            Some(crate::trace::TraceWriter::create(path)?)
+            Some(byard_core::telemetry::trace::TraceWriter::create(path)?)
         }
         None => None,
     };
@@ -914,7 +914,7 @@ struct App {
     /// JSON array after every frame, so a session that is `Ctrl-C`'d still
     /// leaves a trace every viewer will open. That is usually the session you
     /// most want to look at.
-    trace: Option<crate::trace::TraceWriter>,
+    trace: Option<byard_core::telemetry::trace::TraceWriter>,
 }
 
 impl App {

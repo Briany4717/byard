@@ -899,5 +899,7 @@ macro_rules! profile_scope {
     };
 }
 
+pub mod trace;
+
 #[cfg(test)]
 mod tests;

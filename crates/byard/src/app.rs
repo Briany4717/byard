@@ -77,6 +77,8 @@ pub struct App {
     /// Whether the running app follows its project's files: see
     /// [`hot_reload`](App::hot_reload).
     hot_reload: bool,
+    /// Where to write a trace of every frame: see [`trace`](App::trace).
+    trace: Option<PathBuf>,
 }
 
 /// The program a running app reloads into, and the watcher that sends it.
@@ -116,7 +118,24 @@ impl App {
             reserved: Vec::new(),
             duplicate_views: Vec::new(),
             hot_reload: false,
+            trace: None,
         }
+    }
+
+    /// Writes a trace of every frame to `path`: the logic thread's scopes,
+    /// the render thread's and the GPU's passes, as `byard dev --trace`
+    /// does. Open it in Perfetto, `chrome://tracing` or speedscope. The file
+    /// is valid at every instant, so a run that is killed keeps its trace.
+    ///
+    /// ```ignore
+    /// let trace = std::env::var_os("APP_TRACE");
+    /// let app = byard::App::new(env!("CARGO_MANIFEST_DIR"));
+    /// match trace { Some(path) => app.trace(path), None => app }.run()
+    /// ```
+    #[must_use]
+    pub fn trace(mut self, path: impl Into<PathBuf>) -> Self {
+        self.trace = Some(path.into());
+        self
     }
 
     /// Follows the project's files while the app runs: editing a `.byd`, the
@@ -308,6 +327,12 @@ impl App {
         };
         let mut registry = self.registry;
         byard_core::cap::configure_http(&mut registry, http.base_url.as_deref(), &http.hosts);
+        let trace = self
+            .trace
+            .as_deref()
+            .map(byard_core::telemetry::trace::TraceWriter::create)
+            .transpose()
+            .map_err(ByardError::Platform)?;
 
         let (width, height) = self.size;
         // Wait mode: a shipped app redraws when something changed, and the
@@ -327,6 +352,7 @@ impl App {
             width_bits: Arc::new(AtomicU32::new(w0.to_bits())),
             height_bits: Arc::new(AtomicU32::new(h0.to_bits())),
             reloads,
+            trace,
         })
     }
 
@@ -448,6 +474,8 @@ struct Host {
     height_bits: Arc<AtomicU32>,
     /// Where a re-read program arrives, when the app follows its project.
     reloads: Option<Reloads>,
+    /// The trace every frame is written to, when the app was asked for one.
+    trace: Option<byard_core::telemetry::trace::TraceWriter>,
 }
 
 impl PlatformHost for Host {
@@ -538,10 +566,15 @@ impl PlatformHost for Host {
     }
 
     fn on_redraw(&mut self) -> Result<(), ByardError> {
-        match self.engine.as_mut() {
-            Some(engine) => engine.render_latest(),
-            None => Ok(()),
+        let Some(engine) = self.engine.as_mut() else {
+            return Ok(());
+        };
+        engine.render_latest()?;
+        if let Some(trace) = self.trace.as_mut() {
+            let render = byard_core::telemetry::drain_samples();
+            trace.write_frame(engine.latest_cpu_telemetry().as_ref(), &render);
         }
+        Ok(())
     }
 
     fn on_pointer_input(&mut self, button: PointerButton, state: PointerState, x: f32, y: f32) {

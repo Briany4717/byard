@@ -45,6 +45,11 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-
 directories = { version = "6", optional = true }
 
 [dev-dependencies]
+# Test-only, and only to *parse* what `telemetry/trace.rs` writes.
+# Hand-rolling a JSON reader to validate a JSON writer would share every
+# assumption the writer made. Already in the workspace through `byld-lsp`, and
+# nothing of it reaches a shipped binary.
+serde_json = "1"
 # Blocks on the async wgpu device request inside headless pipeline tests.
 pollster = "0.4"
 # The one device every GPU test in a process shares, one test at a time, so a

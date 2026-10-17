@@ -1,4 +1,5 @@
-//! Chrome Trace Event export for `byard dev --trace <path>` (RFC-0030 §V5).
+//! Chrome Trace Event export (RFC-0030 §V5): `byard dev --trace <path>`, and
+//! [`App::trace`](../../../byard/struct.App.html) for an app with a Rust half.
 //!
 //! # Why this is a serialiser and not a viewer
 //!
@@ -57,7 +58,7 @@ use std::fs::File;
 use std::io::{BufWriter, Seek, SeekFrom, Write};
 use std::path::Path;
 
-use byard_core::telemetry::{Owner, SampleBlock, ScopeKind, scope_kind, scope_name};
+use super::{Owner, SampleBlock, ScopeKind, scope_kind, scope_name};
 
 /// Trace thread id for the logic thread's samples.
 const TID_LOGIC: u32 = 1;
@@ -135,7 +136,7 @@ impl TraceWriter {
             // Report once. A dev runner must not be taken down by its own
             // diagnostic, and must not spend the rest of the session shouting
             // about a full disk it cannot do anything about.
-            crate::style::warn(&format!("trace file is no longer writable: {e}"));
+            eprintln!("warning: trace file is no longer writable: {e}");
             self.failed = true;
         }
     }
@@ -226,7 +227,7 @@ impl Drop for TraceWriter {
         // silently is how a developer ends up debugging their profiler.
         if !self.failed {
             if let Err(e) = self.out.flush() {
-                crate::style::warn(&format!("trace file could not be flushed: {e}"));
+                eprintln!("warning: trace file could not be flushed: {e}");
             }
         }
     }
@@ -235,7 +236,7 @@ impl Drop for TraceWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use byard_core::telemetry::{Sample, ScopeId, scope_id_tagged};
+    use crate::telemetry::{Sample, ScopeId, scope_id_tagged};
 
     /// A unique scratch directory per test, so a parallel test binary never
     /// has two tests writing the same trace.

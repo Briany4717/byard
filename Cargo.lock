@@ -315,7 +315,6 @@ dependencies = [
  "image",
  "pollster 0.3.0",
  "semver",
- "serde_json",
  "sha2",
  "toml",
  "toml_edit 0.22.27",

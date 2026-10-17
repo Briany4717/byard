@@ -1,8 +1,15 @@
 [project]
 name = "aura_weather"
 entry = "src/main.byd"
-# The window's icon (title bar and taskbar on Windows and Linux).
+# The window's icon (title bar and taskbar on Windows and Linux), and the
+# app's icon in the Dock once packaged with `byard bundle`.
 icon = "assets/icon.png"
+
+# What the packaged app is called (`byard bundle`).
+[bundle]
+name = "Aura Weather"
+id = "dev.byard.aura-weather"
+version = "0.1.0"
 
 # The forecast's requests name a path; this is the host they go to.
 [http]

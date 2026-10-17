@@ -178,6 +178,30 @@ pub struct Manifest {
     /// `[project] icon`: the picture the app's window and taskbar show, an
     /// absolute path. `None` when the project names none.
     pub icon: Option<PathBuf>,
+    /// The `[bundle]` table: what `byard bundle` writes into the package an
+    /// app ships as.
+    pub bundle: BundleConfig,
+}
+
+/// The `[bundle]` table: how the app is named to the operating system once
+/// it is packaged. Every field is optional, and `byard bundle` says what it
+/// chose for each one left out.
+///
+/// ```toml
+/// [bundle]
+/// name = "Aura Weather"
+/// id = "dev.byard.aura-weather"
+/// version = "1.2.0"
+/// ```
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct BundleConfig {
+    /// `name`: what the system shows for the app, its Finder and Dock name.
+    pub name: Option<String>,
+    /// `id`: the reverse-DNS identifier the system knows the app by, which
+    /// its settings and permissions are kept under.
+    pub id: Option<String>,
+    /// `version`: the version the package reports.
+    pub version: Option<String>,
 }
 
 /// One element of `[native_views]`: a name and the properties it takes.
@@ -281,6 +305,7 @@ impl Manifest {
                 watch_files: Vec::new(),
                 native_views: Vec::new(),
                 icon: None,
+                bundle: BundleConfig::default(),
             });
         }
 
@@ -313,6 +338,7 @@ impl Manifest {
             watch_files: Vec::new(),
             native_views: Vec::new(),
             icon: None,
+            bundle: BundleConfig::default(),
         }
     }
 
@@ -338,6 +364,7 @@ impl Manifest {
                     | "dev"
                     | "http"
                     | "native_views"
+                    | "bundle"
             ) {
                 eprintln!("byard.toml: warning: unknown key `{key}` (ignored)");
             }
@@ -412,6 +439,7 @@ impl Manifest {
         let http = parse_http(&table)?;
         let native_views = parse_native_views(&table)?;
         let icon = parse_icon(project, &project_root)?;
+        let bundle = parse_bundle(&table)?;
 
         Ok(Self {
             project_root,
@@ -427,8 +455,45 @@ impl Manifest {
             watch_files,
             native_views,
             icon,
+            bundle,
         })
     }
+}
+
+/// Parses `[bundle]`. An identifier is reverse-DNS: dot-separated parts of
+/// letters, digits and `-`, at least two of them, which is what every system
+/// that keys an app's settings by it accepts.
+fn parse_bundle(table: &toml::Table) -> Result<BundleConfig, String> {
+    let mut bundle = BundleConfig::default();
+    let Some(tbl) = table.get("bundle").and_then(toml::Value::as_table) else {
+        return Ok(bundle);
+    };
+    for (key, value) in tbl {
+        let text = value
+            .as_str()
+            .ok_or_else(|| format!("byard.toml: [bundle] `{key}` is a string"))?
+            .to_string();
+        match key.as_str() {
+            "name" => bundle.name = Some(text),
+            "id" => {
+                let parts: Vec<&str> = text.split('.').collect();
+                let valid = parts.len() >= 2
+                    && parts.iter().all(|p| {
+                        !p.is_empty() && p.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+                    });
+                if !valid {
+                    return Err(format!(
+                        "byard.toml: [bundle] `id = \"{text}\"` is not a reverse-DNS \
+                         identifier, like \"com.example.weather\""
+                    ));
+                }
+                bundle.id = Some(text);
+            }
+            "version" => bundle.version = Some(text),
+            other => return Err(format!("byard.toml: [bundle]: unknown key `{other}`")),
+        }
+    }
+    Ok(bundle)
 }
 
 /// `[project] icon`: a path relative to the project, which has to be there.
@@ -1861,5 +1926,35 @@ mod tests {
         let number = project_with("number", "icon = 3", &[]);
         let err = Manifest::discover(Some(&number)).err().unwrap();
         assert!(err.contains("is a path"), "{err}");
+    }
+
+    #[test]
+    fn the_bundle_table_names_the_packaged_app() {
+        let dir = project_with(
+            "bundle",
+            "[bundle]\nname = \"X App\"\nid = \"com.example.x-app\"\nversion = \"1.2.0\"",
+            &[],
+        );
+        let bundle = Manifest::discover(Some(&dir)).unwrap().bundle;
+        assert_eq!(bundle.name.as_deref(), Some("X App"));
+        assert_eq!(bundle.id.as_deref(), Some("com.example.x-app"));
+        assert_eq!(bundle.version.as_deref(), Some("1.2.0"));
+        let none = project_with("no-bundle", "", &[]);
+        assert_eq!(
+            Manifest::discover(Some(&none)).unwrap().bundle,
+            BundleConfig::default()
+        );
+    }
+
+    #[test]
+    fn a_bundle_id_that_is_not_reverse_dns_is_an_error() {
+        for bad in ["weather", "com..x", "com.ex ample", ".com.x"] {
+            let dir = project_with("bad-id", &format!("[bundle]\nid = \"{bad}\""), &[]);
+            let err = Manifest::discover(Some(&dir)).err().unwrap();
+            assert!(err.contains("reverse-DNS"), "{bad}: {err}");
+        }
+        let dir = project_with("bad-key", "[bundle]\ncolour = \"red\"", &[]);
+        let err = Manifest::discover(Some(&dir)).err().unwrap();
+        assert!(err.contains("unknown key `colour`"), "{err}");
     }
 }

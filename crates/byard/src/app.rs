@@ -808,7 +808,11 @@ mod tests {
         let mac = root.join("X.app/Contents");
         std::fs::create_dir_all(mac.join("MacOS")).unwrap();
         std::fs::create_dir_all(mac.join("Resources/project")).unwrap();
-        std::fs::write(mac.join("Resources/project/byard.toml"), "[project]\nname = \"x\"\n").unwrap();
+        std::fs::write(
+            mac.join("Resources/project/byard.toml"),
+            "[project]\nname = \"x\"\n",
+        )
+        .unwrap();
         let gone = Path::new("/a/build/machine/that/is/not/here");
 
         let found = locate_project(gone, Some(&flat.join("app")));

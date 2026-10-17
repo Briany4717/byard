@@ -412,6 +412,14 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **An animation ticks once per frame drawn.** With an animation in flight
+  the logic thread ticked as fast as it could, computing frames the display
+  never showed, and a hidden or minimised window kept spinning a core. It now
+  waits for the frame it published to be drawn, so animations run at the
+  display's rate, and slows to ten ticks a second while nothing is drawn.
+  Aura Weather's start-up went from 1.6 s to 0.7 s of CPU in its first
+  eight seconds.
+
 - **A hot reload keeps the root view's state.** A reload that changed only how
   state is shown kept each `var`, and the root was then lowered again, which
   gave every `var` a fresh signal at its initial value: under `byard dev`,

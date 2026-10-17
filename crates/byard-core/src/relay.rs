@@ -138,6 +138,24 @@ const _: () = assert!(RECYCLE_POOL_SIZE > 0);
 /// by some other means keeps its old ≤6 ms responsiveness.
 const IDLE_PARK: std::time::Duration = std::time::Duration::from_millis(6);
 
+/// The longest an animating logic tick waits for its frame to be drawn
+/// before ticking again anyway: a frame at 60 Hz.
+///
+/// An animation advances once per frame the screen shows. The logic thread
+/// therefore waits, after publishing a frame that only an animation asked
+/// for, until the render thread has drawn it, which paces the animation to
+/// the display (120 Hz on a 120 Hz panel, because the render thread's
+/// acquire is). Without the wait it ticked as fast as it could, thousands of
+/// times a second, each tick computing a frame the display would never show.
+const FRAME_PACE: std::time::Duration = std::time::Duration::from_millis(16);
+
+/// How long an animating tick waits once frames have stopped being drawn: a
+/// hidden, minimised or occluded window, or no renderer at all. Its
+/// animations still advance, ten times a second, and the next frame that is
+/// drawn wakes the thread at once, so a display merely slower than
+/// [`FRAME_PACE`] loses nothing.
+const UNSEEN_PACE: std::time::Duration = std::time::Duration::from_millis(100);
+
 /// The rendezvous between a sleeping logic thread and the async pool
 /// (RFC-0029 §2, resolved question "idle parking vs latency").
 ///
@@ -172,8 +190,9 @@ impl IdleGate {
 
     /// Parks until [`signal`](Self::signal) is called or `timeout` elapses,
     /// clearing the pending flag. Returns immediately when work was queued
-    /// while the caller was busy.
-    fn park(&self, timeout: std::time::Duration) {
+    /// while the caller was busy. Whether it was signalled (rather than
+    /// timed out) is returned.
+    fn park(&self, timeout: std::time::Duration) -> bool {
         let pending = self.pending.lock().unwrap_or_else(PoisonError::into_inner);
         let mut pending = if *pending {
             pending
@@ -183,7 +202,9 @@ impl IdleGate {
                 .unwrap_or_else(PoisonError::into_inner)
                 .0
         };
+        let signalled = *pending;
         *pending = false;
+        signalled
     }
 }
 
@@ -489,6 +510,9 @@ impl Relay {
         // encode) must not walk the watermark backwards and make a frame that
         // was drawn look undrawn.
         self.rendered_version.fetch_max(version, Ordering::Relaxed);
+        // An animating logic thread waits for its frame to be drawn before
+        // computing the next one: this is the frame it waits for.
+        self.idle.signal();
     }
 
     /// Returns a clone of the current latest frame, or `None` if nothing
@@ -670,6 +694,8 @@ impl Relay {
                 // thread body only; neither is ever observed off this thread.
                 let arena = ViewArena::new();
                 let mut runtime = build(&arena);
+                // Whether the last frame an animation asked for was drawn.
+                let mut seen = true;
                 while !relay.is_shutdown() {
                     let mut frame = relay.acquire_recycled();
                     // Tick step 0 (RFC-0028 §6): apply everything the async
@@ -720,8 +746,18 @@ impl Relay {
                         // event behind it at all: an animation in flight, or
                         // an `on measure` whose write only the next tick shows.
                         relay.wake_renderer();
-                        thread::yield_now();
+                        if had_input || applied {
+                            // A burst of input or replies drains at full
+                            // speed.
+                            thread::yield_now();
+                        } else {
+                            // Only an animation asked: the next tick waits
+                            // for this frame to be drawn (see FRAME_PACE),
+                            // or, while nothing is being drawn, for longer.
+                            seen = relay.idle.park(if seen { FRAME_PACE } else { UNSEEN_PACE });
+                        }
                     } else {
+                        seen = true;
                         // Edge-triggered, with a timeout only as a lost-signal
                         // backstop (RFC-0029 §2): a result queued by the pool
                         // opens this gate immediately instead of waiting out
@@ -1648,13 +1684,102 @@ mod tests {
         let handle =
             Relay::spawn_logic_from_view(&relay, move |_arena| Box::new(AskingRuntime { frames }))
                 .unwrap();
-        // Long enough for every asked-for tick and then many idle parks: a
-        // settled runtime must stay asleep through them.
-        thread::sleep(IDLE_PARK * 20);
+        // Long enough for every asked-for tick (with no renderer, each waits
+        // out its pace) and then many idle parks: a settled runtime must stay
+        // asleep through them.
+        thread::sleep(FRAME_PACE + UNSEEN_PACE * 3);
         relay.request_shutdown();
         relay.wake_logic();
         handle.join().unwrap();
         woke.load(Ordering::SeqCst)
+    }
+
+    /// A runtime that always wants another frame, as a running animation
+    /// does, counting its ticks.
+    struct Animating {
+        ticks: Arc<AtomicUsize>,
+    }
+
+    impl LogicRuntime for Animating {
+        fn evaluate_tick(
+            &mut self,
+            _frame: &mut RenderFrame,
+            _input_events: &[InputEvent],
+            _dirty: &[crate::frame::TargetId],
+        ) {
+            self.ticks.fetch_add(1, Ordering::SeqCst);
+        }
+
+        fn wants_another_frame(&self) -> bool {
+            true
+        }
+    }
+
+    /// Runs an animation for `run`, with a renderer that draws the latest
+    /// frame every `draw_every` when there is one (`None`: no renderer, as
+    /// for a hidden window), and returns how many ticks the logic thread made
+    /// and how many frames the renderer drew.
+    fn animation_ticks(run: Duration, draw_every: Option<Duration>) -> (usize, usize) {
+        let relay = Arc::new(Relay::new().unwrap());
+        let ticks = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&ticks);
+        let handle = Relay::spawn_logic_from_view(&relay, move |_arena| {
+            Box::new(Animating { ticks: counted })
+        })
+        .unwrap();
+        let start = Instant::now();
+        let mut drawn = 0;
+        while start.elapsed() < run {
+            match draw_every {
+                Some(period) => {
+                    thread::sleep(period);
+                    if let Some(frame) = relay.current() {
+                        drawn += 1;
+                        relay.mark_rendered(frame.version());
+                    }
+                }
+                None => thread::sleep(Duration::from_millis(5)),
+            }
+        }
+        relay.request_shutdown();
+        relay.wake_logic();
+        handle.join().unwrap();
+        (ticks.load(Ordering::SeqCst), drawn)
+    }
+
+    /// An animation ticks once per frame drawn, not as fast as the thread can
+    /// go and not slower: about as many ticks as frames the display drew.
+    /// Counted against the frames actually drawn, so a loaded machine that
+    /// draws fewer is held to fewer. (A tick can miss a frame drawn the
+    /// instant before it published, hence half.)
+    #[test]
+    fn an_animation_ticks_once_per_frame_drawn() {
+        let (ticks, drawn) =
+            animation_ticks(Duration::from_millis(300), Some(Duration::from_millis(5)));
+        assert!(
+            ticks <= drawn + 3 && ticks * 2 + 3 >= drawn,
+            "{ticks} ticks for {drawn} frames drawn"
+        );
+    }
+
+    /// With no frame being drawn (a hidden window), an animation slows to a
+    /// tick every `UNSEEN_PACE` instead of spinning.
+    #[test]
+    fn an_animation_nobody_sees_ticks_slowly() {
+        let (ticks, _) = animation_ticks(Duration::from_millis(500), None);
+        assert!((3..=8).contains(&ticks), "{ticks} ticks in 500 ms unseen");
+    }
+
+    /// A display slower than the frame pace (here a frame every 25 ms) keeps
+    /// the animation at its rate: a late frame is not an unseen one.
+    #[test]
+    fn a_slow_display_is_not_mistaken_for_a_hidden_window() {
+        let (ticks, drawn) =
+            animation_ticks(Duration::from_millis(500), Some(Duration::from_millis(25)));
+        assert!(
+            ticks * 2 + 3 >= drawn,
+            "{ticks} ticks for {drawn} frames drawn"
+        );
     }
 
     #[test]

@@ -678,9 +678,18 @@ impl Checker<'_> {
             }
             Expr::Call { callee, args, .. } => self.check_call(callee, args),
             // `(vertical: 8)`, `(kind: radial, …)`: a property's own shape.
+            // A named field is a value (an offset, a colour, a length), so
+            // `shadow: (y: sze)` and `gradient: (to: blak)` are misspelt
+            // names. The exception is `kind`, which says which shape the
+            // record is. Unnamed items stay as written, since a positional
+            // pair may be words.
             Expr::Tuple(args, _) => {
                 for arg in args {
-                    self.word(&arg.value);
+                    if arg.name.as_ref().is_some_and(|f| f.as_str() != "kind") {
+                        self.value(&arg.value);
+                    } else {
+                        self.word(&arg.value);
+                    }
                 }
                 Ty::Unknown
             }

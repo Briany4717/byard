@@ -88,11 +88,14 @@ Each of these was found by building a screen, and each is now in Byard.
 | Shell | The window had the default icon. | `[project] icon` (#325) |
 | Search | A misspelt field of a JSON reply (`res.json.resluts`) read as nothing, and `?? []` hid it. | `let reply: GeoReply = res.json` in an action: the fields are checked, and what arrives is compared with the type |
 | Shipping | The app read its project from the path it was compiled at, so it ran on no other machine, and there was no way to package it. | `byard bundle --bin …`: a `.app` (or a directory) with the project and its packages beside the binary, which an app looks for when its build path is gone; `[bundle]` names it |
+| Trends | A misspelt name inside a gradient or a shadow (`to: blak`) checked clean. | A record value's named fields are checked as values |
 
 ## What it still could not be built with
 
 Worked around in the app, and not yet fixed in Byard:
 
+- **A misspelt JSON field reads as nothing.** `??` gives a missing field a
+  default, but `res.json.resluts` is a missing field too, and nothing says so.
 - **One kind of misspelling still checks clean**: a name passed to an
   intrinsic's named argument, where the argument may also be a word.
 - **The Rust half itself does not reload.** `cargo run -p aura-weather --

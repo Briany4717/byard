@@ -45,14 +45,16 @@ Every screen is `byld`, in `src/`:
 The place chosen in the search is kept with `Store`, so the app opens on it
 next time.
 
-`byard.toml` holds the theme (two typefaces, a type scale, the dark palette),
+`byard.toml` holds the theme (two typefaces, a type scale, the dark palette;
+the light one is derived, and the app follows the system between them),
 the three hosts the screens ask (forecast, air quality, geocoding), and the
 declaration of the map element.
 
 The one part in Rust is the map (`src/map.rs`). It is an element of the
-app's own with a shader of the app's own: it turns OpenStreetMap's daytime
-tiles into the app's night colours and draws however many are on screen in
-one batch. To `byld` it is `Map #[lat: …, lon: …, zoom: …]`.
+app's own with a shader of the app's own: it draws OpenStreetMap's daytime
+tiles as they are on a light scheme and turns them into the app's night
+colours on a dark one, however many are on screen in one batch. To `byld`
+it is `Map #[lat: …, lon: …, zoom: …, night: t.dark]`.
 
 The tests (`tests/it`) drive the real program through the interpreter, with
 every request answered by a server on the machine, tiles included.
@@ -81,6 +83,9 @@ Each of these was found by building a screen, and each is now in Byard.
 | Map | An app with a Rust half could not hot-reload: `byard dev` cannot link the map, so it drew a panel there. | `App::hot_reload(true)`, `--dev` |
 | 10 days | Dates had no words: month names were a hand-written table and a weekday could not be had at all. | `iso.formatDate("ddd D")` |
 | Search | A reply was assigned to `List<Place>` without being compared with it, so a field the server left out read as nothing. | A value written into a record-typed `var` is compared, and the first difference reported; `country: Str?` may be absent |
+| Every screen | A theme was light or dark, never the system's: the app ignored the appearance the user had chosen. | `scheme = "system"` (#323) |
+| Every screen | A translucent tint of a theme colour had to be its own hex, which stayed dark on a light scheme. | `t.primary.alpha(0.6)` (#324) |
+| Shell | The window had the default icon. | `[project] icon` (#325) |
 | Shipping | The app read its project from the path it was compiled at, so it ran on no other machine, and there was no way to package it. | `byard bundle --bin …`: a `.app` (or a directory) with the project and its packages beside the binary, which an app looks for when its build path is gone; `[bundle]` names it |
 
 ## What it still could not be built with
@@ -91,17 +96,9 @@ Worked around in the app, and not yet fixed in Byard:
   intrinsic's named argument, where the argument may also be a word.
 - **A misspelt JSON field reads as nothing.** `??` gives a missing field a
   default, but `res.json.resluts` is a missing field too, and nothing says so.
-- **A JSON list of records has no type.** `var found: List<Place>` names a
-  type nothing defines and nothing checks.
-- **The Rust half has no hot reload.** `byard dev examples/aura_weather`
-  reloads every screen but draws a plain panel where the map is; the map
-  itself changes only when the app is rebuilt.
-- **A lambda's parameters take no type**: `(asked) => …`, never
-  `(asked: Str) => …`.
 - **The Rust half itself does not reload.** `cargo run -p aura-weather --
   --dev` follows every `.byd` and the manifest with the map linked in, but
   an edit to `map.rs` still needs the app rebuilt.
-- **Not measured**: the frame time while panning the map.
 - **Measured only on the logic side**: panning over tiles the map has costs
   about 0.04 ms of tick and render for the whole app in a release build
   (0.4 ms in debug), and asks for and writes nothing

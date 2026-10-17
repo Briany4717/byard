@@ -79,7 +79,8 @@ View ForecastScreen(place: Str, lat: Float, lon: Float) {
             Column #[bg: t.surfaceContainerLow, radius: 28, p: (horizontal: 24, vertical: 20),
                      gap: 2,
                      gradient: (kind: radial, center: (0.5, 0.0), radius: 1.1,
-                                from: 0x993B82F6, mid: 0x331D4ED8, to: 0x00121A31)] {
+                                from: t.primary.alpha(0.6), mid: t.primary.alpha(0.2),
+                                to: t.surfaceContainerLow.alpha(0.0))] {
                 Text("{temp:.0}°") #[typo: t.hero, color: t.onSurface]
                 Text(describe(code)) #[typo: t.title, color: t.onSurface]
                 Text("High {high:.0}°  ·  Low {low:.0}°") #[typo: t.body, color: t.onSurfaceVariant]

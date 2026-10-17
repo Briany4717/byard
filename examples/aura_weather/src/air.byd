@@ -37,12 +37,6 @@ View AirScreen(place: Str, lat: Float, lon: Float) {
         : aqi <= 200 ? 0xFFEF4444
         : aqi <= 300 ? 0xFFA855F7
         : 0xFFBE185D
-    fn glow(aqi: Int) -> Int => aqi <= 50 ? 0x5534D399
-        : aqi <= 100 ? 0x55FBBF24
-        : aqi <= 150 ? 0x55FB923C
-        : aqi <= 200 ? 0x55EF4444
-        : aqi <= 300 ? 0x55A855F7
-        : 0x55BE185D
 
     let load = () => {
         state = "loading"
@@ -88,18 +82,18 @@ View AirScreen(place: Str, lat: Float, lon: Float) {
             // linear ramp cannot draw.
             Column #[bg: t.surfaceContainerLow, radius: 28, p: 20, gap: 4, align: center,
                      gradient: (kind: radial, center: (0.5, 0.42), radius: 0.75,
-                                from: glow(aqi), to: 0x00121A31)] {
+                                from: tone(aqi).alpha(0.33), to: t.surfaceContainerLow.alpha(0.0))] {
                 on measure => { cardW = it.w }
 
                 Canvas #[width: size, height: size * 0.82] {
                     arc(cx: size / 2.0, cy: size / 2.0, r: r, start: 135, sweep: 270,
-                        stroke: 0xFF1D2947, stroke_width: 16, cap: round)
+                        stroke: t.surfaceContainerHigh, stroke_width: 16, cap: round)
                     arc(cx: size / 2.0, cy: size / 2.0, r: r, start: 135, sweep: sweep,
                         stroke: tone(aqi), stroke_width: 16, cap: round)
                     text("{aqi}", x: size / 2.0, y: size / 2.0 + 12.0,
-                         color: 0xFFE8EEF9, size: 44, align: center)
+                         color: t.onSurface, size: 44, align: center)
                     text("US AQI", x: size / 2.0, y: size / 2.0 + 36.0,
-                         color: 0xFF9AA8C2, size: 12, align: center)
+                         color: t.onSurfaceVariant, size: 12, align: center)
                 }
                 Text(category(aqi)) #[typo: t.title, color: t.onSurface]
                 Text(place) #[typo: t.caption, color: t.onSurfaceVariant]

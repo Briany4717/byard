@@ -22,6 +22,13 @@ the open window, map included.
 cargo run -p aura-weather -- --dev
 ```
 
+Or package it to run on a Mac that has neither its sources nor Byard: an
+`Aura Weather.app` with its icon, under `examples/aura_weather/.byard/bundle/`.
+
+```bash
+cargo build --release -p aura-weather && cargo run --release -p byard-cli -- bundle examples/aura_weather --bin target/release/aura-weather
+```
+
 ## What it is made of
 
 Every screen is `byld`, in `src/`:
@@ -79,6 +86,7 @@ Each of these was found by building a screen, and each is now in Byard.
 | Every screen | A theme was light or dark, never the system's: the app ignored the appearance the user had chosen. | `scheme = "system"` (#323) |
 | Every screen | A translucent tint of a theme colour had to be its own hex, which stayed dark on a light scheme. | `t.primary.alpha(0.6)` (#324) |
 | Shell | The window had the default icon. | `[project] icon` (#325) |
+| Shipping | The app read its project from the path it was compiled at, so it ran on no other machine, and there was no way to package it. | `byard bundle --bin …`: a `.app` (or a directory) with the project and its packages beside the binary, which an app looks for when its build path is gone; `[bundle]` names it |
 
 ## What it still could not be built with
 

@@ -10,7 +10,7 @@
 //!
 //! - [`MapTiles`], a shader. It draws a tile from a layer of an array
 //!   texture, rounds the card's corners itself, and repaints the daytime map
-//!   tiles in the app's night colours.
+//!   tiles, in the app's night colours when the scheme is dark.
 //! - [`Map`], the view. It works out which tiles its rectangle shows, asks
 //!   for the ones it does not have, and emits every one it does in a single
 //!   batch. Dragging pans it.
@@ -55,10 +55,12 @@ pub struct TileInstance {
     layer: u32,
     /// The card's corner radius.
     radius: f32,
+    /// 1 for the night colours, 0 for the tile's own.
+    night: f32,
 }
 
 /// The map's shader: a tile from its layer, clipped to the card's rounded
-/// rectangle, in night colours.
+/// rectangle, in the tile's own colours or the app's night ones.
 pub struct MapTiles;
 
 impl Shader for MapTiles {
@@ -71,7 +73,7 @@ impl Shader for MapTiles {
     type Instance = TileInstance;
 
     fn lanes() -> &'static [Lane] {
-        &[Lane::Vec4, Lane::Vec4, Lane::U32, Lane::F32]
+        &[Lane::Vec4, Lane::Vec4, Lane::U32, Lane::F32, Lane::F32]
     }
 
     fn wgsl() -> &'static str {
@@ -83,6 +85,7 @@ struct Out {
     @location(2) @interpolate(flat) card: vec4<f32>,
     @location(3) @interpolate(flat) layer: u32,
     @location(4) @interpolate(flat) radius: f32,
+    @location(5) @interpolate(flat) night: f32,
 };
 
 @vertex
@@ -92,6 +95,7 @@ fn vs_main(
     @location(2) card: vec4<f32>,
     @location(3) layer: u32,
     @location(4) radius: f32,
+    @location(5) night: f32,
     @location(15) depth: f32,
 ) -> Out {
     var out: Out;
@@ -101,6 +105,7 @@ fn vs_main(
     out.card = card;
     out.layer = layer;
     out.radius = radius;
+    out.night = night;
     return out;
 }
 
@@ -122,7 +127,7 @@ fn fs_main(in: Out) -> @location(0) vec4<f32> {
     let grey = dot(turned, vec3<f32>(0.299, 0.587, 0.114));
     let night = mix(vec3<f32>(grey), turned, 0.35) * vec3<f32>(0.75, 0.95, 1.5)
         + vec3<f32>(0.006, 0.010, 0.026);
-    return vec4<f32>(night, cover);
+    return vec4<f32>(mix(day, night, in.night), cover);
 }
 "
     }
@@ -227,6 +232,10 @@ pub struct Map {
     /// The colour of the pin at the place.
     #[prop]
     pin: u32,
+    /// Whether the tiles are drawn in the app's night colours, for a dark
+    /// scheme, or in their own daytime ones.
+    #[prop]
+    night: bool,
 
     /// How far the map has been dragged from the place, in logical pixels at
     /// the current zoom.
@@ -352,6 +361,7 @@ impl NativeView for Map {
                     card: layout.rect,
                     layer: slot.layer,
                     radius: self.radius,
+                    night: if self.night { 1.0 } else { 0.0 },
                 });
             }
         }

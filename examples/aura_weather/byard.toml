@@ -22,7 +22,8 @@ Body = "fonts/Manrope-Variable.ttf"
 
 [theme]
 name = "aura"
-scheme = "dark"
+# The scheme follows the system's appearance; the dark one is the app's own.
+scheme = "system"
 transition = 300
 # The light scheme is derived from this; the dark one is written out below,
 # because it is the app's own look rather than a generic palette.
@@ -74,3 +75,4 @@ lon = "float"
 zoom = "float"
 radius = "float"
 pin = "color"
+night = "bool"

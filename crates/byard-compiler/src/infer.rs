@@ -33,7 +33,7 @@ const LIST_METHODS: [&str; 13] = [
 /// The methods a `Str` has at runtime (`len` is a field). Any other call on a
 /// `Str` silently evaluates to nothing, which is exactly what this diagnostic
 /// exists to stop.
-const STR_METHODS: [&str; 2] = ["slice", "urlEncoded"];
+const STR_METHODS: [&str; 3] = ["slice", "urlEncoded", "formatDate"];
 
 /// Names the engine puts in scope itself: the animation namespace
 /// (`anim.spring`), a collapsing header's `scroll_fraction`, and the `route`
@@ -51,22 +51,25 @@ const BUILT_IN_CALLS: [&str; 5] = ["untrack", "match", "navigate", "back", "repl
 /// `false` for anything not known to: a view of the program (its arguments
 /// are checked as values already), a style block, a property nothing names.
 fn takes_only_a_value(element: &str, prop: &str) -> bool {
-    use crate::interp::intrinsics::PropType;
     // The catalogue holds the registered native views too, with their
     // properties' types mapped onto the same ones.
     crate::interp::intrinsics::lookup(element)
         .and_then(|intrinsic| intrinsic.property_type(prop))
-        .is_some_and(|ty| {
-            matches!(
-                ty,
-                PropType::Int
-                    | PropType::Float
-                    | PropType::Color
-                    | PropType::Len
-                    | PropType::Angle
-                    | PropType::List
-            )
-        })
+        .is_some_and(only_values)
+}
+
+/// Whether a value of type `ty` can only be a value, never a word.
+fn only_values(ty: crate::interp::intrinsics::PropType) -> bool {
+    use crate::interp::intrinsics::PropType;
+    matches!(
+        ty,
+        PropType::Int
+            | PropType::Float
+            | PropType::Color
+            | PropType::Len
+            | PropType::Angle
+            | PropType::List
+    )
 }
 
 /// An inferred / resolved type. Distinct from the syntactic [`Type`] AST node:
@@ -479,7 +482,14 @@ impl Checker<'_> {
                 // argument may be one of its own words.
                 let is_view = self.views.contains(&el.name);
                 for arg in &el.content {
-                    if is_view || arg.name.is_none() {
+                    let takes_a_value = arg.name.as_ref().is_some_and(|name| {
+                        crate::interp::intrinsics::shape_argument_type(
+                            el.name.as_str(),
+                            name.as_str(),
+                        )
+                        .is_some_and(only_values)
+                    });
+                    if is_view || arg.name.is_none() || takes_a_value {
                         self.value(&arg.value);
                     } else {
                         self.word(&arg.value);
@@ -905,7 +915,7 @@ impl Checker<'_> {
                 recv.clone()
             }
             (Ty::List(_), "indexOf") => Ty::Int,
-            (Ty::Str, "slice" | "urlEncoded") => Ty::Str,
+            (Ty::Str, "slice" | "urlEncoded" | "formatDate") => Ty::Str,
             (Ty::List(_), "contains") => Ty::Bool,
             (Ty::List(_), "map") => Ty::List(Box::new(lambda_body_ty.unwrap_or(Ty::Unknown))),
             _ => Ty::Unknown,

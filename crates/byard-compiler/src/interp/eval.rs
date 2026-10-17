@@ -12979,6 +12979,21 @@ impl Interpreter {
                 Value::Str(s) => Value::Str(url_encoded(&s)),
                 other => other,
             })),
+            // `iso.formatDate("ddd D MMM")`: an ISO date written out, or
+            // nothing when the text is not one (so `?? "—"` reads naturally).
+            "formatDate" => {
+                let mut pattern = self.lower_expr(&args.first()?.value, payload_name);
+                Some(Box::new(move |ctx| {
+                    let pattern = pattern(ctx);
+                    match (base_c(ctx), pattern) {
+                        (Value::Str(text), Value::Str(pattern)) => {
+                            super::dates::format_date(&text, &pattern)
+                                .map_or(Value::Unit, Value::Str)
+                        }
+                        _ => Value::Unit,
+                    }
+                }))
+            }
             "contains" => {
                 let mut arg = self.lower_expr(&args.first()?.value, payload_name);
                 Some(Box::new(move |ctx| {

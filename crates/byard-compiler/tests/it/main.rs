@@ -21,6 +21,7 @@ mod event_exposure;
 mod font_prop;
 mod font_registration;
 mod format_and_slice;
+mod format_date;
 mod fuzz;
 mod gradient_kinds;
 mod group_opacity;

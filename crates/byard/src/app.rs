@@ -90,9 +90,15 @@ impl App {
     /// A project runs exactly as `byard dev` runs it: its `[theme]` and
     /// declared fonts, every `.byd` beside the entry, and its packages. A lone
     /// file runs by itself in the built-in theme.
+    ///
+    /// When `entry` is not there, which is the case for an app built on one
+    /// machine and run on another (its `CARGO_MANIFEST_DIR` stays behind),
+    /// the project is looked for beside the executable, where `byard bundle`
+    /// puts it: `project/` next to it, or `../Resources/project/` inside a
+    /// macOS `.app`.
     #[must_use]
     pub fn new(entry: impl AsRef<Path>) -> Self {
-        let entry = entry.as_ref().to_path_buf();
+        let entry = locate_project(entry.as_ref(), std::env::current_exe().ok().as_deref());
         let title = entry
             .file_stem()
             .and_then(|s| s.to_str())
@@ -349,6 +355,21 @@ impl App {
         std::mem::forget(watcher);
         Ok(reloads)
     }
+}
+
+/// Where the project an app runs is: `entry` when it is there, or else the
+/// copy `byard bundle` put beside the executable `exe`.
+fn locate_project(entry: &Path, exe: Option<&Path>) -> PathBuf {
+    if entry.exists() {
+        return entry.to_path_buf();
+    }
+    let Some(dir) = exe.and_then(Path::parent) else {
+        return entry.to_path_buf();
+    };
+    [dir.join("project"), dir.join("../Resources/project")]
+        .into_iter()
+        .find(|candidate| candidate.join("byard.toml").is_file())
+        .unwrap_or_else(|| entry.to_path_buf())
 }
 
 /// What [`load_program`] reads from a project.
@@ -782,6 +803,35 @@ mod tests {
         let (rgba, w, h) = program.icon.expect("Aura Weather names an icon");
         assert_eq!((w, h), (256, 256));
         assert_eq!(rgba.len(), 256 * 256 * 4);
+    }
+
+    /// A built app run where its sources are not finds the project
+    /// `byard bundle` put beside its executable.
+    #[test]
+    fn the_project_is_found_beside_the_executable_when_its_path_is_gone() {
+        let root = std::env::temp_dir().join(format!("byard-locate-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let flat = root.join("flat");
+        std::fs::create_dir_all(flat.join("project")).unwrap();
+        std::fs::write(flat.join("project/byard.toml"), "[project]\nname = \"x\"\n").unwrap();
+        let mac = root.join("X.app/Contents");
+        std::fs::create_dir_all(mac.join("MacOS")).unwrap();
+        std::fs::create_dir_all(mac.join("Resources/project")).unwrap();
+        std::fs::write(
+            mac.join("Resources/project/byard.toml"),
+            "[project]\nname = \"x\"\n",
+        )
+        .unwrap();
+        let gone = Path::new("/a/build/machine/that/is/not/here");
+
+        let found = locate_project(gone, Some(&flat.join("app")));
+        assert_eq!(found, flat.join("project"));
+        let found = locate_project(gone, Some(&mac.join("MacOS/app")));
+        assert!(found.join("byard.toml").is_file(), "{}", found.display());
+        // Where the sources are, they win.
+        let here = Path::new(env!("CARGO_MANIFEST_DIR"));
+        assert_eq!(locate_project(here, Some(&flat.join("app"))), here);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     /// A project in a fresh directory: `main.byd` holding `body`.

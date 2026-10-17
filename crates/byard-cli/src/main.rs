@@ -67,6 +67,23 @@ enum Command {
         /// Path to a `.byd` file or project dir. Defaults to `byard.toml`.
         file: Option<PathBuf>,
     },
+    /// Package a built app with its project, to run where its sources are
+    /// not: a `.app` on macOS, a directory elsewhere.
+    Bundle {
+        /// The project directory or `byard.toml`. Defaults to the current
+        /// project.
+        path: Option<PathBuf>,
+        /// The app's executable, built (`cargo build --release`).
+        #[arg(long, value_name = "EXE")]
+        bin: PathBuf,
+        /// Where to write the bundle. Defaults to the project's
+        /// `.byard/bundle/`.
+        #[arg(short, long, value_name = "DIR")]
+        out: Option<PathBuf>,
+        /// The package's shape. Defaults to the one this system runs.
+        #[arg(long, value_enum)]
+        layout: Option<commands::bundle::Layout>,
+    },
     /// Add a dependency to byard.toml, then fetch and lock it (RFC-0008).
     #[command(alias = "install")]
     Add {
@@ -181,6 +198,17 @@ fn main() {
         }),
         Command::Check { file, short } => commands::check::run(file.as_deref(), short),
         Command::Build { file } => commands::build::run(file.as_deref()),
+        Command::Bundle {
+            path,
+            bin,
+            out,
+            layout,
+        } => commands::bundle::run(
+            path.as_deref(),
+            &bin,
+            out.as_deref(),
+            layout.unwrap_or_else(commands::bundle::Layout::host),
+        ),
         Command::Clean { file } => commands::clean::run(file.as_deref()),
         Command::Add {
             name,

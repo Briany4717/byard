@@ -265,3 +265,49 @@ fn panning_over_tiles_it_has_writes_and_asks_nothing() {
         slowest
     );
 }
+
+/// The `night` lane of every tile drawn this frame: the last of the
+/// instance's eleven floats.
+fn night_lanes(app: &App) -> Vec<f32> {
+    let batch = tile_batches(app)[0];
+    assert_eq!(batch.instance_size, 44, "rect, card, layer, radius, night");
+    batch
+        .bytes
+        .chunks(batch.instance_size)
+        .map(|tile| f32::from_ne_bytes(tile[40..44].try_into().unwrap()))
+        .collect()
+}
+
+fn system(dark: bool) -> byard_core::InputEvent {
+    byard_core::InputEvent {
+        kind: byard_core::EventKind::SystemScheme,
+        pos: (0.0, 0.0),
+        delta: (0.0, 0.0),
+        payload: Some(byard_core::InputPayload::Bool(dark)),
+        time_ms: 0,
+    }
+}
+
+/// The app follows the system's appearance, and the map with it: the tiles
+/// are drawn in their own daytime colours on a light system and in the
+/// app's night ones on a dark one.
+#[test]
+fn the_map_follows_the_systems_appearance() {
+    let server = server();
+    let mut app = on_the_map(&server);
+    app.step(&[system(false)]);
+    app.settle();
+    let day = night_lanes(&app);
+    assert!(
+        !day.is_empty() && day.iter().all(|&n| n.abs() < f32::EPSILON),
+        "{day:?}"
+    );
+
+    app.step(&[system(true)]);
+    app.settle();
+    let night = night_lanes(&app);
+    assert!(
+        night.iter().all(|&n| (n - 1.0).abs() < f32::EPSILON),
+        "{night:?}"
+    );
+}

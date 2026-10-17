@@ -90,7 +90,8 @@ View TrendsScreen(place: Str, lat: Float, lon: Float) {
                     path(
                         fill: 0x00000000,
                         gradient: (kind: linear, angle: 90deg,
-                                   from: 0xCCFFC46B, mid: 0x44FFC46B, to: 0x00FFC46B)
+                                   from: t.secondary.alpha(0.8), mid: t.secondary.alpha(0.27),
+                                   to: t.secondary.alpha(0.0))
                     ) {
                         move(across(0), plotH)
                         line(across(0), down(highs[0]))
@@ -109,20 +110,20 @@ View TrendsScreen(place: Str, lat: Float, lon: Float) {
                                across(i) + step / 2.0, down(highs[i]),
                                across(i) + step / 2.0, down(temp),
                                across(i + 1), down(temp),
-                               stroke: 0xFFFFC46B, stroke_width: 3, cap: round)
+                               stroke: t.secondary, stroke_width: 3, cap: round)
                     }
                     for i, temp in lows.slice(1) {
                         bezier(across(i), down(lows[i]),
                                across(i) + step / 2.0, down(lows[i]),
                                across(i) + step / 2.0, down(temp),
                                across(i + 1), down(temp),
-                               stroke: 0xFF7CC4FF, stroke_width: 2, cap: round)
+                               stroke: t.primary, stroke_width: 2, cap: round)
                     }
 
                     // The weekday under each reading.
                     for i, day in days {
                         text(day.formatDate("ddd") ?? "", x: across(i), y: plotH + 12.0,
-                             color: 0xFF9AA8C2, size: 11, align: center)
+                             color: t.onSurfaceVariant, size: 11, align: center)
                     }
                 }
 

@@ -80,6 +80,18 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`byard bundle --bin <exe>` packages an app to run on another machine.**
+  An app read its project from the path it was compiled at
+  (`App::new(env!("CARGO_MANIFEST_DIR"))`), so the binary ran nowhere else,
+  and nothing packaged it. Now `byard bundle` writes a macOS `.app` (Info.plist,
+  an `.icns` made from `[project] icon`, the binary, the project) or, with
+  `--layout dir`, a directory with `project/` beside the binary. The project's
+  packages are carried inside it and every manifest pointed at the copies, and
+  the bundle is resolved before the command succeeds, so a file named from
+  outside the project is an error there. An app whose build path is gone looks
+  for its project beside its executable. A new `[bundle]` table names the
+  package: `name`, `id` (reverse-DNS) and `version`.
+
 - **`icon = "assets/icon.png"` in `[project]` gives the app's window an
   icon.** An app had no way to set one. `App` and `byard dev` show it in the
   title bar and taskbar on Windows and Linux; macOS takes an app's icon from

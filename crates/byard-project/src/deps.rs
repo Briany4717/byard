@@ -1112,6 +1112,7 @@ mod tests {
             watch_files: Vec::new(),
             native_views: Vec::new(),
             icon: None,
+            bundle: crate::manifest::BundleConfig::default(),
         };
         let (program, provider) = resolve_project(&manifest).unwrap();
         assert!(program.errors.is_empty(), "{:?}", program.errors);

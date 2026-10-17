@@ -74,6 +74,13 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A value written into a `var` of a record type is compared with it.** A
+  record type checked the code that reads a value; a JSON reply is whatever
+  the server sent. Now, when a reply is written into `var found: List<Place>`,
+  the first difference is reported once, where the assignment is written:
+  "the value written into `found` is not a `List<Place>`: item 3 has no
+  `country`". A field written `country: Str?` may be left out.
+
 - **`text.formatDate(pattern)` writes out an ISO date or date-time.** An API
   sends `2026-10-16T14:00` and a screen shows `Fri 16 Oct` or `14:00`; the
   weekday was out of reach in `byld`, and month names were a table every app

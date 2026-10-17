@@ -44,6 +44,7 @@ mod overlay_dismiss;
 mod path_from_data;
 mod path_morph;
 mod path_morph_resample;
+mod record_shape;
 mod record_types;
 mod responsive_variants;
 mod retained_across_views;

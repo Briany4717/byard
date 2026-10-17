@@ -463,6 +463,7 @@ impl PlatformHost for Host {
             for error in interp.errors() {
                 eprintln!("  {}", error.headline());
             }
+            let errors_told = interp.errors().len();
             interp.tick();
             Box::new(AppRuntime {
                 interp,
@@ -473,6 +474,7 @@ impl PlatformHost for Host {
                 views,
                 reloads,
                 reloaded: std::cell::Cell::new(false),
+                errors_told,
             })
         })?;
 
@@ -608,9 +610,22 @@ struct AppRuntime {
     /// Whether a reload changed the frame since it was last asked for, with
     /// no input behind it to ask for the next one.
     reloaded: std::cell::Cell<bool>,
+    /// How many of the interpreter's errors have been printed.
+    errors_told: usize,
 }
 
 impl AppRuntime {
+    /// Prints what the program reported since the last frame: a reply that
+    /// did not match its record type, a reload's lowering errors. A shipped
+    /// app has no overlay, so standard error is where it can be read.
+    fn tell_new_errors(&mut self) {
+        let errors = self.interp.errors();
+        for error in errors.iter().skip(self.errors_told) {
+            eprintln!("  {}", error.headline());
+        }
+        self.errors_told = errors.len();
+    }
+
     /// Applies a re-read program, if one arrived: the theme if it changed,
     /// then the views. A program that does not compile is reported and the
     /// running one is kept.
@@ -636,9 +651,6 @@ impl AppRuntime {
         ) {
             self.tree = tree;
         }
-        for error in self.interp.errors() {
-            eprintln!("  {}", error.headline());
-        }
         self.views = parsed.views;
         self.reloaded.set(true);
     }
@@ -659,6 +671,7 @@ impl LogicRuntime for AppRuntime {
         let w = f32::from_bits(self.width_bits.load(Ordering::Relaxed));
         let h = f32::from_bits(self.height_bits.load(Ordering::Relaxed));
         self.interp.render(&self.tree, frame, w, h);
+        self.tell_new_errors();
     }
 
     fn apply_io_results(&mut self, results: Vec<IoResult>) -> bool {
@@ -762,6 +775,7 @@ mod tests {
             views,
             reloads: Some(Arc::clone(reloads)),
             reloaded: std::cell::Cell::new(false),
+            errors_told: 0,
         }
     }
 

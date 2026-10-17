@@ -16,6 +16,7 @@ pub mod nav;
 pub mod reactive;
 pub mod reload;
 pub mod seed;
+pub mod shape;
 pub mod style;
 pub mod theme;
 pub mod views;

@@ -70,14 +70,12 @@ Each of these was found by building a screen, and each is now in Byard.
 | Search | A JSON list of records had no type, so `hit.nmae` checked clean. | `type Place = { name: Str, … }` |
 | Map | An app with a Rust half could not hot-reload: `byard dev` cannot link the map, so it drew a panel there. | `App::hot_reload(true)`, `--dev` |
 | 10 days | Dates had no words: month names were a hand-written table and a weekday could not be had at all. | `iso.formatDate("ddd D")` |
+| Search | A reply was assigned to `List<Place>` without being compared with it, so a field the server left out read as nothing. | A value written into a record-typed `var` is compared, and the first difference reported; `country: Str?` may be absent |
 
 ## What it still could not be built with
 
 Worked around in the app, and not yet fixed in Byard:
 
-- **A JSON reply is not checked against its type.** A record type checks
-  the code that reads a value; the geocoder's reply is assigned without
-  being matched against `Place`, so a field it leaves out reads as nothing.
 - **One kind of misspelling still checks clean**: a name passed to an
   intrinsic's named argument, where the argument may also be a word.
 - **A misspelt JSON field reads as nothing.** `??` gives a missing field a

@@ -124,7 +124,14 @@ pub fn check_views(views: &[ViewDecl]) -> Inference {
         .map(|v| {
             v.records
                 .iter()
-                .map(|r| (r.name.clone(), r.fields.clone()))
+                .map(|r| {
+                    let fields = r
+                        .fields
+                        .iter()
+                        .map(|f| (f.name.clone(), f.ty.clone()))
+                        .collect();
+                    (r.name.clone(), fields)
+                })
                 .collect()
         })
         .unwrap_or_default();

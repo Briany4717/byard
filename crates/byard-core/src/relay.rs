@@ -152,7 +152,8 @@ const FRAME_PACE: std::time::Duration = std::time::Duration::from_millis(16);
 /// How long an animating tick waits once frames have stopped being drawn: a
 /// hidden, minimised or occluded window, or no renderer at all. Its
 /// animations still advance, ten times a second, and the next frame that is
-/// drawn wakes the thread at once.
+/// drawn wakes the thread at once, so a display merely slower than
+/// [`FRAME_PACE`] loses nothing.
 const UNSEEN_PACE: std::time::Duration = std::time::Duration::from_millis(100);
 
 /// The rendezvous between a sleeping logic thread and the async pool
@@ -1716,8 +1717,9 @@ mod tests {
 
     /// Runs an animation for `run`, with a renderer that draws the latest
     /// frame every `draw_every` when there is one (`None`: no renderer, as
-    /// for a hidden window), and returns how many ticks the logic thread made.
-    fn animation_ticks(run: Duration, draw_every: Option<Duration>) -> usize {
+    /// for a hidden window), and returns how many ticks the logic thread made
+    /// and how many frames the renderer drew.
+    fn animation_ticks(run: Duration, draw_every: Option<Duration>) -> (usize, usize) {
         let relay = Arc::new(Relay::new().unwrap());
         let ticks = Arc::new(AtomicUsize::new(0));
         let counted = Arc::clone(&ticks);
@@ -1726,11 +1728,13 @@ mod tests {
         })
         .unwrap();
         let start = Instant::now();
+        let mut drawn = 0;
         while start.elapsed() < run {
             match draw_every {
                 Some(period) => {
                     thread::sleep(period);
                     if let Some(frame) = relay.current() {
+                        drawn += 1;
                         relay.mark_rendered(frame.version());
                     }
                 }
@@ -1740,18 +1744,21 @@ mod tests {
         relay.request_shutdown();
         relay.wake_logic();
         handle.join().unwrap();
-        ticks.load(Ordering::SeqCst)
+        (ticks.load(Ordering::SeqCst), drawn)
     }
 
     /// An animation ticks once per frame drawn, not as fast as the thread can
-    /// go: a 10 ms display shows about 30 frames in 300 ms, and the logic
-    /// thread computes about as many.
+    /// go and not slower: about as many ticks as frames the display drew.
+    /// Counted against the frames actually drawn, so a loaded machine that
+    /// draws fewer is held to fewer. (A tick can miss a frame drawn the
+    /// instant before it published, hence half.)
     #[test]
     fn an_animation_ticks_once_per_frame_drawn() {
-        let ticks = animation_ticks(Duration::from_millis(300), Some(Duration::from_millis(10)));
+        let (ticks, drawn) =
+            animation_ticks(Duration::from_millis(300), Some(Duration::from_millis(5)));
         assert!(
-            (15..=45).contains(&ticks),
-            "{ticks} ticks for about 30 frames"
+            ticks <= drawn + 3 && ticks * 2 + 3 >= drawn,
+            "{ticks} ticks for {drawn} frames drawn"
         );
     }
 
@@ -1759,8 +1766,20 @@ mod tests {
     /// tick every `UNSEEN_PACE` instead of spinning.
     #[test]
     fn an_animation_nobody_sees_ticks_slowly() {
-        let ticks = animation_ticks(Duration::from_millis(500), None);
+        let (ticks, _) = animation_ticks(Duration::from_millis(500), None);
         assert!((3..=8).contains(&ticks), "{ticks} ticks in 500 ms unseen");
+    }
+
+    /// A display slower than the frame pace (here a frame every 25 ms) keeps
+    /// the animation at its rate: a late frame is not an unseen one.
+    #[test]
+    fn a_slow_display_is_not_mistaken_for_a_hidden_window() {
+        let (ticks, drawn) =
+            animation_ticks(Duration::from_millis(500), Some(Duration::from_millis(25)));
+        assert!(
+            ticks * 2 + 3 >= drawn,
+            "{ticks} ticks for {drawn} frames drawn"
+        );
     }
 
     #[test]

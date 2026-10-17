@@ -12975,6 +12975,24 @@ impl Interpreter {
             }
             // `text.urlEncoded()`: text made safe to put in a URL, as one
             // query value or one path segment.
+            // `color.alpha(0.6)`: the colour at that opacity, so a theme token
+            // gives its own translucent tints (`t.secondary.alpha(0.8)`)
+            // instead of a hex written out beside it.
+            "alpha" => {
+                let mut amount = self.lower_expr(&args.first()?.value, payload_name);
+                Some(Box::new(move |ctx| {
+                    let amount = match amount(ctx) {
+                        Value::Float(f) => f,
+                        #[allow(clippy::cast_precision_loss)]
+                        Value::Int(n) => n as f64,
+                        _ => return Value::Unit,
+                    };
+                    match base_c(ctx) {
+                        Value::Int(color) => Value::Int(with_alpha(color, amount)),
+                        _ => Value::Unit,
+                    }
+                }))
+            }
             "urlEncoded" => Some(Box::new(move |ctx| match base_c(ctx) {
                 Value::Str(s) => Value::Str(url_encoded(&s)),
                 other => other,
@@ -15178,6 +15196,15 @@ fn structural_eq(a: &Value, b: &Value) -> bool {
         }
         _ => false,
     }
+}
+
+/// `color` with its alpha set to `amount` (0 to 1, clamped), as an
+/// alpha-first `0xAARRGGBB` carrying the has-alpha tag, so even a fully
+/// transparent result reads as transparent and not as an opaque `0xRRGGBB`.
+fn with_alpha(color: i64, amount: f64) -> i64 {
+    #[allow(clippy::cast_possible_truncation)]
+    let byte = (amount.clamp(0.0, 1.0) * 255.0).round() as i64;
+    (color & 0x00FF_FFFF) | (byte << 24) | crate::lexer::COLOR_HAS_ALPHA_TAG
 }
 
 /// Percent-encodes `text` for use as one value in a URL (RFC 3986): letters,

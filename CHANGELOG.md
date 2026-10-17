@@ -74,6 +74,11 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`color.alpha(0.16)` is a colour at an opacity.** A translucent tint of a
+  theme colour had to be written as a hex of its own, which stayed put when
+  the theme or the scheme changed. `t.primary.alpha(0.16)` follows the token.
+  The opacity is clamped to 0–1; an alpha the colour already had is replaced.
+
 - **`scheme = "system"` follows the system's light or dark appearance.** A
   theme could start light or dark and flip on `t.dark = …`, but not follow
   the operating system. Now the window reports its appearance when it opens

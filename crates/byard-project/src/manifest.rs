@@ -834,12 +834,16 @@ fn apply_theme_table(
     // `scheme = "dark"` (RFC-0022): the scheme the app starts in. Absent is
     // light, as it always was. The runtime flag (`t.dark`) still flips it.
     if let Some(v) = theme_tbl.get("scheme") {
+        // "system" starts light and follows the system's appearance, which
+        // the host reports as soon as it has a window.
+        theme.follows_system = v.as_str() == Some("system");
         theme.active_dark = match v.as_str() {
-            Some("light") => false,
+            Some("light" | "system") => false,
             Some("dark") => true,
             _ => {
                 return Err(
-                    "byard.toml: [theme] `scheme` must be \"light\" or \"dark\"".to_string()
+                    "byard.toml: [theme] `scheme` must be \"light\", \"dark\" or \"system\""
+                        .to_string(),
                 );
             }
         };
@@ -1455,6 +1459,11 @@ mod tests {
             !theme_of("[theme]\nscheme = \"light\"\n")
                 .unwrap()
                 .active_dark
+        );
+        let system = theme_of("[theme]\nscheme = \"system\"\n").unwrap();
+        assert!(
+            system.follows_system && !system.active_dark,
+            "starts light, follows"
         );
         let err = theme_of("[theme]\nscheme = \"night\"\n").unwrap_err();
         assert!(err.contains("scheme"), "{err}");

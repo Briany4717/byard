@@ -914,7 +914,7 @@ impl Checker<'_> {
             (Ty::List(_), "push" | "removeAt" | "filter" | "slice" | "sort" | "sortBy") => {
                 recv.clone()
             }
-            (Ty::List(_), "indexOf") => Ty::Int,
+            (Ty::List(_), "indexOf") | (Ty::Int, "alpha") => Ty::Int,
             (Ty::Str, "slice" | "urlEncoded" | "formatDate") => Ty::Str,
             (Ty::List(_), "contains") => Ty::Bool,
             (Ty::List(_), "map") => Ty::List(Box::new(lambda_body_ty.unwrap_or(Ty::Unknown))),

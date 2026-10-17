@@ -290,6 +290,13 @@ impl<H: PlatformHost> ApplicationHandler<FramePublished> for WinitApp<H> {
             return;
         }
 
+        // The appearance the window opens in, for an app whose theme
+        // follows it. A platform that cannot say reports nothing.
+        if let Some(theme) = window.theme() {
+            self.host
+                .on_system_scheme(theme == winit::window::Theme::Dark);
+        }
+
         window.request_redraw();
         self.window = Some(window);
     }
@@ -310,6 +317,12 @@ impl<H: PlatformHost> ApplicationHandler<FramePublished> for WinitApp<H> {
             // arm below rather than getting its own empty branch here.
             WindowEvent::CloseRequested if self.host.on_close_requested() => {
                 event_loop.exit();
+            }
+
+            WindowEvent::ThemeChanged(theme) => {
+                self.host
+                    .on_system_scheme(theme == winit::window::Theme::Dark);
+                window.request_redraw();
             }
 
             WindowEvent::Resized(new_size) => {

@@ -30,6 +30,7 @@ const STEP: std::time::Duration = std::time::Duration::from_millis(16);
 pub struct Shot {
     run_ms: u32,
     taps: Vec<(f32, f32)>,
+    system_dark: Option<bool>,
 }
 
 impl Shot {
@@ -39,7 +40,18 @@ impl Shot {
         Self {
             run_ms,
             taps: Vec::new(),
+            system_dark: None,
         }
+    }
+
+    /// Reports the system's appearance as dark (`true`) or light, as a
+    /// window would when it opens, for an app whose theme follows it
+    /// (`scheme = "system"`). Without it a shot reports nothing, as a
+    /// platform that cannot say would.
+    #[must_use]
+    pub const fn system_dark(mut self, dark: bool) -> Self {
+        self.system_dark = Some(dark);
+        self
     }
 
     /// Taps a logical point first. Taps happen in order, one per frame, at
@@ -104,6 +116,15 @@ impl App {
         let (pw, ph) = ((w * scale).round() as u32, (h * scale).round() as u32);
         let mut target = Target::new(pw, ph, scale, (w, h))?;
 
+        if let Some(dark) = plan.system_dark {
+            interp.dispatch_events(&[InputEvent {
+                kind: EventKind::SystemScheme,
+                pos: (0.0, 0.0),
+                delta: (0.0, 0.0),
+                payload: Some(byard_core::platform::InputPayload::Bool(dark)),
+                time_ms: 0,
+            }]);
+        }
         let mut now = 0_u32;
         let mut taps = plan.taps.iter();
         loop {

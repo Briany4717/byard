@@ -13,7 +13,8 @@
 //! cargo run -p aura-weather -- --shot map.png map
 //! ```
 //!
-//! The last word is the tab: `now`, `days`, `air`, `trends` or `map`.
+//! The next word is the tab: `now`, `days`, `air`, `trends` or `map`, and
+//! `--light` after it draws the light scheme.
 //!
 //! Or run it following its own files, so an edit to a screen applies to the
 //! open window:
@@ -40,7 +41,10 @@ fn main() -> Result<(), byard::ByardError> {
         (Some("--dev"), _) => app.hot_reload(true).run(),
         (Some("--shot"), Some(out)) => {
             let tab = args.next().unwrap_or_else(|| "now".to_string());
-            let mut plan = byard::Shot::after(6000);
+            // The app follows the system's appearance; a shot is dark unless
+            // `--light` is given.
+            let dark = !args.any(|a| a == "--light");
+            let mut plan = byard::Shot::after(6000).system_dark(dark);
             if let Some((_, x)) = TABS.iter().find(|(name, _)| *name == tab) {
                 plan = plan.tap(*x, 850.0);
             }

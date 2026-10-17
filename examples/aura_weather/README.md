@@ -22,6 +22,13 @@ the open window, map included.
 cargo run -p aura-weather -- --dev
 ```
 
+Or trace a shot that pans the map, and open `pan.json` in Perfetto: every
+frame's logic, encoding and GPU pass.
+
+```bash
+cargo run --release -p aura-weather -- --shot map.png map --pan --trace pan.json
+```
+
 Or package it to run on a Mac that has neither its sources nor Byard: an
 `Aura Weather.app` with its icon, under `examples/aura_weather/.byard/bundle/`.
 
@@ -86,6 +93,7 @@ Each of these was found by building a screen, and each is now in Byard.
 | Every screen | A theme was light or dark, never the system's: the app ignored the appearance the user had chosen. | `scheme = "system"` (#323) |
 | Every screen | A translucent tint of a theme colour had to be its own hex, which stayed dark on a light scheme. | `t.primary.alpha(0.6)` (#324) |
 | Shell | The window had the default icon. | `[project] icon` (#325) |
+| Map | An app with a Rust half could not be profiled: only `byard dev` wrote a trace, so the GPU side of panning could not be measured. | `App::trace(path)`, `Shot::trace`, `Shot::drag` and `Shot::wait`. Panning measured: 0.61 ms of GPU per frame (median, 0.69 ms p95) at 880×1760, the same as a still frame |
 | Shipping | The app read its project from the path it was compiled at, so it ran on no other machine, and there was no way to package it. | `byard bundle --bin …`: a `.app` (or a directory) with the project and its packages beside the binary, which an app looks for when its build path is gone; `[bundle]` names it |
 | Trends | A misspelt name inside a gradient or a shadow (`to: blak`) checked clean. | A record value's named fields are checked as values |
 
@@ -98,8 +106,3 @@ Worked around in the app, and not yet fixed in Byard:
 - **The Rust half itself does not reload.** `cargo run -p aura-weather --
   --dev` follows every `.byd` and the manifest with the map linked in, but
   an edit to `map.rs` still needs the app rebuilt.
-- **Measured only on the logic side**: panning over tiles the map has costs
-  about 0.04 ms of tick and render for the whole app in a release build
-  (0.4 ms in debug), and asks for and writes nothing
-  (`panning_over_tiles_it_has_writes_and_asks_nothing`). The GPU side of a
-  panning frame is not measured.

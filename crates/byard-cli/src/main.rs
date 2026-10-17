@@ -14,7 +14,6 @@ mod hud;
 mod statusline;
 mod style;
 mod telemetry_overlay;
-mod trace;
 
 #[derive(Parser)]
 #[command(

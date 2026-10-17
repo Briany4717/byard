@@ -80,6 +80,14 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`App::trace(path)` profiles an app with a Rust half.** Only `byard dev
+  --trace` wrote a trace, and `byard dev` cannot link an app's controllers,
+  views or shaders. Now a running app writes the same Chrome trace: the
+  logic thread, the render thread and the GPU's passes, frame by frame.
+  `Shot::trace` does the same for an offscreen run, and `Shot::drag` and
+  `Shot::wait` script what it does first, so a trace can hold the frames a
+  pan or a scroll costs. The trace writer moved into `byard_core::telemetry`.
+
 - **`byard bundle --bin <exe>` packages an app to run on another machine.**
   An app read its project from the path it was compiled at
   (`App::new(env!("CARGO_MANIFEST_DIR"))`), so the binary ran nowhere else,

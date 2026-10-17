@@ -959,7 +959,7 @@ impl EncoderSubsystem {
     /// requires the `map_async` request to happen only after the command
     /// buffer that writes the mapped buffer has actually been submitted
     /// (see [`GpuTimer::resolve_and_copy`]'s doc comment).
-    pub(crate) fn submit(&mut self, buffer: wgpu::CommandBuffer) {
+    pub fn submit(&mut self, buffer: wgpu::CommandBuffer) {
         // RFC-0030 §I1: a top-level scope rather than a child of
         // `encode.frame`, because the submission happens after that scope has
         // closed, the caller owns the command buffer in between. It is also

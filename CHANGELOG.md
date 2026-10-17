@@ -12,6 +12,12 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **A record-shaped property value reads its fields' bare names as names.**
+  `shadow: (y: sze)`, `p: (vertical: sze)` and `gradient: (to: blak)` checked
+  clean (or, for `p`, said only "expected a length") and drew with nothing.
+  Now each misspelling is told, with the name it meant. A gradient's `kind:`
+  keeps its words, and so does an unnamed item of a pair.
+
 - **A canvas shape's numeric argument reads a bare name as a name.**
   `circle(r: raduis)` and `line(x: wdth, y: 40)` checked clean and drew with
   nothing; now the misspelling is told, with the name it meant. An argument

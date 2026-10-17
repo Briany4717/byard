@@ -74,13 +74,12 @@ Each of these was found by building a screen, and each is now in Byard.
 | Map | An app with a Rust half could not hot-reload: `byard dev` cannot link the map, so it drew a panel there. | `App::hot_reload(true)`, `--dev` |
 | 10 days | Dates had no words: month names were a hand-written table and a weekday could not be had at all. | `iso.formatDate("ddd D")` |
 | Search | A reply was assigned to `List<Place>` without being compared with it, so a field the server left out read as nothing. | A value written into a record-typed `var` is compared, and the first difference reported; `country: Str?` may be absent |
+| Trends | A misspelt name inside a gradient or a shadow (`to: blak`) checked clean. | A record value's named fields are checked as values |
 
 ## What it still could not be built with
 
 Worked around in the app, and not yet fixed in Byard:
 
-- **One kind of misspelling still checks clean**: a name passed to an
-  intrinsic's named argument, where the argument may also be a word.
 - **A misspelt JSON field reads as nothing.** `??` gives a missing field a
   default, but `res.json.resluts` is a missing field too, and nothing says so.
 - **A JSON list of records has no type.** `var found: List<Place>` names a

@@ -221,8 +221,25 @@ fn drive_frame(
     target: &wgpu::Texture,
     frame: &mut RenderFrame,
 ) {
+    drive_frame_with(interp, tree, enc, device, queue, target, frame, false);
+}
+
+/// [`drive_frame`], with the accessibility flag as the relay would have
+/// stamped it on the frame (RFC-0042).
+#[allow(clippy::too_many_arguments)]
+fn drive_frame_with(
+    interp: &mut Interpreter,
+    tree: &[RenderNode],
+    enc: &mut EncoderSubsystem,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    target: &wgpu::Texture,
+    frame: &mut RenderFrame,
+    access: bool,
+) {
     interp.tick();
     frame.clear();
+    frame.set_access_wanted(access);
     interp.render(tree, frame, W, H);
     let cmd = enc.encode_frame_from_relay(target, frame).unwrap();
     queue.submit(std::iter::once(cmd));
@@ -536,4 +553,75 @@ fn an_idle_frame_marks_nothing_and_draws_nothing() {
         "nothing changed, so no box may be reported dirty"
     );
     assert!(w.frame.texts().iter().all(|t| !t.dirty));
+}
+
+/// RFC-0042 "Cost": with no assistive technology listening, a frame builds no
+/// accessibility tree, allocates no storage for one, and allocates nothing
+/// more than it did before the feature existed.
+///
+/// "Nothing more than before" is asserted three ways, none of which depends
+/// on the machine's absolute allocation count: the build counter does not
+/// move, neither the frame nor the interpreter has any accessibility storage,
+/// and a frame after an assistive technology has come and gone allocates
+/// exactly what a frame that never had one did. The same assertions are shown
+/// able to fail by the frames that do ask, which build, allocate and leave
+/// storage behind.
+#[test]
+fn a_frame_with_the_accessibility_flag_off_builds_no_tree_and_allocates_nothing_extra() {
+    let mut w = skip_without_gpu!(warm_up());
+    let mut drive = |w: &mut Warm, access: bool| {
+        flip(&mut w.interp, "hot");
+        count_allocations(|| {
+            drive_frame_with(
+                &mut w.interp,
+                &w.tree,
+                &mut w.enc,
+                &w.device,
+                &w.queue,
+                &w.target,
+                &mut w.frame,
+                access,
+            );
+        })
+        .1
+    };
+
+    let builds = byard_core::access::builds();
+    let off = drive(&mut w, false);
+    assert_eq!(
+        byard_core::access::builds(),
+        builds,
+        "a frame with the flag off started building a tree"
+    );
+    assert!(w.frame.access().is_none());
+    assert_eq!(w.frame.access_capacity(), 0, "storage for a tree was made");
+    assert_eq!(w.interp.access_scratch_capacity(), 0);
+    assert!(off <= MAX_ALLOCATIONS_PER_FRAME);
+
+    // The frames that ask do build, allocate and leave storage behind, so
+    // the assertions above are able to fail.
+    drive(&mut w, true);
+    let on = drive(&mut w, true);
+    assert!(byard_core::access::builds() > builds);
+    assert!(w.frame.access().is_some_and(|t| !t.nodes.is_empty()));
+    assert!(w.frame.access_capacity() > 0);
+    assert!(w.interp.access_scratch_capacity() > 0);
+    assert!(
+        on > off,
+        "a frame with a tree allocated no more ({on} vs {off})"
+    );
+
+    // And when the assistive technology goes, so does the cost: the frames
+    // after it allocate what they did before it came.
+    let after_builds = byard_core::access::builds();
+    drive(&mut w, false);
+    drive(&mut w, false);
+    let settled = drive(&mut w, false);
+    assert_eq!(byard_core::access::builds(), after_builds);
+    assert!(w.frame.access().is_none());
+    assert_eq!(
+        settled, off,
+        "a frame after the flag went off allocates differently from one that never had it on"
+    );
+    eprintln!("accessibility: {off} allocations off, {on} on");
 }

@@ -56,7 +56,11 @@ fn accessibility_example_checks_clean() {
 /// and read the diff: it is the change in what a screen reader is told.
 #[test]
 fn the_example_tree_is_the_committed_golden_file() {
-    let golden = std::fs::read_to_string(example_dir().join("tree.txt")).expect("tree.txt");
+    // A Windows checkout with `core.autocrlf` gives the golden file CRLF
+    // endings; the dump has LF ones on every platform.
+    let golden = std::fs::read_to_string(example_dir().join("tree.txt"))
+        .expect("tree.txt")
+        .replace("\r\n", "\n");
     assert_eq!(dump(), golden);
 }
 

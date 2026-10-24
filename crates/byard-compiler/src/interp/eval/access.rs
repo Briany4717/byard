@@ -720,7 +720,8 @@ impl Interpreter {
                 owners.get(j) == Some(&depth) && tree.nodes[j].role == AccessRole::Label
             });
             if let Some(j) = label {
-                tree.nodes[i].name = tree.nodes[j].name.clone();
+                let name = tree.nodes[j].name.clone();
+                tree.nodes[i].name = name;
                 consumed.push(j);
             }
         }

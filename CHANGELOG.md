@@ -98,10 +98,11 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `(unnamed)`, and needs no GPU or screen reader; see the `accessibility`
   example. A `Slider` now writes its `var` when its value is set from
   outside the pointer. `#[byard::native_view(role = "image")]` says what a
-  native view is called. The `no-a11y` feature on `byard` and `byard-platform`
-  leaves the bridge out for an embedded or kiosk build, and it adds
-  `accesskit` and `accesskit_winit` (53 packages in `Cargo.lock`) to
-  everything else. An element with a tap handler is read as a button, and a
+  native view is called. Handing the tree to the screen reader is opt-in:
+  `byard = { ..., features = ["a11y"] }` (and `byard-cli`'s `a11y` feature
+  for `byard dev`). It brings in `accesskit` and `accesskit_winit` (53
+  packages in `Cargo.lock`) and adds about a fifth to a stripped release
+  binary, so an app that does not ask for it carries none of it. An element with a tap handler is read as a button, and a
   `Toggle`, a `Button` or a `Slider` is still not in the Tab order; both are
   follow-ups.
 

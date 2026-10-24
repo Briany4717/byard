@@ -183,8 +183,8 @@ the same path, so the tree is checked without any AT, any D-Bus or any window.
   already doing; a hash compare on the platform side; a `TreeUpdate` only when
   something changed. Flattening keeps the tree to the controls.
 - **Binary:** `accesskit_winit` pulls in AccessKit's platform adapters (AT-SPI
-  over `zbus` on Linux). This is the largest cost and is paid by every
-  windowed app; Q4 explains why it is not behind a feature flag by default.
+  over `zbus` on Linux), measured at about a fifth of a stripped release
+  binary. It is the largest cost, and it is why the bridge is opt-in (Q4).
 
 ## Drawbacks
 
@@ -235,10 +235,17 @@ learn it.
 
 ### Q4, a cargo feature to leave AccessKit out
 
-**Resolution:** on by default, a `no-a11y` opt-out feature on `byard` and
-`byard-platform` for embedded or kiosk builds. Accessibility that is opt-in is
-missing from most apps; the binary-size cost is measured and recorded in the
-PR so the trade is visible.
+**Options.** (a) on by default, a `no-a11y` opt-out; (b) off by default, an
+`a11y` opt-in. **Resolution: (b), an `a11y` feature on `byard`,
+`byard-platform` and `byard-cli`.** This was first written as (a), on the
+argument that accessibility which is opt-in is missing from most apps.
+Measured, the bridge adds 19 % to a stripped release binary (Aura Weather,
+21.4 MB to 25.4 MB), most of it the Linux D-Bus stack, and Byard's first
+promise is the smallest footprint for what an app uses. So an app opts in.
+What is opt-in is only the hand-off to the platform: the tree itself, the
+`a11y_label` and `a11y_hidden` attributes and `byard shot --a11y` work in
+every build, so an app can be checked for accessibility before it ships the
+bridge.
 
 ## Acceptance
 

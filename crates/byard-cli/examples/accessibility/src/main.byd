@@ -7,8 +7,10 @@
 // reader, no D-Bus and no window: one node a line, with its role, name, value,
 // state and bounds. The committed copy is `tree.txt` beside this file, and
 // `tests/it/accessibility_example.rs` compares the two. To hear it instead,
-// run the app with `byard dev` under Orca (Linux), NVDA or Narrator (Windows)
-// or VoiceOver (macOS) and move through it with Tab.
+// run it with the bridge, which is opt-in,
+//   cargo run -p byard-cli --features a11y -- dev crates/byard-cli/examples/accessibility
+// under Orca (Linux), NVDA or Narrator (Windows) or VoiceOver (macOS), and
+// move through it with Tab.
 //
 // What to look for in the dump:
 //   1. "Save" is a Button named by its own text, and the text is not listed a

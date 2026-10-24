@@ -13,9 +13,9 @@
 //! # Accessibility (RFC-0042)
 //!
 //! The window also hands the platform's screen-reader API the tree the engine
-//! builds for it, through AccessKit. That is on by default and costs nothing
-//! while no assistive technology is connected; the `no-a11y` feature compiles
-//! it out. See [`access`].
+//! builds for it, through AccessKit, when the `a11y` feature is on (it is off
+//! by default). With it on, it costs nothing while no assistive technology is
+//! connected. See [`access`].
 
 use std::sync::Arc;
 
@@ -44,12 +44,12 @@ fn control_flow_for(wants_frames: bool) -> ControlFlow {
     }
 }
 
-#[cfg(all(feature = "a11y", not(feature = "no-a11y")))]
+#[cfg(feature = "a11y")]
 mod access;
 
 /// What the accessibility bridge is when the feature is off: nothing, behind
 /// the same few calls, so the host reads the same either way.
-#[cfg(not(all(feature = "a11y", not(feature = "no-a11y"))))]
+#[cfg(not(feature = "a11y"))]
 mod access {
     use byard_core::PlatformHost;
     use winit::window::Window;
@@ -78,11 +78,11 @@ enum UserEvent {
     FramePublished,
     /// The screen-reader adapter has something to say (RFC-0042 §5): a reader
     /// connected or left, or asked a node to act.
-    #[cfg(all(feature = "a11y", not(feature = "no-a11y")))]
+    #[cfg(feature = "a11y")]
     Access(accesskit_winit::Event),
 }
 
-#[cfg(all(feature = "a11y", not(feature = "no-a11y")))]
+#[cfg(feature = "a11y")]
 impl From<accesskit_winit::Event> for UserEvent {
     fn from(event: accesskit_winit::Event) -> Self {
         Self::Access(event)
@@ -245,7 +245,7 @@ struct WinitApp<H: PlatformHost> {
     ime_caret: Option<byard_core::frame::Rect>,
     /// The proxy the screen-reader adapter posts its events through.
     #[cfg_attr(
-        not(all(feature = "a11y", not(feature = "no-a11y"))),
+        not(feature = "a11y"),
         allow(dead_code, reason = "only the AccessKit bridge uses it")
     )]
     access_proxy: winit::event_loop::EventLoopProxy<UserEvent>,
@@ -262,7 +262,7 @@ impl<H: PlatformHost> WinitApp<H> {
     }
 
     #[cfg_attr(
-        not(all(feature = "a11y", not(feature = "no-a11y"))),
+        not(feature = "a11y"),
         allow(
             clippy::unused_self,
             reason = "there is no adapter to keep without AccessKit"
@@ -272,7 +272,7 @@ impl<H: PlatformHost> WinitApp<H> {
     /// (RFC-0042 §5). With the feature off the window was never hidden and
     /// there is nothing to build.
     fn attach_access(&mut self, event_loop: &ActiveEventLoop, window: &Window) {
-        #[cfg(all(feature = "a11y", not(feature = "no-a11y")))]
+        #[cfg(feature = "a11y")]
         {
             self.access = Some(access::Bridge::new(
                 event_loop,
@@ -281,7 +281,7 @@ impl<H: PlatformHost> WinitApp<H> {
             ));
             window.set_visible(true);
         }
-        #[cfg(not(all(feature = "a11y", not(feature = "no-a11y"))))]
+        #[cfg(not(feature = "a11y"))]
         let _ = (event_loop, window);
     }
 
@@ -528,7 +528,7 @@ impl<H: PlatformHost> ApplicationHandler<UserEvent> for WinitApp<H> {
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: UserEvent) {
         match event {
             UserEvent::FramePublished => {}
-            #[cfg(all(feature = "a11y", not(feature = "no-a11y")))]
+            #[cfg(feature = "a11y")]
             UserEvent::Access(event) => {
                 if let Some(access) = self.access.as_mut() {
                     access.handle(&mut self.host, event.window_event);

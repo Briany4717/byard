@@ -229,6 +229,71 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
     Ok(())
 }
 
+/// The `.byd` files a project owns, for the tools that rewrite sources
+/// (`byard fmt`, RFC-0044): its entry directory, and every path dependency
+/// (and theirs), wherever on disk it is, since a path dependency is the
+/// project's own code. Never `.byard/` or any hidden directory, `target/`,
+/// or a package fetched into the cache (a git or registry dependency belongs
+/// to its author, and rewriting it would make the lockfile's hash lie).
+///
+/// Sorted within each package, packages in dependency order, each file once.
+pub fn owned_source_files(manifest: &Manifest) -> Result<Vec<PathBuf>, String> {
+    let mut out: Vec<PathBuf> = Vec::new();
+    if manifest.single_file {
+        out.push(manifest.entry.clone());
+        return Ok(out);
+    }
+    if manifest.library {
+        out.extend(
+            collect_byd_files(&manifest.project_root)?
+                .into_iter()
+                .map(|(_, p)| p),
+        );
+    } else {
+        let entry_dir = manifest
+            .entry
+            .parent()
+            .unwrap_or(Path::new("."))
+            .to_path_buf();
+        walk(&entry_dir, &mut out)?;
+    }
+
+    let mut seen: Vec<PathBuf> = vec![manifest.project_root.clone()];
+    let mut pending: Vec<(PathBuf, Vec<Dependency>)> =
+        vec![(manifest.project_root.clone(), manifest.dependencies.clone())];
+    while let Some((declarer, deps)) = pending.pop() {
+        for dep in deps {
+            if !matches!(dep.source, DepSource::Path(_)) {
+                continue;
+            }
+            let root = dep_root(&declarer, &dep, None)?;
+            if seen.contains(&root) {
+                continue;
+            }
+            seen.push(root.clone());
+            let package = Manifest::discover(Some(&root))?;
+            out.extend(collect_byd_files(&root)?.into_iter().map(|(_, p)| p));
+            pending.push((root, package.dependencies));
+        }
+    }
+    let mut unique: Vec<PathBuf> = Vec::with_capacity(out.len());
+    for path in out {
+        if !unique.contains(&path) {
+            unique.push(path);
+        }
+    }
+    Ok(unique)
+}
+
+/// Every `.byd` file under `dir`, recursively, sorted, skipping hidden
+/// directories and `target/`: the files `byard fmt DIR` formats when `DIR`
+/// is not itself a project.
+pub fn byd_files_under(dir: &Path) -> Result<Vec<PathBuf>, String> {
+    let mut out = Vec::new();
+    walk(dir, &mut out)?;
+    Ok(out)
+}
+
 // ── Lockfile (D-I) ────────────────────────────────────────────────────────────
 
 /// One pinned package in `byard.lock`.

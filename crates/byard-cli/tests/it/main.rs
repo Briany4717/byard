@@ -14,6 +14,7 @@ mod data_ops_example;
 mod diagnostics_shape;
 mod error_overlay_example;
 mod example_roots;
+mod fmt;
 mod font_families_example;
 mod frosted_glass_example;
 mod gradient_kinds_example;

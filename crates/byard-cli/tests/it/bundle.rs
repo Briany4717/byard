@@ -287,12 +287,73 @@ fn a_linux_bundle_is_a_prefix_with_a_launcher_entry() {
         ("Name", "Dials"),
         ("Comment", "Dials for things"),
         ("Exec", "dials-bin"),
+        ("Icon", "com.example.dials"),
         ("Terminal", "false"),
         ("Categories", "Utility;Development;"),
         ("StartupWMClass", "com.example.dials"),
     ] {
         assert_eq!(key(&keys, k), Some(v), "{k}: {keys:?}");
     }
+
+    // The icon at every hicolor size up to its own 128 px, and none above it,
+    // each a PNG of that size.
+    let icons = prefix.join("share/icons/hicolor");
+    let mut sizes: Vec<String> = std::fs::read_dir(&icons)
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    sizes.sort();
+    assert_eq!(
+        sizes,
+        ["128x128", "16x16", "32x32", "48x48", "64x64"],
+        "{sizes:?}"
+    );
+    for size in [16u32, 32, 48, 64, 128] {
+        let file = icons.join(format!("{size}x{size}/apps/com.example.dials.png"));
+        let png = image::open(&file).unwrap_or_else(|e| panic!("{}: {e}", file.display()));
+        assert_eq!((png.width(), png.height()), (size, size));
+    }
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A source larger than 512 px stops at 512, and a small one is not scaled up.
+#[test]
+fn the_hicolor_icons_stop_at_the_source_or_512() {
+    for (source, expect) in [
+        (600u32, vec![16u32, 32, 48, 64, 128, 256, 512]),
+        (256, vec![16, 32, 48, 64, 128, 256]),
+        (50, vec![16, 32, 48]),
+    ] {
+        let root = workspace(&format!("linux-icon-{source}"));
+        image::RgbaImage::from_pixel(source, source, image::Rgba([9, 9, 9, 255]))
+            .save(root.join("app/icon.png"))
+            .unwrap();
+        let (ok, text) = bundle(&root, "linux");
+        assert!(ok, "{text}");
+        let icons = root.join("out/dials/share/icons/hicolor");
+        let mut sizes: Vec<u32> = std::fs::read_dir(&icons)
+            .unwrap()
+            .map(|e| {
+                let name = e.unwrap().file_name().to_string_lossy().into_owned();
+                name.split('x').next().unwrap().parse().unwrap()
+            })
+            .collect();
+        sizes.sort_unstable();
+        assert_eq!(sizes, expect, "a {source} px icon");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}
+
+/// An icon that is not square is refused, as for `.icns`.
+#[test]
+fn a_linux_bundle_refuses_an_icon_that_is_not_square() {
+    let root = workspace("linux-wide");
+    image::RgbaImage::from_pixel(64, 32, image::Rgba([9, 9, 9, 255]))
+        .save(root.join("app/icon.png"))
+        .unwrap();
+    let (ok, text) = bundle(&root, "linux");
+    assert!(!ok, "{text}");
+    assert!(text.contains("square") && text.contains("64x32"), "{text}");
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -315,5 +376,27 @@ fn a_linux_bundle_with_no_bundle_table_falls_back_to_the_executable() {
     assert_eq!(key(&keys, "Categories"), Some("Utility;"));
     assert_eq!(key(&keys, "StartupWMClass"), Some("dev.byard.dials-bin"));
     assert_eq!(key(&keys, "Comment"), None);
+    // The icon is named by the id, and written under it.
+    assert_eq!(key(&keys, "Icon"), Some("dev.byard.dials-bin"));
+    assert!(
+        root.join("out/dials/share/icons/hicolor/16x16/apps/dev.byard.dials-bin.png")
+            .is_file()
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// An app with no icon has no `Icon` key and no icon files to point at.
+#[test]
+fn a_linux_bundle_without_an_icon_writes_none() {
+    let root = workspace("linux-noicon");
+    let manifest = root.join("app/byard.toml");
+    let text = std::fs::read_to_string(&manifest).unwrap();
+    std::fs::write(&manifest, text.replace("icon = \"icon.png\"\n", "")).unwrap();
+    let (ok, text) = bundle(&root, "linux");
+    assert!(ok, "{text}");
+    let prefix = root.join("out/dials");
+    let keys = desktop_keys(&prefix.join("share/applications/com.example.dials.desktop"));
+    assert_eq!(key(&keys, "Icon"), None);
+    assert!(!prefix.join("share/icons").exists());
     let _ = std::fs::remove_dir_all(&root);
 }

@@ -265,7 +265,7 @@ fn write_file(path: &Path, text: impl AsRef<[u8]>) -> Result<(), String> {
     std::fs::write(path, text).map_err(|e| io(path, &e))
 }
 
-/// What the desktop reads of a Linux prefix: the launcher entry.
+/// What the desktop reads of a Linux prefix: the launcher entry and the icons.
 fn write_linux_entries(
     manifest: &Manifest,
     naming: &Naming,
@@ -279,7 +279,11 @@ fn write_linux_entries(
             .join("applications")
             .join(format!("{}.desktop", naming.id)),
         desktop,
-    )
+    )?;
+    if let Some(icon) = &manifest.icon {
+        write_hicolor_icons(icon, &share, &naming.id)?;
+    }
+    Ok(())
 }
 
 /// A value of a `.desktop` file: a backslash and a line break are written
@@ -426,9 +430,8 @@ const ICNS_SIZES: [(u32, &[u8; 4]); 10] = [
     (1024, b"ic10"),
 ];
 
-/// A macOS icon file from the project's icon: the picture at every size up
-/// to its own, so none is scaled up past what it holds.
-fn icns_from(icon: &Path) -> Result<Vec<u8>, String> {
+/// The project's icon, read, and square (as an icon is).
+fn square_icon(icon: &Path) -> Result<image::DynamicImage, String> {
     let picture = image::open(icon).map_err(|e| format!("{}: {e}", icon.display()))?;
     let (w, h) = (picture.width(), picture.height());
     if w != h {
@@ -437,19 +440,57 @@ fn icns_from(icon: &Path) -> Result<Vec<u8>, String> {
             icon.display()
         ));
     }
+    Ok(picture)
+}
+
+/// The picture as a PNG `size` pixels square: resized with Lanczos3, or
+/// as it is when it already has that size.
+fn png_at(picture: &image::DynamicImage, size: u32) -> Result<Vec<u8>, String> {
+    let mut png = Vec::new();
+    let write = |img: &image::DynamicImage, png: &mut Vec<u8>| {
+        img.write_to(&mut std::io::Cursor::new(png), image::ImageFormat::Png)
+            .map_err(|e| e.to_string())
+    };
+    if picture.width() == size {
+        write(picture, &mut png)?;
+    } else {
+        let scaled = picture.resize_exact(size, size, image::imageops::FilterType::Lanczos3);
+        write(&scaled, &mut png)?;
+    }
+    Ok(png)
+}
+
+/// A macOS icon file from the project's icon: the picture at every size up
+/// to its own, so none is scaled up past what it holds.
+fn icns_from(icon: &Path) -> Result<Vec<u8>, String> {
+    let picture = square_icon(icon)?;
+    let w = picture.width();
     let mut chunks = Vec::new();
     for (size, kind) in ICNS_SIZES {
         if size > w.max(16) {
             break;
         }
-        let scaled = picture.resize_exact(size, size, image::imageops::FilterType::Lanczos3);
-        let mut png = Vec::new();
-        scaled
-            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
-            .map_err(|e| e.to_string())?;
-        chunks.push((kind, png));
+        chunks.push((kind, png_at(&picture, size)?));
     }
     Ok(icns(&chunks))
+}
+
+/// The sizes of a freedesktop.org icon theme a Linux desktop looks for.
+const HICOLOR_SIZES: [u32; 7] = [16, 32, 48, 64, 128, 256, 512];
+
+/// Writes the icon under `share/icons/hicolor/NxN/apps/<id>.png` at each of
+/// the [`HICOLOR_SIZES`] up to the picture's own (and never fewer than 16).
+fn write_hicolor_icons(icon: &Path, share: &Path, id: &str) -> Result<(), String> {
+    let picture = square_icon(icon)?;
+    let largest = picture.width().max(16);
+    for size in HICOLOR_SIZES.into_iter().take_while(|&s| s <= largest) {
+        let path = share
+            .join("icons/hicolor")
+            .join(format!("{size}x{size}/apps"))
+            .join(format!("{id}.png"));
+        write_file(&path, png_at(&picture, size)?)?;
+    }
+    Ok(())
 }
 
 /// The `.icns` container: `icns`, its length, then each chunk as its type,

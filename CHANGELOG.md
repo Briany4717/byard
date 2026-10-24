@@ -12,6 +12,16 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Every app's window now carries its own id, so its window class changes.**
+  Wayland's `app_id` and X11's `WM_CLASS` were `dev.byard.Byard` for every
+  Byard app, so a compositor grouped them as one application, a taskbar could
+  not find the right icon and a window rule could not tell two apps apart. The
+  id is now the manifest's `[bundle] id` (`dev.byard.aura-weather`), or else
+  `dev.byard.<executable name>`. `byard dev` keeps `dev.byard.Byard`, as it is
+  the tool's window. A window rule written for `dev.byard.Byard` (Hyprland's
+  `windowrule = ..., class:^(dev.byard.Byard)$`) no longer matches an app;
+  it never named one, and it now can.
+
 - **A record-shaped property value reads its fields' bare names as names.**
   `shadow: (y: sze)`, `p: (vertical: sze)` and `gradient: (to: blak)` checked
   clean (or, for `p`, said only "expected a length") and drew with nothing.
@@ -79,6 +89,20 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   colour lighter than it was written.
 
 ### Added
+
+- **`byard bundle --layout linux` writes an install tree for a Linux
+  desktop.** Bundling gave a Linux app a directory and nothing the desktop
+  could see: no launcher entry, no icon, nothing a package could install
+  without inventing a layout. Now the tree is a prefix: the binary in `bin/`,
+  the project in `share/<exe>/project/`, a `.desktop` entry, the icon at every
+  hicolor size up to its own, and an AppStream metainfo file, and `cp -r
+  aura-weather/* ~/.local/` installs it for one user. `--archive` also packs it
+  as `<exe>-<version>-linux-<arch>.tar.gz`. `[bundle]` takes `categories`,
+  `summary` and `license` for the entry and the metainfo. If
+  `desktop-file-validate` or `appstreamcli` is installed, it checks what was
+  written and its warnings are printed. An app finds its project at
+  `../share/<exe>/project` when its build path is gone, one more path probed
+  at start-up and only then.
 
 - **`App::trace(path)` profiles an app with a Rust half.** Only `byard dev
   --trace` wrote a trace, and `byard dev` cannot link an app's controllers,

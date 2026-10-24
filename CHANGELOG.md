@@ -80,6 +80,31 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A Byard window can be read by a screen reader.** Each control, label and
+  image the user can read or operate is a node with a role, a name, its
+  bounds and its state, handed to the platform's accessibility API through
+  AccessKit, and the reader's actions (press, focus, set a value, increment,
+  decrement, scroll into view) come back as the events a pointer or a
+  keyboard would have sent. Nothing changes for an app already written with
+  text in its controls: a button is named by its text, a text field by its
+  placeholder, a switch, checkbox or radio button by the `Text` beside it in
+  its `Row`. A control with no text of its own takes `a11y_label: "Close"`
+  (a string expression, so `"{count} unread"` updates), and decoration comes
+  out of the tree with `a11y_hidden: true`; `byard check` accepts and
+  type-checks both on every element. The tree is built only while a reader is
+  connected: with none, an app pays one relaxed atomic load per frame and
+  allocates nothing more than before. `byard shot --a11y tree.txt` writes the
+  tree as text, marks every control a reader could not name with
+  `(unnamed)`, and needs no GPU or screen reader; see the `accessibility`
+  example. A `Slider` now writes its `var` when its value is set from
+  outside the pointer. `#[byard::native_view(role = "image")]` says what a
+  native view is called. The `no-a11y` feature on `byard` and `byard-platform`
+  leaves the bridge out for an embedded or kiosk build, and it adds
+  `accesskit` and `accesskit_winit` (53 packages in `Cargo.lock`) to
+  everything else. An element with a tap handler is read as a button, and a
+  `Toggle`, a `Button` or a `Slider` is still not in the Tab order; both are
+  follow-ups.
+
 - **`App::trace(path)` profiles an app with a Rust half.** Only `byard dev
   --trace` wrote a trace, and `byard dev` cannot link an app's controllers,
   views or shaders. Now a running app writes the same Chrome trace: the

@@ -97,6 +97,7 @@ Each of these was found by building a screen, and each is now in Byard.
 | Map | An app with a Rust half could not be profiled: only `byard dev` wrote a trace, so the GPU side of panning could not be measured. | `App::trace(path)`, `Shot::trace`, `Shot::drag` and `Shot::wait`. Panning measured: 0.61 ms of GPU per frame (median, 0.69 ms p95) at 880×1760, the same as a still frame |
 | Shipping | The app read its project from the path it was compiled at, so it ran on no other machine, and there was no way to package it. | `byard bundle --bin …`: a `.app` (or a directory) with the project and its packages beside the binary, which an app looks for when its build path is gone; `[bundle]` names it |
 | Trends | A misspelt name inside a gradient or a shadow (`to: blak`) checked clean. | A record value's named fields are checked as values |
+| Shipping on Linux | A bundle was a directory the desktop could not see: no launcher entry, no icon, and every Byard window had the one class `dev.byard.Byard`. | `byard bundle --layout linux --archive`: a prefix with a `.desktop` entry, hicolor icons and metainfo, and a window class of its own (`dev.byard.aura-weather`) |
 
 ## What it still could not be built with
 

@@ -5,11 +5,16 @@ entry = "src/main.byd"
 # app's icon in the Dock once packaged with `byard bundle`.
 icon = "assets/icon.png"
 
-# What the packaged app is called (`byard bundle`).
+# What the packaged app is called (`byard bundle`). The id is also the
+# window's class on Linux, and the name of its launcher entry; the rest fills
+# that entry and the app's store listing.
 [bundle]
 name = "Aura Weather"
 id = "dev.byard.aura-weather"
 version = "0.1.0"
+categories = ["Utility"]
+summary = "Weather for one place at a time, with a map"
+license = "MIT OR Apache-2.0"
 
 # The forecast's requests name a path; this is the host they go to.
 [http]

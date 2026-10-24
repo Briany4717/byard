@@ -54,6 +54,7 @@ View Main() {
             Text("Bold 700") #[font: display, size: 26, weight: 700, color: 0xE7ECF2]
         }
 
-        Text("This paragraph names no family at all. It is set in Manrope because the theme's body token names one, which is how a project declares a UI face once instead of on every line.") #[typo: body, color: 0x9AA3AE]
+        Text("This paragraph names no family at all. It is set in Manrope because the theme's body token names one, which is how a project declares a UI face once instead of on every line.")
+            #[typo: body, color: 0x9AA3AE]
     }
 }

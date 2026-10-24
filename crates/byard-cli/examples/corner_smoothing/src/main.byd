@@ -40,19 +40,43 @@ View Main() {
         Text("the shadow and the border share the caster's profile")
             #[color: 0x8A90A0, size: 13]
         Row #[gap: 20] {
-            Box #[bg: 0xFFFFFF, radius: 32, smooth: 0.0, width: 140, height: 100,
-                  shadow: (y: 10, blur: 24, color: 0x66000000)] {}
-            Box #[bg: 0xFFFFFF, radius: 32, smooth: 1.0, width: 140, height: 100,
-                  shadow: (y: 10, blur: 24, color: 0x66000000)] {}
-            Box #[bg: 0x00000000, radius: 32, smooth: 1.0, width: 140, height: 100,
-                  border: 0x5B8DEF, border_width: 3] {}
+            Box #[
+                bg: 0xFFFFFF,
+                radius: 32,
+                smooth: 0.0,
+                width: 140,
+                height: 100,
+                shadow: (y: 10, blur: 24, color: 0x66000000),
+            ] {}
+            Box #[
+                bg: 0xFFFFFF,
+                radius: 32,
+                smooth: 1.0,
+                width: 140,
+                height: 100,
+                shadow: (y: 10, blur: 24, color: 0x66000000),
+            ] {}
+            Box #[
+                bg: 0x00000000,
+                radius: 32,
+                smooth: 1.0,
+                width: 140,
+                height: 100,
+                border: 0x5B8DEF,
+                border_width: 3,
+            ] {}
         }
 
         // ── 3. It animates (paint-class, RFC-0010) ───────────────────────
         Text("tap the card, smooth is animatable, and moves no layout")
             #[color: 0x8A90A0, size: 13]
-        Box #[bg: 0xE8734A, radius: 44, width: 220, height: 120,
-              smooth: squircled ? 1.0 : 0.0 with anim.spring(stiffness: 180, damping: 0.7)]
+        Box #[
+            bg: 0xE8734A,
+            radius: 44,
+            width: 220,
+            height: 120,
+            smooth: squircled ? 1.0 : 0.0 with anim.spring(stiffness: 180, damping: 0.7),
+        ]
             => squircled = !squircled
 
         // ── 4. The Canvas `rect` kind takes the same scalar (§S3) ────────

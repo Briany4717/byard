@@ -83,9 +83,17 @@ View Main() {
 
     Column #[bg: t.background, grow: 1] {
         Row #[p: (top: 20, horizontal: 24)] {
-            TextField #[bind: query, placeholder: "Search for a city", grow: 1, height: 44,
-                        bg: t.surfaceContainer, radius: 22, p: (horizontal: 18),
-                        typo: t.body, color: t.onSurface] as searchField
+            TextField #[
+                bind: query,
+                placeholder: "Search for a city",
+                grow: 1,
+                height: 44,
+                bg: t.surfaceContainer,
+                radius: 22,
+                p: (horizontal: 18),
+                typo: t.body,
+                color: t.onSurface,
+            ] as searchField
         }
         NavHost(active: tab) #[grow: 1, transition: fade] {
             tab "forecast" { ForecastScreen(place: place, lat: lat, lon: lon) }
@@ -94,8 +102,7 @@ View Main() {
             tab "trends" { TrendsScreen(place: place, lat: lat, lon: lon) }
             tab "map" { MapScreen(place: place, lat: lat, lon: lon) }
         }
-        Row #[bg: t.surfaceContainer, p: (vertical: 10, horizontal: 12), gap: 4,
-              align: center] {
+        Row #[bg: t.surfaceContainer, p: (vertical: 10, horizontal: 12), gap: 4, align: center] {
             Button("Now") #[..tabButton, typo: t.label, selected: tab == "forecast"]
                 => tab = "forecast"
             Button("10 days") #[..tabButton, typo: t.label, selected: tab == "outlook"]
@@ -113,20 +120,37 @@ View Main() {
     // it when there is no room below. A press anywhere else closes them.
     when open {
         Overlay #[modal: false] {
-            Column #[anchor_to: "searchField", anchor_edge: below, anchor_gap: 6,
-                     width: match(searchField), bg: t.surfaceContainerHigh, radius: 18,
-                     p: 6, dismiss => open = false] {
+            Column #[
+                anchor_to: "searchField",
+                anchor_edge: below,
+                anchor_gap: 6,
+                width: match(searchField),
+                bg: t.surfaceContainerHigh,
+                radius: 18,
+                p: 6,
+                dismiss => open = false,
+            ] {
                 when searching && found.len == 0 {
-                    Text("Looking for {query}") #[typo: t.caption, color: t.onSurfaceVariant,
-                                                 p: (vertical: 10, horizontal: 12)]
+                    Text("Looking for {query}") #[
+                        typo: t.caption,
+                        color: t.onSurfaceVariant,
+                        p: (vertical: 10, horizontal: 12),
+                    ]
                 }
                 when !searching && found.len == 0 {
-                    Text("No place by that name") #[typo: t.caption, color: t.onSurfaceVariant,
-                                                   p: (vertical: 10, horizontal: 12)]
+                    Text("No place by that name") #[
+                        typo: t.caption,
+                        color: t.onSurfaceVariant,
+                        p: (vertical: 10, horizontal: 12),
+                    ]
                 }
                 for hit in found {
-                    Column #[p: (vertical: 8, horizontal: 12), radius: 12, gap: 2,
-                             tap => choose(hit.name, hit.latitude, hit.longitude)] {
+                    Column #[
+                        p: (vertical: 8, horizontal: 12),
+                        radius: 12,
+                        gap: 2,
+                        tap => choose(hit.name, hit.latitude, hit.longitude),
+                    ] {
                         Text(hit.name) #[typo: t.body, color: t.onSurface]
                         Text(hit.country ?? "") #[typo: t.caption, color: t.onSurfaceVariant]
                     }

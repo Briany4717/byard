@@ -52,11 +52,21 @@ View Main() {
         }
 
         Row #[gap: 12] {
-            Button("add") #[bg: 0x5B8DEF, color: 0x0B0B10, p: (vertical: 10, horizontal: 20), radius: 10] => {
+            Button("add") #[
+                bg: 0x5B8DEF,
+                color: 0x0B0B10,
+                p: (vertical: 10, horizontal: 20),
+                radius: 10,
+            ] => {
                 next = next * 1.21
                 series = series + [next]
             }
-            Button("reset") #[bg: 0x2A2A38, color: 0xF2F2F7, p: (vertical: 10, horizontal: 20), radius: 10] => {
+            Button("reset") #[
+                bg: 0x2A2A38,
+                color: 0xF2F2F7,
+                p: (vertical: 10, horizontal: 20),
+                radius: 10,
+            ] => {
                 series = [12.0, 30.0, 18.0, 44.0, 26.0, 51.0, 33.0]
                 next = 20.0
             }

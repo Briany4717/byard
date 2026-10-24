@@ -29,7 +29,13 @@ View Main() {
     Column #[bg: 0x0E1116, p: 28, gap: 18, width: 520, height: 400] {
         Text("Group opacity") #[color: 0xE7ECF2, size: 20]
         Text("RFC-0011") #[color: 0x69737F, size: 13]
-        Button("fade") #[bg: 0x2A3442, radius: 8, p: 10, width: 80, color: 0xE7ECF2] => faded = !faded
+        Button("fade") #[
+            bg: 0x2A3442,
+            radius: 8,
+            p: 10,
+            width: 80,
+            color: 0xE7ECF2,
+        ] => faded = !faded
 
         ZStack {
             // A stripe behind both cards, so "see-through" has something to
@@ -38,13 +44,27 @@ View Main() {
             Row #[gap: 40] {
                 Column #[gap: 8] {
                     Text("opacity on the card") #[color: 0x9AA3AE, size: 12]
-                    Box #[bg: 0x1C2430, radius: 14, p: 10,
-                          opacity: (faded ? 0.5 : 1.0) with anim.spring()] {
+                    Box #[
+                        bg: 0x1C2430,
+                        radius: 14,
+                        p: 10,
+                        opacity: (faded ? 0.5 : 1.0) with anim.spring(),
+                    ] {
                         ZStack #[width: 180, height: 120] {
-                            Box #[width: 80, height: 80, radius: 40, bg: 0xE8543F,
-                                  m: (left: 30, top: 20)] {}
-                            Box #[width: 80, height: 80, radius: 40, bg: 0x4A6FD0,
-                                  m: (left: 70, top: 20)] {}
+                            Box #[
+                                width: 80,
+                                height: 80,
+                                radius: 40,
+                                bg: 0xE8543F,
+                                m: (left: 30, top: 20),
+                            ] {}
+                            Box #[
+                                width: 80,
+                                height: 80,
+                                radius: 40,
+                                bg: 0x4A6FD0,
+                                m: (left: 70, top: 20),
+                            ] {}
                         }
                     }
                 }
@@ -55,12 +75,23 @@ View Main() {
                     // 0.5, which is exactly what multiplying a card's opacity
                     // into every primitive used to produce.
                     ZStack #[width: 200, height: 140] {
-                        Box #[bg: 0x1C2430, radius: 14, width: 200, height: 140,
-                              opacity: 0.5] {}
-                        Box #[width: 80, height: 80, radius: 40, bg: 0xE8543F,
-                              opacity: 0.5, m: (left: 40, top: 30)] {}
-                        Box #[width: 80, height: 80, radius: 40, bg: 0x4A6FD0,
-                              opacity: 0.5, m: (left: 80, top: 30)] {}
+                        Box #[bg: 0x1C2430, radius: 14, width: 200, height: 140, opacity: 0.5] {}
+                        Box #[
+                            width: 80,
+                            height: 80,
+                            radius: 40,
+                            bg: 0xE8543F,
+                            opacity: 0.5,
+                            m: (left: 40, top: 30),
+                        ] {}
+                        Box #[
+                            width: 80,
+                            height: 80,
+                            radius: 40,
+                            bg: 0x4A6FD0,
+                            opacity: 0.5,
+                            m: (left: 80, top: 30),
+                        ] {}
                     }
                 }
             }

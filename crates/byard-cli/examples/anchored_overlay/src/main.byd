@@ -67,8 +67,13 @@ View Main() {
             as searchField => query = it
 
         Box #[height: 150] {}
-        Button("Hover target") #[width: 140, bg: 0x2A3242, color: 0xE7ECF2, radius: 8,
-                                 p: (vertical: 8, horizontal: 14)]
+        Button("Hover target") #[
+            width: 140,
+            bg: 0x2A3242,
+            color: 0xE7ECF2,
+            radius: 8,
+            p: (vertical: 8, horizontal: 14),
+        ]
             as tipTarget => hovering = !hovering
 
         Spacer #[grow: 1]
@@ -84,10 +89,14 @@ View Main() {
     // outside itself and the field.
     when query != "" {
         Overlay #[modal: false] {
-            Box #[anchor_to: "searchField", anchor_edge: below,
-                  anchor_align: start, anchor_gap: 6,
-                  width: match(searchField),
-                  dismiss => query = ""] {
+            Box #[
+                anchor_to: "searchField",
+                anchor_edge: below,
+                anchor_align: start,
+                anchor_gap: 6,
+                width: match(searchField),
+                dismiss => query = "",
+            ] {
                 Panel("results")
             }
         }
@@ -105,8 +114,7 @@ View Main() {
     // Above its trigger, centred on it: a tooltip is the degenerate case.
     when hovering {
         Overlay #[modal: false] {
-            Box #[anchor_to: "tipTarget", anchor_edge: above,
-                  anchor_align: center, anchor_gap: 8] {
+            Box #[anchor_to: "tipTarget", anchor_edge: above, anchor_align: center, anchor_gap: 8] {
                 Box #[bg: 0x2D3644, radius: 6, p: 8] {
                     Text("Anchored above, centred") #[color: 0xE7ECF2, size: 12]
                 }
@@ -117,10 +125,14 @@ View Main() {
     // Asks for `below`, and gets `above` once the window is too short for it.
     when lower != "" {
         Overlay #[modal: false] {
-            Box #[anchor_to: "bottomField", anchor_edge: below,
-                  anchor_align: start, anchor_gap: 6,
-                  width: match(bottomField),
-                  dismiss => lower = ""] {
+            Box #[
+                anchor_to: "bottomField",
+                anchor_edge: below,
+                anchor_align: start,
+                anchor_gap: 6,
+                width: match(bottomField),
+                dismiss => lower = "",
+            ] {
                 Panel("flipped")
             }
         }

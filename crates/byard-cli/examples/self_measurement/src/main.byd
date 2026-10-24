@@ -56,17 +56,17 @@ View Main() {
             // before RFC-0038 this width could only be a literal.
             Canvas #[width: inner, height: 200, bg: 0x11141B] {
                 text("seven bars, spaced from the measured width",
-                     x: 16, y: 22, color: 0x6B7280, size: 12)
+                    x: 16, y: 22, color: 0x6B7280, size: 12)
 
                 // The baseline the bars stand on, inset by the same 8px at both
                 // ends at every window width.
                 line(x1: 8, y1: 172, x2: inner - 8.0, y2: 172,
-                     stroke: 0x2A2F3A, stroke_width: 2)
+                    stroke: 0x2A2F3A, stroke_width: 2)
 
                 for i in [0, 1, 2, 3, 4, 5, 6] {
                     rect(x: i * step + 10.0, y: 172.0 - bars[i],
-                         w: step - 20.0, h: bars[i],
-                         radius: 6, fill: 0x5B8DEF)
+                        w: step - 20.0, h: bars[i],
+                        radius: 6, fill: 0x5B8DEF)
                 }
             }
 

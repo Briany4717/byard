@@ -13,7 +13,7 @@
 //      slider moves; the lavender track ring stays complete beneath it.
 //   2. The centre percentage label tracks the slider value.
 //   3. The gauge (right) sweeps its needle across a dashed 270° dial.
-//   4. The bezier wave and the dashed circle render crisp at any DPI, 
+//   4. The bezier wave and the dashed circle render crisp at any DPI,
 //      strokes stay anti-aliased, caps are round where declared.
 //   5. The red heart is a `path(d: …)` fill, Tier 2, rasterized through
 //      the MSDF pipeline at icon quality.
@@ -23,7 +23,7 @@ View Main() {
     // Twelve samples, so the chart below has a shape count that comes from a
     // list rather than from twelve hand-written `rect(…)` lines.
     let samples = [40.0, 62.0, 55.0, 78.0, 91.0, 70.0,
-                   48.0, 83.0, 96.0, 61.0, 74.0, 52.0]
+        48.0, 83.0, 96.0, 61.0, 74.0, 52.0]
 
     Column #[bg: 0x14141C, p: 32, gap: 24, width: 560] {
         Text("Canvas, path & shape primitives") #[color: 0xE6E1E5, size: 20]
@@ -39,7 +39,7 @@ View Main() {
                     start: -90, sweep: percent * 3.6,
                     stroke: 0xD0BCFF, stroke_width: 8, cap: round)
                 text("{percent}%", x: 60, y: 60,
-                     color: 0xE6E1E5, size: 18, align: center)
+                    color: 0xE6E1E5, size: 18, align: center)
             }
 
             // ── 270° gauge with a dashed dial and a needle ────────────────
@@ -53,39 +53,39 @@ View Main() {
                     stroke: 0x7DD3A8, stroke_width: 6, cap: round)
                 circle(cx: 60, cy: 60, r: 5, fill: 0xE6E1E5)
                 text("gauge", x: 60, y: 100,
-                     color: 0x938F99, size: 11, align: center)
+                    color: 0x938F99, size: 11, align: center)
             }
 
             // ── Tier 2: an SVG path fill (MSDF-rasterized) ────────────────
             Canvas #[width: 120, height: 120] {
                 circle(cx: 60, cy: 60, r: 52, fill: 0x1F1B24)
                 path(d: "M60 90 C30 70 22 48 34 38 C44 30 56 36 60 46 C64 36 76 30 86 38 C98 48 90 70 60 90 Z",
-                     fill: 0xF2B8B5)
+                    fill: 0xF2B8B5)
             }
         }
 
         // ── Strokes, caps, dashes, and a flattened bezier wave ────────────
         Canvas #[width: 496, height: 120, bg: 0x1C1B22] {
             line(x1: 24, y1: 24, x2: 200, y2: 24,
-                 stroke: 0xCAC4D0, stroke_width: 10)
+                stroke: 0xCAC4D0, stroke_width: 10)
             line(x1: 24, y1: 48, x2: 200, y2: 48,
-                 stroke: 0xCAC4D0, stroke_width: 10, cap: round)
+                stroke: 0xCAC4D0, stroke_width: 10, cap: round)
             line(x1: 24, y1: 72, x2: 200, y2: 72,
-                 stroke: 0xCAC4D0, stroke_width: 10, cap: square)
+                stroke: 0xCAC4D0, stroke_width: 10, cap: square)
             line(x1: 24, y1: 96, x2: 200, y2: 96,
-                 stroke: 0x938F99, stroke_width: 4,
-                 dash: (12, 8), dash_offset: percent)
+                stroke: 0x938F99, stroke_width: 4,
+                dash: (12, 8), dash_offset: percent)
             rect(x: 232, y: 24, w: 72, h: 72, radius: 12,
-                 fill: 0x381E72, stroke: 0xD0BCFF, stroke_width: 2)
+                fill: 0x381E72, stroke: 0xD0BCFF, stroke_width: 2)
             bezier(x1: 328, y1: 96, cx1: 372, cy1: 8, cx2: 416, cy2: 152, x2: 472, y2: 32,
-                   stroke: 0x7DD3A8, stroke_width: 3)
+                stroke: 0x7DD3A8, stroke_width: 3)
         }
 
         // ── A data-driven chart: `for` inside a `Canvas` ──────────────────
         //
         // The shape *count* comes from the data, not from the source. Before
         // this a canvas could animate every coordinate, colour and sweep from
-        // live values and still could not draw `n` bars for `n` data points, 
+        // live values and still could not draw `n` bars for `n` data points,
         // which excludes charts, sparklines, histograms and legends, i.e. most
         // of what a drawing surface is for. The workaround was to write twelve
         // `rect(…)` lines against twelve separately named fields, and a
@@ -99,19 +99,19 @@ View Main() {
         Canvas #[width: 496, height: 96, bg: 0x1C1B22] {
             for i, s in samples {
                 rect(x: 16 + i * 40, y: 88 - s * percent * 0.008 * 88,
-                     w: 24, h: s * percent * 0.008 * 88,
-                     radius: 3, fill: 0x6750A4)
+                    w: 24, h: s * percent * 0.008 * 88,
+                    radius: 3, fill: 0x6750A4)
             }
             when percent > 80 {
                 line(x1: 8, y1: 8, x2: 488, y2: 8,
-                     stroke: 0xF2B8B5, stroke_width: 2, dash: (6, 4))
+                    stroke: 0xF2B8B5, stroke_width: 2, dash: (6, 4))
             }
             else {
                 line(x1: 8, y1: 88, x2: 488, y2: 88, stroke: 0x49454F)
             }
         }
         Text(percent > 80 ? "over the line, the `else` branch swapped out"
-                          : "drag past 80 to swap the `when` branch")
+                : "drag past 80 to swap the `when` branch")
             #[color: 0x938F99, size: 12]
 
         Slider #[bind: percent, min: 0.0, max: 100.0, step: 1.0, width: 496, height: 26]

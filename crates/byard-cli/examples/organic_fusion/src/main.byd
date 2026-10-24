@@ -74,8 +74,8 @@ View Main() {
         Canvas #[width: 340, height: 110, bg: 0x1C1F27, fuse: 22] {
             circle(cx: 70, cy: 55, r: 26, fill: 0x5B8DEF)
             circle(cx: 250 with anim.ease_in_out(1800ms, from: 130,
-                                                 repeat: infinite, reverse: true),
-                   cy: 55, r: 20, fill: 0xE8734A)
+                repeat: infinite, reverse: true),
+                cy: 55, r: 20, fill: 0xE8734A)
         }
 
         Row #[gap: 20] {
@@ -98,7 +98,7 @@ View Main() {
                     Canvas #[width: 220, height: 120, bg: 0x1C1F27, fuse: 24] {
                         ngon(cx: 78, cy: 60, r: 32, n: 6, corner: 6, fill: 0x4CC38A)
                         ngon(cx: 140, cy: 60, r: 28, n: 5, corner: 4, inner: 0.6,
-                             fill: 0xE8B54A)
+                            fill: 0xE8B54A)
                     }
                 }
             }

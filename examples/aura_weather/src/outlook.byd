@@ -37,8 +37,11 @@ View OutlookScreen(place: Str, lat: Float, lon: Float) {
 
     Screen(title: place, subtitle: "The outlook, day by day") {
         when state == "loading" {
-            Text("Asking about the next ten days") #[typo: t.body, color: t.onSurfaceVariant,
-                                                     m: (vertical: 48)]
+            Text("Asking about the next ten days") #[
+                typo: t.body,
+                color: t.onSurfaceVariant,
+                m: (vertical: 48),
+            ]
         }
 
         when state == "error" {
@@ -46,8 +49,12 @@ View OutlookScreen(place: Str, lat: Float, lon: Float) {
                 Text("The outlook did not arrive") #[typo: t.title, color: t.onSurface]
                 Text(message) #[typo: t.caption, color: t.error]
                 Row #[p: (top: 8)] {
-                    Button("Try again") #[typo: t.label, bg: t.primaryContainer,
-                                         color: t.onPrimaryContainer, radius: 18]
+                    Button("Try again") #[
+                        typo: t.label,
+                        bg: t.primaryContainer,
+                        color: t.onPrimaryContainer,
+                        radius: 18,
+                    ]
                         => load()
                 }
             }

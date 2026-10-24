@@ -4,7 +4,6 @@
 View Badge(label: Str = "brand") {
     inject Theme as t
     Box #[bg: t.primaryContainer, radius: 12, p: (vertical: 6, horizontal: 12)] {
-        Text(label) #[font: "brand/Display", size: 14, weight: medium,
-                      color: t.onPrimaryContainer]
+        Text(label) #[font: "brand/Display", size: 14, weight: medium, color: t.onPrimaryContainer]
     }
 }

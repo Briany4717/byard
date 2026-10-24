@@ -48,8 +48,8 @@ View StatCard(title, value, accent) {
         Text(title) #[color: 0x9AA0AC, size: 14]
         Text(value) #[color: 0xFFFFFF, size: 30, weight: bold]
         Row #[gap: 8] {
-            Badge(label: "live", tone: accent)   // named args
-            Badge("default")                       // omitted defaulted `tone`
+            Badge(label: "live", tone: accent) // named args
+            Badge("default") // omitted defaulted `tone`
         }
     }
 }

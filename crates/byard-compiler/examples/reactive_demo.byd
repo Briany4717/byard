@@ -25,10 +25,18 @@ View Main() {
         // ── Live `when`: the button flips `showList`, mounting/unmounting the
         //    list subtree on the next frame. ──
         Row #[gap: 12] {
-            Button("Toggle list") #[bg: 0x3C3C52, radius: 10, p: (vertical: 10, horizontal: 16),
-                                    color: 0xECE6F0] => showList = showList ? false : true
-            Button("Add Grace") #[bg: 0x6750A4, radius: 10, p: (vertical: 10, horizontal: 16),
-                                  color: 0xFFFFFF] => names = ["Ada", "Alan", "Grace", "Katherine"]
+            Button("Toggle list") #[
+                bg: 0x3C3C52,
+                radius: 10,
+                p: (vertical: 10, horizontal: 16),
+                color: 0xECE6F0,
+            ] => showList = showList ? false : true
+            Button("Add Grace") #[
+                bg: 0x6750A4,
+                radius: 10,
+                p: (vertical: 10, horizontal: 16),
+                color: 0xFFFFFF,
+            ] => names = ["Ada", "Alan", "Grace", "Katherine"]
         }
 
         when showList {

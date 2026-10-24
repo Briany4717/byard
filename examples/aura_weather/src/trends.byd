@@ -52,8 +52,11 @@ View TrendsScreen(place: Str, lat: Float, lon: Float) {
 
     Screen(title: place, subtitle: "Temperature over the week") {
         when state == "loading" {
-            Text("Asking about the week") #[typo: t.body, color: t.onSurfaceVariant,
-                                            m: (vertical: 48)]
+            Text("Asking about the week") #[
+                typo: t.body,
+                color: t.onSurfaceVariant,
+                m: (vertical: 48),
+            ]
         }
 
         when state == "error" {
@@ -61,8 +64,12 @@ View TrendsScreen(place: Str, lat: Float, lon: Float) {
                 Text("The week did not arrive") #[typo: t.title, color: t.onSurface]
                 Text(message) #[typo: t.caption, color: t.error]
                 Row #[p: (top: 8)] {
-                    Button("Try again") #[typo: t.label, bg: t.primaryContainer,
-                                         color: t.onPrimaryContainer, radius: 18]
+                    Button("Try again") #[
+                        typo: t.label,
+                        bg: t.primaryContainer,
+                        color: t.onPrimaryContainer,
+                        radius: 18,
+                    ]
                         => load()
                 }
             }
@@ -90,15 +97,15 @@ View TrendsScreen(place: Str, lat: Float, lon: Float) {
                     path(
                         fill: 0x00000000,
                         gradient: (kind: linear, angle: 90deg,
-                                   from: t.secondary.alpha(0.8), mid: t.secondary.alpha(0.27),
-                                   to: t.secondary.alpha(0.0))
+                            from: t.secondary.alpha(0.8), mid: t.secondary.alpha(0.27),
+                            to: t.secondary.alpha(0.0))
                     ) {
                         move(across(0), plotH)
                         line(across(0), down(highs[0]))
                         for i, temp in highs.slice(1) {
                             cubic(across(i) + step / 2.0, down(highs[i]),
-                                  across(i) + step / 2.0, down(temp),
-                                  across(i + 1), down(temp))
+                                across(i) + step / 2.0, down(temp),
+                                across(i + 1), down(temp))
                         }
                         line(across(6), plotH)
                         close()
@@ -107,23 +114,23 @@ View TrendsScreen(place: Str, lat: Float, lon: Float) {
                     // The two lines themselves, on top of the area.
                     for i, temp in highs.slice(1) {
                         bezier(across(i), down(highs[i]),
-                               across(i) + step / 2.0, down(highs[i]),
-                               across(i) + step / 2.0, down(temp),
-                               across(i + 1), down(temp),
-                               stroke: t.secondary, stroke_width: 3, cap: round)
+                            across(i) + step / 2.0, down(highs[i]),
+                            across(i) + step / 2.0, down(temp),
+                            across(i + 1), down(temp),
+                            stroke: t.secondary, stroke_width: 3, cap: round)
                     }
                     for i, temp in lows.slice(1) {
                         bezier(across(i), down(lows[i]),
-                               across(i) + step / 2.0, down(lows[i]),
-                               across(i) + step / 2.0, down(temp),
-                               across(i + 1), down(temp),
-                               stroke: t.primary, stroke_width: 2, cap: round)
+                            across(i) + step / 2.0, down(lows[i]),
+                            across(i) + step / 2.0, down(temp),
+                            across(i + 1), down(temp),
+                            stroke: t.primary, stroke_width: 2, cap: round)
                     }
 
                     // The weekday under each reading.
                     for i, day in days {
                         text(day.formatDate("ddd") ?? "", x: across(i), y: plotH + 12.0,
-                             color: t.onSurfaceVariant, size: 11, align: center)
+                            color: t.onSurfaceVariant, size: 11, align: center)
                     }
                 }
 

@@ -96,8 +96,9 @@ impl App {
     /// When `entry` is not there, which is the case for an app built on one
     /// machine and run on another (its `CARGO_MANIFEST_DIR` stays behind),
     /// the project is looked for beside the executable, where `byard bundle`
-    /// puts it: `project/` next to it, or `../Resources/project/` inside a
-    /// macOS `.app`.
+    /// puts it: `project/` next to it, `../Resources/project/` inside a
+    /// macOS `.app`, or `../share/<executable name>/project/` in a Linux
+    /// prefix.
     #[must_use]
     pub fn new(entry: impl AsRef<Path>) -> Self {
         let entry = locate_project(entry.as_ref(), std::env::current_exe().ok().as_deref());
@@ -407,8 +408,15 @@ fn locate_project(entry: &Path, exe: Option<&Path>) -> PathBuf {
     let Some(dir) = exe.and_then(Path::parent) else {
         return entry.to_path_buf();
     };
+    // The Linux layout keeps it under `share/<executable name>/`, so that
+    // place is the one that needs the name; it is last, after the two that
+    // do not.
+    let shared = exe
+        .and_then(Path::file_name)
+        .map(|name| Path::new("../share").join(name).join("project"));
     [dir.join("project"), dir.join("../Resources/project")]
         .into_iter()
+        .chain(shared.map(|rel| dir.join(rel)))
         .find(|candidate| candidate.join("byard.toml").is_file())
         .unwrap_or_else(|| entry.to_path_buf())
 }
@@ -873,7 +881,23 @@ mod tests {
             "[project]\nname = \"x\"\n",
         )
         .unwrap();
+        // A Linux prefix: `bin/app` with its project under `share/app/`.
+        let prefix = root.join("prefix");
+        std::fs::create_dir_all(prefix.join("bin")).unwrap();
+        std::fs::create_dir_all(prefix.join("share/app/project")).unwrap();
+        std::fs::write(
+            prefix.join("share/app/project/byard.toml"),
+            "[project]\nname = \"x\"\n",
+        )
+        .unwrap();
         let gone = Path::new("/a/build/machine/that/is/not/here");
+
+        let found = locate_project(gone, Some(&prefix.join("bin/app")));
+        assert!(found.join("byard.toml").is_file(), "{}", found.display());
+        assert!(found.ends_with("share/app/project"), "{}", found.display());
+        // Another executable's directory under `share/` is not this one's.
+        let found = locate_project(gone, Some(&prefix.join("bin/other")));
+        assert_eq!(found, gone);
 
         let found = locate_project(gone, Some(&flat.join("app")));
         assert_eq!(found, flat.join("project"));

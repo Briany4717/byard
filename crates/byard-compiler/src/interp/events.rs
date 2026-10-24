@@ -557,6 +557,45 @@ impl EventRouter {
         self.steal_focus(ctx, Some(elem));
     }
 
+    /// Moves focus to `elem` if it is a focus target in the current scope
+    /// (RFC-0042 `Focus`): registered this frame, enabled, and not shut out by
+    /// a modal overlay's focus trap. Returns whether focus is now there.
+    ///
+    /// The guard is the point: a request from an assistive technology names an
+    /// element by an id it read from an earlier frame, and focusing one that
+    /// is gone, disabled or beneath a modal would leave focus where no key
+    /// press could reach it.
+    pub fn focus_element(&mut self, ctx: &mut ReactiveCtx, elem: u32) -> bool {
+        if self.disabled.contains(&elem) || !self.is_focus_target(elem) {
+            return false;
+        }
+        self.steal_focus(ctx, Some(elem));
+        true
+    }
+
+    /// Whether `elem` registered as focusable this frame, and sits inside the
+    /// scope a modal overlay's focus trap leaves open.
+    #[must_use]
+    pub fn is_focus_target(&self, elem: u32) -> bool {
+        self.focusables[self.focusable_floor..]
+            .iter()
+            .any(|f| f.elem == elem)
+    }
+
+    /// Whether `elem` has a handler of `kind` registered this frame.
+    #[must_use]
+    pub fn has_handler(&self, elem: u32, kind: EventKind) -> bool {
+        self.handlers
+            .iter()
+            .any(|h| h.elem == elem && h.kind == kind)
+    }
+
+    /// Whether `elem` is `disabled:` this frame (RFC-0012 S5).
+    #[must_use]
+    pub fn is_disabled(&self, elem: u32) -> bool {
+        self.disabled.contains(&elem)
+    }
+
     /// Fires the handler of `kind` registered on `elem`, if any, the engine's
     /// path for delivering *synthesized* events like RFC-0021's
     /// `end_reached`/`page_change`/`scroll_end`, which have no `InputEvent`. A

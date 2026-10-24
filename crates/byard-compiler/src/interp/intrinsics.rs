@@ -374,15 +374,30 @@ fn props_from(groups: &[&[(&'static str, PropDef)]]) -> HashMap<&'static str, Pr
             m.insert(k, v);
         }
     }
-    // Universal props. A style class can carry anything, so it is classified
-    // by its most consequential possibility rather than its most common one.
+    add_universal(&mut m);
+    m
+}
+
+/// The props every element takes, whatever it is.
+///
+/// Also called by the intrinsics that build their prop table by hand
+/// (`VectorIcon`, `Canvas`, `Overlay`), so none of them can be the one element
+/// that lacks a name for a screen reader.
+fn add_universal(m: &mut HashMap<&'static str, PropDef>) {
+    // A style class can carry anything, so it is classified by its most
+    // consequential possibility rather than its most common one.
     m.insert("style", lay(PropType::Class));
     // RFC-0024: `selected`/`invalid` are universal opt-in pseudo-state props,
     // any element can drive the `selected`/`invalid` style states (nav items,
     // tabs, chips, form fields).
     m.insert("selected", pnt(PropType::Bool));
     m.insert("invalid", pnt(PropType::Bool));
-    m
+    // RFC-0042: what a screen reader calls the element when its own text
+    // does not say, and a way to take decoration out of the tree. Paint
+    // class: neither moves anything, and the tree is rebuilt from them each
+    // frame an assistive technology is listening.
+    m.insert("a11y_label", pnt(PropType::Str));
+    m.insert("a11y_hidden", pnt(PropType::Bool));
 }
 
 fn events_from(focusable: bool, extra: &[&'static str]) -> HashSet<&'static str> {
@@ -777,7 +792,7 @@ fn lookup_intrinsic(name: &str) -> Option<Intrinsic> {
             props.insert("color", pnt(PropType::Color));
             props.insert("m", lay(PropType::Len));
             props.insert("opacity", pnt(PropType::Float));
-            props.insert("style", lay(PropType::Class));
+            add_universal(&mut props);
             Intrinsic {
                 arity: 1,
                 content: Some(PropType::Str),
@@ -821,7 +836,7 @@ fn lookup_intrinsic(name: &str) -> Option<Intrinsic> {
             // scalar, and an animating fusion is new per-instance data rather
             // than a re-tessellation.
             props.insert("fuse", pnt(PropType::Float));
-            props.insert("style", lay(PropType::Class));
+            add_universal(&mut props);
             Intrinsic {
                 arity: 0,
                 content: None,
@@ -843,7 +858,7 @@ fn lookup_intrinsic(name: &str) -> Option<Intrinsic> {
             let mut props: HashMap<&'static str, PropDef> = HashMap::new();
             props.insert("modal", lay(PropType::Bool));
             props.insert("dismiss_on_outside", lay(PropType::Bool));
-            props.insert("style", lay(PropType::Class));
+            add_universal(&mut props);
             Intrinsic {
                 arity: 0,
                 content: None,

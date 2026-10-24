@@ -18,6 +18,7 @@
 //! - A mutation (`=`, `+=`, `++`, `--`) on a `var` marks it; on anything else
 //!   it is [`CompileError::NotAssignable`].
 
+mod access;
 mod controller;
 mod measure;
 
@@ -1972,6 +1973,9 @@ pub struct Interpreter {
     /// continuation table and the structural effects. One field rather than
     /// six, see [`controller::Bridge`].
     bridge: controller::Bridge,
+    /// RFC-0042: the accessibility tree being built by the paint walk, when
+    /// the frame asked for one. Empty, and unallocated, otherwise.
+    access: access::AccessScratch,
 }
 
 /// What [`Interpreter::render`] remembers between frames so it can decide
@@ -5077,6 +5081,10 @@ impl Interpreter {
         // render thread skips what it already holds.
         frame.set_fonts(self.fonts.clone());
 
+        // RFC-0042: reads the frame's flag once. Every accessibility hook in
+        // the walk below starts with the plain `bool` this leaves behind.
+        self.access_begin(frame);
+
         // RFC-0030 §I1. `layout.taffy` (Native) nests strictly inside this
         // scope, the interpreter owns the `LayoutAtlas` and drives it from
         // here, which is exactly why the interpreter tax is self-time and
@@ -5300,6 +5308,7 @@ impl Interpreter {
                 paths_before,
                 byard_core::atlas::layout::path_counters::snapshot(),
             ));
+            self.access_end(frame);
             return;
         };
         // Drive layout with the shared text measurer so wrapping `Text` leaves
@@ -5419,6 +5428,7 @@ impl Interpreter {
         // widget that asked for a tile on the frame it mounted has its request
         // in flight rather than waiting a frame for nothing.
         self.dispatch_native_calls(frame);
+        self.access_end(frame);
 
         frame.set_atlas_paths(path_delta(
             paths_before,
@@ -6064,6 +6074,15 @@ impl Interpreter {
         // resolved-question: scissor interaction).
         frame.begin_clip(byard_core::frame::Rect::new(0.0, 0.0, width, height));
 
+        // RFC-0042: a modal overlay is a dialog, and whatever it holds is
+        // inside it in the tree.
+        let dialog = if self.access.on {
+            let elem = self.atlas.node_index(ol.wrapper_id);
+            self.access_enter_overlay(frame, attrs, modal, elem, viewport)
+        } else {
+            access::Scope::default()
+        };
+
         // A modal overlay installs its scrim *before* its content so the content
         // wins hit-testing where it overlaps, while the scrim blocks (and
         // optionally dismisses) everything beneath the overlay.
@@ -6116,6 +6135,7 @@ impl Interpreter {
             self.register_light_dismiss(slot, shift);
         }
 
+        self.access_leave(frame, dialog);
         frame.end_clip();
     }
 
@@ -7978,6 +7998,21 @@ impl Interpreter {
                                 transform.origin[1] + transform.translate[1],
                             ],
                         );
+                    if self.access.on {
+                        self.access_text(
+                            frame,
+                            attrs,
+                            elem_idx,
+                            &text,
+                            crate::interp::intrinsics::Rect::new(
+                                rect.x,
+                                rect.y,
+                                rect.width,
+                                rect.height,
+                            ),
+                            &transform,
+                        );
+                    }
                     let anchor = transform.apply_point([rect.x, rect.y]);
                     let scaled_size = size * transform.uniform_scale();
                     // RFC-0005 default text wrap: shape the run to the width layout
@@ -8057,6 +8092,9 @@ impl Interpreter {
                 // Whether this box opened an opacity group (RFC-0011 T4), so the
                 // group is closed on the way out of exactly the box that opened it.
                 let mut grouped = false;
+                // The accessibility scope this box opened (RFC-0042), closed on
+                // the way out with the node it described.
+                let mut access_scope = access::Scope::default();
                 // Likewise the composed paint transform children inherit (RFC-0011
                 // group transforms): this box's own transform ∘ its ancestors',
                 // set once the rect is known, else passed through unchanged.
@@ -8432,6 +8470,30 @@ impl Interpreter {
                     if !matches!(element_name, "TextField" | "Checkbox" | "RadioButton") {
                         self.register_focusable(attrs, hit_rect, elem_idx);
                     }
+
+                    // RFC-0042: describe the box now that its handlers and
+                    // focus target are registered, which is what its actions
+                    // and state are read from.
+                    if self.access.on {
+                        let tapped = elem_idx.is_some_and(|i| {
+                            self.router
+                                .has_handler(i, crate::interp::events::EventKind::Tap)
+                        });
+                        access_scope = self.access_enter_box(
+                            frame,
+                            &access::BoxFacts {
+                                name: element_name,
+                                attrs,
+                                paint_attrs,
+                                bound_sig: *bound_sig,
+                                tapped,
+                                elem: elem_idx,
+                                rect: current_rect,
+                                atlas_node,
+                                transform,
+                            },
+                        );
+                    }
                 }
                 // RFC-0021 collapsing header: when set, the first child is pinned
                 // to the viewport top by this many screen px (undoing the scroll
@@ -8690,6 +8752,8 @@ impl Interpreter {
                     // remaining children stay aligned.
                     if let Some(clip) = child_clip {
                         if this.child_fully_clipped(child_id, child_transform, clip) {
+                            // RFC-0042: its words still name the button it is in.
+                            this.access_culled(child, pools);
                             *flat_idx += this.flat_len(child, pools);
                             return;
                         }
@@ -8794,6 +8858,7 @@ impl Interpreter {
                 if grouped {
                     frame.end_group();
                 }
+                self.access_leave(frame, access_scope);
                 // Close the RFC-0019 instance-env scope opened at the top of this
                 // arm (balanced with `env_base`), restoring the caller's env for
                 // the remaining siblings.
@@ -8845,6 +8910,14 @@ impl Interpreter {
                 // `route_change` and any pointer handlers on the container.
                 let hit_rect = scrolled_hit_rect(nav_rect, scroll_shift, cull_clip);
                 self.register_event_attrs(&p.attrs, hit_rect, elem_idx);
+                // RFC-0042: tabs are a tab list; a stack's screens have no
+                // role of their own and their content is simply the tree's.
+                let host = p.kind == NavKind::Host;
+                let nav_scope = if host && self.access.on {
+                    self.access_enter_tabs(frame, &p.attrs, elem_idx, nav_rect, &transform)
+                } else {
+                    access::Scope::default()
+                };
 
                 // A screen mid-transition is partly outside the container, so
                 // everything it paints is clipped to the container's bounds,
@@ -8885,6 +8958,18 @@ impl Interpreter {
                         .map_or(nav_rect, |r| {
                             crate::interp::intrinsics::Rect::new(r.x, r.y, r.width, r.height)
                         });
+                    let tab_scope = if host && self.access.on {
+                        self.access_enter_tab(
+                            frame,
+                            &p.entries[screen.entry].path,
+                            screen.entry == p.current,
+                            self.atlas.node_index(screen_id),
+                            screen_rect,
+                            &screen_transform,
+                        )
+                    } else {
+                        access::Scope::default()
+                    };
                     for child in self.expand_concrete(&p.entries[screen.entry].nodes, pools) {
                         let child_id = flat_ids[*flat_idx];
                         self.anim_slot = child.slot;
@@ -8903,8 +8988,10 @@ impl Interpreter {
                             pools,
                         );
                     }
+                    self.access_leave(frame, tab_scope);
                 }
                 frame.end_clip();
+                self.access_leave(frame, nav_scope);
                 // The element index a settled `route_change` fires against.
                 if let Some(nav) = self.nav_elems.get_mut(*pool) {
                     *nav = elem_idx;
@@ -8952,6 +9039,22 @@ impl Interpreter {
                     let tl = inherited_transform.apply_point([rect.x, rect.y]);
                     let tw = rect.width * inherited_transform.scale[0];
                     let th = rect.height * inherited_transform.scale[1];
+                    if self.access.on {
+                        let elem = self.atlas.node_index(atlas_node);
+                        self.access_image(
+                            frame,
+                            attrs,
+                            elem,
+                            crate::interp::intrinsics::Rect::new(
+                                rect.x,
+                                rect.y,
+                                rect.width,
+                                rect.height,
+                            ),
+                            &inherited_transform,
+                            false,
+                        );
+                    }
                     frame.push_texture(byard_core::frame::TextureSampler {
                         rect: [tl[0], tl[1], tw, th],
                         src: src_val,
@@ -9045,6 +9148,16 @@ impl Interpreter {
                         rect: hit_rect,
                         drawn_at: self.router.handler_count(),
                     });
+                    if self.access.on {
+                        self.access_native(
+                            frame,
+                            name.as_str(),
+                            attrs,
+                            elem_idx,
+                            view_rect,
+                            &inherited_transform,
+                        );
+                    }
                     if let Some(idx) = elem_idx {
                         if state_blocks.iter().any(|sb| {
                             sb.states.iter().any(|st| {
@@ -9082,6 +9195,22 @@ impl Interpreter {
             }
             RenderNode::Vector { attrs, src } => {
                 if let Ok(Some(rect)) = self.atlas.resolved_rect(atlas_node) {
+                    if self.access.on {
+                        let elem = self.atlas.node_index(atlas_node);
+                        self.access_image(
+                            frame,
+                            attrs,
+                            elem,
+                            crate::interp::intrinsics::Rect::new(
+                                rect.x,
+                                rect.y,
+                                rect.width,
+                                rect.height,
+                            ),
+                            &inherited_transform,
+                            false,
+                        );
+                    }
                     let handle = self
                         .binding_value(*src)
                         .and_then(|v| if let Value::Str(s) = v { Some(s) } else { None })
@@ -9168,6 +9297,17 @@ impl Interpreter {
                         rect.width,
                         rect.height,
                     );
+
+                    if self.access.on {
+                        self.access_image(
+                            frame,
+                            attrs,
+                            elem_idx,
+                            canvas_rect,
+                            &inherited_transform,
+                            true,
+                        );
+                    }
 
                     // Background fill: a plain solid behind every shape.
                     if let Some(bg) = self.eval_color_prop(paint_attrs, "bg") {
@@ -9767,6 +9907,15 @@ impl Interpreter {
                 hit_rect,
                 super::events::EventKind::PointerDrag,
                 make_drag_action(min_f, max_f, step_f),
+            );
+            // Change write-back (RFC-0003 E1), as the other value widgets
+            // have: the way a value set from outside the pointer, an
+            // assistive technology (RFC-0042), reaches the `var`.
+            self.router.on(
+                idx,
+                hit_rect,
+                super::events::EventKind::Change,
+                super::events::write_back_action(sig),
             );
         }
     }
@@ -14520,16 +14669,32 @@ impl Interpreter {
         self.apply_composition(events, &mut consumed);
         // The system's appearance is the theme's to follow, when it was told
         // to (`scheme = "system"`), and nothing for any element to route.
+        // An assistive technology's requests to move focus or to scroll
+        // (RFC-0042 §5) are engine state in the same way: applied here,
+        // never offered to a handler.
         for (i, ev) in events.iter().enumerate() {
-            if ev.kind == CoreKind::SystemScheme {
-                consumed[i] = true;
-                if let (true, Some(InputPayload::Bool(dark))) =
-                    (self.theme.follows_system, ev.payload.as_ref())
-                {
-                    if self.theme_is_dark() != *dark {
-                        self.set_theme_dark(*dark);
+            match ev.kind {
+                CoreKind::SystemScheme => {
+                    consumed[i] = true;
+                    if let (true, Some(InputPayload::Bool(dark))) =
+                        (self.theme.follows_system, ev.payload.as_ref())
+                    {
+                        if self.theme_is_dark() != *dark {
+                            self.set_theme_dark(*dark);
+                        }
                     }
                 }
+                CoreKind::AccessFocus => {
+                    consumed[i] = true;
+                    if let Some(InputPayload::Element(elem)) = ev.payload {
+                        self.router.focus_element(&mut self.ctx, elem);
+                    }
+                }
+                CoreKind::AccessScrollIntoView => {
+                    consumed[i] = true;
+                    self.scroll_into_view(ev.pos, ev.delta);
+                }
+                _ => {}
             }
         }
 

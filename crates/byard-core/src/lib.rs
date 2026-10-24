@@ -7,9 +7,12 @@
 //! - [`evaluator`], Reactive state (`Signal<T>`), per-view memory arenas (`ViewArena`),
 //!   and dirty-flag collection.
 //! - [`atlas`], Layout computation via Taffy and spatial hit-testing via a hash grid.
-//! - [`encoder`], Multi-pipeline `wgpu` command dispatch. `SolidBox` and
-//!   `TextGlyph` are implemented today; `DecoratedBox` and `TextureSampler`
-//!   are planned (RFC-0001 §3.1) but not yet built.
+//! - [`encoder`], Multi-pipeline `wgpu` command dispatch. It draws `SolidBox`,
+//!   `DecoratedBox` (gradients, shadows, borders), `Ripple`, `CanvasShape`,
+//!   `CanvasFill` (filled paths), `TextureSampler` (images), `VectorMSDF`
+//!   (icons and vector glyphs) and `TextGlyph` (text) in one UI pass, plus the
+//!   backdrop blur and opacity-group passes, and any pipeline an app registers
+//!   through [`render`] (RFC-0039).
 //! - [`relay`], Thread management, double-buffered frame swap, and async I/O pool.
 //!
 //! Cross-subsystem communication goes exclusively through the types defined in

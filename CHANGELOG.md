@@ -412,6 +412,8 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`byard build` prints the version it is.** It always said `0.0.0`.
+
 - **An animation ticks once per frame drawn.** With an animation in flight
   the logic thread ticked as fast as it could, computing frames the display
   never showed, and a hidden or minimised window kept spinning a core. It now

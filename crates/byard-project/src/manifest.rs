@@ -192,6 +192,9 @@ pub struct Manifest {
 /// name = "Aura Weather"
 /// id = "dev.byard.aura-weather"
 /// version = "1.2.0"
+/// categories = ["Utility", "Weather"]
+/// summary = "Weather with a map"
+/// license = "MIT OR Apache-2.0"
 /// ```
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct BundleConfig {
@@ -202,6 +205,16 @@ pub struct BundleConfig {
     pub id: Option<String>,
     /// `version`: the version the package reports.
     pub version: Option<String>,
+    /// `categories`: where a Linux launcher files the app, names from the
+    /// freedesktop.org menu specification (`"Utility"`, `"Game"`). Empty when the
+    /// manifest sets none.
+    pub categories: Vec<String>,
+    /// `summary`: one line saying what the app is, a Linux launcher's comment
+    /// and the store listing's summary.
+    pub summary: Option<String>,
+    /// `license`: the app's licence as an SPDX expression
+    /// (`"MIT OR Apache-2.0"`). Not checked beyond being written.
+    pub license: Option<String>,
 }
 
 /// One element of `[native_views]`: a name and the properties it takes.
@@ -469,6 +482,28 @@ fn parse_bundle(table: &toml::Table) -> Result<BundleConfig, String> {
         return Ok(bundle);
     };
     for (key, value) in tbl {
+        if key == "categories" {
+            let list = value
+                .as_array()
+                .and_then(|items| {
+                    items
+                        .iter()
+                        .map(toml::Value::as_str)
+                        .collect::<Option<Vec<_>>>()
+                })
+                .filter(|items| {
+                    items
+                        .iter()
+                        .all(|c| !c.trim().is_empty() && !c.contains(';'))
+                })
+                .ok_or_else(|| {
+                    "byard.toml: [bundle] `categories` is a list of names, \
+                     like [\"Utility\"]"
+                        .to_string()
+                })?;
+            bundle.categories = list.into_iter().map(str::to_string).collect();
+            continue;
+        }
         let text = value
             .as_str()
             .ok_or_else(|| format!("byard.toml: [bundle] `{key}` is a string"))?
@@ -490,6 +525,11 @@ fn parse_bundle(table: &toml::Table) -> Result<BundleConfig, String> {
                 bundle.id = Some(text);
             }
             "version" => bundle.version = Some(text),
+            "summary" | "license" if text.trim().is_empty() => {
+                return Err(format!("byard.toml: [bundle] `{key}` is empty"));
+            }
+            "summary" => bundle.summary = Some(text),
+            "license" => bundle.license = Some(text),
             other => return Err(format!("byard.toml: [bundle]: unknown key `{other}`")),
         }
     }
@@ -1953,6 +1993,36 @@ mod tests {
             Manifest::discover(Some(&none)).unwrap().bundle,
             BundleConfig::default()
         );
+    }
+
+    #[test]
+    fn the_bundle_table_names_a_linux_listing() {
+        let dir = project_with(
+            "bundle-listing",
+            "[bundle]\ncategories = [\"Utility\", \"Weather\"]\n\
+             summary = \"Weather with a map\"\nlicense = \"MIT OR Apache-2.0\"",
+            &[],
+        );
+        let bundle = Manifest::discover(Some(&dir)).unwrap().bundle;
+        assert_eq!(bundle.categories, ["Utility", "Weather"]);
+        assert_eq!(bundle.summary.as_deref(), Some("Weather with a map"));
+        assert_eq!(bundle.license.as_deref(), Some("MIT OR Apache-2.0"));
+    }
+
+    #[test]
+    fn a_bundle_listing_that_is_malformed_is_an_error() {
+        for (bad, key) in [
+            ("categories = \"Utility\"", "categories"),
+            ("categories = [\"Utility\", 3]", "categories"),
+            ("categories = [\"\"]", "categories"),
+            ("summary = \"\"", "summary"),
+            ("license = \"  \"", "license"),
+            ("license = 4", "license"),
+        ] {
+            let dir = project_with("bad-listing", &format!("[bundle]\n{bad}"), &[]);
+            let err = Manifest::discover(Some(&dir)).err().unwrap();
+            assert!(err.contains(key), "{bad}: {err}");
+        }
     }
 
     #[test]

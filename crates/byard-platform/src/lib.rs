@@ -10,6 +10,10 @@
 //! downstream crates can depend on `byard-platform` without ever importing
 //! `winit` themselves.
 
+mod clipboard;
+
+pub use clipboard::SystemClipboard;
+
 use std::sync::Arc;
 
 use byard_core::relay::FrameWaker;

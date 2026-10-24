@@ -394,4 +394,15 @@ mod tests {
             "PipelineCompilation { pipeline: \"SolidBox\", reason: \"bad\" }"
         );
     }
+
+    /// Errors are returned from every frame's `Result`; the two boxed variants
+    /// hold a fat pointer each, which fits in the largest variant that was
+    /// already there (two `String`s), so the enum is no bigger for them.
+    #[test]
+    fn the_new_variants_do_not_grow_the_error() {
+        assert_eq!(
+            std::mem::size_of::<ByardError>(),
+            2 * std::mem::size_of::<String>()
+        );
+    }
 }

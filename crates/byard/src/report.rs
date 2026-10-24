@@ -18,7 +18,7 @@ use byard_project::ProjectError;
 /// [`render`](Self::render) to stderr by the time an app has one, so its
 /// [`Display`](fmt::Display) is a single line: how many there were.
 ///
-/// ```ignore
+/// ```no_run
 /// use byard::ByardErrorExt as _;
 ///
 /// match byard::App::new(env!("CARGO_MANIFEST_DIR")).run() {

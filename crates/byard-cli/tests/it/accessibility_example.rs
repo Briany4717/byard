@@ -15,7 +15,11 @@ fn example_dir() -> PathBuf {
 }
 
 fn dump() -> String {
-    let out = std::env::temp_dir().join(format!("byard-a11y-example-{}.txt", std::process::id()));
+    // One file per call: the tests run side by side in one process.
+    static CALLS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let n = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let out =
+        std::env::temp_dir().join(format!("byard-a11y-example-{}-{n}.txt", std::process::id()));
     let run = Command::new(env!("CARGO_BIN_EXE_byard"))
         .arg("shot")
         .arg(example_dir())

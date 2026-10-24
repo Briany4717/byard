@@ -1,5 +1,6 @@
-//! Procedural macros for byard, the `#[byard_controller]` boundary marker
-//! (RFC-0028 §2, correcting erratum CB1).
+//! Procedural macros for byard: `#[byard_controller]`, the boundary marker
+//! (RFC-0028 §2, correcting erratum CB1), and `#[native_view]`, which declares
+//! a package-authored widget (RFC-0039).
 //!
 //! `#[byard_controller]` has two forms, distinguished by what it annotates:
 //!

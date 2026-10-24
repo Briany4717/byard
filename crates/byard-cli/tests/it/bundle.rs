@@ -273,7 +273,7 @@ fn a_linux_bundle_is_a_prefix_with_a_launcher_entry() {
     let root = workspace("linux");
     let (ok, text) = bundle(&root, "linux");
     assert!(ok, "{text}");
-    let prefix = root.join("out/dials");
+    let prefix = root.join("out/dials-bin");
     assert!(prefix.join("bin/dials-bin").is_file());
     assert_project_copy(&prefix.join("share/dials-bin/project"));
     // Nothing of the other layouts.
@@ -345,7 +345,7 @@ fn the_hicolor_icons_stop_at_the_source_or_512() {
             .unwrap();
         let (ok, text) = bundle(&root, "linux");
         assert!(ok, "{text}");
-        let icons = root.join("out/dials/share/icons/hicolor");
+        let icons = root.join("out/dials-bin/share/icons/hicolor");
         let mut sizes: Vec<u32> = std::fs::read_dir(&icons)
             .unwrap()
             .map(|e| {
@@ -385,7 +385,7 @@ fn a_linux_bundle_with_no_bundle_table_falls_back_to_the_executable() {
     std::fs::write(&manifest, bare).unwrap();
     let (ok, text) = bundle(&root, "linux");
     assert!(ok, "{text}");
-    let desktop = root.join("out/dials/share/applications/dev.byard.dials-bin.desktop");
+    let desktop = root.join("out/dials-bin/share/applications/dev.byard.dials-bin.desktop");
     let keys = desktop_keys(&desktop);
     assert_eq!(key(&keys, "Name"), Some("dials"));
     assert_eq!(key(&keys, "Categories"), Some("Utility;"));
@@ -393,7 +393,7 @@ fn a_linux_bundle_with_no_bundle_table_falls_back_to_the_executable() {
     assert_eq!(key(&keys, "Comment"), None);
     // No licence line, and the name stands for the summary.
     let info = std::fs::read_to_string(
-        root.join("out/dials/share/metainfo/dev.byard.dials-bin.metainfo.xml"),
+        root.join("out/dials-bin/share/metainfo/dev.byard.dials-bin.metainfo.xml"),
     )
     .unwrap();
     assert!(!info.contains("project_license"), "{info}");
@@ -401,7 +401,7 @@ fn a_linux_bundle_with_no_bundle_table_falls_back_to_the_executable() {
     // The icon is named by the id, and written under it.
     assert_eq!(key(&keys, "Icon"), Some("dev.byard.dials-bin"));
     assert!(
-        root.join("out/dials/share/icons/hicolor/16x16/apps/dev.byard.dials-bin.png")
+        root.join("out/dials-bin/share/icons/hicolor/16x16/apps/dev.byard.dials-bin.png")
             .is_file()
     );
     let _ = std::fs::remove_dir_all(&root);
@@ -416,7 +416,7 @@ fn a_linux_bundle_without_an_icon_writes_none() {
     std::fs::write(&manifest, text.replace("icon = \"icon.png\"\n", "")).unwrap();
     let (ok, text) = bundle(&root, "linux");
     assert!(ok, "{text}");
-    let prefix = root.join("out/dials");
+    let prefix = root.join("out/dials-bin");
     let keys = desktop_keys(&prefix.join("share/applications/com.example.dials.desktop"));
     assert_eq!(key(&keys, "Icon"), None);
     assert!(!prefix.join("share/icons").exists());
@@ -435,7 +435,7 @@ fn the_entries_pass_the_freedesktop_validators() {
     let root = workspace("linux-validate");
     let (ok, text) = bundle(&root, "linux");
     assert!(ok, "{text}");
-    let share = root.join("out/dials/share");
+    let share = root.join("out/dials-bin/share");
     let mut ran = 0;
     if installed("desktop-file-validate") {
         ran += 1;
@@ -544,7 +544,7 @@ fn the_archive_lists_the_files_of_the_tree() {
     );
     assert!(text.contains(&name), "{text}");
 
-    let prefix = root.join("out/dials");
+    let prefix = root.join("out/dials-bin");
     let bytes = std::fs::read(&archive).unwrap();
     let unpacked = root.join("unpacked");
     let mut listed = byard_project::archive::unpack(&bytes, &unpacked).unwrap();
@@ -627,7 +627,7 @@ fn the_project_in_a_linux_prefix_checks_clean() {
     let root = workspace("linux-resolves");
     let (ok, text) = bundle(&root, "linux");
     assert!(ok, "{text}");
-    let prefix = root.join("out/dials");
+    let prefix = root.join("out/dials-bin");
     let project = prefix.join("bin/../share/dials-bin/project");
     // `byard check` on the tree's copy, as the app resolves it.
     let out = Command::new(env!("CARGO_BIN_EXE_byard"))

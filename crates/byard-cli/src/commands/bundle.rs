@@ -17,11 +17,11 @@
 //! ```
 //!
 //! `--layout linux` writes a freedesktop.org prefix instead (RFC-0045), which
-//! `cp -r name/* ~/.local/` installs for one user and a distribution package
+//! `cp -r exe/* ~/.local/` installs for one user and a distribution package
 //! maps onto `/usr` as it is:
 //!
 //! ```text
-//! name/
+//! exe/
 //!   bin/exe
 //!   share/exe/project/                 byard.toml, src/, fonts/, ...
 //!   share/applications/id.desktop
@@ -259,7 +259,8 @@ fn write_bundle(
             (root.clone(), root.clone(), root.join("project"))
         }
         Layout::Linux => {
-            let root = out.join(&manifest.name);
+            // Named for the program, as the prefix's `bin/` and `share/` are.
+            let root = out.join(exe);
             let project = root.join("share").join(exe).join("project");
             (root.clone(), root.join("bin"), project)
         }

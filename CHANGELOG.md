@@ -80,6 +80,22 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`byard fmt` formats `.byd` files, and the editor formats them the same way.**
+  There was no command for it, and the language server's formatter counted
+  braces at the ends of lines without reading the tokens, so a brace in a
+  string could move the indentation of every line after it, and it left the
+  spacing inside lines as typed. Now `byard fmt` rewrites a
+  project's files (its entry directory and its path dependencies) with one
+  layout and no options: four-space indentation, one space around operators,
+  an `#[ ... ]` list on one line when it fits in 100 columns and one attribute
+  per line otherwise, at most one blank line in a row. Comments stay where
+  they were, and strings are copied byte for byte. `byard fmt --check` lists
+  the files that are not formatted and exits 1, for CI. Before a file is
+  written the output is parsed and compared with the input's tree, and a file
+  that would change meaning, or does not parse, is reported and left alone.
+  The language server's format-on-save calls the same function and ignores the
+  editor's tab size. The examples were formatted once with it.
+
 - **`App::trace(path)` profiles an app with a Rust half.** Only `byard dev
   --trace` wrote a trace, and `byard dev` cannot link an app's controllers,
   views or shaders. Now a running app writes the same Chrome trace: the

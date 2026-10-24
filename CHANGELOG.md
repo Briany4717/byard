@@ -80,6 +80,27 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A `TextField` edits like a text field.** It appended what was typed and
+  removed the last character on Backspace, so a typo in the middle could only
+  be fixed by deleting everything after it, and nothing could be pasted. Now the
+  caret moves by grapheme with the arrows, by word with Ctrl (Option on macOS)
+  and to either end with Home and End, and Shift selects. A press places the
+  caret, a drag selects, a double press selects a word, and a text wider than
+  the field scrolls to keep the caret in view. Mod+A, Mod+C, Mod+X and Mod+V
+  select all, copy, cut and paste (a paste is one line), and Mod+Z with
+  Mod+Shift+Z or Mod+Y undo and redo, typed text a word at a time. The
+  selection is painted in the theme's `primary` at 30 %, or in a `selection:`
+  colour the field sets. The caret blinks, from one timer wake per phase and
+  only while the field and the window have focus. Nothing changes in `byld`:
+  every `TextField #[bind: …]` already written edits this way. The clipboard
+  is the system's (`arboard`, with its Wayland support) and is opened on the
+  first copy or paste.
+
+- **`byard shot` can press keys and type.** `--key shift+Left` and `--type
+  "text"` run in order with `--tap`, and `Shot::key` and `Shot::type_text` do
+  the same for an app, so a caret and a selection can be drawn to a PNG without
+  a window. `examples/text_editing` has the command.
+
 - **`App::trace(path)` profiles an app with a Rust half.** Only `byard dev
   --trace` wrote a trace, and `byard dev` cannot link an app's controllers,
   views or shaders. Now a running app writes the same Chrome trace: the
@@ -411,6 +432,10 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   an error.
 
 ### Fixed
+
+- **Delete in a `TextField` removes one character, not the whole field.** It
+  wrote an empty string, which lost the user's work with one key. It removes
+  the grapheme after the caret, and nothing at the end of the text.
 
 - **An animation ticks once per frame drawn.** With an animation in flight
   the logic thread ticked as fast as it could, computing frames the display

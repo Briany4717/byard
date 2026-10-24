@@ -16,7 +16,7 @@ doctest = false
 
 [dependencies]
 byard-core = { path = "../byard-core" }
-wgpu = "29.0"
+wgpu.workspace = true
 # winit is a regular (non-dev) dependency of this crate by design: it is the
 # entire reason byard-platform exists (RFC-0001 §6). It never appears in
 # WinitHost's public API surface (PlatformHost::run takes/returns no winit
@@ -29,12 +29,12 @@ winit = "0.30"
 byard-test-gpu = { path = "../byard-test-gpu" }
 # Visual verification example (examples/hello_world.rs).
 # Minimal async executor for blocking on `Engine::init` inside `on_resume`.
-pollster = "0.4"
+pollster.workspace = true
 # hello_world_byd example: drives the byld interpreter in a real winit window.
 byard-compiler = { path = "../byard-compiler" }
 # Dumps readback frames to PNG for visual verification (gated behind
 # BYARD_DUMP_PNG); dev-only, never in the shipped engine.
-image = { version = "0.25", default-features = false, features = ["png"] }
+image = { workspace = true, features = ["png"] }
 
 [lints]
 workspace = true

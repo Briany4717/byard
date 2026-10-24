@@ -18,18 +18,18 @@ byard-platform = { path = "../byard-platform" }
 byard-core     = { path = "../byard-core" }
 byard-project  = { path = "../byard-project" }
 clap           = { version = "4", features = ["derive"] }
-toml           = { version = "1", features = ["preserve_order"] }
-semver         = "1"
+toml           = { workspace = true, features = ["preserve_order"] }
+semver.workspace = true
 toml_edit      = "0.25"
-sha2           = "0.10"
-pollster       = "0.4"
-wgpu           = "29.0"
-crossbeam-channel = "0.5"
+sha2.workspace = true
+pollster.workspace = true
+wgpu.workspace = true
+crossbeam-channel.workspace = true
 # `byard shot` writes PNGs. Already in the tree through the image stack.
-image = { version = "0.25", default-features = false, features = ["png"] }
+image = { workspace = true, features = ["png"] }
 # RFC-0008 D-H: package archives are gzip-compressed. Already in the tree
 # (through the image stack), so this adds no new crate.
-flate2 = "1"
+flate2.workspace = true
 
 
 [lints]

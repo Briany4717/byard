@@ -12,8 +12,8 @@ publish = false
 [dependencies]
 byard = { path = "../../crates/byard" }
 # The map's tile controller: fetch a tile, decode it.
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-webpki-roots"] }
-image = { version = "0.25", default-features = false, features = ["png"] }
+reqwest = { workspace = true, features = ["rustls-tls-webpki-roots"] }
+image = { workspace = true, features = ["png"] }
 
 [lints]
 workspace = true

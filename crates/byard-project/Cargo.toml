@@ -18,17 +18,17 @@ doctest = false
 [dependencies]
 byard-compiler = { path = "../byard-compiler" }
 byard-core     = { path = "../byard-core" }
-toml           = { version = "1", features = ["preserve_order"] }
-image          = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
-sha2           = "0.10"
-flate2         = "1"
+toml           = { workspace = true, features = ["preserve_order"] }
+image          = { workspace = true, features = ["png", "jpeg"] }
+sha2.workspace = true
+flate2.workspace = true
 # RFC-0008 D-K: version requirements and the solver that picks versions for
 # them. PubGrub because its failure explanation is one a user can act on.
 pubgrub = "0.3.0"
-semver = "1.0.28"
+semver.workspace = true
 # A registry served over HTTP. Already in the tree through the runtime's
 # `net` feature; `blocking` because `byard get` is a command, not a loop.
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls-webpki-roots"] }
+reqwest = { workspace = true, features = ["blocking", "rustls-tls-webpki-roots"] }
 
 [lints]
 workspace = true

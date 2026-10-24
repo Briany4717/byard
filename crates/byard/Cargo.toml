@@ -20,12 +20,12 @@ byard-platform = { path = "../byard-platform" }
 # `App` reads a project the way `byard dev` does: manifest, theme, fonts,
 # sibling views and packages (RFC-0008, RFC-0022).
 byard-project = { path = "../byard-project" }
-wgpu = "29.0"
-pollster = "0.4"
+wgpu.workspace = true
+pollster.workspace = true
 # `App::hot_reload` hands the watcher a channel of its own.
-crossbeam-channel = "0.5"
+crossbeam-channel.workspace = true
 # `App::shot` writes a PNG.
-image = { version = "0.25", default-features = false, features = ["png"] }
+image = { workspace = true, features = ["png"] }
 
 [lints]
 workspace = true

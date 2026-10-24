@@ -11,11 +11,11 @@ publish = false
 
 [dependencies]
 byard = { path = "../../crates/byard" }
-tokio = { version = "1", features = ["time"] }
+tokio = { workspace = true, features = ["time"] }
 
 [dev-dependencies]
 # The test reads back the PNG `App::shot` writes.
-image = { version = "0.25", default-features = false, features = ["png"] }
+image = { workspace = true, features = ["png"] }
 
 [lints]
 workspace = true

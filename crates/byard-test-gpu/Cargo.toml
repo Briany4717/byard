@@ -18,8 +18,8 @@ publish = false
 doctest = false
 
 [dependencies]
-wgpu = "29.0"
-pollster = "0.4"
+wgpu.workspace = true
+pollster.workspace = true
 
 [lints]
 workspace = true

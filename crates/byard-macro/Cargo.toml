@@ -21,7 +21,7 @@ proc-macro2 = "1"
 # and permitted (dev-deps never enter the normal build graph). Confirms the
 # emitted `impl Controller` compiles against the real façade (RFC-0028 §2).
 byard = { path = "../byard" }
-pollster = "0.4"
+pollster.workspace = true
 
 [lints]
 workspace = true

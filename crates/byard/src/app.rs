@@ -319,6 +319,7 @@ impl App {
             theme,
             http,
             icon,
+            bundle_id,
         } = load_program(&self.entry)?;
         let reloads = if self.hot_reload {
             Some(self.follow_project()?)
@@ -340,7 +341,9 @@ impl App {
         // controller reply arriving with no input behind it (RFC-0029 §2).
         #[allow(clippy::cast_precision_loss)]
         let (w0, h0) = (width as f32, height as f32);
-        let mut window = byard_platform::WinitHost::new(self.title.clone(), width, height);
+        let window_id = window_id(bundle_id.as_deref(), executable_name().as_deref());
+        let mut window = byard_platform::WinitHost::new(self.title.clone(), width, height)
+            .with_app_id(window_id);
         if let Some((rgba, w, h)) = icon {
             window = window.with_icon(rgba, w, h);
         }
@@ -383,6 +386,18 @@ impl App {
     }
 }
 
+/// The id the app's window carries, which a Linux desktop matches to the
+/// app's `.desktop` file, icon and window rules (RFC-0045): `[bundle] id`
+/// when the manifest sets one, or else `dev.byard.<executable name>`, so two
+/// apps that are not bundled still differ.
+fn window_id(bundle_id: Option<&str>, exe: Option<&str>) -> String {
+    match (bundle_id, exe) {
+        (Some(id), _) => id.to_string(),
+        (None, Some(exe)) => format!("dev.byard.{exe}"),
+        (None, None) => "dev.byard.Byard".to_string(),
+    }
+}
+
 /// Where the project an app runs is: `entry` when it is there, or else the
 /// copy `byard bundle` put beside the executable `exe`.
 fn locate_project(entry: &Path, exe: Option<&Path>) -> PathBuf {
@@ -406,6 +421,8 @@ pub(crate) struct Program {
     pub(crate) theme: byard_compiler::interp::theme::Theme,
     /// The `[http]` origins, for the built-in `Http` (RFC-0029).
     pub(crate) http: byard_project::manifest::HttpConfig,
+    /// `[bundle] id`, the id the app's window carries when it names one.
+    pub(crate) bundle_id: Option<String>,
 }
 
 /// Reads the program an app runs and the theme it runs in, the same way
@@ -458,6 +475,7 @@ pub(crate) fn load_program(entry: &Path) -> Result<Program, ByardError> {
         views: program.views,
         theme: manifest.theme,
         http: manifest.http,
+        bundle_id: manifest.bundle.id,
     })
 }
 
@@ -865,6 +883,31 @@ mod tests {
         let here = Path::new(env!("CARGO_MANIFEST_DIR"));
         assert_eq!(locate_project(here, Some(&flat.join("app"))), here);
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The window's id is the manifest's `[bundle] id`, or else
+    /// `dev.byard.<executable>` so unbundled apps differ too (RFC-0045).
+    #[test]
+    fn the_window_id_is_the_bundle_id_then_the_executable() {
+        assert_eq!(
+            window_id(Some("dev.byard.aura-weather"), Some("aura-weather")),
+            "dev.byard.aura-weather"
+        );
+        assert_eq!(window_id(Some("com.example.x"), None), "com.example.x");
+        assert_eq!(
+            window_id(None, Some("controller-demo")),
+            "dev.byard.controller-demo"
+        );
+        assert_ne!(window_id(None, Some("a")), window_id(None, Some("b")));
+        assert_eq!(window_id(None, None), "dev.byard.Byard");
+    }
+
+    /// The manifest's `[bundle] id` reaches `load_program`, for the window.
+    #[test]
+    fn a_projects_bundle_id_is_read_with_its_program() {
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/aura_weather");
+        let program = load_program(&dir).unwrap();
+        assert_eq!(program.bundle_id.as_deref(), Some("dev.byard.aura-weather"));
     }
 
     /// A project in a fresh directory: `main.byd` holding `body`.

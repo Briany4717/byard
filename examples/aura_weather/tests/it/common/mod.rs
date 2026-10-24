@@ -221,6 +221,7 @@ impl App {
                 delta: (0.0, 0.0),
                 payload: Some(InputPayload::Key(c.to_string())),
                 time_ms: t,
+                mods: byard_core::KeyModifiers::default(),
             }]);
         }
     }
@@ -233,6 +234,7 @@ impl App {
             delta: (0.0, 0.0),
             payload: None,
             time_ms: t,
+            mods: byard_core::KeyModifiers::default(),
         };
         let t = u64::from(self.now);
         self.step(&[
@@ -326,6 +328,7 @@ impl App {
             delta: (0.0, 0.0),
             payload: None,
             time_ms: t,
+            mods: byard_core::KeyModifiers::default(),
         };
         let t = u64::from(self.now);
         self.step(&[

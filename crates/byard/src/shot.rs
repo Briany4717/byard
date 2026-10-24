@@ -78,6 +78,7 @@ impl Shot {
             delta,
             payload: None,
             time_ms: 0,
+            mods: byard_core::KeyModifiers::default(),
         };
         let steps = frames.max(1);
         #[allow(clippy::cast_precision_loss)]
@@ -118,6 +119,7 @@ impl Shot {
             delta: (0.0, 0.0),
             payload: None,
             time_ms: 0,
+            mods: byard_core::KeyModifiers::default(),
         };
         self.gestures
             .push(vec![at(EventKind::PointerDown), at(EventKind::PointerUp)]);
@@ -185,6 +187,7 @@ impl App {
                 delta: (0.0, 0.0),
                 payload: Some(byard_core::platform::InputPayload::Bool(dark)),
                 time_ms: 0,
+                mods: byard_core::KeyModifiers::default(),
             }]);
         }
         let mut trace = plan

@@ -289,6 +289,7 @@ fn a_prop_bound_to_a_var_is_re_evaluated_every_tick() {
         delta: (0.0, 0.0),
         payload: None,
         time_ms: 1,
+        mods: byard_core::KeyModifiers::default(),
     }]);
     interp.tick();
     let mut frame = RenderFrame::new();
@@ -327,6 +328,7 @@ fn a_pointer_event_over_the_view_reaches_it_in_its_own_coordinates() {
         delta: (0.0, 0.0),
         payload: None,
         time_ms: 1,
+        mods: byard_core::KeyModifiers::default(),
     }]);
     interp.tick();
     let mut frame = RenderFrame::new();
@@ -340,6 +342,7 @@ fn a_pointer_event_over_the_view_reaches_it_in_its_own_coordinates() {
         delta: (0.0, 0.0),
         payload: None,
         time_ms: 2,
+        mods: byard_core::KeyModifiers::default(),
     }]);
     interp.tick();
     let mut frame = RenderFrame::new();
@@ -387,6 +390,7 @@ fn tap_through(source: &str, pos: (f32, f32)) -> (String, u32) {
         delta: (0.0, 0.0),
         payload: None,
         time_ms: 1,
+        mods: byard_core::KeyModifiers::default(),
     }]);
     interp.tick();
     let mut frame = RenderFrame::new();

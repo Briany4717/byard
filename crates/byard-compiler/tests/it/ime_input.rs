@@ -93,6 +93,7 @@ impl App {
             delta: (0.0, 0.0),
             payload,
             time_ms: self.t,
+            mods: byard_core::KeyModifiers::default(),
         }
     }
 

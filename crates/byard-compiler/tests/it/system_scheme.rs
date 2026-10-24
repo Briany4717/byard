@@ -36,6 +36,7 @@ fn system(dark: bool) -> InputEvent {
         delta: (0.0, 0.0),
         payload: Some(InputPayload::Bool(dark)),
         time_ms: 0,
+        mods: byard_core::KeyModifiers::default(),
     }
 }
 

@@ -153,6 +153,7 @@ pub fn run(opts: Options<'_>) -> Result<(), String> {
         hud_visible,
         hud_telemetry: None,
         last_frame: std::time::Instant::now(),
+        mods: byard_core::KeyModifiers::default(),
     })
     .map_err(|e| format!("event loop error: {e}"))
 }
@@ -915,6 +916,9 @@ struct App {
     /// leaves a trace every viewer will open. That is usually the session you
     /// most want to look at.
     trace: Option<byard_core::telemetry::trace::TraceWriter>,
+    /// The modifier keys held now, stamped onto the key and pointer events
+    /// this host creates (RFC-0041 §2).
+    mods: byard_core::KeyModifiers,
 }
 
 impl App {
@@ -1454,6 +1458,7 @@ impl PlatformHost for App {
                         delta: (0.0, 0.0),
                         payload: None,
                         time_ms: now_ms(),
+                        mods: byard_core::KeyModifiers::default(),
                     });
                 }
             }
@@ -1480,6 +1485,7 @@ impl PlatformHost for App {
                 delta: (0.0, 0.0),
                 payload,
                 time_ms: now_ms(),
+                mods: self.mods,
             });
         }
     }
@@ -1492,6 +1498,24 @@ impl PlatformHost for App {
                 delta: (0.0, 0.0),
                 payload: None,
                 time_ms: now_ms(),
+                mods: self.mods,
+            });
+        }
+    }
+
+    fn on_modifiers(&mut self, mods: byard_core::KeyModifiers) {
+        self.mods = mods;
+    }
+
+    fn on_window_focus(&mut self, focused: bool) {
+        if let Some(engine) = &self.engine {
+            engine.push_input(byard_core::platform::InputEvent {
+                kind: byard_core::platform::EventKind::WindowFocus,
+                pos: (0.0, 0.0),
+                delta: (0.0, 0.0),
+                payload: Some(byard_core::platform::InputPayload::Bool(focused)),
+                time_ms: now_ms(),
+                mods: self.mods,
             });
         }
     }
@@ -1504,6 +1528,7 @@ impl PlatformHost for App {
                 delta: (0.0, 0.0),
                 payload: Some(byard_core::platform::InputPayload::Bool(dark)),
                 time_ms: now_ms(),
+                mods: byard_core::KeyModifiers::default(),
             });
         }
     }
@@ -1524,6 +1549,7 @@ impl PlatformHost for App {
                 delta: (0.0, 0.0),
                 payload: Some(byard_core::platform::InputPayload::Key(key.to_string())),
                 time_ms: now_ms(),
+                mods: self.mods,
             });
         }
     }
@@ -1536,6 +1562,7 @@ impl PlatformHost for App {
                 delta: (0.0, 0.0),
                 payload: Some(byard_core::platform::InputPayload::Key(text.to_string())),
                 time_ms: now_ms(),
+                mods: self.mods,
             });
         }
     }
@@ -1560,6 +1587,7 @@ impl PlatformHost for App {
                 delta: (dx, dy),
                 payload: None,
                 time_ms: now_ms(),
+                mods: self.mods,
             });
         }
     }
@@ -1572,6 +1600,7 @@ impl PlatformHost for App {
                 delta: (dx, dy),
                 payload: None,
                 time_ms: now_ms(),
+                mods: self.mods,
             });
         }
     }

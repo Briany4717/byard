@@ -41,6 +41,7 @@ fn ev(kind: EventKind, pos: (f32, f32), t: u64, payload: Option<InputPayload>) -
         delta: (1.0, 1.0),
         payload,
         time_ms: t,
+        mods: byard_core::KeyModifiers::default(),
     }
 }
 

@@ -184,6 +184,7 @@ fn dragging_pans_the_map() {
         delta: (0.0, 0.0),
         payload: None,
         time_ms: t,
+        mods: byard_core::KeyModifiers::default(),
     };
     // Press in the middle of the card and pull a tile and a half to the right.
     let (x, y) = (220.0, 400.0);
@@ -230,6 +231,7 @@ fn panning_over_tiles_it_has_writes_and_asks_nothing() {
         delta: (0.0, 0.0),
         payload: None,
         time_ms: t,
+        mods: byard_core::KeyModifiers::default(),
     };
 
     // Small moves back and forth: everything on screen stays among the
@@ -285,6 +287,7 @@ fn system(dark: bool) -> byard_core::InputEvent {
         delta: (0.0, 0.0),
         payload: Some(byard_core::InputPayload::Bool(dark)),
         time_ms: 0,
+        mods: byard_core::KeyModifiers::default(),
     }
 }
 

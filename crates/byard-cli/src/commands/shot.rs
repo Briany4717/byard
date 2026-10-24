@@ -111,6 +111,7 @@ pub fn run(args: &ShotArgs<'_>) -> Result<(), String> {
             delta: (0.0, 0.0),
             payload: None,
             time_ms: u64::from(now),
+            mods: byard_core::KeyModifiers::default(),
         };
         let tap = [at(EventKind::PointerDown), at(EventKind::PointerUp)];
         step(&mut interp, &mut frame, &mut now, &tap);

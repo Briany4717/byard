@@ -14521,6 +14521,11 @@ impl Interpreter {
         // The system's appearance is the theme's to follow, when it was told
         // to (`scheme = "system"`), and nothing for any element to route.
         for (i, ev) in events.iter().enumerate() {
+            // Whether the window has focus matters to a text field's caret,
+            // which is not routed; nothing here uses it yet.
+            if ev.kind == CoreKind::WindowFocus {
+                consumed[i] = true;
+            }
             if ev.kind == CoreKind::SystemScheme {
                 consumed[i] = true;
                 if let (true, Some(InputPayload::Bool(dark))) =
@@ -14559,7 +14564,8 @@ impl Interpreter {
                     CoreKind::Composition
                     | CoreKind::CompositionCommit
                     | CoreKind::CompositionEnd
-                    | CoreKind::SystemScheme => {
+                    | CoreKind::SystemScheme
+                    | CoreKind::WindowFocus => {
                         unreachable!("composition and scheme events are consumed before routing")
                     }
                 };
@@ -14577,6 +14583,7 @@ impl Interpreter {
                     delta: ev.delta,
                     value,
                     time_ms: ev.time_ms,
+                    mods: ev.mods,
                 }
             })
             .collect();

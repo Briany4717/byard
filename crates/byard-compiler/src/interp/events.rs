@@ -107,6 +107,10 @@ pub struct InputEvent {
     pub value: Option<Value>,
     /// Event time in milliseconds (for the tap interval).
     pub time_ms: u64,
+    /// The modifier keys held when the event happened (RFC-0041 §2). Not part
+    /// of any payload a `byld` handler sees: handlers read it through
+    /// [`CURRENT_EVENT_MODS`], which only the engine's own widgets do.
+    pub mods: byard_core::KeyModifiers,
 }
 
 impl InputEvent {
@@ -119,6 +123,7 @@ impl InputEvent {
             delta: (0.0, 0.0),
             value: None,
             time_ms,
+            mods: byard_core::KeyModifiers::default(),
         }
     }
 }
@@ -137,6 +142,20 @@ thread_local! {
     /// handlers that need cursor position (e.g. Slider drag).
     pub static CURRENT_EVENT_POS: std::cell::Cell<(f32, f32)> =
         const { std::cell::Cell::new((0.0, 0.0)) };
+    /// The modifier keys held for the event currently being dispatched
+    /// (RFC-0041 §2), for the handlers that care which of Shift, Ctrl, Alt
+    /// and Cmd were down: a text field's caret movement and shortcuts.
+    pub static CURRENT_EVENT_MODS: std::cell::Cell<byard_core::KeyModifiers> =
+        const { std::cell::Cell::new(byard_core::KeyModifiers {
+            shift: false,
+            ctrl: false,
+            alt: false,
+            meta: false,
+        }) };
+    /// The time of the event currently being dispatched, in milliseconds, for
+    /// the handlers that need a clock (a text field coalescing typed
+    /// characters into one undo step).
+    pub static CURRENT_EVENT_TIME: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 /// A handler's reactive action. Receives the context (for `var` mutation) and
@@ -614,8 +633,11 @@ impl EventRouter {
         atlas: Option<&byard_core::atlas::layout::LayoutAtlas>,
         ev: &InputEvent,
     ) {
-        // Expose position to handlers (e.g. Slider drag).
+        // Expose position to handlers (e.g. Slider drag), and the modifiers
+        // and time a text field edits by.
         CURRENT_EVENT_POS.with(|c| c.set(ev.pos));
+        CURRENT_EVENT_MODS.with(|c| c.set(ev.mods));
+        CURRENT_EVENT_TIME.with(|c| c.set(ev.time_ms));
 
         match ev.kind {
             EventKind::PointerDown => {
@@ -1207,6 +1229,7 @@ mod tests {
                 delta: (1.0, 0.0),
                 value: None,
                 time_ms: i,
+                mods: byard_core::KeyModifiers::default(),
             })
             .collect();
         router.dispatch_tick(&mut ctx, None, moves);
@@ -1231,6 +1254,7 @@ mod tests {
                 delta: (0.0, 0.0),
                 value: Some(Value::Str("a".to_string())),
                 time_ms: 0,
+                mods: byard_core::KeyModifiers::default(),
             }],
         );
         assert_eq!(ctx.peek_signal(query), Value::Str("a".to_string()));
@@ -1247,6 +1271,7 @@ mod tests {
                 delta: (0.0, 0.0),
                 value: Some(Value::Str("a".to_string())),
                 time_ms: 1,
+                mods: byard_core::KeyModifiers::default(),
             }],
         );
         assert_eq!(
@@ -1537,6 +1562,7 @@ mod tests {
                 delta: (0.0, 0.0),
                 value: Some(Value::Bool(true)), // marks secondary button
                 time_ms: 0,
+                mods: byard_core::KeyModifiers::default(),
             }],
         );
         assert_eq!(ctx.peek_signal(sec), Value::Int(1), "secondary fired");
@@ -1606,6 +1632,7 @@ mod tests {
                 delta: (0.0, 0.0),
                 value: Some(Value::Str("Escape".to_string())),
                 time_ms: 200,
+                mods: byard_core::KeyModifiers::default(),
             }],
         );
         assert_eq!(
@@ -1651,6 +1678,7 @@ mod tests {
             delta: (0.0, 0.0),
             value: Some(Value::Str("Tab".to_string())),
             time_ms: 0,
+            mods: byard_core::KeyModifiers::default(),
         };
 
         // First Tab → first focusable in the overlay scope (fb), not fa.

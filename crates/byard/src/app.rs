@@ -3,7 +3,20 @@
 //! An app is a crate whose `main.rs` builds its controllers, hands them to the
 //! engine, and points it at the `.byd` entry:
 //!
-//! ```ignore
+//! ```no_run
+//! # use byard::bridge::HostValue;
+//! # #[byard::byard_controller]
+//! # #[derive(Clone)]
+//! # struct WeatherApi;
+//! # #[byard::byard_controller]
+//! # impl WeatherApi {
+//! #     async fn forecast(&self, city: String) -> Result<HostValue, HostValue> {
+//! #         Ok(HostValue::Str(city))
+//! #     }
+//! # }
+//! # impl WeatherApi {
+//! #     fn new() -> Self { Self }
+//! # }
 //! fn main() -> Result<(), byard::ByardError> {
 //!     byard::App::new("src/main.byd")
 //!         .title("Weather")
@@ -130,10 +143,12 @@ impl App {
     /// does. Open it in Perfetto, `chrome://tracing` or speedscope. The file
     /// is valid at every instant, so a run that is killed keeps its trace.
     ///
-    /// ```ignore
+    /// ```no_run
+    /// # fn main() -> Result<(), byard::ByardError> {
     /// let trace = std::env::var_os("APP_TRACE");
     /// let app = byard::App::new(env!("CARGO_MANIFEST_DIR"));
     /// match trace { Some(path) => app.trace(path), None => app }.run()
+    /// # }
     /// ```
     #[must_use]
     pub fn trace(mut self, path: impl Into<PathBuf>) -> Self {
@@ -149,9 +164,11 @@ impl App {
     ///
     /// For development: a shipped app has no project beside it to follow.
     ///
-    /// ```ignore
+    /// ```no_run
+    /// # fn main() -> Result<(), byard::ByardError> {
     /// let dev = std::env::args().any(|a| a == "--dev");
     /// byard::App::new(env!("CARGO_MANIFEST_DIR")).hot_reload(dev).run()
+    /// # }
     /// ```
     #[must_use]
     pub const fn hot_reload(mut self, on: bool) -> Self {
@@ -232,10 +249,22 @@ impl App {
     /// Registers a native view so `byld` can name it as an element
     /// (RFC-0039).
     ///
-    /// ```ignore
+    /// ```no_run
+    /// # use byard::render::{Layout, NativeView, RenderCtx};
+    /// # #[byard::native_view(name = "Sparkline")]
+    /// # #[derive(Default)]
+    /// # struct Sparkline {
+    /// #     #[prop]
+    /// #     data: Vec<f32>,
+    /// # }
+    /// # impl NativeView for Sparkline {
+    /// #     fn render(&mut self, _layout: Layout, _cx: &mut RenderCtx<'_>) {}
+    /// # }
+    /// # fn main() -> Result<(), byard::ByardError> {
     /// byard::App::new("src/main.byd")
     ///     .native_view::<Sparkline>()
     ///     .run()
+    /// # }
     /// ```
     ///
     /// The view is compiled into this binary, so the call site in `byld` is a
@@ -254,11 +283,30 @@ impl App {
     /// Registers a shader of the app's own, so a native view can draw
     /// through it (RFC-0039).
     ///
-    /// ```ignore
+    /// ```no_run
+    /// # use byard::render::{Layout, NativeView, RenderCtx, Shader, Lane};
+    /// # struct MapTiles;
+    /// # impl Shader for MapTiles {
+    /// #     const NAME: &'static str = "MapTiles";
+    /// #     type Instance = [f32; 4];
+    /// #     fn lanes() -> &'static [Lane] { &[] }
+    /// #     fn wgsl() -> &'static str { "" }
+    /// # }
+    /// # #[byard::native_view(name = "Map")]
+    /// # #[derive(Default)]
+    /// # struct Map {
+    /// #     #[prop]
+    /// #     zoom: f32,
+    /// # }
+    /// # impl NativeView for Map {
+    /// #     fn render(&mut self, _layout: Layout, _cx: &mut RenderCtx<'_>) {}
+    /// # }
+    /// # fn main() -> Result<(), byard::ByardError> {
     /// byard::App::new("src/main.byd")
     ///     .shader::<MapTiles>()
     ///     .native_view::<Map>()
     ///     .run()
+    /// # }
     /// ```
     ///
     /// The engine builds the pipeline when the window opens. A shader that

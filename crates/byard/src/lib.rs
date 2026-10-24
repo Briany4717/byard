@@ -7,7 +7,7 @@
 //! dependency graph (`app → byard → byard-core`, a forward edge; the direction holds:
 //! `byard-macro` still has no dependency on core/compiler).
 //!
-//! ```ignore
+//! ```
 //! use byard::bridge::HostValue;
 //!
 //! #[byard::byard_controller]

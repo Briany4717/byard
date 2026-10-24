@@ -13,7 +13,7 @@ use std::path::Path;
 
 pub fn run(file: Option<&Path>, short: bool) -> Result<(), String> {
     let started = std::time::Instant::now();
-    let manifest = Manifest::discover(file)?;
+    let manifest = Manifest::discover(file).map_err(|e| e.to_string())?;
 
     if manifest.library {
         style::action(&format!(
@@ -25,7 +25,7 @@ pub fn run(file: Option<&Path>, short: bool) -> Result<(), String> {
         style::action(&format!("checking {}", manifest.entry.display()));
     }
 
-    let (program, _provider) = resolve_project(&manifest)?;
+    let (program, _provider) = resolve_project(&manifest).map_err(|e| e.to_string())?;
     let n_files = program.source_map.files().count();
     let n_pkgs = program.packages.len().saturating_sub(1);
     if n_files > 1 || n_pkgs > 0 {

@@ -10,6 +10,9 @@
 
 pub mod archive;
 pub mod deps;
+pub mod error;
 pub mod live;
 pub mod manifest;
 pub mod solve;
+
+pub use error::{ProjectError, ResolveError};

@@ -36,6 +36,7 @@ use crate::deps::{
     IndexEntry, LockedPackage, Lockfile, Registry, RegistryIndex, fetch_registry, package_checksum,
     registry_cache_path, registry_source,
 };
+use crate::error::{ProjectError, ResolveError};
 use crate::manifest::{DepSource, Dependency, RegistryLocation, parse_dependencies};
 
 type Range = Ranges<SemanticVersion>;
@@ -77,16 +78,19 @@ pub struct Resolution {
 
 /// Resolves every registry requirement of `fixed`, whose first element is the
 /// project. Fetches what it chose into the cache.
-pub fn resolve(fixed: &[FixedPackage], previous: Option<&Lockfile>) -> Result<Resolution, String> {
+pub fn resolve(
+    fixed: &[FixedPackage],
+    previous: Option<&Lockfile>,
+) -> Result<Resolution, ProjectError> {
     if let Some(packages) = from_lock(fixed, previous) {
         return Ok(Resolution {
             packages,
             read_index: false,
         });
     }
-    let root = fixed
-        .first()
-        .ok_or("internal: resolve needs the project as its first package")?;
+    let root = fixed.first().ok_or_else(|| ResolveError::Failed {
+        message: "internal: resolve needs the project as its first package".to_string(),
+    })?;
     let mut sources = Sources::default();
     let mut graph = build_graph(fixed, &mut sources)?;
     if let Some(lock) = previous {
@@ -101,8 +105,11 @@ pub fn resolve(fixed: &[FixedPackage], previous: Option<&Lockfile>) -> Result<Re
         }
     }
 
-    let root_version = version_of(&root.version)
-        .ok_or_else(|| format!("`{}` {}: version out of range", root.name, root.version))?;
+    let root_version = version_of(&root.version).ok_or_else(|| ResolveError::Version {
+        package: root.name.clone(),
+        version: root.version.to_string(),
+        problem: "version out of range".to_string(),
+    })?;
     let solution =
         pubgrub::resolve(&graph, root.name.clone(), root_version).map_err(|e| match e {
             // Not collapsed: "there is no version of X in that range" is
@@ -110,12 +117,13 @@ pub fn resolve(fixed: &[FixedPackage], previous: Option<&Lockfile>) -> Result<Re
             // exactly that one.
             PubGrubError::NoSolution(tree) => {
                 let report = DefaultStringReporter::report(&tree);
-                format!(
-                    "no set of versions satisfies every requirement:\n{report}{}",
-                    graph.published_versions(&report)
-                )
+                ResolveError::Unsatisfiable {
+                    explanation: format!("{report}{}", graph.published_versions(&report)),
+                }
             }
-            other => format!("resolving dependencies failed: {other}"),
+            other => ResolveError::Failed {
+                message: format!("resolving dependencies failed: {other}"),
+            },
         })?;
 
     let mut packages = Vec::new();
@@ -146,7 +154,7 @@ pub fn resolve(fixed: &[FixedPackage], previous: Option<&Lockfile>) -> Result<Re
 /// The whole graph the solver reads: every fixed package with its one
 /// version, and every published version of every registry package reachable
 /// from them, each with what it requires.
-fn build_graph(fixed: &[FixedPackage], sources: &mut Sources) -> Result<Graph, String> {
+fn build_graph(fixed: &[FixedPackage], sources: &mut Sources) -> Result<Graph, ProjectError> {
     let mut graph = Graph::default();
 
     // The fixed packages: one version each, their requirements as declared.
@@ -169,13 +177,10 @@ fn build_graph(fixed: &[FixedPackage], sources: &mut Sources) -> Result<Graph, S
             };
             deps.insert(dep.name.clone(), range);
         }
-        let version = version_of(&pkg.version).ok_or_else(|| {
-            format!(
-                "`{}` {}: version parts above {} are not supported",
-                pkg.name,
-                pkg.version,
-                u32::MAX
-            )
+        let version = version_of(&pkg.version).ok_or_else(|| ResolveError::Version {
+            package: pkg.name.clone(),
+            version: pkg.version.to_string(),
+            problem: format!("version parts above {} are not supported", u32::MAX),
         })?;
         graph.add(&pkg.name, version, deps);
     }
@@ -293,18 +298,18 @@ fn from_lock(
 }
 
 /// The `[dependencies]` of the package at `root`, if it has a manifest.
-fn manifest_dependencies(root: &Path) -> Result<Vec<Dependency>, String> {
+fn manifest_dependencies(root: &Path) -> Result<Vec<Dependency>, ProjectError> {
     let path = root.join("byard.toml");
     if !path.exists() {
         return Ok(Vec::new());
     }
-    let src = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let src = std::fs::read_to_string(&path).map_err(|e| ProjectError::io(&path, e))?;
     let table: toml::Table = src
         .parse()
-        .map_err(|e: toml::de::Error| format!("{}: {e}", path.display()))?;
+        .map_err(|e: toml::de::Error| ProjectError::toml_in(&path, &src, &e))?;
     table
         .get("dependencies")
-        .map_or_else(|| Ok(Vec::new()), parse_dependencies)
+        .map_or_else(|| Ok(Vec::new()), |deps| parse_dependencies(deps, &path))
 }
 
 /// What a published version depends on: from its index entry, or, for an
@@ -314,7 +319,7 @@ fn manifest_dependencies(root: &Path) -> Result<Vec<Dependency>, String> {
 fn dependencies_of(
     registry: &Registry,
     entry: &IndexEntry,
-) -> Result<Vec<crate::deps::IndexDep>, String> {
+) -> Result<Vec<crate::deps::IndexDep>, ProjectError> {
     if let Some(deps) = &entry.dependencies {
         return Ok(deps.clone());
     }
@@ -337,14 +342,16 @@ fn dependencies_of(
 
 /// A registry an index entry names: a URL, or a directory relative to the
 /// registry directory that holds the index.
-fn located(parent: &Registry, written: &str) -> Result<Registry, String> {
+fn located(parent: &Registry, written: &str) -> Result<Registry, ResolveError> {
     match (RegistryLocation::parse(written), parent) {
         (RegistryLocation::Http(url), _) => Ok(Registry::Http(url)),
         (RegistryLocation::Dir(rel), Registry::Dir(dir)) => Ok(Registry::Dir(dir.join(rel))),
-        (RegistryLocation::Dir(rel), Registry::Http(url)) => Err(format!(
-            "the index at `{url}` names the registry directory `{}`, which a server cannot reach",
-            rel.display()
-        )),
+        (RegistryLocation::Dir(rel), Registry::Http(url)) => {
+            Err(ResolveError::UnreachableRegistry {
+                index: url.clone(),
+                directory: rel.display().to_string(),
+            })
+        }
     }
 }
 
@@ -369,24 +376,27 @@ fn version_of(v: &semver::Version) -> Option<SemanticVersion> {
 }
 
 /// A requirement, Cargo's semantics, as the solver's range.
-fn requirement(name: &str, written: &str) -> Result<Range, String> {
-    let req = semver::VersionReq::parse(written).map_err(|e| {
-        format!("dependency `{name}`: `{written}` is not a version requirement: {e}")
-    })?;
+fn requirement(name: &str, written: &str) -> Result<Range, ResolveError> {
+    let bad = |problem: String| ResolveError::Requirement {
+        package: name.to_string(),
+        written: written.to_string(),
+        problem,
+    };
+    let req = semver::VersionReq::parse(written)
+        .map_err(|e| bad(format!("is not a version requirement: {e}")))?;
     if req.comparators.iter().any(|c| !c.pre.is_empty()) {
         // Pre-release versions are never chosen, so a requirement naming one
         // would be resolved to a release it did not ask for.
-        return Err(format!(
-            "dependency `{name}`: `{written}` names a pre-release, which byard does not resolve"
+        return Err(bad(
+            "names a pre-release, which byard does not resolve".to_string()
         ));
     }
     req.comparators.iter().try_fold(Range::full(), |acc, c| {
         Ok(acc.intersection(&comparator(c).ok_or_else(|| {
-            format!(
-                "dependency `{name}`: `{written}` uses a comparator byard does not support, \
-                 or a version part above {}",
+            bad(format!(
+                "uses a comparator byard does not support, or a version part above {}",
                 u32::MAX
-            )
+            ))
         })?))
     })
 }
@@ -452,14 +462,18 @@ struct Sources {
 impl Sources {
     /// Records that `name` comes from `registry`; asking for it from a
     /// second registry is an error, since the namespace is flat.
-    fn claim(&mut self, name: &str, registry: Registry, source: String) -> Result<(), String> {
+    fn claim(
+        &mut self,
+        name: &str,
+        registry: Registry,
+        source: String,
+    ) -> Result<(), ResolveError> {
         match self.by_name.get(name) {
-            Some((known, _)) if *known != registry => Err(format!(
-                "`{name}` is asked for from two registries, `{}` and `{}`; \
-                 a package name means one package",
-                known.label(),
-                registry.label()
-            )),
+            Some((known, _)) if *known != registry => Err(ResolveError::TwoRegistries {
+                package: name.to_string(),
+                first: known.label(),
+                second: registry.label(),
+            }),
             Some(_) => Ok(()),
             None => {
                 self.by_name.insert(name.to_string(), (registry, source));
@@ -475,7 +489,7 @@ impl Sources {
             .unwrap_or_else(|| (Registry::Dir(PathBuf::new()), String::new()))
     }
 
-    fn index(&mut self, registry: &Registry) -> Result<RegistryIndex, String> {
+    fn index(&mut self, registry: &Registry) -> Result<RegistryIndex, ProjectError> {
         let label = registry.label();
         if let Some(index) = self.indexes.get(&label) {
             return Ok(index.clone());
@@ -632,7 +646,8 @@ mod tests {
     #[test]
     fn a_pre_release_requirement_is_refused() {
         let err = requirement("x", "=1.2.3-alpha").unwrap_err();
-        assert!(err.contains("pre-release"), "{err}");
+        assert!(matches!(err, ResolveError::Requirement { .. }), "{err:?}");
+        assert!(err.to_string().contains("pre-release"), "{err}");
     }
 
     /// The range of every requirement agrees with `semver`'s own `matches`,

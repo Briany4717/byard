@@ -9,6 +9,8 @@
 use byard_compiler::interp::theme::{DeclaredFont, FontWeight, Theme, TypoToken};
 use std::path::{Path, PathBuf};
 
+use crate::error::ProjectError;
+
 /// How a dependency is acquired (RFC-0008 D-H: git + path first; a hosted
 /// registry is deferred and layers onto the same lockfile later).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -229,12 +231,15 @@ pub struct HttpConfig {
 impl Manifest {
     /// An error for the commands that run an app, when this is a library
     /// package: it has views but nothing to open.
-    pub fn require_app(&self, command: &str) -> Result<(), String> {
+    pub fn require_app(&self, command: &str) -> Result<(), ProjectError> {
         if self.library {
-            return Err(format!(
-                "`{}` is a library package: it has no entry to {command}\n\
-                 hint: run it through an app that depends on it; `byard check` works here",
-                self.name
+            return Err(ProjectError::manifest(
+                &self.project_root.join("byard.toml"),
+                format!(
+                    "`{}` is a library package: it has no entry to {command}\n\
+                     hint: run it through an app that depends on it; `byard check` works here",
+                    self.name
+                ),
             ));
         }
         Ok(())
@@ -243,11 +248,9 @@ impl Manifest {
     /// Discover the manifest by walking up from `CWD`, or fall back to
     /// `main.byd` in the current directory (C1).  If `override_path` is given,
     /// it is used as the entry file directly (no manifest required).
-    pub fn discover(override_path: Option<&Path>) -> Result<Self, String> {
+    pub fn discover(override_path: Option<&Path>) -> Result<Self, ProjectError> {
         if let Some(p) = override_path {
-            let p = p
-                .canonicalize()
-                .map_err(|e| format!("{}: {e}", p.display()))?;
+            let p = p.canonicalize().map_err(|e| ProjectError::io(p, e))?;
             // Pointing at a project (a directory, or its `byard.toml`) reads the
             // manifest, including `[dependencies]`, rather than treating the
             // path as a lone entry file. Only a `.byd` path is a bare entry.
@@ -260,7 +263,7 @@ impl Manifest {
                 if main.exists() {
                     return Ok(Self::bare_entry(main));
                 }
-                return Err(format!("`{}` has no byard.toml or main.byd", p.display()));
+                return Err(ProjectError::NoManifest { searched_from: p });
             }
             if p.file_name().is_some_and(|n| n == "byard.toml") {
                 return Self::from_toml(&p);
@@ -268,7 +271,7 @@ impl Manifest {
             return Ok(Self::bare_entry(p));
         }
 
-        let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+        let cwd = std::env::current_dir().map_err(|e| ProjectError::io(".", e))?;
 
         // Walk upward looking for byard.toml (C1).
         let mut dir = cwd.as_path();
@@ -309,9 +312,7 @@ impl Manifest {
             });
         }
 
-        Err("no byard.toml found and no main.byd in current directory\n\
-             hint: run `byard new <name>` to create a project, or pass a file path"
-            .to_string())
+        Err(ProjectError::NoManifest { searched_from: cwd })
     }
 
     /// A manifest for a lone `.byd` entry file with no `[dependencies]`, the
@@ -342,9 +343,14 @@ impl Manifest {
         }
     }
 
-    fn from_toml(path: &Path) -> Result<Self, String> {
-        let src = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-        let table: toml::Table = src.parse().map_err(|e: toml::de::Error| e.to_string())?;
+    fn from_toml(path: &Path) -> Result<Self, ProjectError> {
+        let src = std::fs::read_to_string(path).map_err(|e| ProjectError::io(path, e))?;
+        let table: toml::Table = src
+            .parse()
+            .map_err(|e: toml::de::Error| ProjectError::toml(path, &src, &e))?;
+        // The sections below say what is wrong with their own table; the
+        // manifest they were read from is added here.
+        let in_manifest = |message: String| ProjectError::manifest(path, message);
 
         let project_root = path.parent().unwrap_or(Path::new(".")).to_path_buf();
 
@@ -412,19 +418,19 @@ impl Manifest {
             project_root.join(entry_rel)
         };
         if !library && !entry.exists() {
-            return Err(format!(
+            return Err(in_manifest(format!(
                 "entry file `{}` not found (set in byard.toml [project].entry)",
                 entry.display()
-            ));
+            )));
         }
 
         let dependencies = match table.get("dependencies") {
-            Some(deps) => parse_dependencies(deps)?,
+            Some(deps) => parse_dependencies(deps, path)?,
             None => Vec::new(),
         };
 
         // RFC-0022: `[theme]` tokens + `[assets.fonts]` layer onto `byard-base`.
-        let theme = parse_theme(&table, &project_root, &dependencies)?;
+        let theme = parse_theme(&table, &project_root, &dependencies).map_err(in_manifest)?;
         let mut watch_files = vec![path.to_path_buf()];
         if let Some(image) = table
             .get("theme")
@@ -435,11 +441,11 @@ impl Manifest {
             watch_files.push(project_root.join(image));
         }
         // RFC-0030 §V2: the dev runner's own surface.
-        let dev = parse_dev(&table)?;
-        let http = parse_http(&table)?;
-        let native_views = parse_native_views(&table)?;
-        let icon = parse_icon(project, &project_root)?;
-        let bundle = parse_bundle(&table)?;
+        let dev = parse_dev(&table).map_err(in_manifest)?;
+        let http = parse_http(&table).map_err(in_manifest)?;
+        let native_views = parse_native_views(&table).map_err(in_manifest)?;
+        let icon = parse_icon(project, &project_root).map_err(in_manifest)?;
+        let bundle = parse_bundle(&table).map_err(in_manifest)?;
 
         Ok(Self {
             project_root,
@@ -1174,13 +1180,22 @@ fn parse_hex_color(s: &str) -> Option<i64> {
 }
 
 /// Parses a `[dependencies]` table (RFC-0008 Pillar C). Every malformed entry
-/// is an **error**, this table is never warn-and-ignore.
-pub fn parse_dependencies(deps: &toml::Value) -> Result<Vec<Dependency>, String> {
-    let table = deps.as_table().ok_or("`[dependencies]` must be a table")?;
+/// is an **error**, this table is never warn-and-ignore. `manifest` is the
+/// file `deps` was read from, which an error names.
+pub fn parse_dependencies(
+    deps: &toml::Value,
+    manifest: &Path,
+) -> Result<Vec<Dependency>, ProjectError> {
+    let table = deps
+        .as_table()
+        .ok_or_else(|| ProjectError::manifest(manifest, "`[dependencies]` must be a table"))?;
 
     let mut out = Vec::with_capacity(table.len());
     for (name, value) in table {
-        out.push(parse_dependency(name, value)?);
+        out.push(
+            parse_dependency(name, value)
+                .map_err(|message| ProjectError::manifest(manifest, message))?,
+        );
     }
     Ok(out)
 }
@@ -1319,7 +1334,8 @@ mod tests {
 
     fn deps(src: &str) -> Result<Vec<Dependency>, String> {
         let table: toml::Table = src.parse().unwrap();
-        parse_dependencies(table.get("dependencies").unwrap())
+        parse_dependencies(table.get("dependencies").unwrap(), Path::new("byard.toml"))
+            .map_err(|e| e.to_string())
     }
 
     #[test]
@@ -1351,8 +1367,9 @@ mod tests {
         let deps: toml::Value =
             toml::from_str("w = { registry = \"https://r.example\", version = \"=1.2.3-alpha\" }")
                 .unwrap();
-        let err = parse_dependencies(&deps).unwrap_err();
-        assert!(err.contains("pre-release"), "{err}");
+        let err = parse_dependencies(&deps, Path::new("byard.toml")).unwrap_err();
+        assert!(matches!(err, ProjectError::Manifest { .. }), "{err:?}");
+        assert!(err.to_string().contains("pre-release"), "{err}");
     }
 
     #[test]
@@ -1927,13 +1944,16 @@ mod tests {
     #[test]
     fn an_icon_that_is_not_there_or_not_a_path_is_an_error() {
         let missing = project_with("missing", "icon = \"nope.png\"", &[]);
-        let err = Manifest::discover(Some(&missing)).err().unwrap();
+        let err = Manifest::discover(Some(&missing))
+            .err()
+            .unwrap()
+            .to_string();
         assert!(
             err.contains("nope.png") && err.contains("not there"),
             "{err}"
         );
         let number = project_with("number", "icon = 3", &[]);
-        let err = Manifest::discover(Some(&number)).err().unwrap();
+        let err = Manifest::discover(Some(&number)).err().unwrap().to_string();
         assert!(err.contains("is a path"), "{err}");
     }
 
@@ -1959,11 +1979,11 @@ mod tests {
     fn a_bundle_id_that_is_not_reverse_dns_is_an_error() {
         for bad in ["weather", "com..x", "com.ex ample", ".com.x"] {
             let dir = project_with("bad-id", &format!("[bundle]\nid = \"{bad}\""), &[]);
-            let err = Manifest::discover(Some(&dir)).err().unwrap();
+            let err = Manifest::discover(Some(&dir)).err().unwrap().to_string();
             assert!(err.contains("reverse-DNS"), "{bad}: {err}");
         }
         let dir = project_with("bad-key", "[bundle]\ncolour = \"red\"", &[]);
-        let err = Manifest::discover(Some(&dir)).err().unwrap();
+        let err = Manifest::discover(Some(&dir)).err().unwrap().to_string();
         assert!(err.contains("unknown key `colour`"), "{err}");
     }
 }

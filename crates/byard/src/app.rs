@@ -361,9 +361,10 @@ impl App {
     /// `byard dev`.
     fn follow_project(&self) -> Result<Reloads, ByardError> {
         let fail = |e: String| ByardError::Platform(format!("hot reload: {e}"));
-        let manifest =
-            byard_project::manifest::Manifest::discover(Some(&self.entry)).map_err(fail)?;
-        let (_, provider) = byard_project::deps::resolve_project(&manifest).map_err(fail)?;
+        let manifest = byard_project::manifest::Manifest::discover(Some(&self.entry))
+            .map_err(|e| fail(e.to_string()))?;
+        let (_, provider) =
+            byard_project::deps::resolve_project(&manifest).map_err(|e| fail(e.to_string()))?;
         let paths = byard_project::live::watch_paths(&manifest, &provider);
         let reloads: Reloads = Arc::default();
         // Images the app draws are decoded by the engine, which a running app

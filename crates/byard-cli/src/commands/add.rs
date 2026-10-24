@@ -36,7 +36,7 @@ pub struct AddArgs<'a> {
 }
 
 pub fn run(args: &AddArgs) -> Result<(), String> {
-    let manifest = Manifest::discover(None)?;
+    let manifest = Manifest::discover(None).map_err(|e| e.to_string())?;
     let manifest_path = manifest.project_root.join("byard.toml");
     if !manifest_path.exists() {
         return Err(
@@ -138,7 +138,9 @@ fn registry_entry(
         req.to_string()
     } else {
         let location = crate::manifest::RegistryLocation::parse(registry);
-        let index = crate::deps::Registry::at(project_root, &location).index()?;
+        let index = crate::deps::Registry::at(project_root, &location)
+            .index()
+            .map_err(|e| e.to_string())?;
         let newest = index
             .entries
             .iter()

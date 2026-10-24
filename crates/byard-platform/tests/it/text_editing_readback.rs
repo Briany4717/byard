@@ -259,11 +259,18 @@ fn a_selection_is_painted_behind_the_glyphs() {
     let px = draw(&device, &queue, &mut enc, &field.frame);
 
     // The box is where the selected text is: from after `hello ` to after `hello wr`.
+    // Measured apart, a prefix can come out a few pixels off its place in the
+    // whole line: kerning across the boundary, and the system's fallback face
+    // (CI machines have different fonts from a desktop) moves it further. So
+    // the box is checked to within a few pixels, and against the end it must
+    // not reach.
     let (x0, x1) = (10.0 + width_of("hello "), 10.0 + width_of("hello wr"));
     assert!(
-        (bx - x0).abs() < 0.5 && (bx + bw - x1).abs() < 0.5,
-        "{bx} {bw}"
+        (bx - x0).abs() < 4.0 && (bx + bw - x1).abs() < 4.0,
+        "the selection box is at {bx}..{}, expected about {x0}..{x1}",
+        bx + bw
     );
+    assert!(bx + bw < 10.0 + width_of("hello wrol"), "{bx} {bw}");
 
     // A glyph-free row inside the box (its first) is tinted, and the same row
     // outside it is the field's own colour.
@@ -324,9 +331,16 @@ fn the_caret_is_drawn_at_the_carets_x_and_not_at_the_end() {
         *columns.iter().min().unwrap(),
         *columns.iter().max().unwrap(),
     );
+    // Within a few pixels of the prefix's measured width (see the selection
+    // test for why not exactly), and well short of the end of the text.
     let caret_x = 10.0 + width_of("hello wr") - 0.5;
+    let end_x = 10.0 + width_of("hello wrold");
     assert!(
-        first as f32 >= caret_x - 1.5 && last as f32 <= caret_x + 3.0,
+        (last as f32) < end_x - 10.0,
+        "the caret is in columns {first}..={last}, at the end ({end_x}) and not at the caret"
+    );
+    assert!(
+        first as f32 >= caret_x - 5.0 && last as f32 <= caret_x + 5.0,
         "the caret is in columns {first}..={last}, expected about {caret_x}"
     );
     let end_x = 10.0 + width_of("hello wrold");

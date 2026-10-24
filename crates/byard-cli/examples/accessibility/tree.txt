@@ -1,0 +1,15 @@
+Label "Accessibility, RFC-0042" @ 24,24 352x24
+Button "Save" @ 24,124 90x36
+Button "Close" @ 124,124 36x36
+Button (unnamed) @ 170,124 36x36
+Switch "Wi-Fi" = on @ 24,174 52x30
+Label "Wi-Fi" @ 88,179 200x20
+CheckBox "Remember me" [focusable] @ 24,218 24x24
+Label "Remember me" @ 60,220 200x20
+RadioButton "Free" [focusable] @ 24,256 24x24
+Label "Free" @ 60,258 200x20
+RadioButton "Pro" [focusable checked] @ 24,294 24x24
+Label "Pro" @ 60,296 200x20
+Slider "Volume" = 0.5 in 0..1 step 0.25 @ 24,332 352x28
+TextInput "Search" = "" [focusable] @ 24,374 352x36
+Label "0 saved" @ 24,424 352x17

@@ -33,6 +33,7 @@ pub struct Shot {
     gestures: Vec<Vec<InputEvent>>,
     system_dark: Option<bool>,
     trace: Option<std::path::PathBuf>,
+    access: Option<std::path::PathBuf>,
 }
 
 impl Shot {
@@ -44,7 +45,19 @@ impl Shot {
             gestures: Vec::new(),
             system_dark: None,
             trace: None,
+            access: None,
         }
+    }
+
+    /// Writes the accessibility tree of the last frame to `path` as indented
+    /// text (RFC-0042 §6), built the way it is for an assistive technology:
+    /// role, name, value, state and bounds, one node a line, with a control a
+    /// screen reader could not name marked `(unnamed)`. No screen reader, no
+    /// D-Bus and no window are involved, so a test can check the tree.
+    #[must_use]
+    pub fn access(mut self, path: impl Into<std::path::PathBuf>) -> Self {
+        self.access = Some(path.into());
+        self
     }
 
     /// Writes a trace of every frame of the run to `path`, as
@@ -222,6 +235,7 @@ impl App {
             interp.tick();
             let mut frame = RenderFrame::new();
             frame.request_full_redraw();
+            frame.set_access_wanted(plan.access.is_some());
             interp.render(&tree, &mut frame, w, h);
             // Every frame is drawn, not only the last: a layer a view wrote on
             // an earlier frame has to reach the texture it lives in.
@@ -232,6 +246,10 @@ impl App {
                 trace.write_frame(None, &byard_core::telemetry::drain_samples());
             }
             if now >= plan.run_ms && gestures.len() == 0 {
+                if let (Some(path), Some(tree)) = (plan.access.as_deref(), frame.access()) {
+                    std::fs::write(path, tree.to_text())
+                        .map_err(|e| gpu(&path.display().to_string(), e))?;
+                }
                 break;
             }
             now += 16;
@@ -444,6 +462,36 @@ mod tests {
         // Frames at 0, 16, 32, 48 and 64 ms.
         assert_eq!(text.matches("\"encode.frame\"").count(), 5, "{text}");
         assert_eq!(text.matches("\"interp.render\"").count(), 5, "{text}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A shot asked for the accessibility tree writes it, as text, from the
+    /// last frame. Skipped where there is no GPU to draw the picture with.
+    #[test]
+    fn a_shot_can_write_the_accessibility_tree() {
+        let dir = std::env::temp_dir().join(format!("byard-shot-access-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("main.byd"),
+            "View Main() { Column { Button(\"Save\") #[width: 60, height: 30] => 0 \
+             Image(\"none.png\") #[width: 10, height: 10] } }\n",
+        )
+        .unwrap();
+        let (png, tree) = (dir.join("shot.png"), dir.join("tree.txt"));
+
+        let result = App::new(dir.join("main.byd"))
+            .size(120, 80)
+            .shot(&png, &Shot::after(16).access(&tree));
+        if let Err(ByardError::Platform(message)) = &result {
+            if message.starts_with("no GPU") {
+                return;
+            }
+        }
+        result.unwrap();
+        let text = std::fs::read_to_string(&tree).unwrap();
+        assert!(text.starts_with("Button \"Save\""), "{text}");
+        assert!(text.contains("\nImage (unnamed)"), "{text}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

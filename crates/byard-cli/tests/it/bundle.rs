@@ -36,7 +36,9 @@ fn workspace(name: &str) -> PathBuf {
     write(
         &app.join("byard.toml"),
         "[project]\nname = \"dials\"\nentry = \"src/main.byd\"\nicon = \"icon.png\"\n\n\
-         [bundle]\nname = \"Dials\"\nid = \"com.example.dials\"\nversion = \"1.4.0\"\n\n\
+         [bundle]\nname = \"Dials\"\nid = \"com.example.dials\"\nversion = \"1.4.0\"\n\
+         categories = [\"Utility\", \"Development\"]\nsummary = \"Dials for things\"\n\
+         license = \"MIT OR Apache-2.0\"\n\n\
          # The dependency is where it is on this machine.\n\
          [dependencies]\ndial = { path = \"../dial\" }\n",
     );
@@ -62,6 +64,10 @@ fn workspace(name: &str) -> PathBuf {
 }
 
 fn bundle(root: &Path, layout: &str) -> (bool, String) {
+    bundle_with(root, layout, &[])
+}
+
+fn bundle_with(root: &Path, layout: &str, extra: &[&str]) -> (bool, String) {
     let out = Command::new(env!("CARGO_BIN_EXE_byard"))
         .arg("bundle")
         .arg(root.join("app"))
@@ -71,6 +77,7 @@ fn bundle(root: &Path, layout: &str) -> (bool, String) {
         .arg(root.join("out"))
         .arg("--layout")
         .arg(layout)
+        .args(extra)
         .output()
         .expect("run `byard bundle`");
     let text = format!(
@@ -239,5 +246,74 @@ fn a_project_with_an_error_or_no_entry_does_not_bundle() {
     );
     assert!(!out.status.success(), "{text}");
     assert!(text.contains("library package"), "{text}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// The `key=value` lines of a `.desktop` file's one group.
+fn desktop_keys(path: &Path) -> Vec<(String, String)> {
+    let text = std::fs::read_to_string(path).unwrap();
+    assert!(text.starts_with("[Desktop Entry]\n"), "{text}");
+    text.lines()
+        .skip(1)
+        .map(|l| {
+            let (k, v) = l.split_once('=').unwrap_or_else(|| panic!("{l}"));
+            (k.to_string(), v.to_string())
+        })
+        .collect()
+}
+
+fn key<'a>(keys: &'a [(String, String)], name: &str) -> Option<&'a str> {
+    keys.iter()
+        .find(|(k, _)| k == name)
+        .map(|(_, v)| v.as_str())
+}
+
+#[test]
+fn a_linux_bundle_is_a_prefix_with_a_launcher_entry() {
+    let root = workspace("linux");
+    let (ok, text) = bundle(&root, "linux");
+    assert!(ok, "{text}");
+    let prefix = root.join("out/dials");
+    assert!(prefix.join("bin/dials-bin").is_file());
+    assert_project_copy(&prefix.join("share/dials-bin/project"));
+    // Nothing of the other layouts.
+    for other in ["project", "dials-bin", "Contents", "Info.plist"] {
+        assert!(!prefix.join(other).exists(), "{other}");
+    }
+
+    let keys = desktop_keys(&prefix.join("share/applications/com.example.dials.desktop"));
+    for (k, v) in [
+        ("Type", "Application"),
+        ("Name", "Dials"),
+        ("Comment", "Dials for things"),
+        ("Exec", "dials-bin"),
+        ("Terminal", "false"),
+        ("Categories", "Utility;Development;"),
+        ("StartupWMClass", "com.example.dials"),
+    ] {
+        assert_eq!(key(&keys, k), Some(v), "{k}: {keys:?}");
+    }
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Without `[bundle]` keys the entry is still complete, and its id is what
+/// the window announces for an app that names none.
+#[test]
+fn a_linux_bundle_with_no_bundle_table_falls_back_to_the_executable() {
+    let root = workspace("linux-bare");
+    let manifest = root.join("app/byard.toml");
+    let text = std::fs::read_to_string(&manifest).unwrap();
+    let bare = text.split("[bundle]").next().unwrap().to_string()
+        + "[dependencies]"
+        + text.split("[dependencies]").nth(1).unwrap();
+    std::fs::write(&manifest, bare).unwrap();
+    let (ok, text) = bundle(&root, "linux");
+    assert!(ok, "{text}");
+    let desktop = root.join("out/dials/share/applications/dev.byard.dials-bin.desktop");
+    let keys = desktop_keys(&desktop);
+    assert_eq!(key(&keys, "Name"), Some("dials"));
+    assert_eq!(key(&keys, "Categories"), Some("Utility;"));
+    assert_eq!(key(&keys, "StartupWMClass"), Some("dev.byard.dials-bin"));
+    assert_eq!(key(&keys, "Comment"), None);
     let _ = std::fs::remove_dir_all(&root);
 }

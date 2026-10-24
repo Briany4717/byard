@@ -67,7 +67,8 @@ enum Command {
         file: Option<PathBuf>,
     },
     /// Package a built app with its project, to run where its sources are
-    /// not: a `.app` on macOS, a directory elsewhere.
+    /// not: a `.app` on macOS, a directory elsewhere, or with `--layout
+    /// linux` a freedesktop.org prefix with a launcher entry and icons.
     Bundle {
         /// The project directory or `byard.toml`. Defaults to the current
         /// project.
@@ -79,7 +80,8 @@ enum Command {
         /// `.byard/bundle/`.
         #[arg(short, long, value_name = "DIR")]
         out: Option<PathBuf>,
-        /// The package's shape. Defaults to the one this system runs.
+        /// The package's shape: `app`, `dir` or `linux`. Defaults to `app`
+        /// on macOS and `dir` elsewhere.
         #[arg(long, value_enum)]
         layout: Option<commands::bundle::Layout>,
     },

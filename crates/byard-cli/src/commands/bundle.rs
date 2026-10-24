@@ -16,6 +16,19 @@
 //!     byard.toml, src/, fonts/, ...
 //! ```
 //!
+//! `--layout linux` writes a freedesktop.org prefix instead (RFC-0045), which
+//! `cp -r name/* ~/.local/` installs for one user and a distribution package
+//! maps onto `/usr` as it is:
+//!
+//! ```text
+//! name/
+//!   bin/exe
+//!   share/exe/project/                 byard.toml, src/, fonts/, ...
+//!   share/applications/id.desktop
+//!   share/icons/hicolor/NxN/apps/id.png
+//!   share/metainfo/id.metainfo.xml
+//! ```
+//!
 //! The copy is the project directory as it is, less what is not read at run
 //! time: build output (`target/`), hidden entries (`.byard/`, `.git`), the Rust
 //! half, which is already in the binary (`*.rs`, `Cargo.toml`, `Cargo.lock`),
@@ -32,7 +45,7 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use crate::deps::resolve_project;
-use crate::manifest::Manifest;
+use crate::manifest::{BundleConfig, Manifest};
 use crate::style;
 
 /// The shape of the package.
@@ -42,6 +55,9 @@ pub enum Layout {
     App,
     /// A directory holding the executable and `project/` beside it.
     Dir,
+    /// A freedesktop.org prefix: `bin/`, the project under `share/<exe>/`, a
+    /// `.desktop` entry, hicolor icons and `AppStream` metainfo.
+    Linux,
 }
 
 impl Layout {
@@ -77,7 +93,12 @@ pub fn run(
         ));
     }
     let (manifest, provider) = load(file)?;
-    let naming = naming(&manifest);
+    let exe = bin
+        .file_name()
+        .ok_or_else(|| format!("--bin {}: not a file", bin.display()))?
+        .to_string_lossy()
+        .into_owned();
+    let naming = naming(&manifest, &exe, layout);
     let out = out.map_or_else(
         || manifest.project_root.join(".byard/bundle"),
         Path::to_path_buf,
@@ -131,13 +152,19 @@ fn load(path: Option<&Path>) -> Result<(Manifest, crate::deps::FsProvider), Stri
     Ok((manifest, provider))
 }
 
-fn naming(manifest: &Manifest) -> Naming {
+/// The names a bundle carries. With no `[bundle] id` the id is a local one,
+/// except in the Linux layout, where it names the `.desktop` file and has to
+/// be what the window announces: `dev.byard.<executable>`.
+fn naming(manifest: &Manifest, exe: &str, layout: Layout) -> Naming {
     let name = manifest
         .bundle
         .name
         .clone()
         .unwrap_or_else(|| manifest.name.clone());
     let id = manifest.bundle.id.clone().unwrap_or_else(|| {
+        if layout == Layout::Linux {
+            return format!("dev.byard.{exe}");
+        }
         let part: String = manifest
             .name
             .chars()
@@ -186,6 +213,11 @@ fn write_bundle(
             let root = out.join(&manifest.name);
             (root.clone(), root.clone(), root.join("project"))
         }
+        Layout::Linux => {
+            let root = out.join(&manifest.name);
+            let project = root.join("share").join(exe).join("project");
+            (root.clone(), root.join("bin"), project)
+        }
     };
     // Only ever this command's own output: a bundle is rewritten whole.
     if root.exists() {
@@ -219,7 +251,94 @@ fn write_bundle(
         let path = root.join("Contents/Info.plist");
         std::fs::write(&path, plist).map_err(|e| io(&path, &e))?;
     }
+    if layout == Layout::Linux {
+        write_linux_entries(manifest, naming, &exe.to_string_lossy(), &root)?;
+    }
     Ok(Written { root, project })
+}
+
+/// Writes `text` to `path`, its directory made.
+fn write_file(path: &Path, text: impl AsRef<[u8]>) -> Result<(), String> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| io(dir, &e))?;
+    }
+    std::fs::write(path, text).map_err(|e| io(path, &e))
+}
+
+/// What the desktop reads of a Linux prefix: the launcher entry.
+fn write_linux_entries(
+    manifest: &Manifest,
+    naming: &Naming,
+    exe: &str,
+    root: &Path,
+) -> Result<(), String> {
+    let share = root.join("share");
+    let desktop = desktop_entry(naming, &manifest.bundle, exe, manifest.icon.is_some());
+    write_file(
+        &share
+            .join("applications")
+            .join(format!("{}.desktop", naming.id)),
+        desktop,
+    )
+}
+
+/// A value of a `.desktop` file: a backslash and a line break are written
+/// escaped, which is all its string type reserves.
+fn desktop_escape(text: &str) -> String {
+    text.replace('\\', "\\\\")
+        .replace('\n', "\\n")
+        .replace('\r', "")
+}
+
+/// One argument of an `Exec` line: bare when it is plain, else quoted with
+/// the characters the entry specification reserves escaped (and then the
+/// escapes escaped again, as a string value).
+fn exec_argument(arg: &str) -> String {
+    if arg
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '+'))
+    {
+        return arg.to_string();
+    }
+    let mut quoted = String::from("\"");
+    for c in arg.chars() {
+        if matches!(c, '"' | '`' | '$' | '\\') {
+            quoted.push('\\');
+        }
+        if c == '%' {
+            quoted.push('%');
+        }
+        quoted.push(c);
+    }
+    quoted.push('"');
+    desktop_escape(&quoted)
+}
+
+/// The launcher entry. `Exec` is the bare executable name, found through
+/// `PATH`, so the prefix can be anywhere on it; `StartupWMClass` is the id
+/// the app's window announces, which is how a shell pairs the two.
+fn desktop_entry(naming: &Naming, bundle: &BundleConfig, exe: &str, icon: bool) -> String {
+    let categories = if bundle.categories.is_empty() {
+        "Utility;".to_string()
+    } else {
+        bundle.categories.iter().fold(String::new(), |mut out, c| {
+            let _ = write!(out, "{c};");
+            out
+        })
+    };
+    let mut out = String::from("[Desktop Entry]\nType=Application\n");
+    let _ = writeln!(out, "Name={}", desktop_escape(&naming.name));
+    if let Some(summary) = &bundle.summary {
+        let _ = writeln!(out, "Comment={}", desktop_escape(summary));
+    }
+    let _ = writeln!(out, "Exec={}", exec_argument(exe));
+    if icon {
+        let _ = writeln!(out, "Icon={}", naming.id);
+    }
+    let _ = writeln!(out, "Terminal=false");
+    let _ = writeln!(out, "Categories={categories}");
+    let _ = writeln!(out, "StartupWMClass={}", naming.id);
+    out
 }
 
 fn io(what: &Path, e: &std::io::Error) -> String {
@@ -444,5 +563,46 @@ mod tests {
         assert!(plist.contains("<key>CFBundleExecutable</key>\n    <string>tj</string>"));
         assert!(plist.contains("<key>CFBundleIconFile</key>"));
         assert!(!info_plist(&naming, "tj", None).contains("CFBundleIconFile"));
+    }
+
+    fn naming_of(id: &str) -> Naming {
+        Naming {
+            name: "Tom & Jerry".to_string(),
+            id: id.to_string(),
+            version: "2.0.1".to_string(),
+        }
+    }
+
+    #[test]
+    fn the_desktop_entry_names_the_app_the_window_and_the_icon() {
+        let bundle = BundleConfig {
+            summary: Some("Cat\nand mouse".to_string()),
+            categories: vec!["Game".to_string(), "Simulation".to_string()],
+            ..BundleConfig::default()
+        };
+        let entry = desktop_entry(&naming_of("com.example.tj"), &bundle, "tj", true);
+        for line in [
+            "Name=Tom & Jerry",
+            "Comment=Cat\\nand mouse",
+            "Exec=tj",
+            "Icon=com.example.tj",
+            "Categories=Game;Simulation;",
+            "StartupWMClass=com.example.tj",
+        ] {
+            assert!(entry.lines().any(|l| l == line), "{line}: {entry}");
+        }
+        // No icon, no `Icon`; no categories, `Utility`; no summary, no comment.
+        let bare = desktop_entry(&naming_of("a.b"), &BundleConfig::default(), "tj", false);
+        assert!(!bare.contains("Icon="), "{bare}");
+        assert!(!bare.contains("Comment="), "{bare}");
+        assert!(bare.contains("Categories=Utility;\n"), "{bare}");
+    }
+
+    #[test]
+    fn an_exec_with_spaces_or_reserved_characters_is_quoted() {
+        assert_eq!(exec_argument("aura-weather"), "aura-weather");
+        assert_eq!(exec_argument("my app"), "\"my app\"");
+        assert_eq!(exec_argument("a$b"), "\"a\\\\$b\"");
+        assert_eq!(exec_argument("50%"), "\"50%%\"");
     }
 }

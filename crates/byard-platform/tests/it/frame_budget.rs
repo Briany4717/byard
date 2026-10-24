@@ -569,7 +569,7 @@ fn an_idle_frame_marks_nothing_and_draws_nothing() {
 #[test]
 fn a_frame_with_the_accessibility_flag_off_builds_no_tree_and_allocates_nothing_extra() {
     let mut w = skip_without_gpu!(warm_up());
-    let mut drive = |w: &mut Warm, access: bool| {
+    let drive = |w: &mut Warm, access: bool| {
         flip(&mut w.interp, "hot");
         count_allocations(|| {
             drive_frame_with(

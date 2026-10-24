@@ -60,6 +60,9 @@ mod access {
     /// Nothing to bridge.
     pub(crate) struct Bridge;
 
+    // The same signatures as the real bridge, so the host calls it the same
+    // way with the feature off; there is simply nothing for `self` to be.
+    #[allow(clippy::unused_self)]
     impl Bridge {
         pub(crate) fn process_event(&mut self, _: &Window, _: &winit::event::WindowEvent) {}
         pub(crate) fn sync<H: PlatformHost>(&mut self, _: &H, _: &Window) {}
@@ -258,6 +261,13 @@ impl<H: PlatformHost> WinitApp<H> {
         event_loop.exit();
     }
 
+    #[cfg_attr(
+        not(all(feature = "a11y", not(feature = "no-a11y"))),
+        allow(
+            clippy::unused_self,
+            reason = "there is no adapter to keep without AccessKit"
+        )
+    )]
     /// Creates the screen-reader adapter for `window`, then shows the window
     /// (RFC-0042 §5). With the feature off the window was never hidden and
     /// there is nothing to build.

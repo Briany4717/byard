@@ -35,7 +35,7 @@ View Main() {
     var query = ""
     var saved = 0
 
-    Column #[bg: 0x14141C, p: 24, gap: 14, width: 400] {
+    Column #[bg: 0x14141C, p: 24, gap: 14, width: 400, grow: 1] {
         Text("Accessibility, RFC-0042") #[font: body, color: 0xE6E1E5, size: 20, width: 352]
         Image("src/hero.png") #[width: 352, height: 48, a11y_hidden: true]
 

@@ -18,6 +18,7 @@ mod font_families_example;
 mod frosted_glass_example;
 mod gradient_kinds_example;
 mod grid_example;
+mod guide;
 mod incremental_example;
 mod library_check;
 mod list_animations_example;

@@ -193,6 +193,20 @@ fn shape_line(
     wrap: Option<f32>,
     metadata: usize,
 ) {
+    // A size text cannot be laid out at draws nothing, as it measures as
+    // nothing (`text::is_drawable_size`). The buffer still needs metrics
+    // `cosmic-text` accepts, and no text to shape at them.
+    if !crate::text::is_drawable_size(line.font_size) {
+        buffer.set_metrics(font_system, Metrics::new(1.0, 1.0));
+        buffer.set_text(
+            font_system,
+            "",
+            &Attrs::new().metadata(metadata),
+            glyphon::Shaping::Advanced,
+            None,
+        );
+        return;
+    }
     let metrics = Metrics::new(line.font_size, line.font_size * 1.2);
     buffer.set_metrics(font_system, metrics);
     // RFC-0018 text wrap: a `Some(w)` bound shapes the line onto multiple
@@ -922,6 +936,20 @@ mod tests {
     /// font nobody ships.
     const DISPLAY_FONT: &[u8] =
         include_bytes!("../../../byard-cli/examples/assets/fonts/SpaceGrotesk-Variable.ttf");
+
+    /// A line at size 0 (or below, or NaN) is shaped to no glyphs instead of
+    /// panicking inside `cosmic-text`, and a later real size shapes again.
+    #[test]
+    fn a_line_at_no_usable_size_shapes_to_nothing() {
+        let mut fs = FontSystem::new();
+        let mut buf = Buffer::new(&mut fs, Metrics::new(32.0, 38.4));
+        for size in [0.0, -4.0, f32::NAN] {
+            shape_line(&mut fs, &mut buf, &line("hidden", size), None, 0);
+            assert_eq!(buf.layout_runs().map(|r| r.glyphs.len()).sum::<usize>(), 0);
+        }
+        shape_line(&mut fs, &mut buf, &line("shown", 32.0), None, 0);
+        assert!(buf.layout_runs().map(|r| r.glyphs.len()).sum::<usize>() > 0);
+    }
 
     /// Shapes `text` the way the paint side does, on a `FontSystem` prepared
     /// the way the paint side prepares one, and returns the run's width.

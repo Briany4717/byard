@@ -412,6 +412,13 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A text at size 0 takes no room instead of crashing.** `Text("x")
+  #[size: 0]`, or a size bound to a `var` that holds 0 or springs through it,
+  panicked inside the text shaper ("line height cannot be 0"), and because
+  laying a view out measures its text, `byard check` panicked with it. Text at
+  a size of 0, below 0 or not a number now measures as nothing and draws
+  nothing, in the check, a shot and a window alike.
+
 - **An animation ticks once per frame drawn.** With an animation in flight
   the logic thread ticked as fast as it could, computing frames the display
   never showed, and a hidden or minimised window kept spinning a core. It now

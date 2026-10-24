@@ -166,6 +166,9 @@ impl TextMeasurer {
         weight: u16,
         family: Option<&str>,
     ) -> (f32, f32) {
+        if !is_drawable_size(font_size) {
+            return (0.0, 0.0);
+        }
         let line_height = font_size * 1.2;
         let mut buffer = Buffer::new(&mut self.font_system, Metrics::new(font_size, line_height));
         // `None` measures the natural single-line width; `Some(w)` wraps to `w`.
@@ -188,6 +191,18 @@ impl TextMeasurer {
         let height = lines.max(1) as f32 * line_height;
         (width, height)
     }
+}
+
+/// Whether text can be laid out at `font_size`: a finite size above zero.
+///
+/// `cosmic-text` asserts on a zero line height, so `Text("x") #[size: 0]`, or
+/// a size bound to a `var` or springing through 0, used to panic the measure
+/// and the paint path alike, `byard check` included. Text at any other size
+/// takes no room and draws nothing, the way a zero-size box does; both paths
+/// ask this one function, so they cannot disagree about which sizes those are.
+#[must_use]
+pub fn is_drawable_size(font_size: f32) -> bool {
+    font_size.is_finite() && font_size > 0.0
 }
 
 /// The `cosmic-text` family selector for an optional resolved family name.
@@ -367,6 +382,23 @@ fn axis_weights_of(bytes: &[u8], index: u32) -> Vec<glyphon::fontdb::Weight> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A size of zero, below zero or not a number takes no room, where it used
+    /// to panic inside `cosmic-text` ("line height cannot be 0").
+    #[test]
+    fn text_at_no_usable_size_measures_as_nothing() {
+        let mut m = TextMeasurer::new();
+        for size in [0.0, -0.0, -12.0, f32::NAN, f32::INFINITY] {
+            assert_eq!(m.measure("x", size, 400, None), (0.0, 0.0), "size {size}");
+            assert_eq!(
+                m.measure_wrapped("x y z", size, Some(10.0), 400, None),
+                (0.0, 0.0),
+                "size {size}, wrapped"
+            );
+        }
+        let (w, h) = m.measure("x", 16.0, 400, None);
+        assert!(w > 0.0 && h > 0.0, "a real size still measures: {w} {h}");
+    }
 
     /// The two shipped example faces, read from the tree so the suite and the
     /// examples are proving the same files work.

@@ -23,13 +23,20 @@ pub fn run(paths: &[PathBuf], check: bool) -> Result<(), String> {
         return Err("no `.byd` files found".to_string());
     }
 
-    let cwd = std::env::current_dir().ok();
+    // The files are canonical, so the directory they are shown against has to
+    // be too: on Windows a canonical path is a verbatim `\\?\C:\...` one, which
+    // a plain `current_dir` is never a prefix of.
+    let cwd = std::env::current_dir()
+        .ok()
+        .map(|c| c.canonicalize().unwrap_or(c));
     let shown = |p: &Path| -> String {
-        cwd.as_deref()
+        let shown = cwd
+            .as_deref()
             .and_then(|c| p.strip_prefix(c).ok())
             .unwrap_or(p)
             .display()
-            .to_string()
+            .to_string();
+        without_verbatim_prefix(shown)
     };
 
     let (mut changed, mut failed) = (0usize, 0usize);
@@ -118,4 +125,35 @@ fn collect(paths: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
         }
     }
     Ok(out)
+}
+
+/// A path outside the current directory as a person writes it: Windows'
+/// verbatim `\\?\C:\dir` becomes `C:\dir`. A verbatim UNC path
+/// (`\\?\UNC\server\share`) is left as it is.
+fn without_verbatim_prefix(shown: String) -> String {
+    match shown.strip_prefix(r"\\?\") {
+        Some(rest) if !rest.starts_with("UNC\\") => rest.to_string(),
+        _ => shown,
+    }
+}
+
+#[cfg(test)]
+mod shown_tests {
+    use super::without_verbatim_prefix;
+
+    #[test]
+    fn a_verbatim_drive_path_is_shown_without_its_prefix() {
+        assert_eq!(
+            without_verbatim_prefix(r"\\?\C:\work\main.byd".to_string()),
+            r"C:\work\main.byd"
+        );
+        assert_eq!(
+            without_verbatim_prefix(r"\\?\UNC\host\share\a.byd".to_string()),
+            r"\\?\UNC\host\share\a.byd"
+        );
+        assert_eq!(
+            without_verbatim_prefix("src/main.byd".to_string()),
+            "src/main.byd"
+        );
+    }
 }

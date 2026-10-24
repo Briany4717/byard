@@ -35,6 +35,9 @@ It runs on macOS, Linux and Windows. Mobile hosts do not exist yet.
 
 ## Try it
 
+New here? Start with [the guide](docs/guide/src/introduction.md). To read it as
+a book, run `cargo install mdbook`, then `mdbook serve docs/guide`.
+
 Everything below runs from a clone of this repository, through Cargo.
 
 ```sh

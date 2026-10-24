@@ -16,7 +16,7 @@ to change as Phase 1 evolves, but the foundations are in place.
 | **New design proposal** | Copy [`docs/rfcs/0000-template.md`](docs/rfcs/0000-template.md), fill it in, open a PR. |
 | **Bug report** | Use the bug report issue template. |
 | **Feature request** | Use the feature request issue template. Large features should go through the RFC process. |
-| **Documentation** | Fixes to the README, RFCs, or this file are always welcome. |
+| **Documentation** | Fixes to the README, RFCs, or this file are always welcome. So are fixes and new chapters for [the user guide](docs/guide/src/introduction.md), which has [its own notes](docs/guide/CONTRIBUTING.md): every `byld` sample in it is checked by `cargo test`. |
 
 The [Unresolved Questions](docs/rfcs/0001-core-architecture.md#unresolved-questions)
 section of RFC-0001 still lists open design problems, accessibility mapping,

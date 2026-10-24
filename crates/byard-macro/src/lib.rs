@@ -26,13 +26,18 @@ mod native_view;
 /// Marks a Rust struct as a native view (RFC-0039): a package-authored widget
 /// that draws, measures and handles events like an intrinsic.
 ///
-/// ```ignore
+/// ```
+/// # use byard::render::{Layout, NativeView, RenderCtx};
 /// #[byard::native_view(name = "Sparkline")]
+/// #[derive(Default)]
 /// struct Sparkline {
 ///     #[prop] data: Vec<f32>,
 ///     #[prop(layout)] thickness: f32,
 ///     #[event] hover_point: (),
 /// }
+/// # impl NativeView for Sparkline {
+/// #     fn render(&mut self, _layout: Layout, _cx: &mut RenderCtx<'_>) {}
+/// # }
 /// ```
 ///
 /// It emits the struct unchanged, a `Default`-based constructor, the catalog

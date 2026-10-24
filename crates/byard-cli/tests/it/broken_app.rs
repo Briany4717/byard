@@ -78,8 +78,11 @@ fn an_app_that_does_not_compile_prints_what_check_prints() {
     if std::env::var_os("BYARD_BLESS").is_some() {
         std::fs::write(&snapshot, &stderr).expect("write the snapshot");
     }
+    // A Windows checkout with `core.autocrlf` gives the snapshot CRLF
+    // endings; what the app prints has LF ones on every platform.
     let expected = std::fs::read_to_string(&snapshot)
-        .expect("the snapshot is committed (BYARD_BLESS=1 writes it)");
+        .expect("the snapshot is committed (BYARD_BLESS=1 writes it)")
+        .replace("\r\n", "\n");
     assert_eq!(
         stderr, expected,
         "stderr differs from tests/fixtures/broken_app.stderr"

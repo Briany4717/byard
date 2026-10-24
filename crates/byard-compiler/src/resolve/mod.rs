@@ -162,7 +162,12 @@ impl SourceMap {
             file: entry.file.clone(),
             line,
             column,
-            text: entry.source[line_start..line_end].to_string(),
+            // A file saved with CRLF endings (any file checked out on Windows
+            // with `core.autocrlf`) keeps its `\r` before the `\n`; printed, it
+            // sends the terminal's cursor back to the start of the line.
+            text: entry.source[line_start..line_end]
+                .trim_end_matches('\r')
+                .to_string(),
             // Character offsets, not byte offsets: the caret is placed against
             // rendered columns, and a span after a multi-byte character would
             // otherwise point somewhere to its right.

@@ -1694,7 +1694,8 @@ impl CompileError {
         let line_no = source[..start].bytes().filter(|&b| b == b'\n').count() + 1;
         let col = start - line_start; // byte column, 0-based
 
-        let line_text = &source[line_start..line_end];
+        // Without the `\r` of a CRLF ending, as `SourceMap::caret` does.
+        let line_text = source[line_start..line_end].trim_end_matches('\r');
 
         // The caret underlines the span, clamped to this line's end.
         let caret_len = (end.min(line_end) - start).max(1);
@@ -1923,6 +1924,11 @@ mod tests {
     /// A program with the one error a misspelt name makes, resolved the way
     /// `byard check` resolves it.
     fn misspelt_program() -> crate::resolve::ResolvedProgram {
+        program_from("View Main() {\n    var count = 1\n    Text(\"{cuont}\")\n}\n")
+    }
+
+    /// `source`, as `main.byd`, resolved the way `byard check` resolves it.
+    fn program_from(source: &str) -> crate::resolve::ResolvedProgram {
         struct NoPackages;
         impl crate::resolve::PackageProvider for NoPackages {
             fn package_files(
@@ -1936,10 +1942,27 @@ mod tests {
         crate::resolve::resolve_program(
             vec![crate::resolve::SourceFile {
                 name: "main.byd".to_string(),
-                source: "View Main() {\n    var count = 1\n    Text(\"{cuont}\")\n}\n".to_string(),
+                source: source.to_string(),
             }],
             &mut NoPackages,
         )
+    }
+
+    /// A file with CRLF endings draws the same block as one with LF: the
+    /// `\r` would otherwise be printed into the source line.
+    #[test]
+    fn render_drops_the_carriage_return_of_a_crlf_line() {
+        let lf = misspelt_program();
+        let crlf =
+            program_from("View Main() {\r\n    var count = 1\r\n    Text(\"{cuont}\")\r\n}\r\n");
+        let crlf_text = render(&crlf.errors, &crlf.source_map, Style::PLAIN);
+        assert!(!crlf_text.contains('\r'), "{crlf_text:?}");
+        assert_eq!(crlf_text, render(&lf.errors, &lf.source_map, Style::PLAIN));
+        let single = CompileError::UnexpectedChar {
+            span: Span::new(2, 3),
+        }
+        .render("ab@cd\r\nxy");
+        assert!(!single.contains('\r'), "{single:?}");
     }
 
     /// The block is the file, the line, the source and a caret run exactly

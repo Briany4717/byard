@@ -127,6 +127,9 @@ pub fn run(
     if !deps.is_empty() {
         style::fact("Packages", &deps.len().to_string());
     }
+    if layout == Layout::Linux {
+        validate_linux_entries(&written.root, &naming.id);
+    }
     if manifest.bundle.id.is_none() {
         eprintln!(
             "note: no [bundle] id in byard.toml, so the app is `{}`; \
@@ -283,7 +286,96 @@ fn write_linux_entries(
     if let Some(icon) = &manifest.icon {
         write_hicolor_icons(icon, &share, &naming.id)?;
     }
-    Ok(())
+    write_file(
+        &share
+            .join("metainfo")
+            .join(format!("{}.metainfo.xml", naming.id)),
+        metainfo(naming, &manifest.bundle),
+    )
+}
+
+/// The `AppStream` component software centres and Flathub read: what the app
+/// is, its licence and the `.desktop` file that launches it. The validator
+/// requires a summary and a description of a desktop application, so an app
+/// that sets no `[bundle] summary` is described by its name.
+fn metainfo(naming: &Naming, bundle: &BundleConfig) -> String {
+    let summary = bundle.summary.as_deref().unwrap_or(&naming.name);
+    let summary = xml_escape(&summary.replace(['\r', '\n'], " "));
+    let mut out = String::from(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<component type=\"desktop-application\">\n",
+    );
+    let _ = writeln!(out, "  <id>{}</id>", xml_escape(&naming.id));
+    let _ = writeln!(out, "  <name>{}</name>", xml_escape(&naming.name));
+    let _ = writeln!(out, "  <summary>{summary}</summary>");
+    let _ = writeln!(
+        out,
+        "  <description>\n    <p>{summary}</p>\n  </description>"
+    );
+    out.push_str("  <metadata_license>CC0-1.0</metadata_license>\n");
+    if let Some(license) = &bundle.license {
+        let _ = writeln!(
+            out,
+            "  <project_license>{}</project_license>",
+            xml_escape(license)
+        );
+    }
+    let _ = writeln!(
+        out,
+        "  <launchable type=\"desktop-id\">{}.desktop</launchable>",
+        xml_escape(&naming.id)
+    );
+    out.push_str("</component>\n");
+    out
+}
+
+/// Runs `desktop-file-validate` and `appstreamcli validate --no-net` on what
+/// the Linux layout wrote, when they are installed, and prints what they
+/// object to. A tool that is not there is skipped: the files come from a
+/// fixed template that this command's tests validate.
+fn validate_linux_entries(root: &Path, id: &str) {
+    let share = root.join("share");
+    let desktop = share.join("applications").join(format!("{id}.desktop"));
+    let metainfo = share.join("metainfo").join(format!("{id}.metainfo.xml"));
+    for (tool, args) in [
+        ("desktop-file-validate", vec![desktop.as_path()]),
+        (
+            "appstreamcli",
+            vec![
+                Path::new("validate"),
+                Path::new("--no-net"),
+                metainfo.as_path(),
+            ],
+        ),
+    ] {
+        let Ok(output) = std::process::Command::new(tool)
+            .args(&args)
+            .env("LC_ALL", "C")
+            .output()
+        else {
+            continue;
+        };
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        for line in problems(tool, &text) {
+            eprintln!("warning: {tool}: {line}");
+        }
+    }
+}
+
+/// The lines of a validator's output that are an error or a warning.
+/// `desktop-file-validate` prints nothing else; `appstreamcli` marks them
+/// `E:` and `W:` among its notes (`I:`, `P:`) and its verdict.
+fn problems(tool: &str, output: &str) -> Vec<String> {
+    output
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .filter(|l| tool != "appstreamcli" || l.starts_with("E:") || l.starts_with("W:"))
+        .map(str::to_string)
+        .collect()
 }
 
 /// A value of a `.desktop` file: a backslash and a line break are written
@@ -509,12 +601,15 @@ fn icns(chunks: &[(&[u8; 4], Vec<u8>)]) -> Vec<u8> {
     out
 }
 
+/// Text for an XML element's content.
+fn xml_escape(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
 fn info_plist(naming: &Naming, exe: &str, icon: Option<&str>) -> String {
-    let escape = |s: &str| {
-        s.replace('&', "&amp;")
-            .replace('<', "&lt;")
-            .replace('>', "&gt;")
-    };
+    let escape = xml_escape;
     let mut keys = vec![
         ("CFBundleName", escape(&naming.name)),
         ("CFBundleDisplayName", escape(&naming.name)),
@@ -645,5 +740,52 @@ mod tests {
         assert_eq!(exec_argument("my app"), "\"my app\"");
         assert_eq!(exec_argument("a$b"), "\"a\\\\$b\"");
         assert_eq!(exec_argument("50%"), "\"50%%\"");
+    }
+
+    #[test]
+    fn the_metainfo_names_the_component_and_escapes_what_it_writes() {
+        let bundle = BundleConfig {
+            summary: Some("Cats & <mice>\nat play".to_string()),
+            license: Some("MIT OR Apache-2.0".to_string()),
+            ..BundleConfig::default()
+        };
+        let info = metainfo(&naming_of("com.example.tj"), &bundle);
+        assert!(info.contains("<name>Tom &amp; Jerry</name>"), "{info}");
+        assert!(
+            info.contains("<summary>Cats &amp; &lt;mice&gt; at play</summary>"),
+            "{info}"
+        );
+        assert!(
+            info.contains("<p>Cats &amp; &lt;mice&gt; at play</p>"),
+            "{info}"
+        );
+        assert!(
+            info.contains("<project_license>MIT OR Apache-2.0<"),
+            "{info}"
+        );
+        assert!(
+            info.contains(">com.example.tj.desktop</launchable>"),
+            "{info}"
+        );
+        let bare = metainfo(&naming_of("a.b"), &BundleConfig::default());
+        assert!(!bare.contains("project_license"), "{bare}");
+        assert!(
+            bare.contains("<summary>Tom &amp; Jerry</summary>"),
+            "{bare}"
+        );
+    }
+
+    #[test]
+    fn only_a_validators_complaints_are_kept() {
+        let appstream = "I: x:~: content-rating-missing\nW: x:~: url-homepage-missing\n\
+                         E: x:~: oops\n\n\u{2718} Validation failed: errors: 1\n";
+        assert_eq!(
+            problems("appstreamcli", appstream),
+            ["W: x:~: url-homepage-missing", "E: x:~: oops"]
+        );
+        assert_eq!(
+            problems("desktop-file-validate", "a.desktop: error: bad\n\n"),
+            ["a.desktop: error: bad"]
+        );
     }
 }

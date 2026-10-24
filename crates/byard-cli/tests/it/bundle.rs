@@ -37,7 +37,7 @@ fn workspace(name: &str) -> PathBuf {
         &app.join("byard.toml"),
         "[project]\nname = \"dials\"\nentry = \"src/main.byd\"\nicon = \"icon.png\"\n\n\
          [bundle]\nname = \"Dials\"\nid = \"com.example.dials\"\nversion = \"1.4.0\"\n\
-         categories = [\"Utility\", \"Development\"]\nsummary = \"Dials for things\"\n\
+         categories = [\"Utility\", \"Calculator\"]\nsummary = \"Dials for things\"\n\
          license = \"MIT OR Apache-2.0\"\n\n\
          # The dependency is where it is on this machine.\n\
          [dependencies]\ndial = { path = \"../dial\" }\n",
@@ -289,10 +289,25 @@ fn a_linux_bundle_is_a_prefix_with_a_launcher_entry() {
         ("Exec", "dials-bin"),
         ("Icon", "com.example.dials"),
         ("Terminal", "false"),
-        ("Categories", "Utility;Development;"),
+        ("Categories", "Utility;Calculator;"),
         ("StartupWMClass", "com.example.dials"),
     ] {
         assert_eq!(key(&keys, k), Some(v), "{k}: {keys:?}");
+    }
+
+    let info =
+        std::fs::read_to_string(prefix.join("share/metainfo/com.example.dials.metainfo.xml"))
+            .unwrap();
+    for line in [
+        "<component type=\"desktop-application\">",
+        "<id>com.example.dials</id>",
+        "<name>Dials</name>",
+        "<summary>Dials for things</summary>",
+        "<metadata_license>CC0-1.0</metadata_license>",
+        "<project_license>MIT OR Apache-2.0</project_license>",
+        "<launchable type=\"desktop-id\">com.example.dials.desktop</launchable>",
+    ] {
+        assert!(info.lines().any(|l| l.trim() == line), "{line}: {info}");
     }
 
     // The icon at every hicolor size up to its own 128 px, and none above it,
@@ -376,6 +391,13 @@ fn a_linux_bundle_with_no_bundle_table_falls_back_to_the_executable() {
     assert_eq!(key(&keys, "Categories"), Some("Utility;"));
     assert_eq!(key(&keys, "StartupWMClass"), Some("dev.byard.dials-bin"));
     assert_eq!(key(&keys, "Comment"), None);
+    // No licence line, and the name stands for the summary.
+    let info = std::fs::read_to_string(
+        root.join("out/dials/share/metainfo/dev.byard.dials-bin.metainfo.xml"),
+    )
+    .unwrap();
+    assert!(!info.contains("project_license"), "{info}");
+    assert!(info.contains("<summary>dials</summary>"), "{info}");
     // The icon is named by the id, and written under it.
     assert_eq!(key(&keys, "Icon"), Some("dev.byard.dials-bin"));
     assert!(
@@ -398,5 +420,93 @@ fn a_linux_bundle_without_an_icon_writes_none() {
     let keys = desktop_keys(&prefix.join("share/applications/com.example.dials.desktop"));
     assert_eq!(key(&keys, "Icon"), None);
     assert!(!prefix.join("share/icons").exists());
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Whether `tool` is installed: a CI image may not have the validators.
+fn installed(tool: &str) -> bool {
+    Command::new(tool).arg("--version").output().is_ok()
+}
+
+/// What the template writes passes the validators the desktop's own tooling
+/// ships. A tool that is not installed is skipped, not failed.
+#[test]
+fn the_entries_pass_the_freedesktop_validators() {
+    let root = workspace("linux-validate");
+    let (ok, text) = bundle(&root, "linux");
+    assert!(ok, "{text}");
+    let share = root.join("out/dials/share");
+    let mut ran = 0;
+    if installed("desktop-file-validate") {
+        ran += 1;
+        let out = Command::new("desktop-file-validate")
+            .env("LC_ALL", "C")
+            .arg(share.join("applications/com.example.dials.desktop"))
+            .output()
+            .unwrap();
+        let said = String::from_utf8_lossy(&out.stdout) + String::from_utf8_lossy(&out.stderr);
+        assert!(out.status.success() && said.trim().is_empty(), "{said}");
+        // The bundle command ran it too, and found nothing to say.
+        assert!(!text.contains("desktop-file-validate"), "{text}");
+    }
+    if installed("appstreamcli") {
+        ran += 1;
+        let out = Command::new("appstreamcli")
+            .env("LC_ALL", "C")
+            .args(["validate", "--no-net"])
+            .arg(share.join("metainfo/com.example.dials.metainfo.xml"))
+            .output()
+            .unwrap();
+        // A homepage is not something `[bundle]` can say, so its absence is
+        // a warning; an error is what a malformed file would be.
+        let said = String::from_utf8_lossy(&out.stdout);
+        assert!(!said.lines().any(|l| l.starts_with("E:")), "{said}");
+    }
+    if ran == 0 {
+        eprintln!("skipped: neither desktop-file-validate nor appstreamcli is installed");
+    }
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A validator that objects is heard, and one that is absent is not an error.
+#[test]
+fn the_bundle_prints_what_a_validator_objects_to() {
+    let root = workspace("linux-warn");
+    let manifest = root.join("app/byard.toml");
+    let text = std::fs::read_to_string(&manifest).unwrap();
+    std::fs::write(
+        &manifest,
+        text.replace(
+            "[\"Utility\", \"Calculator\"]",
+            "[\"Utility\", \"Weather\"]",
+        ),
+    )
+    .unwrap();
+    let (ok, text) = bundle(&root, "linux");
+    assert!(ok, "a warning does not fail the bundle: {text}");
+    if installed("desktop-file-validate") {
+        assert!(
+            text.contains("warning: desktop-file-validate:") && text.contains("Weather"),
+            "{text}"
+        );
+    }
+
+    // With no tools on the path, the same bundle is written, in silence.
+    let none = root.join("empty-path");
+    std::fs::create_dir_all(&none).unwrap();
+    let out = Command::new(env!("CARGO_BIN_EXE_byard"))
+        .env("PATH", &none)
+        .arg("bundle")
+        .arg(root.join("app"))
+        .arg("--bin")
+        .arg(root.join("dials-bin"))
+        .arg("--out")
+        .arg(root.join("out"))
+        .args(["--layout", "linux"])
+        .output()
+        .unwrap();
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{said}");
+    assert!(!said.contains("warning:"), "{said}");
     let _ = std::fs::remove_dir_all(&root);
 }

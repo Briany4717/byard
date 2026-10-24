@@ -522,6 +522,9 @@ impl PlatformHost for Host {
         engine.start_logic_from_view(move |_arena| {
             let mut interp = Interpreter::new();
             interp.set_dispatcher(dispatcher);
+            // Copy, cut and paste in a `TextField` (RFC-0041 §3). Opens
+            // nothing until the first of them is used.
+            interp.set_clipboard(Box::new(byard_platform::SystemClipboard::new()));
             // Before lowering, as `byard dev` does: `inject Theme` resolves
             // against the ambient chain at lower time.
             if let Some(theme) = theme {

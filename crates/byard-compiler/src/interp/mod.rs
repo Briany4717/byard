@@ -8,6 +8,7 @@
 pub mod anim;
 pub mod bridge;
 pub mod dates;
+pub(crate) mod edit;
 pub mod env;
 pub mod eval;
 pub mod events;

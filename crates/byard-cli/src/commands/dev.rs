@@ -1259,6 +1259,9 @@ impl PlatformHost for App {
                 interp.tick();
                 (interp, tree, initial_views)
             };
+            // Copy, cut and paste in a `TextField` (RFC-0041 §3). Opens nothing
+            // until the first of them is used.
+            interp.set_clipboard(Box::new(byard_platform::SystemClipboard::new()));
             interp.set_vector_ack_receiver(vector_ack_rx);
             interp.set_vector_cache_dir(vector_cache_dir);
 

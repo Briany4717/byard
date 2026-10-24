@@ -270,9 +270,10 @@ fn the_caret_is_reported_in_viewport_space() {
 
     app.tap(A);
     let empty = app.caret().expect("a focused field reports its caret");
-    // Layout x 20, the box's translate 40, the field's 10 of padding.
+    // Layout x 20, the box's translate 40, the field's 10 of padding, and the
+    // half pixel left of the boundary the caret sits at (RFC-0041 §6).
     assert!(
-        (empty.x - 71.0).abs() < 1.0 && empty.y > 20.0 && empty.y < 60.0,
+        (empty.x - 69.5).abs() < 1.0 && empty.y > 20.0 && empty.y < 60.0,
         "through the transform: {empty:?}"
     );
 

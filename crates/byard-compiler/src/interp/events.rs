@@ -317,6 +317,13 @@ pub struct EventRouter {
     /// panel dismisses and reopens it in one gesture, which reads as a flicker
     /// nobody can explain.
     light_dismiss: Vec<(Vec<Rect>, Action)>,
+    /// Elements that keep a drag after it leaves them (RFC-0041 §4): while a
+    /// press that began on one is held, `PointerDrag` and `PointerUp` go to
+    /// it wherever the pointer is, instead of to whatever is under the pointer.
+    /// A text field selecting text needs the pointer to be able to go past its
+    /// edge. Rebuilt every render like the handler set; empty unless a
+    /// `TextField` registered one.
+    drag_captures: Vec<u32>,
 }
 
 impl EventRouter {
@@ -341,6 +348,27 @@ impl EventRouter {
         self.focusable_floor = 0;
         self.modal_scrims.clear();
         self.light_dismiss.clear();
+        self.drag_captures.clear();
+    }
+
+    /// Makes `elem` keep the drag of a press that began on it (RFC-0041 §4).
+    pub fn capture_drag(&mut self, elem: u32) {
+        self.drag_captures.push(elem);
+    }
+
+    /// The press target that kept its drag, if the gesture in flight began on
+    /// an element that asked to.
+    fn captured_drag(&self) -> Option<u32> {
+        let elem = self.down.as_ref()?.elem?;
+        self.drag_captures.contains(&elem).then_some(elem)
+    }
+
+    /// The ancestors' paint transform of whatever is being registered right
+    /// now (RFC-0011), for a handler that has to map the pointer into the
+    /// space its element was laid out in. See [`local_point`].
+    #[must_use]
+    pub const fn current_frame(&self) -> Option<Transform> {
+        self.current_frame
     }
 
     /// Registers a modal `Overlay`'s full-viewport scrim (RFC-0017 §Modality).
@@ -668,8 +696,15 @@ impl EventRouter {
                 }
             }
             EventKind::PointerUp => {
-                // E4 precedence: pointer_up fires before tap.
-                self.fire(ctx, atlas, EventKind::PointerUp, ev.pos, None);
+                // E4 precedence: pointer_up fires before tap. A press that an
+                // element keeps (a text field mid-selection) is released to
+                // it wherever the pointer is.
+                match self.captured_drag() {
+                    Some(elem) => {
+                        self.fire_on_elem(ctx, Some(elem), EventKind::PointerUp, ev.pos, None);
+                    }
+                    None => self.fire(ctx, atlas, EventKind::PointerUp, ev.pos, None),
+                }
                 // The gesture ends, clear the drag latch (RFC-0024).
                 self.dragging = None;
                 if let Some(down) = self.down.take() {
@@ -726,7 +761,18 @@ impl EventRouter {
                         if (dx * dx + dy * dy).sqrt() > TAP_SLOP {
                             self.dragging = elem;
                         }
-                        self.fire(ctx, atlas, EventKind::PointerDrag, ev.pos, None);
+                        match self.captured_drag() {
+                            Some(elem) => self.fire_on_elem(
+                                ctx,
+                                Some(elem),
+                                EventKind::PointerDrag,
+                                ev.pos,
+                                None,
+                            ),
+                            None => {
+                                self.fire(ctx, atlas, EventKind::PointerDrag, ev.pos, None);
+                            }
+                        }
                     } else {
                         // Enter / Exit / Hover: compare new hovered elem to prev.
                         let new_hover = self.hit_any(atlas, ev.pos);
@@ -1088,6 +1134,22 @@ fn hits(r: Rect, frame: Option<Transform>, p: (f32, f32)) -> bool {
         Some(t) => {
             let q = invert_point(&t, [p.0, p.1]);
             contains(r, (q[0], q[1]))
+        }
+    }
+}
+
+/// Where the pointer is in the space an element was laid out in, when the
+/// element is drawn under its ancestors' transform `frame` (RFC-0011). The
+/// same mapping hit-testing does, exposed for a widget that needs a position
+/// inside itself (RFC-0041: where in a field's text a press landed). `None`
+/// is the untransformed case and returns `p` unchanged.
+#[must_use]
+pub fn local_point(frame: Option<Transform>, p: (f32, f32)) -> (f32, f32) {
+    match frame {
+        None => p,
+        Some(t) => {
+            let q = invert_point(&t, [p.0, p.1]);
+            (q[0], q[1])
         }
     }
 }

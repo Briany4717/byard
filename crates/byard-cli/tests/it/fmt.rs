@@ -184,3 +184,12 @@ fn a_path_that_does_not_exist_is_an_error() {
     assert!(text(&out).contains("nope.byd"), "{}", text(&out));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// RFC-0044 Acceptance, the check a person can do: the examples the
+/// repository ships are formatted.
+#[test]
+fn the_shipped_examples_are_formatted() {
+    let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("examples");
+    let out = byard(&examples, &["fmt", "--check", "."]);
+    assert!(out.status.success(), "{}", text(&out));
+}

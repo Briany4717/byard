@@ -741,3 +741,19 @@ fn every_kind_of_difference_is_seen_by_the_meaning_check() {
         assert!(!parsed_files_span_eq(&pb, &pa), "not told apart:\n{b}\n{a}");
     }
 }
+
+/// The repository's own `.byd` files are formatted, like its Rust: a file
+/// that is not is listed, and `byard fmt` fixes it.
+#[test]
+fn the_repositorys_byd_files_are_formatted() {
+    let unformatted: Vec<String> = repo_files()
+        .into_iter()
+        .filter(|(_, src)| fmt(src) != *src)
+        .map(|(path, _)| path.display().to_string())
+        .collect();
+    assert!(
+        unformatted.is_empty(),
+        "run `cargo run -p byard-cli -- fmt .` to format:\n{}",
+        unformatted.join("\n")
+    );
+}

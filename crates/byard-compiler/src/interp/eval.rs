@@ -14559,14 +14559,20 @@ impl Interpreter {
                     CoreKind::Composition
                     | CoreKind::CompositionCommit
                     | CoreKind::CompositionEnd
-                    | CoreKind::SystemScheme => {
-                        unreachable!("composition and scheme events are consumed before routing")
+                    | CoreKind::SystemScheme
+                    | CoreKind::AccessFocus
+                    | CoreKind::AccessScrollIntoView => {
+                        unreachable!(
+                            "composition, scheme and accessibility events are consumed before routing"
+                        )
                     }
                 };
                 let value = ev.payload.as_ref().map(|p| match p {
                     InputPayload::Str(s) => Value::Str(s.clone()),
                     InputPayload::Bool(b) => Value::Bool(*b),
                     InputPayload::Float(f) => Value::Float(f64::from(*f)),
+                    InputPayload::Number(n) => Value::Float(*n),
+                    InputPayload::Element(e) => Value::Int(i64::from(*e)),
                     InputPayload::Key(k) => Value::Str(k.clone()),
                     // Only a `Composition` carries one, and those are consumed.
                     InputPayload::Preedit { text, .. } => Value::Str(text.clone()),

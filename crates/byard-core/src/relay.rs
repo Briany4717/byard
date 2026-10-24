@@ -252,6 +252,12 @@ pub struct Relay {
     recycle_tx: Sender<RenderFrame>,
     recycle_rx: Receiver<RenderFrame>,
     shutdown: AtomicBool,
+    /// Whether an assistive technology is listening to the window (RFC-0042).
+    /// Set and cleared by the platform thread, read once per frame by the
+    /// logic thread in [`acquire_recycled`](Self::acquire_recycled): that
+    /// relaxed load is the entire cost of the accessibility tree while
+    /// nothing listens.
+    access_active: AtomicBool,
     io_runtime: tokio::runtime::Runtime,
     io_result_tx: UnboundedSender<IoResult>,
     // `tokio::sync::mpsc::UnboundedReceiver` only allows a single consumer
@@ -352,6 +358,7 @@ impl Relay {
             recycle_tx,
             recycle_rx,
             shutdown: AtomicBool::new(false),
+            access_active: AtomicBool::new(false),
             io_runtime,
             io_result_tx,
             io_result_rx: Mutex::new(io_result_rx),
@@ -419,7 +426,29 @@ impl Relay {
     pub fn acquire_recycled(&self) -> RenderFrame {
         let mut frame = self.recycle_rx.try_recv().unwrap_or_default();
         frame.clear();
+        // RFC-0042: the one relaxed load an app pays per frame for being
+        // accessible, and all it pays while no assistive technology listens.
+        frame.set_access_wanted(self.access_active.load(Ordering::Relaxed));
         frame
+    }
+
+    /// Tells the logic thread whether an assistive technology is listening
+    /// (RFC-0042). While it is, every frame carries an accessibility tree;
+    /// while it is not, none does and nothing is built.
+    ///
+    /// Called from the platform thread when the accessibility API connects
+    /// and disconnects. Wakes the logic thread, so the first tree arrives now
+    /// rather than at the end of its idle park.
+    pub fn set_access_active(&self, active: bool) {
+        if self.access_active.swap(active, Ordering::Relaxed) != active {
+            self.idle.signal();
+        }
+    }
+
+    /// Whether an assistive technology is listening (RFC-0042).
+    #[must_use]
+    pub fn access_active(&self) -> bool {
+        self.access_active.load(Ordering::Relaxed)
     }
 
     /// Publishes `frame` as the new latest frame, atomically replacing
@@ -696,6 +725,8 @@ impl Relay {
                 let mut runtime = build(&arena);
                 // Whether the last frame an animation asked for was drawn.
                 let mut seen = true;
+                // The hash of the accessibility tree last published, if any.
+                let mut last_tree: Option<u64> = None;
                 while !relay.is_shutdown() {
                     let mut frame = relay.acquire_recycled();
                     // Tick step 0 (RFC-0028 §6): apply everything the async
@@ -719,6 +750,14 @@ impl Relay {
                     // phase, so pass an empty slice for now.
                     let had_input = !inputs.is_empty();
                     runtime.evaluate_tick(&mut frame, &inputs, &[]);
+                    // RFC-0042: a tree that differs from the last one sent is
+                    // news the render thread must hear, even on an idle tick
+                    // with no input, or the platform would learn of it only at
+                    // the next redraw for some other reason. `None` (the
+                    // common case) costs nothing.
+                    let tree_hash = frame.access().map(crate::access::AccessTree::content_hash);
+                    let tree_changed = tree_hash.is_some() && tree_hash != last_tree;
+                    last_tree = tree_hash;
                     relay.publish(frame);
                     let more = runtime.wants_another_frame();
 
@@ -729,6 +768,9 @@ impl Relay {
                     // speed so bursts drain immediately; only an idle tick parks
                     // briefly, capping idle CPU while keeping first-input latency
                     // under one short park. (RFC-0001 leaves pacing to the caller.)
+                    if tree_changed {
+                        relay.wake_renderer();
+                    }
                     if had_input || applied || more {
                         // The frame just published reflects this input, or an
                         // async result that landed with no input at all. Either
@@ -874,6 +916,24 @@ mod tests {
             dirty: false,
             ..dirty_line(text)
         }
+    }
+
+    /// RFC-0042 "Cost": a frame asks for an accessibility tree only while an
+    /// assistive technology listens, and stops asking the moment it goes.
+    #[test]
+    fn a_frame_asks_for_a_tree_only_while_an_assistive_technology_listens() {
+        let relay = Relay::new().unwrap();
+        assert!(!relay.access_active());
+        assert!(!relay.acquire_recycled().access_wanted());
+
+        relay.set_access_active(true);
+        assert!(relay.access_active());
+        let frame = relay.acquire_recycled();
+        assert!(frame.access_wanted());
+        // Recycling does not carry the request over to a later frame.
+        relay.publish(frame);
+        relay.set_access_active(false);
+        assert!(!relay.acquire_recycled().access_wanted());
     }
 
     #[test]

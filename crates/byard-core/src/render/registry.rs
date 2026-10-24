@@ -86,6 +86,11 @@ pub trait NativeViewMeta: NativeView {
     /// This view's catalog entry.
     const INFO: NativeViewInfo;
 
+    /// What a screen reader should call this view (RFC-0042 §2). A group
+    /// unless the view says otherwise: a chart is not a button, and one that
+    /// is should say so, with `role = "…"` on `#[byard::native_view]`.
+    const ACCESS_ROLE: crate::access::AccessRole = crate::access::AccessRole::Group;
+
     /// Makes a fresh instance, called once per element that declares it.
     fn create() -> Box<dyn NativeView>;
 }
@@ -94,6 +99,7 @@ pub trait NativeViewMeta: NativeView {
 struct Entry {
     info: NativeViewInfo,
     factory: fn() -> Box<dyn NativeView>,
+    access_role: crate::access::AccessRole,
 }
 
 /// The registered views, in registration order.
@@ -116,6 +122,7 @@ pub fn register<V: NativeViewMeta>() -> bool {
     registry.push(Entry {
         info: V::INFO,
         factory: V::create,
+        access_role: V::ACCESS_ROLE,
     });
     true
 }
@@ -190,6 +197,7 @@ pub fn declare(name: &str, props: &[DeclaredProp]) -> bool {
             events: &[],
         },
         factory: || Box::new(StandIn),
+        access_role: crate::access::AccessRole::Group,
     });
     true
 }
@@ -202,6 +210,17 @@ pub fn info(name: &str) -> Option<NativeViewInfo> {
         .iter()
         .find(|e| e.info.name == name)
         .map(|e| e.info)
+}
+
+/// The accessibility role the view registered under `name` declares
+/// (RFC-0042 §2), if there is one.
+#[must_use]
+pub fn access_role(name: &str) -> Option<crate::access::AccessRole> {
+    let registry = REGISTRY.read().ok()?;
+    registry
+        .iter()
+        .find(|e| e.info.name == name)
+        .map(|e| e.access_role)
 }
 
 /// Every registered view's name, in registration order.

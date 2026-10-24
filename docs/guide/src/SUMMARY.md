@@ -20,3 +20,22 @@
 - [Drawing](drawing.md)
 - [Navigation](navigation.md)
 - [Data and I/O](data-and-io.md)
+
+# Theming
+
+- [Themes, colours and fonts](theming.md)
+
+# The Rust half
+
+- [Controllers](rust-controllers.md)
+- [Native views](rust-native-views.md)
+- [The App](rust-app.md)
+
+# Distribution
+
+- [Packages](packages.md)
+- [Shipping](shipping.md)
+
+# Reference
+
+- [CLI reference](cli-reference.md)

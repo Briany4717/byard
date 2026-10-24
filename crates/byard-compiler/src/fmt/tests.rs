@@ -548,11 +548,14 @@ fn every_byd_file_in_the_repository_formats_idempotently_and_keeps_its_meaning()
 #[test]
 fn indentation_in_the_input_never_matters() {
     for (path, src) in repo_files() {
+        // Joined with the file's own line ending: a Windows checkout gives the
+        // files CRLF ones, and the formatter keeps whichever it is given.
+        let eol = if src.contains("\r\n") { "\r\n" } else { "\n" };
         let flat: String = src
             .lines()
             .map(str::trim_start)
             .collect::<Vec<_>>()
-            .join("\n");
+            .join(eol);
         assert_eq!(
             fmt(&flat),
             fmt(&src),

@@ -293,6 +293,38 @@ mod tests {
         }
     }
 
+    struct Gauge;
+
+    impl NativeProps for Gauge {}
+
+    impl NativeView for Gauge {
+        fn render(&mut self, _layout: Layout, _cx: &mut RenderCtx<'_>) {}
+    }
+
+    impl NativeViewMeta for Gauge {
+        const INFO: NativeViewInfo = NativeViewInfo {
+            name: "RegistryGauge",
+            props: &[],
+            events: &[],
+        };
+        const ACCESS_ROLE: crate::access::AccessRole = crate::access::AccessRole::Slider;
+        fn create() -> Box<dyn NativeView> {
+            Box::new(Self)
+        }
+    }
+
+    /// RFC-0042 §2: a view reports the role it declared, a group when it
+    /// declared none, and nothing when it is not registered at all.
+    #[test]
+    fn a_registered_view_reports_the_accessibility_role_it_declared() {
+        use crate::access::AccessRole;
+        register::<Gauge>();
+        register::<Probe>();
+        assert_eq!(access_role("RegistryGauge"), Some(AccessRole::Slider));
+        assert_eq!(access_role("RegistryProbe"), Some(AccessRole::Group));
+        assert_eq!(access_role("NoSuchView"), None);
+    }
+
     #[test]
     fn a_registered_view_is_findable_by_name_and_instantiable() {
         // Not `assert!(register(...))`: the sibling test registers the same

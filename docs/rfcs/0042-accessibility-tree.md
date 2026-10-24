@@ -132,7 +132,9 @@ control's own `Text` children, joined with a space; for a `Toggle`,
 `Checkbox` or `RadioButton` with no text of its own, the text of the next
 sibling `Text` in the same `Row` (the common "control, then its label"
 pattern). Otherwise the node has no name and is reported as `(unnamed)` in
-the dump. `Text` inside a named control is not repeated as its own node.
+the dump. `Text` inside a named control is not repeated as its own node, and
+neither is the sibling `Text` that named a control: it is part of that
+control's name, and a reader would otherwise say it twice.
 
 `a11y_hidden: true` removes the element and its subtree. Both attributes are
 checked by `byard check` like any other attribute: `a11y_label` takes a string

@@ -693,17 +693,20 @@ impl Interpreter {
     }
 
     /// The "label beside it" rule (RFC-0042 §3): a switch, checkbox or radio
-    /// button nothing else names is named by the next `Text` in the same `Row`.
+    /// button nothing else names is named by the next `Text` in the same `Row`,
+    /// and that `Text` is then part of its name and not a node of its own, as
+    /// the text inside a button is. Left in, a reader would say it twice.
     ///
     /// Runs when the `Row` is left, over the nodes it held: those it owns
     /// itself, not the ones in containers nested inside it.
-    fn name_from_label_beside(&self, frame: &mut RenderFrame, first: usize) {
+    fn name_from_label_beside(&mut self, frame: &mut RenderFrame, first: usize) {
         let Some(tree) = frame.access_mut() else {
             return;
         };
         // This `Row`'s container has just been popped.
         let depth = u32::try_from(self.access.containers.len() + 1).unwrap_or(u32::MAX);
-        let owners = &self.access.owners;
+        let owners = &mut self.access.owners;
+        let mut consumed: Vec<usize> = Vec::new();
         for i in first..tree.nodes.len() {
             let wants = matches!(
                 tree.nodes[i].role,
@@ -713,10 +716,22 @@ impl Interpreter {
             if !wants {
                 continue;
             }
-            let label = (i + 1..tree.nodes.len())
-                .find(|&j| owners.get(j) == Some(&depth) && tree.nodes[j].role == AccessRole::Label)
-                .and_then(|j| tree.nodes[j].name.clone());
-            tree.nodes[i].name = label;
+            let label = (i + 1..tree.nodes.len()).find(|&j| {
+                owners.get(j) == Some(&depth) && tree.nodes[j].role == AccessRole::Label
+            });
+            if let Some(j) = label {
+                tree.nodes[i].name = tree.nodes[j].name.clone();
+                consumed.push(j);
+            }
+        }
+        // Back to front, so each removal leaves the indices still to come.
+        // Nothing else holds an index past `first`: the nodes open around the
+        // walk were pushed before this `Row`, and a `Label` has no children.
+        consumed.sort_unstable();
+        consumed.dedup();
+        for j in consumed.into_iter().rev() {
+            tree.nodes.remove(j);
+            owners.remove(j);
         }
     }
 }

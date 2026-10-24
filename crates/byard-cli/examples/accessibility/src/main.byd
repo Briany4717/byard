@@ -19,7 +19,8 @@
 //      the dump says so: `Button (unnamed)`. That is where an `a11y_label:` is
 //      missing, and a reader would say only "button".
 //   4. The Toggle, the Checkbox and each RadioButton are named by the Text
-//      beside them in their Row; the Slider by its `a11y_label:`; the
+//      beside them in their Row, and that Text is not listed again (a reader
+//      would say "Wi-Fi" twice); the Slider by its `a11y_label:`; the
 //      TextField by its placeholder.
 //   5. The hero image is not in the tree at all (`a11y_hidden: true`), and
 //      every Row, Column and Box between the controls is gone: the tree is

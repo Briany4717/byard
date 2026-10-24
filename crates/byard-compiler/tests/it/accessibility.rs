@@ -359,6 +359,55 @@ fn a_switch_checkbox_or_radio_is_named_by_the_label_beside_it_in_its_row() {
     );
 }
 
+/// The text that names a switch, checkbox or radio button is part of its name
+/// and not a node of its own, as the text inside a button is: left in, a
+/// reader would say "Wi-Fi" twice.
+#[test]
+fn a_label_that_names_a_control_is_not_read_twice() {
+    let run = Run::start(
+        r#"View Main() {
+            var a = true
+            var c = "x"
+            Column {
+                Row { Toggle #[bind: a, width: 52, height: 30] Text("Wi-Fi") Text("second") }
+                Row { RadioButton #[bind: c, value: "x", width: 24, height: 24] Text("Express") }
+                Row { Toggle #[bind: a, width: 52, height: 30] }
+                Text("Wi-Fi")
+            }
+        }"#,
+    );
+    let summary: Vec<(AccessRole, &str)> = run
+        .access()
+        .nodes
+        .iter()
+        .map(|n| (n.role, n.name.as_deref().unwrap_or("-")))
+        .collect();
+    assert_eq!(
+        summary,
+        [
+            (AccessRole::Switch, "Wi-Fi"),
+            // Only the label that named the control is taken in; a second
+            // `Text` beside it is still a label of its own.
+            (AccessRole::Label, "second"),
+            (AccessRole::RadioButton, "Express"),
+            (AccessRole::Switch, "-"),
+            // A `Text` that is not beside a control stays what it was, even
+            // with the same words.
+            (AccessRole::Label, "Wi-Fi"),
+        ],
+        "{}",
+        run.access().to_text()
+    );
+    // Every node's parent is still a node of the tree: removing the label
+    // left nothing pointing at it.
+    let tree = run.access();
+    assert!(
+        tree.nodes
+            .iter()
+            .all(|n| n.parent.is_none_or(|p| tree.node(p).is_some()))
+    );
+}
+
 #[test]
 fn a_label_is_reactive() {
     let mut run = Run::start(

@@ -238,7 +238,10 @@ impl std::error::Error for ByardError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Layout(e) => Some(e),
-            Self::Project(e) | Self::Compile(e) => Some(&**e),
+            // Transparent: `Display` already is the inner error's text, so
+            // the chain continues from the inner error's own source, or a
+            // reporter would print the same message twice.
+            Self::Project(e) | Self::Compile(e) => e.source(),
             _ => None,
         }
     }
@@ -334,15 +337,16 @@ mod tests {
     }
     impl std::error::Error for Outer {}
 
-    /// RFC-0043: the new variants read as the message their payload carries,
-    /// and expose it as their source.
+    /// RFC-0043: the new variants read as the message their payload carries;
+    /// they are transparent, so the source chain skips them.
     #[test]
-    fn project_and_compile_show_their_payload_and_chain_it() {
+    fn project_and_compile_read_as_their_payload() {
         use std::error::Error;
 
         let project = ByardError::project(std::io::Error::other("no manifest here"));
         assert_eq!(project.to_string(), "no manifest here");
-        assert!(project.source().is_some());
+        // Transparent: the text is the inner error's, so the chain skips it.
+        assert!(project.source().is_none());
         assert!(matches!(project, ByardError::Project(_)));
 
         let compile = ByardError::compile(Outer);

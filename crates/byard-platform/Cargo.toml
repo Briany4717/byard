@@ -29,7 +29,7 @@ winit = "0.30"
 byard-test-gpu = { path = "../byard-test-gpu" }
 # Visual verification example (examples/hello_world.rs).
 # Minimal async executor for blocking on `Engine::init` inside `on_resume`.
-pollster = "0.3"
+pollster = "0.4"
 # hello_world_byd example: drives the byld interpreter in a real winit window.
 byard-compiler = { path = "../byard-compiler" }
 # Dumps readback frames to PNG for visual verification (gated behind

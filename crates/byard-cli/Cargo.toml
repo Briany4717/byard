@@ -22,7 +22,7 @@ toml           = { version = "0.8", features = ["preserve_order"] }
 semver         = "1"
 toml_edit      = "0.22"
 sha2           = "0.10"
-pollster       = "0.3"
+pollster       = "0.4"
 wgpu           = "29.0"
 crossbeam-channel = "0.5"
 # `byard shot` writes PNGs. Already in the tree through the image stack.

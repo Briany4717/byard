@@ -297,7 +297,7 @@ dependencies = [
  "byard-project",
  "crossbeam-channel",
  "image",
- "pollster 0.4.0",
+ "pollster",
  "wgpu",
 ]
 
@@ -313,7 +313,7 @@ dependencies = [
  "crossbeam-channel",
  "flate2",
  "image",
- "pollster 0.3.0",
+ "pollster",
  "semver",
  "sha2",
  "toml",
@@ -352,7 +352,7 @@ dependencies = [
  "glyphon",
  "image",
  "naga",
- "pollster 0.4.0",
+ "pollster",
  "reqwest",
  "rustc-hash 2.1.2",
  "serde_json",
@@ -368,7 +368,7 @@ name = "byard-macro"
 version = "0.0.0"
 dependencies = [
  "byard",
- "pollster 0.4.0",
+ "pollster",
  "proc-macro2",
  "quote",
  "syn",
@@ -382,7 +382,7 @@ dependencies = [
  "byard-core",
  "byard-test-gpu",
  "image",
- "pollster 0.3.0",
+ "pollster",
  "wgpu",
  "winit",
 ]
@@ -406,7 +406,7 @@ dependencies = [
 name = "byard-test-gpu"
 version = "0.0.0"
 dependencies = [
- "pollster 0.4.0",
+ "pollster",
  "wgpu",
 ]
 
@@ -2546,12 +2546,6 @@ dependencies = [
  "rustix 1.1.4",
  "windows-sys 0.61.2",
 ]
-
-[[package]]
-name = "pollster"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "22686f4785f02a4fcc856d3b3bb19bf6c8160d103f7a99cc258bddd0251dc7f2"
 
 [[package]]
 name = "pollster"

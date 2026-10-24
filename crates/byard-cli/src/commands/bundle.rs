@@ -29,6 +29,9 @@
 //!   share/metainfo/id.metainfo.xml
 //! ```
 //!
+//! `--archive` also packs that tree, paths from its root, as
+//! `exe-version-linux-arch.tar.gz` beside it.
+//!
 //! The copy is the project directory as it is, less what is not read at run
 //! time: build output (`target/`), hidden entries (`.byard/`, `.git`), the Rust
 //! half, which is already in the binary (`*.rs`, `Cargo.toml`, `Cargo.lock`),
@@ -47,6 +50,7 @@ use std::path::{Path, PathBuf};
 use crate::deps::resolve_project;
 use crate::manifest::{BundleConfig, Manifest};
 use crate::style;
+use byard_project::archive;
 
 /// The shape of the package.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
@@ -84,7 +88,11 @@ pub fn run(
     bin: &Path,
     out: Option<&Path>,
     layout: Layout,
+    archive: bool,
 ) -> Result<(), String> {
+    if archive && layout != Layout::Linux {
+        return Err("--archive packs the Linux layout: add `--layout linux`".to_string());
+    }
     if !bin.is_file() {
         return Err(format!(
             "--bin {}: there is no executable there\n\
@@ -130,6 +138,13 @@ pub fn run(
     if layout == Layout::Linux {
         validate_linux_entries(&written.root, &naming.id);
     }
+    if archive {
+        let file = out.join(archive_name(&exe, &naming.version));
+        let files = tree_files(&written.root)?;
+        let bytes = archive::pack_tree(&files, |path| path.starts_with("bin/"))?;
+        write_file(&file, bytes)?;
+        style::fact("Archive", &file.display().to_string());
+    }
     if manifest.bundle.id.is_none() {
         eprintln!(
             "note: no [bundle] id in byard.toml, so the app is `{}`; \
@@ -138,6 +153,33 @@ pub fn run(
         );
     }
     Ok(())
+}
+
+/// What the Linux archive is called: `<exe>-<version>-linux-<arch>.tar.gz`,
+/// as GitHub release assets and `cargo-dist` name theirs (RFC-0045).
+fn archive_name(exe: &str, version: &str) -> String {
+    format!("{exe}-{version}-linux-{}.tar.gz", std::env::consts::ARCH)
+}
+
+/// Every file under `root` as its path from `root`, `/`-separated, and its
+/// contents: the entries of the archive, which unpacks into a prefix.
+fn tree_files(root: &Path) -> Result<Vec<(String, Vec<u8>)>, String> {
+    fn walk(dir: &Path, rel: &str, out: &mut Vec<(String, Vec<u8>)>) -> Result<(), String> {
+        for entry in std::fs::read_dir(dir).map_err(|e| io(dir, &e))? {
+            let entry = entry.map_err(|e| io(dir, &e))?;
+            let path = entry.path();
+            let name = format!("{rel}{}", entry.file_name().to_string_lossy());
+            if path.is_dir() {
+                walk(&path, &format!("{name}/"), out)?;
+            } else {
+                out.push((name, std::fs::read(&path).map_err(|e| io(&path, &e))?));
+            }
+        }
+        Ok(())
+    }
+    let mut files = Vec::new();
+    walk(root, "", &mut files)?;
+    Ok(files)
 }
 
 /// The project at `path`, resolved, an app's, and free of errors.

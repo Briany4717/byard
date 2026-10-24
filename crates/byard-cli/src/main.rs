@@ -84,6 +84,10 @@ enum Command {
         /// on macOS and `dir` elsewhere.
         #[arg(long, value_enum)]
         layout: Option<commands::bundle::Layout>,
+        /// Also pack the Linux layout as `<exe>-<version>-linux-<arch>.tar.gz`
+        /// beside it, to unpack into a prefix (`tar xzf ... -C ~/.local`).
+        #[arg(long)]
+        archive: bool,
     },
     /// Add a dependency to byard.toml, then fetch and lock it (RFC-0008).
     #[command(alias = "install")]
@@ -204,11 +208,13 @@ fn main() {
             bin,
             out,
             layout,
+            archive,
         } => commands::bundle::run(
             path.as_deref(),
             &bin,
             out.as_deref(),
             layout.unwrap_or_else(commands::bundle::Layout::host),
+            archive,
         ),
         Command::Clean { file } => commands::clean::run(file.as_deref()),
         Command::Add {

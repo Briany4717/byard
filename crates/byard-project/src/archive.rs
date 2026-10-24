@@ -19,21 +19,44 @@ const BLOCK: usize = 512;
 /// Packs `files` (relative path, contents) into a gzip-compressed ustar
 /// archive. Paths use `/` and must fit ustar's 255-byte name.
 pub fn pack(files: &[(String, Vec<u8>)]) -> Result<Vec<u8>, String> {
+    write(files, |_| 0o644, flate2::Compression::best())
+}
+
+/// Packs a tree to be unpacked into a prefix (`byard bundle --archive`): as
+/// [`pack`], except that the entries `executable` accepts carry mode 0755,
+/// and the compression is the default level, because the tree holds a
+/// program rather than a package of sources and `best` costs seconds on it
+/// for a few percent. Still sorted and without times, so the same tree is the
+/// same bytes.
+pub fn pack_tree(
+    files: &[(String, Vec<u8>)],
+    executable: impl Fn(&str) -> bool,
+) -> Result<Vec<u8>, String> {
+    write(
+        files,
+        |path| if executable(path) { 0o755 } else { 0o644 },
+        flate2::Compression::default(),
+    )
+}
+
+fn write(
+    files: &[(String, Vec<u8>)],
+    mode: impl Fn(&str) -> u32,
+    level: flate2::Compression,
+) -> Result<Vec<u8>, String> {
     let mut sorted: Vec<&(String, Vec<u8>)> = files.iter().collect();
     sorted.sort_by(|a, b| a.0.cmp(&b.0));
 
     let mut tar = Vec::new();
     for (path, bytes) in sorted {
-        tar.extend_from_slice(&header(path, bytes.len())?);
+        tar.extend_from_slice(&header(path, bytes.len(), mode(path))?);
         tar.extend_from_slice(bytes);
         tar.resize(tar.len().div_ceil(BLOCK) * BLOCK, 0);
     }
     // End of archive: two zero blocks.
     tar.resize(tar.len() + 2 * BLOCK, 0);
 
-    let mut gz = flate2::GzBuilder::new()
-        .mtime(0)
-        .write(Vec::new(), flate2::Compression::best());
+    let mut gz = flate2::GzBuilder::new().mtime(0).write(Vec::new(), level);
     gz.write_all(&tar).map_err(|e| e.to_string())?;
     gz.finish().map_err(|e| e.to_string())
 }
@@ -85,7 +108,7 @@ pub fn unpack(archive: &[u8], dest: &Path) -> Result<Vec<String>, String> {
 }
 
 /// One ustar header for a regular file.
-fn header(path: &str, size: usize) -> Result<[u8; BLOCK], String> {
+fn header(path: &str, size: usize, mode: u32) -> Result<[u8; BLOCK], String> {
     if !safe_relative(path) {
         return Err(format!(
             "`{path}`: a package path must be relative and inside it"
@@ -103,7 +126,7 @@ fn header(path: &str, size: usize) -> Result<[u8; BLOCK], String> {
         (&path[..cut], &path[cut + 1..])
     };
     h[..name.len()].copy_from_slice(name.as_bytes());
-    put(&mut h[100..108], "0000644");
+    put(&mut h[100..108], &format!("{mode:07o}"));
     put(&mut h[108..116], "0000000");
     put(&mut h[116..124], "0000000");
     put(&mut h[124..136], &format!("{size:011o}"));
@@ -195,12 +218,48 @@ mod tests {
         assert_eq!(pack(&a).unwrap(), pack(&b).unwrap());
     }
 
+    /// A tree for a prefix keeps its programs runnable, and is the same bytes
+    /// however the files are ordered.
+    #[test]
+    fn a_tree_marks_its_programs_executable() {
+        let files = vec![
+            ("share/app/byard.toml".to_string(), b"x".to_vec()),
+            ("bin/app".to_string(), b"#!/bin/sh\n".to_vec()),
+        ];
+        let archive = pack_tree(&files, |p| p.starts_with("bin/")).unwrap();
+        let mut tar = Vec::new();
+        flate2::read::GzDecoder::new(&archive[..])
+            .read_to_end(&mut tar)
+            .unwrap();
+        // Sorted: `bin/app` first, then the data, each header's mode field.
+        assert_eq!(field_str(&tar[0..100]), "bin/app");
+        assert_eq!(field_str(&tar[100..108]), "0000755");
+        let second = 2 * BLOCK;
+        assert_eq!(
+            field_str(&tar[second..second + 100]),
+            "share/app/byard.toml"
+        );
+        assert_eq!(field_str(&tar[second + 100..second + 108]), "0000644");
+        let mut reversed = files.clone();
+        reversed.reverse();
+        assert_eq!(
+            archive,
+            pack_tree(&reversed, |p| p.starts_with("bin/")).unwrap()
+        );
+        // Unpacking reads it as it reads a package.
+        let dir = scratch("tree");
+        let mut written = unpack(&archive, &dir).unwrap();
+        written.sort();
+        assert_eq!(written, ["bin/app", "share/app/byard.toml"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn a_path_outside_the_package_is_refused_both_ways() {
         assert!(pack(&[("../evil".to_string(), vec![1])]).is_err());
         assert!(pack(&[("/etc/evil".to_string(), vec![1])]).is_err());
         // A hand-made archive carrying `../evil` does not escape on unpack.
-        let mut h = header("okay", 1).unwrap();
+        let mut h = header("okay", 1, 0o644).unwrap();
         h[..100].fill(0);
         h[..7].copy_from_slice(b"../evil");
         h[148..156].fill(b' ');

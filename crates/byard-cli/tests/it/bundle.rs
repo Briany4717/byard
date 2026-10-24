@@ -510,3 +510,132 @@ fn the_bundle_prints_what_a_validator_objects_to() {
     assert!(!said.contains("warning:"), "{said}");
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// Every file under `dir`, as its `/`-separated path from `dir`.
+fn tree(dir: &Path) -> Vec<String> {
+    fn walk(dir: &Path, rel: &str, out: &mut Vec<String>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let entry = entry.unwrap();
+            let name = format!("{rel}{}", entry.file_name().to_string_lossy());
+            if entry.path().is_dir() {
+                walk(&entry.path(), &format!("{name}/"), out);
+            } else {
+                out.push(name);
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(dir, "", &mut out);
+    out.sort();
+    out
+}
+
+#[test]
+fn the_archive_lists_the_files_of_the_tree() {
+    let root = workspace("linux-archive");
+    let (ok, text) = bundle_with(&root, "linux", &["--archive"]);
+    assert!(ok, "{text}");
+    let name = format!("dials-bin-1.4.0-linux-{}.tar.gz", std::env::consts::ARCH);
+    let archive = root.join("out").join(&name);
+    assert!(
+        archive.is_file(),
+        "{name} in {:?}",
+        tree(&root.join("out")).len()
+    );
+    assert!(text.contains(&name), "{text}");
+
+    let prefix = root.join("out/dials");
+    let bytes = std::fs::read(&archive).unwrap();
+    let unpacked = root.join("unpacked");
+    let mut listed = byard_project::archive::unpack(&bytes, &unpacked).unwrap();
+    listed.sort();
+    assert_eq!(listed, tree(&prefix));
+    for path in &listed {
+        assert_eq!(
+            std::fs::read(unpacked.join(path)).unwrap(),
+            std::fs::read(prefix.join(path)).unwrap(),
+            "{path}"
+        );
+    }
+    // The program is runnable once unpacked, and nothing else is.
+    let mut tar = Vec::new();
+    std::io::Read::read_to_end(&mut flate2::read::GzDecoder::new(&bytes[..]), &mut tar).unwrap();
+    let mut at = 0;
+    let mut modes = Vec::new();
+    while tar[at..at + 512].iter().any(|&b| b != 0) {
+        let field = |a: usize, b: usize| {
+            String::from_utf8_lossy(&tar[at + a..at + b])
+                .trim_end_matches('\0')
+                .to_string()
+        };
+        let size = usize::from_str_radix(field(124, 136).trim(), 8).unwrap();
+        modes.push((field(0, 100), field(100, 108)));
+        at += 512 + size.div_ceil(512) * 512;
+    }
+    for (path, mode) in &modes {
+        let expect = if path.starts_with("bin/") {
+            "0000755"
+        } else {
+            "0000644"
+        };
+        assert_eq!(mode, expect, "{path}");
+    }
+    assert_eq!(modes.len(), listed.len());
+
+    // The system's own `tar` reads the same list, when there is one.
+    if let Ok(out) = Command::new("tar").arg("-tzf").arg(&archive).output() {
+        let mut theirs: Vec<String> = String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(str::to_string)
+            .collect();
+        theirs.sort();
+        assert_eq!(theirs, listed);
+    }
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// The archive is a Linux layout's, and says so rather than guessing.
+#[test]
+fn an_archive_of_another_layout_is_refused() {
+    let root = workspace("archive-dir");
+    let (ok, text) = bundle_with(&root, "dir", &["--archive"]);
+    assert!(!ok, "{text}");
+    assert!(text.contains("--layout linux"), "{text}");
+    assert!(!root.join("out").exists(), "nothing was written");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// Without `--archive` there is none.
+#[test]
+fn a_linux_bundle_has_no_archive_unless_asked() {
+    let root = workspace("linux-noarchive");
+    let (ok, text) = bundle(&root, "linux");
+    assert!(ok, "{text}");
+    assert_eq!(
+        std::fs::read_dir(root.join("out")).unwrap().count(),
+        1,
+        "only the tree"
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// The project in the prefix, at `../share/<exe>/project` from the binary
+/// where the program looks for it, loads and checks clean as the app will
+/// load it.
+#[test]
+fn the_project_in_a_linux_prefix_checks_clean() {
+    let root = workspace("linux-resolves");
+    let (ok, text) = bundle(&root, "linux");
+    assert!(ok, "{text}");
+    let prefix = root.join("out/dials");
+    let project = prefix.join("bin/../share/dials-bin/project");
+    // `byard check` on the tree's copy, as the app resolves it.
+    let out = Command::new(env!("CARGO_BIN_EXE_byard"))
+        .arg("check")
+        .arg(&project)
+        .output()
+        .unwrap();
+    let said = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{said}");
+    let _ = std::fs::remove_dir_all(&root);
+}

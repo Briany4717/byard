@@ -18,9 +18,9 @@ byard-platform = { path = "../byard-platform" }
 byard-core     = { path = "../byard-core" }
 byard-project  = { path = "../byard-project" }
 clap           = { version = "4", features = ["derive"] }
-toml           = { version = "0.8", features = ["preserve_order"] }
+toml           = { version = "1", features = ["preserve_order"] }
 semver         = "1"
-toml_edit      = "0.22"
+toml_edit      = "0.25"
 sha2           = "0.10"
 pollster       = "0.4"
 wgpu           = "29.0"

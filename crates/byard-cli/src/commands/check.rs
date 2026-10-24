@@ -6,9 +6,9 @@ use crate::deps::resolve_project;
 use crate::manifest::Manifest;
 use crate::style;
 use byard_compiler::CompileError;
+use byard_compiler::diagnostics::{Style, render, render_short};
 use byard_compiler::interp::eval::Interpreter;
 use byard_compiler::resolve::{ResolvedProgram, SourceMap};
-use std::fmt::Write as _;
 use std::path::Path;
 
 pub fn run(file: Option<&Path>, short: bool) -> Result<(), String> {
@@ -145,60 +145,31 @@ pub fn check_source(src: &str) -> Vec<CompileError> {
 /// Prints every diagnostic: the machine-readable first line, then, unless
 /// `short`, a caret-anchored block beneath it (RFC-0006 **C3**).
 ///
-/// # The first line is not negotiable
-///
-/// `file:line:col: error[kind]: message` is RFC-0006 **C7** and is parsed by
-/// editor problem matchers. It is emitted **unstyled and byte-identical** to
-/// what `byard check` has always printed. Colouring or reformatting it would
-/// break integrations that then go *quiet* rather than failing, which nobody
-/// notices for a long time.
-///
-/// The caret block goes **beneath** it, and that is where the palette applies:
-///
-/// ```text
-/// main.byd:7:14: error[UnknownAttribute]: unknown attribute `colour` on `Column`
-///   |
-/// 7 |     Column #[colour: 0xFF0000] {
-///   |              ^^^^^^
-/// ```
-///
-/// `--short` suppresses the block entirely, for scripts that want one line per
-/// error and nothing else.
+/// The text is [`byard_compiler::diagnostics::render`]'s, so the first line
+/// stays unstyled and byte-identical to what `byard check` has always
+/// printed (RFC-0006 **C7**, see there) and an app that does not compile
+/// prints the same block. What stays here is the part that is the CLI's own:
+/// the palette it resolved, and writing through the statusline so the
+/// readout is erased around the text.
 pub fn print_diagnostics(errors: &[CompileError], map: &SourceMap, short: bool) {
-    let p = style::palette();
-    for err in errors {
-        // Unstyled, on stderr, exactly as before.
-        crate::statusline::log_stderr(&map.render_line(err));
-        if short {
-            continue;
-        }
-        let Some(caret) = map.caret(err) else {
-            // A project-level diagnostic has a headline and no source to point
-            // at. Printing an empty gutter for it would suggest the context was
-            // lost rather than never existing.
-            continue;
-        };
-        // Built line by line rather than as one continued literal: a `\`
-        // continuation in a formatted string is exactly the kind of thing
-        // `cargo fmt` rewrites into baked-in indentation, and the gutter's
-        // alignment is the only thing holding the block together.
-        let gutter = caret.line.to_string();
-        let pad = " ".repeat(gutter.len());
-        let mut block = String::with_capacity(caret.text.len() + 96);
-        let (dim, err_c, reset) = (p.dim, p.err, p.reset);
-        let _ = writeln!(block, "{dim}{pad} |{reset}");
-        let _ = writeln!(block, "{dim}{gutter} |{reset} {}", caret.text);
-        let _ = write!(block, "{dim}{pad} |{reset} ");
-        for _ in 0..caret.caret_start {
-            block.push(' ');
-        }
-        let _ = write!(block, "{err_c}");
-        for _ in 0..caret.caret_len {
-            block.push('^');
-        }
-        let _ = write!(block, "{reset}");
-        crate::statusline::log_stderr(&block);
+    if errors.is_empty() {
+        return;
     }
+    let text = if short {
+        render_short(errors, map)
+    } else {
+        let p = style::palette();
+        render(
+            errors,
+            map,
+            Style {
+                dim: p.dim,
+                err: p.err,
+                reset: p.reset,
+            },
+        )
+    };
+    crate::statusline::log_stderr(&text);
 }
 
 #[cfg(test)]

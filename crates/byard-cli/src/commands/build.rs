@@ -23,7 +23,10 @@ use crate::style;
 pub fn run(file: Option<&Path>) -> Result<(), String> {
     let manifest = Manifest::discover(file)?;
     manifest.require_app("build")?;
-    style::fact("Byard", "0.0.0, build (AOT vector atlas)");
+    style::fact(
+        "Byard",
+        &format!("{}, build (AOT vector atlas)", env!("CARGO_PKG_VERSION")),
+    );
     style::fact("Entry", &manifest.entry.display().to_string());
 
     let (program, _provider) = resolve_project(&manifest)?;

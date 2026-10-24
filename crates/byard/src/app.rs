@@ -35,6 +35,9 @@ use byard_compiler::parser::ast::ViewDecl;
 use byard_core::bridge::{Controller, ControllerRegistry};
 use byard_core::frame::{RenderFrame, TargetId};
 use byard_core::relay::IoResult;
+use byard_project::ProjectError;
+
+use crate::report::{ByardErrorExt as _, CompileReport};
 use byard_core::{
     ByardError, Engine, InputEvent, LogicRuntime, PlatformHost, PointerButton, PointerState,
     WindowSize,
@@ -309,9 +312,15 @@ impl App {
     ///
     /// # Errors
     ///
-    /// Returns [`ByardError::Platform`] if the entry file cannot be read or
-    /// does not parse, and whatever engine/platform error initialisation or
-    /// the event loop produces.
+    /// - [`ByardError::Project`] if the project cannot be read: no manifest,
+    ///   one that does not parse, a dependency that cannot be resolved.
+    /// - [`ByardError::Compile`] if its views do not compile. The diagnostics
+    ///   are printed to stderr first, as `byard check` prints them, with the
+    ///   source line and the suggestion, and the error is the one-line
+    ///   summary under them.
+    /// - Whatever engine/platform error initialisation or the event loop
+    ///   produces; [`ByardError::Platform`] means the window, the surface or
+    ///   the event loop failed, and little else.
     pub fn run(self) -> Result<(), ByardError> {
         self.check_registrations()?;
         let Program {
@@ -319,7 +328,8 @@ impl App {
             theme,
             http,
             icon,
-        } = load_program(&self.entry)?;
+            ..
+        } = load_program(&self.entry).map_err(announced)?;
         let reloads = if self.hot_reload {
             Some(self.follow_project()?)
         } else {
@@ -360,11 +370,8 @@ impl App {
     /// arrives. The watcher lives as long as the process, as under
     /// `byard dev`.
     fn follow_project(&self) -> Result<Reloads, ByardError> {
-        let fail = |e: String| ByardError::Platform(format!("hot reload: {e}"));
-        let manifest = byard_project::manifest::Manifest::discover(Some(&self.entry))
-            .map_err(|e| fail(e.to_string()))?;
-        let (_, provider) =
-            byard_project::deps::resolve_project(&manifest).map_err(|e| fail(e.to_string()))?;
+        let manifest = byard_project::manifest::Manifest::discover(Some(&self.entry))?;
+        let (_, provider) = byard_project::deps::resolve_project(&manifest)?;
         let paths = byard_project::live::watch_paths(&manifest, &provider);
         let reloads: Reloads = Arc::default();
         // Images the app draws are decoded by the engine, which a running app
@@ -378,7 +385,7 @@ impl App {
             assets,
             move || byard_project::live::reresolve(Some(&entry)),
         )
-        .map_err(|e| fail(e.to_string()))?;
+        .map_err(|e| ByardError::Platform(format!("hot reload: {e}")))?;
         std::mem::forget(watcher);
         Ok(reloads)
     }
@@ -407,6 +414,22 @@ pub(crate) struct Program {
     pub(crate) theme: byard_compiler::interp::theme::Theme,
     /// The `[http]` origins, for the built-in `Http` (RFC-0029).
     pub(crate) http: byard_project::manifest::HttpConfig,
+    /// The files the program's spans point into, for a diagnostic found after
+    /// loading (a view that lowers with errors) to be drawn with its source.
+    pub(crate) source_map: byard_compiler::resolve::SourceMap,
+}
+
+/// Prints a [`ByardError::Compile`]'s diagnostics, as `byard check` would, and
+/// returns the error unchanged; any other error passes through.
+///
+/// What `run` and `shot` map their load through, so the report is printed once,
+/// at the edge, and the error that travels up is the one line that goes under
+/// it (RFC-0043 Q2).
+pub(crate) fn announced(error: ByardError) -> ByardError {
+    if let Some(report) = error.as_compile() {
+        report.eprint();
+    }
+    error
 }
 
 /// Reads the program an app runs and the theme it runs in, the same way
@@ -421,33 +444,32 @@ pub(crate) struct Program {
 /// that does not compile fails here with its diagnostics rather than opening
 /// a window onto nothing. (`byard dev` is the one that keeps going.)
 pub(crate) fn load_program(entry: &Path) -> Result<Program, ByardError> {
-    let manifest = byard_project::manifest::Manifest::discover(Some(entry))
-        .map_err(|e| ByardError::Platform(format!("`{}`: {e}", entry.display())))?;
-    let (program, _) = byard_project::deps::resolve_project(&manifest)
-        .map_err(|e| ByardError::Platform(format!("`{}`: {e}", entry.display())))?;
+    let manifest = byard_project::manifest::Manifest::discover(Some(entry))?;
+    let (program, _) = byard_project::deps::resolve_project(&manifest)?;
     if !program.errors.is_empty() {
-        let report = program
-            .errors
-            .iter()
-            .map(|e| format!("  {}", e.headline()))
-            .collect::<Vec<_>>()
-            .join("\n");
-        return Err(ByardError::Platform(format!(
-            "`{}` did not compile:\n{report}",
-            entry.display()
+        return Err(ByardError::compile(CompileReport::new(
+            program.errors,
+            program.source_map,
         )));
     }
     if program.views.is_empty() {
-        return Err(ByardError::Platform(format!(
-            "`{}` declares no `View`",
-            entry.display()
-        )));
+        return Err(ByardError::compile(declares_no_view(program.source_map)));
     }
-    check_declared_views(&manifest.native_views)?;
+    let manifest_path = manifest.project_root.join("byard.toml");
+    check_declared_views(&manifest.native_views, &manifest_path)?;
     let icon = match &manifest.icon {
         Some(path) => {
             let image = image::open(path)
-                .map_err(|e| ByardError::Platform(format!("`{}`: {e}", path.display())))?
+                .map_err(|e| {
+                    ByardError::project(ProjectError::Manifest {
+                        path: manifest_path.clone(),
+                        line: None,
+                        message: format!(
+                            "byard.toml: [project] `icon` {} could not be read as an image: {e}",
+                            path.display()
+                        ),
+                    })
+                })?
                 .to_rgba8();
             let (w, h) = image.dimensions();
             Some((image.into_raw(), w, h))
@@ -459,7 +481,21 @@ pub(crate) fn load_program(entry: &Path) -> Result<Program, ByardError> {
         views: program.views,
         theme: manifest.theme,
         http: manifest.http,
+        source_map: program.source_map,
     })
+}
+
+/// A program with nothing to run, as a diagnostic: it is anchored to the start
+/// of the entry file (the first one in the map), so it names the file like any
+/// other, rather than being a message with nowhere to point (RFC-0043 §3).
+pub(crate) fn declares_no_view(source_map: byard_compiler::resolve::SourceMap) -> CompileReport {
+    CompileReport::new(
+        vec![byard_compiler::CompileError::Project {
+            span: byard_compiler::Span::new(0, 0),
+            message: "the program declares no `View`".to_string(),
+        }],
+        source_map,
+    )
 }
 
 /// The `PlatformHost` half: owns the `Engine`, forwards OS input, and starts
@@ -778,6 +814,7 @@ impl LogicRuntime for AppRuntime {
 /// property is off instead of starting.
 fn check_declared_views(
     declared: &[byard_project::manifest::NativeViewDecl],
+    manifest: &Path,
 ) -> Result<(), ByardError> {
     use byard_core::render::registry;
     for view in declared {
@@ -810,15 +847,19 @@ fn check_declared_views(
         };
         let (written, real) = (describe(&view.props), describe(&registered));
         if written != real {
-            return Err(ByardError::Platform(format!(
-                "byard.toml declares `{}` with the properties [{}], and the view registered \
-                 under that name has [{}]. `[native_views.{}]` is what `byard check` and the \
-                 editor go by, so it has to say what the view takes.",
-                view.name,
-                written.join(", "),
-                real.join(", "),
-                view.name
-            )));
+            return Err(ByardError::project(ProjectError::Manifest {
+                path: manifest.to_path_buf(),
+                line: None,
+                message: format!(
+                    "byard.toml declares `{}` with the properties [{}], and the view registered \
+                     under that name has [{}]. `[native_views.{}]` is what `byard check` and the \
+                     editor go by, so it has to say what the view takes.",
+                    view.name,
+                    written.join(", "),
+                    real.join(", "),
+                    view.name
+                ),
+            }));
         }
     }
     Ok(())
@@ -1020,27 +1061,42 @@ mod tests {
             ty,
             layout: false,
         };
+        let manifest = Path::new("byard.toml");
 
         assert!(
-            check_declared_views(&declared(vec![prop("value", NativePropType::Float)])).is_ok()
+            check_declared_views(
+                &declared(vec![prop("value", NativePropType::Float)]),
+                manifest
+            )
+            .is_ok()
         );
-        let renamed = check_declared_views(&declared(vec![prop("level", NativePropType::Float)]))
-            .unwrap_err()
-            .to_string();
+        let renamed = check_declared_views(
+            &declared(vec![prop("level", NativePropType::Float)]),
+            manifest,
+        )
+        .unwrap_err();
+        assert!(
+            renamed.as_project().is_some(),
+            "a declaration in byard.toml is a project problem: {renamed:?}"
+        );
+        let renamed = renamed.to_string();
         assert!(
             renamed.contains("DriftGauge")
                 && renamed.contains("level")
                 && renamed.contains("value"),
             "{renamed}"
         );
-        let retyped = check_declared_views(&declared(vec![prop("value", NativePropType::Color)]));
+        let retyped = check_declared_views(
+            &declared(vec![prop("value", NativePropType::Color)]),
+            manifest,
+        );
         assert!(retyped.is_err(), "a different type is a different property");
         // A name nothing registered is not this check's business.
         let other = vec![NativeViewDecl {
             name: "NobodyRegisteredThis".into(),
             props: Vec::new(),
         }];
-        assert!(check_declared_views(&other).is_ok());
+        assert!(check_declared_views(&other, manifest).is_ok());
     }
 
     /// A shipped app reads its project as `byard dev` does: the theme's
@@ -1094,8 +1150,107 @@ mod tests {
         let Err(err) = load_program(&dir) else {
             panic!("a broken program must not load");
         };
-        let err = err.to_string();
-        assert!(err.contains("did not compile"), "{err}");
+        assert!(err.as_compile().is_some(), "{err:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A scratch project holding one `main.byd`.
+    fn project_with(tag: &str, source: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("byard-app-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("byard.toml"),
+            "[project]\nname = \"scratch\"\nentry = \"main.byd\"\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("main.byd"), source).unwrap();
+        dir
+    }
+
+    /// RFC-0043 acceptance: a misspelt name is `Compile`, not `Platform`,
+    /// and the text it renders is `byard check`'s: the file, the line, the
+    /// source with a caret under the name, and the suggestion.
+    #[test]
+    fn a_misspelt_name_is_a_compile_error_with_the_caret_block() {
+        let dir = project_with(
+            "misspelt",
+            "View Main() {\n    var count = 1\n    Text(\"{cuont}\")\n}\n",
+        );
+        let Err(err) = load_program(&dir) else {
+            panic!("a misspelt name must not load");
+        };
+        assert!(matches!(err, ByardError::Compile(_)), "{err:?}");
+        let report = err.as_compile().expect("a CompileReport behind Compile");
+        let text = report.render();
+        assert!(text.contains("main.byd:3:12: error[UnknownName]"), "{text}");
+        assert!(text.contains("did you mean `count`?"), "{text}");
+        assert!(text.contains("3 |     Text(\"{cuont}\")"), "{text}");
+        assert!(
+            text.contains("  |            ^^^^^"),
+            "the caret sits under the name: {text}"
+        );
+        // What `fn main() -> Result<(), ByardError>` prints under it.
+        assert_eq!(
+            format!("{err:?}"),
+            "1 error in the project's views (shown above)"
+        );
+        assert_eq!(
+            err.to_string(),
+            "1 error in the project's views (shown above)"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// RFC-0043 acceptance: no manifest is `Project`, and says where it
+    /// looked.
+    #[test]
+    fn a_missing_manifest_is_a_project_error_naming_the_directory() {
+        let dir = std::env::temp_dir().join(format!("byard-app-empty-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let Err(err) = load_program(&dir) else {
+            panic!("an empty directory is not a project");
+        };
+        assert!(matches!(err, ByardError::Project(_)), "{err:?}");
+        let searched = dir.canonicalize().unwrap().display().to_string();
+        match err.as_project() {
+            Some(ProjectError::NoManifest { searched_from }) => {
+                assert_eq!(searched_from.display().to_string(), searched);
+            }
+            other => panic!("expected NoManifest, got {other:?}"),
+        }
+        assert!(err.to_string().contains(&searched), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A program with no `View` has a diagnostic like any other: it names the
+    /// entry file instead of being a message with nowhere to point.
+    #[test]
+    fn a_program_with_no_view_is_a_compile_diagnostic_in_the_entry_file() {
+        let dir = project_with("noview", "// nothing here yet\n");
+        let Err(err) = load_program(&dir) else {
+            panic!("a program with no view must not load");
+        };
+        let text = err.as_compile().expect("Compile").render();
+        assert!(
+            text.starts_with("main.byd:1:1: error[Project]: the program declares no `View`"),
+            "{text}"
+        );
+        assert!(text.contains("1 | // nothing here yet"), "{text}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Only a project or a compile problem is `Project` or `Compile`; the
+    /// ones in the window's own path stay `Platform`.
+    #[test]
+    fn platform_is_not_what_a_broken_project_reports() {
+        let dir = project_with("kinds", "View Main( {");
+        let Err(err) = load_program(&dir) else {
+            panic!("must not load");
+        };
+        assert!(!matches!(err, ByardError::Platform(_)), "{err:?}");
+        assert!(err.as_project().is_none());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -5,6 +5,7 @@
 //! relinking all of them was most of the time an edit spent before a test
 //! could run.
 
+mod broken_app;
 mod bundle;
 mod callbacks_example;
 mod checkbox_example;

@@ -99,7 +99,7 @@ pub fn declared_assets(root: &Path) -> Result<Vec<(String, PathBuf)>, ProjectErr
     let src = std::fs::read_to_string(&manifest).map_err(|e| ProjectError::io(&manifest, e))?;
     let table: toml::Table = src
         .parse()
-        .map_err(|e: toml::de::Error| ProjectError::toml_in(&manifest, &src, &e))?;
+        .map_err(|e: toml::de::Error| ProjectError::toml(&manifest, &src, &e))?;
     let mut out = Vec::new();
     if let Some(image) = table
         .get("theme")
@@ -955,7 +955,7 @@ impl FsProvider {
             .map_err(|e| ProjectError::io(&manifest_path, e))?;
         let table: toml::Table = src
             .parse()
-            .map_err(|e: toml::de::Error| ProjectError::toml_in(&manifest_path, &src, &e))?;
+            .map_err(|e: toml::de::Error| ProjectError::toml(&manifest_path, &src, &e))?;
         let deps = match table.get("dependencies") {
             Some(d) => parse_dependencies(d, &manifest_path)?,
             None => Vec::new(),

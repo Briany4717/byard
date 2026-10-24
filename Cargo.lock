@@ -305,6 +305,7 @@ dependencies = [
 name = "byard-cli"
 version = "0.0.0"
 dependencies = [
+ "byard",
  "byard-compiler",
  "byard-core",
  "byard-platform",

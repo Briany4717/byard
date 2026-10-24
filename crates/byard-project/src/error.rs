@@ -92,14 +92,10 @@ impl ProjectError {
     }
 
     /// A manifest that does not parse. `src` is the text `error` was found
-    /// in, which gives the line.
+    /// in, which gives the line. The message leads with the file's path,
+    /// because the parser's own text names a line and not a file, and an app
+    /// started from `cargo run` has no command line to say which.
     pub(crate) fn toml(path: &Path, src: &str, error: &toml::de::Error) -> Self {
-        Self::toml_message(path, src, error, error.to_string())
-    }
-
-    /// As [`toml`](Self::toml), for a file whose message has always led with
-    /// the file's path.
-    pub(crate) fn toml_in(path: &Path, src: &str, error: &toml::de::Error) -> Self {
         Self::toml_message(path, src, error, format!("{}: {error}", path.display()))
     }
 
@@ -178,6 +174,14 @@ impl std::error::Error for ProjectError {
             Self::Resolve(e) => Some(e),
             _ => None,
         }
+    }
+}
+
+/// So an app's `main` can `?` a project function: `ByardError::Project` holds
+/// it, and `byard::ByardErrorExt::as_project` hands it back.
+impl From<ProjectError> for byard_core::ByardError {
+    fn from(e: ProjectError) -> Self {
+        Self::project(e)
     }
 }
 

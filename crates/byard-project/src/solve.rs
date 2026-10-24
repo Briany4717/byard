@@ -306,7 +306,7 @@ fn manifest_dependencies(root: &Path) -> Result<Vec<Dependency>, ProjectError> {
     let src = std::fs::read_to_string(&path).map_err(|e| ProjectError::io(&path, e))?;
     let table: toml::Table = src
         .parse()
-        .map_err(|e: toml::de::Error| ProjectError::toml_in(&path, &src, &e))?;
+        .map_err(|e: toml::de::Error| ProjectError::toml(&path, &src, &e))?;
     table
         .get("dependencies")
         .map_or_else(|| Ok(Vec::new()), |deps| parse_dependencies(deps, &path))

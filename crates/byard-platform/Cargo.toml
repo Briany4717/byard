@@ -23,6 +23,23 @@ wgpu = "29.0"
 # types), so downstream crates can depend on byard-platform without ever
 # importing winit themselves.
 winit = "0.30"
+# RFC-0042: the accessibility tree, mapped onto AccessKit and handed to the
+# platform's screen-reader API (AT-SPI on Linux, UI Automation on Windows,
+# NSAccessibility on macOS). Optional, behind the default `a11y` feature, so a
+# kiosk or embedded build can leave the crates out of the graph altogether
+# with `--no-default-features`; `no-a11y` is the switch that turns the code off
+# while leaving the graph alone.
+accesskit = { version = "0.25", optional = true }
+accesskit_winit = { version = "0.34", optional = true }
+
+[features]
+default = ["a11y"]
+# Pulls in AccessKit. On by default: accessibility that is opt-in is missing
+# from most apps (RFC-0042 Q4).
+a11y = ["dep:accesskit", "dep:accesskit_winit"]
+# RFC-0042 Q4, the opt-out: compiles the adapter out, so the window publishes
+# no tree and the binary carries none of AccessKit's code. It wins over `a11y`.
+no-a11y = []
 
 [dev-dependencies]
 # The one device every GPU test in a process shares, one test at a time.

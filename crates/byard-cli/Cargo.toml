@@ -32,5 +32,9 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 flate2 = "1"
 
 
+[features]
+# RFC-0042 Q4: the dev runner's window without the accessibility bridge.
+no-a11y = ["byard-platform/no-a11y"]
+
 [lints]
 workspace = true

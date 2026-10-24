@@ -27,5 +27,11 @@ crossbeam-channel = "0.5"
 # `App::shot` writes a PNG.
 image = { version = "0.25", default-features = false, features = ["png"] }
 
+[features]
+# RFC-0042 Q4: leaves the accessibility bridge (AccessKit) out of the window
+# host, for an embedded or kiosk build. The tree is on by default: an app that
+# is not accessible is the one nobody can fix after the fact.
+no-a11y = ["byard-platform/no-a11y"]
+
 [lints]
 workspace = true

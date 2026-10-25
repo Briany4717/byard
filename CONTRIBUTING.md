@@ -81,6 +81,8 @@ with one module per subject (`tests/it/clip_path.rs` and so on). A new file
 under `tests/it/` needs its `mod` line in `main.rs`; a new file directly under
 `tests/` would build a separate binary that links the whole engine again,
 which is what used to make every edit cost a minute before a test could run.
+(`examples/aura_weather/tests/first_frame.rs` is the one deliberate exception:
+it times a start, so it must run alone, not beside other tests.)
 
 Tests in one binary share a process. GPU tests take the one device through
 `byard_test_gpu::device`, which also hands out turns, so they never overlap.
@@ -90,8 +92,9 @@ it clip_path`.
 ### Benchmarks
 
 The Evaluator subsystem ships with benchmarks under `crates/byard-core/benches/`.
-They are **not** part of CI, they are local-only tools for verifying that
-changes don't regress hot-path performance.
+They are local tools for verifying that changes don't regress hot-path
+performance, and CI runs them too, as a warning only (see Resource budgets
+below).
 
 ```sh
 cargo bench
@@ -99,6 +102,19 @@ cargo bench
 
 Run them before merging changes to performance-sensitive code (signal
 read/write paths, arena allocation, drop registry).
+
+### Resource budgets
+
+Byard's promise is to spend least, so CI holds four numbers to a ceiling, the
+way `crates/byard-platform/tests/it/frame_budget.rs` holds allocations per
+frame (RFC-0046): the wake-ups of an idle app's logic thread, the time to a
+headless first frame, the stripped size of a release `aura-weather`, and how
+much slower a benchmark may get (a warning, not a failure). The ceilings are
+in `ci/budgets.toml` and each check prints what it measured next to its
+ceiling; lowering one needs no ceremony, and raising one needs a PR that says
+the old value, the new one and why. To see the numbers locally:
+`cargo test -p aura-weather --test first_frame -- --nocapture` (and `--test it
+budgets`).
 
 ### Toolchain
 

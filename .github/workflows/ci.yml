@@ -76,7 +76,7 @@ jobs:
 
       - name: test (a11y)
         run: cargo test --locked -p byard-platform --features a11y
-
+        
       # Documentation is code: an intra-doc link that points at nothing, or at
       # a private item, renders as plain text in the docs and nobody notices.
       # One platform is enough, as the links do not change with the target.
@@ -92,3 +92,146 @@ jobs:
         env:
           RUSTDOCFLAGS: "-D warnings"
         run: cargo doc --locked --no-deps -p byard-platform -p byard -p byard-cli --features byard-platform/a11y,byard/a11y,byard-cli/a11y
+      
+      # The resource budgets in ci/budgets.toml (RFC-0046) that are tests, run
+      # again with their output shown, which a passing test does not give:
+      # each prints what it measured next to its ceiling, so the margin is in
+      # this log before it is gone. They already ran, and passed or failed,
+      # in `test` above; this adds the numbers and takes a few seconds. The
+      # first-frame time is only held on Linux, where its ceiling was measured.
+      - name: budgets (measured against their ceilings)
+        if: runner.os == 'Linux'
+        run: |
+          cargo test --locked -p aura-weather --test it budgets -- --nocapture
+          cargo test --locked -p aura-weather --test first_frame -- --nocapture
+
+  # The resource budgets that are not tests (RFC-0046 sections 3 and 4): the
+  # size of the release binary, and the speed of the engine's benchmarks. The
+  # ceilings are in ci/budgets.toml; the two that are tests (idle wakes, time
+  # to the first frame) run in `check` above.
+  #
+  # A job cannot be skipped by a path filter, only a whole workflow can, and
+  # a workflow that skipped on a docs-only change would also skip fmt, clippy
+  # and the tests. So the job always runs, decides in its first step whether
+  # the change can have moved either number, and ends green, saying so, when
+  # it cannot. That is also what lets it be a required check.
+  budgets:
+    name: Budgets
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: What this change can move
+        id: scope
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ "$EVENT" != "pull_request" ]; then
+            echo "A push to main: both budgets run."
+            echo "binary=true" >> "$GITHUB_OUTPUT"
+            echo "bench=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          changed="$(git diff --name-only "$BASE_SHA" HEAD)"
+          printf 'Files this pull request changes:\n%s\n' "$changed"
+          # What goes into the binary: the manifests, the toolchain, every
+          # crate, the vendored crates, the app itself, and the budgets.
+          if grep -Eq '^(Cargo\.toml|Cargo\.lock|rust-toolchain\.toml|crates/|third_party/|examples/aura_weather/|ci/|\.github/workflows/ci\.yml)' <<< "$changed"; then
+            echo "binary=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "binary=false" >> "$GITHUB_OUTPUT"
+            echo "Nothing that goes into the binary changed: its size is not measured."
+          fi
+          # What the benchmarks run: byard-core and what it is built from.
+          if grep -Eq '^(Cargo\.toml|Cargo\.lock|rust-toolchain\.toml|crates/byard-core/|crates/byard-test-gpu/|third_party/|ci/|\.github/workflows/ci\.yml)' <<< "$changed"; then
+            echo "bench=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "bench=false" >> "$GITHUB_OUTPUT"
+            echo "Nothing the benchmarks run changed: they are not run."
+          fi
+
+      - name: Install stable toolchain
+        if: steps.scope.outputs.binary == 'true' || steps.scope.outputs.bench == 'true'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        if: steps.scope.outputs.binary == 'true' || steps.scope.outputs.bench == 'true'
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install Linux GPU dependencies
+        if: steps.scope.outputs.binary == 'true' || steps.scope.outputs.bench == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1-mesa-dev libgl1-mesa-dev
+
+      # What a user downloads is the stripped binary, so that is what is
+      # measured: a copy is stripped and the build's own output is left alone.
+      - name: Build aura-weather (release)
+        if: steps.scope.outputs.binary == 'true'
+        run: cargo build --release --locked -p aura-weather
+
+      - name: Binary size
+        if: steps.scope.outputs.binary == 'true'
+        run: |
+          cp target/release/aura-weather aura-weather.stripped
+          strip aura-weather.stripped
+          size="$(stat -c %s aura-weather.stripped)"
+          ceiling="$(python3 -c "import tomllib; print(tomllib.load(open('ci/budgets.toml', 'rb'))['binary']['aura_weather_stripped_bytes'])")"
+          echo "stripped aura-weather: $size bytes, ceiling $ceiling bytes ($(( ceiling - size )) to spare)"
+          {
+            echo "### Binary size"
+            echo "Stripped release \`aura-weather\`: **$size** bytes, ceiling $ceiling bytes."
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$size" -gt "$ceiling" ]; then
+            echo "::error title=Binary size::the stripped release aura-weather is $size bytes, over the ceiling of $ceiling bytes in ci/budgets.toml [binary]. Something made every binary larger: a dependency, a feature turned on, a large table or embedded asset. Find what grew (cargo bloat, or compare with the base). Raise the ceiling only if the growth is worth it, and say so in the PR."
+            exit 1
+          fi
+
+      # The benchmarks are the repository's own (crates/byard-core/benches,
+      # plain timed loops that print ns/op), so there is no baseline file to
+      # keep, and none would be comparable: two runs of the very same code on
+      # one shared machine differ by 30% or more, and a number saved from
+      # some other runner on some other day is worse. So on a pull request the
+      # base is built and measured in this same job, three rounds, taking turns
+      # with the change, and a benchmark is flagged only when the change's best
+      # run is slower than the base's worst by more than the budget
+      # (ci/bench-compare.py). It only ever warns (RFC-0046 Q2): a gate that
+      # fails at random gets ignored, and guards nothing. A push to main runs
+      # them once and prints the numbers.
+      - name: Benchmarks
+        if: steps.scope.outputs.bench == 'true'
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          bench() { cargo bench --locked -p byard-core --bench '*'; }
+          percent="$(python3 -c "import tomllib; print(tomllib.load(open('ci/budgets.toml', 'rb'))['bench']['regression_percent'])")"
+          workspace="$PWD"
+          if [ "$EVENT" != "pull_request" ]; then
+            bench | tee bench-head.txt
+            echo "A push to main: the numbers are printed above, there is nothing to compare them with."
+            exit 0
+          fi
+          git worktree add --detach ../base "$BASE_SHA"
+          for round in 1 2 3; do
+            echo "::group::Round $round, the base"
+            (cd ../base && export CARGO_TARGET_DIR="$workspace/target" && bench) | tee "bench-base-$round.txt"
+            echo "::endgroup::"
+            echo "::group::Round $round, this change"
+            bench | tee "bench-head-$round.txt"
+            echo "::endgroup::"
+            python3 ci/bench-compare.py parse < "bench-base-$round.txt" > "bench-base-$round.json"
+            python3 ci/bench-compare.py parse < "bench-head-$round.txt" > "bench-head-$round.json"
+          done
+          python3 ci/bench-compare.py compare "$percent" \
+            --base bench-base-?.json --head bench-head-?.json | tee bench-compare.txt
+          {
+            echo "### Benchmarks against the base"
+            echo '```'
+            cat bench-compare.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+

@@ -16,7 +16,15 @@ pub const TILE_SERVER: &str = "https://tile.openstreetmap.org";
 /// The app, with its map drawing tiles from `tiles`.
 #[must_use]
 pub fn app(tiles: &str) -> byard::App {
-    byard::App::new(env!("CARGO_MANIFEST_DIR"))
+    app_at(env!("CARGO_MANIFEST_DIR"), tiles)
+}
+
+/// The app as [`app`] builds it, reading its project from `project` instead
+/// of this directory. A test points it at a copy whose `byard.toml` names a
+/// local server, so a headless start asks that server and not the network.
+#[must_use]
+pub fn app_at(project: impl AsRef<std::path::Path>, tiles: &str) -> byard::App {
+    byard::App::new(project)
         .title("Aura Weather")
         .size(440, 880)
         .shader::<map::MapTiles>()

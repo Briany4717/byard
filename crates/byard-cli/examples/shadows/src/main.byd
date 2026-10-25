@@ -13,17 +13,26 @@ View Main() {
         Box #[bg: 0xFFFFFF, radius: 12, width: 440, height: 72, shadow: "md"] {}
 
         // Named custom shadow, self-describing, any field order.
-        Box #[bg: 0xFFFFFF, radius: 12, width: 440, height: 72,
-              shadow: (y: 10, blur: 24, spread: -2, color: 0x33000000)] {}
+        Box #[
+            bg: 0xFFFFFF,
+            radius: 12,
+            width: 440,
+            height: 72,
+            shadow: (y: 10, blur: 24, spread: -2, color: 0x33000000),
+        ] {}
 
         // Positional (x, y, blur, spread, color), terse.
-        Box #[bg: 0xFFFFFF, radius: 12, width: 440, height: 72,
-              shadow: (0, 4, 8, 0, 0x40000000)] {}
+        Box #[bg: 0xFFFFFF, radius: 12, width: 440, height: 72, shadow: (0, 4, 8, 0, 0x40000000)] {}
 
         // Layered: a tight contact shadow plus a soft ambient one (Material-like
         // elevation). First-listed paints on top.
-        Box #[bg: 0xFFFFFF, radius: 12, width: 440, height: 72,
-              shadow: [(y: 1, blur: 2, color: 0x30000000),
-                       (y: 12, blur: 28, spread: -4, color: 0x28000000)]] {}
+        Box #[
+            bg: 0xFFFFFF,
+            radius: 12,
+            width: 440,
+            height: 72,
+            shadow: [(y: 1, blur: 2, color: 0x30000000),
+                (y: 12, blur: 28, spread: -4, color: 0x28000000)],
+        ] {}
     }
 }

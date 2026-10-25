@@ -15,7 +15,7 @@ View Main() {
         Text("Baked with byard build") #[color: 0xFFFFFF, size: 20, weight: bold]
         Row #[gap: 16] {
             VectorIcon("src/check.svg") #[size: 48, color: 0x8AB4F8]
-            VectorIcon("src/plus.svg")  #[size: 48, color: 0x81C995]
+            VectorIcon("src/plus.svg") #[size: 48, color: 0x81C995]
             VectorIcon("src/check.svg") #[size: 32, color: 0xF28B82]
         }
     }

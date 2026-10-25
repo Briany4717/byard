@@ -42,8 +42,14 @@ View __ByardDevHud() {
     // An RFC-0017 overlay layer over an RFC-0023 frosted backdrop. It is an
     // ordinary layer and an ordinary backdrop, nothing about the HUD is
     // special-cased anywhere in the renderer.
-    Box #[width: 252, radius: 12, p: 12,
-          blur: 24, backdrop_tint: 0x1418206E, blur_saturation: 1.4] {
+    Box #[
+        width: 252,
+        radius: 12,
+        p: 12,
+        blur: 24,
+        backdrop_tint: 0x1418206E,
+        blur_saturation: 1.4,
+    ] {
         Column #[gap: 7] {
             // ── the headline ─────────────────────────────────────────────
             Row #[gap: 8, align: center] {
@@ -66,7 +72,7 @@ View __ByardDevHud() {
                 line(x1: 0, y1: 29, x2: 228, y2: 29, stroke: 0x2A303C)
                 for b in t.spark {
                     rect(x: b.x, y: b.y, w: 6, h: b.h, radius: 1,
-                         fill: b.over ? 0xF2B8B5 : 0x6750A4)
+                        fill: b.over ? 0xF2B8B5 : 0x6750A4)
                 }
             }
 
@@ -92,8 +98,7 @@ View __ByardDevHud() {
                 Text("vec") #[..label]
             }
             Row #[gap: 6, align: center] {
-                Box #[width: 7, height: 7, radius: 4,
-                      bg: t.retainedOk ? 0x7DD3A8 : 0xE8B931] {}
+                Box #[width: 7, height: 7, radius: 4, bg: t.retainedOk ? 0x7DD3A8 : 0xE8B931] {}
                 Text(t.retained) #[..label]
             }
 

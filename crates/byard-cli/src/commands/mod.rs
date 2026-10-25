@@ -4,6 +4,7 @@ pub mod bundle;
 pub mod check;
 pub mod clean;
 pub mod dev;
+pub mod fmt;
 pub mod get;
 pub mod new;
 pub mod publish;

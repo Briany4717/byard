@@ -43,8 +43,12 @@ View Main() {
         // even as the app behind it is blocked (value reactivity is live; only
         // structural mount/unmount waits for a hot-reload).
         Row #[gap: 12, p: (vertical: 8, horizontal: 0)] {
-            Button("Poke the app") #[bg: 0x3C3C52, radius: 10, p: (vertical: 12, horizontal: 18),
-                                     color: 0xECE6F0] => pokes++
+            Button("Poke the app") #[
+                bg: 0x3C3C52,
+                radius: 10,
+                p: (vertical: 12, horizontal: 18),
+                color: 0xECE6F0,
+            ] => pokes++
             Text("pokes: {pokes}  ·  deleted: {confirmed}") #[color: 0x9A94A4, size: 15]
         }
 
@@ -68,8 +72,15 @@ View Main() {
     // bottom edge of the viewport. Mounted first, so the dialog stacks above it.
     when snackOpen {
         Overlay #[modal: false] {
-            Row #[anchor: bottom, bg: 0x323240, radius: 12, shadow: "lg",
-                  p: (vertical: 14, horizontal: 20), gap: 16, mb: 24] {
+            Row #[
+                anchor: bottom,
+                bg: 0x323240,
+                radius: 12,
+                shadow: "lg",
+                p: (vertical: 14, horizontal: 20),
+                gap: 16,
+                mb: 24,
+            ] {
                 Text("Changes saved") #[color: 0xECE6F0, size: 15]
                 Text("DISMISS") #[color: 0x8AB4F8, size: 15, weight: medium]
             }
@@ -89,17 +100,32 @@ View Main() {
 
             // Dialog surface, centred (Material-ish). The body is a wrapped
             // paragraph (RFC-0018 text wrap) bounded to the surface width.
-            Column #[anchor: center, bg: 0xECE6F0, radius: 28, shadow: "lg",
-                     p: 24, gap: 12, width: 380] {
+            Column #[
+                anchor: center,
+                bg: 0xECE6F0,
+                radius: 28,
+                shadow: "lg",
+                p: 24,
+                gap: 12,
+                width: 380,
+            ] {
                 Text("Delete this file?") #[color: 0x1D1B20, size: 22, weight: medium]
                 Text("This action can't be undone. The modal blocks the app behind it until you choose.")
                     #[color: 0x49454F, size: 14, wrap: true, width: 332]
                 Row #[gap: 8, justify: end] {
-                    Button("Cancel") #[bg: 0xE7E0EC, radius: 20,
-                                       p: (vertical: 10, horizontal: 18), color: 0x6750A4]
+                    Button("Cancel") #[
+                        bg: 0xE7E0EC,
+                        radius: 20,
+                        p: (vertical: 10, horizontal: 18),
+                        color: 0x6750A4,
+                    ]
                         => dialogOpen = false
-                    Button("Delete") #[bg: 0x6750A4, radius: 20,
-                                       p: (vertical: 10, horizontal: 18), color: 0xFFFFFF]
+                    Button("Delete") #[
+                        bg: 0x6750A4,
+                        radius: 20,
+                        p: (vertical: 10, horizontal: 18),
+                        color: 0xFFFFFF,
+                    ]
                         => confirmed = true
                 }
             }

@@ -44,12 +44,12 @@ View Main() {
         Text("one kind: polygon, squircle, scallop, burst, star")
             #[color: 0x8A90A0, size: 13]
         Canvas #[width: 620, height: 130, bg: 0x1C1F27] {
-            ngon(cx: 65,  cy: 65, r: 46, n: 6, corner: 6,            fill: 0x5B8DEF)
-            ngon(cx: 190, cy: 65, r: 46, n: 4, corner: 26,           fill: 0x5B8DEF)
+            ngon(cx: 65, cy: 65, r: 46, n: 6, corner: 6, fill: 0x5B8DEF)
+            ngon(cx: 190, cy: 65, r: 46, n: 4, corner: 26, fill: 0x5B8DEF)
             ngon(cx: 315, cy: 65, r: 46, n: 8, corner: 5, inner: 0.82, fill: 0x4CC38A)
             ngon(cx: 440, cy: 65, r: 46, n: 5, corner: 4, inner: 0.42, fill: 0xE8B54A)
             ngon(cx: 555, cy: 65, r: 46, n: 7, corner: 3, inner: 0.55, rotate: 12deg,
-                 fill: 0xE8734A)
+                fill: 0xE8734A)
         }
 
         // ── 2. The Material 3 Expressive loading indicator ───────────────
@@ -58,21 +58,29 @@ View Main() {
         Row #[gap: 24] {
             // The loader: 7 shapes × 650 ms = 4550 ms per revolution, from one
             // animated scalar on the `morph:` attribute.
-            Canvas #[width: 120, height: 120, bg: 0x1C1F27,
-                     morph: 7.0 with anim.linear(4550ms, from: 0.0, repeat: infinite)] {
-                ngon(cx: 60, cy: 60, r: 44, n: 4, corner: 10,             fill: 0x5B8DEF)
-                ngon(cx: 60, cy: 60, r: 44, n: 6, corner: 7,  inner: 0.9, fill: 0x5B8DEF)
-                ngon(cx: 60, cy: 60, r: 44, n: 8, corner: 5,  inner: 0.8, fill: 0x5B8DEF)
-                ngon(cx: 60, cy: 60, r: 44, n: 5, corner: 4,  inner: 0.6, fill: 0x5B8DEF)
-                ngon(cx: 60, cy: 60, r: 44, n: 7, corner: 3,  inner: 0.7, fill: 0x5B8DEF)
-                ngon(cx: 60, cy: 60, r: 44, n: 3, corner: 12,             fill: 0x5B8DEF)
+            Canvas #[
+                width: 120,
+                height: 120,
+                bg: 0x1C1F27,
+                morph: 7.0 with anim.linear(4550ms, from: 0.0, repeat: infinite),
+            ] {
+                ngon(cx: 60, cy: 60, r: 44, n: 4, corner: 10, fill: 0x5B8DEF)
+                ngon(cx: 60, cy: 60, r: 44, n: 6, corner: 7, inner: 0.9, fill: 0x5B8DEF)
+                ngon(cx: 60, cy: 60, r: 44, n: 8, corner: 5, inner: 0.8, fill: 0x5B8DEF)
+                ngon(cx: 60, cy: 60, r: 44, n: 5, corner: 4, inner: 0.6, fill: 0x5B8DEF)
+                ngon(cx: 60, cy: 60, r: 44, n: 7, corner: 3, inner: 0.7, fill: 0x5B8DEF)
+                ngon(cx: 60, cy: 60, r: 44, n: 3, corner: 12, fill: 0x5B8DEF)
                 ngon(cx: 60, cy: 60, r: 44, n: 12, corner: 3, inner: 0.9, fill: 0x5B8DEF)
             }
 
             // ── 4. Two different kinds, and a colour that rides the same
             //       scalar, one animation rather than two that can drift.
-            Canvas #[width: 120, height: 120, bg: 0x1C1F27,
-                     morph: 2.0 with anim.linear(1300ms, from: 0.0, repeat: infinite)] {
+            Canvas #[
+                width: 120,
+                height: 120,
+                bg: 0x1C1F27,
+                morph: 2.0 with anim.linear(1300ms, from: 0.0, repeat: infinite),
+            ] {
                 circle(cx: 60, cy: 60, r: 44, fill: 0x4CC38A)
                 ngon(cx: 60, cy: 60, r: 44, n: 7, corner: 3, inner: 0.5, fill: 0xE8734A)
             }
@@ -81,10 +89,13 @@ View Main() {
         // ── 3. The interaction-state case ────────────────────────────────
         Text("tap the square, the same code path, two members and a spring")
             #[color: 0x8A90A0, size: 13]
-        Canvas #[width: 120, height: 120, bg: 0x1C1F27,
-                 morph: selected ? 1.0 : 0.0
-                     with anim.spring(stiffness: 200, damping: 0.6),
-                 tap => selected = !selected] {
+        Canvas #[
+            width: 120,
+            height: 120,
+            bg: 0x1C1F27,
+            morph: selected ? 1.0 : 0.0 with anim.spring(stiffness: 200, damping: 0.6),
+            tap => selected = !selected,
+        ] {
             ngon(cx: 60, cy: 60, r: 44, n: 4, corner: 8, fill: 0xE8B54A)
             circle(cx: 60, cy: 60, r: 44, fill: 0xE8B54A)
         }
@@ -96,17 +107,20 @@ View Main() {
         //    `cubic` where the other has a `line` and `byard check` names it.
         Text("tap: play and pause, two paths with the same commands")
             #[color: 0x8A90A0, size: 13]
-        Canvas #[width: 120, height: 120, bg: 0x1C1F27,
-                 morph: playing ? 1.0 : 0.0
-                     with anim.spring(stiffness: 260, damping: 0.8),
-                 tap => playing = !playing] {
+        Canvas #[
+            width: 120,
+            height: 120,
+            bg: 0x1C1F27,
+            morph: playing ? 1.0 : 0.0 with anim.spring(stiffness: 260, damping: 0.8),
+            tap => playing = !playing,
+        ] {
             path(fill: 0x4CC38A) {
-                move(30, 20)  line(60, 40)  line(60, 80)  line(30, 100) close()
-                move(60, 40)  line(92, 60)  line(92, 60)  line(60, 80)  close()
+                move(30, 20) line(60, 40) line(60, 80) line(30, 100) close()
+                move(60, 40) line(92, 60) line(92, 60) line(60, 80) close()
             }
             path(fill: 0xF2F3F5) {
-                move(30, 20)  line(52, 20)  line(52, 100) line(30, 100) close()
-                move(68, 20)  line(90, 20)  line(90, 100) line(68, 100) close()
+                move(30, 20) line(52, 20) line(52, 100) line(30, 100) close()
+                move(68, 20) line(90, 20) line(90, 100) line(68, 100) close()
             }
         }
 
@@ -114,8 +128,13 @@ View Main() {
         //    The heart is four cubics, the star ten lines.
         Text("heart into star: morph_mode: resample, no shared structure")
             #[color: 0x8A90A0, size: 13]
-        Canvas #[width: 120, height: 120, bg: 0x1C1F27, morph_mode: resample,
-                 morph: 1.0 with anim.ease_in_out(900ms, from: 0.0, repeat: infinite, reverse: true)] {
+        Canvas #[
+            width: 120,
+            height: 120,
+            bg: 0x1C1F27,
+            morph_mode: resample,
+            morph: 1.0 with anim.ease_in_out(900ms, from: 0.0, repeat: infinite, reverse: true),
+        ] {
             path(fill: 0xE8546A) {
                 move(60, 100) cubic(20, 72, 12, 40, 36, 30) cubic(48, 25, 58, 32, 60, 42)
                 cubic(62, 32, 72, 25, 84, 30) cubic(108, 40, 100, 72, 60, 100) close()

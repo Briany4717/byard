@@ -67,7 +67,7 @@ View Main() {
     var longer = false
 
     let paras = ["one", "two", "three", "four", "five", "six",
-                 "seven", "eight", "nine", "ten", "eleven", "twelve"]
+        "seven", "eight", "nine", "ten", "eleven", "twelve"]
     let chip = style { radius: 18, p: (vertical: 8, horizontal: 16), color: 0xE6E1E5 }
 
     Column #[bg: 0x101014, p: 20, gap: 12, width: 760] {
@@ -80,8 +80,12 @@ View Main() {
             // a paint-class attribute, so it never marks layout dirty, which
             // is the invariant RFC-0010 asserted in prose and RFC-0032 turned
             // into a compile error.
-            Box #[width: 44, height: 44, origin: center,
-                  rotate: 360deg with anim.linear(1400ms, from: 0deg, repeat: infinite)] {
+            Box #[
+                width: 44,
+                height: 44,
+                origin: center,
+                rotate: 360deg with anim.linear(1400ms, from: 0deg, repeat: infinite),
+            ] {
                 Canvas #[width: 44, height: 44] {
                     arc(cx: 22, cy: 22, r: 17, stroke: 0x36323C, stroke_width: 4)
                     arc(cx: 22, cy: 22, r: 17, start: -90, sweep: 250,
@@ -101,8 +105,8 @@ View Main() {
 
         Column #[gap: 8] {
             Text(longer
-                ? "Text content is layout-class, and this is the row the whole RFC turns on: the string that reaches the frame is hashed alongside the font size and the offered width, so an edit marks this leaf and Taffy re-measures it, and only it. Everything below moves; nothing above is touched; no other paragraph is re-shaped."
-                : "Text content is layout-class. Press \"longer\".")
+                    ? "Text content is layout-class, and this is the row the whole RFC turns on: the string that reaches the frame is hashed alongside the font size and the offered width, so an edit marks this leaf and Taffy re-measures it, and only it. Everything below moves; nothing above is touched; no other paragraph is re-shaped."
+                    : "Text content is layout-class. Press \"longer\".")
                 #[color: 0xCCD2E0, size: 14]
             for p in paras {
                 Text("Paragraph {p}, this text never changes. It is measured once, shaped once, and then skipped on every frame after that, which is where the twenty-fold difference on this scene comes from. It wraps, and it must stay wrapped across a retained frame.")

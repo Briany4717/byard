@@ -27,12 +27,9 @@ View Main() {
             #[typo: t.bodyLarge, color: t.onSurfaceVariant]
 
         // A filled card painted entirely from tokens.
-        Column #[bg: t.primaryContainer, radius: t.cornerXl,
-                 p: 20, gap: 8] {
-            Text("Primary container") #[typo: t.titleLarge,
-                                        color: t.onPrimaryContainer]
-            Box #[bg: t.primary, radius: t.cornerMd,
-                  p: (10, 16)] {
+        Column #[bg: t.primaryContainer, radius: t.cornerXl, p: 20, gap: 8] {
+            Text("Primary container") #[typo: t.titleLarge, color: t.onPrimaryContainer]
+            Box #[bg: t.primary, radius: t.cornerMd, p: (10, 16)] {
                 Text("Primary") #[typo: t.labelLarge, color: t.onPrimary]
             }
             // A tint of a token: the same colour at 16%, so it follows the
@@ -44,8 +41,12 @@ View Main() {
 
         // Two ways to switch the scheme, both writing the same reactive flag.
         Row #[gap: 12, align: center] {
-            Box #[bg: t.surfaceContainer, radius: t.cornerLg, p: (10, 16),
-                  tap => t.dark = t.dark ? false : true] {
+            Box #[
+                bg: t.surfaceContainer,
+                radius: t.cornerLg,
+                p: (10, 16),
+                tap => t.dark = t.dark ? false : true,
+            ] {
                 Text("Toggle light / dark") #[typo: t.labelLarge, color: t.onSurface]
             }
             Toggle #[bind: t.dark, bg: t.primary, width: 52, height: 30]

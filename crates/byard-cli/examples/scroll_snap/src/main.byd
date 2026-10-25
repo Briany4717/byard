@@ -15,7 +15,7 @@
 //      fixed page). Scroll it and release; whichever card is nearest centres.
 //   3. Scroll the lower list to the bottom, crossing `end_threshold` fires
 //      `end_reached`, flipping the status line (infinite-scroll trigger).
-//   4. Drag the bottom list DOWN from its top and release past the threshold, 
+//   4. Drag the bottom list DOWN from its top and release past the threshold,
 //      the pull indicator (a ring) grows in the gap and `refresh` fires,
 //      flipping its status line (`pull_refresh`).
 //
@@ -39,9 +39,16 @@ View Main() {
     Column #[bg: 0x14141C, p: 24, gap: 14, width: 360] {
         Text("Advanced scroll, RFC-0021") #[color: 0xE6E1E5, size: 18]
 
-        ScrollView #[axis: horizontal, snap: page, offset: (offX, offY),
-                     snap_spring: anim.spring(stiffness: 260, damping: 16),
-                     page: page, page_count: 3, width: 312, height: 160] {
+        ScrollView #[
+            axis: horizontal,
+            snap: page,
+            offset: (offX, offY),
+            snap_spring: anim.spring(stiffness: 260, damping: 16),
+            page: page,
+            page_count: 3,
+            width: 312,
+            height: 160,
+        ] {
             Row {
                 Box #[bg: 0x381E72, p: 10, m: 5, radius: 12, width: 302, height: 150] {
                     Text("Page 1") #[color: 0xE8DEF8, size: 20]
@@ -59,8 +66,14 @@ View Main() {
 
         Text("snap: item · snap_align: center") #[color: 0x938F99, size: 13]
 
-        ScrollView #[axis: horizontal, snap: item, snap_align: center,
-                     offset: (itemX, itemY), width: 312, height: 96] {
+        ScrollView #[
+            axis: horizontal,
+            snap: item,
+            snap_align: center,
+            offset: (itemX, itemY),
+            width: 312,
+            height: 96,
+        ] {
             Row #[gap: 10] {
                 Box #[bg: 0x4A4458, radius: 12, width: 120, height: 88] {
                     Text("A") #[color: 0xE8DEF8, size: 18]
@@ -77,16 +90,21 @@ View Main() {
             }
         }
 
-        ScrollView #[offset: (listX, listY), end_threshold: 0.8,
-                     end_reached => loaded_more = true, width: 312, height: 120] {
+        ScrollView #[
+            offset: (listX, listY),
+            end_threshold: 0.8,
+            end_reached => loaded_more = true,
+            width: 312,
+            height: 120,
+        ] {
             Column #[gap: 8] {
                 Box #[bg: 0x1E1E2A, p: 5, radius: 8, width: 300, height: 56] {
                     Text("Item 1") #[color: 0xCAC4D0, size: 15]
                 }
-                Box #[bg: 0x1E1E2A, p: 5,radius: 8, width: 300, height: 56] {
+                Box #[bg: 0x1E1E2A, p: 5, radius: 8, width: 300, height: 56] {
                     Text("Item 2") #[color: 0xCAC4D0, size: 15]
                 }
-                Box #[bg: 0x1E1E2A, p: 5,radius: 8, width: 300, height: 56] {
+                Box #[bg: 0x1E1E2A, p: 5, radius: 8, width: 300, height: 56] {
                     Text("Item 3") #[color: 0xCAC4D0, size: 15]
                 }
             }
@@ -100,8 +118,7 @@ View Main() {
 
         Text("pull_refresh, drag down from the top") #[color: 0x938F99, size: 13]
 
-        ScrollView #[pull_refresh: true, refresh => pulled = true,
-                     width: 312, height: 96] {
+        ScrollView #[pull_refresh: true, refresh => pulled = true, width: 312, height: 96] {
             Column #[gap: 8] {
                 Box #[bg: 0x24202C, p: 5, radius: 8, width: 300, height: 40] {
                     Text("Pull me down…") #[color: 0xCAC4D0, size: 15]

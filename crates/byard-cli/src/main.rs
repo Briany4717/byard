@@ -61,6 +61,17 @@ enum Command {
         /// Path to a `.byd` file. Defaults to `entry` in `byard.toml`.
         file: Option<PathBuf>,
     },
+    /// Format `.byd` files in place, with the one layout there is.
+    Fmt {
+        /// Files, or directories to format. A project directory covers its
+        /// entry directory and its path dependencies; any other directory,
+        /// every `.byd` under it. Defaults to the current project.
+        paths: Vec<PathBuf>,
+        /// Change nothing: list the files that are not formatted, and exit
+        /// 1 if there are any.
+        #[arg(long)]
+        check: bool,
+    },
     /// Bake the AOT vector atlas for the project (RFC-0009 §4).
     Build {
         /// Path to a `.byd` file or project dir. Defaults to `byard.toml`.
@@ -259,6 +270,7 @@ fn main() {
             profile,
         }),
         Command::Check { file, short } => commands::check::run(file.as_deref(), short),
+        Command::Fmt { paths, check } => commands::fmt::run(&paths, check),
         Command::Build { file } => commands::build::run(file.as_deref()),
         Command::Bundle {
             path,

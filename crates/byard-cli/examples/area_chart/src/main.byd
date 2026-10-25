@@ -39,7 +39,7 @@ View Main() {
                 path(
                     fill: 0x00000000,
                     gradient: (kind: linear, angle: 90deg,
-                               from: 0xFFF9A8A8, mid: 0x66F9A8A8, to: 0x00F9A8A8)
+                        from: 0xFFF9A8A8, mid: 0x66F9A8A8, to: 0x00F9A8A8)
                 ) {
                     move(0, 200)
                     line(0, 150)
@@ -51,9 +51,9 @@ View Main() {
 
                 // The curve itself, stroked on top (Tier-1, unchanged).
                 bezier(0, 150, 90, 60, 180, peak, 270, 110,
-                       stroke: 0xFFF9A8A8, stroke_width: 3, cap: round)
+                    stroke: 0xFFF9A8A8, stroke_width: 3, cap: round)
                 bezier(270, 110, 360, 100, 450, 40, 540, 90,
-                       stroke: 0xFFF9A8A8, stroke_width: 3, cap: round)
+                    stroke: 0xFFF9A8A8, stroke_width: 3, cap: round)
             }
         }
 
@@ -83,7 +83,7 @@ View Main() {
                 path(
                     fill: 0x00000000,
                     gradient: (kind: linear, angle: 90deg,
-                               from: 0xFF7CC4FF, mid: 0x667CC4FF, to: 0x007CC4FF)
+                        from: 0xFF7CC4FF, mid: 0x667CC4FF, to: 0x007CC4FF)
                 ) {
                     move(0, 160)
                     for i, t in week { line(i * 90, 160 - t * 5) }
@@ -96,7 +96,7 @@ View Main() {
             Button("another week") #[bg: 0x2A3442, radius: 8, p: 10, color: 0xE7ECF2] => {
                 other = !other
                 week = other ? [22.0, 12.0, 15.5, 27.0, 18.0, 13.0, 25.0]
-                             : [14.0, 17.5, 21.0, 19.0, 24.5, 22.0, 16.0]
+                    : [14.0, 17.5, 21.0, 19.0, 24.5, 22.0, 16.0]
             }
             Text("high {week.max()}°, low {week.min()}°") #[color: 0xF2F2F7, size: 14]
         }

@@ -284,7 +284,7 @@ fn dispatch_request(connection: &Connection, document_store: &DocumentStore, req
 
             let edits = document_store
                 .get(&uri)
-                .and_then(|doc| capabilities::formatting::handle_formatting(&doc, options));
+                .and_then(|doc| capabilities::formatting::handle_formatting(&doc, &options));
             send_response(connection, Response::new_ok(id, edits));
         }
         PrepareRenameRequest::METHOD => {
@@ -476,22 +476,6 @@ mod tests {
         } else {
             panic!("Expected Nested DocumentSymbolResponse");
         }
-    }
-
-    #[test]
-    fn test_formatting_capabilities() {
-        let uri: Uri = "file:///test.byd".parse().unwrap();
-        let content = "View Main{\nColumn{\nText(\"hello\")\n}\n}".to_string();
-        let doc = Document::new(uri, Some(1), content);
-
-        let options = lsp_types::FormattingOptions {
-            tab_size: 2,
-            insert_spaces: true,
-            ..Default::default()
-        };
-        let edits = capabilities::formatting::handle_formatting(&doc, options).unwrap();
-        assert_eq!(edits.len(), 1);
-        assert!(edits[0].new_text.contains("  Column{\n    Text(\"hello\")"));
     }
 
     #[test]

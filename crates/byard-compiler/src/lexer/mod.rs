@@ -14,6 +14,9 @@
 
 use logos::{Lexer, Logos};
 
+mod trivia;
+pub use trivia::{Piece, Trivia, TriviaFile, lex_with_trivia};
+
 use crate::diagnostics::{CompileError, Span};
 use crate::symbol::Symbol;
 

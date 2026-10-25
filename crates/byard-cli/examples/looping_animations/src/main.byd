@@ -12,7 +12,7 @@
 //      stretches and shrinks, restarting every 2 s. Two `anim.keyframes(…)`
 //      sequences on one element (translate and scale), each with per-segment
 //      easing.
-//   3. PULSING BADGE: the red dot breathes between 1.0× and 1.4× forever, 
+//   3. PULSING BADGE: the red dot breathes between 1.0× and 1.4× forever,
 //      `repeat: infinite, reverse: true` turns one spring into an oscillation.
 //   4. COLOUR PULSE: the "LIVE" chip crossfades between purple and red
 //      *through OKLab*, the mid-points stay saturated, never muddy grey.
@@ -47,7 +47,7 @@ View Main() {
     let bar = style {
         bg: 0x2B2930, radius: 4, height: 18
         gradient: (angle: 180deg, from: 0x00FFFFFF, mid: 0x26FFFFFF,
-                   to: 0x00FFFFFF, mid_pos: 0.5)
+            to: 0x00FFFFFF, mid_pos: 0.5)
         gradient_offset: 1.0 with anim.linear(1.4s, from: 0.0, repeat: infinite)
     }
 
@@ -55,11 +55,14 @@ View Main() {
         Row #[gap: 12, align: center] {
             Text("RFC-0025, looping animations") #[color: 0xE6E1E5, size: 20]
             Spacer
-            Button(loading ? "Stop" : "Start") #[bg: 0x4A4458, color: 0xE6E1E5,
-                                                radius: 20, p: (8, 16)]
+            Button(loading ? "Stop" : "Start") #[
+                bg: 0x4A4458,
+                color: 0xE6E1E5,
+                radius: 20,
+                p: (8, 16),
+            ]
                 => loading = !loading
-            Button("Replay entrance") #[bg: 0x4A4458, color: 0xE6E1E5,
-                                        radius: 20, p: (8, 16)]
+            Button("Replay entrance") #[bg: 0x4A4458, color: 0xE6E1E5, radius: 20, p: (8, 16)]
                 => entrance++
         }
 
@@ -74,8 +77,12 @@ View Main() {
                 Row #[gap: 28, align: center] {
                     // The animation lives and dies with its element: no
                     // start/stop API, unmounting is what stops it.
-                    Box #[width: 56, height: 56, origin: center,
-                          rotate: 360deg with anim.linear(1s, from: 0deg, repeat: infinite)] {
+                    Box #[
+                        width: 56,
+                        height: 56,
+                        origin: center,
+                        rotate: 360deg with anim.linear(1s, from: 0deg, repeat: infinite),
+                    ] {
                         Canvas #[width: 56, height: 56] {
                             arc(cx: 28, cy: 28, r: 22,
                                 stroke: 0x36323C, stroke_width: 5)
@@ -86,17 +93,26 @@ View Main() {
 
                     // A pulsing notification dot: one spring, two endpoints,
                     // forever.
-                    Box #[width: 44, height: 44, radius: 22, bg: 0x2B2930, origin: center,
-                          scale: 1.4 with anim.spring(from: 1.0, stiffness: 90, damping: 9,
-                                                      repeat: infinite, reverse: true)] {
+                    Box #[
+                        width: 44,
+                        height: 44,
+                        radius: 22,
+                        bg: 0x2B2930,
+                        origin: center,
+                        scale: 1.4 with anim.spring(from: 1.0, stiffness: 90, damping: 9,
+                            repeat: infinite, reverse: true),
+                    ] {
                         Box #[width: 14, height: 14, radius: 7, bg: 0xEF5350] {}
                     }
 
                     // A colour that loops: interpolated in OKLab, so the
                     // crossfade never passes through grey.
-                    Box #[radius: 14, p: (6, 14),
-                          bg: 0xEF5350 with anim.linear(700ms, from: 0x6750A4,
-                                                        repeat: infinite, reverse: true)] {
+                    Box #[
+                        radius: 14,
+                        p: (6, 14),
+                        bg: 0xEF5350 with anim.linear(700ms, from: 0x6750A4,
+                            repeat: infinite, reverse: true),
+                    ] {
                         Text("LIVE") #[color: 0xFFFFFF, size: 13, weight: medium]
                     }
                 }
@@ -104,8 +120,13 @@ View Main() {
 
             // 7: a *finite* repeat, three bounces, then it holds and the
             // animation leaves the active set on its own, with no `when` needed.
-            Box #[width: 34, height: 34, radius: 8, bg: 0xFFB300,
-                  translate: (60, 0) with anim.ease_in_out(500ms, from: 0, repeat: 3)] {}
+            Box #[
+                width: 34,
+                height: 34,
+                radius: 8,
+                bg: 0xFFB300,
+                translate: (60, 0) with anim.ease_in_out(500ms, from: 0, repeat: 3),
+            ] {}
         }
 
         // ── 2: Material indeterminate progress bar ────────────────────────
@@ -114,17 +135,25 @@ View Main() {
                 #[color: 0x938F99, size: 12]
             when loading {
                 Box #[bg: 0x36323C, radius: 3, width: 560, height: 6] {
-                    Box #[bg: 0xD0BCFF, radius: 3, width: 140, height: 6, origin: center,
-                          translate: anim.keyframes(
-                              0%: (-140, 0),
-                              60%: (160, 0) ease_in_out,
-                              100%: (420, 0) ease_out,
-                              duration: 2s, loop: true),
-                          scale: anim.keyframes(
-                              0%: (0.3, 1),
-                              60%: (1.6, 1) ease_in_out,
-                              100%: (0.3, 1) ease_in,
-                              duration: 2s, loop: true)] {}
+                    Box #[
+                        bg: 0xD0BCFF,
+                        radius: 3,
+                        width: 140,
+                        height: 6,
+                        origin: center,
+                        translate: anim.keyframes(
+                            0%: (-140, 0),
+                            60%: (160, 0) ease_in_out,
+                            100%: (420, 0) ease_out,
+                            duration: 2s, loop: true
+                        ),
+                        scale: anim.keyframes(
+                            0%: (0.3, 1),
+                            60%: (1.6, 1) ease_in_out,
+                            100%: (0.3, 1) ease_in,
+                            duration: 2s, loop: true
+                        ),
+                    ] {}
                 }
             }
         }
@@ -158,14 +187,18 @@ View Main() {
                     // never change, so without it the cascade would only ever be
                     // seen once, at start-up. A replay honours the offsets again,
                     // so the rows come in one after another every time.
-                    Row #[bg: 0x211F26, radius: 8, width: 560, p: (10, 14), gap: 10,
-                          align: center,
-                          opacity: 1.0 with
-                              anim.stagger(linear(320ms, from: 0.0), 90ms, i,
-                                           restart: entrance),
-                          translate: (0, 0) with
-                              anim.stagger(spring(from: (0, 18)), 90ms, i,
-                                           restart: entrance)] {
+                    Row #[
+                        bg: 0x211F26,
+                        radius: 8,
+                        width: 560,
+                        p: (10, 14),
+                        gap: 10,
+                        align: center,
+                        opacity: 1.0 with anim.stagger(linear(320ms, from: 0.0), 90ms, i,
+                            restart: entrance),
+                        translate: (0, 0) with anim.stagger(spring(from: (0, 18)), 90ms, i,
+                            restart: entrance),
+                    ] {
                         Box #[width: 8, height: 8, radius: 4, bg: 0xD0BCFF] {}
                         Text(row) #[color: 0xE6E1E5, size: 14]
                         Spacer

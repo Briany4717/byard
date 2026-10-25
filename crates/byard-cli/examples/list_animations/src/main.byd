@@ -53,12 +53,12 @@ View Main() {
     // still paints every colour correctly.
     let rows = [
         { tilt: -14deg, dim: 0.35, bar: 120 },
-        { tilt: 22deg,  dim: 0.85, bar: 168 },
-        { tilt: -6deg,  dim: 0.55, bar: 96  },
-        { tilt: 30deg,  dim: 0.95, bar: 200 },
-        { tilt: 10deg,  dim: 0.45, bar: 144 },
+        { tilt: 22deg, dim: 0.85, bar: 168 },
+        { tilt: -6deg, dim: 0.55, bar: 96 },
+        { tilt: 30deg, dim: 0.95, bar: 200 },
+        { tilt: 10deg, dim: 0.45, bar: 144 },
         { tilt: -25deg, dim: 0.75, bar: 112 },
-        { tilt: 17deg,  dim: 0.65, bar: 184 },
+        { tilt: 17deg, dim: 0.65, bar: 184 },
     ]
 
     Column #[bg: 0x14161C, p: 28, gap: 20, width: 640] {
@@ -71,13 +71,19 @@ View Main() {
             // The list has as many rows as `rows` has entries, so "Add" runs out
             // of rows to add. A button that is out of range says so, it dims,
             // rather than staying lit and quietly doing nothing when pressed.
-            Button("Add") #[bg: count < rows.len ? 0x2B2F3A : 0x1E212A,
-                            color: count < rows.len ? 0xE6E1E5 : 0x555B66,
-                            radius: 8, p: (8, 14)]
+            Button("Add") #[
+                bg: count < rows.len ? 0x2B2F3A : 0x1E212A,
+                color: count < rows.len ? 0xE6E1E5 : 0x555B66,
+                radius: 8,
+                p: (8, 14),
+            ]
                 => count = count < rows.len ? count + 1 : count
-            Button("Remove") #[bg: count > 0 ? 0x2B2F3A : 0x1E212A,
-                               color: count > 0 ? 0xE6E1E5 : 0x555B66,
-                               radius: 8, p: (8, 14)]
+            Button("Remove") #[
+                bg: count > 0 ? 0x2B2F3A : 0x1E212A,
+                color: count > 0 ? 0xE6E1E5 : 0x555B66,
+                radius: 8,
+                p: (8, 14),
+            ]
                 => count = count > 0 ? count - 1 : count
             Button("Replay") #[bg: 0x2B2F3A, color: 0xE6E1E5, radius: 8, p: (8, 14)]
                 => entrance = entrance + 1
@@ -88,20 +94,38 @@ View Main() {
             for i, row in rows {
                 when i < count {
                     // 4. One stagger clause, `i` rows apart.
-                    Row #[gap: 10, align: center, height: 26,
-                          opacity: 1.0 with anim.stagger(anim.spring(from: 0.0), 80ms, i,
-                                                         restart: entrance)] {
+                    Row #[
+                        gap: 10,
+                        align: center,
+                        height: 26,
+                        opacity: 1.0 with anim.stagger(anim.spring(from: 0.0), 80ms, i,
+                            restart: entrance),
+                    ] {
                         Text("{i}") #[color: 0x8A90A0, size: 12, width: 14]
                         // 1. Each bar heads for its own target, on its own spring.
-                        Row #[bg: 0x5B8DEF, width: row.bar, height: 22, radius: 11,
-                              p: (0, 10), gap: 6, align: center,
-                              rotate: shuffled ? row.tilt : 0deg with anim.spring(
-                                  stiffness: 140, damping: 18)] {
+                        Row #[
+                            bg: 0x5B8DEF,
+                            width: row.bar,
+                            height: 22,
+                            radius: 11,
+                            p: (0, 10),
+                            gap: 6,
+                            align: center,
+                            rotate: shuffled ? row.tilt : 0deg with anim.spring(
+                                stiffness: 140, damping: 18
+                            ),
+                        ] {
                             // 3. A nested `for`: these dots are this bar's.
                             for d in [0, 1, 2] {
-                                Box #[bg: 0xFFFFFF, width: 6, height: 6, radius: 3,
-                                      opacity: shuffled ? row.dim : 1.0 with anim.spring(
-                                          stiffness: 90, damping: 16)] {}
+                                Box #[
+                                    bg: 0xFFFFFF,
+                                    width: 6,
+                                    height: 6,
+                                    radius: 3,
+                                    opacity: shuffled ? row.dim : 1.0 with anim.spring(
+                                        stiffness: 90, damping: 16
+                                    ),
+                                ] {}
                             }
                         }
                     }

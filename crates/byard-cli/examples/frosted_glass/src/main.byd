@@ -6,16 +6,16 @@
 //
 // What to verify:
 //   1. The top bar is frosted glass: the colorful tiles are visibly blurred
-//      *through* it, saturated (vibrancy) and tinted white. Scroll the list, 
+//      *through* it, saturated (vibrancy) and tinted white. Scroll the list,
 //      the blur re-samples live as tiles slide beneath the bar.
 //   2. The bar's rounded corners clip the glass exactly (no square bleed).
 //   3. Hover the "Hover me" card: blur and tint spring in smoothly
 //      (`blur: 0 with anim.spring()` + `on hover { blur: 16 }`).
-//   4. The bottom-left chip forces `blur_quality: low` (quarter-resolution, 
+//   4. The bottom-left chip forces `blur_quality: low` (quarter-resolution,
 //      cheapest, visibly softer/blockier); the bottom-right forces `high`
 //      (0.75× resolution, the finest frost). Same Gaussian, different cost.
 //   5. Text on every pane stays crisp, children render above the glass.
-//   6. Tint without blur (the amber wash) is just a translucent overlay, 
+//   6. Tint without blur (the amber wash) is just a translucent overlay,
 //      no frost, no extra GPU cost.
 View Main() {
     var scroll = 0

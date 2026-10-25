@@ -61,13 +61,25 @@ enum Command {
         /// Path to a `.byd` file. Defaults to `entry` in `byard.toml`.
         file: Option<PathBuf>,
     },
+    /// Format `.byd` files in place, with the one layout there is.
+    Fmt {
+        /// Files, or directories to format. A project directory covers its
+        /// entry directory and its path dependencies; any other directory,
+        /// every `.byd` under it. Defaults to the current project.
+        paths: Vec<PathBuf>,
+        /// Change nothing: list the files that are not formatted, and exit
+        /// 1 if there are any.
+        #[arg(long)]
+        check: bool,
+    },
     /// Bake the AOT vector atlas for the project (RFC-0009 §4).
     Build {
         /// Path to a `.byd` file or project dir. Defaults to `byard.toml`.
         file: Option<PathBuf>,
     },
     /// Package a built app with its project, to run where its sources are
-    /// not: a `.app` on macOS, a directory elsewhere.
+    /// not: a `.app` on macOS, a directory elsewhere, or with `--layout
+    /// linux` a freedesktop.org prefix with a launcher entry and icons.
     Bundle {
         /// The project directory or `byard.toml`. Defaults to the current
         /// project.
@@ -79,9 +91,14 @@ enum Command {
         /// `.byard/bundle/`.
         #[arg(short, long, value_name = "DIR")]
         out: Option<PathBuf>,
-        /// The package's shape. Defaults to the one this system runs.
+        /// The package's shape: `app`, `dir` or `linux`. Defaults to `app`
+        /// on macOS and `dir` elsewhere.
         #[arg(long, value_enum)]
         layout: Option<commands::bundle::Layout>,
+        /// Also pack the Linux layout as `<exe>-<version>-linux-<arch>.tar.gz`
+        /// beside it, to unpack into a prefix (`tar xzf ... -C ~/.local`).
+        #[arg(long)]
+        archive: bool,
     },
     /// Add a dependency to byard.toml, then fetch and lock it (RFC-0008).
     #[command(alias = "install")]
@@ -259,17 +276,20 @@ fn main() {
             profile,
         }),
         Command::Check { file, short } => commands::check::run(file.as_deref(), short),
+        Command::Fmt { paths, check } => commands::fmt::run(&paths, check),
         Command::Build { file } => commands::build::run(file.as_deref()),
         Command::Bundle {
             path,
             bin,
             out,
             layout,
+            archive,
         } => commands::bundle::run(
             path.as_deref(),
             &bin,
             out.as_deref(),
             layout.unwrap_or_else(commands::bundle::Layout::host),
+            archive,
         ),
         Command::Clean { file } => commands::clean::run(file.as_deref()),
         Command::Add {

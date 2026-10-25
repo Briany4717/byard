@@ -42,13 +42,36 @@ View Main() {
         Image("src/hero.png") #[width: 352, height: 48, a11y_hidden: true]
 
         Row #[gap: 10] {
-            Button("Save") #[font: body, width: 90, height: 36, bg: 0x3B82F6, radius: 8] => saved = saved + 1
+            Button("Save") #[
+                font: body,
+                width: 90,
+                height: 36,
+                bg: 0x3B82F6,
+                radius: 8,
+            ] => saved = saved + 1
             // Icon only: the label is what a screen reader says.
-            Box #[a11y_label: "Close", width: 36, height: 36, bg: 0x2A2A36, radius: 8, align: center, justify: center, tap => saved = 0] {
+            Box #[
+                a11y_label: "Close",
+                width: 36,
+                height: 36,
+                bg: 0x2A2A36,
+                radius: 8,
+                align: center,
+                justify: center,
+                tap => saved = 0,
+            ] {
                 VectorIcon("src/close.svg") #[size: 18, color: 0xFFFFFF, a11y_hidden: true]
             }
             // The same button with nothing to say what it does.
-            Box #[width: 36, height: 36, bg: 0x2A2A36, radius: 8, align: center, justify: center, tap => saved = 0] {
+            Box #[
+                width: 36,
+                height: 36,
+                bg: 0x2A2A36,
+                radius: 8,
+                align: center,
+                justify: center,
+                tap => saved = 0,
+            ] {
                 VectorIcon("src/close.svg") #[size: 18, color: 0xFFFFFF, a11y_hidden: true]
             }
         }
@@ -70,8 +93,23 @@ View Main() {
             Text("Pro") #[font: body, color: 0xCAC4D0, size: 16, width: 200]
         }
 
-        Slider #[bind: volume, min: 0, max: 1, step: 0.25, width: 352, height: 28, a11y_label: "Volume"]
-        TextField #[bind: query, placeholder: "Search", font: body, width: 352, height: 36, bg: 0x20202C]
+        Slider #[
+            bind: volume,
+            min: 0,
+            max: 1,
+            step: 0.25,
+            width: 352,
+            height: 28,
+            a11y_label: "Volume",
+        ]
+        TextField #[
+            bind: query,
+            placeholder: "Search",
+            font: body,
+            width: 352,
+            height: 36,
+            bg: 0x20202C,
+        ]
         Text("{saved} saved") #[font: body, color: 0x938F99, size: 14, width: 352]
     }
 }

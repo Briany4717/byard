@@ -16,6 +16,22 @@
 //!     byard.toml, src/, fonts/, ...
 //! ```
 //!
+//! `--layout linux` writes a freedesktop.org prefix instead (RFC-0045), which
+//! `cp -r exe/* ~/.local/` installs for one user and a distribution package
+//! maps onto `/usr` as it is:
+//!
+//! ```text
+//! exe/
+//!   bin/exe
+//!   share/exe/project/                 byard.toml, src/, fonts/, ...
+//!   share/applications/id.desktop
+//!   share/icons/hicolor/NxN/apps/id.png
+//!   share/metainfo/id.metainfo.xml
+//! ```
+//!
+//! `--archive` also packs that tree, paths from its root, as
+//! `exe-version-linux-arch.tar.gz` beside it.
+//!
 //! The copy is the project directory as it is, less what is not read at run
 //! time: build output (`target/`), hidden entries (`.byard/`, `.git`), the Rust
 //! half, which is already in the binary (`*.rs`, `Cargo.toml`, `Cargo.lock`),
@@ -32,8 +48,9 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use crate::deps::resolve_project;
-use crate::manifest::Manifest;
+use crate::manifest::{BundleConfig, Manifest};
 use crate::style;
+use byard_project::archive;
 
 /// The shape of the package.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
@@ -42,6 +59,9 @@ pub enum Layout {
     App,
     /// A directory holding the executable and `project/` beside it.
     Dir,
+    /// A freedesktop.org prefix: `bin/`, the project under `share/<exe>/`, a
+    /// `.desktop` entry, hicolor icons and `AppStream` metainfo.
+    Linux,
 }
 
 impl Layout {
@@ -68,7 +88,11 @@ pub fn run(
     bin: &Path,
     out: Option<&Path>,
     layout: Layout,
+    archive: bool,
 ) -> Result<(), String> {
+    if archive && layout != Layout::Linux {
+        return Err("--archive packs the Linux layout: add `--layout linux`".to_string());
+    }
     if !bin.is_file() {
         return Err(format!(
             "--bin {}: there is no executable there\n\
@@ -77,7 +101,12 @@ pub fn run(
         ));
     }
     let (manifest, provider) = load(file)?;
-    let naming = naming(&manifest);
+    let exe = bin
+        .file_name()
+        .ok_or_else(|| format!("--bin {}: not a file", bin.display()))?
+        .to_string_lossy()
+        .into_owned();
+    let naming = naming(&manifest, &exe, layout);
     let out = out.map_or_else(
         || manifest.project_root.join(".byard/bundle"),
         Path::to_path_buf,
@@ -106,6 +135,17 @@ pub fn run(
     if !deps.is_empty() {
         style::fact("Packages", &deps.len().to_string());
     }
+    if layout == Layout::Linux {
+        validate_linux_entries(&written.root, &naming.id);
+    }
+    if archive {
+        let file = out.join(archive_name(&exe, &naming.version));
+        let files = tree_files(&written.root)?;
+        let bytes = archive::pack_tree(&files, |path| path.starts_with("bin/"))
+            .map_err(|e| e.to_string())?;
+        write_file(&file, bytes)?;
+        style::fact("Archive", &file.display().to_string());
+    }
     if manifest.bundle.id.is_none() {
         eprintln!(
             "note: no [bundle] id in byard.toml, so the app is `{}`; \
@@ -114,6 +154,33 @@ pub fn run(
         );
     }
     Ok(())
+}
+
+/// What the Linux archive is called: `<exe>-<version>-linux-<arch>.tar.gz`,
+/// as GitHub release assets and `cargo-dist` name theirs (RFC-0045).
+fn archive_name(exe: &str, version: &str) -> String {
+    format!("{exe}-{version}-linux-{}.tar.gz", std::env::consts::ARCH)
+}
+
+/// Every file under `root` as its path from `root`, `/`-separated, and its
+/// contents: the entries of the archive, which unpacks into a prefix.
+fn tree_files(root: &Path) -> Result<Vec<(String, Vec<u8>)>, String> {
+    fn walk(dir: &Path, rel: &str, out: &mut Vec<(String, Vec<u8>)>) -> Result<(), String> {
+        for entry in std::fs::read_dir(dir).map_err(|e| io(dir, &e))? {
+            let entry = entry.map_err(|e| io(dir, &e))?;
+            let path = entry.path();
+            let name = format!("{rel}{}", entry.file_name().to_string_lossy());
+            if path.is_dir() {
+                walk(&path, &format!("{name}/"), out)?;
+            } else {
+                out.push((name, std::fs::read(&path).map_err(|e| io(&path, &e))?));
+            }
+        }
+        Ok(())
+    }
+    let mut files = Vec::new();
+    walk(root, "", &mut files)?;
+    Ok(files)
 }
 
 /// The project at `path`, resolved, an app's, and free of errors.
@@ -131,13 +198,19 @@ fn load(path: Option<&Path>) -> Result<(Manifest, crate::deps::FsProvider), Stri
     Ok((manifest, provider))
 }
 
-fn naming(manifest: &Manifest) -> Naming {
+/// The names a bundle carries. With no `[bundle] id` the id is a local one,
+/// except in the Linux layout, where it names the `.desktop` file and has to
+/// be what the window announces: `dev.byard.<executable>`.
+fn naming(manifest: &Manifest, exe: &str, layout: Layout) -> Naming {
     let name = manifest
         .bundle
         .name
         .clone()
         .unwrap_or_else(|| manifest.name.clone());
     let id = manifest.bundle.id.clone().unwrap_or_else(|| {
+        if layout == Layout::Linux {
+            return format!("dev.byard.{exe}");
+        }
         let part: String = manifest
             .name
             .chars()
@@ -186,6 +259,12 @@ fn write_bundle(
             let root = out.join(&manifest.name);
             (root.clone(), root.clone(), root.join("project"))
         }
+        Layout::Linux => {
+            // Named for the program, as the prefix's `bin/` and `share/` are.
+            let root = out.join(exe);
+            let project = root.join("share").join(exe).join("project");
+            (root.clone(), root.join("bin"), project)
+        }
     };
     // Only ever this command's own output: a bundle is rewritten whole.
     if root.exists() {
@@ -219,7 +298,187 @@ fn write_bundle(
         let path = root.join("Contents/Info.plist");
         std::fs::write(&path, plist).map_err(|e| io(&path, &e))?;
     }
+    if layout == Layout::Linux {
+        write_linux_entries(manifest, naming, &exe.to_string_lossy(), &root)?;
+    }
     Ok(Written { root, project })
+}
+
+/// Writes `text` to `path`, its directory made.
+fn write_file(path: &Path, text: impl AsRef<[u8]>) -> Result<(), String> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| io(dir, &e))?;
+    }
+    std::fs::write(path, text).map_err(|e| io(path, &e))
+}
+
+/// What the desktop reads of a Linux prefix: the launcher entry and the icons.
+fn write_linux_entries(
+    manifest: &Manifest,
+    naming: &Naming,
+    exe: &str,
+    root: &Path,
+) -> Result<(), String> {
+    let share = root.join("share");
+    let desktop = desktop_entry(naming, &manifest.bundle, exe, manifest.icon.is_some());
+    write_file(
+        &share
+            .join("applications")
+            .join(format!("{}.desktop", naming.id)),
+        desktop,
+    )?;
+    if let Some(icon) = &manifest.icon {
+        write_hicolor_icons(icon, &share, &naming.id)?;
+    }
+    write_file(
+        &share
+            .join("metainfo")
+            .join(format!("{}.metainfo.xml", naming.id)),
+        metainfo(naming, &manifest.bundle),
+    )
+}
+
+/// The `AppStream` component software centres and Flathub read: what the app
+/// is, its licence and the `.desktop` file that launches it. The validator
+/// requires a summary and a description of a desktop application, so an app
+/// that sets no `[bundle] summary` is described by its name.
+fn metainfo(naming: &Naming, bundle: &BundleConfig) -> String {
+    let summary = bundle.summary.as_deref().unwrap_or(&naming.name);
+    let summary = xml_escape(&summary.replace(['\r', '\n'], " "));
+    let mut out = String::from(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<component type=\"desktop-application\">\n",
+    );
+    let _ = writeln!(out, "  <id>{}</id>", xml_escape(&naming.id));
+    let _ = writeln!(out, "  <name>{}</name>", xml_escape(&naming.name));
+    let _ = writeln!(out, "  <summary>{summary}</summary>");
+    let _ = writeln!(
+        out,
+        "  <description>\n    <p>{summary}</p>\n  </description>"
+    );
+    out.push_str("  <metadata_license>CC0-1.0</metadata_license>\n");
+    if let Some(license) = &bundle.license {
+        let _ = writeln!(
+            out,
+            "  <project_license>{}</project_license>",
+            xml_escape(license)
+        );
+    }
+    let _ = writeln!(
+        out,
+        "  <launchable type=\"desktop-id\">{}.desktop</launchable>",
+        xml_escape(&naming.id)
+    );
+    out.push_str("</component>\n");
+    out
+}
+
+/// Runs `desktop-file-validate` and `appstreamcli validate --no-net` on what
+/// the Linux layout wrote, when they are installed, and prints what they
+/// object to. A tool that is not there is skipped: the files come from a
+/// fixed template that this command's tests validate.
+fn validate_linux_entries(root: &Path, id: &str) {
+    let share = root.join("share");
+    let desktop = share.join("applications").join(format!("{id}.desktop"));
+    let metainfo = share.join("metainfo").join(format!("{id}.metainfo.xml"));
+    for (tool, args) in [
+        ("desktop-file-validate", vec![desktop.as_path()]),
+        (
+            "appstreamcli",
+            vec![
+                Path::new("validate"),
+                Path::new("--no-net"),
+                metainfo.as_path(),
+            ],
+        ),
+    ] {
+        let Ok(output) = std::process::Command::new(tool)
+            .args(&args)
+            .env("LC_ALL", "C")
+            .output()
+        else {
+            continue;
+        };
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        for line in problems(tool, &text) {
+            eprintln!("warning: {tool}: {line}");
+        }
+    }
+}
+
+/// The lines of a validator's output that are an error or a warning.
+/// `desktop-file-validate` prints nothing else; `appstreamcli` marks them
+/// `E:` and `W:` among its notes (`I:`, `P:`) and its verdict.
+fn problems(tool: &str, output: &str) -> Vec<String> {
+    output
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .filter(|l| tool != "appstreamcli" || l.starts_with("E:") || l.starts_with("W:"))
+        .map(str::to_string)
+        .collect()
+}
+
+/// A value of a `.desktop` file: a backslash and a line break are written
+/// escaped, which is all its string type reserves.
+fn desktop_escape(text: &str) -> String {
+    text.replace('\\', "\\\\")
+        .replace('\n', "\\n")
+        .replace('\r', "")
+}
+
+/// One argument of an `Exec` line: bare when it is plain, else quoted with
+/// the characters the entry specification reserves escaped (and then the
+/// escapes escaped again, as a string value).
+fn exec_argument(arg: &str) -> String {
+    if arg
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '+'))
+    {
+        return arg.to_string();
+    }
+    let mut quoted = String::from("\"");
+    for c in arg.chars() {
+        if matches!(c, '"' | '`' | '$' | '\\') {
+            quoted.push('\\');
+        }
+        if c == '%' {
+            quoted.push('%');
+        }
+        quoted.push(c);
+    }
+    quoted.push('"');
+    desktop_escape(&quoted)
+}
+
+/// The launcher entry. `Exec` is the bare executable name, found through
+/// `PATH`, so the prefix can be anywhere on it; `StartupWMClass` is the id
+/// the app's window announces, which is how a shell pairs the two.
+fn desktop_entry(naming: &Naming, bundle: &BundleConfig, exe: &str, icon: bool) -> String {
+    let categories = if bundle.categories.is_empty() {
+        "Utility;".to_string()
+    } else {
+        bundle.categories.iter().fold(String::new(), |mut out, c| {
+            let _ = write!(out, "{c};");
+            out
+        })
+    };
+    let mut out = String::from("[Desktop Entry]\nType=Application\n");
+    let _ = writeln!(out, "Name={}", desktop_escape(&naming.name));
+    if let Some(summary) = &bundle.summary {
+        let _ = writeln!(out, "Comment={}", desktop_escape(summary));
+    }
+    let _ = writeln!(out, "Exec={}", exec_argument(exe));
+    if icon {
+        let _ = writeln!(out, "Icon={}", naming.id);
+    }
+    let _ = writeln!(out, "Terminal=false");
+    let _ = writeln!(out, "Categories={categories}");
+    let _ = writeln!(out, "StartupWMClass={}", naming.id);
+    out
 }
 
 fn io(what: &Path, e: &std::io::Error) -> String {
@@ -307,9 +566,8 @@ const ICNS_SIZES: [(u32, &[u8; 4]); 10] = [
     (1024, b"ic10"),
 ];
 
-/// A macOS icon file from the project's icon: the picture at every size up
-/// to its own, so none is scaled up past what it holds.
-fn icns_from(icon: &Path) -> Result<Vec<u8>, String> {
+/// The project's icon, read, and square (as an icon is).
+fn square_icon(icon: &Path) -> Result<image::DynamicImage, String> {
     let picture = image::open(icon).map_err(|e| format!("{}: {e}", icon.display()))?;
     let (w, h) = (picture.width(), picture.height());
     if w != h {
@@ -318,19 +576,57 @@ fn icns_from(icon: &Path) -> Result<Vec<u8>, String> {
             icon.display()
         ));
     }
+    Ok(picture)
+}
+
+/// The picture as a PNG `size` pixels square: resized with Lanczos3, or
+/// as it is when it already has that size.
+fn png_at(picture: &image::DynamicImage, size: u32) -> Result<Vec<u8>, String> {
+    let mut png = Vec::new();
+    let write = |img: &image::DynamicImage, png: &mut Vec<u8>| {
+        img.write_to(&mut std::io::Cursor::new(png), image::ImageFormat::Png)
+            .map_err(|e| e.to_string())
+    };
+    if picture.width() == size {
+        write(picture, &mut png)?;
+    } else {
+        let scaled = picture.resize_exact(size, size, image::imageops::FilterType::Lanczos3);
+        write(&scaled, &mut png)?;
+    }
+    Ok(png)
+}
+
+/// A macOS icon file from the project's icon: the picture at every size up
+/// to its own, so none is scaled up past what it holds.
+fn icns_from(icon: &Path) -> Result<Vec<u8>, String> {
+    let picture = square_icon(icon)?;
+    let w = picture.width();
     let mut chunks = Vec::new();
     for (size, kind) in ICNS_SIZES {
         if size > w.max(16) {
             break;
         }
-        let scaled = picture.resize_exact(size, size, image::imageops::FilterType::Lanczos3);
-        let mut png = Vec::new();
-        scaled
-            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
-            .map_err(|e| e.to_string())?;
-        chunks.push((kind, png));
+        chunks.push((kind, png_at(&picture, size)?));
     }
     Ok(icns(&chunks))
+}
+
+/// The sizes of a freedesktop.org icon theme a Linux desktop looks for.
+const HICOLOR_SIZES: [u32; 7] = [16, 32, 48, 64, 128, 256, 512];
+
+/// Writes the icon under `share/icons/hicolor/NxN/apps/<id>.png` at each of
+/// the [`HICOLOR_SIZES`] up to the picture's own (and never fewer than 16).
+fn write_hicolor_icons(icon: &Path, share: &Path, id: &str) -> Result<(), String> {
+    let picture = square_icon(icon)?;
+    let largest = picture.width().max(16);
+    for size in HICOLOR_SIZES.into_iter().take_while(|&s| s <= largest) {
+        let path = share
+            .join("icons/hicolor")
+            .join(format!("{size}x{size}/apps"))
+            .join(format!("{id}.png"));
+        write_file(&path, png_at(&picture, size)?)?;
+    }
+    Ok(())
 }
 
 /// The `.icns` container: `icns`, its length, then each chunk as its type,
@@ -349,12 +645,15 @@ fn icns(chunks: &[(&[u8; 4], Vec<u8>)]) -> Vec<u8> {
     out
 }
 
+/// Text for an XML element's content.
+fn xml_escape(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
 fn info_plist(naming: &Naming, exe: &str, icon: Option<&str>) -> String {
-    let escape = |s: &str| {
-        s.replace('&', "&amp;")
-            .replace('<', "&lt;")
-            .replace('>', "&gt;")
-    };
+    let escape = xml_escape;
     let mut keys = vec![
         ("CFBundleName", escape(&naming.name)),
         ("CFBundleDisplayName", escape(&naming.name)),
@@ -444,5 +743,93 @@ mod tests {
         assert!(plist.contains("<key>CFBundleExecutable</key>\n    <string>tj</string>"));
         assert!(plist.contains("<key>CFBundleIconFile</key>"));
         assert!(!info_plist(&naming, "tj", None).contains("CFBundleIconFile"));
+    }
+
+    fn naming_of(id: &str) -> Naming {
+        Naming {
+            name: "Tom & Jerry".to_string(),
+            id: id.to_string(),
+            version: "2.0.1".to_string(),
+        }
+    }
+
+    #[test]
+    fn the_desktop_entry_names_the_app_the_window_and_the_icon() {
+        let bundle = BundleConfig {
+            summary: Some("Cat\nand mouse".to_string()),
+            categories: vec!["Game".to_string(), "Simulation".to_string()],
+            ..BundleConfig::default()
+        };
+        let entry = desktop_entry(&naming_of("com.example.tj"), &bundle, "tj", true);
+        for line in [
+            "Name=Tom & Jerry",
+            "Comment=Cat\\nand mouse",
+            "Exec=tj",
+            "Icon=com.example.tj",
+            "Categories=Game;Simulation;",
+            "StartupWMClass=com.example.tj",
+        ] {
+            assert!(entry.lines().any(|l| l == line), "{line}: {entry}");
+        }
+        // No icon, no `Icon`; no categories, `Utility`; no summary, no comment.
+        let bare = desktop_entry(&naming_of("a.b"), &BundleConfig::default(), "tj", false);
+        assert!(!bare.contains("Icon="), "{bare}");
+        assert!(!bare.contains("Comment="), "{bare}");
+        assert!(bare.contains("Categories=Utility;\n"), "{bare}");
+    }
+
+    #[test]
+    fn an_exec_with_spaces_or_reserved_characters_is_quoted() {
+        assert_eq!(exec_argument("aura-weather"), "aura-weather");
+        assert_eq!(exec_argument("my app"), "\"my app\"");
+        assert_eq!(exec_argument("a$b"), "\"a\\\\$b\"");
+        assert_eq!(exec_argument("50%"), "\"50%%\"");
+    }
+
+    #[test]
+    fn the_metainfo_names_the_component_and_escapes_what_it_writes() {
+        let bundle = BundleConfig {
+            summary: Some("Cats & <mice>\nat play".to_string()),
+            license: Some("MIT OR Apache-2.0".to_string()),
+            ..BundleConfig::default()
+        };
+        let info = metainfo(&naming_of("com.example.tj"), &bundle);
+        assert!(info.contains("<name>Tom &amp; Jerry</name>"), "{info}");
+        assert!(
+            info.contains("<summary>Cats &amp; &lt;mice&gt; at play</summary>"),
+            "{info}"
+        );
+        assert!(
+            info.contains("<p>Cats &amp; &lt;mice&gt; at play</p>"),
+            "{info}"
+        );
+        assert!(
+            info.contains("<project_license>MIT OR Apache-2.0<"),
+            "{info}"
+        );
+        assert!(
+            info.contains(">com.example.tj.desktop</launchable>"),
+            "{info}"
+        );
+        let bare = metainfo(&naming_of("a.b"), &BundleConfig::default());
+        assert!(!bare.contains("project_license"), "{bare}");
+        assert!(
+            bare.contains("<summary>Tom &amp; Jerry</summary>"),
+            "{bare}"
+        );
+    }
+
+    #[test]
+    fn only_a_validators_complaints_are_kept() {
+        let appstream = "I: x:~: content-rating-missing\nW: x:~: url-homepage-missing\n\
+                         E: x:~: oops\n\n\u{2718} Validation failed: errors: 1\n";
+        assert_eq!(
+            problems("appstreamcli", appstream),
+            ["W: x:~: url-homepage-missing", "E: x:~: oops"]
+        );
+        assert_eq!(
+            problems("desktop-file-validate", "a.desktop: error: bad\n\n"),
+            ["a.desktop: error: bad"]
+        );
     }
 }

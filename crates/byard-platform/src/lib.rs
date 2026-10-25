@@ -109,6 +109,8 @@ pub struct WinitHost {
     poll: bool,
     /// The window's icon, as `(rgba, width, height)`.
     icon: Option<(Vec<u8>, u32, u32)>,
+    /// The id the desktop knows the window by: see [`WinitHost::with_app_id`].
+    app_id: String,
 }
 
 impl WinitHost {
@@ -121,7 +123,18 @@ impl WinitHost {
             height,
             poll: false,
             icon: None,
+            app_id: DEFAULT_APP_ID.to_string(),
         }
+    }
+
+    /// Names the app the window belongs to, the id a Linux desktop matches to
+    /// the app's `.desktop` file, its icon and its window rules (Wayland
+    /// `app_id`, X11 `WM_CLASS`). Defaults to `dev.byard.Byard`, the id of
+    /// Byard's own tools. Other platforms have no such id and ignore it.
+    #[must_use]
+    pub fn with_app_id(mut self, app_id: impl Into<String>) -> Self {
+        self.app_id = app_id.into();
+        self
     }
 
     /// Gives the window an icon: tightly packed 8-bit RGBA, `width` by
@@ -194,6 +207,7 @@ impl WinitHost {
             width: self.width,
             height: self.height,
             icon: self.icon,
+            app_id: self.app_id,
             fatal: None,
             cursor_pos: (0.0, 0.0),
             poll: self.poll,
@@ -228,6 +242,8 @@ struct WinitApp<H: PlatformHost> {
     height: u32,
     /// The window's icon, if the app has one.
     icon: Option<(Vec<u8>, u32, u32)>,
+    /// The id the desktop knows the window by.
+    app_id: String,
     /// Set when a [`PlatformHost`] callback returns `Err`, since
     /// `ApplicationHandler`'s methods can't themselves return a `Result`.
     /// `WinitHost::run` checks this after the event loop exits and surfaces
@@ -338,6 +354,7 @@ impl<H: PlatformHost> ApplicationHandler<UserEvent> for WinitApp<H> {
                 // first shown (RFC-0042 §5), so it opens hidden and is shown
                 // as soon as the adapter exists.
                 .with_visible(!access::NEEDS_HIDDEN_START),
+            &self.app_id,
         );
         let window = match event_loop.create_window(attributes) {
             Ok(w) => Arc::new(w),
@@ -576,20 +593,14 @@ impl<H: PlatformHost> ApplicationHandler<UserEvent> for WinitApp<H> {
     }
 }
 
-/// Stable free-desktop application id (Wayland `app_id` / X11 `WM_CLASS`).
+/// The free-desktop application id (Wayland `app_id` / X11 `WM_CLASS`) of a
+/// window whose app named none: Byard's own tools, such as `byard dev`.
 ///
-/// Set so a running Byard window is attributed to a real application by the
-/// desktop shell instead of the generic "Unknown"/"Desconocido" label a
-/// Wayland toplevel with no `app_id` gets, and so a future
-/// `dev.byard.Byard.desktop` can supply the taskbar icon and name.
-#[cfg(any(
-    target_os = "linux",
-    target_os = "freebsd",
-    target_os = "openbsd",
-    target_os = "netbsd",
-    target_os = "dragonfly"
-))]
-const APP_ID: &str = "dev.byard.Byard";
+/// An app names its own through [`WinitHost::with_app_id`], so the desktop
+/// shell attributes each window to its application instead of the generic
+/// "Unknown"/"Desconocido" label a Wayland toplevel with no `app_id` gets, and
+/// a `.desktop` file of that name can supply the taskbar icon and name.
+const DEFAULT_APP_ID: &str = "dev.byard.Byard";
 
 /// Applies the free-desktop application id to `attrs` on Wayland and X11.
 ///
@@ -605,13 +616,16 @@ const APP_ID: &str = "dev.byard.Byard";
     target_os = "netbsd",
     target_os = "dragonfly"
 ))]
-fn with_app_id(attrs: winit::window::WindowAttributes) -> winit::window::WindowAttributes {
+fn with_app_id(
+    attrs: winit::window::WindowAttributes,
+    app_id: &str,
+) -> winit::window::WindowAttributes {
     // Fully-qualified rather than `use`d as a trait: both extension traits
     // expose `with_name`, so bringing them into scope would be ambiguous (and
     // an unused import on the call that doesn't resolve through it).
     let attrs =
-        winit::platform::wayland::WindowAttributesExtWayland::with_name(attrs, APP_ID, "byard");
-    winit::platform::x11::WindowAttributesExtX11::with_name(attrs, APP_ID, "byard")
+        winit::platform::wayland::WindowAttributesExtWayland::with_name(attrs, app_id, "byard");
+    winit::platform::x11::WindowAttributesExtX11::with_name(attrs, app_id, "byard")
 }
 
 /// No-op on platforms without a free-desktop application id (macOS, Windows,
@@ -623,7 +637,10 @@ fn with_app_id(attrs: winit::window::WindowAttributes) -> winit::window::WindowA
     target_os = "netbsd",
     target_os = "dragonfly"
 )))]
-fn with_app_id(attrs: winit::window::WindowAttributes) -> winit::window::WindowAttributes {
+fn with_app_id(
+    attrs: winit::window::WindowAttributes,
+    _app_id: &str,
+) -> winit::window::WindowAttributes {
     attrs
 }
 
@@ -756,6 +773,17 @@ fn key_to_str(key: &Key) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A window carries the id its app names, and Byard's own tools keep
+    /// `dev.byard.Byard`.
+    #[test]
+    fn a_host_carries_the_app_id_it_is_given() {
+        assert_eq!(WinitHost::new("t", 1, 1).app_id, "dev.byard.Byard");
+        let host = WinitHost::new("t", 1, 1).with_app_id("dev.byard.aura-weather");
+        assert_eq!(host.app_id, "dev.byard.aura-weather");
+        // Applying it to the window's attributes works on every platform.
+        let _ = with_app_id(Window::default_attributes(), &host.app_id);
+    }
 
     /// Every winit IME event maps onto the engine's own, field for field
     /// (RFC-0040 §3), so the host never has to know which windowing library

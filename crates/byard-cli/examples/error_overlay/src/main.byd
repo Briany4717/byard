@@ -98,7 +98,7 @@ View Main() {
     // it is the whole instruction.
     let strip = style {
         bg: 0x2B2930, radius: 12, p: (vertical: 22, horizontal: 24), color: 0xE6E1E5
-        on hover   { bg: 0x36323C }
+        on hover { bg: 0x36323C }
         on pressed { bg: 0x4A4458 }
     }
 

@@ -50,11 +50,22 @@ View Main() {
         Text("{remaining} of {todos.len} left") #[color: 0x9AA0AC, size: 14]
 
         Row #[gap: 12] {
-            TextField #[value: draft, placeholder: "New task…", grow: 1,
-                        bg: 0x1E1E2A, radius: 8, p: (horizontal: 12), height: 40,
-                        color: 0xFFFFFF]
-            Button("Add") #[bg: 0x477A96, radius: 10, color: 0xFFFFFF,
-                            p: (vertical: 10, horizontal: 18)]
+            TextField #[
+                value: draft,
+                placeholder: "New task…",
+                grow: 1,
+                bg: 0x1E1E2A,
+                radius: 8,
+                p: (horizontal: 12),
+                height: 40,
+                color: 0xFFFFFF,
+            ]
+            Button("Add") #[
+                bg: 0x477A96,
+                radius: 10,
+                color: 0xFFFFFF,
+                p: (vertical: 10, horizontal: 18),
+            ]
                 => {
                     todos = todos.push({ id: nextId, text: draft, done: false })
                     nextId = nextId + 1
@@ -82,8 +93,12 @@ View Main() {
         }
 
         Row #[gap: 12] {
-            Button("Forget everything") #[bg: 0x262636, radius: 8, color: 0x9AA0AC,
-                                          p: (vertical: 8, horizontal: 14)]
+            Button("Forget everything") #[
+                bg: 0x262636,
+                radius: 8,
+                color: 0x9AA0AC,
+                p: (vertical: 8, horizontal: 14),
+            ]
                 => {
                     todos = []
                     nextId = 0

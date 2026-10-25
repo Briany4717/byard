@@ -36,7 +36,13 @@ View Main() {
             }
         }
 
-        Box #[bg: t.surfaceContainer, radius: 16, p: 16, border: t.outlineVariant, border_width: 1] {
+        Box #[
+            bg: t.surfaceContainer,
+            radius: 16,
+            p: 16,
+            border: t.outlineVariant,
+            border_width: 1,
+        ] {
             Text("A surface container, tinted by the same seed") #[size: 14, color: t.onSurface]
         }
 

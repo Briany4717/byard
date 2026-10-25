@@ -12,6 +12,16 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Every app's window now carries its own id, so its window class changes.**
+  Wayland's `app_id` and X11's `WM_CLASS` were `dev.byard.Byard` for every
+  Byard app, so a compositor grouped them as one application, a taskbar could
+  not find the right icon and a window rule could not tell two apps apart. The
+  id is now the manifest's `[bundle] id` (`dev.byard.aura-weather`), or else
+  `dev.byard.<executable name>`. `byard dev` keeps `dev.byard.Byard`, as it is
+  the tool's window. A window rule written for `dev.byard.Byard` (Hyprland's
+  `windowrule = ..., class:^(dev.byard.Byard)$`) no longer matches an app;
+  it never named one, and it now can.
+
 - **An app whose views do not compile prints what `byard check` prints.**
   `cargo run` on an app with a misspelt name printed
   `Error: Platform("... did not compile: nothing here is named ...")`: the
@@ -126,6 +136,36 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   really says, the TOML parses, the Rust is quoted from files that build, and
   every link and heading it points at exists, so the guide fails the build when
   it stops being true. The conventions are in `docs/guide/CONTRIBUTING.md`.
+  
+- **`byard bundle --layout linux` writes an install tree for a Linux
+  desktop.** Bundling gave a Linux app a directory and nothing the desktop
+  could see: no launcher entry, no icon, nothing a package could install
+  without inventing a layout. Now the tree is a prefix: the binary in `bin/`,
+  the project in `share/<exe>/project/`, a `.desktop` entry, the icon at every
+  hicolor size up to its own, and an AppStream metainfo file, and `cp -r
+  aura-weather/* ~/.local/` installs it for one user. `--archive` also packs it
+  as `<exe>-<version>-linux-<arch>.tar.gz`. `[bundle]` takes `categories`,
+  `summary` and `license` for the entry and the metainfo. If
+  `desktop-file-validate` or `appstreamcli` is installed, it checks what was
+  written and its warnings are printed. An app finds its project at
+  `../share/<exe>/project` when its build path is gone, one more path probed
+  at start-up and only then.
+  
+- **`byard fmt` formats `.byd` files, and the editor formats them the same way.**
+  There was no command for it, and the language server's formatter counted
+  braces at the ends of lines without reading the tokens, so a brace in a
+  string could move the indentation of every line after it, and it left the
+  spacing inside lines as typed. Now `byard fmt` rewrites a
+  project's files (its entry directory and its path dependencies) with one
+  layout and no options: four-space indentation, one space around operators,
+  an `#[ ... ]` list on one line when it fits in 100 columns and one attribute
+  per line otherwise, at most one blank line in a row. Comments stay where
+  they were, and strings are copied byte for byte. `byard fmt --check` lists
+  the files that are not formatted and exits 1, for CI. Before a file is
+  written the output is parsed and compared with the input's tree, and a file
+  that would change meaning, or does not parse, is reported and left alone.
+  The language server's format-on-save calls the same function and ignores the
+  editor's tab size. The examples were formatted once with it.
 
 - **A Byard window can be read by a screen reader.** Each control, label and
   image the user can read or operate is a node with a role, a name, its

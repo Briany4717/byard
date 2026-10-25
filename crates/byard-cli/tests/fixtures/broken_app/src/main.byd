@@ -1,0 +1,7 @@
+View Main() {
+    var count = 3
+    Column #[gap: 12, p: 16] {
+        Text("Forecast for {cuont} days")
+        Forecast(days: count)
+    }
+}

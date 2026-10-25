@@ -10,6 +10,8 @@
 //! [`Span`] (no silent failures). The variant set starts small and grows
 //! one milestone at a time as later passes need to report new conditions.
 
+use crate::resolve::SourceMap;
+
 /// A byte-offset range into the source text, `[start, end)`.
 ///
 /// `Copy`; every token and AST node carries one for diagnostics and the future
@@ -1692,7 +1694,8 @@ impl CompileError {
         let line_no = source[..start].bytes().filter(|&b| b == b'\n').count() + 1;
         let col = start - line_start; // byte column, 0-based
 
-        let line_text = &source[line_start..line_end];
+        // Without the `\r` of a CRLF ending, as `SourceMap::caret` does.
+        let line_text = source[line_start..line_end].trim_end_matches('\r');
 
         // The caret underlines the span, clamped to this line's end.
         let caret_len = (end.min(line_end) - start).max(1);
@@ -1713,6 +1716,146 @@ fn with_hint(message: String, hint: Option<&str>) -> String {
         Some(h) => format!("{message} (did you mean `{h}`?)"),
         None => message,
     }
+}
+
+// ── Rendering ─────────────────────────────────────────────────────────────────
+
+/// The colours of a caret block (RFC-0043 §2): which escape dims the gutter,
+/// which paints the carets, and which ends either.
+///
+/// Fields rather than an on/off flag so a caller with a palette of its own,
+/// as the CLI has, hands over exactly the escapes it already prints and the
+/// bytes cannot drift from what that tool printed before.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Style {
+    /// Starts the gutter (`7 |`): dim.
+    pub dim: &'static str,
+    /// Starts the carets: red.
+    pub err: &'static str,
+    /// Ends either.
+    pub reset: &'static str,
+}
+
+impl Style {
+    /// No escapes at all: for a file, a pipe, a test, or a `String` that is
+    /// going to be searched.
+    pub const PLAIN: Self = Self {
+        dim: "",
+        err: "",
+        reset: "",
+    };
+
+    /// The 16-colour ANSI escapes: dim gutter, red carets.
+    pub const ANSI: Self = Self {
+        dim: "\x1b[2m",
+        err: "\x1b[31m",
+        reset: "\x1b[0m",
+    };
+
+    /// The style for text that will be written to this process's stderr:
+    /// coloured when stderr is a terminal, plain otherwise.
+    ///
+    /// Precedence, following the de-facto standard and `byard`'s own
+    /// command-line tool: `CLICOLOR_FORCE` (set, and not `0`), then
+    /// `NO_COLOR` (set to anything), then `TERM=dumb`, then whether stderr
+    /// is a terminal.
+    #[must_use]
+    pub fn for_stderr() -> Self {
+        use std::io::IsTerminal as _;
+        Self::resolve(
+            |key| std::env::var(key).ok(),
+            std::io::stderr().is_terminal(),
+        )
+    }
+
+    /// [`for_stderr`](Self::for_stderr) with the environment and the terminal
+    /// test passed in, so the order above can be tested without touching the
+    /// process's own environment.
+    fn resolve(var: impl Fn(&str) -> Option<String>, is_terminal: bool) -> Self {
+        if var("CLICOLOR_FORCE").is_some_and(|v| v != "0") {
+            return Self::ANSI;
+        }
+        if var("NO_COLOR").is_some() || var("TERM").is_some_and(|t| t == "dumb") {
+            return Self::PLAIN;
+        }
+        if is_terminal { Self::ANSI } else { Self::PLAIN }
+    }
+}
+
+/// Renders every diagnostic as `byard check` prints them: the
+/// machine-readable first line, then a caret-anchored block beneath it
+/// (RFC-0006 **C3**, **C7**; RFC-0043 §2).
+///
+/// # The first line is not negotiable
+///
+/// `file:line:col: error[kind]: message` is RFC-0006 **C7** and is parsed by
+/// editor problem matchers. It is emitted **unstyled and byte-identical** to
+/// what `byard check` has always printed. Colouring or reformatting it would
+/// break integrations that then go *quiet* rather than failing, which nobody
+/// notices for a long time.
+///
+/// The caret block goes **beneath** it, and that is where `style` applies:
+///
+/// ```text
+/// main.byd:7:14: error[UnknownAttribute]: unknown attribute `colour` on `Column`
+///   |
+/// 7 |     Column #[colour: 0xFF0000] {
+///   |              ^^^^^^
+/// ```
+///
+/// A diagnostic whose span belongs to no file (a project-level error) has a
+/// first line and no block: an empty gutter would suggest the context was
+/// lost rather than never existing. Lines are joined with `\n`, and the last
+/// has none, so the caller chooses how to end the text.
+///
+/// This is the one renderer. `byard check` calls it and so does an app that
+/// does not compile, so the two cannot disagree about what an error looks
+/// like.
+#[must_use]
+pub fn render(errors: &[CompileError], map: &SourceMap, style: Style) -> String {
+    use std::fmt::Write as _;
+
+    let Style {
+        dim,
+        err: red,
+        reset,
+    } = style;
+    let mut out = String::new();
+    for (i, err) in errors.iter().enumerate() {
+        if i > 0 {
+            out.push('\n');
+        }
+        out.push_str(&map.render_line(err));
+        let Some(caret) = map.caret(err) else {
+            continue;
+        };
+        // Built line by line rather than as one continued literal: a `\`
+        // continuation in a formatted string is exactly the kind of thing
+        // `cargo fmt` rewrites into baked-in indentation, and the gutter's
+        // alignment is the only thing holding the block together.
+        let gutter = caret.line.to_string();
+        let pad = " ".repeat(gutter.len());
+        let _ = write!(out, "\n{dim}{pad} |{reset}");
+        let _ = write!(out, "\n{dim}{gutter} |{reset} {}", caret.text);
+        let _ = write!(out, "\n{dim}{pad} |{reset} ");
+        out.extend(std::iter::repeat_n(' ', caret.caret_start));
+        out.push_str(red);
+        out.extend(std::iter::repeat_n('^', caret.caret_len));
+        out.push_str(reset);
+    }
+    out
+}
+
+/// As [`render`], with the first line of each diagnostic and nothing else:
+/// what `byard check --short` prints, for scripts that want one line per
+/// error.
+#[must_use]
+pub fn render_short(errors: &[CompileError], map: &SourceMap) -> String {
+    errors
+        .iter()
+        .map(|e| map.render_line(e))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 #[cfg(test)]
@@ -1774,5 +1917,146 @@ mod tests {
     fn span_from_range() {
         let s: Span = (3usize..7usize).into();
         assert_eq!(s, Span::new(3, 7));
+    }
+
+    // ── render (RFC-0043 §2) ──────────────────────────────────────────────
+
+    /// A program with the one error a misspelt name makes, resolved the way
+    /// `byard check` resolves it.
+    fn misspelt_program() -> crate::resolve::ResolvedProgram {
+        program_from("View Main() {\n    var count = 1\n    Text(\"{cuont}\")\n}\n")
+    }
+
+    /// `source`, as `main.byd`, resolved the way `byard check` resolves it.
+    fn program_from(source: &str) -> crate::resolve::ResolvedProgram {
+        struct NoPackages;
+        impl crate::resolve::PackageProvider for NoPackages {
+            fn package_files(
+                &mut self,
+                _dependent: &str,
+                _package: &str,
+            ) -> Result<Vec<crate::resolve::SourceFile>, String> {
+                Ok(Vec::new())
+            }
+        }
+        crate::resolve::resolve_program(
+            vec![crate::resolve::SourceFile {
+                name: "main.byd".to_string(),
+                source: source.to_string(),
+            }],
+            &mut NoPackages,
+        )
+    }
+
+    /// A file with CRLF endings draws the same block as one with LF: the
+    /// `\r` would otherwise be printed into the source line.
+    #[test]
+    fn render_drops_the_carriage_return_of_a_crlf_line() {
+        let lf = misspelt_program();
+        let crlf =
+            program_from("View Main() {\r\n    var count = 1\r\n    Text(\"{cuont}\")\r\n}\r\n");
+        let crlf_text = render(&crlf.errors, &crlf.source_map, Style::PLAIN);
+        assert!(!crlf_text.contains('\r'), "{crlf_text:?}");
+        assert_eq!(crlf_text, render(&lf.errors, &lf.source_map, Style::PLAIN));
+        let single = CompileError::UnexpectedChar {
+            span: Span::new(2, 3),
+        }
+        .render("ab@cd\r\nxy");
+        assert!(!single.contains('\r'), "{single:?}");
+    }
+
+    /// The block is the file, the line, the source and a caret run exactly
+    /// as long as the name, with the suggestion in the headline.
+    #[test]
+    fn render_draws_the_first_line_and_a_caret_block() {
+        let program = misspelt_program();
+        assert!(!program.errors.is_empty(), "the fixture must not compile");
+        let text = render(&program.errors, &program.source_map, Style::PLAIN);
+        let lines: Vec<&str> = text.lines().collect();
+        assert!(
+            lines[0].starts_with("main.byd:3:12:"),
+            "file, line and column lead: {text}"
+        );
+        assert!(lines[0].contains("error[UnknownName]"), "{text}");
+        assert!(lines[0].contains("did you mean `count`?"), "{text}");
+        assert_eq!(lines[1], "  |", "{text}");
+        assert_eq!(lines[2], "3 |     Text(\"{cuont}\")", "{text}");
+        // `    Text("{` is eleven characters; the caret starts under `cuont`.
+        assert_eq!(lines[3], format!("  | {}^^^^^", " ".repeat(11)), "{text}");
+        assert!(!text.ends_with('\n'), "the caller ends the text");
+    }
+
+    /// RFC-0006 C7: colour never reaches the line editors parse.
+    #[test]
+    fn render_never_styles_the_first_line() {
+        let program = misspelt_program();
+        let plain = render(&program.errors, &program.source_map, Style::PLAIN);
+        let ansi = render(&program.errors, &program.source_map, Style::ANSI);
+        assert!(!plain.contains('\x1b'));
+        assert!(ansi.contains("\x1b[31m^^^^^\x1b[0m"), "{ansi:?}");
+        assert!(ansi.contains("\x1b[2m3 |\x1b[0m"), "{ansi:?}");
+        assert_eq!(plain.lines().next(), ansi.lines().next());
+        assert!(!ansi.lines().next().unwrap().contains('\x1b'));
+    }
+
+    /// `--short` is the first lines and nothing else.
+    #[test]
+    fn render_short_is_the_first_lines_only() {
+        let program = misspelt_program();
+        let short = render_short(&program.errors, &program.source_map);
+        assert_eq!(short.lines().count(), program.errors.len());
+        assert!(short.lines().all(|l| l.starts_with("main.byd:")), "{short}");
+        assert!(!short.contains(" |"), "{short}");
+    }
+
+    /// A diagnostic anchored to no file has a headline and no block, and
+    /// several are separated by a newline each.
+    #[test]
+    fn render_gives_a_project_error_no_block_and_joins_with_newlines() {
+        let map = SourceMap::default();
+        let errors = [
+            CompileError::Project {
+                span: Span::new(0, 0),
+                message: "no byard.toml".to_string(),
+            },
+            CompileError::Project {
+                span: Span::new(0, 0),
+                message: "second".to_string(),
+            },
+        ];
+        assert_eq!(
+            render(&errors, &map, Style::PLAIN),
+            "error[Project]: no byard.toml\nerror[Project]: second"
+        );
+        assert_eq!(render(&[], &map, Style::PLAIN), "");
+    }
+
+    /// The order the doc comment promises, tested without touching the real
+    /// environment.
+    #[test]
+    fn colour_follows_the_documented_precedence() {
+        let env = |pairs: &'static [(&'static str, &'static str)]| {
+            move |key: &str| {
+                pairs
+                    .iter()
+                    .find(|(k, _)| *k == key)
+                    .map(|(_, v)| (*v).to_string())
+            }
+        };
+        assert_eq!(Style::resolve(env(&[]), true), Style::ANSI);
+        assert_eq!(Style::resolve(env(&[]), false), Style::PLAIN);
+        assert_eq!(
+            Style::resolve(env(&[("NO_COLOR", "1")]), true),
+            Style::PLAIN
+        );
+        assert_eq!(Style::resolve(env(&[("TERM", "dumb")]), true), Style::PLAIN);
+        assert_eq!(
+            Style::resolve(env(&[("CLICOLOR_FORCE", "1"), ("NO_COLOR", "1")]), false),
+            Style::ANSI
+        );
+        assert_eq!(
+            Style::resolve(env(&[("CLICOLOR_FORCE", "0")]), false),
+            Style::PLAIN
+        );
     }
 }

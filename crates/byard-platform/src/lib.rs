@@ -17,6 +17,10 @@
 //! by default). With it on, it costs nothing while no assistive technology is
 //! connected. See [`access`].
 
+mod clipboard;
+
+pub use clipboard::SystemClipboard;
+
 use std::sync::Arc;
 
 use byard_core::relay::FrameWaker;
@@ -482,6 +486,16 @@ impl<H: PlatformHost> ApplicationHandler<UserEvent> for WinitApp<H> {
 
             WindowEvent::ModifiersChanged(state) => {
                 self.modifiers = to_key_modifiers(state.state());
+                // The host stamps them onto the events it creates next
+                // (RFC-0041 §2): a text field tells Left from Shift+Left.
+                self.host.on_modifiers(self.modifiers);
+            }
+
+            // Whether anyone is typing into this window. The caret of a
+            // focused field stops blinking when nobody is (RFC-0041 §6).
+            WindowEvent::Focused(focused) => {
+                self.host.on_window_focus(focused);
+                window.request_redraw();
             }
 
             WindowEvent::KeyboardInput { event, .. } => {
@@ -770,6 +784,32 @@ mod tests {
             ImeEvent::Commit("日本".into())
         );
         assert_eq!(to_ime_event(Ime::Disabled), ImeEvent::Disabled);
+    }
+
+    /// Every modifier `winit` reports reaches the engine as the one it is, and
+    /// nothing else does (RFC-0041 §2): a text field tells Shift+Left from
+    /// Ctrl+Left by these four.
+    #[test]
+    fn modifier_state_maps_each_key_to_its_own_field() {
+        assert_eq!(
+            to_key_modifiers(ModifiersState::empty()),
+            KeyModifiers::default()
+        );
+        let all = to_key_modifiers(
+            ModifiersState::SHIFT
+                | ModifiersState::CONTROL
+                | ModifiersState::ALT
+                | ModifiersState::SUPER,
+        );
+        assert!(all.shift && all.ctrl && all.alt && all.meta);
+        let shift_only = to_key_modifiers(ModifiersState::SHIFT);
+        assert!(shift_only.shift && !shift_only.ctrl && !shift_only.alt && !shift_only.meta);
+        let ctrl_only = to_key_modifiers(ModifiersState::CONTROL);
+        assert!(ctrl_only.ctrl && !ctrl_only.shift && !ctrl_only.alt && !ctrl_only.meta);
+        let alt_only = to_key_modifiers(ModifiersState::ALT);
+        assert!(alt_only.alt && !alt_only.ctrl);
+        let super_only = to_key_modifiers(ModifiersState::SUPER);
+        assert!(super_only.meta && !super_only.ctrl);
     }
 
     #[test]

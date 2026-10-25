@@ -626,6 +626,9 @@ fn lookup_intrinsic(name: &str) -> Option<Intrinsic> {
             props.insert("bind", lay(PropType::Str));
             props.insert("focused", pnt(PropType::Bool));
             props.insert("disabled", pnt(PropType::Bool));
+            // RFC-0041 §6: the colour a selection is painted in, where the
+            // theme's `primary` at 30 % is not wanted.
+            props.insert("selection", pnt(PropType::Color));
             Intrinsic {
                 arity: 0,
                 content: None,

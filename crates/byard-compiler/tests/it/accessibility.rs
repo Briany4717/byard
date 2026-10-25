@@ -754,6 +754,7 @@ fn a_request_for_something_that_cannot_be_focused_changes_nothing() {
         delta: (0.0, 0.0),
         payload: Some(byard_core::InputPayload::Element(label.0)),
         time_ms: 0,
+        mods: byard_core::KeyModifiers::default(),
     };
     run.interp.dispatch_events(&[forged]);
     run.render(true);

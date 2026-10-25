@@ -26,10 +26,13 @@
 //!
 //! A `Turn` must be bound to a name that lives as long as the test does:
 //!
-//! ```ignore
+//! ```no_run
+//! # fn limits(_: &wgpu::Adapter) -> wgpu::Limits { wgpu::Limits::default() }
+//! # fn a_test() {
 //! let Some((device, queue, _turn)) = byard_test_gpu::device(limits) else {
 //!     return;
 //! };
+//! # }
 //! ```
 //!
 //! `_turn` keeps it; a bare `_` would drop it at the end of the statement and

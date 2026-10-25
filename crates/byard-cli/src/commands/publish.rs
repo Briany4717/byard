@@ -75,7 +75,8 @@ pub fn publish(root: &Path, registry: &Path) -> Result<IndexEntry, String> {
     };
     let (name, version) = (field("name")?, field("version")?);
 
-    let files = publishable_files(root)?
+    let files = publishable_files(root)
+        .map_err(|e| e.to_string())?
         .into_iter()
         .map(|(rel, path)| {
             std::fs::read(&path)
@@ -84,17 +85,17 @@ pub fn publish(root: &Path, registry: &Path) -> Result<IndexEntry, String> {
         })
         .collect::<Result<Vec<_>, String>>()?;
     let dependencies = published_dependencies(&table, root, registry)?;
-    let archive = crate::archive::pack(&files)?;
+    let archive = crate::archive::pack(&files).map_err(|e| e.to_string())?;
     let entry = IndexEntry {
         dependencies: Some(dependencies),
         archive: format!("{name}/{version}.tar.gz"),
         archive_sha256: sha256_tag(&archive),
-        checksum: package_checksum(root)?,
+        checksum: package_checksum(root).map_err(|e| e.to_string())?,
         name,
         version,
     };
 
-    let mut index = RegistryIndex::read(registry)?;
+    let mut index = RegistryIndex::read(registry).map_err(|e| e.to_string())?;
     if let Some(existing) = index.get(&entry.name, &entry.version) {
         if existing.checksum == entry.checksum {
             return Ok(existing.clone());
@@ -112,7 +113,7 @@ pub fn publish(root: &Path, registry: &Path) -> Result<IndexEntry, String> {
     std::fs::write(&archive_path, &archive)
         .map_err(|e| format!("{}: {e}", archive_path.display()))?;
     index.entries.push(entry.clone());
-    index.write(registry)?;
+    index.write(registry).map_err(|e| e.to_string())?;
     Ok(entry)
 }
 
@@ -139,7 +140,8 @@ fn published_dependencies(
     let target = registry
         .canonicalize()
         .map_err(|e| format!("{}: {e}", registry.display()))?;
-    parse_dependencies(deps)?
+    parse_dependencies(deps, &root.join("byard.toml"))
+        .map_err(|e| e.to_string())?
         .into_iter()
         .map(|dep| match dep.source {
             DepSource::Registry {

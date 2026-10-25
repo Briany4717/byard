@@ -625,3 +625,163 @@ fn a_frame_with_the_accessibility_flag_off_builds_no_tree_and_allocates_nothing_
     );
     eprintln!("accessibility: {off} allocations off, {on} on");
 }
+
+// ── The caret's blink (RFC-0041 §6) ────────────────────────────────────────
+//
+// The caret is the one animation a focused field runs, and it must not be an
+// animation in the sense that costs anything: it is one repeating timer, one
+// wake of the logic thread per phase. These tests count the wakes against the
+// real timer driver, because a count taken under a fake clock says nothing
+// about whether the reactor was asked for more.
+//
+// No GPU is involved: a wake is a result arriving for the logic thread, and
+// what it costs on the GPU side is the frame the existing ceilings above
+// already bound.
+
+const FIELD_SCENE: &str = include_str!("../fixtures/text_field_scene.byd");
+
+/// The most wakes a focused, idle field may cost per second: two, one per
+/// phase of 530 ms. A ceiling, in the spirit of the ratchet above: lowering
+/// it needs no ceremony and raising it needs a reason in the PR.
+const MAX_FIELD_WAKES_PER_SECOND: f64 = 2.0;
+
+/// A scene with two text fields, wired to a relay the way a window wires one.
+struct FieldApp {
+    interp: Interpreter,
+    tree: Vec<RenderNode>,
+    relay: byard_core::relay::Relay,
+    frame: RenderFrame,
+}
+
+impl FieldApp {
+    fn new() -> Self {
+        let parsed = parse(FIELD_SCENE);
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let relay = byard_core::relay::Relay::new().expect("relay");
+        let dispatcher = byard_core::bridge::Dispatcher::new(
+            byard_core::bridge::ControllerRegistry::new(),
+            relay.io_handle(),
+            relay.io_result_sender(),
+        );
+        let mut interp = Interpreter::new();
+        interp.set_dispatcher(dispatcher);
+        interp.load_views(&parsed.views);
+        let tree = interp.lower_view(&parsed.views[0], &["Main"]);
+        assert!(interp.errors().is_empty(), "{:?}", interp.errors());
+        let mut app = Self {
+            interp,
+            tree,
+            relay,
+            frame: RenderFrame::new(),
+        };
+        app.draw(&[]);
+        app
+    }
+
+    fn draw(&mut self, events: &[byard_core::InputEvent]) {
+        self.interp.dispatch_events(events);
+        self.interp.tick();
+        self.frame.clear();
+        self.interp.render(&self.tree, &mut self.frame, W, H);
+    }
+
+    /// Puts the focus in the first field.
+    fn focus(&mut self) {
+        let at = |kind| byard_core::InputEvent {
+            kind,
+            pos: (100.0, 40.0),
+            delta: (0.0, 0.0),
+            payload: None,
+            time_ms: 10,
+            mods: byard_core::KeyModifiers::default(),
+        };
+        self.draw(&[
+            at(byard_core::EventKind::PointerDown),
+            at(byard_core::EventKind::PointerUp),
+        ]);
+    }
+
+    /// Everything that wakes the logic thread without input: the results the
+    /// pool has delivered since the last call, applied as the logic thread
+    /// would. Returns how many there were.
+    fn wakes(&mut self) -> usize {
+        let mut results = Vec::new();
+        while let Some(r) = self.relay.try_recv_io_result() {
+            results.push(r);
+        }
+        let n = results.len();
+        if n > 0 {
+            let _ = self.interp.apply_io_results(results);
+            self.draw(&[]);
+        }
+        n
+    }
+}
+
+/// Counts how many times each of `apps` is woken over `run`, polling as the
+/// logic thread's loop would.
+fn count_wakes(apps: &mut [&mut FieldApp], run: std::time::Duration) -> Vec<usize> {
+    let start = std::time::Instant::now();
+    let mut counts = vec![0; apps.len()];
+    while start.elapsed() < run {
+        for (app, count) in apps.iter_mut().zip(&mut counts) {
+            *count += app.wakes();
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    counts
+}
+
+#[test]
+fn a_focused_idle_field_wakes_the_logic_thread_at_most_twice_a_second_and_an_unfocused_one_never() {
+    let mut focused = FieldApp::new();
+    let mut unfocused = FieldApp::new();
+    focused.focus();
+    assert!(focused.interp.caret_is_blinking(), "focus starts the blink");
+    assert!(
+        !unfocused.interp.caret_is_blinking(),
+        "a field without focus arms no timer at all"
+    );
+
+    // Two full seconds and a bit: long enough to see the rate and not one
+    // lucky tick. Real time, because the claim is about the reactor.
+    let run = std::time::Duration::from_millis(2300);
+    let counts = count_wakes(&mut [&mut focused, &mut unfocused], run);
+    let seconds = run.as_secs_f64();
+
+    assert_eq!(counts[1], 0, "an unfocused field woke the logic thread");
+    let rate = counts[0] as f64 / seconds;
+    assert!(
+        rate <= MAX_FIELD_WAKES_PER_SECOND,
+        "a focused, idle field woke the logic thread {} times in {seconds:.1} s \
+         ({rate:.2} a second), over the ceiling of {MAX_FIELD_WAKES_PER_SECOND}. The blink \
+         is one timer wake per 530 ms phase and nothing in between; more means it became \
+         an animation, or something else is waking it.",
+        counts[0]
+    );
+    assert!(
+        counts[0] >= 3,
+        "the blink never ran: {} wakes in {seconds:.1} s",
+        counts[0]
+    );
+    // And what a wake costs is a frame, not a stream of them: the interpreter
+    // never asks for another one.
+    assert!(!focused.interp.needs_another_frame());
+}
+
+#[test]
+fn a_scene_with_no_text_field_keeps_no_editing_state_and_arms_nothing() {
+    let (mut interp, tree) = build();
+    let mut frame = RenderFrame::new();
+    for _ in 0..4 {
+        interp.tick();
+        frame.clear();
+        interp.render(&tree, &mut frame, W, H);
+    }
+    assert_eq!(interp.edit_state_count(), 0, "no field, no state");
+    assert!(!interp.caret_is_blinking(), "no field, no timer");
+    assert!(
+        frame.text_input().is_none(),
+        "and the platform is told there is no text input"
+    );
+}

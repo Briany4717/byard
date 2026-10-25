@@ -15,6 +15,13 @@ rust-version.workspace = true
 doctest = false
 
 [dependencies]
+# RFC-0041 §3: the system clipboard behind a text field's copy, cut and paste.
+# `wayland-data-control` is what makes it work under Hyprland, GNOME and KDE on
+# Wayland as well as X11; without it a Wayland session reads as empty. Default
+# features are off, they only add image support, which a text field never uses.
+# Linked into the windowed host and nowhere else: never `byard-core`, never the
+# compiler.
+arboard = { version = "3.7.0", default-features = false, features = ["wayland-data-control"] }
 byard-core = { path = "../byard-core" }
 wgpu = "29.0"
 # winit is a regular (non-dev) dependency of this crate by design: it is the

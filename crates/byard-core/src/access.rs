@@ -542,6 +542,8 @@ impl AccessRequest {
             delta: (0.0, 0.0),
             payload,
             time_ms,
+            // An assistive technology's request comes with no keyboard.
+            mods: crate::platform::KeyModifiers::default(),
         };
         let allowed = |a: AccessActions| node.actions.contains(a);
         let b = node.bounds;

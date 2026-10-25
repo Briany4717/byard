@@ -1916,6 +1916,7 @@ mod tests {
             delta: (0.0, 0.0),
             payload: None,
             time_ms: 0,
+            mods: crate::KeyModifiers::default(),
         });
 
         let start = Instant::now();

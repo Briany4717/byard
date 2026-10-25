@@ -7,7 +7,7 @@
 //! dependency graph (`app → byard → byard-core`, a forward edge; the direction holds:
 //! `byard-macro` still has no dependency on core/compiler).
 //!
-//! ```ignore
+//! ```
 //! use byard::bridge::HostValue;
 //!
 //! #[byard::byard_controller]
@@ -23,10 +23,16 @@
 //! ```
 
 pub mod app;
+mod report;
 mod shot;
 pub use shot::Shot;
 
 pub use app::App;
+pub use report::{ByardErrorExt, CompileReport};
+
+/// What a project failure holds (RFC-0043): [`ByardErrorExt::as_project`]
+/// gives one back from a [`ByardError::Project`].
+pub use byard_project::{ProjectError, ResolveError};
 
 /// Re-exported so an app's `main` can name the error `App::run` returns
 /// without depending on `byard-core` directly.

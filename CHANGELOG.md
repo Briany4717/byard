@@ -12,6 +12,42 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **An app whose views do not compile prints what `byard check` prints.**
+  `cargo run` on an app with a misspelt name printed
+  `Error: Platform("... did not compile: nothing here is named ...")`: the
+  wrong subsystem, the headline and nothing else. `App::run` and `App::shot`
+  now print each diagnostic with its file, line and column, the source line,
+  a caret under the span and the suggestion, through the renderer `byard check`
+  uses (`byard_compiler::diagnostics::render`, which moved out of the CLI;
+  `byard check` is byte for byte as it was), and then return one short line
+  (`1 error in the project's views (shown above)`), so the
+  `fn main() -> Result<(), ByardError>` every example writes reads well. A program that declares no `View` is a
+  diagnostic in the entry file like any other.
+
+- **`ByardError` says whether the project or the program is what failed.**
+  Breaking, though the enum was already `#[non_exhaustive]`: it gains
+  `Project` and `Compile`, which hold the error boxed, and
+  `byard::ByardErrorExt` gives them back by name (`as_project()` is a
+  `ProjectError`, `as_compile()` a `CompileReport` with each diagnostic and
+  its source). `Platform` goes back to meaning the window, the surface or the
+  event loop. Its `Debug`, which is what a returned `main` error prints, shows
+  the two new variants as their message and every other variant as before.
+
+- **`byard-project` returns a `ProjectError`, not a `String`.** Breaking for
+  anything that calls it: `Manifest::discover`, `Manifest::require_app`,
+  `resolve_project`, `project_source_files`, `parse_dependencies`, `dep_root`,
+  `package_checksum`, `publishable_files`, `declared_assets`, `Lockfile`,
+  `Registry`, `RegistryIndex`, `fetch_git`, `fetch_registry`, `solve::resolve`
+  and `archive::{pack, unpack}` now answer with a matchable error (a missing
+  manifest, a manifest that does not parse and on which line, an I/O failure,
+  an unsatisfiable requirement with the solver's explanation, a fetch, a
+  lockfile, an archive) whose text is the message that was there. Two
+  signatures grew an argument to say where they were reading from:
+  `parse_dependencies` takes the manifest's path and `fetch_git` the package's
+  name. A directory with no project in it now names the directory, and a
+  `byard.toml` that does not parse is led by its path, so an app started
+  from `cargo run` says which file.
+
 - **A record-shaped property value reads its fields' bare names as names.**
   `shadow: (y: sze)`, `p: (vertical: sze)` and `gradient: (to: blak)` checked
   clean (or, for `p`, said only "expected a length") and drew with nothing.
@@ -102,9 +138,31 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `byard = { ..., features = ["a11y"] }` (and `byard-cli`'s `a11y` feature
   for `byard dev`). It brings in `accesskit` and `accesskit_winit` (53
   packages in `Cargo.lock`) and adds about a fifth to a stripped release
-  binary, so an app that does not ask for it carries none of it. An element with a tap handler is read as a button, and a
+  binary, so an app that does not ask for it carries none of it. An element
+  with a tap handler is read as a button, and a
   `Toggle`, a `Button` or a `Slider` is still not in the Tab order; both are
   follow-ups.
+
+- **A `TextField` edits like a text field.** It appended what was typed and
+  removed the last character on Backspace, so a typo in the middle could only
+  be fixed by deleting everything after it, and nothing could be pasted. Now the
+  caret moves by grapheme with the arrows, by word with Ctrl (Option on macOS)
+  and to either end with Home and End, and Shift selects. A press places the
+  caret, a drag selects, a double press selects a word, and a text wider than
+  the field scrolls to keep the caret in view. Mod+A, Mod+C, Mod+X and Mod+V
+  select all, copy, cut and paste (a paste is one line), and Mod+Z with
+  Mod+Shift+Z or Mod+Y undo and redo, typed text a word at a time. The
+  selection is painted in the theme's `primary` at 30 %, or in a `selection:`
+  colour the field sets. The caret blinks, from one timer wake per phase and
+  only while the field and the window have focus. Nothing changes in `byld`:
+  every `TextField #[bind: …]` already written edits this way. The clipboard
+  is the system's (`arboard`, with its Wayland support) and is opened on the
+  first copy or paste.
+
+- **`byard shot` can press keys and type.** `--key shift+Left` and `--type
+  "text"` run in order with `--tap`, and `Shot::key` and `Shot::type_text` do
+  the same for an app, so a caret and a selection can be drawn to a PNG without
+  a window. `examples/text_editing` has the command.
 
 - **`App::trace(path)` profiles an app with a Rust half.** Only `byard dev
   --trace` wrote a trace, and `byard dev` cannot link an app's controllers,
@@ -437,6 +495,12 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   an error.
 
 ### Fixed
+
+- **Delete in a `TextField` removes one character, not the whole field.** It
+  wrote an empty string, which lost the user's work with one key. It removes
+  the grapheme after the caret, and nothing at the end of the text.
+  
+- **`byard build` prints the version it is.** It always said `0.0.0`.
 
 - **An animation ticks once per frame drawn.** With an animation in flight
   the logic thread ticked as fast as it could, computing frames the display

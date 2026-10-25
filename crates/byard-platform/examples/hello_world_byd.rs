@@ -184,6 +184,7 @@ impl PlatformHost for App {
                 delta: (0.0, 0.0),
                 payload: None,
                 time_ms: now_ms(),
+                mods: byard_core::KeyModifiers::default(),
             });
         }
     }
@@ -196,6 +197,7 @@ impl PlatformHost for App {
                 delta: (0.0, 0.0),
                 payload: None,
                 time_ms: now_ms(),
+                mods: byard_core::KeyModifiers::default(),
             });
         }
     }
@@ -213,6 +215,7 @@ impl PlatformHost for App {
                 delta: (0.0, 0.0),
                 payload: Some(byard_core::platform::InputPayload::Key(key.to_string())),
                 time_ms: now_ms(),
+                mods: byard_core::KeyModifiers::default(),
             });
         }
     }
@@ -225,6 +228,7 @@ impl PlatformHost for App {
                 delta: (0.0, 0.0),
                 payload: Some(byard_core::platform::InputPayload::Key(text.to_string())),
                 time_ms: now_ms(),
+                mods: byard_core::KeyModifiers::default(),
             });
         }
     }

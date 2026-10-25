@@ -55,7 +55,7 @@ pub fn reresolve(entry: Option<&Path>) -> ParsedFile {
             views: Vec::new(),
             errors: vec![CompileError::Project {
                 span: byard_compiler::Span::new(0, 0),
-                message,
+                message: message.to_string(),
             }],
             theme: None,
             watch_files: Vec::new(),

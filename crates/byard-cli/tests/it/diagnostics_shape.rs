@@ -160,6 +160,39 @@ fn the_caret_block_appears_beneath_the_line_and_points_at_the_span() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// The caret block is where the palette applies (RFC-0006 C3), and the block is
+/// now drawn by the compiler's renderer (RFC-0043 §2), which is handed the
+/// CLI's palette: dim gutter, red carets, exactly the escapes it always
+/// printed, and none at all when colour is off.
+#[test]
+fn the_caret_block_takes_the_clis_palette() {
+    let dir = broken_project();
+    let (_, forced, _) = check(&dir, &[]);
+    assert!(
+        forced.contains("\x1b[31m^^^^^^^^^^^^^^^^\x1b[0m"),
+        "red carets under the attribute: {forced:?}"
+    );
+    assert!(
+        forced.contains("\x1b[2m3 |\x1b[0m"),
+        "a dim gutter: {forced:?}"
+    );
+
+    let plain = Command::new(env!("CARGO_BIN_EXE_byard"))
+        .arg("check")
+        .arg(&dir)
+        .env("NO_COLOR", "1")
+        .env_remove("CLICOLOR_FORCE")
+        .output()
+        .expect("run `byard check`");
+    let plain = String::from_utf8_lossy(&plain.stderr);
+    assert!(
+        !plain.contains('\u{1b}'),
+        "no escapes without colour: {plain:?}"
+    );
+    assert!(plain.contains("^^^^^^^^^^^^^^^^"), "{plain}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn a_clean_project_prints_no_diagnostics_on_stderr_at_all() {
     // The other half of C7's contract: silence on success, so a CI job's

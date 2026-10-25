@@ -46,6 +46,7 @@ fn ev(kind: EventKind, pos: (f32, f32), t: u64) -> InputEvent {
         delta: (1.0, 1.0),
         payload: None,
         time_ms: t,
+        mods: byard_core::KeyModifiers::default(),
     }
 }
 
@@ -95,6 +96,7 @@ impl App {
             delta: (0.0, 0.0),
             payload: Some(InputPayload::Str("Escape".into())),
             time_ms: 0,
+            mods: byard_core::KeyModifiers::default(),
         }]);
         self.render();
     }

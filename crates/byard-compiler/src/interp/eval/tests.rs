@@ -1,7 +1,13 @@
 use super::animation::hex_from_oklab;
 use super::animation::oklab_from_hex;
+use super::expr::eval_binary;
+use super::expr::eval_compare;
+use super::expr::eval_concat;
+use super::expr::index_value;
+use super::expr::structural_eq;
 use super::states::resolve_state_attrs;
 use super::*;
+use crate::parser::ast::BinOp;
 use crate::parser::ast::ElementNode;
 use crate::parser::parse;
 

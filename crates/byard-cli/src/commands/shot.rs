@@ -97,8 +97,12 @@ pub struct ShotArgs<'a> {
     /// The project directory, `byard.toml` or `.byd`; the current project
     /// when absent.
     pub path: Option<&'a Path>,
-    /// Where the PNG goes.
-    pub out: &'a Path,
+    /// Where the PNG goes, or `None` to draw none (a run that only wants the
+    /// accessibility tree needs no GPU).
+    pub out: Option<&'a Path>,
+    /// Where to write the accessibility tree as indented text (RFC-0042 §6),
+    /// built from the last frame as an assistive technology would be given it.
+    pub a11y: Option<&'a Path>,
     /// Logical size of the viewport.
     pub size: (u32, u32),
     /// Device pixels per logical pixel.
@@ -169,6 +173,8 @@ pub fn run(args: &ShotArgs<'_>) -> Result<(), String> {
         interp.tick();
         *frame = RenderFrame::new();
         frame.request_full_redraw();
+        // Asked for like the platform asks: by the frame's flag.
+        frame.set_access_wanted(args.a11y.is_some());
         interp.render(&tree, frame, w, h);
         *now += 16;
     };
@@ -183,16 +189,29 @@ pub fn run(args: &ShotArgs<'_>) -> Result<(), String> {
     // Once more at rest, so a mesh or an image that landed a frame late is in.
     step(&mut interp, &mut frame, &mut now, &[]);
 
+    if let Some(path) = args.a11y {
+        let tree = frame
+            .access()
+            .ok_or("the last frame carried no accessibility tree")?;
+        std::fs::write(path, tree.to_text()).map_err(|e| format!("{}: {e}", path.display()))?;
+        style::ok(
+            &format!("{} ({} nodes)", path.display(), tree.nodes.len()),
+            Some(started.elapsed()),
+        );
+    }
+    let Some(out) = args.out else {
+        return Ok(());
+    };
     let pixels = paint(&frame, args.size, args.scale)?;
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let (pw, ph) = (
         (w * args.scale).round() as u32,
         (h * args.scale).round() as u32,
     );
-    image::save_buffer(args.out, &pixels, pw, ph, image::ColorType::Rgba8)
-        .map_err(|e| format!("{}: {e}", args.out.display()))?;
+    image::save_buffer(out, &pixels, pw, ph, image::ColorType::Rgba8)
+        .map_err(|e| format!("{}: {e}", out.display()))?;
     style::ok(
-        &format!("{} ({pw}x{ph})", args.out.display()),
+        &format!("{} ({pw}x{ph})", out.display()),
         Some(started.elapsed()),
     );
     Ok(())

@@ -5,7 +5,7 @@
 #![allow(clippy::missing_errors_doc)]
 
 use clap::{Parser, Subcommand};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 mod capabilities;
 use byard_project::{archive, deps, manifest};
@@ -126,9 +126,15 @@ enum Command {
         /// The project directory, `byard.toml` or `.byd`. Defaults to the
         /// current project.
         path: Option<PathBuf>,
-        /// Where to write the PNG.
-        #[arg(short, long, value_name = "PNG", default_value = "shot.png")]
-        out: PathBuf,
+        /// Where to write the PNG. Defaults to `shot.png`, unless `--a11y` is
+        /// given: then no picture is drawn unless this asks for one.
+        #[arg(short, long, value_name = "PNG")]
+        out: Option<PathBuf>,
+        /// Write the accessibility tree to a text file (role, name, value,
+        /// state and bounds, one node a line; a control a screen reader could
+        /// not name is marked `(unnamed)`).
+        #[arg(long, value_name = "FILE")]
+        a11y: Option<PathBuf>,
         /// Logical size, `WIDTHxHEIGHT`.
         #[arg(long, default_value = "440x880", value_parser = parse_size)]
         size: (u32, u32),
@@ -299,6 +305,7 @@ fn main() {
         Command::Shot {
             path,
             out,
+            a11y,
             size,
             scale,
             at,
@@ -309,7 +316,12 @@ fn main() {
             type_text,
         } => commands::shot::run(&commands::shot::ShotArgs {
             path: path.as_deref(),
-            out: &out,
+            out: match (out.as_deref(), a11y.is_some()) {
+                (Some(out), _) => Some(out),
+                (None, true) => None,
+                (None, false) => Some(Path::new("shot.png")),
+            },
+            a11y: a11y.as_deref(),
             size,
             scale,
             at_ms: at,

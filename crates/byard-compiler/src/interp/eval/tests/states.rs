@@ -1,6 +1,9 @@
 //! Style states: spreads, merges, specificity and the prop-driven state bits.
 
 use super::*;
+use crate::interp::eval::states::resolve_state_attrs;
+use crate::parser::ast::AttrKind;
+use crate::parser::ast::StyleStateKind;
 
 #[test]
 fn style_value_spreads_onto_an_element_and_inline_overrides() {

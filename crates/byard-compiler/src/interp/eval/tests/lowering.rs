@@ -3,6 +3,12 @@
 //! and `eval_pure`.
 
 use super::*;
+use crate::interp::eval::expr::eval_binary;
+use crate::interp::eval::expr::eval_compare;
+use crate::interp::eval::expr::eval_concat;
+use crate::interp::eval::expr::index_value;
+use crate::interp::eval::expr::structural_eq;
+use crate::parser::ast::BinOp;
 
 #[test]
 fn vector_icon_lowers_to_a_vector_node() {

@@ -1,5 +1,6 @@
 //! The paint walk: ripples, backdrop blur, glass panes and the perf warning.
 
+use super::animation::ramp_paint_prop;
 use super::*;
 
 // ── RFC-0023 ripple ink ─────────────────────────────────────────────

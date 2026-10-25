@@ -2,6 +2,8 @@
 //! windowed lists and hit-testing under a scroll.
 
 use super::*;
+use crate::interp::eval::animation::hex_from_oklab;
+use crate::interp::eval::animation::oklab_from_hex;
 
 /// RFC-0005: the mouse wheel over a `ScrollView` scrolls it by writing the
 /// signal behind `offset.y`, clamped to `[0, content − viewport]`.

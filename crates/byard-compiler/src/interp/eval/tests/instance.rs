@@ -2,6 +2,7 @@
 //! hot reload, slots, defaults and the first render trees.
 
 use super::*;
+use crate::interp::eval::instance::MAX_INSTANCE_DEPTH;
 
 // ── argument → parameter binding ────────────────────────────────
 

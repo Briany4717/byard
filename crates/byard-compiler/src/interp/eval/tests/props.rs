@@ -4,6 +4,7 @@
 use super::animation::sample_over_time;
 use super::paint::rendered_frame;
 use super::*;
+use crate::parser::ast::AttrKind;
 
 // ── `Len` padding/margin forms ──────────────────────────────────
 

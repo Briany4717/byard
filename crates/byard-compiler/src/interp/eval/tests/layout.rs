@@ -1,6 +1,7 @@
 //! Layout: `Grid`, `ZStack`, default text wrap, structural `for` and `when`,
 //! and `Spacer` flex.
 
+use super::controls::checkbox_frame;
 use super::paint::rendered_frame;
 use super::*;
 

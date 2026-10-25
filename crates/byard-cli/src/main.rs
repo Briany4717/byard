@@ -78,7 +78,8 @@ enum Command {
         file: Option<PathBuf>,
     },
     /// Package a built app with its project, to run where its sources are
-    /// not: a `.app` on macOS, a directory elsewhere.
+    /// not: a `.app` on macOS, a directory elsewhere, or with `--layout
+    /// linux` a freedesktop.org prefix with a launcher entry and icons.
     Bundle {
         /// The project directory or `byard.toml`. Defaults to the current
         /// project.
@@ -90,9 +91,14 @@ enum Command {
         /// `.byard/bundle/`.
         #[arg(short, long, value_name = "DIR")]
         out: Option<PathBuf>,
-        /// The package's shape. Defaults to the one this system runs.
+        /// The package's shape: `app`, `dir` or `linux`. Defaults to `app`
+        /// on macOS and `dir` elsewhere.
         #[arg(long, value_enum)]
         layout: Option<commands::bundle::Layout>,
+        /// Also pack the Linux layout as `<exe>-<version>-linux-<arch>.tar.gz`
+        /// beside it, to unpack into a prefix (`tar xzf ... -C ~/.local`).
+        #[arg(long)]
+        archive: bool,
     },
     /// Add a dependency to byard.toml, then fetch and lock it (RFC-0008).
     #[command(alias = "install")]
@@ -277,11 +283,13 @@ fn main() {
             bin,
             out,
             layout,
+            archive,
         } => commands::bundle::run(
             path.as_deref(),
             &bin,
             out.as_deref(),
             layout.unwrap_or_else(commands::bundle::Layout::host),
+            archive,
         ),
         Command::Clean { file } => commands::clean::run(file.as_deref()),
         Command::Add {

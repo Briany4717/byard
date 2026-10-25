@@ -5,6 +5,7 @@ use super::expr::eval_compare;
 use super::expr::eval_concat;
 use super::expr::index_value;
 use super::expr::structural_eq;
+use super::instance::MAX_INSTANCE_DEPTH;
 use super::states::resolve_state_attrs;
 use super::*;
 use crate::parser::ast::BinOp;

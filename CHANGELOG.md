@@ -126,6 +126,17 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A user guide, and a test that keeps its samples honest.** Byard had a README
+  and forty design documents written for the people building it, and nothing for
+  someone using it. `docs/guide` is an mdBook: install, the dev loop, one chapter
+  for each part of the language, theming, the Rust half, packages, shipping and
+  every command. Read it with `cargo install mdbook`, then `mdbook serve
+  docs/guide`. Every `byld` block in it is parsed and checked the way `byard
+  check` checks a file, the errors it quotes are compared with what the compiler
+  really says, the TOML parses, the Rust is quoted from files that build, and
+  every link and heading it points at exists, so the guide fails the build when
+  it stops being true. The conventions are in `docs/guide/CONTRIBUTING.md`.
+  
 - **`byard bundle --layout linux` writes an install tree for a Linux
   desktop.** Bundling gave a Linux app a directory and nothing the desktop
   could see: no launcher entry, no icon, nothing a package could install

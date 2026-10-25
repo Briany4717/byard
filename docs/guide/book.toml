@@ -1,0 +1,13 @@
+[book]
+title = "The Byard Guide"
+authors = ["The Byard contributors"]
+description = "Build native, GPU-rendered apps with Byard: the byld language, the Rust half, and the tools."
+language = "en"
+src = "src"
+
+[build]
+build-dir = "book"
+
+[output.html]
+git-repository-url = "https://github.com/Briany4717/byard"
+edit-url-template = "https://github.com/Briany4717/byard/edit/main/docs/guide/{path}"

@@ -1,3 +1,5 @@
+use super::animation::hex_from_oklab;
+use super::animation::oklab_from_hex;
 use super::*;
 use crate::parser::ast::ElementNode;
 use crate::parser::parse;

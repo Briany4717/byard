@@ -8,7 +8,8 @@
 //! carries it there), paging, the end-of-list event, and the elastic
 //! pull-to-refresh indicator.
 
-use super::{Interpreter, pack_curve};
+use super::Interpreter;
+use super::animation::pack_curve;
 use crate::interp::env::{SignalId, Value};
 use crate::parser::ast::{Attr, AttrKind};
 

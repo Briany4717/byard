@@ -83,7 +83,7 @@ enum Palette {
     Error,
 }
 
-/// One derived scheme: `(role, 0xRRGGBB)` in the order of [`ROLES`].
+/// One derived scheme: `(role, 0xRRGGBB)` in the order of `ROLES`.
 pub type Scheme = Vec<(&'static str, i64)>;
 
 /// Both schemes derived from `seed` (`0xRRGGBB`): `(light, dark)`.
@@ -137,12 +137,12 @@ const GREY_BELOW: u32 = 24;
 /// are the picture: a logo's anti-aliased edge counts, the faint halo round
 /// it does not. `None` when no pixel is.
 ///
-/// Median cut to [`CLUSTERS`] colours over at most [`SAMPLE_SIDE`] pixels on
+/// Median cut to `CLUSTERS` colours over at most `SAMPLE_SIDE` pixels on
 /// the long side, in **integer sRGB** throughout, so the same bytes are the
 /// same seed on every platform to the bit. OKLab would be the more perceptual
 /// space to cut in, but it needs a cube root, whose last bit is the maths
 /// library's choice, and a seed that changed with the machine building it
-/// would make a theme change with it. The seed then goes through [`derive`],
+/// would make a theme change with it. The seed then goes through [`derive()`],
 /// which works in OKLCH as before.
 ///
 /// This is close to what Material's image scoring picks, not the same

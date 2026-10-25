@@ -68,7 +68,7 @@ pub struct DecodedRgba {
 /// The result of one async decode, sent back through the I/O channel and
 /// drained on the render thread. `result` is `Err(message)` on a missing or
 /// corrupt file, the message is logged once when the entry transitions to
-/// [`TextureState::Failed`].
+/// `TextureState::Failed`.
 #[derive(Debug)]
 pub struct DecodedImage {
     /// The source path/key this decode was started for.
@@ -145,7 +145,7 @@ enum TextureState {
 ///
 /// Decode is **asynchronous** (RFC-0001 §5.1): [`ensure`](Self::ensure)
 /// never touches the filesystem on the calling (render) thread, it inserts a
-/// [`TextureState::Pending`] marker and spawns the blocking `image::open` decode
+/// `TextureState::Pending` marker and spawns the blocking `image::open` decode
 /// on the relay's I/O runtime. The decoded pixels return through the type-erased
 /// I/O channel and are uploaded by [`apply_decoded`](Self::apply_decoded), which
 /// runs on the render thread (where the `wgpu` `Device`/`Queue` live).

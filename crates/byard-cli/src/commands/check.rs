@@ -64,7 +64,7 @@ pub fn run(file: Option<&Path>, short: bool) -> Result<(), String> {
 /// Headless semantic validation of a resolved program (no `wgpu`/`winit`).
 ///
 /// Resolve/parse errors short-circuit; otherwise every `View` is lowered and
-/// rendered into a throwaway [`RenderFrame`] so attribute-contract and
+/// rendered into a throwaway [`RenderFrame`](byard_core::frame::RenderFrame) so attribute-contract and
 /// `Len`-form validation checks, which run during lowering and render, are
 /// exercised across the whole module graph.
 #[must_use]

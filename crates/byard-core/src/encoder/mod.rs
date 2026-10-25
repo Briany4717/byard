@@ -29,7 +29,7 @@
 //! Pipeline creation is wrapped in `Device::push_error_scope` (returns an
 //! `ErrorScopeGuard` in wgpu 28+) and `scope.pop().await` with
 //! `ErrorFilter::Validation`. Failures are surfaced as
-//! [`ByardError::PipelineCompilation`](crate::ByardError::PipelineCompilation)
+//! [`ByardError::PipelineCompilation`]
 //!, the engine never panics on a GPU error.
 //!
 //! # Where the encode time actually goes (RFC-0030 §I1)
@@ -92,7 +92,7 @@ pub use gpu_timer::GpuTimer;
 /// Name of the single GPU pass this codebase currently times (RFC-0013 §"GPU
 /// timing"): `SolidBox`, `DecoratedBox`, `TextureSampler`, `VectorMSDF`,
 /// `CanvasShape`, and `TextGlyph` all draw within one `wgpu::RenderPass` (see
-/// [`draw_ui_pass`]), so, unlike the RFC's four-pipeline illustration,
+/// `draw_ui_pass`), so, unlike the RFC's four-pipeline illustration,
 /// there is exactly one pass boundary to time today. Per-pipeline GPU timing
 /// needs the encoder to split that pass first; tracked as a follow-up, not
 /// attempted here.
@@ -528,12 +528,12 @@ impl EncoderSubsystem {
     /// Shader compilation and pipeline creation are wrapped in a
     /// `push_error_scope` / `pop_error_scope` pair (RFC §8). Any GPU-side
     /// validation failure is returned as
-    /// [`ByardError::PipelineCompilation`](crate::ByardError::PipelineCompilation)
+    /// [`ByardError::PipelineCompilation`]
     ///, this method never panics on a GPU error.
     ///
     /// `width`/`height` are the surface's initial dimensions in **physical
     /// pixels**, used to allocate the persistent intermediate colour target
-    /// (see [`persistent_color`](Self::persistent_color)) at construction
+    /// (see `persistent_color`) at construction
     /// time so the very first [`encode_frame`](Self::encode_frame) call has
     /// somewhere to draw into.
     ///
@@ -1050,7 +1050,7 @@ impl EncoderSubsystem {
     /// Must be called whenever the surface is resized before the next frame.
     ///
     /// If `phys_w`/`phys_h` differ from the currently allocated
-    /// [`persistent_color`](Self::persistent_color) size, that texture is
+    /// `persistent_color` size, that texture is
     /// recreated at the new size and `needs_full_redraw` is set, the
     /// recreated texture's contents are undefined, so the next
     /// `encode_frame` must repopulate it in full rather than trying to
@@ -1084,12 +1084,12 @@ impl EncoderSubsystem {
     ///
     /// Implements RFC-0001 §3.3 (dirty rectangles and scissor clipping). The
     /// actual incremental drawing target is **not** `target`, it is
-    /// [`persistent_color`](Self::persistent_color), an off-screen texture
+    /// `persistent_color`, an off-screen texture
     /// that, unlike the swapchain image, is guaranteed to retain its
     /// contents across frames. See that field's doc comment for why this
     /// indirection exists.
     ///
-    /// Three cases, decided by [`needs_full_redraw_this_frame`]:
+    /// Three cases, decided by `needs_full_redraw_this_frame`:
     ///
     /// - **Full redraw** (first call, or after a resize, or the
     ///   instance/text count changed shape since the previous call): the
@@ -1100,16 +1100,16 @@ impl EncoderSubsystem {
     ///   dirty): the inner pass loads (does not clear) `persistent_color`,
     ///   restricts fragment writes to `wgpu::RenderPass::set_scissor_rect`
     ///   for the union of the dirty lines' *current and previous* bounding
-    ///   boxes (see [`dirty_text_bounds`]), then draws a fully transparent
-    ///   "clear quad" over exactly that rect via [`clear_pipeline`](
-    ///   Self::clear_pipeline) before redrawing, standard alpha blending
-    ///   alone cannot erase stale content (see that field's doc comment),
-    ///   so this step is required, not optional. Every `BoxInstance` is
+    ///   boxes (see `dirty_text_bounds`), then draws a fully transparent
+    ///   "clear quad" over exactly that rect via `clear_pipeline` before
+    ///   redrawing, standard alpha blending alone cannot erase stale content
+    ///   (see that field's doc comment), so this step is required, not
+    ///   optional. Every `BoxInstance` is
     ///   then redrawn too (the clear quad may have wiped one), bounded by
     ///   the active scissor rect. `TextGlyphPipeline::prepare`/`render_layer`
     ///   still receive the **full, unfiltered** `texts` slice (partitioned by
     ///   z-layer, never filtered); see the note above the `render_layer` call
-    ///   in [`draw_ui_pass`] for why.
+    ///   in `draw_ui_pass` for why.
     /// - **Nothing dirty**: the inner pass is skipped entirely, zero GPU
     ///   work beyond the mandatory composite step below.
     ///
@@ -1715,7 +1715,7 @@ impl EncoderSubsystem {
     /// (decode tasks are spawned here) and the type-erased result sender (they
     /// report decoded pixels back through it). Called once by the engine after
     /// it has both a `Relay` and this encoder. Until set, image decode falls
-    /// back to a synchronous path (see [`encode_frame_with_decorations`]).
+    /// back to a synchronous path (see [`Self::encode_frame_with_decorations`]).
     pub fn set_io_context(
         &mut self,
         handle: tokio::runtime::Handle,

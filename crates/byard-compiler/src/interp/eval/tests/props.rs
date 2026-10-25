@@ -2,6 +2,7 @@
 //! colours with an alpha byte, the decorated box and the theme tokens.
 
 use super::animation::sample_over_time;
+use super::paint::rendered_frame;
 use super::*;
 
 // ── `Len` padding/margin forms ──────────────────────────────────

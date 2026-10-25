@@ -47,6 +47,10 @@ pub use byard_core::bridge;
 /// block, generates the async-method dispatch shim (`impl Controller`).
 pub use byard_macro::byard_controller;
 
+/// The accessibility tree (RFC-0042): the roles a native view can declare with
+/// `#[native_view(role = "…")]`.
+pub use byard_core::access;
+
 /// The native render extension ABI (RFC-0039): [`NativeView`](render::NativeView)
 /// and the bounded [`RenderCtx`](render::RenderCtx) it draws through, plus the
 /// catalog types `#[native_view]` generates.

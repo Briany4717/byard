@@ -149,3 +149,23 @@ fn create_makes_an_instance_the_engine_can_hold() {
     // Box<dyn NativeView>: the engine's own handle on a package's widget.
     let _: Box<dyn NativeView> = view;
 }
+
+/// A view that says what a screen reader should call it (RFC-0042 §2).
+#[byard::native_view(name = "Gauge", role = "slider")]
+#[derive(Default)]
+struct Gauge {
+    #[prop]
+    level: f32,
+}
+
+impl NativeView for Gauge {
+    fn render(&mut self, _layout: Layout, _cx: &mut RenderCtx<'_>) {}
+}
+
+#[test]
+fn a_view_declares_its_accessibility_role_and_is_a_group_otherwise() {
+    use byard::access::AccessRole;
+    assert_eq!(<Gauge as NativeViewMeta>::ACCESS_ROLE, AccessRole::Slider);
+    assert_eq!(<Gauge as NativeViewMeta>::INFO.name, "Gauge");
+    assert_eq!(<Chart as NativeViewMeta>::ACCESS_ROLE, AccessRole::Group);
+}

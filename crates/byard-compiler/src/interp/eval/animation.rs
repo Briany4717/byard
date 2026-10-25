@@ -9,7 +9,8 @@
 //! blending, and the colour mixing (in OKLab) that animated colours and the
 //! theme cross-fade share.
 
-use super::{Interpreter, collect_pools, spacing_value};
+use super::props::spacing_value;
+use super::{Interpreter, collect_pools};
 use crate::diagnostics::Span;
 use crate::interp::env::Value;
 use crate::parser::ast::Expr;

@@ -50,4 +50,5 @@ mod theme_transition_example;
 mod todo_example;
 mod transform_stack_example;
 mod workspace_example;
+mod zero_text_size;
 mod zstack_example;

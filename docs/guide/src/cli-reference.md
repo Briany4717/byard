@@ -10,6 +10,7 @@ byard <COMMAND>
 | [`dev`](#byard-dev) | Open the app in a window that reloads as you save |
 | [`check`](#byard-check) | Check the project without a window |
 | [`shot`](#byard-shot) | Draw the project to a PNG without a window |
+| [`fmt`](#byard-fmt) | Format `.byd` files in place |
 | [`build`](#byard-build) | Bake the vector icon atlas |
 | [`bundle`](#byard-bundle) | Package a built app with its project |
 | [`add`](#byard-add) | Add a dependency, then fetch and lock it |
@@ -97,6 +98,32 @@ library package.
 | `--dark` | | Forces the dark scheme. Conflicts with `--light`. |
 | `--light` | | Forces the light scheme. |
 | `--tap <X,Y>` | | Taps a logical point before the picture. Repeat it to tap more than once. |
+| `--key <KEY>` | | Presses a key before the picture, such as `Left`, `shift+Left` or `mod+a`. Repeat it to press more. |
+| `--type <TEXT>` | | Types text before the picture. Repeat it to type more. |
+| `--a11y <FILE>` | | Writes the accessibility tree to a text file, one node a line. A control a screen reader could not name is marked `(unnamed)`. |
+
+`--tap`, `--key` and `--type` run in the order they are written on the command line. A key is a single
+character or one of `Left`, `Right`, `Up`, `Down`, `Home`, `End`, `Backspace`, `Delete`, `Enter`,
+`Tab`, `Escape` and `Space`, with any of `shift`, `ctrl`, `alt`, `meta` and `mod` before it, joined
+by `+`. `mod` is Command on macOS and Control elsewhere. With `--a11y`, the picture is drawn only if
+`-o` is given too, and the tree needs no GPU. See [the dev loop](dev-loop.md#byard-shot) and
+[accessibility](accessibility.md).
+
+## `byard fmt`
+
+```text
+byard fmt [OPTIONS] [PATHS]...
+```
+
+Formats `.byd` files in place, with the one layout there is. See [the dev loop](dev-loop.md#byard-fmt).
+
+| Argument or flag | |
+|------------------|-|
+| `[PATHS]...` | Files or directories to format. A project directory covers its entry directory and its path dependencies. Any other directory covers every `.byd` under it. Defaults to the current project. |
+| `--check` | Changes nothing. Lists the files that are not formatted, and exits 1 if there are any. |
+
+A file that does not parse, or that formatting would change the meaning of, is reported and left as it
+was, and the command exits 1. Finding no `.byd` file at all is an error.
 
 ## `byard build`
 
@@ -121,14 +148,16 @@ byard bundle [OPTIONS] --bin <EXE> [PATH]
 ```
 
 Packages a built app with its project, to run where its sources are not: a `.app` on macOS, a
-directory elsewhere. See [shipping](shipping.md).
+directory elsewhere, or with `--layout linux` a prefix with a launcher entry and icons. See
+[shipping](shipping.md).
 
 | Argument or flag | Default | |
 |------------------|---------|-|
 | `[PATH]` | the current project | The project directory or `byard.toml`. |
 | `--bin <EXE>` | required | The app's executable, built, as by `cargo build --release`. |
 | `-o`, `--out <DIR>` | `.byard/bundle/` in the project | Where to write the bundle. |
-| `--layout <LAYOUT>` | the shape your system uses | `app`, a macOS application bundle, or `dir`, a directory holding the executable and `project/` beside it. |
+| `--layout <LAYOUT>` | the shape your system uses | `app`, a macOS application bundle, `dir`, a directory holding the executable and `project/` beside it, or `linux`, a freedesktop.org prefix with `bin/`, `share/`, a `.desktop` entry, icons and AppStream metainfo. |
+| `--archive` | | Also packs the Linux layout as `<exe>-<version>-linux-<arch>.tar.gz` beside it. Needs `--layout linux`. |
 
 ## `byard add`
 
@@ -202,7 +231,7 @@ Removes `.byard/cache` and `.byard/generated` from the project. Package checkout
 | `[assets.vectors]` | Icons to bake that no literal names | `byard build` above |
 | `[http]`, `[http.hosts]` | Where requests go | [Data and I/O](data-and-io.md) |
 | `[native_views.Name]` | Elements the Rust half draws | [Native views](rust-native-views.md) |
-| `[bundle]` | `name`, `id`, `version` for a packaged app | [Shipping](shipping.md) |
+| `[bundle]` | `name`, `id`, `version`, and for Linux `categories`, `summary`, `license` | [Shipping](shipping.md) |
 | `[dev]` | `frame_budget`, `hud`, `statusline` | [The dev loop](dev-loop.md) |
 
 An unknown top-level table is reported as a warning and ignored. Inside `[dependencies]`, `[dev]`,

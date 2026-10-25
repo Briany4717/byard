@@ -81,7 +81,7 @@ Button("Tap me") #[bg: 0x3B82F6, color: 0xFFFFFF, radius: 8] => count++
 A `Button` takes its label as content. With no `p`, it pads the label by 10 above and
 below and 24 left and right, and it is at least 40 pixels tall, so a bare button is
 already something a finger can hit. Say `p`, `width` or `height` to change that. It
-takes every layout, decoration and text attribute. It is focusable, so Tab reaches it.
+takes every layout, decoration and text attribute. It is not in the Tab order yet.
 
 ## TextField
 
@@ -102,7 +102,56 @@ fainter. `p` sets where the text starts, and a `typo` gives its size. In a `Row`
 
 Its events are `input` and `change`, which run after each edit, and `submit`, which
 runs on Enter. Each can name the text, as `input(text) => …`. See
-[events](events-and-actions.md#handlers-that-take-a-value).
+[events](events-and-actions.md#handlers-that-take-a-value). An edit that changes nothing,
+such as Backspace at the start, runs nothing.
+
+### Editing
+
+A field edits like a text field anywhere else, and the `byld` above needs nothing
+more for it. While it has focus:
+
+| Input | Does |
+|-------|------|
+| Left, Right | Move the caret one character. With a selection, collapse it to its start or end. |
+| `Ctrl`+Left, `Ctrl`+Right | Move by word. `Option` on macOS. |
+| Home, End | Go to the start or the end. `Cmd`+Left and `Cmd`+Right do the same on macOS. |
+| `Shift` with any of these | Select instead of moving. |
+| Backspace, Delete | Remove the selection, or the character before or after the caret. |
+| `Ctrl`+Backspace, `Ctrl`+Delete | Remove a word. `Option` on macOS. |
+| `Mod`+A | Select all. |
+| `Mod`+C, `Mod`+X, `Mod`+V | Copy, cut and paste. |
+| `Mod`+Z | Undo. |
+| `Mod`+`Shift`+Z, `Mod`+Y | Redo. |
+| A press | Place the caret under the pointer. |
+| A drag | Select from the press to the pointer. |
+| A double press | Select the word under the pointer. |
+
+`Mod` is Command on macOS and Control elsewhere. A character is a whole grapheme, so
+an accented letter or an emoji moves and deletes as one. Typing replaces the selection.
+A paste is one line: its line breaks become spaces. The clipboard is the system's.
+
+Typing is undone a word at a time, and a paste, a cut or a deleted selection is a step of
+its own. When the `var` is written from somewhere else, such as a button's action or a
+reply from a server, the caret goes to the end of the new text and the undo history starts
+again. A text wider than the field scrolls to keep the caret in view. The caret blinks
+while the field and the window have focus.
+
+The selection is painted in the theme's `primary` colour at 30 % opacity. Give the
+field `selection:` to choose another:
+
+```byld
+View Main() {
+    var note = "select some of this text"
+
+    Column #[bg: 0x14141C, p: 28, width: 400, grow: 1] {
+        TextField #[bind: note, bg: 0x1E1E2A, color: 0xFFFFFF, radius: 8,
+                    p: (horizontal: 12), height: 40, selection: 0x66E4A11B]
+    }
+}
+```
+
+To see a caret and a selection without a window, give `byard shot` the keys to press and
+the text to type. See [the dev loop](dev-loop.md#taps-keys-and-typing).
 
 ## Toggle
 

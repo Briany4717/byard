@@ -24,6 +24,7 @@
 //! evaluator ─┘
 //! ```
 
+pub mod access;
 pub mod atlas;
 pub mod bridge;
 pub mod cap;

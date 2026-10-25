@@ -41,6 +41,9 @@ mod native_view;
 /// # }
 /// ```
 ///
+/// `role = "button"` (or `slider`, `image`, `dialog`, …) says what a screen
+/// reader should call the view (RFC-0042); without it the view is a group.
+///
 /// It emits the struct unchanged, a `Default`-based constructor, the catalog
 /// entry the compiler validates `byld` against, and the `set_prop` half of
 /// `NativeView` that assigns each declared field from the value the language

@@ -127,6 +127,33 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   every link and heading it points at exists, so the guide fails the build when
   it stops being true. The conventions are in `docs/guide/CONTRIBUTING.md`.
 
+- **A Byard window can be read by a screen reader.** Each control, label and
+  image the user can read or operate is a node with a role, a name, its
+  bounds and its state, handed to the platform's accessibility API through
+  AccessKit, and the reader's actions (press, focus, set a value, increment,
+  decrement, scroll into view) come back as the events a pointer or a
+  keyboard would have sent. Nothing changes for an app already written with
+  text in its controls: a button is named by its text, a text field by its
+  placeholder, a switch, checkbox or radio button by the `Text` beside it in
+  its `Row`. A control with no text of its own takes `a11y_label: "Close"`
+  (a string expression, so `"{count} unread"` updates), and decoration comes
+  out of the tree with `a11y_hidden: true`; `byard check` accepts and
+  type-checks both on every element. The tree is built only while a reader is
+  connected: with none, an app pays one relaxed atomic load per frame and
+  allocates nothing more than before. `byard shot --a11y tree.txt` writes the
+  tree as text, marks every control a reader could not name with
+  `(unnamed)`, and needs no GPU or screen reader; see the `accessibility`
+  example. A `Slider` now writes its `var` when its value is set from
+  outside the pointer. `#[byard::native_view(role = "image")]` says what a
+  native view is called. Handing the tree to the screen reader is opt-in:
+  `byard = { ..., features = ["a11y"] }` (and `byard-cli`'s `a11y` feature
+  for `byard dev`). It brings in `accesskit` and `accesskit_winit` (53
+  packages in `Cargo.lock`) and adds about a fifth to a stripped release
+  binary, so an app that does not ask for it carries none of it. An element
+  with a tap handler is read as a button, and a
+  `Toggle`, a `Button` or a `Slider` is still not in the Tab order; both are
+  follow-ups.
+
 - **A `TextField` edits like a text field.** It appended what was typed and
   removed the last character on Backspace, so a typo in the middle could only
   be fixed by deleting everything after it, and nothing could be pasted. Now the

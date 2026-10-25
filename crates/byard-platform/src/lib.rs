@@ -9,6 +9,13 @@
 //! generic `PlatformHost` and returns a plain `Result<(), ByardError>`), so
 //! downstream crates can depend on `byard-platform` without ever importing
 //! `winit` themselves.
+//!
+//! # Accessibility (RFC-0042)
+//!
+//! The window also hands the platform's screen-reader API the tree the engine
+//! builds for it, through AccessKit, when the `a11y` feature is on (it is off
+//! by default). With it on, it costs nothing while no assistive technology is
+//! connected. See [`access`].
 
 mod clipboard;
 
@@ -41,11 +48,50 @@ fn control_flow_for(wants_frames: bool) -> ControlFlow {
     }
 }
 
-/// User event posted to the winit loop by the logic thread's [`FrameWaker`]
-/// when it publishes a frame that changed in response to input. It carries no
-/// data, its only job is to wake a `Wait`-mode loop so it redraws the update.
-#[derive(Debug, Clone, Copy)]
-struct FramePublished;
+#[cfg(feature = "a11y")]
+mod access;
+
+/// What the accessibility bridge is when the feature is off: nothing, behind
+/// the same few calls, so the host reads the same either way.
+#[cfg(not(feature = "a11y"))]
+mod access {
+    use byard_core::PlatformHost;
+    use winit::window::Window;
+
+    /// A window needs no hiding when there is no adapter to build first.
+    pub(crate) const NEEDS_HIDDEN_START: bool = false;
+
+    /// Nothing to bridge.
+    pub(crate) struct Bridge;
+
+    // The same signatures as the real bridge, so the host calls it the same
+    // way with the feature off; there is simply nothing for `self` to be.
+    #[allow(clippy::unused_self)]
+    impl Bridge {
+        pub(crate) fn process_event(&mut self, _: &Window, _: &winit::event::WindowEvent) {}
+        pub(crate) fn sync<H: PlatformHost>(&mut self, _: &H, _: &Window) {}
+    }
+}
+
+/// User events posted to the winit loop.
+#[derive(Debug)]
+enum UserEvent {
+    /// Posted by the logic thread's [`FrameWaker`] when it publishes a frame
+    /// that changed in response to input. It carries no data; its only job is
+    /// to wake a `Wait`-mode loop so it redraws the update.
+    FramePublished,
+    /// The screen-reader adapter has something to say (RFC-0042 §5): a reader
+    /// connected or left, or asked a node to act.
+    #[cfg(feature = "a11y")]
+    Access(accesskit_winit::Event),
+}
+
+#[cfg(feature = "a11y")]
+impl From<accesskit_winit::Event> for UserEvent {
+    fn from(event: accesskit_winit::Event) -> Self {
+        Self::Access(event)
+    }
+}
 
 /// A `winit`-backed [`PlatformHost`] driver.
 ///
@@ -130,7 +176,7 @@ impl WinitHost {
     pub fn run<H: PlatformHost>(self, host: H) -> Result<(), ByardError> {
         // A user-event loop so the logic thread can wake it via a proxy when it
         // publishes a changed frame (see `FramePublished` / the frame waker).
-        let event_loop = EventLoop::<FramePublished>::with_user_event()
+        let event_loop = EventLoop::<UserEvent>::with_user_event()
             .build()
             .map_err(|e| ByardError::Platform(e.to_string()))?;
         // Poll mode for live-reload dev tools; Wait mode for shipped applications
@@ -146,10 +192,11 @@ impl WinitHost {
         // wrapped in a `Mutex` so the closure is `Sync` regardless of whether
         // `EventLoopProxy` is, satisfying the `FrameWaker` bound; the lock is
         // only ever taken by the single logic thread, so it never contends.
+        let access_proxy = event_loop.create_proxy();
         let proxy = Mutex::new(event_loop.create_proxy());
         let waker: FrameWaker = std::sync::Arc::new(move || {
             if let Ok(proxy) = proxy.lock() {
-                let _ = proxy.send_event(FramePublished);
+                let _ = proxy.send_event(UserEvent::FramePublished);
             }
         });
 
@@ -167,6 +214,8 @@ impl WinitHost {
             waker,
             modifiers: KeyModifiers::default(),
             ime_caret: None,
+            access_proxy,
+            access: None,
         };
 
         event_loop
@@ -214,6 +263,14 @@ struct WinitApp<H: PlatformHost> {
     /// The caret last handed to the IME, `None` while it is off (RFC-0040
     /// §4). Kept so the window is only told when something changed.
     ime_caret: Option<byard_core::frame::Rect>,
+    /// The proxy the screen-reader adapter posts its events through.
+    #[cfg_attr(
+        not(feature = "a11y"),
+        allow(dead_code, reason = "only the AccessKit bridge uses it")
+    )]
+    access_proxy: winit::event_loop::EventLoopProxy<UserEvent>,
+    /// The window's screen-reader adapter, once the window exists (RFC-0042).
+    access: Option<access::Bridge>,
 }
 
 impl<H: PlatformHost> WinitApp<H> {
@@ -222,6 +279,30 @@ impl<H: PlatformHost> WinitApp<H> {
     fn fail(&mut self, event_loop: &ActiveEventLoop, err: ByardError) {
         self.fatal = Some(err);
         event_loop.exit();
+    }
+
+    #[cfg_attr(
+        not(feature = "a11y"),
+        allow(
+            clippy::unused_self,
+            reason = "there is no adapter to keep without AccessKit"
+        )
+    )]
+    /// Creates the screen-reader adapter for `window`, then shows the window
+    /// (RFC-0042 §5). With the feature off the window was never hidden and
+    /// there is nothing to build.
+    fn attach_access(&mut self, event_loop: &ActiveEventLoop, window: &Window) {
+        #[cfg(feature = "a11y")]
+        {
+            self.access = Some(access::Bridge::new(
+                event_loop,
+                window,
+                self.access_proxy.clone(),
+            ));
+            window.set_visible(true);
+        }
+        #[cfg(not(feature = "a11y"))]
+        let _ = (event_loop, window);
     }
 
     /// Turns the IME on or off and moves its candidate window to follow the
@@ -252,7 +333,7 @@ impl<H: PlatformHost> WinitApp<H> {
     }
 }
 
-impl<H: PlatformHost> ApplicationHandler<FramePublished> for WinitApp<H> {
+impl<H: PlatformHost> ApplicationHandler<UserEvent> for WinitApp<H> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         // Already initialised, e.g. resumed again after a mobile suspend.
         if self.window.is_some() {
@@ -268,7 +349,11 @@ impl<H: PlatformHost> ApplicationHandler<FramePublished> for WinitApp<H> {
             Window::default_attributes()
                 .with_title(&self.title)
                 .with_inner_size(LogicalSize::new(self.width, self.height))
-                .with_window_icon(icon),
+                .with_window_icon(icon)
+                // AccessKit wants its adapter in place before the window is
+                // first shown (RFC-0042 §5), so it opens hidden and is shown
+                // as soon as the adapter exists.
+                .with_visible(!access::NEEDS_HIDDEN_START),
             &self.app_id,
         );
         let window = match event_loop.create_window(attributes) {
@@ -278,6 +363,7 @@ impl<H: PlatformHost> ApplicationHandler<FramePublished> for WinitApp<H> {
                 return;
             }
         };
+        self.attach_access(event_loop, &window);
 
         // wgpu 29: InstanceDescriptor::default() removed.
         // `new_without_display_handle_from_env` is the direct equivalent:
@@ -331,6 +417,9 @@ impl<H: PlatformHost> ApplicationHandler<FramePublished> for WinitApp<H> {
         let Some(window) = self.window.as_ref() else {
             return;
         };
+        if let Some(access) = self.access.as_mut() {
+            access.process_event(window, &event);
+        }
 
         match event {
             // on_close_requested() == false means "keep the window open";
@@ -367,6 +456,12 @@ impl<H: PlatformHost> ApplicationHandler<FramePublished> for WinitApp<H> {
                     return;
                 }
                 self.sync_ime();
+                // RFC-0042: sends the screen reader the tree the frame just
+                // presented carries, if it differs from the last one sent. A
+                // window with no reader connected does nothing here.
+                if let (Some(access), Some(window)) = (self.access.as_mut(), self.window.as_ref()) {
+                    access.sync(&self.host, window);
+                }
             }
 
             WindowEvent::Ime(ime) => {
@@ -457,7 +552,20 @@ impl<H: PlatformHost> ApplicationHandler<FramePublished> for WinitApp<H> {
     /// The logic thread published a frame that changed in response to input.
     /// Request a redraw so a `Wait`-mode loop presents it immediately instead
     /// of showing the pre-input frame until the next unrelated OS event.
-    fn user_event(&mut self, _event_loop: &ActiveEventLoop, _event: FramePublished) {
+    ///
+    /// Or the screen-reader adapter has something to say (RFC-0042 §5), which
+    /// also ends in a redraw: a reader that just connected needs the tree
+    /// sent, and one that asked a node to act needs the result shown.
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: UserEvent) {
+        match event {
+            UserEvent::FramePublished => {}
+            #[cfg(feature = "a11y")]
+            UserEvent::Access(event) => {
+                if let Some(access) = self.access.as_mut() {
+                    access.handle(&mut self.host, event.window_event);
+                }
+            }
+        }
         if let Some(window) = &self.window {
             window.request_redraw();
         }

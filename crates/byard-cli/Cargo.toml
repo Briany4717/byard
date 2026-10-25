@@ -32,6 +32,11 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 flate2 = "1"
 
 
+[features]
+# RFC-0042 Q4: the dev runner's window with the accessibility bridge, to try
+# an app under a screen reader: `cargo run -p byard-cli --features a11y -- dev`.
+a11y = ["byard-platform/a11y"]
+
 [dev-dependencies]
 # RFC-0043: the test that runs a broken app through `Shot` is the façade's
 # first caller from outside, and checks what it prints against what `byard

@@ -67,3 +67,12 @@ jobs:
 
       - name: test
         run: cargo test --locked --workspace
+
+      # The accessibility bridge is opt-in (RFC-0042 Q4), so the steps above
+      # never compile it. A gate that silently does not apply is worse than
+      # none: build, lint and test it on purpose.
+      - name: clippy (a11y)
+        run: cargo clippy --locked -p byard-platform -p byard -p byard-cli --all-targets --features byard-platform/a11y,byard/a11y,byard-cli/a11y
+
+      - name: test (a11y)
+        run: cargo test --locked -p byard-platform --features a11y

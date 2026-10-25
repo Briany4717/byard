@@ -1582,6 +1582,24 @@ impl PlatformHost for App {
             .and_then(byard_core::Engine::text_input)
     }
 
+    fn on_access_active(&mut self, active: bool) {
+        if let Some(engine) = &self.engine {
+            engine.set_access_active(active);
+        }
+    }
+
+    fn access_frame(&self) -> Option<Arc<byard_core::frame::RenderFrame>> {
+        self.engine
+            .as_ref()
+            .and_then(byard_core::Engine::latest_frame)
+    }
+
+    fn on_access_request(&mut self, request: byard_core::access::AccessRequest) {
+        if let Some(engine) = &self.engine {
+            engine.push_access_request(&request, now_ms());
+        }
+    }
+
     fn on_scroll(&mut self, dx: f32, dy: f32, x: f32, y: f32) {
         if let Some(engine) = &self.engine {
             engine.push_input(byard_core::platform::InputEvent {

@@ -656,6 +656,42 @@ impl Engine {
         Ok(())
     }
 
+    /// Tells the logic thread whether an assistive technology is listening
+    /// (RFC-0042). While one is, every published frame carries an
+    /// accessibility tree; while none is, no tree is built and nothing extra
+    /// is allocated. A host calls this from
+    /// [`PlatformHost::on_access_active`](crate::platform::PlatformHost::on_access_active).
+    pub fn set_access_active(&self, active: bool) {
+        self.relay.set_access_active(active);
+    }
+
+    /// The latest frame the logic thread published, whose
+    /// [`access`](crate::frame::RenderFrame::access) is the tree to send to
+    /// the assistive technology (RFC-0042). A host answers
+    /// [`PlatformHost::access_frame`](crate::platform::PlatformHost::access_frame)
+    /// with it.
+    #[must_use]
+    pub fn latest_frame(&self) -> Option<Arc<crate::frame::RenderFrame>> {
+        self.relay.current()
+    }
+
+    /// Turns what an assistive technology asked into the input events a
+    /// pointer or a keyboard would have sent, read against the tree of the
+    /// latest frame, and queues them for the logic thread (RFC-0042 §5).
+    ///
+    /// A request for a node the latest tree no longer has queues nothing.
+    pub fn push_access_request(&self, request: &crate::access::AccessRequest, time_ms: u64) {
+        let Some(frame) = self.relay.current() else {
+            return;
+        };
+        let Some(tree) = frame.access() else {
+            return;
+        };
+        for event in request.to_events(tree, time_ms) {
+            self.relay.push_input(event);
+        }
+    }
+
     /// The caret of the focused text field in the latest published frame,
     /// in viewport space (RFC-0040 §4). The platform reads it after each
     /// redraw to place the IME's candidate window.

@@ -1,14 +1,14 @@
 //! Zero-allocation telemetry & profiling (RFC-0013).
 //!
 //! Each engine thread owns a fixed-capacity, thread-local ring of
-//! [`Sample`]s. [`profile_scope!`] wraps a block in an RAII [`Guard`] that
+//! [`Sample`]s. [`profile_scope!`](crate::profile_scope) wraps a block in an RAII [`Guard`] that
 //! writes one sample on drop; the ring never grows and never allocates on
 //! the hot path (P1). At end-of-tick, [`crate::relay::Relay::publish`] calls
 //! [`crate::frame::RenderFrame::drain_telemetry`], which pulls the calling
 //! thread's ring into the frame's own [`SampleBlock`], piggybacking on the
 //! existing atomic frame swap instead of opening a new channel.
 //!
-//! With the `telemetry` Cargo feature off, [`profile_scope!`] expands to a
+//! With the `telemetry` Cargo feature off, [`profile_scope!`](crate::profile_scope) expands to a
 //! no-op statement, zero cost in a build that disables it (e.g. release).
 
 use std::cell::{Cell, RefCell};
@@ -30,7 +30,7 @@ pub const MAX_DIRECT_CHILDREN: usize = 32;
 /// A compile-time-interned scope identifier.
 ///
 /// Looked up once per call site (cached in a call-site-local `OnceLock` by
-/// [`profile_scope!`]), never per sample.
+/// [`profile_scope!`](crate::profile_scope)), never per sample.
 #[repr(transparent)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct ScopeId(pub u16);
@@ -192,7 +192,7 @@ pub fn now_ns() -> u64 {
 }
 
 /// One CPU scope timing: a scope identifier, its nesting depth, and its
-/// start/end timestamps in nanoseconds since the telemetry [`epoch`].
+/// start/end timestamps in nanoseconds since the telemetry `epoch`.
 ///
 /// `#[repr(C)]` with explicit padding fields (no implicit tail/interior
 /// padding) so the type is a clean `bytemuck::Pod`, required to pack a flat
@@ -753,7 +753,7 @@ pub fn attribute_to(owner: Owner) -> OwnerGuard {
     }
 }
 
-/// RAII guard produced by [`profile_scope!`]; writes one [`Sample`] to the
+/// RAII guard produced by [`profile_scope!`](crate::profile_scope); writes one [`Sample`] to the
 /// calling thread's ring when dropped.
 ///
 /// The guard also maintains the thread's nesting depth (RFC-0030 §I2). It
@@ -810,7 +810,7 @@ impl Drop for Guard {
 /// A [`Guard`] and an [`OwnerGuard`] taken together, for a region that is only
 /// *sometimes* somebody else's.
 ///
-/// [`profile_scope!`] is a statement, so it cannot be opened conditionally,
+/// [`profile_scope!`](crate::profile_scope) is a statement, so it cannot be opened conditionally,
 /// and the encoder needs exactly that: one iteration of a loop is the dev
 /// runner's and the next is the app's, with the loop body identical. Holding
 /// both guards in one value makes `cond.then(|| attributed_scope(..))` express
@@ -830,7 +830,7 @@ pub struct AttributedScope {
 /// Opens `scope` attributed to `owner`, until the returned value is dropped.
 ///
 /// The scope id is taken rather than a name so the caller can cache it in a
-/// call-site `OnceLock`, exactly as [`profile_scope!`] does, the registry is a
+/// call-site `OnceLock`, exactly as [`profile_scope!`](crate::profile_scope) does, the registry is a
 /// mutex, and a loop is not the place to lock it.
 #[must_use = "the scope closes when the returned value is dropped"]
 pub fn attributed_scope(scope: ScopeId, owner: Owner) -> AttributedScope {

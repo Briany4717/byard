@@ -3,7 +3,7 @@
 //!
 //! A single `#[derive(Logos)]` enum compiles to one DFA. Whitespace and line
 //! comments are skipped at the enum level. String interpolation is handled by a
-//! manual callback ([`lex_string`]) that emits one raw `StrLit` token whose end
+//! manual callback (`lex_string`) that emits one raw `StrLit` token whose end
 //! is located with a fixed-depth two-state stack (`InString` / `InBrace`); the
 //! *parser* later re-invokes the pipeline on each `{...}` span (the PEP 701
 //! model). Nesting interpolated strings deeper than 3 levels is rejected as

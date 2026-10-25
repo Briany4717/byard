@@ -3,8 +3,8 @@
 //!
 //! Declarations, elements, and control flow are ordinary recursive descent,
 //! one function per production, following the EBNF. Expressions use the Pratt
-//! parser in [`expr`]. Error recovery records a [`CompileError`], substitutes an
-//! [`Expr::Error`] (or skips one token at member level), and continues, so a
+//! parser in `expr`. Error recovery records a [`CompileError`], substitutes an
+//! [`Expr::Error`](ast::Expr::Error) (or skips one token at member level), and continues, so a
 //! single pass collects multiple diagnostics.
 
 pub mod ast;

@@ -323,7 +323,7 @@ View Main() {
 }
 ```
 
-- `size` is in logical pixels.
+- `size` is in logical pixels. Text at a size of 0, or below it, takes no room and draws nothing.
 - `weight` is `thin`, `regular`, `medium` or `bold`, or a number from 100 to 900. A
   variable font follows the number exactly. `bold` and `700` are the same weight.
 - `font` picks a family you declared in `byard.toml`. [Theming](theming.md) shows

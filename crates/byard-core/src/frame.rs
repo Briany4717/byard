@@ -1975,7 +1975,7 @@ pub struct NativeOutcome {
 /// A content-clip rectangle (RFC-0005 `ScrollView`). `rect` is in logical
 /// pixels, like every other [`RenderFrame`] geometry; the Encoder scales it to
 /// physical pixels and intersects it with the dirty-region scissor before the
-/// draw. A [`ScrollView`]'s clip is the intersection of its own viewport with
+/// draw. A `ScrollView`'s clip is the intersection of its own viewport with
 /// any ancestor scroll viewport, so nested scrolling needs no per-draw math.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct ClipRect {
@@ -3200,7 +3200,7 @@ impl RenderFrame {
     /// Asks the encoder to redraw the whole surface this frame rather than
     /// only the dirty union (RFC-0006 §3.4).
     ///
-    /// See [`Self::full_redraw`] for the two instants that need it. Cleared by
+    /// See `Self::full_redraw` for the two instants that need it. Cleared by
     /// [`clear`](Self::clear), so it never leaks into the next frame, a
     /// sticky full redraw would silently disable the incremental path for the
     /// rest of the session, which is the expensive way to be wrong here.

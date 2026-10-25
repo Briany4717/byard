@@ -125,7 +125,7 @@ impl Shot {
 
     /// Presses a key, by the name the platform reports it (`"ArrowLeft"`,
     /// `"Backspace"`, `"a"`), with no modifier held, after any gesture before
-    /// it (RFC-0041 §7). A person writes `Left`; [`KeyModifiers::parse_chord`]
+    /// it (RFC-0041 §7). A person writes `Left`; [`KeyModifiers::parse_chord`](byard_core::KeyModifiers::parse_chord)
     /// turns that, and `shift+Left`, into what this takes.
     #[must_use]
     pub fn key(self, name: &str) -> Self {

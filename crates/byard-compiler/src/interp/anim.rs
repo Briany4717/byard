@@ -1,7 +1,7 @@
 //! RFC-0010 / RFC-0025 typed animation curves and their resolution from an
 //! `anim.*(…)` call.
 //!
-//! The parser produces an [`Expr::Animated`](crate::parser::ast::Expr::Animated)
+//! The parser produces an [`Expr::Animated`]
 //! whose `anim` side is an ordinary call/member expression; [`resolve_motion`]
 //! turns that surface into a typed, argument-validated [`MotionSpec`] at
 //! lowering time, the curve plus RFC-0025's repeat/reverse/delay/from
@@ -251,7 +251,7 @@ pub fn resolve_curve(anim: &Expr) -> Result<Curve, CompileError> {
 /// Accepts the parenthesised form (`anim.spring(stiffness: 210)`), the bare
 /// form (`anim.spring`, every default), and any mix of positional curve
 /// arguments with trailing modifiers (`anim.linear(800ms, repeat: infinite)`).
-/// Any name outside [`CURVE_NAMES`] is [`CompileError::UnknownAnimation`] with a
+/// Any name outside `CURVE_NAMES` is [`CompileError::UnknownAnimation`] with a
 /// Levenshtein suggestion; malformed arguments are
 /// [`CompileError::InvalidAnimation`].
 ///
@@ -307,7 +307,7 @@ pub fn resolve_keyframes(expr: &Expr) -> Option<Result<KeyframeTrack<'_>, Compil
 /// evaluation chokepoint runs before doing any resolution work.
 ///
 /// Every value evaluation asks this, so it reads the shape directly rather
-/// than going through [`destructure_anim_call`], whose "not a curve" error
+/// than going through `destructure_anim_call`, whose "not a curve" error
 /// would allocate a message for every ordinary expression.
 #[must_use]
 pub fn is_keyframes_call(expr: &Expr) -> bool {

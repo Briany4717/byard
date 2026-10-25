@@ -123,10 +123,8 @@ impl DecoratedInstance {
     /// bytes that were already being uploaded. Reading them that way costs
     /// nothing, changes no byte of the instance record, and buys back two
     /// locations. The Rust fields stay separate because that is where their
-    /// meaning is, and [`decorated_instance_lanes_are_contiguous`] pins the
+    /// meaning is, and `decorated_instance_lanes_are_contiguous` pins the
     /// offsets this reading depends on.
-    ///
-    /// [`decorated_instance_lanes_are_contiguous`]: super::tests
     #[must_use]
     pub fn layout() -> wgpu::VertexBufferLayout<'static> {
         const ATTRS: &[wgpu::VertexAttribute] = &wgpu::vertex_attr_array![

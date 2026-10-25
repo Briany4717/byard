@@ -16,6 +16,7 @@
 - [Styling](styling.md)
 - [Events and actions](events-and-actions.md)
 - [Controls](controls.md)
+- [Accessibility](accessibility.md)
 - [Motion](motion.md)
 - [Drawing](drawing.md)
 - [Navigation](navigation.md)

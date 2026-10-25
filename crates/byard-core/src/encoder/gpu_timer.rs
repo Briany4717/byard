@@ -6,7 +6,7 @@
 //! `map_async`'d; [`GpuTimer::drain_ready`] only ever polls
 //! [`wgpu::PollType::Poll`] (non-blocking) and reports whichever slots have
 //! already completed, by construction that is always at least
-//! [`READBACK_LAG`] frames after the frame that produced them (RFC-0013:
+//! `READBACK_LAG` frames after the frame that produced them (RFC-0013:
 //! "read it two frames later").
 //!
 //! Degrades to `None` from [`GpuTimer::new`] when the device lacks

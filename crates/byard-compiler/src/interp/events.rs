@@ -107,6 +107,10 @@ pub struct InputEvent {
     pub value: Option<Value>,
     /// Event time in milliseconds (for the tap interval).
     pub time_ms: u64,
+    /// The modifier keys held when the event happened (RFC-0041 §2). Not part
+    /// of any payload a `byld` handler sees: handlers read it through
+    /// [`CURRENT_EVENT_MODS`], which only the engine's own widgets do.
+    pub mods: byard_core::KeyModifiers,
 }
 
 impl InputEvent {
@@ -119,6 +123,7 @@ impl InputEvent {
             delta: (0.0, 0.0),
             value: None,
             time_ms,
+            mods: byard_core::KeyModifiers::default(),
         }
     }
 }
@@ -137,6 +142,20 @@ thread_local! {
     /// handlers that need cursor position (e.g. Slider drag).
     pub static CURRENT_EVENT_POS: std::cell::Cell<(f32, f32)> =
         const { std::cell::Cell::new((0.0, 0.0)) };
+    /// The modifier keys held for the event currently being dispatched
+    /// (RFC-0041 §2), for the handlers that care which of Shift, Ctrl, Alt
+    /// and Cmd were down: a text field's caret movement and shortcuts.
+    pub static CURRENT_EVENT_MODS: std::cell::Cell<byard_core::KeyModifiers> =
+        const { std::cell::Cell::new(byard_core::KeyModifiers {
+            shift: false,
+            ctrl: false,
+            alt: false,
+            meta: false,
+        }) };
+    /// The time of the event currently being dispatched, in milliseconds, for
+    /// the handlers that need a clock (a text field coalescing typed
+    /// characters into one undo step).
+    pub static CURRENT_EVENT_TIME: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 /// A handler's reactive action. Receives the context (for `var` mutation) and
@@ -298,6 +317,13 @@ pub struct EventRouter {
     /// panel dismisses and reopens it in one gesture, which reads as a flicker
     /// nobody can explain.
     light_dismiss: Vec<(Vec<Rect>, Action)>,
+    /// Elements that keep a drag after it leaves them (RFC-0041 §4): while a
+    /// press that began on one is held, `PointerDrag` and `PointerUp` go to
+    /// it wherever the pointer is, instead of to whatever is under the pointer.
+    /// A text field selecting text needs the pointer to be able to go past its
+    /// edge. Rebuilt every render like the handler set; empty unless a
+    /// `TextField` registered one.
+    drag_captures: Vec<u32>,
 }
 
 impl EventRouter {
@@ -322,6 +348,27 @@ impl EventRouter {
         self.focusable_floor = 0;
         self.modal_scrims.clear();
         self.light_dismiss.clear();
+        self.drag_captures.clear();
+    }
+
+    /// Makes `elem` keep the drag of a press that began on it (RFC-0041 §4).
+    pub fn capture_drag(&mut self, elem: u32) {
+        self.drag_captures.push(elem);
+    }
+
+    /// The press target that kept its drag, if the gesture in flight began on
+    /// an element that asked to.
+    fn captured_drag(&self) -> Option<u32> {
+        let elem = self.down.as_ref()?.elem?;
+        self.drag_captures.contains(&elem).then_some(elem)
+    }
+
+    /// The ancestors' paint transform of whatever is being registered right
+    /// now (RFC-0011), for a handler that has to map the pointer into the
+    /// space its element was laid out in. See [`local_point`].
+    #[must_use]
+    pub const fn current_frame(&self) -> Option<Transform> {
+        self.current_frame
     }
 
     /// Registers a modal `Overlay`'s full-viewport scrim (RFC-0017 §Modality).
@@ -614,8 +661,11 @@ impl EventRouter {
         atlas: Option<&byard_core::atlas::layout::LayoutAtlas>,
         ev: &InputEvent,
     ) {
-        // Expose position to handlers (e.g. Slider drag).
+        // Expose position to handlers (e.g. Slider drag), and the modifiers
+        // and time a text field edits by.
         CURRENT_EVENT_POS.with(|c| c.set(ev.pos));
+        CURRENT_EVENT_MODS.with(|c| c.set(ev.mods));
+        CURRENT_EVENT_TIME.with(|c| c.set(ev.time_ms));
 
         match ev.kind {
             EventKind::PointerDown => {
@@ -646,8 +696,15 @@ impl EventRouter {
                 }
             }
             EventKind::PointerUp => {
-                // E4 precedence: pointer_up fires before tap.
-                self.fire(ctx, atlas, EventKind::PointerUp, ev.pos, None);
+                // E4 precedence: pointer_up fires before tap. A press that an
+                // element keeps (a text field mid-selection) is released to
+                // it wherever the pointer is.
+                match self.captured_drag() {
+                    Some(elem) => {
+                        self.fire_on_elem(ctx, Some(elem), EventKind::PointerUp, ev.pos, None);
+                    }
+                    None => self.fire(ctx, atlas, EventKind::PointerUp, ev.pos, None),
+                }
                 // The gesture ends, clear the drag latch (RFC-0024).
                 self.dragging = None;
                 if let Some(down) = self.down.take() {
@@ -704,7 +761,18 @@ impl EventRouter {
                         if (dx * dx + dy * dy).sqrt() > TAP_SLOP {
                             self.dragging = elem;
                         }
-                        self.fire(ctx, atlas, EventKind::PointerDrag, ev.pos, None);
+                        match self.captured_drag() {
+                            Some(elem) => self.fire_on_elem(
+                                ctx,
+                                Some(elem),
+                                EventKind::PointerDrag,
+                                ev.pos,
+                                None,
+                            ),
+                            None => {
+                                self.fire(ctx, atlas, EventKind::PointerDrag, ev.pos, None);
+                            }
+                        }
                     } else {
                         // Enter / Exit / Hover: compare new hovered elem to prev.
                         let new_hover = self.hit_any(atlas, ev.pos);
@@ -1070,6 +1138,22 @@ fn hits(r: Rect, frame: Option<Transform>, p: (f32, f32)) -> bool {
     }
 }
 
+/// Where the pointer is in the space an element was laid out in, when the
+/// element is drawn under its ancestors' transform `frame` (RFC-0011). The
+/// same mapping hit-testing does, exposed for a widget that needs a position
+/// inside itself (RFC-0041: where in a field's text a press landed). `None`
+/// is the untransformed case and returns `p` unchanged.
+#[must_use]
+pub fn local_point(frame: Option<Transform>, p: (f32, f32)) -> (f32, f32) {
+    match frame {
+        None => p,
+        Some(t) => {
+            let q = invert_point(&t, [p.0, p.1]);
+            (q[0], q[1])
+        }
+    }
+}
+
 /// The inverse of [`Transform::apply_point`]: undo the translation, rotate
 /// back about the pivot, and divide the scale out.
 ///
@@ -1207,6 +1291,7 @@ mod tests {
                 delta: (1.0, 0.0),
                 value: None,
                 time_ms: i,
+                mods: byard_core::KeyModifiers::default(),
             })
             .collect();
         router.dispatch_tick(&mut ctx, None, moves);
@@ -1231,6 +1316,7 @@ mod tests {
                 delta: (0.0, 0.0),
                 value: Some(Value::Str("a".to_string())),
                 time_ms: 0,
+                mods: byard_core::KeyModifiers::default(),
             }],
         );
         assert_eq!(ctx.peek_signal(query), Value::Str("a".to_string()));
@@ -1247,6 +1333,7 @@ mod tests {
                 delta: (0.0, 0.0),
                 value: Some(Value::Str("a".to_string())),
                 time_ms: 1,
+                mods: byard_core::KeyModifiers::default(),
             }],
         );
         assert_eq!(
@@ -1537,6 +1624,7 @@ mod tests {
                 delta: (0.0, 0.0),
                 value: Some(Value::Bool(true)), // marks secondary button
                 time_ms: 0,
+                mods: byard_core::KeyModifiers::default(),
             }],
         );
         assert_eq!(ctx.peek_signal(sec), Value::Int(1), "secondary fired");
@@ -1606,6 +1694,7 @@ mod tests {
                 delta: (0.0, 0.0),
                 value: Some(Value::Str("Escape".to_string())),
                 time_ms: 200,
+                mods: byard_core::KeyModifiers::default(),
             }],
         );
         assert_eq!(
@@ -1651,6 +1740,7 @@ mod tests {
             delta: (0.0, 0.0),
             value: Some(Value::Str("Tab".to_string())),
             time_ms: 0,
+            mods: byard_core::KeyModifiers::default(),
         };
 
         // First Tab → first focusable in the overlay scope (fb), not fa.

@@ -411,6 +411,7 @@ impl App {
             height_bits: Arc::new(AtomicU32::new(h0.to_bits())),
             reloads,
             trace,
+            mods: byard_core::KeyModifiers::default(),
         })
     }
 
@@ -561,6 +562,9 @@ struct Host {
     reloads: Option<Reloads>,
     /// The trace every frame is written to, when the app was asked for one.
     trace: Option<byard_core::telemetry::trace::TraceWriter>,
+    /// The modifier keys held now, stamped onto the events this host creates
+    /// (RFC-0041 §2).
+    mods: byard_core::KeyModifiers,
 }
 
 impl PlatformHost for Host {
@@ -603,6 +607,9 @@ impl PlatformHost for Host {
         engine.start_logic_from_view(move |_arena| {
             let mut interp = Interpreter::new();
             interp.set_dispatcher(dispatcher);
+            // Copy, cut and paste in a `TextField` (RFC-0041 §3). Opens
+            // nothing until the first of them is used.
+            interp.set_clipboard(Box::new(byard_platform::SystemClipboard::new()));
             // Before lowering, as `byard dev` does: `inject Theme` resolves
             // against the ambient chain at lower time.
             if let Some(theme) = theme {
@@ -685,6 +692,19 @@ impl PlatformHost for Host {
         self.push(byard_core::EventKind::PointerMove, (x, y), (0.0, 0.0), None);
     }
 
+    fn on_modifiers(&mut self, mods: byard_core::KeyModifiers) {
+        self.mods = mods;
+    }
+
+    fn on_window_focus(&mut self, focused: bool) {
+        self.push(
+            byard_core::EventKind::WindowFocus,
+            (0.0, 0.0),
+            (0.0, 0.0),
+            Some(byard_core::InputPayload::Bool(focused)),
+        );
+    }
+
     fn on_key(&mut self, key: &str, pressed: bool) {
         let kind = if pressed {
             byard_core::EventKind::KeyDown
@@ -740,6 +760,7 @@ impl Host {
                 delta,
                 payload,
                 time_ms: now_ms(),
+                mods: self.mods,
             });
         }
     }

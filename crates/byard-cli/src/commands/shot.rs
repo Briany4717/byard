@@ -11,6 +11,10 @@
 //! tests and was obvious in a screenshot. A screenshot of a live window is
 //! the right tool when a person is watching; this is the one that works when
 //! the machine is busy, and the one a script can repeat exactly.
+//!
+//! It can also press keys and type (`--key`, `--type`), in order with `--tap`,
+//! so a text field's caret and selection can be drawn without a window
+//! (RFC-0041 §7).
 
 use std::path::Path;
 use std::sync::Arc;
@@ -23,6 +27,70 @@ use byard_core::platform::{EventKind, InputEvent};
 use crate::deps::resolve_project;
 use crate::manifest::Manifest;
 use crate::style;
+
+/// A key to press: its name as the platform reports it, and the modifiers held.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Key {
+    /// `ArrowLeft`, `Backspace`, `a`.
+    pub name: String,
+    /// What is held while it is pressed.
+    pub mods: byard_core::KeyModifiers,
+}
+
+/// One thing `byard shot` does before the picture (RFC-0041 §7).
+#[derive(Clone, Debug, PartialEq)]
+pub enum Step {
+    /// Tap a logical point.
+    Tap(f32, f32),
+    /// Press a key.
+    Key(Key),
+    /// Type text.
+    Type(String),
+}
+
+impl Step {
+    /// The input this step is, as one frame's events at time `now`.
+    fn events(&self, now: u32) -> Vec<InputEvent> {
+        let time_ms = u64::from(now);
+        match self {
+            Self::Tap(x, y) => [EventKind::PointerDown, EventKind::PointerUp]
+                .into_iter()
+                .map(|kind| InputEvent {
+                    kind,
+                    pos: (*x, *y),
+                    delta: (0.0, 0.0),
+                    payload: None,
+                    time_ms,
+                    mods: byard_core::KeyModifiers::default(),
+                })
+                .collect(),
+            Self::Key(Key { name, mods }) => [EventKind::KeyDown, EventKind::KeyUp]
+                .into_iter()
+                .map(|kind| InputEvent {
+                    kind,
+                    pos: (0.0, 0.0),
+                    delta: (0.0, 0.0),
+                    payload: Some(byard_core::platform::InputPayload::Key(name.clone())),
+                    time_ms,
+                    mods: *mods,
+                })
+                .collect(),
+            // One event per character, all in the same frame, as a keyboard
+            // delivers a burst of typing: it is one run to undo.
+            Self::Type(text) => text
+                .chars()
+                .map(|c| InputEvent {
+                    kind: EventKind::TextInput,
+                    pos: (0.0, 0.0),
+                    delta: (0.0, 0.0),
+                    payload: Some(byard_core::platform::InputPayload::Key(c.to_string())),
+                    time_ms,
+                    mods: byard_core::KeyModifiers::default(),
+                })
+                .collect(),
+        }
+    }
+}
 
 /// What `byard shot` was asked to render.
 pub struct ShotArgs<'a> {
@@ -41,8 +109,9 @@ pub struct ShotArgs<'a> {
     /// Start in the dark scheme (`Some(true)`), the light one, or whichever
     /// the manifest says (`None`).
     pub dark: Option<bool>,
-    /// Logical points to tap, in order, before the picture is taken.
-    pub taps: &'a [(f32, f32)],
+    /// What to do before the picture is taken, in order: taps, key presses
+    /// and typed text (RFC-0041 §7), one frame each.
+    pub steps: &'a [Step],
 }
 
 pub fn run(args: &ShotArgs<'_>) -> Result<(), String> {
@@ -104,16 +173,9 @@ pub fn run(args: &ShotArgs<'_>) -> Result<(), String> {
         *now += 16;
     };
     step(&mut interp, &mut frame, &mut now, &[]);
-    for &(x, y) in args.taps {
-        let at = |kind| InputEvent {
-            kind,
-            pos: (x, y),
-            delta: (0.0, 0.0),
-            payload: None,
-            time_ms: u64::from(now),
-        };
-        let tap = [at(EventKind::PointerDown), at(EventKind::PointerUp)];
-        step(&mut interp, &mut frame, &mut now, &tap);
+    for what in args.steps {
+        let events = what.events(now);
+        step(&mut interp, &mut frame, &mut now, &events);
     }
     while now < args.at_ms {
         step(&mut interp, &mut frame, &mut now, &[]);

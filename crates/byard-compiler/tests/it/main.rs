@@ -11,6 +11,7 @@ mod anchored_overlay;
 mod button_defaults;
 mod callback_props;
 mod canvas_filled_paths;
+mod caret_blink;
 mod clip_path;
 mod color_alpha;
 mod control_grow;
@@ -53,6 +54,7 @@ mod retained_across_views;
 mod runner_loop;
 mod store_persistence;
 mod system_scheme;
+mod text_editing;
 mod text_field_events;
 
 mod text_field_style;

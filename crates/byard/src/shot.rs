@@ -79,6 +79,7 @@ impl Shot {
             delta,
             payload: None,
             time_ms: 0,
+            mods: byard_core::KeyModifiers::default(),
         };
         let steps = frames.max(1);
         #[allow(clippy::cast_precision_loss)]
@@ -109,8 +110,54 @@ impl Shot {
         self
     }
 
+    /// Presses a key, by the name the platform reports it (`"ArrowLeft"`,
+    /// `"Backspace"`, `"a"`), with no modifier held, after any gesture before
+    /// it (RFC-0041 §7). A person writes `Left`; [`KeyModifiers::parse_chord`]
+    /// turns that, and `shift+Left`, into what this takes.
+    #[must_use]
+    pub fn key(self, name: &str) -> Self {
+        self.key_with(name, byard_core::KeyModifiers::default())
+    }
+
+    /// Presses a key with `mods` held: one frame of input, a press then a
+    /// release, as a keyboard sends them.
+    #[must_use]
+    pub fn key_with(mut self, name: &str, mods: byard_core::KeyModifiers) -> Self {
+        let at = |kind| InputEvent {
+            kind,
+            pos: (0.0, 0.0),
+            delta: (0.0, 0.0),
+            payload: Some(byard_core::platform::InputPayload::Key(name.to_string())),
+            time_ms: 0,
+            mods,
+        };
+        self.gestures
+            .push(vec![at(EventKind::KeyDown), at(EventKind::KeyUp)]);
+        self
+    }
+
+    /// Types `text`, one character after another, as a keyboard does: all in
+    /// one frame, so a run of letters is one run of typing to undo.
+    #[must_use]
+    pub fn type_text(mut self, text: &str) -> Self {
+        let events = text
+            .chars()
+            .map(|c| InputEvent {
+                kind: EventKind::TextInput,
+                pos: (0.0, 0.0),
+                delta: (0.0, 0.0),
+                payload: Some(byard_core::platform::InputPayload::Key(c.to_string())),
+                time_ms: 0,
+                mods: byard_core::KeyModifiers::default(),
+            })
+            .collect();
+        self.gestures.push(events);
+        self
+    }
+
     /// Taps a logical point first. Taps happen in order, one per frame, at
-    /// the start of the run, so a shot can open the screen it wants.
+    /// the start of the run, so a shot can open the screen it wants. Keys and
+    /// typed text join them in the order they were added.
     #[must_use]
     pub fn tap(mut self, x: f32, y: f32) -> Self {
         let at = |kind| InputEvent {
@@ -119,6 +166,7 @@ impl Shot {
             delta: (0.0, 0.0),
             payload: None,
             time_ms: 0,
+            mods: byard_core::KeyModifiers::default(),
         };
         self.gestures
             .push(vec![at(EventKind::PointerDown), at(EventKind::PointerUp)]);
@@ -159,6 +207,8 @@ impl App {
         let mut interp = Interpreter::new();
         interp.set_dispatcher(dispatcher);
         interp.set_theme(theme);
+        // A picture shows the caret, whichever half of a blink it was taken in.
+        interp.set_caret_blink(false);
         interp.load_views(&views);
         let known: Vec<&str> = views.iter().map(|v| v.name.as_str()).collect();
         let root = byard_compiler::parser::ast::root_view(&views)
@@ -184,6 +234,7 @@ impl App {
                 delta: (0.0, 0.0),
                 payload: Some(byard_core::platform::InputPayload::Bool(dark)),
                 time_ms: 0,
+                mods: byard_core::KeyModifiers::default(),
             }]);
         }
         let mut trace = plan
@@ -418,6 +469,54 @@ mod tests {
 
     /// A traced shot writes a frame's scopes for every frame it draws. Skipped
     /// where there is no GPU to draw with.
+    /// A key is a press and a release carrying its modifiers, and typing is
+    /// one text event per character, all in one frame (RFC-0041 §7).
+    #[test]
+    fn a_key_and_typed_text_are_frames_of_input_in_the_order_added() {
+        let (shift, name) = byard_core::KeyModifiers::parse_chord("shift+Left").unwrap();
+        let plan = Shot::after(0)
+            .tap(10.0, 20.0)
+            .type_text("hé")
+            .key_with(&name, shift)
+            .key("Home");
+        let steps: Vec<Vec<(EventKind, Option<String>, bool)>> = plan
+            .gestures
+            .iter()
+            .map(|step| {
+                step.iter()
+                    .map(|e| {
+                        let text = match &e.payload {
+                            Some(byard_core::platform::InputPayload::Key(k)) => Some(k.clone()),
+                            _ => None,
+                        };
+                        (e.kind, text, e.mods.shift)
+                    })
+                    .collect()
+            })
+            .collect();
+        assert_eq!(
+            steps,
+            [
+                vec![
+                    (EventKind::PointerDown, None, false),
+                    (EventKind::PointerUp, None, false)
+                ],
+                vec![
+                    (EventKind::TextInput, Some("h".into()), false),
+                    (EventKind::TextInput, Some("é".into()), false),
+                ],
+                vec![
+                    (EventKind::KeyDown, Some("ArrowLeft".into()), true),
+                    (EventKind::KeyUp, Some("ArrowLeft".into()), true),
+                ],
+                vec![
+                    (EventKind::KeyDown, Some("Home".into()), false),
+                    (EventKind::KeyUp, Some("Home".into()), false),
+                ],
+            ]
+        );
+    }
+
     #[test]
     fn a_traced_shot_writes_every_frame() {
         let dir = std::env::temp_dir().join(format!("byard-shot-trace-{}", std::process::id()));

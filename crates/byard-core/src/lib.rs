@@ -27,6 +27,7 @@
 pub mod atlas;
 pub mod bridge;
 pub mod cap;
+pub mod clipboard;
 pub mod color;
 pub mod encoder;
 pub mod engine;
@@ -38,6 +39,7 @@ pub mod render;
 pub mod telemetry;
 pub mod text;
 
+pub use clipboard::{Clipboard, MemoryClipboard};
 pub use encoder::BoxInstance;
 pub use encoder::text_glyph::TextLine;
 pub use engine::{Census, Engine};

@@ -14,11 +14,13 @@
 use std::io::{Read, Write};
 use std::path::{Component, Path};
 
+use crate::error::ProjectError;
+
 const BLOCK: usize = 512;
 
 /// Packs `files` (relative path, contents) into a gzip-compressed ustar
 /// archive. Paths use `/` and must fit ustar's 255-byte name.
-pub fn pack(files: &[(String, Vec<u8>)]) -> Result<Vec<u8>, String> {
+pub fn pack(files: &[(String, Vec<u8>)]) -> Result<Vec<u8>, ProjectError> {
     write(files, |_| 0o644, flate2::Compression::best())
 }
 
@@ -31,7 +33,7 @@ pub fn pack(files: &[(String, Vec<u8>)]) -> Result<Vec<u8>, String> {
 pub fn pack_tree(
     files: &[(String, Vec<u8>)],
     executable: impl Fn(&str) -> bool,
-) -> Result<Vec<u8>, String> {
+) -> Result<Vec<u8>, ProjectError> {
     write(
         files,
         |path| if executable(path) { 0o755 } else { 0o644 },
@@ -43,7 +45,7 @@ fn write(
     files: &[(String, Vec<u8>)],
     mode: impl Fn(&str) -> u32,
     level: flate2::Compression,
-) -> Result<Vec<u8>, String> {
+) -> Result<Vec<u8>, ProjectError> {
     let mut sorted: Vec<&(String, Vec<u8>)> = files.iter().collect();
     sorted.sort_by(|a, b| a.0.cmp(&b.0));
 
@@ -57,17 +59,19 @@ fn write(
     tar.resize(tar.len() + 2 * BLOCK, 0);
 
     let mut gz = flate2::GzBuilder::new().mtime(0).write(Vec::new(), level);
-    gz.write_all(&tar).map_err(|e| e.to_string())?;
-    gz.finish().map_err(|e| e.to_string())
+    gz.write_all(&tar)
+        .map_err(|e| ProjectError::archive("", e.to_string()))?;
+    gz.finish()
+        .map_err(|e| ProjectError::archive("", e.to_string()))
 }
 
 /// Unpacks an archive written by [`pack`] into `dest`, returning the paths
 /// it wrote.
-pub fn unpack(archive: &[u8], dest: &Path) -> Result<Vec<String>, String> {
+pub fn unpack(archive: &[u8], dest: &Path) -> Result<Vec<String>, ProjectError> {
     let mut tar = Vec::new();
     flate2::read::GzDecoder::new(archive)
         .read_to_end(&mut tar)
-        .map_err(|e| format!("not a package archive: {e}"))?;
+        .map_err(|e| ProjectError::archive("", format!("not a package archive: {e}")))?;
 
     let mut written = Vec::new();
     let mut at = 0;
@@ -83,24 +87,31 @@ pub fn unpack(archive: &[u8], dest: &Path) -> Result<Vec<String>, String> {
         } else {
             format!("{prefix}/{name}")
         };
-        let size = octal(&h[124..136]).ok_or_else(|| format!("`{path}`: bad size"))?;
+        let size = octal(&h[124..136])
+            .ok_or_else(|| ProjectError::archive(&path, format!("`{path}`: bad size")))?;
         let kind = h[156];
         if kind != b'0' && kind != 0 {
-            return Err(format!("`{path}`: only regular files belong in a package"));
+            return Err(ProjectError::archive(
+                &path,
+                format!("`{path}`: only regular files belong in a package"),
+            ));
         }
         if !safe_relative(&path) {
-            return Err(format!("`{path}`: a path outside the package"));
+            return Err(ProjectError::archive(
+                &path,
+                format!("`{path}`: a path outside the package"),
+            ));
         }
         let start = at + BLOCK;
         let end = start + size;
-        let bytes = tar
-            .get(start..end)
-            .ok_or_else(|| format!("`{path}`: archive is truncated"))?;
+        let bytes = tar.get(start..end).ok_or_else(|| {
+            ProjectError::archive(&path, format!("`{path}`: archive is truncated"))
+        })?;
         let out = dest.join(&path);
         if let Some(parent) = out.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+            std::fs::create_dir_all(parent).map_err(|e| ProjectError::io(parent, e))?;
         }
-        std::fs::write(&out, bytes).map_err(|e| format!("{}: {e}", out.display()))?;
+        std::fs::write(&out, bytes).map_err(|e| ProjectError::io(&out, e))?;
         written.push(path);
         at = start + size.div_ceil(BLOCK) * BLOCK;
     }
@@ -108,10 +119,11 @@ pub fn unpack(archive: &[u8], dest: &Path) -> Result<Vec<String>, String> {
 }
 
 /// One ustar header for a regular file.
-fn header(path: &str, size: usize, mode: u32) -> Result<[u8; BLOCK], String> {
+fn header(path: &str, size: usize, mode: u32) -> Result<[u8; BLOCK], ProjectError> {
     if !safe_relative(path) {
-        return Err(format!(
-            "`{path}`: a package path must be relative and inside it"
+        return Err(ProjectError::archive(
+            path,
+            format!("`{path}`: a package path must be relative and inside it"),
         ));
     }
     let mut h = [0u8; BLOCK];
@@ -122,7 +134,9 @@ fn header(path: &str, size: usize, mode: u32) -> Result<[u8; BLOCK], String> {
         let cut = path[..path.len().min(156)]
             .rfind('/')
             .filter(|&i| path.len() - i - 1 <= 100)
-            .ok_or_else(|| format!("`{path}`: too long for a package archive"))?;
+            .ok_or_else(|| {
+                ProjectError::archive(path, format!("`{path}`: too long for a package archive"))
+            })?;
         (&path[..cut], &path[cut + 1..])
     };
     h[..name.len()].copy_from_slice(name.as_bytes());
@@ -273,7 +287,8 @@ mod tests {
         let archive = gz.finish().unwrap();
         let dir = scratch("escape");
         let err = unpack(&archive, &dir.join("inner")).unwrap_err();
-        assert!(err.contains("outside"), "{err}");
+        assert!(matches!(err, ProjectError::Archive { .. }), "{err:?}");
+        assert!(err.to_string().contains("outside"), "{err}");
         assert!(!dir.join("evil").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }

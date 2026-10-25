@@ -142,6 +142,14 @@ enum Command {
         /// Tap a logical point before the picture, `X,Y`; repeatable.
         #[arg(long, value_name = "X,Y", value_parser = parse_point)]
         tap: Vec<(f32, f32)>,
+        /// Press a key before the picture, like `Left`, `shift+Left` or
+        /// `mod+a`; repeatable. Applied in order with `--tap` and `--type`.
+        #[arg(long, value_name = "KEY", value_parser = parse_key)]
+        key: Vec<commands::shot::Key>,
+        /// Type text before the picture; repeatable. Applied in order with
+        /// `--tap` and `--key`.
+        #[arg(long = "type", value_name = "TEXT")]
+        type_text: Vec<String>,
     },
     /// Publish the package in this directory to a registry (RFC-0008).
     Publish {
@@ -186,8 +194,57 @@ fn parse_point(s: &str) -> Result<(f32, f32), String> {
     ))
 }
 
+/// A key chord, for `byard shot --key`.
+fn parse_key(s: &str) -> Result<commands::shot::Key, String> {
+    let (mods, name) = byard_core::KeyModifiers::parse_chord(s)?;
+    Ok(commands::shot::Key { name, mods })
+}
+
+/// The taps, keys and typed text of `byard shot`, in the order they were
+/// written on the command line. clap collects each flag into its own list, so
+/// the order between lists is read back from the positions it recorded.
+fn shot_steps(
+    matches: &clap::ArgMatches,
+    taps: &[(f32, f32)],
+    keys: &[commands::shot::Key],
+    typed: &[String],
+) -> Vec<commands::shot::Step> {
+    use commands::shot::Step;
+    let Some(shot) = matches.subcommand_matches("shot") else {
+        return Vec::new();
+    };
+    let at = |id: &str| -> Vec<usize> {
+        shot.indices_of(id)
+            .map(Iterator::collect)
+            .unwrap_or_default()
+    };
+    let mut steps: Vec<(usize, Step)> = Vec::new();
+    steps.extend(
+        at("tap")
+            .into_iter()
+            .zip(taps)
+            .map(|(i, &(x, y))| (i, Step::Tap(x, y))),
+    );
+    steps.extend(
+        at("key")
+            .into_iter()
+            .zip(keys)
+            .map(|(i, k)| (i, Step::Key(k.clone()))),
+    );
+    steps.extend(
+        at("type_text")
+            .into_iter()
+            .zip(typed)
+            .map(|(i, t)| (i, Step::Type(t.clone()))),
+    );
+    steps.sort_by_key(|(i, _)| *i);
+    steps.into_iter().map(|(_, s)| s).collect()
+}
+
 fn main() {
-    let cli = Cli::parse();
+    let matches = <Cli as clap::CommandFactory>::command().get_matches();
+    let cli =
+        <Cli as clap::FromArgMatches>::from_arg_matches(&matches).unwrap_or_else(|e| e.exit());
     let result = match cli.command {
         Command::New { name } => commands::new::run(&name),
         Command::Dev {
@@ -244,6 +301,8 @@ fn main() {
             dark,
             light,
             tap,
+            key,
+            type_text,
         } => commands::shot::run(&commands::shot::ShotArgs {
             path: path.as_deref(),
             out: &out,
@@ -257,7 +316,7 @@ fn main() {
             } else {
                 None
             },
-            taps: &tap,
+            steps: &shot_steps(&matches, &tap, &key, &type_text),
         }),
         Command::Publish { package, registry } => {
             commands::publish::run(&commands::publish::PublishArgs {
@@ -273,5 +332,84 @@ fn main() {
             style::err(&e);
         }
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use commands::shot::Step;
+
+    /// The steps `byard shot` would take for these arguments.
+    fn steps_of(args: &[&str]) -> Vec<Step> {
+        let matches = <Cli as clap::CommandFactory>::command()
+            .try_get_matches_from(std::iter::once("byard").chain(args.iter().copied()))
+            .expect("arguments clap accepts");
+        let cli = <Cli as clap::FromArgMatches>::from_arg_matches(&matches).unwrap();
+        let Command::Shot {
+            tap,
+            key,
+            type_text,
+            ..
+        } = cli.command
+        else {
+            panic!("a shot");
+        };
+        shot_steps(&matches, &tap, &key, &type_text)
+    }
+
+    fn key(chord: &str) -> Step {
+        Step::Key(parse_key(chord).unwrap())
+    }
+
+    /// RFC-0041 §7: taps, keys and typed text run in the order they were
+    /// written, whichever flag each one is, which clap alone would lose (it
+    /// collects each flag into a list of its own).
+    #[test]
+    fn taps_keys_and_typed_text_run_in_the_order_they_were_written() {
+        let steps = steps_of(&[
+            "shot",
+            "--tap",
+            "200,120",
+            "--type",
+            "hello",
+            "--key",
+            "Left",
+            "--key",
+            "shift+Left",
+            "--tap",
+            "10,20",
+            "--type",
+            "!",
+            "--key",
+            "mod+a",
+        ]);
+        assert_eq!(
+            steps,
+            [
+                Step::Tap(200.0, 120.0),
+                Step::Type("hello".into()),
+                key("Left"),
+                key("shift+Left"),
+                Step::Tap(10.0, 20.0),
+                Step::Type("!".into()),
+                key("mod+a"),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_shot_with_no_steps_has_none() {
+        assert_eq!(steps_of(&["shot"]).len(), 0);
+    }
+
+    #[test]
+    fn a_key_names_the_platforms_key_and_what_is_held() {
+        let Step::Key(k) = key("shift+Left") else {
+            panic!("a key");
+        };
+        assert_eq!(k.name, "ArrowLeft");
+        assert!(k.mods.shift && !k.mods.ctrl);
+        assert!(parse_key("shift+Flibber").is_err());
     }
 }

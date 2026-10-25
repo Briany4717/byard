@@ -2982,6 +2982,7 @@ fn wheel_over_a_scrollview_scrolls_and_clamps_the_offset() {
             delta: (0.0, dy),
             payload: None,
             time_ms: 0,
+            mods: byard_core::KeyModifiers::default(),
         }]);
         interp.tick();
         let mut f = byard_core::frame::RenderFrame::new();
@@ -3094,6 +3095,7 @@ fn drag_on_scrollview_content_scrolls_and_clamps() {
         delta: (0.0, 0.0),
         payload: None,
         time_ms: 0,
+        mods: byard_core::KeyModifiers::default(),
     };
 
     // Press on inert content, then drag up 50px → content scrolls down 50.
@@ -3161,6 +3163,7 @@ fn page_snap_settles_to_nearest_page_on_release() {
         delta: (0.0, 0.0),
         payload: None,
         time_ms: 0,
+        mods: byard_core::KeyModifiers::default(),
     };
 
     interp.dispatch_events(&[ev(K::PointerDown, 50.0, 50.0)]);
@@ -3206,6 +3209,7 @@ fn on_end_reached_fires_once_past_threshold() {
         delta: (0.0, 0.0),
         payload: None,
         time_ms: 0,
+        mods: byard_core::KeyModifiers::default(),
     };
     assert_eq!(
         interp.peek(loaded),
@@ -3290,6 +3294,7 @@ fn page_reflects_on_wheel_scroll_without_a_release() {
         delta: (-120.0, 0.0),
         payload: None,
         time_ms: 0,
+        mods: byard_core::KeyModifiers::default(),
     }]);
     assert_eq!(
         interp.peek(pg),
@@ -3327,6 +3332,7 @@ fn wheel_scroll_snaps_to_a_page_after_settling() {
         delta: (-60.0, 0.0), // offX → 60 (not yet a page boundary)
         payload: None,
         time_ms: 0,
+        mods: byard_core::KeyModifiers::default(),
     }]);
     // Render successive idle frames with the offset held still; the settle
     // counts stable frames and snaps once it reaches its threshold.
@@ -3373,6 +3379,7 @@ fn wheel_scroll_does_not_snap_while_still_moving() {
         delta: (dx, 0.0),
         payload: None,
         time_ms: 0,
+        mods: byard_core::KeyModifiers::default(),
     };
     // Several small scrolls, each followed by a render (offset keeps moving),
     // so the settle count resets every frame and never snaps mid-motion.
@@ -3425,6 +3432,7 @@ fn snap_page_keyword_is_not_shadowed_by_a_same_named_var() {
         delta: (-70.0, 0.0),
         payload: None,
         time_ms: 0,
+        mods: byard_core::KeyModifiers::default(),
     }]);
     for _ in 0..8 {
         interp.render(&tree, &mut frame, 400.0, 300.0);
@@ -3479,6 +3487,7 @@ fn page_snap_glides_smoothly_when_a_clock_is_advancing() {
         delta: (-70.0, 0.0),
         payload: None,
         time_ms: 0,
+        mods: byard_core::KeyModifiers::default(),
     }]);
     let mut saw_intermediate = false;
     for step in 1..=60 {
@@ -3526,6 +3535,7 @@ fn momentum_scroll_does_not_snap_until_it_goes_quiet() {
         delta: (dx, 0.0),
         payload: None,
         time_ms: 0,
+        mods: byard_core::KeyModifiers::default(),
     };
     // Five momentum frames (input every frame) accumulate to offset 75 without
     // ever snapping, each event restarts the quiet countdown.
@@ -3587,6 +3597,7 @@ fn item_snap_settles_to_the_nearest_child_boundary() {
         delta: (-60.0, 0.0),
         payload: None,
         time_ms: 0,
+        mods: byard_core::KeyModifiers::default(),
     }]);
     for _ in 0..8 {
         interp.render(&tree, &mut frame, 400.0, 300.0);
@@ -3630,6 +3641,7 @@ fn fast_fling_projects_one_page_forward() {
         delta: (dx, 0.0),
         payload: None,
         time_ms: t,
+        mods: byard_core::KeyModifiers::default(),
     };
     // Two quick flicks 20px apart in 40ms → ~500 px/s, well past 150 dp/s, but
     // the offset only reaches 40, short of the page-0→1 midpoint (50).
@@ -3909,6 +3921,7 @@ fn item_snap_align_center_centres_the_item() {
         delta: (-75.0, 0.0),
         payload: None,
         time_ms: 0,
+        mods: byard_core::KeyModifiers::default(),
     }]);
     for _ in 0..8 {
         interp.render(&tree, &mut frame, 400.0, 300.0);
@@ -3952,6 +3965,7 @@ fn snap_spring_override_checks_and_snaps() {
         delta: (-70.0, 0.0),
         payload: None,
         time_ms: 0,
+        mods: byard_core::KeyModifiers::default(),
     }]);
     for _ in 0..8 {
         interp.render(&tree, &mut frame, 400.0, 300.0);
@@ -4022,6 +4036,7 @@ fn pull_past_threshold_fires_refresh_and_retracts_when_cleared() {
         delta: (0.0, 0.0),
         payload: None,
         time_ms: 0,
+        mods: byard_core::KeyModifiers::default(),
     };
     // Press at the top, drag down 130px (past the elastic threshold), release.
     interp.dispatch_events(&[ev(K::PointerDown, 12.0)]);
@@ -4063,6 +4078,7 @@ fn short_pull_retracts_without_refreshing() {
         delta: (0.0, 0.0),
         payload: None,
         time_ms: 0,
+        mods: byard_core::KeyModifiers::default(),
     };
     // Only a 20px pull, well under the threshold.
     interp.dispatch_events(&[ev(K::PointerDown, 12.0)]);
@@ -4105,6 +4121,7 @@ fn drag_defers_to_interactive_children() {
         delta: (0.0, 0.0),
         payload: None,
         time_ms: 0,
+        mods: byard_core::KeyModifiers::default(),
     };
 
     // Press on the Button (top 60px), then drag: the button owns the press,
@@ -4170,6 +4187,7 @@ fn horizontal_scrollview_scrolls_offset_x_by_wheel() {
             delta: (dx, 0.0),
             payload: None,
             time_ms: 0,
+            mods: byard_core::KeyModifiers::default(),
         }]);
         interp.tick();
     };
@@ -4232,6 +4250,7 @@ fn both_axis_scrollview_pans_in_two_dimensions_by_drag() {
         delta: (0.0, 0.0),
         payload: None,
         time_ms: 0,
+        mods: byard_core::KeyModifiers::default(),
     };
 
     // Press mid-viewport, drag up-left 60px each → pan right 60, down 60.
@@ -4333,6 +4352,7 @@ fn windowed_scrollview_preserves_scroll_extent() {
         delta: (0.0, -10_000.0),
         payload: None,
         time_ms: 0,
+        mods: byard_core::KeyModifiers::default(),
     }]);
     let clamped = match interp.peek(y) {
         Value::Float(f) => f as f32,
@@ -4838,6 +4858,7 @@ fn hover_state_block_recolours_after_pointer_enters() {
         delta: (0.0, 0.0),
         payload: None,
         time_ms: 0,
+        mods: byard_core::KeyModifiers::default(),
     }]);
     interp.tick();
     let mut frame2 = byard_core::frame::RenderFrame::new();
@@ -5031,6 +5052,7 @@ fn toggle_tap_flips_bound_var() {
             delta: (0.0, 0.0),
             payload: None,
             time_ms: 0,
+            mods: byard_core::KeyModifiers::default(),
         },
         byard_core::platform::InputEvent {
             kind: byard_core::platform::EventKind::PointerUp,
@@ -5038,6 +5060,7 @@ fn toggle_tap_flips_bound_var() {
             delta: (0.0, 0.0),
             payload: None,
             time_ms: 50,
+            mods: byard_core::KeyModifiers::default(),
         },
     ]);
     interp.tick();
@@ -5056,6 +5079,7 @@ fn toggle_tap_flips_bound_var() {
             delta: (0.0, 0.0),
             payload: None,
             time_ms: 400,
+            mods: byard_core::KeyModifiers::default(),
         },
         byard_core::platform::InputEvent {
             kind: byard_core::platform::EventKind::PointerUp,
@@ -5063,6 +5087,7 @@ fn toggle_tap_flips_bound_var() {
             delta: (0.0, 0.0),
             payload: None,
             time_ms: 450,
+            mods: byard_core::KeyModifiers::default(),
         },
     ]);
     interp.tick();
@@ -5183,6 +5208,7 @@ fn checkbox_tap_flips_bound_var() {
             delta: (0.0, 0.0),
             payload: None,
             time_ms: 0,
+            mods: byard_core::KeyModifiers::default(),
         },
         byard_core::platform::InputEvent {
             kind: byard_core::platform::EventKind::PointerUp,
@@ -5190,6 +5216,7 @@ fn checkbox_tap_flips_bound_var() {
             delta: (0.0, 0.0),
             payload: None,
             time_ms: 50,
+            mods: byard_core::KeyModifiers::default(),
         },
     ]);
     interp.tick();
@@ -5217,6 +5244,7 @@ fn checkbox_space_key_toggles_when_focused() {
             delta: (0.0, 0.0),
             payload: None,
             time_ms: 0,
+            mods: byard_core::KeyModifiers::default(),
         },
         byard_core::platform::InputEvent {
             kind: byard_core::platform::EventKind::KeyDown,
@@ -5224,6 +5252,7 @@ fn checkbox_space_key_toggles_when_focused() {
             delta: (0.0, 0.0),
             payload: Some(byard_core::platform::InputPayload::Key(" ".to_string())),
             time_ms: 10,
+            mods: byard_core::KeyModifiers::default(),
         },
     ]);
     interp.tick();
@@ -5291,6 +5320,7 @@ fn radio_tap_selects_its_value() {
             delta: (0.0, 0.0),
             payload: None,
             time_ms: 0,
+            mods: byard_core::KeyModifiers::default(),
         },
         byard_core::platform::InputEvent {
             kind: byard_core::platform::EventKind::PointerUp,
@@ -5298,6 +5328,7 @@ fn radio_tap_selects_its_value() {
             delta: (0.0, 0.0),
             payload: None,
             time_ms: 50,
+            mods: byard_core::KeyModifiers::default(),
         },
     ]);
     interp.tick();
@@ -5337,6 +5368,7 @@ fn radio_group_is_mutually_exclusive_via_the_shared_var() {
             delta: (0.0, 0.0),
             payload: None,
             time_ms: 0,
+            mods: byard_core::KeyModifiers::default(),
         },
         byard_core::platform::InputEvent {
             kind: byard_core::platform::EventKind::PointerUp,
@@ -5344,6 +5376,7 @@ fn radio_group_is_mutually_exclusive_via_the_shared_var() {
             delta: (0.0, 0.0),
             payload: None,
             time_ms: 50,
+            mods: byard_core::KeyModifiers::default(),
         },
     ]);
     interp.tick();
@@ -5383,6 +5416,7 @@ fn radio_arrow_keys_move_selection_with_wrap() {
         delta: (0.0, 0.0),
         payload: None,
         time_ms: 0,
+        mods: byard_core::KeyModifiers::default(),
     }]);
     interp.tick();
     assert_eq!(interp.peek(sig), Value::Str("home".to_string()));
@@ -5398,6 +5432,7 @@ fn radio_arrow_keys_move_selection_with_wrap() {
             delta: (0.0, 0.0),
             payload: Some(byard_core::platform::InputPayload::Key(key.to_string())),
             time_ms: 10,
+            mods: byard_core::KeyModifiers::default(),
         }]);
         interp.tick();
         match interp.peek(sig) {
@@ -5622,6 +5657,7 @@ fn slider_drag_sets_float_value() {
         delta: (0.0, 0.0),
         payload: None,
         time_ms: 0,
+        mods: byard_core::KeyModifiers::default(),
     }]);
     interp.tick();
 
@@ -5663,6 +5699,7 @@ fn slider_value_has_no_f32_widening_tail() {
         delta: (0.0, 0.0),
         payload: None,
         time_ms: 0,
+        mods: byard_core::KeyModifiers::default(),
     }]);
     interp.tick();
 
@@ -5703,6 +5740,7 @@ fn slider_with_step_does_not_emit_more_decimals_than_the_step() {
         delta: (0.0, 0.0),
         payload: None,
         time_ms: 0,
+        mods: byard_core::KeyModifiers::default(),
     }]);
     interp.tick();
 
@@ -5736,6 +5774,7 @@ fn text_field_change_event_round_trips() {
         delta: (0.0, 0.0),
         payload: Some(byard_core::platform::InputPayload::Str("hello".to_string())),
         time_ms: 0,
+        mods: byard_core::KeyModifiers::default(),
     }]);
     assert_eq!(interp.peek(sig), Value::Str("hello".to_string()));
 
@@ -5747,6 +5786,7 @@ fn text_field_change_event_round_trips() {
         delta: (0.0, 0.0),
         payload: Some(byard_core::platform::InputPayload::Str("hello".to_string())),
         time_ms: 1,
+        mods: byard_core::KeyModifiers::default(),
     }]);
     assert_eq!(interp.peek(sig), before, "equal value deduped");
 }
@@ -5790,6 +5830,7 @@ fn text_field_receives_keyboard_text_input() {
             delta: (0.0, 0.0),
             payload: None,
             time_ms: 0,
+            mods: byard_core::KeyModifiers::default(),
         },
         byard_core::platform::InputEvent {
             kind: byard_core::platform::EventKind::PointerUp,
@@ -5797,6 +5838,7 @@ fn text_field_receives_keyboard_text_input() {
             delta: (0.0, 0.0),
             payload: None,
             time_ms: 50,
+            mods: byard_core::KeyModifiers::default(),
         },
     ]);
     interp2.tick();
@@ -5809,6 +5851,7 @@ fn text_field_receives_keyboard_text_input() {
         delta: (0.0, 0.0),
         payload: Some(byard_core::platform::InputPayload::Key("a".to_string())),
         time_ms: 100,
+        mods: byard_core::KeyModifiers::default(),
     }]);
     interp2.dispatch_events(&[byard_core::platform::InputEvent {
         kind: byard_core::platform::EventKind::TextInput,
@@ -5816,6 +5859,7 @@ fn text_field_receives_keyboard_text_input() {
         delta: (0.0, 0.0),
         payload: Some(byard_core::platform::InputPayload::Key("b".to_string())),
         time_ms: 200,
+        mods: byard_core::KeyModifiers::default(),
     }]);
     interp2.tick();
     assert_eq!(
@@ -5834,6 +5878,7 @@ fn text_field_receives_keyboard_text_input() {
             "Backspace".to_string(),
         )),
         time_ms: 300,
+        mods: byard_core::KeyModifiers::default(),
     }]);
     interp2.tick();
     assert_eq!(
@@ -5874,6 +5919,7 @@ fn tab_key_advances_focus_through_text_fields() {
         delta: (0.0, 0.0),
         payload: Some(byard_core::platform::InputPayload::Key("Tab".to_string())),
         time_ms: 0,
+        mods: byard_core::KeyModifiers::default(),
     }]);
     interp.tick();
     assert_eq!(
@@ -5891,6 +5937,7 @@ fn tab_key_advances_focus_through_text_fields() {
         delta: (0.0, 0.0),
         payload: Some(byard_core::platform::InputPayload::Key("Tab".to_string())),
         time_ms: 100,
+        mods: byard_core::KeyModifiers::default(),
     }]);
     interp.tick();
     assert_eq!(interp.peek(fa), Value::Bool(false), "first field blurred");
@@ -6782,6 +6829,7 @@ fn modal_overlay_blocks_the_main_tree_and_dismisses_on_outside_tap() {
                 delta: (0.0, 0.0),
                 payload: None,
                 time_ms: t,
+                mods: byard_core::KeyModifiers::default(),
             },
             byard_core::platform::InputEvent {
                 kind: byard_core::platform::EventKind::PointerUp,
@@ -6789,6 +6837,7 @@ fn modal_overlay_blocks_the_main_tree_and_dismisses_on_outside_tap() {
                 delta: (0.0, 0.0),
                 payload: None,
                 time_ms: t + 20,
+                mods: byard_core::KeyModifiers::default(),
             },
         ]
     };
@@ -6842,6 +6891,7 @@ fn modal_overlay_content_wins_over_the_scrim() {
             delta: (0.0, 0.0),
             payload: None,
             time_ms: 0,
+            mods: byard_core::KeyModifiers::default(),
         },
         byard_core::platform::InputEvent {
             kind: byard_core::platform::EventKind::PointerUp,
@@ -6849,6 +6899,7 @@ fn modal_overlay_content_wins_over_the_scrim() {
             delta: (0.0, 0.0),
             payload: None,
             time_ms: 20,
+            mods: byard_core::KeyModifiers::default(),
         },
     ]);
     interp.tick();
@@ -6889,6 +6940,7 @@ fn escape_dismisses_the_topmost_modal_overlay() {
         delta: (0.0, 0.0),
         payload: Some(byard_core::platform::InputPayload::Key("Escape".into())),
         time_ms: 0,
+        mods: byard_core::KeyModifiers::default(),
     }]);
     interp.tick();
     assert_eq!(
@@ -6935,6 +6987,7 @@ fn when_gated_overlay_unmounts_live_on_dismiss() {
             delta: (0.0, 0.0),
             payload: None,
             time_ms: 0,
+            mods: byard_core::KeyModifiers::default(),
         },
         byard_core::platform::InputEvent {
             kind: byard_core::platform::EventKind::PointerUp,
@@ -6942,6 +6995,7 @@ fn when_gated_overlay_unmounts_live_on_dismiss() {
             delta: (0.0, 0.0),
             payload: None,
             time_ms: 20,
+            mods: byard_core::KeyModifiers::default(),
         },
     ]);
     interp.tick();
@@ -6984,6 +7038,7 @@ fn non_modal_overlay_lets_taps_fall_through() {
             delta: (0.0, 0.0),
             payload: None,
             time_ms: 0,
+            mods: byard_core::KeyModifiers::default(),
         },
         byard_core::platform::InputEvent {
             kind: byard_core::platform::EventKind::PointerUp,
@@ -6991,6 +7046,7 @@ fn non_modal_overlay_lets_taps_fall_through() {
             delta: (0.0, 0.0),
             payload: None,
             time_ms: 20,
+            mods: byard_core::KeyModifiers::default(),
         },
     ]);
     interp.tick();
@@ -7132,6 +7188,7 @@ fn pointer(
         delta: (0.0, 0.0),
         payload: None,
         time_ms: t,
+        mods: byard_core::KeyModifiers::default(),
     }
 }
 

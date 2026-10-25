@@ -112,6 +112,7 @@ fn a_path_whose_numbers_changed_is_tessellated_again() {
         delta: (0.0, 0.0),
         payload: None,
         time_ms: 1,
+        mods: byard_core::KeyModifiers::default(),
     }]);
     interp.tick();
     let mut frame = RenderFrame::new();

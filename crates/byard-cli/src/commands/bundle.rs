@@ -141,7 +141,8 @@ pub fn run(
     if archive {
         let file = out.join(archive_name(&exe, &naming.version));
         let files = tree_files(&written.root)?;
-        let bytes = archive::pack_tree(&files, |path| path.starts_with("bin/"))?;
+        let bytes = archive::pack_tree(&files, |path| path.starts_with("bin/"))
+            .map_err(|e| e.to_string())?;
         write_file(&file, bytes)?;
         style::fact("Archive", &file.display().to_string());
     }
@@ -184,9 +185,9 @@ fn tree_files(root: &Path) -> Result<Vec<(String, Vec<u8>)>, String> {
 
 /// The project at `path`, resolved, an app's, and free of errors.
 fn load(path: Option<&Path>) -> Result<(Manifest, crate::deps::FsProvider), String> {
-    let manifest = Manifest::discover(path)?;
-    manifest.require_app("bundle")?;
-    let (program, provider) = resolve_project(&manifest)?;
+    let manifest = Manifest::discover(path).map_err(|e| e.to_string())?;
+    manifest.require_app("bundle").map_err(|e| e.to_string())?;
+    let (program, provider) = resolve_project(&manifest).map_err(|e| e.to_string())?;
     if !program.errors.is_empty() {
         crate::commands::check::print_diagnostics(&program.errors, &program.source_map, false);
         return Err(format!(

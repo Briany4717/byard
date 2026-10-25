@@ -197,6 +197,11 @@ pub(super) struct Bridge {
     /// produces exactly one reply, and the reply removes its entry. A timer's
     /// continuation is never recorded, because its task is aborted with it.
     discarded: HashMap<u64, Span>,
+    /// How many of `continuations` belong to the engine's own timers (the
+    /// caret's blink, RFC-0041 §6) rather than to a call or a view's effect.
+    /// They are always armed while a field has focus, so a harness waiting for
+    /// "nothing outstanding" must not count them.
+    engine_timers: usize,
     /// Monotonic continuation id source.
     next_id: u64,
     /// The structural effects lowered so far.
@@ -251,6 +256,16 @@ impl Bridge {
         );
         id
     }
+}
+
+/// A timer the engine armed for itself, not one a view wrote (RFC-0041 §6):
+/// the handle whose drop cancels the task, and the continuation its ticks
+/// resume into.
+pub(super) struct EngineTimer {
+    /// Dropping it aborts the task.
+    _handle: TimerHandle,
+    /// The id registered in the continuation table, withdrawn on cancel.
+    continuation: u64,
 }
 
 /// The handle an `inject` binds when nothing provides the named type and
@@ -885,6 +900,46 @@ impl Interpreter {
         }
     }
 
+    /// Arms a repeating timer that runs `tick` every `period_ms` and belongs to
+    /// the engine rather than to a view (RFC-0041 §6: the caret's blink).
+    ///
+    /// It travels the path a written `every` does: a continuation, a Tokio
+    /// task, a [`TimerTick`] on the reply channel, and one wake of the logic
+    /// thread per tick, which is the whole cost of it. `None` where there is
+    /// no dispatcher (`byard check`, a headless shot, a test that wired none):
+    /// the caller then has no animation to run, which is what those want.
+    pub(super) fn arm_engine_timer(&mut self, period_ms: u64, tick: Action) -> Option<EngineTimer> {
+        let dispatcher = self.bridge.dispatcher.clone()?;
+        let arms = Rc::new(RefCell::new(CallArms {
+            ok: Some(tick),
+            err: None,
+        }));
+        let continuation = self
+            .bridge
+            .open(arms, None, Span::new(0, 0), true, Vec::new());
+        let Some(handle) = dispatcher.spawn_timer(true, period_ms, continuation) else {
+            self.bridge.continuations.remove(&continuation);
+            return None;
+        };
+        self.bridge.engine_timers += 1;
+        Some(EngineTimer {
+            _handle: handle,
+            continuation,
+        })
+    }
+
+    /// Cancels a timer from [`arm_engine_timer`](Self::arm_engine_timer): the
+    /// task is aborted by dropping its handle, and a tick already queued
+    /// finds no continuation and is dropped.
+    pub(super) fn cancel_engine_timer(&mut self, timer: EngineTimer) {
+        let continuation = timer.continuation;
+        // Dropping the handle is what aborts the task.
+        drop(timer);
+        if self.bridge.continuations.remove(&continuation).is_some() {
+            self.bridge.engine_timers = self.bridge.engine_timers.saturating_sub(1);
+        }
+    }
+
     /// Cancels effect `index`'s timer and forgets its continuation.
     fn disarm_timer(&mut self, index: usize) {
         if let Some(slot) = self.bridge.effects.get_mut(index) {
@@ -930,6 +985,11 @@ impl Interpreter {
         self.remember_discarded(|_| true);
         self.bridge.effects.clear();
         self.bridge.queue.borrow_mut().clear();
+        // The caret's blink is a continuation too, and the one just dropped:
+        // the next frame that draws a focused field starts it again.
+        self.blink = None;
+        self.bridge.engine_timers = 0;
+        self.caret_off.set(false);
     }
 
     /// Drops every continuation matching `doomed`, keeping its call site so a
@@ -960,7 +1020,10 @@ impl Interpreter {
     /// takes its scope's calls with it.
     #[must_use]
     pub fn outstanding_continuations(&self) -> usize {
-        self.bridge.continuations.len()
+        self.bridge
+            .continuations
+            .len()
+            .saturating_sub(self.bridge.engine_timers)
     }
 
     /// How many requests native views have made that are not yet answered

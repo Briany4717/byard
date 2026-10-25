@@ -39,6 +39,7 @@ fn run(src: &str, taps: usize) -> (Vec<String>, Vec<CompileError>) {
             delta: (0.0, 0.0),
             payload: None,
             time_ms: time,
+            mods: byard_core::KeyModifiers::default(),
         };
         let time = 100 + t as u64 * 100;
         interp.dispatch_events(&[

@@ -1,0 +1,9 @@
+main.byd:4:29: error[UnknownName]: nothing here is named `cuont` (did you mean `count`?)
+  |
+4 |         Text("Forecast for {cuont} days")
+  |                             ^^^^^
+forecast.byd:2:15: error[UnknownName]: nothing here is named `prmary`
+  |
+2 |     Box #[bg: prmary, p: 8] {
+  |               ^^^^^^
+Error: 2 errors in the project's views (shown above)

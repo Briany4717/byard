@@ -53,16 +53,17 @@ cargo run -p byard-cli -- shot examples/aura_weather -o aura.png
 
 There are about forty small examples under
 [`crates/byard-cli/examples`](crates/byard-cli/examples), one per feature:
-`todo`, `navigation`, `theme`, `font_families`, `text_input`, `shape_morph`,
-`frosted_glass` and so on. Each one's `main.byd` starts with what to look for
-when you run it.
+`todo`, `navigation`, `theme`, `font_families`, `text_input`, `text_editing`,
+`shape_morph`, `frosted_glass` and so on. Each one's `main.byd` starts with
+what to look for when you run it.
 
 ## What you get
 
 - **Views and state.** `Row`, `Column`, `Grid`, `ZStack`, `ScrollView`,
   `Overlay`, text, images, icons, and the usual controls (`Button`,
-  `TextField` with input-method support, `Toggle`, `Slider`, `Checkbox`,
-  `RadioButton`). State is `var`; anything reading it updates when it changes.
+  `TextField` with a caret, selection, clipboard, undo and input-method
+  support, `Toggle`, `Slider`, `Checkbox`, `RadioButton`). State is `var`;
+  anything reading it updates when it changes.
 - **Styling.** Reusable `style { … }` values, `on hover` / `on pressed` /
   `on selected` blocks, and responsive blocks such as `on width >= md`.
 - **Themes.** Colours, type scale, shapes, breakpoints and fonts declared in
@@ -101,7 +102,9 @@ fn main() -> Result<(), byard::ByardError> {
 }
 ```
 
-and reads the project exactly as `byard dev` does.
+and reads the project exactly as `byard dev` does. A view that does not
+compile prints the errors `byard check` prints, with the source line and the
+suggestion, before the app returns.
 
 ## How it is built
 

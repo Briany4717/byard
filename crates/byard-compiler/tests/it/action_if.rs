@@ -66,6 +66,7 @@ impl App {
             delta: (0.0, 0.0),
             payload: None,
             time_ms: base + time_ms,
+            mods: byard_core::KeyModifiers::default(),
         };
         self.step(&[at(EventKind::PointerDown, 0), at(EventKind::PointerUp, 10)]);
         self.step(&[]);

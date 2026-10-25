@@ -8,7 +8,8 @@
 //! registering the scrim tap and `Escape` that dismiss it. The `anchor_to:`
 //! names are checked here too, when the view is lowered.
 
-use super::{Interpreter, Pools, RenderNode, access};
+use super::layout::Pools;
+use super::{Interpreter, RenderNode, access};
 use crate::diagnostics::{CompileError, Span};
 use crate::parser::ast::{Attr, AttrKind, ElementNode, Expr, Member, ViewDecl};
 

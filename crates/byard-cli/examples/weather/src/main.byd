@@ -38,10 +38,10 @@ View Main() {
     // Latitude/longitude per city, so the example needs no geocoding round
     // trip and stays about the one thing it is demonstrating.
     let places = [
-        { name: "Tokyo",     lat: 35.68,  lon: 139.69 },
-        { name: "Reykjavik", lat: 64.15,  lon: -21.94 },
-        { name: "Nairobi",   lat: -1.29,  lon: 36.82 },
-        { name: "Santiago",  lat: -33.45, lon: -70.67 }
+        { name: "Tokyo", lat: 35.68, lon: 139.69 },
+        { name: "Reykjavik", lat: 64.15, lon: -21.94 },
+        { name: "Nairobi", lat: -1.29, lon: 36.82 },
+        { name: "Santiago", lat: -33.45, lon: -70.67 }
     ]
 
     // RFC-0029 §5: a forecast goes stale, so it is re-asked for on a timer as
@@ -75,8 +75,7 @@ View Main() {
                 // Each button is one request. The action sets the loading
                 // state and returns; the arms run when the answer arrives.
                 Button(place.name)
-                    #[bg: 0x262636, radius: 10, color: 0xFFFFFF,
-                      p: (vertical: 10, horizontal: 16)]
+                    #[bg: 0x262636, radius: 10, color: 0xFFFFFF, p: (vertical: 10, horizontal: 16)]
                     => {
                         state = "loading"
                         city = place.name

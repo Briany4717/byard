@@ -8,7 +8,7 @@
 //   cargo run -p byard-cli -- dev --deep-link byard://detail/7
 //
 // The whole model is one line of state: navigation IS a reactive `var`. There
-// is no navigation controller to hold, no route object, no widget reference, 
+// is no navigation controller to hold, no route object, no widget reference,
 // setting `homePath = "/detail/2"` *is* the push, and setting it back *is* the
 // pop.
 //
@@ -71,12 +71,15 @@ View Main() {
     Column #[bg: 0x0F0E13, grow: 1] {
         // ── content: one tab at a time, each tab's state preserved ──────────
         NavHost(active: tab) #[grow: 1, transition: fade] {
-
             tab "library" {
                 // `deep_link: true` accepts OS URL intents: `byard://detail/7`
                 // lands on the detail screen with `id = "7"`.
-                NavStack(path: libraryPath) #[grow: 1, transition: slide,
-                                              swipe_back: true, deep_link: true] {
+                NavStack(path: libraryPath) #[
+                    grow: 1,
+                    transition: slide,
+                    swipe_back: true,
+                    deep_link: true,
+                ] {
                     route "/" {
                         Column #[..screen] {
                             Text("Library") #[..title]

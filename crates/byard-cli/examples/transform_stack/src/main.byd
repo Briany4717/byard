@@ -51,11 +51,28 @@ View Main() {
             Text("presses: {presses}") #[color: 0xE7ECF2, size: 15]
         }
 
-        Box #[m: (left: 80, top: 40), width: 300, height: 260, bg: 0x1C2430, radius: 16,
-              p: 20, gap: 14, rotate: angle * 1deg, origin: center] {
-            Box #[..grows, width: 90, height: 44, bg: 0x4A6FD0, radius: 10,
-                  justify: center, align: center, origin: center,
-                  tap => presses++] {
+        Box #[
+            m: (left: 80, top: 40),
+            width: 300,
+            height: 260,
+            bg: 0x1C2430,
+            radius: 16,
+            p: 20,
+            gap: 14,
+            rotate: angle * 1deg,
+            origin: center,
+        ] {
+            Box #[
+                ..grows,
+                width: 90,
+                height: 44,
+                bg: 0x4A6FD0,
+                radius: 10,
+                justify: center,
+                align: center,
+                origin: center,
+                tap => presses++,
+            ] {
                 Text("+1") #[color: 0xFFFFFF, size: 18]
             }
 
@@ -72,7 +89,12 @@ View Main() {
 
         // A text's box is as wide as its column offers, so it gets a width of
         // its own: `origin: center` is then the middle of the words.
-        Text("tilted {angle}°") #[color: 0xF2B705, size: 16, width: 110,
-                                  rotate: angle * -0.5deg, origin: center]
+        Text("tilted {angle}°") #[
+            color: 0xF2B705,
+            size: 16,
+            width: 110,
+            rotate: angle * -0.5deg,
+            origin: center,
+        ]
     }
 }

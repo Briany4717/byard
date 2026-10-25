@@ -26,7 +26,10 @@ View Main() {
     inject Theme as t
     Column #[bg: t.surface, p: 32, gap: 14, width: 560] {
         Text("A theme from a package") #[typo: t.headline, color: t.onSurface]
-        Text("Type, colour and shape, from a registry over HTTP") #[typo: t.title, color: t.onSurfaceVariant]
+        Text("Type, colour and shape, from a registry over HTTP") #[
+            typo: t.title,
+            color: t.onSurfaceVariant,
+        ]
         Row #[gap: 10, align: center] {
             b.Badge(label: "exported view")
             Box #[bg: t.primary, radius: t.cornerLg, p: (vertical: 10, horizontal: 18)] {

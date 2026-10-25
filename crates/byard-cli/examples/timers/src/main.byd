@@ -43,8 +43,7 @@ View Main() {
 
         Row #[gap: 12] {
             Button(live ? "stop the scoped timer" : "start it again")
-                #[bg: 0x477A96, radius: 10, color: 0xFFFFFF,
-                  p: (vertical: 10, horizontal: 18)]
+                #[bg: 0x477A96, radius: 10, color: 0xFFFFFF, p: (vertical: 10, horizontal: 18)]
                 => { live = !live }
             Text("beats: {beats}") #[color: 0x9AA0AC, size: 14]
         }

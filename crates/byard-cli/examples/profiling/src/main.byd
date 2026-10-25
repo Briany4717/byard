@@ -229,7 +229,7 @@
 //
 // Press `Mod+Shift+D` (`Cmd` on macOS, `Ctrl` elsewhere), or start with
 // `[dev] hud = true` in `byard.toml`. A frosted panel appears in the top-right
-// corner, drawn by the engine, from a `.byd` source that lives in the CLI, 
+// corner, drawn by the engine, from a `.byd` source that lives in the CLI,
 // not from Rust. That is the point of it: a Rust HUD would be easier to write
 // and would prove nothing, while this one is a permanent, self-executing test
 // that the framework can render a non-trivial, continuously-updating, blurred,
@@ -410,7 +410,7 @@ View Main() {
     // Sixteen cells, used as both rows and columns to build a 256-node grid
     // without needing 256 lines of source.
     let cells = ["1", "2", "3", "4", "5", "6", "7", "8",
-                 "9", "10", "11", "12", "13", "14", "15", "16"]
+        "9", "10", "11", "12", "13", "14", "15", "16"]
 
     let chip = style { radius: 20, p: (vertical: 9, horizontal: 18), color: 0xE6E1E5 }
 
@@ -421,12 +421,18 @@ View Main() {
 
         // ── the controls ──────────────────────────────────────────────────
         Row #[gap: 10, align: center] {
-            Button(dense ? "dense tree ON" : "dense tree") #[..chip,
-                bg: dense ? 0x6750A4 : 0x2B2930] => dense = !dense
-            Button(animate ? "animate ON" : "animate") #[..chip,
-                bg: animate ? 0x6750A4 : 0x2B2930] => animate = !animate
-            Button(longText ? "long text ON" : "long text") #[..chip,
-                bg: longText ? 0x6750A4 : 0x2B2930] => longText = !longText
+            Button(dense ? "dense tree ON" : "dense tree") #[
+                ..chip,
+                bg: dense ? 0x6750A4 : 0x2B2930,
+            ] => dense = !dense
+            Button(animate ? "animate ON" : "animate") #[
+                ..chip,
+                bg: animate ? 0x6750A4 : 0x2B2930,
+            ] => animate = !animate
+            Button(longText ? "long text ON" : "long text") #[
+                ..chip,
+                bg: longText ? 0x6750A4 : 0x2B2930,
+            ] => longText = !longText
         }
 
         // ── interp.dispatch_events ────────────────────────────────────────
@@ -435,8 +441,13 @@ View Main() {
         // changes shape, so this is the only row that should move when you
         // press it.
         Row #[gap: 14, align: center] {
-            Button("tap me") #[bg: 0x4A4458, radius: 12, p: (vertical: 14, horizontal: 34),
-                               color: 0xE6E1E5, size: 16] => taps++
+            Button("tap me") #[
+                bg: 0x4A4458,
+                radius: 12,
+                p: (vertical: 14, horizontal: 34),
+                color: 0xE6E1E5,
+                size: 16,
+            ] => taps++
             Text("{taps} taps dispatched") #[color: 0x938F99, size: 14]
         }
 
@@ -449,8 +460,12 @@ View Main() {
         // that never happened.
         Row #[gap: 20, align: center] {
             when animate {
-                Box #[width: 46, height: 46, origin: center,
-                      rotate: 360deg with anim.linear(1200ms, from: 0deg, repeat: infinite)] {
+                Box #[
+                    width: 46,
+                    height: 46,
+                    origin: center,
+                    rotate: 360deg with anim.linear(1200ms, from: 0deg, repeat: infinite),
+                ] {
                     Canvas #[width: 46, height: 46] {
                         arc(cx: 23, cy: 23, r: 18, stroke: 0x36323C, stroke_width: 4)
                         arc(cx: 23, cy: 23, r: 18, start: -90, sweep: 240,
@@ -459,7 +474,7 @@ View Main() {
                 }
             }
             Text(animate ? "frames are being produced, the block prints once a second"
-                         : "parked: no frames, no samples, no block")
+                    : "parked: no frames, no samples, no block")
                 #[color: 0x938F99, size: 13]
         }
 

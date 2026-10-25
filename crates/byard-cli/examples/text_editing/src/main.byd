@@ -40,18 +40,41 @@ View Main() {
         Text("Text editing") #[color: 0xF2F3F5, size: 20]
         Text("click in the field, then type and edit") #[color: 0x8A90A0, size: 14]
 
-        TextField #[bind: query, placeholder: "Search", bg: 0x1F222B,
-                    width: 360, height: 44, size: 18, input => edits++]
+        TextField #[
+            bind: query,
+            placeholder: "Search",
+            bg: 0x1F222B,
+            width: 360,
+            height: 44,
+            size: 18,
+            input => edits++,
+        ]
         Text("query = \"{query}\"") #[color: 0x8A90A0, size: 14]
         Text("{edits} edits") #[color: 0x8A90A0, size: 14]
 
-        Button("write it from outside") #[bg: 0x2B3142, color: 0xF2F3F5,
-                                          p: (vertical: 8, horizontal: 14), radius: 8]
+        Button("write it from outside") #[
+            bg: 0x2B3142,
+            color: 0xF2F3F5,
+            p: (vertical: 8, horizontal: 14),
+            radius: 8,
+        ]
             => query = "written from an action"
 
-        TextField #[bind: narrow, placeholder: "a narrow field", bg: 0x1F222B,
-                    width: 160, height: 44, size: 18]
-        TextField #[bind: note, bg: 0x1F222B, width: 360, height: 44, size: 18,
-                    selection: 0x66E4A11B]
+        TextField #[
+            bind: narrow,
+            placeholder: "a narrow field",
+            bg: 0x1F222B,
+            width: 160,
+            height: 44,
+            size: 18,
+        ]
+        TextField #[
+            bind: note,
+            bg: 0x1F222B,
+            width: 360,
+            height: 44,
+            size: 18,
+            selection: 0x66E4A11B,
+        ]
     }
 }

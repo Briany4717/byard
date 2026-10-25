@@ -311,6 +311,8 @@ mod tests {
             crate::manifest::parse_dependencies;
         let _: fn(&Manifest) -> Result<_, ProjectError> = crate::deps::resolve_project;
         let _: fn(&Manifest) -> Result<_, ProjectError> = crate::deps::project_source_files;
+        let _: fn(&Manifest) -> Result<_, ProjectError> = crate::deps::owned_source_files;
+        let _: fn(&Path) -> Result<_, ProjectError> = crate::deps::byd_files_under;
         let _: fn(&Path) -> Result<String, ProjectError> = crate::deps::package_checksum;
         let _: fn(&Path) -> Result<_, ProjectError> = crate::deps::declared_assets;
         let _: fn(&Path) -> Result<_, ProjectError> = crate::deps::publishable_files;

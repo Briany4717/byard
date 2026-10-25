@@ -18,6 +18,7 @@
 )]
 
 pub mod diagnostics;
+pub mod fmt;
 pub mod infer;
 pub mod interp;
 pub mod lexer;

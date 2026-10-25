@@ -19,9 +19,17 @@ View MapScreen(place: Str, lat: Float, lon: Float) {
         Column {
             on measure => { cardW = it.w }
             ZStack {
-                Map #[lat: lat, lon: lon, zoom: zoom, radius: 28.0, pin: t.primary,
-                      night: t.dark,
-                      bg: t.surfaceContainerLow, width: cardW, height: 520]
+                Map #[
+                    lat: lat,
+                    lon: lon,
+                    zoom: zoom,
+                    radius: 28.0,
+                    pin: t.primary,
+                    night: t.dark,
+                    bg: t.surfaceContainerLow,
+                    width: cardW,
+                    height: 520,
+                ]
                 Column #[width: cardW, height: 520, p: 12] {
                     Row {
                         Spacer()
@@ -33,7 +41,11 @@ View MapScreen(place: Str, lat: Float, lon: Float) {
                     Spacer()
                     // The tiles are OpenStreetMap's, and say so.
                     Row {
-                        Box #[bg: t.background.alpha(0.7), radius: 8, p: (vertical: 3, horizontal: 8)] {
+                        Box #[
+                            bg: t.background.alpha(0.7),
+                            radius: 8,
+                            p: (vertical: 3, horizontal: 8),
+                        ] {
                             Text("© OpenStreetMap contributors")
                                 #[typo: t.caption, color: t.onSurface]
                         }

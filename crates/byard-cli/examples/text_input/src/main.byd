@@ -34,9 +34,16 @@ View Main() {
     Column #[bg: 0x14161C, p: 32, gap: 16, width: 560] {
         Text("Text input, with an input method") #[color: 0xF2F3F5, size: 20]
 
-        TextField #[bind: name, placeholder: "Type a name, in any script",
-                    bg: 0x1F222B, width: 420, height: 44, size: 18,
-                    input => edits++, submit => sent = name]
+        TextField #[
+            bind: name,
+            placeholder: "Type a name, in any script",
+            bg: 0x1F222B,
+            width: 420,
+            height: 44,
+            size: 18,
+            input => edits++,
+            submit => sent = name,
+        ]
         Text("name = \"{name}\"") #[color: 0x8A90A0, size: 14]
         Text("{edits} edits, sent \"{sent}\" (press Enter)") #[color: 0x8A90A0, size: 14]
 
@@ -44,8 +51,14 @@ View Main() {
         ScrollView #[width: 440, height: 120, offset: (0, scroll), bg: 0x1C1F27] {
             Column #[gap: 12, p: 10] {
                 Box #[height: 40] {}
-                TextField #[bind: note, placeholder: "A note", bg: 0x1F222B,
-                            width: 400, height: 44, size: 18]
+                TextField #[
+                    bind: note,
+                    placeholder: "A note",
+                    bg: 0x1F222B,
+                    width: 400,
+                    height: 44,
+                    size: 18,
+                ]
                 Box #[height: 160] {}
             }
         }

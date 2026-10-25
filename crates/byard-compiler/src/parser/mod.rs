@@ -9,6 +9,7 @@
 
 pub mod ast;
 mod expr;
+pub mod span_eq;
 
 use ast::{
     Attr, AttrKind, ElementNode, FnDecl, Member, Param, RecordDecl, RecordField, RouteKind,

@@ -67,8 +67,12 @@ View ForecastScreen(place: Str, lat: Float, lon: Float) {
                 Text("The forecast did not arrive") #[typo: t.title, color: t.onSurface]
                 Text(message) #[typo: t.caption, color: t.error]
                 Row #[p: (top: 8)] {
-                    Button("Try again") #[typo: t.label, bg: t.primaryContainer,
-                                         color: t.onPrimaryContainer, radius: 18]
+                    Button("Try again") #[
+                        typo: t.label,
+                        bg: t.primaryContainer,
+                        color: t.onPrimaryContainer,
+                        radius: 18,
+                    ]
                         => load()
                 }
             }
@@ -76,11 +80,15 @@ View ForecastScreen(place: Str, lat: Float, lon: Float) {
 
         when state == "ok" {
             // The hero: a blue glow from the top edge behind the number.
-            Column #[bg: t.surfaceContainerLow, radius: 28, p: (horizontal: 24, vertical: 20),
-                     gap: 2,
-                     gradient: (kind: radial, center: (0.5, 0.0), radius: 1.1,
-                                from: t.primary.alpha(0.6), mid: t.primary.alpha(0.2),
-                                to: t.surfaceContainerLow.alpha(0.0))] {
+            Column #[
+                bg: t.surfaceContainerLow,
+                radius: 28,
+                p: (horizontal: 24, vertical: 20),
+                gap: 2,
+                gradient: (kind: radial, center: (0.5, 0.0), radius: 1.1,
+                    from: t.primary.alpha(0.6), mid: t.primary.alpha(0.2),
+                    to: t.surfaceContainerLow.alpha(0.0)),
+            ] {
                 Text("{temp:.0}°") #[typo: t.hero, color: t.onSurface]
                 Text(describe(code)) #[typo: t.title, color: t.onSurface]
                 Text("High {high:.0}°  ·  Low {low:.0}°") #[typo: t.body, color: t.onSurfaceVariant]
@@ -96,14 +104,21 @@ View ForecastScreen(place: Str, lat: Float, lon: Float) {
             ScrollView #[axis: horizontal, height: 92, offset: (hoursX, 0)] {
                 Row #[gap: 8] {
                     for i, hour in hours {
-                        Column #[width: 62, p: (vertical: 14), gap: 6, radius: 18, align: center,
-                                 bg: i == 0 ? t.primaryContainer : t.surfaceContainer] {
+                        Column #[
+                            width: 62,
+                            p: (vertical: 14),
+                            gap: 6,
+                            radius: 18,
+                            align: center,
+                            bg: i == 0 ? t.primaryContainer : t.surfaceContainer,
+                        ] {
                             Text(i == 0 ? "Now" : hour.formatDate("HH:mm") ?? "")
-                                #[typo: t.caption,
-                                  color: i == 0 ? t.onPrimaryContainer : t.onSurfaceVariant]
+                                #[
+                                    typo: t.caption,
+                                    color: i == 0 ? t.onPrimaryContainer : t.onSurfaceVariant,
+                                ]
                             Text("{temps[i]:.0}°")
-                                #[typo: t.title,
-                                  color: i == 0 ? t.onPrimaryContainer : t.onSurface]
+                                #[typo: t.title, color: i == 0 ? t.onPrimaryContainer : t.onSurface]
                         }
                     }
                 }

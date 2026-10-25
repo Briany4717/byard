@@ -76,3 +76,15 @@ jobs:
 
       - name: test (a11y)
         run: cargo test --locked -p byard-platform --features a11y
+
+      # The resource budgets in ci/budgets.toml (RFC-0046) that are tests, run
+      # again with their output shown, which a passing test does not give:
+      # each prints what it measured next to its ceiling, so the margin is in
+      # this log before it is gone. They already ran, and passed or failed,
+      # in `test` above; this adds the numbers and takes a few seconds. The
+      # first-frame time is only held on Linux, where its ceiling was measured.
+      - name: budgets (measured against their ceilings)
+        if: runner.os == 'Linux'
+        run: |
+          cargo test --locked -p aura-weather --test it budgets -- --nocapture
+          cargo test --locked -p aura-weather --test first_frame -- --nocapture

@@ -485,6 +485,7 @@ dependencies = [
  "byard-project",
  "image",
  "reqwest",
+ "toml",
 ]
 
 [[package]]

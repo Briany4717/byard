@@ -122,6 +122,29 @@ fn tile_png() -> &'static [u8] {
     })
 }
 
+/// One integer of `ci/budgets.toml`, the resource budgets (RFC-0046). A
+/// missing file, section or key fails the test and says which: a budget that
+/// is not read is not a budget.
+pub fn ceiling(section: &str, key: &str) -> u64 {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../ci/budgets.toml");
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("cannot read the budgets file {}: {e}", path.display()));
+    let budgets: toml::Table = text
+        .parse()
+        .unwrap_or_else(|e| panic!("{} is not valid TOML: {e}", path.display()));
+    budgets
+        .get(section)
+        .and_then(|s| s.get(key))
+        .and_then(toml::Value::as_integer)
+        .and_then(|n| u64::try_from(n).ok())
+        .unwrap_or_else(|| {
+            panic!(
+                "{} has no non-negative integer `{key}` under [{section}]",
+                path.display()
+            )
+        })
+}
+
 pub struct App {
     pub interp: Interpreter,
     tree: Vec<RenderNode>,
@@ -300,6 +323,26 @@ impl App {
         {
             self.answer();
         }
+    }
+
+    /// Whatever would wake the logic thread now, applied as the logic thread
+    /// would, and how many wakes that was: each reply the pool delivered, and
+    /// a tick the interpreter asked for because something is still animating.
+    /// Nothing in flight and nothing animating is `0`.
+    pub fn wakes(&mut self) -> usize {
+        let mut results = Vec::new();
+        while let Some(result) = self.relay.try_recv_io_result() {
+            results.push(result);
+        }
+        let mut wakes = results.len();
+        if !results.is_empty() {
+            let _ = self.interp.apply_io_results(results);
+            self.step(&[]);
+        } else if self.interp.needs_another_frame() {
+            wakes += 1;
+            self.step(&[]);
+        }
+        wakes
     }
 
     pub fn texts(&self) -> Vec<String> {

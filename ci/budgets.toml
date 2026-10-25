@@ -1,0 +1,32 @@
+# Resource budgets (RFC-0046, docs/rfcs/0046-resource-budgets.md).
+#
+# Raise a ceiling only on purpose, and say why in the PR: the old value, the
+# new one, and why the regression is worth it. Lowering one needs no ceremony.
+# Every value here is read by a test or a CI step, and each prints what it
+# measured next to the ceiling, so the margin is visible before it is gone.
+
+[idle]
+# Wakes of the logic thread per second for an app with nothing animating and
+# nothing in flight. A ratchet that does not move: an idle app sleeps.
+# Read by examples/aura_weather/tests/budgets.rs.
+logic_wakes_per_second = 0
+
+[startup]
+# Milliseconds from `App::new` to the first frame, saved, for Aura Weather in a
+# headless shot with its HTTP answered from a local server, in the build the
+# test suite uses (debug). About 500 ms where it was set, so six times that:
+# a CI runner is about twice as slow, and the ceiling is three times what a
+# runner does, enough to catch a doubling and not a 5% drift.
+# Read by examples/aura_weather/tests/budgets.rs.
+first_frame_ms = 3000
+
+[binary]
+# Bytes of the stripped release `aura-weather`: 22_092_064 where it was set,
+# plus 5%, rounded up.
+# Read by the `budgets` job in .github/workflows/ci.yml.
+aura_weather_stripped_bytes = 23_200_000
+
+[bench]
+# How much slower, in percent, a `byard-core` benchmark may get against the
+# baseline before CI warns. Read by the `budgets` job in ci.yml.
+regression_percent = 10

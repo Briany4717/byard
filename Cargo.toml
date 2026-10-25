@@ -35,6 +35,24 @@ homepage    = "https://github.com/Briany4717/byard"
 authors     = ["Byard contributors"]
 rust-version = "1.86"
 
+# The versions the member crates share, declared once so they cannot drift
+# apart again (two versions of one crate is a second copy built and linked).
+# A member adds its own `features` on top of what is here.
+[workspace.dependencies]
+wgpu              = "29.0"
+pollster          = "0.4"
+crossbeam-channel = "0.5"
+rustc-hash        = "2"
+smallvec          = "1"
+tokio             = "1"
+image             = { version = "0.25", default-features = false }
+reqwest           = { version = "0.12", default-features = false }
+serde_json        = "1.0.150"
+toml              = "1"
+semver            = "1.0.28"
+sha2              = "0.10"
+flate2            = "1"
+
 [workspace.lints.rust]
 unsafe_code     = "deny"
 missing_docs    = "warn"

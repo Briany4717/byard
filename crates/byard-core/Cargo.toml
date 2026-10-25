@@ -11,9 +11,9 @@ rust-version.workspace = true
 [dependencies]
 bumpalo = "3"
 taffy = "0.10"
-rustc-hash = "2"
-smallvec = "1"
-wgpu = "29.0"
+rustc-hash.workspace = true
+smallvec.workspace = true
+wgpu.workspace = true
 bytemuck = { version = "1.14", features = ["derive"] }
 glyphon = "0.11"
 # Reading one table, `fvar`, from a registered font's bytes (RFC-0034). Already
@@ -25,20 +25,20 @@ ttf-parser = "0.25"
 # Relay subsystem (RFC-0001 §5): lock-free Arc<RenderFrame> publish/subscribe,
 # zero-allocation-steady-state frame recycling, and the async I/O pool.
 arc-swap = "1"
-crossbeam-channel = "0.5"
-tokio = { version = "1", features = ["rt-multi-thread", "sync"] }
+crossbeam-channel.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "sync"] }
 # Image decode for the `TextureSampler` pipeline. PNG/JPEG only
 # keeps the dependency tree small; the runner/host owns decode, not the interp.
-image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+image = { workspace = true, features = ["png", "jpeg"] }
 # RFC-0029 O3: JSON parse/stringify for the `Json` capability and for `Http`'s
 # `.json` field. `preserve_order` keeps object key order, so a record that
 # round-trips through JSON comes back in the order it was written, matching
 # RFC-0027's ordered records.
-serde_json = { version = "1", features = ["preserve_order"], optional = true }
+serde_json = { workspace = true, features = ["preserve_order"], optional = true }
 # RFC-0029 O2: the `Http` capability. rustls + webpki-roots, never native TLS:
 # pure Rust (so `unsafe_code = "deny"` holds all the way down), no OpenSSL, no
 # platform certificate store, and an identical build on every OS.
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-webpki-roots", "gzip", "charset", "http2"], optional = true }
+reqwest = { workspace = true, features = ["rustls-tls-webpki-roots", "gzip", "charset", "http2"], optional = true }
 # RFC-0029 O5: the per-OS data directory the `Store` capability writes into.
 # Every one of those paths has an exception nobody remembers, so it is resolved
 # by the canonical crate rather than by hand.
@@ -49,9 +49,9 @@ directories = { version = "6", optional = true }
 # Hand-rolling a JSON reader to validate a JSON writer would share every
 # assumption the writer made. Already in the workspace through `byld-lsp`, and
 # nothing of it reaches a shipped binary.
-serde_json = "1"
+serde_json.workspace = true
 # Blocks on the async wgpu device request inside headless pipeline tests.
-pollster = "0.4"
+pollster.workspace = true
 # The one device every GPU test in a process shares, one test at a time, so a
 # test binary never has two D3D12 devices alive at once (see its crate docs).
 byard-test-gpu = { path = "../byard-test-gpu" }

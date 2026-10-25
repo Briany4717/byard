@@ -60,11 +60,11 @@ pub enum EventKind {
     // ── RFC-0012 §A: `focus =>`/`blur =>` sugar ──────────────────────────
     /// An element's focus state rose (RFC-0012 S2). **Internal-only**: never
     /// produced by a raw [`InputEvent`], fired directly by
-    /// [`EventRouter::steal_focus`] on the rising edge of `focused_sig`.
+    /// `EventRouter::steal_focus` on the rising edge of `focused_sig`.
     Focus,
     /// An element's focus state fell (RFC-0012 S2). **Internal-only**: never
     /// produced by a raw [`InputEvent`], fired directly by
-    /// [`EventRouter::steal_focus`] on the falling edge of `focused_sig`.
+    /// `EventRouter::steal_focus` on the falling edge of `focused_sig`.
     Blur,
     // ── RFC-0021 advanced scroll behaviours ──────────────────────────────
     /// A `ScrollView` scrolled past its `end_threshold` (infinite scroll).
@@ -376,7 +376,7 @@ impl EventRouter {
     /// Must be called *after* the main tree's handlers and *before* the
     /// overlay's own content handlers are registered, so the scrim sits below
     /// the content (content wins where it overlaps) but above the whole main
-    /// tree. Raising [`modal_floor`](Self::modal_floor) to the scrim's index
+    /// tree. Raising `modal_floor` to the scrim's index
     /// excludes every earlier handler from hit-testing, that is the modality:
     /// input can no longer reach anything beneath the overlay. `dismiss` is the
     /// action run when the scrim is tapped or `Escape` is pressed; a modal

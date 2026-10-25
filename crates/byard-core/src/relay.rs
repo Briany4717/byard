@@ -69,12 +69,12 @@
 //! ## Engine integration
 //!
 //! [`crate::engine::Engine`] owns an `Arc<Relay>`, spawns the logic thread
-//! in [`Engine::start_logic`], and reads the latest frame via
-//! [`Relay::current`] in [`Engine::render_latest`]. `Engine`'s `Drop` impl
+//! in [`Engine::start_logic`](crate::engine::Engine::start_logic), and reads the latest frame via
+//! [`Relay::current`] in [`Engine::render_latest`](crate::engine::Engine::render_latest). `Engine`'s `Drop` impl
 //! calls [`Relay::request_shutdown`] and joins the logic thread before
 //! releasing the last `Arc<Relay>`.
 //!
-//! [`Engine::start_logic`] does not use [`Relay::spawn_logic_thread`]
+//! [`Engine::start_logic`](crate::engine::Engine::start_logic) does not use [`Relay::spawn_logic_thread`]
 //! directly. The tick state it needs to capture, a `ReactiveLabel`, holds
 //! a [`crate::evaluator::Signal`], which is intentionally `!Send` per
 //! RFC-0001 §5.1 (signals are never accessed outside the logic thread; the
@@ -626,7 +626,7 @@ impl Relay {
     }
 
     /// Opens the idle gate, waking a parked logic thread now rather than at
-    /// the end of its [`IDLE_PARK`] fallback (RFC-0029 §2).
+    /// the end of its `IDLE_PARK` fallback (RFC-0029 §2).
     ///
     /// [`IoSender::send`] already does this for every delivered result; this
     /// is for the sources that hand the logic thread work without going

@@ -2,7 +2,7 @@
 //! (RFC-0044 §3).
 //!
 //! The formatter moves every token, so two trees that mean the same differ in
-//! every [`Span`]. The derived `PartialEq` on the AST compares spans too, and
+//! every [`Span`](crate::Span). The derived `PartialEq` on the AST compares spans too, and
 //! it has to: hot reload and the checker rely on it. Rather than change how
 //! spans are stored (the parser would pay for it on every node), this is a
 //! second comparison that skips them, used only where a tree is compared
@@ -19,7 +19,7 @@ use super::ast::{
 };
 use crate::symbol::Symbol;
 
-/// Equality that skips every [`Span`]: two trees are `span_eq` when they have
+/// Equality that skips every [`Span`](crate::Span): two trees are `span_eq` when they have
 /// the same shape, names and literal values, wherever each was written.
 pub trait SpanEq {
     /// Whether `self` and `other` are the same tree apart from positions.

@@ -15,7 +15,7 @@
 //! 1. [`collect_static_vector_refs`], a static traversal of the resolved view
 //!    graph collecting every `VectorIcon("literal")`, with the RFC-0009 §4
 //!    dynamic-reference guard ([`CompileError::VectorAssetNotStatic`]).
-//! 2. generation (reusing [`super::generate`]) + dedup of identical handles.
+//! 2. generation (reusing [`super::generate()`]) + dedup of identical handles.
 //! 3. [`super::pack`] MaxRects packing into layered cells.
 //!
 //! [`bake_atlas`] runs 2–3 over the closed set from stage 1.

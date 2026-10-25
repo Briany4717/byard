@@ -5,7 +5,7 @@
 //! as a *read-tracking* layer over a subscription store, exactly as RFC-0004
 //! specifies:
 //!
-//! - A logic-thread-local [`struct@CURRENT_SCOPE`] names the computation being
+//! - A logic-thread-local `CURRENT_SCOPE` names the computation being
 //!   evaluated (§2). Every `read_signal`/`read_memo` while a scope is active
 //!   records a subscription, so dependency edges are *discovered*, never
 //!   declared.
@@ -54,7 +54,7 @@ pub struct ScopeId(u32);
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
 pub struct FrameTarget(pub u32);
 
-/// Which structural construct a [`ScopeKind::Structural`] scope drives.
+/// Which structural construct a `ScopeKind::Structural` scope drives.
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub enum StructuralKind {
     /// `when cond { … } else { … }`.

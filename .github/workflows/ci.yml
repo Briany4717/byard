@@ -76,7 +76,23 @@ jobs:
 
       - name: test (a11y)
         run: cargo test --locked -p byard-platform --features a11y
+        
+      # Documentation is code: an intra-doc link that points at nothing, or at
+      # a private item, renders as plain text in the docs and nobody notices.
+      # One platform is enough, as the links do not change with the target.
+      - name: doc
+        if: runner.os == 'Linux'
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: cargo doc --locked --workspace --no-deps
 
+      # What the a11y feature adds is documented only with it on.
+      - name: doc (a11y)
+        if: runner.os == 'Linux'
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: cargo doc --locked --no-deps -p byard-platform -p byard -p byard-cli --features byard-platform/a11y,byard/a11y,byard-cli/a11y
+      
       # The resource budgets in ci/budgets.toml (RFC-0046) that are tests, run
       # again with their output shown, which a passing test does not give:
       # each prints what it measured next to its ceiling, so the margin is in
@@ -218,3 +234,4 @@ jobs:
             cat bench-compare.txt
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+

@@ -23,9 +23,9 @@
 //!   single-layer frame uses exactly one renderer: the pre-layering fast
 //!   path, unchanged.
 //! - **Content-addressed re-shaping**, a line's glyph buffer is re-shaped if
-//!   and only if the [`shape_key`] its buffer was shaped from, `(text,
+//!   and only if the `shape_key` its buffer was shaped from, `(text,
 //!   font_size, wrap)`, differs from this frame's, or the viewport changed,
-//!   or index identity is not comparable at all. See [`needs_reshape`].
+//!   or index identity is not comparable at all. See `needs_reshape`.
 //!
 //!   This replaces trusting [`TextLine::dirty`] alone, and the reason is
 //!   measured rather than theoretical. The flag's producer is the
@@ -51,10 +51,10 @@
 //!
 //! - **The dirty flag still governs the redraw region**, so it is still
 //!   checked, in debug, against the full content hash (colour included):
-//!   `dirty` is what [`dirty_text_bounds`](super::dirty_text_bounds) unions
+//!   `dirty` is what `dirty_text_bounds` unions
 //!   into the incremental scissor, so a line that changed colour with the
 //!   flag unset would now be shaped correctly and clipped out of the redraw.
-//!   See [`assert_dirty_flag_consistency`].
+//!   See `assert_dirty_flag_consistency`.
 //! - **Three-pass borrow pattern**, `prepare` splits work across three
 //!   sequential passes to satisfy Rust's field-split borrowing rules (see the
 //!   method documentation for a precise explanation).
@@ -88,7 +88,7 @@ use crate::ByardError;
 // ── Public surface ────────────────────────────────────────────────────────────
 
 /// Re-exported from [`crate::frame`], the canonical definition now lives
-/// there so the Logic thread can populate [`RenderFrame::texts`] without
+/// there so the Logic thread can populate [`RenderFrame::texts`](crate::frame::RenderFrame::texts) without
 /// importing from a subsystem that it must not depend on (RFC-0001 §9).
 pub use crate::frame::TextLine;
 
@@ -352,8 +352,8 @@ struct ShapePass {
 /// GPU text pipeline owned by [`EncoderSubsystem`](super::EncoderSubsystem).
 ///
 /// Wraps all glyphon state into a single struct so that it can be initialised
-/// once in [`EncoderSubsystem::init`] and driven frame-by-frame by
-/// [`prepare`](TextGlyphPipeline::prepare) + [`render`](TextGlyphPipeline::render).
+/// once in [`EncoderSubsystem::init`](super::EncoderSubsystem::init) and driven frame-by-frame by
+/// [`prepare`](TextGlyphPipeline::prepare) + [`render_layer`](TextGlyphPipeline::render_layer).
 pub struct TextGlyphPipeline {
     /// glyphon font system, owns the loaded font data and shaped buffers.
     font_system: FontSystem,

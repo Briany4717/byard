@@ -54,7 +54,7 @@
 //! layout inputs actually changed are marked dirty.
 //!
 //! That last one is why the dirty channel works at all now. `clear()` bumps
-//! the generation, which invalidates every outstanding [`layout::TargetId`],
+//! the generation, which invalidates every outstanding [`TargetId`](crate::frame::TargetId),
 //! and while every frame cleared, the generation counter distinguished one
 //! *frame* from another rather than one *view* from another, so a caller
 //! could not have passed a valid dirty set even if it had one.

@@ -1,7 +1,7 @@
 //! Backdrop blur pipelines (RFC-0023 §2): the iOS frosted-glass / vibrancy
 //! effect.
 //!
-//! A [`BackdropInstance`](crate::frame::BackdropInstance) is a **barrier**:
+//! A [`BackdropInstance`] is a **barrier**:
 //! everything emitted before it must be rasterised into the colour target
 //! before the pane can sample it. The encoder therefore splits its UI pass
 //! at each backdrop and, between the split passes, this module records the

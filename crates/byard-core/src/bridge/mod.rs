@@ -68,7 +68,9 @@ impl HostValue {
 /// type (RFC-0028 §2). Total but lenient: a mismatched shape yields the type's
 /// [`Default`]-ish fallback rather than panicking (arguments are user-derived,
 /// and user data never panics). Implemented for scalars, `String`, `HostValue`
-/// itself, and `Vec<T>`; `#[derive(HostValue)]` structs get it too.
+/// itself, and `Vec<T>`. There is no derive for a struct: take a
+/// [`HostValue`] and read its fields with [`HostValue::field`], or implement
+/// this trait by hand.
 pub trait FromHostValue: Sized {
     /// Builds `Self` from a boundary value.
     fn from_host(value: HostValue) -> Self;
@@ -76,7 +78,8 @@ pub trait FromHostValue: Sized {
 
 /// Converts a controller method's return/error type into a [`HostValue`] to send
 /// back across the boundary (RFC-0028 §2). Implemented for scalars, `String`,
-/// `HostValue` itself, `Vec<T>`, and (via derive) records.
+/// `HostValue` itself and `Vec<T>`. There is no derive for a struct: build a
+/// record with [`HostValue::Record`], or implement this trait by hand.
 pub trait IntoHostValue {
     /// Consumes `self` into a boundary value.
     fn into_host(self) -> HostValue;

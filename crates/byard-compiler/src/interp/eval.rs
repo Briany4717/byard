@@ -466,7 +466,7 @@ fn round_to_decimals(val: f64, decimals: i32) -> f64 {
 
 /// A resolved first-class style value (RFC-0016): a flat base attribute set
 /// plus its `on <state> { … }` interaction-state blocks. Produced by
-/// [`Interpreter::resolve_style_expr`] from a `style { … }` value, a `let`-bound
+/// `Interpreter::resolve_style_expr` from a `style { … }` value, a `let`-bound
 /// style name, or a `merge` of two styles. Static and view-scoped, no cascade.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct StyleDef {
@@ -628,7 +628,7 @@ pub enum RenderNode {
     /// A reactive `when cond { … } else { … }` (RFC-0018 structural reactivity).
     /// The driver re-reads `cond` every frame and expands the taken branch, so a
     /// `var` flip mounts/unmounts the subtree with no re-lowering. Each branch is
-    /// lowered **lazily** on first selection and cached (see [`WhenPool`]), so a
+    /// lowered **lazily** on first selection and cached (see `WhenPool`), so a
     /// guarded recursion (`when done { … } else { Recurse() }`) only lowers the
     /// recursive branch when the guard actually reaches it, terminating finitely.
     When {
@@ -2191,7 +2191,7 @@ pub enum PerfWarning {
         path: String,
     },
     /// An `on measure` element's rect has been alternating between two sizes
-    /// for [`MEASURE_FEEDBACK_FLIPS`] frames (RFC-0038 "no feedback loop"): the
+    /// for `MEASURE_FEEDBACK_FLIPS` frames (RFC-0038 "no feedback loop"): the
     /// handler is feeding its own size back into its own layout through a path
     /// the compiler could not see (a `var` read by an ancestor, a `let` derived
     /// from it).
@@ -5077,8 +5077,9 @@ impl Interpreter {
         self.nav_pools.iter().map(|p| p.entries.len()).collect()
     }
 
-    /// Walks a render tree, projecting it into a `byard-core` [`RenderFrame`]
-    /// using Taffy layout via `byard-core`'s [`LayoutAtlas`].
+    /// Walks a render tree, projecting it into a `byard-core`
+    /// [`RenderFrame`](byard_core::frame::RenderFrame) using Taffy layout via
+    /// `byard-core`'s [`LayoutAtlas`](byard_core::atlas::layout::LayoutAtlas).
     #[allow(clippy::similar_names)]
     pub fn render(
         &mut self,

@@ -1,6 +1,7 @@
 //! Resolving props to values: padding, radius, transforms, shadows, gradients,
 //! colours with an alpha byte, the decorated box and the theme tokens.
 
+use super::animation::sample_over_time;
 use super::*;
 
 // ── `Len` padding/margin forms ──────────────────────────────────

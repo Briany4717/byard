@@ -1,0 +1,9 @@
+[project]
+name = "accessibility"
+entry = "src/main.byd"
+
+# The text in this example is set in a declared font rather than whatever the
+# machine has, so the tree's bounds (which depend on how wide text is) come out
+# the same everywhere and `tests/it/accessibility_example.rs` can compare them.
+[assets.fonts]
+body = "../assets/fonts/Manrope-Variable.ttf"

@@ -27,5 +27,10 @@ crossbeam-channel = "0.5"
 # `App::shot` writes a PNG.
 image = { version = "0.25", default-features = false, features = ["png"] }
 
+[features]
+# RFC-0042 Q4: hands the accessibility tree to the platform's screen reader
+# through AccessKit. Opt-in: `byard = { ..., features = ["a11y"] }`.
+a11y = ["byard-platform/a11y"]
+
 [lints]
 workspace = true

@@ -267,6 +267,16 @@ pub enum EventKind {
     /// the window opens and whenever the user changes it; `true` in
     /// `InputEvent.payload` as `InputPayload::Bool` means dark.
     SystemScheme,
+    /// An assistive technology asked to move keyboard focus to an element
+    /// (RFC-0042 §5); the element in `InputEvent.payload` as
+    /// `InputPayload::Element`. Not routed to a handler: the router moves
+    /// focus itself, as a Tab press would.
+    AccessFocus,
+    /// An assistive technology asked to scroll an element into view
+    /// (RFC-0042 §5); the element in `InputEvent.payload` as
+    /// `InputPayload::Element`, and where it is in viewport space in
+    /// `InputEvent.pos` (its top-left) and `InputEvent.delta` (its size).
+    AccessScrollIntoView,
     /// The window gained or lost focus, reported by the host; `true` in
     /// `InputEvent.payload` as `InputPayload::Bool` means it has focus. A
     /// text field's caret only blinks in a window that has it (RFC-0041 §6).
@@ -309,6 +319,8 @@ impl EventKind {
             | Self::CompositionCommit
             | Self::CompositionEnd
             | Self::SystemScheme
+            | Self::AccessFocus
+            | Self::AccessScrollIntoView
             | Self::WindowFocus => false,
         }
     }
@@ -323,6 +335,12 @@ pub enum InputPayload {
     Bool(bool),
     /// A float payload (e.g. slider position).
     Float(f32),
+    /// A number at full precision: the value an assistive technology set a
+    /// slider to (RFC-0042), which an `f32` would turn from `0.7` into
+    /// `0.699999988…`.
+    Number(f64),
+    /// An element, by its index in the lowered tree (RFC-0042 `AccessId`).
+    Element(u32),
     /// A key name or printable text (keyboard events).
     Key(String),
     /// An IME preedit and its cursor, a byte range inside it (RFC-0040).
@@ -574,6 +592,32 @@ pub trait PlatformHost {
     fn text_input(&self) -> Option<crate::frame::TextInputState> {
         None
     }
+
+    /// Called with `true` when an assistive technology connects to the window
+    /// and `false` when the last one goes (RFC-0042 §5). A host passes it on
+    /// to its engine ([`Engine::set_access_active`](crate::engine::Engine::set_access_active)),
+    /// which is what makes the logic thread start, or stop, building the
+    /// accessibility tree.
+    ///
+    /// Defaults to a no-op: a host that does not opt in never has a tree.
+    fn on_access_active(&mut self, _active: bool) {}
+
+    /// The latest published frame, from which the platform reads the
+    /// accessibility tree to send to the assistive technology (RFC-0042 §5).
+    /// A host usually answers from
+    /// [`Engine::latest_frame`](crate::engine::Engine::latest_frame).
+    ///
+    /// Defaults to `None`: a host that does not opt in has no tree to send.
+    fn access_frame(&self) -> Option<std::sync::Arc<crate::frame::RenderFrame>> {
+        None
+    }
+
+    /// Called when an assistive technology asks a node to act (RFC-0042 §5).
+    /// A host usually passes it on to
+    /// [`Engine::push_access_request`](crate::engine::Engine::push_access_request).
+    ///
+    /// Defaults to a no-op.
+    fn on_access_request(&mut self, _request: crate::access::AccessRequest) {}
 
     /// Called on a trackpad-style scroll gesture at cursor position `(x, y)`,
     /// with `(dx, dy)` the scroll delta in logical pixels (RFC-0012 §A loose

@@ -1838,6 +1838,19 @@ pub struct RenderFrame {
     /// no text field has focus, which is also what turns the IME off.
     text_input: Option<TextInputState>,
 
+    /// Whether an assistive technology is listening, so the producer should
+    /// fill [`access`](Self::access) (RFC-0042). Stamped by the relay when it
+    /// hands the frame out, from one relaxed atomic load; `false` on a frame
+    /// nobody stamped, which is what a frame that builds no tree looks like.
+    access_wanted: bool,
+    /// The accessibility tree of this frame (RFC-0042), present only when
+    /// [`access_wanted`](Self::access_wanted) was set and the producer built
+    /// one. `None` is the whole cost of the feature while nothing listens.
+    access: Option<crate::access::AccessTree>,
+    /// The tree of an earlier frame, kept empty so its allocation is reused
+    /// instead of rebuilt each frame an assistive technology is listening.
+    access_spare: Option<crate::access::AccessTree>,
+
     /// Every font family registered so far (RFC-0034), shared with the logic
     /// thread rather than copied.
     ///
@@ -2143,6 +2156,55 @@ impl RenderFrame {
         self.text_input
     }
 
+    /// Records whether an assistive technology is listening (RFC-0042), which
+    /// is the producer's cue to build an accessibility tree for this frame.
+    /// The relay calls it when it hands a frame out; a headless run sets it to
+    /// ask for the tree.
+    pub fn set_access_wanted(&mut self, wanted: bool) {
+        self.access_wanted = wanted;
+    }
+
+    /// Whether the producer should build an accessibility tree for this frame
+    /// (RFC-0042).
+    #[must_use]
+    pub const fn access_wanted(&self) -> bool {
+        self.access_wanted
+    }
+
+    /// Starts this frame's accessibility tree and returns it, empty, for the
+    /// producer to fill. Counted by [`access::builds`](crate::access::builds).
+    pub fn begin_access(&mut self) -> &mut crate::access::AccessTree {
+        let mut tree = self.access_spare.take().unwrap_or_default();
+        tree.begin_build();
+        self.access.insert(tree)
+    }
+
+    /// The accessibility tree this frame carries, if the producer built one
+    /// (RFC-0042).
+    #[must_use]
+    pub const fn access(&self) -> Option<&crate::access::AccessTree> {
+        self.access.as_ref()
+    }
+
+    /// The tree being built, if [`begin_access`](Self::begin_access) started
+    /// one.
+    pub const fn access_mut(&mut self) -> Option<&mut crate::access::AccessTree> {
+        self.access.as_mut()
+    }
+
+    /// How many nodes the frame's accessibility storage can hold without
+    /// allocating, whether or not a tree is in use. Zero until a tree has
+    /// first been built: what "a frame with the flag off allocates nothing
+    /// extra" is asserted against.
+    #[must_use]
+    pub fn access_capacity(&self) -> usize {
+        self.access
+            .iter()
+            .chain(self.access_spare.iter())
+            .map(|t| t.nodes.capacity())
+            .sum()
+    }
+
     /// Clears the frame, retaining internal buffer capacity.
     ///
     /// After the first frame, subsequent populations pay zero allocation cost
@@ -2168,6 +2230,10 @@ impl RenderFrame {
         self.atlas_uploads.clear();
         self.clip_masks.clear();
         self.text_input = None;
+        self.access_wanted = false;
+        if let Some(tree) = self.access.take() {
+            self.access_spare = Some(tree);
+        }
         self.groups.clear();
         self.unrotate = None;
         self.open_group = None;

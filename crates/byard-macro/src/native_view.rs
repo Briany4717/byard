@@ -35,10 +35,18 @@ struct Prop {
 
 pub fn expand(attr: TokenStream, item: TokenStream) -> TokenStream {
     let input = parse_macro_input!(item as ItemStruct);
-    let name = match view_name(attr.into(), &input) {
-        Ok(name) => name,
+    let (name, role) = match view_args(attr.into(), &input) {
+        Ok(args) => args,
         Err(e) => return e.to_compile_error().into(),
     };
+    // RFC-0042 §2: what a screen reader calls the view. Unwritten, the trait's
+    // own default (a group) stands.
+    let role_const = role.map(|variant| {
+        quote! {
+            const ACCESS_ROLE: ::byard::access::AccessRole =
+                ::byard::access::AccessRole::#variant;
+        }
+    });
 
     let mut props = Vec::new();
     let mut events: Vec<String> = Vec::new();
@@ -102,6 +110,8 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> TokenStream {
         #stripped
 
         impl #impl_generics ::byard::render::NativeViewMeta for #ident #ty_generics #where_clause {
+            #role_const
+
             const INFO: ::byard::render::NativeViewInfo = ::byard::render::NativeViewInfo {
                 name: #name,
                 props: &[
@@ -138,28 +148,67 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> TokenStream {
     TokenStream::from(expanded)
 }
 
-/// Reads `name = "…"` off the attribute, defaulting to the struct's own name.
-fn view_name(attr: proc_macro2::TokenStream, input: &ItemStruct) -> syn::Result<String> {
-    if attr.is_empty() {
-        return Ok(input.ident.to_string());
+/// The roles `role = "…"` accepts, as the accessibility role each names
+/// (RFC-0042 §2).
+const ROLES: &[(&str, &str)] = &[
+    ("button", "Button"),
+    ("text_input", "TextInput"),
+    ("switch", "Switch"),
+    ("check_box", "CheckBox"),
+    ("radio_button", "RadioButton"),
+    ("slider", "Slider"),
+    ("label", "Label"),
+    ("image", "Image"),
+    ("scroll_view", "ScrollView"),
+    ("tab_list", "TabList"),
+    ("tab", "Tab"),
+    ("dialog", "Dialog"),
+    ("group", "Group"),
+];
+
+/// Reads `name = "…"` and `role = "…"` off the attribute. The name defaults to
+/// the struct's own; the role to nothing, which leaves the view a group.
+fn view_args(
+    attr: proc_macro2::TokenStream,
+    input: &ItemStruct,
+) -> syn::Result<(String, Option<syn::Ident>)> {
+    use syn::parse::Parser as _;
+    let mut name = input.ident.to_string();
+    let mut role = None;
+    let metas = syn::punctuated::Punctuated::<syn::MetaNameValue, syn::Token![,]>::parse_terminated
+        .parse2(attr)?;
+    for meta in metas {
+        let value = match &meta.value {
+            syn::Expr::Lit(syn::ExprLit {
+                lit: syn::Lit::Str(s),
+                ..
+            }) => s.value(),
+            other => {
+                return Err(syn::Error::new_spanned(
+                    other,
+                    "the arguments take string literals",
+                ));
+            }
+        };
+        if meta.path.is_ident("name") {
+            name = value;
+        } else if meta.path.is_ident("role") {
+            let Some((_, variant)) = ROLES.iter().find(|(word, _)| *word == value) else {
+                let words: Vec<&str> = ROLES.iter().map(|(w, _)| *w).collect();
+                return Err(syn::Error::new_spanned(
+                    &meta.value,
+                    format!("`role` is one of {}", words.join(", ")),
+                ));
+            };
+            role = Some(syn::Ident::new(variant, proc_macro2::Span::call_site()));
+        } else {
+            return Err(syn::Error::new_spanned(
+                meta.path,
+                "the arguments are `name = \"ElementName\"` and `role = \"…\"`",
+            ));
+        }
     }
-    let meta: syn::MetaNameValue = syn::parse2(attr)?;
-    if !meta.path.is_ident("name") {
-        return Err(syn::Error::new_spanned(
-            meta.path,
-            "the only argument is `name = \"ElementName\"`",
-        ));
-    }
-    match meta.value {
-        syn::Expr::Lit(syn::ExprLit {
-            lit: syn::Lit::Str(s),
-            ..
-        }) => Ok(s.value()),
-        other => Err(syn::Error::new_spanned(
-            other,
-            "`name` takes a string literal",
-        )),
-    }
+    Ok((name, role))
 }
 
 /// Maps a field's Rust type to the catalog's prop type.

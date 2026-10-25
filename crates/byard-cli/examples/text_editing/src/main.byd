@@ -36,7 +36,7 @@ View Main() {
     var note = "the selection has a colour of its own"
     var edits = 0
 
-    Column #[bg: 0x14161C, p: 32, gap: 16, width: 440] {
+    Column #[bg: 0x14161C, p: 32, gap: 16, width: 440, grow: 1] {
         Text("Text editing") #[color: 0xF2F3F5, size: 20]
         Text("click in the field, then type and edit") #[color: 0x8A90A0, size: 14]
 

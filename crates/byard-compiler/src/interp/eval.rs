@@ -14,9 +14,24 @@
 //!   `Value::Memo`. Whether it is actually reactive is observed by the tracker
 //!   (D3), not declared.
 //! - Reading a `var`/memo identifier routes through `read_signal`/`read_memo`.
-//! - `untrack(expr)` is a reserved-name call dispatched to [`untrack`].
+//! - `untrack(expr)` is a reserved-name call dispatched to [`untrack`](super::reactive::untrack).
 //! - A mutation (`=`, `+=`, `++`, `--`) on a `var` marks it; on anything else
 //!   it is [`CompileError::NotAssignable`].
+//!
+//! The driver is split by area, one submodule each:
+//!
+//! - `expr`: lowering expressions and actions; `props`: reading an
+//!   element's props and resolving them to values; `states`: style states,
+//!   breakpoints and spreads; `animation`: `with`, keyframes and loops.
+//! - `element`: lowering an element; `instance`: instantiating a user
+//!   `View` and binding its arguments; `navigation`: `NavStack` and `NavHost`.
+//! - `layout`: flattening the render tree and building the layout tree;
+//!   `paint`: the paint walk; `overlay`, `canvas`, `scroll`,
+//!   `controls`, `text_field` and `wiring`: what that walk emits and
+//!   registers for each family of element.
+//! - `typography`: fonts and the theme; `controller`, `editing`,
+//!   `measure` and `access`: the controller boundary, text editing,
+//!   self-measurement and the accessibility tree.
 
 mod access;
 mod animation;
@@ -53,6 +68,7 @@ use wiring::{NativeRequest, NativeTarget};
 
 use super::env::{Env, SignalId, Value};
 use super::reactive::{FrameTarget, ReactiveCtx, ScopeId};
+// The interpreter modules the submodules reach as `super::events::…` and so on.
 use super::{bridge, dates, edit, env, events, intrinsics, shape, theme};
 use crate::diagnostics::{CompileError, Span};
 use crate::parser::ast::{Attr, ElementNode, Expr, Member, Param, StateBlock, Type, ViewDecl};
@@ -1355,8 +1371,6 @@ impl Interpreter {
     pub fn read_memo(&mut self, scope: ScopeId) -> Value {
         self.ctx.read_memo(scope)
     }
-
-    // ── element lowering (RFC-0005) ─────────────────────────────────────
 
     /// Walks a render tree, projecting it into a `byard-core` [`RenderFrame`]
     /// using Taffy layout via `byard-core`'s [`LayoutAtlas`].

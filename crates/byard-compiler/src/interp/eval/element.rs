@@ -20,6 +20,8 @@ use crate::parser::ast::{ElementNode, Expr, Member};
 use crate::symbol::Symbol;
 
 impl Interpreter {
+    // ── element lowering (RFC-0005) ─────────────────────────────────────
+
     /// Lowers an element to a [`RenderNode`], validating it against the §5
     /// attribute contract first (diagnostics accumulate in [`Interpreter::errors`]).
     /// `known_views` are user `ViewDecl` names in scope.

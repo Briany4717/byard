@@ -45,6 +45,7 @@ impl App {
             delta: (0.0, 0.0),
             payload: None,
             time_ms: t,
+            mods: byard_core::KeyModifiers::default(),
         };
         self.interp
             .dispatch_events(&[ev(EventKind::PointerDown, 0), ev(EventKind::PointerUp, 8)]);

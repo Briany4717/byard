@@ -10,6 +10,7 @@
 
 use std::collections::BTreeMap;
 
+use crate::error::{ProjectError, ResolveError};
 use crate::manifest::RegistryLocation;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -61,7 +62,7 @@ pub fn git_cache_path(name: &str, url: &str, reference: &GitRef) -> PathBuf {
 /// checksum mismatch like a swapped source file. A package that declares none
 /// hashes exactly as it did before assets existed, which is what keeps every
 /// lockfile written until then valid.
-pub fn package_checksum(root: &Path) -> Result<String, String> {
+pub fn package_checksum(root: &Path) -> Result<String, ProjectError> {
     let mut files = collect_byd_files(root)?;
     let manifest = root.join("byard.toml");
     if manifest.exists() {
@@ -76,7 +77,7 @@ pub fn package_checksum(root: &Path) -> Result<String, String> {
 
     let mut hasher = Sha256::new();
     for (rel, path) in files {
-        let bytes = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let bytes = std::fs::read(&path).map_err(|e| ProjectError::io(&path, e))?;
         hasher.update(rel.as_bytes());
         hasher.update([0]);
         hasher.update((bytes.len() as u64).to_le_bytes());
@@ -90,16 +91,15 @@ pub fn package_checksum(root: &Path) -> Result<String, String> {
 /// path, absolute path)`: its fonts, and the image its theme's seed is taken
 /// from (`[theme] seed = { image = "…" }`), which a consumer reads from the
 /// package when it extends the theme, so it has to be published and pinned.
-pub fn declared_assets(root: &Path) -> Result<Vec<(String, PathBuf)>, String> {
+pub fn declared_assets(root: &Path) -> Result<Vec<(String, PathBuf)>, ProjectError> {
     let manifest = root.join("byard.toml");
     if !manifest.exists() {
         return Ok(Vec::new());
     }
-    let src =
-        std::fs::read_to_string(&manifest).map_err(|e| format!("{}: {e}", manifest.display()))?;
+    let src = std::fs::read_to_string(&manifest).map_err(|e| ProjectError::io(&manifest, e))?;
     let table: toml::Table = src
         .parse()
-        .map_err(|e: toml::de::Error| format!("{}: {e}", manifest.display()))?;
+        .map_err(|e: toml::de::Error| ProjectError::toml(&manifest, &src, &e))?;
     let mut out = Vec::new();
     if let Some(image) = table
         .get("theme")
@@ -108,9 +108,12 @@ pub fn declared_assets(root: &Path) -> Result<Vec<(String, PathBuf)>, String> {
         .and_then(toml::Value::as_str)
     {
         if !crate::manifest::is_inside_package(image) {
-            return Err(format!(
-                "{}: [theme] seed image {image:?} is outside the package",
-                manifest.display()
+            return Err(ProjectError::manifest(
+                &manifest,
+                format!(
+                    "{}: [theme] seed image {image:?} is outside the package",
+                    manifest.display()
+                ),
             ));
         }
         let rel = image.trim_start_matches("./").replace('\\', "/");
@@ -122,15 +125,21 @@ pub fn declared_assets(root: &Path) -> Result<Vec<(String, PathBuf)>, String> {
         .and_then(toml::Value::as_table);
     for (family, path) in fonts.into_iter().flatten() {
         let Some(path) = path.as_str() else {
-            return Err(format!(
-                "{}: [assets.fonts] `{family}` must be a string path",
-                manifest.display()
+            return Err(ProjectError::manifest(
+                &manifest,
+                format!(
+                    "{}: [assets.fonts] `{family}` must be a string path",
+                    manifest.display()
+                ),
             ));
         };
         if !crate::manifest::is_inside_package(path) {
-            return Err(format!(
-                "{}: [assets.fonts] `{family}` = {path:?} is outside the package",
-                manifest.display()
+            return Err(ProjectError::manifest(
+                &manifest,
+                format!(
+                    "{}: [assets.fonts] `{family}` = {path:?} is outside the package",
+                    manifest.display()
+                ),
             ));
         }
         let rel = path.trim_start_matches("./").replace('\\', "/");
@@ -145,12 +154,12 @@ pub fn declared_assets(root: &Path) -> Result<Vec<(String, PathBuf)>, String> {
 /// path)`: its manifest, its sources, its declared assets, and a README and
 /// licence when present. Exactly what [`package_checksum`] covers, plus the
 /// documentation, which is shipped but not pinned.
-pub fn publishable_files(root: &Path) -> Result<Vec<(String, PathBuf)>, String> {
+pub fn publishable_files(root: &Path) -> Result<Vec<(String, PathBuf)>, ProjectError> {
     let mut files = collect_byd_files(root)?;
     files.push(("byard.toml".to_string(), root.join("byard.toml")));
     files.extend(declared_assets(root)?);
     let mut entries: Vec<PathBuf> = std::fs::read_dir(root)
-        .map_err(|e| format!("{}: {e}", root.display()))?
+        .map_err(|e| ProjectError::io(root, e))?
         .filter_map(|e| e.ok().map(|e| e.path()))
         .collect();
     entries.sort();
@@ -168,9 +177,12 @@ pub fn publishable_files(root: &Path) -> Result<Vec<(String, PathBuf)>, String> 
     files.dedup_by(|a, b| a.0 == b.0);
     for (rel, path) in &files {
         if !path.is_file() {
-            return Err(format!(
-                "`{rel}` is declared but `{}` does not exist",
-                path.display()
+            return Err(ProjectError::manifest(
+                &root.join("byard.toml"),
+                format!(
+                    "`{rel}` is declared but `{}` does not exist",
+                    path.display()
+                ),
             ));
         }
     }
@@ -180,7 +192,7 @@ pub fn publishable_files(root: &Path) -> Result<Vec<(String, PathBuf)>, String> 
 /// Collects `(relative path, absolute path)` for every `.byd` under `root`
 /// (preferring `root/src/` when it exists), sorted for determinism. Hidden
 /// directories, `target/`, and `.byard/` are skipped.
-fn collect_byd_files(root: &Path) -> Result<Vec<(String, PathBuf)>, String> {
+fn collect_byd_files(root: &Path) -> Result<Vec<(String, PathBuf)>, ProjectError> {
     let scan_root = if root.join("src").is_dir() {
         root.join("src")
     } else {
@@ -204,12 +216,12 @@ fn collect_byd_files(root: &Path) -> Result<Vec<(String, PathBuf)>, String> {
     Ok(with_rel)
 }
 
-fn walk(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
-    let entries = std::fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+fn walk(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), ProjectError> {
+    let entries = std::fs::read_dir(dir).map_err(|e| ProjectError::io(dir, e))?;
     // Deterministic traversal: sorted so checksums and file order never
     // depend on readdir order.
     let mut paths: Vec<PathBuf> = entries
-        .map(|e| e.map(|e| e.path()).map_err(|e| e.to_string()))
+        .map(|e| e.map(|e| e.path()).map_err(|e| ProjectError::io(dir, e)))
         .collect::<Result<_, _>>()?;
     paths.sort();
     for path in paths {
@@ -237,7 +249,7 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
 /// to its author, and rewriting it would make the lockfile's hash lie).
 ///
 /// Sorted within each package, packages in dependency order, each file once.
-pub fn owned_source_files(manifest: &Manifest) -> Result<Vec<PathBuf>, String> {
+pub fn owned_source_files(manifest: &Manifest) -> Result<Vec<PathBuf>, ProjectError> {
     let mut out: Vec<PathBuf> = Vec::new();
     if manifest.single_file {
         out.push(manifest.entry.clone());
@@ -288,7 +300,7 @@ pub fn owned_source_files(manifest: &Manifest) -> Result<Vec<PathBuf>, String> {
 /// Every `.byd` file under `dir`, recursively, sorted, skipping hidden
 /// directories and `target/`: the files `byard fmt DIR` formats when `DIR`
 /// is not itself a project.
-pub fn byd_files_under(dir: &Path) -> Result<Vec<PathBuf>, String> {
+pub fn byd_files_under(dir: &Path) -> Result<Vec<PathBuf>, ProjectError> {
     let mut out = Vec::new();
     walk(dir, &mut out)?;
     Ok(out)
@@ -322,15 +334,15 @@ pub struct Lockfile {
 
 impl Lockfile {
     /// Reads `byard.lock` from `project_root`, if present.
-    pub fn read(project_root: &Path) -> Result<Option<Self>, String> {
+    pub fn read(project_root: &Path) -> Result<Option<Self>, ProjectError> {
         let path = project_root.join("byard.lock");
         if !path.exists() {
             return Ok(None);
         }
-        let src = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let src = std::fs::read_to_string(&path).map_err(|e| ProjectError::io(&path, e))?;
         let table: toml::Table = src
             .parse()
-            .map_err(|e: toml::de::Error| format!("byard.lock: {e}"))?;
+            .map_err(|e: toml::de::Error| ProjectError::lock(&path, format!("byard.lock: {e}")))?;
         let mut packages = Vec::new();
         if let Some(toml::Value::Array(entries)) = table.get("package") {
             for entry in entries {
@@ -339,7 +351,12 @@ impl Lockfile {
                         .get(key)
                         .and_then(|v| v.as_str())
                         .map(str::to_string)
-                        .ok_or_else(|| format!("byard.lock: package entry missing `{key}`"))
+                        .ok_or_else(|| {
+                            ProjectError::lock(
+                                &path,
+                                format!("byard.lock: package entry missing `{key}`"),
+                            )
+                        })
                 };
                 let mut source = get("source")?;
                 let mut version = entry
@@ -374,7 +391,7 @@ impl Lockfile {
     }
 
     /// Writes `byard.lock` under `project_root`, sorted by package name.
-    pub fn write(&self, project_root: &Path) -> Result<(), String> {
+    pub fn write(&self, project_root: &Path) -> Result<(), ProjectError> {
         let mut packages = self.packages.clone();
         packages.sort_by(|a, b| a.name.cmp(&b.name));
         let mut out = String::from(
@@ -397,7 +414,7 @@ impl Lockfile {
             let _ = writeln!(out, "checksum = {:?}", p.checksum);
         }
         let path = project_root.join("byard.lock");
-        std::fs::write(&path, out).map_err(|e| format!("{}: {e}", path.display()))
+        std::fs::write(&path, out).map_err(|e| ProjectError::io(&path, e))
     }
 
     /// The locked entry for `name`, if any.
@@ -440,44 +457,69 @@ pub fn dep_root(
     declarer_root: &Path,
     dep: &Dependency,
     lock: Option<&Lockfile>,
-) -> Result<PathBuf, String> {
+) -> Result<PathBuf, ProjectError> {
+    // The manifest that declared the dependency, which is where a fix goes.
+    let declared_in = declarer_root.join("byard.toml");
     match &dep.source {
         DepSource::Path(rel) => {
             let root = declarer_root.join(rel);
-            let root = root
-                .canonicalize()
-                .map_err(|e| format!("dependency `{}`: {}: {e}", dep.name, root.display()))?;
+            let root = root.canonicalize().map_err(|e| {
+                ProjectError::manifest(
+                    &declared_in,
+                    format!("dependency `{}`: {}: {e}", dep.name, root.display()),
+                )
+            })?;
             if !root.is_dir() {
-                return Err(format!(
-                    "dependency `{}`: `{}` is not a directory",
-                    dep.name,
-                    root.display()
+                return Err(ProjectError::manifest(
+                    &declared_in,
+                    format!(
+                        "dependency `{}`: `{}` is not a directory",
+                        dep.name,
+                        root.display()
+                    ),
                 ));
             }
             Ok(root)
         }
         DepSource::Registry { registry, version } => {
             let not_fetched = || {
-                format!(
-                    "dependency `{}` ({} {version} from `{}`) is not fetched yet\n\
-                     hint: run `byard get` to resolve and fetch dependencies",
-                    dep.name,
-                    dep.name,
-                    registry.as_written()
+                ProjectError::fetch(
+                    Some(&dep.name),
+                    registry.as_written(),
+                    format!(
+                        "dependency `{}` ({} {version} from `{}`) is not fetched yet\n\
+                         hint: run `byard get` to resolve and fetch dependencies",
+                        dep.name,
+                        dep.name,
+                        registry.as_written()
+                    ),
                 )
             };
             let locked = lock
                 .and_then(|l| l.get(&dep.name))
                 .filter(|l| !l.version.is_empty())
                 .ok_or_else(not_fetched)?;
-            let req = semver::VersionReq::parse(version).map_err(|e| e.to_string())?;
-            let pinned = semver::Version::parse(&locked.version)
-                .map_err(|e| format!("byard.lock: `{}` version: {e}", dep.name))?;
+            let lock_path = declarer_root.join("byard.lock");
+            let req =
+                semver::VersionReq::parse(version).map_err(|e| ResolveError::Requirement {
+                    package: dep.name.clone(),
+                    written: version.clone(),
+                    problem: format!("is not a version requirement: {e}"),
+                })?;
+            let pinned = semver::Version::parse(&locked.version).map_err(|e| {
+                ProjectError::lock(
+                    &lock_path,
+                    format!("byard.lock: `{}` version: {e}", dep.name),
+                )
+            })?;
             if !req.matches(&pinned) {
-                return Err(format!(
-                    "dependency `{}`: byard.toml asks for {version} but byard.lock pins {pinned}\n\
-                     hint: run `byard get` to resolve again",
-                    dep.name
+                return Err(ProjectError::lock(
+                    &lock_path,
+                    format!(
+                        "dependency `{}`: byard.toml asks for {version} but byard.lock pins {pinned}\n\
+                         hint: run `byard get` to resolve again",
+                        dep.name
+                    ),
                 ));
             }
             let root = registry_cache_path(&dep.name, &locked.version, &locked.checksum);
@@ -492,11 +534,15 @@ pub fn dep_root(
             if root.is_dir() {
                 Ok(root)
             } else {
-                Err(format!(
-                    "dependency `{}` ({url}#{}) is not in the cache yet\n\
-                     hint: run `byard get` to fetch dependencies",
-                    dep.name,
-                    reference.as_str()
+                Err(ProjectError::fetch(
+                    Some(&dep.name),
+                    url.as_str(),
+                    format!(
+                        "dependency `{}` ({url}#{}) is not in the cache yet\n\
+                         hint: run `byard get` to fetch dependencies",
+                        dep.name,
+                        reference.as_str()
+                    ),
                 ))
             }
         }
@@ -508,11 +554,17 @@ pub fn dep_root(
 /// Fetches a pinned git source into `dest`, returning the exact commit it
 /// resolved to. Shells out to the system `git`, the same trust boundary as
 /// Cargo's git dependencies.
-pub fn fetch_git(url: &str, reference: &GitRef, dest: &Path) -> Result<String, String> {
+pub fn fetch_git(
+    name: &str,
+    url: &str,
+    reference: &GitRef,
+    dest: &Path,
+) -> Result<String, ProjectError> {
     if let Some(parent) = dest.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
+        std::fs::create_dir_all(parent).map_err(|e| ProjectError::io(parent, e))?;
     }
-    let run = |args: &[&str], cwd: Option<&Path>| -> Result<String, String> {
+    let fail = |message: String| ProjectError::fetch(Some(name), url, message);
+    let run = |args: &[&str], cwd: Option<&Path>| -> Result<String, ProjectError> {
         let mut cmd = std::process::Command::new("git");
         cmd.args(args);
         if let Some(cwd) = cwd {
@@ -520,13 +572,13 @@ pub fn fetch_git(url: &str, reference: &GitRef, dest: &Path) -> Result<String, S
         }
         let out = cmd
             .output()
-            .map_err(|e| format!("failed to run git: {e}"))?;
+            .map_err(|e| fail(format!("failed to run git: {e}")))?;
         if !out.status.success() {
-            return Err(format!(
+            return Err(fail(format!(
                 "git {} failed:\n{}",
                 args.join(" "),
                 String::from_utf8_lossy(&out.stderr)
-            ));
+            )));
         }
         Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
     };
@@ -618,17 +670,21 @@ impl Registry {
     /// `rel` comes from an index, so it must stay inside the registry: a
     /// path that is absolute or climbs out with `..` is refused before
     /// anything is read, from a directory or a server.
-    pub fn read(&self, rel: &str) -> Result<Vec<u8>, String> {
+    pub fn read(&self, rel: &str) -> Result<Vec<u8>, ProjectError> {
         if !crate::manifest::is_inside_package(rel) || rel.contains("://") {
-            return Err(format!(
-                "the registry at `{}` names {rel:?}, which is outside it",
-                self.label()
+            return Err(ProjectError::fetch(
+                None,
+                self.label(),
+                format!(
+                    "the registry at `{}` names {rel:?}, which is outside it",
+                    self.label()
+                ),
             ));
         }
         match self {
             Self::Dir(dir) => {
                 let path = dir.join(rel);
-                std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))
+                std::fs::read(&path).map_err(|e| ProjectError::io(&path, e))
             }
             Self::Http(base) => http_get(&format!("{base}/{rel}")),
         }
@@ -637,13 +693,18 @@ impl Registry {
     /// The registry's `index.toml`. A directory without one is an empty
     /// registry; a server without one is an error, since a URL that serves
     /// no index is more likely mistyped than empty.
-    pub fn index(&self) -> Result<RegistryIndex, String> {
+    pub fn index(&self) -> Result<RegistryIndex, ProjectError> {
         match self {
             Self::Dir(dir) => RegistryIndex::read(dir),
             Self::Http(base) => {
                 let bytes = self.read("index.toml")?;
-                let src = String::from_utf8(bytes)
-                    .map_err(|_| format!("{base}/index.toml is not UTF-8 text"))?;
+                let src = String::from_utf8(bytes).map_err(|_| {
+                    ProjectError::fetch(
+                        None,
+                        base.as_str(),
+                        format!("{base}/index.toml is not UTF-8 text"),
+                    )
+                })?;
                 RegistryIndex::parse(&src, &format!("{base}/index.toml"))
             }
         }
@@ -651,12 +712,13 @@ impl Registry {
 }
 
 /// `GET url`, the whole body, or an error naming the URL and the status.
-fn http_get(url: &str) -> Result<Vec<u8>, String> {
+fn http_get(url: &str) -> Result<Vec<u8>, ProjectError> {
+    let fail = |message: String| ProjectError::fetch(None, url, message);
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(60))
         .user_agent(concat!("byard/", env!("CARGO_PKG_VERSION")))
         .build()
-        .map_err(|e| format!("GET {url}: {e}"))?;
+        .map_err(|e| fail(format!("GET {url}: {e}")))?;
     let response = client.get(url).send().map_err(|e| {
         // reqwest's own message is "error sending request"; the reason a
         // user can act on (refused, timed out, bad certificate) is in its
@@ -667,13 +729,13 @@ fn http_get(url: &str) -> Result<Vec<u8>, String> {
             reason = format!("{reason}: {inner}");
             source = inner.source();
         }
-        format!("GET {url}: {reason}")
+        fail(format!("GET {url}: {reason}"))
     })?;
     let status = response.status();
     if !status.is_success() {
-        return Err(format!("GET {url}: {status}"));
+        return Err(fail(format!("GET {url}: {status}")));
     }
-    read_capped(response, MAX_DOWNLOAD).map_err(|e| format!("GET {url}: {e}"))
+    read_capped(response, MAX_DOWNLOAD).map_err(|e| fail(format!("GET {url}: {e}")))
 }
 
 /// The most `byard get` reads from one registry response. An index or a
@@ -738,20 +800,22 @@ pub struct RegistryIndex {
 
 impl RegistryIndex {
     /// Reads `index.toml` under `registry`; an absent file is an empty index.
-    pub fn read(registry: &Path) -> Result<Self, String> {
+    pub fn read(registry: &Path) -> Result<Self, ProjectError> {
         let path = registry.join("index.toml");
         if !path.exists() {
             return Ok(Self::default());
         }
-        let src = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let src = std::fs::read_to_string(&path).map_err(|e| ProjectError::io(&path, e))?;
         Self::parse(&src, &path.display().to_string())
     }
 
     /// Parses the text of an `index.toml`; `label` names it in errors.
-    pub fn parse(src: &str, label: &str) -> Result<Self, String> {
+    pub fn parse(src: &str, label: &str) -> Result<Self, ProjectError> {
+        // An index is the registry's, not any one package's.
+        let bad = |message: String| ProjectError::fetch(None, label, message);
         let table: toml::Table = src
             .parse()
-            .map_err(|e: toml::de::Error| format!("{label}: {e}"))?;
+            .map_err(|e: toml::de::Error| bad(format!("{label}: {e}")))?;
         let mut entries = Vec::new();
         if let Some(toml::Value::Array(items)) = table.get("package") {
             for item in items {
@@ -759,7 +823,7 @@ impl RegistryIndex {
                     item.get(key)
                         .and_then(toml::Value::as_str)
                         .map(str::to_string)
-                        .ok_or_else(|| format!("{label}: an entry is missing `{key}`"))
+                        .ok_or_else(|| bad(format!("{label}: an entry is missing `{key}`")))
                 };
                 let dependencies = match item.get("dependencies") {
                     None => None,
@@ -770,20 +834,22 @@ impl RegistryIndex {
                                 Ok(IndexDep {
                                     name: field("name")
                                         .ok_or_else(|| {
-                                            format!("{label}: a dependency has no `name`")
+                                            bad(format!("{label}: a dependency has no `name`"))
                                         })?
                                         .to_string(),
                                     version: field("version")
                                         .ok_or_else(|| {
-                                            format!("{label}: a dependency has no `version`")
+                                            bad(format!("{label}: a dependency has no `version`"))
                                         })?
                                         .to_string(),
                                     registry: field("registry").map(str::to_string),
                                 })
                             })
-                            .collect::<Result<Vec<_>, String>>()?,
+                            .collect::<Result<Vec<_>, ProjectError>>()?,
                     ),
-                    Some(_) => return Err(format!("{label}: `dependencies` must be an array")),
+                    Some(_) => {
+                        return Err(bad(format!("{label}: `dependencies` must be an array")));
+                    }
                 };
                 entries.push(IndexEntry {
                     name: get("name")?,
@@ -799,7 +865,7 @@ impl RegistryIndex {
     }
 
     /// Writes `index.toml` under `registry`, sorted by name then version.
-    pub fn write(&self, registry: &Path) -> Result<(), String> {
+    pub fn write(&self, registry: &Path) -> Result<(), ProjectError> {
         let mut entries = self.entries.clone();
         entries.sort_by(|a, b| (&a.name, &a.version).cmp(&(&b.name, &b.version)));
         let mut out = String::from(
@@ -827,7 +893,7 @@ impl RegistryIndex {
             }
         }
         let path = registry.join("index.toml");
-        std::fs::write(&path, out).map_err(|e| format!("{}: {e}", path.display()))
+        std::fs::write(&path, out).map_err(|e| ProjectError::io(&path, e))
     }
 
     /// The entry for `name` at exactly `version`.
@@ -850,7 +916,7 @@ pub fn sha256_tag(bytes: &[u8]) -> String {
 /// unpacking and the package's checksum after, both against the entry.
 /// Already cached is not refetched, since a published version is immutable
 /// and the cache is keyed by its checksum.
-pub fn fetch_registry(registry: &Registry, entry: &IndexEntry) -> Result<PathBuf, String> {
+pub fn fetch_registry(registry: &Registry, entry: &IndexEntry) -> Result<PathBuf, ProjectError> {
     let (name, version) = (&entry.name, &entry.version);
     let dest = registry_cache_path(name, version, &entry.checksum);
     if dest.is_dir() {
@@ -859,32 +925,41 @@ pub fn fetch_registry(registry: &Registry, entry: &IndexEntry) -> Result<PathBuf
         if package_checksum(&dest).ok().as_deref() == Some(entry.checksum.as_str()) {
             return Ok(dest);
         }
-        std::fs::remove_dir_all(&dest).map_err(|e| format!("{}: {e}", dest.display()))?;
+        std::fs::remove_dir_all(&dest).map_err(|e| ProjectError::io(&dest, e))?;
     }
     let bytes = registry.read(&entry.archive)?;
     let actual = sha256_tag(&bytes);
     if actual != entry.archive_sha256 {
-        return Err(format!(
-            "`{name}@{version}` from `{}`: the archive does not match the index\nindexed: {}\nfound:   {actual}",
+        return Err(ProjectError::fetch(
+            Some(name),
             registry.label(),
-            entry.archive_sha256
+            format!(
+                "`{name}@{version}` from `{}`: the archive does not match the index\nindexed: {}\nfound:   {actual}",
+                registry.label(),
+                entry.archive_sha256
+            ),
         ));
     }
     // Unpacked beside the destination and renamed into place, so a failure
     // part way through never leaves a directory that looks fetched.
     let staging = dest.with_extension("partial");
     let _ = std::fs::remove_dir_all(&staging);
-    std::fs::create_dir_all(&staging).map_err(|e| format!("{}: {e}", staging.display()))?;
-    crate::archive::unpack(&bytes, &staging).map_err(|e| format!("`{name}@{version}`: {e}"))?;
+    std::fs::create_dir_all(&staging).map_err(|e| ProjectError::io(&staging, e))?;
+    crate::archive::unpack(&bytes, &staging)
+        .map_err(|e| ProjectError::archive(&staging, format!("`{name}@{version}`: {e}")))?;
     let unpacked = package_checksum(&staging)?;
     if unpacked != entry.checksum {
         let _ = std::fs::remove_dir_all(&staging);
-        return Err(format!(
-            "`{name}@{version}`: the unpacked package does not match the index\nindexed: {}\nfound:   {unpacked}",
-            entry.checksum
+        return Err(ProjectError::fetch(
+            Some(name),
+            registry.label(),
+            format!(
+                "`{name}@{version}`: the unpacked package does not match the index\nindexed: {}\nfound:   {unpacked}",
+                entry.checksum
+            ),
         ));
     }
-    std::fs::rename(&staging, &dest).map_err(|e| format!("{}: {e}", dest.display()))?;
+    std::fs::rename(&staging, &dest).map_err(|e| ProjectError::io(&dest, e))?;
     Ok(dest)
 }
 
@@ -926,7 +1001,7 @@ impl FsProvider {
     }
 
     /// The `[dependencies]` visible to `dependent`.
-    fn deps_of(&self, dependent: &str) -> Result<(PathBuf, Vec<Dependency>), String> {
+    fn deps_of(&self, dependent: &str) -> Result<(PathBuf, Vec<Dependency>), ProjectError> {
         if dependent == ROOT_PACKAGE {
             return Ok((self.project_root.clone(), self.project_deps.clone()));
         }
@@ -934,18 +1009,20 @@ impl FsProvider {
             .roots
             .get(dependent)
             .cloned()
-            .ok_or_else(|| format!("internal: package `{dependent}` not yet resolved"))?;
+            .ok_or_else(|| ResolveError::Failed {
+                message: format!("internal: package `{dependent}` not yet resolved"),
+            })?;
         let manifest_path = root.join("byard.toml");
         if !manifest_path.exists() {
             return Ok((root, Vec::new()));
         }
         let src = std::fs::read_to_string(&manifest_path)
-            .map_err(|e| format!("{}: {e}", manifest_path.display()))?;
+            .map_err(|e| ProjectError::io(&manifest_path, e))?;
         let table: toml::Table = src
             .parse()
-            .map_err(|e: toml::de::Error| format!("{}: {e}", manifest_path.display()))?;
+            .map_err(|e: toml::de::Error| ProjectError::toml(&manifest_path, &src, &e))?;
         let deps = match table.get("dependencies") {
-            Some(d) => parse_dependencies(d)?,
+            Some(d) => parse_dependencies(d, &manifest_path)?,
             None => Vec::new(),
         };
         Ok((root, deps))
@@ -953,17 +1030,34 @@ impl FsProvider {
 }
 
 impl PackageProvider for FsProvider {
+    /// The compiler's resolver reports a package it cannot get as text, in a
+    /// diagnostic of its own, so the typed error is rendered here at the
+    /// boundary.
     fn package_files(&mut self, dependent: &str, package: &str) -> Result<Vec<SourceFile>, String> {
+        self.files_of(dependent, package).map_err(|e| e.to_string())
+    }
+}
+
+impl FsProvider {
+    /// The `.byd` files of `package`, requested by `dependent`.
+    fn files_of(
+        &mut self,
+        dependent: &str,
+        package: &str,
+    ) -> Result<Vec<SourceFile>, ProjectError> {
         let (declarer_root, deps) = self.deps_of(dependent)?;
         let dep = deps.iter().find(|d| d.name == package).ok_or_else(|| {
-            format!(
-                "not declared in `[dependencies]` of {}\n\
-                 hint: run `byard add {package} --path <dir>` or `--git <url> --tag <tag>`",
-                if dependent == ROOT_PACKAGE {
-                    "byard.toml".to_string()
-                } else {
-                    format!("package `{dependent}`")
-                }
+            ProjectError::manifest(
+                &declarer_root.join("byard.toml"),
+                format!(
+                    "not declared in `[dependencies]` of {}\n\
+                     hint: run `byard add {package} --path <dir>` or `--git <url> --tag <tag>`",
+                    if dependent == ROOT_PACKAGE {
+                        "byard.toml".to_string()
+                    } else {
+                        format!("package `{dependent}`")
+                    }
+                ),
             )
         })?;
 
@@ -979,13 +1073,16 @@ impl PackageProvider for FsProvider {
             if let Some(locked) = self.lock.as_ref().and_then(|l| l.get(package)) {
                 let actual = package_checksum(&root)?;
                 if actual != locked.checksum {
-                    return Err(format!(
-                        "checksum mismatch for `{package}` (cache `{}`)\n\
-                         locked:  {}\n\
-                         found:   {actual}\n\
-                         hint: the cache is corrupt; delete it and run `byard get`",
-                        root.display(),
-                        locked.checksum
+                    return Err(ProjectError::lock(
+                        &self.project_root.join("byard.lock"),
+                        format!(
+                            "checksum mismatch for `{package}` (cache `{}`)\n\
+                             locked:  {}\n\
+                             found:   {actual}\n\
+                             hint: the cache is corrupt; delete it and run `byard get`",
+                            root.display(),
+                            locked.checksum
+                        ),
                     ));
                 }
             }
@@ -995,16 +1092,20 @@ impl PackageProvider for FsProvider {
 
         let files = collect_byd_files(&root)?;
         if files.is_empty() {
-            return Err(format!(
-                "package `{package}` at `{}` contains no `.byd` files",
-                root.display()
+            return Err(ProjectError::fetch(
+                Some(package),
+                root.display().to_string(),
+                format!(
+                    "package `{package}` at `{}` contains no `.byd` files",
+                    root.display()
+                ),
             ));
         }
         files
             .into_iter()
             .map(|(rel, path)| {
-                let source = std::fs::read_to_string(&path)
-                    .map_err(|e| format!("{}: {e}", path.display()))?;
+                let source =
+                    std::fs::read_to_string(&path).map_err(|e| ProjectError::io(&path, e))?;
                 Ok(SourceFile {
                     name: format!("{package}/{rel}"),
                     source,
@@ -1019,23 +1120,26 @@ impl PackageProvider for FsProvider {
 /// Collects the root project's `.byd` files: the entry first, then every
 /// sibling (recursive under the entry's directory), sorted, the root package
 /// is one namespace (RFC-0008), so sibling views need no `use`.
-pub fn project_source_files(manifest: &Manifest) -> Result<Vec<SourceFile>, String> {
+pub fn project_source_files(manifest: &Manifest) -> Result<Vec<SourceFile>, ProjectError> {
     // A library package is checked as the files a consumer gets, from its
     // `src/` (or its root without one), with no entry first.
     if manifest.library {
         let files = collect_byd_files(&manifest.project_root)?;
         if files.is_empty() {
-            return Err(format!(
-                "package `{}` at `{}` contains no `.byd` files",
-                manifest.name,
-                manifest.project_root.display()
+            return Err(ProjectError::manifest(
+                &manifest.project_root.join("byard.toml"),
+                format!(
+                    "package `{}` at `{}` contains no `.byd` files",
+                    manifest.name,
+                    manifest.project_root.display()
+                ),
             ));
         }
         return files
             .into_iter()
             .map(|(name, path)| {
-                let source = std::fs::read_to_string(&path)
-                    .map_err(|e| format!("{}: {e}", path.display()))?;
+                let source =
+                    std::fs::read_to_string(&path).map_err(|e| ProjectError::io(&path, e))?;
                 Ok(SourceFile { name, source })
             })
             .collect();
@@ -1047,7 +1151,7 @@ pub fn project_source_files(manifest: &Manifest) -> Result<Vec<SourceFile>, Stri
         .to_path_buf();
 
     let entry_src = std::fs::read_to_string(&manifest.entry)
-        .map_err(|e| format!("{}: {e}", manifest.entry.display()))?;
+        .map_err(|e| ProjectError::io(&manifest.entry, e))?;
     let entry_name = manifest.entry.file_name().map_or_else(
         || "main.byd".to_string(),
         |n| n.to_string_lossy().into_owned(),
@@ -1083,8 +1187,7 @@ pub fn project_source_files(manifest: &Manifest) -> Result<Vec<SourceFile>, Stri
     rels.sort_by(|a, b| a.0.cmp(&b.0));
 
     for (rel, path) in rels {
-        let source =
-            std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let source = std::fs::read_to_string(&path).map_err(|e| ProjectError::io(&path, e))?;
         files.push(SourceFile { name: rel, source });
     }
     Ok(files)
@@ -1095,7 +1198,7 @@ pub fn project_source_files(manifest: &Manifest) -> Result<Vec<SourceFile>, Stri
 /// commands can never disagree about what the program *is*.
 pub fn resolve_project(
     manifest: &Manifest,
-) -> Result<(byard_compiler::resolve::ResolvedProgram, FsProvider), String> {
+) -> Result<(byard_compiler::resolve::ResolvedProgram, FsProvider), ProjectError> {
     let lock = Lockfile::read(&manifest.project_root)?;
     let mut provider = FsProvider::new(manifest, lock);
     let files = project_source_files(manifest)?;
@@ -1235,7 +1338,8 @@ mod tests {
         ] {
             for registry in [&dir, &web] {
                 let err = registry.read(rel).unwrap_err();
-                assert!(err.contains("outside it"), "{rel}: {err}");
+                assert!(matches!(err, ProjectError::Fetch { .. }), "{rel}: {err:?}");
+                assert!(err.to_string().contains("outside it"), "{rel}: {err}");
             }
         }
     }
@@ -1280,7 +1384,8 @@ mod tests {
         )
         .unwrap();
         let err = declared_assets(&dir).unwrap_err();
-        assert!(err.contains("outside the package"), "{err}");
+        assert!(matches!(err, ProjectError::Manifest { .. }), "{err:?}");
+        assert!(err.to_string().contains("outside the package"), "{err}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

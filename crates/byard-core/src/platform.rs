@@ -58,13 +58,16 @@ pub struct WindowSize {
     pub refresh_rate_mhz: Option<u32>,
 }
 
-/// Keyboard modifier state accompanying a key event.
+/// Keyboard modifier state accompanying a key or pointer event.
 ///
-/// Separate from [`InputEvent`] because it exists for exactly one consumer,
-/// the dev runner's chords (RFC-0030 §Q1), and those are consumed *before*
-/// `dispatch_events`, so the app under test never sees them. Putting modifiers
-/// into the router's event payload would be a language-visible change made for
-/// a dev-only feature.
+/// Carried on every [`InputEvent`] (RFC-0041 §2) so a text field can tell a
+/// plain Left from Shift+Left or Ctrl+Left, and also offered to the host by
+/// itself through [`PlatformHost::on_chord`], before the router sees the
+/// event, so the dev runner can claim its `Mod+Shift` chords (RFC-0030 §Q1).
+///
+/// The `key_down` payload a `byld` handler sees is still the key name alone:
+/// modifiers reach the engine's own widgets, not the language, which is the
+/// reason RFC-0030 kept them off the event and still holds.
 // Four `bool`s is the shape of the thing being modelled, a keyboard has four
 // modifier keys and they are independent. A bitflags type would satisfy the
 // lint and make every call site less readable than `mods.shift`.
@@ -97,6 +100,85 @@ impl KeyModifiers {
         } else {
             self.ctrl
         }
+    }
+
+    /// Whether the modifier that moves the caret by a word is held: `Option`
+    /// on macOS, `Ctrl` everywhere else (RFC-0041 §Q5).
+    ///
+    /// Not the same key as [`mod_held`](Self::mod_held) on macOS, where `Cmd`
+    /// is the shortcut key and `Option` is the word key.
+    #[must_use]
+    pub const fn word_held(self) -> bool {
+        if cfg!(target_os = "macos") {
+            self.alt
+        } else {
+            self.ctrl
+        }
+    }
+
+    /// Reads a key chord as a person writes it on a command line: modifiers
+    /// then a key, joined by `+`, like `shift+Left` or `mod+a`, and returns the
+    /// modifiers and the key's name as a platform reports it (`ArrowLeft`).
+    ///
+    /// The modifiers are `shift`, `ctrl`, `alt` (or `option`), `meta` (or
+    /// `cmd`, `super`) and `mod`, the platform's shortcut key (RFC-0041 §Q5).
+    /// The key is a single character, or one of `Left`, `Right`, `Up`, `Down`,
+    /// `Home`, `End`, `Backspace`, `Delete`, `Enter`, `Tab`, `Escape` and
+    /// `Space`; case does not matter for those.
+    ///
+    /// # Errors
+    ///
+    /// An unknown modifier or key, in words a person can act on.
+    pub fn parse_chord(chord: &str) -> Result<(Self, String), String> {
+        let (head, key) = match chord.rfind('+') {
+            // "mod++" is Mod and the plus key; a lone "+" is the plus key.
+            Some(i) if i + 1 == chord.len() => (chord[..i].strip_suffix('+').unwrap_or(""), "+"),
+            Some(i) => (&chord[..i], &chord[i + 1..]),
+            None => ("", chord),
+        };
+        let mut mods = Self::default();
+        for part in head.split('+').filter(|p| !p.is_empty()) {
+            match part.to_ascii_lowercase().as_str() {
+                "shift" => mods.shift = true,
+                "ctrl" | "control" => mods.ctrl = true,
+                "alt" | "option" => mods.alt = true,
+                "meta" | "cmd" | "command" | "super" | "win" => mods.meta = true,
+                "mod" => {
+                    if cfg!(target_os = "macos") {
+                        mods.meta = true;
+                    } else {
+                        mods.ctrl = true;
+                    }
+                }
+                other => {
+                    return Err(format!(
+                        "`{other}` is not a modifier; use shift, ctrl, alt, meta or mod"
+                    ));
+                }
+            }
+        }
+        let name = match key.to_ascii_lowercase().as_str() {
+            "left" => "ArrowLeft".to_string(),
+            "right" => "ArrowRight".to_string(),
+            "up" => "ArrowUp".to_string(),
+            "down" => "ArrowDown".to_string(),
+            "home" => "Home".to_string(),
+            "end" => "End".to_string(),
+            "backspace" => "Backspace".to_string(),
+            "delete" | "del" => "Delete".to_string(),
+            "enter" | "return" => "Enter".to_string(),
+            "tab" => "Tab".to_string(),
+            "escape" | "esc" => "Escape".to_string(),
+            "space" => " ".to_string(),
+            _ if key.chars().count() == 1 => key.to_string(),
+            "" => return Err(format!("`{chord}` names no key")),
+            _ => {
+                return Err(format!(
+                    "`{key}` is not a key I know; try Left, Home, Delete or a single character"
+                ));
+            }
+        };
+        Ok((mods, name))
     }
 
     /// Whether this is the `Mod+Shift` prefix every dev chord uses.
@@ -185,6 +267,10 @@ pub enum EventKind {
     /// the window opens and whenever the user changes it; `true` in
     /// `InputEvent.payload` as `InputPayload::Bool` means dark.
     SystemScheme,
+    /// The window gained or lost focus, reported by the host; `true` in
+    /// `InputEvent.payload` as `InputPayload::Bool` means it has focus. A
+    /// text field's caret only blinks in a window that has it (RFC-0041 §6).
+    WindowFocus,
 }
 
 impl EventKind {
@@ -222,7 +308,8 @@ impl EventKind {
             | Self::Composition
             | Self::CompositionCommit
             | Self::CompositionEnd
-            | Self::SystemScheme => false,
+            | Self::SystemScheme
+            | Self::WindowFocus => false,
         }
     }
 }
@@ -289,6 +376,7 @@ impl ImeEvent {
             delta: (0.0, 0.0),
             payload,
             time_ms,
+            mods: KeyModifiers::default(),
         })
     }
 }
@@ -306,6 +394,10 @@ pub struct InputEvent {
     pub payload: Option<InputPayload>,
     /// Event time in milliseconds (for the tap interval).
     pub time_ms: u64,
+    /// The modifier keys held when the event happened (RFC-0041 §2). Default
+    /// (none held) for events that have no keyboard to ask, such as a
+    /// system-scheme change.
+    pub mods: KeyModifiers,
 }
 
 /// Application hooks driven by a concrete platform host.
@@ -442,6 +534,22 @@ pub trait PlatformHost {
         false
     }
 
+    /// Called when the modifier keys change (Shift, Ctrl, Alt, Cmd/Super), so
+    /// a host can stamp the state onto the key and pointer events it creates
+    /// afterwards ([`InputEvent::mods`], RFC-0041 §2).
+    ///
+    /// Defaults to a no-op: a host that does not record them sends events with
+    /// no modifiers held, and a text field then edits as it always did.
+    fn on_modifiers(&mut self, _mods: KeyModifiers) {}
+
+    /// Called when the window gains (`true`) or loses focus, so the engine can
+    /// stop a text field's caret blinking in a window nobody is typing into
+    /// (RFC-0041 §6). A host usually forwards it as an
+    /// [`EventKind::WindowFocus`] input event.
+    ///
+    /// Defaults to a no-op.
+    fn on_window_focus(&mut self, _focused: bool) {}
+
     /// Called when printable text is committed (character keys, IME commit).
     ///
     /// `text` is the committed string (usually one character but may be more
@@ -566,6 +674,41 @@ mod tests {
             .is_dev_chord()
         );
         assert!(!KeyModifiers::default().is_dev_chord());
+    }
+
+    #[test]
+    fn a_chord_is_modifiers_then_a_key_and_names_the_key_as_a_platform_does() {
+        let (mods, key) = KeyModifiers::parse_chord("shift+Left").unwrap();
+        assert_eq!(
+            (mods, key.as_str()),
+            (
+                KeyModifiers {
+                    shift: true,
+                    ..KeyModifiers::default()
+                },
+                "ArrowLeft"
+            )
+        );
+        let (mods, key) = KeyModifiers::parse_chord("mod+a").unwrap();
+        assert!(mods.mod_held() && !mods.shift);
+        assert_eq!(key, "a");
+        let (mods, key) = KeyModifiers::parse_chord("ctrl+Shift+DELETE").unwrap();
+        assert!(mods.ctrl && mods.shift && !mods.alt);
+        assert_eq!(key, "Delete");
+        let (mods, key) = KeyModifiers::parse_chord("Home").unwrap();
+        assert_eq!((mods, key.as_str()), (KeyModifiers::default(), "Home"));
+        assert_eq!(KeyModifiers::parse_chord("mod++").unwrap().1, "+");
+        assert_eq!(KeyModifiers::parse_chord("+").unwrap().1, "+");
+        assert_eq!(KeyModifiers::parse_chord("space").unwrap().1, " ");
+    }
+
+    #[test]
+    fn a_chord_that_names_nothing_it_knows_is_refused_with_the_word_that_failed() {
+        let err = KeyModifiers::parse_chord("hyper+a").unwrap_err();
+        assert!(err.contains("hyper"), "{err}");
+        let err = KeyModifiers::parse_chord("shift+Flibber").unwrap_err();
+        assert!(err.contains("Flibber"), "{err}");
+        assert!(KeyModifiers::parse_chord("").is_err());
     }
 
     #[test]

@@ -1,0 +1,3 @@
+[project]
+name = "text_editing"
+entry = "src/main.byd"

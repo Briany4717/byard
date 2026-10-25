@@ -1,0 +1,57 @@
+// RFC-0041, text editing: a caret that moves, a selection, the clipboard and
+// undo.
+//
+// Run it (from the repo root):
+//   cargo run -p byard-cli -- dev crates/byard-cli/examples/text_editing
+//
+// Nothing in this file is about editing: a TextField bound to a var edits like
+// a text field anywhere else. Try these in the first field, and read the echo
+// lines under it, which change only when the value does:
+//   1. Type `hello wrold`, then press Left three times and Backspace once.
+//      The typo is fixed in the middle; nothing after it was lost.
+//   2. Press Delete with the caret in the middle. It removes the character
+//      after the caret, and the rest of the field stays (it used to clear it).
+//   3. Hold Shift and press Left or Right: a selection grows a grapheme at a
+//      time. Ctrl+Left and Ctrl+Right (Option on macOS) move by word, Home and
+//      End go to either end, and Shift with any of them selects.
+//   4. Click inside the text: the caret goes there. Drag to select. Double
+//      click to select a word. Drag past the edge of the narrow second field
+//      and its text scrolls to follow.
+//   5. Ctrl+A selects everything (Cmd on macOS, as for every shortcut here).
+//      Ctrl+C copies, Ctrl+X cuts, Ctrl+V pastes over the selection. A paste
+//      with line breaks arrives as one line.
+//   6. Type a sentence, then press Ctrl+Z: it is taken back a word at a time.
+//      Ctrl+Shift+Z or Ctrl+Y puts it back. A paste is one step.
+//   7. Press the button: the value is written from outside, so the caret goes
+//      to the end and undo starts over.
+//   8. The third field paints its selection in its own colour (`selection:`).
+//
+// To see a selection without a window:
+//   cargo run -p byard-cli -- shot crates/byard-cli/examples/text_editing \
+//     --tap 200,120 --type "hello wrold" --key Left --key Left --key Left \
+//     --key shift+Left --key shift+Left -o editing.png
+View Main() {
+    var query = ""
+    var narrow = ""
+    var note = "the selection has a colour of its own"
+    var edits = 0
+
+    Column #[bg: 0x14161C, p: 32, gap: 16, width: 440] {
+        Text("Text editing") #[color: 0xF2F3F5, size: 20]
+        Text("click in the field, then type and edit") #[color: 0x8A90A0, size: 14]
+
+        TextField #[bind: query, placeholder: "Search", bg: 0x1F222B,
+                    width: 360, height: 44, size: 18, input => edits++]
+        Text("query = \"{query}\"") #[color: 0x8A90A0, size: 14]
+        Text("{edits} edits") #[color: 0x8A90A0, size: 14]
+
+        Button("write it from outside") #[bg: 0x2B3142, color: 0xF2F3F5,
+                                          p: (vertical: 8, horizontal: 14), radius: 8]
+            => query = "written from an action"
+
+        TextField #[bind: narrow, placeholder: "a narrow field", bg: 0x1F222B,
+                    width: 160, height: 44, size: 18]
+        TextField #[bind: note, bg: 0x1F222B, width: 360, height: 44, size: 18,
+                    selection: 0x66E4A11B]
+    }
+}

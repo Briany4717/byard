@@ -5,15 +5,23 @@
 //! This subsystem owns the specialised render pipelines compiled at startup:
 //!
 //! - **`SolidBox`**, Axis-aligned rectangles with solid fill **and per-corner
-//!   `border-radius` via an analytical SDF**. This absorbs the basic rounded-rect
-//!   case from the RFC §3.1 `DecoratedBox` column by design: a single instanced
-//!   pipeline handles both plain and rounded rectangles with zero extra GPU state
+//!   `border-radius` via an analytical SDF**. A single instanced pipeline
+//!   handles both plain and rounded rectangles with zero extra GPU state
 //!   switches, because the radius parameters are part of the per-instance vertex
 //!   data rather than a pipeline variant.
-//! - **`DecoratedBox`**, Rectangles with gradients, box-shadows, and parametric
-//!   decorations (future sub-issue).
-//! - **`TextGlyph`**, Text rendering via a `glyphon` glyph atlas (future).
-//! - **`TextureSampler`**, UV-mapped quads for decoded images and icons (future).
+//! - **`DecoratedBox`**, Rectangles with gradients, box-shadows, an inner
+//!   border and opacity ([`decorated_box`]). A box is promoted to it only when
+//!   one of those is non-trivial.
+//! - **`Ripple`**, The Material ink reveal ([`ripple`]).
+//! - **`CanvasShape`**, Arcs, circles, lines and rectangles by their analytic
+//!   signed-distance functions ([`canvas_shape`]), and **`CanvasFill`**, filled
+//!   paths as tessellated meshes ([`canvas_fill`]).
+//! - **`TextureSampler`**, UV-mapped quads for decoded images ([`texture_sampler`]).
+//! - **`VectorMSDF`**, Icons and vector glyphs from an MSDF atlas ([`vector_msdf`]).
+//! - **`TextGlyph`**, Text rendering via a `glyphon` glyph atlas ([`text_glyph`]).
+//! - **Backdrop blur** ([`backdrop`]) and **opacity groups** ([`group`]), which
+//!   split the UI pass to sample or composite what was drawn before them.
+//! - Any pipeline a package registers ([`package_shader`], RFC-0039).
 //!
 //! Primitives are batched into Z-bins (stacking contexts) and ordered first by
 //! pipeline, then by local Z-index, to minimise GPU context switches.

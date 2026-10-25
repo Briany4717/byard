@@ -107,7 +107,8 @@ fn collect(paths: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
         }
     };
     if paths.is_empty() {
-        add(owned_source_files(&Manifest::discover(None)?)?);
+        let manifest = Manifest::discover(None).map_err(|e| e.to_string())?;
+        add(owned_source_files(&manifest).map_err(|e| e.to_string())?);
         return Ok(out);
     }
     for path in paths {
@@ -116,9 +117,10 @@ fn collect(paths: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
             .map_err(|e| format!("{}: {e}", path.display()))?;
         if path.is_dir() {
             if path.join("byard.toml").exists() {
-                add(owned_source_files(&Manifest::discover(Some(&path))?)?);
+                let manifest = Manifest::discover(Some(&path)).map_err(|e| e.to_string())?;
+                add(owned_source_files(&manifest).map_err(|e| e.to_string())?);
             } else {
-                add(byd_files_under(&path)?);
+                add(byd_files_under(&path).map_err(|e| e.to_string())?);
             }
         } else {
             add(vec![path]);

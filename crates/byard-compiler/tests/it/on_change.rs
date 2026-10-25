@@ -63,6 +63,7 @@ impl App {
             delta: (0.0, 0.0),
             payload: None,
             time_ms: t,
+            mods: byard_core::KeyModifiers::default(),
         };
         let t = u64::from(self.now);
         self.step(&[

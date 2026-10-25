@@ -8,7 +8,7 @@
 [idle]
 # Wakes of the logic thread per second for an app with nothing animating and
 # nothing in flight. A ratchet that does not move: an idle app sleeps.
-# Read by examples/aura_weather/tests/budgets.rs.
+# Read by examples/aura_weather/tests/it/budgets.rs.
 logic_wakes_per_second = 0
 
 [startup]
@@ -17,7 +17,7 @@ logic_wakes_per_second = 0
 # test suite uses (debug). About 500 ms where it was set, so six times that:
 # a CI runner is about twice as slow, and the ceiling is three times what a
 # runner does, enough to catch a doubling and not a 5% drift.
-# Read by examples/aura_weather/tests/budgets.rs.
+# Read by examples/aura_weather/tests/first_frame.rs.
 first_frame_ms = 3000
 
 [binary]

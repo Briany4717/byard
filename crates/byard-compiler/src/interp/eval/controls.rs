@@ -7,7 +7,8 @@
 //! a few decimals without one). The `bind:` and `value:` attributes are
 //! resolved to the `var` they name here.
 
-use super::{Interpreter, dim_alpha};
+use super::Interpreter;
+use super::paint::dim_alpha;
 use crate::interp::env::Value;
 use crate::parser::ast::{Attr, AttrKind};
 

@@ -8,7 +8,8 @@
 //! morph that blends two paths command by command on the CPU.
 
 use super::animation::{hex_from_oklab, linear_to_srgb, oklab_from_hex};
-use super::{CanvasItem, Interpreter, dim_alpha};
+use super::paint::dim_alpha;
+use super::{CanvasItem, Interpreter};
 use crate::diagnostics::{CompileError, Span};
 use crate::interp::env::Value;
 use crate::parser::ast::{Attr, ElementNode, Expr, Member};

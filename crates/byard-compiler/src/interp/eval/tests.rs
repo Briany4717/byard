@@ -8,8 +8,10 @@ use super::expr::structural_eq;
 use super::instance::MAX_INSTANCE_DEPTH;
 use super::states::resolve_state_attrs;
 use super::*;
+use crate::parser::ast::AttrKind;
 use crate::parser::ast::BinOp;
 use crate::parser::ast::ElementNode;
+use crate::parser::ast::StyleStateKind;
 use crate::parser::parse;
 
 fn element(m: &Member) -> &ElementNode {

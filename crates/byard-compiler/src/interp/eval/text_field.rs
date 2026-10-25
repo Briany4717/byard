@@ -6,7 +6,8 @@
 //! composition (the preedit drawn at the owning field's caret, never part of
 //! its value) and the routing of the platform's composition events.
 
-use super::{Interpreter, dim_alpha, editing, floor_char_boundary, push_fill};
+use super::paint::{dim_alpha, push_fill};
+use super::{Interpreter, editing, floor_char_boundary};
 use crate::interp::env::Value;
 use crate::parser::ast::{Attr, AttrKind};
 

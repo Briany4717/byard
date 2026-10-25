@@ -114,6 +114,7 @@ impl Logic {
             delta: (0.0, 0.0),
             payload: None,
             time_ms: u64::from(self.now) + dt,
+            mods: byard_core::KeyModifiers::default(),
         };
         let down = event(EventKind::PointerDown, 0);
         let up = event(EventKind::PointerUp, 8);

@@ -1,0 +1,16 @@
+// The caret's blink, measured (RFC-0041 §6), in `tests/it/frame_budget.rs`.
+//
+// Two fields and nothing else: the budget is about what a focused, idle field
+// costs the logic thread, so there is nothing in this scene that could wake it
+// but the caret. It does not animate, and it is not the reference scene the
+// frame ceilings were recorded against (`budget_scene.byd`), which has no text
+// field at all, which is the other half of the claim: an app with no focused
+// TextField costs nothing.
+View Main() {
+    var a: Str = ""
+    var b: Str = ""
+    Column #[p: 20, gap: 10, width: 400, height: 300] {
+        TextField #[bind: a, width: 200, height: 40]
+        TextField #[bind: b, width: 200, height: 40]
+    }
+}

@@ -5,6 +5,7 @@
 //! relinking all of them was most of the time an edit spent before a test
 //! could run.
 
+mod broken_app;
 mod bundle;
 mod callbacks_example;
 mod checkbox_example;
@@ -39,6 +40,7 @@ mod self_measurement_example;
 mod shape_morph_example;
 mod shot;
 mod style_states_example;
+mod text_editing_example;
 mod text_input_example;
 mod text_wrap_example;
 mod theme_transition_example;

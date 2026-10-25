@@ -1,0 +1,5 @@
+View Forecast(days: Int) {
+    Box #[bg: prmary, p: 8] {
+        Text("{days} days ahead")
+    }
+}

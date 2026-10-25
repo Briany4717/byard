@@ -93,6 +93,7 @@ fn at_a_tilt_the_button_is_pressed_where_it_is_drawn() {
             delta: (0.0, 0.0),
             payload: None,
             time_ms: t,
+            mods: byard_core::KeyModifiers::default(),
         };
         interp.dispatch_events(&[ev(EventKind::PointerDown, 0), ev(EventKind::PointerUp, 8)]);
         interp.tick();

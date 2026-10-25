@@ -110,6 +110,7 @@ fn derived_readouts_are_correct_and_reactive() {
             delta: (0.0, 0.0),
             payload: None,
             time_ms: t,
+            mods: byard_core::KeyModifiers::default(),
         }]);
         interp.tick();
         let _ = texts(&mut interp, &tree);
@@ -119,6 +120,7 @@ fn derived_readouts_are_correct_and_reactive() {
             delta: (0.0, 0.0),
             payload: None,
             time_ms: t + 30,
+            mods: byard_core::KeyModifiers::default(),
         }]);
         interp.tick();
         let _ = texts(&mut interp, &tree);

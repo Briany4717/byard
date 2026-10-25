@@ -19,6 +19,7 @@
 //!   it is [`CompileError::NotAssignable`].
 
 mod controller;
+mod editing;
 mod measure;
 
 use controller::UNBOUND_CONTROLLER;
@@ -1576,6 +1577,13 @@ pub(crate) const RESERVED_CONTENT: &str = "content";
 const FIELD_PAD_X: f32 = 10.0;
 /// A placeholder is drawn in the field's `color:` at this share of its alpha.
 const PLACEHOLDER_ALPHA: f32 = 0.55;
+/// Where the caret's left edge sits relative to the boundary it is at, in
+/// logical pixels. A little left of it, so a caret between two letters is in
+/// the gap and not on the left side of the second one (RFC-0041 §6).
+const CARET_DX: f32 = -0.5;
+/// A selection is painted in the theme's `primary` at this share of its alpha
+/// when the field writes no `selection:` colour (RFC-0041 §6).
+const SELECTION_ALPHA: f32 = 0.3;
 
 thread_local! {
     /// Thread-local storage holding the active payload of the event currently being processed.
@@ -1618,7 +1626,9 @@ pub struct Interpreter {
     pub router: crate::interp::events::EventRouter,
     /// Glyph-accurate text measurer, created lazily on first layout so the
     /// non-rendering paths (parsing, reactivity tests) never load fonts.
-    text_measurer: Option<byard_core::text::TextMeasurer>,
+    /// Shared (RFC-0041 §4): a `TextField`'s handlers measure with it to turn a
+    /// pointer into a caret, and an action can reach nothing but what it holds.
+    text_measurer: editing::SharedMeasurer,
     /// Active design-token theme (RFC-0022; the theme-default layer).
     pub theme: super::theme::Theme,
     /// The viewport this frame is rendered at, in logical pixels: what a
@@ -1856,6 +1866,20 @@ pub struct Interpreter {
     /// Engine state, not app state: it has no name in byld and never touches
     /// a `var`. There is at most one, because there is at most one focus.
     composition: Option<Composition>,
+    /// The editing state of every `TextField` that has needed one: its caret,
+    /// selection and undo (RFC-0041 §1). Empty until a field is focused.
+    edit: std::rc::Rc<std::cell::RefCell<super::edit::EditStore>>,
+    /// The clipboard copy, cut and paste use (RFC-0041 §3); in memory unless
+    /// the host supplies the system's through [`set_clipboard`](Self::set_clipboard).
+    clipboard: editing::SharedClipboard,
+    /// Whether the caret is in the off half of its blink (RFC-0041 §6).
+    /// Inverted, so that the default, a caret that shows, is the zero value.
+    caret_off: std::rc::Rc<std::cell::Cell<bool>>,
+    /// The caret's blink timer while a field has focus in a window that does.
+    blink: Option<editing::Blink>,
+
+    /// What the caret's blink is conditioned on, besides having a field.
+    caret: editing::CaretFlags,
     /// How many meshes have been tessellated this session, the measurement
     /// behind the caching claim (a performance claim names the path it measures).
     tessellations: u64,
@@ -2467,6 +2491,7 @@ impl Interpreter {
         family: Option<&str>,
     ) -> (f32, f32) {
         self.text_measurer
+            .borrow_mut()
             .get_or_insert_with(byard_core::text::TextMeasurer::new)
             .measure_wrapped(text, font_size, max_width, weight, family)
     }
@@ -2906,9 +2931,8 @@ impl Interpreter {
             self.fonts = std::sync::Arc::default();
             return;
         }
-        let measurer = self
-            .text_measurer
-            .get_or_insert_with(byard_core::text::TextMeasurer::new);
+        let mut measurer = self.text_measurer.borrow_mut();
+        let measurer = measurer.get_or_insert_with(byard_core::text::TextMeasurer::new);
         let mut table = byard_core::frame::FontTable::default();
         for (declared, font) in self.theme.fonts() {
             let here = measurer.register_family(&font.bytes);
@@ -5305,23 +5329,24 @@ impl Interpreter {
         // Drive layout with the shared text measurer so wrapping `Text` leaves
         // reflow to their parent's width (RFC-0005 default wrap). Disjoint field
         // borrows: `self.atlas` and `self.text_measurer`.
-        let measurer = self
-            .text_measurer
-            .get_or_insert_with(byard_core::text::TextMeasurer::new);
-        if retained_used {
-            // **`_with_text`, always.** The sizer-less `recompute_dirty` runs
-            // the measure protocol with no sizer, so every wrapping `Text` leaf
-            // Taffy touches would fall back to its natural single-line size and
-            // silently un-wrap (RFC-0032 §R5). Taffy invokes the callback only
-            // for nodes it is actually recomputing, so a clean paragraph is
-            // never re-shaped, which is where this whole path's win comes from.
-            self.atlas
-                .recompute_dirty_with_text(Viewport::new(width, height), measurer)
-                .unwrap();
-        } else {
-            self.atlas
-                .compute_with_text(Viewport::new(width, height), measurer)
-                .unwrap();
+        {
+            let mut measurer = self.text_measurer.borrow_mut();
+            let measurer = measurer.get_or_insert_with(byard_core::text::TextMeasurer::new);
+            if retained_used {
+                // **`_with_text`, always.** The sizer-less `recompute_dirty` runs
+                // the measure protocol with no sizer, so every wrapping `Text` leaf
+                // Taffy touches would fall back to its natural single-line size and
+                // silently un-wrap (RFC-0032 §R5). Taffy invokes the callback only
+                // for nodes it is actually recomputing, so a clean paragraph is
+                // never re-shaped, which is where this whole path's win comes from.
+                self.atlas
+                    .recompute_dirty_with_text(Viewport::new(width, height), measurer)
+                    .unwrap();
+            } else {
+                self.atlas
+                    .compute_with_text(Viewport::new(width, height), measurer)
+                    .unwrap();
+            }
         }
         // RFC-0032 §R3 step 5. On the retained path this is the set of nodes
         // whose layout *inputs* moved; on a full rebuild every node is new, so
@@ -5419,6 +5444,8 @@ impl Interpreter {
         // widget that asked for a tile on the frame it mounted has its request
         // in flight rather than waiting a frame for nothing.
         self.dispatch_native_calls(frame);
+
+        self.settle_text_editing();
 
         frame.set_atlas_paths(path_delta(
             paths_before,
@@ -6216,9 +6243,8 @@ impl Interpreter {
             return;
         }
         let viewport = byard_core::frame::Viewport::new(width, height);
-        let measurer = self
-            .text_measurer
-            .get_or_insert_with(byard_core::text::TextMeasurer::new);
+        let mut measurer = self.text_measurer.borrow_mut();
+        let measurer = measurer.get_or_insert_with(byard_core::text::TextMeasurer::new);
         let _ = self.atlas.recompute_dirty_with_text(viewport, measurer);
     }
 
@@ -9771,8 +9797,9 @@ impl Interpreter {
         }
     }
 
-    /// Renders a `TextField` widget: background box + text/placeholder,
-    /// and registers keyboard handlers for text input.
+    /// Renders a `TextField` widget: background box + text/placeholder, and,
+    /// while it has focus, the selection and the caret (RFC-0041 §6). Registers
+    /// the handlers that edit it.
     #[allow(clippy::too_many_arguments)]
     #[allow(clippy::too_many_lines)]
     fn render_text_field(
@@ -9786,6 +9813,7 @@ impl Interpreter {
         opacity: f32,
         frame: &mut byard_core::frame::RenderFrame,
     ) {
+        use super::events::EventKind as Kind;
         let placeholder = self.eval_str_prop(attrs, "placeholder").unwrap_or_default();
         let cur_text = bound_sig
             .map(|s| match self.ctx.peek_signal(s) {
@@ -9795,8 +9823,11 @@ impl Interpreter {
             .unwrap_or_default();
 
         let is_focused = elem_idx.is_some_and(|i| self.router.is_focused(i));
-        // RFC-0040: the preedit this field owns, drawn after the value (the
-        // caret is at the end, §8) and never part of it.
+        // RFC-0041: the field being edited, if it is the focused one and is
+        // bound to a `var` there is something to edit in.
+        let editing = elem_idx.filter(|_| is_focused && bound_sig.is_some());
+        // RFC-0040: the preedit this field owns, drawn at the caret and never
+        // part of the value.
         let preedit = self
             .composition
             .as_ref()
@@ -9808,6 +9839,9 @@ impl Interpreter {
         } else {
             (cur_text, false)
         };
+        // What the caret and the selection index into: the value, which is
+        // empty while a placeholder is showing in its place.
+        let value: &str = if is_placeholder { "" } else { &display_text };
 
         // The field's own `color:` for what is typed, and the same colour
         // fainter for the placeholder. Unwritten, the field keeps the white
@@ -9859,6 +9893,8 @@ impl Interpreter {
         };
         let text_x = rect.x + pad_x;
         let text_y = rect.y + (rect.h - font_size) / 2.0;
+        // The content box the text lives in; a longer text scrolls inside it.
+        let view_w = (rect.w - pad_x * 2.0).max(1.0);
         // NOTE: `TextLine` carries no `Transform` field (RFC-0011 engine slice:
         // only box primitives were given one), so the field's *text* does not
         // follow `translate`/`scale`/`rotate`, the box visuals below (underline,
@@ -9869,49 +9905,125 @@ impl Interpreter {
         // defect this whole change exists to remove.
         let weight = self.resolve_weight(attrs);
         let family = self.resolve_family(attrs);
-        if !display_text.is_empty() {
-            frame.push_text(byard_core::TextLine {
-                weight,
-                family: family.clone(),
-                x: text_x,
-                y: text_y,
-                text: display_text.clone(),
-                font_size,
-                color: dim_alpha(text_rgba, opacity),
-                dirty: true,
-            });
+        let font = super::edit::FieldFont {
+            size: font_size,
+            weight,
+            family: family.clone(),
+        };
+
+        // RFC-0041: where the caret and the selection are, in pixels from the
+        // start of the text, and how far the text has scrolled to keep the
+        // caret in view. Measured through the shared measurer, whose cache
+        // makes a prefix that was measured last frame free this frame.
+        let mut caret_rel = 0.0_f32;
+        let mut value_w = 0.0_f32;
+        let mut selection: Option<(f32, f32)> = None;
+        let mut scroll = 0.0_f32;
+        // The preedit's width, and the IME's cursor inside it, as x ranges.
+        let mut preedit_w = 0.0_f32;
+        let mut preedit_cursor: Option<(f32, f32)> = None;
+        if let Some(idx) = editing {
+            let store = std::rc::Rc::clone(&self.edit);
+            let seq = self.frame_seq;
+            let mut measure = |t: &str| self.measure_in(t, &font);
+            if let Some((text, cursor)) = &preedit {
+                preedit_w = measure(text);
+                preedit_cursor = cursor.map(|(b, e)| {
+                    let at = |upto: usize| measure(&text[..floor_char_boundary(text, upto)]);
+                    (at(b), at(e))
+                });
+            }
+            let mut store = store.borrow_mut();
+            let state = store.state(idx);
+            state.sync(value);
+            state.seen = seq;
+            caret_rel = state.x_of(value, &font, state.caret, &mut measure);
+            value_w = state.x_of(value, &font, value.len(), &mut measure);
+            if state.has_selection() && preedit.is_none() {
+                let (lo, hi) = state.range();
+                selection = Some((
+                    state.x_of(value, &font, lo, &mut measure),
+                    state.x_of(value, &font, hi, &mut measure),
+                ));
+            }
+            let cursor_x = caret_rel + preedit_cursor.map_or(preedit_w, |(_, e)| e);
+            state.follow_caret(cursor_x, value_w + preedit_w, view_w);
+            scroll = state.scroll;
+        } else if let Some(idx) = elem_idx {
+            // A field that is not focused keeps its state while it is on
+            // screen and loses it with its element (§1).
+            let seq = self.frame_seq;
+            let mut store = self.edit.borrow_mut();
+            if !store.is_empty() {
+                store.touch(idx, seq);
+            }
+        }
+        let origin_x = text_x - scroll;
+        // The text is clipped to the content box when it overflows it, which is
+        // the only time it can reach outside.
+        let clipped = editing.is_some() && value_w + preedit_w > view_w;
+        if clipped {
+            frame.begin_clip(byard_core::frame::Rect::new(text_x, rect.y, view_w, rect.h));
         }
 
-        // Caret at the end of the entered text while focused, or
-        // at the IME's cursor inside the preedit while composing (RFC-0040).
+        // The selection, behind the text: the theme's `primary` at 30 %, or the
+        // field's own `selection:` colour.
+        if let Some((x0, x1)) = selection.filter(|(a, b)| b > a) {
+            let color = self.eval_color_prop(attrs, "selection").map_or_else(
+                || {
+                    let c = super::intrinsics::color_to_rgba(self.theme.primary(), false);
+                    [c[0], c[1], c[2], c[3] * SELECTION_ALPHA]
+                },
+                super::intrinsics::color_rgba_auto,
+            );
+            push_fill(
+                frame,
+                byard_core::BoxInstance {
+                    rect: [origin_x + x0, text_y - 1.0, x1 - x0, font_size + 2.0],
+                    color: dim_alpha(color, opacity),
+                    radii: [0.0; 4],
+                    transform,
+                    smooth: 0.0,
+                },
+            );
+        }
+
+        // The value's text. A preedit is drawn at the caret, so the part of the
+        // value after the caret moves out of its way (RFC-0040 §1).
+        let caret_at = editing
+            .and_then(|_| self.edit.borrow().get(elem_idx?).map(|s| s.caret))
+            .unwrap_or(value.len());
+        let split = preedit.is_some() && caret_at < value.len();
+        let push_value = |frame: &mut byard_core::frame::RenderFrame, x: f32, text: &str| {
+            if !text.is_empty() {
+                frame.push_text(byard_core::TextLine {
+                    weight,
+                    family: family.clone(),
+                    x,
+                    y: text_y,
+                    text: text.to_string(),
+                    font_size,
+                    color: dim_alpha(text_rgba, opacity),
+                    dirty: true,
+                });
+            }
+        };
+        if split {
+            let (head, tail) = value.split_at(caret_at);
+            push_value(frame, origin_x, head);
+            push_value(frame, origin_x + caret_rel + preedit_w, tail);
+        } else {
+            push_value(frame, origin_x, &display_text);
+        }
+
+        // The caret, in the field's own text colour: at the caret's place in
+        // the value, or at the IME's cursor inside the preedit while composing
+        // (RFC-0040).
         if is_focused {
-            let measured = if is_placeholder || display_text.is_empty() {
-                0.0
-            } else {
-                self.measure_text_wrapped(&display_text, font_size, None, weight, family.as_deref())
-                    .0
-            };
-            let mut caret_x = text_x + measured + 1.0;
-            if let Some((text, cursor)) = &preedit {
+            let mut caret_x = origin_x + caret_rel + CARET_DX;
+            if let Some((text, _)) = &preedit {
                 let color = dim_alpha(text_rgba, opacity);
-                let start = text_x + measured;
-                let mut width_of = |upto: usize| -> f32 {
-                    let end = floor_char_boundary(text, upto);
-                    if end == 0 {
-                        0.0
-                    } else {
-                        self.measure_text_wrapped(
-                            &text[..end],
-                            font_size,
-                            None,
-                            weight,
-                            family.as_deref(),
-                        )
-                        .0
-                    }
-                };
-                let full = width_of(text.len());
-                let range = cursor.map(|(b, e)| (width_of(b), width_of(e)));
+                let start = origin_x + caret_rel;
                 frame.push_text(byard_core::TextLine {
                     weight,
                     family: family.clone(),
@@ -9934,16 +10046,22 @@ impl Interpreter {
                         smooth: 0.0,
                     });
                 };
-                bar(start, full, 1.0);
-                if let Some((b, e)) = range.filter(|(b, e)| e > b) {
+                bar(start, preedit_w, 1.0);
+                if let Some((b, e)) = preedit_cursor.filter(|(b, e)| e > b) {
                     bar(start + b, e - b, 2.0);
                 }
-                caret_x = start + range.map_or(full, |(_, e)| e) + 1.0;
+                caret_x = start + preedit_cursor.map_or(preedit_w, |(_, e)| e) + CARET_DX;
             }
             // `None` from the IME hides its cursor; the caret rectangle is
             // still reported, since the candidate window needs a place.
             let caret_visible = preedit.as_ref().is_none_or(|(_, c)| c.is_some());
-            if caret_visible {
+            // The blink (RFC-0041 §6): one timer wake per phase, started by the
+            // first frame that draws the caret and stopped when it stops being
+            // drawn.
+            if let Some(idx) = editing {
+                self.start_blink(idx);
+            }
+            if caret_visible && self.caret_shown() {
                 frame.push_instance(byard_core::BoxInstance {
                     rect: [caret_x, text_y, 1.5, font_size],
                     color: dim_alpha(value_rgba, opacity),
@@ -9965,6 +10083,9 @@ impl Interpreter {
                 ),
             });
         }
+        if clipped {
+            frame.end_clip();
+        }
 
         // The field's own events. The router runs one handler per event kind
         // on the focused element, the last one registered, so the handlers
@@ -9972,89 +10093,55 @@ impl Interpreter {
         // blur, key_up reach them as on any element) and the ones that share
         // a kind with the field's own editing are folded into it below.
         self.register_event_attrs(attrs, hit_rect, elem_idx);
-        let mut on_edit = self.field_actions(attrs, &["input", "change"]);
-        let mut on_typed = self.field_actions(attrs, &["text_input"]);
-        let mut on_key = self.field_actions(attrs, &["key_down"]);
-        let mut on_submit = self.field_actions(attrs, &["submit"]);
+        let on_edit = self.field_actions(attrs, &["input", "change"]);
+        let on_typed = self.field_actions(attrs, &["text_input"]);
+        let on_key = self.field_actions(attrs, &["key_down"]);
+        let on_submit = self.field_actions(attrs, &["submit"]);
 
-        // Handlers: TextInput appends, KeyDown handles Backspace/Delete/Enter.
+        // Handlers: typing and the keys edit the value at the caret, the
+        // pointer places it and selects (RFC-0041).
         if let (Some(sig), Some(idx)) = (bound_sig, elem_idx) {
-            // What the field holds now, for the handlers that are told.
-            let value_of = move |ctx: &mut ReactiveCtx| match ctx.peek_signal(sig) {
-                Value::Str(s) => Value::Str(s),
-                _ => Value::Str(String::new()),
-            };
-            // TextInput: append typed text, then `input` and `change`, which
-            // see the value already written.
-            let mut edited = self.field_actions(attrs, &["input", "change"]);
-            let text_input: super::events::Action = Box::new(move |ctx, payload| {
-                if let Some(Value::Str(ch)) = payload {
-                    let cur = match ctx.peek_signal(sig) {
-                        Value::Str(s) => s,
-                        _ => String::new(),
-                    };
-                    ctx.write_signal(sig, Value::Str(cur + ch.as_str()));
-                    for action in &mut on_typed {
-                        action(ctx, payload);
-                    }
-                    let now = value_of(ctx);
-                    for action in &mut edited {
-                        action(ctx, Some(&now));
-                    }
-                }
-            });
-            self.router.on(
+            let handle = self.field_handle(
+                sig,
                 idx,
-                hit_rect,
-                super::events::EventKind::TextInput,
-                text_input,
+                editing::FieldGeom {
+                    font,
+                    text_x,
+                    view_w,
+                    frame: self.router.current_frame(),
+                },
             );
-
-            // KeyDown: Backspace and Delete edit, Enter submits.
-            let key_down: super::events::Action = Box::new(move |ctx, payload| {
-                if let Some(Value::Str(key)) = payload {
-                    let before = value_of(ctx);
-                    match key.as_str() {
-                        "Backspace" => {
-                            let cur = match ctx.peek_signal(sig) {
-                                Value::Str(s) => s,
-                                _ => String::new(),
-                            };
-                            // RFC-0040 §7: one press, one grapheme cluster. A
-                            // decomposed accent, an emoji with a modifier and a
-                            // flag each go whole.
-                            let keep = unicode_segmentation::UnicodeSegmentation::grapheme_indices(
-                                cur.as_str(),
-                                true,
-                            )
-                            .next_back()
-                            .map_or(0, |(i, _)| i);
-                            ctx.write_signal(sig, Value::Str(cur[..keep].to_string()));
-                        }
-                        "Delete" => {
-                            ctx.write_signal(sig, Value::Str(String::new()));
-                        }
-                        _ => {}
-                    }
-                    for action in &mut on_key {
-                        action(ctx, payload);
-                    }
-                    let now = value_of(ctx);
-                    // A Backspace in an empty field edits nothing.
-                    if now != before {
-                        for action in &mut on_edit {
-                            action(ctx, Some(&now));
-                        }
-                    }
-                    if key.as_str() == "Enter" {
-                        for action in &mut on_submit {
-                            action(ctx, Some(&now));
-                        }
-                    }
-                }
-            });
-            self.router
-                .on(idx, hit_rect, super::events::EventKind::KeyDown, key_down);
+            // `input` and `change` see the value already written.
+            let edited = self.field_actions(attrs, &["input", "change"]);
+            let events = [
+                (Kind::TextInput, handle.clone().text_input(on_typed, edited)),
+                (
+                    Kind::KeyDown,
+                    handle.clone().key_down(on_key, on_edit, on_submit),
+                ),
+                (
+                    Kind::PointerDown,
+                    handle
+                        .clone()
+                        .pointer_down(self.field_actions(attrs, &["pointer_down"])),
+                ),
+                (Kind::PointerDrag, handle.clone().pointer_drag()),
+                (
+                    Kind::PointerUp,
+                    handle
+                        .clone()
+                        .pointer_up(self.field_actions(attrs, &["pointer_up"])),
+                ),
+                (
+                    Kind::DoubleTap,
+                    handle.double_tap(self.field_actions(attrs, &["double_tap"])),
+                ),
+            ];
+            for (kind, action) in events {
+                self.router.on(idx, hit_rect, kind, action);
+            }
+            // A selection that starts in the field goes on past its edge.
+            self.router.capture_drag(idx);
 
             // Change event: write-back from platform (E1).
             self.router.on(
@@ -10137,8 +10224,9 @@ impl Interpreter {
     ///   through the same `TextInput` handler typing uses: committed text and
     ///   typed text are the same thing once they reach the field.
     /// - The IME turning off ends the composition, with nothing committed.
-    /// - Backspace, Delete and Enter are the IME's while a preedit is showing,
-    ///   so they never also edit the committed value.
+    /// - Backspace, Delete, Enter and the keys that move the caret are the
+    ///   IME's while a preedit is showing, so they never also edit the
+    ///   committed value or move the caret out from under the preedit.
     fn apply_composition(&mut self, events: &[byard_core::InputEvent], consumed: &mut [bool]) {
         use byard_core::platform::{EventKind as CoreKind, InputPayload};
         for (i, ev) in events.iter().enumerate() {
@@ -10169,6 +10257,9 @@ impl Interpreter {
                         .map(|c| c.owner)
                         .or_else(|| self.router.focused());
                     if let (Some(target), Some(InputPayload::Key(text))) = (target, &ev.payload) {
+                        // No key is down for a commit: it must not inherit the
+                        // modifiers of the last one (RFC-0041 §1).
+                        Self::clear_event_context(ev.time_ms);
                         self.router.fire_event(
                             &mut self.ctx,
                             target,
@@ -10183,7 +10274,16 @@ impl Interpreter {
                 }
                 CoreKind::KeyDown | CoreKind::KeyUp if self.composing() => {
                     if let Some(InputPayload::Key(key)) = &ev.payload {
-                        if matches!(key.as_str(), "Backspace" | "Delete" | "Enter") {
+                        if matches!(
+                            key.as_str(),
+                            "Backspace"
+                                | "Delete"
+                                | "Enter"
+                                | "ArrowLeft"
+                                | "ArrowRight"
+                                | "Home"
+                                | "End"
+                        ) {
                             consumed[i] = true;
                         }
                     }
@@ -14521,6 +14621,12 @@ impl Interpreter {
         // The system's appearance is the theme's to follow, when it was told
         // to (`scheme = "system"`), and nothing for any element to route.
         for (i, ev) in events.iter().enumerate() {
+            if ev.kind == CoreKind::WindowFocus {
+                consumed[i] = true;
+                if let Some(InputPayload::Bool(focused)) = ev.payload.as_ref() {
+                    self.caret.window_blurred = !*focused;
+                }
+            }
             if ev.kind == CoreKind::SystemScheme {
                 consumed[i] = true;
                 if let (true, Some(InputPayload::Bool(dark))) =
@@ -14559,7 +14665,8 @@ impl Interpreter {
                     CoreKind::Composition
                     | CoreKind::CompositionCommit
                     | CoreKind::CompositionEnd
-                    | CoreKind::SystemScheme => {
+                    | CoreKind::SystemScheme
+                    | CoreKind::WindowFocus => {
                         unreachable!("composition and scheme events are consumed before routing")
                     }
                 };
@@ -14577,6 +14684,7 @@ impl Interpreter {
                     delta: ev.delta,
                     value,
                     time_ms: ev.time_ms,
+                    mods: ev.mods,
                 }
             })
             .collect();
@@ -14744,6 +14852,9 @@ impl Interpreter {
             .dispatch_tick(&mut self.ctx, Some(&self.atlas), comp_events);
         // RFC-0040 §6: routing may have moved focus away from a composition.
         self.drop_unfocused_preedit();
+        // RFC-0041 §6: and from the field whose caret was blinking, or an edit
+        // may have started the blink over.
+        self.settle_blink();
     }
 }
 

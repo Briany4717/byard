@@ -102,7 +102,9 @@ fn main() -> Result<(), byard::ByardError> {
 }
 ```
 
-and reads the project exactly as `byard dev` does.
+and reads the project exactly as `byard dev` does. A view that does not
+compile prints the errors `byard check` prints, with the source line and the
+suggestion, before the app returns.
 
 ## How it is built
 

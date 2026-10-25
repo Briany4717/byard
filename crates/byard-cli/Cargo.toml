@@ -32,5 +32,11 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 flate2 = "1"
 
 
+[dev-dependencies]
+# RFC-0043: the test that runs a broken app through `Shot` is the façade's
+# first caller from outside, and checks what it prints against what `byard
+# check` prints for the same project.
+byard = { path = "../byard" }
+
 [lints]
 workspace = true

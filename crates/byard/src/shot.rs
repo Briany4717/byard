@@ -20,7 +20,8 @@ use byard_core::frame::{RenderFrame, Viewport};
 use byard_core::platform::{EventKind, InputEvent};
 use byard_core::relay::Relay;
 
-use crate::app::{App, Program, load_program};
+use crate::app::{App, Program, announced, declares_no_view, load_program};
+use crate::report::CompileReport;
 
 /// One frame's worth of real time between steps.
 const STEP: std::time::Duration = std::time::Duration::from_millis(16);
@@ -184,14 +185,20 @@ impl App {
     ///
     /// # Errors
     ///
-    /// Whatever [`run`](App::run) would report before opening its window, and
-    /// [`ByardError::Platform`] if there is no GPU to draw with or the file
-    /// cannot be written.
+    /// Whatever [`run`](App::run) would report before opening its window (a
+    /// [`ByardError::Project`], or a [`ByardError::Compile`] with its
+    /// diagnostics printed), a [`ByardError::Compile`] for a view that only
+    /// fails once it is lowered, and [`ByardError::Platform`] if there is no
+    /// GPU to draw with or the file cannot be written.
     pub fn shot(self, out: impl AsRef<Path>, plan: &Shot) -> Result<(), ByardError> {
         self.check_registrations()?;
         let Program {
-            views, theme, http, ..
-        } = load_program(&self.entry)?;
+            views,
+            theme,
+            http,
+            source_map,
+            ..
+        } = load_program(&self.entry).map_err(announced)?;
         let mut registry = self.registry;
         byard_core::cap::configure_http(&mut registry, http.base_url.as_deref(), &http.hosts);
 
@@ -205,19 +212,11 @@ impl App {
         interp.load_views(&views);
         let known: Vec<&str> = views.iter().map(|v| v.name.as_str()).collect();
         let root = byard_compiler::parser::ast::root_view(&views)
-            .ok_or_else(|| ByardError::Platform("the program declares no `View`".to_string()))?;
+            .ok_or_else(|| announced(ByardError::compile(declares_no_view(source_map.clone()))))?;
         let tree = interp.lower_view(root, &known);
         if !interp.errors().is_empty() {
-            let report: Vec<String> = interp
-                .errors()
-                .iter()
-                .map(|e| format!("  {}", e.headline()))
-                .collect();
-            return Err(ByardError::Platform(format!(
-                "`{}` did not compile:\n{}",
-                self.entry.display(),
-                report.join("\n")
-            )));
+            let report = CompileReport::new(interp.errors().to_vec(), source_map);
+            return Err(announced(ByardError::compile(report)));
         }
 
         let scale = 2.0_f32;

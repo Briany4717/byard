@@ -57,13 +57,13 @@ pub fn run(opts: Options<'_>) -> Result<(), String> {
         trace,
         profile,
     } = opts;
-    let manifest = Manifest::discover(file)?;
-    manifest.require_app("run")?;
+    let manifest = Manifest::discover(file).map_err(|e| e.to_string())?;
+    manifest.require_app("run").map_err(|e| e.to_string())?;
 
     // Initial resolve on the main thread: catch errors before opening the
     // window. This covers the whole module graph (RFC-0008), not just the
     // entry file.
-    let (program, provider) = resolve_project(&manifest)?;
+    let (program, provider) = resolve_project(&manifest).map_err(|e| e.to_string())?;
 
     // The startup header is four facts, a rule, a result and a duration
     // (RFC-0030 §"Starting the dev runner"). Two of the facts, the adapter and

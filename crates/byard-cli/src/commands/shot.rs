@@ -116,9 +116,9 @@ pub struct ShotArgs<'a> {
 
 pub fn run(args: &ShotArgs<'_>) -> Result<(), String> {
     let started = std::time::Instant::now();
-    let manifest = Manifest::discover(args.path)?;
-    manifest.require_app("render")?;
-    let (program, _) = resolve_project(&manifest)?;
+    let manifest = Manifest::discover(args.path).map_err(|e| e.to_string())?;
+    manifest.require_app("render").map_err(|e| e.to_string())?;
+    let (program, _) = resolve_project(&manifest).map_err(|e| e.to_string())?;
     if !program.errors.is_empty() {
         let report: Vec<String> = program
             .errors

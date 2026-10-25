@@ -12,6 +12,42 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **An app whose views do not compile prints what `byard check` prints.**
+  `cargo run` on an app with a misspelt name printed
+  `Error: Platform("... did not compile: nothing here is named ...")`: the
+  wrong subsystem, the headline and nothing else. `App::run` and `App::shot`
+  now print each diagnostic with its file, line and column, the source line,
+  a caret under the span and the suggestion, through the renderer `byard check`
+  uses (`byard_compiler::diagnostics::render`, which moved out of the CLI;
+  `byard check` is byte for byte as it was), and then return one short line
+  (`1 error in the project's views (shown above)`), so the
+  `fn main() -> Result<(), ByardError>` every example writes reads well. A program that declares no `View` is a
+  diagnostic in the entry file like any other.
+
+- **`ByardError` says whether the project or the program is what failed.**
+  Breaking, though the enum was already `#[non_exhaustive]`: it gains
+  `Project` and `Compile`, which hold the error boxed, and
+  `byard::ByardErrorExt` gives them back by name (`as_project()` is a
+  `ProjectError`, `as_compile()` a `CompileReport` with each diagnostic and
+  its source). `Platform` goes back to meaning the window, the surface or the
+  event loop. Its `Debug`, which is what a returned `main` error prints, shows
+  the two new variants as their message and every other variant as before.
+
+- **`byard-project` returns a `ProjectError`, not a `String`.** Breaking for
+  anything that calls it: `Manifest::discover`, `Manifest::require_app`,
+  `resolve_project`, `project_source_files`, `parse_dependencies`, `dep_root`,
+  `package_checksum`, `publishable_files`, `declared_assets`, `Lockfile`,
+  `Registry`, `RegistryIndex`, `fetch_git`, `fetch_registry`, `solve::resolve`
+  and `archive::{pack, unpack}` now answer with a matchable error (a missing
+  manifest, a manifest that does not parse and on which line, an I/O failure,
+  an unsatisfiable requirement with the solver's explanation, a fetch, a
+  lockfile, an archive) whose text is the message that was there. Two
+  signatures grew an argument to say where they were reading from:
+  `parse_dependencies` takes the manifest's path and `fetch_git` the package's
+  name. A directory with no project in it now names the directory, and a
+  `byard.toml` that does not parse is led by its path, so an app started
+  from `cargo run` says which file.
+
 - **A record-shaped property value reads its fields' bare names as names.**
   `shadow: (y: sze)`, `p: (vertical: sze)` and `gradient: (to: blak)` checked
   clean (or, for `p`, said only "expected a length") and drew with nothing.
@@ -436,6 +472,8 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Delete in a `TextField` removes one character, not the whole field.** It
   wrote an empty string, which lost the user's work with one key. It removes
   the grapheme after the caret, and nothing at the end of the text.
+  
+- **`byard build` prints the version it is.** It always said `0.0.0`.
 
 - **An animation ticks once per frame drawn.** With an animation in flight
   the logic thread ticked as fast as it could, computing frames the display

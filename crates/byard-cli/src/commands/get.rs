@@ -18,10 +18,10 @@ use crate::manifest::{DepSource, Dependency, Manifest, parse_dependencies};
 use byard_project::solve::{self, FixedPackage};
 
 pub fn run() -> Result<(), String> {
-    let manifest = Manifest::discover(None)?;
+    let manifest = Manifest::discover(None).map_err(|e| e.to_string())?;
     let started = std::time::Instant::now();
     style::action(&format!("resolving dependencies of `{}`", manifest.name));
-    let previous = Lockfile::read(&manifest.project_root)?;
+    let previous = Lockfile::read(&manifest.project_root).map_err(|e| e.to_string())?;
 
     // Path and git packages first: they are on disk (or fetched now), each
     // with exactly one version, and their manifests say what they require.
@@ -42,7 +42,7 @@ pub fn run() -> Result<(), String> {
                 continue; // registry packages are the solver's; first path/git wins
             }
             let (root, commit) = ensure_present(&declarer_root, &dep)?;
-            let checksum = package_checksum(&root)?;
+            let checksum = package_checksum(&root).map_err(|e| e.to_string())?;
             style::info(&format!(
                 "{} {} ({})",
                 if matches!(dep.source, DepSource::Path(_)) {
@@ -70,7 +70,7 @@ pub fn run() -> Result<(), String> {
     }
 
     // Then one version for every registry requirement (RFC-0008 D-K).
-    let resolution = solve::resolve(&fixed, previous.as_ref())?;
+    let resolution = solve::resolve(&fixed, previous.as_ref()).map_err(|e| e.to_string())?;
     if !resolution.read_index && !resolution.packages.is_empty() {
         style::info("registry packages unchanged: byard.lock still satisfies byard.toml");
     }
@@ -85,7 +85,9 @@ pub fn run() -> Result<(), String> {
     }
 
     let n = locked.len();
-    Lockfile { packages: locked }.write(&manifest.project_root)?;
+    Lockfile { packages: locked }
+        .write(&manifest.project_root)
+        .map_err(|e| e.to_string())?;
     style::ok(
         &format!(
             "locked {n} package{} -> byard.lock",
@@ -128,7 +130,10 @@ fn package_version(root: &Path) -> Result<semver::Version, String> {
 /// returning its root and the exact commit (empty for path deps).
 fn ensure_present(declarer_root: &Path, dep: &Dependency) -> Result<(PathBuf, String), String> {
     match &dep.source {
-        DepSource::Path(_) => Ok((dep_root(declarer_root, dep, None)?, String::new())),
+        DepSource::Path(_) => Ok((
+            dep_root(declarer_root, dep, None).map_err(|e| e.to_string())?,
+            String::new(),
+        )),
         DepSource::Registry { .. } => Err(format!(
             "internal: `{}` is a registry package, which the solver fetches",
             dep.name
@@ -149,7 +154,7 @@ fn ensure_present(declarer_root: &Path, dep: &Dependency) -> Result<(PathBuf, St
                     dep.name,
                     reference.as_str()
                 ));
-                fetch_git(url, reference, &dest)?
+                fetch_git(&dep.name, url, reference, &dest).map_err(|e| e.to_string())?
             };
             Ok((dest, commit))
         }
@@ -168,7 +173,7 @@ fn package_deps(root: &Path) -> Result<Vec<Dependency>, String> {
         .parse()
         .map_err(|e: toml::de::Error| format!("{}: {e}", manifest_path.display()))?;
     match table.get("dependencies") {
-        Some(d) => parse_dependencies(d),
+        Some(d) => parse_dependencies(d, &manifest_path).map_err(|e| e.to_string()),
         None => Ok(Vec::new()),
     }
 }

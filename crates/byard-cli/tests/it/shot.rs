@@ -8,7 +8,12 @@ use std::path::PathBuf;
 use std::process::Command;
 
 fn scratch() -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("byard-shot-test-{}", std::process::id()));
+    scratch_named("")
+}
+
+/// A fresh directory of its own, so tests that run side by side do not share one.
+fn scratch_named(tag: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("byard-shot-test{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir
@@ -77,5 +82,63 @@ fn a_shot_is_the_project_at_the_asked_size_in_its_own_colours() {
     assert!(out.status.success());
     let empty = *image::open(&png).unwrap().to_rgba8().get_pixel(80, 30);
     assert_eq!(empty.0, [0, 0, 0, 255], "an empty area is opaque black");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// RFC-0041 §7: `--tap`, `--type` and `--key` run in the order they are
+/// written. Typing `ab` and then pressing Shift+Left selects the `b`; the same
+/// keys with the press first select nothing, and the pictures say which.
+#[test]
+fn a_shot_taps_types_and_presses_keys_in_the_order_written() {
+    let dir = scratch_named("-typed");
+    std::fs::write(
+        dir.join("byard.toml"),
+        "[project]\nname = \"typed\"\nentry = \"main.byd\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("main.byd"),
+        "View Main() {\n    var q: Str = \"\"\n    \
+         TextField #[bind: q, bg: 0x20242C, color: 0xFFFFFF, size: 30, width: 200, height: 60]\n}\n",
+    )
+    .unwrap();
+    let shot = |name: &str, steps: &[&str]| -> Option<Vec<u8>> {
+        let png = dir.join(format!("{name}.png"));
+        let out = Command::new(env!("CARGO_BIN_EXE_byard"))
+            .args(["shot", dir.to_str().unwrap(), "-o", png.to_str().unwrap()])
+            .args(["--size", "220x80", "--scale", "1", "--at", "0"])
+            .args(steps)
+            .output()
+            .expect("run byard shot");
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        if text.contains("no GPU adapter") {
+            return None;
+        }
+        assert!(out.status.success(), "{text}");
+        Some(image::open(&png).expect("a PNG").to_rgb8().into_raw())
+    };
+    let Some(plain) = shot("plain", &["--tap", "100,30", "--type", "ab"]) else {
+        eprintln!("no GPU adapter, skipping byard shot");
+        return;
+    };
+    let selected = shot(
+        "selected",
+        &["--tap", "100,30", "--type", "ab", "--key", "shift+Left"],
+    )
+    .unwrap();
+    let too_early = shot(
+        "early",
+        &["--tap", "100,30", "--key", "shift+Left", "--type", "ab"],
+    )
+    .unwrap();
+    assert_ne!(plain, selected, "the selection is in the picture");
+    assert_eq!(
+        plain, too_early,
+        "a key pressed before the text exists selects nothing"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }

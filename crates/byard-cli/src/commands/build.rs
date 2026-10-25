@@ -21,12 +21,15 @@ use crate::manifest::Manifest;
 use crate::style;
 
 pub fn run(file: Option<&Path>) -> Result<(), String> {
-    let manifest = Manifest::discover(file)?;
-    manifest.require_app("build")?;
-    style::fact("Byard", "0.0.0, build (AOT vector atlas)");
+    let manifest = Manifest::discover(file).map_err(|e| e.to_string())?;
+    manifest.require_app("build").map_err(|e| e.to_string())?;
+    style::fact(
+        "Byard",
+        &format!("{}, build (AOT vector atlas)", env!("CARGO_PKG_VERSION")),
+    );
     style::fact("Entry", &manifest.entry.display().to_string());
 
-    let (program, _provider) = resolve_project(&manifest)?;
+    let (program, _provider) = resolve_project(&manifest).map_err(|e| e.to_string())?;
     if !program.errors.is_empty() {
         crate::commands::check::print_diagnostics(&program.errors, &program.source_map, false);
         return Err(format!(

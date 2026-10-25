@@ -57,6 +57,7 @@ fn a_composition_shows_but_only_the_commit_reaches_the_echo() {
         delta: (0.0, 0.0),
         payload: None,
         time_ms: t,
+        mods: byard_core::KeyModifiers::default(),
     };
     let _ = step(
         &mut interp,

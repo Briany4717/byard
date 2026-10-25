@@ -36,6 +36,7 @@ fn written(place: &str, value: &str, taps: usize) -> Vec<String> {
             delta: (0.0, 0.0),
             payload: None,
             time_ms: time,
+            mods: byard_core::KeyModifiers::default(),
         };
         let time = 100 + t as u64 * 100;
         interp.dispatch_events(&[
@@ -136,6 +137,7 @@ fn a_var_of_no_record_type_is_not_compared() {
         delta: (0.0, 0.0),
         payload: None,
         time_ms: time,
+        mods: byard_core::KeyModifiers::default(),
     };
     interp.dispatch_events(&[
         at(EventKind::PointerDown, 100),

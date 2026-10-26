@@ -33,7 +33,7 @@ View Main() {
 
         Row #[gap: 12] {
             TextField #[
-                value: name,
+                bind: name,
                 placeholder: "who to greet…",
                 grow: 1,
                 bg: 0x1E1E2A,

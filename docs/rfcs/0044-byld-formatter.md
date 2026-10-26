@@ -1,9 +1,10 @@
 # RFC-0044: The byld formatter, `byard fmt`
 
-- **Status:** Accepted
+- **Status:** Active, implemented 2026-10-25 (#342). Breaking long lines other
+  than attribute lists, `--stdin` and range formatting are open (#356).
 - **Author(s):** Briany4717
 - **Created:** 2026-10-24
-- **Last updated:** 2026-10-24
+- **Last updated:** 2026-10-26
 - **Depends on:** RFC-0002 (the lexer and parser), RFC-0006 (the CLI).
 - **Enables:** one layout for every `.byd` file; format on save in every
   editor through the LSP; a CI check like `cargo fmt --check`.

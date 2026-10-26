@@ -1,9 +1,13 @@
 # RFC-0042: The accessibility tree
 
-- **Status:** Accepted
+- **Status:** Active, implemented 2026-10-25 (#341), behind the opt-in `a11y`
+  cargo feature (§Resolved questions, Q4). Still open: Tab reaching a
+  `Button`, `Toggle` and `Slider` (#347), a text field's caret and selection
+  (#349), what a `ScrollView` culls and hidden overlays (#350), radio groups
+  (#351), and a checked run on real screen readers (#353).
 - **Author(s):** Briany4717
 - **Created:** 2026-10-24
-- **Last updated:** 2026-10-24
+- **Last updated:** 2026-10-26
 - **Depends on:** RFC-0001 (§5 the logic/render split, `frame.rs` as the only
   boundary; §6 `PlatformHost`), RFC-0003 (events, focus, Tab order), RFC-0005
   and RFC-0018 (the intrinsic catalog), RFC-0041 (text field caret and

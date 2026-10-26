@@ -100,7 +100,7 @@ View Main() {
     var detail: Str = ""
 
     Column #[bg: 0x14141C, p: 32, gap: 20, width: 640] {
-        TextField #[value: name, placeholder: "who to greet…", grow: 1]
+        TextField #[bind: name, placeholder: "who to greet…", grow: 1]
         Button("Greet") #[bg: 0x477A96, radius: 10, color: 0xFFFFFF]
             => {
                 answer = ""

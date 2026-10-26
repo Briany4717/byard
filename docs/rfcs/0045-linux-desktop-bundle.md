@@ -1,9 +1,10 @@
 # RFC-0045: A Linux desktop bundle, and each app its own id
 
-- **Status:** Accepted
+- **Status:** Active, implemented 2026-10-25 (#343). `[bundle]` has no
+  homepage yet, which AppStream's check wants (#357).
 - **Author(s):** Briany4717
 - **Created:** 2026-10-24
-- **Last updated:** 2026-10-24
+- **Last updated:** 2026-10-26
 - **Depends on:** `byard bundle` (#329: `[bundle]`, `--layout app|dir`, the
   project copy and the lookup beside the executable), the window icon (#325).
 - **Enables:** a Byard app that appears in a Linux launcher with its own name

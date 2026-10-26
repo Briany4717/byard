@@ -17,7 +17,7 @@ use crate::diagnostics::CompileError;
 use crate::parser::ast::{Member, ViewDecl};
 use crate::symbol::Symbol;
 
-/// A dense index into [`ViewTable::decls`].
+/// A dense index into `ViewTable::decls`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ViewId(pub u32);
 

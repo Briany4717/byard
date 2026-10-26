@@ -6,7 +6,7 @@
 //! `Send` data enum defined in `byard-core::bridge`; only the data subset of
 //! `Value` converts. A `Signal`/`Memo`/`Fn`/`Theme`/`Controller` has no
 //! `HostValue` form, passing one as a controller argument is
-//! [`CompileError::NonDataControllerArg`] (the boundary holds only data).
+//! [`CompileError::NonDataControllerArg`](crate::CompileError::NonDataControllerArg) (the boundary holds only data).
 
 use byard_core::bridge::HostValue;
 

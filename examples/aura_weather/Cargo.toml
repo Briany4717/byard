@@ -24,3 +24,5 @@ workspace = true
 byard-project  = { path = "../../crates/byard-project" }
 byard-compiler = { path = "../../crates/byard-compiler" }
 byard-core     = { path = "../../crates/byard-core" }
+# The budget tests read their ceilings from ci/budgets.toml.
+toml           = { workspace = true }

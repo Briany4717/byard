@@ -28,7 +28,7 @@ use super::spatial::SpatialGrid;
 ///
 /// `AtlasNodeId` is scoped to the [`LayoutAtlas`] instance that created it.
 /// Every atlas is assigned a unique `instance_id` at construction time
-/// (see [`LayoutAtlas::next_instance_id`]), and that id travels with every
+/// (see `LayoutAtlas::next_instance_id`), and that id travels with every
 /// `AtlasNodeId` it produces. Passing an ID to a different atlas instance
 /// is rejected with [`AtlasError::ForeignNode`] rather than returning
 /// incorrect geometry or hitting an opaque backend error.
@@ -1915,7 +1915,7 @@ impl LayoutAtlas {
     /// transitively) to the root configured via [`Self::set_root`], Taffy
     /// still resolves a default `Rect` of all zeros for it rather than
     /// failing, this returns `Ok(Some(zero_rect))`, not `Ok(None)`. See
-    /// [`Self::resolved_rect_internal`] for the raw Taffy behaviour this
+    /// `Self::resolved_rect_internal` for the raw Taffy behaviour this
     /// wraps. Callers should only query rects for nodes known to be
     /// reachable from the root.
     ///
@@ -1970,7 +1970,7 @@ impl LayoutAtlas {
     /// `dirty_targets` is intended to be the output of
     /// [`EvaluatorTick::collect_dirty`](crate::evaluator::EvaluatorTick::collect_dirty)
     /// for this tick. Each node's own `TargetId` (kind, generation, index)
-    /// is reconstructed using the same scheme as [`Self::rebuild_grid`] and
+    /// is reconstructed using the same scheme as `Self::rebuild_grid` and
     /// [`Self::mark_dirty_all`], so stale-generation targets are excluded
     /// for free, they simply will not match any live node's id.
     ///

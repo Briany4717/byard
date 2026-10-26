@@ -61,7 +61,8 @@ there too: a property you animate does not trigger layout.
 **Developer experience.** `byard dev` reloads the window on every save and keeps
 your state through most edits. `byard check` reads a whole project and finds a misspelt name, a
 wrong type or an unknown attribute without opening a window, so CI can run it.
-`byard shot` draws a project to a PNG, also without a window.
+`byard shot` draws a project to a PNG, also without a window, and `byard fmt` gives every file
+the same layout.
 
 ## Status
 
@@ -76,7 +77,7 @@ a clone.
 
 If you are new, read in order. [Getting started](getting-started.md) installs the
 tools and runs a first app. [The dev loop](dev-loop.md) covers `byard dev`,
-`check` and `shot`, which you will use all day.
+`check`, `shot` and `fmt`, which you will use all day.
 
 The language tour is one chapter per idea, and each starts with a small
 complete example you can paste into `main.byd`. After it, theming, the Rust

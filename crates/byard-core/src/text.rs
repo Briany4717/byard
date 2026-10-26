@@ -308,7 +308,7 @@ fn declare_axis_weights(db: &mut glyphon::fontdb::Database, id: glyphon::fontdb:
 ///
 /// Reading the system's font files is most of what building a `FontSystem`
 /// costs (tens of milliseconds on a desktop, every time). The scan, and the
-/// weight declaration above, happen once per process in [`system_fonts`];
+/// weight declaration above, happen once per process in `system_fonts`;
 /// each `FontSystem` starts from a copy of that database, which is a list of
 /// face records and costs microseconds. Faces registered afterwards (a
 /// project's own fonts) go into that copy only.

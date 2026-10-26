@@ -630,7 +630,7 @@ impl Engine {
     }
 
     /// Spawns the logic thread from a `build` factory that constructs a
-    /// [`LogicRuntime`] (e.g. the `byld` Dev interpreter) **inside** the thread
+    /// [`LogicRuntime`](crate::LogicRuntime) (e.g. the `byld` Dev interpreter) **inside** the thread
     /// (RFC-0002 §"Integration with Engine", RFC-0003 §8).
     ///
     /// This is the entry point the `byard-compiler` crate targets: it hands in
@@ -638,7 +638,7 @@ impl Engine {
     /// the factory builds the `!Send` running interpreter (holding `Signal`s
     /// and a logic-thread-local reactive scope) on the logic thread, where it
     /// is then driven once per tick. The `Send + 'static` bound is on the
-    /// factory only, never on the [`LogicRuntime`] it produces.
+    /// factory only, never on the [`LogicRuntime`](crate::LogicRuntime) it produces.
     ///
     /// Use this **instead of** [`start_logic`](Engine::start_logic); call it at
     /// most once.

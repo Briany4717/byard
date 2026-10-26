@@ -15,7 +15,7 @@
 //! The window also hands the platform's screen-reader API the tree the engine
 //! builds for it, through AccessKit, when the `a11y` feature is on (it is off
 //! by default). With it on, it costs nothing while no assistive technology is
-//! connected. See [`access`].
+//! connected. See `access`.
 
 mod clipboard;
 

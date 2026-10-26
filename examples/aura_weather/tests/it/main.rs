@@ -5,6 +5,7 @@
 //! relinking all of them was most of the time an edit spent before a test
 //! could run.
 
+mod budgets;
 mod common;
 mod forecast;
 mod map;

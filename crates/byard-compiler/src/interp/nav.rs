@@ -196,7 +196,7 @@ impl NavTransition {
     /// Both screens are placed from the same `p`, so they move as one gesture:
     /// the screen on the *leading* side of the motion (the one entering on a
     /// push, leaving on a pop) travels the full viewport, its partner drifts by
-    /// [`PARALLAX`] of it.
+    /// `PARALLAX` of it.
     #[must_use]
     pub fn screen_motion(
         self,

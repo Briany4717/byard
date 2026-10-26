@@ -1,14 +1,14 @@
 //! The `byld` formatter (RFC-0044): one layout for every `.byd` file, no
 //! options.
 //!
-//! [`format`] works on the token stream with comments and line breaks kept
+//! [`format()`] works on the token stream with comments and line breaks kept
 //! ([`lex_with_trivia`](crate::lexer::lex_with_trivia)), decides per token
 //! whether a space, nothing or a line break comes before it, and copies every
 //! token's text from the source byte for byte, so a string (and the
 //! interpolations in it) is never touched. It is one pass over the pieces with
 //! a small state, and it allocates one output `String`.
 //!
-//! It never changes what a file means. Before returning, [`format`] parses
+//! It never changes what a file means. Before returning, [`format()`] parses
 //! both the input and the output and compares the two trees with positions
 //! ignored ([`SpanEq`](crate::parser::span_eq::SpanEq)); if they differ, or
 //! the input does not parse, the caller gets a [`FmtError`] and keeps its file
@@ -48,7 +48,7 @@ use crate::parser::{ParsedFile, parse};
 /// same as the workspace's Rust (`rustfmt`'s default `max_width`).
 pub const MAX_WIDTH: usize = 100;
 
-/// Why [`format`] left a file alone.
+/// Why [`format()`] left a file alone.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FmtError {
     /// The source does not parse, so there is no meaning to preserve. The
@@ -99,7 +99,7 @@ pub fn format(source: &str) -> Result<String, FmtError> {
     format_using(source, printer::print)
 }
 
-/// [`format`] with the layout step supplied, so a test can hand it a printer
+/// [`format()`] with the layout step supplied, so a test can hand it a printer
 /// that gets it wrong and see the safety check refuse the result.
 fn format_using(source: &str, print: impl FnOnce(&str) -> String) -> Result<String, FmtError> {
     let before = parse(source);

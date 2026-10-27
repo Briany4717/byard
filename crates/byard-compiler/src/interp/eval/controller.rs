@@ -221,6 +221,13 @@ pub(super) struct Bridge {
 }
 
 impl Bridge {
+    /// Whether a controller call is waiting for its reply. A timer's repeating
+    /// continuation is not one: its action was lowered with the view that
+    /// declared it, not with a frame's handlers.
+    pub(super) fn has_pending_replies(&self) -> bool {
+        self.continuations.values().any(|c| !c.repeating)
+    }
+
     /// A fresh continuation id with nothing registered under it.
     ///
     /// For a reply that resumes no action: a native view's request is answered
@@ -766,6 +773,27 @@ impl Interpreter {
             last: Vec::new(),
         });
         index
+    }
+
+    /// Lets go of the closure and watched memos of an effect whose node is gone
+    /// (its screen was popped). The slot stays, so the indices of the others do
+    /// not move, but it is inert: nothing visits it, so it never mounts again.
+    ///
+    /// Left alone if it is still mounted, which only happens when the walk
+    /// reached it after all; its unmount edge has to run first.
+    pub(super) fn release_effect(&mut self, index: usize) {
+        let Some(slot) = self.bridge.effects.get_mut(index) else {
+            return;
+        };
+        if slot.mounted {
+            return;
+        }
+        slot.kind = EffectKind::Mount;
+        slot.action = Rc::new(RefCell::new(CallArms {
+            ok: None,
+            err: None,
+        }));
+        slot.last = Vec::new();
     }
 
     /// Records that effect `index` was reached by this frame's structural

@@ -48,6 +48,7 @@ mod navigation;
 mod overlay;
 mod paint;
 mod props;
+mod retire;
 mod scroll;
 mod states;
 mod text_field;
@@ -336,9 +337,10 @@ pub enum RenderNode {
     /// Coarse, positional reconciliation (RFC-0002 D7): the driver reads `list`
     /// each frame and renders one pooled body per element. Bodies are lowered
     /// lazily into a reusable pool (grown to the high-water length, never
-    /// re-lowered per frame), each reading its element from a per-slot signal the
-    /// driver updates, so list growth/shrink/value changes are reactive without
-    /// re-lowering or churning scopes.
+    /// re-lowered per frame, and given back after a drastic shrink), each reading
+    /// its element from a per-slot signal the driver updates, so list
+    /// growth/shrink/value changes are reactive without re-lowering or churning
+    /// scopes.
     For {
         /// Index into the interpreter's `for_pools`.
         pool: usize,
@@ -529,6 +531,24 @@ pub struct Interpreter {
     /// rather than inside them because the pools are lent out (immutably) for
     /// the whole build/paint phase, and this is written during it.
     nav_elems: Vec<Option<u32>>,
+    /// Pool indices whose container went away with the screen it was in, reused
+    /// before the pools grow. Without them, a route with a `when` in it adds a
+    /// pool (and a copy of the branch's AST) every time it is visited.
+    free_when_pools: Vec<usize>,
+    /// As [`free_when_pools`](Self::free_when_pools), for `for`.
+    free_for_pools: Vec<usize>,
+    /// As [`free_when_pools`](Self::free_when_pools), for navigation containers.
+    free_nav_pools: Vec<usize>,
+    /// What the screens, branches and rows retired since the last frame settled
+    /// own, released once the effects have run (see `retire`).
+    retired: retire::Retired,
+    /// The scopes the last frame's painting opened: the arguments of the `fn`s
+    /// its handlers call, lowered again every frame. Alive until the next frame
+    /// replaces the handlers.
+    frame_scopes: Vec<ScopeId>,
+    /// Frame scopes that could not be released yet because a controller call
+    /// raised from a handler was still waiting for its reply.
+    held_scopes: Vec<ScopeId>,
     /// RFC-0026: the shared navigation state each container publishes for the
     /// lowered `back`/`replace` closures, keyed by the navigation `var` that
     /// drives it. Keyed rather than indexed by pool because an action can be
@@ -1375,8 +1395,41 @@ impl Interpreter {
     /// Walks a render tree, projecting it into a `byard-core`
     /// [`RenderFrame`](byard_core::frame::RenderFrame) using Taffy layout via
     /// `byard-core`'s [`LayoutAtlas`](byard_core::atlas::layout::LayoutAtlas).
-    #[allow(clippy::similar_names)]
     pub fn render(
+        &mut self,
+        tree: &[RenderNode],
+        frame: &mut byard_core::frame::RenderFrame,
+        width: f32,
+        height: f32,
+    ) {
+        // Painting lowers the handlers of every interactive element again each
+        // frame (they close over the frame's layout), and lowering a call to a
+        // `fn` opens a scope for each argument. Those scopes live exactly as
+        // long as the handlers do, until the next frame replaces them, so they
+        // are recorded here and given back then (see `release_frame_scopes`).
+        self.ctx.push_scope_tracker();
+        self.render_frame(tree, frame, width, height);
+        self.frame_scopes = self.ctx.pop_scope_tracker();
+    }
+
+    /// Hands back the scopes the previous frame's painting opened. Called once
+    /// this frame has cleared the handlers they belonged to.
+    ///
+    /// Held back while a controller call is in flight: its `ok`/`err` arms were
+    /// lowered with the handler that raised it and may read one of those
+    /// scopes (`fn save(id) => api.save(id) ok => { status = "saved {id}" }`),
+    /// and a reply that found its scopes gone would read nothing. They are
+    /// released on the first frame after the last reply, so the wait is bounded
+    /// by the call, not by the run.
+    fn release_frame_scopes(&mut self) {
+        self.held_scopes.append(&mut self.frame_scopes);
+        if !self.bridge.has_pending_replies() {
+            self.retired.scopes.append(&mut self.held_scopes);
+        }
+    }
+
+    #[allow(clippy::similar_names)]
+    fn render_frame(
         &mut self,
         tree: &[RenderNode],
         frame: &mut byard_core::frame::RenderFrame,
@@ -1489,6 +1542,12 @@ impl Interpreter {
         // identity into the next frame's top-level animations.
         self.anim_slot = 0;
 
+        // Everything that could still be called from the previous frame's
+        // handlers has been cleared above, so the scopes its painting opened
+        // are no longer reachable (and `retired` is released after the effects
+        // settle below).
+        self.release_frame_scopes();
+
         // Drain any MSDF generations that finished since the last tick, before
         // the tree walk below, so a freshly-resident glyph is visible the same
         // tick it lands (RFC-0009 §2; signals are touched on the logic thread
@@ -1517,6 +1576,9 @@ impl Interpreter {
             // mounted, not the one after.
             let mut changed = self.reconcile_structure(tree, 0);
             changed |= self.settle_effects();
+            // After the effects: a popped screen's `on unmount` has just run,
+            // against its `let`s, and nothing reads them again.
+            self.release_retired();
             if !changed || passes > MAX_INSTANCE_DEPTH {
                 break;
             }
@@ -1799,6 +1861,28 @@ impl Interpreter {
         self.measures.len()
     }
 
+    /// How many reactive scope slots the interpreter has ever needed (its
+    /// high-water mark), live or free. A screen that is popped gives its slots
+    /// back and the next one reuses them, so this stays put while it is pushed
+    /// and popped; it is exposed so a test can say so.
+    #[must_use]
+    pub fn scope_slot_count(&self) -> usize {
+        self.ctx.scope_slot_count()
+    }
+
+    /// How many reactive scopes are alive right now.
+    #[must_use]
+    pub fn live_scope_count(&self) -> usize {
+        self.ctx.live_scope_count()
+    }
+
+    /// How many reactive signals have been created. Signals are not recycled,
+    /// so unlike scopes this only ever grows.
+    #[must_use]
+    pub fn signal_count(&self) -> usize {
+        self.ctx.signal_count()
+    }
+
     /// Runtime performance diagnostics recomputed by the last
     /// [`render`](Self::render) (RFC-0023): empty when the frame is healthy.
     #[must_use]
@@ -1831,6 +1915,10 @@ impl Interpreter {
         self.nav_pools.clear();
         self.nav_elems.clear();
         self.nav_shared.clear();
+        // The free lists name slots of the pools just cleared.
+        self.free_when_pools.clear();
+        self.free_for_pools.clear();
+        self.free_nav_pools.clear();
         // RFC-0039: the previous tree's native views die with it, which is
         // their unmount. Each is told, in mount order, and the generation
         // moves so a reply still in flight for one of them finds the door

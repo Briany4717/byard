@@ -44,6 +44,16 @@
 //!   did not change wins by roughly three orders of magnitude, and wins on
 //!   the very first line it skips.
 //!
+//!   A line is compared with the buffer **at its own index**, whatever the
+//!   pool's length did: appending a line shapes one line, closing a HUD
+//!   shapes none, and removing a line shapes only the ones whose key moved
+//!   (the key is the whole question, so a line that landed on an index holding
+//!   a different text is simply a key that differs). What is *not* in the key
+//!   is index-bound and handled per frame: a buffer is only ever shaped at its
+//!   own index, so the glyph `metadata` that pass 3 maps to a draw-order depth
+//!   is right whenever the key matches, and position, colour and clip are
+//!   read from the current line in pass 2.
+//!
 //!   It is also strictly more robust. A producer that changes a line's text
 //!   and forgets to set `dirty` used to render stale glyphs in release, in
 //!   silence; now it renders correctly, because the key it is compared
@@ -282,23 +292,16 @@ const fn needs_reshape(viewport_dirty: bool, shape_changed: bool) -> bool {
     viewport_dirty || shape_changed
 }
 
-/// Whether index `i` refers to the same *element* it referred to last frame.
+/// Whether index `i` refers to the same *element* it referred to last frame,
+/// so that its `dirty` flag can be held against its content.
 ///
-/// The whole incremental scheme is index-addressed, `texts[i]` compared
-/// against what was shaped for `texts[i]`, with `TextLine::dirty` trusted to say
-/// when they differ, and that is sound only while this holds.
-///
-/// It stops holding when the pool's length changes. Mount a paragraph in the
-/// middle of a column and every line after it shifts down one index: each of
-/// those indices now holds a different element whose producer has truthfully
-/// reported it unchanged, because it *is* unchanged at its own position in the
-/// tree. Index-wise it is entirely different text.
-///
-/// "Which index shifted" is not knowable from two lengths, so a length change
-/// invalidates all of them. That costs a reshape of the whole pool on such a
-/// frame, which is already a full-redraw frame
-/// (`needs_full_redraw_this_frame` includes exactly this condition), so it adds
-/// no cost class that was not being paid.
+/// Only the debug-only [`assert_dirty_flag_consistency`] asks. The re-shape
+/// decision does not: it compares the content itself ([`needs_reshape`]), which
+/// is right at any index. The flag is another matter: a producer reports it
+/// for an element against *its* previous state, and when the pool's length
+/// changed, index `i` may hold a different element than last frame, so a
+/// changed hash there says nothing about that element's flag.
+#[cfg(debug_assertions)]
 #[must_use]
 const fn index_is_identity_stable(is_new: bool, length_changed: bool) -> bool {
     !is_new && !length_changed
@@ -339,8 +342,9 @@ struct ShapePass {
     /// which is the previous frame's pool length: any index at or past it has
     /// never been shaped.
     preexisting_len: usize,
-    /// Whether the text pool's length changed, which makes index-wise
-    /// comparison illegal for the whole pool. See [`index_is_identity_stable`].
+    /// Whether the text pool's length changed, which makes a line's `dirty`
+    /// flag unreadable for the whole pool. See [`index_is_identity_stable`].
+    #[cfg(debug_assertions)]
     length_changed: bool,
     /// Whether the viewport changed, which invalidates every shaped buffer
     /// regardless of content (DPI/scale reaches the shaper).
@@ -348,6 +352,11 @@ struct ShapePass {
 }
 
 // ── Pipeline ──────────────────────────────────────────────────────────────────
+
+/// How many spare buffers the pipeline keeps when the text pool shrinks. A HUD
+/// is a few dozen lines; this bounds what a one-off page of thousands leaves
+/// behind.
+const MAX_SPARE_BUFFERS: usize = 256;
 
 /// GPU text pipeline owned by [`EncoderSubsystem`](super::EncoderSubsystem).
 ///
@@ -373,8 +382,15 @@ pub struct TextGlyphPipeline {
     ///
     /// Index-aligned with the **full** `text_lines` slice passed to `prepare`
     ///, *global* across layers, so layering never re-shapes a line.
-    /// Entries are added as new lines appear and never removed (Phase 1).
+    /// Truncated to the pool's length each frame; the buffers it sheds go to
+    /// [`free_buffers`](Self::free_buffers).
     cache: Vec<CachedLine>,
+    /// Spare `glyphon::Buffer`s, kept (up to [`MAX_SPARE_BUFFERS`]) when the
+    /// text pool shrinks, so an overlay or HUD that opens again takes them
+    /// back instead of building new `cosmic-text` buffers. A buffer taken from
+    /// here is shaped from scratch (it enters as `is_new`), which resets its
+    /// metrics, size, text and metadata.
+    free_buffers: Vec<Buffer>,
     /// How many lines the last [`prepare`](Self::prepare) actually re-shaped.
     ///
     /// Read, not inferred, the same principle as the statusline's
@@ -450,6 +466,7 @@ impl TextGlyphPipeline {
             viewport,
             renderers: vec![renderer],
             cache: Vec::new(),
+            free_buffers: Vec::new(),
             reshaped: 0,
             loaded_families: std::collections::HashSet::new(),
         })
@@ -575,43 +592,45 @@ impl TextGlyphPipeline {
         // at the same time as &mut cache, which would be a double borrow.
         self.reshaped = 0;
         let preexisting_len = self.cache.len();
-        // # A pool whose length changed is not index-comparable
+        // # A pool whose length changed is still compared line by line
         //
-        // The whole incremental scheme is index-addressed: `texts[i]` is
-        // compared against the `shape_key` recorded for `texts[i]` last frame.
-        // That is sound only while index `i` means the same *element* on both
-        // frames.
+        // The cache is index-addressed: `texts[i]` is compared with the buffer
+        // shaped for `texts[i]` last frame. Mount a paragraph in the middle of
+        // a column and every line after it shifts down one index, so index `i`
+        // may now hold a different element than it did.
         //
-        // A length change breaks it. Mount a paragraph in the middle of a
-        // column and every line after it shifts down one index: each of those
-        // indices now holds a different element, whose producer has truthfully
-        // reported it unchanged, because it *is* unchanged, at its own
-        // position in the tree. Index-wise it is entirely different text, and
-        // the cached buffer at that index would be drawn as-is.
+        // That used to force a reshape of the whole pool, because the
+        // comparison was only as good as the producer's `dirty` flag, which
+        // describes an element at *its* previous position. It is not that
+        // any more: the comparison is the `shape_key` of what index `i` holds
+        // now against the key its buffer was shaped from, so a different
+        // element at `i` is a different key and is shaped, and the same one
+        // is byte-identical glyphs and is kept. Nothing else the buffer holds
+        // depends on the element: its glyph metadata is its own index, which
+        // it was shaped at and still sits at.
         //
-        // This is latent rather than new. Before an overlay lengthened the
-        // pool, the shifted indices usually landed beyond the cache and were
-        // taken as `is_new`, which reshapes unconditionally and hides it. The
-        // in-window HUD made the cache long enough for them to land *inside*
-        // it, which is how it surfaced, as an intermittent debug assertion,
-        // and in release as silently stale text.
-        //
-        // So a length change reshapes everything. The frame is being fully
-        // redrawn anyway on such a frame (`needs_full_redraw_this_frame`
-        // includes exactly this condition), so this adds no cost class that
-        // was not already being paid, and it is the only answer available
-        // here, because "which index shifted" is not knowable from two
-        // lengths.
+        // So only a length-changed frame's *redraw region* is index-unsafe
+        // (`dirty` flags and previous bounds are per position), and that is
+        // `needs_full_redraw_this_frame`'s to answer, not the shaper's.
+        #[cfg(debug_assertions)]
         let length_changed = preexisting_len != text_lines.len();
         // The cache is as long as this frame's pool, never longer. Left at its
         // high-water length after an unmount, every later frame would compare
-        // "shorter" against it and reshape the whole pool, forever; and a pool
-        // growing back to exactly that length would count as unchanged while
-        // the previous frame was shorter.
-        self.cache.truncate(text_lines.len());
+        // "shorter" against it; and a pool growing back to exactly that length
+        // would count as unchanged while the previous frame was shorter. The
+        // shed buffers are kept, so the next mount does not allocate them.
+        if self.cache.len() > text_lines.len() {
+            for entry in self.cache.drain(text_lines.len()..) {
+                if self.free_buffers.len() < MAX_SPARE_BUFFERS {
+                    self.free_buffers.push(entry.buffer);
+                }
+            }
+        }
         while self.cache.len() < text_lines.len() {
-            let metrics = Metrics::new(12.0, 14.0); // placeholder; overwritten below
-            let buffer = Buffer::new(&mut self.font_system, metrics);
+            let buffer = self.free_buffers.pop().unwrap_or_else(|| {
+                let metrics = Metrics::new(12.0, 14.0); // placeholder; overwritten below
+                Buffer::new(&mut self.font_system, metrics)
+            });
             self.cache.push(CachedLine {
                 buffer,
                 // No buffer has been shaped for this entry yet. The value is
@@ -630,6 +649,7 @@ impl TextGlyphPipeline {
         let split = dev_text_start.min(text_lines.len());
         let pass = ShapePass {
             preexisting_len,
+            #[cfg(debug_assertions)]
             length_changed,
             viewport_dirty,
         };
@@ -761,7 +781,6 @@ impl TextGlyphPipeline {
             let is_new = i >= pass.preexisting_len;
             let wrap_w = wraps.get(i).copied().flatten();
             let key = shape_key(line, wrap_w);
-            let comparable = index_is_identity_stable(is_new, pass.length_changed);
             let entry = &mut self.cache[i];
 
             #[cfg(debug_assertions)]
@@ -770,13 +789,18 @@ impl TextGlyphPipeline {
                 // Not asserted on a length-changed frame: the premise of the
                 // check is about *this* element's flag, and on such a frame
                 // index `i` is not this element's previous position at all.
-                if comparable {
+                if index_is_identity_stable(is_new, pass.length_changed) {
                     assert_dirty_flag_consistency(hash != entry.content_hash, line.dirty);
                 }
                 entry.content_hash = hash;
             }
 
-            if comparable && !needs_reshape(pass.viewport_dirty, key != entry.shape_key) {
+            // `shape_key` is content-addressed (text, size, wrap, weight,
+            // family) and this buffer was shaped at this very index, so a
+            // pre-existing slot whose key still matches holds byte-identical
+            // glyphs with the right metadata, whether or not the pool's length
+            // moved around it.
+            if !is_new && !needs_reshape(pass.viewport_dirty, key != entry.shape_key) {
                 continue; // byte-identical glyph run, the cached buffer stands
             }
             entry.shape_key = key;
@@ -1125,6 +1149,7 @@ mod tests {
     // ── index_is_identity_stable: when index-wise comparison is legal ──────
 
     #[test]
+    #[cfg(debug_assertions)]
     fn a_length_change_makes_every_index_unstable() {
         // Mounting a paragraph mid-column shifts every line after it down one
         // index. Each of those indices now holds a different element whose
@@ -1136,11 +1161,13 @@ mod tests {
     }
 
     #[test]
+    #[cfg(debug_assertions)]
     fn a_brand_new_index_is_never_compared_against_a_previous_occupant() {
         assert!(!index_is_identity_stable(true, false));
     }
 
     #[test]
+    #[cfg(debug_assertions)]
     fn a_stable_pool_is_compared_index_wise() {
         // The common case, and the one the whole incremental scheme exists
         // for: same length, same elements, so a matching shape key is enough

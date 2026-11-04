@@ -24,6 +24,17 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   it keeps them and writes into them, growing only when a frame needs more than
   it has held. Pixels are unchanged; `EncoderSubsystem::backdrop_bind_groups_created`
   and `clip_mask_gpu_creations` count what is left.
+  
+- **Handing the layout to the encoder costs one pass, and allocates nothing.**
+  `LayoutAtlas::populate_frame` found each node's position by climbing its
+  parent chain to the root, and cloned each node's child list on the way down;
+  the hit-test grid rebuilt after every layout did the same. Both now walk the
+  tree once, passing each node's position to its children, and the interpreter's
+  path (`populate_frame_dirty`) reuses its buffers and tracks dirty nodes in a
+  flat list instead of a hash set. On a 3,906-node tree the call goes from about
+  470 us to 165 us and from 787 heap allocations to none; on 8,191 nodes in a
+  12-deep tree, from 1.6 ms to 0.29 ms. The rectangles are the same ones, to the
+  bit: a test holds every node of an irregular tree to the old answer.
 
 - **Every app's window now carries its own id, so its window class changes.**
   Wayland's `app_id` and X11's `WM_CLASS` were `dev.byard.Byard` for every
@@ -136,6 +147,32 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   package's widget writes colours too, and a second implementation of a
   transfer function is a second chance to spend a release displaying every
   colour lighter than it was written.
+
+- **A text appearing or disappearing no longer re-shapes every text in the
+  window.** The glyph cache was compared line by line only while the number of
+  texts stayed the same, so adding one line to a list, or opening and closing
+  the dev HUD, shaped every line of the window again (eight lines plus one
+  appended: nine shaped, now one; the HUD opening on eight app lines: 29, now
+  its own 21; the HUD closing: 8, now none). A line is kept whenever what it
+  is made from (text, size, wrap, weight, family) still matches the buffer at
+  its place, and the buffers a shrinking window gives up are kept, up to 256,
+  for the next one that opens. A frame whose text count changed is still
+  redrawn in full, as its redraw region is tracked by position. The seven
+  lists of last-frame bounds the encoder keeps are refilled instead of
+  collected anew, seven allocations fewer on every frame.
+  
+- **Measuring a text that was measured before allocates nothing, and the
+  cache has a ceiling.** Layout asks for the size of every `Text` and `Button`
+  on every tick, and each ask built a `String` and an `Arc<str>` for its cache
+  key before finding the answer it had. The key is borrowed now: a hit hashes
+  the string and compares it, with no heap allocation (a test counts them), and
+  takes about 80 ns where it took about 490 ns; a screen of 200 labels measured
+  again each tick went from about 109 us to about 12 us. The cache kept every
+  string it was ever asked about, so a clock, a counter or a download's progress
+  line grew it for as long as the app ran; it now holds at most 4,096 answers
+  and drops the half used least recently when it is full. A string that is
+  new each time shapes through one reused `cosmic-text` buffer instead of
+  building one, and the measurements come out bit for bit as before.
 
 ### Added
 

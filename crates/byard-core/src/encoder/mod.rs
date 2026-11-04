@@ -1798,16 +1798,44 @@ fn update_frame_bookkeeping(
     // primitive's bounds are unchanged from last frame anyway, so this is a
     // no-op for it, and it keeps each `last_*_bounds` positionally aligned with
     // its slice without needing a separate "did this move" check.
-    state.last_text_bounds = texts.iter().map(text_line_bounds).collect();
-    state.last_box_bounds = instances.iter().map(|b| rect_of(b.rect)).collect();
-    state.last_decorated_bounds = decorated.iter().map(|d| rect_of(d.base.rect)).collect();
-    state.last_canvas_bounds = canvas_shapes
-        .iter()
-        .map(crate::frame::CanvasShape::bounds)
-        .collect();
-    state.last_ripple_bounds = ripples.iter().map(|r| rect_of(r.rect)).collect();
-    state.last_backdrop_bounds = backdrops.iter().map(|b| rect_of(b.rect)).collect();
-    state.last_texture_bounds = textures.iter().map(|t| rect_of(t.rect)).collect();
+    //
+    // Into the vectors the last frame filled rather than into new ones: seven
+    // `collect`s here were seven heap allocations every frame, for a result
+    // the same length as the one they replaced.
+    refill(
+        &mut state.last_text_bounds,
+        texts.iter().map(text_line_bounds),
+    );
+    refill(
+        &mut state.last_box_bounds,
+        instances.iter().map(|b| rect_of(b.rect)),
+    );
+    refill(
+        &mut state.last_decorated_bounds,
+        decorated.iter().map(|d| rect_of(d.base.rect)),
+    );
+    refill(
+        &mut state.last_canvas_bounds,
+        canvas_shapes.iter().map(crate::frame::CanvasShape::bounds),
+    );
+    refill(
+        &mut state.last_ripple_bounds,
+        ripples.iter().map(|r| rect_of(r.rect)),
+    );
+    refill(
+        &mut state.last_backdrop_bounds,
+        backdrops.iter().map(|b| rect_of(b.rect)),
+    );
+    refill(
+        &mut state.last_texture_bounds,
+        textures.iter().map(|t| rect_of(t.rect)),
+    );
+}
+
+/// Replaces the contents of `bounds` with `rects`, keeping its allocation.
+fn refill(bounds: &mut Vec<Rect>, rects: impl Iterator<Item = Rect>) {
+    bounds.clear();
+    bounds.extend(rects);
 }
 
 /// Draws the UI render pass: a scissored clear quad (incremental frames

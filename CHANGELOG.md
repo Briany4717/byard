@@ -547,6 +547,15 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A hot reload keeps every `var` when a `let` is added, removed or moved.**
+  A `let` was part of what a reload compared, so adding one derived value
+  (`let doubled = count * 2`) counted as a change to the view's state and
+  reset every `var` in it. A `let` or `fn` holds no state of its own, so it no
+  longer counts, and neither does the order the `var`s are written in. A
+  `var` that appears or disappears still resets the view, and so does one
+  whose written type changes (`Int` to `Str`), which used to keep a value of
+  the old type.
+
 - **A text at size 0 takes no room instead of crashing.** `Text("x")
   #[size: 0]`, or a size bound to a `var` that holds 0 or springs through it,
   panicked inside the text shaper ("line height cannot be 0"), and because

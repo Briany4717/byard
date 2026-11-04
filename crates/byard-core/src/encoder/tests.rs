@@ -1630,3 +1630,27 @@ fn disjoint_scissors_intersect_to_nothing_without_underflow() {
         Some((50, 60, 50, 40))
     );
 }
+
+// ── Frame bookkeeping reuses its vectors ────────────────────────────────────
+
+/// The seven `last_*_bounds` vectors are rewritten every frame. Refilling one
+/// to the same length must keep its allocation, which a `collect()` into a new
+/// vector never did: the address of the buffer is what tells them apart.
+#[test]
+fn refilling_the_previous_frames_bounds_keeps_the_allocation() {
+    let rects = |n: u16| (0..n).map(|i| Rect::new(f32::from(i), 0.0, 4.0, 4.0));
+    let mut bounds: Vec<Rect> = rects(40).collect();
+    let (ptr, cap) = (bounds.as_ptr(), bounds.capacity());
+
+    for n in [40, 12, 40, 0, 33] {
+        refill(&mut bounds, rects(n));
+        assert_eq!(
+            bounds.len(),
+            usize::from(n),
+            "the new frame's bounds, no leftovers"
+        );
+        assert_eq!(bounds.as_ptr(), ptr, "{n} rects: the buffer moved");
+        assert_eq!(bounds.capacity(), cap);
+    }
+    assert_eq!(bounds[32], Rect::new(32.0, 0.0, 4.0, 4.0));
+}

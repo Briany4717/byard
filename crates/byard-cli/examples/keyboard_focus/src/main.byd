@@ -1,0 +1,71 @@
+// Keyboard focus on a Button, a Toggle and a Slider (issue #347, RFC-0042 §5).
+//
+// Run it (from the repo root), pressing keys with no window and no GPU:
+//   cargo run -p byard-cli -- shot crates/byard-cli/examples/keyboard_focus \
+//       --key Tab --key Space -o after.png
+// or read the same state as text:
+//   cargo run -p byard-cli -- shot crates/byard-cli/examples/keyboard_focus \
+//       --key Tab --key Space --a11y after.txt
+// `tests/it/keyboard_focus_example.rs` runs the second and checks it.
+//
+// What to look for in the picture that command draws:
+//   1. The first Tab focused "Save": it has the purple focus ring (`on focused`
+//      draws it; focus itself draws nothing, so a control that does not style
+//      it shows no ring).
+//   2. Space pressed it, so the line at the bottom says "saved 1".
+//   3. A Toggle and a Slider draw their own parts, so `on focused` has nothing to
+//      style on them; the accessibility dump says which one has focus.
+//      `--key Tab --key Tab --key Space` moves on to the Toggle and flips it,
+//      `--key Tab --key Tab --key Tab --key Right` raises the Slider by its
+//      step, and Shift+Tab (`--key shift+Tab`) goes back one.
+//   4. "Locked" is disabled: Tab goes past it, and so does a click.
+View Main() {
+    var saved = 0
+    var wifi = false
+    var volume = 0.5
+
+    let ring = style {
+        border: 0x2F2F40, border_width: 2
+        on focused { border: 0xB69DF8, border_width: 2 }
+    }
+
+    Column #[bg: 0x14141C, p: 24, gap: 16, width: 360, grow: 1] {
+        Text("Tab, Space, Enter and the arrow keys") #[
+            font: body,
+            color: 0xE6E1E5,
+            size: 18,
+            width: 312,
+        ]
+        Button("Save") #[
+            ..ring,
+            font: body,
+            width: 120,
+            height: 40,
+            bg: 0x3B82F6,
+            radius: 8,
+        ] => saved += 1
+        Button("Locked") #[
+            font: body,
+            width: 120,
+            height: 40,
+            bg: 0x3B3B4A,
+            radius: 8,
+            disabled: true,
+        ] => saved += 100
+        Row #[gap: 12, align: center] {
+            Toggle #[bind: wifi, width: 52, height: 30]
+            Text("Wi-Fi {wifi ? "on" : "off"}") #[font: body, color: 0xCAC4D0, size: 16, width: 200]
+        }
+        Slider #[
+            bind: volume,
+            min: 0,
+            max: 1,
+            step: 0.1,
+            width: 312,
+            height: 28,
+            ..ring,
+            radius: 14,
+        ]
+        Text("saved {saved}, volume {volume}") #[font: body, color: 0x938F99, size: 14, width: 312]
+    }
+}

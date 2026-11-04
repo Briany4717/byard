@@ -67,9 +67,9 @@ The type of the `var` has to match the control:
 | `Slider` | `Float` | A thumb on a track |
 | `RadioButton` | `Str` | One of a group |
 
-Each also accepts `value:` to show a value without writing it back, and a `change`
-handler to run an action when the user changes it. `bind` is what you want almost
-always.
+`value:` is the older name for `bind:` and does the same thing (RFC-0018). Both
+need a `var`: given a `let` or a literal, a control draws its default instead of
+that value. A `change` handler runs an action when the user changes it.
 
 ## Button
 
@@ -161,7 +161,8 @@ Toggle #[bind: on, bg: 0x3B82F6, width: 52, height: 30]
 ```
 
 A switch. It draws its own track and thumb, so `bg` is the colour of the *on* track,
-and the `on checked` style state is active when it is on.
+and the `on checked` style state is active when it is on. Space or Enter flips it while it
+has focus.
 
 ## Checkbox
 
@@ -192,7 +193,8 @@ Slider #[bind: percent, min: 0.0, max: 100.0, step: 1.0, width: 300, height: 26]
 ```
 
 Bind it to a `Float`, not an `Int`, and write its bounds as floats. A slider is also
-a good way to try out a number: bind one to anything and drag it.
+a good way to try out a number: bind one to anything and drag it. With focus, the
+arrow keys move it by `step`, or by a tenth of the range when there is none.
 
 ## RadioButton
 
@@ -217,6 +219,29 @@ View Main() {
     }
 }
 ```
+
+## The keyboard
+
+Tab moves focus to the next control and Shift+Tab to the one before, in the order the
+controls are written, wrapping at the ends. A `Button` (with something to do), a
+`Toggle`, a `Slider`, a `Checkbox`, a `RadioButton` and a `TextField` are all in that
+order, and a disabled control is skipped, by Tab and by a click.
+
+What a focused control does with a key:
+
+| Control | Key | Does |
+|---------|-----|------|
+| `Button` | Space, Enter | Presses it, once however long the key is held |
+| `Toggle`, `Checkbox` | Space (and Enter for a `Toggle`) | Flips it |
+| `Slider` | Arrow keys | Steps the value, up to its `min` and `max` |
+| `RadioButton` | Arrow keys | Selects the neighbour in its group |
+| `TextField` | Space types a space; Enter submits | Nothing else is pressed |
+
+Focus draws nothing by itself. Style it with `on focused`, as in
+`style { on focused { border: 0xB69DF8, border_width: 2 } }`, and a control that does
+not shows no ring. `examples/keyboard_focus` does, and
+`byard shot crates/byard-cli/examples/keyboard_focus --key Tab --key Space -o after.png`
+draws it with the first button focused and pressed.
 
 ## Disabled, focused, invalid
 

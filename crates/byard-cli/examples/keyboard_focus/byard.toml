@@ -1,0 +1,7 @@
+[project]
+name = "keyboard_focus"
+entry = "src/main.byd"
+
+# Text in a declared font so the picture is the same on every machine.
+[assets.fonts]
+body = "../assets/fonts/Manrope-Variable.ttf"

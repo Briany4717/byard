@@ -44,8 +44,19 @@ pub use byard_core::ByardError;
 pub use byard_core::bridge;
 
 /// Marks a Rust struct as a byard controller (field metadata) and, on its `impl`
-/// block, generates the async-method dispatch shim (`impl Controller`).
+/// block, generates the method dispatch shim (`impl Controller`) for every
+/// method that takes `&self`, `async` or not.
 pub use byard_macro::byard_controller;
+
+/// Derives for a struct that crosses the controller boundary as a record:
+/// [`FromHostValue`] (the argument side), [`IntoHostValue`] (the reply side) and
+/// [`HostValue`], both. They share their names with the traits in
+/// [`bridge`], which they implement.
+///
+/// [`FromHostValue`]: byard_macro::FromHostValue
+/// [`IntoHostValue`]: byard_macro::IntoHostValue
+/// [`HostValue`]: byard_macro::HostValue
+pub use byard_macro::{FromHostValue, HostValue, IntoHostValue};
 
 /// The accessibility tree (RFC-0042): the roles a native view can declare with
 /// `#[native_view(role = "…")]`.

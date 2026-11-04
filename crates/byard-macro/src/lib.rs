@@ -10,8 +10,12 @@
 //!   make the struct callable, that is the impl-block form below.
 //! - **On an `impl` block** it emits the block unchanged plus
 //!   `impl ::byard::bridge::Controller`: a `type_name` and an `invoke` that
-//!   dispatches each `async fn` by name, converting arguments from `HostValue`,
-//!   awaiting the method, and mapping `Ok`/`Err` back to `HostValue`.
+//!   dispatches each method taking `&self`, `async` or not, by name,
+//!   converting arguments from `HostValue`, running the method on the pool, and
+//!   mapping `Ok`/`Err` back to `HostValue`.
+//!
+//! `#[derive(FromHostValue, IntoHostValue)]` (or `#[derive(HostValue)]`, both)
+//! lets a struct with named fields cross the boundary as a record.
 //!
 //! The generated code references only `::byard::bridge::*` from the *app* crate's
 //! dependency graph, so `byard-macro` keeps **no** dependency on
@@ -20,9 +24,48 @@
 
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{Fields, Item, ReturnType, Type, parse_macro_input};
+use syn::{DeriveInput, Fields, Item, ReturnType, Type, parse_macro_input};
 
+mod host_value;
 mod native_view;
+
+/// Derives `::byard::bridge::FromHostValue` for a struct with named fields: a
+/// `HostValue::Record` becomes the struct, each field read by name through its
+/// own type's `from_host`. A field the record lacks, or a value that is not a
+/// record, gives the field what its type makes of nothing (`0`, `""`, `None`),
+/// as the conversions written by hand do. `#[host(rename = "…")]` on a field
+/// names it differently in the record. Enums and tuple structs are a compile
+/// error.
+#[proc_macro_derive(FromHostValue, attributes(host))]
+pub fn derive_from_host_value(input: TokenStream) -> TokenStream {
+    derive(input, host_value::from_host_value)
+}
+
+/// Derives `::byard::bridge::IntoHostValue` for a struct with named fields: it
+/// becomes a `HostValue::Record` with a key per field, in declaration order.
+/// See [`FromHostValue`](macro@FromHostValue) for `#[host(rename = "…")]` and
+/// for what is refused.
+#[proc_macro_derive(IntoHostValue, attributes(host))]
+pub fn derive_into_host_value(input: TokenStream) -> TokenStream {
+    derive(input, host_value::into_host_value)
+}
+
+/// Derives both `FromHostValue` and `IntoHostValue`, which is what RFC-0028
+/// and RFC-0029 call `#[derive(HostValue)]`.
+#[proc_macro_derive(HostValue, attributes(host))]
+pub fn derive_host_value(input: TokenStream) -> TokenStream {
+    derive(input, host_value::host_value)
+}
+
+fn derive(
+    input: TokenStream,
+    expand: fn(&DeriveInput) -> syn::Result<proc_macro2::TokenStream>,
+) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    expand(&input)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
 
 /// Marks a Rust struct as a native view (RFC-0039): a package-authored widget
 /// that draws, measures and handles events like an intrinsic.
@@ -57,13 +100,13 @@ pub fn native_view(attr: TokenStream, item: TokenStream) -> TokenStream {
 /// Marks a Rust struct, or its `impl` block, as a byard controller (RFC-0028
 /// §2). See the crate docs for the two forms. On a struct it emits
 /// `BYARD_FIELDS` + `byard_field_type`; on an `impl` block it emits
-/// `impl Controller` dispatching the block's `async fn`s.
+/// `impl Controller` dispatching the block's methods that take `&self`.
 #[proc_macro_attribute]
 pub fn byard_controller(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let parsed = parse_macro_input!(item as Item);
     match parsed {
         Item::Struct(s) => expand_struct(&Item::Struct(s)),
-        Item::Impl(i) => expand_impl(&i),
+        Item::Impl(i) => expand_impl(&i).into(),
         other => syn::Error::new_spanned(
             other,
             "#[byard_controller] applies to a struct or an `impl` block",
@@ -123,21 +166,94 @@ fn expand_struct(item: &Item) -> TokenStream {
     TokenStream::from(expanded)
 }
 
+/// What a function of a `#[byard_controller] impl` is to the macro.
+enum Method {
+    /// A controller method: a view can call it by name.
+    Call,
+    /// An ordinary associated function (`fn new() -> Self`, `fn with(self, …)`),
+    /// left as written.
+    Other,
+}
+
+/// Decides what `f` is, or why it cannot be either.
+///
+/// A method takes `&self`, `async` or not. A controller is cloned for each
+/// call, so a method that needs `&mut self` could only change a copy that is
+/// then dropped: that is refused rather than left to fail at run time with
+/// "unknown controller method". An `async fn` is plainly meant to be a method,
+/// so one that cannot be (no receiver, `self` by value) is refused too. A
+/// synchronous function that is not a method is a constructor or a helper, and
+/// stays what it is.
+fn classify(f: &syn::ImplItemFn) -> syn::Result<Method> {
+    let name = &f.sig.ident;
+    let is_async = f.sig.asyncness.is_some();
+    match f.sig.receiver() {
+        Some(r) if r.reference.is_some() && r.mutability.is_none() => {
+            if f.sig
+                .generics
+                .params
+                .iter()
+                .any(|p| !matches!(p, syn::GenericParam::Lifetime(_)))
+            {
+                return Err(syn::Error::new_spanned(
+                    &f.sig.generics,
+                    format!(
+                        "the controller method `{name}` cannot be generic: a view calls it with \
+                         values, and a value has one type"
+                    ),
+                ));
+            }
+            Ok(Method::Call)
+        }
+        Some(r) if r.reference.is_some() => Err(syn::Error::new_spanned(
+            r,
+            format!(
+                "the controller method `{name}` takes `&mut self`, and a controller method \
+                 cannot: each call runs on its own copy of the controller, so a change to it \
+                 would be lost\n\
+                 help: take `&self` and keep what must change behind an `Arc<Mutex<…>>`, or \
+                 move `{name}` to an `impl` block that is not `#[byard_controller]`"
+            ),
+        )),
+        _ if is_async => Err(syn::Error::new_spanned(
+            name,
+            format!(
+                "`{name}` is `async` but does not take `&self`, so a view cannot call it: a \
+                 controller method is `async fn {name}(&self, …)`\n\
+                 help: make it a method, or drop `async` if it is a helper"
+            ),
+        )),
+        _ => Ok(Method::Other),
+    }
+}
+
 /// Emits an `impl` block unchanged plus `impl Controller` dispatching its
-/// `async fn`s by name (RFC-0028 §2). Each method's arguments are converted from
-/// `HostValue` via `FromHostValue`, the method is awaited on a clone of `self`
-/// (so the reply future is `'static`), and its `Ok`/`Err` map back through
-/// `IntoHostValue`.
-fn expand_impl(input: &syn::ItemImpl) -> TokenStream {
+/// methods by name (RFC-0028 §2). Each method's arguments are converted from
+/// `HostValue` via `FromHostValue`, the method runs on a clone of `self` (so
+/// the reply future is `'static`), and its `Ok`/`Err` map back through
+/// `IntoHostValue`. A synchronous method is called when the future is first
+/// polled, which is on the pool and not on the logic thread.
+fn expand_impl(input: &syn::ItemImpl) -> proc_macro2::TokenStream {
     let self_ty = &input.self_ty;
 
-    // One match arm per `async fn` method.
+    // One match arm per method; what cannot be one is an error, reported
+    // beside the untouched impl so nothing else of the person's code is lost.
     let mut arms = Vec::new();
+    let mut errors: Option<syn::Error> = None;
     for item in &input.items {
         let syn::ImplItem::Fn(f) = item else { continue };
-        if f.sig.asyncness.is_none() {
-            continue;
+        match classify(f) {
+            Ok(Method::Call) => {}
+            Ok(Method::Other) => continue,
+            Err(e) => {
+                match &mut errors {
+                    Some(all) => all.combine(e),
+                    None => errors = Some(e),
+                }
+                continue;
+            }
         }
+        let is_async = f.sig.asyncness.is_some();
         let ident = &f.sig.ident;
         let name_str = ident.to_string();
 
@@ -161,12 +277,18 @@ fn expand_impl(input: &syn::ItemImpl) -> TokenStream {
             arg_index += 1;
         }
 
+        let call_expr = if is_async {
+            quote! { __this.#ident(#(#call_args),*).await }
+        } else {
+            quote! { __this.#ident(#(#call_args),*) }
+        };
+
         // A `-> Result<T, E>` maps ok/err separately; any other return type is
         // treated as an infallible success.
         let returns_result = matches!(&f.sig.output, ReturnType::Type(_, ty) if is_result(ty));
         let dispatch = if returns_result {
             quote! {
-                match __this.#ident(#(#call_args),*).await {
+                match #call_expr {
                     ::core::result::Result::Ok(__v) =>
                         ::core::result::Result::Ok(::byard::bridge::IntoHostValue::into_host(__v)),
                     ::core::result::Result::Err(__e) =>
@@ -176,7 +298,7 @@ fn expand_impl(input: &syn::ItemImpl) -> TokenStream {
         } else {
             quote! {
                 ::core::result::Result::Ok(
-                    ::byard::bridge::IntoHostValue::into_host(__this.#ident(#(#call_args),*).await)
+                    ::byard::bridge::IntoHostValue::into_host(#call_expr)
                 )
             }
         };
@@ -191,7 +313,9 @@ fn expand_impl(input: &syn::ItemImpl) -> TokenStream {
         });
     }
 
-    let expanded = quote! {
+    let errors = errors.map(syn::Error::into_compile_error);
+    quote! {
+        #errors
         // A controller method is `async` because the boundary is async, not
         // because its body awaits: a method that computes its answer outright
         // is perfectly ordinary and the shim still has to hand back a future.
@@ -226,8 +350,7 @@ fn expand_impl(input: &syn::ItemImpl) -> TokenStream {
                 }
             }
         }
-    };
-    TokenStream::from(expanded)
+    }
 }
 
 /// Whether a return type is syntactically a `Result<…>` (so `invoke` maps its
@@ -253,5 +376,94 @@ fn byld_type_name(ty: &Type) -> String {
         Some("String" | "str") => "Str".to_string(),
         Some(other) => other.to_string(),
         None => "Unknown".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use syn::parse_quote;
+
+    fn expansion(item: &syn::ItemImpl) -> String {
+        expand_impl(item).to_string()
+    }
+
+    #[test]
+    fn a_synchronous_method_taking_ref_self_is_dispatched() {
+        let item: syn::ItemImpl = parse_quote! {
+            impl Calc {
+                fn double(&self, n: i64) -> i64 { n * 2 }
+            }
+        };
+        let text = expansion(&item);
+        assert!(text.contains("\"double\" =>"), "{text}");
+        assert!(!text.contains(". await"), "{text}");
+        assert!(!text.contains("compile_error"), "{text}");
+    }
+
+    #[test]
+    fn an_async_method_is_awaited() {
+        let item: syn::ItemImpl = parse_quote! {
+            impl Calc { async fn slow(&self) -> i64 { 1 } }
+        };
+        assert!(expansion(&item).contains(". await"));
+    }
+
+    #[test]
+    fn constructors_and_builders_are_left_alone() {
+        let item: syn::ItemImpl = parse_quote! {
+            impl Calc {
+                fn new() -> Self { Calc }
+                fn with_base(self, base: i64) -> Self { self }
+                fn helper(&self) -> i64 { 1 }
+            }
+        };
+        let text = expansion(&item);
+        assert!(!text.contains("compile_error"), "{text}");
+        assert!(!text.contains("\"new\""), "{text}");
+        assert!(!text.contains("\"with_base\""), "{text}");
+        assert!(text.contains("\"helper\""), "{text}");
+    }
+
+    fn refusal(item: &syn::ItemImpl) -> String {
+        let text = expansion(item);
+        assert!(text.contains("compile_error"), "should refuse: {text}");
+        text
+    }
+
+    #[test]
+    fn a_mutable_receiver_is_refused_and_says_why() {
+        let text = refusal(&parse_quote! { impl C { fn bump(&mut self) {} } });
+        assert!(text.contains("takes `&mut self`"), "{text}");
+        assert!(text.contains("Arc<Mutex"), "{text}");
+        let text = refusal(&parse_quote! { impl C { async fn bump(&mut self) {} } });
+        assert!(text.contains("takes `&mut self`"), "{text}");
+    }
+
+    #[test]
+    fn an_async_function_that_is_not_a_method_is_refused() {
+        let text = refusal(&parse_quote! { impl C { async fn make() -> i64 { 1 } } });
+        assert!(text.contains("does not take `&self`"), "{text}");
+        let text = refusal(&parse_quote! { impl C { async fn eat(self) {} } });
+        assert!(text.contains("does not take `&self`"), "{text}");
+    }
+
+    #[test]
+    fn a_generic_method_is_refused() {
+        let text = refusal(&parse_quote! { impl C { fn id<T>(&self, t: T) -> T { t } } });
+        assert!(text.contains("cannot be generic"), "{text}");
+    }
+
+    #[test]
+    fn every_problem_is_reported_and_the_impl_is_kept() {
+        let text = refusal(&parse_quote! {
+            impl C {
+                fn a(&mut self) {}
+                async fn b() {}
+            }
+        });
+        assert!(text.matches("compile_error").count() >= 2, "{text}");
+        // The person's code is still there for the compiler's other messages.
+        assert!(text.contains("fn a (& mut self)"), "{text}");
     }
 }

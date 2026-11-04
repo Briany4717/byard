@@ -12,6 +12,42 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Images stop piling up in video memory.** The texture cache kept every
+  decoded image for the life of the app, so a gallery, a feed or a list of
+  avatars grew VRAM without a limit. It now holds up to 128 MiB of decoded
+  pixels (`EncoderSubsystem::set_texture_budget` changes it), and past that
+  drops the ones no frame has drawn for half a second, least recently drawn
+  first. An image drawn this frame is never dropped, so a screen that shows
+  more than the budget goes over it rather than decoding the same pictures
+  again every frame; it comes back under when the view moves on. A decode in
+  flight and a hot reload are never cut off, and an app that stays under the
+  budget pays one comparison per frame. `EncoderSubsystem::texture_cache_bytes`
+  reports what is held.
+  
+- **A frosted pane creates no bind groups on a steady frame.** Every
+  `backdrop` pane built three bind groups, one for each blur pass and one for
+  the composite, on every frame it was drawn. They now live with the pane's
+  scratch textures and are rebuilt only when those are recreated (the pane
+  changed size or the surface format changed) or the instance arena replaced
+  its buffer, so a pane that sits still, moves, or shifts inside the arena
+  because something drawn before it changed costs none. The blur parameters
+  are picked by dynamic offset for this reason. A path `clip` whose outline
+  animates likewise stops creating its three buffers and bind group each frame:
+  it keeps them and writes into them, growing only when a frame needs more than
+  it has held. Pixels are unchanged; `EncoderSubsystem::backdrop_bind_groups_created`
+  and `clip_mask_gpu_creations` count what is left.
+  
+- **Handing the layout to the encoder costs one pass, and allocates nothing.**
+  `LayoutAtlas::populate_frame` found each node's position by climbing its
+  parent chain to the root, and cloned each node's child list on the way down;
+  the hit-test grid rebuilt after every layout did the same. Both now walk the
+  tree once, passing each node's position to its children, and the interpreter's
+  path (`populate_frame_dirty`) reuses its buffers and tracks dirty nodes in a
+  flat list instead of a hash set. On a 3,906-node tree the call goes from about
+  470 us to 165 us and from 787 heap allocations to none; on 8,191 nodes in a
+  12-deep tree, from 1.6 ms to 0.29 ms. The rectangles are the same ones, to the
+  bit: a test holds every node of an irregular tree to the old answer.
+
 - **Every app's window now carries its own id, so its window class changes.**
   Wayland's `app_id` and X11's `WM_CLASS` were `dev.byard.Byard` for every
   Byard app, so a compositor grouped them as one application, a taskbar could
@@ -124,6 +160,32 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   transfer function is a second chance to spend a release displaying every
   colour lighter than it was written.
 
+- **A text appearing or disappearing no longer re-shapes every text in the
+  window.** The glyph cache was compared line by line only while the number of
+  texts stayed the same, so adding one line to a list, or opening and closing
+  the dev HUD, shaped every line of the window again (eight lines plus one
+  appended: nine shaped, now one; the HUD opening on eight app lines: 29, now
+  its own 21; the HUD closing: 8, now none). A line is kept whenever what it
+  is made from (text, size, wrap, weight, family) still matches the buffer at
+  its place, and the buffers a shrinking window gives up are kept, up to 256,
+  for the next one that opens. A frame whose text count changed is still
+  redrawn in full, as its redraw region is tracked by position. The seven
+  lists of last-frame bounds the encoder keeps are refilled instead of
+  collected anew, seven allocations fewer on every frame.
+  
+- **Measuring a text that was measured before allocates nothing, and the
+  cache has a ceiling.** Layout asks for the size of every `Text` and `Button`
+  on every tick, and each ask built a `String` and an `Arc<str>` for its cache
+  key before finding the answer it had. The key is borrowed now: a hit hashes
+  the string and compares it, with no heap allocation (a test counts them), and
+  takes about 80 ns where it took about 490 ns; a screen of 200 labels measured
+  again each tick went from about 109 us to about 12 us. The cache kept every
+  string it was ever asked about, so a clock, a counter or a download's progress
+  line grew it for as long as the app ran; it now holds at most 4,096 answers
+  and drops the half used least recently when it is full. A string that is
+  new each time shapes through one reused `cosmic-text` buffer instead of
+  building one, and the measurements come out bit for bit as before.
+
 ### Added
 
 - **The language server checks a file in the context of its project.** It parsed
@@ -152,6 +214,53 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   operator, a ternary, an assignment, a lambda, an `if`, a record, an index, a
   controller call's arms or a `style { … }` value was left plain; the angle
   literal and top-level function bodies were too.
+- **A struct crosses the controller boundary as a record, with a derive.**
+  `#[derive(FromHostValue)]`, `#[derive(IntoHostValue)]` and
+  `#[derive(HostValue)]` (both, the name RFC-0028 and RFC-0029 gave it) turn a
+  struct with named fields into a `HostValue::Record` and back, so a controller
+  takes and returns `Customer` instead of building records by hand. Structs
+  nest, and `Vec<T>`, `Option<T>` and generic structs work; a missing or
+  misshapen field takes its type's empty value, as the hand-written conversions
+  do; `#[host(rename = "…")]` renames a field in the record. An enum, a tuple
+  struct or a union is a compile error that says what to do instead.
+  `Option<T>` now converts too (`Unit` is `None`), and a type that cannot
+  cross says so by name and points at the derive.
+
+- **A synchronous method of a controller is a controller method.**
+  `#[byard_controller] impl` dispatched only `async fn`s, and skipped every
+  other function without a word, so a view calling one failed at run time with
+  "unknown controller method". Every method taking `&self` is now exposed,
+  `async` or not. A method taking `&mut self` (its change would be made on a
+  copy and lost), a generic method, and an `async fn` that cannot be called
+  (no `&self`) are compile errors with the reason; `fn new() -> Self` and
+  other functions that are not methods are left as they are.
+  
+- **The `%` operator, and the text methods an app needs.** `%` is the
+  remainder, binding like `*` and `/`: `7 % 3` is `1`, `-7 % 3` is `-1` (the
+  sign of the left side, as in Rust) and `n % 0` is `0`, as `n / 0` is. Text
+  gains `trim`, `toLower`, `toUpper`, `contains`, `startsWith`, `endsWith`,
+  `replace`, `split` and `indexOf`, and lists `reverse` and `join`, all pure and
+  all known to the checker, so a search box that ignores case is
+  `names.filter(|n| n.toLower().contains(query.trim().toLower()))` and a misspelt
+  one is an `UnknownMethod` with the closest name. `contains` on text used to be
+  reported as a method text does not have. `10%3` with no spaces is a remainder
+  too: a percent literal is one only before a `:`, in a keyframe step, and
+  `byard fmt` writes `10 % 3`. RFC-0047 has the rules, down to what
+  `split("")` and `"ß".toUpper()` give. `examples/text_methods` shows them
+  (`byard shot crates/byard-cli/examples/text_methods`).
+  
+- **A `Button`, a `Toggle` and a `Slider` take keyboard focus.** Only a text
+  field, a checkbox and a radio button were in the Tab order, so a person on a
+  keyboard could not reach a button at all (#347). Now Tab walks them in the
+  order they are written and Shift+Tab walks back; Space or Enter presses a
+  focused button or flips a focused toggle, once however long the key is held,
+  and the arrow keys step a focused slider by its `step` (a tenth of the range
+  without one). A disabled control is skipped by Tab and by a click, and a
+  button with no action is not a stop. Space also reaches the controls from a
+  real keyboard now: it arrived only as typed text, never as the key, so a
+  focused checkbox did not flip. In the accessibility example the three gain
+  `[focusable]`. Focus draws nothing on its own; `on focused` styles it, and
+  `examples/keyboard_focus` shows the ring.
 
 - **A user guide, and a test that keeps its samples honest.** Byard had a README
   and forty design documents written for the people building it, and nothing for
@@ -589,6 +698,46 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   looked for "unknown property" in a message that says "unknown attribute", so
   it never showed; it follows the diagnostic's code now, and removes the comma
   with the attribute (`#[gap: 4, bogus: 1]` becomes `#[gap: 4]`).
+  
+- **A controller argument that is left out is an empty string, not "Unit".**
+  `String::from_host(HostValue::Unit)` gave the text `Unit`, so a view that
+  called `greet()` without its argument greeted "Unit". It is `""`, as the
+  guide always said and as a number is `0`.
+  
+- **A focusable control no longer adds a signal every frame.** A checkbox, a
+  radio button or a text field with no `focused:` made a signal of its own each
+  time it was drawn, and nothing freed them, so the signal table grew with
+  every frame of a window that had one. They share a single signal now, which
+  nothing reads: focus is drawn from the router, not from that signal.
+  
+- **A screen that is popped, a list that shrinks and a frame that is drawn give
+  their reactive scopes back.** Nothing retired a scope, so the table of them
+  only grew. Each visit to a route lowered its screen into scopes (and, for a
+  `when`, a `for` or a `NavStack` in it, pools that kept a copy of their
+  branches), and popping the route threw the screen away and kept all of that:
+  100 visits to a screen of nine scopes left 900 behind. A handler that calls a
+  `fn` is lowered again every frame, and each call opened a scope for its
+  argument that nothing closed: 1,000 frames of an idle window, 1,000 scopes.
+  And a `for` that shrank from 1,000 rows to one still held 1,000 lowered
+  bodies and the 1,000 records behind them. Now a popped screen's scopes, pools
+  and lifecycle effects are released once its `on unmount` has run, the
+  arguments a frame's handlers opened go with the next frame's handlers (kept
+  while a controller call raised from them is waiting for its reply, which may
+  read them), a pool that is left more than four times larger than its list
+  keeps twice that many bodies, and a row that leaves lets go of its value at
+  once. Those runs now end at 2 scopes live, 3 slots in the table, and 33
+  scopes with 32 bodies kept. A scope's slot is reused, and an id that outlived its scope names nothing
+  rather than the scope that took its place. Signals are still never freed:
+  `var`s declared inside a screen leave theirs behind.
+  
+- **A hot reload keeps every `var` when a `let` is added, removed or moved.**
+  A `let` was part of what a reload compared, so adding one derived value
+  (`let doubled = count * 2`) counted as a change to the view's state and
+  reset every `var` in it. A `let` or `fn` holds no state of its own, so it no
+  longer counts, and neither does the order the `var`s are written in. A
+  `var` that appears or disappears still resets the view, and so does one
+  whose written type changes (`Int` to `Str`), which used to keep a value of
+  the old type.
 
 - **A text at size 0 takes no room instead of crashing.** `Text("x")
   #[size: 0]`, or a size bound to a `var` that holds 0 or springs through it,

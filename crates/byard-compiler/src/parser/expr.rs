@@ -544,8 +544,8 @@ impl Parser<'_> {
                 right: 19,
             }),
             // Binary arithmetic (RFC-0020 enabler): standard precedence,
-            // `* /` over `+ -`, both left-associative (`right = left + 1`).
-            Token::Star | Token::Slash => Some(Bp {
+            // `* / %` over `+ -`, both left-associative (`right = left + 1`).
+            Token::Star | Token::Slash | Token::Percent => Some(Bp {
                 left: 15,
                 right: 16,
             }),
@@ -660,6 +660,7 @@ impl Parser<'_> {
                 | Token::Minus
                 | Token::Star
                 | Token::Slash
+                | Token::Percent
                 | Token::EqEq
                 | Token::BangEq
                 | Token::Lt
@@ -675,6 +676,7 @@ impl Parser<'_> {
                     Token::Minus => BinOp::Sub,
                     Token::Star => BinOp::Mul,
                     Token::Slash => BinOp::Div,
+                    Token::Percent => BinOp::Rem,
                     Token::EqEq => BinOp::Eq,
                     Token::BangEq => BinOp::Ne,
                     Token::Lt => BinOp::Lt,

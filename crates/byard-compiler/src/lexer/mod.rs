@@ -172,9 +172,14 @@ pub enum Token {
     DurationLit(u32),
     /// A percentage literal (RFC-0025 §4: `anim.keyframes(0%: …, 50%: …)`),
     /// canonicalized at lex time to the **fraction** `0.5`, again the
-    /// [`Token::AngleLit`] precedent (a pure, infallible unit transform). `%` is
-    /// not an operator in `byld`, so the suffix is unambiguous. Listed before
-    /// the plain number rules for longest-match.
+    /// [`Token::AngleLit`] precedent (a pure, infallible unit transform). Listed
+    /// before the plain number rules for longest-match.
+    ///
+    /// `%` is also the remainder operator (RFC-0047), so longest-match alone
+    /// would read `10%3` as this literal and a stray `3`. [`lex`] settles it: a
+    /// percent literal only stays one when a `:` follows, the only place the
+    /// grammar takes one; anywhere else it is split back into the number and a
+    /// [`Token::Percent`].
     #[regex(r"[0-9]+(\.[0-9]+)?%", |lex| {
         let s = lex.slice();
         s[..s.len() - 1].parse::<f64>().ok().map(|p| p / 100.0)
@@ -306,6 +311,10 @@ pub enum Token {
     /// over two `/` tokens through the skip rule's longest match.
     #[token("/")]
     Slash,
+    /// `%`, binary remainder (RFC-0047), binding like [`Token::Star`] and
+    /// [`Token::Slash`].
+    #[token("%")]
+    Percent,
     /// `==`, equality comparison (RFC-0027 §1). Longest-match keeps this
     /// distinct from a single `=` (assignment).
     #[token("==")]
@@ -445,10 +454,15 @@ pub fn lex(source: &str) -> LexedFile {
 pub(crate) fn lex_remapped(source: &str, remap: impl Fn(Span) -> Span) -> LexedFile {
     let mut lexer = Token::lexer(source);
     let mut out = LexedFile::default();
+    // The source range of each token, for splitting a percent literal below.
+    let mut raw: Vec<std::ops::Range<usize>> = Vec::new();
     while let Some(result) = lexer.next() {
         let span = remap(lexer.span().into());
         match result {
-            Ok(token) => out.tokens.push((token, span)),
+            Ok(token) => {
+                out.tokens.push((token, span));
+                raw.push(lexer.span());
+            }
             Err(err) => out.errors.push(match err {
                 LexError::StringNestingTooDeep => CompileError::StringNestingTooDeep { span },
                 LexError::UnterminatedString => CompileError::UnterminatedString { span },
@@ -456,7 +470,63 @@ pub(crate) fn lex_remapped(source: &str, remap: impl Fn(Span) -> Span) -> LexedF
             }),
         }
     }
+    split_unkeyed_percents(&mut out.tokens, &raw, source, &remap);
     out
+}
+
+/// The number a percent literal was written from, and where its `%` is, when
+/// the literal is to be read as a remainder instead (RFC-0047 §4). `None` for a
+/// number too large to read back, which is then left as the literal it lexed as.
+pub(crate) fn percent_halves(
+    source: &str,
+    range: &std::ops::Range<usize>,
+) -> Option<(Token, std::ops::Range<usize>, std::ops::Range<usize>)> {
+    let digits = &source[range.start..range.end - 1];
+    let number = if digits.contains('.') {
+        Token::FloatLit(digits.parse::<f64>().ok()?)
+    } else {
+        Token::IntLit(digits.parse::<i64>().ok()?)
+    };
+    Some((number, range.start..range.end - 1, range.end - 1..range.end))
+}
+
+/// Turns every percent literal not followed by `:` back into the number it was
+/// written from and a [`Token::Percent`] (RFC-0047 §4), so `10%3` is a
+/// remainder and `0%: 0, 50%: 1` stays a pair of keyframe steps.
+fn split_unkeyed_percents(
+    tokens: &mut Vec<SpannedToken>,
+    raw: &[std::ops::Range<usize>],
+    source: &str,
+    remap: &impl Fn(Span) -> Span,
+) {
+    if !tokens
+        .iter()
+        .any(|(t, _)| matches!(t, Token::PercentLit(_)))
+    {
+        return;
+    }
+    let old = std::mem::take(tokens);
+    tokens.reserve(old.len() + 2);
+    for (i, (token, span)) in old.iter().enumerate() {
+        let keyed = matches!(old.get(i + 1), Some((Token::Colon, _)));
+        let halves = if matches!(token, Token::PercentLit(_)) && !keyed {
+            percent_halves(source, &raw[i])
+        } else {
+            None
+        };
+        let Some((number, digits, percent)) = halves else {
+            tokens.push((token.clone(), *span));
+            continue;
+        };
+        let cut = |r: std::ops::Range<usize>| {
+            remap(Span::new(
+                u32::try_from(r.start).unwrap_or(u32::MAX),
+                u32::try_from(r.end).unwrap_or(u32::MAX),
+            ))
+        };
+        tokens.push((number, cut(digits)));
+        tokens.push((Token::Percent, cut(percent)));
+    }
 }
 
 #[cfg(test)]
@@ -690,5 +760,50 @@ mod tests {
         ] {
             let _ = lex(junk); // must not panic; errors are fine
         }
+    }
+
+    #[test]
+    fn a_percent_literal_is_only_one_before_a_colon() {
+        // Keyframe steps keep their literal, however they are spaced.
+        assert_eq!(
+            kinds("0%: 1, 50% : 2"),
+            vec![
+                Token::PercentLit(0.0),
+                Token::Colon,
+                Token::IntLit(1),
+                Token::Comma,
+                Token::PercentLit(0.5),
+                Token::Colon,
+                Token::IntLit(2),
+            ]
+        );
+        // Anywhere else `N%` is the number and the remainder operator.
+        assert_eq!(
+            kinds("10%3"),
+            vec![Token::IntLit(10), Token::Percent, Token::IntLit(3)]
+        );
+        assert_eq!(
+            kinds("1.5%2 x%3 (a)%b"),
+            vec![
+                Token::FloatLit(1.5),
+                Token::Percent,
+                Token::IntLit(2),
+                Token::Ident(Symbol::intern("x")),
+                Token::Percent,
+                Token::IntLit(3),
+                Token::LParen,
+                Token::Ident(Symbol::intern("a")),
+                Token::RParen,
+                Token::Percent,
+                Token::Ident(Symbol::intern("b")),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_halves_of_a_split_percent_keep_their_own_spans() {
+        let lexed = lex("a = 10%3");
+        let spans: Vec<(u32, u32)> = lexed.tokens.iter().map(|(_, s)| (s.start, s.end)).collect();
+        assert_eq!(spans, [(0, 1), (2, 3), (4, 6), (6, 7), (7, 8)]);
     }
 }

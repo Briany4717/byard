@@ -1,0 +1,58 @@
+// RFC-0047, the text methods and the remainder operator.
+//
+// Run it (from the repo root):
+//   cargo run -p byard-cli -- shot crates/byard-cli/examples/text_methods -o text_methods.png
+// or, with no GPU, read what it says:
+//   cargo run -p byard-cli -- shot crates/byard-cli/examples/text_methods --a11y tree.txt
+// `tests/it/text_methods_example.rs` runs the second and compares the lines
+// below with what each one is written to show.
+//
+// What to look for, top to bottom:
+//   1. The search box holds "  ADA " and the list is filtered by it: the query
+//      is trimmed and lower-cased, and so is each name before `contains`.
+//      "Édith Piaf" is lowered too (full Unicode case mapping), and "Ada" is the
+//      only match.
+//   2. `split(" ")` then `reverse()` then `join(" ")` reverses the words.
+//   3. `replace` swaps every dash, and `indexOf` counts characters: the "l" of
+//      "héllo" is at 2, not 3.
+//   4. `%` is a remainder: 7 % 3 is 1, -7 % 3 is -1 (the sign of the left side),
+//      10%3 (no spaces) is also 1, and 5 % 0 is 0, as 5 / 0 is.
+//   5. "ß".toUpper() is "SS": the length changes.
+View Main() {
+    var query = "  ADA "
+    var names = ["Ada Lovelace", "Alan Turing", "Grace Hopper", "Édith Piaf"]
+    var seven = 7
+    var zero = 0
+    let wanted = query.trim().toLower()
+    let shown = names.filter(|n| n.toLower().contains(wanted))
+
+    Column #[bg: 0x14141C, p: 24, gap: 12, width: 400, grow: 1] {
+        Text("RFC-0047") #[font: body, color: 0xE6E1E5, size: 20, width: 352]
+        TextField #[bind: query, font: body, width: 352, height: 36, bg: 0x20202C]
+        Text("matches: {shown.join(", ")}") #[font: body, color: 0xCAC4D0, size: 16, width: 352]
+        Text("words: {"to be or not".split(" ").reverse().join(" ")}") #[
+            font: body,
+            color: 0xCAC4D0,
+            size: 16,
+            width: 352,
+        ]
+        Text("{"a-b-c".replace("-", "+")} {"héllo".indexOf("l")} {"héllo".split("").len}") #[
+            font: body,
+            color: 0xCAC4D0,
+            size: 16,
+            width: 352,
+        ]
+        Text("{seven % 3} {-7 % 3} {10%3} {5 % zero}") #[
+            font: body,
+            color: 0xCAC4D0,
+            size: 16,
+            width: 352,
+        ]
+        Text("{"ß".toUpper()} {"hello".startsWith("he")} {"hello".endsWith("he")}") #[
+            font: body,
+            color: 0xCAC4D0,
+            size: 16,
+            width: 352,
+        ]
+    }
+}

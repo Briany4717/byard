@@ -61,7 +61,7 @@ From the loosest to the tightest:
 | `==` `!=` `<` `<=` `>` `>=` | Comparison |
 | `??` | The left value, or the right one if the left has none |
 | `+` `-` | Add, subtract |
-| `*` `/` | Multiply, divide |
+| `*` `/` `%` | Multiply, divide, remainder |
 | `!` `-` | Not, negate |
 | `++` `--` | Add or subtract one, in actions only |
 | `.` `[ ]` `( )` | Field, index, call |
@@ -72,6 +72,13 @@ depend on the left: `xs.len > 0 && xs[0] > 5`.
 Arithmetic on two `Int`s gives an `Int`, so `7 / 2` is `3`. Make one side a
 `Float` for a fraction: `7 / 2.0` is `3.5`. Dividing by zero gives `0` and does
 not stop the app.
+
+`%` is the remainder, and is good for wrapping a counter or striping a list:
+`7 % 3` is `1`, `7.5 % 2` is `1.5`, and `n % 2 == 0` is true for even `n`. The
+result takes the sign of the left side, so `-7 % 3` is `-1`; for a result that is
+never negative write `(n % 7 + 7) % 7`. A remainder by zero is `0`, as a division
+by zero is. Spaces are optional: `10%3` is `1`. (A number followed by `%` and a
+`:` is a keyframe step instead, see [motion](motion.md).)
 
 `+` also joins text and appends lists. A number next to text becomes its digits:
 
@@ -123,6 +130,8 @@ follow, because the write is what the engine sees.
 |--------|--------|
 | `push(x)` | The list with `x` added at the end |
 | `removeAt(i)` | The list without the item at `i` |
+| `reverse()` | The list backwards |
+| `join(sep)` | One text: each item as `"{x}"` shows it, with `sep` between |
 | `contains(x)` | `true` if `x` is in it |
 | `indexOf(x)` | Its position, or `-1` |
 | `slice(from, to)` | The items from `from` up to, not including, `to` |
@@ -264,7 +273,33 @@ and [events and actions](events-and-actions.md).
 
 ## Text methods
 
-Text has `len`, `slice`, and two helpers for the two jobs that come up most.
+Text has `len`, `slice`, the methods below, and two helpers for the two jobs that
+come up most.
+
+| Method | Result |
+|--------|--------|
+| `trim()` | The text without white space at either end |
+| `toLower()`, `toUpper()` | The text in lower or upper case |
+| `contains(t)` | `true` if `t` is somewhere in it |
+| `startsWith(t)`, `endsWith(t)` | `true` if it begins or ends with `t` |
+| `replace(a, b)` | Every `a` replaced by `b` |
+| `split(sep)` | The pieces between each `sep`, as a list |
+| `indexOf(t)` | Where `t` first appears, counted in characters, or `-1` |
+
+```byld,fragment
+var query = "  Ada "
+let wanted = query.trim().toLower()
+Text("{["Ada Lovelace", "Alan Turing"].filter(|n| n.toLower().contains(wanted)).join(", ")}")
+Text("{"a,,b".split(",").len} {"héllo".indexOf("l")} {"Straße".toUpper()}")
+```
+
+The first shows `Ada Lovelace`; the second `3 2 STRASSE`. Case follows Unicode, in
+no locale, so the result can be longer than the text it came from. They compare
+characters exactly: there is no case folding, which is why the search above
+lowers both sides. `contains("")`, `startsWith("")` and `endsWith("")` are
+`true`. `split` keeps empty pieces (`"a,,b"` is three), and `split("")` gives one
+piece per character; `replace("", x)` changes nothing. `indexOf` counts characters,
+as `len` and `slice` do, so `s.slice(s.indexOf(t))` begins at `t`.
 
 ```byld,fragment
 let moment = "2026-10-16T14:00"

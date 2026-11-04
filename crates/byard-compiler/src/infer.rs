@@ -25,15 +25,28 @@ use crate::symbol::Symbol;
 
 /// The closed set of list methods (RFC-0027 §4), used for the `UnknownMethod`
 /// suggestion.
-const LIST_METHODS: [&str; 13] = [
+const LIST_METHODS: [&str; 15] = [
     "push", "removeAt", "contains", "map", "filter", "slice", "sort", "sortBy", "reduce", "find",
-    "indexOf", "min", "max",
+    "indexOf", "min", "max", "reverse", "join",
 ];
 
 /// The methods a `Str` has at runtime (`len` is a field). Any other call on a
 /// `Str` silently evaluates to nothing, which is exactly what this diagnostic
 /// exists to stop.
-const STR_METHODS: [&str; 3] = ["slice", "urlEncoded", "formatDate"];
+const STR_METHODS: [&str; 12] = [
+    "slice",
+    "urlEncoded",
+    "formatDate",
+    "trim",
+    "toLower",
+    "toUpper",
+    "contains",
+    "startsWith",
+    "endsWith",
+    "replace",
+    "split",
+    "indexOf",
+];
 
 /// Names the engine puts in scope itself: the animation namespace
 /// (`anim.spring`), a collapsing header's `scroll_fraction`, and the `route`
@@ -933,12 +946,18 @@ impl Checker<'_> {
             }
         }
         match (recv, name.as_str()) {
-            (Ty::List(_), "push" | "removeAt" | "filter" | "slice" | "sort" | "sortBy") => {
-                recv.clone()
-            }
-            (Ty::List(_), "indexOf") | (Ty::Int, "alpha") => Ty::Int,
-            (Ty::Str, "slice" | "urlEncoded" | "formatDate") => Ty::Str,
-            (Ty::List(_), "contains") => Ty::Bool,
+            (
+                Ty::List(_),
+                "push" | "removeAt" | "filter" | "slice" | "sort" | "sortBy" | "reverse",
+            ) => recv.clone(),
+            (Ty::List(_) | Ty::Str, "indexOf") | (Ty::Int, "alpha") => Ty::Int,
+            (
+                Ty::Str,
+                "slice" | "urlEncoded" | "formatDate" | "trim" | "toLower" | "toUpper" | "replace",
+            )
+            | (Ty::List(_), "join") => Ty::Str,
+            (Ty::Str, "split") => Ty::List(Box::new(Ty::Str)),
+            (Ty::List(_) | Ty::Str, "contains") | (Ty::Str, "startsWith" | "endsWith") => Ty::Bool,
             (Ty::List(_), "map") => Ty::List(Box::new(lambda_body_ty.unwrap_or(Ty::Unknown))),
             _ => Ty::Unknown,
         }
@@ -1000,7 +1019,7 @@ impl Checker<'_> {
                     Ty::Unknown
                 }
             }
-            BinOp::Sub | BinOp::Mul | BinOp::Div => {
+            BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Rem => {
                 if both_concrete && !(numeric(l) && numeric(r)) {
                     mismatch(self);
                 }
@@ -1128,6 +1147,7 @@ fn op_str(op: BinOp) -> &'static str {
         BinOp::Sub => "-",
         BinOp::Mul => "*",
         BinOp::Div => "/",
+        BinOp::Rem => "%",
         BinOp::Eq => "==",
         BinOp::Ne => "!=",
         BinOp::Lt => "<",

@@ -760,3 +760,16 @@ fn the_repositorys_byd_files_are_formatted() {
         unformatted.join("\n")
     );
 }
+
+#[test]
+fn a_remainder_is_spaced_and_a_keyframe_percent_is_left_alone() {
+    let out = fmt_stable("View M() {\nlet a = n%3\nlet b = 10%3\nlet c = 1+n % 2*3\n}\n");
+    assert!(out.contains("let a = n % 3\n"), "{out}");
+    assert!(out.contains("let b = 10 % 3\n"), "{out}");
+    assert!(out.contains("let c = 1 + n % 2 * 3\n"), "{out}");
+    let out = fmt_stable("View M() {\nlet a = anim.keyframes(0%:0,50%:1,100%:0)\n}\n");
+    assert!(
+        out.contains("anim.keyframes(0%: 0, 50%: 1, 100%: 0)"),
+        "{out}"
+    );
+}

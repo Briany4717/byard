@@ -46,6 +46,7 @@ mod shot;
 mod style_states_example;
 mod text_editing_example;
 mod text_input_example;
+mod text_methods_example;
 mod text_wrap_example;
 mod theme_transition_example;
 mod todo_example;

@@ -12,6 +12,19 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **A frosted pane creates no bind groups on a steady frame.** Every
+  `backdrop` pane built three bind groups, one for each blur pass and one for
+  the composite, on every frame it was drawn. They now live with the pane's
+  scratch textures and are rebuilt only when those are recreated (the pane
+  changed size or the surface format changed) or the instance arena replaced
+  its buffer, so a pane that sits still, moves, or shifts inside the arena
+  because something drawn before it changed costs none. The blur parameters
+  are picked by dynamic offset for this reason. A path `clip` whose outline
+  animates likewise stops creating its three buffers and bind group each frame:
+  it keeps them and writes into them, growing only when a frame needs more than
+  it has held. Pixels are unchanged; `EncoderSubsystem::backdrop_bind_groups_created`
+  and `clip_mask_gpu_creations` count what is left.
+
 - **Every app's window now carries its own id, so its window class changes.**
   Wayland's `app_id` and X11's `WM_CLASS` were `dev.byard.Byard` for every
   Byard app, so a compositor grouped them as one application, a taskbar could

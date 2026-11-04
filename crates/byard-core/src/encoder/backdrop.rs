@@ -105,6 +105,25 @@ pub struct BackdropPipelines {
     /// Shared bilinear sampler (clamping, the halo padding keeps edge taps
     /// in-region, and clamping avoids wrap artefacts on the border).
     sampler: wgpu::Sampler,
+    /// How many bind groups [`prepare`] has created, ever. A steady frosted
+    /// pane must not move it: the acceptance counter for "no per-frame bind
+    /// group", read through
+    /// [`EncoderSubsystem::backdrop_bind_groups_created`](super::EncoderSubsystem::backdrop_bind_groups_created).
+    bind_groups_created: std::sync::atomic::AtomicU32,
+}
+
+impl BackdropPipelines {
+    /// Bind groups created for blur and composite so far, across all slots.
+    #[must_use]
+    pub fn bind_groups_created(&self) -> u32 {
+        self.bind_groups_created
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    fn count_bind_group(&self) {
+        self.bind_groups_created
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 
 /// Adaptive-downsample cap: the largest Gaussian σ, in destination-scaled
@@ -126,9 +145,34 @@ pub struct BlurScratch {
     scaled_size: (u32, u32),
     a_view: wgpu::TextureView,
     b_view: wgpu::TextureView,
+    /// Format the textures were created in.
+    format: wgpu::TextureFormat,
+    /// Group 1 of the composite: the blurred texture (`b_view`) and the
+    /// sampler. Depends on nothing but the textures, so it lives and dies
+    /// with them.
+    composite_bg: wgpu::BindGroup,
+    /// The two blur-pass bind groups, built against the arena's buffer.
+    blur_bgs: Option<BlurBindGroups>,
     /// Keep the ping/pong textures alive alongside their views.
     _a: wgpu::Texture,
     _b: wgpu::Texture,
+}
+
+/// The bind groups of the two blur passes (horizontal reads `src`, vertical
+/// reads `a`) and what they were built against.
+///
+/// They bind the arena's buffer whole, with the parameters selected by dynamic
+/// offset at draw time, so there is exactly one thing that can make them stale
+/// besides the textures: the arena replacing its buffer. The arena only ever
+/// grows, and counts every buffer it makes in `buffer_creations`, which is the
+/// same record the canvas-shape record binding already trusts; capacity alone
+/// would not do (a second arena, or one rebuilt at the same size, would match).
+struct BlurBindGroups {
+    arena_buffers: u32,
+    /// The bytes of one parameter block as bound; the padded region length.
+    binding_len: u64,
+    horizontal: wgpu::BindGroup,
+    vertical: wgpu::BindGroup,
 }
 
 /// A blur job prepared between two main-pass segments: everything
@@ -196,9 +240,14 @@ fn texture_bgl(device: &wgpu::Device, with_uniform: bool) -> wgpu::BindGroupLayo
         entries.push(wgpu::BindGroupLayoutEntry {
             binding: 2,
             visibility: wgpu::ShaderStages::FRAGMENT,
+            // The blur parameters are addressed by dynamic offset into the
+            // frame's instance arena, so the bind group names the arena's
+            // buffer and not where in it a pane's parameters happened to be
+            // staged. Where they sit shifts whenever anything staged before
+            // them changes size; the bind group must not follow.
             ty: wgpu::BindingType::Buffer {
                 ty: wgpu::BufferBindingType::Uniform,
-                has_dynamic_offset: false,
+                has_dynamic_offset: true,
                 min_binding_size: None,
             },
             count: None,
@@ -358,6 +407,7 @@ pub async fn build_pipelines(
         composite,
         composite_bgl,
         sampler,
+        bind_groups_created: std::sync::atomic::AtomicU32::new(0),
     })
 }
 
@@ -405,62 +455,103 @@ fn scratch_texture(
 }
 
 /// Ensures the scratch cache holds textures of exactly the required sizes
-/// for `slot`, reusing the previous frame's when unchanged. Keyed by slot
-/// (the backdrop's pool index) so a skipped slot, a pane whose region
-/// degenerated off-screen, never misaligns the others.
+/// and format for `slot`, and bind groups built against them and against the
+/// arena's current buffer, reusing the previous frame's when nothing changed.
+/// Keyed by slot (the backdrop's pool index) so a skipped slot, a pane whose
+/// region degenerated off-screen, never misaligns the others.
+///
+/// What each cached object depends on:
+/// - textures: `src_size`, `scaled_size`, `format`;
+/// - the composite bind group: the textures, plus the pipeline set's layout and
+///   sampler, which are built once with the encoder and live as long as it;
+/// - the blur bind groups: the textures, the arena's buffer, and the length of
+///   a parameter block. Not the regions' offsets, which are dynamic.
+#[allow(clippy::too_many_arguments)]
 fn ensure_scratch(
     scratch: &mut ScratchCache,
     slot: usize,
     device: &wgpu::Device,
+    pipes: &BackdropPipelines,
+    arena: &super::instance_arena::InstanceArena,
+    regions: BackdropRegions,
     format: wgpu::TextureFormat,
     src_size: (u32, u32),
     scaled_size: (u32, u32),
 ) {
-    let stale = scratch
-        .get(&slot)
-        .is_none_or(|s| s.src_size != src_size || s.scaled_size != scaled_size);
-    if !stale {
-        return;
+    let stale_textures = scratch.get(&slot).is_none_or(|s| {
+        s.src_size != src_size || s.scaled_size != scaled_size || s.format != format
+    });
+    if stale_textures {
+        let (src, src_view) = scratch_texture(device, format, src_size, "ByardCore - Backdrop Src");
+        let (a, a_view) = scratch_texture(device, format, scaled_size, "ByardCore - Backdrop A");
+        let (b, b_view) = scratch_texture(device, format, scaled_size, "ByardCore - Backdrop B");
+        let composite_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("ByardCore - Backdrop Composite BG"),
+            layout: &pipes.composite_bgl,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&b_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&pipes.sampler),
+                },
+            ],
+        });
+        pipes.count_bind_group();
+        scratch.insert(
+            slot,
+            BlurScratch {
+                src_size,
+                src,
+                src_view,
+                scaled_size,
+                a_view,
+                b_view,
+                format,
+                composite_bg,
+                blur_bgs: None,
+                _a: a,
+                _b: b,
+            },
+        );
     }
-    let (src, src_view) = scratch_texture(device, format, src_size, "ByardCore - Backdrop Src");
-    let (a, a_view) = scratch_texture(device, format, scaled_size, "ByardCore - Backdrop A");
-    let (b, b_view) = scratch_texture(device, format, scaled_size, "ByardCore - Backdrop B");
-    scratch.insert(
-        slot,
-        BlurScratch {
-            src_size,
-            src,
-            src_view,
-            scaled_size,
-            a_view,
-            b_view,
-            _a: a,
-            _b: b,
-        },
-    );
+
+    let s = scratch
+        .get_mut(&slot)
+        .expect("the scratch slot was just inserted");
+    let binding_len = regions.blur_h.len;
+    let stale_bgs = s.blur_bgs.as_ref().is_none_or(|bgs| {
+        bgs.arena_buffers != arena.buffer_creations() || bgs.binding_len != binding_len
+    });
+    if stale_bgs {
+        s.blur_bgs = Some(BlurBindGroups {
+            arena_buffers: arena.buffer_creations(),
+            binding_len,
+            horizontal: create_blur_bind_group(device, arena, binding_len, pipes, &s.src_view),
+            vertical: create_blur_bind_group(device, arena, binding_len, pipes, &s.a_view),
+        });
+        pipes.count_bind_group();
+        pipes.count_bind_group();
+    }
 }
 
-/// One off-screen blur pass: fullscreen triangle from `src` into `dst`.
-#[allow(clippy::too_many_arguments)]
-fn blur_pass(
-    encoder: &mut wgpu::CommandEncoder,
+/// A blur pass's group 0: `src`, the sampler, and the arena's buffer bound
+/// `binding_len` bytes at a time, positioned per draw by dynamic offset.
+fn create_blur_bind_group(
     device: &wgpu::Device,
-    queue: &wgpu::Queue,
     arena: &super::instance_arena::InstanceArena,
-    region: super::instance_arena::Region,
+    binding_len: u64,
     pipes: &BackdropPipelines,
     src: &wgpu::TextureView,
-    dst: &wgpu::TextureView,
-    params: BlurParams,
-    label: &str,
-) {
-    arena.write_region(queue, region, bytemuck::bytes_of(&params));
+) -> wgpu::BindGroup {
     let uniform = wgpu::BufferBinding {
         buffer: arena.buffer(),
-        offset: region.offset,
-        size: std::num::NonZeroU64::new(region.len),
+        offset: 0,
+        size: std::num::NonZeroU64::new(binding_len),
     };
-    let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("ByardCore - Blur Pass BG"),
         layout: &pipes.blur_bgl,
         entries: &[
@@ -477,7 +568,30 @@ fn blur_pass(
                 resource: wgpu::BindingResource::Buffer(uniform),
             },
         ],
-    });
+    })
+}
+
+/// A region's offset as the `u32` a dynamic offset is. The arena would have to
+/// reach 4 GiB first; it grows by doubling from 64 KiB to the size of the UI.
+fn dynamic_offset(region: super::instance_arena::Region) -> u32 {
+    u32::try_from(region.offset).expect("the instance arena stays below 4 GiB")
+}
+
+/// One off-screen blur pass: fullscreen triangle from the bind group's source
+/// texture into `dst`, with its parameters at `region` of the arena.
+#[allow(clippy::too_many_arguments)]
+fn blur_pass(
+    encoder: &mut wgpu::CommandEncoder,
+    queue: &wgpu::Queue,
+    arena: &super::instance_arena::InstanceArena,
+    region: super::instance_arena::Region,
+    pipes: &BackdropPipelines,
+    bind: &wgpu::BindGroup,
+    dst: &wgpu::TextureView,
+    params: BlurParams,
+    label: &str,
+) {
+    arena.write_region(queue, region, bytemuck::bytes_of(&params));
     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
         label: Some(label),
         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -497,7 +611,7 @@ fn blur_pass(
     pass.set_pipeline(&pipes.blur);
     // The blur pass binds its own group 0 (the source texture and sampler),
     // not the shared viewport group, so it takes no clip offset.
-    pass.set_bind_group(0, &bind, &[]);
+    pass.set_bind_group(0, bind, &[dynamic_offset(region)]);
     pass.draw(0..3, 0..1);
 }
 
@@ -548,7 +662,8 @@ fn sample_region(
     clippy::too_many_arguments,
     clippy::cast_possible_truncation,
     clippy::cast_precision_loss,
-    clippy::cast_sign_loss
+    clippy::cast_sign_loss,
+    clippy::missing_panics_doc
 )]
 pub fn prepare(
     encoder: &mut wgpu::CommandEncoder,
@@ -588,8 +703,22 @@ pub fn prepare(
         ((src_size.0 as f32) * ds).ceil().max(1.0) as u32,
         ((src_size.1 as f32) * ds).ceil().max(1.0) as u32,
     );
-    ensure_scratch(scratch, slot, device, format, src_size, scaled_size);
+    ensure_scratch(
+        scratch,
+        slot,
+        device,
+        pipes,
+        arena,
+        regions,
+        format,
+        src_size,
+        scaled_size,
+    );
     let s = &scratch[&slot];
+    let bgs = s
+        .blur_bgs
+        .as_ref()
+        .expect("ensure_scratch always leaves the blur bind groups built");
 
     // 1. Copy the region behind the pane.
     encoder.copy_texture_to_texture(
@@ -620,12 +749,11 @@ pub fn prepare(
     let scaled_texel = [1.0 / scaled_size.0 as f32, 1.0 / scaled_size.1 as f32];
     blur_pass(
         encoder,
-        device,
         queue,
         arena,
         regions.blur_h,
         pipes,
-        &s.src_view,
+        &bgs.horizontal,
         &s.a_view,
         BlurParams {
             texel: scaled_texel,
@@ -637,12 +765,11 @@ pub fn prepare(
     );
     blur_pass(
         encoder,
-        device,
         queue,
         arena,
         regions.blur_v,
         pipes,
-        &s.a_view,
+        &bgs.vertical,
         &s.b_view,
         BlurParams {
             texel: scaled_texel,
@@ -655,12 +782,10 @@ pub fn prepare(
 
     // 3. Everything the resumed main pass needs to composite.
     Some(composite_resources(
-        device,
         queue,
         arena,
         regions,
-        pipes,
-        &s.b_view,
+        s.composite_bg.clone(),
         b,
         (x0, y0, x1, y1),
     ))
@@ -669,31 +794,14 @@ pub fn prepare(
 /// Builds the bind group and single-instance quad the resumed main pass
 /// composites with, the hand-off half of [`prepare`].
 #[allow(clippy::cast_precision_loss)]
-#[allow(clippy::too_many_arguments)]
 fn composite_resources(
-    device: &wgpu::Device,
     queue: &wgpu::Queue,
     arena: &super::instance_arena::InstanceArena,
     regions: BackdropRegions,
-    pipes: &BackdropPipelines,
-    blurred: &wgpu::TextureView,
+    bind_group: wgpu::BindGroup,
     b: &BackdropInstance,
     (x0, y0, x1, y1): (u32, u32, u32, u32),
 ) -> PreparedBackdrop {
-    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("ByardCore - Backdrop Composite BG"),
-        layout: &pipes.composite_bgl,
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(blurred),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: wgpu::BindingResource::Sampler(&pipes.sampler),
-            },
-        ],
-    });
     let quad = CompositeQuad {
         rect: b.rect,
         radii: b.radii,

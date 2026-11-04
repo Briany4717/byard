@@ -410,3 +410,92 @@ fn an_unchanged_mask_is_not_rasterised_again() {
     let _third = render(&mut enc, &device, &queue, &frame_with(&triangle()));
     assert_eq!(enc.clip_mask_rasterisations(), after_first + 1);
 }
+
+/// A mask that is a different mesh every frame, the way an animated outline is,
+/// is rasterised each time without creating a GPU buffer or bind group, and
+/// draws what a fresh encoder draws.
+///
+/// `shear` slides the triangle's third corner, so every frame is a new mesh at
+/// the same bounds. The fan after it has more vertices than anything before, so
+/// it must (and may) grow the retained buffers once.
+#[test]
+fn an_animated_mask_reuses_its_gpu_buffers() {
+    let Some((device, queue, _turn)) = try_device() else {
+        eprintln!("no GPU adapter, skipping path clip readback");
+        return;
+    };
+    let [x, y, w, h] = AREA;
+    let v = |px: f32, py: f32| FillVertex {
+        pos: [px, py],
+        uv: [(px - x) / w, (py - y) / h],
+    };
+    let sheared = |shear: f32| ClipMask {
+        mesh: Arc::new(FillMesh {
+            vertices: vec![v(x, y), v(x + w, y), v(x + shear, y + h)],
+            indices: vec![0, 1, 2],
+            bounds: AREA,
+        }),
+        bounds: Rect::new(x, y, w, h),
+    };
+    // A 40-sided fan around the box's centre.
+    let fan = || {
+        let (cx, cy, r) = (x + w / 2.0, y + h / 2.0, w / 2.0);
+        let mut vertices = vec![v(cx, cy)];
+        let mut indices = Vec::new();
+        for i in 0..40_u32 {
+            let a = i as f32 / 40.0 * std::f32::consts::TAU;
+            vertices.push(v(cx + r * a.cos(), cy + r * a.sin()));
+            indices.extend_from_slice(&[0, 1 + i, 1 + (i + 1) % 40]);
+        }
+        ClipMask {
+            mesh: Arc::new(FillMesh {
+                vertices,
+                indices,
+                bounds: AREA,
+            }),
+            bounds: Rect::new(x, y, w, h),
+        }
+    };
+    let frame_with = |m: ClipMask| {
+        let mut frame = RenderFrame::new();
+        frame.request_full_redraw();
+        frame.begin_clip_path(m);
+        frame.push_instance(solid());
+        frame.end_clip();
+        frame
+    };
+
+    let mut animated = encoder(&device, &queue);
+    // Warm-up: the first frame makes the buffers and the bind group.
+    let _ = render(&mut animated, &device, &queue, &frame_with(sheared(0.0)));
+    let warm = animated.clip_mask_gpu_creations();
+    assert!(warm > 0, "the first mask made no GPU resources at all");
+    let rasterised = animated.clip_mask_rasterisations();
+
+    for step in 1..=20 {
+        let frame = frame_with(sheared(step as f32 * 4.0));
+        let got = render(&mut animated, &device, &queue, &frame);
+        let want = render(&mut encoder(&device, &queue), &device, &queue, &frame);
+        assert_eq!(got, want, "step {step}: pixels differ from a fresh encoder");
+        assert_eq!(
+            animated.clip_mask_gpu_creations(),
+            warm,
+            "step {step}: an animated mask created a GPU buffer or bind group"
+        );
+    }
+    assert_eq!(animated.clip_mask_rasterisations(), rasterised + 20);
+
+    // Larger than anything held: grows, and still draws the same.
+    let frame = frame_with(fan());
+    let got = render(&mut animated, &device, &queue, &frame);
+    let want = render(&mut encoder(&device, &queue), &device, &queue, &frame);
+    assert_eq!(got, want, "the fan differs from a fresh encoder");
+    assert!(animated.clip_mask_gpu_creations() > warm);
+    let grown = animated.clip_mask_gpu_creations();
+    // And back to a small one: the larger buffers are kept, nothing new.
+    let frame = frame_with(sheared(10.0));
+    let got = render(&mut animated, &device, &queue, &frame);
+    let want = render(&mut encoder(&device, &queue), &device, &queue, &frame);
+    assert_eq!(got, want);
+    assert_eq!(animated.clip_mask_gpu_creations(), grown);
+}

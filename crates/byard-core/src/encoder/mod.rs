@@ -1602,6 +1602,23 @@ impl EncoderSubsystem {
         self.clip_masks.rasterised()
     }
 
+    /// How many bind groups the backdrop blur has created, ever. Steady
+    /// frosted panes must not move it (RFC-0033 §G5): the bind groups live with
+    /// the scratch textures and are rebuilt only when those are recreated or
+    /// the instance arena replaces its buffer.
+    #[must_use]
+    pub fn backdrop_bind_groups_created(&self) -> u32 {
+        self.backdrop_pipelines.bind_groups_created()
+    }
+
+    /// How many GPU buffers and bind groups the clip-mask atlas has created,
+    /// ever. A frame whose masks change but fit what it already holds must not
+    /// move it.
+    #[must_use]
+    pub const fn clip_mask_gpu_creations(&self) -> u32 {
+        self.clip_masks.gpu_creations()
+    }
+
     /// Whether an opacity-group target has ever been allocated (RFC-0011 T4).
     ///
     /// Exposed for the fast-path assertion: a frame with no group must not

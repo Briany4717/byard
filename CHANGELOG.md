@@ -12,6 +12,19 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **A frosted pane creates no bind groups on a steady frame.** Every
+  `backdrop` pane built three bind groups, one for each blur pass and one for
+  the composite, on every frame it was drawn. They now live with the pane's
+  scratch textures and are rebuilt only when those are recreated (the pane
+  changed size or the surface format changed) or the instance arena replaced
+  its buffer, so a pane that sits still, moves, or shifts inside the arena
+  because something drawn before it changed costs none. The blur parameters
+  are picked by dynamic offset for this reason. A path `clip` whose outline
+  animates likewise stops creating its three buffers and bind group each frame:
+  it keeps them and writes into them, growing only when a frame needs more than
+  it has held. Pixels are unchanged; `EncoderSubsystem::backdrop_bind_groups_created`
+  and `clip_mask_gpu_creations` count what is left.
+  
 - **Handing the layout to the encoder costs one pass, and allocates nothing.**
   `LayoutAtlas::populate_frame` found each node's position by climbing its
   parent chain to the root, and cloned each node's child list on the way down;
@@ -147,6 +160,7 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   redrawn in full, as its redraw region is tracked by position. The seven
   lists of last-frame bounds the encoder keeps are refilled instead of
   collected anew, seven allocations fewer on every frame.
+  
 - **Measuring a text that was measured before allocates nothing, and the
   cache has a ceiling.** Layout asks for the size of every `Text` and `Button`
   on every tick, and each ask built a `String` and an `Arc<str>` for its cache

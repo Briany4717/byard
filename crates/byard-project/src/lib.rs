@@ -9,6 +9,7 @@
 //! programs wearing one name.
 
 pub mod archive;
+pub mod check;
 pub mod deps;
 pub mod error;
 pub mod live;

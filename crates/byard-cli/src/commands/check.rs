@@ -7,7 +7,6 @@ use crate::manifest::Manifest;
 use crate::style;
 use byard_compiler::CompileError;
 use byard_compiler::diagnostics::{Style, render, render_short};
-use byard_compiler::interp::eval::Interpreter;
 use byard_compiler::resolve::{ResolvedProgram, SourceMap};
 use std::path::Path;
 
@@ -61,12 +60,8 @@ pub fn run(file: Option<&Path>, short: bool) -> Result<(), String> {
     }
 }
 
-/// Headless semantic validation of a resolved program (no `wgpu`/`winit`).
-///
-/// Resolve/parse errors short-circuit; otherwise every `View` is lowered and
-/// rendered into a throwaway [`RenderFrame`](byard_core::frame::RenderFrame) so attribute-contract and
-/// `Len`-form validation checks, which run during lowering and render, are
-/// exercised across the whole module graph.
+/// Headless semantic validation of a resolved program (no `wgpu`/`winit`),
+/// see [`byard_project::check`], which the editor's language server runs too.
 #[must_use]
 pub fn check_program(program: &ResolvedProgram) -> Vec<CompileError> {
     check_program_with_theme(program, byard_compiler::interp::theme::Theme::byard_base())
@@ -81,37 +76,7 @@ pub fn check_program_with_theme(
     program: &ResolvedProgram,
     theme: byard_compiler::interp::theme::Theme,
 ) -> Vec<CompileError> {
-    if !program.errors.is_empty() {
-        return program.errors.clone();
-    }
-
-    let known: Vec<&str> = program.views.iter().map(|v| v.name.as_str()).collect();
-    let mut interp = Interpreter::new();
-    interp.set_theme(theme);
-    // RFC-0029 §7: the framework's own capability names are knowable
-    // statically, so `inject Http as http` resolves here and its calls are
-    // checked. An app's own controllers are not, and stay a warning
-    // (`UncheckableInject`).
-    //
-    // The *provided* names, not the reserved ones: `Timer` is reserved because
-    // `every`/`after` own the word and has no controller behind it, so
-    // declaring it would call `inject Timer as t` checkable and let a runtime
-    // failure through. Asking for the names rather than building a registry
-    // also keeps the checker off the filesystem: constructing one resolves a
-    // data directory and opens a store the app owns.
-    let capabilities = byard_core::cap::provided_names();
-    interp.declare_controllers(&capabilities);
-    // Build the user-`View` registry once for the whole program so user-view
-    // calls resolve and expand during lowering (RFC-0007 §1).
-    interp.load_views(&program.views);
-    let mut frame = byard_core::frame::RenderFrame::new();
-    for view in &program.views {
-        let tree = interp.lower_view(view, &known);
-        interp.tick();
-        interp.render(&tree, &mut frame, 1024.0, 768.0);
-        frame.clear();
-    }
-    interp.errors().to_vec()
+    byard_project::check::check_program(program, theme)
 }
 
 /// Headless parse + semantic validation of one `.byd` source, the

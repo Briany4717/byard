@@ -209,11 +209,10 @@ impl PackageProvider for NoPackages {
 /// The diagnostics of one complete file, as `file:line:col: error[Kind]:
 /// message` lines.
 ///
-/// The same steps as `commands::check` takes for a project, which is a
-/// binary's private module and so cannot be called from here: resolve the
-/// program (parse and type check), then lower and render every view into a
-/// throwaway frame, so the checks that run while lowering are exercised too.
-/// If `check_program_with_theme` changes, change this with it.
+/// The same steps `byard check` takes for a project: resolve the program
+/// (parse and type check), then lower and render every view into a throwaway
+/// frame, so the checks that run while lowering are exercised too. If
+/// `byard_project::check::check_program` changes, change this with it.
 fn diagnostics_of(src: &str) -> Vec<String> {
     let program = resolve_program(
         vec![SourceFile {

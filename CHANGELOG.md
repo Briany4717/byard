@@ -126,6 +126,33 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **The language server checks a file in the context of its project.** It parsed
+  the one file in front of it, so in a real app every view, function or record
+  type from another file, every custom theme token, every `[native_views]`
+  element and every `inject Http` was a red line in a file that compiled:
+  Aura Weather opened with twenty-three of them. It now finds the nearest
+  `byard.toml`, reads the files `byard check` reads (the same function names
+  them), resolves the program the way the command does and keeps the
+  diagnostics that are about the file you opened. The files you have open stand
+  in for what is on disk, so an unsaved rename next door is already the
+  program. The project is read when it is first needed and again on a save or
+  when the editor reports a changed file (the server asks to be told about
+  `*.byd`, `byard.toml` and `byard.lock` where the editor allows), never on a
+  keystroke; a burst of edits is answered once. A file next door that does not
+  parse holds back the semantic checks, as in `byard check`, and the editor
+  says so in a note instead of looking clean. The check itself moved to
+  `byard_project::check`, so the editor and `byard check` cannot drift, and
+  `project_source_paths` and `declare_native_views` came out of
+  `resolve_project` for the same reason. A manifest's `[native_views]` is read
+  once per server session: changing a declared property needs a restart.
+
+- **The outline lists the types and functions at the top of a file, and the
+  semantic colours reach every expression.** Document symbols showed only
+  views, and the colouring stopped at a catch-all, so a name inside an
+  operator, a ternary, an assignment, a lambda, an `if`, a record, an index, a
+  controller call's arms or a `style { … }` value was left plain; the angle
+  literal and top-level function bodies were too.
+
 - **A user guide, and a test that keeps its samples honest.** Byard had a README
   and forty design documents written for the people building it, and nothing for
   someone using it. `docs/guide` is an mdBook: install, the dev loop, one chapter
@@ -546,6 +573,22 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   an error.
 
 ### Fixed
+
+- **The language server shows a warning as a warning.** Every diagnostic was an
+  error, including the ones `byard check` prints and passes (`UncheckableInject`
+  on an app's own controller). Each diagnostic also carries the compiler's name
+  for it as its code now (`UnknownAttribute`).
+
+- **"Convert `var` to `let`" no longer rewrites your code.** The action printed
+  the initializer through a function that knew integers, floats and names and
+  wrote `0` for everything else, so applying it to `var total = price * qty`
+  produced `let total = 0`. It now changes the keyword and nothing else, so the
+  initializer, the declared type and a trailing comment stay as written.
+
+- **"Remove invalid attribute" appears, and leaves a list that parses.** It
+  looked for "unknown property" in a message that says "unknown attribute", so
+  it never showed; it follows the diagnostic's code now, and removes the comma
+  with the attribute (`#[gap: 4, bogus: 1]` becomes `#[gap: 4]`).
 
 - **A text at size 0 takes no room instead of crashing.** `Text("x")
   #[size: 0]`, or a size bound to a `var` that holds 0 or springs through it,

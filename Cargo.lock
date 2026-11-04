@@ -727,6 +727,7 @@ name = "byld-lsp"
 version = "0.0.0"
 dependencies = [
  "byard-compiler",
+ "byard-project",
  "dashmap",
  "lsp-server",
  "lsp-types",

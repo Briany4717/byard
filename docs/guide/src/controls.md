@@ -67,9 +67,9 @@ The type of the `var` has to match the control:
 | `Slider` | `Float` | A thumb on a track |
 | `RadioButton` | `Str` | One of a group |
 
-Each also accepts `value:` to show a value without writing it back, and a `change`
-handler to run an action when the user changes it. `bind` is what you want almost
-always.
+`value:` is the older name for `bind:` and does the same thing (RFC-0018). Both
+need a `var`: given a `let` or a literal, a control draws its default instead of
+that value. A `change` handler runs an action when the user changes it.
 
 ## Button
 

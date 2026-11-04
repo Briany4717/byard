@@ -62,14 +62,13 @@ impl Readback {
     }
 }
 
-/// Encodes `frame` into an off-screen target and reads the whole thing back.
-fn render(
+/// An encoder for a `logical_w` x `logical_h` target at the tests' 2x scale.
+fn new_encoder(
     device: &Arc<wgpu::Device>,
     queue: &Arc<wgpu::Queue>,
-    frame: &RenderFrame,
     logical_w: f32,
     logical_h: f32,
-) -> Readback {
+) -> EncoderSubsystem {
     let scale = 2.0_f32;
     let phys_w = (logical_w * scale) as u32;
     let phys_h = (logical_h * scale) as u32;
@@ -92,6 +91,36 @@ fn render(
         phys_h,
         scale,
     );
+    enc
+}
+
+/// Encodes `frame` into an off-screen target with a fresh encoder and reads
+/// the whole thing back.
+fn render(
+    device: &Arc<wgpu::Device>,
+    queue: &Arc<wgpu::Queue>,
+    frame: &RenderFrame,
+    logical_w: f32,
+    logical_h: f32,
+) -> Readback {
+    let mut enc = new_encoder(device, queue, logical_w, logical_h);
+    render_with(&mut enc, device, queue, frame, logical_w, logical_h)
+}
+
+/// Encodes `frame` with `enc`, which keeps whatever it cached from earlier
+/// frames, and reads the target back.
+fn render_with(
+    enc: &mut EncoderSubsystem,
+    device: &Arc<wgpu::Device>,
+    queue: &Arc<wgpu::Queue>,
+    frame: &RenderFrame,
+    logical_w: f32,
+    logical_h: f32,
+) -> Readback {
+    let scale = 2.0_f32;
+    let phys_w = (logical_w * scale) as u32;
+    let phys_h = (logical_h * scale) as u32;
+    let fmt = wgpu::TextureFormat::Bgra8UnormSrgb;
 
     let target = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("backdrop target"),
@@ -301,5 +330,100 @@ fn tint_corner_clip_and_children_compose_over_the_glass() {
     assert!(
         cb > 200 && cr < 60 && cg < 60,
         "the child must stay crisp above the glass, got BGR=({cb},{cg},{cr})"
+    );
+}
+
+/// One frame of the cache test: `extra` filler boxes under a pane at `rect`.
+///
+/// The filler is staged before the pane, so adding or removing some moves where
+/// in the instance arena the pane's blur parameters sit without changing the
+/// pane itself.
+fn cache_scene(extra: usize, rect: [f32; 4]) -> RenderFrame {
+    let mut frame = RenderFrame::new();
+    frame.push_instance(solid([0.0, 0.0, 100.0, 200.0], [0.0, 0.0, 0.0, 1.0]));
+    frame.push_instance(solid([100.0, 0.0, 100.0, 200.0], [1.0, 1.0, 1.0, 1.0]));
+    for i in 0..extra {
+        let x = (i % 40) as f32 * 5.0;
+        let y = 180.0 + (i / 40 % 4) as f32 * 5.0;
+        frame.push_instance(solid([x, y, 4.0, 4.0], [0.9, 0.2, 0.1, 1.0]));
+    }
+    frame.push_backdrop(pane(rect, [8.0; 4], 10.0, [0.1, 0.1, 0.3, 0.2]));
+    frame
+}
+
+/// A frosted pane drawn for many frames on one encoder looks exactly like the
+/// same frames drawn by a fresh encoder each time, and the encoder stops
+/// creating bind groups once the pane is steady.
+///
+/// The sequence is the awkward part: it moves the pane, moves where its
+/// parameters sit in the arena, resizes it (new scratch textures) and grows the
+/// arena past its starting size (a new buffer), the four events that can make
+/// a cached bind group stale. Pixels catch a bind group that is stale and
+/// wrong; the counter catches one that is rebuilt for nothing.
+#[test]
+fn a_cached_pane_renders_like_a_fresh_one_and_stops_creating_bind_groups() {
+    let Some((device, queue, _is_warp, _turn)) = try_device() else {
+        eprintln!("no GPU adapter, skipping backdrop readback");
+        return;
+    };
+    let (w, h) = (200.0_f32, 200.0_f32);
+    let mut cached = new_encoder(&device, &queue, w, h);
+
+    let base = [40.0, 40.0, 120.0, 100.0];
+    // (what, extra boxes, pane rect, whether it may create bind groups)
+    let sequence: &[(&str, usize, [f32; 4], bool)] = &[
+        ("first frame", 0, base, true),
+        ("same again", 0, base, false),
+        ("same again", 0, base, false),
+        ("parameters move in the arena", 7, base, false),
+        ("and back", 0, base, false),
+        (
+            "pane moves, same size",
+            3,
+            [52.0, 60.0, 120.0, 100.0],
+            false,
+        ),
+        ("pane resized", 3, [52.0, 60.0, 90.0, 110.0], true),
+        ("resized again, steady", 3, [52.0, 60.0, 90.0, 110.0], false),
+        ("pane back to its first size", 3, base, true),
+        // 2,500 filler boxes are far past the arena's 64 KiB start.
+        ("the arena grows", 2_500, base, true),
+        ("steady on the larger arena", 2_500, base, false),
+        ("shrinks back, still the larger arena", 5, base, false),
+    ];
+
+    let mut previous = cached.backdrop_bind_groups_created();
+    let mut rebuilt_total = 0;
+    for (what, extra, rect, may_create) in sequence {
+        let frame = cache_scene(*extra, *rect);
+        let got = render_with(&mut cached, &device, &queue, &frame, w, h);
+        let want = render(&device, &queue, &frame, w, h);
+        assert_eq!(
+            got.data, want.data,
+            "{what}: the cached encoder drew different pixels from a fresh one"
+        );
+
+        let now = cached.backdrop_bind_groups_created();
+        if *may_create {
+            rebuilt_total += now - previous;
+        } else {
+            assert_eq!(
+                now,
+                previous,
+                "{what}: a steady frame created {} bind group(s)",
+                now - previous
+            );
+        }
+        previous = now;
+    }
+    // Not vacuous: the events that should rebuild did (first frame creates the
+    // composite and the two blur groups; each resize and the growth again).
+    assert!(
+        rebuilt_total >= 3 + 3 + 3 + 2,
+        "only {rebuilt_total} bind groups were ever created"
+    );
+    eprintln!(
+        "backdrop bind groups created over {} frames: {previous}",
+        sequence.len()
     );
 }

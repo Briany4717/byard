@@ -43,10 +43,6 @@
     checked like the enum properties it replaces, which is consistent but
     narrower than a numeric axis suggests. Worth revisiting.
 
-  **Still open: font families.** `font <name> = asset(path)`, the `font` prop,
-  `fontdb` registration and the family half of the glyph cache key. The family
-  remains hardcoded `Family::SansSerif` in both paths.
-
   **The case it was written for, built (2026-10-16).** Aura Weather sets every
   heading in a display face and everything read in a UI face, both shipped
   with the app and named through the theme's type scale (`typo: t.headline`,

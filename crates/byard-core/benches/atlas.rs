@@ -12,7 +12,7 @@ use std::hint::black_box;
 use std::time::Instant;
 
 use byard_core::atlas::{AtlasNodeId, ContainerStyle, LayoutAtlas, LeafSize};
-use byard_core::frame::{TargetId, TargetKind, Viewport};
+use byard_core::frame::{RenderFrame, TargetId, TargetKind, Viewport};
 
 /// Builds a deep, balanced tree representative of real UI hierarchies.
 ///
@@ -476,6 +476,77 @@ fn bench_rebuild_allocations(mid: u32, per_mid: u32, cycles: usize) {
     );
 }
 
+// ── Handing the geometry to the encoder ─────────────────────────────────────
+//
+// `populate_frame_dirty` is what the interpreter calls once per frame after
+// layout: it resolves every node's absolute rect into the `RenderFrame`. It
+// used to walk up to the root for each node, so it cost O(nodes × depth), which
+// is why it is measured on a deep chain as well as on the balanced shapes.
+
+/// Times `populate_frame_dirty` on a reused atlas and a reused frame, the way
+/// the interpreter calls it, for a full rebuild (every node dirty) and for a
+/// retained frame with a single dirty node.
+fn bench_populate_frame(depth: u32, branch: u32, iters: u64) {
+    let (mut atlas, _) = build_deep_tree_computed(depth, branch);
+    let nodes = atlas.node_count();
+    let mut frame = RenderFrame::new();
+    for retained in [false, true] {
+        for _ in 0..100 {
+            frame.clear();
+            atlas.populate_frame_dirty(&mut frame, retained);
+        }
+        let mut total = std::time::Duration::ZERO;
+        let (allocs_before, _) = counting_alloc::counts();
+        for _ in 0..iters {
+            frame.clear();
+            let start = Instant::now();
+            atlas.populate_frame_dirty(&mut frame, retained);
+            total += start.elapsed();
+            black_box(&frame);
+        }
+        let (allocs_after, _) = counting_alloc::counts();
+        let kind = if retained {
+            "retained, nothing dirty"
+        } else {
+            "full rebuild, all dirty"
+        };
+        println!(
+            "{:60} {:>10.3} µs/op   ({iters} iters)",
+            format!("atlas: populate_frame {nodes} nodes depth {depth} ({kind})"),
+            total.as_nanos() as f64 / iters as f64 / 1000.0
+        );
+        println!(
+            "{:60} {:>10.1} allocs/frame",
+            "  → heap allocations inside populate_frame_dirty",
+            (allocs_after - allocs_before) as f64 / iters as f64,
+        );
+    }
+}
+
+/// Times `recompute_dirty` on a deep chain-like tree, where the spatial-grid
+/// rebuild at the end of every layout pass is most of the cost.
+fn bench_grid_rebuild_deep(depth: u32, branch: u32, iters: u64) {
+    let (mut atlas, dirty) = build_deep_tree_computed(depth, branch);
+    let nodes = atlas.node_count();
+    for _ in 0..100 {
+        atlas.mark_dirty_all(&[dirty]);
+        atlas.recompute_dirty(Viewport::new(1024.0, 768.0)).unwrap();
+    }
+    let mut total = std::time::Duration::ZERO;
+    for _ in 0..iters {
+        atlas.mark_dirty_all(&[dirty]);
+        let start = Instant::now();
+        atlas.recompute_dirty(Viewport::new(1024.0, 768.0)).unwrap();
+        total += start.elapsed();
+        black_box(&atlas);
+    }
+    println!(
+        "{:60} {:>10.3} µs/op   ({iters} iters)",
+        format!("atlas: recompute_dirty {nodes} nodes depth {depth} (1 dirty leaf)"),
+        total.as_nanos() as f64 / iters as f64 / 1000.0
+    );
+}
+
 fn bench_with_setup<S, F, T>(name: &str, iters: u64, mut setup: S, mut measure: F)
 where
     S: FnMut() -> T,
@@ -565,6 +636,13 @@ fn main() {
     println!("\n── spatial-grid rebuild cost, 1-dirty vs all-dirty (200 leaves) ──");
     // root → 10 flex containers → 20 leaves each = 200 leaves, 211 nodes.
     bench_grid_dirty_scaling(10, 20, 10_000);
+
+    println!("\n── populate_frame and the grid rebuild on deep trees ──\n");
+    bench_populate_frame(4, 5, 2_000);
+    bench_populate_frame(5, 5, 500);
+    bench_populate_frame(12, 2, 500);
+    bench_grid_rebuild_deep(5, 5, 500);
+    bench_grid_rebuild_deep(12, 2, 500);
 
     println!();
 }

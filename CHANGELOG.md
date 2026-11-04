@@ -124,6 +124,19 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   transfer function is a second chance to spend a release displaying every
   colour lighter than it was written.
 
+- **A text appearing or disappearing no longer re-shapes every text in the
+  window.** The glyph cache was compared line by line only while the number of
+  texts stayed the same, so adding one line to a list, or opening and closing
+  the dev HUD, shaped every line of the window again (eight lines plus one
+  appended: nine shaped, now one; the HUD opening on eight app lines: 29, now
+  its own 21; the HUD closing: 8, now none). A line is kept whenever what it
+  is made from (text, size, wrap, weight, family) still matches the buffer at
+  its place, and the buffers a shrinking window gives up are kept, up to 256,
+  for the next one that opens. A frame whose text count changed is still
+  redrawn in full, as its redraw region is tracked by position. The seven
+  lists of last-frame bounds the encoder keeps are refilled instead of
+  collected anew, seven allocations fewer on every frame.
+
 ### Added
 
 - **A user guide, and a test that keeps its samples honest.** Byard had a README

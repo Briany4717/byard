@@ -1638,13 +1638,17 @@ fn disjoint_scissors_intersect_to_nothing_without_underflow() {
 /// vector never did: the address of the buffer is what tells them apart.
 #[test]
 fn refilling_the_previous_frames_bounds_keeps_the_allocation() {
-    let rects = |n: usize| (0..n).map(|i| Rect::new(i as f32, 0.0, 4.0, 4.0));
+    let rects = |n: u16| (0..n).map(|i| Rect::new(f32::from(i), 0.0, 4.0, 4.0));
     let mut bounds: Vec<Rect> = rects(40).collect();
     let (ptr, cap) = (bounds.as_ptr(), bounds.capacity());
 
     for n in [40, 12, 40, 0, 33] {
         refill(&mut bounds, rects(n));
-        assert_eq!(bounds.len(), n, "the new frame's bounds, no leftovers");
+        assert_eq!(
+            bounds.len(),
+            usize::from(n),
+            "the new frame's bounds, no leftovers"
+        );
         assert_eq!(bounds.as_ptr(), ptr, "{n} rects: the buffer moved");
         assert_eq!(bounds.capacity(), cap);
     }

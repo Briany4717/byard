@@ -8,6 +8,7 @@
 mod decorated_texture_pipelines;
 mod dev_surface_attribution;
 mod error_overlay_layer;
+mod glyph_cache_reuse;
 mod incremental_scissor;
 mod instrumentation;
 mod native_view_paint;

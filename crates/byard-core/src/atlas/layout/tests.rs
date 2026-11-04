@@ -1220,3 +1220,348 @@ fn grow_distributes_main_axis_space() {
     assert_f32_eq(rs.width, 160.0); // 200 - 40 fixed
     assert_f32_eq(rf.x, 160.0);
 }
+
+// ── One descent resolves every rectangle the way climbing to the root did ───
+//
+// `populate_frame` and the spatial-grid rebuild walk the tree once, handing
+// each node its parent's absolute position, instead of resolving every node by
+// summing `location` up its parent chain. These tests hold the two to the same
+// answer on a tree built to be awkward, and the hit-test grid to the same
+// answer as one built the old way.
+
+/// A small deterministic generator, so a failure names a tree that can be
+/// rebuilt from the seed alone.
+struct Lcg(u64);
+
+impl Lcg {
+    fn next(&mut self) -> u64 {
+        self.0 = self
+            .0
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1_442_695_040_888_963_407);
+        self.0 >> 33
+    }
+
+    fn below(&mut self, n: u64) -> u64 {
+        self.next() % n
+    }
+
+    fn index(&mut self, n: usize) -> usize {
+        usize::try_from(self.below(n as u64)).unwrap()
+    }
+
+    #[allow(clippy::cast_precision_loss)]
+    fn px(&mut self, lo: u64, hi: u64) -> f32 {
+        // Quarter pixels, so sizes are not whole numbers going into layout.
+        (lo * 4 + self.below((hi - lo) * 4 + 1)) as f32 / 4.0
+    }
+}
+
+const TREE_DEPTH: u32 = 14;
+
+/// One node of the awkward tree: padding, margin, gap, both directions,
+/// scroll containers, an absolutely positioned child, grid and stack
+/// containers, and a chain `depth` levels deep.
+fn irregular_subtree(atlas: &mut LayoutAtlas, rng: &mut Lcg, depth: u32) -> AtlasNodeId {
+    // The top of the tree is always a container, so no seed collapses into a
+    // lone leaf; below that, a leaf ends a branch early.
+    if depth == 0 || (depth <= TREE_DEPTH - 3 && rng.below(7) == 0) {
+        return atlas
+            .add_leaf(LeafSize::new(rng.px(4, 40), rng.px(4, 30)))
+            .unwrap();
+    }
+    // Mostly chains and pairs, so the tree is deep rather than merely wide.
+    let breadth = match rng.below(10) {
+        0..=4 => 1,
+        5..=8 => 2,
+        _ => 3,
+    };
+    let mut children: Vec<AtlasNodeId> = (0..breadth)
+        .map(|_| irregular_subtree(atlas, rng, depth - 1))
+        .collect();
+
+    let mut style = ContainerStyle::default()
+        .with_gap(rng.px(0, 9))
+        .with_padding(Spacing {
+            top: rng.px(0, 12),
+            right: rng.px(0, 12),
+            bottom: rng.px(0, 12),
+            left: rng.px(0, 12),
+        })
+        .with_margin(Spacing::symmetric(rng.px(0, 5), rng.px(0, 5)))
+        .with_direction(if rng.below(2) == 0 {
+            FlexDir::Row
+        } else {
+            FlexDir::Column
+        })
+        .with_align([Align::Start, Align::Center, Align::End, Align::Stretch][rng.index(4)])
+        .with_justify(
+            [
+                Justify::Start,
+                Justify::Center,
+                Justify::End,
+                Justify::Between,
+                Justify::Around,
+                Justify::Evenly,
+            ][rng.index(6)],
+        );
+    if rng.below(5) == 0 {
+        style = style.with_scroll_axes(rng.below(2) == 0, true);
+        style.width = Some(rng.px(40, 120));
+        style.height = Some(rng.px(30, 90));
+    }
+    if rng.below(6) == 0 {
+        // An overlay-style child, out of flow, pinned to this container.
+        let overlay = ContainerStyle {
+            absolute: true,
+            ..Default::default()
+        };
+        children.push(atlas.add_container(overlay, &[]).unwrap());
+    }
+
+    match rng.below(6) {
+        0 => atlas
+            .add_grid_container(
+                style,
+                &[GridTrack::Px(rng.px(10, 50)), GridTrack::Fr(1.0)],
+                &[GridTrack::Auto],
+                rng.px(0, 6),
+                rng.px(0, 6),
+                &children,
+            )
+            .unwrap(),
+        1 => atlas
+            .add_stack_container(style, StackAlign::BottomEnd, &children)
+            .unwrap(),
+        _ => atlas.add_container(style, &children).unwrap(),
+    }
+}
+
+/// The nodes under `node` in pre-order, which is the order `populate_frame`
+/// pushes them in.
+fn pre_order(atlas: &LayoutAtlas, node: AtlasNodeId, out: &mut Vec<AtlasNodeId>) {
+    out.push(node);
+    for child in atlas.children(node) {
+        pre_order(atlas, child, out);
+    }
+}
+
+fn computed_irregular_atlas(seed: u64) -> (LayoutAtlas, Vec<AtlasNodeId>) {
+    let mut rng = Lcg(seed);
+    let mut atlas = LayoutAtlas::new();
+    let root = irregular_subtree(&mut atlas, &mut rng, TREE_DEPTH);
+    atlas.set_root(root).unwrap();
+    atlas.compute(Viewport::new(640.0, 480.0)).unwrap();
+    let mut nodes = Vec::new();
+    pre_order(&atlas, root, &mut nodes);
+    (atlas, nodes)
+}
+
+fn depth_of(atlas: &LayoutAtlas, node: AtlasNodeId) -> usize {
+    std::iter::successors(atlas.parent_node(node), |&n| atlas.parent_node(n)).count()
+}
+
+#[test]
+fn populate_frame_matches_climbing_to_the_root_for_every_node() {
+    use crate::frame::RenderFrame;
+
+    for seed in 1..=8 {
+        let (atlas, nodes) = computed_irregular_atlas(seed);
+        let deepest = nodes.iter().map(|&n| depth_of(&atlas, n)).max().unwrap();
+
+        let mut frame = RenderFrame::new();
+        atlas.populate_frame(&mut frame, &[]);
+
+        assert_eq!(frame.rects().len(), nodes.len(), "seed {seed}");
+        for (i, &node) in nodes.iter().enumerate() {
+            let climbed = atlas.resolved_rect_internal(node).unwrap();
+            assert_eq!(
+                frame.rects()[i],
+                climbed,
+                "seed {seed}: node {i} (depth {})",
+                depth_of(&atlas, node),
+            );
+        }
+        // The tree is only a fair test if it is both deep and big.
+        assert!(deepest >= 8, "seed {seed}: only {deepest} deep");
+        assert!(nodes.len() >= 25, "seed {seed}: only {} nodes", nodes.len());
+    }
+}
+
+#[test]
+fn the_irregular_tree_has_offsets_that_matter() {
+    // Guards the test above against passing vacuously: some node must sit at a
+    // non-zero absolute position that is not its own `location`.
+    let (atlas, nodes) = computed_irregular_atlas(3);
+    let shifted_by_ancestors = nodes.iter().any(|&n| {
+        let own = atlas.tree.layout(n.node_id).unwrap().location;
+        let abs = atlas.resolved_rect_internal(n).unwrap();
+        (abs.x - own.x).abs() > 0.5 && (abs.y - own.y).abs() > 0.5
+    });
+    assert!(shifted_by_ancestors);
+}
+
+#[test]
+fn populate_frame_dirty_flags_exactly_the_requested_nodes() {
+    use crate::frame::RenderFrame;
+
+    let (atlas, nodes) = computed_irregular_atlas(5);
+    let generation = atlas.current_generation();
+    let at = |slot: usize| {
+        TargetId::new(
+            atlas.node_index(nodes[slot]).unwrap(),
+            generation,
+            TargetKind::AtlasNode as u16,
+        )
+    };
+    let wanted = [0_usize, 7, 8, 21, nodes.len() - 1];
+    let mut dirty: Vec<TargetId> = wanted.iter().map(|&s| at(s)).collect();
+    // None of these names a node of this atlas right now: a stale generation, a
+    // primitive of the encoder with a real node's index, a slot past the end.
+    dirty.push(TargetId::new(
+        3,
+        generation.wrapping_add(1),
+        TargetKind::AtlasNode as u16,
+    ));
+    dirty.push(TargetId::new(
+        4,
+        generation,
+        TargetKind::EncoderPrimitive as u16,
+    ));
+    dirty.push(TargetId::new(
+        u32::try_from(nodes.len()).unwrap() + 10,
+        generation,
+        TargetKind::AtlasNode as u16,
+    ));
+    // Duplicates collapse, as they did in a set.
+    dirty.push(at(7));
+
+    let mut frame = RenderFrame::new();
+    atlas.populate_frame(&mut frame, &dirty);
+
+    // Pre-order is not build order, so look each node's slot up.
+    for (i, &node) in nodes.iter().enumerate() {
+        let slot = atlas.node_index(node).unwrap() as usize;
+        let expected = wanted
+            .iter()
+            .any(|&w| atlas.node_index(nodes[w]).unwrap() as usize == slot);
+        assert_eq!(frame.dirty()[i], expected, "pre-order position {i}");
+    }
+    assert_eq!(frame.dirty().iter().filter(|&&d| d).count(), wanted.len());
+}
+
+#[test]
+fn populate_frame_dirty_reuses_its_buffers_and_repeats_itself() {
+    use crate::frame::RenderFrame;
+
+    let (mut atlas, _) = computed_irregular_atlas(9);
+    let mut first = RenderFrame::new();
+    atlas.populate_frame_dirty(&mut first, false);
+    assert!(
+        first.dirty().iter().all(|&d| d),
+        "a full rebuild is all dirty"
+    );
+
+    let capacity = (atlas.walk.stack.capacity(), atlas.walk.dirty.capacity());
+    assert!(capacity.0 > 0 && capacity.1 > 0);
+
+    for _ in 0..3 {
+        let mut again = RenderFrame::new();
+        atlas.populate_frame_dirty(&mut again, false);
+        assert_eq!(again.rects(), first.rects());
+        assert_eq!(again.dirty(), first.dirty());
+    }
+    assert_eq!(
+        (atlas.walk.stack.capacity(), atlas.walk.dirty.capacity()),
+        capacity,
+        "steady-state frames must not grow the walk buffers",
+    );
+    assert!(
+        atlas.walk.stack.is_empty(),
+        "the walk leaves its stack empty"
+    );
+
+    // A retained frame with nothing dirty touches no per-node flag at all.
+    atlas.layout_dirty.clear();
+    let mut quiet = RenderFrame::new();
+    atlas.populate_frame_dirty(&mut quiet, true);
+    assert_eq!(quiet.rects(), first.rects());
+    assert!(quiet.dirty().iter().all(|&d| !d));
+    assert_eq!(atlas.walk.dirty.len(), 0);
+}
+
+#[test]
+fn the_hit_grid_matches_one_built_by_climbing_to_the_root() {
+    use super::super::spatial::SpatialGrid;
+
+    for seed in [2, 4, 6] {
+        let (atlas, nodes) = computed_irregular_atlas(seed);
+
+        // The grid as it was built before the single descent: one
+        // `resolved_rect_internal` per node, in pre-order.
+        let mut reference = SpatialGrid::new();
+        for &node in &nodes {
+            let target = TargetId::new(
+                atlas.node_index(node).unwrap(),
+                atlas.current_generation(),
+                TargetKind::AtlasNode as u16,
+            );
+            reference.insert(atlas.resolved_rect_internal(node).unwrap(), target);
+        }
+
+        let mut probed = 0;
+        let mut hits = 0;
+        let mut y = -4.0_f32;
+        while y < 520.0 {
+            let mut x = -4.0_f32;
+            while x < 680.0 {
+                assert_eq!(
+                    atlas.grid.query(x, y),
+                    reference.query(x, y),
+                    "seed {seed}: ({x}, {y})"
+                );
+                probed += 1;
+                hits += usize::from(atlas.grid.query(x, y).is_some());
+                x += 3.7;
+            }
+            y += 3.7;
+        }
+        assert!(probed > 10_000);
+        assert!(hits > 100, "seed {seed}: the probe barely touched the tree");
+    }
+}
+
+#[test]
+fn a_root_below_other_nodes_keeps_their_offset() {
+    use crate::frame::RenderFrame;
+
+    // `set_root` accepts any node, including one that has a parent. Its
+    // rectangle has always been resolved through that parent chain, and the
+    // single descent must start from the same origin.
+    let mut atlas = LayoutAtlas::new();
+    let leaf = atlas.add_leaf(LeafSize::new(10.0, 10.0)).unwrap();
+    let inner = atlas
+        .add_container(
+            ContainerStyle::new(Some(50.0), Some(50.0)).with_padding(Spacing::all(7.0)),
+            &[leaf],
+        )
+        .unwrap();
+    let outer = atlas
+        .add_container(ContainerStyle::new(Some(100.0), Some(100.0)), &[inner])
+        .unwrap();
+    assert_eq!(atlas.parent_node(inner), Some(outer));
+    atlas.set_root(inner).unwrap();
+    atlas.compute(Viewport::new(100.0, 100.0)).unwrap();
+
+    let mut frame = RenderFrame::new();
+    atlas.populate_frame(&mut frame, &[]);
+    assert_eq!(frame.rects().len(), 2);
+    assert_eq!(
+        frame.rects()[0],
+        atlas.resolved_rect_internal(inner).unwrap()
+    );
+    assert_eq!(
+        frame.rects()[1],
+        atlas.resolved_rect_internal(leaf).unwrap()
+    );
+}

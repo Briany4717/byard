@@ -1688,6 +1688,9 @@ impl EncoderSubsystem {
     /// GPU-readback tests, which never carry images, so this branch is a safety
     /// net rather than a hot path.
     fn request_textures(&mut self, textures: &[crate::frame::TextureSampler]) {
+        // Every frame is a tick of the cache's clock, whether or not it draws an
+        // image: that is what lets an image that stopped being drawn age out.
+        self.texture_cache.begin_frame();
         if let Some(io) = &self.io {
             let handle = io.handle.clone();
             let tx = io.tx.clone();
@@ -1707,8 +1710,26 @@ impl EncoderSubsystem {
                     &self.image_sampler,
                     decoded,
                 );
+                self.texture_cache.mark_used(&t.src);
             }
         }
+        // After every image this frame draws has been marked, so none of them
+        // can be chosen.
+        self.texture_cache.trim();
+    }
+
+    /// Sets how much VRAM decoded images may hold before idle ones are
+    /// evicted (default [`texture_sampler::DEFAULT_TEXTURE_BUDGET_BYTES`]).
+    /// Images drawn in the current frame are never evicted, so a view that
+    /// shows more than the budget goes over it instead of thrashing.
+    pub fn set_texture_budget(&mut self, bytes: u64) {
+        self.texture_cache.set_budget(bytes);
+    }
+
+    /// VRAM currently held by decoded images, in bytes.
+    #[must_use]
+    pub const fn texture_cache_bytes(&self) -> u64 {
+        self.texture_cache.resident_bytes()
     }
 
     /// Installs the async-decode plumbing: the relay's I/O runtime handle

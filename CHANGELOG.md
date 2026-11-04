@@ -12,6 +12,18 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Images stop piling up in video memory.** The texture cache kept every
+  decoded image for the life of the app, so a gallery, a feed or a list of
+  avatars grew VRAM without a limit. It now holds up to 128 MiB of decoded
+  pixels (`EncoderSubsystem::set_texture_budget` changes it), and past that
+  drops the ones no frame has drawn for half a second, least recently drawn
+  first. An image drawn this frame is never dropped, so a screen that shows
+  more than the budget goes over it rather than decoding the same pictures
+  again every frame; it comes back under when the view moves on. A decode in
+  flight and a hot reload are never cut off, and an app that stays under the
+  budget pays one comparison per frame. `EncoderSubsystem::texture_cache_bytes`
+  reports what is held.
+
 - **Every app's window now carries its own id, so its window class changes.**
   Wayland's `app_id` and X11's `WM_CLASS` were `dev.byard.Byard` for every
   Byard app, so a compositor grouped them as one application, a taskbar could

@@ -1,7 +1,10 @@
 //! Semantic tokens capability for rich AST-based syntax highlighting.
 
+use byard_compiler::Symbol;
 use byard_compiler::diagnostics::Span;
-use byard_compiler::parser::ast::{AttrKind, ElementNode, Expr, Member, StrPart, ViewDecl};
+use byard_compiler::parser::ast::{
+    Attr, AttrKind, ElementNode, Expr, Member, Param, StrPart, ViewDecl,
+};
 use lsp_types::{
     SemanticToken, SemanticTokenModifier, SemanticTokenType, SemanticTokens, SemanticTokensLegend,
     SemanticTokensResult,
@@ -62,7 +65,18 @@ pub fn handle_semantic_tokens(doc: &Document) -> Option<SemanticTokensResult> {
         });
     }
 
-    // 2. Views and their members
+    // 2. Top-level functions
+    for decl in &doc.parsed.fns {
+        collect_fn_tokens(
+            &decl.name,
+            &decl.params,
+            &decl.body,
+            decl.span,
+            &mut raw_tokens,
+        );
+    }
+
+    // 3. Views and their members
     for view in &doc.parsed.views {
         collect_view_tokens(view, &mut raw_tokens);
     }
@@ -175,29 +189,7 @@ fn collect_member_tokens(members: &[Member], out: &mut Vec<RawToken>) {
                 body,
                 span,
                 ..
-            } => {
-                out.push(RawToken {
-                    span: Span::new(span.start, span.start + 2), // "fn"
-                    token_type: 0,                               // KEYWORD
-                    modifiers: 0,
-                });
-                out.push(RawToken {
-                    span: Span::new(span.start + 3, span.start + 3 + name.as_str().len() as u32),
-                    token_type: 2, // FUNCTION
-                    modifiers: 1,  // DECLARATION
-                });
-                for param in params {
-                    out.push(RawToken {
-                        span: Span::new(
-                            param.span.start,
-                            param.span.start + param.name.as_str().len() as u32,
-                        ),
-                        token_type: 3, // VARIABLE
-                        modifiers: 1,  // DECLARATION
-                    });
-                }
-                collect_expr_tokens(body, out);
-            }
+            } => collect_fn_tokens(name, params, body, *span, out),
             Member::Element(el) => {
                 collect_element_tokens(el, out);
             }
@@ -325,6 +317,37 @@ fn collect_member_tokens(members: &[Member], out: &mut Vec<RawToken>) {
     }
 }
 
+/// `fn name(params) => body`, in a view or at the top of a file.
+fn collect_fn_tokens(
+    name: &Symbol,
+    params: &[Param],
+    body: &Expr,
+    span: Span,
+    out: &mut Vec<RawToken>,
+) {
+    out.push(RawToken {
+        span: Span::new(span.start, span.start + 2), // "fn"
+        token_type: 0,                               // KEYWORD
+        modifiers: 0,
+    });
+    out.push(RawToken {
+        span: Span::new(span.start + 3, span.start + 3 + name.as_str().len() as u32),
+        token_type: 2, // FUNCTION
+        modifiers: 1,  // DECLARATION
+    });
+    for param in params {
+        out.push(RawToken {
+            span: Span::new(
+                param.span.start,
+                param.span.start + param.name.as_str().len() as u32,
+            ),
+            token_type: 3, // VARIABLE
+            modifiers: 1,  // DECLARATION
+        });
+    }
+    collect_expr_tokens(body, out);
+}
+
 fn collect_element_tokens(el: &ElementNode, out: &mut Vec<RawToken>) {
     let name_len = el.name.as_str().len() as u32;
 
@@ -334,7 +357,19 @@ fn collect_element_tokens(el: &ElementNode, out: &mut Vec<RawToken>) {
         modifiers: 0,
     });
 
-    for attr in &el.attrs {
+    collect_attr_tokens(&el.attrs, out);
+
+    if let Some(action) = &el.action {
+        collect_expr_tokens(action, out);
+    }
+
+    collect_member_tokens(&el.children, out);
+}
+
+/// The tokens of an attribute list, `#[name: value, on_tap => action]`, on an
+/// element or inside a `style { … }` value.
+fn collect_attr_tokens(attrs: &[Attr], out: &mut Vec<RawToken>) {
+    for attr in attrs {
         let attr_name_len = attr.name.as_str().len() as u32;
         let attr_token_type = match attr.kind {
             AttrKind::Event { .. } => 10, // EVENT
@@ -355,14 +390,13 @@ fn collect_element_tokens(el: &ElementNode, out: &mut Vec<RawToken>) {
             }
         }
     }
-
-    if let Some(action) = &el.action {
-        collect_expr_tokens(action, out);
-    }
-
-    collect_member_tokens(&el.children, out);
 }
 
+/// The tokens of an expression and of everything inside it.
+///
+/// Every kind of expression is named, with no catch-all: a new one must say
+/// here what it contains, or the compiler says it was forgotten, rather than
+/// the editor quietly leaving what is inside it uncoloured.
 fn collect_expr_tokens(expr: &Expr, out: &mut Vec<RawToken>) {
     match expr {
         Expr::Ident(_, span) => {
@@ -372,7 +406,7 @@ fn collect_expr_tokens(expr: &Expr, out: &mut Vec<RawToken>) {
                 modifiers: 0,
             });
         }
-        Expr::IntLit(_, span) | Expr::FloatLit(_, span) => {
+        Expr::IntLit(_, span) | Expr::FloatLit(_, span) | Expr::AngleLit(_, span) => {
             out.push(RawToken {
                 span: *span,
                 token_type: 6, // NUMBER
@@ -418,6 +452,79 @@ fn collect_expr_tokens(expr: &Expr, out: &mut Vec<RawToken>) {
                 modifiers: 0,
             });
         }
-        _ => {}
+        Expr::Tuple(args, _) => {
+            for arg in args {
+                collect_expr_tokens(&arg.value, out);
+            }
+        }
+        Expr::Binary { lhs, rhs, .. } => {
+            collect_expr_tokens(lhs, out);
+            collect_expr_tokens(rhs, out);
+        }
+        Expr::Merge { left, right, .. } => {
+            collect_expr_tokens(left, out);
+            collect_expr_tokens(right, out);
+        }
+        Expr::Unary { rhs, .. } => collect_expr_tokens(rhs, out),
+        Expr::Ternary {
+            cond, then, els, ..
+        } => {
+            collect_expr_tokens(cond, out);
+            collect_expr_tokens(then, out);
+            collect_expr_tokens(els, out);
+        }
+        Expr::If {
+            cond, then, els, ..
+        } => {
+            collect_expr_tokens(cond, out);
+            collect_expr_tokens(then, out);
+            if let Some(els) = els {
+                collect_expr_tokens(els, out);
+            }
+        }
+        Expr::Index { base, index, .. } => {
+            collect_expr_tokens(base, out);
+            collect_expr_tokens(index, out);
+        }
+        Expr::Record { fields, spread, .. } => {
+            if let Some(spread) = spread {
+                collect_expr_tokens(spread, out);
+            }
+            for (_, value) in fields {
+                collect_expr_tokens(value, out);
+            }
+        }
+        Expr::Lambda { body, .. } => collect_expr_tokens(body, out),
+        Expr::Block(statements, _) => {
+            for statement in statements {
+                collect_expr_tokens(statement, out);
+            }
+        }
+        Expr::Let { value, .. } | Expr::KeyframeStep { value, .. } => {
+            collect_expr_tokens(value, out);
+        }
+        Expr::Assign { target, value, .. } => {
+            collect_expr_tokens(target, out);
+            collect_expr_tokens(value, out);
+        }
+        Expr::Postfix { target, .. } => collect_expr_tokens(target, out),
+        Expr::ControllerCall { call, ok, err, .. } => {
+            collect_expr_tokens(call, out);
+            for arm in [ok, err].into_iter().flatten() {
+                collect_expr_tokens(&arm.action, out);
+            }
+        }
+        Expr::Animated { value, anim, .. } => {
+            collect_expr_tokens(value, out);
+            collect_expr_tokens(anim, out);
+        }
+        Expr::StyleValue { attrs, states, .. } => {
+            collect_attr_tokens(attrs, out);
+            for state in states {
+                collect_attr_tokens(&state.attrs, out);
+            }
+        }
+        // Nothing was parsed here, so there is nothing to colour.
+        Expr::Error(_) => {}
     }
 }

@@ -96,3 +96,7 @@ harness = false
 [[bench]]
 name = "spatial"
 harness = false
+
+[[bench]]
+name = "text"
+harness = false

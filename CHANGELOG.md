@@ -609,6 +609,26 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A screen that is popped, a list that shrinks and a frame that is drawn give
+  their reactive scopes back.** Nothing retired a scope, so the table of them
+  only grew. Each visit to a route lowered its screen into scopes (and, for a
+  `when`, a `for` or a `NavStack` in it, pools that kept a copy of their
+  branches), and popping the route threw the screen away and kept all of that:
+  100 visits to a screen of nine scopes left 900 behind. A handler that calls a
+  `fn` is lowered again every frame, and each call opened a scope for its
+  argument that nothing closed: 1,000 frames of an idle window, 1,000 scopes.
+  And a `for` that shrank from 1,000 rows to one still held 1,000 lowered
+  bodies and the 1,000 records behind them. Now a popped screen's scopes, pools
+  and lifecycle effects are released once its `on unmount` has run, the
+  arguments a frame's handlers opened go with the next frame's handlers (kept
+  while a controller call raised from them is waiting for its reply, which may
+  read them), a pool that is left more than four times larger than its list
+  keeps twice that many bodies, and a row that leaves lets go of its value at
+  once. Those runs now end at 2 scopes live, 3 slots in the table, and 33
+  scopes with 32 bodies kept. A scope's slot is reused, and an id that outlived its scope names nothing
+  rather than the scope that took its place. Signals are still never freed:
+  `var`s declared inside a screen leave theirs behind.
+  
 - **A hot reload keeps every `var` when a `let` is added, removed or moved.**
   A `let` was part of what a reload compared, so adding one derived value
   (`let doubled = count * 2`) counted as a change to the view's state and

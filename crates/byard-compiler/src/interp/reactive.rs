@@ -45,8 +45,26 @@ thread_local! {
 
 /// Identifies a reactive scope (value binding, memo, or structural effect).
 /// A value binding's id doubles as its RFC-0001 §2.2 dirty-flag target.
+///
+/// A retired scope's slot is handed out again, so the id carries the
+/// **generation** of the slot it was minted for. An id that outlived its scope
+/// (a closure captured in a reply that arrives after the screen it belonged to
+/// was popped) then names a dead scope and is refused, rather than silently
+/// naming whichever scope took the slot next: the failure mode of recycling
+/// without it is a wrong value in the wrong place, with nothing to say so.
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
-pub struct ScopeId(u32);
+pub struct ScopeId {
+    index: u32,
+    generation: u32,
+}
+
+impl ScopeId {
+    /// The slot this id names in the scope arena.
+    #[inline]
+    const fn index(self) -> usize {
+        self.index as usize
+    }
+}
 
 /// Identifies a `RenderFrame` field a value binding projects into. Opaque to
 /// the reactive core; the eval driver (M9) maps it to a concrete primitive
@@ -122,6 +140,9 @@ struct Scope {
     last_epoch: u32,
     eval_count: u32,
     live: bool,
+    /// Bumped each time the slot is retired, so a [`ScopeId`] minted for an
+    /// earlier occupant no longer matches.
+    generation: u32,
 }
 
 /// A reactive source: a value plus the scopes subscribed to it.
@@ -140,6 +161,15 @@ pub struct ReactiveCtx {
     /// Parallel to `scopes`: structural mount state, present only for
     /// `Structural` scopes.
     mounts: Vec<Option<Mount>>,
+    /// Retired slots, reused (last in, first out) before the arena grows. A
+    /// screen that is pushed and popped over and over then costs the same
+    /// memory the first time and the thousandth.
+    free_scopes: Vec<u32>,
+    /// Open recordings of the scopes allocated since a
+    /// [`push_scope_tracker`](Self::push_scope_tracker). Empty (and a single
+    /// `last_mut` check per allocation) unless a lazily lowered subtree is being
+    /// lowered.
+    trackers: Vec<Vec<ScopeId>>,
     signals: Vec<SignalCell>,
     dirty_bindings: Vec<ScopeId>,
     dirty_structural: Vec<ScopeId>,
@@ -178,18 +208,84 @@ impl ReactiveCtx {
         compute: Option<Compute>,
         mount: Option<Mount>,
     ) -> ScopeId {
-        let id = ScopeId(self.scopes.len() as u32);
-        self.scopes.push(Scope {
-            kind,
-            deps: SmallVec::new(),
-            dirty: true,
-            last_epoch: 0,
-            eval_count: 0,
-            live: true,
-        });
-        self.computes.push(compute);
-        self.mounts.push(mount);
+        let id = if let Some(index) = self.free_scopes.pop() {
+            let slot = index as usize;
+            let scope = &mut self.scopes[slot];
+            scope.kind = kind;
+            scope.dirty = true;
+            scope.last_epoch = 0;
+            scope.eval_count = 0;
+            scope.live = true;
+            self.computes[slot] = compute;
+            self.mounts[slot] = mount;
+            ScopeId {
+                index,
+                generation: scope.generation,
+            }
+        } else {
+            let index = self.scopes.len() as u32;
+            self.scopes.push(Scope {
+                kind,
+                deps: SmallVec::new(),
+                dirty: true,
+                last_epoch: 0,
+                eval_count: 0,
+                live: true,
+                generation: 0,
+            });
+            self.computes.push(compute);
+            self.mounts.push(mount);
+            ScopeId {
+                index,
+                generation: 0,
+            }
+        };
+        if let Some(tracker) = self.trackers.last_mut() {
+            tracker.push(id);
+        }
         id
+    }
+
+    /// Whether `s` still names the scope it was minted for: the slot is live
+    /// *and* has not been retired and reused since.
+    #[inline]
+    fn is_live(&self, s: ScopeId) -> bool {
+        self.scopes
+            .get(s.index())
+            .is_some_and(|scope| scope.live && scope.generation == s.generation)
+    }
+
+    /// The scope `s` names, or `None` if it has been retired.
+    #[inline]
+    fn scope(&self, s: ScopeId) -> Option<&Scope> {
+        self.scopes
+            .get(s.index())
+            .filter(|scope| scope.live && scope.generation == s.generation)
+    }
+
+    /// Starts recording every scope allocated until the matching
+    /// [`pop_scope_tracker`](Self::pop_scope_tracker).
+    ///
+    /// For a subtree that is lowered lazily and discarded as a unit (a route,
+    /// a `when` branch, a `for` row): the owner keeps the list and retires it
+    /// with the subtree. Trackers nest, and a scope belongs to the innermost
+    /// one open when it was allocated, so no scope is ever listed twice.
+    pub fn push_scope_tracker(&mut self) {
+        self.trackers.push(Vec::new());
+    }
+
+    /// Stops the innermost recording and returns what it saw.
+    pub fn pop_scope_tracker(&mut self) -> Vec<ScopeId> {
+        self.trackers.pop().unwrap_or_default()
+    }
+
+    /// Overwrites a signal's value without marking its subscribers.
+    ///
+    /// For releasing what a signal pinned once nothing can read it: the element
+    /// of a `for` row that left the list. Marking would dirty scopes that are
+    /// not on screen, to compute a value nobody will look at.
+    pub fn reset_signal_silent(&mut self, sig: SignalId, value: Value) {
+        self.signals[sig.0 as usize].value = value;
     }
 
     /// Opens a computed memo (`let`/`fn`). Starts dirty: its first read
@@ -280,8 +376,8 @@ impl ReactiveCtx {
         s: ScopeId,
         compute: impl FnMut(&mut ReactiveCtx) -> Value + 'static,
     ) {
-        self.computes[s.0 as usize] = Some(Box::new(compute));
-        self.scopes[s.0 as usize].dirty = true;
+        self.computes[s.index()] = Some(Box::new(compute));
+        self.scopes[s.index()].dirty = true;
     }
 
     // ── reads (tracking-aware) ──────────────────────────────────────────
@@ -298,22 +394,27 @@ impl ReactiveCtx {
     /// Reads a memo, subscribing the current scope to it and pulling it on
     /// demand if dirty (§6).
     pub fn read_memo(&mut self, m: ScopeId) -> Value {
+        // A memo whose screen has been popped reads as nothing, never as the
+        // scope that has since taken its slot (see [`ScopeId`]).
+        if !self.is_live(m) {
+            return Value::Unit;
+        }
         if let Some(s) = CURRENT_SCOPE.with(Cell::get) {
             self.subscribe_memo(m, s);
             self.record_dep(s, Dep::Memo(m));
         }
-        let dirty = self.scopes[m.0 as usize].dirty;
+        let dirty = self.scopes[m.index()].dirty;
         if dirty {
-            if let ScopeKind::Memo { evaluating, .. } = &self.scopes[m.0 as usize].kind {
+            if let ScopeKind::Memo { evaluating, .. } = &self.scopes[m.index()].kind {
                 debug_assert!(!evaluating, "reactive cycle through memo {m:?}");
             }
             self.set_memo_evaluating(m, true);
             let v = self.evaluate_scope(m);
             self.set_memo_cache(m, v);
-            self.scopes[m.0 as usize].dirty = false;
+            self.scopes[m.index()].dirty = false;
             self.set_memo_evaluating(m, false);
         }
-        match &self.scopes[m.0 as usize].kind {
+        match &self.scopes[m.index()].kind {
             ScopeKind::Memo { cache, .. } => cache.clone(),
             _ => Value::Unit,
         }
@@ -345,9 +446,12 @@ impl ReactiveCtx {
     }
 
     fn mark_scope(&mut self, s: ScopeId) {
+        if !self.is_live(s) {
+            return;
+        }
         {
-            let scope = &mut self.scopes[s.0 as usize];
-            if !scope.live || scope.dirty {
+            let scope = &mut self.scopes[s.index()];
+            if scope.dirty {
                 return; // IDEMPOTENT, stop re-traversal (D1)
             }
             scope.dirty = true;
@@ -355,7 +459,7 @@ impl ReactiveCtx {
         self.mark_effective += 1;
         // Extract the cascade target into owned data before recursing, so no
         // borrow of `self.scopes` is held across the recursive `mark_scope`.
-        let memo_subs: Option<SmallVec<[ScopeId; 4]>> = match &self.scopes[s.0 as usize].kind {
+        let memo_subs: Option<SmallVec<[ScopeId; 4]>> = match &self.scopes[s.index()].kind {
             ScopeKind::ValueBinding { .. } => {
                 self.dirty_bindings.push(s);
                 None
@@ -411,34 +515,35 @@ impl ReactiveCtx {
         while i < self.dirty_bindings.len() {
             let s = self.dirty_bindings[i];
             i += 1;
-            if !self.scopes[s.0 as usize].live {
+            // A scope retired after it was queued is skipped, and so is a stale
+            // entry for a slot that has been reused since: the id's generation
+            // no longer matches, so the new occupant is not run under it.
+            if !self.is_live(s) {
                 continue;
             }
-            if self.scopes[s.0 as usize].last_epoch == epoch {
+            if self.scopes[s.index()].last_epoch == epoch {
                 continue; // EPOCH GUARD (D1)
             }
-            self.scopes[s.0 as usize].last_epoch = epoch;
+            self.scopes[s.index()].last_epoch = epoch;
             let v = self.evaluate_scope(s);
             self.write_frame_field(s, v);
-            self.scopes[s.0 as usize].dirty = false;
+            self.scopes[s.index()].dirty = false;
         }
         self.dirty_bindings.clear();
     }
 
     fn write_frame_field(&mut self, s: ScopeId, v: Value) {
-        let target = match &self.scopes[s.0 as usize].kind {
+        let target = match &self.scopes[s.index()].kind {
             ScopeKind::ValueBinding { target, .. } => *target,
             _ => return,
         };
-        let changed = match &self.scopes[s.0 as usize].kind {
+        let changed = match &self.scopes[s.index()].kind {
             ScopeKind::ValueBinding { last_written, .. } => last_written.as_ref() != Some(&v),
             _ => false,
         };
         if changed {
             // value-equality cut: unchanged projection writes nothing (§7).
-            if let ScopeKind::ValueBinding { last_written, .. } =
-                &mut self.scopes[s.0 as usize].kind
-            {
+            if let ScopeKind::ValueBinding { last_written, .. } = &mut self.scopes[s.index()].kind {
                 *last_written = Some(v.clone());
             }
             self.frame_writes.push((target, v));
@@ -449,28 +554,28 @@ impl ReactiveCtx {
 
     fn evaluate_scope(&mut self, s: ScopeId) -> Value {
         self.clear_deps(s);
-        let mut compute = self.computes[s.0 as usize]
+        let mut compute = self.computes[s.index()]
             .take()
             .expect("scope has a computation (or a reactive cycle re-entered it)");
         let prev = CURRENT_SCOPE.replace(Some(s));
         let value = compute(self);
         CURRENT_SCOPE.set(prev);
-        self.computes[s.0 as usize] = Some(compute);
-        self.scopes[s.0 as usize].eval_count += 1;
+        self.computes[s.index()] = Some(compute);
+        self.scopes[s.index()].eval_count += 1;
         value
     }
 
     /// Removes `s` from each of its dependencies' subscriber lists, then empties
     /// its dep set (§3).
     fn clear_deps(&mut self, s: ScopeId) {
-        let deps = std::mem::take(&mut self.scopes[s.0 as usize].deps);
+        let deps = std::mem::take(&mut self.scopes[s.index()].deps);
         for dep in &deps {
             match dep {
                 Dep::Signal(sig) => {
                     self.signals[sig.0 as usize].subscribers.retain(|x| *x != s);
                 }
                 Dep::Memo(m) => {
-                    if let ScopeKind::Memo { subs, .. } = &mut self.scopes[m.0 as usize].kind {
+                    if let ScopeKind::Memo { subs, .. } = &mut self.scopes[m.index()].kind {
                         subs.retain(|x| *x != s);
                     }
                 }
@@ -481,18 +586,18 @@ impl ReactiveCtx {
     // ── structural reconciliation (§8) ──────────────────────────────────
 
     fn reconcile_structural(&mut self, s: ScopeId, epoch: u32) {
-        if !self.scopes[s.0 as usize].live || self.scopes[s.0 as usize].last_epoch == epoch {
+        if !self.is_live(s) || self.scopes[s.index()].last_epoch == epoch {
             return;
         }
-        self.scopes[s.0 as usize].last_epoch = epoch;
-        let kind = match &self.scopes[s.0 as usize].kind {
+        self.scopes[s.index()].last_epoch = epoch;
+        let kind = match &self.scopes[s.index()].kind {
             ScopeKind::Structural { kind } => *kind,
             _ => return,
         };
         let value = self.evaluate_scope(s);
-        self.scopes[s.0 as usize].dirty = false;
+        self.scopes[s.index()].dirty = false;
 
-        let mut mount = self.mounts[s.0 as usize]
+        let mut mount = self.mounts[s.index()]
             .take()
             .expect("structural scope has mount state");
         match (&mut mount, kind) {
@@ -533,20 +638,31 @@ impl ReactiveCtx {
             }
             _ => {}
         }
-        self.mounts[s.0 as usize] = Some(mount);
+        self.mounts[s.index()] = Some(mount);
     }
 
-    /// Retires a scope on unmount: clears its subscriptions (so no `Signal` or
-    /// memo keeps a stale link), drops any structural children recursively, and
-    /// marks the slot dead. The §4.2 grid entry removal is the eval driver's
-    /// job; here we guarantee no leaked reactive subscription (§8).
-    fn drop_scope(&mut self, s: ScopeId) {
-        if !self.scopes[s.0 as usize].live {
+    /// Retires a scope: clears its subscriptions (so no `Signal` or memo keeps a
+    /// stale link), drops any structural children recursively, releases whatever
+    /// value it had cached, and hands the slot back for the next allocation to
+    /// reuse. The §4.2 grid entry removal is the eval driver's job; here we
+    /// guarantee no leaked reactive subscription and no unbounded growth (§8).
+    ///
+    /// Idempotent, and safe to call with an id that is already retired: the
+    /// generation tells a dead id from the live scope that took its slot.
+    ///
+    /// Everything that can point at a scope is undone here, because a slot that
+    /// is reused while something still points at it fires the new occupant under
+    /// the old one's name: the scopes it read (their `subs`), the scopes that read
+    /// it (their `deps`, if it is a memo), and the signals it subscribed to. The
+    /// dirty queues are not purged (a linear scan per retired scope); an entry
+    /// left in them carries the old generation and is skipped when they drain.
+    pub fn drop_scope(&mut self, s: ScopeId) {
+        if !self.is_live(s) {
             return;
         }
         // Recursively drop structural children first.
         if let Some(Mount::When { children, .. } | Mount::For { children, .. }) =
-            self.mounts[s.0 as usize].as_mut()
+            self.mounts[s.index()].as_mut()
         {
             let children = std::mem::take(children);
             for child in children {
@@ -554,16 +670,34 @@ impl ReactiveCtx {
             }
         }
         self.clear_deps(s);
-        // Remove this scope from any memo subscriber lists it appears in.
-        let scope_is_memo = matches!(self.scopes[s.0 as usize].kind, ScopeKind::Memo { .. });
-        if scope_is_memo {
-            if let ScopeKind::Memo { subs, .. } = &mut self.scopes[s.0 as usize].kind {
-                subs.clear();
+        // If this scope was a memo, the scopes that read it still list it as a
+        // dependency; take it off them, or their next `clear_deps` would reach
+        // into whichever scope the slot holds by then.
+        if let ScopeKind::Memo { subs, .. } = &mut self.scopes[s.index()].kind {
+            let subs = std::mem::take(subs);
+            for sub in subs {
+                if let Some(reader) = self.scopes.get_mut(sub.index()) {
+                    if reader.generation == sub.generation {
+                        reader.deps.retain(|d| *d != Dep::Memo(s));
+                    }
+                }
             }
         }
-        self.scopes[s.0 as usize].live = false;
-        self.computes[s.0 as usize] = None;
-        self.mounts[s.0 as usize] = None;
+        let scope = &mut self.scopes[s.index()];
+        // Replaced, not just flagged dead: a memo's cache or a binding's last
+        // value can be a whole list or record.
+        scope.kind = ScopeKind::Memo {
+            cache: Value::Unit,
+            subs: SmallVec::new(),
+            evaluating: false,
+        };
+        scope.deps = SmallVec::new();
+        scope.dirty = false;
+        scope.live = false;
+        scope.generation = scope.generation.wrapping_add(1);
+        self.computes[s.index()] = None;
+        self.mounts[s.index()] = None;
+        self.free_scopes.push(s.index);
     }
 
     // ── small helpers ───────────────────────────────────────────────────
@@ -576,7 +710,7 @@ impl ReactiveCtx {
     }
 
     fn subscribe_memo(&mut self, m: ScopeId, s: ScopeId) {
-        if let ScopeKind::Memo { subs, .. } = &mut self.scopes[m.0 as usize].kind {
+        if let ScopeKind::Memo { subs, .. } = &mut self.scopes[m.index()].kind {
             if !subs.contains(&s) {
                 subs.push(s);
             }
@@ -584,20 +718,20 @@ impl ReactiveCtx {
     }
 
     fn record_dep(&mut self, s: ScopeId, dep: Dep) {
-        let deps = &mut self.scopes[s.0 as usize].deps;
+        let deps = &mut self.scopes[s.index()].deps;
         if !deps.contains(&dep) {
             deps.push(dep);
         }
     }
 
     fn set_memo_evaluating(&mut self, m: ScopeId, v: bool) {
-        if let ScopeKind::Memo { evaluating, .. } = &mut self.scopes[m.0 as usize].kind {
+        if let ScopeKind::Memo { evaluating, .. } = &mut self.scopes[m.index()].kind {
             *evaluating = v;
         }
     }
 
     fn set_memo_cache(&mut self, m: ScopeId, v: Value) {
-        if let ScopeKind::Memo { cache, .. } = &mut self.scopes[m.0 as usize].kind {
+        if let ScopeKind::Memo { cache, .. } = &mut self.scopes[m.index()].kind {
             *cache = v;
         }
     }
@@ -609,7 +743,7 @@ impl ReactiveCtx {
     /// never on the AST.
     #[must_use]
     pub fn deps_nonempty(&self, s: ScopeId) -> bool {
-        !self.scopes[s.0 as usize].deps.is_empty()
+        self.scope(s).is_some_and(|scope| !scope.deps.is_empty())
     }
 
     // ── observability (tests) ───────────────────────────────────────────
@@ -618,13 +752,13 @@ impl ReactiveCtx {
     /// since it last ran.
     #[must_use]
     pub fn is_dirty(&self, s: ScopeId) -> bool {
-        self.scopes[s.0 as usize].dirty
+        self.scope(s).is_some_and(|scope| scope.dirty)
     }
 
     /// How many times `s` has been evaluated since creation.
     #[must_use]
     pub fn eval_count(&self, s: ScopeId) -> u32 {
-        self.scopes[s.0 as usize].eval_count
+        self.scope(s).map_or(0, |scope| scope.eval_count)
     }
 
     /// Number of frame-field writes performed since the last
@@ -643,7 +777,7 @@ impl ReactiveCtx {
     /// The most recently projected value of a value binding (its `last_written`).
     #[must_use]
     pub fn binding_value(&self, s: ScopeId) -> Option<Value> {
-        match &self.scopes[s.0 as usize].kind {
+        match &self.scope(s)?.kind {
             ScopeKind::ValueBinding { last_written, .. } => last_written.clone(),
             _ => None,
         }
@@ -661,6 +795,27 @@ impl ReactiveCtx {
     #[must_use]
     pub fn mark_effective_visits(&self) -> u32 {
         self.mark_effective
+    }
+
+    /// How many scope slots the arena has ever needed: its high-water mark. A
+    /// retired slot is reused before this grows, so a screen pushed and popped
+    /// repeatedly leaves it where the first push put it.
+    #[must_use]
+    pub fn scope_slot_count(&self) -> usize {
+        self.scopes.len()
+    }
+
+    /// How many scopes are alive right now.
+    #[must_use]
+    pub fn live_scope_count(&self) -> usize {
+        self.scopes.len() - self.free_scopes.len()
+    }
+
+    /// How many signals have been created. Signals are not recycled, so this
+    /// only grows; it is here so a test can say what a feature costs in them.
+    #[must_use]
+    pub fn signal_count(&self) -> usize {
+        self.signals.len()
     }
 }
 

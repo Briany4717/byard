@@ -16,6 +16,7 @@ use super::states::{resolve_state_attrs, viewport_holds};
 use super::{Interpreter, RenderNode};
 use crate::diagnostics::{CompileError, Span};
 use crate::interp::env::Value;
+use crate::interp::reactive::ScopeId;
 use crate::parser::ast::{Attr, AttrKind, Member};
 use crate::symbol::Symbol;
 
@@ -78,6 +79,10 @@ pub(super) struct WhenPool {
     pub(super) then: Option<Vec<RenderNode>>,
     /// The lowered `else` branch, once first taken.
     pub(super) els: Option<Vec<RenderNode>>,
+    /// The reactive scopes lowering `then` opened, retired with the branch.
+    pub(super) then_scopes: Vec<ScopeId>,
+    /// The reactive scopes lowering `else` opened, retired with the branch.
+    pub(super) els_scopes: Vec<ScopeId>,
 }
 
 /// A `for`'s reusable body pool (RFC-0018). Bodies are lowered once per slot and
@@ -99,8 +104,14 @@ pub(super) struct ForPool {
     pub(super) env_snapshot: Vec<(Symbol, super::env::Value)>,
     /// One signal per pooled index, holding that slot's current element value.
     pub(super) item_slots: Vec<super::env::SignalId>,
-    /// One lowered body per pooled index (parallel to `item_slots`).
+    /// One lowered body per pooled index. A prefix of `item_slots`: a pool that
+    /// shrank a long way drops the bodies it no longer needs (their nodes and
+    /// scopes) and keeps the signals, so growing back lowers the rows again
+    /// without growing the signal table.
     pub(super) bodies: Vec<Vec<RenderNode>>,
+    /// The reactive scopes lowering each body opened (parallel to `bodies`),
+    /// retired with the body.
+    pub(super) slot_scopes: Vec<Vec<ScopeId>>,
     /// How many bodies are live (painted) this frame, the current list length.
     pub(super) len: usize,
 }
@@ -391,13 +402,19 @@ impl Interpreter {
                         // an environment that no longer has one.
                         let restored = !env_snap.is_empty();
                         self.restored_depth += u32::from(restored);
+                        // The scopes the branch opens are recorded, so a route
+                        // popped with this `when` in it can retire them.
+                        self.ctx.push_scope_tracker();
                         let nodes = self.lower_members(&ast, &known_refs);
+                        let scopes = self.ctx.pop_scope_tracker();
                         self.restored_depth -= u32::from(restored);
                         self.env.truncate(env_base);
                         if take {
                             self.when_pools[*pool].then = Some(nodes);
+                            self.when_pools[*pool].then_scopes = scopes;
                         } else {
                             self.when_pools[*pool].els = Some(nodes);
+                            self.when_pools[*pool].els_scopes = scopes;
                         }
                         dirtied = true;
                     }
@@ -426,7 +443,14 @@ impl Interpreter {
                     // Grow the pool: lower one body per newly-needed index, each
                     // reading its element from a fresh per-slot signal.
                     while self.for_pools[*pool].bodies.len() < new_len {
-                        let slot = self.ctx.create_signal(Value::Unit);
+                        // A slot signal outlives its body (see `trim_for_pool`),
+                        // so growing back after a shrink takes the one the index
+                        // had rather than adding another to the signal table.
+                        let reused = self.for_pools[*pool]
+                            .item_slots
+                            .get(self.for_pools[*pool].bodies.len())
+                            .copied();
+                        let slot = reused.unwrap_or_else(|| self.ctx.create_signal(Value::Unit));
                         // Clone the lowering inputs out first so the borrow on
                         // `self.for_pools` is released before `lower_members`
                         // (which may append *nested* pools to `self.for_pools`).
@@ -450,13 +474,18 @@ impl Interpreter {
                         // event action captures `t` in its env snapshot (the
                         // binding is truncated below before render, RFC-0027).
                         self.for_depth += 1;
+                        self.ctx.push_scope_tracker();
                         let body_nodes = self.lower_members(&body_ast, &known_refs);
+                        let scopes = self.ctx.pop_scope_tracker();
                         self.for_depth -= 1;
                         self.env.truncate(env_base);
                         // Index `*pool` is still valid (nested lowering only
                         // appended higher indices).
-                        self.for_pools[*pool].item_slots.push(slot);
+                        if reused.is_none() {
+                            self.for_pools[*pool].item_slots.push(slot);
+                        }
                         self.for_pools[*pool].bodies.push(body_nodes);
+                        self.for_pools[*pool].slot_scopes.push(scopes);
                         dirtied = true;
                     }
                     // Update each live slot's element value (value-deduped).
@@ -470,16 +499,18 @@ impl Interpreter {
                     // RFC-0025: an animation lives and dies with its element,
                     // so a row that just left the list drops its state, a
                     // re-grown row starts fresh rather than resuming a stale
-                    // timeline. The pool's *bodies* are grow-only (index `i`
-                    // reuses its lowered nodes and its element signal), which is
-                    // exactly why the state has to be dropped explicitly: it
-                    // would otherwise be waiting there for the next occupant.
+                    // timeline. The pool keeps a row's lowered nodes and its
+                    // element signal for the next occupant of index `i` (up to
+                    // the bound in `trim_for_pool`), which is exactly why the
+                    // state has to be dropped explicitly: it would otherwise be
+                    // waiting there for the next occupant.
                     let previous_len = self.for_pools[*pool].len;
                     if new_len < previous_len {
                         self.drop_slot_state(*pool, new_len, previous_len);
                         dirtied = true;
                     }
                     self.for_pools[*pool].len = new_len;
+                    self.trim_for_pool(*pool);
                     // Reconcile nested loops inside the live bodies. Take the
                     // bodies out so nested growth (which mutates `self.for_pools`)
                     // can't alias this pool's own vector.

@@ -45,10 +45,14 @@ pub(super) struct NavEntry {
     pub(super) path: String,
     /// The lowered subtree. Never re-lowered while the entry lives.
     pub(super) nodes: Vec<RenderNode>,
+    /// The reactive scopes lowering the subtree opened, retired with the entry
+    /// so a screen that is pushed and popped over and over does not leave a
+    /// scope behind per visit.
+    pub(super) scopes: Vec<ScopeId>,
     /// The source range the entry's body spans, so a discarded entry takes its
     /// animation state with it (RFC-0025: an animation lives and dies with its
     /// element).
-    body_span: Span,
+    pub(super) body_span: Span,
 }
 
 /// An in-flight route transition (RFC-0026 §5): two entries are alive and
@@ -171,6 +175,34 @@ pub(super) struct NavPool {
     warned_paths: Vec<String>,
     /// The container's source span, for diagnostics.
     span: Span,
+}
+
+impl NavPool {
+    /// Empties a pool whose container has gone with the screen it was in,
+    /// returning the entries it held and the signal behind its `path:`. What is
+    /// left is a husk that holds nothing and is waiting for its index to be
+    /// reused.
+    pub(super) fn vacate(&mut self) -> (Vec<NavEntry>, Option<SignalId>) {
+        let entries = std::mem::take(&mut self.entries);
+        let path_sig = self.path_sig.take();
+        self.routes = Vec::new();
+        self.attrs = Vec::new();
+        self.state_blocks = Vec::new();
+        self.known_views = Vec::new();
+        self.env_snapshot = Vec::new();
+        self.live = Vec::new();
+        self.anim = None;
+        self.current = 0;
+        self.last_path = None;
+        self.pending_change = None;
+        self.warned_paths = Vec::new();
+        (entries, path_sig)
+    }
+
+    /// The signal behind `path:`/`active:`, when it is a writable `var`.
+    pub(super) const fn path_signal(&self) -> Option<SignalId> {
+        self.path_sig
+    }
 }
 
 /// Default `NavStack` `max_depth` (RFC-0026 resolved question "memory
@@ -383,8 +415,7 @@ impl Interpreter {
             Some(sig) => self.nav_shared_cell(sig),
             None => NavSharedCell::default(),
         };
-        let pool = self.nav_pools.len();
-        self.nav_pools.push(NavPool {
+        let pool = self.alloc_nav_pool(NavPool {
             kind,
             attrs: attrs.to_vec(),
             state_blocks,
@@ -408,7 +439,6 @@ impl Interpreter {
             warned_paths: Vec::new(),
             span: el.span,
         });
-        self.nav_elems.push(None);
         RenderNode::Nav { pool, path }
     }
 
@@ -608,7 +638,9 @@ impl Interpreter {
         // time (an event action, a reactive prop) captures `route`/`params` in
         // its env snapshot, the bindings are truncated out just below.
         self.nav_depth += 1;
+        self.ctx.push_scope_tracker();
         let nodes = self.lower_members(&body, &known_refs);
+        let scopes = self.ctx.pop_scope_tracker();
         self.nav_depth -= 1;
         self.env.truncate(env_base);
 
@@ -616,6 +648,7 @@ impl Interpreter {
         self.nav_pools[pool].entries.push(NavEntry {
             path: path.to_string(),
             nodes,
+            scopes,
             body_span,
         });
         self.nav_pools[pool].entries.len() - 1
@@ -679,13 +712,14 @@ impl Interpreter {
 
     /// Discards entries from `keep` upward (RFC-0026 §4: only the back target is
     /// preserved, the routes a multi-pop skipped over are gone), dropping each
-    /// discarded screen's animation state along with it.
+    /// discarded screen's animation state and reactive scopes along with it.
     fn drop_nav_entries(&mut self, pool: usize, keep: usize) {
         while self.nav_pools[pool].entries.len() > keep {
             let Some(entry) = self.nav_pools[pool].entries.pop() else {
                 break;
             };
             self.drop_animation_state(entry.body_span);
+            self.retire_subtree(entry.scopes, entry.nodes);
         }
     }
 

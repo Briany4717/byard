@@ -6,4 +6,5 @@
 //! could run.
 
 mod controller;
+mod host_value;
 mod native_view;

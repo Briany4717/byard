@@ -3,7 +3,11 @@
 //!
 //! The impl-form test controllers do sync work in `async fn`s (no real I/O), so
 //! the `unused_async` lint is expected and allowed here.
-#![allow(clippy::unused_async)]
+#![allow(
+    clippy::unused_async,
+    clippy::unused_self,
+    clippy::needless_pass_by_value
+)]
 
 use byard_macro::byard_controller;
 
@@ -127,4 +131,111 @@ fn impl_form_unknown_method_is_an_error_reply_not_a_panic() {
     };
     let r = pollster::block_on(c.invoke("frobnicate", vec![]));
     assert!(matches!(r, Err(HostValue::Str(_))));
+}
+
+// ── Synchronous methods ──────────────────────────────────────────────────────
+//
+// A method that is not `async` used to be skipped by the macro, and a view
+// that called it got "unknown controller method" at run time.
+
+#[derive(Debug, Clone, PartialEq, byard::HostValue)]
+struct Pair {
+    left: i64,
+    right: i64,
+}
+
+#[byard_controller]
+#[derive(Clone)]
+struct Calculator {
+    base: i64,
+}
+
+impl Calculator {
+    /// An ordinary constructor, in a plain block.
+    fn new(base: i64) -> Self {
+        Self { base }
+    }
+}
+
+#[byard_controller]
+impl Calculator {
+    fn plus(&self, n: i64) -> i64 {
+        self.base + n
+    }
+
+    fn halves(&self, n: i64) -> Result<Pair, String> {
+        if n % 2 == 0 {
+            Ok(Pair {
+                left: n / 2,
+                right: n / 2,
+            })
+        } else {
+            Err(format!("{n} is odd"))
+        }
+    }
+
+    fn swap(&self, pair: Pair) -> Pair {
+        Pair {
+            left: pair.right,
+            right: pair.left,
+        }
+    }
+
+    async fn later(&self, n: i64) -> i64 {
+        self.base * n
+    }
+
+    /// A function that is not a method: left alone, still callable from Rust.
+    fn doubled(self) -> Self {
+        Self {
+            base: self.base * 2,
+        }
+    }
+}
+
+#[test]
+fn sync_methods_dispatch_beside_async_ones() {
+    let c = Calculator::new(40);
+    let reply = |method: &str, args: Vec<HostValue>| pollster::block_on(c.invoke(method, args));
+    assert_eq!(
+        reply("plus", vec![HostValue::Int(2)]),
+        Ok(HostValue::Int(42))
+    );
+    assert_eq!(
+        reply("later", vec![HostValue::Int(2)]),
+        Ok(HostValue::Int(80))
+    );
+    assert_eq!(
+        reply("halves", vec![HostValue::Int(8)]),
+        Ok(HostValue::Record(vec![
+            ("left".into(), HostValue::Int(4)),
+            ("right".into(), HostValue::Int(4)),
+        ]))
+    );
+    assert_eq!(
+        reply("halves", vec![HostValue::Int(7)]),
+        Err(HostValue::Str("7 is odd".into()))
+    );
+}
+
+#[test]
+fn a_sync_method_takes_and_returns_a_struct() {
+    let c = Calculator::new(0);
+    let sent = HostValue::Record(vec![
+        ("left".into(), HostValue::Int(1)),
+        ("right".into(), HostValue::Int(2)),
+    ]);
+    let back = pollster::block_on(c.invoke("swap", vec![sent])).unwrap();
+    assert_eq!(back.field("left"), Some(&HostValue::Int(2)));
+    assert_eq!(back.field("right"), Some(&HostValue::Int(1)));
+}
+
+#[test]
+fn functions_that_are_not_methods_are_not_exposed() {
+    let c = Calculator::new(1);
+    for name in ["new", "doubled"] {
+        let r = pollster::block_on(c.invoke(name, vec![]));
+        assert!(matches!(r, Err(HostValue::Str(_))), "{name}: {r:?}");
+    }
+    assert_eq!(c.clone().doubled().base, 2);
 }

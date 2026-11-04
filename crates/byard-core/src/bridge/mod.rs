@@ -68,9 +68,15 @@ impl HostValue {
 /// type (RFC-0028 §2). Total but lenient: a mismatched shape yields the type's
 /// [`Default`]-ish fallback rather than panicking (arguments are user-derived,
 /// and user data never panics). Implemented for scalars, `String`, `HostValue`
-/// itself, and `Vec<T>`. There is no derive for a struct: take a
-/// [`HostValue`] and read its fields with [`HostValue::field`], or implement
-/// this trait by hand.
+/// itself, `Option<T>` and `Vec<T>`. A struct with named fields derives it,
+/// from a [`HostValue::Record`]: `#[derive(FromHostValue)]`, re-exported by
+/// the `byard` crate. Anything else implements it by hand.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` cannot be read from a controller argument",
+    label = "this type does not implement `FromHostValue`",
+    note = "a struct with named fields can derive it: `#[derive(byard::FromHostValue)]`",
+    note = "or take a `HostValue` and read it with `HostValue::field`"
+)]
 pub trait FromHostValue: Sized {
     /// Builds `Self` from a boundary value.
     fn from_host(value: HostValue) -> Self;
@@ -78,8 +84,15 @@ pub trait FromHostValue: Sized {
 
 /// Converts a controller method's return/error type into a [`HostValue`] to send
 /// back across the boundary (RFC-0028 §2). Implemented for scalars, `String`,
-/// `HostValue` itself and `Vec<T>`. There is no derive for a struct: build a
-/// record with [`HostValue::Record`], or implement this trait by hand.
+/// `HostValue` itself, `Option<T>` and `Vec<T>`. A struct with named fields
+/// derives it, into a [`HostValue::Record`]: `#[derive(IntoHostValue)]`,
+/// re-exported by the `byard` crate. Anything else implements it by hand.
+#[diagnostic::on_unimplemented(
+    message = "`{Self}` cannot be sent back from a controller method",
+    label = "this type does not implement `IntoHostValue`",
+    note = "a struct with named fields can derive it: `#[derive(byard::IntoHostValue)]`",
+    note = "or build a `HostValue::Record` by hand"
+)]
 pub trait IntoHostValue {
     /// Consumes `self` into a boundary value.
     fn into_host(self) -> HostValue;
@@ -120,6 +133,10 @@ impl FromHostValue for String {
     fn from_host(value: HostValue) -> Self {
         match value {
             HostValue::Str(s) => s,
+            // Nothing is the empty string, as it is the zero of a number: an
+            // argument left out, or a record field that is missing, is not the
+            // text "Unit".
+            HostValue::Unit => String::new(),
             other => format!("{other:?}"),
         }
     }
@@ -226,6 +243,22 @@ impl FromHostValue for i64 {
 impl IntoHostValue for i64 {
     fn into_host(self) -> HostValue {
         HostValue::Int(self)
+    }
+}
+
+/// Nothing is `None`, and anything else is `Some`: how a record field that may
+/// be left out crosses.
+impl<T: FromHostValue> FromHostValue for Option<T> {
+    fn from_host(value: HostValue) -> Self {
+        match value {
+            HostValue::Unit => None,
+            other => Some(T::from_host(other)),
+        }
+    }
+}
+impl<T: IntoHostValue> IntoHostValue for Option<T> {
+    fn into_host(self) -> HostValue {
+        self.map_or(HostValue::Unit, IntoHostValue::into_host)
     }
 }
 
@@ -525,6 +558,21 @@ impl Dispatcher {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nothing_is_none_and_the_empty_string() {
+        assert_eq!(Option::<i64>::from_host(HostValue::Unit), None);
+        assert_eq!(Option::<i64>::from_host(HostValue::Int(3)), Some(3));
+        assert_eq!(
+            Option::<Vec<String>>::from_host(HostValue::List(vec![HostValue::Str("a".into())])),
+            Some(vec!["a".to_string()])
+        );
+        assert_eq!(None::<i64>.into_host(), HostValue::Unit);
+        assert_eq!(Some(2_i64).into_host(), HostValue::Int(2));
+        // A missing argument or field is not the text "Unit".
+        assert_eq!(String::from_host(HostValue::Unit), "");
+        assert_eq!(String::from_host(HostValue::Str("x".into())), "x");
+    }
 
     #[test]
     fn host_value_round_trips_every_variant() {

@@ -66,9 +66,25 @@ it records the field names. On the `impl` it generates the glue that lets a view
 each `async fn` by name. The struct must be `Clone`, because each call runs on its own
 copy.
 
-Every `async fn` in that `impl` becomes a method a view can call. A method that is not
-`async` is not exposed. A method that returns `Result<T, E>` has its two sides become the
-view's `ok` and `err` arms, and one that returns anything else always succeeds.
+Every method of that `impl` that takes `&self` becomes a method a view can call, whether
+it is `async` or not. A synchronous one runs on the same pool when it is called, so keep it
+short. A method that returns `Result<T, E>` has its two sides become the view's `ok` and
+`err` arms, and one that returns anything else always succeeds.
+
+What the macro does with the other functions of the block:
+
+| In the `impl` | The macro |
+|---------------|-----------|
+| `fn f(&self, …)` or `async fn f(&self, …)` | exposes it |
+| `fn new() -> Self`, `fn with(self, …)` | leaves it alone, it is ordinary Rust |
+| `fn f(&mut self)` or `async fn f(&mut self)` | refuses, naming the reason |
+| `async fn f()` or `async fn f(self)` | refuses, it cannot be called |
+| a method with type parameters | refuses |
+
+`&mut self` is refused because each call runs on a copy of the controller, so a change to it
+would be lost. Keep state that must change behind an `Arc<Mutex<…>>`, or in a field that is
+one. Helpers that take `&self` and are not meant for views go in a plain `impl` block,
+because everything in this one is a method a view can call.
 
 ## Registering it
 
@@ -171,11 +187,46 @@ becomes `Record`, and a tuple becomes a `List`. A `Record` arrives in a view as 
 so `reply.text` reads its `text` field. `Bytes` is for pictures and file contents given to
 a native view, and byld reads it as nothing.
 
-An `async fn`'s parameters are converted for you. The types that convert are `bool`,
-`String`, `f64`, `f32`, `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `(f32, f32)`, `Vec<T>` of any of them, `()`, and
-`HostValue` itself, which takes whatever was sent. The same types convert back out as
-return values. Conversion is lenient: a value of the wrong shape gives the type's empty
-value (`0`, `""`, an empty list) and never a panic, because the arguments are user data.
+A method's parameters are converted for you. The types that convert are `bool`,
+`String`, `f64`, `f32`, `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `(f32, f32)`, `Vec<T>`
+and `Option<T>` of any of them, `()`, and `HostValue` itself, which takes whatever was sent.
+The same types convert back out as return values. Conversion is lenient: a value of the wrong
+shape gives the type's empty value (`0`, `""`, an empty list, `None`) and never a panic,
+because the arguments are user data.
+
+### A struct is a record
+
+A struct with named fields crosses as a record, field for field, when it derives the two
+conversions. `FromHostValue` reads one from a record, for an argument, `IntoHostValue`
+writes one, for a reply, and `HostValue` derives both:
+
+```rust,ignore,excerpt
+#[derive(Debug, Clone, PartialEq, byard::FromHostValue, byard::IntoHostValue)]
+struct Address {
+    street: String,
+    zip: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, byard::HostValue)]
+struct Customer {
+    name: String,
+    age: i64,
+    address: Address,
+    tags: Vec<String>,
+    #[host(rename = "isVip")]
+    vip: bool,
+}
+```
+
+A struct can hold another one, and `Vec` and `Option` of them. A view sends it as a record
+literal and reads a reply's fields by name, `reply.address.street`. A field the record leaves
+out, or has in the wrong shape, takes its type's empty value, so an `Option` is the place for
+something that may be absent. `#[host(rename = "…")]` gives a field another name in the
+record, for a view that spells it differently, and a generic struct converts when its type
+parameters do.
+
+An `enum` cannot derive these, and the compiler says so. Send the variant's name as text, by
+implementing the traits yourself, or put the choice in a struct field.
 
 Reply with a record when a view needs several things, built from `HostValue::Record`. The
 fields `kind` and `message` are what a view expects of an error, which is what the
@@ -183,8 +234,9 @@ engine's own capabilities send.
 
 ## Rules of the boundary
 
-- **Never block.** A controller runs on the async pool. Sleep with `tokio::time::sleep`,
-  never `std::thread::sleep`, and keep long synchronous work out of it. Blocking a worker
+- **Never block.** A controller runs on the async pool, a synchronous method included. Sleep
+  with `tokio::time::sleep`, never `std::thread::sleep`, and keep long synchronous work out
+  of it. Blocking a worker
   is a smaller version of the mistake of blocking the window.
 - **A reply belongs to the logic thread.** The `ok` and `err` arms run there, so they may
   write any `var` of the view that made the call.

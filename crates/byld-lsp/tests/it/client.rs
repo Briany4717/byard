@@ -201,8 +201,14 @@ impl Drop for Client {
     }
 }
 
+/// The `file:` URI an editor would send for `path`. Built by `url` rather than
+/// by gluing `file://` to the path, which on Windows gives `file://C:\…` (or
+/// `file://\\?\C:\…` for a canonical path): not a URI, so the server drops the
+/// message and never answers.
 pub fn uri(path: &Path) -> String {
-    format!("file://{}", path.display())
+    url::Url::from_file_path(path)
+        .unwrap_or_else(|()| panic!("{} is not an absolute path", path.display()))
+        .to_string()
 }
 
 fn read_message(from: &mut impl BufRead) -> Option<Value> {

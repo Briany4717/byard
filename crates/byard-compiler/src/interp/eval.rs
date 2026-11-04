@@ -531,6 +531,16 @@ pub struct Interpreter {
     /// rather than inside them because the pools are lent out (immutably) for
     /// the whole build/paint phase, and this is written during it.
     nav_elems: Vec<Option<u32>>,
+    /// The signal every focusable that does not bind `focused:` hands the router.
+    ///
+    /// The router writes a focusable's signal on the way in and out of focus, so
+    /// each one needs *some* signal, and making a fresh one for each, each frame
+    /// (they are registered again every frame) grew the signal table without
+    /// bound. Sharing one is sound because nothing reads it: focus visuals ask
+    /// [`EventRouter::is_focused`](super::events::EventRouter::is_focused), and
+    /// the router's own writes to it are the only ones. A control that binds
+    /// `focused:` still gets its own `var`.
+    focus_sink: Option<SignalId>,
     /// Pool indices whose container went away with the screen it was in, reused
     /// before the pools grow. Without them, a route with a `when` in it adds a
     /// pool (and a copy of the branch's AST) every time it is visited.

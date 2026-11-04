@@ -398,11 +398,25 @@ impl Interpreter {
 
             // Register as focusable so Tab and click steal focus.
             // TextField uses its own focused-var if provided via `focused:` attr;
-            // otherwise we create a dummy signal just for the focusable registry.
-            let focused_sig = self.resolve_focused_sig(attrs);
-            let fsig = focused_sig.unwrap_or_else(|| self.ctx.create_signal(Value::Bool(false)));
+            // otherwise the shared sink the registry needs a signal for.
+            let fsig = self.focus_signal(attrs);
             self.router.focusable(idx, hit_rect, fsig);
         }
+    }
+
+    /// The signal a focusable registers with: its own `focused:` `var` when it
+    /// binds one, else the one shared by every focusable that does not (see
+    /// `focus_sink`).
+    pub(super) fn focus_signal(&mut self, attrs: &[Attr]) -> super::env::SignalId {
+        if let Some(sig) = self.resolve_focused_sig(attrs) {
+            return sig;
+        }
+        if let Some(sig) = self.focus_sink {
+            return sig;
+        }
+        let sig = self.ctx.create_signal(Value::Bool(false));
+        self.focus_sink = Some(sig);
+        sig
     }
 
     /// Resolves the `focused:` attribute to a `SignalId`, if present.

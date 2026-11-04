@@ -8,36 +8,107 @@
 //! once (it loads the system fonts) and reused for every measurement.
 
 use glyphon::{Attrs, Buffer, Family, FontSystem, Metrics, Shaping};
-use std::collections::HashMap;
+use rustc_hash::{FxHashMap, FxHasher};
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
-/// Everything that changes a shaped size, and therefore everything the
-/// measurement cache is keyed on: the string, its size and wrap width as bit
-/// patterns, its weight, and its family.
+/// How many shaped measurements a [`TextMeasurer`] keeps.
 ///
-/// Named rather than written inline because leaving a member out is the whole
-/// failure mode: a key that omits one input hands the second caller the first
-/// one's answer, silently, for a string that was never measured.
-type MeasureKey = (String, u32, u32, u16, Option<Arc<str>>);
+/// A string that changes every frame (a timer, a counter, a download's
+/// progress, streamed text, the coordinates of a drag) is a new key every
+/// frame, so without a ceiling the cache grows for as long as the app runs and
+/// every one of those strings stays alive in it. At the ceiling the half that
+/// was used least recently is dropped in one pass, which is rare (once per
+/// ~2,000 new strings) and leaves everything a screen is showing in place.
+const MAX_MEASURE_CACHE_ENTRIES: usize = 4096;
 
-/// Measures shaped text sizes, reusing one [`FontSystem`].
+/// How long a string may be, in bytes, and stay shaped in the scratch buffer
+/// after it is measured.
+const SCRATCH_RETAINS_UP_TO: usize = 4096;
+
+/// One cached measurement, with the inputs it answers for.
+///
+/// Everything that changes a shaped size is in here, and the cache is looked up
+/// by a 64-bit hash of it: the string, its size and wrap width as bit patterns,
+/// its weight, and its family. Leaving a member out is the whole failure mode,
+/// because a key that omits one input hands the second caller the first one's
+/// answer, silently, for a string that was never measured. The inputs are kept
+/// next to the answer, and compared on every hit, so a collision of two
+/// different keys in the 64-bit hash costs a re-shaping and never a wrong size.
+struct CachedMeasure {
+    text: Box<str>,
+    font_size_bits: u32,
+    wrap_width_bits: u32,
+    weight: u16,
+    family: Option<Box<str>>,
+    measured: (f32, f32),
+    /// [`TextMeasurer::access_clock`] when this was last asked for.
+    last_access: u64,
+}
+
+impl CachedMeasure {
+    /// Whether this entry answers for exactly these inputs.
+    #[inline]
+    fn matches(&self, key: &MeasureKey<'_>) -> bool {
+        self.font_size_bits == key.font_size_bits
+            && self.wrap_width_bits == key.wrap_width_bits
+            && self.weight == key.weight
+            && self.family.as_deref() == key.family
+            && &*self.text == key.text
+    }
+}
+
+/// The inputs of one measurement, borrowed: looking one up builds no `String`
+/// and no `Arc`, so a cache hit allocates nothing.
+#[derive(Clone, Copy)]
+struct MeasureKey<'a> {
+    text: &'a str,
+    font_size_bits: u32,
+    wrap_width_bits: u32,
+    weight: u16,
+    family: Option<&'a str>,
+}
+
+impl MeasureKey<'_> {
+    fn hash64(&self) -> u64 {
+        let mut hasher = FxHasher::default();
+        self.text.hash(&mut hasher);
+        self.font_size_bits.hash(&mut hasher);
+        self.wrap_width_bits.hash(&mut hasher);
+        self.weight.hash(&mut hasher);
+        self.family.hash(&mut hasher);
+        hasher.finish()
+    }
+}
+
+/// Measures shaped text sizes, reusing one [`FontSystem`] and one scratch
+/// [`Buffer`].
 ///
 /// Shaping a string through `cosmic-text` (`Shaping::Advanced`) is expensive,
 /// several hundred microseconds for a short label. Because layout re-measures
 /// every `Text`/`Button` on **every** render tick (and most strings are
 /// unchanged frame to frame), results are memoised in a
-/// `(text, font_size, wrap_width, weight)` cache
-/// so a steady-state tick re-shapes nothing. This is the single biggest
-/// factor in per-tick cost on a continuously-redrawing logic thread.
+/// `(text, font_size, wrap_width, weight, family)` cache
+/// so a steady-state tick re-shapes nothing, and a hit allocates nothing. This
+/// is the single biggest factor in per-tick cost on a continuously-redrawing
+/// logic thread.
 pub struct TextMeasurer {
     font_system: FontSystem,
-    /// `(text, font_size.to_bits(), wrap_width.to_bits(), weight, family)` →
-    /// shaped `(width, height)`. The wrap width is part of the key because it
-    /// changes the line breaks and thus the measured size (RFC-0018); the
-    /// family is, because two faces set the same string to different widths
-    /// and a key without it hands the second caller the first one's answer
-    /// (RFC-0034 §Engine side).
-    cache: HashMap<MeasureKey, (f32, f32)>,
+    /// The one `cosmic-text` buffer every shaping goes through. A miss used to
+    /// build a fresh buffer and drop it; setting its metrics, size and text
+    /// again leaves nothing of the last string in it (see
+    /// `a_reused_buffer_measures_like_a_fresh_one`).
+    scratch: Buffer,
+    /// 64-bit hash of the [`MeasureKey`] → its entry. The wrap width is part of
+    /// the key because it changes the line breaks and thus the measured size
+    /// (RFC-0018); the family is, because two faces set the same string to
+    /// different widths and a key without it hands the second caller the first
+    /// one's answer (RFC-0034 §Engine side). At most
+    /// [`MAX_MEASURE_CACHE_ENTRIES`].
+    cache: FxHashMap<u64, CachedMeasure>,
+    /// Counts every lookup; an entry remembers the count of its last one, which
+    /// is how the half used least recently is told from the rest.
+    access_clock: u64,
 }
 
 impl Default for TextMeasurer {
@@ -87,9 +158,13 @@ impl TextMeasurer {
     /// Creates a measurer with a fresh font system (loads system fonts once).
     #[must_use]
     pub fn new() -> Self {
+        let mut font_system = new_font_system();
+        let scratch = Buffer::new(&mut font_system, Metrics::new(16.0, 19.2));
         Self {
-            font_system: new_font_system(),
-            cache: HashMap::new(),
+            font_system,
+            scratch,
+            cache: FxHashMap::default(),
+            access_clock: 0,
         }
     }
 
@@ -126,19 +201,70 @@ impl TextMeasurer {
         // same string to different widths, so a key without them would hand
         // the second caller the first one's width and lay the text out to a
         // measurement of a different face.
-        let key = (
-            text.to_string(),
-            font_size.to_bits(),
-            max_width.map_or(u32::MAX, f32::to_bits),
+        let key = MeasureKey {
+            text,
+            font_size_bits: font_size.to_bits(),
+            wrap_width_bits: max_width.map_or(u32::MAX, f32::to_bits),
             weight,
-            family.map(Arc::from),
-        );
-        if let Some(&hit) = self.cache.get(&key) {
-            return hit;
+            family,
+        };
+        self.measure_keyed(key.hash64(), &key, font_size, max_width)
+    }
+
+    /// [`measure_wrapped`](Self::measure_wrapped) with the key's hash given, so
+    /// a test can make two different keys collide.
+    fn measure_keyed(
+        &mut self,
+        hash: u64,
+        key: &MeasureKey<'_>,
+        font_size: f32,
+        max_width: Option<f32>,
+    ) -> (f32, f32) {
+        self.access_clock = self.access_clock.wrapping_add(1);
+        let now = self.access_clock;
+
+        if let Some(entry) = self.cache.get_mut(&hash)
+            && entry.matches(key)
+        {
+            entry.last_access = now;
+            return entry.measured;
         }
-        let measured = self.shape(text, font_size, max_width, weight, family);
-        self.cache.insert(key, measured);
+
+        let measured = self.shape(key.text, font_size, max_width, key.weight, key.family);
+
+        // A different key in this slot is replaced, not grown: the cache holds
+        // one entry per hash, so a collision is a re-shape for the loser.
+        if self.cache.len() >= MAX_MEASURE_CACHE_ENTRIES && !self.cache.contains_key(&hash) {
+            self.evict_least_recently_used_half();
+        }
+        self.cache.insert(
+            hash,
+            CachedMeasure {
+                text: Box::from(key.text),
+                font_size_bits: key.font_size_bits,
+                wrap_width_bits: key.wrap_width_bits,
+                weight: key.weight,
+                family: key.family.map(Box::from),
+                measured,
+                last_access: now,
+            },
+        );
         measured
+    }
+
+    /// Drops the half of the cache that was asked for least recently.
+    ///
+    /// The cut is the median access time, not the middle of the oldest and the
+    /// newest: one entry untouched since the start would otherwise drag the
+    /// middle down to where nothing is older, and every following miss would
+    /// walk the whole cache to free a single slot.
+    fn evict_least_recently_used_half(&mut self) {
+        let mut accessed: Vec<u64> = self.cache.values().map(|e| e.last_access).collect();
+        let half = accessed.len() / 2;
+        let (_, &mut median, _) = accessed.select_nth_unstable(half);
+        // Every access time is unique (the clock moves on every lookup), so
+        // this keeps exactly the newer half.
+        self.cache.retain(|_, entry| entry.last_access > median);
     }
 
     /// Registers a font family's bytes with this measurer's `FontSystem` and
@@ -170,10 +296,14 @@ impl TextMeasurer {
             return (0.0, 0.0);
         }
         let line_height = font_size * 1.2;
-        let mut buffer = Buffer::new(&mut self.font_system, Metrics::new(font_size, line_height));
-        // `None` measures the natural single-line width; `Some(w)` wraps to `w`.
-        buffer.set_size(&mut self.font_system, max_width, None);
-        buffer.set_text(
+        // `None` measures the natural single line; `Some(w)` wraps to `w`.
+        self.scratch.set_metrics_and_size(
+            &mut self.font_system,
+            Metrics::new(font_size, line_height),
+            max_width,
+            None,
+        );
+        self.scratch.set_text(
             &mut self.font_system,
             text,
             &Attrs::new()
@@ -182,11 +312,25 @@ impl TextMeasurer {
             Shaping::Advanced,
             None,
         );
-        buffer.shape_until_scroll(&mut self.font_system, false);
+        self.scratch
+            .shape_until_scroll(&mut self.font_system, false);
 
-        let (width, lines) = buffer
+        let (width, lines) = self
+            .scratch
             .layout_runs()
             .fold((0.0_f32, 0u32), |(w, n), run| (w.max(run.line_w), n + 1));
+        if text.len() > SCRATCH_RETAINS_UP_TO {
+            // The buffer keeps the shaped lines of the last string. Keeping a
+            // page of text alive for the sake of the next label is the wrong
+            // way round, so a long one is cleared out again.
+            self.scratch.set_text(
+                &mut self.font_system,
+                "",
+                &Attrs::new(),
+                Shaping::Basic,
+                None,
+            );
+        }
         #[allow(clippy::cast_precision_loss)]
         let height = lines.max(1) as f32 * line_height;
         (width, height)
@@ -730,5 +874,219 @@ mod tests {
                 "weight {weight} left `{family}`: {got:?}"
             );
         }
+    }
+
+    /// What a measurement was before the scratch buffer: a new buffer for the
+    /// one string, dropped afterwards. The reference the reused one is held to.
+    fn measured_with_a_fresh_buffer(
+        fs: &mut FontSystem,
+        text: &str,
+        font_size: f32,
+        max_width: Option<f32>,
+        weight: u16,
+        family: Option<&str>,
+    ) -> (f32, f32) {
+        if !is_drawable_size(font_size) {
+            return (0.0, 0.0);
+        }
+        let line_height = font_size * 1.2;
+        let mut buffer = Buffer::new(fs, Metrics::new(font_size, line_height));
+        buffer.set_size(fs, max_width, None);
+        buffer.set_text(
+            fs,
+            text,
+            &Attrs::new()
+                .family(family_of(family))
+                .weight(glyphon::Weight(weight)),
+            Shaping::Advanced,
+            None,
+        );
+        buffer.shape_until_scroll(fs, false);
+        let (width, lines) = buffer
+            .layout_runs()
+            .fold((0.0_f32, 0u32), |(w, n), run| (w.max(run.line_w), n + 1));
+        #[allow(clippy::cast_precision_loss)]
+        let height = lines.max(1) as f32 * line_height;
+        (width, height)
+    }
+
+    /// Text, size, wrap width, weight and family.
+    type Case<'a> = (&'a str, f32, Option<f32>, u16, Option<&'a str>);
+
+    /// The buffer every shaping goes through is reused, so nothing of the
+    /// string before may leak into the one after: not its size, its wrap, its
+    /// line breaks, its face. Each answer is compared, to the bit, with a
+    /// buffer built for that string alone, in an order that moves a wrap on and
+    /// off, a size up and down, a face on and off and a long text before a
+    /// short one.
+    #[test]
+    fn a_reused_buffer_measures_like_a_fresh_one() {
+        let mut m = TextMeasurer::new();
+        let mut reference = new_font_system();
+        let display = m.register_family(&Arc::from(DISPLAY)).expect("display");
+        let body = m.register_family(&Arc::from(BODY)).expect("body");
+        assert_eq!(
+            register_into(reference.db_mut(), &Arc::from(DISPLAY)),
+            Some(display.clone())
+        );
+        assert_eq!(
+            register_into(reference.db_mut(), &Arc::from(BODY)),
+            Some(body.clone())
+        );
+
+        let fox = "the quick brown fox jumps over the lazy dog again and again";
+        let page = "a long line of text that goes on. ".repeat(300);
+        assert!(page.len() > SCRATCH_RETAINS_UP_TO);
+        let cases: Vec<Case<'_>> = vec![
+            (fox, 16.0, None, 400, None),
+            (fox, 16.0, Some(120.0), 400, None),
+            ("i", 16.0, None, 400, None),
+            (fox, 16.0, Some(60.0), 700, None),
+            ("", 16.0, None, 400, None),
+            ("two\nlines\nand a third", 14.0, None, 400, None),
+            ("two\nlines\nand a third", 14.0, Some(30.0), 400, None),
+            ("Aura Weather", 28.0, None, 400, Some(display.as_str())),
+            ("Aura Weather", 28.0, None, 400, Some(body.as_str())),
+            ("Aura Weather", 28.0, None, 400, None),
+            (fox, 48.0, Some(300.0), 300, Some(body.as_str())),
+            ("x", 0.0, None, 400, None),
+            ("שלום עולם hello", 18.0, None, 400, None),
+            ("日本語のテキスト 🙂", 18.0, Some(80.0), 400, None),
+            (&page, 12.0, Some(400.0), 400, None),
+            ("short after long", 12.0, None, 400, None),
+            (fox, 16.0, None, 400, None),
+            (fox, 16.0, Some(120.0), 400, None),
+        ];
+        // Twice over, in opposite orders, so every case also follows every
+        // other. The cache is emptied between rounds: it is the shaping that is
+        // under test, not the lookup.
+        for round in 0..2 {
+            m.cache.clear();
+            let order: Vec<_> = if round == 0 {
+                cases.iter().collect()
+            } else {
+                cases.iter().rev().collect()
+            };
+            for &&(text, size, wrap, weight, family) in &order {
+                let got = m.measure_wrapped(text, size, wrap, weight, family);
+                let want =
+                    measured_with_a_fresh_buffer(&mut reference, text, size, wrap, weight, family);
+                assert_eq!(
+                    (got.0.to_bits(), got.1.to_bits()),
+                    (want.0.to_bits(), want.1.to_bits()),
+                    "{:?} at {size}, wrap {wrap:?}, weight {weight}, family {family:?}: \
+                     reused {got:?}, fresh {want:?}",
+                    &text[..text.len().min(24)],
+                );
+            }
+        }
+    }
+
+    /// Two different keys that hash alike must not share an answer. A 64-bit
+    /// hash makes that vanishingly rare, so the test forces it: both keys are
+    /// filed under one hash, and each is asked for again after the other.
+    #[test]
+    fn keys_that_collide_never_hand_over_each_others_size() {
+        let mut m = TextMeasurer::new();
+        let narrow = MeasureKey {
+            text: "iii",
+            font_size_bits: 16.0_f32.to_bits(),
+            wrap_width_bits: u32::MAX,
+            weight: 400,
+            family: None,
+        };
+        let wide = MeasureKey {
+            text: "WWW",
+            ..narrow
+        };
+        let bold_narrow = MeasureKey {
+            weight: 700,
+            ..narrow
+        };
+        let truth = |k: &MeasureKey<'_>| {
+            let mut other = TextMeasurer::new();
+            other.measure(k.text, 16.0, k.weight, k.family)
+        };
+        let (n, w, b) = (truth(&narrow), truth(&wide), truth(&bold_narrow));
+        assert_ne!(n, w, "the two strings are not the same size to begin with");
+
+        let hash = 0xdead_beef_u64;
+        for round in 0..3 {
+            assert_eq!(
+                m.measure_keyed(hash, &narrow, 16.0, None),
+                n,
+                "round {round}"
+            );
+            assert_eq!(m.measure_keyed(hash, &wide, 16.0, None), w, "round {round}");
+            assert_eq!(
+                m.measure_keyed(hash, &bold_narrow, 16.0, None),
+                b,
+                "round {round}"
+            );
+            assert_eq!(
+                m.cache.len(),
+                1,
+                "one slot per hash: the collision replaces"
+            );
+        }
+    }
+
+    /// Ten thousand distinct strings (a clock, a counter, a stream) leave the
+    /// cache under its ceiling the whole way, and a label the screen keeps
+    /// showing is still cached at the end: it was never the one dropped.
+    #[test]
+    fn measurement_cache_is_bounded_and_keeps_what_is_in_use() {
+        let mut m = TextMeasurer::new();
+        let hot = m.measure("hot label", 16.0, 400, None);
+        for i in 0..10_000 {
+            // The screen asks for its label every frame, as layout does.
+            if i % 64 == 0 {
+                assert_eq!(m.measure("hot label", 16.0, 400, None), hot);
+            }
+            let _ = m.measure(&format!("tick-{i}"), 16.0, 400, None);
+            assert!(
+                m.cache.len() <= MAX_MEASURE_CACHE_ENTRIES,
+                "cache exceeded its ceiling of {MAX_MEASURE_CACHE_ENTRIES}: {}",
+                m.cache.len()
+            );
+        }
+        assert!(
+            m.cache.len() > MAX_MEASURE_CACHE_ENTRIES / 2,
+            "eviction drops half, not everything: {}",
+            m.cache.len()
+        );
+        let key = MeasureKey {
+            text: "hot label",
+            font_size_bits: 16.0_f32.to_bits(),
+            wrap_width_bits: u32::MAX,
+            weight: 400,
+            family: None,
+        };
+        assert!(
+            m.cache.get(&key.hash64()).is_some_and(|e| e.matches(&key)),
+            "the label in use survived 10,000 other strings"
+        );
+    }
+
+    /// One entry nobody has asked for since the start must not decide how much
+    /// an eviction frees: a full cache of recent entries plus one ancient one
+    /// still loses half, so the next miss is not another walk of the cache to
+    /// free a single slot.
+    #[test]
+    fn an_old_entry_does_not_stop_an_eviction_freeing_half() {
+        let mut m = TextMeasurer::new();
+        let _ = m.measure("the first and never again", 16.0, 400, None);
+        // Push the clock far from the ancient entry's access time.
+        m.access_clock += 1_000_000;
+        for i in 1..MAX_MEASURE_CACHE_ENTRIES {
+            let _ = m.measure(&format!("n{i}"), 12.0, 400, None);
+        }
+        assert_eq!(m.cache.len(), MAX_MEASURE_CACHE_ENTRIES);
+        let _ = m.measure("one more", 12.0, 400, None);
+        assert!(
+            m.cache.len() <= MAX_MEASURE_CACHE_ENTRIES / 2 + 1,
+            "an eviction frees half: {} left",
+            m.cache.len()
+        );
     }
 }

@@ -1,9 +1,11 @@
 # RFC-0041: Text editing, caret, selection, clipboard and undo
 
-- **Status:** Accepted
+- **Status:** Active, implemented 2026-10-25 (#340). Still open: the
+  `text_input =>` handler the RFC describes is rejected on a `TextField`
+  (#354).
 - **Author(s):** Briany4717
 - **Created:** 2026-10-24
-- **Last updated:** 2026-10-24
+- **Last updated:** 2026-10-26
 - **Depends on:** RFC-0040 (composition: the preedit is drawn at the caret, and
   the keys the IME owns), RFC-0003 (the event router and focus), RFC-0004 (the
   reactive tick), RFC-0001 §6 (`PlatformHost` keeps `winit` out of

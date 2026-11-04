@@ -136,6 +136,18 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   redrawn in full, as its redraw region is tracked by position. The seven
   lists of last-frame bounds the encoder keeps are refilled instead of
   collected anew, seven allocations fewer on every frame.
+- **Measuring a text that was measured before allocates nothing, and the
+  cache has a ceiling.** Layout asks for the size of every `Text` and `Button`
+  on every tick, and each ask built a `String` and an `Arc<str>` for its cache
+  key before finding the answer it had. The key is borrowed now: a hit hashes
+  the string and compares it, with no heap allocation (a test counts them), and
+  takes about 80 ns where it took about 490 ns; a screen of 200 labels measured
+  again each tick went from about 109 us to about 12 us. The cache kept every
+  string it was ever asked about, so a clock, a counter or a download's progress
+  line grew it for as long as the app ran; it now holds at most 4,096 answers
+  and drops the half used least recently when it is full. A string that is
+  new each time shapes through one reused `cosmic-text` buffer instead of
+  building one, and the measurements come out bit for bit as before.
 
 ### Added
 

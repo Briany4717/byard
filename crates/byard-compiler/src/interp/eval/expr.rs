@@ -51,7 +51,7 @@ pub(super) fn eval_binary(op: BinOp, lhs: Value, rhs: Value) -> Value {
             Value::Unit => rhs,
             value => value,
         },
-        BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::And | BinOp::Or => {
+        BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Rem | BinOp::And | BinOp::Or => {
             match (lhs, rhs) {
                 (Value::Int(a), Value::Int(b)) => Value::Int(match op {
                     BinOp::Add => a.wrapping_add(b),
@@ -62,6 +62,15 @@ pub(super) fn eval_binary(op: BinOp, lhs: Value, rhs: Value) -> Value {
                             0
                         } else {
                             a.wrapping_div(b)
+                        }
+                    }
+                    // Like `/`, a zero divisor answers 0 (RFC-0047 §1); the sign
+                    // follows the dividend, as in Rust.
+                    BinOp::Rem => {
+                        if b == 0 {
+                            0
+                        } else {
+                            a.wrapping_rem(b)
                         }
                     }
                     _ => 0,
@@ -295,6 +304,13 @@ fn eval_binary_f(op: BinOp, a: f64, b: f64) -> Value {
                 a / b
             }
         }
+        BinOp::Rem => {
+            if b == 0.0 {
+                0.0
+            } else {
+                a % b
+            }
+        }
         _ => 0.0,
     })
 }
@@ -310,6 +326,34 @@ fn format_scalar(v: &Value) -> String {
         Value::Str(s) => s.clone(),
         _ => String::new(),
     }
+}
+
+/// `text.split(sep)` (RFC-0047 §2): every piece between occurrences of `sep`,
+/// empty ones kept. An empty `sep` splits into characters (Unicode scalar
+/// values, the unit `len` and `slice` count in), and an empty text into none.
+fn split_text(text: &str, sep: &str) -> Vec<Value> {
+    if sep.is_empty() {
+        return text.chars().map(|c| Value::Str(c.to_string())).collect();
+    }
+    text.split(sep).map(|p| Value::Str(p.to_string())).collect()
+}
+
+/// `text.replace(from, to)` (RFC-0047 §2): every occurrence, left to right. An
+/// empty `from` replaces nothing.
+fn replace_text(text: &str, from: &str, to: &str) -> String {
+    if from.is_empty() {
+        text.to_string()
+    } else {
+        text.replace(from, to)
+    }
+}
+
+/// `text.indexOf(needle)` (RFC-0047 §2): the index in characters of the first
+/// occurrence, or `-1`.
+fn index_of_text(text: &str, needle: &str) -> i64 {
+    text.find(needle).map_or(-1, |at| {
+        i64::try_from(text[..at].chars().count()).unwrap_or(-1)
+    })
 }
 
 /// A number with exactly `decimals` decimals, for `{x:.N}` (RFC-0027).
@@ -1130,6 +1174,79 @@ impl Interpreter {
                     }
                 }))
             }
+            "trim" => Some(Box::new(move |ctx| match base_c(ctx) {
+                Value::Str(s) => Value::Str(s.trim().to_string()),
+                other => other,
+            })),
+            "toLower" => Some(Box::new(move |ctx| match base_c(ctx) {
+                Value::Str(s) => Value::Str(s.to_lowercase()),
+                other => other,
+            })),
+            "toUpper" => Some(Box::new(move |ctx| match base_c(ctx) {
+                Value::Str(s) => Value::Str(s.to_uppercase()),
+                other => other,
+            })),
+            "startsWith" | "endsWith" => {
+                let ends = name.as_str() == "endsWith";
+                let mut arg = self.lower_expr(&args.first()?.value, payload_name);
+                Some(Box::new(move |ctx| {
+                    let part = arg(ctx);
+                    match (base_c(ctx), part) {
+                        (Value::Str(s), Value::Str(p)) => Value::Bool(if ends {
+                            s.ends_with(&p)
+                        } else {
+                            s.starts_with(&p)
+                        }),
+                        _ => Value::Bool(false),
+                    }
+                }))
+            }
+            "replace" => {
+                let mut from = self.lower_expr(&args.first()?.value, payload_name);
+                let mut to = self.lower_expr(&args.get(1)?.value, payload_name);
+                Some(Box::new(move |ctx| {
+                    let (from, to) = (from(ctx), to(ctx));
+                    match (base_c(ctx), from, to) {
+                        (Value::Str(s), Value::Str(f), Value::Str(t)) => {
+                            Value::Str(replace_text(&s, &f, &t))
+                        }
+                        (other, _, _) => other,
+                    }
+                }))
+            }
+            "split" => {
+                let mut sep = self.lower_expr(&args.first()?.value, payload_name);
+                Some(Box::new(move |ctx| {
+                    let sep = sep(ctx);
+                    match (base_c(ctx), sep) {
+                        (Value::Str(s), Value::Str(sep)) => Value::List(split_text(&s, &sep)),
+                        _ => Value::List(Vec::new()),
+                    }
+                }))
+            }
+            "reverse" => Some(Box::new(move |ctx| match base_c(ctx) {
+                Value::List(mut xs) => {
+                    xs.reverse();
+                    Value::List(xs)
+                }
+                other => other,
+            })),
+            "join" => {
+                let mut sep = self.lower_expr(&args.first()?.value, payload_name);
+                Some(Box::new(move |ctx| {
+                    let sep = sep(ctx);
+                    let sep = match &sep {
+                        Value::Str(s) => s.as_str(),
+                        _ => "",
+                    };
+                    match base_c(ctx) {
+                        Value::List(xs) => {
+                            Value::Str(xs.iter().map(format_scalar).collect::<Vec<_>>().join(sep))
+                        }
+                        _ => Value::Str(String::new()),
+                    }
+                }))
+            }
             "contains" => {
                 let mut arg = self.lower_expr(&args.first()?.value, payload_name);
                 Some(Box::new(move |ctx| {
@@ -1138,6 +1255,10 @@ impl Interpreter {
                         Value::List(xs) => {
                             Value::Bool(xs.iter().any(|x| structural_eq(x, &needle)))
                         }
+                        Value::Str(s) => match needle {
+                            Value::Str(part) => Value::Bool(s.contains(&part)),
+                            _ => Value::Bool(false),
+                        },
                         _ => Value::Bool(false),
                     }
                 }))
@@ -1167,8 +1288,11 @@ impl Interpreter {
                 let mut arg = self.lower_expr(&args.first()?.value, payload_name);
                 Some(Box::new(move |ctx| {
                     let needle = arg(ctx);
-                    let found = match base_c(ctx) {
-                        Value::List(xs) => xs.iter().position(|x| structural_eq(x, &needle)),
+                    let found = match (base_c(ctx), &needle) {
+                        (Value::List(xs), _) => xs.iter().position(|x| structural_eq(x, &needle)),
+                        (Value::Str(s), Value::Str(part)) => {
+                            return Value::Int(index_of_text(&s, part));
+                        }
                         _ => None,
                     };
                     Value::Int(found.and_then(|i| i64::try_from(i).ok()).unwrap_or(-1))

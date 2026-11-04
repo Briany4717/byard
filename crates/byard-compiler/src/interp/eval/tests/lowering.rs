@@ -388,3 +388,72 @@ fn parameterized_fn_reacts_to_signal_arg() {
         "greet reacts to signal change"
     );
 }
+
+#[test]
+fn remainder_takes_the_dividends_sign_and_a_zero_divisor_answers_zero() {
+    let rem = |a, b| eval_binary(BinOp::Rem, a, b);
+    assert_eq!(rem(Value::Int(17), Value::Int(5)), Value::Int(2));
+    assert_eq!(rem(Value::Int(-7), Value::Int(3)), Value::Int(-1));
+    assert_eq!(rem(Value::Int(7), Value::Int(-3)), Value::Int(1));
+    assert_eq!(rem(Value::Int(10), Value::Int(0)), Value::Int(0));
+    assert_eq!(rem(Value::Int(i64::MIN), Value::Int(-1)), Value::Int(0));
+    assert_eq!(rem(Value::Float(7.5), Value::Int(2)), Value::Float(1.5));
+    assert_eq!(rem(Value::Int(7), Value::Float(2.5)), Value::Float(2.0));
+    assert_eq!(rem(Value::Float(1.0), Value::Float(0.0)), Value::Float(0.0));
+    assert_eq!(rem(Value::Str("a".into()), Value::Int(2)), Value::Unit);
+}
+
+/// Evaluates `expr` as the text of a one-line view, through the checker too.
+fn shown(expr: &str) -> String {
+    let src = format!("View App() {{\n  Text(\"{{{expr}}}\")\n}}");
+    let parsed = parse(&src);
+    assert!(parsed.errors.is_empty(), "{expr}: {:?}", parsed.errors);
+    let checked = crate::infer::check_views(&parsed.views);
+    assert!(checked.errors.is_empty(), "{expr}: {:?}", checked.errors);
+    let (mut interp, tree) = lower_named(&src, "App");
+    interp.tick();
+    let mut frame = byard_core::frame::RenderFrame::new();
+    interp.render(&tree, &mut frame, 400.0, 100.0);
+    assert!(interp.errors().is_empty(), "{expr}: {:?}", interp.errors());
+    frame.texts()[0].text.clone()
+}
+
+#[test]
+fn text_methods_follow_the_rules_of_rfc_0047() {
+    for (expr, want) in [
+        (r#""  hi there  ".trim()"#, "hi there"),
+        (r#""Straße".toUpper()"#, "STRASSE"),
+        (r#""ÀB".toLower()"#, "àb"),
+        (r#""ΟΔΟΣ".toLower()"#, "οδος"),
+        (r#""hello".contains("ell")"#, "true"),
+        (r#""hello".contains("")"#, "true"),
+        (r#""hello".contains("x")"#, "false"),
+        (r#""hello".startsWith("he")"#, "true"),
+        (r#""hello".startsWith("")"#, "true"),
+        (r#""hello".endsWith("lo")"#, "true"),
+        (r#""hello".endsWith("he")"#, "false"),
+        (r#""a-b-c".replace("-", "")"#, "abc"),
+        (r#""aaa".replace("aa", "b")"#, "ba"),
+        (r#""abc".replace("", "-")"#, "abc"),
+        (r#""héllo".indexOf("l")"#, "2"),
+        (r#""héllo".indexOf("z")"#, "-1"),
+        (r#""héllo".indexOf("")"#, "0"),
+        (r#""a,,b".split(",").len"#, "3"),
+        (r#""a,,b".split(",").join("|")"#, "a||b"),
+        (r#""".split(",").len"#, "1"),
+        (r#""".split("").len"#, "0"),
+        (r#""héllo".split("").len"#, "5"),
+        (r#""héllo".split("").reverse().join("")"#, "olléh"),
+        (r#"[1, 2, 3].reverse().join("")"#, "321"),
+        (r#"[1.0, true, "x"].join(", ")"#, "1, true, x"),
+        (r#"[].join(",")"#, ""),
+        ("17 % 5", "2"),
+        ("-7 % 3", "-1"),
+        ("10%3", "1"),
+        ("7.5 % 2", "1.5"),
+        ("10 % 0", "0"),
+        ("1 + 7 % 4 * 2", "7"),
+    ] {
+        assert_eq!(shown(expr), want, "{expr}");
+    }
+}

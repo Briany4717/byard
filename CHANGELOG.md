@@ -126,6 +126,20 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **The `%` operator, and the text methods an app needs.** `%` is the
+  remainder, binding like `*` and `/`: `7 % 3` is `1`, `-7 % 3` is `-1` (the
+  sign of the left side, as in Rust) and `n % 0` is `0`, as `n / 0` is. Text
+  gains `trim`, `toLower`, `toUpper`, `contains`, `startsWith`, `endsWith`,
+  `replace`, `split` and `indexOf`, and lists `reverse` and `join`, all pure and
+  all known to the checker, so a search box that ignores case is
+  `names.filter(|n| n.toLower().contains(query.trim().toLower()))` and a misspelt
+  one is an `UnknownMethod` with the closest name. `contains` on text used to be
+  reported as a method text does not have. `10%3` with no spaces is a remainder
+  too: a percent literal is one only before a `:`, in a keyframe step, and
+  `byard fmt` writes `10 % 3`. RFC-0047 has the rules, down to what
+  `split("")` and `"ß".toUpper()` give. `examples/text_methods` shows them
+  (`byard shot crates/byard-cli/examples/text_methods`).
+
 - **A user guide, and a test that keeps its samples honest.** Byard had a README
   and forty design documents written for the people building it, and nothing for
   someone using it. `docs/guide` is an mdBook: install, the dev loop, one chapter

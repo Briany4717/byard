@@ -79,7 +79,40 @@ pub fn lex_with_trivia(source: &str) -> TriviaFile<'_> {
         }
     }
     push_gap(source, cursor, source.len(), &mut out.pieces);
+    split_unkeyed_percents(&mut out.pieces, source);
     out
+}
+
+/// The formatter's half of RFC-0047 §4: a percent literal with no `:` after it
+/// is a number and a remainder operator, exactly as [`lex`](super::lex) reads it,
+/// so `10%3` is written `10 % 3`.
+fn split_unkeyed_percents<'a>(pieces: &mut Vec<(Piece<'a>, Span)>, source: &str) {
+    if !pieces
+        .iter()
+        .any(|(p, _)| matches!(p, Piece::Token(Token::PercentLit(_))))
+    {
+        return;
+    }
+    let old = std::mem::take(pieces);
+    pieces.reserve(old.len() + 2);
+    for (i, (piece, span)) in old.iter().enumerate() {
+        let next_token = old[i + 1..].iter().find_map(|(p, _)| match p {
+            Piece::Token(t) => Some(t),
+            Piece::Trivia(_) => None,
+        });
+        let halves = match piece {
+            Piece::Token(Token::PercentLit(_)) if next_token != Some(&Token::Colon) => {
+                super::percent_halves(source, &(span.start as usize..span.end as usize))
+            }
+            _ => None,
+        };
+        let Some((number, digits, percent)) = halves else {
+            pieces.push((piece.clone(), *span));
+            continue;
+        };
+        pieces.push((Piece::Token(number), Span::from(digits)));
+        pieces.push((Piece::Token(Token::Percent), Span::from(percent)));
+    }
 }
 
 /// Reads the whitespace and comments of `source[from..to]` into `pieces`.

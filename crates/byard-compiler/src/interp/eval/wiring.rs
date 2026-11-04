@@ -312,28 +312,23 @@ impl Interpreter {
     /// **or** a `focus =>`/`blur =>` handler (RFC-0012 S2), the
     /// sugar rides `focused_sig`'s edges, so an element that only wants the
     /// one-shot event (no bound `var`) still needs a signal for
-    /// `steal_focus` to flip. That signal is a fresh internal one when
-    /// `focused:` wasn't given, mirroring `render_text_field`'s same
-    /// bind-or-create pattern for its own `focused_sig`.
+    /// `steal_focus` to flip. That signal is the shared sink when `focused:`
+    /// wasn't given (see `focus_sink`).
     pub(super) fn register_focusable(
         &mut self,
         attrs: &[Attr],
         hit_rect: crate::interp::intrinsics::Rect,
         elem_idx: Option<u32>,
     ) {
-        // Without an index there is nowhere to register the focusable, so a
-        // freshly created internal signal below would just be dropped,
-        // bail out first rather than allocate one for nothing.
+        // Without an index there is nowhere to register the focusable.
         let Some(idx) = elem_idx else {
             return;
         };
         let has_focus_sugar = attrs.iter().any(|a| {
             matches!(a.kind, AttrKind::Event { .. }) && matches!(a.name.as_str(), "focus" | "blur")
         });
-        let sig = self
-            .resolve_focused_sig(attrs)
-            .or_else(|| has_focus_sugar.then(|| self.ctx.create_signal(Value::Bool(false))));
-        if let Some(sig) = sig {
+        if has_focus_sugar || self.resolve_focused_sig(attrs).is_some() {
+            let sig = self.focus_signal(attrs);
             self.router.focusable(idx, hit_rect, sig);
         }
     }

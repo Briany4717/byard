@@ -529,6 +529,16 @@ pub struct Interpreter {
     /// rather than inside them because the pools are lent out (immutably) for
     /// the whole build/paint phase, and this is written during it.
     nav_elems: Vec<Option<u32>>,
+    /// The signal every focusable that does not bind `focused:` hands the router.
+    ///
+    /// The router writes a focusable's signal on the way in and out of focus, so
+    /// each one needs *some* signal, and making a fresh one for each, each frame
+    /// (they are registered again every frame) grew the signal table without
+    /// bound. Sharing one is sound because nothing reads it: focus visuals ask
+    /// [`EventRouter::is_focused`](super::events::EventRouter::is_focused), and
+    /// the router's own writes to it are the only ones. A control that binds
+    /// `focused:` still gets its own `var`.
+    focus_sink: Option<SignalId>,
     /// RFC-0026: the shared navigation state each container publishes for the
     /// lowered `back`/`replace` closures, keyed by the navigation `var` that
     /// drives it. Keyed rather than indexed by pool because an action can be
@@ -1797,6 +1807,13 @@ impl Interpreter {
     #[must_use]
     pub fn measure_slots(&self) -> usize {
         self.measures.len()
+    }
+
+    /// How many reactive signals have been created. Signals are not recycled,
+    /// so unlike scopes this only ever grows.
+    #[must_use]
+    pub fn signal_count(&self) -> usize {
+        self.ctx.signal_count()
     }
 
     /// Runtime performance diagnostics recomputed by the last

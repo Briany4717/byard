@@ -324,6 +324,16 @@ pub struct EventRouter {
     /// edge. Rebuilt every render like the handler set; empty unless a
     /// `TextField` registered one.
     drag_captures: Vec<u32>,
+    /// Elements that a focused Space or Enter presses, by firing their `Tap`
+    /// handler: a `Button`, a `Toggle`. Rebuilt every render like the handler
+    /// set. Left to the element itself for everything else (a `TextField` types
+    /// the space, and Enter submits it).
+    activatable: Vec<u32>,
+    /// Whether an activation key is held down since it last fired. A held key
+    /// delivers `KeyDown` again and again; it presses a button once, as a held
+    /// mouse button does, and is armed again by the `KeyUp`. Gesture state, kept
+    /// across the render rebuild.
+    activation_held: bool,
 }
 
 impl EventRouter {
@@ -349,6 +359,13 @@ impl EventRouter {
         self.modal_scrims.clear();
         self.light_dismiss.clear();
         self.drag_captures.clear();
+        self.activatable.clear();
+    }
+
+    /// Makes a focused Space or Enter press `elem`: it fires its `Tap` handler.
+    /// Registered after the handler it presses.
+    pub fn activate_on_key(&mut self, elem: u32) {
+        self.activatable.push(elem);
     }
 
     /// Makes `elem` keep the drag of a press that began on it (RFC-0041 §4).
@@ -861,8 +878,19 @@ impl EventRouter {
                 // Tab key cycles focus.
                 if let Some(Value::Str(key)) = &ev.value {
                     if key == "Tab" {
-                        self.tab_focus(ctx, false);
+                        self.tab_focus(ctx, ev.mods.shift);
                         return;
+                    }
+                    // A focused button or switch is pressed by Space or Enter,
+                    // once per press however long the key is held.
+                    if matches!(key.as_str(), " " | "Space" | "Spacebar" | "Enter") {
+                        if let Some(focused) = self.focused.filter(|f| self.activatable.contains(f))
+                        {
+                            if !std::mem::replace(&mut self.activation_held, true) {
+                                self.fire_on_elem(ctx, Some(focused), EventKind::Tap, ev.pos, None);
+                            }
+                            return;
+                        }
                     }
                     // RFC-0017: Escape dismisses the topmost modal overlay.
                     // RFC-0036: and every open anchored overlay, which has no
@@ -883,6 +911,11 @@ impl EventRouter {
                 self.fire_focused(ctx, EventKind::KeyDown, ev.value.as_ref());
             }
             EventKind::KeyUp => {
+                if let Some(Value::Str(key)) = &ev.value {
+                    if matches!(key.as_str(), " " | "Space" | "Spacebar" | "Enter") {
+                        self.activation_held = false;
+                    }
+                }
                 self.fire_focused(ctx, EventKind::KeyUp, ev.value.as_ref());
             }
             EventKind::TextInput => {
@@ -1035,8 +1068,13 @@ impl EventRouter {
             .enumerate()
             .rev()
             // RFC-0017 focus trap: a modal overlay confines focus to its own
-            // scope; a press below the focus floor cannot steal focus.
-            .find(|(i, f)| *i >= self.focusable_floor && hits(f.rect, f.frame, pos))
+            // scope; a press below the focus floor, or on a disabled element,
+            // cannot steal focus.
+            .find(|(i, f)| {
+                *i >= self.focusable_floor
+                    && !self.disabled.contains(&f.elem)
+                    && hits(f.rect, f.frame, pos)
+            })
             .map(|(_, f)| f.elem)
     }
 
@@ -1066,20 +1104,25 @@ impl EventRouter {
     }
 
     /// Advances keyboard focus to the next (or previous) focusable element
-    /// (Tab traversal).
+    /// (Tab traversal), skipping disabled ones: a control that cannot be used is
+    /// not somewhere focus can rest.
     fn tab_focus(&mut self, ctx: &mut ReactiveCtx, reverse: bool) {
         // RFC-0017 focus trap: when a modal overlay is mounted, cycle only within
         // its scope (`focusables[focusable_floor..]`), wrapping last→first inside
         // it. Outside a modal overlay, `focusable_floor` is 0, the whole set.
         let floor = self.focusable_floor;
-        let scope = &self.focusables[floor..];
+        let scope: smallvec::SmallVec<[u32; 16]> = self.focusables[floor..]
+            .iter()
+            .filter(|f| !self.disabled.contains(&f.elem))
+            .map(|f| f.elem)
+            .collect();
         if scope.is_empty() {
             return;
         }
         let n = scope.len();
         let cur_idx = self
             .focused
-            .and_then(|elem| scope.iter().position(|f| f.elem == elem));
+            .and_then(|elem| scope.iter().position(|&e| e == elem));
         let next_idx = match cur_idx {
             Some(i) => {
                 if reverse {
@@ -1096,8 +1139,7 @@ impl EventRouter {
                 }
             }
         };
-        let next_elem = scope[next_idx].elem;
-        self.steal_focus(ctx, Some(next_elem));
+        self.steal_focus(ctx, Some(scope[next_idx]));
     }
 
     /// Fires the topmost mounted modal overlay's `dismiss` action (RFC-0017:

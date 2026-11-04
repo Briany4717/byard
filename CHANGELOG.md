@@ -126,6 +126,19 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A `Button`, a `Toggle` and a `Slider` take keyboard focus.** Only a text
+  field, a checkbox and a radio button were in the Tab order, so a person on a
+  keyboard could not reach a button at all (#347). Now Tab walks them in the
+  order they are written and Shift+Tab walks back; Space or Enter presses a
+  focused button or flips a focused toggle, once however long the key is held,
+  and the arrow keys step a focused slider by its `step` (a tenth of the range
+  without one). A disabled control is skipped by Tab and by a click, and a
+  button with no action is not a stop. Space also reaches the controls from a
+  real keyboard now: it arrived only as typed text, never as the key, so a
+  focused checkbox did not flip. In the accessibility example the three gain
+  `[focusable]`. Focus draws nothing on its own; `on focused` styles it, and
+  `examples/keyboard_focus` shows the ring.
+
 - **A user guide, and a test that keeps its samples honest.** Byard had a README
   and forty design documents written for the people building it, and nothing for
   someone using it. `docs/guide` is an mdBook: install, the dev loop, one chapter
@@ -546,6 +559,12 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   an error.
 
 ### Fixed
+
+- **A focusable control no longer adds a signal every frame.** A checkbox, a
+  radio button or a text field with no `focused:` made a signal of its own each
+  time it was drawn, and nothing freed them, so the signal table grew with
+  every frame of a window that had one. They share a single signal now, which
+  nothing reads: focus is drawn from the router, not from that signal.
 
 - **A text at size 0 takes no room instead of crashing.** `Text("x")
   #[size: 0]`, or a size bound to a `var` that holds 0 or springs through it,

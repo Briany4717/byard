@@ -662,6 +662,13 @@ impl ReactiveCtx {
     pub fn mark_effective_visits(&self) -> u32 {
         self.mark_effective
     }
+
+    /// How many signals have been created. Signals are not recycled, so this
+    /// only grows; it is here so a test can say what a feature costs in them.
+    #[must_use]
+    pub fn signal_count(&self) -> usize {
+        self.signals.len()
+    }
 }
 
 /// Evaluates `thunk` with read-tracking suspended (`CURRENT_SCOPE = None`), so

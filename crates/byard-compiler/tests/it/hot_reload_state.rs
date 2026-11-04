@@ -59,3 +59,54 @@ fn a_new_declaration_starts_afresh() {
     let tree = apply_program(&mut interp, &before.views, &after.views).expect("lowered again");
     assert_eq!(shown(&mut interp, &tree), ["count 0"]);
 }
+
+/// A derived `let` holds no state, so adding, removing or moving one between
+/// edits is not a change to what the view remembers: every `var` keeps its
+/// value, through the lowering after the reload as well.
+#[test]
+fn adding_a_derived_let_keeps_every_var() {
+    let before = parse(
+        "View Main() {\n    var count: Int = 0\n    var name: Str = \"a\"\n    Text(\"{name} {count}\")\n}",
+    );
+    let mut interp = Interpreter::new();
+    interp.load_views(&before.views);
+    let tree = interp.lower_view(&before.views[0], &["Main"]);
+    let sym = byard_compiler::Symbol::intern;
+    let value = byard_compiler::interp::env::Value::Int;
+    interp.write_var(interp.var_signal(&sym("count")).unwrap(), value(7));
+    interp.write_var(
+        interp.var_signal(&sym("name")).unwrap(),
+        byard_compiler::interp::env::Value::Str("zed".into()),
+    );
+    assert_eq!(shown(&mut interp, &tree), ["zed 7"]);
+
+    // A `let` appears between the vars, and the vars swap places.
+    let after = parse(
+        "View Main() {\n    var name: Str = \"a\"\n    let twice = count * 2\n    var count: Int = 0\n    Text(\"{name} {count} {twice}\")\n}",
+    );
+    let tree = apply_program(&mut interp, &before.views, &after.views).expect("lowered again");
+    assert_eq!(shown(&mut interp, &tree), ["zed 7 14"]);
+
+    // And removing it again.
+    let tree = apply_program(&mut interp, &after.views, &before.views).expect("lowered again");
+    assert_eq!(shown(&mut interp, &tree), ["zed 7"]);
+}
+
+/// A `var` whose declared type changed does not keep a value of the old one.
+#[test]
+fn a_retyped_var_starts_afresh() {
+    let before = parse("View Main() {\n    var n: Int = 3\n    Text(\"{n}\")\n}");
+    let mut interp = Interpreter::new();
+    interp.load_views(&before.views);
+    let tree = interp.lower_view(&before.views[0], &["Main"]);
+    assert_eq!(shown(&mut interp, &tree), ["3"]);
+    interp.write_var(
+        interp
+            .var_signal(&byard_compiler::Symbol::intern("n"))
+            .unwrap(),
+        byard_compiler::interp::env::Value::Int(9),
+    );
+    let after = parse("View Main() {\n    var n: Str = \"fresh\"\n    Text(\"{n}\")\n}");
+    let tree = apply_program(&mut interp, &before.views, &after.views).expect("lowered again");
+    assert_eq!(shown(&mut interp, &tree), ["fresh"]);
+}

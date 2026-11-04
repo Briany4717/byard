@@ -89,6 +89,66 @@ pub struct ClipMaskAtlas {
     /// How many times the strip has actually been rasterised. Read by the
     /// steady-frame assertion.
     rasterised: u64,
+    /// The mesh and uniform buffers and the bind group over the uniforms, kept
+    /// between frames and grown, never shrunk. A frame whose masks change but
+    /// fit rewrites them in place.
+    gpu: MaskBuffers,
+    /// How many buffers and bind groups `gpu` has made, ever.
+    gpu_creations: u32,
+}
+
+/// A buffer that only ever grows, written in place with `write_buffer`.
+///
+/// The same rule the instance arena follows (RFC-0033 §G3), applied to the
+/// clip-mask pass, which cannot use the arena: its pass runs ahead of the
+/// arena's upload, in the same command buffer. Rounded up to a power of two so
+/// a mask that gains a vertex does not reallocate.
+#[derive(Default)]
+struct GrowBuffer {
+    buffer: Option<wgpu::Buffer>,
+    capacity: u64,
+}
+
+impl GrowBuffer {
+    /// Makes room for `needed` bytes and writes `bytes` at the start. Returns
+    /// whether the buffer was replaced, which invalidates anything bound to it.
+    fn write(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        label: &str,
+        usage: wgpu::BufferUsages,
+        bytes: &[u8],
+    ) -> bool {
+        let needed = bytes.len() as u64;
+        let mut replaced = false;
+        if self.buffer.is_none() || needed > self.capacity {
+            self.capacity = needed.max(256).next_power_of_two();
+            self.buffer = Some(device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size: self.capacity,
+                usage: usage | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
+            replaced = true;
+        }
+        if let Some(buffer) = &self.buffer {
+            queue.write_buffer(buffer, 0, bytes);
+        }
+        replaced
+    }
+
+    fn get(&self) -> &wgpu::Buffer {
+        self.buffer.as_ref().expect("written before it is bound")
+    }
+}
+
+#[derive(Default)]
+struct MaskBuffers {
+    vertices: GrowBuffer,
+    indices: GrowBuffer,
+    uniforms: GrowBuffer,
+    bind_group: Option<wgpu::BindGroup>,
 }
 
 impl ClipMaskAtlas {
@@ -168,6 +228,8 @@ impl ClipMaskAtlas {
             drawn: Vec::new(),
             drawn_scale: 0.0,
             rasterised: 0,
+            gpu: MaskBuffers::default(),
+            gpu_creations: 0,
         })
     }
 
@@ -196,6 +258,13 @@ impl ClipMaskAtlas {
         self.rasterised
     }
 
+    /// How many GPU buffers and bind groups the mask pass has created, ever.
+    /// Frames whose masks change but fit the buffers already held add nothing.
+    #[must_use]
+    pub const fn gpu_creations(&self) -> u32 {
+        self.gpu_creations
+    }
+
     /// The strip's allocated size in physical pixels.
     #[must_use]
     pub const fn size(&self) -> (u32, u32) {
@@ -208,6 +277,7 @@ impl ClipMaskAtlas {
     ///
     /// Draws nothing and reallocates nothing when `masks` is empty, which is
     /// the frame every application without a path clip renders.
+    #[allow(clippy::missing_panics_doc)]
     pub fn prepare(
         &mut self,
         device: &wgpu::Device,
@@ -240,7 +310,7 @@ impl ClipMaskAtlas {
         self.rasterised += 1;
         let reallocated = self.layout_strip(device, masks, scale);
 
-        let bind_group = self.mask_uniforms(device, queue, masks);
+        self.write_mask_uniforms(device, queue, masks);
 
         // The meshes, concatenated into one vertex and one index buffer, so
         // the pass is one binding and N draws rather than N of each.
@@ -258,18 +328,27 @@ impl ClipMaskAtlas {
         if indices.is_empty() {
             return reallocated;
         }
-        let vertex_buffer = create_init_buffer(
+        self.gpu_creations += u32::from(self.gpu.vertices.write(
             device,
+            queue,
             "ByardCore - ClipMask Vertices",
-            bytemuck::cast_slice(&vertices),
             wgpu::BufferUsages::VERTEX,
-        );
-        let index_buffer = create_init_buffer(
+            bytemuck::cast_slice(&vertices),
+        ));
+        self.gpu_creations += u32::from(self.gpu.indices.write(
             device,
+            queue,
             "ByardCore - ClipMask Indices",
-            bytemuck::cast_slice(&indices),
             wgpu::BufferUsages::INDEX,
-        );
+            bytemuck::cast_slice(&indices),
+        ));
+        let vertex_buffer = self.gpu.vertices.get();
+        let index_buffer = self.gpu.indices.get();
+        let bind_group = self
+            .gpu
+            .bind_group
+            .as_ref()
+            .expect("write_mask_uniforms built the bind group");
 
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("ByardCore - ClipMask Pass"),
@@ -311,7 +390,7 @@ impl ClipMaskAtlas {
             );
             #[allow(clippy::cast_possible_truncation)]
             let offset = UNIFORM_STRIDE as u32 * u32::try_from(i).unwrap_or(0);
-            pass.set_bind_group(0, Some(&bind_group), &[offset]);
+            pass.set_bind_group(0, Some(bind_group), &[offset]);
             let (first, count, base) = ranges[i];
             if count > 0 {
                 pass.draw_indexed(first..first + count, base, 0..1);
@@ -364,14 +443,15 @@ impl ClipMaskAtlas {
         false
     }
 
-    /// One uniform per mask at the dynamic-offset stride, and the bind group
-    /// that names them.
-    fn mask_uniforms(
-        &self,
+    /// One uniform per mask at the dynamic-offset stride, written into the
+    /// retained uniform buffer; the bind group over it is rebuilt only when the
+    /// buffer was replaced by a larger one.
+    fn write_mask_uniforms(
+        &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         masks: &[ClipMask],
-    ) -> wgpu::BindGroup {
+    ) {
         let stride = usize::try_from(UNIFORM_STRIDE).unwrap_or(256);
         let mut uniforms = vec![0.0_f32; (stride / 4) * masks.len()];
         for (i, m) in masks.iter().enumerate() {
@@ -383,25 +463,28 @@ impl ClipMaskAtlas {
                 m.bounds.height,
             ]);
         }
-        let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("ByardCore - ClipMask Uniforms"),
-            size: UNIFORM_STRIDE * masks.len() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        queue.write_buffer(&uniform_buffer, 0, bytemuck::cast_slice(&uniforms));
-        device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("ByardCore - ClipMask Bind Group"),
-            layout: &self.layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: &uniform_buffer,
-                    offset: 0,
-                    size: wgpu::BufferSize::new(UNIFORM_STRIDE),
-                }),
-            }],
-        })
+        let replaced = self.gpu.uniforms.write(
+            device,
+            queue,
+            "ByardCore - ClipMask Uniforms",
+            wgpu::BufferUsages::UNIFORM,
+            bytemuck::cast_slice(&uniforms),
+        );
+        if replaced || self.gpu.bind_group.is_none() {
+            self.gpu_creations += 2;
+            self.gpu.bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("ByardCore - ClipMask Bind Group"),
+                layout: &self.layout,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: self.gpu.uniforms.get(),
+                        offset: 0,
+                        size: wgpu::BufferSize::new(UNIFORM_STRIDE),
+                    }),
+                }],
+            }));
+        }
     }
 }
 
@@ -533,18 +616,4 @@ fn allocate(
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
     let msaa_view = msaa.create_view(&wgpu::TextureViewDescriptor::default());
     (texture, view, msaa, msaa_view)
-}
-
-fn create_init_buffer(
-    device: &wgpu::Device,
-    label: &str,
-    contents: &[u8],
-    usage: wgpu::BufferUsages,
-) -> wgpu::Buffer {
-    use wgpu::util::DeviceExt;
-    device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some(label),
-        contents,
-        usage,
-    })
 }

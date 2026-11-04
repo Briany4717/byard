@@ -141,7 +141,66 @@ enum TextureState {
     Reloading(TextureEntry),
 }
 
-/// Path-keyed cache of decoded textures so a static image uploads once.
+/// The default ceiling on the VRAM the decoded images may hold, in bytes.
+///
+/// 128 MiB is 32 full-HD photographs, or about 500 of the 512x512 thumbnails a
+/// gallery shows. It is a ceiling and not a reservation: an app with a few
+/// images never gets near it and pays one comparison per frame to know so. It
+/// is deliberately below what an integrated GPU, which shares system memory
+/// with everything else, can afford to give a UI toolkit. An app that really
+/// shows more at once is not cut off (see [`TextureCache`]); it can raise the
+/// budget with [`EncoderSubsystem::set_texture_budget`](super::EncoderSubsystem::set_texture_budget).
+pub const DEFAULT_TEXTURE_BUDGET_BYTES: u64 = 128 * 1024 * 1024;
+
+/// How many frames an image must go undrawn before the cache may evict it.
+///
+/// Only matters once the budget is exceeded. A grace period, so a picture that
+/// is hidden for a moment (a tab switch, a list row scrolling out and back by a
+/// pixel of jitter) is not thrown away and decoded again; half a second at 60 Hz.
+const EVICT_AFTER_IDLE_FRAMES: u64 = 30;
+
+/// One cache entry: the state, the frame it was last asked for, and the VRAM it
+/// holds.
+struct Slot {
+    state: TextureState,
+    /// The cache's frame counter the last time a frame referenced this image.
+    last_used: u64,
+    /// `4 * width * height` while a texture is held (`Ready` / `Reloading`),
+    /// zero otherwise.
+    bytes: u64,
+}
+
+fn texture_bytes(entry: &TextureEntry) -> u64 {
+    4 * u64::from(entry.width) * u64::from(entry.height)
+}
+
+/// Picks which idle entries to evict, oldest first, until `resident` fits
+/// `budget`.
+///
+/// `idle` holds `(index, last_used, bytes)` for every entry that is *allowed*
+/// to go: the caller has already left out anything pending, reloading, failed
+/// or used within the grace period, and so anything drawn this frame. If those
+/// are not enough to reach the budget it returns all it can and stops: a frame
+/// that shows more than the budget is allowed to, because the alternative is
+/// to evict what is on screen and decode it again next frame, forever.
+fn choose_evictions(idle: &mut [(usize, u64, u64)], mut resident: u64, budget: u64) -> Vec<usize> {
+    if resident <= budget {
+        return Vec::new();
+    }
+    idle.sort_unstable_by_key(|&(_, last_used, _)| last_used);
+    let mut victims = Vec::new();
+    for &(index, _, bytes) in idle.iter() {
+        if resident <= budget {
+            break;
+        }
+        resident = resident.saturating_sub(bytes);
+        victims.push(index);
+    }
+    victims
+}
+
+/// Path-keyed cache of decoded textures so a static image uploads once, within
+/// a VRAM budget.
 ///
 /// Decode is **asynchronous** (RFC-0001 §5.1): [`ensure`](Self::ensure)
 /// never touches the filesystem on the calling (render) thread, it inserts a
@@ -149,16 +208,96 @@ enum TextureState {
 /// on the relay's I/O runtime. The decoded pixels return through the type-erased
 /// I/O channel and are uploaded by [`apply_decoded`](Self::apply_decoded), which
 /// runs on the render thread (where the `wgpu` `Device`/`Queue` live).
-#[derive(Default)]
+///
+/// # Residency
+///
+/// A texture stays until the cache holds more than its budget of them, and then
+/// only the ones **no frame has asked for lately** go, least recently asked for
+/// first. Every frame calls [`begin_frame`](Self::begin_frame), asks for each
+/// image it draws with [`ensure`](Self::ensure) (which stamps it with that
+/// frame) and then [`trim`](Self::trim)s. An image drawn this frame, or within
+/// the last 30, is never evicted, so a screen showing
+/// more images than the budget holds goes over it rather than thrash; it comes
+/// back under as soon as the view changes. A decode in flight is never
+/// evicted either, so its result always has an entry to land in.
 pub struct TextureCache {
-    entries: HashMap<String, TextureState>,
+    entries: HashMap<String, Slot>,
+    /// Frames begun, the clock `last_used` is read against.
+    frame: u64,
+    /// Sum of `bytes` over `entries`.
+    resident_bytes: u64,
+    budget_bytes: u64,
+    /// Entries evicted so far, for tests and telemetry.
+    evictions: u64,
+}
+
+impl Default for TextureCache {
+    fn default() -> Self {
+        Self::with_budget(DEFAULT_TEXTURE_BUDGET_BYTES)
+    }
 }
 
 impl TextureCache {
+    /// A cache that evicts idle textures once they hold more than
+    /// `budget_bytes` of VRAM.
+    #[must_use]
+    pub fn with_budget(budget_bytes: u64) -> Self {
+        Self {
+            entries: HashMap::new(),
+            frame: 0,
+            resident_bytes: 0,
+            budget_bytes,
+            evictions: 0,
+        }
+    }
+
+    /// Changes the budget. Takes effect at the next [`trim`](Self::trim).
+    pub fn set_budget(&mut self, budget_bytes: u64) {
+        self.budget_bytes = budget_bytes;
+    }
+
+    /// VRAM held by decoded textures, in bytes.
+    #[must_use]
+    pub const fn resident_bytes(&self) -> u64 {
+        self.resident_bytes
+    }
+
+    /// The budget [`trim`](Self::trim) holds idle textures to.
+    #[must_use]
+    pub const fn budget_bytes(&self) -> u64 {
+        self.budget_bytes
+    }
+
+    /// How many entries (in any state) the cache holds.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Whether the cache holds no entries.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// How many textures have been evicted so far.
+    #[must_use]
+    pub const fn evictions(&self) -> u64 {
+        self.evictions
+    }
+
+    /// Starts a frame. Every image the frame draws must be
+    /// [`ensure`](Self::ensure)d after this, and [`trim`](Self::trim) called
+    /// once they all have been.
+    pub fn begin_frame(&mut self) {
+        self.frame += 1;
+    }
+
     /// Requests `src` without blocking: if unseen, inserts a `Pending` marker
     /// and spawns the decode on `io_handle`, returning immediately. A second
-    /// call for a still-`Pending` (or already-resolved) `src` is a no-op, the
-    /// `contains_key` guard ensures exactly one decode task per source.
+    /// call for a still-`Pending` (or already-resolved) `src` is a no-op apart
+    /// from recording that this frame uses it, the `contains_key` guard
+    /// ensures exactly one decode task per source.
     ///
     /// Decode happens entirely off the calling thread (the render and logic
     /// threads never block on I/O); only the cheap GPU upload, later, runs on
@@ -169,18 +308,72 @@ impl TextureCache {
         io_tx: &DecodeResultSender,
         src: &str,
     ) {
-        if self.entries.contains_key(src) {
+        if self.mark_used(src) {
             return;
         }
-        self.entries.insert(src.to_string(), TextureState::Pending);
+        self.entries.insert(
+            src.to_string(),
+            Slot {
+                state: TextureState::Pending,
+                last_used: self.frame,
+                bytes: 0,
+            },
+        );
         spawn_decode(io_handle, io_tx, src);
+    }
+
+    /// Records that the current frame uses `src`, returning whether it is known.
+    pub fn mark_used(&mut self, src: &str) -> bool {
+        match self.entries.get_mut(src) {
+            Some(slot) => {
+                slot.last_used = self.frame;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Evicts textures to bring the cache back under its budget, if it is over
+    /// it: only `Ready` ones that no frame has used for
+    /// 30 frames, least recently used first. If everything
+    /// held is in use the cache stays over budget. A cache under budget does
+    /// nothing, and costs one comparison.
+    pub fn trim(&mut self) {
+        if self.resident_bytes <= self.budget_bytes {
+            return;
+        }
+        let frame = self.frame;
+        let keys: Vec<&String> = self.entries.keys().collect();
+        let mut idle: Vec<(usize, u64, u64)> = keys
+            .iter()
+            .enumerate()
+            .filter_map(|(i, key)| {
+                let slot = &self.entries[*key];
+                let evictable = matches!(slot.state, TextureState::Ready(_))
+                    && frame.saturating_sub(slot.last_used) >= EVICT_AFTER_IDLE_FRAMES;
+                evictable.then_some((i, slot.last_used, slot.bytes))
+            })
+            .collect();
+        let victims: Vec<String> =
+            choose_evictions(&mut idle, self.resident_bytes, self.budget_bytes)
+                .into_iter()
+                .map(|i| keys[i].clone())
+                .collect();
+        for key in victims {
+            if let Some(slot) = self.entries.remove(&key) {
+                self.resident_bytes = self.resident_bytes.saturating_sub(slot.bytes);
+                self.evictions += 1;
+            }
+        }
     }
 
     /// Decodes again every entry that is the file at `changed` (dev hot
     /// reload), returning how many. An entry drawn so far keeps drawing until
     /// the new pixels are uploaded; one that had failed (the file was missing
     /// or broken) is simply retried. An entry still `Pending` is left alone:
-    /// its decode reads the file when it runs, which is after the change.
+    /// its decode reads the file when it runs, which is after the change. An
+    /// entry the cache already evicted needs nothing: the next frame that draws
+    /// it decodes the file as it now is.
     ///
     /// Matched by file rather than by string, since a view names the image
     /// relative to where the app runs and a watcher reports it absolute.
@@ -196,11 +389,11 @@ impl TextureCache {
                 .map_or_else(|_| std::path::Path::new(src) == changed, |p| p == changed)
         };
         let mut reloaded = 0;
-        for (src, state) in &mut self.entries {
+        for (src, slot) in &mut self.entries {
             if !same(src) {
                 continue;
             }
-            *state = match std::mem::replace(state, TextureState::Pending) {
+            slot.state = match std::mem::replace(&mut slot.state, TextureState::Pending) {
                 TextureState::Ready(entry) | TextureState::Reloading(entry) => {
                     TextureState::Reloading(entry)
                 }
@@ -224,6 +417,11 @@ impl TextureCache {
         sampler: &wgpu::Sampler,
         decoded: DecodedImage,
     ) {
+        let previous = self.entries.remove(&decoded.src);
+        let (last_used, held) = previous
+            .as_ref()
+            .map_or((self.frame, 0), |p| (p.last_used, p.bytes));
+        self.resident_bytes = self.resident_bytes.saturating_sub(held);
         let state = match decoded.result {
             Ok(rgba) => TextureState::Ready(upload_rgba(device, queue, layout, sampler, &rgba)),
             // A reload that could not be read, most often a file caught half
@@ -231,15 +429,18 @@ impl TextureCache {
             // The save that completes it is another change, and another try.
             Err(err)
                 if matches!(
-                    self.entries.get(&decoded.src),
-                    Some(TextureState::Reloading(_))
+                    previous,
+                    Some(Slot {
+                        state: TextureState::Reloading(_),
+                        ..
+                    })
                 ) =>
             {
                 eprintln!(
                     "byard: warning: image changed but could not be decoded, keeping the previous one: '{}': {err}",
                     decoded.src
                 );
-                match self.entries.remove(&decoded.src) {
+                match previous.map(|p| p.state) {
                     Some(TextureState::Reloading(entry)) => TextureState::Ready(entry),
                     _ => TextureState::Failed,
                 }
@@ -255,7 +456,19 @@ impl TextureCache {
                 TextureState::Failed
             }
         };
-        self.entries.insert(decoded.src, state);
+        let bytes = match &state {
+            TextureState::Ready(entry) | TextureState::Reloading(entry) => texture_bytes(entry),
+            TextureState::Pending | TextureState::Failed => 0,
+        };
+        self.resident_bytes += bytes;
+        self.entries.insert(
+            decoded.src,
+            Slot {
+                state,
+                last_used,
+                bytes,
+            },
+        );
     }
 
     /// Looks up a `Ready` entry. Returns `None` for both `Pending` and
@@ -263,7 +476,7 @@ impl TextureCache {
     /// one, so callers need no new pending-state handling.
     #[must_use]
     pub fn get(&self, src: &str) -> Option<&TextureEntry> {
-        match self.entries.get(src) {
+        match self.entries.get(src).map(|slot| &slot.state) {
             Some(TextureState::Ready(entry) | TextureState::Reloading(entry)) => Some(entry),
             _ => None,
         }
@@ -971,5 +1184,293 @@ mod tests {
             .expect("the decode woke the render loop");
         assert!(rx.try_recv().is_ok(), "and its result is waiting");
         assert!(woke_rx.try_recv().is_err(), "exactly once");
+    }
+
+    // ── Residency: the budget, and not thrashing under it ───────────────────
+
+    /// Sorted-input helper: `(index, last_used, bytes)` for `n` idle entries
+    /// of `bytes` each, entry `i` last used at frame `i`.
+    fn idle(n: usize, bytes: u64) -> Vec<(usize, u64, u64)> {
+        (0..n).map(|i| (i, i as u64, bytes)).collect()
+    }
+
+    #[test]
+    fn a_cache_under_its_budget_evicts_nothing() {
+        assert_eq!(choose_evictions(&mut idle(10, 100), 1_000, 1_000).len(), 0);
+        assert_eq!(choose_evictions(&mut idle(10, 100), 900, 1_000).len(), 0);
+    }
+
+    #[test]
+    fn the_least_recently_used_go_first_and_only_as_many_as_needed() {
+        // Ten entries of 100 bytes held, budget 650: four must go, the oldest.
+        let mut entries = idle(10, 100);
+        entries.reverse(); // order in, must not matter
+        let victims = choose_evictions(&mut entries, 1_000, 650);
+        assert_eq!(victims, vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn nothing_in_use_means_nothing_is_evicted_however_far_over_budget() {
+        // The caller offers only entries that are allowed to go. A thousand
+        // textures on screen at once are none of them offered.
+        assert_eq!(
+            choose_evictions(&mut [], 1_000 * 1_024, 128 * 1_024).len(),
+            0
+        );
+        // Offered fewer bytes than the overshoot: take them all, stop there.
+        let victims = choose_evictions(&mut idle(2, 100), 10_000, 500);
+        assert_eq!(victims, vec![0, 1]);
+    }
+
+    fn decoded(src: &str, side: u32) -> DecodedImage {
+        DecodedImage {
+            src: src.to_string(),
+            result: Ok(DecodedRgba {
+                width: side,
+                height: side,
+                bytes: vec![200; (4 * side * side) as usize],
+            }),
+        }
+    }
+
+    /// One frame of a view showing `visible`, with decoding instantaneous:
+    /// anything the cache does not hold is "decoded" and uploaded now. Returns
+    /// how many were (re)decoded, which is the thrash metric.
+    fn show(
+        cache: &mut TextureCache,
+        gpu: &(Arc<wgpu::Device>, Arc<wgpu::Queue>),
+        layout: &wgpu::BindGroupLayout,
+        sampler: &wgpu::Sampler,
+        visible: impl Iterator<Item = usize>,
+    ) -> usize {
+        cache.begin_frame();
+        let mut decodes = 0;
+        for i in visible {
+            let src = format!("img{i}");
+            if !cache.mark_used(&src) {
+                cache.apply_decoded(&gpu.0, &gpu.1, layout, sampler, decoded(&src, 16));
+                decodes += 1;
+            }
+        }
+        cache.trim();
+        decodes
+    }
+
+    const TEX: u64 = 4 * 16 * 16; // bytes of one test image
+
+    /// The failure the first design had: more images on screen than the budget
+    /// holds. Evicting the older half re-decodes what is being drawn, every
+    /// frame, forever. Here a thousand are drawn for a hundred frames and each
+    /// is decoded exactly once.
+    #[test]
+    fn a_view_larger_than_the_budget_does_not_thrash() {
+        let Some((device, queue, _turn)) = try_device() else {
+            eprintln!("no GPU adapter, skipping texture residency test");
+            return;
+        };
+        let gpu = (device.clone(), queue);
+        let layout = bind_group_layout(&device);
+        let smp = sampler(&device);
+        let mut cache = TextureCache::with_budget(128 * TEX);
+
+        let mut decodes = 0;
+        for _ in 0..100 {
+            decodes += show(&mut cache, &gpu, &layout, &smp, 0..1_000);
+        }
+        assert_eq!(decodes, 1_000, "every image decodes once, then stays");
+        assert_eq!(cache.evictions(), 0);
+        assert_eq!(
+            cache.resident_bytes(),
+            1_000 * TEX,
+            "over budget, on purpose"
+        );
+    }
+
+    /// Images the view moved on from go, once they have been idle long enough,
+    /// and what is on screen stays.
+    #[test]
+    fn images_nobody_draws_any_more_are_evicted_and_the_visible_ones_stay() {
+        let Some((device, queue, _turn)) = try_device() else {
+            eprintln!("no GPU adapter, skipping texture residency test");
+            return;
+        };
+        let gpu = (device.clone(), queue);
+        let layout = bind_group_layout(&device);
+        let smp = sampler(&device);
+        let mut cache = TextureCache::with_budget(200 * TEX);
+
+        for _ in 0..5 {
+            show(&mut cache, &gpu, &layout, &smp, 0..200);
+        }
+        // Navigate to a different set of 200. The first set is idle but within
+        // the grace period, and the cache is over budget: nothing is dropped
+        // yet, because it could still come back.
+        for _ in 0..5 {
+            show(&mut cache, &gpu, &layout, &smp, 1_000..1_200);
+        }
+        assert_eq!(cache.evictions(), 0, "the first set is within its grace");
+        for _ in 0..=EVICT_AFTER_IDLE_FRAMES {
+            show(&mut cache, &gpu, &layout, &smp, 1_000..1_200);
+        }
+        assert_eq!(cache.evictions(), 200, "the first set aged out");
+        assert!(cache.get("img0").is_none() && cache.get("img199").is_none());
+        assert!((1_000..1_200).all(|i| cache.get(&format!("img{i}")).is_some()));
+        assert_eq!(cache.resident_bytes(), 200 * TEX);
+    }
+
+    /// The test to run to see the budget hold: a window of 50 images slides
+    /// over 3,000, one step a frame, and the VRAM the cache holds never goes
+    /// above the budget once it has filled.
+    ///
+    /// `cargo test -p byard-core --lib images_cycled -- --nocapture` prints the
+    /// peak.
+    #[test]
+    fn images_cycled_through_a_window_stay_under_the_budget() {
+        let Some((device, queue, _turn)) = try_device() else {
+            eprintln!("no GPU adapter, skipping texture residency test");
+            return;
+        };
+        let gpu = (device.clone(), queue);
+        let layout = bind_group_layout(&device);
+        let smp = sampler(&device);
+        let budget = 100 * TEX;
+        let mut cache = TextureCache::with_budget(budget);
+
+        let mut peak = 0;
+        let mut decodes = 0;
+        for step in 0..3_000 {
+            decodes += show(&mut cache, &gpu, &layout, &smp, step..step + 50);
+            peak = peak.max(cache.resident_bytes());
+            assert!(
+                cache.resident_bytes() <= budget,
+                "step {step}: {} bytes held, budget {budget}",
+                cache.resident_bytes()
+            );
+        }
+        // Each image enters once as the window reaches it, and none that was
+        // still in the window was ever decoded twice.
+        assert_eq!(decodes, 3_000 + 49);
+        eprintln!(
+            "texture cache: peak {peak} bytes of a {budget} byte budget, \
+             {} images seen, {} evicted, {} resident",
+            decodes,
+            cache.evictions(),
+            cache.len()
+        );
+    }
+
+    /// A decode in flight is never evicted, so its result always has an entry
+    /// to land in, and a result for an image the cache no longer knows is kept
+    /// (and can age out) rather than leaked or lost.
+    #[test]
+    fn a_pending_decode_survives_trimming_and_its_result_is_not_leaked() {
+        let Some((device, queue, _turn)) = try_device() else {
+            eprintln!("no GPU adapter, skipping texture residency test");
+            return;
+        };
+        let layout = bind_group_layout(&device);
+        let smp = sampler(&device);
+        let rt = io_runtime();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Box<dyn Any + Send>>();
+        let tx = DecodeResultSender::new(tx, std::sync::Arc::new(|| {}));
+
+        let mut cache = TextureCache::with_budget(0);
+        cache.begin_frame();
+        cache.ensure(rt.handle(), &tx, "/nonexistent/byard-pending.png");
+        for _ in 0..200 {
+            cache.begin_frame();
+            cache.trim();
+        }
+        assert_eq!(cache.len(), 1, "a pending entry is not evictable");
+        assert_eq!(cache.evictions(), 0);
+
+        let result = rt.block_on(rx.recv()).expect("decode result");
+        let result = *result.downcast::<DecodedImage>().expect("a DecodedImage");
+        assert!(result.result.is_err());
+        cache.apply_decoded(&device, &queue, &layout, &smp, result);
+        assert_eq!(cache.len(), 1, "the failure landed in the entry that asked");
+        assert_eq!(cache.resident_bytes(), 0);
+
+        // A result for something nobody asked for (or that was dropped) is
+        // stored with the current frame, and then ages out like any other.
+        cache.apply_decoded(&device, &queue, &layout, &smp, decoded("stray", 16));
+        assert_eq!(cache.resident_bytes(), TEX);
+        for _ in 0..=EVICT_AFTER_IDLE_FRAMES {
+            cache.begin_frame();
+        }
+        cache.trim();
+        assert!(cache.get("stray").is_none());
+        assert_eq!(cache.resident_bytes(), 0);
+    }
+
+    /// A changed file still reloads with eviction in play: a resident image
+    /// swaps in place, and one that was evicted is simply decoded from the new
+    /// file the next time a frame draws it.
+    #[test]
+    fn hot_reload_works_for_resident_and_evicted_images() {
+        let Some((device, queue, _turn)) = try_device() else {
+            eprintln!("no GPU adapter, skipping texture residency test");
+            return;
+        };
+        let layout = bind_group_layout(&device);
+        let smp = sampler(&device);
+        let rt = io_runtime();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Box<dyn Any + Send>>();
+        let tx = DecodeResultSender::new(tx, std::sync::Arc::new(|| {}));
+        let path = write_png_fixture("evict_reload", 8, 8);
+        let src = path.to_str().unwrap();
+        let mut pump = |cache: &mut TextureCache| {
+            let r = rt.block_on(rx.recv()).expect("decode result");
+            cache.apply_decoded(
+                &device,
+                &queue,
+                &layout,
+                &smp,
+                *r.downcast::<DecodedImage>().unwrap(),
+            );
+        };
+
+        let mut cache = TextureCache::with_budget(0);
+        cache.begin_frame();
+        cache.ensure(rt.handle(), &tx, src);
+        pump(&mut cache);
+        assert_eq!(cache.get(src).map(|e| e.width), Some(8));
+
+        // Resident: the reload swaps in place and keeps drawing the old pixels
+        // meanwhile, and the byte count follows the new texture.
+        image::RgbaImage::from_pixel(16, 4, image::Rgba([1, 2, 3, 255]))
+            .save(&path)
+            .unwrap();
+        assert_eq!(cache.reload(rt.handle(), &tx, &path), 1);
+        assert_eq!(
+            cache.get(src).map(|e| e.width),
+            Some(8),
+            "old picture until the new lands"
+        );
+        cache.begin_frame();
+        cache.trim();
+        assert_eq!(cache.len(), 1, "a reloading entry is not evictable");
+        pump(&mut cache);
+        assert_eq!(cache.get(src).map(|e| (e.width, e.height)), Some((16, 4)));
+        assert_eq!(cache.resident_bytes(), 4 * 16 * 4);
+
+        // Evicted (zero budget, idle past the grace): nothing to reload, and
+        // the next draw decodes the file as it is now.
+        for _ in 0..=EVICT_AFTER_IDLE_FRAMES {
+            cache.begin_frame();
+        }
+        cache.trim();
+        assert!(cache.get(src).is_none());
+        assert_eq!(cache.resident_bytes(), 0);
+        image::RgbaImage::from_pixel(5, 5, image::Rgba([9, 9, 9, 255]))
+            .save(&path)
+            .unwrap();
+        assert_eq!(cache.reload(rt.handle(), &tx, &path), 0);
+        cache.begin_frame();
+        cache.ensure(rt.handle(), &tx, src);
+        pump(&mut cache);
+        assert_eq!(cache.get(src).map(|e| (e.width, e.height)), Some((5, 5)));
+
+        let _ = std::fs::remove_file(&path);
     }
 }

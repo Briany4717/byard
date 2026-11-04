@@ -750,11 +750,30 @@ impl Interpreter {
                     }
 
                     // ── `focused:` reflected prop → register as focusable ──
-                    // TextField, Checkbox, and RadioButton register their own
-                    // focusable inside their render fns (they are focusable *by
-                    // default*, RFC-0018), so exclude them here to avoid
-                    // double-registration.
-                    if !matches!(element_name, "TextField" | "Checkbox" | "RadioButton") {
+                    // TextField, Checkbox, RadioButton, Toggle and Slider register
+                    // their own focusable inside their render fns (they are
+                    // focusable *by default*, RFC-0018), so exclude them here to
+                    // avoid double-registration.
+                    //
+                    // A `Button` that does something is focusable by default too,
+                    // and Space or Enter presses it; one with nothing to press is
+                    // not, there is nothing for focus to do there. `Toggle` and
+                    // `Slider` register their own, as the rest do.
+                    if element_name == "Button" {
+                        if let Some(idx) = elem_idx.filter(|&i| {
+                            self.router
+                                .has_handler(i, crate::interp::events::EventKind::Tap)
+                        }) {
+                            let fsig = self.focus_signal(attrs);
+                            self.router.focusable(idx, hit_rect, fsig);
+                            self.router.activate_on_key(idx);
+                        } else {
+                            self.register_focusable(attrs, hit_rect, elem_idx);
+                        }
+                    } else if !matches!(
+                        element_name,
+                        "TextField" | "Checkbox" | "RadioButton" | "Toggle" | "Slider"
+                    ) {
                         self.register_focusable(attrs, hit_rect, elem_idx);
                     }
 

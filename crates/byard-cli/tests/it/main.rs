@@ -23,6 +23,7 @@ mod gradient_kinds_example;
 mod grid_example;
 mod guide;
 mod incremental_example;
+mod keyboard_focus_example;
 mod library_check;
 mod list_animations_example;
 mod looping_animations_example;

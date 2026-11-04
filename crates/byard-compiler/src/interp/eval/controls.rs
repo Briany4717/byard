@@ -217,6 +217,14 @@ impl Interpreter {
             });
             self.router
                 .on(idx, hit_rect, super::events::EventKind::Tap, flip);
+
+            // Focus target, and Space or Enter flips it like a tap does
+            // (WAI-ARIA switch pattern): Tab and a click both reach it.
+            let fsig = self.focus_signal(attrs);
+            self.router.focusable(idx, hit_rect, fsig);
+            self.router.activate_on_key(idx);
+        } else {
+            self.register_focusable(attrs, hit_rect, elem_idx);
         }
     }
 
@@ -368,9 +376,8 @@ impl Interpreter {
             );
 
             // Focus target so Tab and click reach the box. Uses the element's own
-            // `focused:` var when given, else a private signal for the registry.
-            let focused_sig = self.resolve_focused_sig(attrs);
-            let fsig = focused_sig.unwrap_or_else(|| self.ctx.create_signal(Value::Bool(false)));
+            // `focused:` var when given, else the shared sink.
+            let fsig = self.focus_signal(attrs);
             self.router.focusable(idx, hit_rect, fsig);
         }
     }
@@ -514,8 +521,7 @@ impl Interpreter {
             );
 
             // Focus target so Tab and click reach the button.
-            let focused_sig = self.resolve_focused_sig(attrs);
-            let fsig = focused_sig.unwrap_or_else(|| self.ctx.create_signal(Value::Bool(false)));
+            let fsig = self.focus_signal(attrs);
             self.router.focusable(idx, hit_rect, fsig);
         }
     }
@@ -652,6 +658,40 @@ impl Interpreter {
                 super::events::EventKind::Change,
                 super::events::write_back_action(sig),
             );
+
+            // Arrow keys step the value while it has focus (WAI-ARIA slider
+            // pattern): by `step:`, or a tenth of the range without one.
+            let key_step = step_f.unwrap_or((max_f - min_f) / 10.0);
+            let decimals = step_f.map_or(SLIDER_DEFAULT_DECIMALS, step_decimals);
+            self.router.on(
+                idx,
+                hit_rect,
+                super::events::EventKind::KeyDown,
+                Box::new(move |ctx, payload| {
+                    let Some(Value::Str(key)) = payload else {
+                        return;
+                    };
+                    let direction = match key.as_str() {
+                        "ArrowRight" | "ArrowUp" => 1.0,
+                        "ArrowLeft" | "ArrowDown" => -1.0,
+                        _ => return,
+                    };
+                    let current = match ctx.peek_signal(sig) {
+                        Value::Float(f) => f,
+                        #[allow(clippy::cast_precision_loss)]
+                        Value::Int(n) => n as f64,
+                        _ => min_f,
+                    };
+                    let next = (current + direction * key_step).clamp(min_f, max_f);
+                    ctx.write_signal(sig, Value::Float(round_to_decimals(next, decimals)));
+                }),
+            );
+
+            // Focus target, so Tab and a click reach it.
+            let fsig = self.focus_signal(attrs);
+            self.router.focusable(idx, hit_rect, fsig);
+        } else {
+            self.register_focusable(attrs, hit_rect, elem_idx);
         }
     }
 }

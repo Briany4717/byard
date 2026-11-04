@@ -126,6 +126,27 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A struct crosses the controller boundary as a record, with a derive.**
+  `#[derive(FromHostValue)]`, `#[derive(IntoHostValue)]` and
+  `#[derive(HostValue)]` (both, the name RFC-0028 and RFC-0029 gave it) turn a
+  struct with named fields into a `HostValue::Record` and back, so a controller
+  takes and returns `Customer` instead of building records by hand. Structs
+  nest, and `Vec<T>`, `Option<T>` and generic structs work; a missing or
+  misshapen field takes its type's empty value, as the hand-written conversions
+  do; `#[host(rename = "…")]` renames a field in the record. An enum, a tuple
+  struct or a union is a compile error that says what to do instead.
+  `Option<T>` now converts too (`Unit` is `None`), and a type that cannot
+  cross says so by name and points at the derive.
+
+- **A synchronous method of a controller is a controller method.**
+  `#[byard_controller] impl` dispatched only `async fn`s, and skipped every
+  other function without a word, so a view calling one failed at run time with
+  "unknown controller method". Every method taking `&self` is now exposed,
+  `async` or not. A method taking `&mut self` (its change would be made on a
+  copy and lost), a generic method, and an `async fn` that cannot be called
+  (no `&self`) are compile errors with the reason; `fn new() -> Self` and
+  other functions that are not methods are left as they are.
+
 - **A user guide, and a test that keeps its samples honest.** Byard had a README
   and forty design documents written for the people building it, and nothing for
   someone using it. `docs/guide` is an mdBook: install, the dev loop, one chapter
@@ -546,6 +567,11 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   an error.
 
 ### Fixed
+
+- **A controller argument that is left out is an empty string, not "Unit".**
+  `String::from_host(HostValue::Unit)` gave the text `Unit`, so a view that
+  called `greet()` without its argument greeted "Unit". It is `""`, as the
+  guide always said and as a number is `0`.
 
 - **A text at size 0 takes no room instead of crashing.** `Text("x")
   #[size: 0]`, or a size bound to a `var` that holds 0 or springs through it,

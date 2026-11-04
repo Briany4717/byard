@@ -147,6 +147,7 @@ fn kind_of(token: &Token) -> K {
         | Token::Plus
         | Token::Star
         | Token::Slash
+        | Token::Percent
         | Token::EqEq
         | Token::BangEq
         | Token::LtEq
@@ -476,6 +477,7 @@ impl<'s> Printer<'_, 's> {
                     | Token::Plus
                     | Token::Star
                     | Token::Slash
+                    | Token::Percent
                     | Token::EqEq
                     | Token::BangEq
                     | Token::LtEq
@@ -667,6 +669,7 @@ impl<'s> Printer<'_, 's> {
             | Token::Plus
             | Token::Star
             | Token::Slash
+            | Token::Percent
             | Token::EqEq
             | Token::BangEq
             | Token::LtEq

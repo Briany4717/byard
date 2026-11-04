@@ -2,15 +2,17 @@
 //! RFC-0004 §11).
 //!
 //! On a `.byd` change the new `ViewDecl` is structurally diffed against the
-//! running one by the **shape** of its `param`/`var`/`let`/`inject` lists
-//! (names + positions). Two outcomes:
+//! running one by the **shape** of its `param`/`var`/`inject` declarations
+//! (names, declared types; a `var`'s position and any `let`/`fn` between
+//! them do not matter). Two outcomes:
 //!
 //! - **Reactive-compatible** (shape unchanged; only expressions/elements/control
 //!   flow/style differ): keep the live `Signal`s, rebuild the scopes from the
 //!   new AST, and read-tracking re-derives the dependency graph (§11). No
 //!   flicker, state preserved.
 //! - **Structure-incompatible** (a `var`/`param`/`inject` added, removed,
-//!   reordered, or retyped): tear down and remount; state resets.
+//!   retyped, or a `param`/`inject` reordered): tear down and remount; state
+//!   resets.
 //!
 //! Multiple `View`s per file are diffed **per `ViewDecl` name** (D11). A
 //! structure-incompatible patch is **held** while a pointer gesture is in flight
@@ -20,7 +22,8 @@
 use std::collections::HashSet;
 
 use super::views::{CallGraph, ViewTable};
-use crate::parser::ast::{Member, ViewDecl};
+use crate::parser::ast::{Member, Type, ViewDecl};
+use crate::parser::span_eq::SpanEq;
 use crate::symbol::Symbol;
 
 /// The classification of a single-View patch.
@@ -32,34 +35,60 @@ pub enum ReloadKind {
     StructureIncompatible,
 }
 
-/// A tag identifying which declaration list a shape entry came from.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Tag {
-    Param,
-    Var,
-    Let,
-    Inject,
+/// The reload-relevant shape of a View: its `param`s and `inject`s in order,
+/// and its `var`s as a set of `(name, declared type)`.
+///
+/// A `var` is what a reload keeps, and it is kept by name (`Interpreter::reload`
+/// matches signals by name), so the order they are written in does not decide
+/// anything and neither does a `let` or `fn` between them: those hold no state
+/// of their own and are lowered again from scratch. What does decide is a `var`
+/// appearing, disappearing or changing its declared type, because the value
+/// the old signal holds is not a value of the new declaration. Expressions,
+/// elements, control flow, and the style block are deliberately excluded, they
+/// may change freely in a reactive-compatible patch.
+#[derive(Debug)]
+struct Shape {
+    /// `param`s then `inject`s, in declaration order.
+    ordered: Vec<(bool, Symbol)>,
+    /// Every `var`, in no particular order.
+    vars: Vec<(Symbol, Option<Type>)>,
 }
 
-/// The reload-relevant shape of a View: the ordered `(tag, name)` of its
-/// `param`/`var`/`let`/`inject` declarations. Expressions, elements, control
-/// flow, and the style block are deliberately excluded, they may change freely
-/// in a reactive-compatible patch.
-fn shape(view: &ViewDecl) -> Vec<(Tag, Symbol)> {
-    let mut s: Vec<(Tag, Symbol)> = view
-        .params
-        .iter()
-        .map(|p| (Tag::Param, p.name.clone()))
-        .collect();
+impl PartialEq for Shape {
+    fn eq(&self, other: &Self) -> bool {
+        self.ordered == other.ordered
+            && self.vars.len() == other.vars.len()
+            && self.vars.iter().all(|v| {
+                other
+                    .vars
+                    .iter()
+                    .any(|w| v.0 == w.0 && same_type(v.1.as_ref(), w.1.as_ref()))
+            })
+    }
+}
+
+/// Whether two declarations of a `var` agree on its type. A `var` with no
+/// annotation takes its type from its initializer and says nothing, so adding
+/// or dropping an annotation is not a retype; two written types must be the same.
+fn same_type(a: Option<&Type>, b: Option<&Type>) -> bool {
+    match (a, b) {
+        (Some(a), Some(b)) => a.span_eq(b),
+        _ => true,
+    }
+}
+
+fn shape(view: &ViewDecl) -> Shape {
+    let mut ordered: Vec<(bool, Symbol)> =
+        view.params.iter().map(|p| (true, p.name.clone())).collect();
+    let mut vars = Vec::new();
     for member in &view.body {
         match member {
-            Member::Var { name, .. } => s.push((Tag::Var, name.clone())),
-            Member::Let { name, .. } => s.push((Tag::Let, name.clone())),
-            Member::Inject { name, .. } => s.push((Tag::Inject, name.clone())),
+            Member::Var { name, ty, .. } => vars.push((name.clone(), ty.clone())),
+            Member::Inject { name, .. } => ordered.push((false, name.clone())),
             _ => {}
         }
     }
-    s
+    Shape { ordered, vars }
 }
 
 /// Classifies a patch by diffing the two Views' shapes (RFC-0002 boundary).
@@ -508,10 +537,49 @@ mod tests {
         let old = view("View C() { var count = 0 }");
         let new = view("View C() { var count = 0\n var other = 1 }");
         assert_eq!(diff_view(&old, &new), ReloadKind::StructureIncompatible);
-        // Reordering is also incompatible.
+    }
+
+    #[test]
+    fn reordering_vars_is_compatible_but_reordering_params_is_not() {
         let a = view("View C() { var a = 0\n var b = 1 }");
         let b = view("View C() { var b = 1\n var a = 0 }");
-        assert_eq!(diff_view(&a, &b), ReloadKind::StructureIncompatible);
+        assert_eq!(diff_view(&a, &b), ReloadKind::ReactiveCompatible);
+        let p = view("View C(x: Int, y: Int) { Text(\"\") }");
+        let q = view("View C(y: Int, x: Int) { Text(\"\") }");
+        assert_eq!(diff_view(&p, &q), ReloadKind::StructureIncompatible);
+    }
+
+    #[test]
+    fn a_var_whose_declared_type_changes_is_structure_incompatible() {
+        let old = view("View C() { var n: Int = 0 }");
+        let new = view("View C() { var n: Str = \"\" }");
+        assert_eq!(diff_view(&old, &new), ReloadKind::StructureIncompatible);
+    }
+
+    #[test]
+    fn vars_survive_lets_added_removed_and_reordered_between_them() {
+        let old = view("View C() { let a = 1\n var x = 0\n var y = 0\n Text(\"\") }");
+        let new = view(
+            "View C() { var y = 0\n let b = y * 2\n var x = 0\n fn f() => x\n let a = 1\n Text(\"{b}\") }",
+        );
+        assert_eq!(diff_view(&old, &new), ReloadKind::ReactiveCompatible);
+
+        let mut interp = Interpreter::new();
+        for m in &old.body {
+            if let Member::Var { name, init, .. } = m {
+                interp.define_var(name.clone(), init);
+            }
+        }
+        let (x, y) = (Symbol::intern("x"), Symbol::intern("y"));
+        let (sx, sy) = (
+            interp.var_signal(&x).unwrap(),
+            interp.var_signal(&y).unwrap(),
+        );
+        interp.write_var(sx, Value::Int(3));
+        interp.write_var(sy, Value::Int(4));
+        interp.reload(&new, diff_view(&old, &new));
+        assert_eq!(interp.peek(interp.var_signal(&x).unwrap()), Value::Int(3));
+        assert_eq!(interp.peek(interp.var_signal(&y).unwrap()), Value::Int(4));
     }
 
     #[test]

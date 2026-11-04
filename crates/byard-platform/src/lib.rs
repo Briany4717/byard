@@ -757,6 +757,10 @@ fn key_to_str(key: &Key) -> String {
             NamedKey::Delete => "Delete".to_string(),
             NamedKey::Enter => "Enter".to_string(),
             NamedKey::Tab => "Tab".to_string(),
+            // winit names the space bar rather than giving it as a character,
+            // so without this a focused control never saw it as a key, only as
+            // the text it also types.
+            NamedKey::Space => " ".to_string(),
             NamedKey::Escape => "Escape".to_string(),
             NamedKey::ArrowLeft => "ArrowLeft".to_string(),
             NamedKey::ArrowRight => "ArrowRight".to_string(),
@@ -783,6 +787,16 @@ mod tests {
         assert_eq!(host.app_id, "dev.byard.aura-weather");
         // Applying it to the window's attributes works on every platform.
         let _ = with_app_id(Window::default_attributes(), &host.app_id);
+    }
+
+    /// The space bar reaches the router as the key it is: winit gives it as a
+    /// named key, and a control activated by Space (a focused button) would
+    /// otherwise never be pressed from a real keyboard.
+    #[test]
+    fn the_space_bar_is_a_key_like_any_other() {
+        assert_eq!(key_to_str(&Key::Named(NamedKey::Space)), " ");
+        assert_eq!(key_to_str(&Key::Named(NamedKey::Tab)), "Tab");
+        assert_eq!(key_to_str(&Key::Character("a".into())), "a");
     }
 
     /// Every winit IME event maps onto the engine's own, field for field

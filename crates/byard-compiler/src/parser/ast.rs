@@ -645,6 +645,8 @@ pub enum BinOp {
     Mul,
     /// `/`
     Div,
+    /// `%`, remainder (RFC-0047)
+    Rem,
     /// `==`
     Eq,
     /// `!=`

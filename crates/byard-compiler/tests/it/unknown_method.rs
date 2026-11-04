@@ -185,8 +185,37 @@ fn a_method_a_str_does_not_have_is_reported() {
     let found = unknown_methods("var s: Str = \"hello\"\nText(\"{s.slicee(1)}\")");
     assert_eq!(found, one("slicee", Some("slice")));
     // The runtime runs none of these on text: they are silent no-ops.
-    let found = unknown_methods("let s = \"hello\"\nlet a = s.contains(\"h\")");
-    assert_eq!(found, one("contains", None));
+    let found = unknown_methods("let s = \"hello\"\nlet a = s.padStart(8)");
+    assert_eq!(found, one("padStart", None));
+}
+
+#[test]
+fn every_text_and_list_method_of_rfc_0047_checks_clean() {
+    assert_clean(
+        "let s = \"  Hi  \"\n\
+         let a = s.trim().toLower().toUpper()\n\
+         let b = s.contains(\"H\") && s.startsWith(\" \") && s.endsWith(\" \")\n\
+         let c = s.replace(\"H\", \"h\").split(\"i\").reverse().join(\"-\")\n\
+         let d = s.indexOf(\"i\") % 2\n\
+         Text(\"{a} {b} {c} {d}\")",
+    );
+}
+
+#[test]
+fn a_misspelt_text_method_gets_the_closest_real_one_as_a_hint() {
+    let found = unknown_methods("let s = \"hello\"\nlet a = s.toLowr()");
+    assert_eq!(found, one("toLowr", Some("toLower")));
+}
+
+#[test]
+fn a_remainder_of_non_numbers_is_a_type_mismatch() {
+    let errors = resolve("let a = \"x\" % 2").errors;
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e, CompileError::TypeMismatch { op, .. } if op == "%")),
+        "{errors:?}"
+    );
 }
 
 #[test]

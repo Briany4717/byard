@@ -167,7 +167,6 @@ byard = { path = "../byard/crates/byard", features = ["a11y"] }
 The tree is built only while a screen reader is connected. With none, an app pays one
 atomic load a frame and nothing else.
 
-Two limits to know. A `Button`, `Toggle` and `Slider` are not in the Tab order yet, so a
-reader reaches them through its own navigation, not through Tab. And the names Byard works
-out are a guess from the layout. They are wrong for some layouts, and `a11y_label` is the
-fix.
+One limit to know. The names Byard works out are a guess from the layout. They are wrong
+for some layouts, and `a11y_label` is the fix. Every control, a `Button`, `Toggle` and
+`Slider` among them, is in the Tab order and is marked `[focusable]` in the dump.

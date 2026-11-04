@@ -2,9 +2,10 @@
 
 use std::collections::HashMap;
 
+use byard_compiler::diagnostics::Span;
 use lsp_types::{
     CodeAction, CodeActionKind, CodeActionOrCommand, CodeActionParams, CodeActionResponse,
-    TextEdit, WorkspaceEdit,
+    NumberOrString, Range, TextEdit, WorkspaceEdit,
 };
 
 use crate::state::document::Document;
@@ -16,11 +17,15 @@ pub fn handle_code_action(doc: &Document, params: CodeActionParams) -> Option<Co
 
     // 1. Process diagnostic-driven quick fixes
     for diagnostic in &params.context.diagnostics {
-        let msg = &diagnostic.message;
-
-        if msg.contains("unknown property") || msg.contains("invalid attribute") {
+        // The compiler's own name for the problem, set by `diagnostics`, not
+        // a guess at its wording: a message can be reworded, a kind cannot
+        // without breaking this on purpose.
+        if matches!(
+            &diagnostic.code,
+            Some(NumberOrString::String(kind)) if kind == "UnknownAttribute"
+        ) {
             let edit = TextEdit {
-                range: diagnostic.range,
+                range: attribute_removal_range(doc, diagnostic.range),
                 new_text: String::new(),
             };
             let mut changes = HashMap::new();
@@ -50,16 +55,22 @@ pub fn handle_code_action(doc: &Document, params: CodeActionParams) -> Option<Co
     for view in &doc.parsed.views {
         if crate::syntax::ast_utils::span_contains(view.span, offset) {
             for member in &view.body {
-                if let byard_compiler::parser::ast::Member::Var {
-                    name, span, init, ..
-                } = member
-                {
+                if let byard_compiler::parser::ast::Member::Var { name, span, .. } = member {
                     if crate::syntax::ast_utils::span_contains(*span, offset) {
-                        let var_range = doc.line_index.span_to_range(&doc.content, *span);
-                        let let_replacement = format!("let {name} = {}", format_expr(init));
+                        // Only the keyword changes. Whatever follows it, the type
+                        // written, the initializer, a comment on the line, is the
+                        // person's text and stays exactly as they wrote it.
+                        let keyword = Span::new(span.start, span.start + 3);
+                        if doc
+                            .content
+                            .get(keyword.start as usize..keyword.end as usize)
+                            != Some("var")
+                        {
+                            continue;
+                        }
                         let edit = TextEdit {
-                            range: var_range,
-                            new_text: let_replacement,
+                            range: doc.line_index.span_to_range(&doc.content, keyword),
+                            new_text: "let".to_string(),
                         };
                         let mut changes = HashMap::new();
                         changes.insert(doc.uri.clone(), vec![edit]);
@@ -91,11 +102,35 @@ pub fn handle_code_action(doc: &Document, params: CodeActionParams) -> Option<Co
     }
 }
 
-fn format_expr(expr: &byard_compiler::parser::ast::Expr) -> String {
-    match expr {
-        byard_compiler::parser::ast::Expr::IntLit(val, _) => val.to_string(),
-        byard_compiler::parser::ast::Expr::FloatLit(val, _) => val.to_string(),
-        byard_compiler::parser::ast::Expr::Ident(sym, _) => sym.as_str().to_string(),
-        _ => "0".to_string(),
-    }
+/// The range to delete to take an attribute out of its `#[ … ]` list: the
+/// attribute itself and one separating comma, so what is left is still a list
+/// (`#[a: 1, b: 2]` without `b` is `#[a: 1]`, not `#[a: 1, ]`).
+fn attribute_removal_range(doc: &Document, range: Range) -> Range {
+    let text = doc.content.as_str();
+    let (Some(start), Some(end)) = (
+        doc.line_index.position_to_offset(text, range.start),
+        doc.line_index.position_to_offset(text, range.end),
+    ) else {
+        return range;
+    };
+    let after = &text[end..];
+    let trimmed = after.trim_start_matches([' ', '\t']);
+    let (start, end) = if let Some(rest) = trimmed.strip_prefix(',') {
+        // A comma follows: take it and the blanks after it.
+        let gap = after.len() - trimmed.len();
+        let blanks = rest.len() - rest.trim_start_matches([' ', '\t']).len();
+        (start, end + gap + 1 + blanks)
+    } else {
+        // The last in its list: take the comma before it instead.
+        let before = &text[..start];
+        let kept = before.trim_end_matches([' ', '\t']);
+        match kept.strip_suffix(',') {
+            Some(head) => (head.len(), end),
+            None => (start, end),
+        }
+    };
+    Range::new(
+        doc.line_index.offset_to_position(text, start),
+        doc.line_index.offset_to_position(text, end),
+    )
 }

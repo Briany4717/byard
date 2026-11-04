@@ -11,6 +11,7 @@ mod lowering;
 mod overlay;
 mod paint;
 mod props;
+mod retire;
 mod scroll;
 mod states;
 

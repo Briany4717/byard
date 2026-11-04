@@ -135,6 +135,30 @@ Because it needs no window, it runs in a test:
 
 An adapter-less machine, such as a CI box, reports `no GPU` and the test skips itself.
 
+## When the app does not start
+
+`run` and `shot` return a `ByardError`. When the views do not compile, the diagnostics have
+already been printed by the time `main` sees the error, in the same form `byard check` prints
+them, so `main` only has to decide how to exit. `ByardErrorExt` gets at what is inside:
+
+```rust,ignore,excerpt
+use byard::ByardErrorExt as _;
+
+match byard::App::new(env!("CARGO_MANIFEST_DIR")).run() {
+    Ok(()) => {}
+    // Already printed; `report` has each diagnostic with its file and span.
+    Err(e) if e.as_compile().is_some() => std::process::exit(2),
+    Err(e) => {
+        eprintln!("{e}");
+        std::process::exit(1)
+    }
+}
+```
+
+`as_compile()` gives the `CompileReport`, every diagnostic with the file it points into, and
+`as_project()` the `ProjectError` behind a missing manifest or a dependency that cannot be
+fetched. A test can assert on either instead of matching on the message.
+
 ## Packaging
 
 A built app reads its project from the path it was compiled at. To run it on another machine, bundle

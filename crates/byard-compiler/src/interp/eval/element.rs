@@ -465,9 +465,8 @@ impl Interpreter {
                 cond, then, els, ..
             } => {
                 let cond_scope = self.bind_value(cond);
-                let pool = self.when_pools.len();
                 let env_snapshot = self.capture_env_snapshot();
-                self.when_pools.push(WhenPool {
+                let pool = self.alloc_when_pool(WhenPool {
                     branch_spans: (
                         members_span(then),
                         els.as_deref().map_or(Span::new(0, 0), members_span),
@@ -478,6 +477,8 @@ impl Interpreter {
                     env_snapshot,
                     then: None,
                     els: None,
+                    then_scopes: Vec::new(),
+                    els_scopes: Vec::new(),
                     last_take: None,
                 });
                 out.push(RenderNode::When {
@@ -497,9 +498,8 @@ impl Interpreter {
                 ..
             } => {
                 let list_scope = self.bind_value(iter);
-                let pool = self.for_pools.len();
                 let env_snapshot = self.capture_env_snapshot();
-                self.for_pools.push(ForPool {
+                let pool = self.alloc_for_pool(ForPool {
                     item_var: var.clone(),
                     index_var: index.clone(),
                     body: body.clone(),
@@ -507,6 +507,7 @@ impl Interpreter {
                     env_snapshot,
                     item_slots: Vec::new(),
                     bodies: Vec::new(),
+                    slot_scopes: Vec::new(),
                     len: 0,
                 });
                 out.push(RenderNode::For {

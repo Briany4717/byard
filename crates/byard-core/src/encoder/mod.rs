@@ -1602,6 +1602,23 @@ impl EncoderSubsystem {
         self.clip_masks.rasterised()
     }
 
+    /// How many bind groups the backdrop blur has created, ever. Steady
+    /// frosted panes must not move it (RFC-0033 §G5): the bind groups live with
+    /// the scratch textures and are rebuilt only when those are recreated or
+    /// the instance arena replaces its buffer.
+    #[must_use]
+    pub fn backdrop_bind_groups_created(&self) -> u32 {
+        self.backdrop_pipelines.bind_groups_created()
+    }
+
+    /// How many GPU buffers and bind groups the clip-mask atlas has created,
+    /// ever. A frame whose masks change but fit what it already holds must not
+    /// move it.
+    #[must_use]
+    pub const fn clip_mask_gpu_creations(&self) -> u32 {
+        self.clip_masks.gpu_creations()
+    }
+
     /// Whether an opacity-group target has ever been allocated (RFC-0011 T4).
     ///
     /// Exposed for the fast-path assertion: a frame with no group must not
@@ -1688,6 +1705,9 @@ impl EncoderSubsystem {
     /// GPU-readback tests, which never carry images, so this branch is a safety
     /// net rather than a hot path.
     fn request_textures(&mut self, textures: &[crate::frame::TextureSampler]) {
+        // Every frame is a tick of the cache's clock, whether or not it draws an
+        // image: that is what lets an image that stopped being drawn age out.
+        self.texture_cache.begin_frame();
         if let Some(io) = &self.io {
             let handle = io.handle.clone();
             let tx = io.tx.clone();
@@ -1707,8 +1727,26 @@ impl EncoderSubsystem {
                     &self.image_sampler,
                     decoded,
                 );
+                self.texture_cache.mark_used(&t.src);
             }
         }
+        // After every image this frame draws has been marked, so none of them
+        // can be chosen.
+        self.texture_cache.trim();
+    }
+
+    /// Sets how much VRAM decoded images may hold before idle ones are
+    /// evicted (default [`texture_sampler::DEFAULT_TEXTURE_BUDGET_BYTES`]).
+    /// Images drawn in the current frame are never evicted, so a view that
+    /// shows more than the budget goes over it instead of thrashing.
+    pub fn set_texture_budget(&mut self, bytes: u64) {
+        self.texture_cache.set_budget(bytes);
+    }
+
+    /// VRAM currently held by decoded images, in bytes.
+    #[must_use]
+    pub const fn texture_cache_bytes(&self) -> u64 {
+        self.texture_cache.resident_bytes()
     }
 
     /// Installs the async-decode plumbing: the relay's I/O runtime handle
@@ -1781,16 +1819,44 @@ fn update_frame_bookkeeping(
     // primitive's bounds are unchanged from last frame anyway, so this is a
     // no-op for it, and it keeps each `last_*_bounds` positionally aligned with
     // its slice without needing a separate "did this move" check.
-    state.last_text_bounds = texts.iter().map(text_line_bounds).collect();
-    state.last_box_bounds = instances.iter().map(|b| rect_of(b.rect)).collect();
-    state.last_decorated_bounds = decorated.iter().map(|d| rect_of(d.base.rect)).collect();
-    state.last_canvas_bounds = canvas_shapes
-        .iter()
-        .map(crate::frame::CanvasShape::bounds)
-        .collect();
-    state.last_ripple_bounds = ripples.iter().map(|r| rect_of(r.rect)).collect();
-    state.last_backdrop_bounds = backdrops.iter().map(|b| rect_of(b.rect)).collect();
-    state.last_texture_bounds = textures.iter().map(|t| rect_of(t.rect)).collect();
+    //
+    // Into the vectors the last frame filled rather than into new ones: seven
+    // `collect`s here were seven heap allocations every frame, for a result
+    // the same length as the one they replaced.
+    refill(
+        &mut state.last_text_bounds,
+        texts.iter().map(text_line_bounds),
+    );
+    refill(
+        &mut state.last_box_bounds,
+        instances.iter().map(|b| rect_of(b.rect)),
+    );
+    refill(
+        &mut state.last_decorated_bounds,
+        decorated.iter().map(|d| rect_of(d.base.rect)),
+    );
+    refill(
+        &mut state.last_canvas_bounds,
+        canvas_shapes.iter().map(crate::frame::CanvasShape::bounds),
+    );
+    refill(
+        &mut state.last_ripple_bounds,
+        ripples.iter().map(|r| rect_of(r.rect)),
+    );
+    refill(
+        &mut state.last_backdrop_bounds,
+        backdrops.iter().map(|b| rect_of(b.rect)),
+    );
+    refill(
+        &mut state.last_texture_bounds,
+        textures.iter().map(|t| rect_of(t.rect)),
+    );
+}
+
+/// Replaces the contents of `bounds` with `rects`, keeping its allocation.
+fn refill(bounds: &mut Vec<Rect>, rects: impl Iterator<Item = Rect>) {
+    bounds.clear();
+    bounds.extend(rects);
 }
 
 /// Draws the UI render pass: a scissored clear quad (incremental frames

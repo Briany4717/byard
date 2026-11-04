@@ -743,6 +743,16 @@ impl Interpreter {
         if dead.is_empty() {
             return;
         }
+        // The rows are gone, but their element signals stay in the pool for the
+        // next occupant of the index. Let go of what they hold meanwhile: a list
+        // that shrank from a thousand records to one should not keep the other
+        // nine hundred and ninety-nine alive behind rows nobody can see. Silent,
+        // because the scopes reading them are not on screen to be recomputed,
+        // and a row that comes back is written (and so marked) before it paints.
+        for &slot in &dead {
+            self.ctx
+                .reset_signal_silent(crate::interp::env::SignalId(slot), Value::Unit);
+        }
         let dead: std::collections::HashSet<u32> = dead.into_iter().collect();
         self.animations.retain(|k, _| !dead.contains(&k.slot));
         self.color_animations.retain(|k, _| !dead.contains(&k.slot));

@@ -54,6 +54,7 @@ mod record_types;
 mod responsive_variants;
 mod retained_across_views;
 mod runner_loop;
+mod scope_reuse;
 mod store_persistence;
 mod system_scheme;
 mod text_editing;

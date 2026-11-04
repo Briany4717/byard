@@ -263,6 +263,151 @@ fn structural_when_mounts_and_unmounts_without_leaks() {
     }
 }
 
+/// Repeated mount/unmount cycles reuse the retired slots instead of growing the
+/// arena (the `when` keeps its own scope; the branch's binding is the one that
+/// comes and goes).
+#[test]
+fn structural_when_cycles_reuse_retired_scope_slots() {
+    let mut ctx = ReactiveCtx::new();
+    let cond = ctx.create_signal(Value::Bool(false));
+    let inner = ctx.create_signal(int(0));
+    ctx.open_when(
+        move |c| c.read_signal(cond),
+        move |c| vec![c.open_value_binding(FrameTarget(1), move |c| c.read_signal(inner))],
+        None,
+    );
+    let e = ctx.begin_tick();
+    ctx.pull(e);
+
+    let cycle = |ctx: &mut ReactiveCtx| {
+        ctx.write_signal(cond, Value::Bool(true));
+        let e = ctx.begin_tick();
+        ctx.pull(e);
+        ctx.write_signal(cond, Value::Bool(false));
+        let e = ctx.begin_tick();
+        ctx.pull(e);
+    };
+    cycle(&mut ctx);
+    let slots = ctx.scope_slot_count();
+    for _ in 0..200 {
+        cycle(&mut ctx);
+    }
+    assert_eq!(
+        ctx.scope_slot_count(),
+        slots,
+        "200 mount/unmount cycles reuse the slot the first one freed"
+    );
+    assert_eq!(ctx.live_scope_count(), 1, "only the `when` itself is live");
+}
+
+/// An id that outlived its scope names nothing, even after another scope has
+/// taken the slot: the generation tells them apart.
+#[test]
+fn a_retired_id_does_not_name_the_scope_that_took_its_slot() {
+    let mut ctx = ReactiveCtx::new();
+    let a = ctx.create_signal(int(1));
+    let b = ctx.create_signal(int(100));
+    let old = ctx.open_memo(move |c| c.read_signal(a));
+    assert_eq!(ctx.read_memo(old), int(1));
+
+    ctx.drop_scope(old);
+    let new = ctx.open_memo(move |c| c.read_signal(b));
+    assert_eq!(ctx.scope_slot_count(), 1, "the slot was reused");
+    assert_eq!(ctx.read_memo(new), int(100));
+
+    assert_eq!(
+        ctx.read_memo(old),
+        Value::Unit,
+        "the old id reads nothing, not the new occupant's value"
+    );
+    assert!(!ctx.is_dirty(old));
+    assert_eq!(ctx.eval_count(old), 0);
+    assert!(!ctx.deps_nonempty(old));
+    // Dropping through the old id again must not retire the new scope.
+    ctx.drop_scope(old);
+    assert_eq!(ctx.read_memo(new), int(100));
+    assert_eq!(ctx.live_scope_count(), 1);
+}
+
+/// A binding queued dirty and retired in the same tick is not run, and neither
+/// is the scope that reuses its slot under the stale queue entry.
+#[test]
+fn a_scope_retired_while_queued_neither_runs_nor_runs_its_successor_twice() {
+    let mut ctx = ReactiveCtx::new();
+    let s = ctx.create_signal(int(1));
+    let old = ctx.open_value_binding(FrameTarget(0), move |c| c.read_signal(s));
+    let e = ctx.begin_tick();
+    ctx.pull(e);
+
+    ctx.write_signal(s, int(2)); // queues `old`
+    ctx.drop_scope(old);
+    let new = ctx.open_value_binding(FrameTarget(1), move |c| c.read_signal(s));
+    let e = ctx.begin_tick();
+    ctx.pull(e);
+
+    assert_eq!(ctx.eval_count(new), 1, "once, from its own queue entry");
+    assert_eq!(ctx.binding_value(new), Some(int(2)));
+    assert_eq!(ctx.binding_value(old), None);
+    assert_eq!(ctx.signal_subscriber_count(s), 1);
+}
+
+/// A memo that is retired is taken off the scopes that read it, so a reader's
+/// next re-evaluation does not reach into the slot's next occupant.
+#[test]
+fn retiring_a_memo_unlinks_its_readers_and_its_sources() {
+    let mut ctx = ReactiveCtx::new();
+    let s = ctx.create_signal(int(1));
+    let t = ctx.create_signal(int(10));
+    let memo = ctx.open_memo(move |c| c.read_signal(s));
+    let reader = ctx.open_value_binding(FrameTarget(0), move |c| c.read_memo(memo));
+    let e = ctx.begin_tick();
+    ctx.pull(e);
+    assert_eq!(ctx.signal_subscriber_count(s), 1);
+
+    ctx.drop_scope(memo);
+    assert_eq!(
+        ctx.signal_subscriber_count(s),
+        0,
+        "the memo no longer listens to its source"
+    );
+
+    // The slot is reused by a memo the reader never read. Re-running the reader
+    // must not subscribe it to, or unsubscribe it from, that memo.
+    let other = ctx.open_memo(move |c| c.read_signal(t));
+    assert_eq!(ctx.read_memo(other), int(10));
+    ctx.write_signal(s, int(2)); // nothing is subscribed to `s` any more
+    ctx.write_signal(t, int(11));
+    let e = ctx.begin_tick();
+    ctx.pull(e);
+    assert_eq!(
+        ctx.eval_count(reader),
+        1,
+        "the reader was not marked by the memo that replaced its dependency"
+    );
+    assert_eq!(ctx.read_memo(other), int(11));
+}
+
+/// A tracker records the scopes allocated while it is open, to the innermost
+/// one only.
+#[test]
+fn a_scope_tracker_records_what_was_allocated_under_it() {
+    let mut ctx = ReactiveCtx::new();
+    let outside = ctx.open_memo(|_| int(0));
+    ctx.push_scope_tracker();
+    let a = ctx.open_memo(|_| int(1));
+    ctx.push_scope_tracker();
+    let b = ctx.open_memo(|_| int(2));
+    let inner = ctx.pop_scope_tracker();
+    let c = ctx.open_memo(|_| int(3));
+    let outer = ctx.pop_scope_tracker();
+    assert_eq!(inner, vec![b]);
+    assert_eq!(outer, vec![a, c]);
+    assert!(!outer.contains(&outside));
+    // Nothing recorded once they are closed.
+    let _ = ctx.open_memo(|_| int(4));
+    assert_eq!(ctx.pop_scope_tracker(), Vec::new());
+}
+
 /// Fixture 8, structural `for` (coarse). Mutating the list drops and rebuilds.
 #[test]
 fn structural_for_drops_and_rebuilds() {

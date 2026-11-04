@@ -3,7 +3,7 @@
 //! See the module-level documentation in [`super`] for the design intent
 //! and lifecycle contract.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -1006,6 +1006,21 @@ pub struct LayoutAtlas {
     /// handed to [`Self::populate_frame`] by the interpreter, this is the
     /// dirty set RFC-0001 §2.2 described and the runtime did not produce.
     layout_dirty: Vec<TargetId>,
+    /// Buffers the per-frame tree walks reuse, so a steady-state frame
+    /// allocates nothing to hand the geometry over.
+    walk: WalkScratch,
+}
+
+/// What [`LayoutAtlas::populate_frame`] and the spatial-grid rebuild need while
+/// walking the tree. Lives on the atlas and is only ever cleared, never
+/// dropped, so after the first frame it holds the capacity the tree needs.
+#[derive(Default)]
+struct WalkScratch {
+    /// Depth-first work list: a node with the absolute position of its parent.
+    stack: Vec<(NodeId, f32, f32)>,
+    /// `dirty[i]` is whether the node in build-order slot `i` is dirty this
+    /// frame. Empty when nothing is, which is the paint-only frame.
+    dirty: Vec<bool>,
 }
 
 /// Bookkeeping for one retained build pass (RFC-0032 §R4).
@@ -1039,6 +1054,7 @@ impl LayoutAtlas {
             restyled: rustc_hash::FxHashSet::default(),
             retained: None,
             layout_dirty: Vec::new(),
+            walk: WalkScratch::default(),
         }
     }
 
@@ -2001,6 +2017,18 @@ impl LayoutAtlas {
     /// first.
     #[track_caller]
     pub fn populate_frame(&self, frame: &mut RenderFrame, dirty_targets: &[TargetId]) {
+        // This entry point only reads the atlas, so it cannot borrow the
+        // reusable buffers; the interpreter goes through
+        // [`populate_frame_dirty`](Self::populate_frame_dirty), which does.
+        self.populate_with(frame, dirty_targets, &mut WalkScratch::default());
+    }
+
+    fn populate_with(
+        &self,
+        frame: &mut RenderFrame,
+        dirty_targets: &[TargetId],
+        scratch: &mut WalkScratch,
+    ) {
         assert_eq!(
             self.state,
             AtlasState::Computed,
@@ -2012,10 +2040,34 @@ impl LayoutAtlas {
          this indicates an internal state-machine inconsistency",
         );
 
-        let dirty: HashSet<u64> = dirty_targets.iter().map(|t| t.as_raw()).collect();
-
-        let matched = self.walk_and_push(root, frame, &dirty);
+        self.mark_dirty_slots(dirty_targets, &mut scratch.dirty);
+        let matched = self.walk_and_push(root, frame, scratch);
         path_counters::record_populate(dirty_targets.len(), matched);
+    }
+
+    /// Fills `slots` so `slots[i]` says whether the node in build-order slot
+    /// `i` is among `dirty_targets`.
+    ///
+    /// A target names one of this atlas's nodes only if it is of kind
+    /// [`TargetKind::AtlasNode`] and carries the current generation; anything
+    /// else (a stale generation, an encoder primitive) matches no node, exactly
+    /// as it would not equal any id the walk reconstructs. An empty
+    /// `dirty_targets` leaves `slots` empty, which reads as "nothing dirty"
+    /// without touching a byte per node.
+    fn mark_dirty_slots(&self, dirty_targets: &[TargetId], slots: &mut Vec<bool>) {
+        slots.clear();
+        if dirty_targets.is_empty() {
+            return;
+        }
+        slots.resize(self.nodes_by_index.len(), false);
+        for target in dirty_targets {
+            if target.kind() == TargetKind::AtlasNode as u16
+                && target.generation() == self.current_generation
+                && let Some(slot) = slots.get_mut(target.index() as usize)
+            {
+                *slot = true;
+            }
+        }
     }
 
     /// [`populate_frame`](Self::populate_frame) driven by this atlas's own
@@ -2048,7 +2100,9 @@ impl LayoutAtlas {
         // Split the borrow: `populate_frame` only reads, but the compiler
         // cannot see that through `&mut self`, so the set moves out and back.
         let dirty = std::mem::take(&mut self.layout_dirty);
-        self.populate_frame(frame, &dirty);
+        let mut scratch = std::mem::take(&mut self.walk);
+        self.populate_with(frame, &dirty, &mut scratch);
+        self.walk = scratch;
         self.layout_dirty = dirty;
     }
 
@@ -2121,48 +2175,32 @@ impl LayoutAtlas {
         )
     }
 
-    /// Recursively walks the tree from `node` in pre-order, pushing each
-    /// resolved rectangle, and its dirty state, into `frame`.
+    /// Walks the tree from `root` in pre-order, pushing each resolved
+    /// rectangle, and its dirty state, into `frame`.
     ///
-    /// `dirty` holds the raw (`TargetId::as_raw`) bits of every dirty
-    /// target for this tick. Each node's own `TargetId` is reconstructed
-    /// from its Taffy node-context index, the atlas's current generation,
-    /// and `TargetKind::AtlasNode`, the same triple `rebuild_grid` uses,
-    /// so the lookup is exact and stale generations never match.
+    /// `scratch.dirty` says which build-order slots are dirty this tick (see
+    /// [`Self::mark_dirty_slots`]); each node's slot is the index its Taffy
+    /// node context carries, the same one its [`TargetId`] is made of, so a
+    /// stale generation never matches.
     ///
-    /// Returns how many pushed nodes matched a target in `dirty`, the
-    /// quantity that distinguishes "the caller passed no dirty set" from "the
-    /// caller passed a dirty set from a generation this atlas has already
-    /// invalidated". Both produce an all-`false` frame; only one is a bug in
-    /// the caller.
+    /// Returns how many pushed nodes were dirty, the quantity that
+    /// distinguishes "the caller passed no dirty set" from "the caller passed a
+    /// dirty set from a generation this atlas has already invalidated". Both
+    /// produce an all-`false` frame; only one is a bug in the caller.
     fn walk_and_push(
         &self,
         root: AtlasNodeId,
         frame: &mut RenderFrame,
-        dirty: &HashSet<u64>,
+        scratch: &mut WalkScratch,
     ) -> usize {
         let mut matched = 0;
-        let mut stack = vec![root];
-        while let Some(node) = stack.pop() {
-            if let Some(rect) = self.resolved_rect_internal(node) {
-                let index = *self.tree.get_node_context(node.node_id).unwrap();
-                let target =
-                    TargetId::new(index, self.current_generation, TargetKind::AtlasNode as u16);
-                let is_dirty = dirty.contains(&target.as_raw());
-                matched += usize::from(is_dirty);
-                frame.push_rect(rect, is_dirty);
-            }
-            if let Ok(children) = self.tree.children(node.node_id) {
-                // Push in reverse so the leftmost child is popped first,
-                // preserving pre-order traversal semantics.
-                for child in children.iter().rev() {
-                    stack.push(AtlasNodeId {
-                        node_id: *child,
-                        atlas_id: self.instance_id,
-                    });
-                }
-            }
-        }
+        let origin = self.ancestor_offset(root.node_id);
+        let WalkScratch { stack, dirty } = scratch;
+        walk_rects(&self.tree, root.node_id, origin, stack, |index, rect| {
+            let is_dirty = dirty.get(index as usize).copied().unwrap_or(false);
+            matched += usize::from(is_dirty);
+            frame.push_rect(rect, is_dirty);
+        });
         matched
     }
 
@@ -2179,31 +2217,53 @@ impl LayoutAtlas {
     /// reflow, risking dangling (stale-but-queryable) hit rects, a correctness
     /// hazard strictly worse than a redundant walk this cheap. The full walk is
     /// therefore kept deliberately; see the `atlas` bench for the numbers.
+    ///
+    /// The walk is one descent that carries each node's absolute position down
+    /// to its children, so it costs O(nodes), not O(nodes × depth).
     fn rebuild_grid(&mut self) {
         self.grid.clear();
         let Some(root) = self.root else {
             return;
         };
 
-        let mut stack = vec![root];
-        while let Some(node) = stack.pop() {
-            let index = *self.tree.get_node_context(node.node_id).unwrap();
-            let target =
-                TargetId::new(index, self.current_generation, TargetKind::AtlasNode as u16);
-            if let Some(rect) = self.resolved_rect_internal(node) {
-                self.grid.insert(rect, target);
-            }
-            if let Ok(children) = self.tree.children(node.node_id) {
-                // Push in reverse so the leftmost child is popped first,
-                // preserving pre-order traversal semantics.
-                for child in children.iter().rev() {
-                    stack.push(AtlasNodeId {
-                        node_id: *child,
-                        atlas_id: self.instance_id,
-                    });
-                }
-            }
+        let origin = self.ancestor_offset(root.node_id);
+        let generation = self.current_generation;
+        let Self {
+            tree, grid, walk, ..
+        } = self;
+        walk_rects(
+            tree,
+            root.node_id,
+            origin,
+            &mut walk.stack,
+            |index, rect| {
+                grid.insert(
+                    rect,
+                    TargetId::new(index, generation, TargetKind::AtlasNode as u16),
+                );
+            },
+        );
+    }
+
+    /// The sum of the resolved positions of every ancestor of `node`: where
+    /// its parent's origin sits in the root's coordinate space.
+    ///
+    /// `(0, 0)` for the usual root, which has no parent. A node installed with
+    /// [`Self::set_root`] that is itself a child of something else is still
+    /// positioned relative to that ancestor chain, exactly as
+    /// `Self::resolved_rect_internal` positions it.
+    fn ancestor_offset(&self, node: NodeId) -> (f32, f32) {
+        let (mut x, mut y) = (0.0, 0.0);
+        let mut current = node;
+        while let Some(&parent) = self.parents.get(&current) {
+            let Ok(layout) = self.tree.layout(parent) else {
+                break;
+            };
+            x += layout.location.x;
+            y += layout.location.y;
+            current = parent;
         }
+        (x, y)
     }
 
     /// Same as `resolved_rect` but without the state assertion or the
@@ -2418,6 +2478,55 @@ impl LayoutAtlas {
         // and an element that is tappable where it used to be.
         self.rebuild_grid();
         Ok(())
+    }
+}
+
+/// Visits every node under `root` in pre-order with its rectangle in the
+/// root's coordinate space, calling `visit(build_order_index, rect)`.
+///
+/// Taffy stores each node's `location` relative to its parent, so a node's
+/// absolute position is the sum of the locations on the path from the root.
+/// Walking down and handing each child its parent's absolute position makes
+/// that sum one addition per node, where resolving each node by climbing the
+/// parent chain would cost its depth. Taffy's own scroll and overflow handling
+/// never writes into `location` (the renderer applies scroll offsets), so the
+/// plain sum is the whole of the resolution.
+///
+/// `origin` is where `root`'s parent sits. `stack` is a reusable work list; it
+/// is empty on entry and on exit.
+fn walk_rects(
+    tree: &TaffyTree<u32>,
+    root: NodeId,
+    origin: (f32, f32),
+    stack: &mut Vec<(NodeId, f32, f32)>,
+    mut visit: impl FnMut(u32, Rect),
+) {
+    stack.clear();
+    stack.push((root, origin.0, origin.1));
+    while let Some((node, parent_x, parent_y)) = stack.pop() {
+        let Ok(layout) = tree.layout(node) else {
+            continue;
+        };
+        let x = parent_x + layout.location.x;
+        let y = parent_y + layout.location.y;
+        let index = *tree
+            .get_node_context(node)
+            .expect("every node the atlas builds carries its build-order index");
+        visit(
+            index,
+            Rect {
+                x,
+                y,
+                width: layout.size.width,
+                height: layout.size.height,
+            },
+        );
+        // Push in reverse so the leftmost child is popped first, preserving
+        // pre-order. Indexing the children avoids the `Vec` clone that
+        // `TaffyTree::children` makes for every node.
+        for i in (0..tree.child_count(node)).rev() {
+            stack.push((tree.get_child_id(node, i), x, y));
+        }
     }
 }
 

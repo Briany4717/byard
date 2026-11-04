@@ -1,9 +1,9 @@
 # RFC-0046: Resource budgets in CI
 
-- **Status:** Accepted
+- **Status:** Active, implemented 2026-10-25 (#367).
 - **Author(s):** Briany4717
 - **Created:** 2026-10-24
-- **Last updated:** 2026-10-24
+- **Last updated:** 2026-10-26
 - **Depends on:** RFC-0013 (telemetry), RFC-0033 (the instance arena), the
   frame budget in `crates/byard-platform/tests/it/frame_budget.rs`.
 

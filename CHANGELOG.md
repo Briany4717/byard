@@ -12,6 +12,17 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Handing the layout to the encoder costs one pass, and allocates nothing.**
+  `LayoutAtlas::populate_frame` found each node's position by climbing its
+  parent chain to the root, and cloned each node's child list on the way down;
+  the hit-test grid rebuilt after every layout did the same. Both now walk the
+  tree once, passing each node's position to its children, and the interpreter's
+  path (`populate_frame_dirty`) reuses its buffers and tracks dirty nodes in a
+  flat list instead of a hash set. On a 3,906-node tree the call goes from about
+  470 us to 165 us and from 787 heap allocations to none; on 8,191 nodes in a
+  12-deep tree, from 1.6 ms to 0.29 ms. The rectangles are the same ones, to the
+  bit: a test holds every node of an irregular tree to the old answer.
+
 - **Every app's window now carries its own id, so its window class changes.**
   Wayland's `app_id` and X11's `WM_CLASS` were `dev.byard.Byard` for every
   Byard app, so a compositor grouped them as one application, a taskbar could

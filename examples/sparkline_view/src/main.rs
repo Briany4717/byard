@@ -228,16 +228,38 @@ struct MeanLine {
     /// The mean the controller last answered with, and the request that is in
     /// flight, if any.
     mean: Option<f32>,
-    asked_for: Option<usize>,
+    /// A fingerprint of the series the last request was for. The length alone
+    /// is not enough: a live series keeps its length while every value moves.
+    asked_for: Option<u64>,
     requests: u64,
+}
+
+impl MeanLine {
+    /// Whether the series changed since the last request, recording it as asked
+    /// for when it did.
+    fn should_ask(&mut self) -> bool {
+        use std::hash::{Hash, Hasher};
+        if self.of.is_empty() {
+            return false;
+        }
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        for v in &self.of {
+            v.to_bits().hash(&mut hasher);
+        }
+        let fingerprint = hasher.finish();
+        if self.asked_for == Some(fingerprint) {
+            return false;
+        }
+        self.asked_for = Some(fingerprint);
+        true
+    }
 }
 
 impl NativeView for MeanLine {
     fn render(&mut self, layout: Layout, cx: &mut RenderCtx<'_>) {
         // Ask when the data changed, and only then: a request per frame would
         // be a widget hammering a controller for an answer it already has.
-        if self.asked_for != Some(self.of.len()) && !self.of.is_empty() {
-            self.asked_for = Some(self.of.len());
+        if self.should_ask() {
             self.requests += 1;
             cx.call(
                 RequestKey(self.requests),
@@ -391,6 +413,22 @@ impl NativeView for Glow {
 
 #[cfg(test)]
 mod tests {
+    use super::MeanLine;
+
+    #[test]
+    fn the_mean_is_asked_for_again_when_a_value_moves() {
+        let mut line = MeanLine {
+            of: vec![1.0, 2.0, 3.0],
+            ..MeanLine::default()
+        };
+        assert!(line.should_ask(), "the first series is asked for");
+        assert!(!line.should_ask(), "the same series is not asked twice");
+        line.of[1] = 5.0;
+        assert!(line.should_ask(), "same length, new values: ask again");
+        line.of.clear();
+        assert!(!line.should_ask(), "nothing to average");
+    }
+
     /// The whole app, Rust half included, drawn without a window: the glow's
     /// shader lights the card behind the bars, and the mean line is there,
     /// which means the controller was really asked and really answered.

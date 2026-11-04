@@ -280,11 +280,63 @@ error: 1 of 14 files not formatted
 ### In your editor
 
 The language server, `byld-lsp`, formats with the same code, so format on save in an
-editor gives what `byard fmt` gives. It ignores the editor's tab size. Build it with
-`cargo build --release -p byld-lsp` and point your editor's `.byd` language server at the
-binary. It speaks the Language Server Protocol over standard input and output, and besides
-formatting it offers completion, go to definition, rename, document symbols, semantic
-colours and quick fixes. It is early, and it will change.
+editor gives what `byard fmt` gives. It ignores the editor's tab size. It speaks the
+Language Server Protocol over standard input and output, and besides formatting it offers
+completion, go to definition, rename, document symbols, semantic colours and quick fixes.
+It is early, and it will change.
+
+Install it next to `byard`, from the same clone:
+
+```sh
+cargo install --path crates/byld-lsp
+```
+
+**VS Code.** The extension is in `editors/vscode`. Open that folder in VS Code, run
+`npm install` and `npm run build` in it, and press F5: a second window opens with the
+extension loaded. It looks for `byld-lsp` on your `PATH` and in the workspace's
+`target/release` and `target/debug`; to point it somewhere else, set it in your settings:
+
+```json
+{
+  "byld.lsp.serverPath": "/home/you/.cargo/bin/byld-lsp"
+}
+```
+
+**JetBrains.** The plugin is in `editors/jetbrains`, built with Gradle (`gradle
+buildPlugin`, then *Install Plugin from Disk*). It uses the IDE's LSP support, which only
+the paid IDEs have, from 2023.2. It runs `target/release/byld-lsp` or
+`target/debug/byld-lsp` of the open project if there is one, and `byld-lsp` from your
+`PATH` if not.
+
+**Neovim** (0.11 or newer), in your `init.lua`:
+
+```lua
+vim.filetype.add({ extension = { byd = "byld" } })
+vim.lsp.config("byld", {
+  cmd = { "byld-lsp" },
+  filetypes = { "byld" },
+  root_markers = { "byard.toml" },
+})
+vim.lsp.enable("byld")
+```
+
+**Helix**, in `languages.toml`:
+
+```toml
+[language-server.byld-lsp]
+command = "byld-lsp"
+
+[[language]]
+name = "byld"
+scope = "source.byld"
+file-types = ["byd"]
+roots = ["byard.toml"]
+language-servers = ["byld-lsp"]
+```
+
+Neovim colours a `.byd` file from the server's semantic colours. Helix does not read those
+and has no byld grammar yet, so there it gets diagnostics, completion and formatting, but no
+colours.
 
 ## `byard clean`
 

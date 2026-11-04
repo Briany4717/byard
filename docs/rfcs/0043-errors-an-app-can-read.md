@@ -1,9 +1,10 @@
 # RFC-0043: Errors an app can read
 
-- **Status:** Accepted
+- **Status:** Active, implemented 2026-10-25 (#339). Three errors are still
+  reported as platform errors (#355).
 - **Author(s):** Briany4717
 - **Created:** 2026-10-24
-- **Last updated:** 2026-10-24
+- **Last updated:** 2026-10-26
 - **Depends on:** RFC-0006 (the CLI and its diagnostics), RFC-0030 (the caret
   block diagnostics are printed in), RFC-0008 (packages, the resolver).
 - **Enables:** an app's `main` that can tell a broken project from a broken

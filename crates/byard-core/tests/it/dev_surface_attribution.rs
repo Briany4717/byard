@@ -372,14 +372,110 @@ fn only_the_field_that_moved_is_re_shaped_when_the_hud_updates() {
     );
 }
 
+/// What a change to the pool's length costs, in lines shaped. Each test below
+/// states its number; this prints them next to it so a run shows the cost.
+fn report(what: &str, reshaped: usize) {
+    eprintln!("{what}: {reshaped} re-shaped");
+}
+
 #[test]
-fn losing_the_fixed_width_padding_re_shapes_the_whole_pool() {
-    // "Demonstrated red by removing the padding", as an assertion rather than
-    // a procedure. Without a value-independent width the string's *length*
-    // changes as a number crosses ten, the text pool's length is unaffected
-    // but every field's own key moves, and worse, a HUD that interpolated
-    // widths into `byld` would change the pool length itself, which makes
-    // every index in the frame incomparable and re-shapes the app's text too.
+fn appending_one_line_re_shapes_one_line() {
+    // The pool grows by one. The glyph cache used to call a length change
+    // "not index-comparable" and shape the whole pool; a line is now compared
+    // by its own key, so the eight that did not change are not touched.
+    let Some(mut h) = Harness::new() else {
+        eprintln!("no GPU adapter available, skipping");
+        return;
+    };
+    let app = app_lines();
+    h.encode(&frame_with(&app, None));
+    let mut longer = app.clone();
+    longer.push("a ninth row".to_string());
+    h.encode(&frame_with(&longer, None));
+    report("append one line to eight", h.reshapes());
+    assert_eq!(h.reshapes(), 1, "only the new line is shaped");
+    h.encode(&frame_with(&longer, None));
+    assert_eq!(h.reshapes(), 0, "and the next frame is steady");
+}
+
+#[test]
+fn removing_the_last_line_re_shapes_nothing() {
+    let Some(mut h) = Harness::new() else {
+        eprintln!("no GPU adapter available, skipping");
+        return;
+    };
+    let app = app_lines();
+    h.encode(&frame_with(&app, None));
+    h.encode(&frame_with(&app[..app.len() - 1], None));
+    report("remove the last line of eight", h.reshapes());
+    assert_eq!(h.reshapes(), 0, "every line left is where it was");
+}
+
+#[test]
+fn removing_the_first_line_re_shapes_only_the_lines_whose_key_moved() {
+    // Index-addressed, so every line after the removed one now sits on an
+    // index that held its neighbour: its key moved, and it is shaped again.
+    // That is the floor of the scheme, and it is exact: a line whose
+    // neighbour has the same text (here, the two "same" rows) keeps its
+    // buffer, because the key says nothing else differs.
+    let Some(mut h) = Harness::new() else {
+        eprintln!("no GPU adapter available, skipping");
+        return;
+    };
+    let rows: Vec<String> = ["first", "same", "same", "alpha", "beta", "gamma"]
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    h.encode(&frame_with(&rows, None));
+    h.encode(&frame_with(&rows[1..], None));
+    report("remove the first of six lines", h.reshapes());
+    // ["same","same","alpha","beta","gamma"] against
+    // ["first","same","same","alpha","beta"][..5]: index 0 first->same moved,
+    // index 1 same->same did not, 2 same->alpha, 3 alpha->beta, 4 beta->gamma.
+    assert_eq!(h.reshapes(), 4);
+
+    // A middle line: only what follows it moves.
+    let mut h2 = Harness::new().expect("the first harness had a GPU");
+    let app = app_lines();
+    h2.encode(&frame_with(&app, None));
+    let mut gone = app.clone();
+    gone.remove(5);
+    h2.encode(&frame_with(&gone, None));
+    report("remove the sixth of eight lines", h2.reshapes());
+    assert_eq!(h2.reshapes(), 2, "rows 5 and 6 slid up; rows 0-4 did not");
+}
+
+#[test]
+fn the_hud_opening_and_closing_shapes_only_the_hud() {
+    // The HUD's lines are the tail of the pool. Opening it appends them,
+    // closing it truncates them: the app's eight lines are never touched, and
+    // closing costs nothing at all. Reopening reuses the spare buffers the
+    // close kept, and shapes the fields again (a buffer's content is not kept).
+    let Some(mut h) = Harness::new() else {
+        eprintln!("no GPU adapter available, skipping");
+        return;
+    };
+    let app = app_lines();
+    let fields = hud_fields(3.4);
+    h.encode(&frame_with(&app, None));
+    for cycle in 0..3 {
+        h.encode(&frame_with(&app, Some(&fields)));
+        report(&format!("HUD open, cycle {cycle}"), h.reshapes());
+        assert_eq!(h.reshapes(), fields.len(), "open: the HUD's lines only");
+        h.encode(&frame_with(&app, None));
+        report(&format!("HUD close, cycle {cycle}"), h.reshapes());
+        assert_eq!(h.reshapes(), 0, "close: nothing left to shape");
+    }
+}
+
+#[test]
+fn losing_the_fixed_width_padding_costs_the_fields_that_moved_and_not_the_apps_lines() {
+    // The padding exists so that a changing number keeps its string, and the
+    // pool its length. This pins what losing it costs now. A HUD that
+    // interpolated widths into `byld` used to change the pool's length,
+    // which made every index incomparable and re-shaped the *app's* text for
+    // the HUD's formatting (and then forced a full redraw). Its own fields
+    // still pay, because their strings do change; the app's lines do not.
     let Some(mut h) = Harness::new() else {
         eprintln!("no GPU adapter available, skipping");
         return;
@@ -399,16 +495,25 @@ fn losing_the_fixed_width_padding_re_shapes_the_whole_pool() {
     h.encode(&frame_with(&app, Some(&ragged(3.4))));
     assert_eq!(h.reshapes(), 0, "a steady value is still steady");
 
-    // 12.75 is one field longer than 3.4, so the pool's length changes and
-    // index identity is lost for the whole frame.
+    // One field longer: the pool's length changes.
     let mut fields = ragged(3.4);
     fields.push("more".to_string());
-    let f = frame_with(&app, Some(&fields));
-    h.encode(&f);
-    assert!(
-        h.reshapes() >= app.len(),
-        "a pool whose length changed is not index-comparable, so the app's \
-         lines pay for the HUD's formatting: {} re-shaped",
-        h.reshapes()
+    h.encode(&frame_with(&app, Some(&fields)));
+    report("an unpadded HUD grows a field", h.reshapes());
+    assert_eq!(
+        h.reshapes(),
+        1,
+        "the new field is shaped; the app's {} lines pay nothing for the \
+         HUD's formatting",
+        app.len()
+    );
+
+    // And the value crossing a digit changes the fields' own strings.
+    h.encode(&frame_with(&app, Some(&ragged(12.75))));
+    report("an unpadded value crosses ten", h.reshapes());
+    assert_eq!(
+        h.reshapes(),
+        2,
+        "`3`,`4` became `12`,`75`; `more` is the same string at the same index"
     );
 }

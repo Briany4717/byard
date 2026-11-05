@@ -49,6 +49,24 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   same holds for a press in flight, the element under the pointer (`on hover`)
   and a `ScrollView`'s `end_reached`, which fired again when a `when` before the
   view opened. A focused field that is removed lets go of its `focused:` var.
+### Added
+
+- **`Text` takes the layout attributes of an element in a `Row` or `Column`.**
+  `Text("x") #[grow: 1]`, `height`, `basis`, `p` and its sides, and the margins
+  used to be `unknown attribute`, or in the case of `m`, accepted and ignored.
+  A `Text` that writes none of them is laid out exactly as before.
+
+### Fixed
+
+- **A windowed `ScrollView` fills the space it is given.** With `grow: 1` and no
+  `height` it built only a handful of rows and left the rest of the view blank,
+  and a growing one asked its parent for the height of its whole list. It now
+  shows every row that fits and takes only what is left. A `ScrollView` that
+  scrolls sideways is laid out whole instead of being windowed.
+
+- **`Text #[width: N, wrap: false]` is `N` wide.** It was as wide as its text.
+  A single line that is wider than its `width` is clipped at the edge of it, so
+  the cells of a table stay in their columns.
 
 ## [0.1.0] - 2026-11-05
 

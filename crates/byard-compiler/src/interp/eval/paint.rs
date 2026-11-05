@@ -310,7 +310,10 @@ impl Interpreter {
                             &transform,
                         );
                     }
-                    let anchor = transform.apply_point([rect.x, rect.y]);
+                    // A `Text` with `p` draws its glyphs inside the padding. The
+                    // atlas reports none for the common padding-less one.
+                    let pad = self.atlas.padding_of(atlas_node);
+                    let anchor = transform.apply_point([rect.x + pad.left, rect.y + pad.top]);
                     let scaled_size = size * transform.uniform_scale();
                     // RFC-0005 default text wrap: shape the run to the width layout
                     // resolved for this leaf (its parent-offered width), scaled by
@@ -320,11 +323,29 @@ impl Interpreter {
                     // laid-out height.
                     let weight = self.resolve_weight(attrs);
                     let family = self.resolve_family(attrs);
-                    let wrap_w = if self.eval_bool_prop(attrs, "wrap") == Some(false) {
+                    let single_line = self.eval_bool_prop(attrs, "wrap") == Some(false);
+                    let wrap_w = if single_line {
                         None
                     } else {
-                        Some(rect.width * transform.uniform_scale())
+                        Some(
+                            (rect.width - pad.left - pad.right).max(0.0)
+                                * transform.uniform_scale(),
+                        )
                     };
+                    // A single line given a `width` is a fixed-width cell: what
+                    // does not fit is clipped at the cell's edge, not drawn over
+                    // its neighbour. Without a `width` the line is as wide as
+                    // its text and overflows its parent, as it always did.
+                    let clipped = single_line && self.eval_px_prop(attrs, "width").is_some();
+                    if clipped {
+                        let tl = transform.apply_point([rect.x, rect.y]);
+                        frame.begin_clip(byard_core::frame::Rect::new(
+                            tl[0],
+                            tl[1],
+                            rect.width * transform.scale[0],
+                            rect.height * transform.scale[1],
+                        ));
+                    }
                     frame.push_text_wrapped(
                         byard_core::TextLine {
                             x: anchor[0],
@@ -338,6 +359,9 @@ impl Interpreter {
                         },
                         wrap_w,
                     );
+                    if clipped {
+                        frame.end_clip();
+                    }
                     if own_group {
                         frame.end_group();
                     }

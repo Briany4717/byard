@@ -142,7 +142,10 @@ The values are `center`, `top`, `bottom`, `start`, `end`, and the corners
 
 A `ScrollView` holds content larger than itself and scrolls it with the wheel, a
 trackpad or a drag. Give it a size, and its `offset` a `var` if you want to read
-or set where it is:
+or set where it is. A size is a `height` and `width`, or `grow` inside a parent
+that has room to give (a screen whose root says `grow: 1` does), or a parent's
+own size. A `ScrollView` that grows takes what its siblings leave, however long
+its content is:
 
 ```byld
 View Main() {
@@ -167,7 +170,10 @@ moves the content. `axis` is `vertical` (the default), `horizontal` or `both`.
 For a long list, add `windowed: true` and `row_height`. Only the rows in view are
 built. Every row must then be exactly `row_height` tall, margins included, because
 the window works out which rows are visible by multiplying. Put spacing in the
-row's own height or margin, not the container's `gap`.
+row's own height or margin, not the container's `gap`. The list fills whatever
+size the view ends up with, so `grow: 1` works as well as a `height`. Windowing is
+for a list that scrolls up and down: a `ScrollView` with `axis: horizontal` or
+`both` builds all of its content.
 
 A `ScrollView` also snaps to pages or items (`snap: page`, `snap: item`, with
 `snap_align`), reports `page` and `page_count`, calls `end_reached =>` near the
@@ -289,5 +295,17 @@ read the number. The other way round never settles.
 `Text` is the one element that shows words. Its content may be any text, with
 [interpolation](expressions.md#text-and-interpolation), and it wraps to the width
 its parent offers. `wrap: false` keeps it on one line. The look of text is covered under [styling](styling.md).
+
+A `Text` takes the attributes that place a child in a `Row` or `Column`: `width`,
+`height`, `grow`, `basis`, and `p` and `m` with their sides. `Text("Title") #[grow: 1]`
+takes the room left in its row. `p` insets the words inside the text's own box, `m`
+leaves room around it. A `Text` has no children, so `gap`, `align` and `justify`
+do not apply (its `align` positions the words, see [styling](styling.md)).
+
+`wrap: false` with a `width` makes a cell of exactly that width, whatever the text
+measures. Words that do not fit are clipped at the cell's edge, not drawn over the
+next cell, which is what a table column needs. Without a `width` a one-line text is
+as wide as its words and overflows its parent. Spaces in a text are text: leading
+and trailing ones are drawn and take room, `Text("   {error}")` is indented.
 
 Next, [styling](styling.md) makes all of this look like something.

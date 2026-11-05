@@ -42,7 +42,7 @@ The ones that paint:
 | `blur`, `backdrop_tint` | number, colour | Frosted glass, see below |
 
 Text has its own: `size`, `weight`, `font`, `typo`, `align`, `wrap`. They are
-under [Text](#text) below. Every attribute is checked. A name the element does not
+under [Text](#text) below. Its size and spacing are [layout](layout.md#text). Every attribute is checked. A name the element does not
 take is an error, with the nearest one suggested:
 
 ```byld,fails
@@ -332,7 +332,7 @@ View Main() {
   family together. This is the better way to style text, because a screen then
   says what a piece of text *is*, not three loose numbers.
 - `align` places the text within its width.
-- Text wraps to the width its parent offers. `wrap: false` keeps it on a line.
+- Text wraps to the width its parent offers. `wrap: false` keeps it on a line, and with a `width` clips it to that width.
 
 Text, like boxes, can be moved and turned. See [motion](motion.md).
 

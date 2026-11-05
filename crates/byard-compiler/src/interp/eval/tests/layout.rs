@@ -518,3 +518,133 @@ fn the_backdrop_barrier_snapshots_the_content_behind_it() {
     assert!(d < frame.solid_depths()[0], "pane above the card");
     assert!(frame.text_depths()[0] < d, "label above the pane");
 }
+
+// ── `Text` in a `Row` or `Column`: layout attributes, fixed-width cells ──
+
+/// Lowers `src`, renders it at 400×300 and hands back the frame, requiring the
+/// program to compile clean.
+fn text_frame(src: &str) -> byard_core::frame::RenderFrame {
+    let parsed = parse(src);
+    assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+    let mut interp = Interpreter::new();
+    let tree = interp.lower_view(&parsed.views[0], &[]);
+    assert!(interp.errors().is_empty(), "{:?}", interp.errors());
+    interp.tick();
+    let mut frame = byard_core::frame::RenderFrame::new();
+    interp.render(&tree, &mut frame, 400.0, 300.0);
+    frame
+}
+
+fn text_x(frame: &byard_core::frame::RenderFrame, text: &str) -> f32 {
+    frame
+        .texts()
+        .iter()
+        .find(|t| t.text == text)
+        .unwrap_or_else(|| panic!("no run {text:?}"))
+        .x
+}
+
+fn text_y(frame: &byard_core::frame::RenderFrame, text: &str) -> f32 {
+    frame.texts().iter().find(|t| t.text == text).unwrap().y
+}
+
+#[test]
+fn a_text_with_grow_takes_the_free_space_of_its_row() {
+    // `a` grows, so `b` is pushed to the far edge of the 300px row.
+    let frame = text_frame(
+        "View C() {\n Row #[width: 300] {\n Text(\"a\") #[grow: 1]\n Text(\"b\")\n }\n}",
+    );
+    let b = text_x(&frame, "b");
+    assert!(b > 280.0, "b sits at the right edge of the row, got {b}");
+}
+
+#[test]
+fn a_text_with_basis_height_padding_and_margin_lays_out_as_a_box_would() {
+    // `basis` is `a`'s share before growing: `b` starts after it.
+    let frame = text_frame(
+        "View C() {\n Row #[width: 300] {\n Text(\"a\") #[basis: 100]\n Text(\"b\")\n }\n}",
+    );
+    assert!(text_x(&frame, "b") >= 100.0, "b after a's basis");
+
+    // `height` is the room the next sibling is placed after.
+    let frame =
+        text_frame("View C() {\n Column {\n Text(\"a\") #[height: 50]\n Text(\"b\")\n }\n}");
+    assert!(text_y(&frame, "b") >= 50.0, "b under a's 50px");
+
+    // `p` insets the glyphs, `m` the whole leaf: both move the run.
+    let frame = text_frame("View C() {\n Column {\n Text(\"a\") #[p: 10]\n }\n}");
+    assert!((text_x(&frame, "a") - 10.0).abs() < 1.0, "padded run");
+    assert!((text_y(&frame, "a") - 10.0).abs() < 1.0, "padded run");
+    let frame = text_frame("View C() {\n Column {\n Text(\"a\") #[ml: 7, mt: 3]\n }\n}");
+    assert!(
+        (text_x(&frame, "a") - 7.0).abs() < 1.0,
+        "margin moves the run"
+    );
+    assert!(
+        (text_y(&frame, "a") - 3.0).abs() < 1.0,
+        "margin moves the run"
+    );
+}
+
+#[test]
+fn padding_widens_a_text_by_its_sides() {
+    // `a` is padded 10 a side, so `b` starts 20px later than it would plain.
+    let plain = text_frame("View C() {\n Row {\n Text(\"a\")\n Text(\"b\")\n }\n}");
+    let padded = text_frame("View C() {\n Row {\n Text(\"a\") #[p: 10]\n Text(\"b\")\n }\n}");
+    let grew = text_x(&padded, "b") - text_x(&plain, "b");
+    assert!((grew - 20.0).abs() < 1.5, "b moved right by 20, got {grew}");
+}
+
+#[test]
+fn a_nonwrapping_text_with_a_width_is_that_wide() {
+    // The cell is 40 wide though its text is much wider, so `b` starts at 40.
+    let frame = text_frame(
+        "View C() {\n Row {\n Text(\"a rather long cell\") #[width: 40, wrap: false]\n \
+           Text(\"b\")\n }\n}",
+    );
+    let b = text_x(&frame, "b");
+    assert!(
+        (b - 40.0).abs() < 1.0,
+        "b starts after the 40px cell, got {b}"
+    );
+}
+
+#[test]
+fn a_nonwrapping_text_wider_than_its_width_is_clipped_to_it() {
+    let frame = text_frame(
+        "View C() {\n Row {\n Text(\"a rather long cell\") #[width: 40, wrap: false]\n }\n}",
+    );
+    assert!(frame.text_wraps()[0].is_none(), "still one line");
+    let clip = frame.text_clips()[0].expect("clipped to its cell");
+    let rect = frame.clips()[usize::from(clip)];
+    assert!(
+        (rect.rect.width - 40.0).abs() < 1.0,
+        "the clip is the cell's 40px, got {rect:?}"
+    );
+}
+
+#[test]
+fn a_nonwrapping_text_without_a_width_is_not_clipped() {
+    let frame = text_frame(
+        "View C() {\n Column #[width: 60] {\n Text(\"a rather long line\") #[wrap: false]\n }\n}",
+    );
+    assert!(frame.text_clips()[0].is_none(), "it overflows on purpose");
+}
+
+#[test]
+fn leading_spaces_in_a_text_are_kept() {
+    // Spaces are text like any other: they are drawn and they take room.
+    let frame = text_frame(
+        "View C() {\n var e = \"oops\"\n Row {\n Text(\"ab\")\n Text(\"   {e}\")\n \
+           Text(\"   z\") #[wrap: false]\n }\n}",
+    );
+    assert!(frame.texts().iter().any(|t| t.text == "   oops"));
+    assert!(frame.texts().iter().any(|t| t.text == "   z"));
+    let plain = text_frame("View C() {\n Row {\n Text(\"ab\")\n Text(\"oops\")\n }\n}");
+    let wrap_spaced = frame.text_wraps()[1].unwrap();
+    let wrap_plain = plain.text_wraps()[1].unwrap();
+    assert!(
+        wrap_spaced > wrap_plain + 8.0,
+        "three spaces widen the run: {wrap_spaced} vs {wrap_plain}"
+    );
+}

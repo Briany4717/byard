@@ -601,7 +601,27 @@ fn lookup_intrinsic(name: &str) -> Option<Intrinsic> {
             props: props_from(&[
                 TEXT_PROPS,
                 TRANSFORM,
-                &[("m", lay(PropType::Len)), ("width", lay(PropType::Int))],
+                // The layout attributes of a leaf in a `Row` or `Column`:
+                // size, spacing and flex share. `gap`, `align` and `justify`
+                // are about children, which a `Text` has none of.
+                &[
+                    ("width", lay(PropType::Int)),
+                    ("height", lay(PropType::Int)),
+                    ("p", lay(PropType::Len)),
+                    ("m", lay(PropType::Len)),
+                    ("pt", lay(PropType::Len)),
+                    ("pr", lay(PropType::Len)),
+                    ("pb", lay(PropType::Len)),
+                    ("pl", lay(PropType::Len)),
+                    ("mx", lay(PropType::Len)),
+                    ("my", lay(PropType::Len)),
+                    ("mt", lay(PropType::Len)),
+                    ("mr", lay(PropType::Len)),
+                    ("mb", lay(PropType::Len)),
+                    ("ml", lay(PropType::Len)),
+                    ("grow", lay(PropType::Int)),
+                    ("basis", lay(PropType::Int)),
+                ],
             ]),
             events: events_from(false, &[]),
         },

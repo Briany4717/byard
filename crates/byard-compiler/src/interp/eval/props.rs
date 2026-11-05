@@ -429,6 +429,13 @@ impl Interpreter {
                 }
             }
         }
+        // A `ScrollView` that grows is a window onto its content, not a
+        // container sized by it. Its content (a 500-row list is thousands of px
+        // tall) must not make it, or the column around it, ask for that much
+        // room: it takes what is left, and scrolls the rest.
+        if element_name == "ScrollView" && style.grow > 0.0 && style.height.is_none() {
+            style.basis = Some(0.0);
+        }
         // An explicit `width:`/`height:` is the author's call; the touch floor
         // never overrides it.
         if style.width.is_some() {

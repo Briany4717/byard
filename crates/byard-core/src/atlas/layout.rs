@@ -168,6 +168,7 @@ impl LayoutFingerprint {
             .u8(s.align as u8)
             .u8(s.justify as u8)
             .f32(s.grow)
+            .opt_f32(s.basis)
             .bool(s.scroll_x)
             .bool(s.scroll_y)
             .bool(s.absolute)
@@ -301,6 +302,68 @@ pub struct TextLeaf {
     pub fallback: (f32, f32),
 }
 
+/// The box a `Text` leaf takes part in layout with, beyond its content: what
+/// an element in a `Row` or `Column` needs (`grow`, `basis`, `height`,
+/// padding and margin). The all-default value is "no box", the plain leaf a
+/// `Text` with none of these attributes always was, and it adds nothing to the
+/// node's style or its fingerprint.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct TextBox {
+    /// Explicit height in logical px; `None` is the height of the text.
+    pub height: Option<f32>,
+    /// Flex-grow factor along the parent's main axis.
+    pub grow: f32,
+    /// Flex-basis in logical px; `None` is the size of the text.
+    pub basis: Option<f32>,
+    /// Space inside the leaf, around the glyphs. A leaf's `width` and
+    /// `height` include it, as a box's do.
+    pub padding: Spacing,
+    /// Space around the leaf.
+    pub margin: Spacing,
+}
+
+impl TextBox {
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// Lays this box over `style`. A default box leaves `style` untouched.
+    fn apply(&self, style: &mut Style) {
+        if self.is_default() {
+            return;
+        }
+        if let Some(h) = self.height {
+            style.size.height = Dimension::from_length(h);
+        }
+        style.flex_grow = self.grow;
+        if let Some(b) = self.basis {
+            style.flex_basis = Dimension::from_length(b);
+        }
+        style.padding = TaffyRect {
+            left: LengthPercentage::from_length(self.padding.left),
+            right: LengthPercentage::from_length(self.padding.right),
+            top: LengthPercentage::from_length(self.padding.top),
+            bottom: LengthPercentage::from_length(self.padding.bottom),
+        };
+        style.margin = TaffyRect {
+            left: LengthPercentageAuto::length(self.margin.left),
+            right: LengthPercentageAuto::length(self.margin.right),
+            top: LengthPercentageAuto::length(self.margin.top),
+            bottom: LengthPercentageAuto::length(self.margin.bottom),
+        };
+    }
+
+    fn fingerprint(&self, fp: &mut LayoutFingerprint) {
+        if self.is_default() {
+            return;
+        }
+        fp.opt_f32(self.height).f32(self.grow).opt_f32(self.basis);
+        for s in [self.padding, self.margin] {
+            fp.f32(s.top).f32(s.right).f32(s.bottom).f32(s.left);
+        }
+    }
+}
+
 /// 2-D alignment of a `ZStack`'s children within the stack rect (RFC-0018
 /// `Align2D`). The first word is the block (vertical) edge, the second the
 /// inline (horizontal) edge; the single-edge tokens centre on the other axis.
@@ -421,6 +484,11 @@ pub struct ContainerStyle {
     /// Flex-grow factor (how much this node expands to fill its parent's main
     /// axis).
     pub grow: f32,
+    /// Flex-basis in logical pixels: the size along the parent's main axis
+    /// before `grow` hands out the free space. `None` is the node's content.
+    /// A growing `ScrollView` sets it to `0`, so what it holds does not
+    /// decide how much room it asks its parent for.
+    pub basis: Option<f32>,
     /// Whether this is a **horizontal scroll container** (RFC-0005 `ScrollView`
     /// `axis: horizontal|both`): content is measured at natural width and
     /// overflows the fixed viewport on the inline axis (Taffy `overflow.x =
@@ -579,6 +647,7 @@ impl ContainerStyle {
                 Justify::Evenly => JustifyContent::SpaceEvenly,
             }),
             flex_grow: self.grow,
+            flex_basis: self.basis.map_or(Dimension::auto(), Dimension::from_length),
             // RFC-0017 overlay layer: an absolute node leaves its parent's flex
             // flow and is pinned to the containing block's edges (inset 0), so it
             // stretches to fill the viewport and stacks over siblings without
@@ -1426,15 +1495,35 @@ impl LayoutAtlas {
     ///
     /// Returns [`AtlasError::Backend`] if the backend refuses the node.
     pub fn add_text_leaf(&mut self, spec: TextLeaf) -> Result<AtlasNodeId, AtlasError> {
+        self.add_text_leaf_boxed(spec, TextBox::default())
+    }
+
+    /// [`add_text_leaf`](Self::add_text_leaf) for a `Text` that also carries
+    /// layout attributes (`grow`, `height`, `p`, `m`, ...). A default `boxed`
+    /// is exactly `add_text_leaf`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the atlas is in the `Computed` state.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AtlasError::Backend`] if the backend refuses the node.
+    pub fn add_text_leaf_boxed(
+        &mut self,
+        spec: TextLeaf,
+        boxed: TextBox,
+    ) -> Result<AtlasNodeId, AtlasError> {
         self.assert_building("add_text_leaf");
 
-        let style = Style {
+        let mut style = Style {
             size: Size {
                 width: spec.width.map_or(Dimension::auto(), Dimension::from_length),
                 height: Dimension::auto(),
             },
             ..Default::default()
         };
+        boxed.apply(&mut style);
 
         // **Text content is layout-class** (RFC-0032 §R2), the single most
         // important row of that table. It is what lets a clean text leaf skip
@@ -1457,7 +1546,58 @@ impl LayoutAtlas {
             .opt_f32(spec.width)
             .f32(spec.fallback.0)
             .f32(spec.fallback.1);
+        boxed.fingerprint(&mut fp);
         self.place(NodeKind::TextLeaf, fp.finish(), style, &[], Some(spec))
+    }
+
+    /// Adds a **single-line `Text` leaf** of a fixed size (`wrap: false`): the
+    /// run is not reshaped to the width it is given, so `size` is the leaf's
+    /// size whatever the text measures, and the text is clipped at the leaf's
+    /// edge by the paint pass. `boxed` is as for
+    /// [`add_text_leaf_boxed`](Self::add_text_leaf_boxed); `size` includes its
+    /// padding.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the atlas is in the `Computed` state.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AtlasError::Backend`] if the backend refuses the node.
+    pub fn add_fixed_text_leaf(
+        &mut self,
+        size: LeafSize,
+        boxed: TextBox,
+    ) -> Result<AtlasNodeId, AtlasError> {
+        self.assert_building("add_fixed_text_leaf");
+        let mut style = Style {
+            size: Size {
+                width: Dimension::from_length(size.width),
+                height: Dimension::from_length(size.height),
+            },
+            ..Default::default()
+        };
+        boxed.apply(&mut style);
+        let mut fp = LayoutFingerprint::new(NodeKind::Leaf);
+        fp.f32(size.width).f32(size.height);
+        boxed.fingerprint(&mut fp);
+        self.place(NodeKind::Leaf, fp.finish(), style, &[], None)
+    }
+
+    /// The padding a node was laid out with, `Spacing::default()` for a node
+    /// that has none or is unknown. The paint pass reads it to place a `Text`'s
+    /// glyphs inside its padding.
+    #[must_use]
+    pub fn padding_of(&self, node: AtlasNodeId) -> Spacing {
+        self.tree.layout(node.node_id).map_or_else(
+            |_| Spacing::default(),
+            |l| Spacing {
+                top: l.padding.top,
+                right: l.padding.right,
+                bottom: l.padding.bottom,
+                left: l.padding.left,
+            },
+        )
     }
 
     /// Adds a container node that wraps the given children.

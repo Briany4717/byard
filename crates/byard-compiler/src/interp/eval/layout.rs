@@ -794,21 +794,42 @@ impl Interpreter {
                 let family = self.resolve_family(attrs);
                 let (nat_w, nat_h) =
                     self.measure_text_wrapped(&text, font_size, None, weight, family.as_deref());
+                // The layout attributes an element in a `Row` or `Column`
+                // takes. A `Text` with none of them never reaches this, so the
+                // common leaf stays what it was: no style evaluated, none set.
+                let boxed = self.text_box(attrs);
+                let pad_w = boxed.padding.left + boxed.padding.right;
+                let pad_h = boxed.padding.top + boxed.padding.bottom;
+                #[allow(clippy::cast_precision_loss)]
+                let explicit_w = self.eval_px_prop(attrs, "width");
                 if self.eval_bool_prop(attrs, "wrap") == Some(false) {
-                    let id = self.atlas.add_leaf(LeafSize::new(nat_w, nat_h))?;
+                    // A single line is never reshaped to a width, so `width`
+                    // is the leaf's width whatever the text measures (the
+                    // paint pass clips what does not fit), and without one the
+                    // leaf is the text's natural width.
+                    let size = LeafSize::new(
+                        explicit_w.unwrap_or(nat_w + pad_w),
+                        boxed.height.unwrap_or(nat_h + pad_h),
+                    );
+                    let id = if boxed == byard_core::atlas::TextBox::default() {
+                        self.atlas.add_leaf(size)?
+                    } else {
+                        self.atlas.add_fixed_text_leaf(size, boxed)?
+                    };
                     flat_ids.push(id);
                     return Ok(id);
                 }
-                #[allow(clippy::cast_precision_loss)]
-                let explicit_w = self.eval_px_prop(attrs, "width");
-                let id = self.atlas.add_text_leaf(byard_core::atlas::TextLeaf {
-                    content: text,
-                    font_size,
-                    weight,
-                    family,
-                    width: explicit_w,
-                    fallback: (nat_w, nat_h),
-                })?;
+                let id = self.atlas.add_text_leaf_boxed(
+                    byard_core::atlas::TextLeaf {
+                        content: text,
+                        font_size,
+                        weight,
+                        family,
+                        width: explicit_w,
+                        fallback: (nat_w + pad_w, nat_h + pad_h),
+                    },
+                    boxed,
+                )?;
                 flat_ids.push(id);
                 Ok(id)
             }
@@ -866,6 +887,28 @@ impl Interpreter {
                 }
                 out
             }
+        }
+    }
+
+    /// The layout box of a `Text`: its `height`, `grow`, `basis`, padding and
+    /// margin. All-default, without evaluating anything, when the `Text`
+    /// writes none of them.
+    fn text_box(&mut self, attrs: &[Attr]) -> byard_core::atlas::TextBox {
+        let has_box = attrs
+            .iter()
+            .any(|a| matches!(a.kind, AttrKind::Prop { .. }) && is_text_box_attr(a.name.as_str()));
+        if !has_box {
+            return byard_core::atlas::TextBox::default();
+        }
+        let style = self.eval_container_style("Text", attrs);
+        #[allow(clippy::cast_precision_loss)]
+        let basis = self.eval_px_prop(attrs, "basis");
+        byard_core::atlas::TextBox {
+            height: style.height,
+            grow: style.grow,
+            basis,
+            padding: style.padding,
+            margin: style.margin,
         }
     }
 
@@ -1220,4 +1263,29 @@ impl Interpreter {
         flat_ids.extend(temp);
         Ok(id)
     }
+}
+
+/// Whether a `Text` attribute is one of the box ones (`height`, `grow`,
+/// `basis`, padding, margin), as opposed to its text and paint attributes.
+fn is_text_box_attr(name: &str) -> bool {
+    matches!(
+        name,
+        "height"
+            | "grow"
+            | "basis"
+            | "p"
+            | "padding"
+            | "pt"
+            | "pr"
+            | "pb"
+            | "pl"
+            | "m"
+            | "margin"
+            | "mx"
+            | "my"
+            | "mt"
+            | "mr"
+            | "mb"
+            | "ml"
+    )
 }

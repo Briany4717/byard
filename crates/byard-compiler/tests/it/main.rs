@@ -36,6 +36,7 @@ mod incremental_paths;
 mod input_hit_test;
 mod instrumentation;
 mod keyboard_focus;
+mod lambda_items;
 mod let_functions;
 mod let_in_actions;
 mod list_reductions;

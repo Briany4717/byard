@@ -10,6 +10,14 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A lambda sees its own item.** A `fn` called with the item inside a list
+  lambda (`products.filter(p => isLow(p.qty))`) was computed once, for the
+  first item, and gave every item the same answer. A lambda inside another
+  (`cats.map(c => products.filter(p => p.cat == c))`) could not read the outer
+  item. Both now give the right result.
+
 ## [0.1.0] - 2026-11-05
 
 The first release.

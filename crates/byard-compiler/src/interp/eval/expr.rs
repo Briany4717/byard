@@ -276,6 +276,26 @@ fn with_lambda_elem<F: FnOnce() -> Value>(elem: Value, f: F) -> Value {
     out
 }
 
+/// Runs a one-parameter lambda body for one item. `named` is `Some` when the
+/// lambda sits inside another one (or inside an event handler) and so cannot
+/// use the single payload slot without hiding the outer item: it then pushes
+/// the item on the [`LAMBDA_ARGS`] stack under its name. A lambda at the top
+/// keeps the single slot, which costs nothing extra.
+fn with_item<F: FnOnce() -> Value>(named: Option<&Symbol>, elem: Value, f: F) -> Value {
+    let Some(name) = named else {
+        return with_lambda_elem(elem, f);
+    };
+    let base = LAMBDA_ARGS.with(|a| {
+        let mut a = a.borrow_mut();
+        let base = a.len();
+        a.push((name.clone(), elem));
+        base
+    });
+    let out = f();
+    LAMBDA_ARGS.with(|a| a.borrow_mut().truncate(base));
+    out
+}
+
 /// Indexes `base[index]` (RFC-0027 §4): a `List` at an in-range integer index
 /// yields the element; out-of-range or non-list/non-int degrades to `Unit`
 /// (never a panic). Negative indices are out of range.
@@ -996,6 +1016,22 @@ impl Interpreter {
                     }
                     // Bind each arg as a reactive memo so signal reads inside the
                     // body are tracked by the enclosing scope.
+                    if !is_callback && !params.is_empty() && self.per_call(payload_name) {
+                        // Inside a lambda or event handler: arguments depend on
+                        // the item, so evaluate them at each call.
+                        let n = params.len().min(args.len());
+                        let arg_cs: Vec<Lowered> = args[..n]
+                            .iter()
+                            .map(|a| self.lower_expr(&a.value, payload_name))
+                            .collect();
+                        let names: Vec<Symbol> = params[..n].to_vec();
+                        let mark = self.lambda_params.len();
+                        self.lambda_params.extend(names.iter().cloned());
+                        let inner = payload_name.filter(|p| !names.contains(p));
+                        let body_lowered = self.lower_expr(&body, inner);
+                        self.lambda_params.truncate(mark);
+                        return Self::call_with_args(arg_cs, names, body_lowered);
+                    }
                     let snapshot = self.env.len();
                     let inlined = self.inlined_params.len();
                     for (param, arg) in params.iter().zip(args.iter()) {
@@ -1029,6 +1065,58 @@ impl Interpreter {
         Box::new(|_| Value::Unit)
     }
 
+    /// Lowers the body of a one-parameter list lambda. At the top (no event
+    /// payload, no enclosing lambda parameter of another name) the item goes
+    /// through the single payload slot. Inside another lambda or an event
+    /// handler the payload slot is taken, so the item is named on the
+    /// [`LAMBDA_ARGS`] stack instead and the outer item stays readable.
+    fn lower_item_body(
+        &mut self,
+        param: Option<Symbol>,
+        body: &Expr,
+        payload_name: Option<&Symbol>,
+    ) -> (Lowered, Option<Symbol>) {
+        match (&param, payload_name) {
+            (Some(p), Some(outer)) if p != outer => {
+                self.lambda_params.push(p.clone());
+                let c = self.lower_expr(body, payload_name);
+                self.lambda_params.pop();
+                (c, param)
+            }
+            _ => (self.lower_expr(body, param.as_ref()), None),
+        }
+    }
+
+    /// Whether a call made here runs once per item of a lambda (or per event),
+    /// so its arguments must be evaluated at each call: a memo would keep the
+    /// first item's value.
+    fn per_call(&self, payload_name: Option<&Symbol>) -> bool {
+        payload_name.is_some() || !self.lambda_params.is_empty()
+    }
+
+    /// Wraps a function body so its parameters are read from the
+    /// [`LAMBDA_ARGS`] stack, each argument evaluated at every call. The
+    /// arguments go on the stack unnamed first, so none of them can read a
+    /// parameter that shares a name with a variable of the caller.
+    fn call_with_args(mut arg_cs: Vec<Lowered>, names: Vec<Symbol>, mut body: Lowered) -> Lowered {
+        let blank = Symbol::intern("");
+        Box::new(move |ctx| {
+            let base = LAMBDA_ARGS.with(|a| a.borrow().len());
+            for c in &mut arg_cs {
+                let v = c(ctx);
+                LAMBDA_ARGS.with(|a| a.borrow_mut().push((blank.clone(), v)));
+            }
+            LAMBDA_ARGS.with(|a| {
+                for (slot, n) in a.borrow_mut()[base..].iter_mut().zip(&names) {
+                    slot.0 = n.clone();
+                }
+            });
+            let out = body(ctx);
+            LAMBDA_ARGS.with(|a| a.borrow_mut().truncate(base));
+            out
+        })
+    }
+
     /// Inlines a call to a top-level function. Its arguments are lowered in
     /// the caller's environment; its body in an environment holding only its
     /// parameters, so it reads nothing of the view that calls it (a function
@@ -1049,6 +1137,24 @@ impl Interpreter {
             return Box::new(|_| Value::Unit);
         }
         let (params, body, _) = self.fn_table[id.0 as usize].clone();
+        if !params.is_empty() && self.per_call(payload_name) {
+            // Called inside a lambda or an event handler: the arguments depend
+            // on the item, so they are evaluated at each call, not memoised.
+            let n = params.len().min(args.len());
+            let arg_cs: Vec<Lowered> = args[..n]
+                .iter()
+                .map(|a| self.lower_expr(&a.value, payload_name))
+                .collect();
+            let names: Vec<Symbol> = params[..n].to_vec();
+            let caller = std::mem::replace(&mut self.env, Env::new());
+            let outer = std::mem::replace(&mut self.lambda_params, names.clone());
+            self.inlining.push(name.clone());
+            let body_lowered = self.lower_expr(&body, None);
+            self.inlining.pop();
+            self.lambda_params = outer;
+            self.env = caller;
+            return Self::call_with_args(arg_cs, names, body_lowered);
+        }
         let mut bound = Vec::with_capacity(params.len());
         for (param, arg) in params.iter().zip(args.iter()) {
             let arg_lowered = self.lower_expr(&arg.value, payload_name);
@@ -1303,7 +1409,7 @@ impl Interpreter {
                     Expr::Lambda { params, body, .. } => (params.first().cloned(), body.clone()),
                     _ => return None,
                 };
-                let mut body_c = self.lower_expr(&body, param.as_ref());
+                let (mut body_c, named) = self.lower_item_body(param, &body, payload_name);
                 let is_find = name.as_str() == "find";
                 Some(Box::new(move |ctx| {
                     let Value::List(xs) = base_c(ctx) else {
@@ -1317,7 +1423,7 @@ impl Interpreter {
                         return xs
                             .into_iter()
                             .find(|x| {
-                                with_lambda_elem(x.clone(), || body_c(ctx))
+                                with_item(named.as_ref(), x.clone(), || body_c(ctx))
                                     .as_bool()
                                     .unwrap_or(false)
                             })
@@ -1326,7 +1432,7 @@ impl Interpreter {
                     // Each key computed once, then a stable sort by it.
                     let mut keyed: Vec<(Value, Value)> = xs
                         .into_iter()
-                        .map(|x| (with_lambda_elem(x.clone(), || body_c(ctx)), x))
+                        .map(|x| (with_item(named.as_ref(), x.clone(), || body_c(ctx)), x))
                         .collect();
                     keyed.sort_by(|a, b| value_order(&a.0, &b.0));
                     Value::List(keyed.into_iter().map(|(_, x)| x).collect())
@@ -1344,7 +1450,8 @@ impl Interpreter {
                 };
                 let mark = self.lambda_params.len();
                 self.lambda_params.extend(params.iter().cloned());
-                let mut body_c = self.lower_expr(&body, payload_name);
+                let outer = payload_name.filter(|n| !params.contains(n));
+                let mut body_c = self.lower_expr(&body, outer);
                 self.lambda_params.truncate(mark);
                 let (acc_name, elem_name) = (params[0].clone(), params[1].clone());
                 Some(Box::new(move |ctx| {
@@ -1374,7 +1481,7 @@ impl Interpreter {
                     Expr::Lambda { params, body, .. } => (params.first().cloned(), body.clone()),
                     _ => return None,
                 };
-                let mut body_c = self.lower_expr(&body, param.as_ref());
+                let (mut body_c, named) = self.lower_item_body(param, &body, payload_name);
                 let is_map = name.as_str() == "map";
                 Some(Box::new(move |ctx| {
                     let Value::List(xs) = base_c(ctx) else {
@@ -1382,7 +1489,7 @@ impl Interpreter {
                     };
                     let mut out = Vec::with_capacity(xs.len());
                     for elem in xs {
-                        let mapped = with_lambda_elem(elem.clone(), || body_c(ctx));
+                        let mapped = with_item(named.as_ref(), elem.clone(), || body_c(ctx));
                         if is_map {
                             out.push(mapped);
                         } else if mapped.as_bool().unwrap_or(false) {

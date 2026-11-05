@@ -268,6 +268,16 @@ View Main() {
 error[EffectInPureLambda]: a `map`/`filter` lambda must be a pure expression
 ```
 
+A lambda can sit inside another and read the outer one's item, and it can call a
+`fn` with its own item; the call runs for every item:
+
+```byld,fragment
+var products = [{ category: "a", qty: 3 }, { category: "b", qty: 40 }]
+fn isLow(qty: Int) -> Bool => qty < 10
+let perCategory = ["a", "b"].map(c => products.filter(p => p.category == c).len)
+let low = products.filter(p => isLow(p.qty))
+```
+
 A lambda with a block body is an *action*, and may assign. See [state](state.md)
 and [events and actions](events-and-actions.md).
 

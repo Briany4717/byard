@@ -161,7 +161,7 @@ For your own app, turn the feature on in its `Cargo.toml`:
 
 ```toml
 [dependencies]
-byard = { path = "../byard/crates/byard", features = ["a11y"] }
+byard = { version = "0.1", features = ["a11y"] }
 ```
 
 The tree is built only while a screen reader is connected. With none, an app pays one

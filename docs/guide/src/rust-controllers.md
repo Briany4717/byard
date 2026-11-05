@@ -5,9 +5,8 @@ owns, a device, a library with no byld equivalent. A *controller* is a Rust stru
 view can call. This chapter builds one, calls it from a view, and covers what crosses
 between them.
 
-The `byard` crate is what an app depends on. It is not on crates.io yet, so depend on it
-by path to your clone. Controllers are `async`, so an app that sleeps or does I/O in
-one also wants `tokio`:
+The `byard` crate is what an app depends on. Controllers are `async`, so an app that
+sleeps or does I/O in one also wants `tokio`:
 
 ```toml
 [package]
@@ -16,7 +15,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-byard = { path = "../byard/crates/byard" }
+byard = "0.1"
 tokio = { version = "1", features = ["time"] }
 ```
 

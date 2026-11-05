@@ -27,10 +27,14 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-byard = { path = "../byard/crates/byard" }
+byard = "0.1"
 ```
 
 and you run it with `cargo run`.
+
+The same crate is the `byard` command, through its default `cli` feature. Your app never
+links the command, whichever way you write the dependency. To skip compiling it as well,
+write `byard = { version = "0.1", default-features = false }`.
 
 ## What you can set
 

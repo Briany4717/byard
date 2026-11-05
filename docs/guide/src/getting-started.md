@@ -6,19 +6,13 @@ This chapter installs the tools, makes a project and runs it.
 
 - **Rust**, stable, version 1.86 or newer. [rustup](https://rustup.rs) installs
   it.
-- **git**, to get the source.
 - **A graphics driver** `wgpu` can use: Vulkan on Linux, Metal on macOS,
   Direct3D 12 on Windows.
-
-Byard is not on crates.io yet, so you install it from a clone. This will change
-when there is a release.
 
 ## Install
 
 ```sh
-git clone https://github.com/Briany4717/byard
-cd byard
-cargo install --path crates/byard-cli
+cargo install byard
 ```
 
 That builds the `byard` command and puts it in Cargo's bin directory, usually
@@ -28,8 +22,16 @@ That builds the `byard` command and puts it in Cargo's bin directory, usually
 byard --version
 ```
 
-The first build compiles the whole engine, so it takes a while. After that,
-running `cargo install` again only rebuilds what changed.
+The first build compiles the whole engine, so it takes a while. `cargo install
+byard` again updates it to the latest release.
+
+To run what is on `main` instead, install from a clone:
+
+```sh
+git clone https://github.com/Briany4717/byard
+cd byard
+cargo install --path crates/byard
+```
 
 ## Make a project
 

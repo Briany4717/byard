@@ -285,10 +285,10 @@ Language Server Protocol over standard input and output, and besides formatting 
 completion, go to definition, rename, document symbols, semantic colours and quick fixes.
 It is early, and it will change.
 
-Install it next to `byard`, from the same clone:
+Install it next to `byard`:
 
 ```sh
-cargo install --path crates/byld-lsp
+cargo install byld-lsp
 ```
 
 **VS Code.** The extension is in `editors/vscode`. Open that folder in VS Code, run

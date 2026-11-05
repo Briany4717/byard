@@ -10,183 +10,18 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-### Changed
+## [0.1.0] - 2026-11-05
 
-- **Images stop piling up in video memory.** The texture cache kept every
-  decoded image for the life of the app, so a gallery, a feed or a list of
-  avatars grew VRAM without a limit. It now holds up to 128 MiB of decoded
-  pixels (`EncoderSubsystem::set_texture_budget` changes it), and past that
-  drops the ones no frame has drawn for half a second, least recently drawn
-  first. An image drawn this frame is never dropped, so a screen that shows
-  more than the budget goes over it rather than decoding the same pictures
-  again every frame; it comes back under when the view moves on. A decode in
-  flight and a hot reload are never cut off, and an app that stays under the
-  budget pays one comparison per frame. `EncoderSubsystem::texture_cache_bytes`
-  reports what is held.
-  
-- **A frosted pane creates no bind groups on a steady frame.** Every
-  `backdrop` pane built three bind groups, one for each blur pass and one for
-  the composite, on every frame it was drawn. They now live with the pane's
-  scratch textures and are rebuilt only when those are recreated (the pane
-  changed size or the surface format changed) or the instance arena replaced
-  its buffer, so a pane that sits still, moves, or shifts inside the arena
-  because something drawn before it changed costs none. The blur parameters
-  are picked by dynamic offset for this reason. A path `clip` whose outline
-  animates likewise stops creating its three buffers and bind group each frame:
-  it keeps them and writes into them, growing only when a frame needs more than
-  it has held. Pixels are unchanged; `EncoderSubsystem::backdrop_bind_groups_created`
-  and `clip_mask_gpu_creations` count what is left.
-  
-- **Handing the layout to the encoder costs one pass, and allocates nothing.**
-  `LayoutAtlas::populate_frame` found each node's position by climbing its
-  parent chain to the root, and cloned each node's child list on the way down;
-  the hit-test grid rebuilt after every layout did the same. Both now walk the
-  tree once, passing each node's position to its children, and the interpreter's
-  path (`populate_frame_dirty`) reuses its buffers and tracks dirty nodes in a
-  flat list instead of a hash set. On a 3,906-node tree the call goes from about
-  470 us to 165 us and from 787 heap allocations to none; on 8,191 nodes in a
-  12-deep tree, from 1.6 ms to 0.29 ms. The rectangles are the same ones, to the
-  bit: a test holds every node of an irregular tree to the old answer.
-
-- **Every app's window now carries its own id, so its window class changes.**
-  Wayland's `app_id` and X11's `WM_CLASS` were `dev.byard.Byard` for every
-  Byard app, so a compositor grouped them as one application, a taskbar could
-  not find the right icon and a window rule could not tell two apps apart. The
-  id is now the manifest's `[bundle] id` (`dev.byard.aura-weather`), or else
-  `dev.byard.<executable name>`. `byard dev` keeps `dev.byard.Byard`, as it is
-  the tool's window. A window rule written for `dev.byard.Byard` (Hyprland's
-  `windowrule = ..., class:^(dev.byard.Byard)$`) no longer matches an app;
-  it never named one, and it now can.
-
-- **An app whose views do not compile prints what `byard check` prints.**
-  `cargo run` on an app with a misspelt name printed
-  `Error: Platform("... did not compile: nothing here is named ...")`: the
-  wrong subsystem, the headline and nothing else. `App::run` and `App::shot`
-  now print each diagnostic with its file, line and column, the source line,
-  a caret under the span and the suggestion, through the renderer `byard check`
-  uses (`byard_compiler::diagnostics::render`, which moved out of the CLI;
-  `byard check` is byte for byte as it was), and then return one short line
-  (`1 error in the project's views (shown above)`), so the
-  `fn main() -> Result<(), ByardError>` every example writes reads well. A program that declares no `View` is a
-  diagnostic in the entry file like any other.
-
-- **`ByardError` says whether the project or the program is what failed.**
-  Breaking, though the enum was already `#[non_exhaustive]`: it gains
-  `Project` and `Compile`, which hold the error boxed, and
-  `byard::ByardErrorExt` gives them back by name (`as_project()` is a
-  `ProjectError`, `as_compile()` a `CompileReport` with each diagnostic and
-  its source). `Platform` goes back to meaning the window, the surface or the
-  event loop. Its `Debug`, which is what a returned `main` error prints, shows
-  the two new variants as their message and every other variant as before.
-
-- **`byard-project` returns a `ProjectError`, not a `String`.** Breaking for
-  anything that calls it: `Manifest::discover`, `Manifest::require_app`,
-  `resolve_project`, `project_source_files`, `parse_dependencies`, `dep_root`,
-  `package_checksum`, `publishable_files`, `declared_assets`, `Lockfile`,
-  `Registry`, `RegistryIndex`, `fetch_git`, `fetch_registry`, `solve::resolve`
-  and `archive::{pack, unpack}` now answer with a matchable error (a missing
-  manifest, a manifest that does not parse and on which line, an I/O failure,
-  an unsatisfiable requirement with the solver's explanation, a fetch, a
-  lockfile, an archive) whose text is the message that was there. Two
-  signatures grew an argument to say where they were reading from:
-  `parse_dependencies` takes the manifest's path and `fetch_git` the package's
-  name. A directory with no project in it now names the directory, and a
-  `byard.toml` that does not parse is led by its path, so an app started
-  from `cargo run` says which file.
-
-- **A record-shaped property value reads its fields' bare names as names.**
-  `shadow: (y: sze)`, `p: (vertical: sze)` and `gradient: (to: blak)` checked
-  clean (or, for `p`, said only "expected a length") and drew with nothing.
-  Now each misspelling is told, with the name it meant. A gradient's `kind:`
-  keeps its words, and so does an unnamed item of a pair.
-
-- **A canvas shape's numeric argument reads a bare name as a name.**
-  `circle(r: raduis)` and `line(x: wdth, y: 40)` checked clean and drew with
-  nothing; now the misspelling is told, with the name it meant. An argument
-  that takes a word (`cap: round`) keeps it.
-
-- **`byard check` catches three more kinds of misspelling.** A property that
-  takes a number, a colour, a length, an angle or a list reads a bare name
-  as a name, so `bg: prmary` is told (`did you mean primary?`) where it used
-  to draw nothing. A called name has to be a function (`serach(query)`). And
-  text given to a number property (`zoom: "near"`) is a type mismatch, for an
-  intrinsic and for a native view alike. A project that checked clean with
-  one of these in it now fails there.
-
-- **A name nothing declares is an error.** `Text("{cuont}")` drew the word
-  "cuont" and `count = cuont + 1` wrote text into a number, and `byard check`
-  passed both. A bare name read as a value (in a text, an expression, a
-  condition, a loop, an action, an argument to a view) now has to be
-  declared, and the error suggests the closest name in scope
-  (`did you mean count?`). A word an element understands (`align: center`,
-  `repeat: infinite`) is still the element's to judge. A project that passed
-  `byard check` with a misspelt name in it now fails there.
-
-- **A registry `version` is a requirement now, not an exact version.**
-  `version = "0.1.0"` accepts any compatible `0.1.x` (Cargo's rules), where it
-  used to accept `0.1.0` only. Write `"=0.1.0"` to keep exactly one. An
-  existing `byard.lock` keeps its pins, but the package cache is now keyed by
-  content, so run `byard get` once to fill it again before `check` or `dev`. A
-  published package can depend only on registry packages, and `byard publish`
-  refuses one with a path or git dependency. A requirement naming a
-  pre-release (`"=1.2.3-alpha"`) is an error: pre-releases are never chosen.
-
-- **`byard check` and `byard dev` run the type checker.** It used to run only
-  in the editor, so a misspelt method (`xs.pusj(1)`), a type mismatch or an
-  impure lambda passed the command line clean and failed silently at runtime.
-  An unknown method on a list or a string is now an error with a suggestion
-  (`did you mean push?`), and every other check the editor showed now stops
-  `byard check` too. One consequence: a view parameter with no type,
-  `View Card(label)`, is now an error; write `View Card(label: Str)`. The
-  `content` slot is the one parameter written bare.
-
-- **The system fonts are read once per process.** Building a font system scans
-  every font installed on the machine, tens of milliseconds each time, and the
-  engine builds two (one to measure text, one to paint it), so every app paid
-  the scan twice at startup. The scan now happens once, and each font system
-  starts from a copy of its result; a font a project registers still goes into
-  its own copy only.
-
-- **A pipeline may only ask for the vertex attributes every GPU has.** The
-  engine requests the adapter's limits with the attribute budget held down to
-  the sixteen the WebGPU specification guarantees, so a layout that overruns
-  the floor fails on the machine it was written on rather than only on a user's.
-  `DecoratedBox` was over the line, which is why it stopped existing on Linux;
-  its transform now reads as two wide lanes instead of four narrow ones, which
-  changes not one byte of what is uploaded.
-
-- **The colour transfer moved into the engine** (`byard_core::color`). A
-  package's widget writes colours too, and a second implementation of a
-  transfer function is a second chance to spend a release displaying every
-  colour lighter than it was written.
-
-- **A text appearing or disappearing no longer re-shapes every text in the
-  window.** The glyph cache was compared line by line only while the number of
-  texts stayed the same, so adding one line to a list, or opening and closing
-  the dev HUD, shaped every line of the window again (eight lines plus one
-  appended: nine shaped, now one; the HUD opening on eight app lines: 29, now
-  its own 21; the HUD closing: 8, now none). A line is kept whenever what it
-  is made from (text, size, wrap, weight, family) still matches the buffer at
-  its place, and the buffers a shrinking window gives up are kept, up to 256,
-  for the next one that opens. A frame whose text count changed is still
-  redrawn in full, as its redraw region is tracked by position. The seven
-  lists of last-frame bounds the encoder keeps are refilled instead of
-  collected anew, seven allocations fewer on every frame.
-  
-- **Measuring a text that was measured before allocates nothing, and the
-  cache has a ceiling.** Layout asks for the size of every `Text` and `Button`
-  on every tick, and each ask built a `String` and an `Arc<str>` for its cache
-  key before finding the answer it had. The key is borrowed now: a hit hashes
-  the string and compares it, with no heap allocation (a test counts them), and
-  takes about 80 ns where it took about 490 ns; a screen of 200 labels measured
-  again each tick went from about 109 us to about 12 us. The cache kept every
-  string it was ever asked about, so a clock, a counter or a download's progress
-  line grew it for as long as the app ran; it now holds at most 4,096 answers
-  and drops the half used least recently when it is full. A string that is
-  new each time shapes through one reused `cosmic-text` buffer instead of
-  building one, and the measurements come out bit for bit as before.
+The first release.
 
 ### Added
+
+- **`cargo install byard` installs the `byard` command.** The command used to
+  be the `byard-cli` crate's binary, installed from a clone with `cargo install
+  --path crates/byard-cli`. The `byard` crate now carries it too, behind a
+  `cli` feature that is on by default, so one name is both the library an app
+  depends on and the command a person types. An app that depends on `byard`
+  never links the command; `default-features = false` only saves compiling it.
 
 - **`[bundle] homepage`.** The app's web page, an `http` or `https` address,
   written into the Linux bundle's AppStream file as `<url type="homepage">`.
@@ -687,281 +522,341 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   is still fatal, so a diagnostic added without a thought about severity stays
   an error.
 
-### Fixed
-
-- **The language server shows a warning as a warning.** Every diagnostic was an
-  error, including the ones `byard check` prints and passes (`UncheckableInject`
-  on an app's own controller). Each diagnostic also carries the compiler's name
-  for it as its code now (`UnknownAttribute`).
-
-- **"Convert `var` to `let`" no longer rewrites your code.** The action printed
-  the initializer through a function that knew integers, floats and names and
-  wrote `0` for everything else, so applying it to `var total = price * qty`
-  produced `let total = 0`. It now changes the keyword and nothing else, so the
-  initializer, the declared type and a trailing comment stay as written.
-
-- **"Remove invalid attribute" appears, and leaves a list that parses.** It
-  looked for "unknown property" in a message that says "unknown attribute", so
-  it never showed; it follows the diagnostic's code now, and removes the comma
-  with the attribute (`#[gap: 4, bogus: 1]` becomes `#[gap: 4]`).
-  
-- **A controller argument that is left out is an empty string, not "Unit".**
-  `String::from_host(HostValue::Unit)` gave the text `Unit`, so a view that
-  called `greet()` without its argument greeted "Unit". It is `""`, as the
-  guide always said and as a number is `0`.
-  
-- **A focusable control no longer adds a signal every frame.** A checkbox, a
-  radio button or a text field with no `focused:` made a signal of its own each
-  time it was drawn, and nothing freed them, so the signal table grew with
-  every frame of a window that had one. They share a single signal now, which
-  nothing reads: focus is drawn from the router, not from that signal.
-  
-- **A screen that is popped, a list that shrinks and a frame that is drawn give
-  their reactive scopes back.** Nothing retired a scope, so the table of them
-  only grew. Each visit to a route lowered its screen into scopes (and, for a
-  `when`, a `for` or a `NavStack` in it, pools that kept a copy of their
-  branches), and popping the route threw the screen away and kept all of that:
-  100 visits to a screen of nine scopes left 900 behind. A handler that calls a
-  `fn` is lowered again every frame, and each call opened a scope for its
-  argument that nothing closed: 1,000 frames of an idle window, 1,000 scopes.
-  And a `for` that shrank from 1,000 rows to one still held 1,000 lowered
-  bodies and the 1,000 records behind them. Now a popped screen's scopes, pools
-  and lifecycle effects are released once its `on unmount` has run, the
-  arguments a frame's handlers opened go with the next frame's handlers (kept
-  while a controller call raised from them is waiting for its reply, which may
-  read them), a pool that is left more than four times larger than its list
-  keeps twice that many bodies, and a row that leaves lets go of its value at
-  once. Those runs now end at 2 scopes live, 3 slots in the table, and 33
-  scopes with 32 bodies kept. A scope's slot is reused, and an id that outlived its scope names nothing
-  rather than the scope that took its place. Signals are still never freed:
-  `var`s declared inside a screen leave theirs behind.
-  
-- **A hot reload keeps every `var` when a `let` is added, removed or moved.**
-  A `let` was part of what a reload compared, so adding one derived value
-  (`let doubled = count * 2`) counted as a change to the view's state and
-  reset every `var` in it. A `let` or `fn` holds no state of its own, so it no
-  longer counts, and neither does the order the `var`s are written in. A
-  `var` that appears or disappears still resets the view, and so does one
-  whose written type changes (`Int` to `Str`), which used to keep a value of
-  the old type.
-
-- **A text at size 0 takes no room instead of crashing.** `Text("x")
-  #[size: 0]`, or a size bound to a `var` that holds 0 or springs through it,
-  panicked inside the text shaper ("line height cannot be 0"), and because
-  laying a view out measures its text, `byard check` panicked with it. Text at
-  a size of 0, below 0 or not a number now measures as nothing and draws
-  nothing, in the check, a shot and a window alike.
-
-- **Delete in a `TextField` removes one character, not the whole field.** It
-  wrote an empty string, which lost the user's work with one key. It removes
-  the grapheme after the caret, and nothing at the end of the text.
-  
-- **`byard build` prints the version it is.** It always said `0.0.0`.
-
-- **An animation ticks once per frame drawn.** With an animation in flight
-  the logic thread ticked as fast as it could, computing frames the display
-  never showed, and a hidden or minimised window kept spinning a core. It now
-  waits for the frame it published to be drawn, so animations run at the
-  display's rate, and slows to ten ticks a second while nothing is drawn.
-  Aura Weather's start-up went from 1.6 s to 0.7 s of CPU in its first
-  eight seconds.
-
-- **A hot reload keeps the root view's state.** A reload that changed only how
-  state is shown kept each `var`, and the root was then lowered again, which
-  gave every `var` a fresh signal at its initial value: under `byard dev`,
-  every edit reset the root's state one step after keeping it.
-
-- **An element drawn over a native view gets the press first.** A native view
-  was offered every pointer event under it before any element, so a view that
-  claimed presses starved a button placed on top of it. Now what is on top is
-  what the pointer is on: an element drawn over the view that takes presses
-  there gets the event, and the view is offered it only where nothing drawn
-  over it does.
-
-- **A `TextField` or a `Slider` with `grow: 1` fills its row.** Both stayed
-  200 wide whatever `grow` said, and nothing reported it, so a search field
-  could not span its window. `grow` now gives them their share of the free
-  space, as it does for a `Box`; without it they keep their width.
-
-- **A reply's `ok` and `err` arms see the arguments their function was called
-  with.** In `let search = (asked) => { http.get(...) ok res => { ... } }`,
-  `asked` inside the arm read the argument again when the answer arrived, so
-  after `search(query)` it was whatever `query` had become by then. A late
-  answer to an old question could not be told from the current one. The call
-  now keeps its function's parameters as they were when it was placed, each
-  outstanding call its own.
-
-- **The events written on a `TextField` run.** `input`, `change`, `submit`,
-  `key_down`, `key_up`, `focus`, `blur` and the pointer events were accepted
-  on a field and never ran: the field registered its own editing and nothing
-  else. Now `input` and `change` run after every edit (typed text, Backspace,
-  Delete, a committed composition) and see the value already written,
-  `submit` runs on Enter, and the rest run as on any element. A handler can
-  name what it is told: `input(text) => search(text)`. A `key_down` written
-  on a field does not replace the field's own editing.
-
-- **A `TextField` reads its `color:`, its padding and its `typo:` size.** The
-  text was always white, the placeholder always the same grey and both
-  always 10 from the left edge, so a field on a light theme drew white on
-  white. `color:` now colours the text and the caret, and the placeholder is
-  that colour fainter; `p:` or `pl:` sets where the text starts; a `typo:`
-  token gives its size as it does for a `Text`. A field that writes none of
-  them looks as it did.
-
-- **`byard get` limits what a registry can send and where it can point.** A
-  response over 128 MiB is refused instead of read into memory, and a path
-  an index names (an archive) must be inside the registry, so an index cannot
-  point `byard get` at a file elsewhere on disk or another server.
-
-- **A theme's seed image is followed through every change in `byard dev`.**
-  It is matched by its path, so one with an unusual extension (`brand.asset`)
-  is seen; deleting it re-reads the manifest and shows the missing-file
-  error; and when `byard.toml` points the seed at another image, that image
-  is watched from the same save on, even outside the project.
-- **A package's seed image is published with it.** `byard publish` left a
-  theme's `seed = { image = "…" }` out of the archive and the checksum, so a
-  package theme that worked from a path failed once installed. It is now a
-  declared asset, and must live inside the package.
-- **`byard check` works inside a library package.** In a package with
-  `[package]` and no `[project]`, it failed looking for a `main.byd` the
-  package never declared. It now checks the package's own files, the ones an
-  app gets through `use`, with its fonts and theme named as that app sees
-  them. `byard dev`, `shot` and `build` there say it is a library and point
-  at `check`.
-
-- **`byard dev` reloads a changed image.** Editing or replacing a PNG or
-  JPEG while the app runs now updates every `Image` drawn from it on save;
-  it used to keep showing the old picture until restart. The old picture
-  stays up until the new one has loaded, and a file caught half written
-  keeps it rather than going blank. The whole project directory is watched
-  now, so images in `assets/` beside `src/` count, while `target/`,
-  `.byard/` and `.git/` are ignored.
-
-- **`byard dev` applies `byard.toml` edits live, theme included.** Only the
-  source directory was watched, so a manifest next to it was never seen, and
-  a reload never replaced the theme even when it was. Both the manifest and a
-  seed image are now watched, and a changed theme takes effect on save.
-
-- **A hot reload no longer drops the theme.** After any reload, an app that
-  used `inject Theme` lost it: its theme colours resolved to nothing and it
-  drew nearly black until restarted.
-
-- **An `Image` appears as soon as it has loaded.** It used to stay blank until
-  something else redrew the window, such as moving the pointer.
-
-- **Text is not reshaped every frame after something unmounts.** The shaped
-  text cache kept its longest length, so once a panel or a dropdown closed,
-  every later frame looked shorter than the cache and reshaped every line on
-  screen. The cache now follows the frame's own length: the frame something
-  unmounts on reshapes, and the still frames after it reshape nothing.
-
-- **Two quick taps on a button are two taps.** A second tap within the
-  double-tap window became a double tap instead of a tap, whether or not
-  anything listened for double taps, so clicking a `+` twice quickly counted
-  once. A second tap now becomes a double tap only where a `double_tap`
-  handler is under the pointer.
-
-- **An animation belongs to an element, not to the line that wrote it.**
-  Animation state was keyed by the source span of the `with` node alone, and a
-  `for` body is lowered once per row but *written* once, so every row in a list
-  shared one `Motion`, one set of OKLab channels and one `LoopClock`. Each
-  frame, row A retargeted the shared state to its own goal (reseeding `from` and
-  restarting the clock) and row B immediately retargeted it back. Neither
-  advanced: the set stalled near the start and crept. Anyone with a list of
-  animated components was affected, and "my springs are sluggish in a list"
-  points nowhere near the cause.
-
-  The key now carries the element instance as well. A row that leaves the list
-  drops its animation and a re-grown row starts fresh, which is forced rather
-  than chosen, because a pool's slots are reused, so state left behind would be
-  inherited by a *different* element.
-
-- **A telemetry sample now carries who it belongs to (RFC-0030 self-accounting
-  erratum).** The dev HUD runs a second interpreter, so when it was open two
-  `interp.render` samples and two `layout.taffy` samples arrived in one frame.
-  The profile block merged them by name and printed `×2`, honest that a merge
-  had happened, silently wrong about whose time it was, and enough to make the
-  HUD look like it cost a tenth of what it did. It is the same class of defect
-  as the nested double-count §I2b fixed, one level out: there a parent and a
-  child were summed, here two peers were summed and billed to one of them.
-
-  Every sample is now stamped `App` or `DevTools` at scope entry, from a
-  thread-local set at the boundary, so the interpreter, the layout atlas and
-  the shaper are all attributed correctly without any of them knowing that
-  owners exist. `Sample` is still 24 bytes: the owner lives in padding that was
-  already reserved. Consequences a developer sees: the block's scope rows are
-  the app's alone and do not move when the HUD opens, the `hud.render` row is
-  what the dev surfaces cost *on every thread*, the statusline's `work` and the
-  interpreter tax exclude the profiler, and `--trace` tags dev-owned events so
-  hiding them is a checkbox in Perfetto.
-
-- **The render thread's half of the same problem.** A logic-thread scope cannot
-  enclose the encoder, it has been dropped by the time the frame is encoded, 
-  so `RenderFrame` carries a cursor marking where the dev runner's primitives
-  begin, and the encoder charges their shaping, staging and pass recording to
-  `encode.glyphs.dev`, `encode.buffers.dev` and `encode.passes.dev`.
-
-- **`encode.frame`'s breakdown now adds up to something readable.** Three new
-  rows: `encode.scissor` (the dirty-region scan over every pool),
-  `encode.bookkeeping` (its matched pair, recording this frame's bounds for the
-  next one) and `encode.finish` (`wgpu` assembling the command buffer). On a
-  text-heavy frame two of the three largest terms inside `encode.frame` were in
-  no sub-scope at all, so they appeared only as self-time that no row explained.
-
-
-- **The dev loop is something you can see (RFC-0030).** `byard dev` spent every
-  session dumping a multi-line telemetry block to stderr once a second, three
-  hundred of them in five minutes, whose practical effect was to bury the parse
-  errors a developer actually needed to read. It now prints a startup header, a
-  log that scrolls, and one line anchored to the bottom that redraws in place:
-
-  ```
-   ● 60fps  work 3.4ms · idle 15.0ms  ▁▂▁▂▃▁▂  264 boxes  ↻0  retained 64/64
-  ```
-
-  `Mod+Shift+P` (or `--profile`) swaps it for the full per-scope breakdown,
-  charted against the frame budget in fixed execution order and redrawn with the
-  cursor rather than by scrolling. The budget defaults to the display's refresh
-  interval, on a 120 Hz panel that threshold is 8.3 ms, and bars drawn against
-  16.7 ms there would report a comfortable frame for one that visibly stutters, 
-  and is printed in the header so it is never ambiguous which number a bar is
-  drawn against. `[dev] frame_budget = "8ms"` pins it for CI.
-
-- **One output grammar for all seven commands (RFC-0030 §P1–§P4).** A 5-column
-  prefix, a message, and a right-aligned duration, in ~80 lines with no
-  dependency. Roles rather than colours, the 16 base ANSI colours rather than
-  truecolor, a terminal's palette is a preference the user set deliberately, 
-  and `Palette::plain()` empty throughout, so there is no `if colour` at any
-  call site. The rustc-compatible diagnostic first line is untouched.
-
-- **`byard dev --trace out.json` (RFC-0030 §V5).** Chrome Trace Event format, so
-  Perfetto, `chrome://tracing` and speedscope all read it natively and Byard
-  never has to build a flame-graph viewer. The array terminator is maintained
-  continuously rather than written on shutdown, so the file parses at every
-  instant, including the one where you `Ctrl-C`'d, which is usually the session
-  you most want to look at.
-
-- **An in-window HUD, written in `byld` (RFC-0030 §V3–§V4).** `Mod+Shift+D`.
-  Drawn by the engine from an embedded `.byd` source, in its own interpreter, as
-  an ordinary z-layer with an ordinary backdrop blur and an ordinary `Canvas`
-  sparkline. It is a permanent, self-executing test that the framework can
-  render a non-trivial animated overlay inside its own frame budget, and it
-  passes: 0.163 ms against a 16.667 ms budget, 1.0 %, well inside RFC-0030
-  §V4's 5 % bar, measured against the frame delta rather than against what the
-  profiler says about itself. It displays and colours its own cost (0.107 ms of
-  that 0.163 ms, the rest is `encode.finish`, which has its own row), so the
-  reading is checkable rather than quoted.
-
-- **A reload flash (RFC-0030 §V6).** A 2 px inset border, green for a reactive
-  reload and amber for one that waited behind the gesture gate. Never suppressed
-  on a save that changed nothing visible, the only case it exists for.
-
-- **A `Canvas` can draw a chart (RFC-0020 erratum).** `for` and `when` are
-  admitted inside a shape body, so a canvas's shape *count* can come from data.
-  Previously a canvas could animate every coordinate, colour and sweep from live
-  values and still could not draw `n` bars for `n` data points.
+- **RFC-0021 advanced scroll behaviours, page snap, pagination, infinite
+  scroll (first slice).** `ScrollView` gains the full RFC-0021 prop/event surface
+  (`snap`, `snap_align`, `pull_refresh`, `refreshing`, `collapse_header`, `page`,
+  `page_count`, `end_threshold`; events `end_reached`/`page_change`/`scroll_end`/
+  `refresh`). Implemented in this slice: **`snap: page`** glides the offset to the
+  nearest viewport-sized page with a **spring** (RFC-0010) when scrolling stops, 
+  on drag release *and* after wheel/trackpad scrolling goes quiet (there is no
+  release event for a wheel). The settle is momentum-aware: it waits for the
+  fling's shrinking deltas to actually stop before snapping, so the snap animation
+  never fights an in-progress scroll, and any fresh scroll/drag cancels the glide
+  so the user always takes over cleanly. It reflects the `page:` var **both ways**:
+  `page` tracks the current page *continuously* as you scroll (wheel or drag,
+  firing `page_change`), and setting `page` scrolls the offset to that page
+  (edge-triggered so it never fights a drag). **`on_end_reached`** fires once when
+  the visible bottom crosses `end_threshold` (debounced until the offset falls
+  back, so appending items re-arms it), the infinite-scroll trigger. All other
+  props parse and validate. `snap: item` boundary snapping, pull-to-refresh
+  (overscroll + indicator), and collapsing headers (layout-during-scroll +
+  implicit `scroll_fraction`) are follow-up passes, each needs a new
+  physics/layout subsystem. See `crates/byard-cli/examples/scroll_snap`.
+- **RFC-0021 collapsing header.** `collapse_header: true` on a `ScrollView` pins
+  its **first child** (the header) to the viewport top while the rest scrolls
+  under it, and exposes an implicit reactive **`scroll_fraction`** binding
+  (`0` = expanded, `1` = collapsed) scoped to that header's subtree, its children
+  read it to interpolate their own size/opacity (e.g. a subtitle
+  `opacity: 1.0 - scroll_fraction`). The fraction runs over the header's
+  collapsible range (its natural height minus `collapse_min`, default 56) and
+  clamps past it. Per RFC-0021's rationale this avoids sticky-positioning layout
+  complexity: the header keeps its laid-out height and the collapse is expressed as
+  ordinary reactive interpolation. New example
+  `crates/byard-cli/examples/collapse_header`. Parallax
+  (`collapse_parallax`) is accepted but not yet applied, a follow-up.
+- **RFC-0021 pull-to-refresh.** `pull_refresh: true` makes a downward over-drag
+  past the top of a `ScrollView` grow an elastic pull region (a diminishing-returns
+  resistance curve); releasing past the threshold fires the `refresh` event and
+  rests a default indicator (a ring drawn in the revealed gap that grows and fades
+  in with pull progress). With a reflected `refreshing: Bool` the app owns the
+  lifecycle, the engine sets it `true` on trigger and holds the indicator until
+  the controller clears it, which springs the region away; without the binding the
+  pull is a momentary trigger that retracts immediately. Works with or without an
+  `offset` var (the pull region is engine state, not the scroll offset), and the
+  spring reuses RFC-0010's `Motion`. `refresh` was parsed since the first slice but
+  never fired; it fires now. Custom indicator slots (`pull_refresh: { … }`) and the
+  platform-specific edge overscroll rubber-band remain follow-ups. See
+  `crates/byard-cli/examples/scroll_snap`.
+- **RFC-0021 `snap_spring` + fling-velocity projection (snap physics).** A
+  `snap_spring: anim.spring(stiffness: …, damping: …)` prop overrides the snap
+  glide's spring per `ScrollView` (reusing RFC-0010's curve grammar; a malformed
+  curve is diagnosed and falls back to the default). And a settle now projects the
+  fling: above 150 dp/s it advances one boundary in the fling direction, clamped
+  to ±1 of the nearest, so a fast flick that stops short of the midpoint still
+  turns the page while a moderate one never skips, reusing the same boundary
+  geometry for `snap: page` and `snap: item`. Velocity is estimated from the
+  offset change between scroll inputs over their timestamps, so it needs no extra
+  gesture plumbing. This completes RFC-0021's snap-scrolling pillar. See
+  `crates/byard-cli/examples/scroll_snap`.
+- **RFC-0021 `snap: item` + `snap_align`.** `snap: item` settles the scroll to
+  the nearest **direct-child boundary** instead of a fixed page, so a carousel of
+  unequal-width cards snaps each card to the viewport edge. `snap_align` places
+  the snapped item at the viewport's `start` (default), `center`, or `end`. The
+  item boundaries are read from the laid-out child rects each render (offset is a
+  paint-time translate, so layout positions are the natural content coordinates),
+  aligned, and clamped to the scroll extent, the settle then picks the boundary
+  nearest the current offset and reuses the same spring glide and momentum-aware
+  quiet detection as `snap: page`. When the content is wrapped in a single
+  `Row`/`Column` (the usual scroll layout), the items are that container's
+  children. New engine surface: `LayoutAtlas::children`. `snap_spring` overrides
+  and fling-velocity projection remain follow-ups. See
+  `crates/byard-cli/examples/scroll_snap`.
+- **RFC-0024 extended style states + combined selectors.** The style-state
+  system (RFC-0012/0016) gains five engine-managed pseudo-states, `checked`
+  (a value-widget's value is true), `selected` (the `selected:` prop, or a
+  `RadioButton` whose `bind == value`), `invalid` (the `invalid:` prop),
+  `indeterminate` (a `Checkbox`'s mixed prop), and `dragging` (the element being
+  dragged past an 8px threshold), plus **combined selectors**: `on focused+hover
+  { … }` applies only when *all* its states are active. `selected`/`invalid` are
+  universal opt-in props on any element; `checked`/`indeterminate` are mutually
+  exclusive. Resolution is by specificity (a combined selector beats a
+  single-state one) then declaration order. This completes RFC-0012's remaining
+  states and lets `Checkbox`/`RadioButton`/`TextField` theme their states through
+  `on <state>` blocks instead of duplicating the element tree with `when/else`.
+  See `crates/byard-cli/examples/style_states`.
+- **RFC-0018 `ZStack` intrinsic.** Overlapping children within the layout tree:
+  all children occupy the same rect (painted in declaration order, last on top),
+  the stack sizes to its largest child (the SwiftUI model), and
+  `alignment: Align2D` (`center` default, plus the eight edge/corner tokens)
+  positions children smaller than the stack. Implemented as a single-cell CSS
+  grid, so it composes with the rest of the layout system; unblocks badges on
+  avatars, a play button over a thumbnail, and floating action buttons over
+  content. See `crates/byard-cli/examples/zstack`.
+- **RFC-0018 `Grid` intrinsic.** A CSS-grid container backed by Taffy's grid
+  mode. `columns`/`rows` take a template string (`"1fr 2fr 100"`,
+  `"repeat(3, 1fr)"`, `auto`) parsed into engine tracks, a malformed template
+  is a `CompileError::InvalidGridTemplate`. `gap`, plus per-axis `col_gap`/
+  `row_gap`, space the cells. Children auto-place left-to-right, top-to-bottom by
+  default, or place explicitly with the child props `col`/`row` (1-based grid
+  lines) and `col_span`/`row_span`. Replaces the nested-`Row`/`Column` "wrapper
+  hell" for two-dimensional layouts (dashboards, galleries, label+field forms);
+  see `crates/byard-cli/examples/grid`.
+- **RFC-0018 `RadioButton` intrinsic.** Single-selection within a group: each
+  button carries a `value: Str` identity and a `bind: Str` to the shared group
+  `var`, and is selected when `bind == value`. Tapping a button writes its
+  `value` to the group var, so the previously selected sibling deselects
+  reactively, automatic mutual exclusion, no explicit coordination (the
+  standard group-var model). Focusable by default; arrow keys move selection
+  within the group (Down/Right next, Up/Left previous, wrapping at both ends).
+  Visual is an engine-owned outer ring plus an inner accent dot when selected;
+  `bg` is the selected accent. Fires `change` with `bind:` write-back
+  (RFC-0003 E1). See `crates/byard-cli/examples/radio_button`.
+- **RFC-0018 `Checkbox` intrinsic.** A first-class boolean control with a
+  distinct square identity from `Toggle`: reflected two-way `value`/`bind: Bool`
+  (`true` = checked), an `indeterminate` mixed state, focusable by default
+  (Space toggles), and a `change` event with `bind:` write-back (RFC-0003 E1).
+  It owns its visuals, a rounded square that fills with the `bg` accent and
+  shows an engine-drawn checkmark when checked, an outlined box (or a muted
+  filled slot) when unchecked, and a horizontal dash when indeterminate. The
+  container is a `DecoratedBox`, so a style can give it a `border`/`on checked
+  { border }` (RFC-0024); `bg` is the checked accent, not a background slab
+  (parity with `Toggle`/`Slider`). Replaces the Box+Text approximation design
+  systems used for selection controls; see `crates/byard-cli/examples/checkbox`.
+- **Binary arithmetic in `byld` (`+ - * /`).** Expressions can now compute:
+  `width: base * 2 + 10`, `sweep: percent * 3.6 with anim.spring()`. Standard
+  precedence, left-associative, Int/Float promotion; required by RFC-0020's
+  reactive shape parameters and useful everywhere a prop is derived.
+- **RFC-0020 `Canvas` intrinsic & path/shape primitives.** A fixed-size
+  drawing surface whose children are declarative shape commands, `arc`,
+  `circle`, `line`, `rect`, `bezier`, `path(d: …)`, and `text`, rendered by
+  a new analytic-SDF GPU pipeline: resolution-independent anti-aliasing,
+  stroke caps (`butt`/`round`/`square`), dash patterns with an animatable
+  `dash_offset`, fills (including arc sectors), and per-parameter reactivity
+  (`sweep: percent * 3.6` animates with no re-tessellation, no atlas churn).
+  Complex SVG `path` data rasterizes through the existing MSDF pipeline at
+  icon quality. Unblocks circular progress indicators, spinners, gauges, and
+  custom decorations; see `crates/byard-cli/examples/canvas_shapes`.
+- **RFC-0009 `VectorIcon` renders live in `byard dev`.** The `VectorMSDF`
+  pipeline is now actually wired into the render loop (atlas + pipeline built
+  at startup, drawn every frame) and participates in cross-pipeline paint
+  order like every other primitive. A background dev-mode dispatcher generates
+  each icon's field on its own worker thread the first time it's referenced;
+  the call site paints a zero-opacity placeholder until the field lands, then
+  the icon appears, no stall, no re-render trigger needed from the caller.
+- **RFC-0009 vector/icon MSDF generator.** `byard_compiler::vector` turns an
+  SVG icon into a multi-channel signed distance field: a structural complexity
+  guardrail (rejects gradients, patterns, filters, and oversized path sets),
+  and a generator that parses/normalizes with `usvg` and produces the field
+  with a pure-Rust generator, deterministically and with sharp corners
+  preserved at any scale.
+- **RFC-0008 package ecosystem.** The `use` import surface with explicit
+  namespacing (`use material as m` → `m.Card`, `use material.{Card}`); a
+  module resolver in `byard_compiler::resolve` with package-cycle detection
+  and a program-wide span `SourceMap`; strict `[dependencies]` parsing;
+  `byard add`/`byard install`/`byard get` with a content-hashed `byard.lock`
+  and a global `~/.byard/cache`; multi-file + `path`-dependency hot-reload; and
+  package-aware LSP completions (`use <TAB>`, `m.<TAB>`, package-view params).
+- Repository scaffolding: README, licenses, contributing guide, CI workflow.
+- `docs/rfcs/0001-core-architecture.md`, consolidated design document covering
+  the memory model, multi-pipeline renderer, spatial hit-testing grid, threading
+  model, and the `byld` compiler pipeline.
+- RFC template at `docs/rfcs/0000-template.md`.
 
 ### Changed
+
+- **Images stop piling up in video memory.** The texture cache kept every
+  decoded image for the life of the app, so a gallery, a feed or a list of
+  avatars grew VRAM without a limit. It now holds up to 128 MiB of decoded
+  pixels (`EncoderSubsystem::set_texture_budget` changes it), and past that
+  drops the ones no frame has drawn for half a second, least recently drawn
+  first. An image drawn this frame is never dropped, so a screen that shows
+  more than the budget goes over it rather than decoding the same pictures
+  again every frame; it comes back under when the view moves on. A decode in
+  flight and a hot reload are never cut off, and an app that stays under the
+  budget pays one comparison per frame. `EncoderSubsystem::texture_cache_bytes`
+  reports what is held.
+  
+- **A frosted pane creates no bind groups on a steady frame.** Every
+  `backdrop` pane built three bind groups, one for each blur pass and one for
+  the composite, on every frame it was drawn. They now live with the pane's
+  scratch textures and are rebuilt only when those are recreated (the pane
+  changed size or the surface format changed) or the instance arena replaced
+  its buffer, so a pane that sits still, moves, or shifts inside the arena
+  because something drawn before it changed costs none. The blur parameters
+  are picked by dynamic offset for this reason. A path `clip` whose outline
+  animates likewise stops creating its three buffers and bind group each frame:
+  it keeps them and writes into them, growing only when a frame needs more than
+  it has held. Pixels are unchanged; `EncoderSubsystem::backdrop_bind_groups_created`
+  and `clip_mask_gpu_creations` count what is left.
+  
+- **Handing the layout to the encoder costs one pass, and allocates nothing.**
+  `LayoutAtlas::populate_frame` found each node's position by climbing its
+  parent chain to the root, and cloned each node's child list on the way down;
+  the hit-test grid rebuilt after every layout did the same. Both now walk the
+  tree once, passing each node's position to its children, and the interpreter's
+  path (`populate_frame_dirty`) reuses its buffers and tracks dirty nodes in a
+  flat list instead of a hash set. On a 3,906-node tree the call goes from about
+  470 us to 165 us and from 787 heap allocations to none; on 8,191 nodes in a
+  12-deep tree, from 1.6 ms to 0.29 ms. The rectangles are the same ones, to the
+  bit: a test holds every node of an irregular tree to the old answer.
+
+- **Every app's window now carries its own id, so its window class changes.**
+  Wayland's `app_id` and X11's `WM_CLASS` were `dev.byard.Byard` for every
+  Byard app, so a compositor grouped them as one application, a taskbar could
+  not find the right icon and a window rule could not tell two apps apart. The
+  id is now the manifest's `[bundle] id` (`dev.byard.aura-weather`), or else
+  `dev.byard.<executable name>`. `byard dev` keeps `dev.byard.Byard`, as it is
+  the tool's window. A window rule written for `dev.byard.Byard` (Hyprland's
+  `windowrule = ..., class:^(dev.byard.Byard)$`) no longer matches an app;
+  it never named one, and it now can.
+
+- **An app whose views do not compile prints what `byard check` prints.**
+  `cargo run` on an app with a misspelt name printed
+  `Error: Platform("... did not compile: nothing here is named ...")`: the
+  wrong subsystem, the headline and nothing else. `App::run` and `App::shot`
+  now print each diagnostic with its file, line and column, the source line,
+  a caret under the span and the suggestion, through the renderer `byard check`
+  uses (`byard_compiler::diagnostics::render`, which moved out of the CLI;
+  `byard check` is byte for byte as it was), and then return one short line
+  (`1 error in the project's views (shown above)`), so the
+  `fn main() -> Result<(), ByardError>` every example writes reads well. A program that declares no `View` is a
+  diagnostic in the entry file like any other.
+
+- **`ByardError` says whether the project or the program is what failed.**
+  Breaking, though the enum was already `#[non_exhaustive]`: it gains
+  `Project` and `Compile`, which hold the error boxed, and
+  `byard::ByardErrorExt` gives them back by name (`as_project()` is a
+  `ProjectError`, `as_compile()` a `CompileReport` with each diagnostic and
+  its source). `Platform` goes back to meaning the window, the surface or the
+  event loop. Its `Debug`, which is what a returned `main` error prints, shows
+  the two new variants as their message and every other variant as before.
+
+- **`byard-project` returns a `ProjectError`, not a `String`.** Breaking for
+  anything that calls it: `Manifest::discover`, `Manifest::require_app`,
+  `resolve_project`, `project_source_files`, `parse_dependencies`, `dep_root`,
+  `package_checksum`, `publishable_files`, `declared_assets`, `Lockfile`,
+  `Registry`, `RegistryIndex`, `fetch_git`, `fetch_registry`, `solve::resolve`
+  and `archive::{pack, unpack}` now answer with a matchable error (a missing
+  manifest, a manifest that does not parse and on which line, an I/O failure,
+  an unsatisfiable requirement with the solver's explanation, a fetch, a
+  lockfile, an archive) whose text is the message that was there. Two
+  signatures grew an argument to say where they were reading from:
+  `parse_dependencies` takes the manifest's path and `fetch_git` the package's
+  name. A directory with no project in it now names the directory, and a
+  `byard.toml` that does not parse is led by its path, so an app started
+  from `cargo run` says which file.
+
+- **A record-shaped property value reads its fields' bare names as names.**
+  `shadow: (y: sze)`, `p: (vertical: sze)` and `gradient: (to: blak)` checked
+  clean (or, for `p`, said only "expected a length") and drew with nothing.
+  Now each misspelling is told, with the name it meant. A gradient's `kind:`
+  keeps its words, and so does an unnamed item of a pair.
+
+- **A canvas shape's numeric argument reads a bare name as a name.**
+  `circle(r: raduis)` and `line(x: wdth, y: 40)` checked clean and drew with
+  nothing; now the misspelling is told, with the name it meant. An argument
+  that takes a word (`cap: round`) keeps it.
+
+- **`byard check` catches three more kinds of misspelling.** A property that
+  takes a number, a colour, a length, an angle or a list reads a bare name
+  as a name, so `bg: prmary` is told (`did you mean primary?`) where it used
+  to draw nothing. A called name has to be a function (`serach(query)`). And
+  text given to a number property (`zoom: "near"`) is a type mismatch, for an
+  intrinsic and for a native view alike. A project that checked clean with
+  one of these in it now fails there.
+
+- **A name nothing declares is an error.** `Text("{cuont}")` drew the word
+  "cuont" and `count = cuont + 1` wrote text into a number, and `byard check`
+  passed both. A bare name read as a value (in a text, an expression, a
+  condition, a loop, an action, an argument to a view) now has to be
+  declared, and the error suggests the closest name in scope
+  (`did you mean count?`). A word an element understands (`align: center`,
+  `repeat: infinite`) is still the element's to judge. A project that passed
+  `byard check` with a misspelt name in it now fails there.
+
+- **A registry `version` is a requirement now, not an exact version.**
+  `version = "0.1.0"` accepts any compatible `0.1.x` (Cargo's rules), where it
+  used to accept `0.1.0` only. Write `"=0.1.0"` to keep exactly one. An
+  existing `byard.lock` keeps its pins, but the package cache is now keyed by
+  content, so run `byard get` once to fill it again before `check` or `dev`. A
+  published package can depend only on registry packages, and `byard publish`
+  refuses one with a path or git dependency. A requirement naming a
+  pre-release (`"=1.2.3-alpha"`) is an error: pre-releases are never chosen.
+
+- **`byard check` and `byard dev` run the type checker.** It used to run only
+  in the editor, so a misspelt method (`xs.pusj(1)`), a type mismatch or an
+  impure lambda passed the command line clean and failed silently at runtime.
+  An unknown method on a list or a string is now an error with a suggestion
+  (`did you mean push?`), and every other check the editor showed now stops
+  `byard check` too. One consequence: a view parameter with no type,
+  `View Card(label)`, is now an error; write `View Card(label: Str)`. The
+  `content` slot is the one parameter written bare.
+
+- **The system fonts are read once per process.** Building a font system scans
+  every font installed on the machine, tens of milliseconds each time, and the
+  engine builds two (one to measure text, one to paint it), so every app paid
+  the scan twice at startup. The scan now happens once, and each font system
+  starts from a copy of its result; a font a project registers still goes into
+  its own copy only.
+
+- **A pipeline may only ask for the vertex attributes every GPU has.** The
+  engine requests the adapter's limits with the attribute budget held down to
+  the sixteen the WebGPU specification guarantees, so a layout that overruns
+  the floor fails on the machine it was written on rather than only on a user's.
+  `DecoratedBox` was over the line, which is why it stopped existing on Linux;
+  its transform now reads as two wide lanes instead of four narrow ones, which
+  changes not one byte of what is uploaded.
+
+- **The colour transfer moved into the engine** (`byard_core::color`). A
+  package's widget writes colours too, and a second implementation of a
+  transfer function is a second chance to spend a release displaying every
+  colour lighter than it was written.
+
+- **A text appearing or disappearing no longer re-shapes every text in the
+  window.** The glyph cache was compared line by line only while the number of
+  texts stayed the same, so adding one line to a list, or opening and closing
+  the dev HUD, shaped every line of the window again (eight lines plus one
+  appended: nine shaped, now one; the HUD opening on eight app lines: 29, now
+  its own 21; the HUD closing: 8, now none). A line is kept whenever what it
+  is made from (text, size, wrap, weight, family) still matches the buffer at
+  its place, and the buffers a shrinking window gives up are kept, up to 256,
+  for the next one that opens. A frame whose text count changed is still
+  redrawn in full, as its redraw region is tracked by position. The seven
+  lists of last-frame bounds the encoder keeps are refilled instead of
+  collected anew, seven allocations fewer on every frame.
+  
+- **Measuring a text that was measured before allocates nothing, and the
+  cache has a ceiling.** Layout asks for the size of every `Text` and `Button`
+  on every tick, and each ask built a `String` and an `Arc<str>` for its cache
+  key before finding the answer it had. The key is borrowed now: a hit hashes
+  the string and compares it, with no heap allocation (a test counts them), and
+  takes about 80 ns where it took about 490 ns; a screen of 200 labels measured
+  again each tick went from about 109 us to about 12 us. The cache kept every
+  string it was ever asked about, so a clock, a counter or a download's progress
+  line grew it for as long as the app ran; it now holds at most 4,096 answers
+  and drops the half used least recently when it is full. A string that is
+  new each time shapes through one reused `cosmic-text` buffer instead of
+  building one, and the measurements come out bit for bit as before.
 
 - **Glyph shaping is content-addressed.** A text line is re-shaped when the run
   it would produce actually differs, `(text, font_size, wrap)`, not when its
@@ -1001,58 +896,6 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **`byard check` gained `--short`**, and `byard dev` gained `--trace <path>`
   and `--profile`.
-
-### Fixed
-
-- **The in-window HUD no longer leaves stale text on screen.** The encoder's
-  glyph cache is index-addressed and assumes a single producer; the HUD is a
-  second interpreter appending after the app, so index `i` can hold the HUD's
-  line where it held the app's, with both producers truthfully reporting
-  themselves unchanged. The first fix marked the HUD's primitives dirty only
-  when the app's cursor had moved or the HUD had re-lowered, a condition that
-  cannot be proved from where it was made, and a real session tripped the
-  encoder's debug assertion two seconds in. It is now unconditional.
-
-- **A panic can no longer be erased by the statusline.** The painter erases by
-  walking the cursor up over as many lines as its last block occupied. That is
-  valid only while the painter was the last thing to write to the terminal, and
-  a panic breaks the assumption, then runs the drop guard that depends on it,
-  erasing the crash message. A panic hook now retires the statusline first, so
-  the message lands on a clean line.
-
-- **A trace file no longer ends mid-object when the session is interrupted.**
-  `Drop` does not run on `SIGINT`, so "closed on shutdown" meant "closed except
-  when it matters".
-
-- **A second interpreter drawing into a frame no longer risks stale glyphs.**
-  The encoder's glyph cache is index-addressed and assumes a single producer;
-  an overlay appended after the app moves its own indices whenever the app's
-  counts change. `RenderFrame::mark_dirty_since` lets the frame, the only thing
-  that sees both producers, resolve it.
-
-- **The error overlay's mount and dismiss force a full redraw.** Both change the
-  whole composition at once, while the encoder's scissor union is derived from
-  what changed between two frames.
-
-- **A steady-state frame budget, enforced on every PR.**
-  `crates/byard-platform/tests/frame_budget.rs` drives a checked-in reference
-  scene and asserts recorded ceilings: heap allocations per frame, GPU buffer
-  creations (zero), atlas rebuilds (zero), the encoder taking its scissored
-  path, `populate_frame` receiving real targets on a layout-affecting frame,
-  and an idle frame marking nothing at all.
-
-  The last three are the three incremental layers the audit found inert. They
-  had unit tests and they had benchmarks; what none of them had was an
-  assertion that fails when production stops taking the path, which is why they
-  stayed inert for several phases with everything green. Each ceiling was
-  demonstrated red by deliberately regressing what it guards before being
-  trusted.
-
-  **The ratchet rule** is in the file's own header: a ceiling may be lowered by
-  any PR that improves things, and raised only by one whose description states
-  the old value, the new value, and why the regression is acceptable.
-
-### Changed
 
 - **The PR template asks one new question**, answered even when the answer is
   no: *"Does this add or modify a path that exists to be cheaper than an
@@ -1366,36 +1209,6 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   flowing until the ink fades) and in the incremental dirty-scissor union.
   Example: `crates/byard-cli/examples/ripple`.
 
-### Fixed
-
-- **Three assertions that could not fail, in the suite written to stop exactly
-  that.** Phase 9's own thesis is that a path nothing asserts is a path nobody
-  notices going inert; the same question, asked of the phase's own tests, found
-  three of them proving less than they claimed.
-
-  - **The retained-path eligibility tests passed with the whitelist deleted.**
-    A frame RFC-0032 §R4 wrongly admits is refused by `end_retained_build` and
-    rebuilt, correct, and indistinguishable in every counter from a frame the
-    whitelist rejected outright, differing only in that the build walk ran
-    twice. `path_counters` gains `retained_attempts` and `retained_rollbacks`;
-    the eligibility tests now assert the frame was rejected *before* the atlas
-    was touched, and the frame budget pins rollbacks at zero.
-  - **The wrapping-text test passed with the text sizer removed.** It provoked
-    its retained frame with a colour change, and Taffy re-measures only the
-    leaves it recomputes, so the paragraph was never measured and the
-    assertion held either way, on the hazard RFC-0032 itself called the most
-    likely visible bug in the phase. The retained frame now changes the bound
-    that governs the leaf's wrap width, and each of RFC-0005's three wrap modes
-    (available width, fixed `width`, `wrap: false`) has its own test; restoring
-    the sizer-less call collapses two of them from 84 px and 50 px to 17.
-  - **The RFC-0032 example was the only example with no `byard check` guard**,
-    so the scene the retained path is demonstrated on was the one a grammar
-    change could break silently. It has one, plus a test that the seven
-    numbered checks in its header still describe what a reader is asked to
-    verify.
-
-### Changed
-
 - **RFC-0001's memory and invalidation model, corrected to what runs
   (`docs/rfcs/0001-erratum-memory-and-dirty-model.md`).** §2 describes per-view
   arenas, signal-carried dirty flags and a minimal dirty-rectangle scissor in
@@ -1454,6 +1267,352 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `text::TextSizer` trait.
 
 ### Fixed
+
+- **The language server shows a warning as a warning.** Every diagnostic was an
+  error, including the ones `byard check` prints and passes (`UncheckableInject`
+  on an app's own controller). Each diagnostic also carries the compiler's name
+  for it as its code now (`UnknownAttribute`).
+
+- **"Convert `var` to `let`" no longer rewrites your code.** The action printed
+  the initializer through a function that knew integers, floats and names and
+  wrote `0` for everything else, so applying it to `var total = price * qty`
+  produced `let total = 0`. It now changes the keyword and nothing else, so the
+  initializer, the declared type and a trailing comment stay as written.
+
+- **"Remove invalid attribute" appears, and leaves a list that parses.** It
+  looked for "unknown property" in a message that says "unknown attribute", so
+  it never showed; it follows the diagnostic's code now, and removes the comma
+  with the attribute (`#[gap: 4, bogus: 1]` becomes `#[gap: 4]`).
+  
+- **A controller argument that is left out is an empty string, not "Unit".**
+  `String::from_host(HostValue::Unit)` gave the text `Unit`, so a view that
+  called `greet()` without its argument greeted "Unit". It is `""`, as the
+  guide always said and as a number is `0`.
+  
+- **A focusable control no longer adds a signal every frame.** A checkbox, a
+  radio button or a text field with no `focused:` made a signal of its own each
+  time it was drawn, and nothing freed them, so the signal table grew with
+  every frame of a window that had one. They share a single signal now, which
+  nothing reads: focus is drawn from the router, not from that signal.
+  
+- **A screen that is popped, a list that shrinks and a frame that is drawn give
+  their reactive scopes back.** Nothing retired a scope, so the table of them
+  only grew. Each visit to a route lowered its screen into scopes (and, for a
+  `when`, a `for` or a `NavStack` in it, pools that kept a copy of their
+  branches), and popping the route threw the screen away and kept all of that:
+  100 visits to a screen of nine scopes left 900 behind. A handler that calls a
+  `fn` is lowered again every frame, and each call opened a scope for its
+  argument that nothing closed: 1,000 frames of an idle window, 1,000 scopes.
+  And a `for` that shrank from 1,000 rows to one still held 1,000 lowered
+  bodies and the 1,000 records behind them. Now a popped screen's scopes, pools
+  and lifecycle effects are released once its `on unmount` has run, the
+  arguments a frame's handlers opened go with the next frame's handlers (kept
+  while a controller call raised from them is waiting for its reply, which may
+  read them), a pool that is left more than four times larger than its list
+  keeps twice that many bodies, and a row that leaves lets go of its value at
+  once. Those runs now end at 2 scopes live, 3 slots in the table, and 33
+  scopes with 32 bodies kept. A scope's slot is reused, and an id that outlived its scope names nothing
+  rather than the scope that took its place. Signals are still never freed:
+  `var`s declared inside a screen leave theirs behind.
+  
+- **A hot reload keeps every `var` when a `let` is added, removed or moved.**
+  A `let` was part of what a reload compared, so adding one derived value
+  (`let doubled = count * 2`) counted as a change to the view's state and
+  reset every `var` in it. A `let` or `fn` holds no state of its own, so it no
+  longer counts, and neither does the order the `var`s are written in. A
+  `var` that appears or disappears still resets the view, and so does one
+  whose written type changes (`Int` to `Str`), which used to keep a value of
+  the old type.
+
+- **A text at size 0 takes no room instead of crashing.** `Text("x")
+  #[size: 0]`, or a size bound to a `var` that holds 0 or springs through it,
+  panicked inside the text shaper ("line height cannot be 0"), and because
+  laying a view out measures its text, `byard check` panicked with it. Text at
+  a size of 0, below 0 or not a number now measures as nothing and draws
+  nothing, in the check, a shot and a window alike.
+
+- **Delete in a `TextField` removes one character, not the whole field.** It
+  wrote an empty string, which lost the user's work with one key. It removes
+  the grapheme after the caret, and nothing at the end of the text.
+  
+- **`byard build` prints the version it is.** It always said `0.0.0`.
+
+- **An animation ticks once per frame drawn.** With an animation in flight
+  the logic thread ticked as fast as it could, computing frames the display
+  never showed, and a hidden or minimised window kept spinning a core. It now
+  waits for the frame it published to be drawn, so animations run at the
+  display's rate, and slows to ten ticks a second while nothing is drawn.
+  Aura Weather's start-up went from 1.6 s to 0.7 s of CPU in its first
+  eight seconds.
+
+- **A hot reload keeps the root view's state.** A reload that changed only how
+  state is shown kept each `var`, and the root was then lowered again, which
+  gave every `var` a fresh signal at its initial value: under `byard dev`,
+  every edit reset the root's state one step after keeping it.
+
+- **An element drawn over a native view gets the press first.** A native view
+  was offered every pointer event under it before any element, so a view that
+  claimed presses starved a button placed on top of it. Now what is on top is
+  what the pointer is on: an element drawn over the view that takes presses
+  there gets the event, and the view is offered it only where nothing drawn
+  over it does.
+
+- **A `TextField` or a `Slider` with `grow: 1` fills its row.** Both stayed
+  200 wide whatever `grow` said, and nothing reported it, so a search field
+  could not span its window. `grow` now gives them their share of the free
+  space, as it does for a `Box`; without it they keep their width.
+
+- **A reply's `ok` and `err` arms see the arguments their function was called
+  with.** In `let search = (asked) => { http.get(...) ok res => { ... } }`,
+  `asked` inside the arm read the argument again when the answer arrived, so
+  after `search(query)` it was whatever `query` had become by then. A late
+  answer to an old question could not be told from the current one. The call
+  now keeps its function's parameters as they were when it was placed, each
+  outstanding call its own.
+
+- **The events written on a `TextField` run.** `input`, `change`, `submit`,
+  `key_down`, `key_up`, `focus`, `blur` and the pointer events were accepted
+  on a field and never ran: the field registered its own editing and nothing
+  else. Now `input` and `change` run after every edit (typed text, Backspace,
+  Delete, a committed composition) and see the value already written,
+  `submit` runs on Enter, and the rest run as on any element. A handler can
+  name what it is told: `input(text) => search(text)`. A `key_down` written
+  on a field does not replace the field's own editing.
+
+- **A `TextField` reads its `color:`, its padding and its `typo:` size.** The
+  text was always white, the placeholder always the same grey and both
+  always 10 from the left edge, so a field on a light theme drew white on
+  white. `color:` now colours the text and the caret, and the placeholder is
+  that colour fainter; `p:` or `pl:` sets where the text starts; a `typo:`
+  token gives its size as it does for a `Text`. A field that writes none of
+  them looks as it did.
+
+- **`byard get` limits what a registry can send and where it can point.** A
+  response over 128 MiB is refused instead of read into memory, and a path
+  an index names (an archive) must be inside the registry, so an index cannot
+  point `byard get` at a file elsewhere on disk or another server.
+
+- **A theme's seed image is followed through every change in `byard dev`.**
+  It is matched by its path, so one with an unusual extension (`brand.asset`)
+  is seen; deleting it re-reads the manifest and shows the missing-file
+  error; and when `byard.toml` points the seed at another image, that image
+  is watched from the same save on, even outside the project.
+- **A package's seed image is published with it.** `byard publish` left a
+  theme's `seed = { image = "…" }` out of the archive and the checksum, so a
+  package theme that worked from a path failed once installed. It is now a
+  declared asset, and must live inside the package.
+- **`byard check` works inside a library package.** In a package with
+  `[package]` and no `[project]`, it failed looking for a `main.byd` the
+  package never declared. It now checks the package's own files, the ones an
+  app gets through `use`, with its fonts and theme named as that app sees
+  them. `byard dev`, `shot` and `build` there say it is a library and point
+  at `check`.
+
+- **`byard dev` reloads a changed image.** Editing or replacing a PNG or
+  JPEG while the app runs now updates every `Image` drawn from it on save;
+  it used to keep showing the old picture until restart. The old picture
+  stays up until the new one has loaded, and a file caught half written
+  keeps it rather than going blank. The whole project directory is watched
+  now, so images in `assets/` beside `src/` count, while `target/`,
+  `.byard/` and `.git/` are ignored.
+
+- **`byard dev` applies `byard.toml` edits live, theme included.** Only the
+  source directory was watched, so a manifest next to it was never seen, and
+  a reload never replaced the theme even when it was. Both the manifest and a
+  seed image are now watched, and a changed theme takes effect on save.
+
+- **A hot reload no longer drops the theme.** After any reload, an app that
+  used `inject Theme` lost it: its theme colours resolved to nothing and it
+  drew nearly black until restarted.
+
+- **An `Image` appears as soon as it has loaded.** It used to stay blank until
+  something else redrew the window, such as moving the pointer.
+
+- **Text is not reshaped every frame after something unmounts.** The shaped
+  text cache kept its longest length, so once a panel or a dropdown closed,
+  every later frame looked shorter than the cache and reshaped every line on
+  screen. The cache now follows the frame's own length: the frame something
+  unmounts on reshapes, and the still frames after it reshape nothing.
+
+- **Two quick taps on a button are two taps.** A second tap within the
+  double-tap window became a double tap instead of a tap, whether or not
+  anything listened for double taps, so clicking a `+` twice quickly counted
+  once. A second tap now becomes a double tap only where a `double_tap`
+  handler is under the pointer.
+
+- **An animation belongs to an element, not to the line that wrote it.**
+  Animation state was keyed by the source span of the `with` node alone, and a
+  `for` body is lowered once per row but *written* once, so every row in a list
+  shared one `Motion`, one set of OKLab channels and one `LoopClock`. Each
+  frame, row A retargeted the shared state to its own goal (reseeding `from` and
+  restarting the clock) and row B immediately retargeted it back. Neither
+  advanced: the set stalled near the start and crept. Anyone with a list of
+  animated components was affected, and "my springs are sluggish in a list"
+  points nowhere near the cause.
+
+  The key now carries the element instance as well. A row that leaves the list
+  drops its animation and a re-grown row starts fresh, which is forced rather
+  than chosen, because a pool's slots are reused, so state left behind would be
+  inherited by a *different* element.
+
+- **A telemetry sample now carries who it belongs to (RFC-0030 self-accounting
+  erratum).** The dev HUD runs a second interpreter, so when it was open two
+  `interp.render` samples and two `layout.taffy` samples arrived in one frame.
+  The profile block merged them by name and printed `×2`, honest that a merge
+  had happened, silently wrong about whose time it was, and enough to make the
+  HUD look like it cost a tenth of what it did. It is the same class of defect
+  as the nested double-count §I2b fixed, one level out: there a parent and a
+  child were summed, here two peers were summed and billed to one of them.
+
+  Every sample is now stamped `App` or `DevTools` at scope entry, from a
+  thread-local set at the boundary, so the interpreter, the layout atlas and
+  the shaper are all attributed correctly without any of them knowing that
+  owners exist. `Sample` is still 24 bytes: the owner lives in padding that was
+  already reserved. Consequences a developer sees: the block's scope rows are
+  the app's alone and do not move when the HUD opens, the `hud.render` row is
+  what the dev surfaces cost *on every thread*, the statusline's `work` and the
+  interpreter tax exclude the profiler, and `--trace` tags dev-owned events so
+  hiding them is a checkbox in Perfetto.
+
+- **The render thread's half of the same problem.** A logic-thread scope cannot
+  enclose the encoder, it has been dropped by the time the frame is encoded, 
+  so `RenderFrame` carries a cursor marking where the dev runner's primitives
+  begin, and the encoder charges their shaping, staging and pass recording to
+  `encode.glyphs.dev`, `encode.buffers.dev` and `encode.passes.dev`.
+
+- **`encode.frame`'s breakdown now adds up to something readable.** Three new
+  rows: `encode.scissor` (the dirty-region scan over every pool),
+  `encode.bookkeeping` (its matched pair, recording this frame's bounds for the
+  next one) and `encode.finish` (`wgpu` assembling the command buffer). On a
+  text-heavy frame two of the three largest terms inside `encode.frame` were in
+  no sub-scope at all, so they appeared only as self-time that no row explained.
+
+
+- **The dev loop is something you can see (RFC-0030).** `byard dev` spent every
+  session dumping a multi-line telemetry block to stderr once a second, three
+  hundred of them in five minutes, whose practical effect was to bury the parse
+  errors a developer actually needed to read. It now prints a startup header, a
+  log that scrolls, and one line anchored to the bottom that redraws in place:
+
+  ```
+   ● 60fps  work 3.4ms · idle 15.0ms  ▁▂▁▂▃▁▂  264 boxes  ↻0  retained 64/64
+  ```
+
+  `Mod+Shift+P` (or `--profile`) swaps it for the full per-scope breakdown,
+  charted against the frame budget in fixed execution order and redrawn with the
+  cursor rather than by scrolling. The budget defaults to the display's refresh
+  interval, on a 120 Hz panel that threshold is 8.3 ms, and bars drawn against
+  16.7 ms there would report a comfortable frame for one that visibly stutters, 
+  and is printed in the header so it is never ambiguous which number a bar is
+  drawn against. `[dev] frame_budget = "8ms"` pins it for CI.
+
+- **One output grammar for all seven commands (RFC-0030 §P1–§P4).** A 5-column
+  prefix, a message, and a right-aligned duration, in ~80 lines with no
+  dependency. Roles rather than colours, the 16 base ANSI colours rather than
+  truecolor, a terminal's palette is a preference the user set deliberately, 
+  and `Palette::plain()` empty throughout, so there is no `if colour` at any
+  call site. The rustc-compatible diagnostic first line is untouched.
+
+- **`byard dev --trace out.json` (RFC-0030 §V5).** Chrome Trace Event format, so
+  Perfetto, `chrome://tracing` and speedscope all read it natively and Byard
+  never has to build a flame-graph viewer. The array terminator is maintained
+  continuously rather than written on shutdown, so the file parses at every
+  instant, including the one where you `Ctrl-C`'d, which is usually the session
+  you most want to look at.
+
+- **An in-window HUD, written in `byld` (RFC-0030 §V3–§V4).** `Mod+Shift+D`.
+  Drawn by the engine from an embedded `.byd` source, in its own interpreter, as
+  an ordinary z-layer with an ordinary backdrop blur and an ordinary `Canvas`
+  sparkline. It is a permanent, self-executing test that the framework can
+  render a non-trivial animated overlay inside its own frame budget, and it
+  passes: 0.163 ms against a 16.667 ms budget, 1.0 %, well inside RFC-0030
+  §V4's 5 % bar, measured against the frame delta rather than against what the
+  profiler says about itself. It displays and colours its own cost (0.107 ms of
+  that 0.163 ms, the rest is `encode.finish`, which has its own row), so the
+  reading is checkable rather than quoted.
+
+- **A reload flash (RFC-0030 §V6).** A 2 px inset border, green for a reactive
+  reload and amber for one that waited behind the gesture gate. Never suppressed
+  on a save that changed nothing visible, the only case it exists for.
+
+- **A `Canvas` can draw a chart (RFC-0020 erratum).** `for` and `when` are
+  admitted inside a shape body, so a canvas's shape *count* can come from data.
+  Previously a canvas could animate every coordinate, colour and sweep from live
+  values and still could not draw `n` bars for `n` data points.
+
+- **The in-window HUD no longer leaves stale text on screen.** The encoder's
+  glyph cache is index-addressed and assumes a single producer; the HUD is a
+  second interpreter appending after the app, so index `i` can hold the HUD's
+  line where it held the app's, with both producers truthfully reporting
+  themselves unchanged. The first fix marked the HUD's primitives dirty only
+  when the app's cursor had moved or the HUD had re-lowered, a condition that
+  cannot be proved from where it was made, and a real session tripped the
+  encoder's debug assertion two seconds in. It is now unconditional.
+
+- **A panic can no longer be erased by the statusline.** The painter erases by
+  walking the cursor up over as many lines as its last block occupied. That is
+  valid only while the painter was the last thing to write to the terminal, and
+  a panic breaks the assumption, then runs the drop guard that depends on it,
+  erasing the crash message. A panic hook now retires the statusline first, so
+  the message lands on a clean line.
+
+- **A trace file no longer ends mid-object when the session is interrupted.**
+  `Drop` does not run on `SIGINT`, so "closed on shutdown" meant "closed except
+  when it matters".
+
+- **A second interpreter drawing into a frame no longer risks stale glyphs.**
+  The encoder's glyph cache is index-addressed and assumes a single producer;
+  an overlay appended after the app moves its own indices whenever the app's
+  counts change. `RenderFrame::mark_dirty_since` lets the frame, the only thing
+  that sees both producers, resolve it.
+
+- **The error overlay's mount and dismiss force a full redraw.** Both change the
+  whole composition at once, while the encoder's scissor union is derived from
+  what changed between two frames.
+
+- **A steady-state frame budget, enforced on every PR.**
+  `crates/byard-platform/tests/frame_budget.rs` drives a checked-in reference
+  scene and asserts recorded ceilings: heap allocations per frame, GPU buffer
+  creations (zero), atlas rebuilds (zero), the encoder taking its scissored
+  path, `populate_frame` receiving real targets on a layout-affecting frame,
+  and an idle frame marking nothing at all.
+
+  The last three are the three incremental layers the audit found inert. They
+  had unit tests and they had benchmarks; what none of them had was an
+  assertion that fails when production stops taking the path, which is why they
+  stayed inert for several phases with everything green. Each ceiling was
+  demonstrated red by deliberately regressing what it guards before being
+  trusted.
+
+  **The ratchet rule** is in the file's own header: a ceiling may be lowered by
+  any PR that improves things, and raised only by one whose description states
+  the old value, the new value, and why the regression is acceptable.
+
+- **Three assertions that could not fail, in the suite written to stop exactly
+  that.** Phase 9's own thesis is that a path nothing asserts is a path nobody
+  notices going inert; the same question, asked of the phase's own tests, found
+  three of them proving less than they claimed.
+
+  - **The retained-path eligibility tests passed with the whitelist deleted.**
+    A frame RFC-0032 §R4 wrongly admits is refused by `end_retained_build` and
+    rebuilt, correct, and indistinguishable in every counter from a frame the
+    whitelist rejected outright, differing only in that the build walk ran
+    twice. `path_counters` gains `retained_attempts` and `retained_rollbacks`;
+    the eligibility tests now assert the frame was rejected *before* the atlas
+    was touched, and the frame budget pins rollbacks at zero.
+  - **The wrapping-text test passed with the text sizer removed.** It provoked
+    its retained frame with a colour change, and Taffy re-measures only the
+    leaves it recomputes, so the paragraph was never measured and the
+    assertion held either way, on the hazard RFC-0032 itself called the most
+    likely visible bug in the phase. The retained frame now changes the bound
+    that governs the leaf's wrap width, and each of RFC-0005's three wrap modes
+    (available width, fixed `width`, `wrap: false`) has its own test; restoring
+    the sizer-less call collapses two of them from 84 px and 50 px to 17.
+  - **The RFC-0032 example was the only example with no `byard check` guard**,
+    so the scene the retained path is demonstrated on was the one a grammar
+    change could break silently. It has one, plus a test that the seven
+    numbered checks in its header still describe what a reader is asked to
+    verify.
 
 - **Dirty bits survive a skipped frame.** The relay is latest-wins, so a logic
   thread that outruns the display, every logic thread, has most of its
@@ -1553,168 +1712,6 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   now uses the same screen-space-derivative smoothstep as the outer edge, so
   both edges of any border are crisp at every size and DPI.
 
-### Added
-
-- **RFC-0021 advanced scroll behaviours, page snap, pagination, infinite
-  scroll (first slice).** `ScrollView` gains the full RFC-0021 prop/event surface
-  (`snap`, `snap_align`, `pull_refresh`, `refreshing`, `collapse_header`, `page`,
-  `page_count`, `end_threshold`; events `end_reached`/`page_change`/`scroll_end`/
-  `refresh`). Implemented in this slice: **`snap: page`** glides the offset to the
-  nearest viewport-sized page with a **spring** (RFC-0010) when scrolling stops, 
-  on drag release *and* after wheel/trackpad scrolling goes quiet (there is no
-  release event for a wheel). The settle is momentum-aware: it waits for the
-  fling's shrinking deltas to actually stop before snapping, so the snap animation
-  never fights an in-progress scroll, and any fresh scroll/drag cancels the glide
-  so the user always takes over cleanly. It reflects the `page:` var **both ways**:
-  `page` tracks the current page *continuously* as you scroll (wheel or drag,
-  firing `page_change`), and setting `page` scrolls the offset to that page
-  (edge-triggered so it never fights a drag). **`on_end_reached`** fires once when
-  the visible bottom crosses `end_threshold` (debounced until the offset falls
-  back, so appending items re-arms it), the infinite-scroll trigger. All other
-  props parse and validate. `snap: item` boundary snapping, pull-to-refresh
-  (overscroll + indicator), and collapsing headers (layout-during-scroll +
-  implicit `scroll_fraction`) are follow-up passes, each needs a new
-  physics/layout subsystem. See `crates/byard-cli/examples/scroll_snap`.
-- **RFC-0021 collapsing header.** `collapse_header: true` on a `ScrollView` pins
-  its **first child** (the header) to the viewport top while the rest scrolls
-  under it, and exposes an implicit reactive **`scroll_fraction`** binding
-  (`0` = expanded, `1` = collapsed) scoped to that header's subtree, its children
-  read it to interpolate their own size/opacity (e.g. a subtitle
-  `opacity: 1.0 - scroll_fraction`). The fraction runs over the header's
-  collapsible range (its natural height minus `collapse_min`, default 56) and
-  clamps past it. Per RFC-0021's rationale this avoids sticky-positioning layout
-  complexity: the header keeps its laid-out height and the collapse is expressed as
-  ordinary reactive interpolation. New example
-  `crates/byard-cli/examples/collapse_header`. Parallax
-  (`collapse_parallax`) is accepted but not yet applied, a follow-up.
-- **RFC-0021 pull-to-refresh.** `pull_refresh: true` makes a downward over-drag
-  past the top of a `ScrollView` grow an elastic pull region (a diminishing-returns
-  resistance curve); releasing past the threshold fires the `refresh` event and
-  rests a default indicator (a ring drawn in the revealed gap that grows and fades
-  in with pull progress). With a reflected `refreshing: Bool` the app owns the
-  lifecycle, the engine sets it `true` on trigger and holds the indicator until
-  the controller clears it, which springs the region away; without the binding the
-  pull is a momentary trigger that retracts immediately. Works with or without an
-  `offset` var (the pull region is engine state, not the scroll offset), and the
-  spring reuses RFC-0010's `Motion`. `refresh` was parsed since the first slice but
-  never fired; it fires now. Custom indicator slots (`pull_refresh: { … }`) and the
-  platform-specific edge overscroll rubber-band remain follow-ups. See
-  `crates/byard-cli/examples/scroll_snap`.
-- **RFC-0021 `snap_spring` + fling-velocity projection (snap physics).** A
-  `snap_spring: anim.spring(stiffness: …, damping: …)` prop overrides the snap
-  glide's spring per `ScrollView` (reusing RFC-0010's curve grammar; a malformed
-  curve is diagnosed and falls back to the default). And a settle now projects the
-  fling: above 150 dp/s it advances one boundary in the fling direction, clamped
-  to ±1 of the nearest, so a fast flick that stops short of the midpoint still
-  turns the page while a moderate one never skips, reusing the same boundary
-  geometry for `snap: page` and `snap: item`. Velocity is estimated from the
-  offset change between scroll inputs over their timestamps, so it needs no extra
-  gesture plumbing. This completes RFC-0021's snap-scrolling pillar. See
-  `crates/byard-cli/examples/scroll_snap`.
-- **RFC-0021 `snap: item` + `snap_align`.** `snap: item` settles the scroll to
-  the nearest **direct-child boundary** instead of a fixed page, so a carousel of
-  unequal-width cards snaps each card to the viewport edge. `snap_align` places
-  the snapped item at the viewport's `start` (default), `center`, or `end`. The
-  item boundaries are read from the laid-out child rects each render (offset is a
-  paint-time translate, so layout positions are the natural content coordinates),
-  aligned, and clamped to the scroll extent, the settle then picks the boundary
-  nearest the current offset and reuses the same spring glide and momentum-aware
-  quiet detection as `snap: page`. When the content is wrapped in a single
-  `Row`/`Column` (the usual scroll layout), the items are that container's
-  children. New engine surface: `LayoutAtlas::children`. `snap_spring` overrides
-  and fling-velocity projection remain follow-ups. See
-  `crates/byard-cli/examples/scroll_snap`.
-- **RFC-0024 extended style states + combined selectors.** The style-state
-  system (RFC-0012/0016) gains five engine-managed pseudo-states, `checked`
-  (a value-widget's value is true), `selected` (the `selected:` prop, or a
-  `RadioButton` whose `bind == value`), `invalid` (the `invalid:` prop),
-  `indeterminate` (a `Checkbox`'s mixed prop), and `dragging` (the element being
-  dragged past an 8px threshold), plus **combined selectors**: `on focused+hover
-  { … }` applies only when *all* its states are active. `selected`/`invalid` are
-  universal opt-in props on any element; `checked`/`indeterminate` are mutually
-  exclusive. Resolution is by specificity (a combined selector beats a
-  single-state one) then declaration order. This completes RFC-0012's remaining
-  states and lets `Checkbox`/`RadioButton`/`TextField` theme their states through
-  `on <state>` blocks instead of duplicating the element tree with `when/else`.
-  See `crates/byard-cli/examples/style_states`.
-- **RFC-0018 `ZStack` intrinsic.** Overlapping children within the layout tree:
-  all children occupy the same rect (painted in declaration order, last on top),
-  the stack sizes to its largest child (the SwiftUI model), and
-  `alignment: Align2D` (`center` default, plus the eight edge/corner tokens)
-  positions children smaller than the stack. Implemented as a single-cell CSS
-  grid, so it composes with the rest of the layout system; unblocks badges on
-  avatars, a play button over a thumbnail, and floating action buttons over
-  content. See `crates/byard-cli/examples/zstack`.
-- **RFC-0018 `Grid` intrinsic.** A CSS-grid container backed by Taffy's grid
-  mode. `columns`/`rows` take a template string (`"1fr 2fr 100"`,
-  `"repeat(3, 1fr)"`, `auto`) parsed into engine tracks, a malformed template
-  is a `CompileError::InvalidGridTemplate`. `gap`, plus per-axis `col_gap`/
-  `row_gap`, space the cells. Children auto-place left-to-right, top-to-bottom by
-  default, or place explicitly with the child props `col`/`row` (1-based grid
-  lines) and `col_span`/`row_span`. Replaces the nested-`Row`/`Column` "wrapper
-  hell" for two-dimensional layouts (dashboards, galleries, label+field forms);
-  see `crates/byard-cli/examples/grid`.
-- **RFC-0018 `RadioButton` intrinsic.** Single-selection within a group: each
-  button carries a `value: Str` identity and a `bind: Str` to the shared group
-  `var`, and is selected when `bind == value`. Tapping a button writes its
-  `value` to the group var, so the previously selected sibling deselects
-  reactively, automatic mutual exclusion, no explicit coordination (the
-  standard group-var model). Focusable by default; arrow keys move selection
-  within the group (Down/Right next, Up/Left previous, wrapping at both ends).
-  Visual is an engine-owned outer ring plus an inner accent dot when selected;
-  `bg` is the selected accent. Fires `change` with `bind:` write-back
-  (RFC-0003 E1). See `crates/byard-cli/examples/radio_button`.
-- **RFC-0018 `Checkbox` intrinsic.** A first-class boolean control with a
-  distinct square identity from `Toggle`: reflected two-way `value`/`bind: Bool`
-  (`true` = checked), an `indeterminate` mixed state, focusable by default
-  (Space toggles), and a `change` event with `bind:` write-back (RFC-0003 E1).
-  It owns its visuals, a rounded square that fills with the `bg` accent and
-  shows an engine-drawn checkmark when checked, an outlined box (or a muted
-  filled slot) when unchecked, and a horizontal dash when indeterminate. The
-  container is a `DecoratedBox`, so a style can give it a `border`/`on checked
-  { border }` (RFC-0024); `bg` is the checked accent, not a background slab
-  (parity with `Toggle`/`Slider`). Replaces the Box+Text approximation design
-  systems used for selection controls; see `crates/byard-cli/examples/checkbox`.
-- **Binary arithmetic in `byld` (`+ - * /`).** Expressions can now compute:
-  `width: base * 2 + 10`, `sweep: percent * 3.6 with anim.spring()`. Standard
-  precedence, left-associative, Int/Float promotion; required by RFC-0020's
-  reactive shape parameters and useful everywhere a prop is derived.
-- **RFC-0020 `Canvas` intrinsic & path/shape primitives.** A fixed-size
-  drawing surface whose children are declarative shape commands, `arc`,
-  `circle`, `line`, `rect`, `bezier`, `path(d: …)`, and `text`, rendered by
-  a new analytic-SDF GPU pipeline: resolution-independent anti-aliasing,
-  stroke caps (`butt`/`round`/`square`), dash patterns with an animatable
-  `dash_offset`, fills (including arc sectors), and per-parameter reactivity
-  (`sweep: percent * 3.6` animates with no re-tessellation, no atlas churn).
-  Complex SVG `path` data rasterizes through the existing MSDF pipeline at
-  icon quality. Unblocks circular progress indicators, spinners, gauges, and
-  custom decorations; see `crates/byard-cli/examples/canvas_shapes`.
-- **RFC-0009 `VectorIcon` renders live in `byard dev`.** The `VectorMSDF`
-  pipeline is now actually wired into the render loop (atlas + pipeline built
-  at startup, drawn every frame) and participates in cross-pipeline paint
-  order like every other primitive. A background dev-mode dispatcher generates
-  each icon's field on its own worker thread the first time it's referenced;
-  the call site paints a zero-opacity placeholder until the field lands, then
-  the icon appears, no stall, no re-render trigger needed from the caller.
-- **RFC-0009 vector/icon MSDF generator.** `byard_compiler::vector` turns an
-  SVG icon into a multi-channel signed distance field: a structural complexity
-  guardrail (rejects gradients, patterns, filters, and oversized path sets),
-  and a generator that parses/normalizes with `usvg` and produces the field
-  with a pure-Rust generator, deterministically and with sharp corners
-  preserved at any scale.
-- **RFC-0008 package ecosystem.** The `use` import surface with explicit
-  namespacing (`use material as m` → `m.Card`, `use material.{Card}`); a
-  module resolver in `byard_compiler::resolve` with package-cycle detection
-  and a program-wide span `SourceMap`; strict `[dependencies]` parsing;
-  `byard add`/`byard install`/`byard get` with a content-hashed `byard.lock`
-  and a global `~/.byard/cache`; multi-file + `path`-dependency hot-reload; and
-  package-aware LSP completions (`use <TAB>`, `m.<TAB>`, package-view params).
-- Repository scaffolding: README, licenses, contributing guide, CI workflow.
-- `docs/rfcs/0001-core-architecture.md`, consolidated design document covering
-  the memory model, multi-pipeline renderer, spatial hit-testing grid, threading
-  model, and the `byld` compiler pipeline.
-- RFC template at `docs/rfcs/0000-template.md`.
-
 ---
 
 <!-- New versions go above this line, oldest at the bottom. -->
@@ -1723,3 +1720,6 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 - First working renderer prototype.
 -->
+
+[Unreleased]: https://github.com/Briany4717/byard/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/Briany4717/byard/releases/tag/v0.1.0

@@ -559,13 +559,7 @@ fn a_text_with_grow_takes_the_free_space_of_its_row() {
 }
 
 #[test]
-fn a_text_with_basis_height_padding_and_margin_lays_out_as_a_box_would() {
-    // `basis` is `a`'s share before growing: `b` starts after it.
-    let frame = text_frame(
-        "View C() {\n Row #[width: 300] {\n Text(\"a\") #[basis: 100]\n Text(\"b\")\n }\n}",
-    );
-    assert!(text_x(&frame, "b") >= 100.0, "b after a's basis");
-
+fn a_text_with_height_padding_and_margin_lays_out_as_a_box_would() {
     // `height` is the room the next sibling is placed after.
     let frame =
         text_frame("View C() {\n Column {\n Text(\"a\") #[height: 50]\n Text(\"b\")\n }\n}");

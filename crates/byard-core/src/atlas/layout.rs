@@ -161,6 +161,8 @@ impl LayoutFingerprint {
     fn container(&mut self, s: &ContainerStyle) -> &mut Self {
         self.opt_f32(s.width)
             .opt_f32(s.height)
+            .opt_f32(s.min_width)
+            .opt_f32(s.min_height)
             .u8(s.direction as u8)
             .f32(s.gap)
             .spacing(s.padding)
@@ -303,7 +305,7 @@ pub struct TextLeaf {
 }
 
 /// The box a `Text` leaf takes part in layout with, beyond its content: what
-/// an element in a `Row` or `Column` needs (`grow`, `basis`, `height`,
+/// an element in a `Row` or `Column` needs (`grow`, `height`,
 /// padding and margin). The all-default value is "no box", the plain leaf a
 /// `Text` with none of these attributes always was, and it adds nothing to the
 /// node's style or its fingerprint.
@@ -313,8 +315,6 @@ pub struct TextBox {
     pub height: Option<f32>,
     /// Flex-grow factor along the parent's main axis.
     pub grow: f32,
-    /// Flex-basis in logical px; `None` is the size of the text.
-    pub basis: Option<f32>,
     /// Space inside the leaf, around the glyphs. A leaf's `width` and
     /// `height` include it, as a box's do.
     pub padding: Spacing,
@@ -336,9 +336,6 @@ impl TextBox {
             style.size.height = Dimension::from_length(h);
         }
         style.flex_grow = self.grow;
-        if let Some(b) = self.basis {
-            style.flex_basis = Dimension::from_length(b);
-        }
         style.padding = TaffyRect {
             left: LengthPercentage::from_length(self.padding.left),
             right: LengthPercentage::from_length(self.padding.right),
@@ -357,7 +354,7 @@ impl TextBox {
         if self.is_default() {
             return;
         }
-        fp.opt_f32(self.height).f32(self.grow).opt_f32(self.basis);
+        fp.opt_f32(self.height).f32(self.grow);
         for s in [self.padding, self.margin] {
             fp.f32(s.top).f32(s.right).f32(s.bottom).f32(s.left);
         }

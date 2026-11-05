@@ -620,7 +620,6 @@ fn lookup_intrinsic(name: &str) -> Option<Intrinsic> {
                     ("mb", lay(PropType::Len)),
                     ("ml", lay(PropType::Len)),
                     ("grow", lay(PropType::Int)),
-                    ("basis", lay(PropType::Int)),
                 ],
             ]),
             events: events_from(false, &[]),

@@ -11,7 +11,7 @@
 //      pushing the next column along.
 //   2. The title row has a `Text #[grow: 1]` that takes what is left, so the
 //      count sits at the right edge. A `Text` takes the layout attributes an
-//      element in a `Row` or `Column` needs: `grow`, `basis`, `width`,
+//      element in a `Row` or `Column` needs: `grow`, `width`,
 //      `height`, `p` and the margins.
 //   3. The list is windowed with `grow: 1` and no `height`. It fills the space
 //      under the header (about a dozen rows here, out of 500), and scrolling

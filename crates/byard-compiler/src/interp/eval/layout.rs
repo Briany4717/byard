@@ -890,7 +890,7 @@ impl Interpreter {
         }
     }
 
-    /// The layout box of a `Text`: its `height`, `grow`, `basis`, padding and
+    /// The layout box of a `Text`: its `height`, `grow`, padding and
     /// margin. All-default, without evaluating anything, when the `Text`
     /// writes none of them.
     fn text_box(&mut self, attrs: &[Attr]) -> byard_core::atlas::TextBox {
@@ -901,12 +901,9 @@ impl Interpreter {
             return byard_core::atlas::TextBox::default();
         }
         let style = self.eval_container_style("Text", attrs);
-        #[allow(clippy::cast_precision_loss)]
-        let basis = self.eval_px_prop(attrs, "basis");
         byard_core::atlas::TextBox {
             height: style.height,
             grow: style.grow,
-            basis,
             padding: style.padding,
             margin: style.margin,
         }
@@ -1266,13 +1263,12 @@ impl Interpreter {
 }
 
 /// Whether a `Text` attribute is one of the box ones (`height`, `grow`,
-/// `basis`, padding, margin), as opposed to its text and paint attributes.
+/// padding, margin), as opposed to its text and paint attributes.
 fn is_text_box_attr(name: &str) -> bool {
     matches!(
         name,
         "height"
             | "grow"
-            | "basis"
             | "p"
             | "padding"
             | "pt"

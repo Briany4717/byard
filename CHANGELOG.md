@@ -52,11 +52,16 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - **`Text` takes the layout attributes of an element in a `Row` or `Column`.**
-  `Text("x") #[grow: 1]`, `height`, `basis`, `p` and its sides, and the margins
+  `Text("x") #[grow: 1]`, `height`, `p` and its sides, and the margins
   used to be `unknown attribute`, or in the case of `m`, accepted and ignored.
   A `Text` that writes none of them is laid out exactly as before.
 
 ### Fixed
+
+- **A change to only a container's minimum size is laid out again.** A `Button`'s
+  touch floor (and any `min_width`/`min_height`) was left out of what decides
+  whether a container changed, so a frame that moved nothing else kept last
+  frame's geometry.
 
 - **A windowed `ScrollView` fills the space it is given.** With `grow: 1` and no
   `height` it built only a handful of rows and left the rest of the view blank,

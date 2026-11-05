@@ -77,6 +77,16 @@ pub(super) struct ActiveRipple {
     max_radius: Option<f32>,
 }
 
+impl ActiveRipple {
+    pub(super) const fn elem(&self) -> u32 {
+        self.elem
+    }
+
+    pub(super) const fn set_elem(&mut self, elem: u32) {
+        self.elem = elem;
+    }
+}
+
 /// Default ripple fade-out duration in ms (RFC-0023 §"Ripple properties").
 const RIPPLE_DEFAULT_DURATION_MS: f32 = 300.0;
 

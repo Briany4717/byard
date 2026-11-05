@@ -660,6 +660,30 @@ impl EventRouter {
         self.steal_focus(ctx, Some(elem));
     }
 
+    /// Whether the router holds an element index across frames: focus, a press
+    /// in flight, a drag or the element under the pointer.
+    #[must_use]
+    pub fn holds_elements(&self) -> bool {
+        self.focused.is_some()
+            || self.down.is_some()
+            || self.dragging.is_some()
+            || self.hovered.is_some()
+    }
+
+    /// Moves the pointer's elements (the press, the drag, the hover, the last
+    /// tap) to where their elements are after a relayout. An element that is
+    /// gone is let go of without an event.
+    pub fn follow_pointer(&mut self, to: &impl Fn(u32) -> Option<u32>) {
+        if let Some(d) = &mut self.down {
+            d.elem = d.elem.and_then(to);
+        }
+        self.dragging = self.dragging.and_then(to);
+        self.hovered = self.hovered.and_then(to);
+        if let Some((_, e)) = &mut self.last_tap {
+            *e = e.and_then(to);
+        }
+    }
+
     /// Moves `focused` to where its element now is after a relayout, without
     /// the blur and focus an actual move would fire. `None` means the element
     /// is gone: focus ends, and its `var` is cleared.

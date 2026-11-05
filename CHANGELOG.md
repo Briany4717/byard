@@ -40,6 +40,15 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and the undo history now follow the field itself, as its state does, whatever
   a `when` or a `for` before it adds or removes. A focused field that is
   removed lets go of its `focused:` var.
+- **An element keeps what the engine holds for it when something before it
+  appears or goes.** A message that showed above a `TextField` as you typed (a
+  `when` before it in the same parent, or inside a view placed before it) took
+  the keyboard with it, so typing went dead after the first character. Focus,
+  the caret, the selection and the undo history now follow the field itself, as
+  its state does, whatever a `when` or a `for` before it adds or removes. The
+  same holds for a press in flight, the element under the pointer (`on hover`)
+  and a `ScrollView`'s `end_reached`, which fired again when a `when` before the
+  view opened. A focused field that is removed lets go of its `focused:` var.
 
 ## [0.1.0] - 2026-11-05
 

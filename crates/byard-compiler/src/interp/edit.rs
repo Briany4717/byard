@@ -831,7 +831,7 @@ impl EditStore {
     /// Moves every state to the index `to` gives its element, and drops the
     /// ones whose element is gone. The elements did not change; only their
     /// place in the layout did.
-    pub fn rekey(&mut self, to: impl Fn(u32) -> Option<u32>) {
+    pub fn rekey(&mut self, to: &impl Fn(u32) -> Option<u32>) {
         let old = std::mem::take(&mut self.fields);
         self.fields = old
             .into_iter()

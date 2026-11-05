@@ -347,3 +347,123 @@ View Main() {
     app.send(&[]);
     assert_eq!(app.get("fa"), Value::Bool(false));
 }
+
+// ── The rest of what is keyed by an element: scroll, press, hover ──────────
+
+impl App {
+    fn pointer(&mut self, kind: EventKind, x: f32, y: f32) {
+        let mut e = self.event(kind, None, false);
+        e.pos = (x, y);
+        self.send(&[e]);
+    }
+
+    fn wheel(&mut self, x: f32, y: f32, dy: f32) {
+        let mut e = self.event(EventKind::Wheel, None, false);
+        e.pos = (x, y);
+        e.delta = (0.0, dy);
+        self.send(&[e]);
+    }
+
+    fn int(&self, name: &str) -> i64 {
+        match self.get(name) {
+            Value::Int(n) => n,
+            #[allow(clippy::cast_possible_truncation)]
+            Value::Float(f) => f as i64,
+            other => panic!("{name} is {other:?}"),
+        }
+    }
+
+    fn drawn(&self) -> Vec<String> {
+        self.frame.texts().iter().map(|t| t.text.clone()).collect()
+    }
+}
+
+const SCROLLED: &str = r#"
+View Main() {
+    var more = false
+    var off = 0
+    Row {
+        when more { Text("has text") }
+        ScrollView #[width: 200, height: 100, offset: (0, off)] {
+            Column {
+                for i in [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19] { Box #[height: 30] { Text("row {i}") } }
+            }
+        }
+    }
+}
+"#;
+
+#[test]
+fn a_scroll_offset_and_the_rows_in_view_survive_a_when_before_the_view() {
+    let mut app = App::new(SCROLLED);
+    app.set("off", Value::Int(300));
+    let before = app.drawn();
+    assert!(before.iter().any(|t| t == "row 10"), "{before:?}");
+    app.set("more", Value::Bool(true));
+    assert_eq!(app.int("off"), 300);
+    let after: Vec<String> = app
+        .drawn()
+        .into_iter()
+        .filter(|t| t.starts_with("row"))
+        .collect();
+    let before: Vec<String> = before
+        .into_iter()
+        .filter(|t| t.starts_with("row"))
+        .collect();
+    assert_eq!(after, before, "the same rows stay visible");
+}
+const PRESSABLE: &str = r"
+View Main() {
+    var more = false
+    var count = 0
+    let hot = style { bg: 0x111111 on hover { bg: 0x00FF00 } }
+    Row {
+        when more { Box #[width: 30, height: 40] {} }
+        Box #[..hot, width: 100, height: 40] => count++
+    }
+}
+";
+
+#[test]
+fn a_press_in_flight_still_taps_its_element_after_a_when_before_it_opens() {
+    let mut app = App::new(PRESSABLE);
+    app.pointer(EventKind::PointerDown, 90.0, 20.0);
+    app.set("more", Value::Bool(true));
+    app.pointer(EventKind::PointerUp, 90.0, 20.0);
+    assert_eq!(app.int("count"), 1);
+}
+
+#[test]
+fn the_hovered_element_stays_hovered_after_a_when_before_it_opens() {
+    let mut app = App::new(PRESSABLE);
+    app.pointer(EventKind::PointerMove, 90.0, 20.0);
+    let green = |app: &App| app.frame.instances().iter().any(|i| i.color[1] > 0.5);
+    assert!(green(&app), "hover applies");
+    app.set("more", Value::Bool(true));
+    assert!(green(&app), "and goes on applying to the same element");
+}
+
+#[test]
+fn end_reached_does_not_fire_again_when_a_when_before_the_view_opens() {
+    let mut app = App::new(
+        r"
+View Main() {
+    var more = false
+    var off = 0
+    var loads = 0
+    Row {
+        when more { Box #[width: 30, height: 100] {} }
+        ScrollView #[offset: (0, off), width: 100, height: 100,
+                     end_threshold: 0.8, end_reached => loads++] {
+            Column { Box #[width: 100, height: 400] {} }
+        }
+    }
+}
+",
+    );
+    app.wheel(50.0, 50.0, -8.0);
+    assert_eq!(app.int("loads"), 1, "fired once past the threshold");
+    app.set("more", Value::Bool(true));
+    app.wheel(80.0, 50.0, -0.1);
+    assert_eq!(app.int("loads"), 1, "still the same view, still fired");
+}

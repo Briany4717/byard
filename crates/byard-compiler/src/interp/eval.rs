@@ -41,6 +41,7 @@ mod controls;
 mod editing;
 mod element;
 mod expr;
+mod follow;
 mod instance;
 mod layout;
 mod measure;

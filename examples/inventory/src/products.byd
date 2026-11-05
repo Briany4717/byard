@@ -1,0 +1,109 @@
+// The product list: a search box, category chips, a low-stock toggle, columns
+// that sort, and one row a product in a list that builds only what is in view.
+
+View ProductList(products: List<Product>, on_open: Fn(Int) = {|_| }, on_new: Fn() = {}) {
+    inject Theme as t
+
+    var query: Str = ""
+    // "" is every category.
+    var category: Str = ""
+    var lowOnly: Bool = false
+    var sortCol: Str = "name"
+    var sortDesc: Bool = false
+
+    let q = query.trim().toLower()
+    let matched = products.filter(p =>
+        (category == "" || p.category == category)
+        && (!lowOnly || p.qty <= p.min)
+        && (q == "" || p.name.toLower().contains(q) || p.sku.toLower().contains(q)))
+    let sorted = sortCol == "name" ? matched.sortBy(p => p.name.toLower())
+        : sortCol == "qty" ? matched.sortBy(p => p.qty)
+        : matched.sortBy(p => p.qty * p.price)
+    let rows = sortDesc ? sorted.reverse() : sorted
+
+    // Pressing the heading that is already the sort turns it round.
+    let sortBy = (col: Str) => {
+        if sortCol == col {
+            sortDesc = !sortDesc
+        } else {
+            sortCol = col
+            sortDesc = false
+        }
+    }
+    let arrow = (col: Str) => sortCol == col ? (sortDesc ? " v" : " ^") : ""
+
+    Column #[p: (vertical: 24, horizontal: 28), gap: 14, grow: 1] {
+        Heading(title: "Products") {
+            Text("{rows.len} of {products.len}") #[typo: t.caption, color: t.onSurfaceVariant, m: (right: 8)]
+            Action(label: "New product", on_tap: { on_new() })
+        }
+
+        Row #[gap: 10, align: center] {
+            TextField #[
+                bind: query,
+                placeholder: "Search by name or SKU",
+                width: 300,
+                height: 38,
+                bg: t.surfaceContainer,
+                color: t.onSurface,
+                radius: 10,
+                p: (horizontal: 14),
+                typo: t.body,
+                border: t.outlineVariant,
+                border_width: 1,
+            ]
+            Chip(label: "All", on: category == "", on_tap: { category = "" })
+            for c in categories() {
+                Chip(label: c, on: category == c, on_tap: { category = c })
+            }
+            Spacer
+            Row #[gap: 8, align: center] {
+                Toggle #[bind: lowOnly, bg: t.primary, width: 44, height: 26]
+                Text("Low stock only") #[typo: t.label, color: t.onSurfaceVariant]
+            }
+        }
+
+        Column #[bg: t.surfaceContainer, radius: 14, grow: 1] {
+            Row #[p: (vertical: 10, horizontal: 16), gap: 12, align: center] {
+                Text("SKU") #[typo: t.label, color: t.onSurfaceVariant, width: 90]
+                Box #[grow: 1, tap => sortBy("name")] {
+                    Text("Name{arrow("name")}") #[typo: t.label, color: t.onSurfaceVariant]
+                }
+                Text("Category") #[typo: t.label, color: t.onSurfaceVariant, width: 100]
+                Text("Where") #[typo: t.label, color: t.onSurfaceVariant, width: 50]
+                Box #[width: 90, tap => sortBy("qty")] {
+                    Text("Quantity{arrow("qty")}") #[typo: t.label, color: t.onSurfaceVariant]
+                }
+                Box #[width: 100, tap => sortBy("value")] {
+                    Text("Value{arrow("value")}") #[typo: t.label, color: t.onSurfaceVariant]
+                }
+                Box #[width: 60] {}
+            }
+            Box #[height: 1, bg: t.outlineVariant] {}
+            when rows.len == 0 {
+                Text("No product matches") #[typo: t.body, color: t.onSurfaceVariant, m: 24]
+            }
+            ScrollView #[grow: 1, windowed: true, row_height: 44] {
+                Column {
+                    for p in rows {
+                        ProductRow(p: p, on_open: on_open)
+                    }
+                }
+            }
+        }
+    }
+}
+
+// One row, exactly 44 pixels tall because the list is windowed.
+View ProductRow(p: Product, on_open: Fn(Int) = {|_| }) {
+    inject Theme as t
+    Row #[height: 44, p: (horizontal: 16), gap: 12, align: center, tap => on_open(p.id)] {
+        Text(p.sku) #[typo: t.caption, color: t.onSurfaceVariant, width: 90, wrap: false]
+        Box #[grow: 1] { Text(p.name) #[typo: t.body, color: t.onSurface, wrap: false] }
+        Text(p.category) #[typo: t.caption, color: t.onSurfaceVariant, width: 100, wrap: false]
+        Text(p.location ?? "-") #[typo: t.caption, color: t.onSurfaceVariant, width: 50, wrap: false]
+        Text("{p.qty}") #[typo: t.body, color: t.onSurface, width: 90, wrap: false]
+        Text(money(p.qty * p.price)) #[typo: t.body, color: t.onSurface, width: 100, wrap: false]
+        Row #[width: 60] { StockBadge(qty: p.qty, min: p.min) }
+    }
+}

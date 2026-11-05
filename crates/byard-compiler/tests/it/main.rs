@@ -40,6 +40,7 @@ mod lambda_items;
 mod let_functions;
 mod let_in_actions;
 mod list_reductions;
+mod modal_overlay;
 mod native_view_async;
 mod native_view_element;
 mod native_view_keyboard;

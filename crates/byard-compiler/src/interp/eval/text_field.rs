@@ -206,7 +206,14 @@ impl Interpreter {
         let origin_x = text_x - scroll;
         // The text is clipped to the content box when it overflows it, which is
         // the only time it can reach outside.
-        let clipped = editing.is_some() && value_w + preedit_w > view_w;
+        // A field that is not being edited does not scroll, so what it shows
+        // (its placeholder, or a value longer than it) is cut at the content
+        // box instead of drawing past the field.
+        let clipped = if editing.is_some() {
+            value_w + preedit_w > view_w
+        } else {
+            !display_text.is_empty() && self.measure_in(&display_text, &font) > view_w
+        };
         if clipped {
             frame.begin_clip(byard_core::frame::Rect::new(text_x, rect.y, view_w, rect.h));
         }

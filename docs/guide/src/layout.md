@@ -204,7 +204,12 @@ View Main() {
 ```
 
 By default an overlay is *modal*: a scrim covers the page and takes its input.
-`dismiss =>` runs when the scrim is tapped or Escape is pressed. A child places
+The scrim is black at 32%; `scrim: 0x80000000` gives the overlay another colour,
+and a fully transparent one draws none. A child that fills the whole window is
+taken for a scrim you wrote yourself, and then no other is drawn. A non-modal
+overlay has no scrim. `dismiss =>` runs when the scrim is tapped (a press outside
+the overlay's content, not on a panel, its padding or a field in it) or Escape is
+pressed. A child places
 itself with `anchor`: `center`, `top`, `bottom`, `start` or `end`.
 `at: (x, y)` puts a child at an exact offset from the window's top-left instead.
 

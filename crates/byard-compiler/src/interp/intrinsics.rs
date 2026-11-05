@@ -861,6 +861,7 @@ fn lookup_intrinsic(name: &str) -> Option<Intrinsic> {
             let mut props: HashMap<&'static str, PropDef> = HashMap::new();
             props.insert("modal", lay(PropType::Bool));
             props.insert("dismiss_on_outside", lay(PropType::Bool));
+            props.insert("scrim", pnt(PropType::Color));
             add_universal(&mut props);
             Intrinsic {
                 arity: 0,

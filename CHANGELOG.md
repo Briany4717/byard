@@ -26,6 +26,13 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the braces (`xs = xs.filter(...)`) changed what `id` meant on the next line. The same held
   for a `let` action and a `fn` called with an argument. The value is now taken when the
   call runs.
+- **A modal overlay is a dialog you can use.** A press on its panel, a `Text` or a
+  `TextField` in it no longer runs `dismiss`; only a press outside the content
+  does, and a press on a field focuses it. The page under the overlay is dimmed by
+  a scrim (black at 32%, or `scrim: <colour>`), as the guide said it was. A press
+  no longer reaches a `tap` on an element under the one pressed, so `tap => {}` on
+  a panel is not needed and a panel's `tap` is not run by a field inside it. A
+  `TextField`'s placeholder, and a value longer than the field, stop at its edge.
 
 ## [0.1.0] - 2026-11-05
 

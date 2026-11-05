@@ -79,7 +79,7 @@ fn overlay_center_anchor_positions_content_in_the_viewport() {
     let dialog = frame
         .instances()
         .iter()
-        .find(|b| (b.color[0] - linear(0x22)).abs() < 0.02)
+        .find(|b| (b.color[0] - linear(0x22)).abs() < 0.02 && b.color[3] > 0.99)
         .expect("dialog emitted");
     // Centred: (400−100)/2 = 150, (300−60)/2 = 120.
     assert!(

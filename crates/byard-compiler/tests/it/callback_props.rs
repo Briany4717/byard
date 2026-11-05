@@ -698,3 +698,71 @@ View Detail(on_x: Fn(Int) = {|_| }) { var zzz = 0
         "{errors:?}"
     );
 }
+
+// ── an argument is read once, when the call runs ─────────────────────────
+
+/// The text on screen after tapping the first handler.
+fn tapped_text(src: &str) -> Vec<String> {
+    let (mut interp, tree) = boot_tree(src);
+    shown(&mut interp, &tree);
+    tap_once(&mut interp);
+    shown(&mut interp, &tree)
+}
+
+/// `on_x(items[0])`: the body writes `xs` (which `items` follows) and then
+/// reads `id` again; `id` is still what the call was given.
+#[test]
+fn a_callback_argument_is_evaluated_once_whatever_the_body_writes() {
+    let src = "
+View Main() {
+    var xs = [1, 2, 3]
+    var log = \"\"
+    Column {
+        Text(\"xs {xs.len} log {log}\")
+        Child(items: xs, on_x: {|id| xs = xs.filter(p => p != id)
+                                     log = log + \"{id};\" })
+    }
+}
+View Child(items: List<Int>, on_x: Fn(Int) = {|_| }) {
+    Box #[width: 100, height: 40, tap => on_x(items[0])]
+}
+";
+    assert_eq!(tapped_text(src), ["xs 2 log 1;"]);
+}
+
+/// The same for a named action called with an argument.
+#[test]
+fn a_let_actions_argument_is_evaluated_once() {
+    let src = "
+View Main() {
+    var xs = [1, 2, 3]
+    var log = \"\"
+    let remove = (id: Int) => { xs = xs.filter(p => p != id)
+                                log = log + \"{id};\" }
+    Column {
+        Text(\"xs {xs.len} log {log}\")
+        Box #[width: 100, height: 40, tap => remove(xs[0])]
+    }
+}
+";
+    assert_eq!(tapped_text(src), ["xs 2 log 1;"]);
+}
+
+/// And for a view-local `fn` with parameters, called from an action.
+#[test]
+fn a_view_local_fns_argument_is_evaluated_once() {
+    let src = "
+View Main() {
+    var xs = [1, 2, 3]
+    var log = \"\"
+    fn tag(id: Int) -> Str => \"{id};\"
+    let remove = (id: Int) => { xs = xs.filter(p => p != id)
+                                log = log + tag(id) + tag(id) }
+    Column {
+        Text(\"xs {xs.len} log {log}\")
+        Box #[width: 100, height: 40, tap => remove(xs[0])]
+    }
+}
+";
+    assert_eq!(tapped_text(src), ["xs 2 log 1;1;"]);
+}

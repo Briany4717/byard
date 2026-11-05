@@ -1015,60 +1015,50 @@ impl Interpreter {
                             found: args.len(),
                         });
                     }
-                    // Bind each arg as a reactive memo so signal reads inside the
-                    // body are tracked by the enclosing scope.
-                    if !is_callback && !params.is_empty() && self.per_call(payload_name) {
-                        // Inside a lambda or event handler: arguments depend on
-                        // the item, so evaluate them at each call.
-                        let n = params.len().min(args.len());
-                        let arg_cs: Vec<Lowered> = args[..n]
-                            .iter()
-                            .map(|a| self.lower_expr(&a.value, payload_name))
-                            .collect();
-                        let names: Vec<Symbol> = params[..n].to_vec();
-                        let mark = self.lambda_params.len();
-                        self.lambda_params.extend(names.iter().cloned());
-                        let inner = payload_name.filter(|p| !names.contains(p));
-                        let body_lowered = self.lower_expr(&body, inner);
-                        self.lambda_params.truncate(mark);
-                        return Self::call_with_args(arg_cs, names, body_lowered);
-                    }
-                    let snapshot = self.env.len();
-                    let inlined = self.inlined_params.len();
+                    // Each argument is evaluated once, when the call runs, and
+                    // its value bound to the parameter: a write the body makes
+                    // must not change what a later read of the parameter
+                    // sees (`on_x(items[0])` then `items = ...`). The argument
+                    // is lowered here, in the caller's names, whatever the
+                    // body is lowered among.
+                    let mut arg_cs: Vec<(Symbol, Lowered)> = Vec::with_capacity(params.len());
                     for (param, arg) in params.iter().zip(args.iter()) {
-                        let arg_lowered = self.lower_expr(&arg.value, payload_name);
-                        let scope = self.ctx.open_memo(arg_lowered);
-                        self.env.push(param.clone(), Value::Memo(scope));
-                        self.inlined_params.push((param.clone(), scope));
+                        arg_cs.push((param.clone(), self.lower_expr(&arg.value, payload_name)));
                     }
                     // A callback's body is lowered where it was written, among
                     // the names visible there: its own parameters, the
                     // caller's `var`s and `let`s, and nothing the view that
-                    // runs it declares (an argument above was lowered here,
-                    // before the switch). The names of the lambdas this call
+                    // runs it declares. The names of the lambdas this call
                     // sits in are the running view's too.
-                    let Some(captured) = captured else {
-                        // Lower the body with arg bindings in scope.
-                        let body_lowered = self.lower_expr(&body, payload_name);
-                        // Restore env.
-                        self.env.truncate(snapshot);
-                        self.inlined_params.truncate(inlined);
-                        return body_lowered;
+                    let mut body_lowered = if let Some(captured) = captured {
+                        let frame = self.env.enter_closure(captured);
+                        let outer_params = std::mem::take(&mut self.lambda_params);
+                        let outer_inlined = std::mem::take(&mut self.inlined_params);
+                        self.lambda_params.extend(params.iter().cloned());
+                        let lowered = self.lower_expr(&body, None);
+                        self.inlined_params = outer_inlined;
+                        self.lambda_params = outer_params;
+                        self.env.leave_closure(frame);
+                        lowered
+                    } else {
+                        let mark = self.lambda_params.len();
+                        self.lambda_params.extend(params.iter().cloned());
+                        let own = payload_name.filter(|n| !params.contains(n));
+                        let lowered = self.lower_expr(&body, own);
+                        self.lambda_params.truncate(mark);
+                        lowered
                     };
-                    let arg_frames: Vec<(Symbol, Value)> = self.env.snapshot_from(snapshot);
-                    self.env.truncate(snapshot);
-                    let frame = self.env.enter_closure(captured);
-                    for (param, value) in arg_frames {
-                        self.env.push(param, value);
-                    }
-                    let outer_params = std::mem::take(&mut self.lambda_params);
-                    let own_params = self.inlined_params.split_off(inlined);
-                    let outer_inlined = std::mem::replace(&mut self.inlined_params, own_params);
-                    let body_lowered = self.lower_expr(&body, None);
-                    self.inlined_params = outer_inlined;
-                    self.lambda_params = outer_params;
-                    self.env.leave_closure(frame);
-                    return body_lowered;
+                    return Box::new(move |ctx| {
+                        let values: Vec<(Symbol, Value)> = arg_cs
+                            .iter_mut()
+                            .map(|(name, c)| (name.clone(), c(ctx)))
+                            .collect();
+                        let base = LAMBDA_ARGS.with(|args| args.borrow().len());
+                        LAMBDA_ARGS.with(|args| args.borrow_mut().extend(values));
+                        let result = body_lowered(ctx);
+                        LAMBDA_ARGS.with(|args| args.borrow_mut().truncate(base));
+                        result
+                    });
                 }
             }
         }

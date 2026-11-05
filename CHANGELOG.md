@@ -21,6 +21,11 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   used to be read in the view that ran them, so a parameter, `let` or `var` of the same
   name there made a write do nothing, or sent `byard check` into a stack overflow. They
   now read and write the names visible where you wrote them.
+- **An argument you pass to an action is read once.** `on_x(items[0])` gave the callback
+  the value of `items[0]` every time its braces read the parameter, so a write earlier in
+  the braces (`xs = xs.filter(...)`) changed what `id` meant on the next line. The same held
+  for a `let` action and a `fn` called with an argument. The value is now taken when the
+  call runs.
 
 ## [0.1.0] - 2026-11-05
 

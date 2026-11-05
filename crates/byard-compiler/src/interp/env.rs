@@ -211,12 +211,6 @@ impl<'p> Env<'p> {
         self.base = frame.base;
     }
 
-    /// The own bindings pushed from position `from` on.
-    #[must_use]
-    pub fn snapshot_from(&self, from: usize) -> Vec<(Symbol, Value)> {
-        self.bindings[from.min(self.bindings.len())..].to_vec()
-    }
-
     /// The first `len` of this environment's own bindings, as a callback
     /// written there captures them (the caller's frame, without the callee's
     /// parameters pushed after it).

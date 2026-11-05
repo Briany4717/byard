@@ -294,4 +294,117 @@ mod tests {
             "{errs:?}"
         );
     }
+
+    // The cases below are code that is not on screen when the program starts.
+    // Lowering is lazy for it, so `check` used to say `0 errors` for all of it.
+
+    fn unknown_views(src: &str) -> Vec<String> {
+        check_source(src)
+            .iter()
+            .filter_map(|e| match e {
+                CompileError::UnknownView { name, .. } => Some(name.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_tab_that_is_not_active_is_checked() {
+        let found = unknown_views(
+            "View Main() { var tab = \"a\"
+                NavHost(active: tab) { tab \"a\" { Text(\"x\") }  tab \"b\" { Bogus() } } }",
+        );
+        assert_eq!(found, ["Bogus"]);
+    }
+
+    #[test]
+    fn a_route_the_initial_path_misses_is_checked() {
+        let found = unknown_views(
+            "View Main() { var p = \"/\"
+                NavStack(path: p) { route \"/\" { Text(\"x\") }
+                    route \"/x/:id\" {|params| Bogus2() } } }",
+        );
+        assert_eq!(found, ["Bogus2"]);
+    }
+
+    #[test]
+    fn both_arms_of_a_when_that_starts_false_are_checked() {
+        let mut found = unknown_views(
+            "View Main() { var on = false
+                when on { Bogus3() } else { Text(\"x\") }
+                when on { Text(\"y\") } else { Bogus4() } }",
+        );
+        found.sort();
+        assert_eq!(found, ["Bogus3", "Bogus4"]);
+    }
+
+    #[test]
+    fn a_when_inside_a_when_is_checked() {
+        let found = unknown_views(
+            "View Main() { var on = false
+                when on { when on { Text(\"a\") } else { when on { Bogus5() } } } }",
+        );
+        assert_eq!(found, ["Bogus5"]);
+    }
+
+    #[test]
+    fn the_body_of_a_for_over_a_list_that_has_not_loaded_is_checked() {
+        let errs = check_source(
+            "View Main() { var xs: List<Int> = []
+                for x in xs { Text(x) #[bogus: 1] } }",
+        );
+        assert!(
+            errs.iter()
+                .any(|e| matches!(e, CompileError::UnknownAttribute { .. })),
+            "{errs:?}"
+        );
+    }
+
+    #[test]
+    fn a_view_used_only_inside_an_inactive_tab_is_checked_with_its_arguments() {
+        let errs = check_source(
+            "View Detail(id: Str) { Text(id) }
+             View Main() { var tab = \"a\"
+                NavHost(active: tab) { tab \"a\" { Text(\"x\") }
+                    tab \"b\" { Detail(id: \"1\", extra: 2) } } }",
+        );
+        assert!(
+            errs.iter()
+                .any(|e| matches!(e, CompileError::UnknownParam { .. })),
+            "{errs:?}"
+        );
+        let errs = check_source(
+            "View Detail(id: Str) { Text(id) }
+             View Main() { var on = false
+                when on { Detail() } }",
+        );
+        assert!(
+            errs.iter()
+                .any(|e| matches!(e, CompileError::MissingParam { .. })),
+            "{errs:?}"
+        );
+    }
+
+    #[test]
+    fn a_routes_params_and_path_are_in_scope_in_every_route() {
+        let errs = check_source(
+            "View Detail(id: Str) { Text(id) }
+             View Main() { var p = \"/\"
+                NavStack(path: p) { route \"/\" { Text(\"x\") }
+                    route \"/x/:id\" {|params| Detail(id: params.id)
+                        Detail(id: route.params.id) Text(route.path) } } }",
+        );
+        assert!(errs.is_empty(), "{errs:?}");
+    }
+
+    #[test]
+    fn a_for_body_and_a_recursive_view_are_checked_once_and_end() {
+        // The offline pass visits each distinct body once, so a view that
+        // contains itself under a `when` neither loops nor reports twice.
+        let found = unknown_views(
+            "View Tree(n: Int) { when n > 0 { Tree(n: n - 1) Bogus6() } }
+             View Main() { Tree(n: 0) }",
+        );
+        assert_eq!(found, ["Bogus6"]);
+    }
 }

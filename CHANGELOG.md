@@ -72,6 +72,7 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **`Text #[width: N, wrap: false]` is `N` wide.** It was as wide as its text.
   A single line that is wider than its `width` is clipped at the edge of it, so
   the cells of a table stay in their columns.
+- **`byard check` looks inside what is not shown at the start.** A tab that is not the active one, a route the first path does not match, both arms of a `when` and the body of a `for` over an empty list were not checked, so an unknown view or attribute in them said `0 errors` until somebody opened them. They are now, in `byard check` and in the editor.
 
 ## [0.1.0] - 2026-11-05
 

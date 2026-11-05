@@ -321,6 +321,174 @@ impl Interpreter {
         out
     }
 
+    /// Lowers, once and offline, every branch that lowering leaves for later:
+    /// both arms of every `when`, a body of every `for` (with an element that
+    /// has no value yet), and every `route`/`tab` of every navigation
+    /// container, nested ones included. What `byard check` runs after
+    /// rendering the view, so a diagnostic that lowering raises is raised for
+    /// code that is not on screen at the start either: a tab that is not the
+    /// active one, a route the initial path does not match, a `when` that
+    /// starts false, a list that has not loaded.
+    ///
+    /// Runtime lowering stays lazy and never calls this. Each distinct body is
+    /// lowered once (a recursive view lowers its body once, not without end),
+    /// and nothing is mounted: the result of lowering is dropped, only its
+    /// diagnostics and the pools it registers are kept.
+    pub fn lower_every_branch(&mut self) {
+        use std::hash::{Hash, Hasher};
+        let mut seen = std::collections::HashSet::<u64>::new();
+        let mut key = |tag: &str, body: &dyn std::fmt::Debug| {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            tag.hash(&mut h);
+            format!("{body:?}").hash(&mut h);
+            seen.insert(h.finish())
+        };
+        // Pools appear while others are lowered; sweep until a sweep finds
+        // nothing new. `seen` is what makes that end.
+        loop {
+            let mut changed = false;
+            let mut i = 0;
+            while i < self.when_pools.len() {
+                for take in [true, false] {
+                    let (lowered, ast) = if take {
+                        (
+                            self.when_pools[i].then.is_some(),
+                            &self.when_pools[i].then_ast,
+                        )
+                    } else {
+                        (
+                            self.when_pools[i].els.is_some(),
+                            &self.when_pools[i].els_ast,
+                        )
+                    };
+                    if lowered || ast.is_empty() || !key(if take { "then" } else { "else" }, ast) {
+                        continue;
+                    }
+                    let (nodes, scopes) = self.lower_when_branch(i, take);
+                    if take {
+                        self.when_pools[i].then = Some(nodes);
+                        self.when_pools[i].then_scopes = scopes;
+                    } else {
+                        self.when_pools[i].els = Some(nodes);
+                        self.when_pools[i].els_scopes = scopes;
+                    }
+                    changed = true;
+                }
+                i += 1;
+            }
+            let mut i = 0;
+            while i < self.for_pools.len() {
+                let p = &self.for_pools[i];
+                if p.bodies.is_empty() && key("for", &(&p.item_var, &p.index_var, &p.body)) {
+                    let slot = self.ctx.create_signal(Value::Unit);
+                    let (nodes, scopes) = self.lower_for_body(i, slot);
+                    // Held as the pool's one pooled body, with `len` still 0:
+                    // it is never drawn, and the nested pools it registered
+                    // stay reachable for the next sweep.
+                    self.for_pools[i].item_slots.push(slot);
+                    self.for_pools[i].bodies.push(nodes);
+                    self.for_pools[i].slot_scopes.push(scopes);
+                    changed = true;
+                }
+                i += 1;
+            }
+            let mut i = 0;
+            while i < self.nav_pools.len() {
+                for route in 0..self.nav_route_count(i) {
+                    let print = self.nav_route_fingerprint(i, route);
+                    if key("route", &print) {
+                        self.lower_route_offline(i, route);
+                        changed = true;
+                    }
+                }
+                i += 1;
+            }
+            if !changed {
+                break;
+            }
+        }
+    }
+
+    /// Lowers one branch of a `when` pool from its AST and the environment
+    /// captured where the `when` was written, returning the nodes and the
+    /// reactive scopes lowering opened. The one place a branch is lowered, so
+    /// the render-time reconcile and the offline
+    /// [`lower_every_branch`](Self::lower_every_branch) (`byard check`) cannot
+    /// disagree about what a branch means.
+    pub(super) fn lower_when_branch(
+        &mut self,
+        pool: usize,
+        take: bool,
+    ) -> (Vec<RenderNode>, Vec<ScopeId>) {
+        let ast = if take {
+            self.when_pools[pool].then_ast.clone()
+        } else {
+            self.when_pools[pool].els_ast.clone()
+        };
+        let known: Vec<String> = self.when_pools[pool].known_views.clone();
+        let env_snap = self.when_pools[pool].env_snapshot.clone();
+        let env_base = self.env.len();
+        for (k, v) in &env_snap {
+            self.env.push(k.clone(), v.clone());
+        }
+        let known_refs: Vec<&str> = known.iter().map(String::as_str).collect();
+        // A branch lowered here is lowered *away from where it was written*:
+        // the scope it belongs to exists only as the snapshot just pushed, and
+        // it is truncated again below. Anything inside the branch that resolves
+        // later, an event action, an animated attribute reading the row it
+        // belongs to, a nested `for`/`when` pool, has to capture that scope
+        // now, or it will look for the row in an environment that no longer
+        // has one.
+        let restored = !env_snap.is_empty();
+        self.restored_depth += u32::from(restored);
+        // The scopes the branch opens are recorded, so a route popped with this
+        // `when` in it can retire them.
+        self.ctx.push_scope_tracker();
+        let nodes = self.lower_members(&ast, &known_refs);
+        let scopes = self.ctx.pop_scope_tracker();
+        self.restored_depth -= u32::from(restored);
+        self.env.truncate(env_base);
+        (nodes, scopes)
+    }
+
+    /// Lowers the next body of a `for` pool (index `bodies.len()`), reading its
+    /// element from `slot`. Shared with the offline pass, like
+    /// [`lower_when_branch`](Self::lower_when_branch).
+    pub(super) fn lower_for_body(
+        &mut self,
+        pool: usize,
+        slot: crate::interp::env::SignalId,
+    ) -> (Vec<RenderNode>, Vec<ScopeId>) {
+        // Clone the lowering inputs out first so the borrow on `self.for_pools`
+        // is released before `lower_members` (which may append *nested* pools).
+        let item_var = self.for_pools[pool].item_var.clone();
+        let index_var = self.for_pools[pool].index_var.clone();
+        #[allow(clippy::cast_possible_wrap)]
+        let slot_index = self.for_pools[pool].bodies.len() as i64;
+        let body_ast = self.for_pools[pool].body.clone();
+        let known: Vec<String> = self.for_pools[pool].known_views.clone();
+        let env_snap = self.for_pools[pool].env_snapshot.clone();
+        let env_base = self.env.len();
+        for (k, v) in &env_snap {
+            self.env.push(k.clone(), v.clone());
+        }
+        self.env.push(item_var, Value::Signal(slot));
+        if let Some(index_var) = index_var {
+            self.env.push(index_var, Value::Int(slot_index));
+        }
+        let known_refs: Vec<&str> = known.iter().map(String::as_str).collect();
+        // Mark that we are lowering inside a `for` body so any event action
+        // captures the element in its env snapshot (the binding is truncated
+        // below before render, RFC-0027).
+        self.for_depth += 1;
+        self.ctx.push_scope_tracker();
+        let body_nodes = self.lower_members(&body_ast, &known_refs);
+        let scopes = self.ctx.pop_scope_tracker();
+        self.for_depth -= 1;
+        self.env.truncate(env_base);
+        (body_nodes, scopes)
+    }
+
     /// Reconciles the reactive `for` pools before the paint walk (RFC-0018,
     /// coarse D7): reads each live `for`'s list, grows its pool to the list length
     /// (lowering a body the first time an index is needed), rewrites each slot's
@@ -381,35 +549,7 @@ impl Interpreter {
                         self.when_pools[*pool].els.is_some()
                     };
                     if !already {
-                        let ast = if take {
-                            self.when_pools[*pool].then_ast.clone()
-                        } else {
-                            self.when_pools[*pool].els_ast.clone()
-                        };
-                        let known: Vec<String> = self.when_pools[*pool].known_views.clone();
-                        let env_snap = self.when_pools[*pool].env_snapshot.clone();
-                        let env_base = self.env.len();
-                        for (k, v) in &env_snap {
-                            self.env.push(k.clone(), v.clone());
-                        }
-                        let known_refs: Vec<&str> = known.iter().map(String::as_str).collect();
-                        // A branch lowered here is lowered *away from where it
-                        // was written*: the scope it belongs to exists only as
-                        // the snapshot just pushed, and it is truncated again
-                        // below. Anything inside the branch that resolves later
-                        //, an event action, an animated attribute reading the
-                        // row it belongs to, a nested `for`/`when` pool, has to
-                        // capture that scope now, or it will look for the row in
-                        // an environment that no longer has one.
-                        let restored = !env_snap.is_empty();
-                        self.restored_depth += u32::from(restored);
-                        // The scopes the branch opens are recorded, so a route
-                        // popped with this `when` in it can retire them.
-                        self.ctx.push_scope_tracker();
-                        let nodes = self.lower_members(&ast, &known_refs);
-                        let scopes = self.ctx.pop_scope_tracker();
-                        self.restored_depth -= u32::from(restored);
-                        self.env.truncate(env_base);
+                        let (nodes, scopes) = self.lower_when_branch(*pool, take);
                         if take {
                             self.when_pools[*pool].then = Some(nodes);
                             self.when_pools[*pool].then_scopes = scopes;
@@ -452,34 +592,7 @@ impl Interpreter {
                             .get(self.for_pools[*pool].bodies.len())
                             .copied();
                         let slot = reused.unwrap_or_else(|| self.ctx.create_signal(Value::Unit));
-                        // Clone the lowering inputs out first so the borrow on
-                        // `self.for_pools` is released before `lower_members`
-                        // (which may append *nested* pools to `self.for_pools`).
-                        let item_var = self.for_pools[*pool].item_var.clone();
-                        let index_var = self.for_pools[*pool].index_var.clone();
-                        #[allow(clippy::cast_possible_wrap)]
-                        let slot_index = self.for_pools[*pool].bodies.len() as i64;
-                        let body_ast = self.for_pools[*pool].body.clone();
-                        let known: Vec<String> = self.for_pools[*pool].known_views.clone();
-                        let env_snap = self.for_pools[*pool].env_snapshot.clone();
-                        let env_base = self.env.len();
-                        for (k, v) in &env_snap {
-                            self.env.push(k.clone(), v.clone());
-                        }
-                        self.env.push(item_var, Value::Signal(slot));
-                        if let Some(index_var) = index_var {
-                            self.env.push(index_var, Value::Int(slot_index));
-                        }
-                        let known_refs: Vec<&str> = known.iter().map(String::as_str).collect();
-                        // Mark that we are lowering inside a `for` body so any
-                        // event action captures `t` in its env snapshot (the
-                        // binding is truncated below before render, RFC-0027).
-                        self.for_depth += 1;
-                        self.ctx.push_scope_tracker();
-                        let body_nodes = self.lower_members(&body_ast, &known_refs);
-                        let scopes = self.ctx.pop_scope_tracker();
-                        self.for_depth -= 1;
-                        self.env.truncate(env_base);
+                        let (body_nodes, scopes) = self.lower_for_body(*pool, slot);
                         // Index `*pool` is still valid (nested lowering only
                         // appended higher indices).
                         if reused.is_none() {

@@ -102,8 +102,10 @@ byard check
 
 `check` reads the whole project, entry file, siblings and packages, and reports
 every problem it can find without opening a window. It parses, resolves every
-name, checks types and attributes, and lowers every view the way the app would.
-It is what CI runs.
+name, checks types and attributes, and lowers every view the way the app would,
+including what is not on screen at the start: a tab that is not the active one, a
+route the first path does not match, both arms of a `when`, the body of a `for`
+over a list that has not loaded yet. It is what CI runs.
 
 ```text
 →    checking /home/ada/hello/main.byd

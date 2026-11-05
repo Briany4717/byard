@@ -597,17 +597,18 @@ impl Interpreter {
             .find_map(|(i, r)| r.pattern.match_path(path).map(|params| (i, params)))
     }
 
-    /// Instantiates a route's View subtree for `path` and appends it as a new
-    /// entry, returning its index. The body is lowered with `route` (and the
-    /// `{|params| … }` binding, if written) in scope, bound to the extracted
-    /// parameters as records, `Str`-valued in v1 (RFC-0026 resolved question).
-    fn mount_nav_entry(
+    /// Lowers a route's body for `path`, with `route` (and the `{|params| … }`
+    /// binding, if written) in scope, bound to the extracted parameters as
+    /// records, `Str`-valued in v1 (RFC-0026 resolved question). Returns the
+    /// nodes and the reactive scopes lowering opened. Shared by the runtime
+    /// mount and the offline [`lower_every_branch`](Self::lower_every_branch).
+    pub(super) fn lower_route_body(
         &mut self,
         pool: usize,
         route: usize,
         path: &str,
         params: &[(String, String)],
-    ) -> usize {
+    ) -> (Vec<RenderNode>, Vec<ScopeId>) {
         let body = self.nav_pools[pool].routes[route].body.clone();
         let binding = self.nav_pools[pool].routes[route].params_binding.clone();
         let known: Vec<String> = self.nav_pools[pool].known_views.clone();
@@ -643,6 +644,64 @@ impl Interpreter {
         let scopes = self.ctx.pop_scope_tracker();
         self.nav_depth -= 1;
         self.env.truncate(env_base);
+        (nodes, scopes)
+    }
+
+    /// The number of routes in navigation container `pool`.
+    pub(super) fn nav_route_count(&self, pool: usize) -> usize {
+        self.nav_pools[pool].routes.len()
+    }
+
+    /// The source of route `route` of container `pool` as a stable text, so the
+    /// offline pass can tell a body it has lowered from one it has not.
+    pub(super) fn nav_route_fingerprint(&self, pool: usize, route: usize) -> String {
+        let r = &self.nav_pools[pool].routes[route];
+        format!("{:?}|{:?}|{:?}", r.pattern.raw, r.params_binding, r.body)
+    }
+
+    /// Lowers route `route` of container `pool` for a sample path that matches
+    /// its pattern (`/x/:id` → `/x/x`, every `:name` the text `x`), and drops
+    /// the result: the point is the diagnostics lowering gives, and the nested
+    /// pools it registers, which the caller then visits in turn. Nothing is
+    /// mounted, so no screen, transition or `route_change` follows.
+    pub(super) fn lower_route_offline(&mut self, pool: usize, route: usize) {
+        use crate::interp::nav::RouteSegment;
+        let segments = self.nav_pools[pool].routes[route].pattern.segments.clone();
+        let mut path = String::new();
+        let mut params = Vec::new();
+        for seg in &segments {
+            match seg {
+                RouteSegment::Literal(l) => {
+                    path.push('/');
+                    path.push_str(l);
+                }
+                RouteSegment::Param(name) => {
+                    path.push_str("/x");
+                    params.push((name.clone(), "x".to_string()));
+                }
+                RouteSegment::Wildcard => {}
+            }
+        }
+        if path.is_empty() {
+            path.push('/');
+        }
+        // A tab is addressed by its name as written, not by a path.
+        if self.nav_pools[pool].kind == NavKind::Host {
+            path = self.nav_pools[pool].routes[route].pattern.raw.clone();
+        }
+        let _ = self.lower_route_body(pool, route, &path, &params);
+    }
+
+    /// Instantiates a route's View subtree for `path` and appends it as a new
+    /// entry, returning its index.
+    fn mount_nav_entry(
+        &mut self,
+        pool: usize,
+        route: usize,
+        path: &str,
+        params: &[(String, String)],
+    ) -> usize {
+        let (nodes, scopes) = self.lower_route_body(pool, route, path, params);
 
         let body_span = members_span(&self.nav_pools[pool].routes[route].body);
         self.nav_pools[pool].entries.push(NavEntry {

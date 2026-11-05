@@ -109,6 +109,9 @@ by `+`. `mod` is Command on macOS and Control elsewhere. With `--a11y`, the pict
 `-o` is given too, and the tree needs no GPU. See [the dev loop](dev-loop.md#byard-shot) and
 [accessibility](accessibility.md).
 
+Text that starts with `-`, such as a negative number, would be read as another option. Join it to the
+option with `=`: `--type=-1.5`.
+
 ## `byard fmt`
 
 ```text

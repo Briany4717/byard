@@ -54,24 +54,24 @@ View ProductForm(
     }
 
     let field = style {
-        height: 40, bg: t.surfaceContainer, color: t.onSurface, radius: 10, p: (horizontal: 12), typo: t.body
+        height: 40, width: 400, bg: t.surfaceContainer, color: t.onSurface, radius: 10, p: (horizontal: 12), typo: t.body
         border: t.outlineVariant, border_width: 1
         on focused { border: t.primary, border_width: 2 }
         on invalid { border: t.error, border_width: 2 }
     }
 
     ScrollView #[grow: 1] {
-        Column #[p: (vertical: 24, horizontal: 28), gap: 14, width: 560] {
+        Column #[p: (vertical: 24, horizontal: 28), gap: 14, width: 600] {
             Heading(title: isNew ? "New product" : "Edit product") {}
 
             Column #[gap: 4] {
-                Label(text: "SKU", error: skuSeen || sku != "" ? skuError : "")
+                Label(text: "SKU", error: (skuSeen || sku != "") ? skuError : "")
                 TextField #[..field, bind: sku, placeholder: "HW-061", focused: skuFocus,
                             invalid: (skuSeen || sku != "") && skuError != "",
                             blur => skuSeen = true, submit => save()]
             }
             Column #[gap: 4] {
-                Label(text: "Name", error: nameSeen || name != "" ? nameError : "")
+                Label(text: "Name", error: (nameSeen || name != "") ? nameError : "")
                 TextField #[..field, bind: name, placeholder: "Hex bolt M10",
                             invalid: (nameSeen || name != "") && nameError != "",
                             blur => nameSeen = true, submit => save()]
@@ -85,22 +85,22 @@ View ProductForm(
                 }
             }
             Row #[gap: 14] {
-                Column #[gap: 4, grow: 1, width: 0] {
+                Column #[gap: 4] {
                     Label(text: isNew ? "Quantity" : "On hand", error: qtyError)
                     when isNew {
-                        TextField #[..field, bind: qtyText, invalid: qtyError != "", submit => save()]
+                        TextField #[..field, width: 170, bind: qtyText, invalid: qtyError != "", submit => save()]
                     }
                     when !isNew {
-                        Box #[height: 40, bg: t.surfaceContainer, radius: 10, p: (horizontal: 12), justify: center] { Text("{current.qty}") #[typo: t.body, color: t.onSurfaceVariant] }
+                        Box #[height: 40, width: 170, bg: t.surfaceContainer, radius: 10, p: (horizontal: 12), justify: center] { Text("{current.qty}") #[typo: t.body, color: t.onSurfaceVariant] }
                     }
                 }
-                Column #[gap: 4, grow: 1, width: 0] {
+                Column #[gap: 4] {
                     Label(text: "Minimum", error: minError)
-                    TextField #[..field, bind: minText, invalid: minError != "", submit => save()]
+                    TextField #[..field, width: 170, bind: minText, invalid: minError != "", submit => save()]
                 }
-                Column #[gap: 4, grow: 1, width: 0] {
-                    Label(text: "Price", error: priceSeen || priceText != "" ? priceError : "")
-                    TextField #[..field, bind: priceText, placeholder: "0.00",
+                Column #[gap: 4] {
+                    Label(text: "Price", error: (priceSeen || priceText != "") ? priceError : "")
+                    TextField #[..field, width: 170, bind: priceText, placeholder: "0.00",
                                 invalid: (priceSeen || priceText != "") && priceError != "",
                                 blur => priceSeen = true, submit => save()]
                 }

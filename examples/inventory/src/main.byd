@@ -33,10 +33,10 @@ View Main() {
     inject Store as store
     inject Stockroom as room
 
-    var products: List<Product> = []
-    var movements: List<Movement> = []
+    var catalog: List<Product> = []
+    var ledger: List<Movement> = []
     // What a new product's minimum starts as. Kept in Settings.
-    var minDefault: Int = 5
+    var defaultMin: Int = 5
     // Whether the saved data has been read; until it has there is nothing to show.
     var loaded: Bool = false
     // Set when a save fails, so the screen says so and not nothing.
@@ -52,30 +52,30 @@ View Main() {
                 if seeded {
                     store.get("products", [])
                         ok saved => {
-                            products = saved
+                            catalog = saved
                             store.get("movements", [])
                                 ok log => {
-                                    movements = log
+                                    ledger = log
                                     store.get("minDefault", 5)
                                         ok m => {
-                                            minDefault = m
+                                            defaultMin = m
                                             loaded = true
                                         }
                                 }
                         }
                 } else {
-                    products = sampleProducts()
-                    movements = sampleMovements()
+                    catalog = sampleProducts()
+                    ledger = sampleMovements()
                     store.set("seeded", true)
-                    store.set("products", products)
-                    store.set("movements", movements)
+                    store.set("products", catalog)
+                    store.set("movements", ledger)
                     loaded = true
                 }
             }
             err e => {
                 problem = "Could not read the saved data: {e.message}"
-                products = sampleProducts()
-                movements = sampleMovements()
+                catalog = sampleProducts()
+                ledger = sampleMovements()
                 loaded = true
             }
     }
@@ -83,9 +83,9 @@ View Main() {
     // ── What the screens may do ───────────────────────────────────────────
 
     let persist = () => {
-        store.set("products", products)
+        store.set("products", catalog)
             err e => { problem = "Could not save: {e.message}" }
-        store.set("movements", movements)
+        store.set("movements", ledger)
             err e => { problem = "Could not save: {e.message}" }
     }
 
@@ -93,7 +93,7 @@ View Main() {
     let create = (sku: Str, name: Str, category: Str, qty: Int, min: Int, price: Float, location: Str) => {
         room.now()
             ok at => {
-                let id = products.reduce(0, (m, p) => p.id > m ? p.id : m) + 1
+                let id = catalog.reduce(0, (m, p) => p.id > m ? p.id : m) + 1
                 let made: Product = {
                     id: id,
                     sku: sku,
@@ -105,10 +105,10 @@ View Main() {
                     location: location,
                     updated: at,
                 }
-                products = products.push(made)
+                catalog = catalog.push(made)
                 if qty > 0 {
-                    let mid = movements.reduce(0, (m, x) => x.id > m ? x.id : m) + 1
-                    movements = [{ id: mid, productId: id, kind: "in", qty: qty, note: "Opening stock", at: at }] + movements
+                    let mid = ledger.reduce(0, (m, x) => x.id > m ? x.id : m) + 1
+                    ledger = [{ id: mid, productId: id, kind: "in", qty: qty, note: "Opening stock", at: at }] + ledger
                 }
                 persist()
                 replace(productsPath, "/product/{id}")
@@ -118,7 +118,7 @@ View Main() {
     let update = (id: Int, sku: Str, name: Str, category: Str, min: Int, price: Float, location: Str) => {
         room.now()
             ok at => {
-                products = products.map(p => p.id == id ? { ..p, sku: sku, name: name, category: category, min: min, price: price, location: location, updated: at } : p)
+                catalog = catalog.map(p => p.id == id ? { ..p, sku: sku, name: name, category: category, min: min, price: price, location: location, updated: at } : p)
                 persist()
                 back(productsPath)
             }
@@ -129,12 +129,12 @@ View Main() {
     let move = (productId: Int, kind: Str, qty: Int, note: Str) => {
         room.now()
             ok at => {
-                let cur = products.find(p => p.id == productId)
+                let cur = catalog.find(p => p.id == productId)
                 let delta = kind == "out" ? 0 - qty : qty
                 if (cur.qty ?? 0) + delta >= 0 && qty != 0 {
-                    products = products.map(p => p.id == productId ? { ..p, qty: p.qty + delta, updated: at } : p)
-                    let mid = movements.reduce(0, (m, x) => x.id > m ? x.id : m) + 1
-                    movements = [{ id: mid, productId: productId, kind: kind, qty: qty, note: note, at: at }] + movements
+                    catalog = catalog.map(p => p.id == productId ? { ..p, qty: p.qty + delta, updated: at } : p)
+                    let mid = ledger.reduce(0, (m, x) => x.id > m ? x.id : m) + 1
+                    ledger = [{ id: mid, productId: productId, kind: kind, qty: qty, note: note, at: at }] + ledger
                     persist()
                 }
             }
@@ -142,20 +142,20 @@ View Main() {
 
     // The movements stay: the log still reads, with the product's id.
     let remove = (id: Int) => {
-        products = products.filter(p => p.id != id)
+        catalog = catalog.filter(p => p.id != id)
         persist()
         productsPath = "/"
     }
 
     let resetSample = () => {
-        products = sampleProducts()
-        movements = sampleMovements()
+        catalog = sampleProducts()
+        ledger = sampleMovements()
         persist()
         productsPath = "/"
     }
 
     let saveMinDefault = (m: Int) => {
-        minDefault = m
+        defaultMin = m
         store.set("minDefault", m)
     }
 
@@ -188,13 +188,13 @@ View Main() {
         when loaded {
             NavHost(active: tab) #[grow: 1, transition: fade] {
                 tab "dashboard" {
-                    Dashboard(products: products, movements: movements, on_open: {|id| open(id) })
+                    Dashboard(products: catalog, movements: ledger, on_open: {|id| open(id) })
                 }
                 tab "products" {
                     NavStack(path: productsPath) #[grow: 1, transition: slide, swipe_back: true] {
                         route "/" {
                             ProductList(
-                                products: products,
+                                products: catalog,
                                 on_open: {|id| productsPath = "/product/{id}" },
                                 on_new: { productsPath = "/new" },
                             )
@@ -202,8 +202,8 @@ View Main() {
                         route "/new" {
                             ProductForm(
                                 editing: 0,
-                                products: products,
-                                min_default: minDefault,
+                                products: catalog,
+                                min_default: defaultMin,
                                 on_create: {|sku, name, category, qty, min, price, location| create(sku, name, category, qty, min, price, location) },
                                 on_cancel: { back(productsPath) },
                             )
@@ -211,8 +211,8 @@ View Main() {
                         route "/product/:id" {|params|
                             ProductDetail(
                                 id: toInt(params.id),
-                                products: products,
-                                movements: movements,
+                                products: catalog,
+                                movements: ledger,
                                 on_edit: { productsPath = "/product/{params.id}/edit" },
                                 on_delete: {|id| remove(id) },
                                 on_move: {|id, kind, qty, note| move(id, kind, qty, note) },
@@ -222,8 +222,8 @@ View Main() {
                         route "/product/:id/edit" {|params|
                             ProductForm(
                                 editing: toInt(params.id),
-                                products: products,
-                                min_default: minDefault,
+                                products: catalog,
+                                min_default: defaultMin,
                                 on_update: {|id, sku, name, category, min, price, location| update(id, sku, name, category, min, price, location) },
                                 on_cancel: { back(productsPath) },
                             )
@@ -231,12 +231,12 @@ View Main() {
                     }
                 }
                 tab "movements" {
-                    MovementLog(products: products, movements: movements)
+                    MovementLog(products: catalog, movements: ledger)
                 }
                 tab "settings" {
                     Settings(
-                        products: products,
-                        min_default: minDefault,
+                        products: catalog,
+                        min_default: defaultMin,
                         on_min: {|m| saveMinDefault(m) },
                         on_reset: { resetSample() },
                     )

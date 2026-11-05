@@ -103,8 +103,8 @@ View ProductDetail(
             Row #[gap: 10, justify: end] {
                 Action(label: "Keep it", tone: "tonal", on_tap: { dialog = "" })
                 Action(label: "Delete", tone: "danger", on_tap: {
-                    dialog = ""
                     on_delete(id)
+                    dialog = ""
                 })
             }
         }

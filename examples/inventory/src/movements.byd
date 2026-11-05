@@ -7,6 +7,7 @@ View MovementLog(products: List<Product>, movements: List<Movement>) {
     // "" is every kind.
     var kind: Str = ""
     var query: Str = ""
+    var listH: Float = 400.0
 
     let q = query.trim().toLower()
     // The ids of the products the text names, so a row need not look it up.
@@ -48,10 +49,13 @@ View MovementLog(products: List<Product>, movements: List<Movement>) {
             when shown.len == 0 {
                 Text("No movement matches") #[typo: t.body, color: t.onSurfaceVariant, m: 24]
             }
-            ScrollView #[grow: 1, windowed: true, row_height: 40] {
-                Column {
-                    for m in shown {
-                        MovementRow(m: m, products: products)
+            Box #[grow: 1] {
+                on measure => { listH = it.h }
+                ScrollView #[height: listH, windowed: true, row_height: 40] {
+                    Column {
+                        for m in shown {
+                            MovementRow(m: m, products: products)
+                        }
                     }
                 }
             }
@@ -63,10 +67,10 @@ View MovementRow(m: Movement, products: List<Product>) {
     inject Theme as t
     let product = products.find(p => p.id == m.productId)
     Row #[height: 40, p: (horizontal: 16), gap: 12, align: center] {
-        Text(signed(m.kind, m.qty)) #[typo: t.label, width: 56, color: m.kind == "out" ? t.secondary : m.kind == "in" ? t.tertiary : t.onSurfaceVariant]
-        Text(kindLabel(m.kind)) #[typo: t.body, color: t.onSurface, width: 90]
+        Box #[width: 56] { Text(signed(m.kind, m.qty)) #[typo: t.label, color: m.kind == "out" ? t.secondary : m.kind == "in" ? t.tertiary : t.onSurfaceVariant, wrap: false] }
+        Box #[width: 90] { Text(kindLabel(m.kind)) #[typo: t.body, color: t.onSurface, wrap: false] }
         Box #[grow: 1] { Text(product.name ?? "Deleted product #{m.productId}") #[typo: t.body, color: (product.id ?? 0) == 0 ? t.onSurfaceVariant : t.onSurface, wrap: false] }
         Box #[grow: 1] { Text(m.note) #[typo: t.caption, color: t.onSurfaceVariant, wrap: false] }
-        Text(stamp(m.at)) #[typo: t.caption, color: t.onSurfaceVariant, width: 150, wrap: false]
+        Box #[width: 150] { Text(stamp(m.at)) #[typo: t.caption, color: t.onSurfaceVariant, wrap: false] }
     }
 }

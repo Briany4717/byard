@@ -11,19 +11,24 @@
 //! ```
 //!
 //! The word after the file is the screen: `dashboard`, `products`, `movements`
-//! or `settings`. `--light` draws the light scheme.
+//! or `settings`. `--light` draws the light scheme. After the screen, `--tap
+//! x,y`, `--type text` and `--key Tab` act first, in the order given.
 
 /// Where each tab's button is in the tab bar, in logical pixels.
 const TABS: [(&str, f32); 4] = [
-    ("dashboard", 80.0),
-    ("products", 200.0),
-    ("movements", 320.0),
-    ("settings", 440.0),
+    ("dashboard", 163.0),
+    ("products", 264.0),
+    ("movements", 367.0),
+    ("settings", 468.0),
 ];
 
 fn main() -> Result<(), byard::ByardError> {
-    let app = stockroom::app();
     let args: Vec<String> = std::env::args().skip(1).collect();
+    let app = if args.iter().any(|a| a == "--shot") {
+        stockroom::shot_app()
+    } else {
+        stockroom::app()
+    };
     let flag = |name: &str| args.iter().any(|a| a == name);
     let value = |name: &str| {
         args.iter()
@@ -39,6 +44,22 @@ fn main() -> Result<(), byard::ByardError> {
         let mut plan = byard::Shot::after(1500).system_dark(!flag("--light"));
         if let Some((_, x)) = TABS.iter().find(|(name, _)| *name == tab) {
             plan = plan.tap(*x, 30.0).wait(500);
+        }
+        // Then what a person would do next, in the order given: `--tap x,y`,
+        // `--type text`, `--key Tab`.
+        let mut rest = args.iter().skip(shot_at + 2);
+        while let Some(a) = rest.next() {
+            match (a.as_str(), rest.clone().next()) {
+                ("--tap", Some(xy)) => {
+                    let (x, y) = xy.split_once(',').unwrap_or(("0", "0"));
+                    plan = plan.tap(x.parse().unwrap_or(0.0), y.parse().unwrap_or(0.0));
+                }
+                ("--type", Some(text)) => plan = plan.type_text(text),
+                ("--key", Some(key)) => plan = plan.key(key),
+                _ => continue,
+            }
+            plan = plan.wait(700);
+            rest.next();
         }
         return app.shot(out, &plan);
     }

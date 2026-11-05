@@ -38,15 +38,12 @@ View StockBadge(qty: Int, min: Int) {
 // A filter chip: lit when `on`.
 View Chip(label: Str, on: Bool, on_tap: Fn() = {}) {
     inject Theme as t
-    Button(label) #[
-        radius: 16,
-        p: (vertical: 6, horizontal: 12),
-        height: 32,
-        typo: t.label,
-        bg: t.surfaceContainerHigh,
-        color: t.onSurfaceVariant,
-        selected: on,
-    ] => on_tap()
+    let look = style {
+        radius: 16, p: (vertical: 6, horizontal: 12), height: 32, typo: t.label
+        bg: t.surfaceContainerHigh, color: t.onSurfaceVariant
+        on selected { bg: t.primaryContainer, color: t.onPrimaryContainer }
+    }
+    Button(label) #[..look, selected: on] => on_tap()
 }
 
 // A button. `tone` is "primary", "tonal" or "danger".
@@ -67,11 +64,12 @@ View Action(label: Str, tone: Str = "primary", off: Bool = false, on_tap: Fn() =
 // The words next to a control, and what is wrong with it.
 View Label(text: Str, error: Str = "") {
     inject Theme as t
-    Row #[gap: 8, align: center] {
+    // The message is always there, empty when nothing is wrong. A `when` that
+    // came and went here would move the field below it in the tree, and a field
+    // that is moved loses the keyboard focus after the character that did it.
+    Row #[align: center] {
         Text(text) #[typo: t.caption, color: t.onSurfaceVariant]
-        when error != "" {
-            Text(error) #[typo: t.caption, color: t.error]
-        }
+        Text(error) #[typo: t.caption, color: t.error, m: (left: error == "" ? 0 : 8)]
     }
 }
 
@@ -90,7 +88,10 @@ View Heading(title: Str, content) {
 View Dialog(title: Str, on_close: Fn() = {}, content) {
     inject Theme as t
     Overlay #[dismiss => on_close()] {
-        Column #[anchor: center, bg: t.surfaceContainerHigh, radius: 18, p: 22, gap: 14, width: 400] {
+        // `tap => {}` is not decoration: without a listener on the panel, a press
+        // on its padding or on a field inside it counts as a press on the scrim
+        // and closes the dialog.
+        Column #[anchor: center, bg: t.surfaceContainerHigh, radius: 18, p: 22, gap: 14, width: 400, tap => {}] {
             Text(title) #[typo: t.title, color: t.onSurface]
             content
         }

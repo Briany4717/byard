@@ -38,7 +38,7 @@ fn workspace(name: &str) -> PathBuf {
         "[project]\nname = \"dials\"\nentry = \"src/main.byd\"\nicon = \"icon.png\"\n\n\
          [bundle]\nname = \"Dials\"\nid = \"com.example.dials\"\nversion = \"1.4.0\"\n\
          categories = [\"Utility\", \"Calculator\"]\nsummary = \"Dials for things\"\n\
-         license = \"MIT OR Apache-2.0\"\n\n\
+         license = \"MIT OR Apache-2.0\"\nhomepage = \"https://example.com/dials\"\n\n\
          # The dependency is where it is on this machine.\n\
          [dependencies]\ndial = { path = \"../dial\" }\n",
     );
@@ -457,10 +457,15 @@ fn the_entries_pass_the_freedesktop_validators() {
             .arg(share.join("metainfo/com.example.dials.metainfo.xml"))
             .output()
             .unwrap();
-        // A homepage is not something `[bundle]` can say, so its absence is
-        // a warning; an error is what a malformed file would be.
+        // Nothing to object to, not even a warning: the homepage it used to
+        // miss is `[bundle] homepage` now. Informational notes may remain.
         let said = String::from_utf8_lossy(&out.stdout);
-        assert!(!said.lines().any(|l| l.starts_with("E:")), "{said}");
+        assert!(
+            !said
+                .lines()
+                .any(|l| l.starts_with("E:") || l.starts_with("W:")),
+            "{said}"
+        );
     }
     if ran == 0 {
         eprintln!("skipped: neither desktop-file-validate nor appstreamcli is installed");

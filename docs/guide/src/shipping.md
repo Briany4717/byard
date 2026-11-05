@@ -107,8 +107,8 @@ What is in it:
   the summary as its comment. The file is named for the id,
 - the **icon**, from `[project] icon`, at 16, 32, 48, 64, 128, 256 and 512 pixels, up to the size of
   your own picture, so a 256 pixel icon gives six files. Without an icon there are none,
-- the **AppStream file**, which software centres read, with the id, the name, the summary and the
-  licence.
+- the **AppStream file**, which software centres read, with the id, the name, the summary, the
+  licence and the homepage.
 
 Add `--archive` to also pack the tree as one file next to it:
 
@@ -145,6 +145,7 @@ version = "0.1.0"
 categories = ["Utility", "Weather"]
 summary = "Weather with a map"
 license = "MIT"
+homepage = "https://github.com/Briany4717/byard"
 ```
 
 - **`name`** is what the Finder and the Dock show. It defaults to the project's name.
@@ -159,12 +160,14 @@ license = "MIT"
   comment, and a software centre as the listing's summary.
 - **`license`** is the app's licence as an SPDX expression, such as `"MIT OR Apache-2.0"`. It goes
   into the AppStream file. Byard does not check it beyond reading it.
+- **`homepage`** is the app's web page, an `http` or `https` address. It goes into the AppStream
+  file. A software centre links to it, and Flathub does not take an app without one.
 
-The last three are used by the Linux layout and ignored by the others.
+The last four are used by the Linux layout and ignored by the others.
 
 An id that is not reverse-DNS is an error that shows an example, and an unknown key in `[bundle]` is
-one too. So is a `summary` or `license` that is empty, and `categories` that is not a list of names
-without a `;` in them.
+one too. So is a `summary` or `license` that is empty, a `homepage` that is not a web address, and
+`categories` that is not a list of names without a `;` in them.
 
 ## The icon
 

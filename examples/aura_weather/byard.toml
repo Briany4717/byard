@@ -15,6 +15,7 @@ version = "0.1.0"
 categories = ["Utility"]
 summary = "Weather for one place at a time, with a map"
 license = "MIT OR Apache-2.0"
+homepage = "https://github.com/Briany4717/byard/tree/main/examples/aura_weather"
 
 # The forecast's requests name a path; this is the host they go to.
 [http]

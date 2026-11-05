@@ -188,6 +188,12 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`[bundle] homepage`.** The app's web page, an `http` or `https` address,
+  written into the Linux bundle's AppStream file as `<url type="homepage">`.
+  Without it `appstreamcli validate` warned `url-homepage-missing` on every
+  bundle, and Flathub does not take a component that has none. Aura Weather
+  sets one, and the bundle test now holds the file to no warnings at all.
+
 - **The language server checks a file in the context of its project.** It parsed
   the one file in front of it, so in a real app every view, function or record
   type from another file, every custom theme token, every `[native_views]`

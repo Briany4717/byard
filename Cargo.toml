@@ -24,6 +24,7 @@ members = [
     "examples/controller_demo",
     "examples/sparkline_view",
     "examples/aura_weather",
+    "examples/inventory",
 ]
 
 [workspace.package]

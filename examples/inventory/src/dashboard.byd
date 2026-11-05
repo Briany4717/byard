@@ -1,0 +1,92 @@
+// The first screen: five numbers, the value of the stock by category, what is
+// running out, and what moved last.
+
+View Dashboard(products: List<Product>, movements: List<Movement>, on_open: Fn(Int) = {|_| }) {
+    inject Theme as t
+
+    let units = products.reduce(0, (sum, p) => sum + p.qty)
+    let value = products.reduce(0.0, (sum, p) => sum + p.qty * p.price)
+    // The same words as `stockState` in stock.byd, written out: a call to a
+    // shared function inside a lambda is worked out once, for the first item.
+    let low = products.filter(p => p.qty > 0 && p.qty <= p.min)
+    let out = products.filter(p => p.qty <= 0)
+    let attention = out.sortBy(p => p.name) + low.sortBy(p => p.qty)
+    let recent = movements.slice(0, 10)
+
+    ScrollView #[grow: 1] {
+        Column #[p: (vertical: 24, horizontal: 28), gap: 18] {
+            Heading(title: "Dashboard") {}
+
+            Row #[gap: 14] {
+                Tile(label: "SKUs", value: "{products.len}")
+                Tile(label: "Units on hand", value: "{units}")
+                Tile(label: "Stock value", value: money(value))
+                Tile(label: "Low stock", value: "{low.len}", tone: low.len > 0 ? t.secondary : 0)
+                Tile(label: "Out of stock", value: "{out.len}", tone: out.len > 0 ? t.error : 0)
+            }
+
+            Row #[gap: 14, align: start] {
+                Column #[gap: 14, grow: 1, width: 0] {
+                    Card {
+                        Text("Stock value by category") #[typo: t.title, color: t.onSurface]
+                        for c in categories() {
+                            CategoryBar(category: c, products: products, total: value)
+                        }
+                    }
+                    Card {
+                        Text("Last movements") #[typo: t.title, color: t.onSurface]
+                        when recent.len == 0 {
+                            Text("Nothing has moved yet") #[typo: t.body, color: t.onSurfaceVariant]
+                        }
+                        for m in recent {
+                            MovementLine(m: m, products: products)
+                        }
+                    }
+                }
+                Column #[gap: 14, grow: 1, width: 0] {
+                    Card {
+                        Text("Needs attention") #[typo: t.title, color: t.onSurface]
+                        when attention.len == 0 {
+                            Text("Everything is above its minimum") #[typo: t.body, color: t.onSurfaceVariant]
+                        }
+                        for p in attention.slice(0, 12) {
+                            Row #[gap: 10, align: center, p: (vertical: 4), tap => on_open(p.id)] {
+                                StockBadge(qty: p.qty, min: p.min)
+                                Box #[grow: 1] { Text(p.name) #[typo: t.body, color: t.onSurface] }
+                                Text("{p.qty} / {p.min}") #[typo: t.caption, color: t.onSurfaceVariant]
+                            }
+                        }
+                        when attention.len > 12 {
+                            Text("and {attention.len - 12} more") #[typo: t.caption, color: t.onSurfaceVariant]
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// One line of the movement log: what happened, to what, and when.
+View MovementLine(m: Movement, products: List<Product>) {
+    inject Theme as t
+    let product = products.find(p => p.id == m.productId)
+    Row #[gap: 10, align: center] {
+        Text(signed(m.kind, m.qty)) #[typo: t.label, width: 40, color: m.kind == "out" ? t.secondary : m.kind == "in" ? t.tertiary : t.onSurfaceVariant]
+        Box #[grow: 1] { Text(product.name ?? "Deleted product #{m.productId}") #[typo: t.body, color: t.onSurface, wrap: false] }
+        Text(stamp(m.at)) #[typo: t.caption, color: t.onSurfaceVariant, wrap: false]
+    }
+}
+
+// One bar of the chart: the category's share of all the stock's value. It works
+// out its own sum because a lambda inside a lambda cannot read the outer one's
+// item.
+View CategoryBar(category: Str, products: List<Product>, total: Float) {
+    inject Theme as t
+    let sum = products.filter(p => p.category == category).reduce(0.0, (acc, p) => acc + p.qty * p.price)
+    let share = total > 0.0 ? sum / total : 0.0
+    Row #[gap: 12, align: center] {
+        Text(category) #[typo: t.body, color: t.onSurfaceVariant, width: 96]
+        Box #[bg: t.primary, radius: 5, height: 18, width: 2.0 + share * 300.0]
+        Text("{money(sum)}  {share * 100.0:.0}%") #[typo: t.caption, color: t.onSurface]
+    }
+}

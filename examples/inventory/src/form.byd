@@ -1,0 +1,121 @@
+// The form for a new product and for editing one (`editing` is 0 for new).
+// Each field says what is wrong with it; Save waits until nothing is. Tab goes
+// through the fields in the order they are written, and Enter in any text field
+// saves.
+
+View ProductForm(
+    editing: Int,
+    products: List<Product>,
+    min_default: Int,
+    on_create: Fn(Str, Str, Str, Int, Int, Float, Str) = {|_, _, _, _, _, _, _| },
+    on_update: Fn(Int, Str, Str, Str, Int, Float, Str) = {|_, _, _, _, _, _, _| },
+    on_cancel: Fn() = {},
+) {
+    inject Theme as t
+
+    let current = products.find(p => p.id == editing)
+    let isNew = editing == 0
+
+    var sku: Str = current.sku ?? ""
+    var name: Str = current.name ?? ""
+    var category: Str = current.category ?? "Hardware"
+    var qtyText: Str = "0"
+    var minText: Str = isNew ? "{min_default}" : "{current.min}"
+    var priceText: Str = isNew ? "" : "{current.price:.2}"
+    var location: Str = current.location ?? ""
+
+    // A field says what is wrong once it has been left, or typed in.
+    var skuSeen: Bool = false
+    var nameSeen: Bool = false
+    var priceSeen: Bool = false
+    var skuFocus: Bool = false
+
+    on mount => skuFocus = true
+
+    let skuText = sku.trim()
+    let skuError = skuText == "" ? "Required"
+        : products.filter(p => p.id != editing && p.sku.toLower() == skuText.toLower()).len > 0 ? "Already used by another product"
+        : ""
+    let nameError = name.trim() == "" ? "Required" : ""
+    let qtyError = isNew && !(isWhole(qtyText) && qtyText.len <= 9) ? "A whole number, 0 or more" : ""
+    let minError = isWhole(minText) && minText.len <= 9 ? "" : "A whole number, 0 or more"
+    let priceError = isDecimal(priceText) && priceText.len <= 9 ? "" : "A price, 0 or more"
+
+    let ready = skuError == "" && nameError == "" && qtyError == "" && minError == "" && priceError == ""
+
+    let save = () => {
+        if ready {
+            if isNew {
+                on_create(skuText, name.trim(), category, toInt(qtyText), toInt(minText), toFloat(priceText), location.trim())
+            } else {
+                on_update(editing, skuText, name.trim(), category, toInt(minText), toFloat(priceText), location.trim())
+            }
+        }
+    }
+
+    let field = style {
+        height: 40, bg: t.surfaceContainer, color: t.onSurface, radius: 10, p: (horizontal: 12), typo: t.body
+        border: t.outlineVariant, border_width: 1
+        on focused { border: t.primary, border_width: 2 }
+        on invalid { border: t.error, border_width: 2 }
+    }
+
+    ScrollView #[grow: 1] {
+        Column #[p: (vertical: 24, horizontal: 28), gap: 14, width: 560] {
+            Heading(title: isNew ? "New product" : "Edit product") {}
+
+            Column #[gap: 4] {
+                Label(text: "SKU", error: skuSeen || sku != "" ? skuError : "")
+                TextField #[..field, bind: sku, placeholder: "HW-061", focused: skuFocus,
+                            invalid: (skuSeen || sku != "") && skuError != "",
+                            blur => skuSeen = true, submit => save()]
+            }
+            Column #[gap: 4] {
+                Label(text: "Name", error: nameSeen || name != "" ? nameError : "")
+                TextField #[..field, bind: name, placeholder: "Hex bolt M10",
+                            invalid: (nameSeen || name != "") && nameError != "",
+                            blur => nameSeen = true, submit => save()]
+            }
+            Column #[gap: 4] {
+                Label(text: "Category")
+                Row #[gap: 8] {
+                    for c in categories() {
+                        Chip(label: c, on: category == c, on_tap: { category = c })
+                    }
+                }
+            }
+            Row #[gap: 14] {
+                Column #[gap: 4, grow: 1, width: 0] {
+                    Label(text: isNew ? "Quantity" : "On hand", error: qtyError)
+                    when isNew {
+                        TextField #[..field, bind: qtyText, invalid: qtyError != "", submit => save()]
+                    }
+                    when !isNew {
+                        Box #[height: 40, bg: t.surfaceContainer, radius: 10, p: (horizontal: 12), justify: center] { Text("{current.qty}") #[typo: t.body, color: t.onSurfaceVariant] }
+                    }
+                }
+                Column #[gap: 4, grow: 1, width: 0] {
+                    Label(text: "Minimum", error: minError)
+                    TextField #[..field, bind: minText, invalid: minError != "", submit => save()]
+                }
+                Column #[gap: 4, grow: 1, width: 0] {
+                    Label(text: "Price", error: priceSeen || priceText != "" ? priceError : "")
+                    TextField #[..field, bind: priceText, placeholder: "0.00",
+                                invalid: (priceSeen || priceText != "") && priceError != "",
+                                blur => priceSeen = true, submit => save()]
+                }
+            }
+            Column #[gap: 4] {
+                Label(text: "Location")
+                TextField #[..field, bind: location, placeholder: "Shelf, for example B2", submit => save()]
+            }
+            when !isNew {
+                Text("The quantity changes through Receive, Ship and Adjust, so the log stays true.") #[typo: t.caption, color: t.onSurfaceVariant]
+            }
+            Row #[gap: 10, m: (top: 6)] {
+                Action(label: "Cancel", tone: "tonal", on_tap: { on_cancel() })
+                Action(label: isNew ? "Create product" : "Save changes", off: !ready, on_tap: { save() })
+            }
+        }
+    }
+}

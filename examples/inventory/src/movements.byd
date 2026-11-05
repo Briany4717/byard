@@ -1,0 +1,72 @@
+// The whole log, newest first, filtered by kind and by the product's name or
+// SKU.
+
+View MovementLog(products: List<Product>, movements: List<Movement>) {
+    inject Theme as t
+
+    // "" is every kind.
+    var kind: Str = ""
+    var query: Str = ""
+
+    let q = query.trim().toLower()
+    // The ids of the products the text names, so a row need not look it up.
+    let named = products.filter(p => p.name.toLower().contains(q) || p.sku.toLower().contains(q)).map(p => p.id)
+    let shown = movements.filter(m => (kind == "" || m.kind == kind) && (q == "" || named.contains(m.productId)))
+
+    Column #[p: (vertical: 24, horizontal: 28), gap: 14, grow: 1] {
+        Heading(title: "Movements") {
+            Text("{shown.len} of {movements.len}") #[typo: t.caption, color: t.onSurfaceVariant]
+        }
+        Row #[gap: 10, align: center] {
+            TextField #[
+                bind: query,
+                placeholder: "Product name or SKU",
+                width: 300,
+                height: 38,
+                bg: t.surfaceContainer,
+                color: t.onSurface,
+                radius: 10,
+                p: (horizontal: 14),
+                typo: t.body,
+                border: t.outlineVariant,
+                border_width: 1,
+            ]
+            Chip(label: "All", on: kind == "", on_tap: { kind = "" })
+            Chip(label: "Received", on: kind == "in", on_tap: { kind = "in" })
+            Chip(label: "Shipped", on: kind == "out", on_tap: { kind = "out" })
+            Chip(label: "Adjusted", on: kind == "adjust", on_tap: { kind = "adjust" })
+        }
+        Column #[bg: t.surfaceContainer, radius: 14, grow: 1] {
+            Row #[p: (vertical: 10, horizontal: 16), gap: 12] {
+                Text("Qty") #[typo: t.label, color: t.onSurfaceVariant, width: 56]
+                Text("Kind") #[typo: t.label, color: t.onSurfaceVariant, width: 90]
+                Box #[grow: 1] { Text("Product") #[typo: t.label, color: t.onSurfaceVariant] }
+                Box #[grow: 1] { Text("Note") #[typo: t.label, color: t.onSurfaceVariant] }
+                Text("When") #[typo: t.label, color: t.onSurfaceVariant, width: 150]
+            }
+            Box #[height: 1, bg: t.outlineVariant] {}
+            when shown.len == 0 {
+                Text("No movement matches") #[typo: t.body, color: t.onSurfaceVariant, m: 24]
+            }
+            ScrollView #[grow: 1, windowed: true, row_height: 40] {
+                Column {
+                    for m in shown {
+                        MovementRow(m: m, products: products)
+                    }
+                }
+            }
+        }
+    }
+}
+
+View MovementRow(m: Movement, products: List<Product>) {
+    inject Theme as t
+    let product = products.find(p => p.id == m.productId)
+    Row #[height: 40, p: (horizontal: 16), gap: 12, align: center] {
+        Text(signed(m.kind, m.qty)) #[typo: t.label, width: 56, color: m.kind == "out" ? t.secondary : m.kind == "in" ? t.tertiary : t.onSurfaceVariant]
+        Text(kindLabel(m.kind)) #[typo: t.body, color: t.onSurface, width: 90]
+        Box #[grow: 1] { Text(product.name ?? "Deleted product #{m.productId}") #[typo: t.body, color: (product.id ?? 0) == 0 ? t.onSurfaceVariant : t.onSurface, wrap: false] }
+        Box #[grow: 1] { Text(m.note) #[typo: t.caption, color: t.onSurfaceVariant, wrap: false] }
+        Text(stamp(m.at)) #[typo: t.caption, color: t.onSurfaceVariant, width: 150, wrap: false]
+    }
+}

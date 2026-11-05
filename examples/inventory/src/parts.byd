@@ -1,0 +1,98 @@
+// The small views every screen is built from: a card, a tile, a pill, a chip,
+// a button in three tones.
+
+View Card(content) {
+    inject Theme as t
+    Column #[bg: t.surfaceContainer, radius: 14, p: 16, gap: 10] {
+        content
+    }
+}
+
+// A number with its name under it, for the dashboard.
+View Tile(label: Str, value: Str, tone: Int = 0, grow: Int = 1) {
+    inject Theme as t
+    Column #[bg: t.surfaceContainer, radius: 14, p: 16, gap: 4, grow: grow] {
+        Text(value) #[typo: t.headline, color: tone == 0 ? t.onSurface : tone]
+        Text(label) #[typo: t.caption, color: t.onSurfaceVariant]
+    }
+}
+
+View Pill(text: Str, bg: Int, fg: Int) {
+    inject Theme as t
+    Box #[bg: bg, radius: 10, p: (vertical: 2, horizontal: 8)] {
+        Text(text) #[typo: t.caption, color: fg, wrap: false]
+    }
+}
+
+// The badge for a quantity: nothing when there is enough.
+View StockBadge(qty: Int, min: Int) {
+    inject Theme as t
+    when stockState(qty, min) == "out" {
+        Pill(text: "Out", bg: t.error, fg: t.onError)
+    }
+    when stockState(qty, min) == "low" {
+        Pill(text: "Low", bg: t.secondary, fg: t.onSecondary)
+    }
+}
+
+// A filter chip: lit when `on`.
+View Chip(label: Str, on: Bool, on_tap: Fn() = {}) {
+    inject Theme as t
+    Button(label) #[
+        radius: 16,
+        p: (vertical: 6, horizontal: 12),
+        height: 32,
+        typo: t.label,
+        bg: t.surfaceContainerHigh,
+        color: t.onSurfaceVariant,
+        selected: on,
+    ] => on_tap()
+}
+
+// A button. `tone` is "primary", "tonal" or "danger".
+View Action(label: Str, tone: Str = "primary", off: Bool = false, on_tap: Fn() = {}) {
+    inject Theme as t
+    Button(label) #[
+        radius: 10,
+        height: 40,
+        p: (vertical: 8, horizontal: 18),
+        typo: t.label,
+        bg: tone == "primary" ? t.primary : tone == "danger" ? t.error : t.surfaceContainerHigh,
+        color: tone == "primary" ? t.onPrimary : tone == "danger" ? t.onError : t.onSurface,
+        disabled: off,
+        opacity: off ? 0.4 : 1.0,
+    ] => on_tap()
+}
+
+// The words next to a control, and what is wrong with it.
+View Label(text: Str, error: Str = "") {
+    inject Theme as t
+    Row #[gap: 8, align: center] {
+        Text(text) #[typo: t.caption, color: t.onSurfaceVariant]
+        when error != "" {
+            Text(error) #[typo: t.caption, color: t.error]
+        }
+    }
+}
+
+// A screen's heading.
+View Heading(title: Str, content) {
+    inject Theme as t
+    Row #[align: center, gap: 12] {
+        Text(title) #[typo: t.headline, color: t.onSurface]
+        Spacer
+        content
+    }
+}
+
+// A dialog: the page under it is dimmed and takes no input. A press on the
+// dimmed part, or Escape, is `on_close`.
+View Dialog(title: Str, on_close: Fn() = {}, content) {
+    inject Theme as t
+    Overlay #[dismiss => on_close()] {
+        Column #[anchor: center, bg: t.surfaceContainerHigh, radius: 18, p: 22, gap: 14, width: 400] {
+            Text(title) #[typo: t.title, color: t.onSurface]
+            content
+        }
+    }
+}

@@ -1116,7 +1116,34 @@ fn interpolation_node_spans_cover_their_source() {
     let src = "View Main() {\n    Text(\"{temp + 1:.0}\u{b0}\")\n}\n";
     let parts = text_parts(src);
     assert_eq!(at(src, interp(&parts, 0)), "temp + 1");
-    assert!(matches!(parts[0], StrPart::Interp(_, Some(0))), "{parts:?}");
+    let decimals = |group, decimals| Some(NumFormat { group, decimals });
+    assert!(
+        matches!(&parts[0], StrPart::Interp(_, f) if *f == decimals(false, Some(0))),
+        "{parts:?}"
+    );
+
+    // Grouping (RFC-0048): the expression still ends at the colon.
+    for (spec, want) in [
+        (":,", decimals(true, None)),
+        (":,.2", decimals(true, Some(2))),
+        (":.2", decimals(false, Some(2))),
+    ] {
+        let src = format!("View Main() {{\n    Text(\"{{a + 1{spec}}}\")\n}}\n");
+        let parts = text_parts(&src);
+        assert_eq!(at(&src, interp(&parts, 0)), "a + 1", "{spec}");
+        assert!(
+            matches!(&parts[0], StrPart::Interp(_, f) if *f == want),
+            "{spec}: {parts:?}"
+        );
+    }
+    // Not specs: `.2,` is no spec, and a ternary's colon is never one.
+    for src in ["{a:.2,}", "{a ? 1 : 2}", "{a:,x}"] {
+        let src = format!("View Main() {{\n    Text(\"{src}\")\n}}\n");
+        assert!(
+            matches!(&text_parts(&src)[0], StrPart::Interp(_, None)),
+            "{src}"
+        );
+    }
 }
 
 #[test]

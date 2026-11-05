@@ -8,7 +8,7 @@
 //! `r_bp < l_bp`.
 
 use super::Parser;
-use super::ast::{Arg, AssignOp, BinOp, Expr, PostfixOp, StrPart, UnOp};
+use super::ast::{Arg, AssignOp, BinOp, Expr, NumFormat, PostfixOp, StrPart, UnOp};
 use crate::diagnostics::Span;
 use crate::lexer::Token;
 use crate::symbol::Symbol;
@@ -1009,13 +1009,13 @@ impl Parser<'_> {
                     parts.push(StrPart::Text(std::mem::take(&mut text)));
                 }
                 let (frag, mut offsets, next) = collect_interpolation(cs, i + 1, end);
-                // A trailing `:.N` is not part of the expression: the
-                // expression ends at the colon, and its end offset is the
-                // colon's.
-                let (len, decimals) = split_decimals(&frag);
+                // A trailing `:.N`, `:,` or `:,.N` is not part of the
+                // expression: the expression ends at the colon, and its end
+                // offset is the colon's.
+                let (len, spec) = split_spec(&frag);
                 offsets.truncate(len + 1);
                 let expr = self.parse_fragment_expr(&frag[..len], offsets);
-                parts.push(StrPart::Interp(Box::new(expr), decimals));
+                parts.push(StrPart::Interp(Box::new(expr), spec));
                 i = next;
                 continue;
             }
@@ -1040,14 +1040,16 @@ impl Parser<'_> {
     }
 }
 
-/// Finds a trailing `:.N` decimals spec in an interpolation fragment and
-/// returns how many bytes of it are the expression: for `temp:.0`, 4 and
-/// `Some(0)`; with no spec, the whole length and `None`.
+/// Finds a trailing format spec (`:.N`, `:,` or `:,.N`) in an interpolation
+/// fragment and returns how many bytes of it are the expression: for
+/// `temp:.0`, 4 and a spec of no grouping and no decimals; with no spec, the
+/// whole length and `None`.
 ///
 /// Only a `:` outside brackets and strings counts, and only when what follows
-/// it is `.` and digits. That cannot be the tail of an expression, because a
-/// float literal never starts with a dot, so `a ? b : c` is never split.
-fn split_decimals(frag: &str) -> (usize, Option<u8>) {
+/// it is a `,` and/or a `.` and digits. That cannot be the tail of an
+/// expression, because a float literal never starts with a dot and a comma
+/// never ends one, so `a ? b : c` is never split.
+fn split_spec(frag: &str) -> (usize, Option<NumFormat>) {
     let mut depth = 0i32;
     let mut in_str = false;
     let mut colon = None;
@@ -1064,11 +1066,32 @@ fn split_decimals(frag: &str) -> (usize, Option<u8>) {
         return (frag.len(), None);
     };
     let spec = frag[i + 1..].trim();
-    let digits = spec.strip_prefix('.').unwrap_or("");
+    let (group, rest) = match spec.strip_prefix(',') {
+        Some(rest) => (true, rest),
+        None => (false, spec),
+    };
+    if rest.is_empty() {
+        return if group {
+            (
+                i,
+                Some(NumFormat {
+                    group,
+                    decimals: None,
+                }),
+            )
+        } else {
+            (frag.len(), None)
+        };
+    }
+    let digits = rest.strip_prefix('.').unwrap_or("");
     match digits.parse::<u8>() {
-        Ok(n) if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) => {
-            (i, Some(n.min(MAX_DECIMALS)))
-        }
+        Ok(n) if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) => (
+            i,
+            Some(NumFormat {
+                group,
+                decimals: Some(n.min(MAX_DECIMALS)),
+            }),
+        ),
         _ => (frag.len(), None),
     }
 }

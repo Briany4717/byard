@@ -73,6 +73,15 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   A single line that is wider than its `width` is clipped at the edge of it, so
   the cells of a table stay in their columns.
 - **`byard check` looks inside what is not shown at the start.** A tab that is not the active one, a route the first path does not match, both arms of a `when` and the body of a `for` over an empty list were not checked, so an unknown view or attribute in them said `0 errors` until somebody opened them. They are now, in `byard check` and in the editor.
+### Added
+
+- **Numbers from text.** `"12".toInt()` and `"4.5".toFloat()` read a field's text
+  as a number, or as nothing when it is not one, so `qty.toInt() ?? 0` is the
+  whole parser; a number too big for an `Int` is nothing, not a wrapped one.
+  Numbers get `round()`, `floor()` and `ceil()` (each an `Int`), `toFloat()`,
+  `abs()`, `min(other)` and `max(other)`, and `{x:,.2}` in a string puts a comma
+  between thousands (`193,440.70`). A method a number does not have is now
+  `UnknownMethod`, with the closest name. RFC-0048.
 
 ## [0.1.0] - 2026-11-05
 

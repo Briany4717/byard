@@ -22,6 +22,16 @@ fn fmt_stable(source: &str) -> String {
     once
 }
 
+#[test]
+fn a_grouping_spec_in_an_interpolation_is_kept_as_written() {
+    // RFC-0048: a string literal is never reflowed, so `{x:,.2}` stays.
+    let out = fmt_stable("View M(){\nText(\"{ total:,.2 } and {n:,} and {a+1:.0}\")\n}");
+    assert!(
+        out.contains("\"{ total:,.2 } and {n:,} and {a+1:.0}\""),
+        "{out}"
+    );
+}
+
 // ---- spacing ------------------------------------------------------------
 
 #[test]
@@ -607,6 +617,14 @@ fn every_kind_of_difference_is_seen_by_the_meaning_check() {
         (
             "View M() { let a = \"{x:.1}\" }",
             "View M() { let a = \"{x:.2}\" }",
+        ),
+        (
+            "View M() { let a = \"{x:,.2}\" }",
+            "View M() { let a = \"{x:.2}\" }",
+        ),
+        (
+            "View M() { let a = \"{x:,}\" }",
+            "View M() { let a = \"{x}\" }",
         ),
         (
             "View M() { let a = {k: 1} }",

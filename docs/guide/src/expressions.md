@@ -100,6 +100,10 @@ Text("a literal \{brace\} and a \"quote\"")
 ```
 
 - `{x:.2}` shows a number with exactly two decimals. Up to nine are allowed.
+- `{x:,}` puts a comma between every three digits of the whole part, and
+  `{x:,.2}` does that and fixes the decimals: `193440.7` is `193,440.70` and
+  `-1234` is `-1,234`. There is no locale, so the comma is always `,` and the
+  point always `.`.
 - A string inside the braces needs no escaping: `{n == 1 ? "item" : "items"}`.
 - `\{` and `\}` are literal braces, `\"` a quote, `\n` a new line, `\t` a tab.
 
@@ -295,6 +299,8 @@ come up most.
 | `replace(a, b)` | Every `a` replaced by `b` |
 | `split(sep)` | The pieces between each `sep`, as a list |
 | `indexOf(t)` | Where `t` first appears, counted in characters, or `-1` |
+| `toInt()` | The whole number it spells, or nothing |
+| `toFloat()` | The decimal number it spells, or nothing |
 
 ```byld,fragment
 var query = "  Ada "
@@ -310,6 +316,45 @@ lowers both sides. `contains("")`, `startsWith("")` and `endsWith("")` are
 `true`. `split` keeps empty pieces (`"a,,b"` is three), and `split("")` gives one
 piece per character; `replace("", x)` changes nothing. `indexOf` counts characters,
 as `len` and `slice` do, so `s.slice(s.indexOf(t))` begins at `t`.
+
+## Numbers
+
+A `TextField` holds text. `toInt()` and `toFloat()` read it as a number, and give
+*nothing* when it is not one, so `??` is how a default is written:
+
+```byld,fragment
+var qty = " 12 "
+var price = "4.5"
+let n = qty.toInt() ?? 0
+let unit = price.toFloat() ?? 0.0
+Text("{n} x {unit:,.2} = {n.max(0).toFloat() * unit:,.2}")
+```
+
+That shows `12 x 4.50 = 54.00`. `toInt` takes white space around the number, one
+`+` or `-`, and ASCII digits: `"12"`, `" -3 "` and `"+4"` are numbers, and
+`"1_000"`, `"0x10"`, `"1.5"`, `"1,000"` and `""` are nothing. A whole number
+too big for an `Int` is nothing as well, never a wrapped one. `toFloat` also
+takes a fraction (`".5"`, `"5."`) and an exponent (`"1e3"`), and a whole number
+reads as a `Float` (`"3"` is `3.0`); `"inf"`, `"nan"` and `"1,5"` are nothing,
+since the decimal mark is a point. Nothing is not an error: it draws as empty
+text, and arithmetic with it is nothing again, so give it a default before you
+use it.
+
+| Method | On | Result |
+|--------|----|--------|
+| `round()`, `floor()`, `ceil()` | `Float` | An `Int`; nothing for `NaN` or a value too large |
+| `toFloat()` | `Int` | The `Float` |
+| `abs()` | `Int`, `Float` | The same kind |
+| `min(other)`, `max(other)` | `Int`, `Float` | The smaller or larger; `Float` if either is |
+
+`round` takes a half away from zero: `(2.5).round()` is `3` and `(-2.5).round()` is
+`-3`. `floor` goes down (`(-2.5).floor()` is `-3`) and `ceil` up. `n.max(0)` keeps a
+quantity from going below zero without a `fn`, and `n.max(0).min(10)` clamps it.
+`min` and `max` with no argument are still the ones of a list. To keep money
+exact, count it in whole cents as an `Int`; to show two decimals, use `{x:.2}`.
+
+`Int` arithmetic that goes past the largest `Int` wraps around without a
+warning today, so a sum of big numbers can come out negative.
 
 ```byld,fragment
 let moment = "2026-10-16T14:00"

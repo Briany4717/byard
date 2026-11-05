@@ -14,7 +14,7 @@ use crate::diagnostics::{CompileError, Span};
 use crate::interp::env::{Env, SignalId, Value};
 use crate::interp::events::Action;
 use crate::interp::reactive::untrack;
-use crate::parser::ast::{AssignOp, BinOp, Expr, PostfixOp, StrPart, UnOp};
+use crate::parser::ast::{AssignOp, BinOp, Expr, NumFormat, PostfixOp, StrPart, UnOp};
 use crate::symbol::Symbol;
 
 /// The value of a numeric literal, exactly as [`Interpreter::lower_expr`]
@@ -393,6 +393,104 @@ fn format_fixed(v: &Value, decimals: u8) -> String {
         Some(abs) if abs.bytes().all(|b| matches!(b, b'0' | b'.')) => abs.to_string(),
         _ => s,
     }
+}
+
+/// A number written by an interpolation's spec (`{x:.2}`, `{x:,}`, `{x:,.2}`,
+/// RFC-0048): fixed decimals when asked, and a comma between every three
+/// digits of the integer part when `group` is set. Grouping runs over the text
+/// the decimals produced, so the two cannot disagree about rounding. Only a
+/// number is grouped; anything else is written as `{x}` would write it.
+fn format_spec(v: &Value, spec: NumFormat) -> String {
+    let text = match spec.decimals {
+        Some(n) => format_fixed(v, n),
+        None => format_scalar(v),
+    };
+    if spec.group && matches!(v, Value::Int(_) | Value::Float(_)) {
+        group_thousands(&text)
+    } else {
+        text
+    }
+}
+
+/// `text` (a number as `{x}` writes it) with a `,` between every three digits
+/// of its integer part. A sign stays first and the fraction is untouched; text
+/// that does not start with digits (`NaN`, `inf`) is returned as it is.
+fn group_thousands(text: &str) -> String {
+    let (sign, unsigned) = match text.strip_prefix('-') {
+        Some(rest) => ("-", rest),
+        None => ("", text),
+    };
+    let digits = unsigned.bytes().take_while(u8::is_ascii_digit).count();
+    if digits < 4 {
+        return text.to_string();
+    }
+    let (whole, fraction) = unsigned.split_at(digits);
+    let mut out = String::with_capacity(text.len() + digits / 3);
+    out.push_str(sign);
+    for (i, c) in whole.chars().enumerate() {
+        if i > 0 && (digits - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out.push_str(fraction);
+    out
+}
+
+/// `text.toInt()` (RFC-0048 §1): the whole number the trimmed text spells, an
+/// optional sign and ASCII digits, or nothing, also when it does not fit.
+fn text_to_int(text: &str) -> Value {
+    text.trim().parse::<i64>().map_or(Value::Unit, Value::Int)
+}
+
+/// `text.toFloat()` (RFC-0048 §2): the finite decimal number the trimmed text
+/// spells, or nothing. Rust's parser also reads `inf` and `nan`, so the text
+/// is first held to the characters a decimal number is written with.
+fn text_to_float(text: &str) -> Value {
+    let text = text.trim();
+    if !text
+        .bytes()
+        .all(|b| b.is_ascii_digit() || matches!(b, b'.' | b'e' | b'E' | b'+' | b'-'))
+    {
+        return Value::Unit;
+    }
+    match text.parse::<f64>() {
+        Ok(f) if f.is_finite() => Value::Float(f),
+        _ => Value::Unit,
+    }
+}
+
+/// A rounded `Float` as an `Int`, or nothing for `NaN` and for a value outside
+/// the `Int` range (RFC-0048 §3), never a saturated number.
+fn float_to_int(f: f64) -> Value {
+    // 2^63 is exactly representable; the largest `Int` is not, so the upper
+    // bound is exclusive and the lower one inclusive.
+    const LIMIT: f64 = 9_223_372_036_854_775_808.0;
+    if (-LIMIT..LIMIT).contains(&f) {
+        #[allow(clippy::cast_possible_truncation)]
+        Value::Int(f as i64)
+    } else {
+        Value::Unit
+    }
+}
+
+/// `a.min(b)` / `a.max(b)` on two numbers (RFC-0048 §3): `Int` when both are,
+/// `Float` when either is. A `NaN` side gives the other; a non-number argument
+/// gives the receiver.
+fn number_extremum(a: Value, b: Value, is_max: bool) -> Value {
+    #[allow(clippy::cast_precision_loss)]
+    match (a, b) {
+        (Value::Int(a), Value::Int(b)) => Value::Int(if is_max { a.max(b) } else { a.min(b) }),
+        (Value::Int(a), Value::Float(b)) => number_extremum_f(a as f64, b, is_max),
+        (Value::Float(a), Value::Int(b)) => number_extremum_f(a, b as f64, is_max),
+        (Value::Float(a), Value::Float(b)) => number_extremum_f(a, b, is_max),
+        (a, _) => a,
+    }
+}
+
+fn number_extremum_f(a: f64, b: f64, is_max: bool) -> Value {
+    // `f64::max`/`min` already answer the other side for a `NaN`.
+    Value::Float(if is_max { a.max(b) } else { a.min(b) })
 }
 
 impl Interpreter {
@@ -940,15 +1038,13 @@ impl Interpreter {
     fn lower_strlit(&mut self, parts: &[StrPart], payload_name: Option<&Symbol>) -> Lowered {
         enum Part {
             Text(String),
-            Interp(Lowered, Option<u8>),
+            Interp(Lowered, Option<NumFormat>),
         }
         let mut lowered: Vec<Part> = parts
             .iter()
             .map(|p| match p {
                 StrPart::Text(t) => Part::Text(t.clone()),
-                StrPart::Interp(e, decimals) => {
-                    Part::Interp(self.lower_expr(e, payload_name), *decimals)
-                }
+                StrPart::Interp(e, spec) => Part::Interp(self.lower_expr(e, payload_name), *spec),
             })
             .collect();
         Box::new(move |ctx| {
@@ -957,7 +1053,7 @@ impl Interpreter {
                 match part {
                     Part::Text(t) => s.push_str(t),
                     Part::Interp(c, None) => s.push_str(&format_scalar(&c(ctx))),
-                    Part::Interp(c, Some(n)) => s.push_str(&format_fixed(&c(ctx), *n)),
+                    Part::Interp(c, Some(spec)) => s.push_str(&format_spec(&c(ctx), *spec)),
                 }
             }
             Value::Str(s)
@@ -1389,6 +1485,43 @@ impl Interpreter {
                 }
                 other => other,
             })),
+            // Text read as a number, or nothing (RFC-0048).
+            "toInt" => Some(Box::new(move |ctx| match base_c(ctx) {
+                Value::Str(s) => text_to_int(&s),
+                _ => Value::Unit,
+            })),
+            // On text it reads a decimal; on an `Int` it widens.
+            "toFloat" => Some(Box::new(move |ctx| match base_c(ctx) {
+                Value::Str(s) => text_to_float(&s),
+                #[allow(clippy::cast_precision_loss)]
+                Value::Int(n) => Value::Float(n as f64),
+                _ => Value::Unit,
+            })),
+            "round" | "floor" | "ceil" => {
+                let which = name.as_str().to_string();
+                Some(Box::new(move |ctx| match base_c(ctx) {
+                    Value::Float(f) => float_to_int(match which.as_str() {
+                        "round" => f.round(),
+                        "floor" => f.floor(),
+                        _ => f.ceil(),
+                    }),
+                    other => other,
+                }))
+            }
+            "abs" => Some(Box::new(move |ctx| match base_c(ctx) {
+                Value::Int(n) => Value::Int(n.wrapping_abs()),
+                Value::Float(f) => Value::Float(f.abs()),
+                _ => Value::Unit,
+            })),
+            // `a.min(b)` on two numbers; `xs.min()` on a list.
+            "min" | "max" if !args.is_empty() => {
+                let is_max = name.as_str() == "max";
+                let mut other = self.lower_expr(&args.first()?.value, payload_name);
+                Some(Box::new(move |ctx| {
+                    let other = other(ctx);
+                    number_extremum(base_c(ctx), other, is_max)
+                }))
+            }
             "min" | "max" => {
                 let is_max = name.as_str() == "max";
                 Some(Box::new(move |ctx| match base_c(ctx) {

@@ -33,7 +33,7 @@ const LIST_METHODS: [&str; 15] = [
 /// The methods a `Str` has at runtime (`len` is a field). Any other call on a
 /// `Str` silently evaluates to nothing, which is exactly what this diagnostic
 /// exists to stop.
-const STR_METHODS: [&str; 12] = [
+const STR_METHODS: [&str; 14] = [
     "slice",
     "urlEncoded",
     "formatDate",
@@ -46,7 +46,16 @@ const STR_METHODS: [&str; 12] = [
     "replace",
     "split",
     "indexOf",
+    "toInt",
+    "toFloat",
 ];
+
+/// The methods an `Int` has (RFC-0048); `alpha` is a colour's, which is an
+/// `Int` too.
+const INT_METHODS: [&str; 5] = ["toFloat", "abs", "min", "max", "alpha"];
+
+/// The methods a `Float` has (RFC-0048).
+const FLOAT_METHODS: [&str; 6] = ["round", "floor", "ceil", "abs", "min", "max"];
 
 /// Names the engine puts in scope itself: the animation namespace
 /// (`anim.spring`), a collapsing header's `scroll_fraction`, and the `route`
@@ -883,6 +892,8 @@ impl Checker<'_> {
         let known: Option<&[&str]> = match recv {
             Ty::List(_) => Some(&LIST_METHODS),
             Ty::Str => Some(&STR_METHODS),
+            Ty::Int => Some(&INT_METHODS),
+            Ty::Float => Some(&FLOAT_METHODS),
             // Anything else (a controller handle, a record, an `anim.*` curve,
             // an unresolved type) is not modelled, so nothing is claimed.
             _ => None,
@@ -949,8 +960,26 @@ impl Checker<'_> {
             (
                 Ty::List(_),
                 "push" | "removeAt" | "filter" | "slice" | "sort" | "sortBy" | "reverse",
-            ) => recv.clone(),
-            (Ty::List(_) | Ty::Str, "indexOf") | (Ty::Int, "alpha") => Ty::Int,
+            )
+            | (Ty::Int | Ty::Float, "abs") => recv.clone(),
+            (Ty::List(_) | Ty::Str, "indexOf")
+            | (Ty::Int, "alpha")
+            | (Ty::Str, "toInt")
+            | (Ty::Float, "round" | "floor" | "ceil") => Ty::Int,
+            // Text read as a number may be nothing, which `??` defaults; the
+            // checker has no optional type, so (as for `find`) it is the type
+            // it is when it is a value (RFC-0048 §5).
+            (Ty::Str | Ty::Int, "toFloat") => Ty::Float,
+            (Ty::Int | Ty::Float, "min" | "max") => {
+                let other = args
+                    .first()
+                    .map_or(Ty::Unknown, |a| self.infer_expr(&a.value));
+                if matches!(other, Ty::Int | Ty::Float) {
+                    join_numeric(recv, &other)
+                } else {
+                    recv.clone()
+                }
+            }
             (
                 Ty::Str,
                 "slice" | "urlEncoded" | "formatDate" | "trim" | "toLower" | "toUpper" | "replace",

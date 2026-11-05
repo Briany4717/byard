@@ -46,6 +46,7 @@ mod native_view_async;
 mod native_view_element;
 mod native_view_keyboard;
 mod navigation;
+mod numbers_from_text;
 mod on_change;
 mod or_else;
 mod overlay_dismiss;

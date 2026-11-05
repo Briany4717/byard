@@ -1,0 +1,53 @@
+// RFC-0048, numbers from text.
+//
+// Run it (from the repo root):
+//   cargo run -p byard-cli -- shot crates/byard-cli/examples/number_input -o number_input.png
+// or, with no GPU, read what it says:
+//   cargo run -p byard-cli -- shot crates/byard-cli/examples/number_input --a11y tree.txt
+// `tests/it/number_input_example.rs` runs the second and compares the lines
+// below with what each one is written to show.
+//
+// What to look for, top to bottom:
+//   1. The quantity field holds "1234567", a whole number. Its text is read with
+//      `toInt()` and shown doubled with a comma every three digits: 2,469,134.
+//      The field has its normal border.
+//   2. The price field holds "12,50": a comma is not the decimal mark, so
+//      `toFloat()` is nothing, `?? 0.0` gives the total a zero, and the field
+//      draws its `on invalid` style, a red border (`?? -1.0` is below zero).
+//   3. Tap the price field and replace the text with 12.5 (select all, type):
+//      the border turns back and the total reads 15,432,087.50. `--type` does it
+//      headless: `byard shot ... --tap 200,227 --key ctrl+a --type 12.5`.
+//   4. The last line reads `" -3 ".toInt()` (-3), `"1_000".toInt()` (nothing, so
+//      0 here), `(-2.5).round()` (-3: a half goes away from zero) and
+//      `(-2.5).abs()` (2.5).
+View Main() {
+    var qty = "1234567"
+    var price = "12,50"
+    let n = qty.toInt() ?? 0
+    let unit = price.toFloat() ?? 0.0
+    // A field is invalid when it holds text that is not a number, or a
+    // negative one: `?? -1` stands for nothing, and nothing is below zero.
+    let badQty = qty != "" && (qty.toInt() ?? -1) < 0
+    let badPrice = price != "" && (price.toFloat() ?? -1.0) < 0.0
+
+    let field = style {
+        bg: 0x1E1E2A, radius: 10, p: 12, border: 0x49454F, border_width: 1, color: 0xE6E1E5
+        on focused { border: 0x6750A4, border_width: 2 }
+        on invalid { border: 0xB3261E, color: 0xF2B8B5, border_width: 2 }
+    }
+
+    Column #[bg: 0x14141C, p: 24, gap: 12, width: 400, grow: 1] {
+        Text("RFC-0048") #[color: 0xE6E1E5, size: 20, width: 352]
+
+        Text("Quantity") #[color: 0x9AA0AC, size: 13, width: 352]
+        TextField #[..field, bind: qty, invalid: badQty, width: 352, height: 44]
+        Text("doubled: {n * 2:,}") #[color: 0xFFD479, size: 18, width: 352]
+
+        Text("Unit price") #[color: 0x9AA0AC, size: 13, width: 352]
+        TextField #[..field, bind: price, invalid: badPrice, width: 352, height: 44]
+        Text("total: {n.toFloat() * unit:,.2}") #[color: 0xFFD479, size: 18, width: 352]
+
+        Text("{" -3 ".toInt() ?? 0} {"1_000".toInt() ?? 0} {(-2.5).round()} {(-2.5).abs():.1}")
+            #[color: 0xE6E1E5, size: 16, width: 352]
+    }
+}

@@ -704,8 +704,18 @@ pub enum StrPart {
     /// A literal text run.
     Text(String),
     /// An interpolated `{ expr }`, or `{ expr:.N }` with a fixed number of
-    /// decimals (RFC-0027): `{21.46:.1}` reads `21.5`.
-    Interp(Box<Expr>, Option<u8>),
+    /// decimals (RFC-0027): `{21.46:.1}` reads `21.5`; `{n:,}` and `{n:,.2}`
+    /// group the integer part by thousands (RFC-0048).
+    Interp(Box<Expr>, Option<NumFormat>),
+}
+
+/// The spec after the colon of an interpolation: `:.2`, `:,` or `:,.2`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NumFormat {
+    /// A comma between every three digits of the integer part (`,`).
+    pub group: bool,
+    /// A fixed number of decimals (`.N`), or the number as `{x}` writes it.
+    pub decimals: Option<u8>,
 }
 
 /// An expression. Every variant carries its own [`Span`].

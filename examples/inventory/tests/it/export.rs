@@ -12,10 +12,12 @@ fn export_writes_the_catalogue_as_csv_and_says_where() {
     let csv = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
     let lines: Vec<&str> = csv.lines().collect();
     assert_eq!(lines.len(), 61, "a header and sixty products");
-    assert_eq!(lines[0], "id,sku,name,category,qty,min,price,location,updated");
     assert_eq!(
-        lines[1],
-        "1,HW-001,Hex bolt M6,Hardware,0,10,7.90,,2026-10-01T09:00",
+        lines[0],
+        "id,sku,name,category,qty,min,price,location,updated"
+    );
+    assert_eq!(
+        lines[1], "1,HW-001,Hex bolt M6,Hardware,0,10,7.90,,2026-10-01T09:00",
         "a product with no location leaves it empty"
     );
     assert_eq!(
@@ -68,7 +70,11 @@ fn the_default_minimum_starts_new_products() {
     assert!(sb.saved().contains("\"minDefault\": 12"), "{}", sb.saved());
     app.tap("Products");
     app.tap("New product");
-    assert!(app.shows("12"), "the form starts with it: {:?}", app.texts());
+    assert!(
+        app.shows("12"),
+        "the form starts with it: {:?}",
+        app.texts()
+    );
     drop(app);
     // And it is still 12 on the next run.
     let mut again = App::start(&sb);

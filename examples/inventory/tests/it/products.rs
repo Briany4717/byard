@@ -30,7 +30,11 @@ fn search_finds_by_name_and_by_sku() {
     // By SKU, in any case: the nine Packaging products PK-051 to PK-059 match.
     app.type_text("pk-05");
     assert!(app.shows("9 of 60"), "{:?}", app.texts());
-    assert!(app.shows("Packing tape") || app.shows("Pallet strap"), "{:?}", app.texts());
+    assert!(
+        app.shows("Packing tape") || app.shows("Pallet strap"),
+        "{:?}",
+        app.texts()
+    );
 
     backspace(&mut app, 5);
     app.type_text("nothing like this");
@@ -96,7 +100,11 @@ fn the_headings_sort() {
 fn a_row_opens_the_product_and_back_returns_to_the_list() {
     let (_sb, mut app) = products();
     app.tap("9V battery");
-    assert!(app.shows("EL-013") && app.shows("Electronics"), "{:?}", app.texts());
+    assert!(
+        app.shows("EL-013") && app.shows("Electronics"),
+        "{:?}",
+        app.texts()
+    );
     app.tap("< Products");
     assert!(app.shows("60 of 60"), "{:?}", app.texts());
 }

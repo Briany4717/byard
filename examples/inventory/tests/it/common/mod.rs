@@ -84,9 +84,7 @@ impl App {
         let relay = Relay::new().expect("relay");
         let mut registry = ControllerRegistry::new();
         registry.insert(Arc::new(byard_core::cap::Store::at(sandbox.store())));
-        registry.insert(Arc::new(
-            Stockroom::at(&sandbox.dir).with_fixed_now(NOW),
-        ));
+        registry.insert(Arc::new(Stockroom::at(&sandbox.dir).with_fixed_now(NOW)));
         let dispatcher = Dispatcher::new(registry, relay.io_handle(), relay.io_result_sender());
 
         let mut interp = Interpreter::new();
@@ -180,7 +178,10 @@ impl App {
             mods: byard_core::KeyModifiers::default(),
         };
         let t = u64::from(self.now);
-        self.step(&[at(EventKind::PointerDown, t), at(EventKind::PointerUp, t + 8)]);
+        self.step(&[
+            at(EventKind::PointerDown, t),
+            at(EventKind::PointerUp, t + 8),
+        ]);
         self.answer_all();
         self.settle();
     }
@@ -294,7 +295,10 @@ impl App {
         };
         let t = u64::from(self.now);
         let start = std::time::Instant::now();
-        self.step(&[at(EventKind::PointerDown, t), at(EventKind::PointerUp, t + 8)]);
+        self.step(&[
+            at(EventKind::PointerDown, t),
+            at(EventKind::PointerUp, t + 8),
+        ]);
         let first = start.elapsed();
         self.answer_all();
         first
@@ -335,7 +339,14 @@ impl App {
 /// A store file holding `n` generated products and no movements, as a first
 /// run would have left it.
 pub fn write_store_with(sandbox: &Sandbox, n: usize) {
-    let cats = ["Hardware", "Electronics", "Office", "Tools", "Safety", "Packaging"];
+    let cats = [
+        "Hardware",
+        "Electronics",
+        "Office",
+        "Tools",
+        "Safety",
+        "Packaging",
+    ];
     let products: Vec<String> = (1..=n)
         .map(|i| {
             format!(

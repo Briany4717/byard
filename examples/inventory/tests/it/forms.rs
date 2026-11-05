@@ -32,7 +32,11 @@ fn each_field_says_what_is_wrong() {
     // A SKU that exists, in any case.
     app.tap("HW-061");
     app.type_text("hw-001");
-    assert!(app.shows("Already used by another product"), "{:?}", app.texts());
+    assert!(
+        app.shows("Already used by another product"),
+        "{:?}",
+        app.texts()
+    );
 
     // Leaving an empty name says it is required.
     app.tap("Hex bolt M10");
@@ -44,7 +48,11 @@ fn each_field_says_what_is_wrong() {
     assert!(app.shows("A whole number, 0 or more"), "{:?}", app.texts());
     app.replace_text("abc");
     assert!(app.shows("A whole number, 0 or more"));
-    assert!(app.shows("abc"), "the whole word was typed: {:?}", app.texts());
+    assert!(
+        app.shows("abc"),
+        "the whole word was typed: {:?}",
+        app.texts()
+    );
     app.replace_text("12");
     assert!(!app.shows("A whole number, 0 or more"), "{:?}", app.texts());
 
@@ -79,7 +87,12 @@ fn tab_goes_through_the_form_in_the_order_it_is_written() {
     app.key("Tab");
     app.type_text("Shelf Q");
     let order = app.order_of(&["ZZ-1", "Washer", "12", "3", "4.5", "Shelf Q"]);
-    assert_eq!(order, ["ZZ-1", "Washer", "12", "3", "4.5", "Shelf Q"], "{:?}", app.texts());
+    assert_eq!(
+        order,
+        ["ZZ-1", "Washer", "12", "3", "4.5", "Shelf Q"],
+        "{:?}",
+        app.texts()
+    );
 }
 
 /// Fills a valid form, with `location` last, and leaves the caret in it.
@@ -106,10 +119,18 @@ fn enter_in_the_last_field_saves_and_back_does_not_return_to_the_form() {
     app.key("Enter");
     // The product's page, not the form.
     assert!(!app.shows("Create product"), "{:?}", app.texts());
-    assert!(app.shows("Brass hinge") && app.shows("NEW-001") && app.shows("$2.50"), "{:?}", app.texts());
+    assert!(
+        app.shows("Brass hinge") && app.shows("NEW-001") && app.shows("$2.50"),
+        "{:?}",
+        app.texts()
+    );
     assert!(app.shows("D4") && app.shows("5 Nov 2026, 10:30"));
     // Opening stock was logged as a movement.
-    assert!(app.shows("+7") && app.shows("Opening stock"), "{:?}", app.texts());
+    assert!(
+        app.shows("+7") && app.shows("Opening stock"),
+        "{:?}",
+        app.texts()
+    );
     assert!(sb.saved().contains("NEW-001"), "saved to the store");
     // Back goes to the list, one step, and the form is not in the way.
     app.tap("< Products");
@@ -129,7 +150,11 @@ fn a_second_run_loads_what_the_first_saved() {
     assert!(again.shows("61 of 61"), "{:?}", again.texts());
     again.tap("Search by name or SKU");
     again.type_text("copper");
-    assert!(again.shows("1 of 61") && again.shows("Copper pipe"), "{:?}", again.texts());
+    assert!(
+        again.shows("1 of 61") && again.shows("Copper pipe"),
+        "{:?}",
+        again.texts()
+    );
     // The dashboard counts it too.
     again.tap("Dashboard");
     assert!(again.shows("61"), "{:?}", again.texts());

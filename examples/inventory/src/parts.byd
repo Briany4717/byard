@@ -67,9 +67,9 @@ View Label(text: Str, error: Str = "") {
     // The message is always there, empty when nothing is wrong. A `when` that
     // came and went here would move the field below it in the tree, and a field
     // that is moved loses the keyboard focus after the character that did it.
-    Row #[align: center] {
+    Row #[align: center, gap: 8] {
         Text(text) #[typo: t.caption, color: t.onSurfaceVariant]
-        Text(error) #[typo: t.caption, color: t.error, m: (left: error == "" ? 0 : 8)]
+        Text(error) #[typo: t.caption, color: t.error]
     }
 }
 

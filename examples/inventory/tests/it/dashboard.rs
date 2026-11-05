@@ -12,7 +12,11 @@ fn the_first_frame_shows_the_numbers_of_the_sample_data() {
     }
     assert!(app.shows("Stock value by category"));
     assert!(app.shows("Packaging"));
-    assert!(app.shows("$70988.80  37%"), "the biggest bar: {:?}", app.texts());
+    assert!(
+        app.shows("$70988.80  37%"),
+        "the biggest bar: {:?}",
+        app.texts()
+    );
     // The three movements of the sample, newest first.
     assert_eq!(
         app.order_of(&["Hex bolt M8", "Hex bolt M6", "Flat washer M6"]),

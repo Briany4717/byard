@@ -32,7 +32,11 @@ fn receiving_adds_to_the_quantity_and_the_log() {
     assert!(!app.shows("Receive 9V battery"), "the dialog closes");
     assert_eq!(on_hand(&app), "35");
     // The movement is on the product's page, stamped by the clock.
-    assert!(app.shows("+6") && app.shows("Received"), "{:?}", app.texts());
+    assert!(
+        app.shows("+6") && app.shows("Received"),
+        "{:?}",
+        app.texts()
+    );
     assert!(app.shows("Delivery 77"));
     assert!(app.shows("5 Nov 2026, 10:30"), "{:?}", app.texts());
 }
@@ -46,7 +50,11 @@ fn shipping_takes_from_the_quantity_and_shows_in_the_log() {
     // Everything on hand is allowed; that makes it out of stock.
     app.tap("Confirm");
     assert_eq!(on_hand(&app), "0");
-    assert!(app.shows("-29") && app.shows("Shipped"), "{:?}", app.texts());
+    assert!(
+        app.shows("-29") && app.shows("Shipped"),
+        "{:?}",
+        app.texts()
+    );
     assert!(app.shows("Out"), "the badge: {:?}", app.texts());
     assert!(sb.saved().contains("\"kind\": \"out\""), "saved");
 }
@@ -60,7 +68,11 @@ fn shipping_more_than_is_on_hand_is_refused() {
     assert!(app.shows("Only 29 on hand"), "{:?}", app.texts());
     // Confirm does nothing while the quantity is wrong.
     app.tap("Confirm");
-    assert!(app.shows("Ship 9V battery"), "the dialog stays: {:?}", app.texts());
+    assert!(
+        app.shows("Ship 9V battery"),
+        "the dialog stays: {:?}",
+        app.texts()
+    );
     assert_eq!(on_hand(&app), "29");
     assert!(!app.shows("Shipped"));
     // A smaller number is fine.
@@ -77,12 +89,20 @@ fn a_quantity_must_be_a_whole_number() {
     app.tap("Receive");
     app.tap("0");
     app.type_text("abc");
-    assert!(app.shows("Use a whole number, 0 or more"), "{:?}", app.texts());
+    assert!(
+        app.shows("Use a whole number, 0 or more"),
+        "{:?}",
+        app.texts()
+    );
     app.key("Backspace");
     app.key("Backspace");
     app.key("Backspace");
     app.type_text("-1");
-    assert!(app.shows("Use a whole number, 0 or more"), "{:?}", app.texts());
+    assert!(
+        app.shows("Use a whole number, 0 or more"),
+        "{:?}",
+        app.texts()
+    );
 }
 
 #[test]
@@ -90,12 +110,20 @@ fn adjusting_sets_the_count_and_records_the_difference() {
     let (_sb, mut app) = battery();
     app.tap("Adjust");
     // The new count starts as what is on hand.
-    assert!(app.shows("That is what is on hand already"), "{:?}", app.texts());
+    assert!(
+        app.shows("That is what is on hand already"),
+        "{:?}",
+        app.texts()
+    );
     app.tap("29");
     app.replace_text("20");
     app.tap("Confirm");
     assert_eq!(on_hand(&app), "20");
-    assert!(app.shows("-9") && app.shows("Adjusted"), "{:?}", app.texts());
+    assert!(
+        app.shows("-9") && app.shows("Adjusted"),
+        "{:?}",
+        app.texts()
+    );
 }
 
 #[test]
@@ -142,7 +170,11 @@ fn delete_asks_first_then_removes_and_keeps_the_movements_readable() {
     // Now delete: the page is left for the list, and the product is gone.
     app.tap("Delete");
     app.tap("Delete");
-    assert!(app.shows("59 of 59") || app.shows("0 of 59"), "{:?}", app.texts());
+    assert!(
+        app.shows("59 of 59") || app.shows("0 of 59"),
+        "{:?}",
+        app.texts()
+    );
     assert!(!sb.saved().contains("HW-002"), "removed from the store");
     // The log still reads.
     app.tap("Movements");

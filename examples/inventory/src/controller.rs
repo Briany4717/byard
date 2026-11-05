@@ -73,6 +73,8 @@ impl Stockroom {
 
     /// Writes `rows` as CSV into the data directory. Answers with the file's
     /// `path` and how many `rows` it holds.
+    // The controller macro converts only owned arguments, so this takes the Vec.
+    #[allow(clippy::needless_pass_by_value)]
     fn export_csv(&self, rows: Vec<Row>) -> Result<HostValue, HostValue> {
         let fail = |what: &str, e: &std::io::Error| {
             HostValue::Record(vec![
@@ -167,8 +169,8 @@ mod tests {
     #[test]
     fn days_become_dates() {
         assert_eq!(civil_from_days(0), (1970, 1, 1));
-        assert_eq!(civil_from_days(20_427), (2025, 12, 31));
-        assert_eq!(civil_from_days(19_782), (2024, 3, 6));
+        assert_eq!(civil_from_days(20_453), (2025, 12, 31));
+        assert_eq!(civil_from_days(19_788), (2024, 3, 6));
     }
 
     #[test]

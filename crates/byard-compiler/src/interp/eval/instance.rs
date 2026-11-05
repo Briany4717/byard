@@ -188,12 +188,19 @@ impl Interpreter {
 
     /// Registers a caller-supplied callback body in the shared `fn_table`,
     /// returning its [`AstId`]. The body is the caller's action block; it is
-    /// lowered later, at the callee's invocation site, against the shared flat
-    /// env, which still holds the caller's `var` bindings below the callee
-    /// frame, so writes route to the caller's signals (RFC-0019 §2/§3).
-    fn register_callback(&mut self, params: &[Symbol], body: &Expr) -> super::env::AstId {
+    /// lowered later, at the callee's invocation site, but among the `captured`
+    /// names, those visible where it was written, so `count++` is the
+    /// caller's `count` whatever the callee calls its own names (RFC-0019
+    /// §2/§3).
+    fn register_callback(
+        &mut self,
+        params: &[Symbol],
+        body: &Expr,
+        captured: super::env::Captured,
+    ) -> super::env::AstId {
         let id = super::env::AstId(u32::try_from(self.fn_table.len()).unwrap_or(u32::MAX));
-        self.fn_table.push((params.to_vec(), body.clone(), true));
+        self.fn_table
+            .push((params.to_vec(), body.clone(), true, Some(captured)));
         id
     }
 
@@ -205,7 +212,11 @@ impl Interpreter {
         let params: Vec<Symbol> = (0..arity)
             .map(|i| Symbol::intern(&format!("__cb_arg{i}")))
             .collect();
-        self.register_callback(&params, &Expr::Block(Vec::new(), span))
+        self.register_callback(
+            &params,
+            &Expr::Block(Vec::new(), span),
+            super::env::Captured::from([]),
+        )
     }
 
     /// The caller-supplied argument expression for a named parameter, a `name:`
@@ -229,7 +240,12 @@ impl Interpreter {
     /// callback already in scope). Emits the §4 diagnostics, arity mismatch
     /// between the `Fn(...)` type and the block's `|params|`, a non-callback
     /// argument, or a missing required callback.
-    fn bind_callback_param(&mut self, param: &Param, call: &ElementNode) {
+    fn bind_callback_param(
+        &mut self,
+        param: &Param,
+        call: &ElementNode,
+        call_site: &mut CallerFrame,
+    ) {
         let arg_ty_count = match &param.ty {
             Some(Type::Function { params, .. }) => params.len(),
             _ => 0,
@@ -247,7 +263,8 @@ impl Interpreter {
                             found: params.len(),
                         });
                     }
-                    let id = self.register_callback(params, body);
+                    let captured = call_site.captured(&self.env);
+                    let id = self.register_callback(params, body, captured);
                     self.env.push(param.name.clone(), Value::Fn(id));
                 }
                 // Forwarding: `on_tap: outer_on_tap` re-binds a callback already
@@ -257,8 +274,38 @@ impl Interpreter {
                 // type error, a wrapper checked in isolation has its own
                 // callback params unbound, and that must not false-positive.
                 Expr::Ident(other, span) => {
-                    if let Some(&Value::Fn(id)) = self.env.lookup(other) {
-                        self.env.push(param.name.clone(), Value::Fn(id));
+                    // The name is looked up where the call is written, not
+                    // among the callee's parameters pushed so far.
+                    let captured = call_site.captured(&self.env);
+                    let found = captured
+                        .iter()
+                        .rev()
+                        .find(|(k, _)| k == other)
+                        .map(|(_, v)| v.clone());
+                    if let Some(Value::Fn(id)) = found {
+                        if self.fn_table.get(id.0 as usize).is_some_and(|e| e.2) {
+                            self.env.push(param.name.clone(), Value::Fn(id));
+                        } else {
+                            // A `let` action of the caller: a callback that
+                            // calls it, among the caller's names.
+                            let params: Vec<Symbol> = (0..arg_ty_count)
+                                .map(|i| Symbol::intern(&format!("__cb_arg{i}")))
+                                .collect();
+                            let args = params
+                                .iter()
+                                .map(|p| crate::parser::ast::Arg {
+                                    name: None,
+                                    value: Expr::Ident(p.clone(), *span),
+                                })
+                                .collect();
+                            let body = Expr::Call {
+                                callee: Box::new(Expr::Ident(other.clone(), *span)),
+                                args,
+                                span: *span,
+                            };
+                            let id = self.register_callback(&params, &body, captured);
+                            self.env.push(param.name.clone(), Value::Fn(id));
+                        }
                     } else {
                         let id = self.noop_callback(arg_ty_count, *span);
                         self.env.push(param.name.clone(), Value::Fn(id));
@@ -271,8 +318,10 @@ impl Interpreter {
                 }),
             }
         } else if let Some(Expr::Lambda { params, body, .. }) = param_default(param) {
-            // The default is an action block (`= {}` / `= {|_|}`); register it.
-            let id = self.register_callback(params, body);
+            // The default is an action block (`= {}` / `= {|_|}`) written in
+            // the callee: it sees the callee's frame so far.
+            let captured = self.env.capture(self.env.len());
+            let id = self.register_callback(params, body, captured);
             self.env.push(param.name.clone(), Value::Fn(id));
         } else {
             // A required callback with no default and no argument.
@@ -373,12 +422,13 @@ impl Interpreter {
         //    default evaluated in the callee scope, then the callee's
         //    own declarations.
         let snapshot = self.env.len();
+        let mut call_site = CallerFrame::new(snapshot);
         for param in &callee.params {
             // A callback prop (RFC-0019) binds the caller's action block as a
             // `Value::Fn`, resolved at invocation in `lower_call`, rather than a
             // projected value memo.
             if is_callback_param(param) {
-                self.bind_callback_param(param, el);
+                self.bind_callback_param(param, el, &mut call_site);
                 continue;
             }
             if let Some((_, scope)) = bindings.bindings.iter().find(|(n, _)| n == &param.name) {
@@ -407,5 +457,28 @@ impl Interpreter {
         // 4) Close the instance scope (RFC-0007 §2 step 6).
         self.env.truncate(snapshot);
         self.instance_depth -= 1;
+    }
+}
+
+/// The names visible where a user view is called: the frame a callback written
+/// in the call captures. Taken once, on the first callback that needs it, so a
+/// call with no callback copies nothing.
+struct CallerFrame {
+    len: usize,
+    captured: Option<super::env::Captured>,
+}
+
+impl CallerFrame {
+    fn new(len: usize) -> Self {
+        Self {
+            len,
+            captured: None,
+        }
+    }
+
+    fn captured(&mut self, env: &super::env::Env<'_>) -> super::env::Captured {
+        self.captured
+            .get_or_insert_with(|| env.capture(self.len))
+            .clone()
     }
 }

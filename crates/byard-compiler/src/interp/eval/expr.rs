@@ -1002,7 +1002,8 @@ impl Interpreter {
             }
             if let Some(Value::Fn(id)) = self.env.lookup(name).cloned() {
                 if (id.0 as usize) < self.fn_table.len() {
-                    let (params, body, is_callback) = self.fn_table[id.0 as usize].clone();
+                    let (params, body, is_callback, captured) =
+                        self.fn_table[id.0 as usize].clone();
                     // A callback invoked with the wrong arity is a hard error
                     // (RFC-0019 §4); a plain `fn` keeps the historical lenient
                     // zip (extra args ignored, missing bound to nothing).
@@ -1040,11 +1041,33 @@ impl Interpreter {
                         self.env.push(param.clone(), Value::Memo(scope));
                         self.inlined_params.push((param.clone(), scope));
                     }
-                    // Lower the body with arg bindings in scope.
-                    let body_lowered = self.lower_expr(&body, payload_name);
-                    // Restore env.
+                    // A callback's body is lowered where it was written, among
+                    // the names visible there: its own parameters, the
+                    // caller's `var`s and `let`s, and nothing the view that
+                    // runs it declares (an argument above was lowered here,
+                    // before the switch). The names of the lambdas this call
+                    // sits in are the running view's too.
+                    let Some(captured) = captured else {
+                        // Lower the body with arg bindings in scope.
+                        let body_lowered = self.lower_expr(&body, payload_name);
+                        // Restore env.
+                        self.env.truncate(snapshot);
+                        self.inlined_params.truncate(inlined);
+                        return body_lowered;
+                    };
+                    let arg_frames: Vec<(Symbol, Value)> = self.env.snapshot_from(snapshot);
                     self.env.truncate(snapshot);
-                    self.inlined_params.truncate(inlined);
+                    let frame = self.env.enter_closure(captured);
+                    for (param, value) in arg_frames {
+                        self.env.push(param, value);
+                    }
+                    let outer_params = std::mem::take(&mut self.lambda_params);
+                    let own_params = self.inlined_params.split_off(inlined);
+                    let outer_inlined = std::mem::replace(&mut self.inlined_params, own_params);
+                    let body_lowered = self.lower_expr(&body, None);
+                    self.inlined_params = outer_inlined;
+                    self.lambda_params = outer_params;
+                    self.env.leave_closure(frame);
                     return body_lowered;
                 }
             }
@@ -1136,7 +1159,7 @@ impl Interpreter {
             });
             return Box::new(|_| Value::Unit);
         }
-        let (params, body, _) = self.fn_table[id.0 as usize].clone();
+        let (params, body, _, _) = self.fn_table[id.0 as usize].clone();
         if !params.is_empty() && self.per_call(payload_name) {
             // Called inside a lambda or an event handler: the arguments depend
             // on the item, so they are evaluated at each call, not memoised.

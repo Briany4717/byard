@@ -377,6 +377,10 @@ pub enum RenderNode {
 /// A lowered reactive computation (see the module docs).
 type Lowered = Box<dyn FnMut(&mut ReactiveCtx) -> Value>;
 
+/// One entry of the function table: parameter names, body, whether it is a
+/// callback prop, and, for a callback, the names visible where it was written.
+type FnEntry = (Vec<Symbol>, Expr, bool, Option<env::Captured>);
+
 /// The per-instance parameter bindings produced by binding a user-view call's
 /// arguments to the callee's declared parameters (RFC-0007 §3). Each entry
 /// is a reactive memo projecting the argument expression over the *parent*
@@ -473,12 +477,14 @@ pub struct Interpreter {
     theme_mix_dark: Option<bool>,
     /// Parameterized `fn` definitions (`fn f(params) => body`) *and*
     /// callback-prop bindings (RFC-0019): stored as `(param names, body expr,
-    /// is_callback)` and indexed by `AstId`. Both share the invocation path in
-    /// [`Self::lower_call`], a callback is a caller-supplied action block
-    /// inlined at the callee's invocation site; the `is_callback` flag turns on
+    /// is_callback, captured names)` and indexed by `AstId`. Both share the
+    /// invocation path in [`Self::lower_call`], a callback is a caller-supplied
+    /// action block inlined at the callee's invocation site, lowered among the
+    /// names captured where it was written (never the callee's); the
+    /// `is_callback` flag turns on
     /// the RFC-0019 §4 arity/invocability diagnostics that plain `fn`s don't
     /// want.
-    fn_table: Vec<(Vec<Symbol>, Expr, bool)>,
+    fn_table: Vec<FnEntry>,
     /// The resolved user-`View` registry for this program (RFC-0007 §1).
     /// Built once from `ParsedFile::views` via [`Interpreter::load_views`]; a
     /// call whose name resolves here is a user-view instantiation, not a
@@ -1021,7 +1027,7 @@ impl Interpreter {
             for decl in first.helpers.iter() {
                 let id = super::env::AstId(u32::try_from(self.fn_table.len()).unwrap_or(u32::MAX));
                 let params = decl.params.iter().map(|p| p.name.clone()).collect();
-                self.fn_table.push((params, decl.body.clone(), false));
+                self.fn_table.push((params, decl.body.clone(), false, None));
                 self.top_fns.insert(decl.name.clone(), id);
             }
         }
@@ -1376,7 +1382,7 @@ impl Interpreter {
     /// Binds `name` to a body [`Self::lower_call`] inlines at each call.
     fn define_callable(&mut self, name: &Symbol, params: Vec<Symbol>, body: &Expr) {
         let id = crate::interp::env::AstId(u32::try_from(self.fn_table.len()).unwrap_or(u32::MAX));
-        self.fn_table.push((params, body.clone(), false));
+        self.fn_table.push((params, body.clone(), false, None));
         self.env.push(name.clone(), Value::Fn(id));
     }
 

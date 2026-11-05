@@ -247,8 +247,8 @@ View Inner(on_tap: Fn() = {}) {
 }
 
 /// End-to-end guard on the committed visual example: it renders without any
-/// diagnostic, registers a tap handler per `ActionButton` (four in `Main` plus
-/// two inside `Stepper`), and every one of those taps forwards to a caller
+/// diagnostic, registers a tap handler per `ActionButton` (four in `Main`, two
+/// inside `Stepper` and three tags), and every one of those taps forwards to a caller
 /// block that mutates `count`, proving the reusable wrappers really drive the
 /// caller's state on screen.
 #[test]
@@ -258,7 +258,8 @@ fn visual_example_forwards_every_button() {
     let count = sig(&interp, "count");
     assert_eq!(interp.peek(count), Value::Int(0));
 
-    // Six ActionButton instances ⇒ six tap handlers.
+    // Six ActionButton instances, plus one per tag of the `TagList` ⇒ nine tap
+    // handlers.
     let taps: Vec<(f32, f32)> = interp
         .router
         .handler_rects()
@@ -266,7 +267,7 @@ fn visual_example_forwards_every_button() {
         .filter(|(_, k, _)| matches!(k, RouterEventKind::Tap))
         .map(|(_, _, r)| (r.x + r.w / 2.0, r.y + r.h / 2.0))
         .collect();
-    assert_eq!(taps.len(), 6, "one tap handler per ActionButton instance");
+    assert_eq!(taps.len(), 9, "one tap handler per ActionButton instance");
 
     // Every button's action is live: tapping each one changes `count` (each
     // block differs, so the exact value isn't asserted, only that the caller
@@ -433,5 +434,267 @@ View Card(on_tap: Fn() = {}) {
             |e| matches!(e, CompileError::CallbackNotInvocable { name, .. } if name == "on_tap")
         ),
         "expected CallbackNotInvocable, got {errs:?}"
+    );
+}
+
+// ── callbacks are lexically scoped ───────────────────────────────────────
+//
+// The braces of a callback read and write the names visible where they were
+// written, whatever the view that runs them calls its own parameters, `let`s
+// and `var`s.
+
+/// Taps the first tap handler and settles.
+fn tap_once(interp: &mut Interpreter) {
+    let center = tap_center(interp);
+    interp.dispatch_events(&[ev(EventKind::Tap, center)]);
+    interp.tick();
+}
+
+/// Like [`boot`], keeping the lowered tree so the test can render again.
+fn boot_tree(src: &str) -> (Interpreter, Vec<byard_compiler::interp::eval::RenderNode>) {
+    let parsed = parse(src);
+    assert!(
+        parsed.errors.is_empty(),
+        "parse errors: {:?}",
+        parsed.errors
+    );
+    let mut interp = Interpreter::new();
+    let load = interp.load_views(&parsed.views);
+    assert!(load.is_empty(), "load errors: {load:?}");
+    let known: Vec<&str> = parsed.views.iter().map(|v| v.name.as_str()).collect();
+    let tree = interp.lower_view(&parsed.views[0], &known);
+    assert!(
+        interp.errors().is_empty(),
+        "lowering errors: {:?}",
+        interp.errors()
+    );
+    interp.tick();
+    (interp, tree)
+}
+
+/// The text on screen after a render, in paint order. Used where two views
+/// each have a `var` of the same name, which `var_signal` cannot tell apart.
+fn shown(
+    interp: &mut Interpreter,
+    tree: &[byard_compiler::interp::eval::RenderNode],
+) -> Vec<String> {
+    let mut frame = RenderFrame::new();
+    interp.render(tree, &mut frame, 400.0, 400.0);
+    frame.texts().iter().map(|t| t.text.clone()).collect()
+}
+
+fn ints(xs: &[i64]) -> Value {
+    Value::List(xs.iter().map(|n| Value::Int(*n)).collect())
+}
+
+/// The callee's parameter is called `products`, like the caller's `var`: the
+/// callback's write still lands in the caller's.
+#[test]
+fn a_callback_writes_the_callers_var_when_the_callee_has_a_parameter_of_that_name() {
+    let src = "
+View Main() {
+    var products = [1, 2, 3]
+    let remove = (id: Int) => { products = products.filter(p => p != id) }
+    Column {
+        Text(\"main has {products.len}\")
+        Detail(products: products, on_delete: {|id| remove(id) })
+    }
+}
+View Detail(products: List<Int>, on_delete: Fn(Int) = {|_| }) {
+    Box #[width: 100, height: 40, tap => on_delete(2)]
+}
+";
+    let (mut interp, _frame) = boot(src);
+    let products = sig(&interp, "products");
+    tap_once(&mut interp);
+    assert_eq!(interp.peek(products), ints(&[1, 3]));
+}
+
+/// Same, with the callee's own `var` and `let` of the caller's names, and a
+/// callback parameter named like a callee name.
+#[test]
+fn a_callback_ignores_the_callees_vars_and_lets_of_the_same_name() {
+    let src = "
+View Main() {
+    var n = 0
+    var total = 0
+    Column {
+        Text(\"{n} {total}\")
+        Child(on_x: {|total| n = n + total }, on_y: { total = total + 10 })
+    }
+}
+View Child(on_x: Fn(Int) = {|_| }, on_y: Fn() = {}) {
+    var n = 100
+    var total = 7
+    let twice = total * 2
+    Box #[width: 80, height: 80, tap => { on_x(total) on_y() }]
+}
+";
+    let (mut interp, tree) = boot_tree(src);
+    assert_eq!(shown(&mut interp, &tree), ["0 0"]);
+    tap_once(&mut interp);
+    // The argument (the child's `total`, 7) added to Main's `n`, and Main's
+    // `total` raised by ten.
+    assert_eq!(shown(&mut interp, &tree), ["7 10"]);
+}
+
+/// A wrapper that calls its own callback from a closure of the same name:
+/// `Outer(on_x: ...)` then `Inner(on_x: {|id| on_x(id) })`.
+#[test]
+fn a_wrapping_callback_named_like_the_one_it_calls_does_not_recurse() {
+    let src = "
+View Main() { var n = 0
+    Outer(on_x: {|id| n = id }) }
+View Outer(on_x: Fn(Int) = {|_| }) { Inner(on_x: {|id| on_x(id) }) }
+View Inner(on_x: Fn(Int) = {|_| }) { Box #[width: 60, height: 60, tap => on_x(3)] }
+";
+    let (mut interp, _frame) = boot(src);
+    let n = sig(&interp, "n");
+    tap_once(&mut interp);
+    assert_eq!(interp.peek(n), Value::Int(3));
+}
+
+/// The caller's `let` actions are what a callback calls, not the callee's of
+/// the same name.
+#[test]
+fn a_callback_calls_the_callers_let_not_the_callees() {
+    let src = "
+View Main() { var n = 0
+    let save = () => { n++ }
+    let create = () => { save() }
+    Child(on_x: { create() }) }
+View Child(on_x: Fn() = {}) { let save = () => { on_x() }
+    Box #[width: 60, height: 60, tap => save()] }
+";
+    let (mut interp, _frame) = boot(src);
+    let n = sig(&interp, "n");
+    tap_once(&mut interp);
+    assert_eq!(interp.peek(n), Value::Int(1));
+}
+
+/// Three views deep, each wrapping the callback it got, each with names that
+/// collide with the ones above it.
+#[test]
+fn callbacks_wrap_through_three_views_that_reuse_every_name() {
+    let src = "
+View Main() { var n = 0
+    let bump = (by: Int) => { n = n + by }
+    Column {
+        Text(\"n {n}\")
+        A(on_x: {|by| bump(by) })
+    }
+}
+View A(on_x: Fn(Int) = {|_| }) { var n = 1000
+    let bump = (by: Int) => { n = n + by }
+    B(on_x: {|by| on_x(by + 1) })
+}
+View B(on_x: Fn(Int) = {|_| }) { var by = 5
+    C(on_x: {|n| on_x(n + by) })
+}
+View C(on_x: Fn(Int) = {|_| }) { Box #[width: 60, height: 60, tap => on_x(10)] }
+";
+    let (mut interp, tree) = boot_tree(src);
+    shown(&mut interp, &tree);
+    tap_once(&mut interp);
+    // C passes 10; B adds its own `by` (5), A adds 1, and Main's `bump` adds
+    // that to Main's `n`.
+    assert_eq!(shown(&mut interp, &tree), ["n 16"]);
+}
+
+/// A callback forwarded as a bare name keeps meaning the caller's, including a
+/// caller's `let` action passed on directly.
+#[test]
+fn a_let_action_forwarded_by_name_runs_in_the_callers_scope() {
+    let src = "
+View Main() { var n = 0
+    let bump = () => { n++ }
+    Column {
+        Text(\"n {n}\")
+        Child(on_x: bump)
+    }
+}
+View Child(on_x: Fn() = {}) { var n = 50
+    let bump = () => { n = 99 }
+    Box #[width: 60, height: 60, tap => on_x()] }
+";
+    let (mut interp, tree) = boot_tree(src);
+    shown(&mut interp, &tree);
+    tap_once(&mut interp);
+    assert_eq!(shown(&mut interp, &tree), ["n 1"]);
+}
+
+/// A callback inside a `for` row reads that row's item, and a callee's loop
+/// variable of the same name does not hijack it.
+#[test]
+fn a_callback_in_a_for_row_reads_the_rows_item() {
+    let src = "
+View Main() { var last = 0
+    Column {
+        for item in [4, 5] {
+            Line(on_x: {|k| last = item + k })
+        }
+    }
+}
+View Line(on_x: Fn(Int) = {|_| }) {
+    for item in [100] {
+        Box #[width: 60, height: 60, tap => on_x(item)]
+    }
+}
+";
+    let (mut interp, _frame) = boot(src);
+    let last = sig(&interp, "last");
+    tap_once(&mut interp);
+    assert_eq!(interp.peek(last), Value::Int(104));
+}
+
+/// A callback that runs while the instance that wrote it is being unmounted
+/// writes that instance's var, harmlessly, and the other callback still lands.
+#[test]
+fn a_callback_run_as_its_instance_unmounts_does_not_crash() {
+    let src = "
+View Main() {
+    var open = true
+    var closed = 0
+    Column {
+        Text(\"{closed}\")
+        when open { Panel(on_gone: { closed = closed + 1 }) }
+    }
+}
+View Panel(on_gone: Fn() = {}) {
+    var count = 0
+    let double = count * 2
+    Leaf(on_x: { count = count + double + 1 }, on_gone: on_gone)
+}
+View Leaf(on_x: Fn() = {}, on_gone: Fn() = {}) {
+    on unmount => { on_x() on_gone() }
+    Text(\"leaf\")
+}
+";
+    let (mut interp, tree) = boot_tree(src);
+    assert_eq!(shown(&mut interp, &tree), ["0", "leaf"]);
+    let open = sig(&interp, "open");
+    interp.write_var(open, Value::Bool(false));
+    interp.tick();
+    assert_eq!(shown(&mut interp, &tree), ["1"]);
+}
+
+/// The checker types a callback's body in the caller: a name only the callee
+/// declares is unknown there.
+#[test]
+fn the_checker_reports_a_name_only_the_callee_declares_against_the_caller() {
+    let src = "
+View Main() { var n = 0
+    Detail(on_x: {|id| n = id + zzz }) }
+View Detail(on_x: Fn(Int) = {|_| }) { var zzz = 0
+    Box #[width: 60, height: 60, tap => on_x(3)] }
+";
+    let parsed = parse(src);
+    let errors = byard_compiler::infer::check_views(&parsed.views).errors;
+    assert!(
+        errors.iter().any(|e| matches!(
+            e,
+            CompileError::UnknownName { name, .. } if name == "zzz"
+        )),
+        "{errors:?}"
     );
 }

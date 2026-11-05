@@ -174,6 +174,11 @@ tap inside it changes it. That is the whole trick, and it is how a reusable
 component stays ignorant of what it is used for. A default of `{}` is an action
 that does nothing, so the callback is optional.
 
+The names in the braces mean what they mean where you wrote them, always. If
+`ActionButton` has a parameter, a `let` or a `var` called `count` of its own, the
+braces above still change the caller's `count`, and a callback that passes
+through several views reaches the same place as one that goes straight up.
+
 A callback can pass values back. Declare them in the type, `Fn(Str)`, and name
 them between bars in the caller's braces:
 

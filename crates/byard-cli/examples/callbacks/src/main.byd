@@ -21,6 +21,7 @@
 // proof the forwarded event is landing.
 View Main() {
     var count = 0
+    var tags = ["red", "green", "blue"]
 
     Column #[bg: 0x14141C, p: 32, gap: 20, width: 520] {
         Text("RFC-0019, callback props") #[color: 0xFFFFFF, size: 22, weight: bold]
@@ -48,6 +49,22 @@ View Main() {
         Text("Composed wrapper (forwards a callback it received):")
             #[color: 0x9AA0AC, size: 13]
         Stepper(on_up: { count++ }, on_down: { count-- })
+
+        // A callback reads and writes the names visible where it was written,
+        // whatever the view that runs it calls its own. `TagList` has a
+        // parameter named `tags` too; the braces below still change Main's.
+        Text("tags: {tags.join(\", \")}") #[color: 0x9AA0AC, size: 13]
+        TagList(tags: tags, on_remove: {|tag| tags = tags.filter(t => t != tag) })
+    }
+}
+
+// Its own `tags` is a copy of the caller's list. The callback it is given does
+// not see it: `tags = ...` in the caller's braces is the caller's `tags`.
+View TagList(tags: List<Str>, on_remove: Fn(Str) = {|_| }) {
+    Row #[gap: 8] {
+        for tag in tags {
+            ActionButton(label: "remove {tag}", accent: 0x3C3C52, hover: 0x50506A, on_tap: { on_remove(tag) })
+        }
     }
 }
 

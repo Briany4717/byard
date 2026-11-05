@@ -17,6 +17,10 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   first item, and gave every item the same answer. A lambda inside another
   (`cats.map(c => products.filter(p => p.cat == c))`) could not read the outer
   item. Both now give the right result.
+- **A callback you pass to a view runs in your scope, as the guide says.** The braces
+  used to be read in the view that ran them, so a parameter, `let` or `var` of the same
+  name there made a write do nothing, or sent `byard check` into a stack overflow. They
+  now read and write the names visible where you wrote them.
 
 ## [0.1.0] - 2026-11-05
 

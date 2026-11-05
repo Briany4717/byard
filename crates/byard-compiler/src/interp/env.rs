@@ -135,6 +135,21 @@ pub struct Env<'p> {
     ambient: Vec<(Symbol, Value)>,
     /// The enclosing View's environment, if any.
     parent: Option<&'p Env<'p>>,
+    /// The bindings a callback body was written among, searched after
+    /// `bindings` while the body is being lowered (see [`Env::enter_closure`]).
+    base: Option<Captured>,
+}
+
+/// The bindings visible where a callback was written, shared by every
+/// invocation of it.
+pub type Captured = std::sync::Arc<[(Symbol, Value)]>;
+
+/// What [`Env::enter_closure`] set aside, to be handed back to
+/// [`Env::leave_closure`].
+#[derive(Debug)]
+pub struct ClosureFrame {
+    bindings: Vec<(Symbol, Value)>,
+    base: Option<Captured>,
 }
 
 impl<'p> Env<'p> {
@@ -145,6 +160,7 @@ impl<'p> Env<'p> {
             bindings: Vec::new(),
             ambient: Vec::new(),
             parent: None,
+            base: None,
         }
     }
 
@@ -155,6 +171,7 @@ impl<'p> Env<'p> {
             bindings: Vec::new(),
             ambient: Vec::new(),
             parent: Some(parent),
+            base: None,
         }
     }
 
@@ -172,8 +189,45 @@ impl<'p> Env<'p> {
         self.bindings
             .iter()
             .rev()
+            .chain(self.base.iter().flat_map(|b| b.iter().rev()))
             .find(|(k, _)| k == name)
             .map(|(_, v)| v)
+    }
+
+    /// Makes `base` the only bindings in sight, until [`Env::leave_closure`]:
+    /// a callback body is lowered among the names where it was written, and
+    /// none of the view that runs it. Ambient values and the parent chain are
+    /// left alone, `inject` is not a name.
+    pub fn enter_closure(&mut self, base: Captured) -> ClosureFrame {
+        ClosureFrame {
+            bindings: std::mem::take(&mut self.bindings),
+            base: self.base.replace(base),
+        }
+    }
+
+    /// Puts back what [`Env::enter_closure`] set aside.
+    pub fn leave_closure(&mut self, frame: ClosureFrame) {
+        self.bindings = frame.bindings;
+        self.base = frame.base;
+    }
+
+    /// The own bindings pushed from position `from` on.
+    #[must_use]
+    pub fn snapshot_from(&self, from: usize) -> Vec<(Symbol, Value)> {
+        self.bindings[from.min(self.bindings.len())..].to_vec()
+    }
+
+    /// The first `len` of this environment's own bindings, as a callback
+    /// written there captures them (the caller's frame, without the callee's
+    /// parameters pushed after it).
+    #[must_use]
+    pub fn capture(&self, len: usize) -> Captured {
+        self.base
+            .iter()
+            .flat_map(|b| b.iter())
+            .chain(self.bindings[..len.min(self.bindings.len())].iter())
+            .cloned()
+            .collect()
     }
 
     /// Provides an ambient `ty` value to descendant Views (the provider side of
@@ -245,7 +299,12 @@ impl<'p> Env<'p> {
     /// live at instantiation, not the truncated post-instantiation env.
     #[must_use]
     pub fn snapshot(&self) -> Vec<(Symbol, Value)> {
-        self.bindings.clone()
+        self.base
+            .iter()
+            .flat_map(|b| b.iter())
+            .chain(self.bindings.iter())
+            .cloned()
+            .collect()
     }
 }
 

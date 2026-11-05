@@ -363,6 +363,13 @@ fn metainfo(naming: &Naming, bundle: &BundleConfig) -> String {
             xml_escape(license)
         );
     }
+    if let Some(homepage) = &bundle.homepage {
+        let _ = writeln!(
+            out,
+            "  <url type=\"homepage\">{}</url>",
+            xml_escape(homepage)
+        );
+    }
     let _ = writeln!(
         out,
         "  <launchable type=\"desktop-id\">{}.desktop</launchable>",
@@ -791,6 +798,7 @@ mod tests {
         let bundle = BundleConfig {
             summary: Some("Cats & <mice>\nat play".to_string()),
             license: Some("MIT OR Apache-2.0".to_string()),
+            homepage: Some("https://example.com/?a=1&b=2".to_string()),
             ..BundleConfig::default()
         };
         let info = metainfo(&naming_of("com.example.tj"), &bundle);
@@ -811,8 +819,13 @@ mod tests {
             info.contains(">com.example.tj.desktop</launchable>"),
             "{info}"
         );
+        assert!(
+            info.contains("<url type=\"homepage\">https://example.com/?a=1&amp;b=2</url>"),
+            "{info}"
+        );
         let bare = metainfo(&naming_of("a.b"), &BundleConfig::default());
         assert!(!bare.contains("project_license"), "{bare}");
+        assert!(!bare.contains("<url"), "{bare}");
         assert!(
             bare.contains("<summary>Tom &amp; Jerry</summary>"),
             "{bare}"

@@ -217,6 +217,9 @@ pub struct BundleConfig {
     /// `license`: the app's licence as an SPDX expression
     /// (`"MIT OR Apache-2.0"`). Not checked beyond being written.
     pub license: Option<String>,
+    /// `homepage`: the app's web page, an `http` or `https` URL. `AppStream`
+    /// warns about a component without one, and Flathub refuses it.
+    pub homepage: Option<String>,
 }
 
 /// One element of `[native_views]`: a name and the properties it takes.
@@ -536,6 +539,21 @@ fn parse_bundle(table: &toml::Table) -> Result<BundleConfig, String> {
             }
             "summary" => bundle.summary = Some(text),
             "license" => bundle.license = Some(text),
+            "homepage" => {
+                let rest = text
+                    .strip_prefix("https://")
+                    .or_else(|| text.strip_prefix("http://"));
+                let host = rest.and_then(|r| r.split(['/', '?', '#']).next());
+                if !host.is_some_and(|h| !h.is_empty() && !h.contains(char::is_whitespace))
+                    || text.contains(char::is_whitespace)
+                {
+                    return Err(format!(
+                        "byard.toml: [bundle] `homepage = \"{text}\"` is not a web address, \
+                         like \"https://example.com/weather\""
+                    ));
+                }
+                bundle.homepage = Some(text);
+            }
             other => return Err(format!("byard.toml: [bundle]: unknown key `{other}`")),
         }
     }
@@ -2027,6 +2045,35 @@ mod tests {
         assert_eq!(bundle.categories, ["Utility", "Weather"]);
         assert_eq!(bundle.summary.as_deref(), Some("Weather with a map"));
         assert_eq!(bundle.license.as_deref(), Some("MIT OR Apache-2.0"));
+    }
+
+    #[test]
+    fn a_bundle_homepage_is_a_web_address() {
+        let dir = project_with(
+            "homepage",
+            "[bundle]\nhomepage = \"https://example.com/weather\"",
+            &[],
+        );
+        let bundle = Manifest::discover(Some(&dir)).unwrap().bundle;
+        assert_eq!(
+            bundle.homepage.as_deref(),
+            Some("https://example.com/weather")
+        );
+        for bad in [
+            "example.com",
+            "https://",
+            "ftp://example.com",
+            "https://exa mple.com",
+            "",
+        ] {
+            let dir = project_with(
+                "bad-homepage",
+                &format!("[bundle]\nhomepage = \"{bad}\""),
+                &[],
+            );
+            let err = Manifest::discover(Some(&dir)).err().unwrap().to_string();
+            assert!(err.contains("not a web address"), "{bad}: {err}");
+        }
     }
 
     #[test]

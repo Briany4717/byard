@@ -15,7 +15,7 @@ fn example(sub: &str) -> PathBuf {
 /// the `kit` path package) and reports no errors.
 #[test]
 fn workspace_example_checks_clean() {
-    let out = Command::new(env!("CARGO_BIN_EXE_byard"))
+    let out = Command::new(env!("CARGO_BIN_EXE_byard-cli"))
         .arg("check")
         .arg(example("app"))
         .output()
@@ -32,7 +32,7 @@ fn workspace_example_checks_clean() {
 /// Pointing at the manifest resolves the same way as pointing at the directory.
 #[test]
 fn checking_the_manifest_path_is_equivalent() {
-    let out = Command::new(env!("CARGO_BIN_EXE_byard"))
+    let out = Command::new(env!("CARGO_BIN_EXE_byard-cli"))
         .arg("check")
         .arg(example("app/byard.toml"))
         .output()

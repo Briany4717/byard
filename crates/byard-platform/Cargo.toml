@@ -1,6 +1,7 @@
 [package]
 name = "byard-platform"
 version.workspace = true
+description = "The Byard window, input and accessibility host, on winit"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -22,7 +23,7 @@ doctest = false
 # Linked into the windowed host and nowhere else: never `byard-core`, never the
 # compiler.
 arboard = { version = "3.7.0", default-features = false, features = ["wayland-data-control"] }
-byard-core = { path = "../byard-core" }
+byard-core.workspace = true
 wgpu.workspace = true
 # winit is a regular (non-dev) dependency of this crate by design: it is the
 # entire reason byard-platform exists (RFC-0001 §6). It never appears in

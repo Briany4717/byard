@@ -24,7 +24,7 @@ fn scratch(tag: &str) -> PathBuf {
 /// The accessibility dump after pressing `keys` in order.
 fn dump(tag: &str, keys: &[&str]) -> String {
     let out = scratch(tag).join("tree.txt");
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_byard"));
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_byard-cli"));
     cmd.arg("shot").arg(example_dir()).arg("--a11y").arg(&out);
     for key in keys {
         cmd.arg("--key").arg(key);
@@ -47,7 +47,7 @@ fn line<'a>(dump: &'a str, starts: &str) -> &'a str {
 
 #[test]
 fn keyboard_focus_example_checks_clean() {
-    let out = Command::new(env!("CARGO_BIN_EXE_byard"))
+    let out = Command::new(env!("CARGO_BIN_EXE_byard-cli"))
         .arg("check")
         .arg(example_dir())
         .output()
@@ -109,7 +109,7 @@ fn the_keys_reach_the_toggle_and_the_slider_and_skip_the_disabled_button() {
 fn the_focus_ring_is_drawn_on_the_focused_button() {
     let png = |tag: &str, keys: &[&str]| -> Option<Vec<u8>> {
         let out = scratch(tag).join("out.png");
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_byard"));
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_byard-cli"));
         cmd.arg("shot").arg(example_dir()).arg("-o").arg(&out);
         for key in keys {
             cmd.arg("--key").arg(key);

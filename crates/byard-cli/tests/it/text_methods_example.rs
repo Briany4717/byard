@@ -15,7 +15,7 @@ fn example_dir() -> PathBuf {
 
 #[test]
 fn text_methods_example_checks_clean() {
-    let out = Command::new(env!("CARGO_BIN_EXE_byard"))
+    let out = Command::new(env!("CARGO_BIN_EXE_byard-cli"))
         .arg("check")
         .arg(example_dir())
         .output()
@@ -28,7 +28,7 @@ fn text_methods_example_checks_clean() {
 #[test]
 fn the_example_draws_what_its_header_says() {
     let out = std::env::temp_dir().join(format!("byard-text-methods-{}.txt", std::process::id()));
-    let run = Command::new(env!("CARGO_BIN_EXE_byard"))
+    let run = Command::new(env!("CARGO_BIN_EXE_byard-cli"))
         .arg("shot")
         .arg(example_dir())
         .arg("--a11y")

@@ -90,7 +90,7 @@ fn an_app_that_does_not_compile_prints_what_check_prints() {
 
     // One renderer: every line `byard check` prints for the project is in the
     // app's output, in the same order, and nothing is repeated.
-    let check = Command::new(env!("CARGO_BIN_EXE_byard"))
+    let check = Command::new(env!("CARGO_BIN_EXE_byard-cli"))
         .arg("check")
         .arg(fixtures().join("broken_app"))
         .env("NO_COLOR", "1")

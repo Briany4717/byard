@@ -37,7 +37,7 @@ fn broken_project() -> PathBuf {
 }
 
 fn check(dir: &Path, args: &[&str]) -> (String, String, bool) {
-    let out = Command::new(env!("CARGO_BIN_EXE_byard"))
+    let out = Command::new(env!("CARGO_BIN_EXE_byard-cli"))
         .arg("check")
         .args(args)
         .arg(dir)
@@ -177,7 +177,7 @@ fn the_caret_block_takes_the_clis_palette() {
         "a dim gutter: {forced:?}"
     );
 
-    let plain = Command::new(env!("CARGO_BIN_EXE_byard"))
+    let plain = Command::new(env!("CARGO_BIN_EXE_byard-cli"))
         .arg("check")
         .arg(&dir)
         .env("NO_COLOR", "1")

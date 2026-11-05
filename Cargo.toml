@@ -27,7 +27,7 @@ members = [
 ]
 
 [workspace.package]
-version     = "0.0.0"
+version     = "0.1.0"
 edition     = "2024"
 license     = "MIT OR Apache-2.0"
 repository  = "https://github.com/Briany4717/byard"
@@ -39,6 +39,14 @@ rust-version = "1.86"
 # apart again (two versions of one crate is a second copy built and linked).
 # A member adds its own `features` on top of what is here.
 [workspace.dependencies]
+# The workspace's own crates, with the version they are published at: a path
+# alone is enough to build here, and crates.io needs the version.
+byard-cli      = { path = "crates/byard-cli", version = "0.1.0" }
+byard-compiler = { path = "crates/byard-compiler", version = "0.1.0" }
+byard-core     = { path = "crates/byard-core", version = "0.1.0" }
+byard-macro    = { path = "crates/byard-macro", version = "0.1.0" }
+byard-platform = { path = "crates/byard-platform", version = "0.1.0" }
+byard-project  = { path = "crates/byard-project", version = "0.1.0" }
 wgpu              = "29.0"
 pollster          = "0.4"
 crossbeam-channel = "0.5"

@@ -30,7 +30,7 @@ fn project(name: &str, manifest_tail: &str, body: &str) -> PathBuf {
 const GAUGE: &str = "[native_views.Gauge]\nvalue = \"float\"\ntint = \"color\"\n";
 
 fn check(dir: &Path) -> (bool, String) {
-    let out = Command::new(env!("CARGO_BIN_EXE_byard"))
+    let out = Command::new(env!("CARGO_BIN_EXE_byard-cli"))
         .arg("check")
         .arg(dir)
         .output()

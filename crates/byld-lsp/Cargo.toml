@@ -1,6 +1,7 @@
 [package]
 name = "byld-lsp"
 version.workspace = true
+description = "A language server for byld, the language of Byard (.byd files)"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -9,10 +10,10 @@ authors.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-byard-compiler = { path = "../byard-compiler" }
+byard-compiler.workspace = true
 # The project on disk and the check `byard check` runs, so the editor and the
 # command agree on what a project is and what is wrong with it.
-byard-project  = { path = "../byard-project" }
+byard-project.workspace = true
 lsp-server = "0.7.9"
 lsp-types = "0.97.0"
 serde = { version = "1.0.228", features = ["derive"] }

@@ -38,7 +38,7 @@ fn project(test: &str) -> PathBuf {
 }
 
 fn byard(dir: &Path, args: &[&str]) -> (Output, String) {
-    let out = Command::new(env!("CARGO_BIN_EXE_byard"))
+    let out = Command::new(env!("CARGO_BIN_EXE_byard-cli"))
         .args(args)
         .arg(dir)
         .output()

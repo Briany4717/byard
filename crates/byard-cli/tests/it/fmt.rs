@@ -9,7 +9,7 @@ const MESSY: &str =
 const TIDY: &str = "View Main() {\n    var n = 0 // taps\n    Column #[gap: 8, p: (horizontal: 24)] {\n        Text(\"{n}\")\n    }\n}\n";
 
 fn byard(cwd: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_byard"))
+    Command::new(env!("CARGO_BIN_EXE_byard-cli"))
         .args(args)
         .current_dir(cwd)
         .output()

@@ -30,4 +30,8 @@ The regression test is
 
 When a swash release clears the coordinates itself, delete this directory
 and the `[patch.crates-io]` entry in the workspace `Cargo.toml`, and run the
-test above.
+test above. The fix is sent upstream as dfrg/swash#149.
+
+crates.io does not apply a `[patch]`, so until then a published `byard`
+builds against the unfixed swash: the patch only reaches builds from this
+repository. Publishing waits for that release (#348).

@@ -22,7 +22,7 @@ fn example_dir() -> PathBuf {
 
 #[test]
 fn data_ops_example_checks_clean() {
-    let out = Command::new(env!("CARGO_BIN_EXE_byard"))
+    let out = Command::new(env!("CARGO_BIN_EXE_byard-cli"))
         .arg("check")
         .arg(example_dir())
         .output()

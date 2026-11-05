@@ -92,7 +92,16 @@ jobs:
         env:
           RUSTDOCFLAGS: "-D warnings"
         run: cargo doc --locked --no-deps -p byard-platform -p byard -p byard-cli --features byard-platform/a11y,byard/a11y,byard-cli/a11y
-      
+
+      # The crates stay publishable: a path dependency without a version, a
+      # missing description or a file outside the package fails here, not on
+      # release day. `--no-verify` because building them again from their
+      # archives repeats what `test` just did; run it without that flag
+      # before publishing. The examples are `publish = false` and not listed.
+      - name: package
+        if: runner.os == 'Linux'
+        run: cargo package --locked --no-verify -p byard-macro -p byard-core -p byard-compiler -p byard-project -p byard-platform -p byard-cli -p byard -p byld-lsp
+
       # The resource budgets in ci/budgets.toml (RFC-0046) that are tests, run
       # again with their output shown, which a passing test does not give:
       # each prints what it measured next to its ceiling, so the margin is in

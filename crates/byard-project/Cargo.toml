@@ -16,8 +16,8 @@ rust-version.workspace = true
 doctest = false
 
 [dependencies]
-byard-compiler = { path = "../byard-compiler" }
-byard-core     = { path = "../byard-core" }
+byard-compiler.workspace = true
+byard-core.workspace = true
 toml           = { workspace = true, features = ["preserve_order"] }
 image          = { workspace = true, features = ["png", "jpeg"] }
 sha2.workspace = true

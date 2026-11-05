@@ -1,6 +1,7 @@
 [package]
 name = "byard-core"
 version.workspace = true
+description = "The Byard engine: layout, text, the GPU renderer and the bridge to Rust controllers"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true

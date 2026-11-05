@@ -14,7 +14,7 @@ fn example_dir() -> PathBuf {
 /// `byard check <project-dir>` on the gradient-kinds example reports no errors.
 #[test]
 fn gradient_kinds_example_checks_clean() {
-    let out = Command::new(env!("CARGO_BIN_EXE_byard"))
+    let out = Command::new(env!("CARGO_BIN_EXE_byard-cli"))
         .arg("check")
         .arg(example_dir())
         .output()

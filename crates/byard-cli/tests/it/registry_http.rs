@@ -29,7 +29,7 @@ fn write(path: &Path, text: &str) {
 
 /// Runs `byard` in `cwd` with `HOME` at `home`, so the cache is the test's.
 fn byard(cwd: &Path, home: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_byard"))
+    Command::new(env!("CARGO_BIN_EXE_byard-cli"))
         .args(args)
         .current_dir(cwd)
         .env("HOME", home)

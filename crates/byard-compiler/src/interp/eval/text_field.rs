@@ -25,6 +25,16 @@ pub(crate) struct Composition {
     cursor: Option<(usize, usize)>,
 }
 
+impl Composition {
+    pub(super) const fn owner(&self) -> u32 {
+        self.owner
+    }
+
+    pub(super) const fn set_owner(&mut self, owner: u32) {
+        self.owner = owner;
+    }
+}
+
 /// How far a `TextField`'s text sits from its left edge when the field writes
 /// no padding.
 const FIELD_PAD_X: f32 = 10.0;

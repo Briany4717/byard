@@ -21,6 +21,7 @@ mod disabled_gate;
 mod ecosystem_vector_wrapper;
 mod element_measure;
 mod event_exposure;
+mod focus_follows_element;
 mod font_prop;
 mod font_registration;
 mod format_and_slice;

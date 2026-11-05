@@ -33,6 +33,13 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   no longer reaches a `tap` on an element under the one pressed, so `tap => {}` on
   a panel is not needed and a panel's `tap` is not run by a field inside it. A
   `TextField`'s placeholder, and a value longer than the field, stop at its edge.
+- **A `TextField` keeps its focus when something before it appears or goes.** A
+  message that showed above a field as you typed (a `when` before it in the
+  same parent, or inside a view placed before it) took the keyboard with it, so
+  typing went dead after the first character. Focus, the caret, the selection
+  and the undo history now follow the field itself, as its state does, whatever
+  a `when` or a `for` before it adds or removes. A focused field that is
+  removed lets go of its `focused:` var.
 
 ## [0.1.0] - 2026-11-05
 

@@ -136,6 +136,12 @@ reply from a server, the caret goes to the end of the new text and the undo hist
 again. A text wider than the field scrolls to keep the caret in view. The caret blinks
 while the field and the window have focus.
 
+A field keeps its focus, its caret, its selection and its undo history for as long as
+it is on screen, however the things around it change: a message that appears above it
+as you type, or a list before it that grows or shrinks, does not move any of that.
+A field that a `when` removes lets go of focus, and its `focused:` var goes back to
+`false`.
+
 The selection is painted in the theme's `primary` colour at 30 % opacity. Give the
 field `selection:` to choose another:
 

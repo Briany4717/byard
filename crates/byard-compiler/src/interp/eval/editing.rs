@@ -384,6 +384,57 @@ impl Interpreter {
         }
     }
 
+    /// After a layout, finds again the elements that focus and editing state
+    /// belong to. A layout index is a place in the build order, so a `when` or
+    /// `for` that grows before a field moves the field's index by the number of
+    /// nodes it added; the element is the same one, and what it holds (focus,
+    /// caret, selection, undo, an IME composition) goes with it.
+    ///
+    /// The same layout as last frame, the usual case, costs one comparison.
+    pub(super) fn follow_elements(&mut self) {
+        if self.elem_uids != self.prev_elem_uids {
+            let holds = self.router.focused().is_some()
+                || !self.edit.borrow().is_empty()
+                || self.composition.is_some()
+                || self.blink.is_some();
+            if holds {
+                let prev = std::mem::take(&mut self.prev_elem_uids);
+                let now = &self.elem_uids;
+                let moved = |old: u32| -> Option<u32> {
+                    let uid = prev.iter().find(|p| p.0 == old)?.1;
+                    now.iter().find(|n| n.1 == uid).map(|n| n.0)
+                };
+                if let Some(old) = self.router.focused() {
+                    // An index the last frame did not record is not an element
+                    // that can have moved.
+                    if prev.iter().any(|p| p.0 == old) {
+                        self.router.follow_focus(&mut self.ctx, moved(old));
+                    }
+                }
+                self.edit.borrow_mut().rekey(|old| {
+                    if prev.iter().any(|p| p.0 == old) {
+                        moved(old)
+                    } else {
+                        Some(old)
+                    }
+                });
+                if let Some(c) = &mut self.composition {
+                    match moved(c.owner()) {
+                        Some(new) => c.set_owner(new),
+                        None => self.composition = None,
+                    }
+                }
+                if let Some(b) = &mut self.blink {
+                    match moved(b.owner) {
+                        Some(new) => b.owner = new,
+                        None => self.stop_blink(),
+                    }
+                }
+            }
+        }
+        std::mem::swap(&mut self.prev_elem_uids, &mut self.elem_uids);
+    }
+
     /// What a rendered frame leaves to settle about text editing: the state of
     /// a field that was not drawn is dropped with its element (RFC-0041 §1),
     /// and a blink whose field was not drawn is stopped, so a branch that

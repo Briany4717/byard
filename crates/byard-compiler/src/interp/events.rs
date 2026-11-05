@@ -281,6 +281,9 @@ pub struct EventRouter {
     focusables: Vec<Focusable>,
     down: Option<DownState>,
     focused: Option<u32>,
+    /// The `var` the focused element reports into, kept from the frame that
+    /// focused it so an element that goes away can still be blurred.
+    focused_sig: Option<SignalId>,
     /// The element being dragged (RFC-0024 `dragging`): the press target, once
     /// the pointer has moved past [`TAP_SLOP`] since pressing it. Set during a
     /// held move, cleared on the next press/release. Persists across renders like
@@ -655,6 +658,20 @@ impl EventRouter {
     /// Sets the initially-focused element and its `var`.
     pub fn set_focus(&mut self, ctx: &mut ReactiveCtx, elem: u32) {
         self.steal_focus(ctx, Some(elem));
+    }
+
+    /// Moves `focused` to where its element now is after a relayout, without
+    /// the blur and focus an actual move would fire. `None` means the element
+    /// is gone: focus ends, and its `var` is cleared.
+    pub fn follow_focus(&mut self, ctx: &mut ReactiveCtx, now: Option<u32>) {
+        if now.is_some() {
+            self.focused = now;
+        } else {
+            self.focused = None;
+            if let Some(sig) = self.focused_sig.take() {
+                ctx.write_signal(sig, Value::Bool(false));
+            }
+        }
     }
 
     /// Moves focus to `elem` if it is a focus target in the current scope
@@ -1051,9 +1068,11 @@ impl EventRouter {
             // the same `focused_sig` transition as the reflected prop above.
             self.fire_on_elem(ctx, Some(old), EventKind::Blur, (0.0, 0.0), None);
         }
+        self.focused_sig = None;
         if let Some(n) = new {
             if let Some(f) = self.focusables.iter().find(|f| f.elem == n) {
                 ctx.write_signal(f.focused_sig, Value::Bool(true));
+                self.focused_sig = Some(f.focused_sig);
             }
             // RFC-0012 S2: `focus =>` sugar fires on the rising edge.
             self.fire_on_elem(ctx, Some(n), EventKind::Focus, (0.0, 0.0), None);

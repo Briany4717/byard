@@ -362,6 +362,7 @@ impl Interpreter {
                 anchor_name,
                 measure: _,
                 clip_path,
+                uid: _,
             } => {
                 // RFC-0019 §2: restore the instance environment captured at lower
                 // time so event actions re-lowered below (a forwarded callback,

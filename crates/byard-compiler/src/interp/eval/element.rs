@@ -43,6 +43,7 @@ impl Interpreter {
         // element's members minus those declarations, borrowed unchanged in the
         // overwhelming case where there are none.
         let (measure, el_children) = self.lower_measures(el, &attrs);
+        let uid = self.fresh_elem_uid();
         let el_children: &[Member] = &el_children;
         match el.name.as_str() {
             "Text" | "Button" if !el.content.is_empty() => {
@@ -70,6 +71,7 @@ impl Interpreter {
                         bound_sig: None,
                         env_snapshot: self.capture_env_snapshot(),
                         measure,
+                        uid,
                         clip_path: None,
                     }
                 } else {
@@ -155,6 +157,7 @@ impl Interpreter {
                     bound_sig,
                     env_snapshot: self.capture_env_snapshot(),
                     measure,
+                    uid,
                     clip_path: None,
                 }
             }
@@ -174,6 +177,7 @@ impl Interpreter {
                     bound_sig,
                     env_snapshot: self.capture_env_snapshot(),
                     measure,
+                    uid,
                     clip_path: None,
                 }
             }
@@ -231,6 +235,7 @@ impl Interpreter {
                     bound_sig,
                     env_snapshot: self.capture_env_snapshot(),
                     measure,
+                    uid,
                     clip_path,
                 }
             }

@@ -201,6 +201,7 @@ impl Interpreter {
         // because a retained build that rolls back runs the walk twice and the
         // second run is the one that describes the frame.
         self.measure_targets.clear();
+        self.elem_uids.clear();
         // Expand reactive `when`/`for` at the root, then build each concrete node.
         let root_children = self.build_children(tree, pools, flat_ids);
 
@@ -818,6 +819,7 @@ impl Interpreter {
                 children,
                 env_snapshot,
                 measure,
+                uid,
                 ..
             } => {
                 // RFC-0016 responsive variants reach layout here, one pass ahead
@@ -854,6 +856,13 @@ impl Interpreter {
                 // that declared no `on measure`.
                 if let (Some(slot), Ok(id)) = (measure, &out) {
                     self.measure_targets.push((*id, *slot));
+                }
+                // The index this element got is its place in the build order;
+                // the uid is what it is. Focus follows the second.
+                if let Ok(id) = &out {
+                    if let Some(idx) = self.atlas.node_index(*id) {
+                        self.elem_uids.push((idx, *uid));
+                    }
                 }
                 out
             }

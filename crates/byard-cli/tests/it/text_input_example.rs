@@ -101,6 +101,56 @@ fn a_composition_shows_but_only_the_commit_reaches_the_echo() {
     assert_eq!(interp.peek(sig), Value::Str("日本".into()));
 }
 
+#[test]
+fn the_third_field_keeps_focus_as_its_message_appears_above_it() {
+    let src = std::fs::read_to_string(example_dir().join("src/main.byd")).unwrap();
+    let parsed = parse(&src);
+    assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+    let mut interp = Interpreter::new();
+    let known: Vec<&str> = parsed.views.iter().map(|v| v.name.as_str()).collect();
+    interp.load_views(&parsed.views);
+    let tree = interp.lower_view(&parsed.views[0], &known);
+    assert!(interp.errors().is_empty(), "{:?}", interp.errors());
+
+    let mut frame = RenderFrame::new();
+    let mut t = 0;
+    let mut step = |interp: &mut Interpreter, events: Vec<InputEvent>| {
+        t += 16;
+        interp.dispatch_events(&events);
+        interp.tick();
+        frame = RenderFrame::new();
+        interp.render(&tree, &mut frame, 600.0, 900.0);
+    };
+    let ev = |kind, pos, payload, t| InputEvent {
+        kind,
+        pos,
+        delta: (0.0, 0.0),
+        payload,
+        time_ms: t,
+        mods: byard_core::KeyModifiers::default(),
+    };
+    step(&mut interp, vec![]);
+    // `--tap 200,450`, then `--type a --type b --type c`: a frame each.
+    step(
+        &mut interp,
+        vec![
+            ev(EventKind::PointerDown, (200.0, 450.0), None, 1),
+            ev(EventKind::PointerUp, (200.0, 450.0), None, 2),
+        ],
+    );
+    for (i, c) in ["a", "b", "c"].into_iter().enumerate() {
+        let e = ev(
+            EventKind::TextInput,
+            (0.0, 0.0),
+            Some(byard_core::InputPayload::Key(c.into())),
+            10 + i as u64,
+        );
+        step(&mut interp, vec![e]);
+    }
+    let sig = interp.var_signal(&Symbol::intern("code")).unwrap();
+    assert_eq!(interp.peek(sig), Value::Str("abc".into()));
+}
+
 fn frame_has_caret(
     interp: &mut Interpreter,
     tree: &[byard_compiler::interp::eval::RenderNode],

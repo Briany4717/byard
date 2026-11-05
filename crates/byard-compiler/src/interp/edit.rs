@@ -828,6 +828,17 @@ impl EditStore {
         self.fields.retain(|_, s| s.seen == frame_seq);
     }
 
+    /// Moves every state to the index `to` gives its element, and drops the
+    /// ones whose element is gone. The elements did not change; only their
+    /// place in the layout did.
+    pub fn rekey(&mut self, to: impl Fn(u32) -> Option<u32>) {
+        let old = std::mem::take(&mut self.fields);
+        self.fields = old
+            .into_iter()
+            .filter_map(|(elem, state)| Some((to(elem)?, state)))
+            .collect();
+    }
+
     /// How many fields hold a state. Test-facing.
     pub fn len(&self) -> usize {
         self.fields.len()

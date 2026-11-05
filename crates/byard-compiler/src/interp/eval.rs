@@ -209,6 +209,12 @@ pub enum RenderNode {
         /// the element and the rect it wants are only in the same hand during
         /// the layout build; `None` is the whole cost of not using the feature.
         measure: Option<u32>,
+        /// This element's identity, fixed when it is lowered and kept for as
+        /// long as the node lives. The layout index an element gets is its
+        /// place in the build order, and that moves whenever a `when` or a
+        /// `for` before it grows or shrinks; focus and a field's editing state
+        /// follow this instead, as an instance's state follows the instance.
+        uid: u32,
         /// The `path { … }` child of a `Clip`, lifted out of the children and
         /// used as the clip's mask (RFC-0037 `clip(path)`). `None` for every
         /// other box, and for a `Clip` that only rounds its corners.
@@ -634,6 +640,12 @@ pub struct Interpreter {
     /// declare it allocates nothing, which is the whole cost model: the event
     /// is a slot, not a per-element field.
     measures: Vec<MeasureSlot>,
+    /// The next [`RenderNode::Box::uid`] to hand out.
+    next_elem_uid: u32,
+    /// This frame's `(layout index, uid)` of every box, recorded by the layout
+    /// build; and the last frame's, which focus and editing state were keyed by.
+    elem_uids: Vec<(u32, u32)>,
+    prev_elem_uids: Vec<(u32, u32)>,
     /// The elements to measure this frame, `(laid-out node, slot)`, refilled by
     /// the layout build walk.
     ///
@@ -990,6 +1002,12 @@ impl Interpreter {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// A fresh identity for an element being lowered.
+    pub(super) fn fresh_elem_uid(&mut self) -> u32 {
+        self.next_elem_uid += 1;
+        self.next_elem_uid
     }
 
     /// The reactive context (for tests and the engine bridge).
@@ -1462,6 +1480,7 @@ impl Interpreter {
         // Every frame answers `needs_another_frame` for itself, including one
         // that returns before layout.
         self.measure_fired = false;
+        self.elem_uids.clear();
 
         // RFC-0034: the registered families ride every frame, not just the one
         // after registration. The relay keeps only the latest frame, so a pool
@@ -1743,6 +1762,9 @@ impl Interpreter {
         // feeds the same frame's layout). Elements whose rect did not change are not
         // told anything, which is what keeps a static screen at zero writes.
         self.fire_measures();
+        // Layout indices have just been reassigned: focus and editing state
+        // find their elements again before anything paints or reads them.
+        self.follow_elements();
 
         self.retained.flat_ids.clear();
         self.retained.flat_ids.extend_from_slice(&flat_ids);

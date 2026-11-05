@@ -338,6 +338,19 @@ Neovim colours a `.byd` file from the server's semantic colours. Helix does not 
 and has no byld grammar yet, so there it gets diagnostics, completion and formatting, but no
 colours.
 
+It checks a file the way `byard check` checks the project it is in: the nearest
+`byard.toml` above the file says which files make up the program, so a view, a function or
+a record type defined in a file next door is known, and so are the manifest's theme tokens,
+its `[native_views]` and the capabilities the framework provides. The text of the files you
+have open stands in for what is on disk. What `byard check` prints as a warning the editor
+shows as a warning. A file with no `byard.toml` above it is checked alone, as
+`byard check file.byd` does.
+
+The server reads the project when it first needs it, and again when you save a file or the
+editor reports that one changed on disk, never on a keystroke. If a file next door has a
+syntax error, the checks of the others wait for it, as they do in `byard check`, and the
+editor says so in a note at the top of the file rather than showing nothing.
+
 ## `byard clean`
 
 `byard clean` removes `.byard/cache` and `.byard/generated`. It is safe, and it

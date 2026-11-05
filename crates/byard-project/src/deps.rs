@@ -1117,10 +1117,15 @@ impl FsProvider {
 
 // ── Project source collection ─────────────────────────────────────────────────
 
-/// Collects the root project's `.byd` files: the entry first, then every
-/// sibling (recursive under the entry's directory), sorted, the root package
-/// is one namespace (RFC-0008), so sibling views need no `use`.
-pub fn project_source_files(manifest: &Manifest) -> Result<Vec<SourceFile>, ProjectError> {
+/// The root project's `.byd` files as `(display name, path)`, in the order
+/// the resolver is given them: the entry first, then every sibling
+/// (recursive under the entry's directory), sorted. The root package is one
+/// namespace (RFC-0008), so sibling views need no `use`.
+///
+/// Separate from reading them so a tool that keeps sources in memory (the
+/// editor's language server) asks the same question `byard check` does, which
+/// files make up the program, and answers the rest from its own buffers.
+pub fn project_source_paths(manifest: &Manifest) -> Result<Vec<(String, PathBuf)>, ProjectError> {
     // A library package is checked as the files a consumer gets, from its
     // `src/` (or its root without one), with no entry first.
     if manifest.library {
@@ -1135,14 +1140,7 @@ pub fn project_source_files(manifest: &Manifest) -> Result<Vec<SourceFile>, Proj
                 ),
             ));
         }
-        return files
-            .into_iter()
-            .map(|(name, path)| {
-                let source =
-                    std::fs::read_to_string(&path).map_err(|e| ProjectError::io(&path, e))?;
-                Ok(SourceFile { name, source })
-            })
-            .collect();
+        return Ok(files);
     }
     let entry_dir = manifest
         .entry
@@ -1150,17 +1148,11 @@ pub fn project_source_files(manifest: &Manifest) -> Result<Vec<SourceFile>, Proj
         .unwrap_or(Path::new("."))
         .to_path_buf();
 
-    let entry_src = std::fs::read_to_string(&manifest.entry)
-        .map_err(|e| ProjectError::io(&manifest.entry, e))?;
     let entry_name = manifest.entry.file_name().map_or_else(
         || "main.byd".to_string(),
         |n| n.to_string_lossy().into_owned(),
     );
-
-    let mut files = vec![SourceFile {
-        name: entry_name,
-        source: entry_src,
-    }];
+    let mut files = vec![(entry_name, manifest.entry.clone())];
 
     // A bare `.byd` entry (`byard check foo.byd`) compiles only itself; sibling
     // files in the same directory are unrelated (they may be other examples with
@@ -1185,12 +1177,31 @@ pub fn project_source_files(manifest: &Manifest) -> Result<Vec<SourceFile>, Proj
         })
         .collect();
     rels.sort_by(|a, b| a.0.cmp(&b.0));
-
-    for (rel, path) in rels {
-        let source = std::fs::read_to_string(&path).map_err(|e| ProjectError::io(&path, e))?;
-        files.push(SourceFile { name: rel, source });
-    }
+    files.extend(rels);
     Ok(files)
+}
+
+/// Collects the root project's `.byd` files, read from disk: the files
+/// [`project_source_paths`] names, entry first.
+pub fn project_source_files(manifest: &Manifest) -> Result<Vec<SourceFile>, ProjectError> {
+    project_source_paths(manifest)?
+        .into_iter()
+        .map(|(name, path)| {
+            let source = std::fs::read_to_string(&path).map_err(|e| ProjectError::io(&path, e))?;
+            Ok(SourceFile { name, source })
+        })
+        .collect()
+}
+
+/// Declares the elements `manifest`'s `[native_views]` names: the ones the
+/// app's Rust half draws. An app has registered the real ones by now and these
+/// change nothing; a tool that cannot link that Rust gets a stand-in for each,
+/// so the program still means what it says. A name already registered is left
+/// alone, so a second call is harmless.
+pub fn declare_native_views(manifest: &Manifest) {
+    for view in &manifest.native_views {
+        byard_core::render::registry::declare(&view.name, &view.props);
+    }
 }
 
 /// Resolves the whole program for `manifest`: project sources + dependencies.
@@ -1202,12 +1213,7 @@ pub fn resolve_project(
     let lock = Lockfile::read(&manifest.project_root)?;
     let mut provider = FsProvider::new(manifest, lock);
     let files = project_source_files(manifest)?;
-    // The elements the app's Rust half draws. An app has registered the real
-    // ones by now and these change nothing; a tool that cannot link that Rust
-    // gets a stand-in for each, so the program still means what it says.
-    for view in &manifest.native_views {
-        byard_core::render::registry::declare(&view.name, &view.props);
-    }
+    declare_native_views(manifest);
     let program = byard_compiler::resolve::resolve_program(files, &mut provider);
     Ok((program, provider))
 }

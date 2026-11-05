@@ -10,6 +10,63 @@ use crate::state::document::Document;
 pub fn handle_document_symbol(doc: &Document) -> Option<DocumentSymbolResponse> {
     let mut symbols = Vec::new();
 
+    // Types and functions written at the top of the file stand beside the
+    // views: they are as much a part of what the file declares.
+    for record in &doc.parsed.records {
+        let range = doc.line_index.span_to_range(&doc.content, record.span);
+        // A field has no span of its own, so it is anchored at its type.
+        let fields: Vec<DocumentSymbol> = record
+            .fields
+            .iter()
+            .map(|field| {
+                #[allow(deprecated)]
+                DocumentSymbol {
+                    name: field.name.to_string(),
+                    detail: Some(if field.optional {
+                        "Field (optional)".to_string()
+                    } else {
+                        "Field".to_string()
+                    }),
+                    kind: SymbolKind::FIELD,
+                    tags: None,
+                    deprecated: None,
+                    range,
+                    selection_range: range,
+                    children: None,
+                }
+            })
+            .collect();
+        #[allow(deprecated)]
+        symbols.push(DocumentSymbol {
+            name: record.name.to_string(),
+            detail: Some("Record type".to_string()),
+            kind: SymbolKind::STRUCT,
+            tags: None,
+            deprecated: None,
+            range,
+            selection_range: range,
+            children: if fields.is_empty() {
+                None
+            } else {
+                Some(fields)
+            },
+        });
+    }
+    for decl in &doc.parsed.fns {
+        let range = doc.line_index.span_to_range(&doc.content, decl.span);
+        #[allow(deprecated)]
+        symbols.push(DocumentSymbol {
+            name: decl.name.to_string(),
+            detail: Some("Function".to_string()),
+            kind: SymbolKind::FUNCTION,
+            tags: None,
+            deprecated: None,
+            range,
+            selection_range: range,
+            children: None,
+        });
+    }
+
     for view in &doc.parsed.views {
         let view_range = doc.line_index.span_to_range(&doc.content, view.span);
         let mut view_children = Vec::new();

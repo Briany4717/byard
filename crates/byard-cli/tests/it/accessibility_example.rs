@@ -20,7 +20,7 @@ fn dump() -> String {
     let n = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let out =
         std::env::temp_dir().join(format!("byard-a11y-example-{}-{n}.txt", std::process::id()));
-    let run = Command::new(env!("CARGO_BIN_EXE_byard"))
+    let run = Command::new(env!("CARGO_BIN_EXE_byard-cli"))
         .arg("shot")
         .arg(example_dir())
         .arg("--a11y")
@@ -40,7 +40,7 @@ fn dump() -> String {
 
 #[test]
 fn accessibility_example_checks_clean() {
-    let out = Command::new(env!("CARGO_BIN_EXE_byard"))
+    let out = Command::new(env!("CARGO_BIN_EXE_byard-cli"))
         .arg("check")
         .arg(example_dir())
         .output()
@@ -83,7 +83,7 @@ fn asking_only_for_the_tree_writes_no_picture() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let tree = dir.join("tree.txt");
-    let run = Command::new(env!("CARGO_BIN_EXE_byard"))
+    let run = Command::new(env!("CARGO_BIN_EXE_byard-cli"))
         .current_dir(&dir)
         .arg("shot")
         .arg(example_dir())

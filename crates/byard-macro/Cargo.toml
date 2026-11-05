@@ -1,8 +1,10 @@
 [package]
 name    = "byard-macro"
 version.workspace = true
+description = "Procedural macros for Byard: #[byard_controller], #[native_view] and the HostValue derives"
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 
 [lib]
 proc-macro = true

@@ -14,7 +14,7 @@ fn example_dir() -> PathBuf {
 }
 
 fn check(dir: &PathBuf) -> (bool, String) {
-    let out = Command::new(env!("CARGO_BIN_EXE_byard"))
+    let out = Command::new(env!("CARGO_BIN_EXE_byard-cli"))
         .arg("check")
         .arg(dir)
         .output()

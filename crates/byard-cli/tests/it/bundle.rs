@@ -68,7 +68,7 @@ fn bundle(root: &Path, layout: &str) -> (bool, String) {
 }
 
 fn bundle_with(root: &Path, layout: &str, extra: &[&str]) -> (bool, String) {
-    let out = Command::new(env!("CARGO_BIN_EXE_byard"))
+    let out = Command::new(env!("CARGO_BIN_EXE_byard-cli"))
         .arg("bundle")
         .arg(root.join("app"))
         .arg("--bin")
@@ -232,7 +232,7 @@ fn a_project_with_an_error_or_no_entry_does_not_bundle() {
     assert!(!ok, "{text}");
     assert!(text.contains("before bundling"), "{text}");
 
-    let out = Command::new(env!("CARGO_BIN_EXE_byard"))
+    let out = Command::new(env!("CARGO_BIN_EXE_byard-cli"))
         .arg("bundle")
         .arg(root.join("dial"))
         .arg("--bin")
@@ -499,7 +499,7 @@ fn the_bundle_prints_what_a_validator_objects_to() {
     // With no tools on the path, the same bundle is written, in silence.
     let none = root.join("empty-path");
     std::fs::create_dir_all(&none).unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_byard"))
+    let out = Command::new(env!("CARGO_BIN_EXE_byard-cli"))
         .env("PATH", &none)
         .arg("bundle")
         .arg(root.join("app"))
@@ -635,7 +635,7 @@ fn the_project_in_a_linux_prefix_checks_clean() {
     let prefix = root.join("out/dials-bin");
     let project = prefix.join("bin/../share/dials-bin/project");
     // `byard check` on the tree's copy, as the app resolves it.
-    let out = Command::new(env!("CARGO_BIN_EXE_byard"))
+    let out = Command::new(env!("CARGO_BIN_EXE_byard-cli"))
         .arg("check")
         .arg(&project)
         .output()

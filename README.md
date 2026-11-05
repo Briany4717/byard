@@ -28,17 +28,30 @@ View Counter() {
 
 Pre-alpha. The engine, the language and the tools work, and the repository
 builds a multi-screen reference app ([Aura Weather](examples/aura_weather)).
-The language and the Rust APIs will still change before a first release, and
-nothing is published to crates.io yet.
+0.1.0 is the first release. The language and the Rust APIs will still change
+before 1.0.
 
 It runs on macOS, Linux and Windows. Mobile hosts do not exist yet.
+
+## Install
+
+```sh
+cargo install byard
+byard new hello
+cd hello
+byard dev
+```
+
+`byard` is the command and the library an app depends on (`byard = "0.1"`).
+The editor's language server is `cargo install byld-lsp`.
 
 ## Try it
 
 New here? Start with [the guide](docs/guide/src/introduction.md). To read it as
 a book, run `cargo install mdbook`, then `mdbook serve docs/guide`.
 
-Everything below runs from a clone of this repository, through Cargo.
+Everything below runs from a clone of this repository, through Cargo, with no
+install.
 
 ```sh
 # The reference app

@@ -69,9 +69,8 @@ the same layout.
 Byard is pre-alpha. The engine, the language and the tools work, and the
 repository builds a multi-screen reference app,
 [Aura Weather](https://github.com/Briany4717/byard/tree/main/examples/aura_weather).
-The language and the Rust APIs will still change before a first release, and
-nothing is published to crates.io yet. This is why the guide installs Byard from
-a clone.
+0.1.0 is the first release, on crates.io. The language and the Rust APIs will
+still change before 1.0, and a minor version can break them.
 
 ## How to read this guide
 

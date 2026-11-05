@@ -14,7 +14,7 @@ fn example_dir() -> PathBuf {
 /// `byard check <project-dir>` on the organic-fusion example reports no errors.
 #[test]
 fn organic_fusion_example_checks_clean() {
-    let out = Command::new(env!("CARGO_BIN_EXE_byard"))
+    let out = Command::new(env!("CARGO_BIN_EXE_byard-cli"))
         .arg("check")
         .arg(example_dir())
         .output()
@@ -46,7 +46,7 @@ fn an_inert_stroke_warns_while_an_undrawable_dash_fails() {
         let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests/fixtures")
             .join(name);
-        let out = Command::new(env!("CARGO_BIN_EXE_byard"))
+        let out = Command::new(env!("CARGO_BIN_EXE_byard-cli"))
             .arg("check")
             .arg(dir)
             .output()

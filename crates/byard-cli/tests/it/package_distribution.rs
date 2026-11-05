@@ -26,7 +26,7 @@ fn write(path: &Path, text: &str) {
 /// Runs `byard` in `cwd` with `HOME` pointed at `home`, so the package cache
 /// lives in the scratch directory and never in the real one.
 fn byard(cwd: &Path, home: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_byard"))
+    Command::new(env!("CARGO_BIN_EXE_byard-cli"))
         .args(args)
         .current_dir(cwd)
         .env("HOME", home)

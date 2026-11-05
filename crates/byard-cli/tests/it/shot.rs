@@ -37,7 +37,7 @@ fn a_shot_is_the_project_at_the_asked_size_in_its_own_colours() {
     )
     .unwrap();
     let png = dir.join("out.png");
-    let out = Command::new(env!("CARGO_BIN_EXE_byard"))
+    let out = Command::new(env!("CARGO_BIN_EXE_byard-cli"))
         .args(["shot", dir.to_str().unwrap(), "-o", png.to_str().unwrap()])
         .args(["--size", "100x40", "--scale", "2", "--at", "0"])
         .output()
@@ -74,7 +74,7 @@ fn a_shot_is_the_project_at_the_asked_size_in_its_own_colours() {
         "View Main() { Box #[bg: 0xE8543F, width: 20, height: 20] {} }\n",
     )
     .unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_byard"))
+    let out = Command::new(env!("CARGO_BIN_EXE_byard-cli"))
         .args(["shot", dir.to_str().unwrap(), "-o", png.to_str().unwrap()])
         .args(["--size", "100x40", "--scale", "1", "--at", "0"])
         .output()
@@ -104,7 +104,7 @@ fn a_shot_taps_types_and_presses_keys_in_the_order_written() {
     .unwrap();
     let shot = |name: &str, steps: &[&str]| -> Option<Vec<u8>> {
         let png = dir.join(format!("{name}.png"));
-        let out = Command::new(env!("CARGO_BIN_EXE_byard"))
+        let out = Command::new(env!("CARGO_BIN_EXE_byard-cli"))
             .args(["shot", dir.to_str().unwrap(), "-o", png.to_str().unwrap()])
             .args(["--size", "220x80", "--scale", "1", "--at", "0"])
             .args(steps)

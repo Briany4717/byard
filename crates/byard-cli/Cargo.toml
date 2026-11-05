@@ -1,6 +1,7 @@
 [package]
 name = "byard-cli"
 version.workspace = true
+description = "The byard command as a library: new, dev, check, fmt, shot, bundle and the rest"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -8,15 +9,20 @@ homepage.workspace = true
 authors.workspace = true
 rust-version.workspace = true
 
+# The command for this repository's own tests and `cargo run -p byard-cli`.
+# Installed, `byard` is the `byard` crate's binary (`cargo install byard`),
+# which runs the same `byard_cli::main`. Two binaries called `byard` in one
+# workspace would overwrite each other in `target/`.
 [[bin]]
-name = "byard"
+name = "byard-cli"
 path = "src/main.rs"
+doc = false
 
 [dependencies]
-byard-compiler = { path = "../byard-compiler" }
-byard-platform = { path = "../byard-platform" }
-byard-core     = { path = "../byard-core" }
-byard-project  = { path = "../byard-project" }
+byard-compiler.workspace = true
+byard-platform.workspace = true
+byard-core.workspace = true
+byard-project.workspace = true
 clap           = { version = "4", features = ["derive"] }
 toml           = { workspace = true, features = ["preserve_order"] }
 semver.workspace = true
@@ -41,7 +47,7 @@ a11y = ["byard-platform/a11y"]
 # RFC-0043: the test that runs a broken app through `Shot` is the façade's
 # first caller from outside, and checks what it prints against what `byard
 # check` prints for the same project.
-byard = { path = "../byard" }
+byard = { path = "../byard", default-features = false }
 
 [lints]
 workspace = true

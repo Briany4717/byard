@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 fn byard(cwd: &Path, args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_byard"))
+    Command::new(env!("CARGO_BIN_EXE_byard-cli"))
         .args(args)
         .current_dir(cwd)
         .output()

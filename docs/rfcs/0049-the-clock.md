@@ -145,6 +145,11 @@ and `--at` still advances it, so `--now 2026-11-05T09:00:00 --at 3000` is
 byard shot crates/byard-cli/examples/timers --now 2026-11-05T09:00:00 -o clock.png
 ```
 
+An app with a Rust half is drawn by `App::shot`, and `Shot::now("2026-11-05T09:00:00")`
+fixes the clock the same way. *(Erratum, 2026-11-06: `Shot::now` was added after
+this RFC was accepted; it calls `set_wall_clock` before the first frame, as `--now`
+does, and a text that is not a date makes `shot` fail before drawing.)*
+
 A test does the same with `Interpreter::set_wall_clock("2026-11-05T09:00:00")`,
 and moves it forward by advancing app time with `set_now_ms`, the call a test
 already makes every frame. A shot or test that does not fix the clock sees the

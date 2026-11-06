@@ -869,9 +869,18 @@ impl Interpreter {
                 flat_ids.push(id);
                 Ok(id)
             }
-            RenderNode::Image { attrs, .. } => {
+            RenderNode::Image {
+                attrs,
+                env_snapshot,
+                ..
+            } => {
+                let env_base = self.env.len();
+                for (k, v) in env_snapshot {
+                    self.env.push(k.clone(), v.clone());
+                }
                 let w = self.eval_px_prop(attrs, "width").unwrap_or(100.0);
                 let h = self.eval_px_prop(attrs, "height").unwrap_or(100.0);
+                self.env.truncate(env_base);
                 let id = self.atlas.add_leaf(LeafSize::new(w, h))?;
                 flat_ids.push(id);
                 Ok(id)
@@ -942,8 +951,17 @@ impl Interpreter {
             }
             // A VectorIcon is a square leaf sized by its `size` prop (default 24),
             // RFC-0009 §1.
-            RenderNode::Vector { attrs, .. } => {
-                let s = self.eval_int_prop(attrs, "size").unwrap_or(24) as f32;
+            RenderNode::Vector {
+                attrs,
+                env_snapshot,
+                ..
+            } => {
+                let env_base = self.env.len();
+                for (k, v) in env_snapshot {
+                    self.env.push(k.clone(), v.clone());
+                }
+                let s = self.eval_px_prop(attrs, "size").unwrap_or(24.0);
+                self.env.truncate(env_base);
                 let id = self.atlas.add_leaf(LeafSize::new(s, s))?;
                 flat_ids.push(id);
                 Ok(id)

@@ -334,7 +334,8 @@ View Main() {
 - `align` places the text within its width.
 - Any of these can read a view's parameter, a `let` or a `var`: `size: dim`,
   `weight: w`, `color: c`, `wrap: on`, or `typo: name` with a `Str` holding a token name.
-  A `Float` size such as `12.5` works too.
+  A `Float` size such as `12.5` works too. A name the view binds wins over a keyword of the
+  same spelling, so a parameter called `bold` is the parameter.
 - Text wraps to the width its parent offers. `wrap: false` keeps it on a line, and with a `width` clips it to that width.
 
 Text, like boxes, can be moved and turned. See [motion](motion.md).

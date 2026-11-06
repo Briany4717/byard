@@ -298,7 +298,6 @@ const TEXT_PROPS: &[(&str, PropDef)] = &[
     // box it needs.
     ("font", lay(PropType::FontFamily)),
     ("align", lay(PropType::Enum(ALIGN))),
-    ("lines", lay(PropType::Int)),
     ("wrap", lay(PropType::Bool)),
 ];
 

@@ -20,7 +20,7 @@ View Dashboard(products: List<Product>, movements: List<Movement>, on_open: Fn(I
 
             Row #[gap: 14] {
                 Tile(label: "SKUs", value: "{products.len}")
-                Tile(label: "Units on hand", value: "{units}")
+                Tile(label: "Units on hand", value: "{units:,}")
                 Tile(label: "Stock value", value: money(value))
                 Tile(label: "Low stock", value: "{low.len}", tone: low.len > 0 ? t.secondary : 0)
                 Tile(label: "Out of stock", value: "{out.len}", tone: out.len > 0 ? t.error : 0)

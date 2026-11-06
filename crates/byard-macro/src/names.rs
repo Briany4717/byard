@@ -1,10 +1,10 @@
 //! How a Rust name is spelled in Byld.
 //!
-//! Byld spells every name camelCase (`toLower`, `sortBy`, `formatDate`), and
-//! Rust spells functions and fields `snake_case`. The macros translate, so that
-//! neither language has to write the other's style: a controller's
-//! `fn export_csv` is `room.exportCsv(…)`, a record's `unit_price` is
-//! `unitPrice`, a native view's `hover_point` is `hoverPoint`.
+//! Byld spells its methods camelCase (`toLower`, `sortBy`, `formatDate`), and
+//! Rust spells functions `snake_case`, so the controller macro translates a
+//! method's name: `fn export_csv` is `room.exportCsv(…)`. Only methods:
+//! attributes and events (`row_height`, `key_down`) and record fields (data,
+//! `temperature_2m`) keep the name they were given.
 
 /// `snake_case` as `camelCase`. A name with no underscore is returned as it
 /// is, so a word that was already camelCase keeps its capitals. A leading

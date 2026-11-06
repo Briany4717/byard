@@ -125,7 +125,7 @@ View Main() {
                 height: 34,
                 radius: 8,
                 bg: 0xFFB300,
-                translate: (60, 0) with anim.ease_in_out(500ms, from: 0, repeat: 3),
+                translate: (60, 0) with anim.easeInOut(500ms, from: 0, repeat: 3),
             ] {}
         }
 

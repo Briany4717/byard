@@ -132,7 +132,7 @@ fn expand_struct(item: &Item) -> TokenStream {
     if let Fields::Named(named) = &input.fields {
         for field in &named.named {
             if let Some(ident) = &field.ident {
-                let fname = names::of_ident(ident);
+                let fname = ident.to_string();
                 let bty = byld_type_name(&field.ty);
                 entries.push((fname, bty));
             }

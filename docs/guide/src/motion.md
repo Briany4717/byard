@@ -6,7 +6,7 @@ View Main() {
 
     Column #[bg: 0x14141C, p: 40, gap: 24, align: center, grow: 1] {
         Box #[width: 90, height: 90, radius: 20, origin: center,
-              bg: on ? 0xEF5350 : 0x3B82F6 with anim.ease_in_out(300ms),
+              bg: on ? 0xEF5350 : 0x3B82F6 with anim.easeInOut(300ms),
               scale: on ? 1.3 : 1.0 with anim.spring(),
               rotate: on ? 45deg : 0deg with anim.spring(),
               tap => on = !on] {}
@@ -52,9 +52,9 @@ To grow or shrink something smoothly, animate its `scale`.
 |-------|----------|
 | `anim.spring()` | Physical: it overshoots and settles. The default for most things |
 | `anim.linear(200ms)` | A steady rate for the time given |
-| `anim.ease_in(200ms)` | Starts slow |
-| `anim.ease_out(200ms)` | Ends slow |
-| `anim.ease_in_out(200ms)`, `anim.ease(200ms)` | Slow at both ends |
+| `anim.easeIn(200ms)` | Starts slow |
+| `anim.easeOut(200ms)` | Ends slow |
+| `anim.easeInOut(200ms)`, `anim.ease(200ms)` | Slow at both ends |
 
 A spring takes `stiffness`, `damping` and `initial_velocity`, all optional:
 `anim.spring(stiffness: 200, damping: 0.6)`. A higher stiffness is quicker, and a

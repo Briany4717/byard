@@ -134,13 +134,14 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- **A controller method, a record field and a native view prop are camelCase in
-  Byld.** `fn export_csv` is now `room.exportCsv(...)`, a derived struct's
-  `unit_price` is `unitPrice`, and a native view's `#[prop] max_value` is
-  `maxValue` (also in `[native_views]`); the Rust names do not change. An app
-  must rename those calls and reads in its `.byd` files: the snake_case method
-  name now answers with an error naming the camelCase one.
-  `#[byard(rename = "...")]` on a method sets another name.
+- **A method is camelCase in Byld, wherever it comes from.** A controller's
+  `fn export_csv` is now `room.exportCsv(...)`, and the animation curves
+  `anim.ease_in`, `anim.ease_out` and `anim.ease_in_out` are now
+  `anim.easeIn`, `anim.easeOut` and `anim.easeInOut`. An app must rename those
+  calls in its `.byd` files: the old spelling is an error that names the new
+  one. The Rust names do not change, `#[byard(rename = "...")]` on a controller
+  method sets another name, and attributes, events and record fields keep the
+  names they were given.
 
 ### Fixed
 

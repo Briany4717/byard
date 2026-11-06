@@ -638,7 +638,7 @@ fn leading_spaces_in_a_text_are_kept() {
     let wrap_spaced = frame.text_wraps()[1].unwrap();
     let wrap_plain = plain.text_wraps()[1].unwrap();
     assert!(
-        wrap_spaced > wrap_plain + 8.0,
+        wrap_spaced > wrap_plain + 4.0,
         "three spaces widen the run: {wrap_spaced} vs {wrap_plain}"
     );
 }

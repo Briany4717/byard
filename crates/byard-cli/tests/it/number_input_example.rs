@@ -94,7 +94,7 @@ fn typing_a_number_clears_the_invalid_field() {
         let _ = std::fs::remove_file(&out);
         dump
     };
-    let typed = shot(&["--tap", "200,227", "--key", "ctrl+a", "--type", "12.5"]);
+    let typed = shot(&["--tap", "200,227", "--key", "mod+a", "--type", "12.5"]);
     assert!(typed.contains("= \"12.5\""), "{typed}");
     assert!(typed.contains("Label \"total: 15,432,087.50\""), "{typed}");
 }

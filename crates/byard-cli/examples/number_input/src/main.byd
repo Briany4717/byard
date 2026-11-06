@@ -16,7 +16,7 @@
 //      draws its `on invalid` style, a red border (`?? -1.0` is below zero).
 //   3. Tap the price field and replace the text with 12.5 (select all, type):
 //      the border turns back and the total reads 15,432,087.50. `--type` does it
-//      headless: `byard shot ... --tap 200,227 --key ctrl+a --type 12.5`.
+//      headless: `byard shot ... --tap 200,227 --key mod+a --type 12.5`.
 //   4. The last line reads `" -3 ".toInt()` (-3), `"1_000".toInt()` (nothing, so
 //      0 here), `(-2.5).round()` (-3: a half goes away from zero) and
 //      `(-2.5).abs()` (2.5).

@@ -10,14 +10,11 @@ View ProductList(products: List<Product>, on_open: Fn(Int) = {|_| }, on_new: Fn(
     var lowOnly: Bool = false
     var sortCol: Str = "name"
     var sortDesc: Bool = false
-    // A windowed list works out what is in view from its `height`, and `grow`
-    // does not count, so the room the list has is measured and given back.
-    var listH: Float = 400.0
 
     let q = query.trim().toLower()
     let matched = products.filter(p =>
         (category == "" || p.category == category)
-        && (!lowOnly || p.qty <= p.min)
+        && (!lowOnly || stockState(p.qty, p.min) != "ok")
         && (q == "" || p.name.toLower().contains(q) || p.sku.toLower().contains(q)))
     let sorted = sortCol == "name" ? matched.sortBy(p => p.name.toLower())
         : sortCol == "qty" ? matched.sortBy(p => p.qty)
@@ -86,13 +83,10 @@ View ProductList(products: List<Product>, on_open: Fn(Int) = {|_| }, on_new: Fn(
             when rows.len == 0 {
                 Text("No product matches") #[typo: t.body, color: t.onSurfaceVariant, m: 24]
             }
-            Box #[grow: 1] {
-                on measure => { listH = it.h }
-                ScrollView #[height: listH, windowed: true, row_height: 44] {
-                    Column {
-                        for p in rows {
-                            ProductRow(p: p, on_open: on_open)
-                        }
+            ScrollView #[grow: 1, windowed: true, row_height: 44] {
+                Column {
+                    for p in rows {
+                        ProductRow(p: p, on_open: on_open)
                     }
                 }
             }
@@ -104,12 +98,12 @@ View ProductList(products: List<Product>, on_open: Fn(Int) = {|_| }, on_new: Fn(
 View ProductRow(p: Product, on_open: Fn(Int) = {|_| }) {
     inject Theme as t
     Row #[height: 44, p: (horizontal: 16), gap: 12, align: center, tap => on_open(p.id)] {
-        Box #[width: 90] { Text(p.sku) #[typo: t.caption, color: t.onSurfaceVariant, wrap: false] }
-        Box #[grow: 1] { Text(p.name) #[typo: t.body, color: t.onSurface, wrap: false] }
-        Box #[width: 100] { Text(p.category) #[typo: t.caption, color: t.onSurfaceVariant, wrap: false] }
-        Box #[width: 50] { Text(p.location ?? "-") #[typo: t.caption, color: t.onSurfaceVariant, wrap: false] }
-        Box #[width: 90] { Text("{p.qty}") #[typo: t.body, color: t.onSurface, wrap: false] }
-        Box #[width: 100] { Text(money(p.qty * p.price)) #[typo: t.body, color: t.onSurface, wrap: false] }
+        Text(p.sku) #[typo: t.caption, color: t.onSurfaceVariant, width: 90, wrap: false]
+        Text(p.name) #[typo: t.body, color: t.onSurface, grow: 1, wrap: false]
+        Text(p.category) #[typo: t.caption, color: t.onSurfaceVariant, width: 100, wrap: false]
+        Text(p.location ?? "-") #[typo: t.caption, color: t.onSurfaceVariant, width: 50, wrap: false]
+        Text("{p.qty}") #[typo: t.body, color: t.onSurface, width: 90, wrap: false]
+        Text(money(p.qty * p.price)) #[typo: t.body, color: t.onSurface, width: 100, wrap: false]
         Row #[width: 60] { StockBadge(qty: p.qty, min: p.min) }
     }
 }

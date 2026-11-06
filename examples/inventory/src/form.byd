@@ -28,54 +28,55 @@ View ProductForm(
     var skuSeen: Bool = false
     var nameSeen: Bool = false
     var priceSeen: Bool = false
-    var skuFocus: Bool = false
 
-    on mount => skuFocus = true
+    // Quantities are whole numbers from 0 to a billion; a price is from 0 up.
+    let qty = qtyText.toInt() ?? -1
+    let min = minText.toInt() ?? -1
+    let price = priceText.toFloat() ?? -1.0
 
     let skuText = sku.trim()
     let skuError = skuText == "" ? "Required"
         : products.filter(p => p.id != editing && p.sku.toLower() == skuText.toLower()).len > 0 ? "Already used by another product"
         : ""
     let nameError = name.trim() == "" ? "Required" : ""
-    let qtyError = isNew && !(isWhole(qtyText) && qtyText.len <= 9) ? "A whole number, 0 or more" : ""
-    let minError = isWhole(minText) && minText.len <= 9 ? "" : "A whole number, 0 or more"
-    let priceError = isDecimal(priceText) && priceText.len <= 9 ? "" : "A price, 0 or more"
+    let qtyError = isNew && (qty < 0 || qty > 1000000000) ? "A whole number, 0 or more" : ""
+    let minError = (min < 0 || min > 1000000000) ? "A whole number, 0 or more" : ""
+    let priceError = (price < 0.0 || price > 1000000000.0) ? "A price, 0 or more" : ""
 
     let ready = skuError == "" && nameError == "" && qtyError == "" && minError == "" && priceError == ""
 
     let save = () => {
         if ready {
             if isNew {
-                on_create(skuText, name.trim(), category, toInt(qtyText), toInt(minText), toFloat(priceText), location.trim())
+                on_create(skuText, name.trim(), category, qty, min, price, location.trim())
             } else {
-                on_update(editing, skuText, name.trim(), category, toInt(minText), toFloat(priceText), location.trim())
+                on_update(editing, skuText, name.trim(), category, min, price, location.trim())
             }
         }
-    }
-
-    let field = style {
-        height: 40, width: 400, bg: t.surfaceContainer, color: t.onSurface, radius: 10, p: (horizontal: 12), typo: t.body
-        border: t.outlineVariant, border_width: 1
-        on focused { border: t.primary, border_width: 2 }
-        on invalid { border: t.error, border_width: 2 }
     }
 
     ScrollView #[grow: 1] {
         Column #[p: (vertical: 24, horizontal: 28), gap: 14, width: 600] {
             Heading(title: isNew ? "New product" : "Edit product") {}
 
-            Column #[gap: 4] {
-                Label(text: "SKU", error: (skuSeen || sku != "") ? skuError : "")
-                TextField #[..field, bind: sku, placeholder: "HW-061", focused: skuFocus,
-                            invalid: (skuSeen || sku != "") && skuError != "",
-                            blur => skuSeen = true, submit => save()]
-            }
-            Column #[gap: 4] {
-                Label(text: "Name", error: (nameSeen || name != "") ? nameError : "")
-                TextField #[..field, bind: name, placeholder: "Hex bolt M10",
-                            invalid: (nameSeen || name != "") && nameError != "",
-                            blur => nameSeen = true, submit => save()]
-            }
+            FormField(
+                label: "SKU",
+                value: sku,
+                error: (skuSeen || sku != "") ? skuError : "",
+                placeholder: "HW-061",
+                on_change: {|v| sku = v },
+                on_blur: { skuSeen = true },
+                on_submit: { save() },
+            )
+            FormField(
+                label: "Name",
+                value: name,
+                error: (nameSeen || name != "") ? nameError : "",
+                placeholder: "Hex bolt M10",
+                on_change: {|v| name = v },
+                on_blur: { nameSeen = true },
+                on_submit: { save() },
+            )
             Column #[gap: 4] {
                 Label(text: "Category")
                 Row #[gap: 8] {
@@ -84,31 +85,52 @@ View ProductForm(
                     }
                 }
             }
-            Row #[gap: 14] {
-                Column #[gap: 4] {
-                    Label(text: isNew ? "Quantity" : "On hand", error: qtyError)
-                    when isNew {
-                        TextField #[..field, width: 170, bind: qtyText, invalid: qtyError != "", submit => save()]
+            Row #[gap: 14, align: start] {
+                when isNew {
+                    FormField(
+                        label: "Quantity",
+                        value: qtyText,
+                        error: qtyError,
+                        width: 170,
+                        on_change: {|v| qtyText = v },
+                        on_submit: { save() },
+                    )
+                }
+                when !isNew {
+                    Column #[gap: 4] {
+                        Label(text: "On hand")
+                        Box #[height: 40, width: 170, bg: t.surfaceContainer, radius: 10, p: (horizontal: 12), justify: center] {
+                            Text("{current.qty}") #[typo: t.body, color: t.onSurfaceVariant]
+                        }
                     }
-                    when !isNew {
-                        Box #[height: 40, width: 170, bg: t.surfaceContainer, radius: 10, p: (horizontal: 12), justify: center] { Text("{current.qty}") #[typo: t.body, color: t.onSurfaceVariant] }
-                    }
                 }
-                Column #[gap: 4] {
-                    Label(text: "Minimum", error: minError)
-                    TextField #[..field, width: 170, bind: minText, invalid: minError != "", submit => save()]
-                }
-                Column #[gap: 4] {
-                    Label(text: "Price", error: (priceSeen || priceText != "") ? priceError : "")
-                    TextField #[..field, width: 170, bind: priceText, placeholder: "0.00",
-                                invalid: (priceSeen || priceText != "") && priceError != "",
-                                blur => priceSeen = true, submit => save()]
-                }
+                FormField(
+                    label: "Minimum",
+                    value: minText,
+                    error: minError,
+                    width: 170,
+                    on_change: {|v| minText = v },
+                    on_submit: { save() },
+                )
+                FormField(
+                    label: "Price",
+                    value: priceText,
+                    error: (priceSeen || priceText != "") ? priceError : "",
+                    placeholder: "0.00",
+                    width: 170,
+                    on_change: {|v| priceText = v },
+                    on_blur: { priceSeen = true },
+                    on_submit: { save() },
+                )
             }
-            Column #[gap: 4] {
-                Label(text: "Location")
-                TextField #[..field, bind: location, placeholder: "Shelf, for example B2", submit => save()]
-            }
+            FormField(
+                label: "Location",
+                value: location,
+                error: "",
+                placeholder: "Shelf, for example B2",
+                on_change: {|v| location = v },
+                on_submit: { save() },
+            )
             when !isNew {
                 Text("The quantity changes through Receive, Ship and Adjust, so the log stays true.") #[typo: t.caption, color: t.onSurfaceVariant]
             }

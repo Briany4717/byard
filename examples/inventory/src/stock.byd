@@ -6,7 +6,7 @@ fn stockState(qty: Int, min: Int) -> Str => qty <= 0 ? "out" : qty <= min ? "low
 
 fn stockLabel(qty: Int, min: Int) -> Str => qty <= 0 ? "Out" : qty <= min ? "Low" : "In stock"
 
-fn money(v: Float) -> Str => "${v:.2}"
+fn money(v: Float) -> Str => "${v:,.2}"
 
 // A movement's quantity as the log shows it: "+50", "-4", "+3".
 fn signed(kind: Str, qty: Int) -> Str => kind == "out" ? "-{qty}" : qty > 0 ? "+{qty}" : "{qty}"

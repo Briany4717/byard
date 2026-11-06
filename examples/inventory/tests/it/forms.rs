@@ -60,12 +60,18 @@ fn each_field_says_what_is_wrong() {
     app.tap("0.00");
     app.type_text("abc");
     assert!(app.shows("A price, 0 or more"), "{:?}", app.texts());
-    app.replace_text("4.");
+    app.replace_text("1.2.3");
     assert!(app.shows("A price, 0 or more"));
+    app.replace_text("-1");
+    assert!(app.shows("A price, 0 or more"));
+    // ".5" is half, "4." is four: the engine reads them.
     app.replace_text(".5");
-    assert!(app.shows("A price, 0 or more"));
+    assert!(!app.shows("A price, 0 or more"), "{:?}", app.texts());
     app.replace_text("4.50");
     assert!(!app.shows("A price, 0 or more"), "{:?}", app.texts());
+    // A number too large to hold is not one either: no wrapping.
+    app.replace_text("99999999999999999999");
+    assert!(app.shows("A price, 0 or more"), "{:?}", app.texts());
 }
 
 #[test]

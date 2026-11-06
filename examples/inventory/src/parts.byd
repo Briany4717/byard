@@ -64,12 +64,11 @@ View Action(label: Str, tone: Str = "primary", off: Bool = false, on_tap: Fn() =
 // The words next to a control, and what is wrong with it.
 View Label(text: Str, error: Str = "") {
     inject Theme as t
-    // The message is always there, empty when nothing is wrong. A `when` that
-    // came and went here would move the field below it in the tree, and a field
-    // that is moved loses the keyboard focus after the character that did it.
-    Row #[align: center, gap: 8] {
+    Row #[gap: 8, align: center] {
         Text(text) #[typo: t.caption, color: t.onSurfaceVariant]
-        Text(error) #[typo: t.caption, color: t.error]
+        when error != "" {
+            Text(error) #[typo: t.caption, color: t.error]
+        }
     }
 }
 
@@ -88,12 +87,49 @@ View Heading(title: Str, content) {
 View Dialog(title: Str, on_close: Fn() = {}, content) {
     inject Theme as t
     Overlay #[dismiss => on_close()] {
-        // `tap => {}` is not decoration: without a listener on the panel, a press
-        // on its padding or on a field inside it counts as a press on the scrim
-        // and closes the dialog.
-        Column #[anchor: center, bg: t.surfaceContainerHigh, radius: 18, p: 22, gap: 14, width: 400, tap => {}] {
+        Column #[anchor: center, bg: t.surfaceContainerHigh, radius: 18, p: 22, gap: 14, width: 400] {
             Text(title) #[typo: t.title, color: t.onSurface]
             content
         }
+    }
+}
+
+// A labelled text field. A parameter is a copy, so the field keeps its own `var`
+// for the control and hands each edit up through `on_change` (the pattern of
+// `crates/byard-cli/examples/reusable_field`). `error` is the message to show,
+// or nothing.
+View FormField(
+    label: Str,
+    value: Str,
+    error: Str,
+    placeholder: Str = "",
+    width: Int = 400,
+    on_change: Fn(Str) = {|_| },
+    on_blur: Fn() = {},
+    on_submit: Fn() = {},
+) {
+    inject Theme as t
+    var text = value
+    on change(value) => text = value
+
+    let look = style {
+        height: 40, bg: t.surfaceContainer, color: t.onSurface, radius: 10, p: (horizontal: 12), typo: t.body
+        border: t.outlineVariant, border_width: 1
+        on focused { border: t.primary, border_width: 2 }
+        on invalid { border: t.error, border_width: 2 }
+    }
+
+    Column #[gap: 4] {
+        Label(text: label, error: error)
+        TextField #[
+            ..look,
+            bind: text,
+            placeholder: placeholder,
+            width: width,
+            invalid: error != "",
+            input(v) => on_change(v),
+            blur => on_blur(),
+            submit => on_submit(),
+        ]
     }
 }

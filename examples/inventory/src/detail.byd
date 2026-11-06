@@ -70,7 +70,7 @@ View ProductDetail(
                                 Column #[gap: 2, p: (vertical: 4)] {
                                     Row #[gap: 10] {
                                         Text(signed(m.kind, m.qty)) #[typo: t.label, width: 40, color: m.kind == "out" ? t.secondary : m.kind == "in" ? t.tertiary : t.onSurfaceVariant]
-                                        Box #[grow: 1] { Text(kindLabel(m.kind)) #[typo: t.body, color: t.onSurface] }
+                                        Text(kindLabel(m.kind)) #[typo: t.body, color: t.onSurface, grow: 1]
                                         Text(stamp(m.at)) #[typo: t.caption, color: t.onSurfaceVariant]
                                     }
                                     when m.note != "" {
@@ -133,8 +133,9 @@ View MoveDialog(
     var qtyText: Str = kind == "adjust" ? "{on_hand}" : ""
     var note: Str = ""
 
-    let valid = isWhole(qtyText) && qtyText.len <= 6
-    let qty = valid ? toInt(qtyText) : 0
+    let parsed = qtyText.toInt() ?? -1
+    let valid = parsed >= 0 && parsed <= 1000000
+    let qty = valid ? parsed : 0
     // For an adjustment the quantity is the new count, and the movement is
     // the difference.
     let problem = qtyText == "" ? ""
@@ -173,7 +174,7 @@ View MoveDialog(
         Label(text: "Note")
         TextField #[
             bind: note,
-            placeholder: "Order number, delivery, reason",
+            placeholder: "Order, delivery, reason",
             height: 40,
             bg: t.surfaceContainer,
             color: t.onSurface,

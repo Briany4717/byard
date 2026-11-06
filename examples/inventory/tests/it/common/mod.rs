@@ -15,7 +15,7 @@ use stockroom::Stockroom;
 pub const W: f32 = 1100.0;
 pub const H: f32 = 720.0;
 /// What the clock says in every test.
-pub const NOW: &str = "2026-11-05T10:30";
+pub const NOW: &str = "2026-11-05T10:30:00";
 
 /// One integer of `ci/budgets.toml`. A missing file, section or key fails the
 /// test and says which: a budget that is not read is not a budget.
@@ -84,12 +84,13 @@ impl App {
         let relay = Relay::new().expect("relay");
         let mut registry = ControllerRegistry::new();
         registry.insert(Arc::new(byard_core::cap::Store::at(sandbox.store())));
-        registry.insert(Arc::new(Stockroom::at(&sandbox.dir).with_fixed_now(NOW)));
+        registry.insert(Arc::new(Stockroom::at(&sandbox.dir)));
         let dispatcher = Dispatcher::new(registry, relay.io_handle(), relay.io_result_sender());
 
         let mut interp = Interpreter::new();
         interp.set_theme(manifest.theme);
         interp.set_dispatcher(dispatcher);
+        interp.set_wall_clock(NOW).expect("a fixed clock");
         interp.load_views(&program.views);
         let known: Vec<&str> = program.views.iter().map(|v| v.name.as_str()).collect();
         let root = byard_compiler::parser::ast::root_view(&program.views).unwrap();
@@ -220,11 +221,6 @@ impl App {
     }
 
     /// The position of the last text drawn as `label`.
-    ///
-    /// A text line carries no paint transform, and a dialog is placed by one
-    /// (`anchor: center` moves its boxes at paint time), so a text inside the
-    /// dialog panel (400 wide, as `Dialog` in parts.byd says) is moved by the
-    /// panel's own translation to land where it is painted.
     pub fn find(&self, label: &str) -> (f32, f32) {
         let line = self
             .frame
@@ -233,22 +229,7 @@ impl App {
             .rev()
             .find(|t| t.text == label)
             .unwrap_or_else(|| panic!("a text {label:?}: {:?}", self.texts()));
-        let (mut x, mut y) = (line.x + 4.0, line.y + line.font_size * 0.5);
-        let panel = self.frame.instances().iter().rev().find(|b| {
-            (b.rect[2] - 400.0).abs() < 0.5
-                && (b.transform.translate[0] != 0.0 || b.transform.translate[1] != 0.0)
-        });
-        if let Some(b) = panel {
-            let inside = x >= b.rect[0]
-                && x <= b.rect[0] + b.rect[2]
-                && y >= b.rect[1]
-                && y <= b.rect[1] + b.rect[3];
-            if inside {
-                x += b.transform.translate[0];
-                y += b.transform.translate[1];
-            }
-        }
-        (x, y)
+        (line.x + 4.0, line.y + line.font_size * 0.5)
     }
 
     /// Taps the last text drawn as `label`, wherever the layout put it. A
@@ -256,16 +237,6 @@ impl App {
     pub fn tap(&mut self, label: &str) {
         let pos = self.find(label);
         self.tap_at(pos);
-    }
-
-    /// The panel's translation, for a test of where the dialog is painted.
-    pub fn dialog_shift(&self) -> Option<[f32; 2]> {
-        self.frame
-            .instances()
-            .iter()
-            .rev()
-            .find(|b| (b.rect[2] - 400.0).abs() < 0.5 && b.transform.translate != [0.0, 0.0])
-            .map(|b| b.transform.translate)
     }
 
     /// Taps the first text drawn as `label`: a filter chip, which the rows
@@ -311,6 +282,22 @@ impl App {
         let start = std::time::Instant::now();
         self.step(&[e]);
         start.elapsed()
+    }
+
+    /// Every solid box as painted, `[x, y, w, h]`.
+    pub fn boxes(&self) -> Vec<[f32; 4]> {
+        self.frame
+            .instances()
+            .iter()
+            .map(|b| {
+                [
+                    b.rect[0] + b.transform.translate[0],
+                    b.rect[1] + b.transform.translate[1],
+                    b.rect[2],
+                    b.rect[3],
+                ]
+            })
+            .collect()
     }
 
     /// The text drawn at or after `start` that begins with `prefix`, the way a

@@ -107,6 +107,50 @@ Then `use` it in a `.byd` file, before any view:
 Functions a package declares are used the same way: `k.describe(…)`. If two names collide, the
 checker asks for an alias. Your own project's views never need a prefix.
 
+### A view named like a built-in
+
+A package may declare a view with a built-in's name, `Button`, `TextField`, `Toggle`, which a
+design system needs. The two never meet, because the package's view is only reached by the
+package's name:
+
+```byld,ignore
+// Needs the `ds` package below, which declares `View Button`.
+use ds as m
+
+View Main() {
+    Column {
+        m.Button("the package's")
+        Button("the built-in")
+    }
+}
+```
+
+- **Outside the package**, a bare `Button` is always the built-in, and the package's is `m.Button`.
+- `use ds.{Button}` would hide the built-in in that file, so it is an error
+  (`ImportShadowsBuiltin`) that says to write `ds.Button`. The selective form has no alias.
+- **Inside the package**, a bare `Button` is also the built-in, so the package's own `Button` can be
+  built from it, and the package's view is reached by the package's own name, as its callers reach it:
+
+```byld,ignore
+// In the package `ds`: wraps the built-in, which keeps its keyboard and accessibility.
+View Button(label: Str) {
+    Button(label) #[bg: 0x6750A4, color: 0xFFFFFF, radius: 20]
+}
+
+View Pair() {
+    Row #[gap: 8] {
+        ds.Button("one")
+        ds.Button("two")
+    }
+}
+```
+
+  A view that calls itself this way gets the usual recursion error.
+- **In an app**, a view named like a built-in is still an error (`IntrinsicShadowed`): an app has no
+  name to keep the two apart.
+
+The `builtin_names` example has the package and an app that uses both.
+
 ### Fonts and themes from a package
 
 A package's fonts are named `package/Family`, whatever the app calls the dependency:

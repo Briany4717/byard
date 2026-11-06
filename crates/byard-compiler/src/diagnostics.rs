@@ -528,6 +528,16 @@ pub enum CompileError {
         /// The shadowing view name (an intrinsic name).
         name: String,
     },
+    /// `use pkg.{Button}` would hide the built-in `Button` for the whole file;
+    /// the package's view is reached as `pkg.Button` instead.
+    ImportShadowsBuiltin {
+        /// Source range of the imported name.
+        span: Span,
+        /// The built-in's name.
+        name: String,
+        /// The package that declares a view of that name.
+        package: String,
+    },
     /// A user-`View` call cycle is not guarded by a `when`/`for` structural
     /// boundary, so instantiation would diverge (RFC-0007 §4).
     RecursiveView {
@@ -1106,6 +1116,7 @@ impl CompileError {
             | Self::MissingParam { span, .. }
             | Self::DuplicateParam { span, .. }
             | Self::IntrinsicShadowed { span, .. }
+            | Self::ImportShadowsBuiltin { span, .. }
             | Self::RecursiveView { span, .. }
             | Self::UnknownAnimation { span, .. }
             | Self::LayoutPropNotAnimatable { span, .. }
@@ -1208,6 +1219,7 @@ impl CompileError {
             | Self::MissingParam { span, .. }
             | Self::DuplicateParam { span, .. }
             | Self::IntrinsicShadowed { span, .. }
+            | Self::ImportShadowsBuiltin { span, .. }
             | Self::RecursiveView { span, .. }
             | Self::UnknownAnimation { span, .. }
             | Self::LayoutPropNotAnimatable { span, .. }
@@ -1312,6 +1324,7 @@ impl CompileError {
             Self::MissingParam { .. } => "MissingParam",
             Self::DuplicateParam { .. } => "DuplicateParam",
             Self::IntrinsicShadowed { .. } => "IntrinsicShadowed",
+            Self::ImportShadowsBuiltin { .. } => "ImportShadowsBuiltin",
             Self::RecursiveView { .. } => "RecursiveView",
             Self::UnknownAnimation { .. } => "UnknownAnimation",
             Self::LayoutPropNotAnimatable { .. } => "LayoutPropNotAnimatable",
@@ -1638,6 +1651,10 @@ impl CompileError {
             Self::IntrinsicShadowed { name, .. } => {
                 format!("view `{name}` shadows the built-in intrinsic of the same name")
             }
+            Self::ImportShadowsBuiltin { name, package, .. } => format!(
+                "importing `{name}` from `{package}` would hide the built-in `{name}` in this file; \
+                 write `{package}.{name}` (or `use {package} as m` and `m.{name}`)"
+            ),
             Self::RecursiveView { path, .. } => {
                 format!("recursive view cycle without a `when`/`for` guard: {path}")
             }

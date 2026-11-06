@@ -211,6 +211,12 @@ checker, not the parser):
 | `IntrinsicShadowed` | a `View` is named like an RFC-0005 intrinsic |
 | `RecursiveView` | unguarded static call cycle |
 
+> **Erratum (RFC-0008).** `IntrinsicShadowed` applies to a project's own views,
+> which have no namespace. A *package* may declare a view named like a built-in
+> (`Button`): outside it the view is reached only qualified (`m.Button`), inside
+> it as `<package>.Button`, and a bare `Button` is the built-in in both places.
+> `use pkg.{Button}` is `ImportShadowsBuiltin`. See the packages guide.
+
 Diagnostics must carry source spans and, where useful, the callee's parameter
 list as a hint (SwiftUI-quality errors, RFC-0001 §"Rationale").
 

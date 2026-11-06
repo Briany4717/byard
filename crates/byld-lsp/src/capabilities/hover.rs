@@ -5,6 +5,7 @@ use byard_compiler::infer::{Inference, Ty};
 use byard_compiler::interp::intrinsics;
 use lsp_types::{Hover, HoverContents, MarkupContent, MarkupKind, Position};
 
+use crate::semantic::symbols::{PackageIndex, qualified_target};
 use crate::state::document::Document;
 use crate::syntax::ast_utils::{HoverTarget, find_hover_target};
 
@@ -15,6 +16,7 @@ pub fn handle_hover(doc: &Document, pos: Position) -> Option<Hover> {
     let target = find_hover_target(&doc.parsed.views, offset)?;
 
     let docs = match target {
+        HoverTarget::Intrinsic { name } if name.contains('.') => qualified_hover_docs(doc, &name)?,
         HoverTarget::Intrinsic { name } => intrinsic_hover_docs(&name)?,
         HoverTarget::Attribute {
             element_name,
@@ -30,6 +32,27 @@ pub fn handle_hover(doc: &Document, pos: Position) -> Option<Hover> {
         }),
         range: None,
     })
+}
+
+/// A view reached by its package's name (`m.Button`, or `material.Button`
+/// inside `material`): its signature and where it comes from.
+fn qualified_hover_docs(doc: &Document, name: &str) -> Option<String> {
+    let index = PackageIndex::build(doc.file_path().as_deref());
+    let (pkg, rest) = qualified_target(name, &doc.parsed.imports, index.own_package.as_deref())?;
+    let (view, origin) = match &pkg {
+        Some(pkg) => (index.view(pkg, rest)?, format!("package `{pkg}`")),
+        None => (
+            doc.parsed.views.iter().find(|v| v.name.as_str() == rest)?,
+            "this package".to_string(),
+        ),
+    };
+    // A package's view lives in another file for an import: show its
+    // parameter names, which is what a call site needs.
+    let params: Vec<String> = view.params.iter().map(|p| p.name.to_string()).collect();
+    Some(format!(
+        "```byld\nView {rest}({})\n```\n\nA view of {origin}.",
+        params.join(", ")
+    ))
 }
 
 fn intrinsic_hover_docs(name: &str) -> Option<String> {

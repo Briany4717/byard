@@ -27,6 +27,12 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   drew all three like the last (springs, curves, keyframes, staggers, loops, `on hover` changes and
   `morph:` alike). Each call now animates on its own, including inside an `Overlay`, and one that
   goes away starts over when it comes back.
+- **A package can declare a view named like a built-in.** `View Button` in a package made
+  its own `byard check` fail with `IntrinsicShadowed`, though an app would write `m.Button`.
+  Now the package checks clean: a bare `Button` is still the built-in, the package's is
+  `m.Button` outside and `package.Button` inside, and `use package.{Button}` says to write the
+  qualified name. An app declaring such a view is still an error. The editor completes,
+  hovers and jumps to the qualified name.
 - **A lambda sees its own item.** A `fn` called with the item inside a list
   lambda (`products.filter(p => isLow(p.qty))`) was computed once, for the
   first item, and gave every item the same answer. A lambda inside another

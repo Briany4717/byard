@@ -791,3 +791,15 @@ fn a_remainder_is_spaced_and_a_keyframe_percent_is_left_alone() {
         "{out}"
     );
 }
+
+#[test]
+fn a_view_reached_by_its_package_name_is_formatted_like_any_other() {
+    // `m.Button(...)` from an app and `ds.Button(...)` inside the package
+    // `ds`, next to the bare built-in.
+    let out = fmt_stable(
+        "use ds as m\nView Main(){\nColumn{\nm.Button(\"a\") #[bg:0xFF0000]\nButton(\"b\")\nds.Button(\"c\")\n}\n}",
+    );
+    assert!(out.contains("m.Button(\"a\") #[bg: 0xFF0000]"), "{out}");
+    assert!(out.contains("\n        Button(\"b\")\n"), "{out}");
+    assert!(out.contains("ds.Button(\"c\")"), "{out}");
+}

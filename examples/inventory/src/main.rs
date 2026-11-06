@@ -41,7 +41,11 @@ fn main() -> Result<(), byard::ByardError> {
             .get(shot_at + 2)
             .filter(|a| !a.starts_with("--"))
             .map_or("dashboard", String::as_str);
-        let mut plan = byard::Shot::after(1500).system_dark(!flag("--light"));
+        // A fixed clock, so a record made in the picture is dated the same way
+        // every time it is drawn.
+        let mut plan = byard::Shot::after(1500)
+            .system_dark(!flag("--light"))
+            .now("2026-11-05T09:00:00");
         if let Some((_, x)) = TABS.iter().find(|(name, _)| *name == tab) {
             plan = plan.tap(*x, 30.0).wait(500);
         }

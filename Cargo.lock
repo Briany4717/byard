@@ -4011,7 +4011,6 @@ dependencies = [
  "byard-compiler",
  "byard-core",
  "byard-project",
- "directories",
  "toml",
 ]
 

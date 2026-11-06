@@ -26,7 +26,7 @@ fn receiving_adds_to_the_quantity_and_the_log() {
     assert!(app.shows("Receive 9V battery"), "{:?}", app.texts());
     app.tap("0");
     app.type_text("6");
-    app.tap("Order number, delivery, reason");
+    app.tap("Order, delivery, reason");
     app.type_text("Delivery 77");
     app.tap("Confirm");
     assert!(!app.shows("Receive 9V battery"), "the dialog closes");
@@ -181,4 +181,29 @@ fn delete_asks_first_then_removes_and_keeps_the_movements_readable() {
     assert!(app.shows("Deleted product #2"), "{:?}", app.texts());
     assert!(app.shows("Order 1042"));
     assert!(app.shows("3 of 3"));
+}
+
+#[test]
+fn a_press_inside_the_dialog_keeps_it_open_and_the_page_is_dimmed_under_it() {
+    let (_sb, mut app) = battery();
+    app.tap("Ship");
+    // On the words inside the panel, and on its field: neither closes it.
+    app.tap("29 on hand");
+    assert!(app.shows("Ship 9V battery"), "{:?}", app.texts());
+    app.tap("0");
+    assert!(app.shows("Ship 9V battery"), "{:?}", app.texts());
+    app.type_text("12");
+    assert!(
+        app.shows("12"),
+        "the field took what was typed: {:?}",
+        app.texts()
+    );
+    // One box covers the whole window: the scrim.
+    let scrim = app.boxes().iter().any(|b| {
+        b[2] >= crate::common::W - 1.0
+            && b[3] >= crate::common::H - 1.0
+            && b[0] <= 1.0
+            && b[1] <= 1.0
+    });
+    assert!(scrim, "a scrim over the window");
 }

@@ -33,8 +33,8 @@ regression_percent = 10
 
 [inventory]
 # Stockroom (examples/inventory) with 2000 products, in the debug build the test
-# suite uses. Measured where they were set: opening the Products tab 1.9 s (the
-# first frame), a keystroke in its search box 30 to 115 ms; in release 0.37 s and
+# suite uses. Measured where they were set: opening the Products tab 1.2 to 1.9 s
+# (the first frame), a keystroke in its search box 30 to 115 ms; in release 0.37 s and
 # 13 to 38 ms. A frame is 16 ms, so these ceilings are what the example does
 # today (three times it, for a slower runner), not what an app should aim at:
 # they exist so it does not get worse while the engine learns to build only the

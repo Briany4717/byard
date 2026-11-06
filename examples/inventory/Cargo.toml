@@ -11,8 +11,6 @@ publish = false
 
 [dependencies]
 byard = { path = "../../crates/byard" }
-# Where the app's data directory is, for the CSV export (see src/controller.rs).
-directories = "6"
 
 [lints]
 workspace = true

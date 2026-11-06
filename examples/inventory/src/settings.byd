@@ -10,13 +10,14 @@ View Settings(products: List<Product>, min_default: Int, on_min: Fn(Int) = {|_| 
     var minText: Str = "{min_default}"
     var confirming: Bool = false
 
-    let minValid = isWhole(minText) && minText.len <= 6
-    let minChanged = minValid && toInt(minText) != min_default
+    let minParsed = minText.toInt() ?? -1
+    let minValid = minParsed >= 0 && minParsed <= 1000000
+    let minChanged = minValid && minParsed != min_default
 
     let export = () => {
         exported = ""
         exportError = ""
-        room.export_csv(products)
+        room.exportCsv(products)
             ok done => { exported = "Wrote {done.rows} products to {done.path}" }
             err e => { exportError = e.message }
     }
@@ -55,9 +56,9 @@ View Settings(products: List<Product>, min_default: Int, on_min: Fn(Int) = {|_| 
                         invalid: !minValid,
                         border: t.outlineVariant,
                         border_width: 1,
-                        submit => on_min(toInt(minText)),
+                        submit => on_min(minParsed),
                     ]
-                    Action(label: "Save", off: !minChanged, on_tap: { on_min(toInt(minText)) })
+                    Action(label: "Save", off: !minChanged, on_tap: { on_min(minParsed) })
                 }
             }
 

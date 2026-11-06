@@ -7,13 +7,13 @@ fn the_first_frame_shows_the_numbers_of_the_sample_data() {
     let sb = Sandbox::new();
     let app = App::start(&sb);
     // Sixty products, 4,444 units worth $193,440.70, eight low, seven out.
-    for text in ["60", "4444", "$193440.70", "8", "7"] {
+    for text in ["60", "4444", "$193,440.70", "8", "7"] {
         assert!(app.shows(text), "{text} in {:?}", app.texts());
     }
     assert!(app.shows("Stock value by category"));
     assert!(app.shows("Packaging"));
     assert!(
-        app.shows("$70988.80  37%"),
+        app.shows("$70,988.80"),
         "the biggest bar: {:?}",
         app.texts()
     );

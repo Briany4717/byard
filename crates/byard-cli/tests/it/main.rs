@@ -57,3 +57,4 @@ mod view_animations_example;
 mod workspace_example;
 mod zero_text_size;
 mod zstack_example;
+mod zz_debug_number_input;

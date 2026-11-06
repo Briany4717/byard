@@ -225,8 +225,7 @@ Three more errors cover the forms:
 | `BindOutsideViewCall` | `bind name: x` in a function call, a tuple, or an intrinsic's content: the word means something only for a user view. |
 
 A binding the call does not pass is `MissingParam`, as any required parameter,
-and `UnknownParam` covers `bind: x` for a view with no binding (its hint
-names `bind name: Type`). Passing a `var` of the wrong type is
+and `UnknownParam` covers `bind: x` for a view with no binding. Passing a `var` of the wrong type is
 `ArgumentTypeMismatch`, with the types of both.
 
 ### 3. What a binding is inside the view
@@ -305,10 +304,12 @@ cannot see in the source.
 
 An instance's state is kept across a reload that does not change the view's
 parameters, `var`s, `let`s or `inject`s (the guide's rule). A binding is a
-parameter, so adding, removing or retyping one changes the view's signature
-and resets that view's instance, as any parameter change does. Editing the body
-of `Switch`, or the caller's, keeps the caller's `var` and every binding to
-it: the reload re-instantiates the call, which looks the same `var` up again.
+parameter, and a view's shape is its parameter names and its `var`s, so adding or
+removing one resets that view's instance, as any parameter does. Editing the body
+of `Switch`, or the caller's, keeps the caller's `var` and every binding to it,
+and turning a value parameter into a binding (or back) in the same edit as its
+callers is a patch like any other: every caller of a changed view is lowered
+again, which looks the same `var` up again.
 
 ### 7. Tooling
 
@@ -317,10 +318,11 @@ it: the reload re-instantiates the call, which looks the same `var` up again.
   binding runs none of it.
 - **Formatter** (RFC-0044). `bind` is a name followed by a name: it takes one
   space, as `var x` does, in a declaration and in a call. Nothing else changes.
-- **Language server.** Hover on a parameter shows `bind on: Bool`, on a call's
-  argument shows the binding it fills, and go-to-definition from `bind on:`
-  or `bind:` goes to the parameter. The semantic tokens colour `bind` as a
-  keyword in those two places only.
+- **Language server.** Hover on a binding, at its declaration or at any use in
+  the view, shows `bind on: Bool`; a package view's signature in hover lists
+  `bind on`; completion of a call's arguments inserts `bind on: ` for a
+  binding. The semantic tokens colour `bind` in a declaration as a keyword and
+  the name after it as the parameter.
 - **`byard shot`** and the rest of the CLI need nothing: they run the same
   interpreter.
 

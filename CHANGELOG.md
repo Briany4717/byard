@@ -10,6 +10,16 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Bindable parameters (RFC-0051).** A view can declare `bind on: Bool`, and the caller passes
+  a `var` with `Switch(bind: wifi)` (`bind name: var` when the view has several). The view reads
+  and writes the caller's `var` as its own, in a text, an action, a control's `bind:` or another
+  view's binding, with no copy and no callback between the two. A `let`, a literal, an
+  expression or a loop variable is `BindNotAVar`, and a value where a binding is declared (or the
+  reverse) is `BindArgMismatch`. `BindNotAVar` on a plain parameter now names the fix. Hover,
+  completion, the formatter and hot reload know it. See `examples/bindable_params`.
+
 ### Fixed
 
 - Saving a file no longer reloads an empty program first: a save that truncates the file before writing it is read once, after the writing has stopped.

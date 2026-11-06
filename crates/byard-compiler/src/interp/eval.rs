@@ -216,7 +216,7 @@ pub enum RenderNode {
         /// `for` before it grows or shrinks; focus and a field's editing state
         /// follow this instead, as an instance's state follows the instance.
         uid: u32,
-        /// The view instance this node was lowered inside ([`AnimKey`]'s other
+        /// The view instance this node was lowered inside (`AnimKey`'s other
         /// half): the call-site path that mounted it, `0` outside any user view.
         /// Fixed at lowering and kept for as long as the node lives, which is
         /// what lets two calls of one view keep their own animations.
@@ -245,7 +245,7 @@ pub enum RenderNode {
         /// written in. Empty at the top level and for a `Text` with no
         /// attributes, which read nothing.
         env_snapshot: Vec<(Symbol, super::env::Value)>,
-        /// The view instance this node was lowered inside ([`AnimKey`]'s other
+        /// The view instance this node was lowered inside (`AnimKey`'s other
         /// half): the call-site path that mounted it, `0` outside any user view.
         /// Fixed at lowering and kept for as long as the node lives, which is
         /// what lets two calls of one view keep their own animations.
@@ -257,7 +257,7 @@ pub enum RenderNode {
     Spacer {
         /// `grow` (default 1) and `basis` (default 0).
         attrs: Vec<Attr>,
-        /// The view instance this node was lowered inside ([`AnimKey`]'s other
+        /// The view instance this node was lowered inside (`AnimKey`'s other
         /// half): the call-site path that mounted it, `0` outside any user view.
         /// Fixed at lowering and kept for as long as the node lives, which is
         /// what lets two calls of one view keep their own animations.
@@ -275,7 +275,7 @@ pub enum RenderNode {
         /// image is sized and painted so `width: w` or `opacity: o` reading a
         /// view parameter resolves in the instance it was written in.
         env_snapshot: Vec<(Symbol, super::env::Value)>,
-        /// The view instance this node was lowered inside ([`AnimKey`]'s other
+        /// The view instance this node was lowered inside (`AnimKey`'s other
         /// half): the call-site path that mounted it, `0` outside any user view.
         /// Fixed at lowering and kept for as long as the node lives, which is
         /// what lets two calls of one view keep their own animations.
@@ -310,7 +310,7 @@ pub enum RenderNode {
         /// no separate lifetime to manage (an extension never keeps a resource
         /// alive past the scope that owns it).
         slot: usize,
-        /// The view instance this node was lowered inside ([`AnimKey`]'s other
+        /// The view instance this node was lowered inside (`AnimKey`'s other
         /// half): the call-site path that mounted it, `0` outside any user view.
         /// Fixed at lowering and kept for as long as the node lives, which is
         /// what lets two calls of one view keep their own animations.
@@ -325,7 +325,7 @@ pub enum RenderNode {
         src: ScopeId,
         /// The instance environment captured at lower time, as on `Image`.
         env_snapshot: Vec<(Symbol, super::env::Value)>,
-        /// The view instance this node was lowered inside ([`AnimKey`]'s other
+        /// The view instance this node was lowered inside (`AnimKey`'s other
         /// half): the call-site path that mounted it, `0` outside any user view.
         /// Fixed at lowering and kept for as long as the node lives, which is
         /// what lets two calls of one view keep their own animations.
@@ -353,7 +353,7 @@ pub enum RenderNode {
         /// shape parameters and event actions referencing instance vars
         /// resolve against the scope the canvas was instantiated in.
         env_snapshot: Vec<(Symbol, super::env::Value)>,
-        /// The view instance this node was lowered inside ([`AnimKey`]'s other
+        /// The view instance this node was lowered inside (`AnimKey`'s other
         /// half): the call-site path that mounted it, `0` outside any user view.
         /// Fixed at lowering and kept for as long as the node lives, which is
         /// what lets two calls of one view keep their own animations.
@@ -374,7 +374,7 @@ pub enum RenderNode {
         /// `dismiss` action or a child's forwarded callback resolves against the
         /// scope the overlay was instantiated in. Empty at the top level.
         env_snapshot: Vec<(Symbol, super::env::Value)>,
-        /// The view instance this node was lowered inside ([`AnimKey`]'s other
+        /// The view instance this node was lowered inside (`AnimKey`'s other
         /// half): the call-site path that mounted it, `0` outside any user view.
         /// Fixed at lowering and kept for as long as the node lives, which is
         /// what lets two calls of one view keep their own animations.

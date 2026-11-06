@@ -364,8 +364,11 @@ Text("/search?q={"Tom & Jerry".urlEncoded()}")
 
 The first shows `Friday 16 October 2026, 14:00`. `formatDate` takes an ISO date or
 date-time and these tokens: `YYYY`, `MMMM`, `MMM`, `MM`, `M`, `DD`, `D`, `dddd`,
-`ddd`, `HH`, `H`, `mm`. Anything else is kept as written. Names are in English.
-Text that is not a date reads as nothing, so `?? "unknown"` gives it a default.
+`ddd`, `HH`, `H`, `mm`, `ss`. Anything else is kept as written. Names are in English.
+The seconds are read when the text has them, and a trailing `Z` or offset is accepted
+and not applied: the hours shown are the hours written, so `now()` and `nowUtc()`
+both format as they stand. Text that is not a date reads as nothing, so
+`?? "unknown"` gives it a default.
 
 `urlEncoded()` makes text safe inside a URL. Letters, digits and `- . _ ~` stay,
 and everything else, a space included, becomes `%XX`. The second line above is

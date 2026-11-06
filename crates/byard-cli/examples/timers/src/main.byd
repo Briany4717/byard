@@ -11,6 +11,15 @@
 //   • `every 500ms`, a scoped timer inside a `when`, which stops the instant
 //     the panel is collapsed and starts fresh when it comes back.
 //
+// And the clock (RFC-0049): `now()` reads it when an action runs, so the time on
+// screen is a `var` that `on mount` and `every 1s` write, and the button
+// stamps the moment it was pressed. A shot has no real time to wait for, so fix
+// the clock and tap the button:
+//   cargo run -p byard-cli -- shot crates/byard-cli/examples/timers \
+//     --size 640x640 --now 2026-11-05T09:00:00 --tap 100,324 -o clock.png
+// reads `Thu 5 Nov, 09:00:00` above and `2026-11-05T09:00:00` beside the button.
+// (`every` runs on the real clock and does not tick in a shot.)
+//
 // A tick is delivered through exactly the path a controller reply travels
 // (RFC-0028 §5): it lands on the logic thread, runs the written action, writes
 // a `var`, and the ordinary reactive update paints it. Nothing here polls.
@@ -19,8 +28,11 @@ View Main() {
     var revealed: Bool = false
     var beats: Int = 0
     var live: Bool = true
+    var time: Str = ""
+    var stamped: Str = ""
 
-    every 1s => { seconds = seconds + 1 }
+    on mount => time = now()
+    every 1s => { seconds = seconds + 1 time = now() }
     after 3s => { revealed = true }
 
     Column #[bg: 0x14141C, p: 32, gap: 20, width: 620] {
@@ -29,6 +41,19 @@ View Main() {
         Column #[bg: 0x1E1E2A, radius: 14, p: 24, gap: 6] {
             Text("this view has been open for") #[color: 0x9AA0AC, size: 13]
             Text("{seconds}s") #[color: 0xFFFFFF, size: 40, weight: bold]
+        }
+
+        Column #[bg: 0x1E1E2A, radius: 14, p: 24, gap: 6] {
+            Text("the clock, read by `now()`") #[color: 0x9AA0AC, size: 13]
+            Text("{time.formatDate("ddd D MMM, HH:mm:ss")}")
+                #[color: 0xFFFFFF, size: 26, weight: bold]
+            Row #[gap: 12] {
+                Button("stamp it")
+                    #[bg: 0x477A96, radius: 10, color: 0xFFFFFF, p: (vertical: 10, horizontal: 18)]
+                    => stamped = now()
+                Text("{stamped == "" ? "not stamped" : stamped}")
+                    #[color: 0x9AA0AC, size: 14]
+            }
         }
 
         // Appears three seconds in, once. Leave it running: it never

@@ -664,6 +664,16 @@ pub struct Interpreter {
     /// The top-level functions being inlined right now, outermost first, so a
     /// cycle is reported instead of lowered forever.
     inlining: Vec<Symbol>,
+    /// The wall clock `now()` and `nowUtc()` read (RFC-0049), shared by every
+    /// lowered call. The system's until a host fixes it.
+    clock: std::rc::Rc<super::clock::Clock>,
+    /// The entries of `fn_table` that are `fn`s, not named actions: pure, so a
+    /// `now()` in their body is [`CompileError::ClockOutsideAction`] whoever
+    /// calls them (RFC-0049 §3).
+    pure_fns: std::collections::HashSet<u32>,
+    /// How many `fn` bodies are being lowered right now. Above zero, an
+    /// enclosing action does not make the clock readable.
+    pure_depth: u32,
     /// Names bound as parameters of a multi-parameter lambda while its body is
     /// being lowered; `lower_ident` reads them from [`LAMBDA_ARGS`].
     lambda_params: Vec<Symbol>,
@@ -1047,6 +1057,15 @@ impl Interpreter {
                 let id = super::env::AstId(u32::try_from(self.fn_table.len()).unwrap_or(u32::MAX));
                 let params = decl.params.iter().map(|p| p.name.clone()).collect();
                 self.fn_table.push((params, decl.body.clone(), false, None));
+                self.pure_fns.insert(id.0);
+                self.report_clock_in_fn(
+                    &decl
+                        .params
+                        .iter()
+                        .map(|p| p.name.clone())
+                        .collect::<Vec<_>>(),
+                    &decl.body,
+                );
                 self.top_fns.insert(decl.name.clone(), id);
             }
         }
@@ -1096,6 +1115,20 @@ impl Interpreter {
     pub fn set_now_ms(&mut self, ms: u32) {
         self.now_ms = ms;
         self.clock_set = true;
+        self.clock.set_app_ms(ms);
+    }
+
+    /// Fixes the wall clock `now()` and `nowUtc()` read at `iso` (an ISO date
+    /// or date-time, `2026-11-05T09:00:00`), as of the app time now. From then
+    /// on it reads that time plus the app time that passes, so
+    /// [`set_now_ms`](Self::set_now_ms) advances it (RFC-0049 §4). A fixed
+    /// clock has no zone: `nowUtc()` is the same time with a `Z`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message when `iso` is not a date or date-time.
+    pub fn set_wall_clock(&mut self, iso: &str) -> Result<(), String> {
+        self.clock.fix(iso)
     }
 
     /// Wires in the channel the render thread reports applied vector-atlas
@@ -1370,7 +1403,12 @@ impl Interpreter {
             self.define_let(name.clone(), body);
         } else {
             let names: Vec<Symbol> = params.iter().map(|p| p.name.clone()).collect();
-            self.define_callable(name, names, body);
+            self.define_callable(name, names.clone(), body);
+            // A `fn` is pure; a `let f = (x) => …` is a named action.
+            self.report_clock_in_fn(&names, body);
+            if let Some(Value::Fn(id)) = self.env.lookup(name).cloned() {
+                self.pure_fns.insert(id.0);
+            }
         }
     }
 

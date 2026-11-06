@@ -891,6 +891,19 @@ pub enum CompileError {
         /// What the surrounding context is (`let`, `fn`, an attribute value).
         context: String,
     },
+    /// `now()` or `nowUtc()` appeared where no action runs: a `let`, an
+    /// attribute, a text interpolation, a `var`'s initialiser, a `fn`
+    /// (RFC-0049).
+    ///
+    /// The clock is read when the call runs, and a projection runs when what
+    /// it reads changes. The clock is not something it reads, so it would show
+    /// the time it was first computed and never move.
+    ClockOutsideAction {
+        /// Source range of the call.
+        span: Span,
+        /// Which function: `now` or `nowUtc`.
+        name: String,
+    },
     /// A controller call failed and its call site wrote no `err` arm
     /// (RFC-0028 §4).
     ///
@@ -988,6 +1001,7 @@ impl CompileError {
             | Self::NonDataViewProp { span, .. }
             | Self::PathMustStartWithMove { span }
             | Self::EffectInPureContext { span, .. }
+            | Self::ClockOutsideAction { span, .. }
             | Self::DiscardedControllerReply { span }
             | Self::UncheckableInject { span, .. }
             | Self::ReservedControllerName { span, .. }
@@ -1085,6 +1099,7 @@ impl CompileError {
             | Self::NonDataViewProp { span, .. }
             | Self::PathMustStartWithMove { span }
             | Self::EffectInPureContext { span, .. }
+            | Self::ClockOutsideAction { span, .. }
             | Self::DiscardedControllerReply { span }
             | Self::UncheckableInject { span, .. }
             | Self::ReservedControllerName { span, .. }
@@ -1184,6 +1199,7 @@ impl CompileError {
             Self::NonDataViewProp { .. } => "NonDataViewProp",
             Self::PathMustStartWithMove { .. } => "PathMustStartWithMove",
             Self::EffectInPureContext { .. } => "EffectInPureContext",
+            Self::ClockOutsideAction { .. } => "ClockOutsideAction",
             Self::DiscardedControllerReply { .. } => "DiscardedControllerReply",
             Self::UncheckableInject { .. } => "UncheckableInject",
             Self::ReservedControllerName { .. } => "ReservedControllerName",
@@ -1327,6 +1343,10 @@ impl CompileError {
             Self::EffectInPureContext { context, .. } => format!(
                 "a controller call is an effect and cannot appear in {context}; \
                  call it from an action and write the result to a `var`"
+            ),
+            Self::ClockOutsideAction { name, .. } => format!(
+                "`{name}()` reads the clock once, when an action runs; to show the time, \
+                 write it to a `var` in an action, such as `every 1s => time = now()`"
             ),
             Self::UncheckableInject { name, .. } => format!(
                 "`{name}` is not an ambient value here; it must be a controller the Rust \

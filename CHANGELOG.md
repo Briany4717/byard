@@ -82,6 +82,15 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `abs()`, `min(other)` and `max(other)`, and `{x:,.2}` in a string puts a comma
   between thousands (`193,440.70`). A method a number does not have is now
   `UnknownMethod`, with the closest name. RFC-0048.
+### Added
+
+- **`now()` and `nowUtc()` read the clock.** They answer the local time, or UTC, as
+  ISO text with seconds (`2026-11-05T14:03:12`), straight away, with no controller
+  and no `ok` arm. They may be called only in an action: in a `let`, an attribute,
+  a text or a `fn`, `byard check` reports `ClockOutsideAction` and says to write
+  the time to a `var` from `every 1s`. `formatDate` gains the `ss` token for the
+  seconds, and `byard shot --now 2026-11-05T09:00:00` fixes the time so a picture is
+  the same every run.
 
 ## [0.1.0] - 2026-11-05
 

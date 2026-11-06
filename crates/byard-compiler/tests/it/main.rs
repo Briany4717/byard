@@ -14,6 +14,7 @@ mod callback_props;
 mod canvas_filled_paths;
 mod caret_blink;
 mod clip_path;
+mod clock;
 mod color_alpha;
 mod control_grow;
 mod controller_boundary;

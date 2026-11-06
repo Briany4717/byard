@@ -1017,6 +1017,7 @@ impl Interpreter {
         byard_core::atlas::TextBox {
             height: style.height,
             grow: style.grow,
+            basis: style.basis,
             padding: style.padding,
             margin: style.margin,
         }
@@ -1382,6 +1383,7 @@ fn is_text_box_attr(name: &str) -> bool {
         name,
         "height"
             | "grow"
+            | "basis"
             | "p"
             | "padding"
             | "pt"

@@ -315,6 +315,9 @@ pub struct TextBox {
     pub height: Option<f32>,
     /// Flex-grow factor along the parent's main axis.
     pub grow: f32,
+    /// The main-axis size the leaf starts from before `grow` shares out what
+    /// is left; `None` is its own size, as for any flex item.
+    pub basis: Option<f32>,
     /// Space inside the leaf, around the glyphs. A leaf's `width` and
     /// `height` include it, as a box's do.
     pub padding: Spacing,
@@ -336,6 +339,9 @@ impl TextBox {
             style.size.height = Dimension::from_length(h);
         }
         style.flex_grow = self.grow;
+        if let Some(b) = self.basis {
+            style.flex_basis = Dimension::from_length(b.max(0.0));
+        }
         style.padding = TaffyRect {
             left: LengthPercentage::from_length(self.padding.left),
             right: LengthPercentage::from_length(self.padding.right),
@@ -354,7 +360,7 @@ impl TextBox {
         if self.is_default() {
             return;
         }
-        fp.opt_f32(self.height).f32(self.grow);
+        fp.opt_f32(self.height).f32(self.grow).opt_f32(self.basis);
         for s in [self.padding, self.margin] {
             fp.f32(s.top).f32(s.right).f32(s.bottom).f32(s.left);
         }

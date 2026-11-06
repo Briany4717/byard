@@ -54,9 +54,9 @@ fills the window instead of hugging its content.
 its height in a `Column`, before `grow` hands out what is left. A `Box #[basis: 100,
 grow: 1]` and another `Box #[basis: 200, grow: 1]` in a 500 wide row end up 200 and
 300 wide: each gets its basis, and the 200 left over is shared equally. `Box`,
-`Row`, `Column`, `Button`, `ScrollView`, `Grid`, `ZStack`, `Clip` and `Spacer` take
-it. An element that lays itself out from its own content or its own `width` and
-`height` (`Text`, `Image`, `Canvas`, `TextField`, `Toggle`, `Slider`, `Checkbox`,
+`Row`, `Column`, `Button`, `ScrollView`, `Grid`, `ZStack`, `Clip`, `Spacer` and `Text`
+take it. An element that lays itself out from its own content or its own `width` and
+`height` (`Image`, `Canvas`, `TextField`, `Toggle`, `Slider`, `Checkbox`,
 `RadioButton`, `VectorIcon`) has nothing for it to set, and `basis` there is an
 unknown attribute.
 

@@ -103,8 +103,8 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- **`basis` on an element it cannot affect is an unknown attribute.** `Text`,
-  `Image`, `Canvas`, `TextField`, `Toggle`, `Slider`, `Checkbox`, `RadioButton`
+- **`basis` on an element it cannot affect is an unknown attribute.** `Image`,
+  `Canvas`, `TextField`, `Toggle`, `Slider`, `Checkbox`, `RadioButton`
   and `VectorIcon` laid themselves out from their own size and ignored it.
 
 ### Fixed
@@ -125,6 +125,10 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   naming a view, a type, a parameter, a `var`, a `let`, an `inject` or a record
   field. Any other stray token between top-level items is also one error, not one
   per token that follows it.
+
+- **`Text` takes `basis`.** `Text("x") #[grow: 1, basis: 0]` starts from nothing and
+  gets an equal share, so the cells of a table line up whatever they say. Without
+  it a `grow` text starts from its words, as a `Box` does.
 
 ## [0.1.0] - 2026-11-05
 

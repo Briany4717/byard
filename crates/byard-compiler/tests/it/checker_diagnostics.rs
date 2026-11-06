@@ -565,7 +565,6 @@ fn lowering_errors(source: &str) -> Vec<String> {
 #[test]
 fn basis_where_it_does_nothing_is_an_unknown_attribute() {
     for el in [
-        "Text(\"x\") #[basis: 3]",
         "Image(\"a.png\") #[basis: 3]",
         "Toggle #[bind: on, basis: 3]",
         "Slider #[bind: level, basis: 3]",
@@ -590,6 +589,7 @@ fn basis_where_it_does_nothing_is_an_unknown_attribute() {
         "Column #[basis: 3] {}",
         "Button(\"b\") #[basis: 3]",
         "Spacer #[basis: 3]",
+        "Text(\"x\") #[basis: 3]",
         "ScrollView #[basis: 3] {}",
     ] {
         let said = lowering_errors(&format!("View Main() {{ {el} }}"));

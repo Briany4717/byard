@@ -87,7 +87,14 @@ View Heading(title: Str, content) {
 View Dialog(title: Str, on_close: Fn() = {}, content) {
     inject Theme as t
     Overlay #[dismiss => on_close()] {
-        Column #[anchor: center, bg: t.surfaceContainerHigh, radius: 18, p: 22, gap: 14, width: 400] {
+        Column #[
+            anchor: center,
+            bg: t.surfaceContainerHigh,
+            radius: 18,
+            p: 22,
+            gap: 14,
+            width: 400,
+        ] {
             Text(title) #[typo: t.title, color: t.onSurface]
             content
         }

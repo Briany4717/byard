@@ -28,7 +28,10 @@ View Settings(products: List<Product>, min_default: Int, on_min: Fn(Int) = {|_| 
 
             Card {
                 Text("Export") #[typo: t.title, color: t.onSurface]
-                Text("Writes every product to a CSV file in the app's data folder.") #[typo: t.body, color: t.onSurfaceVariant]
+                Text("Writes every product to a CSV file in the app's data folder.") #[
+                    typo: t.body,
+                    color: t.onSurfaceVariant,
+                ]
                 Row #[gap: 12, align: center] {
                     Action(label: "Export to CSV", on_tap: { export() })
                 }
@@ -64,7 +67,10 @@ View Settings(products: List<Product>, min_default: Int, on_min: Fn(Int) = {|_| 
 
             Card {
                 Text("Sample data") #[typo: t.title, color: t.onSurface]
-                Text("Replaces every product and movement with the sample catalogue.") #[typo: t.body, color: t.onSurfaceVariant]
+                Text("Replaces every product and movement with the sample catalogue.") #[
+                    typo: t.body,
+                    color: t.onSurfaceVariant,
+                ]
                 Row {
                     Action(label: "Reset to sample data", tone: "danger", on_tap: { confirming = true })
                 }
@@ -74,7 +80,8 @@ View Settings(products: List<Product>, min_default: Int, on_min: Fn(Int) = {|_| 
 
     when confirming {
         Dialog(title: "Reset to the sample data?", on_close: { confirming = false }) {
-            Text("This removes {products.len} products and their movements, and cannot be undone.") #[typo: t.body, color: t.onSurfaceVariant]
+            Text("This removes {products.len} products and their movements, and cannot be undone.")
+                #[typo: t.body, color: t.onSurfaceVariant]
             Row #[gap: 10, justify: end] {
                 Action(label: "Cancel", tone: "tonal", on_tap: { confirming = false })
                 Action(label: "Reset", tone: "danger", on_tap: {

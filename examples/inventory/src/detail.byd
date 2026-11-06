@@ -69,12 +69,27 @@ View ProductDetail(
                             for m in log {
                                 Column #[gap: 2, p: (vertical: 4)] {
                                     Row #[gap: 10] {
-                                        Text(signed(m.kind, m.qty)) #[typo: t.label, width: 40, color: m.kind == "out" ? t.secondary : m.kind == "in" ? t.tertiary : t.onSurfaceVariant]
-                                        Text(kindLabel(m.kind)) #[typo: t.body, color: t.onSurface, grow: 1]
-                                        Text(stamp(m.at)) #[typo: t.caption, color: t.onSurfaceVariant]
+                                        Text(signed(m.kind, m.qty)) #[
+                                            typo: t.label,
+                                            width: 40,
+                                            color: m.kind == "out" ? t.secondary : m.kind == "in" ? t.tertiary : t.onSurfaceVariant,
+                                        ]
+                                        Text(kindLabel(m.kind)) #[
+                                            typo: t.body,
+                                            color: t.onSurface,
+                                            grow: 1,
+                                        ]
+                                        Text(stamp(m.at)) #[
+                                            typo: t.caption,
+                                            color: t.onSurfaceVariant,
+                                        ]
                                     }
                                     when m.note != "" {
-                                        Text(m.note) #[typo: t.caption, color: t.onSurfaceVariant, m: (left: 50)]
+                                        Text(m.note) #[
+                                            typo: t.caption,
+                                            color: t.onSurfaceVariant,
+                                            m: (left: 50),
+                                        ]
                                     }
                                 }
                             }
@@ -99,7 +114,10 @@ View ProductDetail(
     }
     when found && dialog == "delete" {
         Dialog(title: "Delete {product.name}?", on_close: { dialog = "" }) {
-            Text("Its {log.len} movements stay in the log.") #[typo: t.body, color: t.onSurfaceVariant]
+            Text("Its {log.len} movements stay in the log.") #[
+                typo: t.body,
+                color: t.onSurfaceVariant,
+            ]
             Row #[gap: 10, justify: end] {
                 Action(label: "Keep it", tone: "tonal", on_tap: { dialog = "" })
                 Action(label: "Delete", tone: "danger", on_tap: {

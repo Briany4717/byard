@@ -2088,10 +2088,13 @@ impl Interpreter {
         // the view, so nothing binds its parameters. They go into scope as
         // unset values: a name an attribute reads is then known to be a name
         // the view binds, the same as inside a call, and not a bare keyword.
-        // A parameter that is already a name here keeps its value.
+        // A parameter that is already a name here keeps its value. An unset one
+        // is the zero of its declared type, so a number is a number where a
+        // number goes (`radius: v`) and a `Str` there is still the mismatch it
+        // should be; a type with no obvious zero stays `Unit`.
         for param in &view.params {
             if self.env.lookup(&param.name).is_none() {
-                self.env.push(param.name.clone(), Value::Unit);
+                self.env.push(param.name.clone(), unset_param(param));
             }
         }
         self.eval_view_decls(view);
@@ -2114,6 +2117,21 @@ impl Interpreter {
             self.slot_stack.pop();
         }
         nodes
+    }
+}
+
+/// What a parameter reads as when its view is lowered with no call: the zero of
+/// its declared type.
+fn unset_param(param: &Param) -> Value {
+    match &param.ty {
+        Some(Type::Named { name, args, .. }) if args.is_empty() => match name.as_str() {
+            "Int" => Value::Int(0),
+            "Float" => Value::Float(0.0),
+            "Bool" => Value::Bool(false),
+            "Str" => Value::Str(String::new()),
+            _ => Value::Unit,
+        },
+        _ => Value::Unit,
     }
 }
 

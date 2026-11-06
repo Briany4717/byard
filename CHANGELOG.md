@@ -12,6 +12,7 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- Saving a file no longer reloads an empty program first: a save that truncates the file before writing it is read once, after the writing has stopped.
 - **Text reads the parameters of its view.** `Text("Aa") #[size: dim]` in a view with a
   `dim` parameter drew at the default size, and so did `weight`, `color`, `wrap` and `typo`
   when they named a parameter, a `let` or a `var` of the view. They now use the value of

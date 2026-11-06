@@ -241,7 +241,7 @@ impl Interpreter {
                 }
                 let text = match self.binding_value(*content) {
                     Some(Value::Str(s)) => s,
-                    other => other.map_or_else(String::new, |v| format!("{v:?}")),
+                    other => other.map_or_else(String::new, |v| v.to_text()),
                 };
                 if let Some(open) = self.access.open.last_mut() {
                     if text.is_empty() {

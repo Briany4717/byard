@@ -91,6 +91,40 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the time to a `var` from `every 1s`. `formatDate` gains the `ss` token for the
   seconds, and `byard shot --now 2026-11-05T09:00:00` fixes the time so a picture is
   the same every run.
+### Added
+
+- **`basis` works on a `Box`, `Row`, `Column`, `Button`, `ScrollView`, `Grid`,
+  `ZStack` and `Clip`.** It was accepted on them and ignored. It is the size a
+  child starts from on the main axis before `grow` shares out what is left.
+
+- **A warning for `a || b ? x : y`.** `? :` binds tighter than `||`, so this is
+  `a || (b ? x : y)`, which is rarely what was meant. `byard check` says so and
+  suggests the parentheses; the precedence itself is unchanged.
+
+### Changed
+
+- **`basis` on an element it cannot affect is an unknown attribute.** `Text`,
+  `Image`, `Canvas`, `TextField`, `Toggle`, `Slider`, `Checkbox`, `RadioButton`
+  and `VectorIcon` laid themselves out from their own size and ignored it.
+
+### Fixed
+
+- **`TextField #[bind: value]` on a view parameter did nothing, and `check` said
+  nothing.** A parameter is a copy of what the caller passed, so a control
+  cannot write it. `bind:` and `value:` on a control now have to name a `var`: a
+  parameter, a `let`, a loop variable or a literal is an error, and the one for a
+  parameter shows how to pass the value down and the edits back up.
+
+- **A `Bool` given to a `Str` parameter drew `Bool(false)`.** Arguments to a view
+  are now checked against the parameter's declared type (an `Int` may go where a
+  `Float` is wanted), and a value that is not text is drawn as interpolation
+  writes it, `false`, never as its Rust debug form.
+
+- **A keyword used as a name gave dozens of errors, none about the name.**
+  `fn when(at: Str) -> Str => at` is now one error at `when`, and so is a keyword
+  naming a view, a type, a parameter, a `var`, a `let`, an `inject` or a record
+  field. Any other stray token between top-level items is also one error, not one
+  per token that follows it.
 
 ## [0.1.0] - 2026-11-05
 

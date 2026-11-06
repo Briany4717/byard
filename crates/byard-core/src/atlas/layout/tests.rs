@@ -1221,6 +1221,53 @@ fn grow_distributes_main_axis_space() {
     assert_f32_eq(rf.x, 160.0);
 }
 
+/// A container's `basis` is the main-axis size it starts from before `grow`
+/// shares out what is left, and it is part of the node's identity, so a
+/// retained rebuild that changes only the basis lays out again.
+#[test]
+fn basis_is_the_size_a_container_grows_from() {
+    let lay = |first: Option<f32>| {
+        let mut atlas = LayoutAtlas::new();
+        let a = atlas
+            .add_container(
+                ContainerStyle {
+                    basis: first,
+                    grow: 1.0,
+                    height: Some(10.0),
+                    ..Default::default()
+                },
+                &[],
+            )
+            .unwrap();
+        let b = atlas
+            .add_container(
+                ContainerStyle::default().with_grow(1.0).with_basis(None),
+                &[],
+            )
+            .unwrap();
+        let row = atlas
+            .add_container(
+                ContainerStyle::new(Some(300.0), Some(50.0)).with_direction(FlexDir::Row),
+                &[a, b],
+            )
+            .unwrap();
+        atlas.set_root(row).unwrap();
+        atlas.compute(Viewport::new(300.0, 50.0)).unwrap();
+        (
+            atlas.resolved_rect(a).unwrap().unwrap().width,
+            atlas.resolved_rect(b).unwrap().unwrap().width,
+        )
+    };
+    // No basis: equal shares of 300.
+    let (a, b) = lay(None);
+    assert_f32_eq(a, 150.0);
+    assert_f32_eq(b, 150.0);
+    // A basis of 100 for `a` and none for `b`: 200 is left, shared equally.
+    let (a, b) = lay(Some(100.0));
+    assert_f32_eq(a, 200.0);
+    assert_f32_eq(b, 100.0);
+}
+
 // ── One descent resolves every rectangle the way climbing to the root did ───
 //
 // `populate_frame` and the spatial-grid rebuild walk the tree once, handing

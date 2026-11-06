@@ -888,7 +888,7 @@ impl Interpreter {
                 let attrs: &[Attr] = &attrs;
                 let text = match self.binding_value(*content) {
                     Some(Value::Str(s)) => s,
-                    other => other.map_or_else(String::new, |v| format!("{v:?}")),
+                    other => other.map_or_else(String::new, |v| v.to_text()),
                 };
                 let typo_size = self.eval_typo_size(attrs);
                 #[allow(clippy::cast_precision_loss)]

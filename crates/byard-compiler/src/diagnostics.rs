@@ -972,6 +972,53 @@ pub enum CompileError {
         /// The type that could not be resolved here.
         name: String,
     },
+    /// A control's `bind:` (or `value:`) names something that cannot be
+    /// written: a view parameter, a `let`, a loop variable or a literal. The
+    /// control would draw its default and never write, silently.
+    BindNotAVar {
+        /// Source range of the bound value.
+        span: Span,
+        /// The control (`TextField`, `Toggle`, …).
+        control: String,
+        /// The attribute written (`bind` or `value`).
+        attr: String,
+        /// What it was given: the name, or the literal's source form.
+        target: String,
+        /// Which kind of thing that is.
+        kind: BindTarget,
+    },
+    /// An argument of a user-`View` call does not have the type the callee
+    /// declares for that parameter.
+    ArgumentTypeMismatch {
+        /// Source range of the argument.
+        span: Span,
+        /// The callee view name.
+        callee: String,
+        /// The parameter name.
+        name: String,
+        /// The declared type.
+        expected: String,
+        /// The type of the argument.
+        found: String,
+    },
+    /// A keyword was written where a name goes (a view, function, type,
+    /// parameter, `var`/`let` or record field).
+    KeywordAsName {
+        /// Source range of the keyword.
+        span: Span,
+        /// The keyword.
+        keyword: String,
+        /// What it was used to name (`a function`, `a parameter`, …).
+        what: String,
+    },
+    /// `a || b ? x : y`: `?:` binds tighter than `||` and `&&` in Byld, so
+    /// this is `a || (b ? x : y)`, which is usually not what the writer meant.
+    MixedTernaryPrecedence {
+        /// Source range of the whole expression.
+        span: Span,
+        /// The logical operator (`||` or `&&`).
+        op: String,
+    },
     /// An app registered a controller under a name the framework reserves for
     /// one of its own capabilities (RFC-0029 §7).
     ReservedControllerName {
@@ -980,6 +1027,20 @@ pub enum CompileError {
         /// The reserved name.
         name: String,
     },
+}
+
+/// What a control's `bind:` was given in place of a `var`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BindTarget {
+    /// A parameter of the view: a copy of what the caller passed.
+    Parameter,
+    /// A `let`: computed, never written.
+    Let,
+    /// A number, text or list written in place.
+    Literal,
+    /// Anything else that is not a `var`: a loop variable, a lambda parameter,
+    /// the value an event hands over.
+    Other,
 }
 
 impl CompileError {
@@ -1068,6 +1129,10 @@ impl CompileError {
             | Self::CallbackArityMismatch { span, .. }
             | Self::CallbackNotInvocable { span, .. }
             | Self::CallbackTypeMismatch { span, .. }
+            | Self::BindNotAVar { span, .. }
+            | Self::ArgumentTypeMismatch { span, .. }
+            | Self::KeywordAsName { span, .. }
+            | Self::MixedTernaryPrecedence { span, .. }
             | Self::TypeMismatch { span, .. }
             | Self::PredicateNotBool { span }
             | Self::EffectInPureLambda { span }
@@ -1166,6 +1231,10 @@ impl CompileError {
             | Self::CallbackArityMismatch { span, .. }
             | Self::CallbackNotInvocable { span, .. }
             | Self::CallbackTypeMismatch { span, .. }
+            | Self::BindNotAVar { span, .. }
+            | Self::ArgumentTypeMismatch { span, .. }
+            | Self::KeywordAsName { span, .. }
+            | Self::MixedTernaryPrecedence { span, .. }
             | Self::TypeMismatch { span, .. }
             | Self::PredicateNotBool { span }
             | Self::EffectInPureLambda { span }
@@ -1266,6 +1335,10 @@ impl CompileError {
             Self::CallbackArityMismatch { .. } => "CallbackArityMismatch",
             Self::CallbackNotInvocable { .. } => "CallbackNotInvocable",
             Self::CallbackTypeMismatch { .. } => "CallbackTypeMismatch",
+            Self::BindNotAVar { .. } => "BindNotAVar",
+            Self::ArgumentTypeMismatch { .. } => "ArgumentTypeMismatch",
+            Self::KeywordAsName { .. } => "KeywordAsName",
+            Self::MixedTernaryPrecedence { .. } => "MixedTernaryPrecedence",
             Self::TypeMismatch { .. } => "TypeMismatch",
             Self::PredicateNotBool { .. } => "PredicateNotBool",
             Self::EffectInPureLambda { .. } => "EffectInPureLambda",
@@ -1292,7 +1365,9 @@ impl CompileError {
     pub const fn is_warning(&self) -> bool {
         matches!(
             self,
-            Self::StrokeInFusionGroup { .. } | Self::UncheckableInject { .. }
+            Self::StrokeInFusionGroup { .. }
+                | Self::UncheckableInject { .. }
+                | Self::MixedTernaryPrecedence { .. }
         )
     }
 
@@ -1656,6 +1731,52 @@ impl CompileError {
             Self::CallbackTypeMismatch { callee, name, .. } => format!(
                 "parameter `{name}` of view `{callee}` is a callback (`Fn(...)`); pass an action \
                  block like `{name}: {{ … }}`"
+            ),
+            Self::BindNotAVar {
+                control,
+                attr,
+                target,
+                kind,
+                ..
+            } => match kind {
+                BindTarget::Parameter => format!(
+                    "`{control} #[{attr}: {target}]` cannot change `{target}`: a parameter is a \
+                     copy of what the caller passed, so a change would be lost. Keep a `var` of \
+                     your own, bind the control to it, and hand each change up through a \
+                     callback parameter. For a `TextField`, with `on_change: Fn(Str)` a \
+                     parameter of the view: `var text = {target}`, \
+                     `on change({target}) => text = {target}`, \
+                     `TextField #[bind: text, input(t) => on_change(t)]`"
+                ),
+                BindTarget::Let => format!(
+                    "`{control} #[{attr}: {target}]`: `{target}` is a `let`, which is computed \
+                     and cannot be written, so the control would draw its default and change \
+                     nothing. Bind a `var`"
+                ),
+                BindTarget::Literal => format!(
+                    "`{control}`'s `{attr}` is {target}, which cannot be written, so the \
+                     control would draw its default and change nothing. Bind a `var`"
+                ),
+                BindTarget::Other => format!(
+                    "`{control} #[{attr}: {target}]`: `{target}` is not a `var`, so the control \
+                     would draw its default and change nothing. Bind a `var`"
+                ),
+            },
+            Self::ArgumentTypeMismatch {
+                callee,
+                name,
+                expected,
+                found,
+                ..
+            } => format!(
+                "parameter `{name}` of view `{callee}` is a `{expected}`, but this is a `{found}`"
+            ),
+            Self::KeywordAsName { keyword, what, .. } => {
+                format!("`{keyword}` is a keyword and cannot name {what}")
+            }
+            Self::MixedTernaryPrecedence { op, .. } => format!(
+                "`?:` binds tighter than `{op}`, so this reads `a {op} (b ? x : y)`; \
+                 write the parentheses you mean"
             ),
             Self::TypeMismatch {
                 op, lhs_ty, rhs_ty, ..

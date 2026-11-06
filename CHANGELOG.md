@@ -10,6 +10,26 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Named motion in the theme (RFC-0053).** `[theme.motion]` declares springs
+  (`spatial_fast = { stiffness = 800, damping_ratio = 0.6 }`) and durations
+  (`short_2 = 100`), and byld reads them as tokens wherever a curve goes:
+  `with t.springSpatialFast`, `anim.ease(t.durationShort2)`. `byard-base` ships Material 3
+  Expressive's six springs and sixteen durations, a package's come in with `extends`, and a
+  misspelt or misused token is a check error that names it.
+- **The rest of Material's colour roles in `byard-base`, and from a seed**: `surfaceContainerLowest`,
+  `surfaceContainerHighest`, `surfaceDim`, `surfaceBright`, `inverseSurface`, `inverseOnSurface`,
+  `inversePrimary`, `scrim`, `shadow`, the `primary`, `secondary` and `tertiary` fixed roles, and the
+  `tertiary` family, `surfaceVariant` and `errorContainer` the base lacked. A seed derives all of them,
+  and they are held to the same contrast pairs. The expressive corners (`cornerLgIncreased`,
+  `cornerXlIncreased`, `cornerXxl`) and an `...Emphasized` twin of every type style are in the base too.
+
+### Changed
+
+- A modal overlay's scrim is the theme's `scrim` at 32% (black unless the theme says otherwise), not
+  a constant.
+
 ### Fixed
 
 - Saving a file no longer reloads an empty program first: a save that truncates the file before writing it is read once, after the writing has stopped.

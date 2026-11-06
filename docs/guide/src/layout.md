@@ -229,7 +229,8 @@ View Main() {
 ```
 
 By default an overlay is *modal*: a scrim covers the page and takes its input.
-The scrim is black at 32%; `scrim: 0x80000000` gives the overlay another colour,
+The scrim is the theme's `scrim` colour at 32%, which is black unless the theme says
+otherwise; `scrim: 0x80000000` gives the overlay another colour,
 and a fully transparent one draws none. A child that fills the whole window is
 taken for a scrim you wrote yourself, and then no other is drawn. A non-modal
 overlay has no scrim. `dismiss =>` runs when the scrim is tapped (a press outside

@@ -260,6 +260,8 @@ titleLarge` does, including when written bare.
   longer, and two `[theme.motion.*]` tables is what Material's own token
   documents avoid.
 - **A token takes no modifiers.** `with t.springSpatialFast` cannot loop.
+- **`anim.keyframes(duration: t.x)` takes no token.** A keyframe track's duration
+  stays a literal; the other duration positions take one.
 - **The base grows.** Twenty-two entries are in every theme, used or not.
 
 ## Rationale and alternatives

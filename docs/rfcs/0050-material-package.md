@@ -18,8 +18,9 @@
 `material` is a package of Material 3 Expressive components written in Byld:
 buttons, button groups, switches, fields, chips, lists, navigation, app bars,
 dialogs, snackbars, loading and progress indicators. It is the first package
-Byard maintains itself. It lives in the repository as `packages/material`, is
-versioned with Byard, and is checked by the same CI. An app adds it and writes:
+Byard maintains itself, and it lives in a repository of its own,
+`Briany4717/byard-material`, the way anyone else's package would. An app adds
+it and writes:
 
 ```byld,ignore
 use material as m
@@ -38,11 +39,15 @@ View Main() {
 }
 ```
 
-It is also a test. Stockroom proved Byard can carry an app. This proves it can
-carry a design system that other people build apps from, which is a different
-and harder thing: every component is a view someone else calls, with values,
-bindings, slots, states, motion and accessibility that have to work from the
-outside.
+It is also two tests. Stockroom proved Byard can carry an app. This proves it
+can carry a design system that other people build apps from, which is a
+different and harder thing: every component is a view someone else calls, with
+values, bindings, slots, states, motion and accessibility that have to work
+from the outside. And because it lives outside the repository, it is the first
+real use of the package system from end to end: `byard add`, `byard get`, the
+lockfile, a theme taken with `extends`, fonts named `material/…`, `byard
+publish` to a registry, and `byard bundle` carrying the package into a shipped
+app. Everything a stranger's package goes through, this one goes through first.
 
 ## Motivation
 
@@ -71,7 +76,8 @@ Material 3 Expressive fits what the engine already does well:
 byard add material --registry https://packages.byard.dev
 ```
 
-or, inside this repository, `material = { path = "../../packages/material" }`.
+or, before the registry exists, from git: `byard add material --git
+https://github.com/Briany4717/byard-material --tag v0.1.0`.
 `[theme] extends = "material"` takes its baseline theme: the full set of colour
 roles, the emphasized type scale, the expressive shape scale and its fonts. A
 `seed` on top recolours all of it.
@@ -103,9 +109,9 @@ Every component:
 
 ### The gallery
 
-`examples/material_gallery` shows every component in every variant, light and
-dark, and is how the package is looked at: `byard shot` draws each page. Its
-tests are the package's tests.
+`gallery/` in the package's repository is an app that depends on the package
+by path and shows every component in every variant, light and dark. `byard
+shot` draws each page. Its tests are the package's tests.
 
 ## Reference-level explanation
 
@@ -155,15 +161,23 @@ language (1, 5, 6), in the order above.
 
 ### Where it lives and how it ships
 
-- `packages/material/` in this repository: `byard.toml` (`[package] name =
-  "material"`), `src/*.byd`, `fonts/` (Material Symbols Rounded and a text
-  face, both Apache-2.0 or OFL), README, licence.
-- The version follows Byard's. `material 0.1.x` needs `byard 0.1.x`.
-- It is published to Byard's own registry, the static layout `byard publish`
-  already writes, served from GitHub Pages at a domain Byard owns. Until that
-  exists, a git dependency with a tag works the same.
-- CI runs `byard check` on the package and the gallery's tests on every PR, so
-  an engine change that breaks a component fails where it is made.
+- `Briany4717/byard-material`: `byard.toml` (`[package] name = "material"`),
+  `src/*.byd`, `fonts/` (Material Symbols Rounded and a text face, Apache-2.0
+  or OFL), `gallery/`, README, licence, and its own CI.
+- It has its own version. Its README says which Byard versions it supports,
+  and its CI installs that Byard (`cargo install byard --version …`) and runs
+  `byard check` on the package and the gallery's tests.
+- Its CI also runs once a day against Byard's `main`, so an engine change that
+  breaks a component is known the next morning, not at Byard's next release.
+  Byard's own CI can do the reverse later: fetch the package at its last tag
+  and check it, as a canary.
+- It is published to Byard's registry, the static layout `byard publish`
+  writes, served from GitHub Pages at a domain Byard owns. Until that exists,
+  a git dependency with a tag works the same, and is itself part of the test.
+- Whatever the package system can't do for a real package (a missing manifest
+  key, a confusing error from `get`, a lockfile that changes when it
+  shouldn't, a bundle that leaves something out) is a gap in Byard, logged and
+  fixed in Byard's repository like Stockroom's were.
 
 ### Naming
 
@@ -177,9 +191,8 @@ or affiliated with Google.
 
 - It is a large surface to keep correct as the engine changes. The gallery's
   tests are what keep it honest.
-- Shipping it from the main repository ties its releases to Byard's. A fix to
-  one component waits for a Byard release, unless the package gets patch
-  releases of its own, which the registry allows.
+- A separate repository can drift from the engine between releases. The daily
+  run against `main` is what catches it.
 - Material Symbols makes bundles bigger until subsetting exists.
 
 ## Alternatives
@@ -188,8 +201,10 @@ or affiliated with Google.
   Faster to draw, but every app gets them whether it wants them, a design
   system becomes part of the language, and nobody else could write one the same
   way. Writing it in Byld is the point.
-- **A separate repository.** Cleaner releases, but an engine change could break
-  it with no CI to say so. That can come later, once the language is stable.
+- **`packages/material` inside this repository.** One CI would catch engine
+  breakage at once, but the package would skip what every other package goes
+  through (fetching, the lockfile, publishing), and the package system would
+  stay untested by any real use.
 - **Material 3 without Expressive.** Expressive is the current Material, and
   the parts it adds (shape morphing, springs, connected button groups, the
   loading indicator) are the ones Byard draws better than other toolkits.
@@ -206,11 +221,15 @@ or affiliated with Google.
 
 ## Action plan
 
-1. Spike: `Button`, `Switch` and `TextField` in `packages/material` on main.
-   Log every gap the way Stockroom did.
+1. Create `Briany4717/byard-material` with the package, a `gallery/` app that
+   depends on it by path, and a second app outside it that depends on it by git
+   tag. Spike `Button`, `Switch` and `TextField`. Log every gap, in the engine
+   and in the package system, the way Stockroom did.
 2. Engine branches for the prerequisites (1 to 6 above, plus whatever the spike
    finds), each with tests and its own PR.
 3. The first-release components, a group per PR: actions, selection, input,
    containment, navigation, communication, scaffold and icons.
 4. The gallery, with a test and a light and a dark shot per component.
-5. Publish `material 0.1.0` once Byard has a release to depend on.
+5. Publish `material 0.1.0` to the registry once Byard has a release to depend
+   on, and bundle the gallery with `byard bundle` to check the package travels
+   into a shipped app.

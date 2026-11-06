@@ -245,6 +245,20 @@ mod tests {
     }
 
     #[test]
+    fn a_weight_read_from_a_parameter_is_not_a_keyword_error() {
+        let errs =
+            check_source("View K(w: Int) { Text(\"a\") #[weight: w] }\nView Main() { K(w: 700) }");
+        assert!(errs.is_empty(), "{errs:?}");
+        // A word nobody binds is still a misspelt keyword.
+        let errs = check_source("View Main() { Text(\"a\") #[weight: bld] }");
+        assert!(
+            errs.iter()
+                .any(|e| matches!(e, CompileError::AttributeTypeMismatch { .. })),
+            "{errs:?}"
+        );
+    }
+
+    #[test]
     fn bad_attr_is_reported() {
         let errs = check_source("View Main() { Column #[bogus: 1] {} }");
         assert!(

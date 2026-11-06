@@ -20,6 +20,25 @@ use crate::parser::ast::{ElementNode, Expr, Member};
 use crate::symbol::Symbol;
 
 impl Interpreter {
+    /// Whether `error` is the keyword complaint about a `weight:` whose bare
+    /// word names something in scope (a view parameter, a `let`, a `var`).
+    fn is_bound_weight_word(
+        &self,
+        attrs: &[crate::parser::ast::Attr],
+        error: &CompileError,
+    ) -> bool {
+        let CompileError::AttributeTypeMismatch { span, .. } = error else {
+            return false;
+        };
+        attrs.iter().any(|a| {
+            a.name.as_str() == "weight"
+                && matches!(&a.kind, crate::parser::ast::AttrKind::Prop {
+                    value: Expr::Ident(sym, sp),
+                } if sp == span
+                    && (self.env.lookup(sym).is_some() || self.root_params.contains(sym)))
+        })
+    }
+
     // ── element lowering (RFC-0005) ─────────────────────────────────────
 
     /// Lowers an element to a [`RenderNode`], validating it against the §5
@@ -36,8 +55,14 @@ impl Interpreter {
         // not affect the emitted base set.
         self.check_breakpoints(&state_blocks);
         let to_validate = attrs_with_states(&attrs, &state_blocks);
-        self.errors
-            .extend(validate_element(el, &to_validate, known_views));
+        let mut found = validate_element(el, &to_validate, known_views);
+        // The contract reads a bare word in `weight:` as a keyword, because
+        // without a scope that is all it can be. Here the scope is known: a
+        // word the view binds is a value (`weight: w`), and is not an error.
+        if !found.is_empty() {
+            found.retain(|e| !self.is_bound_weight_word(&to_validate, e));
+        }
+        self.errors.extend(found);
         // RFC-0038: an `on measure` member is *about* this element, so it is
         // consumed here and never reaches the child list. `el_children` is the
         // element's members minus those declarations, borrowed unchanged in the
@@ -66,6 +91,7 @@ impl Interpreter {
                             attrs: label_attrs,
                             state_blocks: Vec::new(),
                             content,
+                            env_snapshot: Vec::new(),
                         }],
                         action: el.action.clone(),
                         bound_sig: None,
@@ -75,10 +101,18 @@ impl Interpreter {
                         clip_path: None,
                     }
                 } else {
+                    // A `Text` with no attributes reads nothing from its
+                    // instance, so it carries no snapshot.
+                    let env_snapshot = if attrs.is_empty() && state_blocks.is_empty() {
+                        Vec::new()
+                    } else {
+                        self.capture_env_snapshot()
+                    };
                     RenderNode::Text {
                         attrs,
                         state_blocks,
                         content,
+                        env_snapshot,
                     }
                 }
             }

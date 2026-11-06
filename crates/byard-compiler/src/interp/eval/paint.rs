@@ -235,7 +235,14 @@ impl Interpreter {
                 attrs,
                 state_blocks,
                 content,
+                env_snapshot,
             } => {
+                // The scope the run was written in: a `size:` or `color:` that
+                // reads a view parameter resolves against it (empty: no-op).
+                let env_base = self.env.len();
+                for (k, v) in env_snapshot {
+                    self.env.push(k.clone(), v.clone());
+                }
                 if let Ok(Some(rect)) = self.atlas.resolved_rect(atlas_node) {
                     // RFC-0016: overlay any active `on <state>` block against the
                     // live engine mask before reading paint properties. RFC-0024:
@@ -261,10 +268,7 @@ impl Interpreter {
                     // Resolve `typo:` token to font size; inline `size:` overrides
                     // (RFC-0005 `Typo`, completed by RFC-0022).
                     let typo_size = self.eval_typo_size(attrs);
-                    let size =
-                        self.eval_int_prop(attrs, "size")
-                            .or(typo_size)
-                            .unwrap_or(self.theme.font_size as i64) as f32;
+                    let size = self.text_font_size(attrs, typo_size);
                     let mut rgba = super::intrinsics::color_rgba_auto(color);
                     rgba[3] *= inherited_opacity;
                     // RFC-0011: the run's own transform, composed with its
@@ -384,6 +388,7 @@ impl Interpreter {
                         self.register_event_attrs(attrs, hit_rect, elem_idx);
                     }
                 }
+                self.env.truncate(env_base);
             }
             RenderNode::Box {
                 name,

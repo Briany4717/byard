@@ -67,6 +67,7 @@ mod text_editing;
 mod text_field_events;
 
 mod text_field_style;
+mod text_param;
 mod text_transform;
 mod text_weight;
 mod theme_swap;

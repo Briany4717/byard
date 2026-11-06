@@ -720,6 +720,82 @@ impl Interpreter {
         }
     }
 
+    /// The layout leaf of a `Text`, measured against the environment the caller
+    /// has restored.
+    fn build_text_leaf(
+        &mut self,
+        attrs: &[Attr],
+        state_blocks: &[crate::parser::ast::StateBlock],
+        content: ScopeId,
+        flat_ids: &mut Vec<byard_core::atlas::layout::AtlasNodeId>,
+    ) -> Result<byard_core::atlas::layout::AtlasNodeId, byard_core::atlas::AtlasError> {
+        use byard_core::atlas::layout::LeafSize;
+        // RFC-0016: a responsive `size:` changes what is measured, so
+        // it has to be seen here as well as at paint.
+        let attrs = resolve_state_attrs(
+            attrs,
+            state_blocks,
+            crate::interp::events::StyleState::empty(),
+            &|c| viewport_holds(c, self.viewport, &self.theme),
+        );
+        let attrs: &[Attr] = &attrs;
+        let text = match self.binding_value(content) {
+            Some(Value::Str(s)) => s,
+            other => other.map_or_else(String::new, |v| v.to_text()),
+        };
+        let typo_size = self.eval_typo_size(attrs);
+        let font_size = self.text_font_size(attrs, typo_size);
+        // RFC-0005 default text wrap: `wrap` defaults to `true`. A
+        // wrapping `Text` becomes a measured leaf that the atlas sizes to
+        // the width its parent offers during layout (via the shared
+        // `TextMeasurer`), so it reflows without an explicit `width`. An
+        // explicit `width` fixes the wrap width; `wrap: false` opts out to
+        // a fixed natural single-line leaf (may overflow, the caller's
+        // choice). `fallback` is the natural size for the no-sizer path.
+        let weight = self.resolve_weight(attrs);
+        let family = self.resolve_family(attrs);
+        let (nat_w, nat_h) =
+            self.measure_text_wrapped(&text, font_size, None, weight, family.as_deref());
+        // The layout attributes an element in a `Row` or `Column`
+        // takes. A `Text` with none of them never reaches this, so the
+        // common leaf stays what it was: no style evaluated, none set.
+        let boxed = self.text_box(attrs);
+        let pad_w = boxed.padding.left + boxed.padding.right;
+        let pad_h = boxed.padding.top + boxed.padding.bottom;
+        #[allow(clippy::cast_precision_loss)]
+        let explicit_w = self.eval_px_prop(attrs, "width");
+        if self.eval_bool_prop(attrs, "wrap") == Some(false) {
+            // A single line is never reshaped to a width, so `width`
+            // is the leaf's width whatever the text measures (the
+            // paint pass clips what does not fit), and without one the
+            // leaf is the text's natural width.
+            let size = LeafSize::new(
+                explicit_w.unwrap_or(nat_w + pad_w),
+                boxed.height.unwrap_or(nat_h + pad_h),
+            );
+            let id = if boxed == byard_core::atlas::TextBox::default() {
+                self.atlas.add_leaf(size)?
+            } else {
+                self.atlas.add_fixed_text_leaf(size, boxed)?
+            };
+            flat_ids.push(id);
+            return Ok(id);
+        }
+        let id = self.atlas.add_text_leaf_boxed(
+            byard_core::atlas::TextLeaf {
+                content: text,
+                font_size,
+                weight,
+                family,
+                width: explicit_w,
+                fallback: (nat_w + pad_w, nat_h + pad_h),
+            },
+            boxed,
+        )?;
+        flat_ids.push(id);
+        Ok(id)
+    }
+
     pub(super) fn build_layout_tree(
         &mut self,
         node: &RenderNode,
@@ -876,75 +952,17 @@ impl Interpreter {
                 attrs,
                 content,
                 state_blocks,
+                env_snapshot,
             } => {
-                // RFC-0016: a responsive `size:` changes what is measured, so
-                // it has to be seen here as well as at paint.
-                let attrs = resolve_state_attrs(
-                    attrs,
-                    state_blocks,
-                    crate::interp::events::StyleState::empty(),
-                    &|c| viewport_holds(c, self.viewport, &self.theme),
-                );
-                let attrs: &[Attr] = &attrs;
-                let text = match self.binding_value(*content) {
-                    Some(Value::Str(s)) => s,
-                    other => other.map_or_else(String::new, |v| v.to_text()),
-                };
-                let typo_size = self.eval_typo_size(attrs);
-                #[allow(clippy::cast_precision_loss)]
-                let font_size = self
-                    .eval_int_prop(attrs, "size")
-                    .or(typo_size)
-                    .unwrap_or(self.theme.font_size as i64) as f32;
-                // RFC-0005 default text wrap: `wrap` defaults to `true`. A
-                // wrapping `Text` becomes a measured leaf that the atlas sizes to
-                // the width its parent offers during layout (via the shared
-                // `TextMeasurer`), so it reflows without an explicit `width`. An
-                // explicit `width` fixes the wrap width; `wrap: false` opts out to
-                // a fixed natural single-line leaf (may overflow, the caller's
-                // choice). `fallback` is the natural size for the no-sizer path.
-                let weight = self.resolve_weight(attrs);
-                let family = self.resolve_family(attrs);
-                let (nat_w, nat_h) =
-                    self.measure_text_wrapped(&text, font_size, None, weight, family.as_deref());
-                // The layout attributes an element in a `Row` or `Column`
-                // takes. A `Text` with none of them never reaches this, so the
-                // common leaf stays what it was: no style evaluated, none set.
-                let boxed = self.text_box(attrs);
-                let pad_w = boxed.padding.left + boxed.padding.right;
-                let pad_h = boxed.padding.top + boxed.padding.bottom;
-                #[allow(clippy::cast_precision_loss)]
-                let explicit_w = self.eval_px_prop(attrs, "width");
-                if self.eval_bool_prop(attrs, "wrap") == Some(false) {
-                    // A single line is never reshaped to a width, so `width`
-                    // is the leaf's width whatever the text measures (the
-                    // paint pass clips what does not fit), and without one the
-                    // leaf is the text's natural width.
-                    let size = LeafSize::new(
-                        explicit_w.unwrap_or(nat_w + pad_w),
-                        boxed.height.unwrap_or(nat_h + pad_h),
-                    );
-                    let id = if boxed == byard_core::atlas::TextBox::default() {
-                        self.atlas.add_leaf(size)?
-                    } else {
-                        self.atlas.add_fixed_text_leaf(size, boxed)?
-                    };
-                    flat_ids.push(id);
-                    return Ok(id);
+                // The scope the run was written in, so a `size:` that reads a
+                // view parameter measures with the instance's value.
+                let env_base = self.env.len();
+                for (k, v) in env_snapshot {
+                    self.env.push(k.clone(), v.clone());
                 }
-                let id = self.atlas.add_text_leaf_boxed(
-                    byard_core::atlas::TextLeaf {
-                        content: text,
-                        font_size,
-                        weight,
-                        family,
-                        width: explicit_w,
-                        fallback: (nat_w + pad_w, nat_h + pad_h),
-                    },
-                    boxed,
-                )?;
-                flat_ids.push(id);
-                Ok(id)
+                let out = self.build_text_leaf(attrs, state_blocks, *content, flat_ids);
+                self.env.truncate(env_base);
+                out
             }
             RenderNode::Box {
                 name,

@@ -234,6 +234,12 @@ pub enum RenderNode {
         state_blocks: Vec<StateBlock>,
         /// The reactive scope projecting the text content.
         content: ScopeId,
+        /// The instance environment captured at lower time, restored while the
+        /// run is measured and painted so a `size:` (or `color:`, `weight:`...)
+        /// that reads a view parameter resolves against the instance it was
+        /// written in. Empty at the top level and for a `Text` with no
+        /// attributes, which read nothing.
+        env_snapshot: Vec<(Symbol, super::env::Value)>,
     },
     /// A flexible gap (layout-only, RFC-0005): absorbs its parent's free space
     /// along the main axis. `attrs` carries `grow`/`basis`, which is why this is
@@ -728,6 +734,10 @@ pub struct Interpreter {
     /// declaration span: lowering a different one is a new tree (RFC-0032
     /// §R4).
     lowered_view: Option<(crate::symbol::Symbol, Span)>,
+    /// The parameters of that view. Lowered standalone (by `check`, or as an
+    /// app's root) nothing binds them, so a name an attribute reads is told
+    /// from a keyword by this list.
+    root_params: Vec<crate::symbol::Symbol>,
     /// The IME composition in progress, if any (RFC-0040 §2).
     ///
     /// Engine state, not app state: it has no name in byld and never touches
@@ -1981,6 +1991,9 @@ impl Interpreter {
             self.invalidate_retained_layout();
             self.lowered_view = Some(identity);
         }
+        self.root_params.clear();
+        self.root_params
+            .extend(view.params.iter().map(|p| p.name.clone()));
         self.check_anchor_refs(view);
         self.check_font_families(view);
         // RFC-0018: a fresh tree gets fresh `when`/`for` pools; the previous

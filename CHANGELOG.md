@@ -12,6 +12,11 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Text reads the parameters of its view.** `Text("Aa") #[size: dim]` in a view with a
+  `dim` parameter drew at the default size, and so did `weight`, `color`, `wrap` and `typo`
+  when they named a parameter, a `let` or a `var` of the view. They now use the value of
+  each call, and follow it when it changes. A `Float` works as a `size`, and `weight: w`
+  with `w` a number no longer fails `byard check`.
 - **A lambda sees its own item.** A `fn` called with the item inside a list
   lambda (`products.filter(p => isLow(p.qty))`) was computed once, for the
   first item, and gave every item the same answer. A lambda inside another

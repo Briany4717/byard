@@ -316,8 +316,11 @@ read the number. The other way round never settles.
 its parent offers. `wrap: false` keeps it on one line. The look of text is covered under [styling](styling.md).
 
 A `Text` takes the attributes that place a child in a `Row` or `Column`: `width`,
-`height`, `grow`, and `p` and `m` with their sides. `Text("Title") #[grow: 1]`
-takes the room left in its row. `p` insets the words inside the text's own box, `m`
+`height`, `grow`, `basis`, and `p` and `m` with their sides. `Text("Title")
+#[grow: 1]` takes the room left in its row after its own size, as a `Box` does, so
+two `grow: 1` texts of different lengths are not equal halves. `basis: 0` makes
+them start from nothing, and a column of such cells lines up from row to row.
+`p` insets the words inside the text's own box, `m`
 leaves room around it. A `Text` has no children, so `gap`, `align` and `justify`
 do not apply (its `align` positions the words, see [styling](styling.md)).
 

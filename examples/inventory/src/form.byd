@@ -99,7 +99,14 @@ View ProductForm(
                 when !isNew {
                     Column #[gap: 4] {
                         Label(text: "On hand")
-                        Box #[height: 40, width: 170, bg: t.surfaceContainer, radius: 10, p: (horizontal: 12), justify: center] {
+                        Box #[
+                            height: 40,
+                            width: 170,
+                            bg: t.surfaceContainer,
+                            radius: 10,
+                            p: (horizontal: 12),
+                            justify: center,
+                        ] {
                             Text("{current.qty}") #[typo: t.body, color: t.onSurfaceVariant]
                         }
                     }
@@ -132,7 +139,8 @@ View ProductForm(
                 on_submit: { save() },
             )
             when !isNew {
-                Text("The quantity changes through Receive, Ship and Adjust, so the log stays true.") #[typo: t.caption, color: t.onSurfaceVariant]
+                Text("The quantity changes through Receive, Ship and Adjust, so the log stays true.")
+                    #[typo: t.caption, color: t.onSurfaceVariant]
             }
             Row #[gap: 10, m: (top: 6)] {
                 Action(label: "Cancel", tone: "tonal", on_tap: { on_cancel() })

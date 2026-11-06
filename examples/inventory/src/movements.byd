@@ -63,9 +63,19 @@ View MovementRow(m: Movement, products: List<Product>) {
     inject Theme as t
     let product = products.find(p => p.id == m.productId)
     Row #[height: 40, p: (horizontal: 16), gap: 12, align: center] {
-        Text(signed(m.kind, m.qty)) #[typo: t.label, color: m.kind == "out" ? t.secondary : m.kind == "in" ? t.tertiary : t.onSurfaceVariant, width: 56, wrap: false]
+        Text(signed(m.kind, m.qty)) #[
+            typo: t.label,
+            color: m.kind == "out" ? t.secondary : m.kind == "in" ? t.tertiary : t.onSurfaceVariant,
+            width: 56,
+            wrap: false,
+        ]
         Text(kindLabel(m.kind)) #[typo: t.body, color: t.onSurface, width: 90, wrap: false]
-        Text(product.name ?? "Deleted product #{m.productId}") #[typo: t.body, color: (product.id ?? 0) == 0 ? t.onSurfaceVariant : t.onSurface, grow: 1, wrap: false]
+        Text(product.name ?? "Deleted product #{m.productId}") #[
+            typo: t.body,
+            color: (product.id ?? 0) == 0 ? t.onSurfaceVariant : t.onSurface,
+            grow: 1,
+            wrap: false,
+        ]
         Text(m.note) #[typo: t.caption, color: t.onSurfaceVariant, grow: 1, wrap: false]
         Text(stamp(m.at)) #[typo: t.caption, color: t.onSurfaceVariant, width: 150, wrap: false]
     }

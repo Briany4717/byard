@@ -33,7 +33,12 @@ View Dashboard(products: List<Product>, movements: List<Movement>, on_open: Fn(I
                         for i, c in categories() {
                             Row #[gap: 12, align: center] {
                                 Text(c) #[typo: t.body, color: t.onSurfaceVariant, width: 96]
-                                Box #[bg: t.primary, radius: 5, height: 18, width: biggest > 0.0 ? 2.0 + totals[i] / biggest * 260.0 : 2.0]
+                                Box #[
+                                    bg: t.primary,
+                                    radius: 5,
+                                    height: 18,
+                                    width: biggest > 0.0 ? 2.0 + totals[i] / biggest * 260.0 : 2.0,
+                                ]
                                 Text(money(totals[i])) #[typo: t.caption, color: t.onSurface]
                             }
                         }
@@ -52,17 +57,26 @@ View Dashboard(products: List<Product>, movements: List<Movement>, on_open: Fn(I
                     Card {
                         Text("Needs attention") #[typo: t.title, color: t.onSurface]
                         when attention.len == 0 {
-                            Text("Everything is above its minimum") #[typo: t.body, color: t.onSurfaceVariant]
+                            Text("Everything is above its minimum") #[
+                                typo: t.body,
+                                color: t.onSurfaceVariant,
+                            ]
                         }
                         for p in attention.slice(0, 12) {
                             Row #[gap: 10, align: center, p: (vertical: 4), tap => on_open(p.id)] {
                                 StockBadge(qty: p.qty, min: p.min)
                                 Text(p.name) #[typo: t.body, color: t.onSurface, grow: 1]
-                                Text("{p.qty} / {p.min}") #[typo: t.caption, color: t.onSurfaceVariant]
+                                Text("{p.qty} / {p.min}") #[
+                                    typo: t.caption,
+                                    color: t.onSurfaceVariant,
+                                ]
                             }
                         }
                         when attention.len > 12 {
-                            Text("and {attention.len - 12} more") #[typo: t.caption, color: t.onSurfaceVariant]
+                            Text("and {attention.len - 12} more") #[
+                                typo: t.caption,
+                                color: t.onSurfaceVariant,
+                            ]
                         }
                     }
                 }
@@ -76,8 +90,17 @@ View MovementLine(m: Movement, products: List<Product>) {
     inject Theme as t
     let product = products.find(p => p.id == m.productId)
     Row #[gap: 10, align: center] {
-        Text(signed(m.kind, m.qty)) #[typo: t.label, width: 40, color: m.kind == "out" ? t.secondary : m.kind == "in" ? t.tertiary : t.onSurfaceVariant]
-        Text(product.name ?? "Deleted product #{m.productId}") #[typo: t.body, color: t.onSurface, wrap: false, grow: 1]
+        Text(signed(m.kind, m.qty)) #[
+            typo: t.label,
+            width: 40,
+            color: m.kind == "out" ? t.secondary : m.kind == "in" ? t.tertiary : t.onSurfaceVariant,
+        ]
+        Text(product.name ?? "Deleted product #{m.productId}") #[
+            typo: t.body,
+            color: t.onSurface,
+            wrap: false,
+            grow: 1,
+        ]
         Text(stamp(m.at)) #[typo: t.caption, color: t.onSurfaceVariant, wrap: false]
     }
 }

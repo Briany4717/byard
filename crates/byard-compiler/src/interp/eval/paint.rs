@@ -236,6 +236,7 @@ impl Interpreter {
                 state_blocks,
                 content,
                 env_snapshot,
+                ..
             } => {
                 // The scope the run was written in: a `size:` or `color:` that
                 // reads a view parameter resolves against it (empty: no-op).
@@ -402,6 +403,7 @@ impl Interpreter {
                 measure: _,
                 clip_path,
                 uid: _,
+                inst: _,
             } => {
                 // RFC-0019 §2: restore the instance environment captured at lower
                 // time so event actions re-lowered below (a forwarded callback,
@@ -1351,6 +1353,7 @@ impl Interpreter {
                 state_blocks,
                 src,
                 env_snapshot,
+                ..
             } => {
                 let env_base = self.env.len();
                 for (k, v) in env_snapshot {
@@ -1434,6 +1437,7 @@ impl Interpreter {
                 action,
                 env_snapshot,
                 slot,
+                ..
             } => {
                 if let Ok(Some(rect)) = self.atlas.resolved_rect(atlas_node) {
                     let elem_idx = self.atlas.node_index(atlas_node);
@@ -1549,6 +1553,7 @@ impl Interpreter {
                 attrs,
                 src,
                 env_snapshot,
+                ..
             } => {
                 let env_base = self.env.len();
                 for (k, v) in env_snapshot {
@@ -1625,6 +1630,7 @@ impl Interpreter {
                 shapes,
                 action,
                 env_snapshot,
+                ..
             } => {
                 if let Ok(Some(rect)) = self.atlas.resolved_rect(atlas_node) {
                     let elem_idx = self.atlas.node_index(atlas_node);

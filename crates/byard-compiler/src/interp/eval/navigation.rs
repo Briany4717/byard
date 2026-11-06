@@ -151,6 +151,8 @@ pub(super) struct NavPool {
     /// The instance env captured at lower time (RFC-0019), restored when a new
     /// entry's body is lowered.
     env_snapshot: Vec<(Symbol, Value)>,
+    /// The view instance the container was written in (see `WhenPool::inst`).
+    pub(super) inst: u32,
     /// The live history stack (a `NavHost`'s instantiated, preserved tabs).
     pub(super) entries: Vec<NavEntry>,
     /// Index into `entries` of the screen the navigation state names.
@@ -427,6 +429,7 @@ impl Interpreter {
             routes,
             known_views: known_views.iter().map(|s| (*s).to_string()).collect(),
             env_snapshot: self.capture_env_snapshot(),
+            inst: self.cur_inst,
             entries: Vec::new(),
             current: 0,
             anim: None,
@@ -618,6 +621,7 @@ impl Interpreter {
         for (k, v) in &env_snap {
             self.env.push(k.clone(), v.clone());
         }
+        let enclosing = std::mem::replace(&mut self.cur_inst, self.nav_pools[pool].inst);
         let params_record = Value::Record(
             params
                 .iter()
@@ -643,6 +647,7 @@ impl Interpreter {
         let nodes = self.lower_members(&body, &known_refs);
         let scopes = self.ctx.pop_scope_tracker();
         self.nav_depth -= 1;
+        self.cur_inst = enclosing;
         self.env.truncate(env_base);
         (nodes, scopes)
     }
@@ -777,7 +782,8 @@ impl Interpreter {
             let Some(entry) = self.nav_pools[pool].entries.pop() else {
                 break;
             };
-            self.drop_animation_state(entry.body_span);
+            let inst = self.nav_pools[pool].inst;
+            self.drop_animation_state(entry.body_span, inst);
             self.retire_subtree(entry.scopes, entry.nodes);
         }
     }

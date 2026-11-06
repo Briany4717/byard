@@ -132,6 +132,7 @@ impl Interpreter {
         if self.free_nav_pools.contains(&pool) {
             return;
         }
+        let inst = self.nav_pools[pool].inst;
         let (entries, path_sig) = self.nav_pools[pool].vacate();
         self.free_nav_pools.push(pool);
         if let Some(slot) = self.nav_elems.get_mut(pool) {
@@ -149,7 +150,7 @@ impl Interpreter {
             }
         }
         for entry in entries {
-            self.drop_animation_state(entry.body_span);
+            self.drop_animation_state(entry.body_span, inst);
             self.retire_subtree(entry.scopes, entry.nodes);
         }
     }

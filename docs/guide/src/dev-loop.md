@@ -196,6 +196,7 @@ picture. Every test of a screen can pass while the screen is wrong.
 | `--size <WIDTHxHEIGHT>` | `440x880` | The logical size of the window |
 | `--scale <SCALE>` | `2` | Device pixels per logical pixel |
 | `--at <MS>` | `1500` | Milliseconds of app time to run first, so animations settle |
+| `--now <ISO>` | the real clock | Fix the time `now()` reads, such as `2026-11-05T09:00:00`. `--at` advances it |
 | `--dark` / `--light` | the manifest's | Force a colour scheme |
 | `--tap <X,Y>` | none | Tap a logical point before the picture. Repeat it for more taps |
 | `--key <KEY>` | none | Press a key before the picture, such as `Left`, `shift+Left` or `mod+a`. Repeatable |

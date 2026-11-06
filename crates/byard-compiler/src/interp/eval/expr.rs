@@ -1126,6 +1126,9 @@ impl Interpreter {
                     // caller's `var`s and `let`s, and nothing the view that
                     // runs it declares. The names of the lambdas this call
                     // sits in are the running view's too.
+                    // A `fn`'s body is pure whatever calls it (RFC-0049 §3).
+                    let pure = self.pure_fns.contains(&id.0);
+                    self.pure_depth += u32::from(pure);
                     let mut body_lowered = if let Some(captured) = captured {
                         let frame = self.env.enter_closure(captured);
                         let outer_params = std::mem::take(&mut self.lambda_params);
@@ -1144,6 +1147,7 @@ impl Interpreter {
                         self.lambda_params.truncate(mark);
                         lowered
                     };
+                    self.pure_depth -= u32::from(pure);
                     return Box::new(move |ctx| {
                         let values: Vec<(Symbol, Value)> = arg_cs
                             .iter_mut()
@@ -1156,6 +1160,16 @@ impl Interpreter {
                         result
                     });
                 }
+            }
+        }
+        // `now()` and `nowUtc()` (RFC-0049): the language's own, found last, so
+        // a program's own `now` is the one it meant.
+        if let Expr::Ident(name, _) = callee {
+            if matches!(name.as_str(), "now" | "nowUtc")
+                && self.env.lookup(name).is_none()
+                && !self.top_fns.contains_key(name)
+            {
+                return self.lower_clock_read(name, callee.span());
             }
         }
         // Collection method calls (RFC-0027 §4): `xs.push(v)`, `.removeAt(i)`,
@@ -1226,6 +1240,53 @@ impl Interpreter {
         })
     }
 
+    /// Lowers `now()` / `nowUtc()` (RFC-0049): a read of the interpreter's
+    /// clock when the action runs. Only an action runs it more than once on
+    /// purpose, so anywhere else (a `let`, an attribute, an interpolation, a
+    /// `var` seed, a `fn`) is [`CompileError::ClockOutsideAction`].
+    fn lower_clock_read(&mut self, name: &Symbol, span: Span) -> Lowered {
+        // Inside a `fn` it was reported where the `fn` is defined
+        // ([`Self::report_clock_in_fn`]), once, wherever it is called from.
+        if self.pure_depth > 0 {
+            return Box::new(|_| Value::Unit);
+        }
+        if self.bridge.action_depth == 0 {
+            self.push_clock_error(span, name.as_str());
+            return Box::new(|_| Value::Unit);
+        }
+        let clock = std::rc::Rc::clone(&self.clock);
+        if name.as_str() == "nowUtc" {
+            Box::new(move |_| Value::Str(clock.utc()))
+        } else {
+            Box::new(move |_| Value::Str(clock.local()))
+        }
+    }
+
+    /// Reports a clock read, once for a given place.
+    fn push_clock_error(&mut self, span: Span, name: &str) {
+        let known = self
+            .errors
+            .iter()
+            .any(|e| matches!(e, CompileError::ClockOutsideAction { span: at, .. } if *at == span));
+        if !known {
+            self.errors.push(CompileError::ClockOutsideAction {
+                span,
+                name: name.to_string(),
+            });
+        }
+    }
+
+    /// Reports every `now()` / `nowUtc()` in the body of a `fn` (RFC-0049 §3).
+    /// A `fn` is pure, so none may read the clock whoever calls it, and a `fn`
+    /// nothing calls is checked too.
+    pub(super) fn report_clock_in_fn(&mut self, params: &[Symbol], body: &Expr) {
+        let mut found = Vec::new();
+        clock_calls(body, params, &mut found);
+        for (span, name) in found {
+            self.push_clock_error(span, &name);
+        }
+    }
+
     /// Inlines a call to a top-level function. Its arguments are lowered in
     /// the caller's environment; its body in an environment holding only its
     /// parameters, so it reads nothing of the view that calls it (a function
@@ -1258,7 +1319,9 @@ impl Interpreter {
             let caller = std::mem::replace(&mut self.env, Env::new());
             let outer = std::mem::replace(&mut self.lambda_params, names.clone());
             self.inlining.push(name.clone());
+            self.pure_depth += 1;
             let body_lowered = self.lower_expr(&body, None);
+            self.pure_depth -= 1;
             self.inlining.pop();
             self.lambda_params = outer;
             self.env = caller;
@@ -1274,7 +1337,9 @@ impl Interpreter {
             self.env.push(param, Value::Memo(scope));
         }
         self.inlining.push(name.clone());
+        self.pure_depth += 1;
         let body_lowered = self.lower_expr(&body, None);
+        self.pure_depth -= 1;
         self.inlining.pop();
         self.env = caller;
         body_lowered
@@ -1826,5 +1891,20 @@ impl Interpreter {
                 *cell.borrow_mut() = None;
             });
         }))
+    }
+}
+
+/// Every call to `now` / `nowUtc` in `expr` that names the built-in rather
+/// than a parameter of the same name.
+fn clock_calls(expr: &Expr, params: &[Symbol], out: &mut Vec<(Span, String)>) {
+    if let Expr::Call { callee, span, .. } = expr {
+        if let Expr::Ident(name, _) = callee.as_ref() {
+            if matches!(name.as_str(), "now" | "nowUtc") && !params.contains(name) {
+                out.push((*span, name.as_str().to_string()));
+            }
+        }
+    }
+    for child in super::measure::children(expr) {
+        clock_calls(child, params, out);
     }
 }

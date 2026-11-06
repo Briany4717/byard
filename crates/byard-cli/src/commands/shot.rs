@@ -110,6 +110,9 @@ pub struct ShotArgs<'a> {
     /// Milliseconds of app time to run before the picture is taken, so
     /// entrance animations and transitions have settled.
     pub at_ms: u32,
+    /// The wall clock `now()` reads, fixed at this ISO time (RFC-0049), or
+    /// `None` for the system's. `at_ms` advances it.
+    pub wall_clock: Option<&'a str>,
     /// Start in the dark scheme (`Some(true)`), the light one, or whichever
     /// the manifest says (`None`).
     pub dark: Option<bool>,
@@ -138,6 +141,11 @@ pub fn run(args: &ShotArgs<'_>) -> Result<(), String> {
         .ok_or("the program declares no `View`")?;
 
     let mut interp = Interpreter::new();
+    if let Some(iso) = args.wall_clock {
+        interp
+            .set_wall_clock(iso)
+            .map_err(|e| format!("--now: {e}"))?;
+    }
     // As `check` does: the framework's own capabilities resolve, so a view
     // that injects `Http` renders its not-yet-loaded state instead of failing.
     interp.declare_controllers(&byard_core::cap::provided_names());

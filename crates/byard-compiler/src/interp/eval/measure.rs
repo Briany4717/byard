@@ -215,7 +215,7 @@ fn reads_binding(expr: &Expr, name: &Symbol) -> bool {
 /// Exhaustive on purpose, with no wildcard arm: a new expression form has to
 /// declare whether it can hold a read or a write, rather than defaulting to
 /// "invisible to both checks above" and quietly weakening them.
-fn children(expr: &Expr) -> Vec<&Expr> {
+pub(super) fn children(expr: &Expr) -> Vec<&Expr> {
     match expr {
         Expr::IntLit(..)
         | Expr::FloatLit(..)

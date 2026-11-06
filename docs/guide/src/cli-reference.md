@@ -95,6 +95,7 @@ library package.
 | `--size <SIZE>` | `440x880` | Logical size, as `WIDTHxHEIGHT`. |
 | `--scale <SCALE>` | `2` | Device pixels per logical pixel. |
 | `--at <MS>` | `1500` | Milliseconds of app time to run first, so animations settle. |
+| `--now <ISO>` | the real clock | Fixes the time `now()` reads, such as `2026-11-05T09:00:00`. `--at` advances it. |
 | `--dark` | | Forces the dark scheme. Conflicts with `--light`. |
 | `--light` | | Forces the light scheme. |
 | `--tap <X,Y>` | | Taps a logical point before the picture. Repeat it to tap more than once. |

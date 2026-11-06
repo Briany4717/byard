@@ -63,9 +63,11 @@ const FLOAT_METHODS: [&str; 6] = ["round", "floor", "ceil", "abs", "min", "max"]
 const BUILT_IN_NAMES: [&str; 3] = ["anim", "scroll_fraction", "route"];
 
 /// Functions the language itself provides: `untrack(expr)`, the
-/// `match(element)` width of an anchored overlay, and the navigation actions
-/// (`navigate`, `back`, `replace`).
-const BUILT_IN_CALLS: [&str; 5] = ["untrack", "match", "navigate", "back", "replace"];
+/// `match(element)` width of an anchored overlay, the navigation actions
+/// (`navigate`, `back`, `replace`), and the clock (`now`, `nowUtc`; RFC-0049).
+const BUILT_IN_CALLS: [&str; 7] = [
+    "untrack", "match", "navigate", "back", "replace", "now", "nowUtc",
+];
 
 /// Whether the property `prop` of the element `element` takes only values (a
 /// number, a colour, a length, an angle, a list) and never words. A pair and
@@ -872,7 +874,14 @@ impl Checker<'_> {
                 if self.strict && !self.knows(name) && !BUILT_IN_CALLS.contains(&name.as_str()) {
                     self.unknown_name(name, *span);
                 }
-                self.fns.get(name).cloned().flatten().unwrap_or(Ty::Unknown)
+                self.fns.get(name).cloned().flatten().unwrap_or_else(|| {
+                    // The clock answers text (RFC-0049).
+                    if matches!(name.as_str(), "now" | "nowUtc") && !self.knows(name) {
+                        Ty::Str
+                    } else {
+                        Ty::Unknown
+                    }
+                })
             }
             _ => Ty::Unknown,
         }
@@ -1102,7 +1111,13 @@ impl Checker<'_> {
             Expr::Call { callee, .. } => match callee.as_ref() {
                 // A call to a named `fn` resolves to its declared return type.
                 Expr::Ident(name, _) => {
-                    self.fns.get(name).cloned().flatten().unwrap_or(Ty::Unknown)
+                    self.fns.get(name).cloned().flatten().unwrap_or_else(|| {
+                        if matches!(name.as_str(), "now" | "nowUtc") && !self.knows(name) {
+                            Ty::Str
+                        } else {
+                            Ty::Unknown
+                        }
+                    })
                 }
                 // Method calls need a catalog Phase 2 does not have.
                 _ => Ty::Unknown,

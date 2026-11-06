@@ -278,7 +278,7 @@ const SETTLE: std::time::Duration = std::time::Duration::from_millis(40);
 ///
 /// Two event classes are routed: a source, the manifest, a raster image or
 /// a watched file being written, created or removed triggers `reparse()` into
-/// `channel`, once the files have been quiet for [`SETTLE`] (a save is often
+/// `channel`, once the files have been quiet for `SETTLE` (a save is often
 /// a truncate and then a write, and a re-read between them sees nothing); an image or `.svg` changing sends its path to `assets` so the
 /// runtime decodes or regenerates it in place (RFC-0009 §3).
 ///
@@ -749,7 +749,7 @@ mod tests {
     /// A save that truncates the file and writes it a moment later is one
     /// reload with the final content, not an empty one first.
     #[test]
-    fn a_truncate_then_a_write_is_one_reload() {
+    fn a_save_that_truncates_first_is_never_read_half_done() {
         use std::sync::{Arc, Mutex};
         use std::time::{Duration, Instant};
 
@@ -790,13 +790,25 @@ mod tests {
         std::fs::write(&file, "two").unwrap();
 
         let deadline = Instant::now() + Duration::from_secs(5);
-        while reads.lock().unwrap().is_empty() {
-            assert!(Instant::now() < deadline, "no reload within 5 s");
+        while reads.lock().unwrap().last().map(String::as_str) != Some("two") {
+            assert!(
+                Instant::now() < deadline,
+                "no reload of the saved file within 5 s: {:?}",
+                reads.lock().unwrap()
+            );
             std::thread::sleep(Duration::from_millis(10));
         }
-        // Long enough for a second, stray re-read to show.
+        // Long enough for a stray re-read to show.
         std::thread::sleep(Duration::from_millis(300));
-        assert_eq!(*reads.lock().unwrap(), vec!["two".to_string()]);
+        let reads = reads.lock().unwrap().clone();
+        // macOS may also report the file's creation, from before the watch
+        // began, as one more reload of "one". What must never be read is the
+        // file between the truncate and the write.
+        assert!(
+            !reads.iter().any(String::is_empty),
+            "a half-saved file was read: {reads:?}"
+        );
+        assert_eq!(reads.last().map(String::as_str), Some("two"), "{reads:?}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

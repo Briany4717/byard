@@ -252,6 +252,13 @@ pub struct ParsedFile {
     pub watch_files: Vec<std::path::PathBuf>,
 }
 
+/// How long the files must stay quiet before the project is re-read. Long
+/// enough for the events of one save (a truncate, then the write) to arrive
+/// together, short enough that it is lost in the frame the reload draws:
+/// RFC-0030 sets no reload latency, only a 16.7 ms frame budget, and this
+/// is about two and a half frames.
+const SETTLE: std::time::Duration = std::time::Duration::from_millis(40);
+
 /// Spawns a background OS thread that watches `paths` with `notify` and
 /// publishes the result of `reparse()` to `channel` on every relevant change
 /// (generalized to the module graph by RFC-0008 Pillar E).
@@ -271,7 +278,8 @@ pub struct ParsedFile {
 ///
 /// Two event classes are routed: a source, the manifest, a raster image or
 /// a watched file being written, created or removed triggers `reparse()` into
-/// `channel`; an image or `.svg` changing sends its path to `assets` so the
+/// `channel`, once the files have been quiet for [`SETTLE`] (a save is often
+/// a truncate and then a write, and a re-read between them sees nothing); an image or `.svg` changing sends its path to `assets` so the
 /// runtime decodes or regenerates it in place (RFC-0009 §3).
 ///
 /// A parse error keeps `views` empty so the caller retains the last-good view.
@@ -311,6 +319,7 @@ where
     // `notify` must not be asked to watch from inside its own event handler.
     let (rewatch_tx, rewatch_rx) = crossbeam_channel::unbounded::<std::path::PathBuf>();
     let watched_files = Arc::clone(&files);
+    let (changed_tx, changed_rx) = crossbeam_channel::unbounded::<()>();
 
     let watcher = notify::RecommendedWatcher::new(
         move |result: notify::Result<notify::Event>| {
@@ -333,28 +342,18 @@ where
                     // An image or vector asset changed: hand its path to
                     // the runtime, which decodes or regenerates it in
                     // place. A disconnected receiver (runtime torn down)
-                    // is not the watcher's problem.
+                    // is not the watcher's problem. Not held back to settle:
+                    // a half-written image fails its decode, and the write
+                    // that finishes it is an event of its own, which decodes
+                    // again while the old picture keeps drawing.
                     let _ = assets.send(p.clone());
                 }
             }
             if source_changed {
-                let parsed = reparse();
-                if let Ok(mut known) = watched_files.lock() {
-                    // The manifest's files now, not added to the old: a seed
-                    // image it no longer names is not the project's any more.
-                    // A failed re-read names none, so the set is kept.
-                    if !parsed.watch_files.is_empty() {
-                        let now: HashSet<_> =
-                            parsed.watch_files.iter().map(|f| normal(f)).collect();
-                        for file in now.difference(&known) {
-                            if let Some(parent) = file.parent().filter(|_| outside(file)) {
-                                let _ = rewatch_tx.send(parent.to_path_buf());
-                            }
-                        }
-                        *known = now;
-                    }
-                }
-                channel.publish(parsed);
+                // Only a signal: the thread below re-reads once the writes
+                // have stopped. A disconnected receiver is a watcher being
+                // dropped.
+                let _ = changed_tx.send(());
             }
         },
         notify::Config::default(),
@@ -375,6 +374,31 @@ where
             }
         }
     }
+    // Re-reads the project once the changes have stopped. A save is often
+    // several events (a truncate, then the write), and a re-read in between
+    // sees an empty file. The thread ends when the watcher (which owns the
+    // sender) is dropped.
+    std::thread::spawn(move || {
+        while changed_rx.recv().is_ok() {
+            while changed_rx.recv_timeout(SETTLE).is_ok() {}
+            let parsed = reparse();
+            if let Ok(mut known) = files.lock() {
+                // The manifest's files now, not added to the old: a seed
+                // image it no longer names is not the project's any more.
+                // A failed re-read names none, so the set is kept.
+                if !parsed.watch_files.is_empty() {
+                    let now: HashSet<_> = parsed.watch_files.iter().map(|f| normal(f)).collect();
+                    for file in now.difference(&known) {
+                        if let Some(parent) = file.parent().filter(|_| outside(file)) {
+                            let _ = rewatch_tx.send(parent.to_path_buf());
+                        }
+                    }
+                    *known = now;
+                }
+            }
+            channel.publish(parsed);
+        }
+    });
     // Ends when the watcher (which owns the sender) is dropped.
     let weak = Arc::downgrade(&watcher);
     std::thread::spawn(move || {
@@ -720,5 +744,59 @@ mod tests {
             .1;
         assert_eq!(a, ViewReload::Patch(ReloadKind::ReactiveCompatible));
         assert_eq!(b, ViewReload::Patch(ReloadKind::ReactiveCompatible));
+    }
+
+    /// A save that truncates the file and writes it a moment later is one
+    /// reload with the final content, not an empty one first.
+    #[test]
+    fn a_truncate_then_a_write_is_one_reload() {
+        use std::sync::{Arc, Mutex};
+        use std::time::{Duration, Instant};
+
+        let dir = std::env::temp_dir().join(format!("byard-settle-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let dir = dir.canonicalize().unwrap();
+        let file = dir.join("main.byd");
+        std::fs::write(&file, "one").unwrap();
+
+        let reads = Arc::new(Mutex::new(Vec::<String>::new()));
+        let seen = Arc::clone(&reads);
+        let path = file.clone();
+        let (assets, _rx) = crossbeam_channel::unbounded();
+        let _watching = start_watcher(
+            std::slice::from_ref(&dir),
+            &[],
+            Arc::new(LatestWins::<ParsedFile>::new()),
+            assets,
+            move || {
+                seen.lock()
+                    .unwrap()
+                    .push(std::fs::read_to_string(&path).unwrap_or_default());
+                ParsedFile {
+                    views: Vec::new(),
+                    errors: Vec::new(),
+                    theme: None,
+                    watch_files: Vec::new(),
+                }
+            },
+        )
+        .unwrap();
+        std::thread::sleep(Duration::from_millis(200));
+
+        // Truncate, then write a few milliseconds later.
+        std::fs::File::create(&file).unwrap();
+        std::thread::sleep(Duration::from_millis(8));
+        std::fs::write(&file, "two").unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while reads.lock().unwrap().is_empty() {
+            assert!(Instant::now() < deadline, "no reload within 5 s");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        // Long enough for a second, stray re-read to show.
+        std::thread::sleep(Duration::from_millis(300));
+        assert_eq!(*reads.lock().unwrap(), vec!["two".to_string()]);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

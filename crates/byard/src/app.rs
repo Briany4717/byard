@@ -1183,7 +1183,10 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(20));
         };
         assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        // The first reload is the complete one, not a read between the
+        // truncate and the write.
         assert_eq!(parsed.views.len(), 1);
+        assert!(format!("{:?}", parsed.views[0]).contains("two"));
     }
 
     /// A declaration that has drifted from the view registered under its name

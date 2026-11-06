@@ -10,6 +10,10 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- Saving a file no longer reloads an empty program first: a save that truncates the file before writing it is read once, after the writing has stopped.
+
 ## [0.1.0] - 2026-11-05
 
 The first release.

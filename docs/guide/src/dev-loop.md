@@ -31,6 +31,9 @@ and its state starts again. Changing what the view shows, its elements, texts,
 styles and expressions, never does. Add a `var` and you will see that view reset
 once. That is the cost of a changed shape, and the other views are untouched.
 
+A save is read once, 40 ms after the last change to the files, so an editor that
+truncates a file before writing it never shows a half-saved one.
+
 What it watches:
 
 - every `.byd` file in the project,

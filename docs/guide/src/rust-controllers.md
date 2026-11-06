@@ -85,6 +85,26 @@ would be lost. Keep state that must change behind an `Arc<Mutex<…>>`, or in a 
 one. Helpers that take `&self` and are not meant for views go in a plain `impl` block,
 because everything in this one is a method a view can call.
 
+### Names
+
+A view spells every name in camelCase, and Rust spells functions in snake_case, so the macro
+translates: `async fn export_csv(&self)` is `room.exportCsv(...)` in a view, as `toLower`
+and `sortBy` are. The Rust name is unchanged, and a name of one word (`greet`) is the same in
+both. Calling the Rust spelling from a view is an error that names the camelCase one.
+
+When the automatic name is wrong, give the method the one you want (here `dataPath` would
+be the automatic one). It is then the only name:
+
+```rust,ignore,excerpt
+#[byard::byard_controller]
+impl Notes {
+    #[byard(rename = "where")]
+    fn data_path(&self) -> String {
+        byard::data_dir(APP_ID).display().to_string()
+    }
+}
+```
+
 ## Registering it
 
 The app gives its controllers to the engine when it starts:
@@ -220,8 +240,9 @@ struct Customer {
 A struct can hold another one, and `Vec` and `Option` of them. A view sends it as a record
 literal and reads a reply's fields by name, `reply.address.street`. A field the record leaves
 out, or has in the wrong shape, takes its type's empty value, so an `Option` is the place for
-something that may be absent. `#[host(rename = "…")]` gives a field another name in the
-record, for a view that spells it differently, and a generic struct converts when its type
+something that may be absent. A field is spelled in camelCase in the record, like a method
+(`unit_price` is `unitPrice`), and `#[host(rename = "…")]` gives it another name, used exactly
+as written, and a generic struct converts when its type
 parameters do.
 
 An `enum` cannot derive these, and the compiler says so. Send the variant's name as text, by
@@ -231,6 +252,40 @@ Reply with a record when a view needs several things, built from `HostValue::Rec
 fields `kind` and `message` are what a view expects of an error, which is what the
 engine's own capabilities send.
 
+## The app's data directory
+
+An app keeps its saved data in one directory, the one `Store` writes its file in.
+`byard::data_dir(app_id)` returns it, so a controller that writes a file of its own puts it
+beside the store and the two cannot drift apart. It needs only the identity, not an `App`, so
+a controller can call it before `App::run`. The identity is the one
+[`app_id`](rust-app.md#app_id) sets, or the executable's name when none is set; under
+`byard dev` it is the project's name.
+
+```rust,ignore,excerpt
+const APP_ID: &str = "dev.byard.controller-demo";
+
+#[byard::byard_controller]
+#[derive(Clone)]
+struct Notes;
+
+#[byard::byard_controller]
+impl Notes {
+    fn save_note(&self, text: String) -> Result<String, String> {
+        let dir = byard::data_dir(APP_ID);
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let path = dir.join("note.txt");
+        std::fs::write(&path, text).map_err(|e| e.to_string())?;
+        Ok(path.display().to_string())
+    }
+}
+```
+
+A view calls it as `notes.saveNote(text)`, and the app gives the same constant to
+`.app_id(APP_ID)`.
+
+The directory is not created for you; `Store` creates it on its first write. Pass the same
+identity to `app_id` and to `data_dir`, a constant being the simplest way to do it.
+
 ## Rules of the boundary
 
 - **Never block.** A controller runs on the async pool, a synchronous method included. Sleep
@@ -239,7 +294,8 @@ engine's own capabilities send.
   is a smaller version of the mistake of blocking the window.
 - **A reply belongs to the logic thread.** The `ok` and `err` arms run there, so they may
   write any `var` of the view that made the call.
-- **Calling an unknown method is an error reply**, never a panic.
+- **Calling an unknown method is an error reply**, never a panic. Calling a method by its
+  Rust name, `export_csv`, is one too, and it says to write `exportCsv`.
 - **Four names are taken.** `Http`, `Json`, `Store` and `Timer` are reserved for the
   engine's own capabilities. `App::provide` rejects a controller named one of them and
   `run` fails saying so. Name yours something else.

@@ -125,6 +125,29 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   naming a view, a type, a parameter, a `var`, a `let`, an `inject` or a record
   field. Any other stray token between top-level items is also one error, not one
   per token that follows it.
+### Added
+
+- **`byard::data_dir(app_id)`.** The directory where an app's data lives, the
+  one `Store` writes in, so a controller can put a file beside the store
+  without rebuilding the platform path by hand. The guide's controllers
+  chapter shows it.
+
+### Changed
+
+- **A controller method, a record field and a native view prop are camelCase in
+  Byld.** `fn export_csv` is now `room.exportCsv(...)`, a derived struct's
+  `unit_price` is `unitPrice`, and a native view's `#[prop] max_value` is
+  `maxValue` (also in `[native_views]`); the Rust names do not change. An app
+  must rename those calls and reads in its `.byd` files: the snake_case method
+  name now answers with an error naming the camelCase one.
+  `#[byard(rename = "...")]` on a method sets another name.
+
+### Fixed
+
+- **`App::app_id` and `without_default_capabilities` no longer discard the
+  controllers provided before them.** `App::new(dir).provide(room).app_id("x")`
+  failed at start with `no ambient Stockroom`; the chain now means the same in
+  any order.
 
 - **`Text` takes `basis`.** `Text("x") #[grow: 1, basis: 0]` starts from nothing and
   gets an equal share, so the cells of a table line up whatever they say. Without

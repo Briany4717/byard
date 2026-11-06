@@ -24,9 +24,11 @@
 
 use proc_macro::TokenStream;
 use quote::quote;
+use syn::ext::IdentExt as _;
 use syn::{DeriveInput, Fields, Item, ReturnType, Type, parse_macro_input};
 
 mod host_value;
+mod names;
 mod native_view;
 
 /// Derives `::byard::bridge::FromHostValue` for a struct with named fields: a
@@ -130,7 +132,7 @@ fn expand_struct(item: &Item) -> TokenStream {
     if let Fields::Named(named) = &input.fields {
         for field in &named.named {
             if let Some(ident) = &field.ident {
-                let fname = ident.to_string();
+                let fname = names::of_ident(ident);
                 let bty = byld_type_name(&field.ty);
                 entries.push((fname, bty));
             }
@@ -240,68 +242,45 @@ fn expand_impl(input: &syn::ItemImpl) -> proc_macro2::TokenStream {
     // beside the untouched impl so nothing else of the person's code is lost.
     let mut arms = Vec::new();
     let mut errors: Option<syn::Error> = None;
+    // (name in Byld, name in Rust) of each method taken so far, to refuse two
+    // that would be one name, and to answer the Rust spelling with the Byld one.
+    let mut taken: Vec<(String, String)> = Vec::new();
+    let mut spelled: Vec<(String, String)> = Vec::new();
     for item in &input.items {
         let syn::ImplItem::Fn(f) = item else { continue };
         match classify(f) {
             Ok(Method::Call) => {}
             Ok(Method::Other) => continue,
             Err(e) => {
-                match &mut errors {
-                    Some(all) => all.combine(e),
-                    None => errors = Some(e),
-                }
+                refuse(&mut errors, e);
                 continue;
             }
         }
-        let is_async = f.sig.asyncness.is_some();
         let ident = &f.sig.ident;
-        let name_str = ident.to_string();
-
-        // Bind each non-receiver parameter from the argument list, annotated with
-        // its declared type so `FromHostValue::from_host` resolves.
-        let mut binds = Vec::new();
-        let mut call_args = Vec::new();
-        let mut arg_index = 0usize;
-        for input_arg in &f.sig.inputs {
-            let syn::FnArg::Typed(pat) = input_arg else {
-                continue; // skip `&self`
-            };
-            let ty = &pat.ty;
-            let var = quote::format_ident!("__arg{arg_index}");
-            binds.push(quote! {
-                let #var: #ty = ::byard::bridge::FromHostValue::from_host(
-                    __args.next().unwrap_or(::byard::bridge::HostValue::Unit)
-                );
-            });
-            call_args.push(quote! { #var });
-            arg_index += 1;
+        let name_str = match method_name(f) {
+            Ok(name) => name,
+            Err(e) => {
+                refuse(&mut errors, e);
+                continue;
+            }
+        };
+        let rust_name = ident.unraw().to_string();
+        if let Some((_, other)) = taken.iter().find(|(public, _)| *public == name_str) {
+            let e = syn::Error::new_spanned(
+                ident,
+                format!(
+                    "`{rust_name}` and `{other}` are both `{name_str}` in a view\n\
+                     help: name one of them with `#[byard(rename = \"…\")]`"
+                ),
+            );
+            refuse(&mut errors, e);
+            continue;
         }
+        taken.push((name_str.clone(), rust_name.clone()));
+        spelled.push((name_str.clone(), rust_name));
 
-        let call_expr = if is_async {
-            quote! { __this.#ident(#(#call_args),*).await }
-        } else {
-            quote! { __this.#ident(#(#call_args),*) }
-        };
-
-        // A `-> Result<T, E>` maps ok/err separately; any other return type is
-        // treated as an infallible success.
-        let returns_result = matches!(&f.sig.output, ReturnType::Type(_, ty) if is_result(ty));
-        let dispatch = if returns_result {
-            quote! {
-                match #call_expr {
-                    ::core::result::Result::Ok(__v) =>
-                        ::core::result::Result::Ok(::byard::bridge::IntoHostValue::into_host(__v)),
-                    ::core::result::Result::Err(__e) =>
-                        ::core::result::Result::Err(::byard::bridge::IntoHostValue::into_host(__e)),
-                }
-            }
-        } else {
-            quote! {
-                ::core::result::Result::Ok(
-                    ::byard::bridge::IntoHostValue::into_host(#call_expr)
-                )
-            }
-        };
+        let (binds, call_args) = bind_arguments(f);
+        let dispatch = dispatch(f, &call_args);
 
         arms.push(quote! {
             #name_str => {
@@ -311,6 +290,18 @@ fn expand_impl(input: &syn::ItemImpl) -> proc_macro2::TokenStream {
                 ::std::boxed::Box::pin(async move { #dispatch })
             }
         });
+    }
+
+    // A view that calls the Rust spelling is told the Byld one, rather than
+    // left to wonder why a method it can see in the source is "unknown".
+    let hints = rust_name_hints(&spelled);
+
+    // `#[byard(rename = "…")]` is ours; the impl that comes out is ordinary Rust.
+    let mut input = input.clone();
+    for item in &mut input.items {
+        if let syn::ImplItem::Fn(f) = item {
+            f.attrs.retain(|a| !a.path().is_ident("byard"));
+        }
     }
 
     let errors = errors.map(syn::Error::into_compile_error);
@@ -339,11 +330,12 @@ fn expand_impl(input: &syn::ItemImpl) -> proc_macro2::TokenStream {
             > {
                 match method {
                     #(#arms)*
+                    #(#hints)*
                     _ => {
                         let __m = method.to_string();
                         ::std::boxed::Box::pin(async move {
                             ::core::result::Result::Err(::byard::bridge::HostValue::Str(
-                                ::std::format!("unknown controller method `{__m}`")
+                                ::std::format!("error[UnknownMethod]: unknown controller method `{__m}`")
                             ))
                         })
                     }
@@ -351,6 +343,120 @@ fn expand_impl(input: &syn::ItemImpl) -> proc_macro2::TokenStream {
             }
         }
     }
+}
+
+/// Binds each non-receiver parameter from the argument list, annotated with
+/// its declared type so `FromHostValue::from_host` resolves.
+fn bind_arguments(
+    f: &syn::ImplItemFn,
+) -> (Vec<proc_macro2::TokenStream>, Vec<proc_macro2::TokenStream>) {
+    let mut binds = Vec::new();
+    let mut call_args = Vec::new();
+    let mut arg_index = 0usize;
+    for input_arg in &f.sig.inputs {
+        let syn::FnArg::Typed(pat) = input_arg else {
+            continue; // skip `&self`
+        };
+        let ty = &pat.ty;
+        let var = quote::format_ident!("__arg{arg_index}");
+        binds.push(quote! {
+            let #var: #ty = ::byard::bridge::FromHostValue::from_host(
+                __args.next().unwrap_or(::byard::bridge::HostValue::Unit)
+            );
+        });
+        call_args.push(quote! { #var });
+        arg_index += 1;
+    }
+
+    (binds, call_args)
+}
+
+/// The call of `f` and the mapping of its result back to a `HostValue`.
+fn dispatch(
+    f: &syn::ImplItemFn,
+    call_args: &[proc_macro2::TokenStream],
+) -> proc_macro2::TokenStream {
+    let ident = &f.sig.ident;
+    let is_async = f.sig.asyncness.is_some();
+    let call_expr = if is_async {
+        quote! { __this.#ident(#(#call_args),*).await }
+    } else {
+        quote! { __this.#ident(#(#call_args),*) }
+    };
+
+    // A `-> Result<T, E>` maps ok/err separately; any other return type is
+    // treated as an infallible success.
+    let returns_result = matches!(&f.sig.output, ReturnType::Type(_, ty) if is_result(ty));
+    if returns_result {
+        quote! {
+            match #call_expr {
+                ::core::result::Result::Ok(__v) =>
+                    ::core::result::Result::Ok(::byard::bridge::IntoHostValue::into_host(__v)),
+                ::core::result::Result::Err(__e) =>
+                    ::core::result::Result::Err(::byard::bridge::IntoHostValue::into_host(__e)),
+            }
+        }
+    } else {
+        quote! {
+            ::core::result::Result::Ok(
+                ::byard::bridge::IntoHostValue::into_host(#call_expr)
+            )
+        }
+    }
+}
+
+/// For each method a view would call by a different name than Rust's, an arm
+/// that answers the Rust spelling with the Byld one, rather than leaving the
+/// author to wonder why a method visible in the source is "unknown".
+fn rust_name_hints(spelled: &[(String, String)]) -> Vec<proc_macro2::TokenStream> {
+    spelled
+        .iter()
+        .filter(|(public, rust)| public != rust && !spelled.iter().any(|(other, _)| other == rust))
+        .map(|(public, rust)| {
+            let message = format!(
+                "error[UnknownMethod]: unknown controller method `{rust}`\n\
+                 help: a controller method is called by its camelCase name in Byld: `{public}`"
+            );
+            quote! {
+                #rust => ::std::boxed::Box::pin(async move {
+                    ::core::result::Result::Err(::byard::bridge::HostValue::Str(
+                        ::std::string::String::from(#message)
+                    ))
+                }),
+            }
+        })
+        .collect()
+}
+
+/// Adds `e` to the errors found so far.
+fn refuse(errors: &mut Option<syn::Error>, e: syn::Error) {
+    match errors {
+        Some(all) => all.combine(e),
+        None => *errors = Some(e),
+    }
+}
+
+/// The name a view calls `f` by: its `#[byard(rename = "…")]`, or its Rust name
+/// in camelCase.
+fn method_name(f: &syn::ImplItemFn) -> syn::Result<String> {
+    let mut rename: Option<String> = None;
+    for attr in f.attrs.iter().filter(|a| a.path().is_ident("byard")) {
+        attr.parse_nested_meta(|meta| {
+            if !meta.path.is_ident("rename") {
+                return Err(meta.error("unknown `byard` option; the only one is `rename = \"…\"`"));
+            }
+            if rename.is_some() {
+                return Err(meta.error("`rename` is given twice"));
+            }
+            let name: syn::LitStr = meta.value()?.parse()?;
+            if name.value().is_empty() {
+                return Err(syn::Error::new(name.span(), "a method needs a name"));
+            }
+            rename = Some(name.value());
+            Ok(())
+        })?;
+    }
+    Ok(rename.unwrap_or_else(|| names::of_ident(&f.sig.ident)))
 }
 
 /// Whether a return type is syntactically a `Result<…>` (so `invoke` maps its

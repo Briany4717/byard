@@ -162,6 +162,10 @@ of = "floats"
 stroke = "color"
 ```
 
+A prop's name is its field's in camelCase, as everything else in byld is: a field
+`max_value` is `maxValue` in byld and in the manifest, and an `#[event]` named `hover_point`
+is `hoverPoint`. The app refuses to start if the manifest still says `max_value`.
+
 The types are `int`, `float`, `bool`, `str`, `color`, `vec2` and `floats`, and `layout =
 true` is the manifest's way to say `#[prop(layout)]`. An element's name starts with a capital
 letter.

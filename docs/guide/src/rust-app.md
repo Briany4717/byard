@@ -38,7 +38,7 @@ write `byard = { version = "0.1", default-features = false }`.
 
 ## What you can set
 
-Every step is a method on `App`, chained before `run`:
+Every step is a method on `App`, chained before `run`, in any order:
 
 | Method | Does |
 |--------|------|
@@ -62,13 +62,15 @@ executable's name. Set it when the binary might be renamed, or shipped under sev
 and its data should follow the app and not the file:
 
 ```rust,ignore,excerpt
+const APP_ID: &str = "dev.byard.controller-demo";
 byard::App::new(env!("CARGO_MANIFEST_DIR"))
-    .app_id("dev.byard.controller-demo")
+    .app_id(APP_ID)
     .run()
 ```
 
 It is a decision about data, which is why it is separate from the title. Changing it points
-the app at a different store.
+the app at a different store. Where that data lives on disk is `byard::data_dir(app_id)`, see
+[controllers](rust-controllers.md#the-apps-data-directory).
 
 ### `hot_reload`
 

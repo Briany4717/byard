@@ -12,6 +12,7 @@ mod callbacks_example;
 mod checkbox_example;
 mod clock_example;
 mod collapse_header_example;
+mod composed_controls_example;
 mod corner_smoothing_example;
 mod data_ops_example;
 mod diagnostics_shape;

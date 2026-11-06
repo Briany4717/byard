@@ -290,11 +290,66 @@ What a focused control does with a key:
 | `RadioButton` | Arrow keys | Selects the neighbour in its group |
 | `TextField` | Space types a space; Enter submits | Nothing else is pressed |
 
-Focus draws nothing by itself. Style it with `on focused`, as in
-`style { on focused { border: 0xB69DF8, border_width: 2 } }`, and a control that does
-not shows no ring. `examples/keyboard_focus` does, and
+Focus draws nothing by itself. Style it with `on focus_visible`, as in
+`style { on focus_visible { border: 0xB69DF8, border_width: 2 } }`, and a control that does
+not shows no ring. `focus_visible` is the state for a ring: it is set when the keyboard
+moved focus and not when a mouse press did, so clicking a button does not leave a ring on it
+and pressing Tab draws one. A `TextField` is always focus-visible, since you are typing in
+it. `on focused` is the state for every kind of focus, a click included, and still works as
+it did. `examples/keyboard_focus` draws the ring, and
 `byard shot crates/byard-cli/examples/keyboard_focus --key Tab --key Space -o after.png`
 draws it with the first button focused and pressed.
+
+### A control you build from a Box
+
+A `Box` with a `tap` is not in the Tab order by itself, and a reader hears a button with
+no state. Give it a role and it is a control like the built-in ones: `a11y_role` says what
+it is, and an element with a role that implies focus and a `tap` is in the Tab order, pressed
+by the keys its role takes.
+
+```byld
+View Main() {
+    var wifi = true
+    let ring = style { on focus_visible { border: 0xD0BCFF, border_width: 3 } }
+
+    Row #[p: 24, gap: 12, align: center] {
+        Box #[..ring, a11y_role: switch, a11y_checked: wifi, width: 52, height: 32,
+              radius: 16, bg: (wifi ? 0x6750A4 : 0x49454F), tap => wifi = !wifi]
+        Text("Wi-Fi") #[color: 0xCAC4D0, size: 16]
+    }
+}
+```
+
+A role that implies focus is `button`, `toggle_button`, `switch`, `checkbox`, `radio`,
+`tab`, `menu_item` and `link`. A role alone does not put an element in the Tab order if it
+has nothing to press; an element with a `focus =>`, a `blur =>` or a `focused:` is in it
+whatever its role, and a `tap` there is pressed by the keys too. A `Box` with only a `tap`
+and no role stays out of the order. What presses it follows the role:
+
+| Role | Space | Enter |
+|------|-------|-------|
+| none, `button`, `toggle_button`, `menu_item`, `tab` | presses | presses |
+| `switch` | presses | presses |
+| `checkbox`, `radio` | presses | does nothing |
+| `link` | does nothing | presses |
+
+A key a role does not take goes on to the element's own `key_down`. Holding a key presses
+once.
+
+A row with `a11y_role: tab_list`, or `radio_group`, holds the elements with the role `tab`
+or `radio` inside it as a group, and the arrow keys walk it:
+
+| Key | Does |
+|-----|------|
+| Right, Down | Focus the next, wrapping at the end |
+| Left, Up | Focus the previous, wrapping |
+| Home, End | Focus the first, the last (a `tab_list` only) |
+
+A disabled member is skipped. In a `radio_group` the one that gets focus is also pressed, as
+the arrow keys select among built-in `RadioButton`s. In a `tab_list` it is not: Enter or
+Space selects, and a tab that should select as focus arrives says `focus =>`. The arrows
+draw the ring, like Tab. [Accessibility](accessibility.md) has the roles and what each
+attribute tells a reader.
 
 ## Disabled, focused, invalid
 

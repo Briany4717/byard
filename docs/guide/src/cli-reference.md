@@ -85,7 +85,9 @@ printed in full and counted apart, and does not fail the command. Exit status 0 
 byard shot [OPTIONS] [PATH]
 ```
 
-Draws the project to a PNG, with no window. It cannot draw an app with a Rust half. Not available in a
+Draws the project to a PNG, with no window. It runs the same check as `byard check` first: a program
+with errors prints them the way `check` does and exits non-zero, and no PNG is written (a warning is
+printed and the picture is drawn). It cannot draw an app with a Rust half. Not available in a
 library package.
 
 | Argument or flag | Default | |
@@ -199,7 +201,8 @@ byard publish [OPTIONS] [PACKAGE]
 ```
 
 Publishes the package in a directory to a registry directory. The package needs a `name` and a `version`
-in `[package]`.
+in `[package]`. It runs `byard check` on the package first and publishes nothing if that has errors; there is no
+flag to skip it.
 
 | Argument or flag | |
 |------------------|-|
@@ -235,5 +238,6 @@ Removes `.byard/cache` and `.byard/generated` from the project. Package checkout
 | `[bundle]` | `name`, `id`, `version`, and for Linux `categories`, `summary`, `license` | [Shipping](shipping.md) |
 | `[dev]` | `frame_budget`, `hud`, `statusline` | [The dev loop](dev-loop.md) |
 
-An unknown top-level table is reported as a warning and ignored. Inside `[dependencies]`, `[dev]`,
-`[http]`, `[bundle]` and `[native_views]`, an unknown or malformed key is an error.
+An unknown key is an error that names it and suggests the closest known one, at the top level and inside
+`[project]`, `[package]`, `[assets]`, `[theme]` (and `[theme.color]`), `[dependencies]`, `[dev]`, `[http]`,
+`[bundle]` and `[native_views]`.

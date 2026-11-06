@@ -174,7 +174,9 @@ brand = { path = "../brand" }
 extends = "brand"
 ```
 
-The palette, type scale, shapes and typefaces all arrive. See
+The palette, type scale, shapes and typefaces all arrive. A package's views read the package's tokens, so
+an app that uses them without `extends` gets an error saying which package's theme declares the token and
+that `[theme] extends = "brand"` brings it (or declare the token yourself). See
 [theming](theming.md). The `package_theme` example shows a package that declares only a seed colour
 and one font, and an app that has no colours or fonts of its own.
 
@@ -236,7 +238,8 @@ byard publish ../kit --registry ./registry
 BYARD_REGISTRY=./registry byard publish
 ```
 
-It needs `name` and `version` in `[package]`. It writes an archive of what the package is made of, its
+It needs `name` and `version` in `[package]`, and the package has to pass `byard check`: the errors are
+printed and nothing is published otherwise, since a version cannot be replaced. It writes an archive of what the package is made of, its
 manifest, sources, declared assets, README and licence, as `registry/kit/0.1.0.tar.gz`, and adds a line
 to the registry's `index.toml` naming the archive, its hash and its dependencies.
 

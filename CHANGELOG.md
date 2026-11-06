@@ -36,6 +36,16 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **An action on a view call is an error, not silently dropped.** `Card("x") => count++`
   and `Card("x") #[tap => count++]` checked clean and did nothing on a tap. `byard check`
   now says the view takes no trailing action and names the `Fn()` parameter to pass it to.
+- **`byard shot` no longer draws a program `byard check` rejects.** It runs the same check
+  first, prints the errors the same way, exits non-zero and writes no PNG.
+- **An unknown key in `byard.toml` is an error.** `[theme.motion]`, a misspelt `[package]` or
+  `[project]` key, an unknown `[theme.color]` scheme or a stray top-level table now name the key
+  and suggest the closest one, instead of being accepted or only warned about.
+- **Using a package's views without its theme says what to add.** A token only the package's theme
+  declares now reads "`surfaceContainerHighest` is declared by package `material`'s theme; add
+  `[theme] extends = "material"`, or declare it yourself".
+- **`byard publish` runs `byard check` first** and publishes nothing when the package has errors.
+
 - **A lambda sees its own item.** A `fn` called with the item inside a list
   lambda (`products.filter(p => isLow(p.qty))`) was computed once, for the
   first item, and gave every item the same answer. A lambda inside another

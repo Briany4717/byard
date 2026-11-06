@@ -40,6 +40,7 @@ pub fn run(args: &PublishArgs<'_>) -> Result<(), String> {
                 "no registry to publish to\nhint: pass `--registry <dir>` or set BYARD_REGISTRY",
             )?,
     };
+    check_package(&root)?;
     let published = publish(&root, &registry)?;
     style::ok(
         &format!(
@@ -52,6 +53,28 @@ pub fn run(args: &PublishArgs<'_>) -> Result<(), String> {
         Some(started.elapsed()),
     );
     Ok(())
+}
+
+/// Runs `byard check` on the package at `root` and refuses when it has
+/// errors, printing them as `check` does: a package that fails its own check
+/// is one nobody can use, and a published version is immutable.
+fn check_package(root: &Path) -> Result<(), String> {
+    let manifest = crate::manifest::Manifest::discover(Some(root)).map_err(|e| e.to_string())?;
+    let (program, _provider) =
+        crate::deps::resolve_project(&manifest).map_err(|e| e.to_string())?;
+    let diagnostics = crate::commands::check::check_program_with_theme(&program, manifest.theme);
+    if !diagnostics.is_empty() {
+        crate::commands::check::print_diagnostics(&diagnostics, &program.source_map, false);
+    }
+    let n = diagnostics.iter().filter(|d| !d.is_warning()).count();
+    if n == 0 {
+        return Ok(());
+    }
+    style::err(&format!(
+        "{n} error{}; nothing published (fix them, `byard check` shows the same)",
+        if n == 1 { "" } else { "s" }
+    ));
+    Err(String::new())
 }
 
 /// Publishes the package at `root` into `registry`, returning its index entry.

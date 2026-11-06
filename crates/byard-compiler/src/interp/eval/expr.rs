@@ -974,6 +974,7 @@ impl Interpreter {
             span,
             field: f.to_string(),
             theme: self.theme.name.clone(),
+            declared_by: self.theme.unapplied_token_owner(f).map(str::to_string),
         });
         Some(Box::new(|_| Value::Unit))
     }

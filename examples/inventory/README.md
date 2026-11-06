@@ -76,7 +76,9 @@ cargo run -p stockroom -- --shot form.png products --tap 1014,104 \
 ```
 
 Pictures use a store of their own (a folder under the temporary directory), so
-they never read or change your catalogue. `--light` draws the light scheme.
+they never read or change your catalogue. `--light` draws the light scheme, and the
+clock is fixed at 2026-11-05 09:00 so a record made in a picture is dated the same
+every time.
 
 ## Still open
 
@@ -95,9 +97,6 @@ What Byard cannot do yet, and what the example does about it:
 - **Testing needs the engine's internals.** `tests/it/common/mod.rs` copies about
   150 lines of `Interpreter`, `Dispatcher` and `Relay` setup from `aura_weather`,
   and a text's position leaves out an overlay's paint transform.
-- **`byard::Shot` cannot fix the clock** (`byard shot --now` can, but not an app
-  with a Rust half), so a picture of a product made in the shot shows the real
-  time.
 
 ## Layout of the source
 

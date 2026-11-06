@@ -121,6 +121,8 @@ pub enum CompileError {
         /// The dependency whose `[theme]` declares the token, when one does
         /// and this theme does not extend it.
         declared_by: Option<String>,
+        /// The dependency this theme already extends, if any.
+        extends: Option<String>,
     },
     /// An element name is neither a known intrinsic nor a `ViewDecl` in scope
     /// (RFC-0002 D4); `hint` carries a Levenshtein "did you mean …?".
@@ -1468,6 +1470,15 @@ impl CompileError {
                 format!("`{name}` is a built-in capability and cannot be provided by an app")
             }
             Self::NotAssignable { .. } => "this is not an assignable `var`".to_string(),
+            Self::UnknownThemeToken {
+                field,
+                declared_by: Some(package),
+                extends: Some(other),
+                ..
+            } => format!(
+                "`{field}` is declared by package `{package}`'s theme, but this theme extends \
+                 `{other}`; declare `{field}` yourself, or extend `{package}` instead"
+            ),
             Self::UnknownThemeToken {
                 field,
                 declared_by: Some(package),

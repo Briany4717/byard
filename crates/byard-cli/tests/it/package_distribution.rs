@@ -330,6 +330,32 @@ fn a_token_only_a_dependencys_theme_declares_says_so() {
         "{}",
         text(&out)
     );
+    // Already extending another package: only one `extends` is allowed, so
+    // the advice is to declare it or to extend this one instead.
+    let other = dir.join("other");
+    write(
+        &other.join("byard.toml"),
+        "[package]\nname = \"other\"\nversion = \"0.1.0\"\n\n[theme]\nname = \"other\"\n",
+    );
+    write(&other.join("src/lib.byd"), "View Nothing() { Box {} }\n");
+    write(
+        &app.join("byard.toml"),
+        "[project]\nname = \"app\"\nentry = \"main.byd\"\n\n[dependencies]\n\
+         brand = { path = \"../brand\" }\nother = { path = \"../other\" }\n\n\
+         [theme]\nextends = \"other\"\n",
+    );
+    let out = byard(&app, &dir, &["check"]);
+    assert!(
+        text(&out).contains(
+            "`brandGlow` is declared by package `brand`'s theme, but this theme extends `other`; declare `brandGlow` yourself, or extend `brand` instead"
+        ),
+        "{}",
+        text(&out)
+    );
+    write(
+        &app.join("byard.toml"),
+        &manifest.replace("[theme]\nextends = \"brand\"\n", ""),
+    );
     // A token nobody declares keeps the plain message.
     write(
         &pkg.join("src/badge.byd"),

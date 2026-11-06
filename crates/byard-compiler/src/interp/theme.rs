@@ -314,6 +314,8 @@ pub struct Theme {
     /// dependency). Never read for a value; it lets `UnknownThemeToken` say
     /// where the token lives.
     unapplied: BTreeMap<String, String>,
+    /// The dependency this theme extends, if any.
+    extended: Option<String>,
 }
 
 impl Theme {
@@ -392,6 +394,7 @@ impl Theme {
             button_min_size: BUTTON_MIN_SIZE,
             transition_ms: 0,
             unapplied: BTreeMap::new(),
+            extended: None,
         }
     }
 
@@ -534,6 +537,17 @@ impl Theme {
         self.unapplied
             .entry(to_camel(token))
             .or_insert_with(|| package.to_string());
+    }
+
+    /// Records the dependency this theme extends.
+    pub fn set_extended(&mut self, package: &str) {
+        self.extended = Some(package.to_string());
+    }
+
+    /// The dependency this theme extends, if any.
+    #[must_use]
+    pub fn extended(&self) -> Option<&str> {
+        self.extended.as_deref()
     }
 
     /// The dependency whose theme declares `token` without this theme having

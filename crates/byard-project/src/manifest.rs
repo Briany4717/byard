@@ -976,6 +976,9 @@ fn parse_theme(
         .get("theme")
         .and_then(|t| t.get("extends"))
         .and_then(toml::Value::as_str);
+    if let Some(base) = extended.filter(|b| *b != "byard-base") {
+        theme.set_extended(base);
+    }
     {
         let base: std::collections::HashSet<String> = Theme::byard_base()
             .token_names()

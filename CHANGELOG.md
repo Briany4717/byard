@@ -43,7 +43,8 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and suggest the closest one, instead of being accepted or only warned about.
 - **Using a package's views without its theme says what to add.** A token only the package's theme
   declares now reads "`surfaceContainerHighest` is declared by package `material`'s theme; add
-  `[theme] extends = "material"`, or declare it yourself".
+  `[theme] extends = "material"`, or declare it yourself" (or, if the theme already extends
+  another package, to declare it or extend that one instead).
 - **`byard publish` runs `byard check` first** and publishes nothing when the package has errors.
 
 - **A lambda sees its own item.** A `fn` called with the item inside a list

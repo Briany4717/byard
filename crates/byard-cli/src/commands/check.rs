@@ -249,6 +249,17 @@ mod tests {
         let errs =
             check_source("View K(w: Int) { Text(\"a\") #[weight: w] }\nView Main() { K(w: 700) }");
         assert!(errs.is_empty(), "{errs:?}");
+        // The same in a view that is not the root, through a `let`, a `var`
+        // and a loop variable, and in a view whose parameter is spelt like a
+        // keyword.
+        let errs = check_source(
+            "View Inner(w: Int) { let k = w\n var v = 300\n Column {\n\
+             Text(\"a\") #[weight: k]\n Text(\"b\") #[weight: v]\n\
+             for x in [400, 700] { Text(\"c\") #[weight: x] } } }\n\
+             View Mid(bold: Int) { Text(\"d\") #[weight: bold] }\n\
+             View Main() { Column { Inner(w: 500) Mid(bold: 200) } }",
+        );
+        assert!(errs.is_empty(), "{errs:?}");
         // A word nobody binds is still a misspelt keyword.
         let errs = check_source("View Main() { Text(\"a\") #[weight: bld] }");
         assert!(

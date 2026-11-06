@@ -256,6 +256,10 @@ pub enum RenderNode {
         state_blocks: Vec<StateBlock>,
         /// The reactive scope that evaluates to the image source path/URL.
         src: ScopeId,
+        /// The instance environment captured at lower time, restored while the
+        /// image is sized and painted so `width: w` or `opacity: o` reading a
+        /// view parameter resolves in the instance it was written in.
+        env_snapshot: Vec<(Symbol, super::env::Value)>,
     },
     /// A package-authored native view (RFC-0039): an element whose drawing,
     /// measurement and event handling are compiled-in Rust rather than an
@@ -294,6 +298,8 @@ pub enum RenderNode {
         attrs: Vec<Attr>,
         /// The reactive scope evaluating to the asset handle (a `Str` path).
         src: ScopeId,
+        /// The instance environment captured at lower time, as on `Image`.
+        env_snapshot: Vec<(Symbol, super::env::Value)>,
     },
     /// A `Canvas`, the RFC-0020 programmatic drawing surface. A fixed-size
     /// leaf whose children are *shape commands*, not views: each render tick
@@ -734,10 +740,6 @@ pub struct Interpreter {
     /// declaration span: lowering a different one is a new tree (RFC-0032
     /// §R4).
     lowered_view: Option<(crate::symbol::Symbol, Span)>,
-    /// The parameters of that view. Lowered standalone (by `check`, or as an
-    /// app's root) nothing binds them, so a name an attribute reads is told
-    /// from a keyword by this list.
-    root_params: Vec<crate::symbol::Symbol>,
     /// The IME composition in progress, if any (RFC-0040 §2).
     ///
     /// Engine state, not app state: it has no name in byld and never touches
@@ -1991,9 +1993,6 @@ impl Interpreter {
             self.invalidate_retained_layout();
             self.lowered_view = Some(identity);
         }
-        self.root_params.clear();
-        self.root_params
-            .extend(view.params.iter().map(|p| p.name.clone()));
         self.check_anchor_refs(view);
         self.check_font_families(view);
         // RFC-0018: a fresh tree gets fresh `when`/`for` pools; the previous
@@ -2019,6 +2018,16 @@ impl Interpreter {
         self.native_views.clear();
         self.native_call_owners.clear();
         self.native_generation = self.native_generation.wrapping_add(1);
+        // Lowered standalone (by `check`, or as an app's root) nothing calls
+        // the view, so nothing binds its parameters. They go into scope as
+        // unset values: a name an attribute reads is then known to be a name
+        // the view binds, the same as inside a call, and not a bare keyword.
+        // A parameter that is already a name here keeps its value.
+        for param in &view.params {
+            if self.env.lookup(&param.name).is_none() {
+                self.env.push(param.name.clone(), Value::Unit);
+            }
+        }
         self.eval_view_decls(view);
         // A view that declares a `content` slot (RFC-0007 D-A) may reference it in
         // its body. When the view is lowered *standalone*, e.g. `byard check`

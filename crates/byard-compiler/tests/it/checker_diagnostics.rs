@@ -596,3 +596,18 @@ fn basis_where_it_does_nothing_is_an_unknown_attribute() {
         assert!(said.is_empty(), "{el}: {said:?}");
     }
 }
+
+// ── `lines:` on a `Text` ────────────────────────────────────────────────
+
+/// `lines:` was accepted and nothing read it, so a `Text` meant to stop at two
+/// lines ran on to six with a clean `check`. Limiting lines is not something
+/// the text stack does, so it says so instead.
+#[test]
+fn lines_on_a_text_is_an_unknown_attribute() {
+    let parsed = parse("View Main() { Text(\"a long text\") #[lines: 2] }");
+    let mut interp = Interpreter::new();
+    interp.load_views(&parsed.views);
+    let _ = interp.lower_view(&parsed.views[0], &["Main"]);
+    let said: Vec<&str> = interp.errors().iter().map(CompileError::kind).collect();
+    assert_eq!(said, ["UnknownAttribute"], "{said:?}");
+}

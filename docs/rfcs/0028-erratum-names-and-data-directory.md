@@ -55,21 +55,26 @@ methods that would share a Byld name are a compile error naming both.
 **The animation curves** `anim.ease_in`, `anim.ease_out` and `anim.ease_in_out` are
 `anim.easeIn`, `anim.easeOut` and `anim.easeInOut`. The old names are an
 `UnknownAnimation` error whose suggestion is the new name. No other built-in method (value,
-list, text, `Http`, `Json`, `Store`, `Timer`) had an underscore. The easing word a keyframe
-step carries (`60%: (160, 0) ease_in_out`) is neither a method nor an attribute but a value
-keyword of that grammar, and it is unchanged.
+list, text, `Http`, `Json`, `Store`, `Timer`) had an underscore.
 
-RFC-0025 §4 and RFC-0031 show `anim.ease_in_out` in their examples; read it as
-`anim.easeInOut`.
+**The keyframe-step easing words** follow the curves, so a curve has one name everywhere:
+`60%: (160, 0) easeInOut`, `easeIn`, `easeOut`. The old `ease_in`, `ease_out` and
+`ease_in_out` on a step are an error ("unknown keyframe easing ... did you mean `easeInOut`?").
+
+RFC-0025 writes `ease_in`, `ease_out` and `ease_in_out` in its keyframe examples and grammar
+(§4, `curve_fn`), and RFC-0031 shows `anim.ease_in_out`; read them as `easeIn`, `easeOut` and
+`easeInOut`, both as `anim.*` calls and as the easing word on a step.
 
 **What an app must change:** a Byld call to a controller method whose Rust name has an
-underscore, and any `anim.ease_in`, `anim.ease_out` or `anim.ease_in_out`.
+underscore, any `anim.ease_in`, `anim.ease_out` or `anim.ease_in_out`, and the same three
+words after a keyframe step.
 
 Covered by `a_method_is_called_by_its_camel_case_name`,
 `the_rust_name_is_unknown_and_the_error_names_the_camel_case_one`,
 `an_explicit_name_replaces_the_automatic_one` (methods);
 `a_curve_is_a_method_and_is_camel_case`,
-`the_snake_case_curve_names_are_unknown_and_suggest_the_camel_case_one` (curves);
+`the_snake_case_curve_names_are_unknown_and_suggest_the_camel_case_one` (curves); `the_snake_case_keyframe_easings_are_errors_that_suggest_the_camel_case_one`
+(keyframe steps);
 `props_and_events_keep_their_snake_case_names` (attributes and events);
 `a_field_is_a_record_key_exactly_as_declared` and `a_controller_field_keeps_its_name`
 (fields).

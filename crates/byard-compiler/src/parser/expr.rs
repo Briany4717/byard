@@ -904,7 +904,7 @@ impl Parser<'_> {
     pub(super) fn parse_arg_list(&mut self, close: &Token) -> Vec<Arg> {
         let mut args = Vec::new();
         while self.cur().is_some() && self.cur() != Some(close) {
-            // A keyframe step `50%: value ease_out` (RFC-0025 §4). Any call may
+            // A keyframe step `50%: value easeOut` (RFC-0025 §4). Any call may
             // *carry* one; only `anim.keyframes(…)` gives it meaning (D6).
             if let Some(step) = self.parse_keyframe_step() {
                 args.push(Arg {
@@ -936,7 +936,7 @@ impl Parser<'_> {
     }
 
     /// `keyframe_step := PERCENT ":" expr IDENT?` (RFC-0025 §4), one timed step
-    /// of an `anim.keyframes(…)` sequence, e.g. `50%: 200 ease_out`. Returns
+    /// of an `anim.keyframes(…)` sequence, e.g. `50%: 200 easeOut`. Returns
     /// `None` (consuming nothing) when the cursor is not on a percentage, so the
     /// ordinary argument forms parse exactly as before.
     ///
@@ -953,7 +953,7 @@ impl Parser<'_> {
         self.advance(); // :
         let value = Box::new(self.parse_expr(0));
         let easing = match (self.cur().cloned(), self.peek2()) {
-            // `ease_out`, but not `ease_out:`, which is the next named argument.
+            // `easeOut`, but not `easeOut:`, which is the next named argument.
             (Some(Token::Ident(name)), next) if next != Some(Token::Colon) => {
                 let span = self.cur_span();
                 self.advance();

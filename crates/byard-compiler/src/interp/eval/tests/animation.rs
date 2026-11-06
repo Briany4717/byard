@@ -333,17 +333,17 @@ fn keyframe_pairs_interpolate_component_wise() {
 
 #[test]
 fn a_keyframe_segment_uses_its_own_easing() {
-    // Same two-segment shape, but the first arrives with `ease_out`: at the
+    // Same two-segment shape, but the first arrives with `easeOut`: at the
     // quarter mark it must be further along than the linear version.
     let linear = "View V() { Box #[bg: 0x808080, width: 10, height: 10, \
                       translate: anim.keyframes(0%: 0, 50%: 100, 100%: 0, duration: 400ms)] }";
     let eased = "View V() { Box #[bg: 0x808080, width: 10, height: 10, \
-                     translate: anim.keyframes(0%: 0, 50%: 100 ease_out, 100%: 0, \
+                     translate: anim.keyframes(0%: 0, 50%: 100 easeOut, 100%: 0, \
                      duration: 400ms)] }";
     let at_quarter = |src: &str| sample_over_time(src, &[0, 100], translate_x)[1].0;
     assert!(
         at_quarter(eased) > at_quarter(linear) + 10.0,
-        "ease_out leads linear: {} vs {}",
+        "easeOut leads linear: {} vs {}",
         at_quarter(eased),
         at_quarter(linear)
     );

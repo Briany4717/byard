@@ -40,11 +40,12 @@ Change the scheme, light to dark, and the colours cross-fade.
 | Colour | `t.primary`, `t.onSurface`, `t.surfaceContainer` | `bg:`, `color:`, `border:` |
 | Type | `t.headlineLarge`, `t.bodyMedium` | `typo:` |
 | Shape | `t.cornerMd`, `t.cornerXl` | `radius:` |
+| Motion | `t.springSpatialFast`, `t.durationShort2` | after `with`, see [motion](motion.md#named-motion) |
 | Scheme | `t.dark`, `t.mode` | `t.dark` is a `Bool` you can write, and `t.mode` is its name as text |
 
 Tokens are spelt in `snake_case` in `byard.toml` and in `camelCase` in byld:
 `primary_container` is `t.primaryContainer`. A token that the theme does not have is
-an error, and it names the three places it looked:
+an error, and it names the four places it looked (colour, type, shape and motion):
 
 ```byld,fails
 View Main() {
@@ -66,20 +67,37 @@ so is `Button("flip") => t.dark = !t.dark`.
 
 ## The built-in theme
 
-With no `[theme]` at all you get `byard-base`, which is close to Material 3. Colours:
-`primary`, `onPrimary`, `primaryContainer`, `onPrimaryContainer`, `secondary`,
-`onSecondary`, `secondaryContainer`, `onSecondaryContainer`, `surface`,
-`surfaceContainerLow`, `surfaceContainer`, `surfaceContainerHigh`, `onSurface`,
-`onSurfaceVariant`, `outline`, `outlineVariant`, `background`, `onBackground`, `error`
-and `onError`, each in a light and a dark scheme.
+With no `[theme]` at all you get `byard-base`, which is close to Material 3. Every
+colour role has a light and a dark value:
+
+- the accents, each with an `on` colour, a container and an `on` colour for the
+  container: `primary`, `secondary`, `tertiary` and `error`;
+- the surfaces, from `surfaceContainerLowest` through `surfaceContainerLow`,
+  `surfaceContainer` and `surfaceContainerHigh` to `surfaceContainerHighest`, plus
+  `surface`, `surfaceDim`, `surfaceBright`, `surfaceVariant`, `onSurface`,
+  `onSurfaceVariant`, `background` and `onBackground`;
+- `outline` and `outlineVariant`;
+- the inverse roles for a snackbar or a tooltip, which are dark on a light app and
+  light on a dark one: `inverseSurface`, `inverseOnSurface` and `inversePrimary`;
+- `scrim` and `shadow`, both black. A modal overlay dims the page with `scrim` at 32%,
+  so a theme that declares another `scrim` changes every dialog at once;
+- the fixed roles, which are the same colour in both schemes, for something that must
+  not change with the scheme: `primaryFixed`, `primaryFixedDim`, `onPrimaryFixed` and
+  `onPrimaryFixedVariant`, and the same four for `secondary` and `tertiary`.
 
 The type scale is `displayLarge`, `displayMedium`, `displaySmall`, `headlineLarge`,
 `headlineMedium`, `headlineSmall`, `titleLarge`, `titleMedium`, `titleSmall`,
 `bodyLarge`, `bodyMedium`, `bodySmall`, `labelLarge`, `labelMedium` and `labelSmall`,
 plus the short names `display`, `headline`, `title`, `body`, `caption` and `label`.
+Each of the fifteen has an emphasized twin, `labelLargeEmphasized` and so on: the same
+size and spacing at the next weight up (regular becomes medium, medium becomes bold).
 
 The shapes are `cornerNone` (0), `cornerXs` (4), `cornerSm` (8), `cornerMd` (12),
-`cornerLg` (16), `cornerXl` (28) and `cornerFull`.
+`cornerLg` (16), `cornerLgIncreased` (20), `cornerXl` (28), `cornerXlIncreased` (32),
+`cornerXxl` (48) and `cornerFull`.
+
+The motion tokens are the six springs of Material 3 Expressive and its sixteen
+durations; they are listed under [named motion](motion.md#named-motion).
 
 ## Declaring your own: `byard.toml`
 
@@ -117,9 +135,13 @@ corner_xl = 28
 [theme.breakpoints]
 md = 640
 lg = 1024
+
+[theme.motion]
+spatial_fast = { stiffness = 800, damping_ratio = 0.6 }
+short_2 = 100
 ```
 
-Every key is checked. A table or key the theme does not read (`[theme.motion]`, `[theme.colour]`) is an
+Every key is checked. A table or key the theme does not read (`[theme.motions]`, `[theme.colour]`) is an
 error that names it and suggests the closest one, not something quietly ignored.
 
 - **`name`** is the theme's name, shown in messages.
@@ -137,6 +159,9 @@ error that names it and suggests the closest one, not something quietly ignored.
   line_height }`. Only `size` is required. `weight` is `thin`, `light`, `regular`,
   `medium`, `semibold`, `bold` or `black`, and `family` names one of your fonts.
 - **`[theme.shape]`** declares corner radii.
+- **`[theme.motion]`** names springs and durations for `with`: a table with `stiffness`
+  and a `damping_ratio` is a spring, a whole number is a duration in milliseconds. See
+  [named motion](motion.md#named-motion).
 - **`[theme.breakpoints]`** names widths for [responsive styles](styling.md#responsive-styles).
 
 A token you declare is used by name. With `hero = { size = 44, weight = "bold" }` and
@@ -167,7 +192,9 @@ transition = 300
 ```
 
 That gives `primary`, `secondary`, `tertiary`, each with its `on` colour and container,
-the `surface` family, `outline`, `error` and so on, light and dark, from one hex. Change
+the `surface` family from `surfaceContainerLowest` to `surfaceContainerHighest`, the
+inverse and fixed roles, `scrim`, `shadow`, `outline`, `error` and so on, light and dark,
+from one hex. Change
 the seed, save, and the whole app moves to the new hue under `byard dev`.
 
 A colour you declare yourself wins over the derived one, so you can take the seed's

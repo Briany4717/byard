@@ -12,8 +12,22 @@
 //      is the same green, lighter where it sits on dark.
 //   3. Change the seed to "#D93025" (or any colour) and save. The whole app
 //      moves to the new hue, and every label stays readable.
+//   4. (RFC-0053) The swatches under "More roles" are the roles `byard-base`
+//      used not to have: the extreme and dim/bright surfaces, the inverse
+//      roles, scrim and shadow, and the fixed roles. They come from the seed
+//      too, and the fixed ones are the same in both schemes.
+//   5. Tap "Slide". Both squares move on springs the theme names, not on
+//      numbers written here: the first on `t.springSpatialFast` (it overshoots
+//      and rings), the second on `t.springSpatialSlow`. Retune either in
+//      `[theme.motion]` of byard.toml and they follow.
+//
+// The pictures (from the repo root):
+//   byard shot crates/byard-cli/examples/seed_scheme --size 560x810 -o roles.png
+//   byard shot crates/byard-cli/examples/seed_scheme --size 560x810 --dark -o roles-dark.png
+//   byard shot crates/byard-cli/examples/seed_scheme --size 560x810 --tap 280,604 --at 110 -o moving.png
 View Main() {
     inject Theme as t
+    var slid = false
 
     Column #[bg: t.surface, p: 32, gap: 16, width: 560] {
         Text("Seed-colour scheme") #[size: 28, color: t.onSurface]
@@ -55,6 +69,131 @@ View Main() {
             border_width: 1,
         ] {
             Text("A surface container, outlined") #[size: 14, color: t.onSurface]
+        }
+
+        Text("More roles") #[size: 16, color: t.onSurface]
+        Row #[gap: 12] {
+            Box #[
+                bg: t.surfaceContainerLowest,
+                radius: t.cornerLgIncreased,
+                p: 10,
+                width: 112,
+                height: 56,
+                border: t.outlineVariant,
+                border_width: 1,
+            ] {
+                Text("lowest") #[size: 12, color: t.onSurface]
+            }
+            Box #[
+                bg: t.surfaceContainerHighest,
+                radius: t.cornerLgIncreased,
+                p: 10,
+                width: 112,
+                height: 56,
+            ] {
+                Text("highest") #[size: 12, color: t.onSurface]
+            }
+            Box #[
+                bg: t.surfaceDim,
+                radius: t.cornerLgIncreased,
+                p: 10,
+                width: 112,
+                height: 56,
+                border: t.outlineVariant,
+                border_width: 1,
+            ] {
+                Text("dim") #[size: 12, color: t.onSurface]
+            }
+            Box #[
+                bg: t.surfaceBright,
+                radius: t.cornerLgIncreased,
+                p: 10,
+                width: 112,
+                height: 56,
+                border: t.outlineVariant,
+                border_width: 1,
+            ] {
+                Text("bright") #[size: 12, color: t.onSurface]
+            }
+        }
+        Row #[gap: 12] {
+            Box #[
+                bg: t.inverseSurface,
+                radius: t.cornerLgIncreased,
+                p: 10,
+                width: 112,
+                height: 56,
+            ] {
+                Text("inverse") #[size: 12, color: t.inverseOnSurface]
+            }
+            Box #[
+                bg: t.inverseSurface,
+                radius: t.cornerLgIncreased,
+                p: 10,
+                width: 112,
+                height: 56,
+            ] {
+                Text("inverse primary") #[size: 12, color: t.inversePrimary]
+            }
+            Box #[bg: t.scrim, radius: t.cornerLgIncreased, p: 10, width: 112, height: 56] {
+                Text("scrim") #[size: 12, color: 0xFFFFFF]
+            }
+            Box #[
+                bg: t.shadow,
+                radius: t.cornerLgIncreased,
+                p: 10,
+                width: 112,
+                height: 56,
+                border: t.outline,
+                border_width: 1,
+            ] {
+                Text("shadow") #[size: 12, color: 0xFFFFFF]
+            }
+        }
+        Row #[gap: 12] {
+            Box #[bg: t.primaryFixed, radius: t.cornerLgIncreased, p: 10, width: 112, height: 56] {
+                Text("primary fixed") #[size: 12, color: t.onPrimaryFixed]
+            }
+            Box #[
+                bg: t.primaryFixedDim,
+                radius: t.cornerLgIncreased,
+                p: 10,
+                width: 112,
+                height: 56,
+            ] {
+                Text("fixed dim") #[size: 12, color: t.onPrimaryFixedVariant]
+            }
+            Box #[
+                bg: t.secondaryFixed,
+                radius: t.cornerLgIncreased,
+                p: 10,
+                width: 112,
+                height: 56,
+            ] {
+                Text("secondary") #[size: 12, color: t.onSecondaryFixed]
+            }
+            Box #[bg: t.tertiaryFixed, radius: t.cornerLgIncreased, p: 10, width: 112, height: 56] {
+                Text("tertiary") #[size: 12, color: t.onTertiaryFixed]
+            }
+        }
+
+        Text("Motion") #[typo: t.titleMediumEmphasized, color: t.onSurface]
+        Button("Slide") #[bg: t.primary, color: t.onPrimary, radius: t.cornerXxl] => slid = !slid
+        Column #[gap: 10] {
+            Box #[
+                bg: t.primary,
+                radius: t.cornerLgIncreased,
+                width: 40,
+                height: 40,
+                translate.x: slid ? 440 : 0 with t.springSpatialFast,
+            ] {}
+            Box #[
+                bg: t.tertiary,
+                radius: t.cornerLgIncreased,
+                width: 40,
+                height: 40,
+                translate.x: slid ? 440 : 0 with t.springSpatialSlow,
+            ] {}
         }
 
         Row #[gap: 12, align: center] {

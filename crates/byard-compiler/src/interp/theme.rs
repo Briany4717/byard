@@ -158,6 +158,23 @@ const M3_TYPO: &[(&str, f32, FontWeight, f32)] = &[
     ("label", 11.0, FontWeight::Medium, 0.0),
 ];
 
+/// How many of the leading [`M3_TYPO`] entries are the fifteen M3 styles (the
+/// rest are short aliases); only those have an emphasized twin.
+const M3_STYLES: usize = 15;
+
+/// The suffix of an emphasized type style (`labelLargeEmphasized`).
+const EMPHASIZED: &str = "Emphasized";
+
+/// The weight an emphasized style carries: regular becomes medium, medium
+/// becomes bold, anything else is already heavy and stays.
+fn emphasize(weight: FontWeight) -> FontWeight {
+    match weight {
+        FontWeight::Regular => FontWeight::Medium,
+        FontWeight::Medium => FontWeight::Bold,
+        other => other,
+    }
+}
+
 /// The M3 shape scale: `camelCase` corner token → radius (RFC-0022 §6).
 const BASE_SHAPES: &[(&str, f32)] = &[
     ("cornerNone", 0.0),
@@ -165,9 +182,92 @@ const BASE_SHAPES: &[(&str, f32)] = &[
     ("cornerSm", 8.0),
     ("cornerMd", 12.0),
     ("cornerLg", 16.0),
+    ("cornerLgIncreased", 20.0),
     ("cornerXl", 28.0),
+    ("cornerXlIncreased", 32.0),
+    ("cornerXxl", 48.0),
     ("cornerFull", 9999.0),
 ];
+
+/// Material 3 Expressive's springs: `(token, stiffness, damping ratio)`.
+/// The ratio is Material's `damping`; [`spring_damping`] turns it into the
+/// engine's coefficient when the theme is built.
+const BASE_SPRINGS: &[(&str, f32, f32)] = &[
+    ("springSpatialFast", 800.0, 0.6),
+    ("springSpatialDefault", 380.0, 0.8),
+    ("springSpatialSlow", 200.0, 0.8),
+    ("springEffectsFast", 3800.0, 1.0),
+    ("springEffectsDefault", 1600.0, 1.0),
+    ("springEffectsSlow", 800.0, 1.0),
+];
+
+/// Material 3's standard durations in milliseconds.
+const BASE_DURATIONS: &[(&str, u32)] = &[
+    ("durationShort1", 50),
+    ("durationShort2", 100),
+    ("durationShort3", 150),
+    ("durationShort4", 200),
+    ("durationMedium1", 250),
+    ("durationMedium2", 300),
+    ("durationMedium3", 350),
+    ("durationMedium4", 400),
+    ("durationLong1", 450),
+    ("durationLong2", 500),
+    ("durationLong3", 550),
+    ("durationLong4", 600),
+    ("durationExtraLong1", 700),
+    ("durationExtraLong2", 800),
+    ("durationExtraLong3", 900),
+    ("durationExtraLong4", 1000),
+];
+
+/// A named piece of motion a theme declares (RFC-0053).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum MotionToken {
+    /// A spring, already in the engine's terms: the `stiffness` and the damping
+    /// *coefficient* of `anim.spring(stiffness:, damping:)`.
+    Spring {
+        /// Spring stiffness.
+        stiffness: f32,
+        /// Damping coefficient (not the ratio).
+        damping: f32,
+    },
+    /// A duration in whole milliseconds.
+    Duration(u32),
+}
+
+impl MotionToken {
+    /// What this token is, for a diagnostic: `a spring` or `a duration`.
+    #[must_use]
+    pub fn describe(self) -> &'static str {
+        match self {
+            Self::Spring { .. } => "a spring",
+            Self::Duration(_) => "a duration",
+        }
+    }
+}
+
+/// The damping coefficient of a unit-mass spring with this stiffness and
+/// damping ratio: `2 * ratio * sqrt(stiffness)`. The engine's `damping:` is the
+/// coefficient; Material's `damping` is the ratio (RFC-0053 §2).
+#[must_use]
+pub fn spring_damping(stiffness: f32, ratio: f32) -> f32 {
+    2.0 * ratio * stiffness.max(0.0).sqrt()
+}
+
+/// The token name for a manifest key: `prefix` followed by the key in
+/// `camelCase` with its first letter raised (`spring` + `spatial_fast` is
+/// `springSpatialFast`).
+fn motion_token_name(prefix: &str, key: &str) -> String {
+    let camel = to_camel(key);
+    let mut chars = camel.chars();
+    let mut out = String::from(prefix);
+    if let Some(first) = chars.next() {
+        out.extend(first.to_uppercase());
+        out.push_str(chars.as_str());
+    }
+    out
+}
 
 /// The `byard-base` light color scheme (`camelCase` token → 0xRRGGBB).
 ///
@@ -184,11 +284,20 @@ const BASE_LIGHT: &[(&str, i64)] = &[
     ("onSecondary", 0x00FF_FFFF),
     ("secondaryContainer", 0x00D9_E3F8),
     ("onSecondaryContainer", 0x0012_1C2B),
+    ("tertiary", 0x0064_597B),
+    ("onTertiary", 0x00FF_FFFF),
+    ("tertiaryContainer", 0x00E8_DDFF),
+    ("onTertiaryContainer", 0x0021_1632),
     ("surface", 0x00FF_FFFF),
+    ("surfaceDim", 0x00DE_D8E1),
+    ("surfaceBright", 0x00FF_FFFF),
+    ("surfaceContainerLowest", 0x00FF_FFFF),
     ("surfaceContainerLow", 0x00F7_F2FA),
     ("surfaceContainer", 0x00F1_ECF4),
     ("surfaceContainerHigh", 0x00EC_E6EE),
+    ("surfaceContainerHighest", 0x00E6_E0E9),
     ("onSurface", 0x001C_1B1F),
+    ("surfaceVariant", 0x00E1_E2EA),
     ("onSurfaceVariant", 0x0043_474E),
     ("outline", 0x0073_777F),
     ("outlineVariant", 0x00C3_C7CF),
@@ -196,6 +305,25 @@ const BASE_LIGHT: &[(&str, i64)] = &[
     ("onBackground", 0x001C_1B1F),
     ("error", 0x00B3_261E),
     ("onError", 0x00FF_FFFF),
+    ("errorContainer", 0x00F9_DEDC),
+    ("onErrorContainer", 0x0041_0E0B),
+    ("inverseSurface", 0x0031_3033),
+    ("inverseOnSurface", 0x00F4_EFF4),
+    ("inversePrimary", 0x0090_CAF9),
+    ("scrim", 0x0000_0000),
+    ("shadow", 0x0000_0000),
+    ("primaryFixed", 0x00C6_E7FF),
+    ("primaryFixedDim", 0x0089_CEFF),
+    ("onPrimaryFixed", 0x0000_1E31),
+    ("onPrimaryFixedVariant", 0x0000_4B71),
+    ("secondaryFixed", 0x00CD_E6F8),
+    ("secondaryFixedDim", 0x00B1_CADC),
+    ("onSecondaryFixed", 0x0009_1D2B),
+    ("onSecondaryFixedVariant", 0x0034_4958),
+    ("tertiaryFixed", 0x00E8_DDFF),
+    ("tertiaryFixedDim", 0x00CD_C0E7),
+    ("onTertiaryFixed", 0x0021_1632),
+    ("onTertiaryFixedVariant", 0x004D_4162),
 ];
 
 /// The `byard-base` dark color scheme (`camelCase` token → 0xRRGGBB). Core
@@ -209,11 +337,20 @@ const BASE_DARK: &[(&str, i64)] = &[
     ("onSecondary", 0x0022_333B),
     ("secondaryContainer", 0x003D_4758),
     ("onSecondaryContainer", 0x00D9_E3F8),
+    ("tertiary", 0x00CD_C0E7),
+    ("onTertiary", 0x0036_2B49),
+    ("tertiaryContainer", 0x004D_4162),
+    ("onTertiaryContainer", 0x00E8_DDFF),
     ("surface", 0x001C_1B1F),
+    ("surfaceDim", 0x0014_1416),
+    ("surfaceBright", 0x003A_3B3E),
+    ("surfaceContainerLowest", 0x000F_1012),
     ("surfaceContainerLow", 0x001A_1C1E),
     ("surfaceContainer", 0x001E_2022),
     ("surfaceContainerHigh", 0x0029_2A2D),
+    ("surfaceContainerHighest", 0x0034_3538),
     ("onSurface", 0x00E6_E1E5),
+    ("surfaceVariant", 0x0043_474E),
     ("onSurfaceVariant", 0x00C3_C7CF),
     ("outline", 0x008D_9199),
     ("outlineVariant", 0x0043_474E),
@@ -221,6 +358,26 @@ const BASE_DARK: &[(&str, i64)] = &[
     ("onBackground", 0x00E6_E1E5),
     ("error", 0x00F2_B8B5),
     ("onError", 0x0060_1410),
+    ("errorContainer", 0x008C_1D18),
+    ("onErrorContainer", 0x00F9_DEDC),
+    ("inverseSurface", 0x00E6_E1E5),
+    ("inverseOnSurface", 0x0031_3033),
+    ("inversePrimary", 0x0000_6495),
+    ("scrim", 0x0000_0000),
+    ("shadow", 0x0000_0000),
+    // The fixed roles are the same in both schemes.
+    ("primaryFixed", 0x00C6_E7FF),
+    ("primaryFixedDim", 0x0089_CEFF),
+    ("onPrimaryFixed", 0x0000_1E31),
+    ("onPrimaryFixedVariant", 0x0000_4B71),
+    ("secondaryFixed", 0x00CD_E6F8),
+    ("secondaryFixedDim", 0x00B1_CADC),
+    ("onSecondaryFixed", 0x0009_1D2B),
+    ("onSecondaryFixedVariant", 0x0034_4958),
+    ("tertiaryFixed", 0x00E8_DDFF),
+    ("tertiaryFixedDim", 0x00CD_C0E7),
+    ("onTertiaryFixed", 0x0021_1632),
+    ("onTertiaryFixedVariant", 0x004D_4162),
 ];
 
 /// The default logical-pixel font size when no `titleLarge`-style token applies.
@@ -279,6 +436,8 @@ pub struct Theme {
     typography: BTreeMap<String, TypoToken>,
     /// `camelCase token → corner radius`.
     shapes: BTreeMap<String, f32>,
+    /// `camelCase token → spring or duration` (RFC-0053).
+    motion: BTreeMap<String, MotionToken>,
     /// Declared font families (RFC-0022 §3, RFC-0034): the name written in
     /// `[assets.fonts]` → the loaded face.
     ///
@@ -333,6 +492,7 @@ impl Theme {
             && self.schemes == other.schemes
             && self.typography == other.typography
             && self.shapes == other.shapes
+            && self.motion == other.motion
             && self.fonts == other.fonts
             && self.breakpoints == other.breakpoints
             && self.font_size.to_bits() == other.font_size.to_bits()
@@ -361,20 +521,53 @@ impl Theme {
                 .map(|(k, v)| ((*k).to_string(), *v))
                 .collect(),
         );
+        // The M3 scale, and an `...Emphasized` twin of each of its fifteen
+        // styles at the next weight up (RFC-0053 §5).
         let typography = M3_TYPO
             .iter()
-            .map(|(name, size, weight, tracking)| {
+            .map(|&(name, size, weight, tracking)| (name.to_string(), weight, size, tracking))
+            .chain(
+                M3_TYPO
+                    .iter()
+                    .take(M3_STYLES)
+                    .map(|&(name, size, weight, tracking)| {
+                        (
+                            format!("{name}{EMPHASIZED}"),
+                            emphasize(weight),
+                            size,
+                            tracking,
+                        )
+                    }),
+            )
+            .map(|(name, weight, size, tracking)| {
                 (
-                    (*name).to_string(),
+                    name,
                     TypoToken {
                         family: None,
-                        size: *size,
-                        weight: *weight,
-                        tracking: *tracking,
+                        size,
+                        weight,
+                        tracking,
                         line_height: (size * 1.25).round(),
                     },
                 )
             })
+            .collect();
+        let motion = BASE_SPRINGS
+            .iter()
+            .map(|&(name, stiffness, ratio)| {
+                (
+                    name.to_string(),
+                    MotionToken::Spring {
+                        stiffness,
+                        damping: spring_damping(stiffness, ratio),
+                    },
+                )
+            })
+            .chain(
+                BASE_DURATIONS
+                    .iter()
+                    .map(|&(name, ms)| (name.to_string(), MotionToken::Duration(ms))),
+            )
             .collect();
         let shapes = BASE_SHAPES
             .iter()
@@ -385,6 +578,7 @@ impl Theme {
             schemes,
             typography,
             shapes,
+            motion,
             fonts: BTreeMap::new(),
             breakpoints: BTreeMap::new(),
             active_dark: false,
@@ -466,6 +660,38 @@ impl Theme {
         self.typo(token).map(|t| t.weight.axis())
     }
 
+    /// Resolves a `camelCase` motion token (RFC-0053): `springSpatialFast`,
+    /// `durationShort2`.
+    #[must_use]
+    pub fn motion(&self, token: &str) -> Option<MotionToken> {
+        self.motion.get(token).copied()
+    }
+
+    /// Declares a spring from a manifest key (`spatial_fast`), with the
+    /// damping coefficient the engine's `anim.spring(damping:)` takes. The
+    /// token is `springSpatialFast`.
+    pub fn set_spring(&mut self, key: &str, stiffness: f32, damping: f32) {
+        self.motion.insert(
+            motion_token_name("spring", key),
+            MotionToken::Spring { stiffness, damping },
+        );
+    }
+
+    /// Declares a spring from a damping *ratio*, Material's `damping`
+    /// (1.0 settles without overshoot).
+    pub fn set_spring_ratio(&mut self, key: &str, stiffness: f32, ratio: f32) {
+        self.set_spring(key, stiffness, spring_damping(stiffness, ratio));
+    }
+
+    /// Declares a duration in milliseconds from a manifest key (`short_2`).
+    /// The token is `durationShort2`.
+    pub fn set_duration(&mut self, key: &str, ms: u32) {
+        self.motion.insert(
+            motion_token_name("duration", key),
+            MotionToken::Duration(ms),
+        );
+    }
+
     /// Resolves a `camelCase` shape (corner-radius) token.
     #[must_use]
     pub fn shape(&self, token: &str) -> Option<f32> {
@@ -519,7 +745,7 @@ impl Theme {
         &self.fonts
     }
 
-    /// Every colour, typography and shape token name, `camelCase`, in no
+    /// Every colour, typography, shape and motion token name, `camelCase`, in no
     /// particular order and possibly repeated across schemes.
     pub fn token_names(&self) -> impl Iterator<Item = &str> {
         self.schemes
@@ -527,6 +753,7 @@ impl Theme {
             .flat_map(|tokens| tokens.keys())
             .chain(self.typography.keys())
             .chain(self.shapes.keys())
+            .chain(self.motion.keys())
             .map(String::as_str)
     }
 
@@ -632,6 +859,11 @@ impl Default for Theme {
 #[must_use]
 pub fn resolve_typo(token: &str) -> Option<f32> {
     let key = token.strip_prefix("m3.").unwrap_or(token);
+    // An emphasized style is the same size as the style it emphasizes.
+    let key = key
+        .strip_suffix(EMPHASIZED)
+        .filter(|plain| M3_TYPO.iter().take(M3_STYLES).any(|(n, ..)| n == plain))
+        .unwrap_or(key);
     M3_TYPO
         .iter()
         .find(|(name, ..)| *name == key)

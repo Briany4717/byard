@@ -16,6 +16,7 @@
 //! `byard-core`'s `frame` owns the repeat/keyframe time arithmetic.
 
 use crate::diagnostics::{CompileError, Span};
+use crate::interp::theme::{MotionToken, Theme};
 use crate::parser::ast::{Arg, Expr};
 use crate::symbol::Symbol;
 use crate::util::closest_match;
@@ -260,7 +261,17 @@ const SEGMENT_EASINGS: &[(&str, u32)] = &[
 /// Returns the first diagnostic encountered (not an `anim.*` call, unknown
 /// curve, or a bad argument list).
 pub fn resolve_curve(anim: &Expr) -> Result<Curve, CompileError> {
-    resolve_motion(anim).map(|spec| spec.curve)
+    resolve_curve_in(anim, None)
+}
+
+/// [`resolve_curve`] with the active theme, so a motion token (`t.springSpatialFast`,
+/// RFC-0053) is a curve.
+///
+/// # Errors
+///
+/// As [`resolve_motion_in`].
+pub fn resolve_curve_in(anim: &Expr, theme: Option<&Theme>) -> Result<Curve, CompileError> {
+    resolve_motion_in(anim, theme).map(|spec| spec.curve)
 }
 
 /// Resolves the `anim` side of a `with` clause into a typed, validated
@@ -279,6 +290,26 @@ pub fn resolve_curve(anim: &Expr) -> Result<Curve, CompileError> {
 /// curve, a bad argument list, or `anim.keyframes` used after `with`, keyframes
 /// carry their own values and belong in value position).
 pub fn resolve_motion(anim: &Expr) -> Result<MotionSpec<'_>, CompileError> {
+    resolve_motion_in(anim, None)
+}
+
+/// [`resolve_motion`] with the active theme (RFC-0053): a member of the injected
+/// theme in curve position (`with t.springSpatialFast`) is a motion token and
+/// resolves to the curve the theme declares, exactly the curve the equivalent
+/// literal gives. A duration token is accepted where a duration literal is.
+///
+/// # Errors
+///
+/// As [`resolve_motion`], plus [`CompileError::UnknownThemeToken`] for a token the
+/// theme does not declare, and [`CompileError::InvalidAnimation`] for one of the
+/// wrong kind.
+pub fn resolve_motion_in<'a>(
+    anim: &'a Expr,
+    theme: Option<&Theme>,
+) -> Result<MotionSpec<'a>, CompileError> {
+    if let Some(curve) = token_curve(anim, theme)? {
+        return Ok(MotionSpec::once(curve));
+    }
     let (name, name_span, args) = destructure_anim_call(anim, true)?;
     if name.as_str() == "keyframes" {
         return Err(CompileError::InvalidAnimation {
@@ -289,10 +320,10 @@ pub fn resolve_motion(anim: &Expr) -> Result<MotionSpec<'_>, CompileError> {
         });
     }
     if name.as_str() == "stagger" {
-        return resolve_stagger(args, name_span);
+        return resolve_stagger(args, name_span, theme);
     }
-    let (curve_args, mods) = split_modifiers(args)?;
-    let curve = resolve_named_curve(name, name_span, &curve_args, mods.duration_ms)?;
+    let (curve_args, mods) = split_modifiers(args, theme)?;
+    let curve = resolve_named_curve(name, name_span, &curve_args, mods.duration_ms, theme)?;
     Ok(MotionSpec {
         curve,
         repeat: mods.repeat.unwrap_or_default(),
@@ -314,11 +345,20 @@ pub fn resolve_motion(anim: &Expr) -> Result<MotionSpec<'_>, CompileError> {
 /// out-of-range percentages, a missing `duration:`, an unknown easing name) or
 /// [`CompileError::TooManyKeyframes`] past the RFC's step cap.
 pub fn resolve_keyframes(expr: &Expr) -> Option<Result<KeyframeTrack<'_>, CompileError>> {
+    resolve_keyframes_in(expr, None)
+}
+
+/// [`resolve_keyframes`] with the active theme, so the track's `duration:` may be
+/// a duration token (`duration: t.durationMedium2`, RFC-0053).
+pub fn resolve_keyframes_in<'a>(
+    expr: &'a Expr,
+    theme: Option<&Theme>,
+) -> Option<Result<KeyframeTrack<'a>, CompileError>> {
     let (name, name_span, args) = destructure_anim_call(expr, true).ok()?;
     if name.as_str() != "keyframes" {
         return None;
     }
-    Some(resolve_keyframe_args(args, name_span))
+    Some(resolve_keyframe_args(args, name_span, theme))
 }
 
 /// Whether `expr` is an `anim.keyframes(…)` call, the cheap shape test the
@@ -344,8 +384,9 @@ pub fn is_keyframes_call(expr: &Expr) -> bool {
 fn resolve_keyframe_args<'a>(
     args: &'a [Arg],
     call_span: Span,
+    theme: Option<&Theme>,
 ) -> Result<KeyframeTrack<'a>, CompileError> {
-    let (step_args, mods) = split_modifiers(args)?;
+    let (step_args, mods) = split_modifiers(args, theme)?;
     let mut steps = Vec::with_capacity(step_args.len());
     for arg in &step_args {
         let Expr::KeyframeStep {
@@ -425,12 +466,16 @@ fn resolve_keyframe_args<'a>(
 /// sugar for the `delay: index * step` pattern, with the non-cancellable delay
 /// semantics of an entrance cascade. Arguments are positional or named
 /// (`base`/`step`/`index`).
-fn resolve_stagger<'a>(args: &'a [Arg], call_span: Span) -> Result<MotionSpec<'a>, CompileError> {
+fn resolve_stagger<'a>(
+    args: &'a [Arg],
+    call_span: Span,
+    theme: Option<&Theme>,
+) -> Result<MotionSpec<'a>, CompileError> {
     const FIELDS: [&str; 3] = ["base", "step", "index"];
     // Modifiers may sit on the stagger itself (`anim.stagger(spring(), 90ms, i,
     // restart: attempt)`) as well as on its base curve, the outer position is
     // the natural place for `restart:`, which is about the cascade, not the curve.
-    let (args, stagger_mods) = split_modifiers(args)?;
+    let (args, stagger_mods) = split_modifiers(args, theme)?;
     let mut slots: [Option<&Expr>; 3] = [None; 3];
     for (position, arg) in args.iter().enumerate() {
         let slot = match &arg.name {
@@ -465,10 +510,16 @@ fn resolve_stagger<'a>(args: &'a [Arg], call_span: Span) -> Result<MotionSpec<'a
     };
     // The base curve may be written bare (`spring()`) inside `stagger`, since
     // the `anim.` namespace is already established by the enclosing call.
-    let (name, name_span, curve_args) = destructure_anim_call(base, false)?;
-    let (curve_args, mods) = split_modifiers(curve_args)?;
-    let curve = resolve_named_curve(name, name_span, &curve_args, mods.duration_ms)?;
-    let step_ms = duration_literal(step, "anim.stagger's step")?;
+    // A spring token is a base curve too (`anim.stagger(t.springSpatialFast, 50ms, i)`).
+    let (curve, mods) = if let Some(curve) = token_curve(base, theme)? {
+        (curve, Modifiers::default())
+    } else {
+        let (name, name_span, curve_args) = destructure_anim_call(base, false)?;
+        let (curve_args, mods) = split_modifiers(curve_args, theme)?;
+        let curve = resolve_named_curve(name, name_span, &curve_args, mods.duration_ms, theme)?;
+        (curve, mods)
+    };
+    let step_ms = duration_literal(step, "anim.stagger's step", theme)?;
     Ok(MotionSpec {
         curve,
         repeat: mods.repeat.unwrap_or_default(),
@@ -520,6 +571,7 @@ struct Modifiers<'a> {
 /// shared RFC-0025 modifiers, validating each modifier's value.
 fn split_modifiers<'a>(
     args: impl IntoIterator<Item = &'a Arg>,
+    theme: Option<&Theme>,
 ) -> Result<(ArgList<'a>, Modifiers<'a>), CompileError> {
     let mut rest = ArgList::new();
     let mut mods = Modifiers::default();
@@ -552,7 +604,7 @@ fn split_modifiers<'a>(
             }
             "reverse" => mods.reverse = Some(bool_literal(&arg.value, "reverse")?),
             "delay" => mods.delay = Some(&arg.value),
-            "duration" => mods.duration_ms = Some(duration_literal(&arg.value, "duration")?),
+            "duration" => mods.duration_ms = Some(duration_literal(&arg.value, "duration", theme)?),
             "from" => mods.from = Some(&arg.value),
             "restart" => mods.restart = Some(&arg.value),
             _ => rest.push(arg),
@@ -599,7 +651,10 @@ fn bool_literal(expr: &Expr, name: &str) -> Result<bool, CompileError> {
 /// Reads a duration literal as whole milliseconds (`200ms`, `1.5s`, or a bare
 /// integer count of ms), rejecting a fractional or out-of-range value rather
 /// than silently truncating it.
-fn duration_literal(expr: &Expr, what: &str) -> Result<u32, CompileError> {
+fn duration_literal(expr: &Expr, what: &str, theme: Option<&Theme>) -> Result<u32, CompileError> {
+    if let Some(ms) = token_duration(expr, theme)? {
+        return Ok(ms);
+    }
     match expr {
         Expr::IntLit(ms, span) => u32::try_from(*ms).map_err(|_| CompileError::InvalidAnimation {
             span: *span,
@@ -625,17 +680,18 @@ fn resolve_named_curve(
     name_span: Span,
     args: &[&Arg],
     duration_ms: Option<u32>,
+    theme: Option<&Theme>,
 ) -> Result<Curve, CompileError> {
     let ease = |kind| -> Result<Curve, CompileError> {
         Ok(Curve::Ease {
-            ms: single_duration(args, name_span, name.as_str(), duration_ms)?,
+            ms: single_duration(args, name_span, name.as_str(), duration_ms, theme)?,
             kind,
         })
     };
     match name.as_str() {
         "spring" => resolve_spring(args, name_span),
         "linear" => Ok(Curve::Linear {
-            ms: single_duration(args, name_span, "linear", duration_ms)?,
+            ms: single_duration(args, name_span, "linear", duration_ms, theme)?,
         }),
         "ease" | "easeInOut" => ease(EaseKind::InOut),
         "easeIn" => ease(EaseKind::In),
@@ -683,13 +739,101 @@ fn not_a_curve(span: Span) -> CompileError {
     }
 }
 
+/// The theme member an expression names when it is written `t.name` with a base
+/// that is not the `anim` namespace: a motion-token reference (RFC-0053).
+fn token_ref(expr: &Expr) -> Option<(&Symbol, &Symbol, Span)> {
+    match expr {
+        Expr::Member { base, field, span } if !is_anim_base(base) => match base.as_ref() {
+            Expr::Ident(name, _) => Some((name, field, *span)),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Looks `t.name` up in the theme's motion tokens. A name the theme declares as
+/// a colour, type or shape token is [`CompileError::InvalidAnimation`] saying
+/// so; a name it declares nowhere is [`CompileError::UnknownThemeToken`].
+fn motion_token(
+    base: &Symbol,
+    field: &Symbol,
+    span: Span,
+    theme: Option<&Theme>,
+) -> Result<MotionToken, CompileError> {
+    let Some(theme) = theme else {
+        return Err(not_a_curve(span));
+    };
+    let f = field.as_str();
+    if let Some(token) = theme.motion(f) {
+        return Ok(token);
+    }
+    let kind = if theme.color(f, false).is_some() {
+        "a colour"
+    } else if theme.typo(f).is_some() {
+        "a typography token"
+    } else if theme.shape(f).is_some() {
+        "a shape token"
+    } else {
+        return Err(CompileError::UnknownThemeToken {
+            span,
+            field: f.to_string(),
+            theme: theme.name.clone(),
+            declared_by: theme.unapplied_token_owner(f).map(str::to_string),
+            extends: theme.extended().map(str::to_string),
+        });
+    };
+    Err(CompileError::InvalidAnimation {
+        span,
+        message: format!("`{base}.{f}` is {kind}, not a motion token"),
+    })
+}
+
+/// The curve a spring token stands for, `None` when `expr` is not a token
+/// reference at all.
+fn token_curve(expr: &Expr, theme: Option<&Theme>) -> Result<Option<Curve>, CompileError> {
+    let Some((base, field, span)) = token_ref(expr) else {
+        return Ok(None);
+    };
+    match motion_token(base, field, span, theme)? {
+        MotionToken::Spring { stiffness, damping } => Ok(Some(Curve::Spring {
+            stiffness,
+            damping,
+            v0: 0.0,
+        })),
+        MotionToken::Duration(_) => Err(CompileError::InvalidAnimation {
+            span,
+            message: format!(
+                "`{base}.{field}` is a duration, a curve is `anim.ease({base}.{field})`"
+            ),
+        }),
+    }
+}
+
+/// The milliseconds a duration token stands for, `None` when `expr` is not a
+/// token reference at all.
+fn token_duration(expr: &Expr, theme: Option<&Theme>) -> Result<Option<u32>, CompileError> {
+    let Some((base, field, span)) = token_ref(expr) else {
+        return Ok(None);
+    };
+    match motion_token(base, field, span, theme)? {
+        MotionToken::Duration(ms) => Ok(Some(ms)),
+        MotionToken::Spring { .. } => Err(CompileError::InvalidAnimation {
+            span,
+            message: format!("`{base}.{field}` is a spring, not a duration"),
+        }),
+    }
+}
+
 /// Whether `base` is the `anim` namespace identifier.
 fn is_anim_base(base: &Expr) -> bool {
     matches!(base, Expr::Ident(sym, _) if sym.as_str() == "anim")
 }
 
 /// Resolves `anim.spring(stiffness: …, damping: …, initial_velocity: …)`. All
-/// three are optional named arguments; omitted ones take the A2 defaults.
+/// are optional named arguments; omitted ones take the A2 defaults. The damping
+/// is written `damping:` (the coefficient) or `damping_ratio:` (1.0 is no
+/// bounce, less bounces, RFC-0053), never both; a ratio becomes the coefficient
+/// `2 * ratio * sqrt(stiffness)` whatever order the arguments came in.
 fn resolve_spring(args: &[&Arg], call_span: Span) -> Result<Curve, CompileError> {
     let Curve::Spring {
         mut stiffness,
@@ -699,12 +843,14 @@ fn resolve_spring(args: &[&Arg], call_span: Span) -> Result<Curve, CompileError>
     else {
         unreachable!("DEFAULT_SPRING is a Spring")
     };
+    let mut ratio: Option<f32> = None;
+    let mut damping_written = false;
     for arg in args {
         let Some(name) = &arg.name else {
             return Err(CompileError::InvalidAnimation {
                 span: arg.value.span(),
                 message: "`anim.spring` takes named arguments \
-                          (stiffness / damping / initial_velocity)"
+                          (stiffness / damping_ratio / damping / initial_velocity)"
                     .to_string(),
             });
         };
@@ -713,12 +859,29 @@ fn resolve_spring(args: &[&Arg], call_span: Span) -> Result<Curve, CompileError>
         // is not a number.
         match name.as_str() {
             "stiffness" => stiffness = literal_f32(&arg.value)?,
-            "damping" => damping = literal_f32(&arg.value)?,
+            "damping" | "damping_ratio" => {
+                if damping_written {
+                    return Err(CompileError::InvalidAnimation {
+                        span: arg.value.span(),
+                        message: "`anim.spring` takes `damping_ratio:` (1.0 is no bounce, less \
+                                  bounces) or `damping:` (the coefficient), not both, and not \
+                                  either twice"
+                            .to_string(),
+                    });
+                }
+                damping_written = true;
+                let value = literal_f32(&arg.value)?;
+                if name.as_str() == "damping_ratio" {
+                    ratio = Some(value);
+                } else {
+                    damping = value;
+                }
+            }
             "initial_velocity" => v0 = literal_f32(&arg.value)?,
             other => {
                 // Modifier names are candidates too, so a misspelt `revrse:`
                 // on a spring is caught here rather than read as a parameter.
-                let candidates = ["stiffness", "damping", "initial_velocity"]
+                let candidates = ["stiffness", "damping_ratio", "damping", "initial_velocity"]
                     .into_iter()
                     .chain(MODIFIER_NAMES.iter().copied());
                 let hint = closest_match(other, candidates)
@@ -731,6 +894,9 @@ fn resolve_spring(args: &[&Arg], call_span: Span) -> Result<Curve, CompileError>
         }
     }
     let _ = call_span;
+    if let Some(ratio) = ratio {
+        damping = crate::interp::theme::spring_damping(stiffness, ratio);
+    }
     Ok(Curve::Spring {
         stiffness,
         damping,
@@ -747,6 +913,7 @@ fn single_duration(
     call_span: Span,
     curve: &str,
     modifier_ms: Option<u32>,
+    theme: Option<&Theme>,
 ) -> Result<u32, CompileError> {
     // `duration:` may supply it instead of the positional slot.
     if args.is_empty() {
@@ -771,6 +938,9 @@ fn single_duration(
                 "`anim.{curve}` has no `{name}` argument{hint}, its duration is positional,                  e.g. `anim.{curve}(200ms)`"
             ),
         });
+    }
+    if let Some(ms) = token_duration(&arg.value, theme)? {
+        return Ok(ms);
     }
     match &arg.value {
         Expr::IntLit(ms, span) => u32::try_from(*ms).map_err(|_| CompileError::InvalidAnimation {

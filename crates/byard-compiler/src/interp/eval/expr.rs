@@ -969,6 +969,27 @@ impl Interpreter {
             }));
         }
 
+        // Motion tokens (RFC-0053). A duration reads as its milliseconds, so
+        // `delay: t.durationShort2` works; a spring is a whole curve, which
+        // only follows `with`.
+        match self.theme.motion(f) {
+            Some(crate::interp::theme::MotionToken::Duration(ms)) => {
+                return Some(Box::new(move |_| Value::Int(i64::from(ms))));
+            }
+            Some(token @ crate::interp::theme::MotionToken::Spring { .. }) => {
+                self.errors.push(CompileError::InvalidAnimation {
+                    span,
+                    message: format!(
+                        "`{f}` is {}, a curve: it goes after `with`, as in `x with {base}.{f}`",
+                        token.describe(),
+                        base = base_name
+                    ),
+                });
+                return Some(Box::new(|_| Value::Unit));
+            }
+            None => {}
+        }
+
         // A member of a theme that names no known token is a hard error.
         self.errors.push(CompileError::UnknownThemeToken {
             span,

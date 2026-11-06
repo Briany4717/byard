@@ -12,6 +12,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::diagnostics::CompileError;
+use crate::interp::theme::Theme;
 use crate::parser::ast::{Attr, AttrKind, ElementNode, Expr, Member};
 use crate::util::closest_match;
 
@@ -1149,6 +1150,18 @@ pub fn validate_element(
     attrs: &[Attr],
     known_views: &[&str],
 ) -> Vec<CompileError> {
+    validate_element_in(el, attrs, known_views, None)
+}
+
+/// [`validate_element`] against a theme, so a motion token in a `with`
+/// (`with t.springSpatialFast`, RFC-0053) is checked rather than refused.
+#[must_use]
+pub fn validate_element_in(
+    el: &ElementNode,
+    attrs: &[Attr],
+    known_views: &[&str],
+    theme: Option<&Theme>,
+) -> Vec<CompileError> {
     let mut errs = Vec::new();
     let name = el.name.as_str();
 
@@ -1290,7 +1303,7 @@ pub fn validate_element(
                         // the curve, a misspelt `revrse:` or an out-of-range
                         // `repeat:` is a diagnostic, never a silently ignored
                         // modifier.
-                        if let Err(err) = crate::interp::anim::resolve_motion(anim) {
+                        if let Err(err) = crate::interp::anim::resolve_motion_in(anim, theme) {
                             errs.push(err);
                         }
                         target = inner;
@@ -1299,7 +1312,7 @@ pub fn validate_element(
                         errs.push(err);
                     }
                 }
-            } else if let Some(track) = crate::interp::anim::resolve_keyframes(value) {
+            } else if let Some(track) = crate::interp::anim::resolve_keyframes_in(value, theme) {
                 // Same rule for the keyframe form (RFC-0025 §3).
                 // RFC-0025 §3: `anim.keyframes(…)` stands in value position. It
                 // is rejected on a layout property for the same reason `with`
@@ -1800,6 +1813,16 @@ fn validate_path_members(members: &[Member], errs: &mut Vec<CompileError>) {
 /// canvas's own attrs/events through the ordinary intrinsic contract).
 #[must_use]
 pub fn validate_canvas(el: &ElementNode, attrs: &[Attr]) -> Vec<CompileError> {
+    validate_canvas_in(el, attrs, None)
+}
+
+/// [`validate_canvas`] against a theme (motion tokens in a shape's `with`).
+#[must_use]
+pub fn validate_canvas_in(
+    el: &ElementNode,
+    attrs: &[Attr],
+    theme: Option<&Theme>,
+) -> Vec<CompileError> {
     let mut errs = Vec::new();
 
     // A canvas is a fixed-size surface: it never sizes to content, so both
@@ -1813,7 +1836,7 @@ pub fn validate_canvas(el: &ElementNode, attrs: &[Attr]) -> Vec<CompileError> {
         errs.push(CompileError::CanvasMissingSize { span: el.span });
     }
 
-    validate_canvas_body(&el.children, &mut errs);
+    validate_canvas_body(&el.children, &mut errs, theme);
     validate_group_cap(el, attrs, &mut errs);
     validate_group_mode(el, attrs, &mut errs);
     errs
@@ -2107,11 +2130,11 @@ fn collect_group_members(members: &[Member], out: &mut Vec<crate::diagnostics::S
 /// surface is for. Everything else stays rejected: a `var` or a `style` block
 /// inside a canvas has no meaning to give it, and silently ignoring one is how
 /// a developer spends an afternoon on a shape that was never going to appear.
-fn validate_canvas_body(members: &[Member], errs: &mut Vec<CompileError>) {
+fn validate_canvas_body(members: &[Member], errs: &mut Vec<CompileError>, theme: Option<&Theme>) {
     for member in members {
         match member {
             Member::Element(child) if is_shape_command(child.name.as_str()) => {
-                errs.extend(validate_shape(child));
+                errs.extend(validate_shape(child, theme));
             }
             Member::Element(child) => {
                 let name = child.name.as_str();
@@ -2122,11 +2145,11 @@ fn validate_canvas_body(members: &[Member], errs: &mut Vec<CompileError>) {
                         .map(str::to_string),
                 });
             }
-            Member::For { body, .. } => validate_canvas_body(body, errs),
+            Member::For { body, .. } => validate_canvas_body(body, errs, theme),
             Member::When { then, els, .. } => {
-                validate_canvas_body(then, errs);
+                validate_canvas_body(then, errs, theme);
                 if let Some(els) = els {
-                    validate_canvas_body(els, errs);
+                    validate_canvas_body(els, errs, theme);
                 }
             }
             // Declarations and style blocks are not shape commands. Reported
@@ -2160,7 +2183,7 @@ fn push_non_shape(errs: &mut Vec<CompileError>, span: crate::diagnostics::Span, 
 /// scalar-literal type mismatches, no attribute block, no children, and the
 /// `path`-is-fill-only rule ([`CompileError::PathStrokeUnsupported`]).
 #[must_use]
-pub fn validate_shape(el: &ElementNode) -> Vec<CompileError> {
+pub fn validate_shape(el: &ElementNode, theme: Option<&Theme>) -> Vec<CompileError> {
     let mut errs = Vec::new();
     let shape = el.name.as_str();
     let (required, optional) = shape_geometry(shape);
@@ -2268,7 +2291,7 @@ pub fn validate_shape(el: &ElementNode) -> Vec<CompileError> {
             // RFC-0010 `with` animation chain walk.
             let mut target = &arg.value;
             while let Expr::Animated { value, anim, .. } = target {
-                if let Err(err) = crate::interp::anim::resolve_curve(anim) {
+                if let Err(err) = crate::interp::anim::resolve_curve_in(anim, theme) {
                     errs.push(err);
                 }
                 target = value;

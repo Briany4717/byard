@@ -1006,3 +1006,60 @@ fn eval_pure_answers_literals_with_the_value_lowering_would_give() {
     }
     assert!(interp.errors().is_empty(), "{:?}", interp.errors());
 }
+
+// ── A view checked on its own ────────────────────────────────────────────
+
+/// What `byard check` does to each view: lowered alone, with no call to give its
+/// parameters values, and rendered. The errors that raises.
+fn errors_checking_alone(src: &str) -> Vec<CompileError> {
+    let parsed = parse(src);
+    assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+    let known: Vec<&str> = parsed.views.iter().map(|v| v.name.as_str()).collect();
+    let mut interp = Interpreter::new();
+    interp.load_views(&parsed.views);
+    for view in &parsed.views {
+        let tree = interp.lower_view(view, &known);
+        interp.tick();
+        let mut frame = byard_core::frame::RenderFrame::new();
+        interp.render(&tree, &mut frame, 400.0, 400.0);
+    }
+    interp.errors().to_vec()
+}
+
+/// An `Int` parameter is a number wherever a number goes. Alone, the view had
+/// no argument, the name read as its own text, and `check` called a right
+/// program wrong.
+#[test]
+fn a_number_parameter_is_a_number_where_a_view_is_checked_alone() {
+    for body in [
+        "radius: v",
+        "radius: v with anim.spring()",
+        "radius: (v, 2, 2, 2)",
+        "p: v",
+        "scale: v",
+        "translate: (v, 0)",
+        "rotate: v",
+        "width: v",
+    ] {
+        let src = format!(
+            "View Main() {{ T(v: 4) }} \
+             View T(v: Int) {{ Box #[{body}, bg: 0x808080, height: 10] {{}} }}"
+        );
+        assert_eq!(errors_checking_alone(&src), [], "{body}");
+    }
+    let src = "View Main() { T(v: 0.5) } \
+               View T(v: Float = 0.5) { Box #[scale: v, bg: 0x808080, width: 9, height: 9] {} }";
+    assert_eq!(errors_checking_alone(src), []);
+}
+
+/// …and a parameter of the wrong type is still the mismatch it was.
+#[test]
+fn a_text_parameter_in_radius_is_still_a_mismatch() {
+    let src = "View Main() { T(v: \"a\") } \
+               View T(v: Str) { Box #[radius: v, bg: 0x808080, width: 9, height: 9] {} }";
+    assert!(
+        errors_checking_alone(src)
+            .iter()
+            .any(|e| matches!(e, CompileError::AttributeTypeMismatch { .. })),
+    );
+}

@@ -20,26 +20,22 @@
 //   4. Run it with `dev`, press "Flip" and watch them spring, and press "Hide /
 //      show": the box behind the `when` comes back from the start, the others
 //      do not move.
-//
-// The radius is picked with `?:` from two Bools rather than passed as a number
-// only because `byard check` lowers each view on its own, where a number
-// argument to `radius` is not there yet.
 View Main() {
     var flipped = false
     var shown = true
 
     Column #[bg: 0x0E1116, p: 20, gap: 14, grow: 1] {
         Row #[gap: 12] {
-            Chip(round: !flipped, tint: 0x3355CC, label: "top left")
-            Chip(round: flipped, tint: 0x33AA77, label: "top middle")
-            Chip(round: !flipped, soft: true, tint: 0xCC5533, label: "top right")
+            Chip(r: flipped ? 2 : 28, tint: 0x3355CC, label: "top left")
+            Chip(r: flipped ? 28 : 2, tint: 0x33AA77, label: "top middle")
+            Chip(r: flipped ? 14 : 28, tint: 0xCC5533, label: "top right")
         }
         Row #[gap: 12] {
-            Chip(round: flipped, soft: !flipped, tint: 0x8855CC, label: "inside a Row")
+            Chip(r: flipped ? 28 : 14, tint: 0x8855CC, label: "inside a Row")
             when shown {
-                Chip(round: !flipped, soft: flipped, tint: 0xCC9933, label: "behind a when")
+                Chip(r: flipped ? 14 : 28, tint: 0xCC9933, label: "behind a when")
             }
-            Framed(round: flipped, tint: 0x33AACC)
+            Framed(r: flipped ? 28 : 2, tint: 0x33AACC)
         }
         Row #[gap: 12] {
             Button("Flip") #[bg: 0x2A2F3A, color: 0xFFFFFF, p: 10] => flipped = !flipped
@@ -48,15 +44,14 @@ View Main() {
     }
 }
 
-View Framed(round: Bool, tint: Int) {
-    Chip(round: round, tint: tint, label: "behind another view")
+View Framed(r: Int, tint: Int) {
+    Chip(r: r, tint: tint, label: "behind another view")
 }
 
-// A pill when `round`, else rounded a little (`soft`) or hardly at all.
-View Chip(round: Bool, tint: Int, label: Str, soft: Bool = false) {
+View Chip(r: Int, tint: Int, label: Str) {
     Box #[
         bg: tint with anim.spring(),
-        radius: (round ? 28 : soft ? 14 : 2) with anim.spring(),
+        radius: r with anim.spring(),
         width: 80,
         height: 50,
         a11y_label: "{label}",

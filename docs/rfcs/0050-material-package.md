@@ -215,6 +215,69 @@ values, not separate views: `m.Button("Send", variant: m.tonal)`. The README
 says the package implements the public Material 3 guidelines and is not made by
 or affiliated with Google.
 
+## What "done" means
+
+The package is done when every Material 3 Expressive component is in it, not
+only the first list above. Byard 0.1.0 is not tagged before then, because the
+package is the proof that Byard carries a design system. That means the first
+list, plus:
+
+- toolbars (docked and floating), the FAB menu, menus, bottom and side sheets,
+  search (bar and view), tabs, segmented buttons as connected button groups,
+  the date and time pickers, the carousel, and the badge on navigation items.
+
+Each component is done when:
+
+- every variant and size Material specifies is there, in light and dark;
+- a pointer, the keyboard (Tab, Space, Enter, arrows where Material uses them)
+  and a screen reader can all use it: role, name, value and state;
+- its press, hover, focus and disabled states draw as specified, with the
+  focus ring only for keyboard focus;
+- it moves with the theme's springs, and costs nothing when still;
+- the gallery has a page for it, a light and a dark picture, and a test that
+  drives it.
+
+The package itself is done when `byard publish` puts it in the registry, an
+app outside the repository adds it with `byard add material --registry …`,
+and `byard bundle` ships that app with only the icons it uses.
+
+## Engine work, in order
+
+What the spike measured, as branches in this repository. Each one has its own
+RFC where it changes the language.
+
+1. **Bindable view parameters** (RFC). `View Switch(bind value: Bool)`: the
+   caller passes a var, and the view reads and writes it.
+2. **Composed controls in the accessibility tree and the keyboard** (RFC,
+   extending RFC-0042). `a11y_role`, `a11y_value`, `a11y_checked`; Space and
+   Enter press a focusable element's `tap`; an `on focus_visible` state that
+   is set only by keyboard focus.
+3. **The theme.** The rest of Material's colour roles in `byard-base`,
+   derived by a seed. Named motion springs (`[theme.motion]`, read as
+   `with t.springSpatialFast`), which is an RFC.
+4. **Icons** (RFC). Variation axes on Text (`variations: (FILL: 1, wght:
+   500)`), and `byard bundle` keeping only the icons an app uses.
+5. **Layout.** `shrink` and `align_self`. A bare `TextField` with no width of
+   its own and no indicator of its own, so a design system can draw its own.
+   Text with `bg` and `radius`.
+6. **The language for packages** (RFC). Top-level constants, names a package
+   keeps private, `else when`, and a way to name a variant (`m.tonal`) that a
+   typo can't silently miss.
+7. **Tooling.** `byard shot --hold X,Y` and `--hover X,Y`, so a held press
+   and a hover can be pictured. `check` noticing a path dependency whose lock
+   is stale. A git dependency fetching only what `publish` would archive. A
+   directory registry recorded without an absolute path.
+8. **Motion on colours and gradients**, so a state layer's alpha and a
+   gradient can take `with`.
+
+## Decisions
+
+- **Registry:** `Briany4717/byard-registry`, served by GitHub Pages at
+  `https://briany4717.github.io/byard-registry`. It can move to a domain of
+  Byard's own later; a registry is static files, so moving it is a copy.
+- **Fonts:** Material Symbols Rounded (variable, Apache-2.0) and Roboto Flex
+  (variable, OFL), shipped in the package with their licences.
+
 ## Drawbacks
 
 - It is a large surface to keep correct as the engine changes. The gallery's
@@ -239,7 +302,7 @@ or affiliated with Google.
 
 ## Unresolved questions
 
-- The registry's domain and who can publish to it.
+- Who besides the maintainers can publish to the registry.
 - Whether the package's theme should replace `byard-base` as the default
   theme when no `[theme]` is declared.
 - Right-to-left layout for navigation and lists, which the engine doesn't do

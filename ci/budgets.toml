@@ -39,6 +39,12 @@ regression_percent = 10
 # today (three times it, for a slower runner), not what an app should aim at:
 # they exist so it does not get worse while the engine learns to build only the
 # rows in view. Lower them as that lands.
-# Read by examples/inventory/tests/it/budgets.rs.
+# Measured in a child process of its own, in a test binary that runs alone
+# (not beside the other Stockroom tests, which load every core), taking the
+# best of three; the ceilings are held only on Linux, where they were
+# measured, the way the Aura Weather first frame is. The work counts (signals
+# a keystroke creates, scopes alive with the list open) are constants in the
+# test, held everywhere.
+# Read by examples/inventory/tests/budgets.rs.
 products_open_ms = 6000
 search_keystroke_ms = 400

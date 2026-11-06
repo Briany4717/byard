@@ -190,3 +190,13 @@ fn only_the_focused_field_hears_it() {
     app.key("Enter");
     assert_eq!(app.line(), "seen=- count=0 q=");
 }
+
+/// What `input(text)` is told stays what it was told, whatever the handler
+/// writes before it reads `text` again.
+#[test]
+fn an_event_payload_is_read_once_whatever_the_handler_writes_first() {
+    let mut app = App::start("input(text) => { q = \"\" seen = \"{text}{text}\" }");
+    app.focus("first");
+    app.type_text("ab");
+    assert_eq!(app.line(), "seen=bb count=0 q=");
+}

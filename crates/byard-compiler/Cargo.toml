@@ -33,6 +33,10 @@ lyon_tessellation = "1"
 # RFC-0040 §7: Backspace removes a grapheme cluster, not a code point. Already
 # in the tree through the text stack, so this adds no new crate.
 unicode-segmentation = "1"
+# RFC-0049: `now()` reads the platform's local time zone, which takes a system
+# call this workspace does not allow itself to write (`unsafe_code = "deny"`).
+# Only the clock is wanted: no parsing of zone names, no serde.
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
 
 [features]

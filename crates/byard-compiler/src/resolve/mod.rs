@@ -290,6 +290,22 @@ struct Resolver<'p> {
     errors: Vec<CompileError>,
     packages: HashMap<String, PackageData>,
     order: Vec<String>,
+    /// Set when the root files are a library package checked on its own: the
+    /// package's name, which its views are canonically named under, as they
+    /// are for the app that uses it.
+    root_library: Option<String>,
+}
+
+impl Resolver<'_> {
+    /// The prefix a view or function of package `pkg` carries in its
+    /// canonical name, `None` for the root project's bare names.
+    fn prefix<'a>(&'a self, pkg: &'a str) -> Option<&'a str> {
+        if pkg == ROOT_PACKAGE {
+            self.root_library.as_deref()
+        } else {
+            Some(pkg)
+        }
+    }
 }
 
 /// Resolves the whole program: `root_files` (entry first, siblings sorted by
@@ -299,12 +315,34 @@ pub fn resolve_program(
     root_files: Vec<SourceFile>,
     provider: &mut dyn PackageProvider,
 ) -> ResolvedProgram {
+    resolve_root(root_files, provider, None)
+}
+
+/// Resolves the files of library package `name` on their own, as `byard check`
+/// inside a package does. The views are named `name.View`, as they are for an
+/// app that uses the package, which is what lets a package declare a view
+/// named like a built-in (`Button`) and reach it as `name.Button`.
+#[must_use]
+pub fn resolve_library(
+    name: &str,
+    root_files: Vec<SourceFile>,
+    provider: &mut dyn PackageProvider,
+) -> ResolvedProgram {
+    resolve_root(root_files, provider, Some(name.to_string()))
+}
+
+fn resolve_root(
+    root_files: Vec<SourceFile>,
+    provider: &mut dyn PackageProvider,
+    root_library: Option<String>,
+) -> ResolvedProgram {
     let mut r = Resolver {
         provider,
         map: SourceMap::default(),
         errors: Vec::new(),
         packages: HashMap::new(),
         order: Vec::new(),
+        root_library,
     };
 
     let mut stack = Vec::new();
@@ -523,14 +561,23 @@ impl Resolver<'_> {
             }
         }
 
+        // A package reaches its own views by its own name, as its callers do
+        // (`material.Button`), which is the way to name one that a built-in of
+        // the same name hides when written bare. A `use` of that name wins.
+        if let Some(own) = self.prefix(pkg_name) {
+            aliases
+                .entry(Symbol::intern(own))
+                .or_insert_with(|| pkg_name.to_string());
+        }
+
         // ---- canonicalize declared names + rewrite bodies ----
         let local: HashMap<Symbol, Span> = self.packages[pkg_name].exports.clone();
         let mut views =
             std::mem::take(&mut self.packages.get_mut(pkg_name).unwrap().modules[module_idx].views);
         let mut errors = Vec::new();
         for view in &mut views {
-            if pkg_name != ROOT_PACKAGE {
-                view.name = Symbol::intern(&format!("{pkg_name}.{}", view.name.as_str()));
+            if let Some(prefix) = self.prefix(pkg_name) {
+                view.name = Symbol::intern(&format!("{prefix}.{}", view.name.as_str()));
             }
             for member in &mut view.body {
                 self.rewrite_member(member, pkg_name, &local, &aliases, &bare, &mut errors);
@@ -557,8 +604,8 @@ impl Resolver<'_> {
             walk::expr(&mut decl.body, &mut |e| {
                 self.rewrite_call(e, pkg_name, &own_fns, &shadowed, &aliases, &mut errors);
             });
-            if pkg_name != ROOT_PACKAGE {
-                decl.name = Symbol::intern(&format!("{pkg_name}.{}", decl.name.as_str()));
+            if let Some(prefix) = self.prefix(pkg_name) {
+                decl.name = Symbol::intern(&format!("{prefix}.{}", decl.name.as_str()));
             }
         }
         let module = &mut self.packages.get_mut(pkg_name).unwrap().modules[module_idx];
@@ -590,8 +637,9 @@ impl Resolver<'_> {
                 };
                 if self.packages[target].fn_exports.contains_key(field) {
                     let span = *span;
+                    let prefix = self.prefix(target).unwrap_or_default();
                     **callee = Expr::Ident(
-                        Symbol::intern(&format!("{target}.{}", field.as_str())),
+                        Symbol::intern(&format!("{prefix}.{}", field.as_str())),
                         span,
                     );
                 } else {
@@ -609,11 +657,12 @@ impl Resolver<'_> {
                 }
             }
             Expr::Ident(name, _)
-                if pkg_name != ROOT_PACKAGE
+                if self.prefix(pkg_name).is_some()
                     && own_fns.contains(name)
                     && !shadowed.contains(name) =>
             {
-                *name = Symbol::intern(&format!("{pkg_name}.{}", name.as_str()));
+                let prefix = self.prefix(pkg_name).unwrap_or_default();
+                *name = Symbol::intern(&format!("{prefix}.{}", name.as_str()));
             }
             _ => {}
         }
@@ -642,9 +691,10 @@ impl Resolver<'_> {
             // *something* and don't cascade extra UnknownView noise.
         }
         if intrinsics::lookup(sym.as_str()).is_some() {
-            self.errors.push(CompileError::IntrinsicShadowed {
+            self.errors.push(CompileError::ImportShadowsBuiltin {
                 span,
                 name: sym.as_str().to_string(),
+                package: target.to_string(),
             });
             return; // the intrinsic always wins; don't bind
         }
@@ -739,7 +789,8 @@ impl Resolver<'_> {
                         hint,
                     });
                 }
-                el.name = Symbol::intern(&format!("{target}.{rest}"));
+                let prefix = self.prefix(target).unwrap_or_default();
+                el.name = Symbol::intern(&format!("{prefix}.{rest}"));
             } else {
                 errors.push(CompileError::UnknownPackage {
                     span: el.span,
@@ -750,8 +801,8 @@ impl Resolver<'_> {
         } else if intrinsics::lookup(name).is_some() {
             // The closed intrinsic catalog always wins (RFC-0005).
         } else if local.contains_key(&el.name) {
-            if pkg_name != ROOT_PACKAGE {
-                el.name = Symbol::intern(&format!("{pkg_name}.{name}"));
+            if let Some(prefix) = self.prefix(pkg_name) {
+                el.name = Symbol::intern(&format!("{prefix}.{name}"));
             }
         } else if let Some(target) = bare.get(&el.name) {
             el.name = Symbol::intern(&format!("{target}.{name}"));
@@ -945,7 +996,7 @@ mod tests {
             &mut p,
         );
         assert!(program.errors.iter().any(
-            |e| matches!(e, CompileError::IntrinsicShadowed { name, .. } if name == "Button")
+            |e| matches!(e, CompileError::ImportShadowsBuiltin { name, package, .. } if name == "Button" && package == "a")
         ));
         // The intrinsic wins: the reference stays bare.
         assert_eq!(body_names(&program.views[0]), ["Button"]);
@@ -962,6 +1013,68 @@ mod tests {
         let program = resolve_program(root("use a\nView App() { a.Button() }"), &mut p);
         assert!(program.errors.is_empty(), "{:?}", program.errors);
         assert_eq!(body_names(&program.views[0]), ["a.Button"]);
+    }
+
+    #[test]
+    fn a_library_declares_a_builtin_name_and_reaches_it_by_its_own_name() {
+        // Checked alone, the package is named `a`; a bare `Button` inside is
+        // the built-in, `a.Button` is its own view.
+        let mut p = MemProvider(BTreeMap::new());
+        let program = resolve_library(
+            "a",
+            vec![SourceFile {
+                name: "a/x.byd".into(),
+                source: "View Button(l: Str) { Button(l) }\nView Pair() { a.Button(\"x\") }".into(),
+            }],
+            &mut p,
+        );
+        assert!(program.errors.is_empty(), "{:?}", program.errors);
+        assert_eq!(names(&program), ["a.Button", "a.Pair"]);
+        assert_eq!(body_names(&program.views[0]), ["Button"]);
+        assert_eq!(body_names(&program.views[1]), ["a.Button"]);
+        let (_, errs) = crate::interp::views::ViewTable::build(&program.views);
+        assert!(errs.is_empty(), "{errs:?}");
+    }
+
+    #[test]
+    fn a_dependency_reaches_its_own_views_by_its_name_too() {
+        let mut p = MemProvider(BTreeMap::from([(
+            "a",
+            vec![(
+                "a/x.byd",
+                "View Button(l: Str) { Button(l) }\nView Pair() { a.Button(\"x\") }",
+            )],
+        )]));
+        let program = resolve_program(
+            root("use a as m\nView App() { m.Pair()\nButton(\"b\")\nm.Button(\"c\") }"),
+            &mut p,
+        );
+        assert!(program.errors.is_empty(), "{:?}", program.errors);
+        assert_eq!(
+            body_names(&program.views[0]),
+            ["a.Pair", "Button", "a.Button"]
+        );
+    }
+
+    #[test]
+    fn a_builtin_named_view_calling_itself_is_recursion() {
+        let mut p = MemProvider(BTreeMap::new());
+        let program = resolve_library(
+            "a",
+            vec![SourceFile {
+                name: "a/x.byd".into(),
+                source: "View Button(l: Str) { a.Button(l) }".into(),
+            }],
+            &mut p,
+        );
+        let mut interp = Interpreter::new();
+        let diags = interp.load_views(&program.views);
+        assert!(
+            diags
+                .iter()
+                .any(|e| matches!(e, CompileError::RecursiveView { .. })),
+            "{diags:?}"
+        );
     }
 
     #[test]

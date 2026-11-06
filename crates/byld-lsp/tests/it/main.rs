@@ -5,4 +5,5 @@
 mod aura_weather;
 mod client;
 mod examples;
+mod package_names;
 mod project;

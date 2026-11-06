@@ -155,6 +155,10 @@ enum Command {
         /// Milliseconds of app time to run first, so animations settle.
         #[arg(long, value_name = "MS", default_value_t = 1500)]
         at: u32,
+        /// Fix the wall clock `now()` reads at this ISO time, such as
+        /// `2026-11-05T09:00:00`. `--at` still advances it.
+        #[arg(long, value_name = "ISO")]
+        now: Option<String>,
         /// Force the dark scheme.
         #[arg(long, conflicts_with = "light")]
         dark: bool,
@@ -324,6 +328,7 @@ pub fn main() {
             size,
             scale,
             at,
+            now,
             dark,
             light,
             tap,
@@ -340,6 +345,7 @@ pub fn main() {
             size,
             scale,
             at_ms: at,
+            wall_clock: now.as_deref(),
             dark: if dark {
                 Some(true)
             } else if light {

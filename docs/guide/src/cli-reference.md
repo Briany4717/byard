@@ -85,7 +85,9 @@ printed in full and counted apart, and does not fail the command. Exit status 0 
 byard shot [OPTIONS] [PATH]
 ```
 
-Draws the project to a PNG, with no window. It cannot draw an app with a Rust half. Not available in a
+Draws the project to a PNG, with no window. It runs the same check as `byard check` first: a program
+with errors prints them the way `check` does and exits non-zero, and no PNG is written (a warning is
+printed and the picture is drawn). It cannot draw an app with a Rust half. Not available in a
 library package.
 
 | Argument or flag | Default | |
@@ -95,6 +97,7 @@ library package.
 | `--size <SIZE>` | `440x880` | Logical size, as `WIDTHxHEIGHT`. |
 | `--scale <SCALE>` | `2` | Device pixels per logical pixel. |
 | `--at <MS>` | `1500` | Milliseconds of app time to run first, so animations settle. |
+| `--now <ISO>` | the real clock | Fixes the time `now()` reads, such as `2026-11-05T09:00:00`. `--at` advances it. |
 | `--dark` | | Forces the dark scheme. Conflicts with `--light`. |
 | `--light` | | Forces the light scheme. |
 | `--tap <X,Y>` | | Taps a logical point before the picture. Repeat it to tap more than once. |
@@ -108,6 +111,9 @@ character or one of `Left`, `Right`, `Up`, `Down`, `Home`, `End`, `Backspace`, `
 by `+`. `mod` is Command on macOS and Control elsewhere. With `--a11y`, the picture is drawn only if
 `-o` is given too, and the tree needs no GPU. See [the dev loop](dev-loop.md#byard-shot) and
 [accessibility](accessibility.md).
+
+Text that starts with `-`, such as a negative number, would be read as another option. Join it to the
+option with `=`: `--type=-1.5`.
 
 ## `byard fmt`
 
@@ -198,7 +204,8 @@ byard publish [OPTIONS] [PACKAGE]
 ```
 
 Publishes the package in a directory to a registry directory. The package needs a `name` and a `version`
-in `[package]`.
+in `[package]`. It runs `byard check` on the package first and publishes nothing if that has errors; there is no
+flag to skip it.
 
 | Argument or flag | |
 |------------------|-|
@@ -234,5 +241,6 @@ Removes `.byard/cache` and `.byard/generated` from the project. Package checkout
 | `[bundle]` | `name`, `id`, `version`, and for Linux `categories`, `summary`, `license` | [Shipping](shipping.md) |
 | `[dev]` | `frame_budget`, `hud`, `statusline` | [The dev loop](dev-loop.md) |
 
-An unknown top-level table is reported as a warning and ignored. Inside `[dependencies]`, `[dev]`,
-`[http]`, `[bundle]` and `[native_views]`, an unknown or malformed key is an error.
+An unknown key is an error that names it and suggests the closest known one, at the top level and inside
+`[project]`, `[package]`, `[assets]`, `[theme]` (and `[theme.color]`), `[dependencies]`, `[dev]`, `[http]`,
+`[bundle]` and `[native_views]`.

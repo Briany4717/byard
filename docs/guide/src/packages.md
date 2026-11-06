@@ -107,6 +107,50 @@ Then `use` it in a `.byd` file, before any view:
 Functions a package declares are used the same way: `k.describe(…)`. If two names collide, the
 checker asks for an alias. Your own project's views never need a prefix.
 
+### A view named like a built-in
+
+A package may declare a view with a built-in's name, `Button`, `TextField`, `Toggle`, which a
+design system needs. The two never meet, because the package's view is only reached by the
+package's name:
+
+```byld,ignore
+// Needs the `ds` package below, which declares `View Button`.
+use ds as m
+
+View Main() {
+    Column {
+        m.Button("the package's")
+        Button("the built-in")
+    }
+}
+```
+
+- **Outside the package**, a bare `Button` is always the built-in, and the package's is `m.Button`.
+- `use ds.{Button}` would hide the built-in in that file, so it is an error
+  (`ImportShadowsBuiltin`) that says to write `ds.Button`. The selective form has no alias.
+- **Inside the package**, a bare `Button` is also the built-in, so the package's own `Button` can be
+  built from it, and the package's view is reached by the package's own name, as its callers reach it:
+
+```byld,ignore
+// In the package `ds`: wraps the built-in, which keeps its keyboard and accessibility.
+View Button(label: Str) {
+    Button(label) #[bg: 0x6750A4, color: 0xFFFFFF, radius: 20]
+}
+
+View Pair() {
+    Row #[gap: 8] {
+        ds.Button("one")
+        ds.Button("two")
+    }
+}
+```
+
+  A view that calls itself this way gets the usual recursion error.
+- **In an app**, a view named like a built-in is still an error (`IntrinsicShadowed`): an app has no
+  name to keep the two apart.
+
+The `builtin_names` example has the package and an app that uses both.
+
 ### Fonts and themes from a package
 
 A package's fonts are named `package/Family`, whatever the app calls the dependency:
@@ -130,7 +174,9 @@ brand = { path = "../brand" }
 extends = "brand"
 ```
 
-The palette, type scale, shapes and typefaces all arrive. See
+The palette, type scale, shapes and typefaces all arrive. A package's views read the package's tokens, so
+an app that uses them without `extends` gets an error saying which package's theme declares the token and
+that `[theme] extends = "brand"` brings it (or declare the token yourself). See
 [theming](theming.md). The `package_theme` example shows a package that declares only a seed colour
 and one font, and an app that has no colours or fonts of its own.
 
@@ -192,7 +238,8 @@ byard publish ../kit --registry ./registry
 BYARD_REGISTRY=./registry byard publish
 ```
 
-It needs `name` and `version` in `[package]`. It writes an archive of what the package is made of, its
+It needs `name` and `version` in `[package]`, and the package has to pass `byard check`: the errors are
+printed and nothing is published otherwise, since a version cannot be replaced. It writes an archive of what the package is made of, its
 manifest, sources, declared assets, README and licence, as `registry/kit/0.1.0.tar.gz`, and adds a line
 to the registry's `index.toml` naming the archive, its hash and its dependencies.
 

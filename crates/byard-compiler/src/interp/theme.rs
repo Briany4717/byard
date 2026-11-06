@@ -309,6 +309,13 @@ pub struct Theme {
     /// every theme did before this existed and what a theme that says nothing
     /// still gets.
     pub transition_ms: u32,
+    /// `camelCase token → dependency` for tokens a dependency's `[theme]`
+    /// declares that this theme did not take (it does not extend that
+    /// dependency). Never read for a value; it lets `UnknownThemeToken` say
+    /// where the token lives.
+    unapplied: BTreeMap<String, String>,
+    /// The dependency this theme extends, if any.
+    extended: Option<String>,
 }
 
 impl Theme {
@@ -386,6 +393,8 @@ impl Theme {
             button_padding: BUTTON_PADDING,
             button_min_size: BUTTON_MIN_SIZE,
             transition_ms: 0,
+            unapplied: BTreeMap::new(),
+            extended: None,
         }
     }
 
@@ -508,6 +517,44 @@ impl Theme {
     #[must_use]
     pub fn fonts(&self) -> &BTreeMap<String, DeclaredFont> {
         &self.fonts
+    }
+
+    /// Every colour, typography and shape token name, `camelCase`, in no
+    /// particular order and possibly repeated across schemes.
+    pub fn token_names(&self) -> impl Iterator<Item = &str> {
+        self.schemes
+            .values()
+            .flat_map(|tokens| tokens.keys())
+            .chain(self.typography.keys())
+            .chain(self.shapes.keys())
+            .map(String::as_str)
+    }
+
+    /// Records that dependency `package`'s theme declares `token` (any
+    /// spelling) though this theme did not take it. The first dependency to
+    /// declare a token is the one named.
+    pub fn note_unapplied_token(&mut self, token: &str, package: &str) {
+        self.unapplied
+            .entry(to_camel(token))
+            .or_insert_with(|| package.to_string());
+    }
+
+    /// Records the dependency this theme extends.
+    pub fn set_extended(&mut self, package: &str) {
+        self.extended = Some(package.to_string());
+    }
+
+    /// The dependency this theme extends, if any.
+    #[must_use]
+    pub fn extended(&self) -> Option<&str> {
+        self.extended.as_deref()
+    }
+
+    /// The dependency whose theme declares `token` without this theme having
+    /// taken it, if any.
+    #[must_use]
+    pub fn unapplied_token_owner(&self, token: &str) -> Option<&str> {
+        self.unapplied.get(token).map(String::as_str)
     }
 
     /// Registers a font family declared in `[assets.fonts]`, already loaded.

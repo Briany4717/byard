@@ -125,7 +125,7 @@ View Main() {
                 height: 34,
                 radius: 8,
                 bg: 0xFFB300,
-                translate: (60, 0) with anim.ease_in_out(500ms, from: 0, repeat: 3),
+                translate: (60, 0) with anim.easeInOut(500ms, from: 0, repeat: 3),
             ] {}
         }
 
@@ -143,14 +143,14 @@ View Main() {
                         origin: center,
                         translate: anim.keyframes(
                             0%: (-140, 0),
-                            60%: (160, 0) ease_in_out,
-                            100%: (420, 0) ease_out,
+                            60%: (160, 0) easeInOut,
+                            100%: (420, 0) easeOut,
                             duration: 2s, loop: true
                         ),
                         scale: anim.keyframes(
                             0%: (0.3, 1),
-                            60%: (1.6, 1) ease_in_out,
-                            100%: (0.3, 1) ease_in,
+                            60%: (1.6, 1) easeInOut,
+                            100%: (0.3, 1) easeIn,
                             duration: 2s, loop: true
                         ),
                     ] {}

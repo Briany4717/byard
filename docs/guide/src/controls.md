@@ -68,8 +68,54 @@ The type of the `var` has to match the control:
 | `RadioButton` | `Str` | One of a group |
 
 `value:` is the older name for `bind:` and does the same thing (RFC-0018). Both
-need a `var`: given a `let` or a literal, a control draws its default instead of
-that value. A `change` handler runs an action when the user changes it.
+need a `var` of the view the control is in. A `let`, a literal, a loop variable or
+a view's parameter cannot be written, so each is an error that says so: the control
+would draw its default and ignore every edit. A `change` handler runs an action
+when the user changes it.
+
+### A field in a view of its own
+
+A parameter is a copy of what the caller passed, so a control cannot write it back.
+To reuse a field, give the view a `var` of its own for the control, show the
+caller's value in it, and hand each edit back through a callback:
+
+```byld
+View Field(value: Str, on_change: Fn(Str) = {|t| }) {
+    var text = value
+    on change(value) => text = value
+    TextField #[bind: text, placeholder: "Type here", input(t) => on_change(t),
+                width: 220, height: 36]
+}
+
+View Main() {
+    var name = "Ada"
+
+    Column #[p: 16, gap: 8] {
+        Field(value: name, on_change: {|t| name = t })
+        Button("Clear") => name = ""
+        Text("name is {name}")
+    }
+}
+```
+
+`var text = value` starts the field with the caller's text, and `on change(value)`
+keeps it in step when the caller changes `name` itself, as the button does. Binding
+the parameter directly is the mistake the checker stops:
+
+```byld,fails
+View Field(value: Str) {
+    TextField #[bind: value]
+}
+
+View Main() {
+    var name = ""
+    Field(value: name)
+}
+```
+
+```diagnostic
+error[BindNotAVar]: `TextField #[bind: value]` cannot change `value`: a parameter is a copy of what the caller passed
+```
 
 ## Button
 
@@ -81,7 +127,8 @@ Button("Tap me") #[bg: 0x3B82F6, color: 0xFFFFFF, radius: 8] => count++
 A `Button` takes its label as content. With no `p`, it pads the label by 10 above and
 below and 24 left and right, and it is at least 40 pixels tall, so a bare button is
 already something a finger can hit. Say `p`, `width` or `height` to change that. It
-takes every layout, decoration and text attribute. It is not in the Tab order yet.
+takes every layout, decoration and text attribute. Tab reaches it, and Space or Enter presses it,
+as [the keyboard](#the-keyboard) describes.
 
 ## TextField
 
@@ -135,6 +182,12 @@ its own. When the `var` is written from somewhere else, such as a button's actio
 reply from a server, the caret goes to the end of the new text and the undo history starts
 again. A text wider than the field scrolls to keep the caret in view. The caret blinks
 while the field and the window have focus.
+
+A field keeps its focus, its caret, its selection and its undo history for as long as
+it is on screen, however the things around it change: a message that appears above it
+as you type, or a list before it that grows or shrinks, does not move any of that.
+A field that a `when` removes lets go of focus, and its `focused:` var goes back to
+`false`.
 
 The selection is painted in the theme's `primary` colour at 30 % opacity. Give the
 field `selection:` to choose another:

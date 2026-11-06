@@ -135,9 +135,15 @@ impl FromHostValue for String {
             HostValue::Str(s) => s,
             // Nothing is the empty string, as it is the zero of a number: an
             // argument left out, or a record field that is missing, is not the
-            // text "Unit".
-            HostValue::Unit => String::new(),
-            other => format!("{other:?}"),
+            // text "Unit". A list, record or bytes has no text form either.
+            // A scalar is written as `{x}` would write it, never in its debug
+            // form (`Bool(false)`).
+            HostValue::Unit | HostValue::List(_) | HostValue::Record(_) | HostValue::Bytes(_) => {
+                String::new()
+            }
+            HostValue::Bool(b) => b.to_string(),
+            HostValue::Int(n) => n.to_string(),
+            HostValue::Float(f) => f.to_string(),
         }
     }
 }

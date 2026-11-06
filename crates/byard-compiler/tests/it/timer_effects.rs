@@ -25,6 +25,15 @@ impl Harness {
     fn new(source: &str) -> Self {
         let parsed = parse(source);
         assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        Self::new_with(&parsed, |_| {})
+    }
+
+    /// Like [`new`](Self::new) from a parsed program, with `setup` run on the
+    /// interpreter before anything is lowered.
+    fn new_with(
+        parsed: &byard_compiler::parser::ParsedFile,
+        setup: impl FnOnce(&mut Interpreter),
+    ) -> Self {
         let relay = Relay::new().expect("relay");
         let dispatcher = Dispatcher::new(
             ControllerRegistry::new(),
@@ -33,6 +42,7 @@ impl Harness {
         );
         let mut interp = Interpreter::new();
         interp.set_dispatcher(dispatcher);
+        setup(&mut interp);
         interp.load_views(&parsed.views);
         let known: Vec<&str> = parsed.views.iter().map(|v| v.name.as_str()).collect();
         let tree = interp.lower_view(&parsed.views[0], &known);
@@ -329,6 +339,45 @@ View Main() {
         1,
         "a repeating timer resumes into the same continuation, it does not accumulate"
     );
+}
+
+// ── the clock (RFC-0049) ─────────────────────────────────────────────────
+
+#[test]
+fn a_tick_that_reads_the_clock_advances_with_app_time() {
+    // `every … => t = now()` is how a screen shows the time. With the clock
+    // fixed, what a tick writes is the fixed time plus the app time that has
+    // passed, so a test moves it by moving app time, the call it already makes.
+    let parsed = parse(
+        r#"
+View Main() {
+    var t: Str = ""
+    var ticks: Int = 0
+    every 10ms => { t = now() ticks = ticks + 1 }
+    Text(t)
+}
+"#,
+    );
+    assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+    let mut harness = Harness::new_with(&parsed, |interp| {
+        interp.set_wall_clock("2026-11-05T09:00:00").unwrap();
+    });
+    assert!(
+        harness.interp.errors().is_empty(),
+        "{:?}",
+        harness.interp.errors()
+    );
+
+    harness.interp.set_now_ms(0);
+    harness.pump_until("ticks", 1, std::time::Duration::from_secs(4));
+    assert!(harness.var("ticks").as_int().unwrap_or(0) >= 1, "no tick");
+    assert_eq!(harness.text(), "2026-11-05T09:00:00");
+
+    // Two minutes of app time later, the next tick writes the later time.
+    harness.interp.set_now_ms(120_000);
+    let seen = harness.var("ticks").as_int().unwrap_or(0);
+    harness.pump_until("ticks", seen + 1, std::time::Duration::from_secs(4));
+    assert_eq!(harness.text(), "2026-11-05T09:02:00");
 }
 
 // ── the shipped example ──────────────────────────────────────────────────

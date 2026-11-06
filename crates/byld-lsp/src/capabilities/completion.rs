@@ -4,7 +4,7 @@ use byard_compiler::Symbol;
 use byard_compiler::interp::intrinsics::{INTRINSIC_NAMES, lookup};
 use lsp_types::{CompletionItem, CompletionItemKind, CompletionResponse, Position};
 
-use crate::semantic::symbols::{PackageIndex, resolve_package_view};
+use crate::semantic::symbols::{PackageIndex, qualified_target, resolve_package_view};
 use crate::state::document::Document;
 use crate::syntax::ast_utils::{collect_locals_in_members, span_contains};
 
@@ -126,8 +126,20 @@ pub fn handle_completion(doc: &Document, pos: Position) -> Option<CompletionResp
                         });
                     }
                 } else {
+                    let own = qualified_target(
+                        &el_name,
+                        &doc.parsed.imports,
+                        index.own_package.as_deref(),
+                    )
+                    .filter(|(pkg, _)| pkg.is_none())
+                    .map(|(_, rest)| rest);
                     let pkg_view = resolve_package_view(&el_name, &doc.parsed.imports, &index);
-                    let local_view = doc.parsed.views.iter().find(|v| v.name.as_str() == el_name);
+                    let local_name = own.unwrap_or(&el_name);
+                    let local_view = doc
+                        .parsed
+                        .views
+                        .iter()
+                        .find(|v| v.name.as_str() == local_name);
                     if let Some(view) = pkg_view.or(local_view) {
                         for param in &view.params {
                             items.push(CompletionItem {
@@ -168,8 +180,16 @@ pub fn handle_completion(doc: &Document, pos: Position) -> Option<CompletionResp
     }
 
     for view in &doc.parsed.views {
+        // A package's view named like a built-in is reached by the package's
+        // name; the bare name is the built-in.
+        let label = match &index.own_package {
+            Some(own) if lookup(view.name.as_str()).is_some() => {
+                format!("{own}.{}", view.name)
+            }
+            _ => view.name.to_string(),
+        };
         items.push(CompletionItem {
-            label: view.name.to_string(),
+            label,
             kind: Some(CompletionItemKind::INTERFACE),
             detail: Some("User View".to_string()),
             ..Default::default()

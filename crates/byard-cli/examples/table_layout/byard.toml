@@ -1,0 +1,3 @@
+[project]
+name = "table_layout"
+entry = "src/main.byd"

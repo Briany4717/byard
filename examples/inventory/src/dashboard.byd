@@ -1,0 +1,107 @@
+// The first screen: five numbers, the value of the stock by category, what is
+// running out, and what moved last.
+
+View Dashboard(products: List<Product>, movements: List<Movement>, on_open: Fn(Int) = {|_| }, on_low: Fn() = {}) {
+    inject Theme as t
+
+    let units = products.reduce(0, (sum, p) => sum + p.qty)
+    let value = products.reduce(0.0, (sum, p) => sum + p.qty * p.price)
+    let low = products.filter(p => stockState(p.qty, p.min) == "low")
+    let out = products.filter(p => stockState(p.qty, p.min) == "out")
+    let attention = out.sortBy(p => p.name) + low.sortBy(p => p.qty)
+    // Each category's value, and the biggest, so the bars are drawn to one scale.
+    let totals = categories().map(c => products.filter(p => p.category == c).reduce(0.0, (sum, p) => sum + p.qty * p.price))
+    let biggest = totals.max() ?? 0.0
+    let recent = movements.slice(0, 10)
+
+    ScrollView #[grow: 1] {
+        Column #[p: (vertical: 24, horizontal: 28), gap: 18] {
+            Heading(title: "Dashboard") {}
+
+            Row #[gap: 14] {
+                Tile(label: "SKUs", value: "{products.len}")
+                Tile(label: "Units on hand", value: "{units:,}")
+                Tile(label: "Stock value", value: money(value))
+                Tile(label: "Low stock", value: "{low.len}", tone: low.len > 0 ? t.secondary : 0)
+                Tile(label: "Out of stock", value: "{out.len}", tone: out.len > 0 ? t.error : 0)
+            }
+
+            Row #[gap: 14, align: start] {
+                Column #[gap: 14, grow: 1, width: 0] {
+                    Card {
+                        Text("Stock value by category") #[typo: t.title, color: t.onSurface]
+                        for i, c in categories() {
+                            Row #[gap: 12, align: center] {
+                                Text(c) #[typo: t.body, color: t.onSurfaceVariant, width: 96]
+                                Box #[
+                                    bg: t.primary,
+                                    radius: 5,
+                                    height: 18,
+                                    width: biggest > 0.0 ? 2.0 + totals[i] / biggest * 260.0 : 2.0,
+                                ]
+                                Text(money(totals[i])) #[typo: t.caption, color: t.onSurface]
+                            }
+                        }
+                    }
+                    Card {
+                        Text("Last movements") #[typo: t.title, color: t.onSurface]
+                        when recent.len == 0 {
+                            Text("Nothing has moved yet") #[typo: t.body, color: t.onSurfaceVariant]
+                        }
+                        for m in recent {
+                            MovementLine(m: m, products: products)
+                        }
+                    }
+                }
+                Column #[gap: 14, grow: 1, width: 0] {
+                    Card {
+                        Text("Needs attention") #[typo: t.title, color: t.onSurface]
+                        when attention.len == 0 {
+                            Text("Everything is above its minimum") #[
+                                typo: t.body,
+                                color: t.onSurfaceVariant,
+                            ]
+                        }
+                        for p in attention.slice(0, 8) {
+                            Row #[gap: 10, align: center, p: (vertical: 4), tap => on_open(p.id)] {
+                                StockBadge(qty: p.qty, min: p.min)
+                                Text(p.name) #[typo: t.body, color: t.onSurface, grow: 1, basis: 0]
+                                Text("{p.qty} / {p.min}") #[
+                                    typo: t.caption,
+                                    color: t.onSurfaceVariant,
+                                ]
+                            }
+                        }
+                        when attention.len > 8 {
+                            Text("and {attention.len - 8} more, see them in Products") #[
+                                typo: t.caption,
+                                color: t.primary,
+                                tap => on_low(),
+                            ]
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// One line of the movement log: what happened, to what, and when.
+View MovementLine(m: Movement, products: List<Product>) {
+    inject Theme as t
+    let product = products.find(p => p.id == m.productId)
+    Row #[gap: 10, align: center] {
+        Text(signed(m.kind, m.qty)) #[
+            typo: t.label,
+            width: 40,
+            color: m.kind == "out" ? t.secondary : m.kind == "in" ? t.tertiary : t.onSurfaceVariant,
+        ]
+        Text(product.name ?? "Deleted product #{m.productId}") #[
+            typo: t.body,
+            color: t.onSurface,
+            wrap: false,
+            grow: 1,
+        ]
+        Text(stamp(m.at)) #[typo: t.caption, color: t.onSurfaceVariant, wrap: false]
+    }
+}

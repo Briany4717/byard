@@ -110,6 +110,9 @@ pub struct ShotArgs<'a> {
     /// Milliseconds of app time to run before the picture is taken, so
     /// entrance animations and transitions have settled.
     pub at_ms: u32,
+    /// The wall clock `now()` reads, fixed at this ISO time (RFC-0049), or
+    /// `None` for the system's. `at_ms` advances it.
+    pub wall_clock: Option<&'a str>,
     /// Start in the dark scheme (`Some(true)`), the light one, or whichever
     /// the manifest says (`None`).
     pub dark: Option<bool>,
@@ -123,21 +126,33 @@ pub fn run(args: &ShotArgs<'_>) -> Result<(), String> {
     let manifest = Manifest::discover(args.path).map_err(|e| e.to_string())?;
     manifest.require_app("render").map_err(|e| e.to_string())?;
     let (program, _) = resolve_project(&manifest).map_err(|e| e.to_string())?;
-    if !program.errors.is_empty() {
-        let report: Vec<String> = program
-            .errors
-            .iter()
-            .map(|e| format!("  {}", e.headline()))
-            .collect();
-        return Err(format!(
-            "the program does not compile:\n{}",
-            report.join("\n")
+    // The same check `byard check` runs, over every view and branch, not just
+    // the root's first frame: a picture of a program `check` rejects shows
+    // something the program does not mean (an attribute that failed to type is
+    // dropped and the box is drawn without it). Warnings print and do not stop
+    // the picture, as in `check`.
+    let diagnostics =
+        crate::commands::check::check_program_with_theme(&program, manifest.theme.clone());
+    if !diagnostics.is_empty() {
+        crate::commands::check::print_diagnostics(&diagnostics, &program.source_map, false);
+    }
+    let n = diagnostics.iter().filter(|d| !d.is_warning()).count();
+    if n > 0 {
+        style::err(&format!(
+            "{n} error{}; no picture drawn (`byard check` rejects this program)",
+            if n == 1 { "" } else { "s" }
         ));
+        return Err(String::new());
     }
     let root = byard_compiler::parser::ast::root_view(&program.views)
         .ok_or("the program declares no `View`")?;
 
     let mut interp = Interpreter::new();
+    if let Some(iso) = args.wall_clock {
+        interp
+            .set_wall_clock(iso)
+            .map_err(|e| format!("--now: {e}"))?;
+    }
     // As `check` does: the framework's own capabilities resolve, so a view
     // that injects `Http` renders its not-yet-loaded state instead of failing.
     interp.declare_controllers(&byard_core::cap::provided_names());
@@ -148,18 +163,6 @@ pub fn run(args: &ShotArgs<'_>) -> Result<(), String> {
     interp.load_views(&program.views);
     let known: Vec<&str> = program.views.iter().map(|v| v.name.as_str()).collect();
     let tree = interp.lower_view(root, &known);
-    let errors: Vec<String> = interp
-        .errors()
-        .iter()
-        .map(|e| format!("  {}", e.headline()))
-        .collect();
-    if !errors.is_empty() {
-        return Err(format!(
-            "the program does not compile:\n{}",
-            errors.join("\n")
-        ));
-    }
-
     #[allow(clippy::cast_precision_loss)]
     let (w, h) = (args.size.0 as f32, args.size.1 as f32);
     let mut frame = RenderFrame::new();

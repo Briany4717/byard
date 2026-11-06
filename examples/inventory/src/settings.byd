@@ -1,0 +1,94 @@
+// Settings: export the catalogue, put the sample data back, and the minimum a
+// new product starts with.
+
+View Settings(products: List<Product>, min_default: Int, on_min: Fn(Int) = {|_| }, on_reset: Fn() = {}) {
+    inject Theme as t
+    inject Stockroom as room
+
+    var exported: Str = ""
+    var exportError: Str = ""
+    var minText: Str = "{min_default}"
+    var confirming: Bool = false
+
+    let minParsed = minText.toInt() ?? -1
+    let minValid = minParsed >= 0 && minParsed <= 1000000
+    let minChanged = minValid && minParsed != min_default
+
+    let export = () => {
+        exported = ""
+        exportError = ""
+        room.exportCsv(products)
+            ok done => { exported = "Wrote {done.rows} products to {done.path}" }
+            err e => { exportError = e.message }
+    }
+
+    ScrollView #[grow: 1] {
+        Column #[p: (vertical: 24, horizontal: 28), gap: 16, width: 640] {
+            Heading(title: "Settings") {}
+
+            Card {
+                Text("Export") #[typo: t.title, color: t.onSurface]
+                Text("Writes every product to a CSV file in the app's data folder.") #[
+                    typo: t.body,
+                    color: t.onSurfaceVariant,
+                ]
+                Row #[gap: 12, align: center] {
+                    Action(label: "Export to CSV", on_tap: { export() })
+                }
+                when exported != "" {
+                    Text(exported) #[typo: t.caption, color: t.tertiary]
+                }
+                when exportError != "" {
+                    Text(exportError) #[typo: t.caption, color: t.error]
+                }
+            }
+
+            Card {
+                Text("New products") #[typo: t.title, color: t.onSurface]
+                Label(text: "Default minimum stock for new products", error: minValid ? "" : "A whole number, 0 or more")
+                Row #[gap: 10, align: center] {
+                    TextField #[
+                        bind: minText,
+                        width: 120,
+                        height: 40,
+                        bg: t.surfaceContainerHigh,
+                        color: t.onSurface,
+                        radius: 10,
+                        p: (horizontal: 12),
+                        typo: t.body,
+                        invalid: !minValid,
+                        border: t.outlineVariant,
+                        border_width: 1,
+                        submit => on_min(minParsed),
+                    ]
+                    Action(label: "Save", off: !minChanged, on_tap: { on_min(minParsed) })
+                }
+            }
+
+            Card {
+                Text("Sample data") #[typo: t.title, color: t.onSurface]
+                Text("Replaces every product and movement with the sample catalogue.") #[
+                    typo: t.body,
+                    color: t.onSurfaceVariant,
+                ]
+                Row {
+                    Action(label: "Reset to sample data", tone: "danger", on_tap: { confirming = true })
+                }
+            }
+        }
+    }
+
+    when confirming {
+        Dialog(title: "Reset to the sample data?", on_close: { confirming = false }) {
+            Text("This removes {products.len} products and their movements, and cannot be undone.")
+                #[typo: t.body, color: t.onSurfaceVariant]
+            Row #[gap: 10, justify: end] {
+                Action(label: "Cancel", tone: "tonal", on_tap: { confirming = false })
+                Action(label: "Reset", tone: "danger", on_tap: {
+                    confirming = false
+                    on_reset()
+                })
+            }
+        }
+    }
+}

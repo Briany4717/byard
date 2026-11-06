@@ -211,7 +211,8 @@ const LAYOUT: &[(&str, PropDef)] = &[
 /// `basis`, the main-axis size an element has before it grows. Only the
 /// elements laid out as containers honour it (taffy's `flex_basis`); a leaf
 /// that took it would accept it and ignore it, so they do not list it, and
-/// writing it there is an unknown attribute.
+/// writing it there is an unknown attribute. `Text` is the exception: it is a
+/// flex item whose layout reads `basis`.
 const BASIS: &[(&str, PropDef)] = &[("basis", lay(PropType::Int))];
 const DECORATION: &[(&str, PropDef)] = &[
     ("bg", pnt(PropType::Color)),
@@ -611,6 +612,7 @@ fn lookup_intrinsic(name: &str) -> Option<Intrinsic> {
                 &[
                     ("width", lay(PropType::Int)),
                     ("height", lay(PropType::Int)),
+                    ("basis", lay(PropType::Int)),
                     ("p", lay(PropType::Len)),
                     ("m", lay(PropType::Len)),
                     ("pt", lay(PropType::Len)),

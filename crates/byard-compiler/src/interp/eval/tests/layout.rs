@@ -559,6 +559,42 @@ fn a_text_with_grow_takes_the_free_space_of_its_row() {
 }
 
 #[test]
+fn texts_with_grow_and_a_zero_basis_split_the_row_evenly() {
+    // `basis: 0` says "start from nothing", so two `grow: 1` cells are one half
+    // each and the second starts at the same x in every row, whatever the
+    // first says. A table's columns line up.
+    let src = |a: &str| {
+        format!(
+            "View C() {{\n Row #[width: 400, gap: 10] {{\n Text(\"{a}\") #[grow: 1, basis: 0, wrap: false]\n Text(\"note\") #[grow: 1, basis: 0, wrap: false]\n }}\n}}"
+        )
+    };
+    let short = text_x(&text_frame(&src("ab")), "note");
+    let long = text_x(&text_frame(&src("a much longer product name")), "note");
+    assert!(
+        (short - 205.0).abs() < 1.0,
+        "second half starts at 205, got {short}"
+    );
+    assert!(
+        (long - short).abs() < 0.5,
+        "same x in every row: {short} vs {long}"
+    );
+}
+
+#[test]
+fn texts_with_only_grow_start_from_their_content_as_boxes_do() {
+    // Without `basis` each starts from its own size and shares what is left,
+    // so a longer first cell pushes the second one right.
+    let src = |a: &str| {
+        format!(
+            "View C() {{\n Row #[width: 400, gap: 10] {{\n Text(\"{a}\") #[grow: 1, wrap: false]\n Text(\"note\") #[grow: 1, wrap: false]\n }}\n}}"
+        )
+    };
+    let short = text_x(&text_frame(&src("ab")), "note");
+    let long = text_x(&text_frame(&src("a much longer product name")), "note");
+    assert!(long > short + 20.0, "{short} vs {long}");
+}
+
+#[test]
 fn a_text_with_height_padding_and_margin_lays_out_as_a_box_would() {
     // `height` is the room the next sibling is placed after.
     let frame =

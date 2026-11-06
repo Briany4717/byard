@@ -13,6 +13,7 @@
 
 use proc_macro2::TokenStream;
 use quote::quote;
+use syn::ext::IdentExt;
 use syn::{Data, DeriveInput, Fields, GenericParam, LitStr, Type};
 
 /// The two traits a derive can implement.
@@ -166,7 +167,7 @@ fn host_fields(input: &DeriveInput, direction: Direction) -> syn::Result<Vec<Hos
     let mut fields: Vec<HostField<'_>> = Vec::with_capacity(named.named.len());
     for field in &named.named {
         let ident = field.ident.as_ref().expect("a named field has a name");
-        let key = renamed(field)?.unwrap_or_else(|| crate::names::of_ident(ident));
+        let key = renamed(field)?.unwrap_or_else(|| ident.unraw().to_string());
         if fields.iter().any(|other| other.key == key) {
             return Err(syn::Error::new_spanned(
                 ident,

@@ -87,9 +87,9 @@ because everything in this one is a method a view can call.
 
 ### Names
 
-A view spells every name in camelCase, and Rust spells functions in snake_case, so the macro
-translates: `async fn export_csv(&self)` is `room.exportCsv(...)` in a view, as `toLower`
-and `sortBy` are. The Rust name is unchanged, and a name of one word (`greet`) is the same in
+A method in byld is camelCase (`toLower`, `sortBy`, `formatDate`), and Rust spells functions
+in snake_case, so the macro translates: `async fn export_csv(&self)` is `room.exportCsv(...)`
+in a view. The Rust name is unchanged, and a name of one word (`greet`) is the same in
 both. Calling the Rust spelling from a view is an error that names the camelCase one.
 
 When the automatic name is wrong, give the method the one you want (here `dataPath` would
@@ -240,9 +240,9 @@ struct Customer {
 A struct can hold another one, and `Vec` and `Option` of them. A view sends it as a record
 literal and reads a reply's fields by name, `reply.address.street`. A field the record leaves
 out, or has in the wrong shape, takes its type's empty value, so an `Option` is the place for
-something that may be absent. A field is spelled in camelCase in the record, like a method
-(`unit_price` is `unitPrice`), and `#[host(rename = "…")]` gives it another name, used exactly
-as written, and a generic struct converts when its type
+something that may be absent. A field keeps the name it was given, because it is data: a
+`unit_price` is `unit_price` in the record, the same as in the struct's JSON.
+`#[host(rename = "…")]` gives it another name, used exactly as written, and a generic struct converts when its type
 parameters do.
 
 An `enum` cannot derive these, and the compiler says so. Send the variant's name as text, by

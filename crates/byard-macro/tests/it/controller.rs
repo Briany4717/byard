@@ -302,12 +302,13 @@ fn an_explicit_name_replaces_the_automatic_one() {
 }
 
 #[test]
-fn a_controller_field_is_described_by_its_camel_case_name() {
+fn a_controller_field_keeps_its_name() {
+    // A field is data, not a method: it is read as it was declared.
     #[byard_controller]
     struct Counter {
         page_size: i64,
     }
-    assert_eq!(Counter::byard_field_type("pageSize"), Some("Int"));
-    assert_eq!(Counter::byard_field_type("page_size"), None);
+    assert_eq!(Counter::byard_field_type("page_size"), Some("Int"));
+    assert_eq!(Counter::byard_field_type("pageSize"), None);
     assert_eq!(Counter { page_size: 1 }.page_size, 1);
 }

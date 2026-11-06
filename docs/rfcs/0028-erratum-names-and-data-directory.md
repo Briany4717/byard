@@ -1,65 +1,80 @@
-# Erratum to RFC-0028: how a Rust name is spelled in Byld, and where an app's data lives
+# Erratum to RFC-0028: how a name is spelled in Byld, and where an app's data lives
 
 - **Status:** Active erratum (amends, does not replace, RFC-0028)
 - **Author(s):** Briany4717
 - **Created:** 2026-11-06
 - **Applies to:** RFC-0028 §2 (what `#[byard_controller]` and `#[derive(HostValue)]` expose
-  to a view), and RFC-0039 (the names of a native view's props and events).
+  to a view), RFC-0025 §4 and RFC-0031 (the `anim.*` curve names), and RFC-0039 (the names
+  of a native view's props and events).
 - **Authority:** the implementation, and the tests named against each correction below.
 
 ---
 
 RFC-0028 says a controller's methods are called "by name" and a derived struct crosses as a
-record "field for field". It never says which spelling of the name. The implementation took
-the Rust identifier as written, so `fn export_csv` was `room.export_csv(...)` in a language
-whose every other name is camelCase (`toLower`, `sortBy`, `formatDate`, `urlEncoded`).
-Building a real app found it, and 0.1.0 is the last moment it is cheap to change.
+record "field for field". It never says which spelling. The implementation took the Rust
+identifier as written, so `fn export_csv` was `room.export_csv(...)` in a language whose other
+methods are `toLower`, `sortBy`, `formatDate` and `urlEncoded`. Looking at that exposed that
+Byld already follows three conventions, each for a reason, and this erratum states them so a
+new name is put in the right one. 0.1.0 is the last moment a rename is cheap.
 
-## 1. A name crosses in camelCase (§2)
+## 1. Three rules (§2)
 
-**Decision.** Byld spells every name camelCase, so a name that crosses the boundary is
-translated from Rust's snake_case by the macros:
+| What | Spelling | Examples |
+|------|----------|----------|
+| A **method** | `camelCase` | `toLower`, `sortBy`, `formatDate`, `urlEncoded`, `room.exportCsv(...)`, `anim.easeInOut(...)` |
+| An **attribute** or an **event** | `snake_case` | `swipe_back`, `deep_link`, `max_depth`, `border_width`, `row_height`, `collapse_header`, `key_down`, `route_change` |
+| A **record field** | the name it was given | `temperature_2m`, `timeout_ms`, `unit_price` |
 
-- a controller method `export_csv` is `exportCsv` in Byld;
-- a field of a `#[derive(HostValue)]` struct, `unit_price`, is the record key `unitPrice`;
-- the fields `#[byard_controller]` lists in `BYARD_FIELDS` are spelled the same way;
-- a native view's `#[prop]` and `#[event]` fields are attribute and event names in the same
-  way (`max_value` is `maxValue`), and `[native_views.Name]` in `byard.toml` writes the
-  camelCase name. This is the rule `[theme]` already follows: tokens are snake_case in
-  `byard.toml` and camelCase in Byld.
+**Methods are camelCase** because a method is called, and the calls a Byld programmer writes
+all day (values, capabilities) are camelCase. A controller method and an animation curve are
+methods, so they follow.
 
-RFC-0028 does not decide field naming, so there was nothing to contradict: the rule applies
-to fields because a record a controller returns is read in the same expressions as the
-methods, and a view that wrote `reply.unit_price` beside `list.sortBy(...)` would be
-spelled in two styles for no reason a user could see.
+**Attributes and events are snake_case** because they sit in a `#[ ... ]` block or after
+`on`, a different place in the grammar from a call, and they were snake_case before this
+erratum (`row_height`, `key_down`). A native view's props and events are attributes and
+events, so they stay exactly as the Rust field declares them and `[native_views.Name]` in
+`byard.toml` writes the same names.
 
-The Rust name does not change, and nothing is lost: a name that is one word, which is most
-of them, is the same in both.
+**Record fields keep the name they were given** because a record is data, and data comes from
+somewhere else: JSON from a server has `temperature_2m`, the Http request record is
+`timeout_ms`. A Rust struct that is also serialized into the `Store`, or sent over HTTP with
+serde, must not be one name in Byld and another in its JSON, so `#[derive(HostValue)]` and the
+`BYARD_FIELDS` list use the Rust field name unchanged. `#[host(rename = "...")]` gives a field
+another name, used exactly as written, for anyone who wants one.
 
-**Calling the Rust name.** A view that writes `room.export_csv(...)` gets a reply error,
-`error[UnknownMethod]: unknown controller method `export_csv`` with the help
-``a controller method is called by its camelCase name in Byld: `exportCsv` ``, rather than a
-bare "unknown method". The checker cannot see Rust, so this is the run-time check; it is the
-same place a misspelt controller method was already reported.
+## 2. What the macro and the checker do (§2)
 
-**Overriding it.** The automatic name is wrong for the odd method (an acronym, a name Byld
-already uses). `#[byard(rename = "…")]` on the method gives it exactly the name written, and
-the automatic spelling then stops working. For a record field the existing
-`#[host(rename = "…")]` does the same, used as written. Two methods that would share a
-Byld name are a compile error naming both.
+**A controller method** `export_csv` is `exportCsv` in Byld; the Rust name does not change.
+Calling the Rust spelling from a view gives the reply error ``error[UnknownMethod]: unknown
+controller method `export_csv` `` with the help to call `exportCsv`. The checker cannot see
+Rust, so this is the run-time check, where a misspelt controller method was already
+reported. `#[byard(rename = "...")]` on a method gives it exactly the name written, for the
+rare method whose automatic name is wrong, and the automatic spelling then stops working. Two
+methods that would share a Byld name are a compile error naming both.
 
-**What an app must change.** A Byld call to a controller method whose Rust name has an
-underscore, a Byld read of a derived struct's multi-word field, and a `[native_views]` entry
-for a prop whose Rust name has an underscore. The last is caught when the app starts, by the
-check that the declaration matches the registered view.
+**The animation curves** `anim.ease_in`, `anim.ease_out` and `anim.ease_in_out` are
+`anim.easeIn`, `anim.easeOut` and `anim.easeInOut`. The old names are an
+`UnknownAnimation` error whose suggestion is the new name. No other built-in method (value,
+list, text, `Http`, `Json`, `Store`, `Timer`) had an underscore. The easing word a keyframe
+step carries (`60%: (160, 0) ease_in_out`) is neither a method nor an attribute but a value
+keyword of that grammar, and it is unchanged.
+
+RFC-0025 §4 and RFC-0031 show `anim.ease_in_out` in their examples; read it as
+`anim.easeInOut`.
+
+**What an app must change:** a Byld call to a controller method whose Rust name has an
+underscore, and any `anim.ease_in`, `anim.ease_out` or `anim.ease_in_out`.
 
 Covered by `a_method_is_called_by_its_camel_case_name`,
 `the_rust_name_is_unknown_and_the_error_names_the_camel_case_one`,
-`an_explicit_name_replaces_the_automatic_one`, `a_snake_case_field_is_a_camel_case_key`,
-`a_controller_field_is_described_by_its_camel_case_name` and
-`a_multi_word_prop_is_camel_case_in_byld`.
+`an_explicit_name_replaces_the_automatic_one` (methods);
+`a_curve_is_a_method_and_is_camel_case`,
+`the_snake_case_curve_names_are_unknown_and_suggest_the_camel_case_one` (curves);
+`props_and_events_keep_their_snake_case_names` (attributes and events);
+`a_field_is_a_record_key_exactly_as_declared` and `a_controller_field_keeps_its_name`
+(fields).
 
-## 2. An app's data directory has one source (§3, RFC-0029 §6)
+## 3. An app's data directory has one source (§3, RFC-0029 §6)
 
 `Store` filed its file under `ProjectDirs::from("dev", "byard", app_id)`, and a controller
 that wanted to write beside it had to repeat that call.

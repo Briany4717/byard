@@ -26,24 +26,11 @@ use syn::{Fields, ItemStruct, Type, parse_macro_input};
 /// One declared prop: the field, and what the catalog should say about it.
 struct Prop {
     ident: syn::Ident,
-    /// The name byld writes: the field's, in camelCase.
-    name: String,
     /// The catalog's type name (`Int`, `Float`, `Bool`, `Str`, `Color`,
     /// `Vec2`, `Floats`).
     ty: &'static str,
     /// Whether a change can move geometry (`#[prop(layout)]`).
     layout: bool,
-}
-
-impl Prop {
-    fn new(ident: syn::Ident, ty: &'static str, layout: bool) -> Self {
-        Self {
-            name: crate::names::of_ident(&ident),
-            ident,
-            ty,
-            layout,
-        }
-    }
 }
 
 pub fn expand(attr: TokenStream, item: TokenStream) -> TokenStream {
@@ -86,7 +73,7 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> TokenStream {
                             .is_ok_and(|arg| arg == "layout")
                 });
                 match prop_type(&field.ty) {
-                    Some(ty) => props.push(Prop::new(ident, ty, layout)),
+                    Some(ty) => props.push(Prop { ident, ty, layout }),
                     None => {
                         return syn::Error::new_spanned(
                             &field.ty,
@@ -98,7 +85,7 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> TokenStream {
                     }
                 }
             } else if is_event {
-                events.push(crate::names::of_ident(&ident));
+                events.push(ident.to_string());
             }
             // The marker attributes are ours; the struct that comes out the
             // other side is ordinary Rust.
@@ -111,7 +98,7 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> TokenStream {
     let ident = &input.ident;
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
 
-    let prop_names: Vec<&str> = props.iter().map(|p| p.name.as_str()).collect();
+    let prop_names: Vec<String> = props.iter().map(|p| p.ident.to_string()).collect();
     let prop_types: Vec<syn::Ident> = props
         .iter()
         .map(|p| syn::Ident::new(p.ty, proc_macro2::Span::call_site()))

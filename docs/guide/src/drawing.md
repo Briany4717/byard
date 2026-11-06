@@ -51,7 +51,7 @@ Every shape that can be painted also takes these:
 | `opacity` | Of that shape |
 
 An argument is any expression. It follows your `var`s, and it can animate with `with`:
-`cx: 250 with anim.ease_in_out(1800ms, from: 130, repeat: infinite, reverse: true)`
+`cx: 250 with anim.easeInOut(1800ms, from: 130, repeat: infinite, reverse: true)`
 moves a circle back and forth.
 
 ```byld
@@ -276,7 +276,7 @@ on the same canvas, and a fused group has one outline, taken from its first shap
 View Main() {
     Canvas #[width: 340, height: 110, bg: 0x1C1F27, fuse: 22] {
         circle(cx: 70, cy: 55, r: 26, fill: 0x5B8DEF)
-        circle(cx: 250 with anim.ease_in_out(1800ms, from: 130, repeat: infinite, reverse: true),
+        circle(cx: 250 with anim.easeInOut(1800ms, from: 130, repeat: infinite, reverse: true),
                cy: 55, r: 20, fill: 0xE8734A)
     }
 }

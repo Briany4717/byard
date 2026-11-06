@@ -1,13 +1,14 @@
 // The product list: a search box, category chips, a low-stock toggle, columns
 // that sort, and one row a product in a list that builds only what is in view.
 
-View ProductList(products: List<Product>, on_open: Fn(Int) = {|_| }, on_new: Fn() = {}) {
+View ProductList(products: List<Product>, low: Bool = false, on_open: Fn(Int) = {|_| }, on_new: Fn() = {}) {
     inject Theme as t
 
     var query: Str = ""
     // "" is every category.
     var category: Str = ""
-    var lowOnly: Bool = false
+    var lowOnly: Bool = low
+    on change(low) => lowOnly = low
     var sortCol: Str = "name"
     var sortDesc: Bool = false
 
@@ -70,7 +71,7 @@ View ProductList(products: List<Product>, on_open: Fn(Int) = {|_| }, on_new: Fn(
         Column #[bg: t.surfaceContainer, radius: 14, grow: 1] {
             Row #[p: (vertical: 10, horizontal: 16), gap: 12, align: center] {
                 Text("SKU") #[typo: t.label, color: t.onSurfaceVariant, width: 90]
-                Box #[grow: 1, tap => sortBy("name")] {
+                Box #[grow: 1, basis: 0, tap => sortBy("name")] {
                     Text("Name{arrow("name")}") #[typo: t.label, color: t.onSurfaceVariant]
                 }
                 Text("Category") #[typo: t.label, color: t.onSurfaceVariant, width: 100]
@@ -103,7 +104,7 @@ View ProductRow(p: Product, on_open: Fn(Int) = {|_| }) {
     inject Theme as t
     Row #[height: 44, p: (horizontal: 16), gap: 12, align: center, tap => on_open(p.id)] {
         Text(p.sku) #[typo: t.caption, color: t.onSurfaceVariant, width: 90, wrap: false]
-        Text(p.name) #[typo: t.body, color: t.onSurface, grow: 1, wrap: false]
+        Text(p.name) #[typo: t.body, color: t.onSurface, grow: 1, basis: 0, wrap: false]
         Text(p.category) #[typo: t.caption, color: t.onSurfaceVariant, width: 100, wrap: false]
         Text(p.location ?? "-") #[
             typo: t.caption,

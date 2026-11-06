@@ -1,7 +1,7 @@
 // The first screen: five numbers, the value of the stock by category, what is
 // running out, and what moved last.
 
-View Dashboard(products: List<Product>, movements: List<Movement>, on_open: Fn(Int) = {|_| }) {
+View Dashboard(products: List<Product>, movements: List<Movement>, on_open: Fn(Int) = {|_| }, on_low: Fn() = {}) {
     inject Theme as t
 
     let units = products.reduce(0, (sum, p) => sum + p.qty)
@@ -62,20 +62,21 @@ View Dashboard(products: List<Product>, movements: List<Movement>, on_open: Fn(I
                                 color: t.onSurfaceVariant,
                             ]
                         }
-                        for p in attention.slice(0, 12) {
+                        for p in attention.slice(0, 8) {
                             Row #[gap: 10, align: center, p: (vertical: 4), tap => on_open(p.id)] {
                                 StockBadge(qty: p.qty, min: p.min)
-                                Text(p.name) #[typo: t.body, color: t.onSurface, grow: 1]
+                                Text(p.name) #[typo: t.body, color: t.onSurface, grow: 1, basis: 0]
                                 Text("{p.qty} / {p.min}") #[
                                     typo: t.caption,
                                     color: t.onSurfaceVariant,
                                 ]
                             }
                         }
-                        when attention.len > 12 {
-                            Text("and {attention.len - 12} more") #[
+                        when attention.len > 8 {
+                            Text("and {attention.len - 8} more, see them in Products") #[
                                 typo: t.caption,
-                                color: t.onSurfaceVariant,
+                                color: t.primary,
+                                tap => on_low(),
                             ]
                         }
                     }

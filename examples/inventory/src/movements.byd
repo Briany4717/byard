@@ -40,8 +40,8 @@ View MovementLog(products: List<Product>, movements: List<Movement>) {
             Row #[p: (vertical: 10, horizontal: 16), gap: 12] {
                 Text("Qty") #[typo: t.label, color: t.onSurfaceVariant, width: 56]
                 Text("Kind") #[typo: t.label, color: t.onSurfaceVariant, width: 90]
-                Text("Product") #[typo: t.label, color: t.onSurfaceVariant, grow: 1]
-                Text("Note") #[typo: t.label, color: t.onSurfaceVariant, grow: 1]
+                Text("Product") #[typo: t.label, color: t.onSurfaceVariant, grow: 1, basis: 0]
+                Text("Note") #[typo: t.label, color: t.onSurfaceVariant, grow: 1, basis: 0]
                 Text("When") #[typo: t.label, color: t.onSurfaceVariant, width: 150]
             }
             Box #[height: 1, bg: t.outlineVariant] {}
@@ -74,9 +74,10 @@ View MovementRow(m: Movement, products: List<Product>) {
             typo: t.body,
             color: (product.id ?? 0) == 0 ? t.onSurfaceVariant : t.onSurface,
             grow: 1,
+            basis: 0,
             wrap: false,
         ]
-        Text(m.note) #[typo: t.caption, color: t.onSurfaceVariant, grow: 1, wrap: false]
+        Text(m.note) #[typo: t.caption, color: t.onSurfaceVariant, grow: 1, basis: 0, wrap: false]
         Text(stamp(m.at)) #[typo: t.caption, color: t.onSurfaceVariant, width: 150, wrap: false]
     }
 }

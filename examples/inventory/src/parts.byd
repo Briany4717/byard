@@ -19,7 +19,7 @@ View Tile(label: Str, value: Str, tone: Int = 0, grow: Int = 1) {
 
 View Pill(text: Str, bg: Int, fg: Int) {
     inject Theme as t
-    Box #[bg: bg, radius: 10, p: (vertical: 2, horizontal: 8)] {
+    Box #[bg: bg, radius: 10, p: (vertical: 2), width: 44, align: center] {
         Text(text) #[typo: t.caption, color: fg, wrap: false]
     }
 }

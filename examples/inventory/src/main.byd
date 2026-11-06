@@ -42,6 +42,8 @@ View Main() {
     var problem: Str = ""
 
     var tab = "dashboard"
+    // Set by the dashboard's "and K more": the product list opens on low stock.
+    var lowFilter = false
     var productsPath = "/"
 
     // First run: nothing is saved yet, so the sample catalogue is the data.
@@ -165,7 +167,7 @@ View Main() {
     Column #[bg: t.background, grow: 1] {
         Row #[bg: t.surfaceContainer, p: (vertical: 10, horizontal: 20), gap: 6, align: center] {
             Text("Stockroom") #[typo: t.title, color: t.onSurface, m: (right: 16)]
-            Button("Dashboard") #[..tabButton, selected: tab == "dashboard"] => tab = "dashboard"
+            Button("Dashboard") #[..tabButton, selected: tab == "dashboard"] => { lowFilter = false tab = "dashboard" }
             Button("Products") #[..tabButton, selected: tab == "products"] => tab = "products"
             Button("Movements") #[..tabButton, selected: tab == "movements"] => tab = "movements"
             Button("Settings") #[..tabButton, selected: tab == "settings"] => tab = "settings"
@@ -181,13 +183,14 @@ View Main() {
         when loaded {
             NavHost(active: tab) #[grow: 1, transition: fade] {
                 tab "dashboard" {
-                    Dashboard(products: products, movements: movements, on_open: {|id| open(id) })
+                    Dashboard(products: products, movements: movements, on_open: {|id| open(id) }, on_low: { lowFilter = true tab = "products" })
                 }
                 tab "products" {
                     NavStack(path: productsPath) #[grow: 1, transition: slide, swipe_back: true] {
                         route "/" {
                             ProductList(
                                 products: products,
+                                low: lowFilter,
                                 on_open: {|id| productsPath = "/product/{id}" },
                                 on_new: { productsPath = "/new" },
                             )

@@ -45,7 +45,7 @@ View Settings(products: List<Product>, min_default: Int, on_min: Fn(Int) = {|_| 
 
             Card {
                 Text("New products") #[typo: t.title, color: t.onSurface]
-                Label(text: "Minimum a new product starts with", error: minValid ? "" : "A whole number, 0 or more")
+                Label(text: "Default minimum stock for new products", error: minValid ? "" : "A whole number, 0 or more")
                 Row #[gap: 10, align: center] {
                     TextField #[
                         bind: minText,

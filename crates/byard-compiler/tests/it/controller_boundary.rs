@@ -663,6 +663,7 @@ fn the_controller_demo_view_mounts_and_places_its_call_against_a_real_registry()
     registry.insert(Arc::new(Greeter {
         calls: Arc::clone(&calls),
     }));
+    registry.insert(Arc::new(Notes));
     let dispatcher = Dispatcher::new(registry, relay.io_handle(), relay.io_result_sender());
 
     let parsed = parse(DEMO_VIEW);
@@ -684,6 +685,23 @@ fn the_controller_demo_view_mounts_and_places_its_call_against_a_real_registry()
         texts.iter().any(|t| t == "status: ready"),
         "`on mount` must have run: {texts:?}"
     );
+}
+
+/// The example's second controller, which only has to be there to be injected.
+struct Notes;
+
+impl Controller for Notes {
+    fn type_name(&self) -> &'static str {
+        "Notes"
+    }
+
+    fn invoke(
+        &self,
+        _method: &str,
+        _args: Vec<HostValue>,
+    ) -> BoxFuture<'static, Result<HostValue, HostValue>> {
+        Box::pin(async { Ok(HostValue::Str(String::new())) })
+    }
 }
 
 /// The example crate's controller, re-declared here rather than depended on:

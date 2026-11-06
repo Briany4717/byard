@@ -29,7 +29,7 @@ pub use http::Http;
 #[cfg(feature = "json")]
 pub use json::Json;
 #[cfg(feature = "storage")]
-pub use store::Store;
+pub use store::{Store, data_dir};
 
 /// The type names the framework reserves for its own capabilities
 /// (RFC-0029 §7).

@@ -212,7 +212,7 @@ impl App {
             source_map,
             ..
         } = load_program(&self.entry).map_err(announced)?;
-        let mut registry = self.registry;
+        let mut registry = self.registry();
         byard_core::cap::configure_http(&mut registry, http.base_url.as_deref(), &http.hosts);
 
         let relay = Relay::new()?;

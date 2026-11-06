@@ -100,7 +100,7 @@ fn the_catalog_entry_is_read_off_the_declaration() {
         "only `#[prop(layout)]` reaches layout"
     );
 
-    assert_eq!(info.events, &["point_hover"]);
+    assert_eq!(info.events, &["pointHover"]);
 }
 
 #[test]
@@ -168,4 +168,24 @@ fn a_view_declares_its_accessibility_role_and_is_a_group_otherwise() {
     assert_eq!(<Gauge as NativeViewMeta>::ACCESS_ROLE, AccessRole::Slider);
     assert_eq!(<Gauge as NativeViewMeta>::INFO.name, "Gauge");
     assert_eq!(<Chart as NativeViewMeta>::ACCESS_ROLE, AccessRole::Group);
+}
+
+#[byard::native_view]
+#[derive(Default)]
+struct Meter {
+    #[prop]
+    max_value: f32,
+}
+
+impl NativeView for Meter {
+    fn render(&mut self, _layout: Layout, _cx: &mut RenderCtx<'_>) {}
+}
+
+#[test]
+fn a_multi_word_prop_is_camel_case_in_byld() {
+    let info = <Meter as NativeViewMeta>::INFO;
+    assert_eq!(info.props[0].name, "maxValue");
+    let mut meter = Meter::default();
+    meter.set_prop("maxValue", &HostValue::Float(4.0));
+    assert!((meter.max_value - 4.0).abs() < f32::EPSILON);
 }

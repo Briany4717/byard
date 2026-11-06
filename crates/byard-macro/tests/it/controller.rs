@@ -239,3 +239,75 @@ fn functions_that_are_not_methods_are_not_exposed() {
     }
     assert_eq!(c.clone().doubled().base, 2);
 }
+
+// ── Names: Byld is camelCase, Rust is snake_case ─────────────────────────────
+
+#[byard_controller]
+#[derive(Clone)]
+struct Room;
+
+#[byard_controller]
+impl Room {
+    async fn export_csv(&self, n: i64) -> Result<i64, ()> {
+        Ok(n)
+    }
+
+    fn total(&self) -> i64 {
+        7
+    }
+
+    #[byard(rename = "csv")]
+    fn to_csv_text(&self) -> i64 {
+        9
+    }
+}
+
+fn error_text(r: Result<HostValue, HostValue>) -> String {
+    match r {
+        Err(HostValue::Str(text)) => text,
+        other => panic!("expected an error reply, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_method_is_called_by_its_camel_case_name() {
+    let ok = pollster::block_on(Room.invoke("exportCsv", vec![HostValue::Int(3)]));
+    assert_eq!(ok, Ok(HostValue::Int(3)));
+    // A word that needs no translation is the same in both.
+    assert_eq!(
+        pollster::block_on(Room.invoke("total", vec![])),
+        Ok(HostValue::Int(7))
+    );
+}
+
+#[test]
+fn the_rust_name_is_unknown_and_the_error_names_the_camel_case_one() {
+    let text = error_text(pollster::block_on(Room.invoke("export_csv", vec![])));
+    assert!(text.contains("UnknownMethod"), "{text}");
+    assert!(text.contains("`export_csv`"), "{text}");
+    assert!(text.contains("`exportCsv`"), "{text}");
+}
+
+#[test]
+fn an_explicit_name_replaces_the_automatic_one() {
+    assert_eq!(
+        pollster::block_on(Room.invoke("csv", vec![])),
+        Ok(HostValue::Int(9))
+    );
+    let text = error_text(pollster::block_on(Room.invoke("toCsvText", vec![])));
+    assert!(text.contains("UnknownMethod"), "{text}");
+    // The Rust name still points at the name that works.
+    let text = error_text(pollster::block_on(Room.invoke("to_csv_text", vec![])));
+    assert!(text.contains("`csv`"), "{text}");
+}
+
+#[test]
+fn a_controller_field_is_described_by_its_camel_case_name() {
+    #[byard_controller]
+    struct Counter {
+        page_size: i64,
+    }
+    assert_eq!(Counter::byard_field_type("pageSize"), Some("Int"));
+    assert_eq!(Counter::byard_field_type("page_size"), None);
+    assert_eq!(Counter { page_size: 1 }.page_size, 1);
+}

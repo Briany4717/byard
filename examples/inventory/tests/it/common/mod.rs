@@ -156,8 +156,10 @@ impl App {
 
     /// Selects everything in the focused field and types `text` over it.
     pub fn replace_text(&mut self, text: &str) {
+        // The shortcut key: Cmd on macOS, Ctrl elsewhere.
         let mods = byard_core::KeyModifiers {
-            ctrl: true,
+            meta: cfg!(target_os = "macos"),
+            ctrl: !cfg!(target_os = "macos"),
             ..byard_core::KeyModifiers::default()
         };
         let mut e = self.key_event(EventKind::KeyDown, "a");

@@ -417,3 +417,80 @@ fn a_spring_token_outside_with_is_an_error_and_a_duration_reads_as_ms() {
     assert!(interp.errors().is_empty(), "{:?}", interp.errors());
     assert!((frame.instances()[0].rect[2] - 300.0).abs() < 0.5);
 }
+
+#[test]
+fn a_damping_ratio_is_the_same_spring_as_its_coefficient() {
+    let c = spring_damping(300.0, 0.5);
+    let mut ratio = App::new(
+        &view_with("anim.spring(stiffness: 300, damping_ratio: 0.5)"),
+        Theme::byard_base(),
+    );
+    // The ratio may come before the stiffness it depends on.
+    let mut first = App::new(
+        &view_with("anim.spring(damping_ratio: 0.5, stiffness: 300)"),
+        Theme::byard_base(),
+    );
+    let mut coefficient = App::new(
+        &view_with(&format!("anim.spring(stiffness: 300, damping: {c})")),
+        Theme::byard_base(),
+    );
+    for app in [&ratio, &first, &coefficient] {
+        assert!(app.errors().is_empty(), "{:?}", app.errors());
+    }
+    let want = coefficient.samples(&TIMES);
+    assert_eq!(ratio.samples(&TIMES), want);
+    assert_eq!(first.samples(&TIMES), want);
+    // And it is the theme's spring: the token with the same ratio.
+    let mut theme = Theme::byard_base();
+    theme.set_spring_ratio("mine", 300.0, 0.5);
+    let mut token = App::new(&view_with("t.springMine"), theme);
+    assert_eq!(token.samples(&TIMES), want);
+}
+
+#[test]
+fn both_damping_spellings_in_one_spring_is_an_error() {
+    for curve in [
+        "anim.spring(damping: 20, damping_ratio: 0.5)",
+        "anim.spring(damping_ratio: 0.5, damping: 20)",
+        "anim.spring(damping_ratio: 0.5, damping_ratio: 0.6)",
+    ] {
+        let errs = errors_of(curve);
+        assert!(
+            errs.iter().any(|e| matches!(
+                e,
+                CompileError::InvalidAnimation { message, .. } if message.contains("not both")
+            )),
+            "{curve}: {errs:?}"
+        );
+    }
+}
+
+#[test]
+fn keyframes_take_a_duration_token() {
+    let track = |duration: &str| {
+        format!(
+            "View V() {{ inject Theme as t\n var on: Bool = false\n \
+             Box #[bg: 0x808080, width: 10, height: 10, \
+             scale: anim.keyframes(0%: 1.0, 100%: 2.0, duration: {duration})] }}"
+        )
+    };
+    let mut token = App::new(&track("t.durationMedium2"), Theme::byard_base());
+    assert!(token.errors().is_empty(), "{:?}", token.errors());
+    let mut literal = App::new(&track("300ms"), Theme::byard_base());
+    let times = [0, 50, 150, 299, 400];
+    assert_eq!(
+        times.map(|t| token.scale_at(t)),
+        times.map(|t| literal.scale_at(t))
+    );
+    assert!(token.scale_at(150) > 1.2 && token.scale_at(150) < 1.8);
+    // A spring there is the same error as everywhere.
+    let bad = App::new(&track("t.springSpatialFast"), Theme::byard_base());
+    assert!(
+        bad.errors().iter().any(|e| matches!(
+            e,
+            CompileError::InvalidAnimation { message, .. } if message.contains("not a duration")
+        )),
+        "{:?}",
+        bad.errors()
+    );
+}

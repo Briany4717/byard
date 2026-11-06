@@ -17,7 +17,9 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`short_2 = 100`), and byld reads them as tokens wherever a curve goes:
   `with t.springSpatialFast`, `anim.ease(t.durationShort2)`. `byard-base` ships Material 3
   Expressive's six springs and sixteen durations, a package's come in with `extends`, and a
-  misspelt or misused token is a check error that names it.
+  misspelt or misused token is a check error that names it. `anim.spring` takes
+  `damping_ratio:` (1.0 is no bounce) beside `damping:` (the coefficient), and every duration
+  position, `anim.keyframes(duration:)` included, takes a duration token.
 - **The rest of Material's colour roles in `byard-base`, and from a seed**: `surfaceContainerLowest`,
   `surfaceContainerHighest`, `surfaceDim`, `surfaceBright`, `inverseSurface`, `inverseOnSurface`,
   `inversePrimary`, `scrim`, `shadow`, the `primary`, `secondary` and `tertiary` fixed roles, and the

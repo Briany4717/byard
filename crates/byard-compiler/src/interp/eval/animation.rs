@@ -676,7 +676,7 @@ impl Interpreter {
     fn keyframe_blend<'a>(&mut self, expr: &'a Expr) -> Option<KeyframeBlend<'a>> {
         use byard_core::frame::{MAX_KEYFRAME_STEPS, MotionCurve, keyframe_cursor, loop_phase};
 
-        let track = crate::interp::anim::resolve_keyframes(expr)?.ok()?;
+        let track = crate::interp::anim::resolve_keyframes_in(expr, Some(&self.theme))?.ok()?;
         let key = self.anim_key(expr.span());
         // Without an advancing clock, resolve to the sequence's first value,
         // mirrors the `with` path, and never latches the active set at `t = 0`.

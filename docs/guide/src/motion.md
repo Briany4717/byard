@@ -56,12 +56,17 @@ To grow or shrink something smoothly, animate its `scale`.
 | `anim.easeOut(200ms)` | Ends slow |
 | `anim.easeInOut(200ms)`, `anim.ease(200ms)` | Slow at both ends |
 
-A spring takes `stiffness`, `damping` and `initial_velocity`, all optional:
-`anim.spring(stiffness: 200, damping: 18)`. A higher stiffness is quicker, and a
-lower damping rings for longer. `damping` is the spring's own coefficient, not a ratio:
-it is critical (no overshoot) at about twice the square root of the stiffness, so 200
-wants about 28, and `damping: 0.6` would ring for many seconds. A spring has no fixed length: it settles when it
+A spring takes `stiffness`, `damping_ratio` and `initial_velocity`, all optional:
+`anim.spring(stiffness: 200, damping_ratio: 0.6)`. A higher stiffness is quicker. The
+damping ratio is how much it bounces: 1.0 settles with no bounce, and the lower it is the
+more it overshoots and rings. A spring has no fixed length: it settles when it
 settles. A timed curve is for something that must take exactly so long.
+
+`damping:` is the same thing written as the engine's own coefficient: `damping_ratio` is
+that divided by twice the square root of the stiffness, so `stiffness: 200,
+damping_ratio: 0.6` and `stiffness: 200, damping: 17` are one spring. A spring takes one
+or the other, and both is an error. Mind the difference: `damping: 0.6` is a coefficient,
+and rings for many seconds.
 
 A mistake in a curve is reported with the name you probably meant, whether it is the
 curve (`anim.sping`), an argument, or a modifier.
@@ -120,12 +125,13 @@ short_2 = 100
 
 A key is named for its kind: `spatial_fast` is `t.springSpatialFast`, `short_2` is
 `t.durationShort2`. A table with `stiffness` is a spring and a whole number is a
-duration. `damping_ratio` is Material's number; `damping` is the one `anim.spring`
-takes, and a spring declares one or the other.
+duration. `damping_ratio` is the same number `anim.spring(damping_ratio:)` takes; `damping` is the
+coefficient `anim.spring(damping:)` takes, and a spring declares one or the other.
 
 A token is the whole curve, so it takes no modifiers: a loop, a delay or a `from:` is
 written out with `anim.spring(...)`, which can still use a duration token
-(`anim.linear(t.durationLong2, repeat: infinite)`). A token costs nothing until a
+(`anim.linear(t.durationLong2, repeat: infinite)`). A duration token goes anywhere a
+duration does, `anim.keyframes(duration: t.durationLong2)` included. A token costs nothing until a
 `with` uses it. A mistake in one is an error that says what is wrong:
 
 ```byld,fails

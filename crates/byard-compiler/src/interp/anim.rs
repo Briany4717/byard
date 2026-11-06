@@ -345,11 +345,20 @@ pub fn resolve_motion_in<'a>(
 /// out-of-range percentages, a missing `duration:`, an unknown easing name) or
 /// [`CompileError::TooManyKeyframes`] past the RFC's step cap.
 pub fn resolve_keyframes(expr: &Expr) -> Option<Result<KeyframeTrack<'_>, CompileError>> {
+    resolve_keyframes_in(expr, None)
+}
+
+/// [`resolve_keyframes`] with the active theme, so the track's `duration:` may be
+/// a duration token (`duration: t.durationMedium2`, RFC-0053).
+pub fn resolve_keyframes_in<'a>(
+    expr: &'a Expr,
+    theme: Option<&Theme>,
+) -> Option<Result<KeyframeTrack<'a>, CompileError>> {
     let (name, name_span, args) = destructure_anim_call(expr, true).ok()?;
     if name.as_str() != "keyframes" {
         return None;
     }
-    Some(resolve_keyframe_args(args, name_span))
+    Some(resolve_keyframe_args(args, name_span, theme))
 }
 
 /// Whether `expr` is an `anim.keyframes(…)` call, the cheap shape test the
@@ -375,8 +384,9 @@ pub fn is_keyframes_call(expr: &Expr) -> bool {
 fn resolve_keyframe_args<'a>(
     args: &'a [Arg],
     call_span: Span,
+    theme: Option<&Theme>,
 ) -> Result<KeyframeTrack<'a>, CompileError> {
-    let (step_args, mods) = split_modifiers(args, None)?;
+    let (step_args, mods) = split_modifiers(args, theme)?;
     let mut steps = Vec::with_capacity(step_args.len());
     for arg in &step_args {
         let Expr::KeyframeStep {
@@ -820,7 +830,10 @@ fn is_anim_base(base: &Expr) -> bool {
 }
 
 /// Resolves `anim.spring(stiffness: …, damping: …, initial_velocity: …)`. All
-/// three are optional named arguments; omitted ones take the A2 defaults.
+/// are optional named arguments; omitted ones take the A2 defaults. The damping
+/// is written `damping:` (the coefficient) or `damping_ratio:` (1.0 is no
+/// bounce, less bounces, RFC-0053), never both; a ratio becomes the coefficient
+/// `2 * ratio * sqrt(stiffness)` whatever order the arguments came in.
 fn resolve_spring(args: &[&Arg], call_span: Span) -> Result<Curve, CompileError> {
     let Curve::Spring {
         mut stiffness,
@@ -830,12 +843,14 @@ fn resolve_spring(args: &[&Arg], call_span: Span) -> Result<Curve, CompileError>
     else {
         unreachable!("DEFAULT_SPRING is a Spring")
     };
+    let mut ratio: Option<f32> = None;
+    let mut damping_written = false;
     for arg in args {
         let Some(name) = &arg.name else {
             return Err(CompileError::InvalidAnimation {
                 span: arg.value.span(),
                 message: "`anim.spring` takes named arguments \
-                          (stiffness / damping / initial_velocity)"
+                          (stiffness / damping_ratio / damping / initial_velocity)"
                     .to_string(),
             });
         };
@@ -844,12 +859,29 @@ fn resolve_spring(args: &[&Arg], call_span: Span) -> Result<Curve, CompileError>
         // is not a number.
         match name.as_str() {
             "stiffness" => stiffness = literal_f32(&arg.value)?,
-            "damping" => damping = literal_f32(&arg.value)?,
+            "damping" | "damping_ratio" => {
+                if damping_written {
+                    return Err(CompileError::InvalidAnimation {
+                        span: arg.value.span(),
+                        message: "`anim.spring` takes `damping_ratio:` (1.0 is no bounce, less \
+                                  bounces) or `damping:` (the coefficient), not both, and not \
+                                  either twice"
+                            .to_string(),
+                    });
+                }
+                damping_written = true;
+                let value = literal_f32(&arg.value)?;
+                if name.as_str() == "damping_ratio" {
+                    ratio = Some(value);
+                } else {
+                    damping = value;
+                }
+            }
             "initial_velocity" => v0 = literal_f32(&arg.value)?,
             other => {
                 // Modifier names are candidates too, so a misspelt `revrse:`
                 // on a spring is caught here rather than read as a parameter.
-                let candidates = ["stiffness", "damping", "initial_velocity"]
+                let candidates = ["stiffness", "damping_ratio", "damping", "initial_velocity"]
                     .into_iter()
                     .chain(MODIFIER_NAMES.iter().copied());
                 let hint = closest_match(other, candidates)
@@ -862,6 +894,9 @@ fn resolve_spring(args: &[&Arg], call_span: Span) -> Result<Curve, CompileError>
         }
     }
     let _ = call_span;
+    if let Some(ratio) = ratio {
+        damping = crate::interp::theme::spring_damping(stiffness, ratio);
+    }
     Ok(Curve::Spring {
         stiffness,
         damping,

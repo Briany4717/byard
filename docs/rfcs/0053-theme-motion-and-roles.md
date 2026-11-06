@@ -164,6 +164,11 @@ the literal `anim.spring(stiffness: 800, damping: 33.94)`, and writing
 `damping = 0.6` in a theme gets what `damping: 0.6` gets in a literal, a spring
 that rings for several seconds. The guide's example is corrected.
 
+Byld speaks both spellings too: `anim.spring(stiffness: 800, damping_ratio: 0.6)` is
+the same spring as the token, and `damping:` stays the coefficient. A call takes one of
+the two (both is `InvalidAnimation`), and a ratio is converted when the curve is
+resolved, whatever order the arguments are written in.
+
 ### 3. Resolution
 
 The grammar of `with` gains one form: a member of the injected theme, `t.name`,
@@ -184,7 +189,7 @@ looked up in the active theme:
 
 A duration token is also accepted wherever a duration literal is: the positional
 duration of `anim.linear`, `anim.ease`, `anim.easeIn`, `anim.easeOut`,
-`anim.easeInOut`, the `duration:` modifier, and the step of `anim.stagger`. A
+`anim.easeInOut`, the `duration:` modifier (a keyframe track's included), and the step of `anim.stagger`. A
 spring there, or any other token, is `InvalidAnimation`. A spring token is also
 accepted as the base curve of `anim.stagger`.
 
@@ -260,8 +265,6 @@ titleLarge` does, including when written bare.
   longer, and two `[theme.motion.*]` tables is what Material's own token
   documents avoid.
 - **A token takes no modifiers.** `with t.springSpatialFast` cannot loop.
-- **`anim.keyframes(duration: t.x)` takes no token.** A keyframe track's duration
-  stays a literal; the other duration positions take one.
 - **The base grows.** Twenty-two entries are in every theme, used or not.
 
 ## Rationale and alternatives

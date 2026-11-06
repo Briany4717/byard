@@ -1312,7 +1312,7 @@ pub fn validate_element_in(
                         errs.push(err);
                     }
                 }
-            } else if let Some(track) = crate::interp::anim::resolve_keyframes(value) {
+            } else if let Some(track) = crate::interp::anim::resolve_keyframes_in(value, theme) {
                 // Same rule for the keyframe form (RFC-0025 §3).
                 // RFC-0025 §3: `anim.keyframes(…)` stands in value position. It
                 // is rejected on a layout property for the same reason `with`

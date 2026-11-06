@@ -3,7 +3,7 @@
 - **Status:** Draft
 - **Author(s):** Briany4717
 - **Created:** 2026-11-06
-- **Last updated:** 2026-11-06
+- **Last updated:** 2026-11-06 (spike findings)
 - **Depends on:** RFC-0008 (the package ecosystem: `byard get`, `byard
   publish`, registries), RFC-0022 (themes and assets in packages), RFC-0017
   and RFC-0036 (overlays), RFC-0020 and RFC-0031 (shapes and morphing),
@@ -158,6 +158,34 @@ known:
 
 Each of these is its own branch, with its own RFC where it changes the
 language (1, 5, 6), in the order above.
+
+### What the spike found
+
+`Button`, `Switch`, `TextField` and `Icon` were built in the package
+repository against every fix pending at the time. The package went through
+`byard get` from a git tag, `extends`, `byard publish` to a registry and
+`byard bundle`, and every step worked. The content checksum is the same from
+path, git and registry. Of the six prerequisites, 3 and 4 turned out not to be
+gaps for a package: a package's `[theme]` can declare every colour role and
+the expressive corner and type tokens. They are missing only from `byard-base`.
+The other four were confirmed.
+
+It also found bugs that are not about Material, and those come first:
+
+- **A view's animations are shared by all its call sites.** Two `T(v: 2)`
+  and `T(v: 20)` that animate `radius: v with anim.spring()` both draw the
+  last call's value. Only a `for` iteration keeps its own. This makes any view
+  with motion unusable more than once on a screen.
+- **`size:` on a Text read from a view parameter is ignored.**
+- **`Comp(…) => action` on a view call is accepted and dropped.**
+- **A package can't name a view like a built-in.** `IntrinsicShadowed` stops
+  `Button` and `TextField`, even though callers write `m.Button`.
+- `byard shot` draws programs `check` rejects, unknown `[theme.*]` tables are
+  accepted silently, and `byard publish` doesn't run `check`.
+
+The icon font is most of a consumer's cost: `check` goes from 52 ms for an
+empty app to 210 ms with the package, and to 71 ms without the font. That makes
+subsetting part of prerequisite 6, not a later nicety.
 
 ### Where it lives and how it ships
 

@@ -1350,7 +1350,12 @@ impl Interpreter {
                 attrs,
                 state_blocks,
                 src,
+                env_snapshot,
             } => {
+                let env_base = self.env.len();
+                for (k, v) in env_snapshot {
+                    self.env.push(k.clone(), v.clone());
+                }
                 if let Ok(Some(rect)) = self.atlas.resolved_rect(atlas_node) {
                     // RFC-0016: overlay active `on <state>` blocks before reading
                     // paint properties (fit/radius/opacity). RFC-0024: fold in the
@@ -1415,6 +1420,7 @@ impl Interpreter {
                         dirty: true,
                     });
                 }
+                self.env.truncate(env_base);
             }
             // RFC-0039: hand the view its rect and let it draw. Props are
             // re-evaluated every tick through the same `eval_*` chokepoints an
@@ -1539,7 +1545,15 @@ impl Interpreter {
                     }
                 }
             }
-            RenderNode::Vector { attrs, src } => {
+            RenderNode::Vector {
+                attrs,
+                src,
+                env_snapshot,
+            } => {
+                let env_base = self.env.len();
+                for (k, v) in env_snapshot {
+                    self.env.push(k.clone(), v.clone());
+                }
                 if let Ok(Some(rect)) = self.atlas.resolved_rect(atlas_node) {
                     if self.access.on {
                         let elem = self.atlas.node_index(atlas_node);
@@ -1599,6 +1613,7 @@ impl Interpreter {
                         layer,
                     ));
                 }
+                self.env.truncate(env_base);
             }
             // RFC-0020: the `Canvas` drawing surface. Shape parameters are
             // re-evaluated every tick through `eval_pure`, so a reactive or

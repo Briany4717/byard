@@ -17,6 +17,11 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   when they named a parameter, a `let` or a `var` of the view. They now use the value of
   each call, and follow it when it changes. A `Float` works as a `size`, and `weight: w`
   with `w` a number no longer fails `byard check`.
+- **`Image` and `VectorIcon` read the parameters of their view too.** `width`, `height`,
+  `opacity`, `size` and `color` written as a parameter used the default; they now use the
+  value of each call.
+- **`lines:` on a `Text` is an error.** It was accepted and did nothing, so a text meant to
+  stop at two lines ran on. `byard check` now says the attribute is unknown.
 - **A lambda sees its own item.** A `fn` called with the item inside a list
   lambda (`products.filter(p => isLow(p.qty))`) was computed once, for the
   first item, and gave every item the same answer. A lambda inside another

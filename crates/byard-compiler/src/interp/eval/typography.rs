@@ -118,7 +118,12 @@ impl Interpreter {
         }
         // A bare word is a keyword only when it is one: `weight: w` with `w` a
         // view parameter is a value, read below like any number.
-        if let Some(kw) = Self::enum_prop(attrs, "weight") {
+        // A name the view binds shadows a keyword of the same spelling.
+        let bound = attrs.iter().any(|a| {
+            matches!(&a.kind, AttrKind::Prop { value: Expr::Ident(sym, _) }
+                if a.name.as_str() == "weight" && self.env.lookup(sym).is_some())
+        });
+        if let Some(kw) = Self::enum_prop(attrs, "weight").filter(|_| !bound) {
             match kw {
                 "thin" => return 100,
                 "regular" => return 400,
@@ -141,9 +146,7 @@ impl Interpreter {
     /// a text-bearing widget. A widget that wraps its label in a box has to
     /// forward them or accept them into a void.
     pub(super) fn text_shaping_attrs(attrs: &[Attr]) -> Vec<Attr> {
-        const TYPE_PROPS: &[&str] = &[
-            "typo", "size", "weight", "font", "color", "align", "wrap", "lines",
-        ];
+        const TYPE_PROPS: &[&str] = &["typo", "size", "weight", "font", "color", "align", "wrap"];
         attrs
             .iter()
             .filter(|a| TYPE_PROPS.contains(&a.name.as_str()))

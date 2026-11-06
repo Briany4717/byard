@@ -20,6 +20,21 @@ use crate::parser::ast::{ElementNode, Expr, Member};
 use crate::symbol::Symbol;
 
 impl Interpreter {
+    /// The instance environment for a leaf that reads attributes outside the
+    /// walk that lowered it. Empty for one with no attributes, which read
+    /// nothing, so the common bare `Text` pays nothing.
+    fn attrs_snapshot(
+        &self,
+        attrs: &[crate::parser::ast::Attr],
+        state_blocks: &[crate::parser::ast::StateBlock],
+    ) -> Vec<(Symbol, Value)> {
+        if attrs.is_empty() && state_blocks.is_empty() {
+            Vec::new()
+        } else {
+            self.capture_env_snapshot()
+        }
+    }
+
     /// Whether `error` is the keyword complaint about a `weight:` whose bare
     /// word names something in scope (a view parameter, a `let`, a `var`).
     fn is_bound_weight_word(
@@ -34,8 +49,7 @@ impl Interpreter {
             a.name.as_str() == "weight"
                 && matches!(&a.kind, crate::parser::ast::AttrKind::Prop {
                     value: Expr::Ident(sym, sp),
-                } if sp == span
-                    && (self.env.lookup(sym).is_some() || self.root_params.contains(sym)))
+                } if sp == span && self.env.lookup(sym).is_some())
         })
     }
 
@@ -101,13 +115,7 @@ impl Interpreter {
                         clip_path: None,
                     }
                 } else {
-                    // A `Text` with no attributes reads nothing from its
-                    // instance, so it carries no snapshot.
-                    let env_snapshot = if attrs.is_empty() && state_blocks.is_empty() {
-                        Vec::new()
-                    } else {
-                        self.capture_env_snapshot()
-                    };
+                    let env_snapshot = self.attrs_snapshot(&attrs, &state_blocks);
                     RenderNode::Text {
                         attrs,
                         state_blocks,
@@ -130,10 +138,12 @@ impl Interpreter {
                     |c| c.value.clone(),
                 );
                 let src = self.bind_value(&src_expr);
+                let env_snapshot = self.attrs_snapshot(&attrs, &state_blocks);
                 RenderNode::Image {
                     attrs,
                     state_blocks,
                     src,
+                    env_snapshot,
                 }
             }
             // VectorIcon intrinsic → VectorMSDF pipeline. Content is an
@@ -144,9 +154,11 @@ impl Interpreter {
                     |c| c.value.clone(),
                 );
                 let src = self.bind_value(&src_expr);
+                let env_snapshot = self.attrs_snapshot(&el.attrs, &[]);
                 RenderNode::Vector {
                     attrs: el.attrs.clone(),
                     src,
+                    env_snapshot,
                 }
             }
             // RFC-0020: the `Canvas` drawing surface. Its children are shape

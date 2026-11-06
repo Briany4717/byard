@@ -185,6 +185,16 @@ fn a_weight_keyword_is_still_a_keyword() {
 }
 
 #[test]
+fn a_parameter_spelt_like_a_keyword_is_the_parameter() {
+    let s = Shot::new(
+        "View K(bold: Int) { Text(\"Aa\") #[size: 20, weight: bold] }\n\
+         View Main() { Column { K(bold: 250) K(bold: 800) } }",
+    );
+    let w: Vec<u16> = s.lines().iter().map(|l| l.weight).collect();
+    assert_eq!(w, [250, 800]);
+}
+
+#[test]
 fn a_color_from_a_parameter() {
     let s = two(
         "View K(c: Int) { Text(\"Aa\") #[size: 20, color: c] }",
@@ -229,4 +239,49 @@ fn a_typo_token_from_a_parameter() {
     );
     let sizes = s.sizes();
     assert!(sizes[0] > sizes[1], "{sizes:?}");
+}
+
+// ── the other leaves that read attributes outside the walk that lowered them ──
+
+#[test]
+fn an_image_reads_its_size_and_opacity_from_parameters() {
+    let s = Shot::new(
+        "View P(w: Int, o: Float) { Image(\"a.png\") #[width: w, height: w, opacity: o] }\n\
+         View Main() { Column { P(w: 40, o: 0.5) P(w: 90, o: 1.0) } }",
+    );
+    let t = s.frame.textures();
+    assert_eq!(t.len(), 2);
+    assert_eq!([t[0].rect[2], t[0].rect[3]], [40.0, 40.0]);
+    assert_eq!([t[1].rect[2], t[1].rect[3]], [90.0, 90.0]);
+    assert!((t[0].opacity - 0.5).abs() < 1e-3 && (t[1].opacity - 1.0).abs() < 1e-3);
+    // Laid out at its own size: the second starts below the first.
+    assert!(t[1].rect[1] >= 40.0, "{:?}", t[1].rect);
+}
+
+#[test]
+fn a_vector_icon_reads_its_size_and_color_from_parameters() {
+    let s = Shot::new(
+        "View I(d: Int, c: Int) { VectorIcon(\"x.svg\") #[size: d, color: c] }\n\
+         View Main() { Column { I(d: 48, c: 0xFF0000) I(d: 16, c: 0x0000FF) } }",
+    );
+    let v = s.frame.vector_instances();
+    assert_eq!(v.len(), 2);
+    assert_eq!([v[0].screen_rect[2], v[0].screen_rect[3]], [48.0, 48.0]);
+    assert_eq!([v[1].screen_rect[2], v[1].screen_rect[3]], [16.0, 16.0]);
+    assert!(v[0].color[0] > v[0].color[2], "{:?}", v[0].color);
+    assert!(v[1].color[2] > v[1].color[0], "{:?}", v[1].color);
+}
+
+#[test]
+fn a_text_field_reads_size_color_and_placeholder_from_parameters() {
+    let s = Shot::new(
+        "View F(d: Int, c: Int, hint: Str) { var t = \"\"\n\
+         TextField #[bind: t, size: d, color: c, placeholder: hint, width: 200] }\n\
+         View Main() { Column { F(d: 30, c: 0xFF0000, hint: \"first\") F(d: 12, c: 0x0000FF, hint: \"second\") } }",
+    );
+    let lines = s.lines();
+    let first = lines.iter().find(|l| l.text == "first").expect("first");
+    let second = lines.iter().find(|l| l.text == "second").expect("second");
+    assert_eq!([first.font_size, second.font_size], [30.0, 12.0]);
+    assert!(first.color[0] > first.color[2] && second.color[2] > second.color[0]);
 }

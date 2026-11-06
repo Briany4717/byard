@@ -315,6 +315,9 @@ pub struct TextBox {
     pub height: Option<f32>,
     /// Flex-grow factor along the parent's main axis.
     pub grow: f32,
+    /// The main-axis size the leaf starts from before `grow` shares out what
+    /// is left; `None` is its own size, as for any flex item.
+    pub basis: Option<f32>,
     /// Space inside the leaf, around the glyphs. A leaf's `width` and
     /// `height` include it, as a box's do.
     pub padding: Spacing,
@@ -336,6 +339,9 @@ impl TextBox {
             style.size.height = Dimension::from_length(h);
         }
         style.flex_grow = self.grow;
+        if let Some(b) = self.basis {
+            style.flex_basis = Dimension::from_length(b.max(0.0));
+        }
         style.padding = TaffyRect {
             left: LengthPercentage::from_length(self.padding.left),
             right: LengthPercentage::from_length(self.padding.right),
@@ -354,7 +360,7 @@ impl TextBox {
         if self.is_default() {
             return;
         }
-        fp.opt_f32(self.height).f32(self.grow);
+        fp.opt_f32(self.height).f32(self.grow).opt_f32(self.basis);
         for s in [self.padding, self.margin] {
             fp.f32(s.top).f32(s.right).f32(s.bottom).f32(s.left);
         }
@@ -482,9 +488,10 @@ pub struct ContainerStyle {
     /// axis).
     pub grow: f32,
     /// Flex-basis in logical pixels: the size along the parent's main axis
-    /// before `grow` hands out the free space. `None` is the node's content.
-    /// A growing `ScrollView` sets it to `0`, so what it holds does not
-    /// decide how much room it asks its parent for.
+    /// before `grow` hands out the free space (CSS `flex-basis`). `None` is
+    /// `auto`, the node's content, and costs nothing. A container may declare
+    /// it with `basis`; a growing `ScrollView` sets it to `0`, so what it
+    /// holds does not decide how much room it asks its parent for.
     pub basis: Option<f32>,
     /// Whether this is a **horizontal scroll container** (RFC-0005 `ScrollView`
     /// `axis: horizontal|both`): content is measured at natural width and
@@ -568,6 +575,13 @@ impl ContainerStyle {
         self
     }
 
+    /// Sets the flex-basis, `None` for `auto`.
+    #[must_use]
+    pub fn with_basis(mut self, basis: Option<f32>) -> Self {
+        self.basis = basis;
+        self
+    }
+
     /// Sets the flex-grow factor.
     #[must_use]
     pub fn with_grow(mut self, grow: f32) -> Self {
@@ -644,7 +658,9 @@ impl ContainerStyle {
                 Justify::Evenly => JustifyContent::SpaceEvenly,
             }),
             flex_grow: self.grow,
-            flex_basis: self.basis.map_or(Dimension::auto(), Dimension::from_length),
+            flex_basis: self
+                .basis
+                .map_or_else(Dimension::auto, |b| Dimension::from_length(b.max(0.0))),
             // RFC-0017 overlay layer: an absolute node leaves its parent's flex
             // flow and is pinned to the containing block's edges (inset 0), so it
             // stretches to fill the viewport and stacks over siblings without

@@ -1,0 +1,151 @@
+// The form for a new product and for editing one (`editing` is 0 for new).
+// Each field says what is wrong with it; Save waits until nothing is. Tab goes
+// through the fields in the order they are written, and Enter in any text field
+// saves.
+
+View ProductForm(
+    editing: Int,
+    products: List<Product>,
+    min_default: Int,
+    on_create: Fn(Str, Str, Str, Int, Int, Float, Str) = {|_, _, _, _, _, _, _| },
+    on_update: Fn(Int, Str, Str, Str, Int, Float, Str) = {|_, _, _, _, _, _, _| },
+    on_cancel: Fn() = {},
+) {
+    inject Theme as t
+
+    let current = products.find(p => p.id == editing)
+    let isNew = editing == 0
+
+    var sku: Str = current.sku ?? ""
+    var name: Str = current.name ?? ""
+    var category: Str = current.category ?? "Hardware"
+    var qtyText: Str = "0"
+    var minText: Str = isNew ? "{min_default}" : "{current.min}"
+    var priceText: Str = isNew ? "" : "{current.price:.2}"
+    var location: Str = current.location ?? ""
+
+    // A field says what is wrong once it has been left, or typed in.
+    var skuSeen: Bool = false
+    var nameSeen: Bool = false
+    var priceSeen: Bool = false
+
+    // Quantities are whole numbers from 0 to a billion; a price is from 0 up.
+    let qty = qtyText.toInt() ?? -1
+    let min = minText.toInt() ?? -1
+    let price = priceText.toFloat() ?? -1.0
+
+    let skuText = sku.trim()
+    let skuError = skuText == "" ? "Required"
+        : products.filter(p => p.id != editing && p.sku.toLower() == skuText.toLower()).len > 0 ? "Already used by another product"
+        : ""
+    let nameError = name.trim() == "" ? "Required" : ""
+    let qtyError = isNew && (qty < 0 || qty > 1000000000) ? "A whole number, 0 or more" : ""
+    let minError = (min < 0 || min > 1000000000) ? "A whole number, 0 or more" : ""
+    let priceError = (price < 0.0 || price > 1000000000.0) ? "A price, 0 or more" : ""
+
+    let ready = skuError == "" && nameError == "" && qtyError == "" && minError == "" && priceError == ""
+
+    let save = () => {
+        if ready {
+            if isNew {
+                on_create(skuText, name.trim(), category, qty, min, price, location.trim())
+            } else {
+                on_update(editing, skuText, name.trim(), category, min, price, location.trim())
+            }
+        }
+    }
+
+    ScrollView #[grow: 1] {
+        Column #[p: (vertical: 24, horizontal: 28), gap: 14, width: 600] {
+            Heading(title: isNew ? "New product" : "Edit product") {}
+
+            FormField(
+                label: "SKU",
+                value: sku,
+                error: (skuSeen || sku != "") ? skuError : "",
+                placeholder: "HW-061",
+                on_change: {|v| sku = v },
+                on_blur: { skuSeen = true },
+                on_submit: { save() },
+            )
+            FormField(
+                label: "Name",
+                value: name,
+                error: (nameSeen || name != "") ? nameError : "",
+                placeholder: "Hex bolt M10",
+                on_change: {|v| name = v },
+                on_blur: { nameSeen = true },
+                on_submit: { save() },
+            )
+            Column #[gap: 4] {
+                Label(text: "Category")
+                Row #[gap: 8] {
+                    for c in categories() {
+                        Chip(label: c, on: category == c, on_tap: { category = c })
+                    }
+                }
+            }
+            Row #[gap: 14, align: start] {
+                when isNew {
+                    FormField(
+                        label: "Quantity",
+                        value: qtyText,
+                        error: qtyError,
+                        width: 170,
+                        on_change: {|v| qtyText = v },
+                        on_submit: { save() },
+                    )
+                }
+                when !isNew {
+                    Column #[gap: 4] {
+                        Label(text: "On hand")
+                        Box #[
+                            height: 40,
+                            width: 170,
+                            bg: t.surfaceContainer,
+                            radius: 10,
+                            p: (horizontal: 12),
+                            justify: center,
+                        ] {
+                            Text("{current.qty}") #[typo: t.body, color: t.onSurfaceVariant]
+                        }
+                    }
+                }
+                FormField(
+                    label: "Minimum",
+                    value: minText,
+                    error: minError,
+                    width: 170,
+                    on_change: {|v| minText = v },
+                    on_submit: { save() },
+                )
+                FormField(
+                    label: "Price",
+                    value: priceText,
+                    error: (priceSeen || priceText != "") ? priceError : "",
+                    placeholder: "0.00",
+                    width: 170,
+                    on_change: {|v| priceText = v },
+                    on_blur: { priceSeen = true },
+                    on_submit: { save() },
+                )
+            }
+            FormField(
+                label: "Location",
+                value: location,
+                error: "",
+                placeholder: "Shelf, for example B2",
+                on_change: {|v| location = v },
+                on_submit: { save() },
+            )
+            when !isNew {
+                Text("The quantity changes through Receive, Ship and Adjust, so the log stays true.")
+                    #[typo: t.caption, color: t.onSurfaceVariant]
+            }
+            Row #[gap: 10, m: (top: 6)] {
+                Action(label: "Cancel", tone: "tonal", on_tap: { on_cancel() })
+                Action(label: isNew ? "Create product" : "Save changes", off: !ready, on_tap: { save() })
+            }
+        }
+    }
+}

@@ -116,13 +116,21 @@ impl Interpreter {
             }
             return 400;
         }
-        if let Some(kw) = Self::enum_prop(attrs, "weight") {
-            return match kw {
-                "thin" => 100,
-                "medium" => 500,
-                "bold" => 700,
-                _ => 400,
-            };
+        // A bare word is a keyword only when it is one: `weight: w` with `w` a
+        // view parameter is a value, read below like any number.
+        // A name the view binds shadows a keyword of the same spelling.
+        let bound = attrs.iter().any(|a| {
+            matches!(&a.kind, AttrKind::Prop { value: Expr::Ident(sym, _) }
+                if a.name.as_str() == "weight" && self.env.lookup(sym).is_some())
+        });
+        if let Some(kw) = Self::enum_prop(attrs, "weight").filter(|_| !bound) {
+            match kw {
+                "thin" => return 100,
+                "regular" => return 400,
+                "medium" => return 500,
+                "bold" => return 700,
+                _ => {}
+            }
         }
         match self.eval_px_prop(attrs, "weight") {
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -138,9 +146,7 @@ impl Interpreter {
     /// a text-bearing widget. A widget that wraps its label in a box has to
     /// forward them or accept them into a void.
     pub(super) fn text_shaping_attrs(attrs: &[Attr]) -> Vec<Attr> {
-        const TYPE_PROPS: &[&str] = &[
-            "typo", "size", "weight", "font", "color", "align", "wrap", "lines",
-        ];
+        const TYPE_PROPS: &[&str] = &["typo", "size", "weight", "font", "color", "align", "wrap"];
         attrs
             .iter()
             .filter(|a| TYPE_PROPS.contains(&a.name.as_str()))
@@ -210,12 +216,26 @@ impl Interpreter {
     /// Both have to come here, because the accessor *evaluates* to the token's
     /// size, and a size carries neither family nor weight. Reading only the
     /// bare spelling dropped both on the spelling everyone writes.
-    fn typo_token_name(&self, attrs: &[Attr]) -> Option<String> {
+    fn typo_token_name(&mut self, attrs: &[Attr]) -> Option<String> {
         let value = attrs.iter().find_map(|a| match (&a.name, &a.kind) {
             (n, AttrKind::Prop { value }) if n.as_str() == "typo" => Some(value),
             _ => None,
         })?;
         match value {
+            // A name the view binds (`typo: style` with `style: Str`) is the
+            // token its value names, not a token called `style`.
+            Expr::Ident(sym, _)
+                if self
+                    .env
+                    .lookup(sym)
+                    .is_some_and(|v| !matches!(v, Value::Theme(_))) =>
+            {
+                let value = value.clone();
+                match self.eval_pure(&value) {
+                    Value::Str(token) => Some(token),
+                    _ => None,
+                }
+            }
             Expr::Ident(sym, _) => Some(sym.as_str().to_string()),
             Expr::Member { base, field, .. } => match base.as_ref() {
                 Expr::Ident(name, _) if matches!(self.env.lookup(name), Some(Value::Theme(_))) => {
@@ -454,6 +474,16 @@ impl Interpreter {
     fn typo_weight(&mut self, attrs: &[Attr]) -> Option<u16> {
         let token = self.typo_token_name(attrs)?;
         self.theme.typo_weight(&token)
+    }
+
+    /// The size a `Text` is shaped at: its `size:` (a whole or a fractional
+    /// number, so a `Float` parameter works), else its `typo:` token's, else
+    /// the theme's body size.
+    #[allow(clippy::cast_precision_loss)]
+    pub(super) fn text_font_size(&mut self, attrs: &[Attr], typo_size: Option<i64>) -> f32 {
+        self.eval_px_prop(attrs, "size")
+            .or(typo_size.map(|s| s as f32))
+            .unwrap_or(self.theme.font_size)
     }
 
     pub(super) fn eval_typo_size(&mut self, attrs: &[Attr]) -> Option<i64> {

@@ -235,7 +235,15 @@ impl Interpreter {
                 attrs,
                 state_blocks,
                 content,
+                env_snapshot,
+                ..
             } => {
+                // The scope the run was written in: a `size:` or `color:` that
+                // reads a view parameter resolves against it (empty: no-op).
+                let env_base = self.env.len();
+                for (k, v) in env_snapshot {
+                    self.env.push(k.clone(), v.clone());
+                }
                 if let Ok(Some(rect)) = self.atlas.resolved_rect(atlas_node) {
                     // RFC-0016: overlay any active `on <state>` block against the
                     // live engine mask before reading paint properties. RFC-0024:
@@ -252,7 +260,7 @@ impl Interpreter {
                     let attrs = attrs.as_ref();
                     let text = match self.binding_value(*content) {
                         Some(Value::Str(s)) => s,
-                        other => other.map_or_else(String::new, |v| format!("{v:?}")),
+                        other => other.map_or_else(String::new, |v| v.to_text()),
                     };
                     // Fall back to theme on-surface color when unset.
                     let color = self
@@ -261,10 +269,7 @@ impl Interpreter {
                     // Resolve `typo:` token to font size; inline `size:` overrides
                     // (RFC-0005 `Typo`, completed by RFC-0022).
                     let typo_size = self.eval_typo_size(attrs);
-                    let size =
-                        self.eval_int_prop(attrs, "size")
-                            .or(typo_size)
-                            .unwrap_or(self.theme.font_size as i64) as f32;
+                    let size = self.text_font_size(attrs, typo_size);
                     let mut rgba = super::intrinsics::color_rgba_auto(color);
                     rgba[3] *= inherited_opacity;
                     // RFC-0011: the run's own transform, composed with its
@@ -384,6 +389,7 @@ impl Interpreter {
                         self.register_event_attrs(attrs, hit_rect, elem_idx);
                     }
                 }
+                self.env.truncate(env_base);
             }
             RenderNode::Box {
                 name,
@@ -397,6 +403,7 @@ impl Interpreter {
                 measure: _,
                 clip_path,
                 uid: _,
+                inst: _,
             } => {
                 // RFC-0019 §2: restore the instance environment captured at lower
                 // time so event actions re-lowered below (a forwarded callback,
@@ -1345,7 +1352,13 @@ impl Interpreter {
                 attrs,
                 state_blocks,
                 src,
+                env_snapshot,
+                ..
             } => {
+                let env_base = self.env.len();
+                for (k, v) in env_snapshot {
+                    self.env.push(k.clone(), v.clone());
+                }
                 if let Ok(Some(rect)) = self.atlas.resolved_rect(atlas_node) {
                     // RFC-0016: overlay active `on <state>` blocks before reading
                     // paint properties (fit/radius/opacity). RFC-0024: fold in the
@@ -1410,6 +1423,7 @@ impl Interpreter {
                         dirty: true,
                     });
                 }
+                self.env.truncate(env_base);
             }
             // RFC-0039: hand the view its rect and let it draw. Props are
             // re-evaluated every tick through the same `eval_*` chokepoints an
@@ -1423,6 +1437,7 @@ impl Interpreter {
                 action,
                 env_snapshot,
                 slot,
+                ..
             } => {
                 if let Ok(Some(rect)) = self.atlas.resolved_rect(atlas_node) {
                     let elem_idx = self.atlas.node_index(atlas_node);
@@ -1534,7 +1549,16 @@ impl Interpreter {
                     }
                 }
             }
-            RenderNode::Vector { attrs, src } => {
+            RenderNode::Vector {
+                attrs,
+                src,
+                env_snapshot,
+                ..
+            } => {
+                let env_base = self.env.len();
+                for (k, v) in env_snapshot {
+                    self.env.push(k.clone(), v.clone());
+                }
                 if let Ok(Some(rect)) = self.atlas.resolved_rect(atlas_node) {
                     if self.access.on {
                         let elem = self.atlas.node_index(atlas_node);
@@ -1594,6 +1618,7 @@ impl Interpreter {
                         layer,
                     ));
                 }
+                self.env.truncate(env_base);
             }
             // RFC-0020: the `Canvas` drawing surface. Shape parameters are
             // re-evaluated every tick through `eval_pure`, so a reactive or
@@ -1605,6 +1630,7 @@ impl Interpreter {
                 shapes,
                 action,
                 env_snapshot,
+                ..
             } => {
                 if let Ok(Some(rect)) = self.atlas.resolved_rect(atlas_node) {
                     let elem_idx = self.atlas.node_index(atlas_node);

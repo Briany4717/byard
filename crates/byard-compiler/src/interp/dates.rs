@@ -21,6 +21,7 @@
 //! | `HH` | `14` |
 //! | `H` | `9` |
 //! | `mm` | `05` |
+//! | `ss` | `09` |
 //!
 //! English names only: languages are a separate question, and a date in the
 //! wrong language is better than a pattern that silently means different
@@ -58,10 +59,12 @@ struct When {
     day: u32,
     hour: u32,
     minute: u32,
+    second: u32,
 }
 
-/// Reads `YYYY-MM-DD`, optionally followed by `THH:MM` (seconds and a zone
-/// after that are ignored). `None` for anything else, or an impossible date.
+/// Reads `YYYY-MM-DD`, optionally followed by `THH:MM` and `:SS` (a fraction
+/// and a zone after that are ignored). `None` for anything else, or an
+/// impossible date.
 fn parse(text: &str) -> Option<When> {
     let bytes = text.as_bytes();
     let number = |range: std::ops::Range<usize>| -> Option<u32> {
@@ -80,7 +83,7 @@ fn parse(text: &str) -> Option<When> {
     if !(1..=12).contains(&month) || day == 0 || day > days_in(year, month) {
         return None;
     }
-    let (hour, minute) = if bytes.len() >= 16 && (bytes[10] == b'T' || bytes[10] == b' ') {
+    let (hour, minute, second) = if bytes.len() >= 16 && (bytes[10] == b'T' || bytes[10] == b' ') {
         if bytes[13] != b':' {
             return None;
         }
@@ -88,9 +91,20 @@ fn parse(text: &str) -> Option<When> {
         if h > 23 || m > 59 {
             return None;
         }
-        (h, m)
+        // Seconds, when written: `:SS`. Whatever follows them (a fraction, a
+        // `Z`, an offset) is ignored.
+        let s = if bytes.get(16) == Some(&b':') {
+            let s = number(17..19)?;
+            if s > 59 {
+                return None;
+            }
+            s
+        } else {
+            0
+        };
+        (h, m, s)
     } else if bytes.len() == 10 {
-        (0, 0)
+        (0, 0, 0)
     } else {
         return None;
     };
@@ -100,7 +114,15 @@ fn parse(text: &str) -> Option<When> {
         day,
         hour,
         minute,
+        second,
     })
+}
+
+/// The fields of an ISO date or date-time, `(year, month, day, hour, minute,
+/// second)`, for the interpreter's clock (RFC-0049).
+pub(crate) fn parse_fields(text: &str) -> Option<(i64, u32, u32, u32, u32, u32)> {
+    let w = parse(text)?;
+    Some((w.year, w.month, w.day, w.hour, w.minute, w.second))
 }
 
 fn days_in(year: i64, month: u32) -> u32 {
@@ -137,7 +159,7 @@ pub fn format_date(text: &str, pattern: &str) -> Option<String> {
     let month = MONTHS[(when.month - 1) as usize];
     let day = WEEKDAYS[weekday(when)];
     // Longest token first, so `MMMM` is not read as `MM` twice.
-    let tokens: [(&str, String); 12] = [
+    let tokens: [(&str, String); 13] = [
         ("YYYY", format!("{:04}", when.year)),
         ("MMMM", month.to_string()),
         ("MMM", month[..3].to_string()),
@@ -150,6 +172,7 @@ pub fn format_date(text: &str, pattern: &str) -> Option<String> {
         ("HH", format!("{:02}", when.hour)),
         ("H", when.hour.to_string()),
         ("mm", format!("{:02}", when.minute)),
+        ("ss", format!("{:02}", when.second)),
     ];
     let mut out = String::with_capacity(pattern.len() + 8);
     let mut rest = pattern;
@@ -200,6 +223,30 @@ mod tests {
             format_date("2026-10-16 23:59:30Z", "HH:mm").as_deref(),
             Some("23:59")
         );
+    }
+
+    #[test]
+    fn seconds_are_read_and_a_zone_is_accepted() {
+        assert_eq!(
+            format_date("2026-11-05T14:03:12", "HH:mm:ss").as_deref(),
+            Some("14:03:12")
+        );
+        // The `Z` of `nowUtc()`, an offset and a fraction follow the seconds.
+        for text in [
+            "2026-11-05T14:03:12Z",
+            "2026-11-05T14:03:12+02:00",
+            "2026-11-05T14:03:12.250Z",
+        ] {
+            assert_eq!(
+                format_date(text, "HH:mm:ss").as_deref(),
+                Some("14:03:12"),
+                "{text}"
+            );
+        }
+        // No seconds written is second zero.
+        assert_eq!(format_date("2026-11-05T14:03", "ss").as_deref(), Some("00"));
+        assert_eq!(format_date("2026-11-05T14:03:61", "ss"), None);
+        assert_eq!(format_date("2026-11-05T14:03:xx", "ss"), None);
     }
 
     #[test]

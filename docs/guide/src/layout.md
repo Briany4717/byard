@@ -50,6 +50,25 @@ children with `grow: 1` and `grow: 2` split it one to two. `Spacer` is a child
 that does nothing but `grow`. The root of a screen usually says `grow: 1`, so it
 fills the window instead of hugging its content.
 
+`basis` is the size a child starts from on the main axis, its width in a `Row` and
+its height in a `Column`, before `grow` hands out what is left. A `Box #[basis: 100,
+grow: 1]` and another `Box #[basis: 200, grow: 1]` in a 500 wide row end up 200 and
+300 wide: each gets its basis, and the 200 left over is shared equally. `Box`,
+`Row`, `Column`, `Button`, `ScrollView`, `Grid`, `ZStack`, `Clip`, `Spacer` and `Text`
+take it. An element that lays itself out from its own content or its own `width` and
+`height` (`Image`, `Canvas`, `TextField`, `Toggle`, `Slider`, `Checkbox`,
+`RadioButton`, `VectorIcon`) has nothing for it to set, and `basis` there is an
+unknown attribute.
+
+```byld
+View Main() {
+    Row #[width: 500, height: 40] {
+        Box #[basis: 100, grow: 1, bg: 0x3B82F6] {}
+        Box #[basis: 200, grow: 1, bg: 0x8FD19E] {}
+    }
+}
+```
+
 ## Space
 
 `gap` is the space between children. `p` is padding, inside the container, and
@@ -297,8 +316,11 @@ read the number. The other way round never settles.
 its parent offers. `wrap: false` keeps it on one line. The look of text is covered under [styling](styling.md).
 
 A `Text` takes the attributes that place a child in a `Row` or `Column`: `width`,
-`height`, `grow`, and `p` and `m` with their sides. `Text("Title") #[grow: 1]`
-takes the room left in its row. `p` insets the words inside the text's own box, `m`
+`height`, `grow`, `basis`, and `p` and `m` with their sides. `Text("Title")
+#[grow: 1]` takes the room left in its row after its own size, as a `Box` does, so
+two `grow: 1` texts of different lengths are not equal halves. `basis: 0` makes
+them start from nothing, and a column of such cells lines up from row to row.
+`p` insets the words inside the text's own box, `m`
 leaves room around it. A `Text` has no children, so `gap`, `align` and `justify`
 do not apply (its `align` positions the words, see [styling](styling.md)).
 

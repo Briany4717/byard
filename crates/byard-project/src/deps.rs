@@ -1214,7 +1214,11 @@ pub fn resolve_project(
     let mut provider = FsProvider::new(manifest, lock);
     let files = project_source_files(manifest)?;
     declare_native_views(manifest);
-    let program = byard_compiler::resolve::resolve_program(files, &mut provider);
+    let program = if manifest.library {
+        byard_compiler::resolve::resolve_library(&manifest.name, files, &mut provider)
+    } else {
+        byard_compiler::resolve::resolve_program(files, &mut provider)
+    };
     Ok((program, provider))
 }
 

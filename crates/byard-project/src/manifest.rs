@@ -372,25 +372,7 @@ impl Manifest {
 
         let project = table.get("project");
 
-        // Warn on unknown top-level keys (C2: forward-compatible), except
-        // `[dependencies]`, which is parsed strictly below, `[package]`,
-        // reserved for package manifests, and `[assets]` (RFC-0009 §4).
-        for key in table.keys() {
-            if !matches!(
-                key.as_str(),
-                "project"
-                    | "dependencies"
-                    | "package"
-                    | "assets"
-                    | "theme"
-                    | "dev"
-                    | "http"
-                    | "native_views"
-                    | "bundle"
-            ) {
-                eprintln!("byard.toml: warning: unknown key `{key}` (ignored)");
-            }
-        }
+        reject_unknown_manifest_keys(&table).map_err(in_manifest)?;
 
         // `[assets.vectors] include = ["a.svg", ...]`, the AOT escape hatch.
         let vector_includes = table
@@ -480,6 +462,70 @@ impl Manifest {
             bundle,
         })
     }
+}
+
+/// Every table of a project or package manifest is read strictly: a key
+/// nothing reads is a setting the author thinks is on (`[theme.motion]`, a
+/// misspelt `[package]` key), so each is an error with the closest known one.
+fn reject_unknown_manifest_keys(table: &toml::Table) -> Result<(), String> {
+    reject_unknown_keys(
+        table,
+        "",
+        &[
+            "project",
+            "dependencies",
+            "package",
+            "assets",
+            "theme",
+            "dev",
+            "http",
+            "native_views",
+            "bundle",
+        ],
+    )?;
+    for (section, keys) in [
+        ("project", &["name", "entry", "icon"][..]),
+        ("package", &["name", "version"][..]),
+        ("assets", &["fonts", "vectors"][..]),
+    ] {
+        if let Some(t) = table.get(section).and_then(toml::Value::as_table) {
+            reject_unknown_keys(t, &format!("[{section}]"), keys)?;
+        }
+    }
+    if let Some(t) = table
+        .get("assets")
+        .and_then(|a| a.get("vectors"))
+        .and_then(toml::Value::as_table)
+    {
+        reject_unknown_keys(t, "[assets.vectors]", &["include"])?;
+    }
+    Ok(())
+}
+
+/// Errors on the first key of `table` that is not in `known`, naming the key
+/// and the closest known one. `section` is how the table is written in the
+/// manifest (`[package]`), or empty for the top level.
+fn reject_unknown_keys(table: &toml::Table, section: &str, known: &[&str]) -> Result<(), String> {
+    let Some(key) = table.keys().find(|k| !known.contains(&k.as_str())) else {
+        return Ok(());
+    };
+    let place = if section.is_empty() {
+        String::new()
+    } else {
+        format!(" {section}:")
+    };
+    let hint = match byard_compiler::util::closest_match(key, known.iter().copied()) {
+        Some(near) => format!("did you mean `{near}`?"),
+        None => format!(
+            "known keys: {}",
+            known
+                .iter()
+                .map(|k| format!("`{k}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    };
+    Err(format!("byard.toml:{place} unknown key `{key}`; {hint}"))
 }
 
 /// Parses `[bundle]`. An identifier is reverse-DNS: dot-separated parts of
@@ -921,6 +967,43 @@ fn parse_theme(
         apply_theme_table(&mut theme, theme_tbl, library_name, project_root)?;
     }
 
+    // The tokens of a dependency's theme this one did not take. The package's
+    // views use them, so a consumer that did not extend it gets
+    // `UnknownThemeToken` for each; remembering where they live lets the
+    // error say what to add. Best effort: a theme that does not apply is
+    // reported where it is extended, not here.
+    let extended = table
+        .get("theme")
+        .and_then(|t| t.get("extends"))
+        .and_then(toml::Value::as_str);
+    if let Some(base) = extended.filter(|b| *b != "byard-base") {
+        theme.set_extended(base);
+    }
+    {
+        let base: std::collections::HashSet<String> = Theme::byard_base()
+            .token_names()
+            .map(str::to_string)
+            .collect();
+        for (name, owner, pkg, root) in packages.iter().filter(|(n, ..)| Some(*n) != extended) {
+            let Some(pkg_theme) = pkg.get("theme").and_then(toml::Value::as_table) else {
+                continue;
+            };
+            let mut scratch = Theme::byard_base();
+            if apply_theme_table(&mut scratch, pkg_theme, Some(owner), root).is_err() {
+                continue;
+            }
+            let mut names: Vec<&str> = scratch
+                .token_names()
+                .filter(|t| !base.contains(*t))
+                .collect();
+            names.sort_unstable();
+            names.dedup();
+            for token in names {
+                theme.note_unapplied_token(token, name);
+            }
+        }
+    }
+
     // The project's own fonts, relative to the project. A library package's
     // are named as its consumers name them, `"<package>/<Family>"`, and must
     // live inside it, so checking the package sees what a consumer will.
@@ -946,6 +1029,29 @@ fn read_package_manifest(root: &Path) -> Result<Option<toml::Table>, String> {
         .map_err(|e: toml::de::Error| format!("{}: {e}", path.display()))
 }
 
+/// Errors on a `[theme]` key, or a `[theme.color]` scheme, nothing reads.
+fn reject_unknown_theme_keys(theme_tbl: &toml::Table) -> Result<(), String> {
+    reject_unknown_keys(
+        theme_tbl,
+        "[theme]",
+        &[
+            "name",
+            "scheme",
+            "transition",
+            "seed",
+            "extends",
+            "color",
+            "typography",
+            "breakpoints",
+            "shape",
+        ],
+    )?;
+    if let Some(colors) = theme_tbl.get("color").and_then(toml::Value::as_table) {
+        reject_unknown_keys(colors, "[theme.color]", &["light", "dark"])?;
+    }
+    Ok(())
+}
+
 /// Applies one `[theme]` table's tokens onto `theme`. `package` names the
 /// package the table came from, so a typography token's `family` resolves to
 /// that package's own font when it declares one (`"Roboto"` inside
@@ -957,6 +1063,7 @@ fn apply_theme_table(
     package: Option<&str>,
     root: &Path,
 ) -> Result<(), String> {
+    reject_unknown_theme_keys(theme_tbl)?;
     if let Some(name) = theme_tbl.get("name").and_then(toml::Value::as_str) {
         theme.name = name.to_string();
     }
@@ -2102,5 +2209,84 @@ mod tests {
         let dir = project_with("bad-key", "[bundle]\ncolour = \"red\"", &[]);
         let err = Manifest::discover(Some(&dir)).err().unwrap().to_string();
         assert!(err.contains("unknown key `colour`"), "{err}");
+    }
+
+    /// The manifest's error for `extra` appended to a valid project, or `None`.
+    fn manifest_error(tag: &str, extra: &str) -> Option<String> {
+        let dir = project_with(tag, extra, &[]);
+        let result = Manifest::discover(Some(&dir));
+        let _ = std::fs::remove_dir_all(&dir);
+        result.err().map(|e| e.to_string())
+    }
+
+    #[test]
+    fn an_unknown_theme_table_is_an_error_naming_it() {
+        let err = manifest_error("motion", "[theme.motion]\nfast = 1\n").expect("an error");
+        assert!(
+            err.contains("[theme]") && err.contains("unknown key `motion`"),
+            "{err}"
+        );
+        let err = manifest_error("colour", "[theme.colour.light]\nprimary = \"#123456\"\n")
+            .expect("an error");
+        assert!(
+            err.contains("unknown key `colour`; did you mean `color`?"),
+            "{err}"
+        );
+        let err = manifest_error("scheme", "[theme.color.darker]\nprimary = \"#123456\"\n")
+            .expect("an error");
+        assert!(
+            err.contains("[theme.color]") && err.contains("`darker`"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn an_unknown_key_in_package_project_or_assets_is_an_error() {
+        let err =
+            manifest_error("pkg", "[package]\nname = \"x\"\nversoin = \"1\"\n").expect("an error");
+        assert!(
+            err.contains("[package]")
+                && err.contains("`versoin`")
+                && err.contains("did you mean `version`?"),
+            "{err}"
+        );
+        let err = manifest_error("proj", "foo = 1\n").expect("an error");
+        assert!(err.contains("[project]") && err.contains("`foo`"), "{err}");
+        let err = manifest_error("top", "[bogus]\nx = 1\n").expect("an error");
+        assert!(err.contains("unknown key `bogus`"), "{err}");
+        let err = manifest_error("assets", "[assets]\nfont = {}\n").expect("an error");
+        assert!(err.contains("did you mean `fonts`?"), "{err}");
+    }
+
+    #[test]
+    fn every_committed_manifest_still_parses() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let mut found = 0;
+        let mut stack = vec![root.join("crates"), root.join("examples")];
+        while let Some(dir) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    if path
+                        .file_name()
+                        .is_some_and(|n| n != "target" && n != "node_modules")
+                    {
+                        stack.push(path);
+                    }
+                } else if path.file_name().is_some_and(|n| n == "byard.toml") {
+                    found += 1;
+                    // A manifest that does not resolve its dependencies yet
+                    // is not this test's business; an unknown key is.
+                    if let Err(e) = Manifest::from_toml(&path) {
+                        let e = e.to_string();
+                        assert!(!e.contains("unknown key"), "{}: {e}", path.display());
+                    }
+                }
+            }
+        }
+        assert!(found > 20, "found only {found} manifests");
     }
 }

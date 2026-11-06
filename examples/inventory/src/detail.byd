@@ -1,0 +1,213 @@
+// One product: its fields, its stock, its movements, and what can be done to
+// it. Receive, ship and adjust open a dialog; delete asks first.
+
+View ProductDetail(
+    id: Int,
+    products: List<Product>,
+    movements: List<Movement>,
+    on_edit: Fn() = {},
+    on_delete: Fn(Int) = {|_| },
+    on_move: Fn(Int, Str, Int, Str) = {|_, _, _, _| },
+    on_back: Fn() = {},
+) {
+    inject Theme as t
+
+    let product = products.find(p => p.id == id)
+    let found = (product.id ?? 0) == id
+    let log = movements.filter(m => m.productId == id)
+
+    // Which dialog is open: "", "in", "out", "adjust" or "delete".
+    var dialog: Str = ""
+
+    ScrollView #[grow: 1] {
+        Column #[p: (vertical: 24, horizontal: 28), gap: 16] {
+            Row #[gap: 12, align: center] {
+                Action(label: "< Products", tone: "tonal", on_tap: { on_back() })
+                Spacer
+            }
+
+            when !found {
+                Text("This product is gone") #[typo: t.title, color: t.onSurfaceVariant]
+            }
+            when found {
+                Heading(title: product.name) {
+                    StockBadge(qty: product.qty, min: product.min)
+                }
+                Row #[gap: 14, align: start] {
+                    Column #[gap: 14, grow: 1, width: 0] {
+                        Card {
+                            Text("Details") #[typo: t.title, color: t.onSurface]
+                            Fact(name: "SKU", value: product.sku)
+                            Fact(name: "Category", value: product.category)
+                            Fact(name: "Price", value: money(product.price))
+                            Fact(name: "Location", value: product.location ?? "not set")
+                            Fact(name: "Updated", value: stamp(product.updated))
+                        }
+                        Card {
+                            Text("Stock") #[typo: t.title, color: t.onSurface]
+                            Fact(name: "On hand", value: "{product.qty}")
+                            Fact(name: "Minimum", value: "{product.min}")
+                            Fact(name: "Value", value: money(product.qty * product.price))
+                            Fact(name: "Status", value: stockLabel(product.qty, product.min))
+                            Row #[gap: 10, m: (top: 6)] {
+                                Action(label: "Receive", on_tap: { dialog = "in" })
+                                Action(label: "Ship", tone: "tonal", on_tap: { dialog = "out" })
+                                Action(label: "Adjust", tone: "tonal", on_tap: { dialog = "adjust" })
+                            }
+                        }
+                        Row #[gap: 10] {
+                            Action(label: "Edit", tone: "tonal", on_tap: { on_edit() })
+                            Action(label: "Delete", tone: "danger", on_tap: { dialog = "delete" })
+                        }
+                    }
+                    Column #[gap: 14, grow: 1, width: 0] {
+                        Card {
+                            Text("Movements") #[typo: t.title, color: t.onSurface]
+                            when log.len == 0 {
+                                Text("None yet") #[typo: t.body, color: t.onSurfaceVariant]
+                            }
+                            for m in log {
+                                Column #[gap: 2, p: (vertical: 4)] {
+                                    Row #[gap: 10] {
+                                        Text(signed(m.kind, m.qty)) #[
+                                            typo: t.label,
+                                            width: 40,
+                                            color: m.kind == "out" ? t.secondary : m.kind == "in" ? t.tertiary : t.onSurfaceVariant,
+                                        ]
+                                        Text(kindLabel(m.kind)) #[
+                                            typo: t.body,
+                                            color: t.onSurface,
+                                            grow: 1,
+                                        ]
+                                        Text(stamp(m.at)) #[
+                                            typo: t.caption,
+                                            color: t.onSurfaceVariant,
+                                        ]
+                                    }
+                                    when m.note != "" {
+                                        Text(m.note) #[
+                                            typo: t.caption,
+                                            color: t.onSurfaceVariant,
+                                            m: (left: 50),
+                                        ]
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    when found && (dialog == "in" || dialog == "out" || dialog == "adjust") {
+        MoveDialog(
+            kind: dialog,
+            on_hand: product.qty,
+            name: product.name,
+            on_close: { dialog = "" },
+            on_confirm: {|qty, note|
+                on_move(id, dialog, qty, note)
+                dialog = ""
+            },
+        )
+    }
+    when found && dialog == "delete" {
+        Dialog(title: "Delete {product.name}?", on_close: { dialog = "" }) {
+            Text("Its {log.len} movements stay in the log.") #[
+                typo: t.body,
+                color: t.onSurfaceVariant,
+            ]
+            Row #[gap: 10, justify: end] {
+                Action(label: "Keep it", tone: "tonal", on_tap: { dialog = "" })
+                Action(label: "Delete", tone: "danger", on_tap: {
+                    on_delete(id)
+                    dialog = ""
+                })
+            }
+        }
+    }
+}
+
+View Fact(name: Str, value: Str) {
+    inject Theme as t
+    Row #[gap: 12] {
+        Text(name) #[typo: t.body, color: t.onSurfaceVariant, width: 90]
+        Text(value) #[typo: t.body, color: t.onSurface]
+    }
+}
+
+// Receive, ship or adjust: a quantity and a note. Shipping more than is on hand
+// is refused, and so is a quantity that is not a whole number.
+View MoveDialog(
+    kind: Str,
+    on_hand: Int,
+    name: Str,
+    on_close: Fn() = {},
+    on_confirm: Fn(Int, Str) = {|_, _| },
+) {
+    inject Theme as t
+
+    var qtyText: Str = kind == "adjust" ? "{on_hand}" : ""
+    var note: Str = ""
+
+    let parsed = qtyText.toInt() ?? -1
+    let valid = parsed >= 0 && parsed <= 1000000
+    let qty = valid ? parsed : 0
+    // For an adjustment the quantity is the new count, and the movement is
+    // the difference.
+    let problem = qtyText == "" ? ""
+        : !valid ? "Use a whole number, 0 or more"
+        : kind != "adjust" && qty == 0 ? "Must be more than 0"
+        : kind == "out" && qty > on_hand ? "Only {on_hand} on hand"
+        : kind == "adjust" && qty == on_hand ? "That is what is on hand already"
+        : ""
+    let ready = qtyText != "" && problem == ""
+    let title = kind == "in" ? "Receive {name}" : kind == "out" ? "Ship {name}" : "Adjust {name}"
+    let delta = kind == "adjust" ? qty - on_hand : qty
+
+    let confirm = () => {
+        if ready {
+            on_confirm(delta, note)
+        }
+    }
+
+    Dialog(title: title, on_close: on_close) {
+        Text("{on_hand} on hand") #[typo: t.body, color: t.onSurfaceVariant]
+        Label(text: kind == "adjust" ? "New count" : "Quantity", error: problem)
+        TextField #[
+            bind: qtyText,
+            placeholder: "0",
+            height: 40,
+            bg: t.surfaceContainer,
+            color: t.onSurface,
+            radius: 10,
+            p: (horizontal: 12),
+            typo: t.body,
+            width: 356,
+            invalid: problem != "",
+            border: t.outlineVariant,
+            border_width: 1,
+            submit => confirm(),
+        ] as qtyField
+        Label(text: "Note")
+        TextField #[
+            bind: note,
+            placeholder: "Order, delivery, reason",
+            height: 40,
+            bg: t.surfaceContainer,
+            color: t.onSurface,
+            radius: 10,
+            p: (horizontal: 12),
+            typo: t.body,
+            width: 356,
+            border: t.outlineVariant,
+            border_width: 1,
+            submit => confirm(),
+        ]
+        Row #[gap: 10, justify: end, m: (top: 4)] {
+            Action(label: "Cancel", tone: "tonal", on_tap: { on_close() })
+            Action(label: "Confirm", off: !ready, on_tap: { confirm() })
+        }
+    }
+}

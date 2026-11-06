@@ -425,6 +425,7 @@ impl Interpreter {
                             style.grow = n as f32;
                         }
                     }
+                    "basis" => style.basis = val_to_f32(&val),
                     _ => {}
                 }
             }

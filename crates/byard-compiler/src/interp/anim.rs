@@ -208,13 +208,31 @@ pub struct KeyframeTrack<'a> {
 const CURVE_NAMES: &[&str] = &[
     "linear",
     "ease",
-    "ease_in",
-    "ease_out",
-    "ease_in_out",
+    "easeIn",
+    "easeOut",
+    "easeInOut",
     "spring",
     "keyframes",
     "stagger",
 ];
+
+/// What to suggest for an unknown curve name. A curve is a method, and methods
+/// are camelCase, so the old snake_case spelling (`ease_in_out`) is answered
+/// with the camelCase one rather than with whatever is nearest by edit distance.
+fn curve_hint(name: &str) -> Option<String> {
+    curve_hint_in(name, CURVE_NAMES.iter().copied())
+}
+
+/// [`curve_hint`] over any list of names (the keyframe easings share it).
+fn curve_hint_in<'a>(name: &str, names: impl Iterator<Item = &'a str> + Clone) -> Option<String> {
+    if let Some(camel) = names
+        .clone()
+        .find(|curve| name.contains('_') && curve.eq_ignore_ascii_case(&name.replace('_', "")))
+    {
+        return Some(camel.to_string());
+    }
+    closest_match(name, names).map(str::to_string)
+}
 
 /// The modifier names every curve accepts (RFC-0025 §4), for suggestions.
 const MODIFIER_NAMES: &[&str] = &[
@@ -224,9 +242,9 @@ const MODIFIER_NAMES: &[&str] = &[
 /// The easing names a keyframe step may carry, mapped to their curve tags.
 const SEGMENT_EASINGS: &[(&str, u32)] = &[
     ("linear", MotionCurve::LINEAR),
-    ("ease_in", MotionCurve::EASE_IN),
-    ("ease_out", MotionCurve::EASE_OUT),
-    ("ease_in_out", MotionCurve::EASE_IN_OUT),
+    ("easeIn", MotionCurve::EASE_IN),
+    ("easeOut", MotionCurve::EASE_OUT),
+    ("easeInOut", MotionCurve::EASE_IN_OUT),
     ("ease", MotionCurve::EASE_IN_OUT),
 ];
 
@@ -467,16 +485,23 @@ fn resolve_segment_easing(name: &Symbol, span: Span) -> Result<u32, CompileError
         .iter()
         .find(|(n, _)| *n == name.as_str())
         .map(|(_, tag)| *tag)
-        .ok_or_else(|| CompileError::InvalidAnimation {
-            span,
-            message: format!(
-                "unknown keyframe easing `{name}` (expected {})",
-                SEGMENT_EASINGS
-                    .iter()
-                    .map(|(n, _)| *n)
-                    .collect::<Vec<_>>()
-                    .join(" / ")
-            ),
+        .ok_or_else(|| {
+            // A curve has one name everywhere, so the old snake_case spelling is
+            // answered with the camelCase one, as `anim.*` does.
+            let hint = curve_hint_in(name.as_str(), SEGMENT_EASINGS.iter().map(|(n, _)| *n))
+                .map(|h| format!("; did you mean `{h}`?"))
+                .unwrap_or_default();
+            CompileError::InvalidAnimation {
+                span,
+                message: format!(
+                    "unknown keyframe easing `{name}` (expected {}){hint}",
+                    SEGMENT_EASINGS
+                        .iter()
+                        .map(|(n, _)| *n)
+                        .collect::<Vec<_>>()
+                        .join(" / ")
+                ),
+            }
         })
 }
 
@@ -612,13 +637,13 @@ fn resolve_named_curve(
         "linear" => Ok(Curve::Linear {
             ms: single_duration(args, name_span, "linear", duration_ms)?,
         }),
-        "ease" | "ease_in_out" => ease(EaseKind::InOut),
-        "ease_in" => ease(EaseKind::In),
-        "ease_out" => ease(EaseKind::Out),
+        "ease" | "easeInOut" => ease(EaseKind::InOut),
+        "easeIn" => ease(EaseKind::In),
+        "easeOut" => ease(EaseKind::Out),
         other => Err(CompileError::UnknownAnimation {
             span: name_span,
             name: other.to_string(),
-            hint: closest_match(other, CURVE_NAMES.iter().copied()).map(str::to_string),
+            hint: curve_hint(other),
         }),
     }
 }
@@ -900,6 +925,57 @@ mod tests {
     }
 
     #[test]
+    fn a_curve_is_a_method_and_is_camel_case() {
+        assert_eq!(
+            curve_of("anim.easeInOut(300ms)").unwrap(),
+            Curve::Ease {
+                ms: 300,
+                kind: EaseKind::InOut
+            }
+        );
+    }
+
+    #[test]
+    fn the_snake_case_curve_names_are_unknown_and_suggest_the_camel_case_one() {
+        for (old, new) in [
+            ("ease_in_out", "easeInOut"),
+            ("ease_in", "easeIn"),
+            ("ease_out", "easeOut"),
+        ] {
+            let err = curve_of(&format!("anim.{old}(200ms)")).unwrap_err();
+            assert!(
+                matches!(
+                    &err,
+                    CompileError::UnknownAnimation { hint: Some(h), .. } if h == new
+                ),
+                "{old}: {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_snake_case_keyframe_easings_are_errors_that_suggest_the_camel_case_one() {
+        for (old, new) in [
+            ("ease_in_out", "easeInOut"),
+            ("ease_in", "easeIn"),
+            ("ease_out", "easeOut"),
+        ] {
+            let src = format!("anim.keyframes(0%: 0, 50%: 2 {old}, 100%: 0, duration: 1s)");
+            with_keyframes(&src, |track| {
+                let CompileError::InvalidAnimation { message, .. } =
+                    track.expect("recognized as keyframes").unwrap_err()
+                else {
+                    panic!("expected an InvalidAnimation");
+                };
+                assert!(
+                    message.contains(&format!("did you mean `{new}`")),
+                    "{message}"
+                );
+            });
+        }
+    }
+
+    #[test]
     fn spring_rejects_an_unknown_named_argument() {
         assert!(matches!(
             curve_of("anim.spring(stifness: 300)").unwrap_err(),
@@ -970,7 +1046,7 @@ mod tests {
 
     #[test]
     fn a_modifier_may_supply_the_duration_and_the_explicit_start() {
-        with_spec("anim.ease_out(duration: 400ms, from: 0.4)", |spec| {
+        with_spec("anim.easeOut(duration: 400ms, from: 0.4)", |spec| {
             let spec = spec.unwrap();
             assert_eq!(
                 spec.curve,
@@ -982,7 +1058,7 @@ mod tests {
             assert!(matches!(spec.from, Some(Expr::FloatLit(..))));
         });
         // The three ease families are addressable by name (RFC-0025 §4).
-        with_spec("anim.ease_in(200ms)", |spec| {
+        with_spec("anim.easeIn(200ms)", |spec| {
             assert!(matches!(
                 spec.unwrap().curve,
                 Curve::Ease {
@@ -1078,7 +1154,7 @@ mod tests {
     #[test]
     fn a_keyframe_track_resolves_its_steps_easings_and_modifiers() {
         with_keyframes(
-            "anim.keyframes(0%: 0, 50%: 200 ease_out, 100%: 0, duration: 2s, loop: true)",
+            "anim.keyframes(0%: 0, 50%: 200 easeOut, 100%: 0, duration: 2s, loop: true)",
             |track| {
                 let track = track.expect("recognized as keyframes").unwrap();
                 assert_eq!(track.duration_ms, 2000);

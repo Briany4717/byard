@@ -90,6 +90,26 @@ The types you will use:
 A [record type](expressions.md#record-types) you declare yourself works as a
 type too.
 
+### Names
+
+A view, a function, a type, a parameter, a `var`, a `let` and a record's field are
+all named with a word of your own. The words the language uses itself cannot be
+names: `View`, `var`, `let`, `fn`, `inject`, `as`, `for`, `in`, `when`, `else`,
+`style`, `untrack`, `with`, `merge` and `use`. One of them in a name's place is one
+error, at the name:
+
+```byld,fails
+fn when(at: Str) -> Str => at
+
+View Main() {
+    Text("x")
+}
+```
+
+```diagnostic
+error[KeywordAsName]: `when` is a keyword and cannot name a function
+```
+
 ### Defaults
 
 Put `= value` after a parameter's type and callers may leave it out. `Badge`
@@ -118,6 +138,29 @@ View Badge(label: Str) {
 error[UnknownParam]: `Badge` has no parameter `lable` (did you mean `label`?)
 error[MissingParam]: missing required argument `label` for view `Badge`
 ```
+
+An argument has to be the type the parameter declares. A `Bool` given to a `Str`
+parameter is an error that names both, instead of text nobody meant. An `Int` may go
+where a `Float` is wanted, and nothing else converts:
+
+```byld,fails
+View Main() {
+    var failed = false
+    Badge(failed)
+}
+
+View Badge(label: Str) {
+    Text(label)
+}
+```
+
+```diagnostic
+error[ArgumentTypeMismatch]: parameter `label` of view `Badge` is a `Str`, but this is a `Bool`
+```
+
+A parameter is a copy of the caller's value. A control cannot write to one, so
+`TextField #[bind: label]` on a parameter is an error. [Controls](controls.md#a-field-in-a-view-of-its-own)
+shows how to pass a value down and the changes back up.
 
 ## Passing children
 
@@ -200,6 +243,30 @@ View Choice(options: List<Str>, on_pick: Fn(Str) = {|_| }) {
     }
 }
 ```
+
+A callback goes in by name. A view does not take a trailing `=> action` the way
+`Button` does, because `Button` is built in and knows what a tap on it is; your view
+only knows the parameters you gave it. Write the action after a view call, or an
+event handler in its `#[...]`, and the checker stops you instead of dropping it:
+
+```byld,fails
+View Card(label: Str, on_tap: Fn() = {}) {
+    Box #[bg: 0x3B82F6, p: 12, tap => on_tap()] { Text(label) }
+}
+
+View Main() {
+    var count = 0
+    Column { Card("Add") => count++ }
+}
+```
+
+```diagnostic
+error[ViewCallAction]: `Card` takes no trailing action; pass it as `on_tap: { … }`
+```
+
+If the view has one `Fn()` parameter the message names it. If it has none or
+several, it says to declare one. A wrapper around `Button` that wants `=>` at its
+call sites is a feature for after 0.1.0, together with bindable parameters.
 
 Callbacks are how views talk to the views that contain them. Data flows down as
 parameters and actions flow back up as callbacks. [Events and

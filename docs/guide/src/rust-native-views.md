@@ -162,6 +162,10 @@ of = "floats"
 stroke = "color"
 ```
 
+A prop keeps its field's name, as every attribute does (`row_height`, `border_width`), and
+an `#[event]` its own (`key_down`, `route_change`): attributes and events are `snake_case` in
+byld, and the manifest writes the same name.
+
 The types are `int`, `float`, `bool`, `str`, `color`, `vec2` and `floats`, and `layout =
 true` is the manifest's way to say `#[prop(layout)]`. An element's name starts with a capital
 letter.

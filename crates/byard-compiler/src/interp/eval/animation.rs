@@ -71,34 +71,91 @@ struct KeyframeBlend<'a> {
     t: f32,
 }
 
+/// The two halves of "which element instance is this", as the render walk
+/// carries them: the `for` row it sits in, and the view instance it was
+/// lowered inside.
+///
+/// They answer different questions. A `for` body is lowered once per pooled
+/// slot, so `row` is the slot's own element signal, unique across the program
+/// (a nested `for` is lowered once per *outer* slot and gets fresh signals).
+/// `inst` is the interned call path of the user view that mounted the node
+/// ([`Instances`]); a view called from three places is three paths, whatever it
+/// does inside. Both are `0` at the top level, where the span was always enough.
+#[derive(Clone, Copy, Default, PartialEq, Eq, Hash, Debug)]
+pub(crate) struct AnimSlot {
+    /// The `for` row, or `0` outside any `for` body.
+    pub(super) row: u32,
+    /// The view instance, or `0` outside any user view.
+    pub(super) inst: u32,
+}
+
 /// What a persisted animation belongs to: the `with` node that wrote it, **and
-/// the element instance it is running on**.
+/// the element instance it is running on** ([`AnimSlot`]).
 ///
-/// The span alone is not an identity. A `for` body is lowered once per pooled
-/// slot but written once, so ten rows animating a property share one source
-/// span, and, before this key existed, one `Motion` and one `LoopClock`. Two
-/// rows heading for *different* targets therefore fought over the same state:
-/// each retarget reseeded the other's `from` and restarted its clock, and both
-/// stalled near `t ≈ 0`. Anyone with a list of animated components was affected.
-///
-/// `slot` is the instance. It is the per-slot element signal a `for` pool
-/// creates for each of its indices, which is unique across the whole program by
-/// construction: a nested `for` is lowered once per *outer* slot and gets its
-/// own pool with its own fresh signals, so the innermost binding already
-/// distinguishes every instance without a path to fold. `0` is "no enclosing
-/// loop", the top level, where the span was always enough.
+/// The span alone is not an identity. A `for` body is written once, and a view
+/// is written once however many times it is called, so ten rows (or three
+/// calls) animating a property share one source span, and, before this key
+/// carried the instance, one `Motion` and one `LoopClock`. Instances heading
+/// for *different* targets fought over the same state: each retarget reseeded
+/// the other's `from` and restarted its clock, or, with a `for` row's pool slot
+/// missing, the last call simply won.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub(crate) struct AnimKey {
     /// Source range of the `with`/keyframes node.
     span: Span,
-    /// The element instance, or `0` outside any `for` body.
+    /// The `for` row, or `0` outside any `for` body.
     slot: u32,
+    /// The view instance, or `0` outside any user view.
+    inst: u32,
 }
 
 impl AnimKey {
     /// The key for `span` on the instance currently being rendered.
-    const fn new(span: Span, slot: u32) -> Self {
-        Self { span, slot }
+    const fn new(span: Span, at: AnimSlot) -> Self {
+        Self {
+            span,
+            slot: at.row,
+            inst: at.inst,
+        }
+    }
+}
+
+/// The interned call paths of the user views, so a view instance has an id that
+/// means the same thing from one lowering to the next.
+///
+/// An instance is a chain of call sites: `Main` calls `Card` at one span, which
+/// calls `T` at another. Each distinct `(parent instance, call span)` is given
+/// a small number the first time it is lowered, and is given the same one when
+/// it is lowered again, which is why a hot reload (it lowers the tree again)
+/// finds its animations where it left them. It is not a hash, so two instances
+/// never share an id by accident.
+///
+/// Cost: one map lookup per user-view call when lowering, and 8 bytes of
+/// `Vec` plus a map entry (about 24 bytes) per distinct call path, ever. Nothing
+/// is touched while rendering: the id rides on the node.
+#[derive(Default)]
+pub(super) struct Instances {
+    /// `(parent, call span)` -> id.
+    ids: rustc_hash::FxHashMap<(u32, Span), u32>,
+    /// `(parent, call span)` of instance `id + 1`, for walking a path upwards.
+    paths: Vec<(u32, Span)>,
+}
+
+impl Instances {
+    /// The id of `call` made from `parent` (`0` is the root), made if new.
+    pub(super) fn enter(&mut self, parent: u32, call: Span) -> u32 {
+        if let Some(&id) = self.ids.get(&(parent, call)) {
+            return id;
+        }
+        self.paths.push((parent, call));
+        let id = u32::try_from(self.paths.len()).unwrap_or(u32::MAX);
+        self.ids.insert((parent, call), id);
+        id
+    }
+
+    /// The call that made `inst`, and who made it. `inst` must not be `0`.
+    fn call(&self, inst: u32) -> (u32, Span) {
+        self.paths[inst as usize - 1]
     }
 }
 
@@ -764,22 +821,38 @@ impl Interpreter {
         AnimKey::new(span, self.anim_slot)
     }
 
-    /// Forgets every animation whose source node lies inside `range`, what an
-    /// unmounted `when` branch takes with it (RFC-0025: "no separate stop
-    /// animation API, the animation lives and dies with its element").
+    /// Forgets the animations of the part of instance `owner` that lies inside
+    /// `range`, what an unmounted `when` branch (or a popped route) takes with
+    /// it (RFC-0025: "no separate stop animation API, the animation lives and
+    /// dies with its element").
     ///
-    /// Animation state is keyed by the source span of the `with`/keyframes node,
-    /// so "inside this branch" is exactly "inside this source range". Rare
-    /// (branch flips only), so a linear sweep of the three maps is the right
-    /// trade against paying for a reverse index every frame.
-    pub(super) fn drop_animation_state(&mut self, range: Span) {
+    /// `range` is a source range inside the view `owner` is an instance of, and
+    /// that view may have other instances whose branch is still showing, so
+    /// "inside the range" is not enough: an animation goes only if it belongs to
+    /// `owner` itself and its node is in the range, or to a view `owner` called
+    /// from a call site that is. Rare (branch flips only), so a linear sweep of
+    /// the three maps is the right trade against paying for a reverse index.
+    pub(super) fn drop_animation_state(&mut self, range: Span, owner: u32) {
         if range.end <= range.start {
             return;
         }
-        let inside = |key: &AnimKey| key.span.start >= range.start && key.span.end <= range.end;
-        self.animations.retain(|key, _| !inside(key));
-        self.color_animations.retain(|key, _| !inside(key));
-        self.anim_clocks.retain(|key, _| !inside(key));
+        let inside = |span: Span| span.start >= range.start && span.end <= range.end;
+        let instances = &self.instances;
+        let goes = |key: &AnimKey| {
+            // Climb from the key's instance to the call `owner` made.
+            let (mut at, mut call) = (key.inst, None);
+            while at != owner {
+                if at == 0 {
+                    return false;
+                }
+                let (parent, span) = instances.call(at);
+                (at, call) = (parent, Some(span));
+            }
+            inside(call.unwrap_or(key.span))
+        };
+        self.animations.retain(|key, _| !goes(key));
+        self.color_animations.retain(|key, _| !goes(key));
+        self.anim_clocks.retain(|key, _| !goes(key));
     }
 
     /// Advances the RFC-0025 timeline keyed by `key`, returning the milliseconds

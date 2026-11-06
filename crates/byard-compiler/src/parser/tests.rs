@@ -476,10 +476,10 @@ fn a_seconds_duration_canonicalizes_to_milliseconds() {
 
 #[test]
 fn keyframe_steps_parse_with_percentages_and_per_segment_easing() {
-    // RFC-0025 §4: `50%: 200 ease_out` is one step; the trailing identifier is
+    // RFC-0025 §4: `50%: 200 easeOut` is one step; the trailing identifier is
     // the segment's easing, and it must not be mistaken for the next argument.
     let view = one_view(
-        "View V() { Box #[translate: anim.keyframes(0%: 0, 50%: 200 ease_out, 100%: 0, \
+        "View V() { Box #[translate: anim.keyframes(0%: 0, 50%: 200 easeOut, 100%: 0, \
          duration: 2s, loop: true)] }",
     );
     let el = as_element(&view.body[0]);
@@ -503,11 +503,7 @@ fn keyframe_steps_parse_with_percentages_and_per_segment_easing() {
         .collect();
     assert_eq!(
         steps,
-        vec![
-            (0.0, None),
-            (0.5, Some("ease_out".to_string())),
-            (1.0, None)
-        ]
+        vec![(0.0, None), (0.5, Some("easeOut".to_string())), (1.0, None)]
     );
     // The modifiers after the steps stay ordinary named arguments.
     let named: Vec<_> = args
@@ -1116,7 +1112,34 @@ fn interpolation_node_spans_cover_their_source() {
     let src = "View Main() {\n    Text(\"{temp + 1:.0}\u{b0}\")\n}\n";
     let parts = text_parts(src);
     assert_eq!(at(src, interp(&parts, 0)), "temp + 1");
-    assert!(matches!(parts[0], StrPart::Interp(_, Some(0))), "{parts:?}");
+    let decimals = |group, decimals| Some(NumFormat { group, decimals });
+    assert!(
+        matches!(&parts[0], StrPart::Interp(_, f) if *f == decimals(false, Some(0))),
+        "{parts:?}"
+    );
+
+    // Grouping (RFC-0048): the expression still ends at the colon.
+    for (spec, want) in [
+        (":,", decimals(true, None)),
+        (":,.2", decimals(true, Some(2))),
+        (":.2", decimals(false, Some(2))),
+    ] {
+        let src = format!("View Main() {{\n    Text(\"{{a + 1{spec}}}\")\n}}\n");
+        let parts = text_parts(&src);
+        assert_eq!(at(&src, interp(&parts, 0)), "a + 1", "{spec}");
+        assert!(
+            matches!(&parts[0], StrPart::Interp(_, f) if *f == want),
+            "{spec}: {parts:?}"
+        );
+    }
+    // Not specs: `.2,` is no spec, and a ternary's colon is never one.
+    for src in ["{a:.2,}", "{a ? 1 : 2}", "{a:,x}"] {
+        let src = format!("View Main() {{\n    Text(\"{src}\")\n}}\n");
+        assert!(
+            matches!(&text_parts(&src)[0], StrPart::Interp(_, None)),
+            "{src}"
+        );
+    }
 }
 
 #[test]

@@ -35,6 +35,7 @@ pub struct Shot {
     system_dark: Option<bool>,
     trace: Option<std::path::PathBuf>,
     access: Option<std::path::PathBuf>,
+    wall_clock: Option<String>,
 }
 
 impl Shot {
@@ -47,7 +48,20 @@ impl Shot {
             system_dark: None,
             trace: None,
             access: None,
+            wall_clock: None,
         }
+    }
+
+    /// Fixes the wall clock `now()` and `nowUtc()` read at `iso`, an ISO date
+    /// or date-time such as `2026-11-05T09:00:00` (RFC-0049), so the picture
+    /// is the same whenever it is taken. App time still advances it, so a
+    /// shot that runs for 3000 ms reads three seconds past `iso`. Without
+    /// this the shot reads the system's clock. A text that is not a date makes
+    /// [`App::shot`] fail before anything is drawn.
+    #[must_use]
+    pub fn now(mut self, iso: impl Into<String>) -> Self {
+        self.wall_clock = Some(iso.into());
+        self
     }
 
     /// Writes the accessibility tree of the last frame to `path` as indented
@@ -212,7 +226,7 @@ impl App {
             source_map,
             ..
         } = load_program(&self.entry).map_err(announced)?;
-        let mut registry = self.registry;
+        let mut registry = self.registry();
         byard_core::cap::configure_http(&mut registry, http.base_url.as_deref(), &http.hosts);
 
         let relay = Relay::new()?;
@@ -220,6 +234,11 @@ impl App {
         let mut interp = Interpreter::new();
         interp.set_dispatcher(dispatcher);
         interp.set_theme(theme);
+        if let Some(iso) = plan.wall_clock.as_deref() {
+            interp
+                .set_wall_clock(iso)
+                .map_err(|e| ByardError::Platform(format!("Shot::now: {e}")))?;
+        }
         // A picture shows the caret, whichever half of a blink it was taken in.
         interp.set_caret_blink(false);
         interp.load_views(&views);
@@ -533,6 +552,44 @@ mod tests {
                 ],
             ]
         );
+    }
+
+    /// `Shot::now` fixes what `now()` reads: the app writes it to a `Text`,
+    /// and the accessibility tree shows the fixed time advanced by the run.
+    /// A bad time is refused before a GPU is asked for. The picture needs a
+    /// GPU, so that half is skipped where there is none.
+    #[test]
+    fn a_shot_can_fix_the_wall_clock() {
+        let dir = std::env::temp_dir().join(format!("byard-shot-clock-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("main.byd"),
+            "View Main() {\n    var t: Str = \"\"\n    on mount => t = now()\n    Text(t)\n}\n",
+        )
+        .unwrap();
+        let (png, tree) = (dir.join("shot.png"), dir.join("tree.txt"));
+        let app = || App::new(dir.join("main.byd")).size(300, 80);
+
+        let bad = app().shot(&png, &Shot::after(0).now("teatime"));
+        match bad {
+            Err(ByardError::Platform(m)) => assert!(m.starts_with("Shot::now"), "{m}"),
+            other => panic!("a bad time is refused, got {other:?}"),
+        }
+
+        let result = app().shot(
+            &png,
+            &Shot::after(0).now("2026-11-05T09:00:00").access(&tree),
+        );
+        if let Err(ByardError::Platform(message)) = &result {
+            if message.starts_with("no GPU") {
+                return;
+            }
+        }
+        result.unwrap();
+        let text = std::fs::read_to_string(&tree).unwrap();
+        assert!(text.contains("2026-11-05T09:00:00"), "{text}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

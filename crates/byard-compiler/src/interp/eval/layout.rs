@@ -8,6 +8,7 @@
 //! through the same walk, which is what makes it safe to reason about; the
 //! state it keeps between frames lives here with the pools it describes.
 
+use super::animation::AnimSlot;
 use super::instance::MAX_INSTANCE_DEPTH;
 use super::navigation::NavPool;
 use super::overlay::OverlayLayout;
@@ -43,7 +44,7 @@ pub(super) fn collect_pools(nodes: &[RenderNode], out: &mut Vec<usize>) {
 #[derive(Clone, Copy)]
 pub(crate) struct Concrete<'a> {
     pub(super) node: &'a RenderNode,
-    pub(super) slot: u32,
+    pub(super) slot: super::animation::AnimSlot,
 }
 
 /// A borrowed view of the structural-reactivity caches (RFC-0018) and the
@@ -75,6 +76,9 @@ pub(super) struct WhenPool {
     pub(super) known_views: Vec<String>,
     /// Instance env captured at lower time (RFC-0019), restored when lowering.
     pub(super) env_snapshot: Vec<(Symbol, super::env::Value)>,
+    /// The view instance the `when` was written in, so a branch lowered later
+    /// belongs to it and not to whatever was being lowered by then.
+    pub(super) inst: u32,
     /// The lowered `then` branch, once first taken.
     pub(super) then: Option<Vec<RenderNode>>,
     /// The lowered `else` branch, once first taken.
@@ -102,6 +106,8 @@ pub(super) struct ForPool {
     /// The instance env captured at lower time (RFC-0019), restored when lowering
     /// a new body so it resolves against the scope the `for` was written in.
     pub(super) env_snapshot: Vec<(Symbol, super::env::Value)>,
+    /// The view instance the `for` was written in (see `WhenPool::inst`).
+    pub(super) inst: u32,
     /// One signal per pooled index, holding that slot's current element value.
     pub(super) item_slots: Vec<super::env::SignalId>,
     /// One lowered body per pooled index. A prefix of `item_slots`: a pool that
@@ -275,7 +281,7 @@ impl Interpreter {
         &self,
         nodes: &'a [RenderNode],
         pools: Pools<'a>,
-        slot: u32,
+        slot: AnimSlot,
     ) -> Vec<Concrete<'a>> {
         let mut out = Vec::new();
         for n in nodes {
@@ -304,7 +310,10 @@ impl Interpreter {
                             // The slot's own element signal, unique across the
                             // program, because a nested `for` is lowered once
                             // per outer slot and gets its own fresh signals.
-                            let row = p.item_slots.get(i).map_or(slot, |s| s.0);
+                            let row = p
+                                .item_slots
+                                .get(i)
+                                .map_or(slot, |s| AnimSlot { row: s.0, ..slot });
                             out.extend(self.expand_concrete_in(body, pools, row));
                         }
                     }
@@ -315,10 +324,188 @@ impl Interpreter {
                 // flat-id sequence, which is the RFC-0032 retained path's
                 // identity, for a node that can never draw.
                 RenderNode::Effect { .. } => {}
-                other => out.push(Concrete { node: other, slot }),
+                other => out.push(Concrete {
+                    node: other,
+                    slot: AnimSlot {
+                        inst: other.inst(),
+                        ..slot
+                    },
+                }),
             }
         }
         out
+    }
+
+    /// Lowers, once and offline, every branch that lowering leaves for later:
+    /// both arms of every `when`, a body of every `for` (with an element that
+    /// has no value yet), and every `route`/`tab` of every navigation
+    /// container, nested ones included. What `byard check` runs after
+    /// rendering the view, so a diagnostic that lowering raises is raised for
+    /// code that is not on screen at the start either: a tab that is not the
+    /// active one, a route the initial path does not match, a `when` that
+    /// starts false, a list that has not loaded.
+    ///
+    /// Runtime lowering stays lazy and never calls this. Each distinct body is
+    /// lowered once (a recursive view lowers its body once, not without end),
+    /// and nothing is mounted: the result of lowering is dropped, only its
+    /// diagnostics and the pools it registers are kept.
+    pub fn lower_every_branch(&mut self) {
+        use std::hash::{Hash, Hasher};
+        let mut seen = std::collections::HashSet::<u64>::new();
+        let mut key = |tag: &str, body: &dyn std::fmt::Debug| {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            tag.hash(&mut h);
+            format!("{body:?}").hash(&mut h);
+            seen.insert(h.finish())
+        };
+        // Pools appear while others are lowered; sweep until a sweep finds
+        // nothing new. `seen` is what makes that end.
+        loop {
+            let mut changed = false;
+            let mut i = 0;
+            while i < self.when_pools.len() {
+                for take in [true, false] {
+                    let (lowered, ast) = if take {
+                        (
+                            self.when_pools[i].then.is_some(),
+                            &self.when_pools[i].then_ast,
+                        )
+                    } else {
+                        (
+                            self.when_pools[i].els.is_some(),
+                            &self.when_pools[i].els_ast,
+                        )
+                    };
+                    if lowered || ast.is_empty() || !key(if take { "then" } else { "else" }, ast) {
+                        continue;
+                    }
+                    let (nodes, scopes) = self.lower_when_branch(i, take);
+                    if take {
+                        self.when_pools[i].then = Some(nodes);
+                        self.when_pools[i].then_scopes = scopes;
+                    } else {
+                        self.when_pools[i].els = Some(nodes);
+                        self.when_pools[i].els_scopes = scopes;
+                    }
+                    changed = true;
+                }
+                i += 1;
+            }
+            let mut i = 0;
+            while i < self.for_pools.len() {
+                let p = &self.for_pools[i];
+                if p.bodies.is_empty() && key("for", &(&p.item_var, &p.index_var, &p.body)) {
+                    let slot = self.ctx.create_signal(Value::Unit);
+                    let (nodes, scopes) = self.lower_for_body(i, slot);
+                    // Held as the pool's one pooled body, with `len` still 0:
+                    // it is never drawn, and the nested pools it registered
+                    // stay reachable for the next sweep.
+                    self.for_pools[i].item_slots.push(slot);
+                    self.for_pools[i].bodies.push(nodes);
+                    self.for_pools[i].slot_scopes.push(scopes);
+                    changed = true;
+                }
+                i += 1;
+            }
+            let mut i = 0;
+            while i < self.nav_pools.len() {
+                for route in 0..self.nav_route_count(i) {
+                    let print = self.nav_route_fingerprint(i, route);
+                    if key("route", &print) {
+                        self.lower_route_offline(i, route);
+                        changed = true;
+                    }
+                }
+                i += 1;
+            }
+            if !changed {
+                break;
+            }
+        }
+    }
+
+    /// Lowers one branch of a `when` pool from its AST and the environment
+    /// captured where the `when` was written, returning the nodes and the
+    /// reactive scopes lowering opened. The one place a branch is lowered, so
+    /// the render-time reconcile and the offline
+    /// [`lower_every_branch`](Self::lower_every_branch) (`byard check`) cannot
+    /// disagree about what a branch means.
+    pub(super) fn lower_when_branch(
+        &mut self,
+        pool: usize,
+        take: bool,
+    ) -> (Vec<RenderNode>, Vec<ScopeId>) {
+        let ast = if take {
+            self.when_pools[pool].then_ast.clone()
+        } else {
+            self.when_pools[pool].els_ast.clone()
+        };
+        let known: Vec<String> = self.when_pools[pool].known_views.clone();
+        let env_snap = self.when_pools[pool].env_snapshot.clone();
+        let env_base = self.env.len();
+        for (k, v) in &env_snap {
+            self.env.push(k.clone(), v.clone());
+        }
+        let known_refs: Vec<&str> = known.iter().map(String::as_str).collect();
+        // A branch lowered here is lowered *away from where it was written*:
+        // the scope it belongs to exists only as the snapshot just pushed, and
+        // it is truncated again below. Anything inside the branch that resolves
+        // later, an event action, an animated attribute reading the row it
+        // belongs to, a nested `for`/`when` pool, has to capture that scope
+        // now, or it will look for the row in an environment that no longer
+        // has one.
+        let restored = !env_snap.is_empty();
+        self.restored_depth += u32::from(restored);
+        let enclosing = std::mem::replace(&mut self.cur_inst, self.when_pools[pool].inst);
+        // The scopes the branch opens are recorded, so a route popped with this
+        // `when` in it can retire them.
+        self.ctx.push_scope_tracker();
+        let nodes = self.lower_members(&ast, &known_refs);
+        let scopes = self.ctx.pop_scope_tracker();
+        self.restored_depth -= u32::from(restored);
+        self.cur_inst = enclosing;
+        self.env.truncate(env_base);
+        (nodes, scopes)
+    }
+
+    /// Lowers the next body of a `for` pool (index `bodies.len()`), reading its
+    /// element from `slot`. Shared with the offline pass, like
+    /// [`lower_when_branch`](Self::lower_when_branch).
+    pub(super) fn lower_for_body(
+        &mut self,
+        pool: usize,
+        slot: crate::interp::env::SignalId,
+    ) -> (Vec<RenderNode>, Vec<ScopeId>) {
+        // Clone the lowering inputs out first so the borrow on `self.for_pools`
+        // is released before `lower_members` (which may append *nested* pools).
+        let item_var = self.for_pools[pool].item_var.clone();
+        let index_var = self.for_pools[pool].index_var.clone();
+        #[allow(clippy::cast_possible_wrap)]
+        let slot_index = self.for_pools[pool].bodies.len() as i64;
+        let body_ast = self.for_pools[pool].body.clone();
+        let known: Vec<String> = self.for_pools[pool].known_views.clone();
+        let env_snap = self.for_pools[pool].env_snapshot.clone();
+        let env_base = self.env.len();
+        for (k, v) in &env_snap {
+            self.env.push(k.clone(), v.clone());
+        }
+        self.env.push(item_var, Value::Signal(slot));
+        if let Some(index_var) = index_var {
+            self.env.push(index_var, Value::Int(slot_index));
+        }
+        let known_refs: Vec<&str> = known.iter().map(String::as_str).collect();
+        // Mark that we are lowering inside a `for` body so any event action
+        // captures the element in its env snapshot (the binding is truncated
+        // below before render, RFC-0027).
+        self.for_depth += 1;
+        let enclosing = std::mem::replace(&mut self.cur_inst, self.for_pools[pool].inst);
+        self.ctx.push_scope_tracker();
+        let body_nodes = self.lower_members(&body_ast, &known_refs);
+        let scopes = self.ctx.pop_scope_tracker();
+        self.for_depth -= 1;
+        self.cur_inst = enclosing;
+        self.env.truncate(env_base);
+        (body_nodes, scopes)
     }
 
     /// Reconciles the reactive `for` pools before the paint walk (RFC-0018,
@@ -368,7 +555,7 @@ impl Interpreter {
                     if previous.is_some_and(|was| was != take) {
                         let (then_span, els_span) = self.when_pools[*pool].branch_spans;
                         let gone = if take { els_span } else { then_span };
-                        self.drop_animation_state(gone);
+                        self.drop_animation_state(gone, self.when_pools[*pool].inst);
                         dirtied = true;
                     }
                     self.when_pools[*pool].last_take = Some(take);
@@ -381,35 +568,7 @@ impl Interpreter {
                         self.when_pools[*pool].els.is_some()
                     };
                     if !already {
-                        let ast = if take {
-                            self.when_pools[*pool].then_ast.clone()
-                        } else {
-                            self.when_pools[*pool].els_ast.clone()
-                        };
-                        let known: Vec<String> = self.when_pools[*pool].known_views.clone();
-                        let env_snap = self.when_pools[*pool].env_snapshot.clone();
-                        let env_base = self.env.len();
-                        for (k, v) in &env_snap {
-                            self.env.push(k.clone(), v.clone());
-                        }
-                        let known_refs: Vec<&str> = known.iter().map(String::as_str).collect();
-                        // A branch lowered here is lowered *away from where it
-                        // was written*: the scope it belongs to exists only as
-                        // the snapshot just pushed, and it is truncated again
-                        // below. Anything inside the branch that resolves later
-                        //, an event action, an animated attribute reading the
-                        // row it belongs to, a nested `for`/`when` pool, has to
-                        // capture that scope now, or it will look for the row in
-                        // an environment that no longer has one.
-                        let restored = !env_snap.is_empty();
-                        self.restored_depth += u32::from(restored);
-                        // The scopes the branch opens are recorded, so a route
-                        // popped with this `when` in it can retire them.
-                        self.ctx.push_scope_tracker();
-                        let nodes = self.lower_members(&ast, &known_refs);
-                        let scopes = self.ctx.pop_scope_tracker();
-                        self.restored_depth -= u32::from(restored);
-                        self.env.truncate(env_base);
+                        let (nodes, scopes) = self.lower_when_branch(*pool, take);
                         if take {
                             self.when_pools[*pool].then = Some(nodes);
                             self.when_pools[*pool].then_scopes = scopes;
@@ -452,34 +611,7 @@ impl Interpreter {
                             .get(self.for_pools[*pool].bodies.len())
                             .copied();
                         let slot = reused.unwrap_or_else(|| self.ctx.create_signal(Value::Unit));
-                        // Clone the lowering inputs out first so the borrow on
-                        // `self.for_pools` is released before `lower_members`
-                        // (which may append *nested* pools to `self.for_pools`).
-                        let item_var = self.for_pools[*pool].item_var.clone();
-                        let index_var = self.for_pools[*pool].index_var.clone();
-                        #[allow(clippy::cast_possible_wrap)]
-                        let slot_index = self.for_pools[*pool].bodies.len() as i64;
-                        let body_ast = self.for_pools[*pool].body.clone();
-                        let known: Vec<String> = self.for_pools[*pool].known_views.clone();
-                        let env_snap = self.for_pools[*pool].env_snapshot.clone();
-                        let env_base = self.env.len();
-                        for (k, v) in &env_snap {
-                            self.env.push(k.clone(), v.clone());
-                        }
-                        self.env.push(item_var, Value::Signal(slot));
-                        if let Some(index_var) = index_var {
-                            self.env.push(index_var, Value::Int(slot_index));
-                        }
-                        let known_refs: Vec<&str> = known.iter().map(String::as_str).collect();
-                        // Mark that we are lowering inside a `for` body so any
-                        // event action captures `t` in its env snapshot (the
-                        // binding is truncated below before render, RFC-0027).
-                        self.for_depth += 1;
-                        self.ctx.push_scope_tracker();
-                        let body_nodes = self.lower_members(&body_ast, &known_refs);
-                        let scopes = self.ctx.pop_scope_tracker();
-                        self.for_depth -= 1;
-                        self.env.truncate(env_base);
+                        let (body_nodes, scopes) = self.lower_for_body(*pool, slot);
                         // Index `*pool` is still valid (nested lowering only
                         // appended higher indices).
                         if reused.is_none() {
@@ -607,6 +739,82 @@ impl Interpreter {
         }
     }
 
+    /// The layout leaf of a `Text`, measured against the environment the caller
+    /// has restored.
+    fn build_text_leaf(
+        &mut self,
+        attrs: &[Attr],
+        state_blocks: &[crate::parser::ast::StateBlock],
+        content: ScopeId,
+        flat_ids: &mut Vec<byard_core::atlas::layout::AtlasNodeId>,
+    ) -> Result<byard_core::atlas::layout::AtlasNodeId, byard_core::atlas::AtlasError> {
+        use byard_core::atlas::layout::LeafSize;
+        // RFC-0016: a responsive `size:` changes what is measured, so
+        // it has to be seen here as well as at paint.
+        let attrs = resolve_state_attrs(
+            attrs,
+            state_blocks,
+            crate::interp::events::StyleState::empty(),
+            &|c| viewport_holds(c, self.viewport, &self.theme),
+        );
+        let attrs: &[Attr] = &attrs;
+        let text = match self.binding_value(content) {
+            Some(Value::Str(s)) => s,
+            other => other.map_or_else(String::new, |v| v.to_text()),
+        };
+        let typo_size = self.eval_typo_size(attrs);
+        let font_size = self.text_font_size(attrs, typo_size);
+        // RFC-0005 default text wrap: `wrap` defaults to `true`. A
+        // wrapping `Text` becomes a measured leaf that the atlas sizes to
+        // the width its parent offers during layout (via the shared
+        // `TextMeasurer`), so it reflows without an explicit `width`. An
+        // explicit `width` fixes the wrap width; `wrap: false` opts out to
+        // a fixed natural single-line leaf (may overflow, the caller's
+        // choice). `fallback` is the natural size for the no-sizer path.
+        let weight = self.resolve_weight(attrs);
+        let family = self.resolve_family(attrs);
+        let (nat_w, nat_h) =
+            self.measure_text_wrapped(&text, font_size, None, weight, family.as_deref());
+        // The layout attributes an element in a `Row` or `Column`
+        // takes. A `Text` with none of them never reaches this, so the
+        // common leaf stays what it was: no style evaluated, none set.
+        let boxed = self.text_box(attrs);
+        let pad_w = boxed.padding.left + boxed.padding.right;
+        let pad_h = boxed.padding.top + boxed.padding.bottom;
+        #[allow(clippy::cast_precision_loss)]
+        let explicit_w = self.eval_px_prop(attrs, "width");
+        if self.eval_bool_prop(attrs, "wrap") == Some(false) {
+            // A single line is never reshaped to a width, so `width`
+            // is the leaf's width whatever the text measures (the
+            // paint pass clips what does not fit), and without one the
+            // leaf is the text's natural width.
+            let size = LeafSize::new(
+                explicit_w.unwrap_or(nat_w + pad_w),
+                boxed.height.unwrap_or(nat_h + pad_h),
+            );
+            let id = if boxed == byard_core::atlas::TextBox::default() {
+                self.atlas.add_leaf(size)?
+            } else {
+                self.atlas.add_fixed_text_leaf(size, boxed)?
+            };
+            flat_ids.push(id);
+            return Ok(id);
+        }
+        let id = self.atlas.add_text_leaf_boxed(
+            byard_core::atlas::TextLeaf {
+                content: text,
+                font_size,
+                weight,
+                family,
+                width: explicit_w,
+                fallback: (nat_w + pad_w, nat_h + pad_h),
+            },
+            boxed,
+        )?;
+        flat_ids.push(id);
+        Ok(id)
+    }
+
     pub(super) fn build_layout_tree(
         &mut self,
         node: &RenderNode,
@@ -660,7 +868,7 @@ impl Interpreter {
                 flat_ids.extend(temp_flat);
                 Ok(id)
             }
-            RenderNode::Spacer { attrs } => {
+            RenderNode::Spacer { attrs, .. } => {
                 // RFC-0005: a `Spacer` is a *flexible* gap, `grow` (default 1)
                 // is its share of the parent's free space, `basis` its size
                 // before growing. Both are read through the ordinary prop path,
@@ -680,9 +888,18 @@ impl Interpreter {
                 flat_ids.push(id);
                 Ok(id)
             }
-            RenderNode::Image { attrs, .. } => {
+            RenderNode::Image {
+                attrs,
+                env_snapshot,
+                ..
+            } => {
+                let env_base = self.env.len();
+                for (k, v) in env_snapshot {
+                    self.env.push(k.clone(), v.clone());
+                }
                 let w = self.eval_px_prop(attrs, "width").unwrap_or(100.0);
                 let h = self.eval_px_prop(attrs, "height").unwrap_or(100.0);
+                self.env.truncate(env_base);
                 let id = self.atlas.add_leaf(LeafSize::new(w, h))?;
                 flat_ids.push(id);
                 Ok(id)
@@ -753,8 +970,17 @@ impl Interpreter {
             }
             // A VectorIcon is a square leaf sized by its `size` prop (default 24),
             // RFC-0009 §1.
-            RenderNode::Vector { attrs, .. } => {
-                let s = self.eval_int_prop(attrs, "size").unwrap_or(24) as f32;
+            RenderNode::Vector {
+                attrs,
+                env_snapshot,
+                ..
+            } => {
+                let env_base = self.env.len();
+                for (k, v) in env_snapshot {
+                    self.env.push(k.clone(), v.clone());
+                }
+                let s = self.eval_px_prop(attrs, "size").unwrap_or(24.0);
+                self.env.truncate(env_base);
                 let id = self.atlas.add_leaf(LeafSize::new(s, s))?;
                 flat_ids.push(id);
                 Ok(id)
@@ -763,75 +989,18 @@ impl Interpreter {
                 attrs,
                 content,
                 state_blocks,
+                env_snapshot,
+                ..
             } => {
-                // RFC-0016: a responsive `size:` changes what is measured, so
-                // it has to be seen here as well as at paint.
-                let attrs = resolve_state_attrs(
-                    attrs,
-                    state_blocks,
-                    crate::interp::events::StyleState::empty(),
-                    &|c| viewport_holds(c, self.viewport, &self.theme),
-                );
-                let attrs: &[Attr] = &attrs;
-                let text = match self.binding_value(*content) {
-                    Some(Value::Str(s)) => s,
-                    other => other.map_or_else(String::new, |v| format!("{v:?}")),
-                };
-                let typo_size = self.eval_typo_size(attrs);
-                #[allow(clippy::cast_precision_loss)]
-                let font_size = self
-                    .eval_int_prop(attrs, "size")
-                    .or(typo_size)
-                    .unwrap_or(self.theme.font_size as i64) as f32;
-                // RFC-0005 default text wrap: `wrap` defaults to `true`. A
-                // wrapping `Text` becomes a measured leaf that the atlas sizes to
-                // the width its parent offers during layout (via the shared
-                // `TextMeasurer`), so it reflows without an explicit `width`. An
-                // explicit `width` fixes the wrap width; `wrap: false` opts out to
-                // a fixed natural single-line leaf (may overflow, the caller's
-                // choice). `fallback` is the natural size for the no-sizer path.
-                let weight = self.resolve_weight(attrs);
-                let family = self.resolve_family(attrs);
-                let (nat_w, nat_h) =
-                    self.measure_text_wrapped(&text, font_size, None, weight, family.as_deref());
-                // The layout attributes an element in a `Row` or `Column`
-                // takes. A `Text` with none of them never reaches this, so the
-                // common leaf stays what it was: no style evaluated, none set.
-                let boxed = self.text_box(attrs);
-                let pad_w = boxed.padding.left + boxed.padding.right;
-                let pad_h = boxed.padding.top + boxed.padding.bottom;
-                #[allow(clippy::cast_precision_loss)]
-                let explicit_w = self.eval_px_prop(attrs, "width");
-                if self.eval_bool_prop(attrs, "wrap") == Some(false) {
-                    // A single line is never reshaped to a width, so `width`
-                    // is the leaf's width whatever the text measures (the
-                    // paint pass clips what does not fit), and without one the
-                    // leaf is the text's natural width.
-                    let size = LeafSize::new(
-                        explicit_w.unwrap_or(nat_w + pad_w),
-                        boxed.height.unwrap_or(nat_h + pad_h),
-                    );
-                    let id = if boxed == byard_core::atlas::TextBox::default() {
-                        self.atlas.add_leaf(size)?
-                    } else {
-                        self.atlas.add_fixed_text_leaf(size, boxed)?
-                    };
-                    flat_ids.push(id);
-                    return Ok(id);
+                // The scope the run was written in, so a `size:` that reads a
+                // view parameter measures with the instance's value.
+                let env_base = self.env.len();
+                for (k, v) in env_snapshot {
+                    self.env.push(k.clone(), v.clone());
                 }
-                let id = self.atlas.add_text_leaf_boxed(
-                    byard_core::atlas::TextLeaf {
-                        content: text,
-                        font_size,
-                        weight,
-                        family,
-                        width: explicit_w,
-                        fallback: (nat_w + pad_w, nat_h + pad_h),
-                    },
-                    boxed,
-                )?;
-                flat_ids.push(id);
-                Ok(id)
+                let out = self.build_text_leaf(attrs, state_blocks, *content, flat_ids);
+                self.env.truncate(env_base);
+                out
             }
             RenderNode::Box {
                 name,
@@ -904,6 +1073,7 @@ impl Interpreter {
         byard_core::atlas::TextBox {
             height: style.height,
             grow: style.grow,
+            basis: style.basis,
             padding: style.padding,
             margin: style.margin,
         }
@@ -1269,6 +1439,7 @@ fn is_text_box_attr(name: &str) -> bool {
         name,
         "height"
             | "grow"
+            | "basis"
             | "p"
             | "padding"
             | "pt"

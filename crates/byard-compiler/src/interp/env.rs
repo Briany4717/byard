@@ -73,6 +73,22 @@ pub enum Value {
 }
 
 impl Value {
+    /// The text form of a value, the one `Text("{x}")` interpolation, `Str +
+    /// scalar` and a `Text(x)` whose content is not a `Str` all use (RFC-0027
+    /// §3): a number, `true` or `false`, or the string itself. A value that is
+    /// not a scalar has no text form and gives an empty string. The Rust
+    /// debug form (`Bool(false)`) never reaches the screen.
+    #[must_use]
+    pub fn to_text(&self) -> String {
+        match self {
+            Self::Int(n) => n.to_string(),
+            Self::Float(f) => f.to_string(),
+            Self::Bool(b) => b.to_string(),
+            Self::Str(s) => s.clone(),
+            _ => String::new(),
+        }
+    }
+
     /// Returns the `i64` if this is an [`Value::Int`].
     #[must_use]
     pub fn as_int(&self) -> Option<i64> {

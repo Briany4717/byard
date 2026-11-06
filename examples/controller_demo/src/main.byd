@@ -17,6 +17,7 @@
 // the reactive path this framework already had.
 View Main() {
     inject Greeter as greeter
+    inject Notes as notes
 
     var name: Str = "world"
     var status: Str = "idle"
@@ -65,6 +66,18 @@ View Main() {
                         }
                 }
         }
+
+        // `save_note` in Rust is `saveNote` here. The file lands beside the
+        // app's Store, in the directory `byard::data_dir` names.
+        Button("Save the answer") #[
+            bg: 0x2A2A38,
+            radius: 10,
+            color: 0xFFFFFF,
+            p: (vertical: 10, horizontal: 18),
+        ]
+            => notes.saveNote(answer)
+            ok path => { detail = "saved to {path}" }
+            err e => { detail = "could not save: {e}" }
 
         // Clear the field and press Greet: the controller answers with an
         // error, and the `err` arm is what runs.

@@ -206,6 +206,27 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Consumes the name a declaration introduces (`what` is how the error
+    /// names the thing: "a function"). A keyword there is one error, at the
+    /// keyword, and is taken as the name so that the rest of the declaration
+    /// parses as it was meant, instead of every token after it going wrong.
+    fn expect_decl_name(&mut self, what: &str, expected: &str) -> Option<Symbol> {
+        match self.cur() {
+            Some(tok) if is_name_keyword(tok) => {
+                let span = self.cur_span();
+                let keyword = self.text(span).to_string();
+                self.errors.push(CompileError::KeywordAsName {
+                    span,
+                    keyword: keyword.clone(),
+                    what: what.to_string(),
+                });
+                self.advance();
+                Some(Symbol::intern(&keyword))
+            }
+            _ => self.expect_ident(expected),
+        }
+    }
+
     /// Consumes a *name*: an identifier or a contextual keyword used as one
     /// (e.g. `style` in `#[style: .title]`). Keywords are recovered from their
     /// source slice and interned.
@@ -270,7 +291,9 @@ impl<'a> Parser<'a> {
                 // anywhere else.
                 Some(Token::Ident(word))
                     if word.as_str() == "type"
-                        && matches!(self.peek2(), Some(Token::Ident(_)))
+                        && self.peek2().is_some_and(|t| {
+                            matches!(t, Token::Ident(_)) || is_name_keyword(&t)
+                        })
                         && matches!(self.peek3(), Some(Token::Eq)) =>
                 {
                     records.push(self.parse_record_decl());
@@ -304,7 +327,10 @@ impl<'a> Parser<'a> {
                     }
                     imports.push(import);
                 }
-                _ => self.error("'View', 'use', 'fn' or 'type'"),
+                _ => {
+                    self.error("'View', 'use', 'fn' or 'type'");
+                    self.skip_to_next_item();
+                }
             }
             if self.pos == before {
                 self.advance(); // guaranteed progress on unrecognized input
@@ -313,18 +339,44 @@ impl<'a> Parser<'a> {
         (imports, views, fns, records)
     }
 
+    /// After a stray token between top-level items: skips to the next item
+    /// (a `View`, `fn`, `use` or `type` outside any braces), so one mistake is
+    /// one error, not one per token that follows it.
+    fn skip_to_next_item(&mut self) {
+        let mut depth = 0usize;
+        // The stray token itself is never the start of an item.
+        self.advance();
+        while let Some(tok) = self.cur() {
+            match tok {
+                Token::LBrace => depth += 1,
+                Token::RBrace => depth = depth.saturating_sub(1),
+                Token::View | Token::Fn | Token::Use if depth == 0 => return,
+                Token::Ident(word)
+                    if depth == 0
+                        && word.as_str() == "type"
+                        && matches!(self.peek2(), Some(Token::Ident(_)))
+                        && matches!(self.peek3(), Some(Token::Eq)) =>
+                {
+                    return;
+                }
+                _ => {}
+            }
+            self.advance();
+        }
+    }
+
     /// `record_decl := "type" IDENT "=" "{" (IDENT ":" type "?"? ","?)* "}"`.
     fn parse_record_decl(&mut self) -> RecordDecl {
         let start = self.cur_span();
         self.advance(); // type
         let name = self
-            .expect_ident("a type name")
+            .expect_decl_name("a type", "a type name")
             .unwrap_or_else(|| Symbol::intern(""));
         self.expect(&Token::Eq, "'='");
         self.expect(&Token::LBrace, "'{'");
         let mut fields = Vec::new();
         while !matches!(self.cur(), Some(Token::RBrace) | None) {
-            let Some(field) = self.expect_ident("a field name") else {
+            let Some(field) = self.expect_decl_name("a field", "a field name") else {
                 break;
             };
             self.expect(&Token::Colon, "':'");
@@ -387,7 +439,7 @@ impl<'a> Parser<'a> {
         let start = self.cur_span();
         self.advance(); // View
         let name = self
-            .expect_ident("a view name")
+            .expect_decl_name("a view", "a view name")
             .unwrap_or_else(|| Symbol::intern(""));
         self.expect(&Token::LParen, "'('");
         let params = self.parse_params();
@@ -410,7 +462,7 @@ impl<'a> Parser<'a> {
         while !matches!(self.cur(), Some(Token::RParen) | None) {
             let start = self.cur_span();
             let name = self
-                .expect_ident("a parameter name")
+                .expect_decl_name("a parameter", "a parameter name")
                 .unwrap_or_else(|| Symbol::intern(""));
             let ty = if self.eat(&Token::Colon) {
                 Some(self.parse_type())
@@ -532,7 +584,7 @@ impl<'a> Parser<'a> {
         let start = self.cur_span();
         self.advance(); // var | let
         let name = self
-            .expect_ident("a binding name")
+            .expect_decl_name(if is_var { "a `var`" } else { "a `let`" }, "a binding name")
             .unwrap_or_else(|| Symbol::intern(""));
         let ty = if self.eat(&Token::Colon) {
             Some(self.parse_type())
@@ -564,7 +616,7 @@ impl<'a> Parser<'a> {
         let start = self.cur_span();
         self.advance(); // fn
         let name = self
-            .expect_ident("a function name")
+            .expect_decl_name("a function", "a function name")
             .unwrap_or_else(|| Symbol::intern(""));
         self.expect(&Token::LParen, "'('");
         let params = self.parse_params();
@@ -671,7 +723,7 @@ impl<'a> Parser<'a> {
         let ty = self.parse_type();
         self.expect(&Token::As, "'as'");
         let name = self
-            .expect_ident("an inject binding name")
+            .expect_decl_name("an `inject` binding", "an inject binding name")
             .unwrap_or_else(|| Symbol::intern(""));
         Member::Inject {
             ty,
@@ -1017,6 +1069,12 @@ impl<'a> Parser<'a> {
             span: self.span_from(start),
         }
     }
+}
+
+/// Whether `tok` is any reserved word, which no declaration may use as its
+/// name.
+fn is_name_keyword(tok: &Token) -> bool {
+    is_keyword(tok) || matches!(tok, Token::With | Token::Merge)
 }
 
 /// Whether `tok` is a reserved keyword that may also be used as a contextual

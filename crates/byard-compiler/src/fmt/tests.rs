@@ -22,6 +22,16 @@ fn fmt_stable(source: &str) -> String {
     once
 }
 
+#[test]
+fn a_grouping_spec_in_an_interpolation_is_kept_as_written() {
+    // RFC-0048: a string literal is never reflowed, so `{x:,.2}` stays.
+    let out = fmt_stable("View M(){\nText(\"{ total:,.2 } and {n:,} and {a+1:.0}\")\n}");
+    assert!(
+        out.contains("\"{ total:,.2 } and {n:,} and {a+1:.0}\""),
+        "{out}"
+    );
+}
+
 // ---- spacing ------------------------------------------------------------
 
 #[test]
@@ -609,6 +619,14 @@ fn every_kind_of_difference_is_seen_by_the_meaning_check() {
             "View M() { let a = \"{x:.2}\" }",
         ),
         (
+            "View M() { let a = \"{x:,.2}\" }",
+            "View M() { let a = \"{x:.2}\" }",
+        ),
+        (
+            "View M() { let a = \"{x:,}\" }",
+            "View M() { let a = \"{x}\" }",
+        ),
+        (
             "View M() { let a = {k: 1} }",
             "View M() { let a = {k: 1, j: 2} }",
         ),
@@ -726,12 +744,12 @@ fn every_kind_of_difference_is_seen_by_the_meaning_check() {
             "View M() { on tap => { let b = 1 } }",
         ),
         (
-            "View M() { let a = anim.keyframes(0%: 1, 50%: 2 ease_out) }",
-            "View M() { let a = anim.keyframes(0%: 1, 60%: 2 ease_out) }",
+            "View M() { let a = anim.keyframes(0%: 1, 50%: 2 easeOut) }",
+            "View M() { let a = anim.keyframes(0%: 1, 60%: 2 easeOut) }",
         ),
         (
-            "View M() { let a = anim.keyframes(0%: 1, 50%: 2 ease_out) }",
-            "View M() { let a = anim.keyframes(0%: 1, 50%: 2 ease_in) }",
+            "View M() { let a = anim.keyframes(0%: 1, 50%: 2 easeOut) }",
+            "View M() { let a = anim.keyframes(0%: 1, 50%: 2 easeIn) }",
         ),
         ("View M() { let v = a ?? b }", "View M() { let v = b ?? a }"),
     ];
@@ -772,4 +790,16 @@ fn a_remainder_is_spaced_and_a_keyframe_percent_is_left_alone() {
         out.contains("anim.keyframes(0%: 0, 50%: 1, 100%: 0)"),
         "{out}"
     );
+}
+
+#[test]
+fn a_view_reached_by_its_package_name_is_formatted_like_any_other() {
+    // `m.Button(...)` from an app and `ds.Button(...)` inside the package
+    // `ds`, next to the bare built-in.
+    let out = fmt_stable(
+        "use ds as m\nView Main(){\nColumn{\nm.Button(\"a\") #[bg:0xFF0000]\nButton(\"b\")\nds.Button(\"c\")\n}\n}",
+    );
+    assert!(out.contains("m.Button(\"a\") #[bg: 0xFF0000]"), "{out}");
+    assert!(out.contains("\n        Button(\"b\")\n"), "{out}");
+    assert!(out.contains("ds.Button(\"c\")"), "{out}");
 }

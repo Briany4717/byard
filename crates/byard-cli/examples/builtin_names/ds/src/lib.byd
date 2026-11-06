@@ -1,0 +1,13 @@
+// A design system names its views like the built-ins it wraps. Inside the
+// package a bare `Button` is still the built-in, so this one is built from it.
+View Button(label: Str) {
+    Button(label) #[bg: 0x6750A4, color: 0xFFFFFF, radius: 20, p: (horizontal: 24, vertical: 10)]
+}
+
+// The package's own view is reached by the package's name, as its callers do.
+View Pair(a: Str, b: Str) {
+    Row #[gap: 8] {
+        ds.Button(a)
+        ds.Button(b)
+    }
+}

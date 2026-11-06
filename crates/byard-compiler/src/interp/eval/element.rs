@@ -15,7 +15,7 @@ use super::states::attrs_with_states;
 use super::{Interpreter, RESERVED_CONTENT, RenderNode, controller, members_span};
 use crate::diagnostics::{CompileError, Span};
 use crate::interp::env::Value;
-use crate::interp::intrinsics::validate_element;
+use crate::interp::intrinsics::validate_element_in;
 use crate::parser::ast::{ElementNode, Expr, Member};
 use crate::symbol::Symbol;
 
@@ -69,7 +69,7 @@ impl Interpreter {
         // not affect the emitted base set.
         self.check_breakpoints(&state_blocks);
         let to_validate = attrs_with_states(&attrs, &state_blocks);
-        let mut found = validate_element(el, &to_validate, known_views);
+        let mut found = validate_element_in(el, &to_validate, known_views, Some(&self.theme));
         // The contract reads a bare word in `weight:` as a keyword, because
         // without a scope that is all it can be. Here the scope is known: a
         // word the view binds is a value (`weight: w`), and is not an error.
@@ -174,8 +174,11 @@ impl Interpreter {
             // AST elements, the render walk re-evaluates their parameter
             // expressions every tick, which is what makes them reactive.
             "Canvas" => {
-                self.errors
-                    .extend(super::intrinsics::validate_canvas(el, &to_validate));
+                self.errors.extend(super::intrinsics::validate_canvas_in(
+                    el,
+                    &to_validate,
+                    Some(&self.theme),
+                ));
                 let shapes = lower_canvas_items(el_children);
                 RenderNode::Canvas {
                     attrs,

@@ -363,7 +363,7 @@ impl Interpreter {
         if !self.clock_set {
             return target_int;
         }
-        let Ok(spec) = crate::interp::anim::resolve_motion(anim) else {
+        let Ok(spec) = crate::interp::anim::resolve_motion_in(anim, Some(&self.theme)) else {
             return target_int;
         };
         let packed = pack_curve(spec.curve);
@@ -449,7 +449,7 @@ impl Interpreter {
         if !self.clock_set {
             return target_value;
         }
-        let Ok(spec) = crate::interp::anim::resolve_motion(anim) else {
+        let Ok(spec) = crate::interp::anim::resolve_motion_in(anim, Some(&self.theme)) else {
             // The checker already reported this; render the target inertly.
             return target_value;
         };

@@ -332,7 +332,7 @@ impl Interpreter {
             AttrKind::Prop { value } if a.name.as_str() == "snap_spring" => Some(value),
             _ => None,
         })?;
-        match crate::interp::anim::resolve_curve(value) {
+        match crate::interp::anim::resolve_curve_in(value, Some(&self.theme)) {
             Ok(curve) => Some(pack_curve(curve)),
             Err(e) => {
                 self.errors.push(e);

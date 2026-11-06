@@ -14,9 +14,20 @@ use crate::diagnostics::{CompileError, Span};
 use crate::interp::intrinsics::color_rgba_auto;
 use crate::parser::ast::{Attr, AttrKind, ElementNode, Expr, Member, ViewDecl};
 
-/// The scrim a modal overlay draws over the page unless it says `scrim:`: black
-/// at 32% (the Material 3 scrim), linear RGBA.
-const DEFAULT_SCRIM: [f32; 4] = [0.0, 0.0, 0.0, 0.32];
+/// How opaque the theme's `scrim` colour is drawn over the page (the Material 3
+/// scrim opacity).
+const SCRIM_ALPHA: f32 = 0.32;
+
+impl Interpreter {
+    /// The colour a modal overlay dims the page with when it names none: the
+    /// active scheme's `scrim` role at [`SCRIM_ALPHA`], linear RGBA. A theme
+    /// without the role (it cannot be: `byard-base` has it) dims with black.
+    fn theme_scrim(&self) -> [f32; 4] {
+        let hex = self.theme.color("scrim", self.theme_is_dark()).unwrap_or(0);
+        let [r, g, b, _] = color_rgba_auto(hex);
+        [r, g, b, SCRIM_ALPHA]
+    }
+}
 
 /// Whether the overlay names its own `scrim:` colour.
 fn has_scrim_prop(attrs: &[Attr]) -> bool {
@@ -393,7 +404,7 @@ impl Interpreter {
             self.router.push_modal_scrim(elem, viewport, dismiss);
 
             // The scrim: the page under a dialog is dimmed. `scrim: <colour>`
-            // replaces the default (black at 32%, M3's scrim), and a fully
+            // replaces the default (the theme's `scrim` at 32%, RFC-0053), and a fully
             // transparent colour turns it off.
             //
             // A child that fills the viewport is the overlay's own scrim (the
@@ -406,7 +417,7 @@ impl Interpreter {
                 .any(|slot| self.fills(slot, width, height));
             let colour = self
                 .eval_color_prop(attrs, "scrim")
-                .map_or(DEFAULT_SCRIM, color_rgba_auto);
+                .map_or_else(|| self.theme_scrim(), color_rgba_auto);
             if colour[3] > 0.0 && (!own_scrim || has_scrim_prop(attrs)) {
                 frame.push_instance(byard_core::BoxInstance {
                     rect: [0.0, 0.0, width, height],

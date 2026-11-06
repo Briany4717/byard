@@ -1044,6 +1044,7 @@ fn reject_unknown_theme_keys(theme_tbl: &toml::Table) -> Result<(), String> {
             "typography",
             "breakpoints",
             "shape",
+            "motion",
         ],
     )?;
     if let Some(colors) = theme_tbl.get("color").and_then(toml::Value::as_table) {
@@ -1180,7 +1181,88 @@ fn apply_theme_table(
         }
     }
 
+    // [theme.motion], `key = { stiffness, damping_ratio | damping }` for a
+    // spring, `key = <ms>` for a duration (RFC-0053).
+    if let Some(motion) = theme_tbl.get("motion") {
+        let motion = motion.as_table().ok_or_else(|| {
+            "byard.toml: [theme.motion] must be a table of springs and durations".to_string()
+        })?;
+        for (key, value) in motion {
+            apply_motion_entry(theme, key, value)?;
+        }
+    }
+
     Ok(())
+}
+
+/// Parses one `[theme.motion]` entry onto `theme`: a spring table or a whole
+/// number of milliseconds.
+fn apply_motion_entry(theme: &mut Theme, key: &str, value: &toml::Value) -> Result<(), String> {
+    let spring_hint = "like `{ stiffness = 800, damping_ratio = 0.6 }`";
+    match value {
+        toml::Value::Integer(ms) => {
+            let ms = u32::try_from(*ms).map_err(|_| {
+                format!(
+                    "byard.toml: motion `{key}` is a duration and must be between 0 and {} milliseconds",
+                    u32::MAX
+                )
+            })?;
+            theme.set_duration(key, ms);
+            Ok(())
+        }
+        toml::Value::Table(spring) => {
+            reject_unknown_keys(
+                spring,
+                &format!("motion `{key}`"),
+                &["stiffness", "damping_ratio", "damping"],
+            )?;
+            let number = |name: &str| -> Result<Option<f64>, String> {
+                spring
+                    .get(name)
+                    .map(|v| {
+                        as_number(v).filter(|n| n.is_finite()).ok_or_else(|| {
+                            format!("byard.toml: motion `{key}`: `{name}` must be a number")
+                        })
+                    })
+                    .transpose()
+            };
+            let stiffness = number("stiffness")?.filter(|k| *k > 0.0).ok_or_else(|| {
+                format!(
+                    "byard.toml: motion `{key}` is a spring and needs a `stiffness` above zero, {spring_hint}"
+                )
+            })?;
+            #[allow(clippy::cast_possible_truncation)]
+            let stiffness = stiffness as f32;
+            match (number("damping_ratio")?, number("damping")?) {
+                (Some(ratio), None) if ratio > 0.0 => {
+                    #[allow(clippy::cast_possible_truncation)]
+                    theme.set_spring_ratio(key, stiffness, ratio as f32);
+                }
+                (None, Some(damping)) if damping >= 0.0 => {
+                    #[allow(clippy::cast_possible_truncation)]
+                    theme.set_spring(key, stiffness, damping as f32);
+                }
+                (Some(_), Some(_)) => {
+                    return Err(format!(
+                        "byard.toml: motion `{key}` has both `damping_ratio` and `damping`; use one \
+                         (`damping_ratio` is Material's, 1.0 settles without overshoot; `damping` is \
+                         the `damping:` of `anim.spring`)"
+                    ));
+                }
+                _ => {
+                    return Err(format!(
+                        "byard.toml: motion `{key}` is a spring and needs a `damping_ratio` above zero \
+                         (or a `damping` of zero or more), {spring_hint}"
+                    ));
+                }
+            }
+            Ok(())
+        }
+        _ => Err(format!(
+            "byard.toml: motion `{key}` must be a spring, {spring_hint}, or a duration in whole \
+             milliseconds, like `{key} = 200`"
+        )),
+    }
 }
 
 /// Reads a manifest's `[assets.fonts]`, `family = "path/to/font.ttf"`
@@ -1855,6 +1937,137 @@ mod tests {
         assert_eq!(theme.shape("cornerXl"), Some(28.0));
     }
 
+    /// `[theme.motion]` declares springs and durations (RFC-0053): a spring by
+    /// its damping ratio (Material's) or its damping coefficient (the engine's),
+    /// a duration in whole milliseconds, each named for its kind.
+    #[test]
+    fn motion_tokens_parse_and_name_themselves_by_kind() {
+        use byard_compiler::interp::theme::{MotionToken, spring_damping};
+        let theme = theme_of(
+            "[theme.motion]\n\
+             spatial_fast = { stiffness = 700, damping_ratio = 0.5 }\n\
+             snappy = { stiffness = 300, damping = 24 }\n\
+             short_2 = 120\n",
+        )
+        .unwrap();
+        assert_eq!(
+            theme.motion("springSpatialFast"),
+            Some(MotionToken::Spring {
+                stiffness: 700.0,
+                damping: spring_damping(700.0, 0.5)
+            }),
+            "the project retunes a base spring"
+        );
+        assert_eq!(
+            theme.motion("springSnappy"),
+            Some(MotionToken::Spring {
+                stiffness: 300.0,
+                damping: 24.0
+            })
+        );
+        assert_eq!(
+            theme.motion("durationShort2"),
+            Some(MotionToken::Duration(120))
+        );
+        assert_eq!(
+            theme.motion("springSpatialSlow"),
+            Theme::byard_base().motion("springSpatialSlow"),
+            "what it does not redeclare stays the base's"
+        );
+    }
+
+    #[test]
+    fn a_motion_entry_that_is_wrong_says_how() {
+        let err = |toml: &str| theme_of(&format!("[theme.motion]\n{toml}\n")).unwrap_err();
+        let e = err("a = \"fast\"");
+        assert!(e.contains("motion `a`") && e.contains("spring"), "{e}");
+        let e = err("a = 1.5");
+        assert!(e.contains("motion `a`") && e.contains("whole"), "{e}");
+        let e = err("a = -4");
+        assert!(
+            e.contains("motion `a`") && e.contains("milliseconds"),
+            "{e}"
+        );
+        let e = err("a = { damping_ratio = 0.5 }");
+        assert!(e.contains("`stiffness`"), "{e}");
+        let e = err("a = { stiffness = 200 }");
+        assert!(e.contains("damping_ratio"), "{e}");
+        let e = err("a = { stiffness = 200, damping_ratio = 0.5, damping = 10 }");
+        assert!(e.contains("both"), "{e}");
+        let e = err("a = { stiffness = 0, damping_ratio = 0.5 }");
+        assert!(e.contains("stiffness"), "{e}");
+        let e = err("a = { stiffness = 200, damping_ratio = 0 }");
+        assert!(e.contains("damping_ratio"), "{e}");
+        let e = err("a = { stiffness = 200, dampening = 0.5 }");
+        assert!(
+            e.contains("unknown key `dampening`") && e.contains("damping"),
+            "{e}"
+        );
+    }
+
+    /// A package's springs come in with `extends`, and the project's own win.
+    #[test]
+    fn an_extended_package_theme_brings_its_motion() {
+        use byard_compiler::interp::theme::{MotionToken, spring_damping};
+        let dir = std::env::temp_dir().join(format!("byard-pkgmotion-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("kit/src")).unwrap();
+        std::fs::create_dir_all(dir.join("app")).unwrap();
+        std::fs::write(
+            dir.join("kit/byard.toml"),
+            "[package]\nname = \"kit\"\nversion = \"0.1.0\"\n\
+             [theme.motion]\nplayful = { stiffness = 250, damping_ratio = 0.4 }\n\
+             lazy = { stiffness = 50, damping_ratio = 1.0 }\nbeat = 640\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("kit/src/a.byd"), "View A() { Box {} }\n").unwrap();
+        std::fs::write(dir.join("app/main.byd"), "View Main() { Box {} }\n").unwrap();
+        let app = |theme: &str| {
+            std::fs::write(
+                dir.join("app/byard.toml"),
+                format!(
+                    "[project]\nname = \"app\"\nentry = \"main.byd\"\n\
+                     [dependencies]\nkit = {{ path = \"../kit\" }}\n{theme}"
+                ),
+            )
+            .unwrap();
+            Manifest::discover(Some(&dir.join("app"))).unwrap().theme
+        };
+        let extended = app(
+            "[theme]\nextends = \"kit\"\n[theme.motion]\nlazy = { stiffness = 60, damping = 14 }\n",
+        );
+        assert_eq!(
+            extended.motion("springPlayful"),
+            Some(MotionToken::Spring {
+                stiffness: 250.0,
+                damping: spring_damping(250.0, 0.4)
+            }),
+            "from the package"
+        );
+        assert_eq!(
+            extended.motion("durationBeat"),
+            Some(MotionToken::Duration(640))
+        );
+        assert_eq!(
+            extended.motion("springLazy"),
+            Some(MotionToken::Spring {
+                stiffness: 60.0,
+                damping: 14.0
+            }),
+            "the project wins"
+        );
+        assert!(
+            extended.motion("springSpatialFast").is_some(),
+            "and the base stays"
+        );
+        // Without `extends` the package's springs are not taken, and the theme
+        // knows which package would have supplied them.
+        let plain = app("");
+        assert_eq!(plain.motion("springPlayful"), None);
+        assert_eq!(plain.unapplied_token_owner("springPlayful"), Some("kit"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn font_assets_register_families() {
         let theme =
@@ -2221,9 +2434,9 @@ mod tests {
 
     #[test]
     fn an_unknown_theme_table_is_an_error_naming_it() {
-        let err = manifest_error("motion", "[theme.motion]\nfast = 1\n").expect("an error");
+        let err = manifest_error("motion", "[theme.motionn]\nfast = 1\n").expect("an error");
         assert!(
-            err.contains("[theme]") && err.contains("unknown key `motion`"),
+            err.contains("[theme]") && err.contains("unknown key `motionn`"),
             "{err}"
         );
         let err = manifest_error("colour", "[theme.colour.light]\nprimary = \"#123456\"\n")

@@ -91,6 +91,10 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the time to a `var` from `every 1s`. `formatDate` gains the `ss` token for the
   seconds, and `byard shot --now 2026-11-05T09:00:00` fixes the time so a picture is
   the same every run.
+
+- **`Shot::now` fixes the clock in a Rust app's shot.** `App::shot` with
+  `Shot::after(1000).now("2026-11-05T09:00:00")` draws `now()` at that time, as
+  `byard shot --now` does for a project without a Rust half.
 ### Added
 
 - **`basis` works on a `Box`, `Row`, `Column`, `Button`, `ScrollView`, `Grid`,

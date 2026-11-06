@@ -70,9 +70,95 @@ pub enum AccessRole {
     /// A grouping with no meaning of its own; what a native view is unless it
     /// declares otherwise.
     Group,
+    /// A button that is on or off (RFC-0052). A button with a `toggled` state
+    /// to the platform.
+    ToggleButton,
+    /// The container of a set of radio buttons (RFC-0052).
+    RadioGroup,
+    /// One entry of a menu (RFC-0052).
+    MenuItem,
+    /// A menu (RFC-0052).
+    Menu,
+    /// Something that goes elsewhere when pressed (RFC-0052).
+    Link,
+    /// How far along something is (RFC-0052).
+    ProgressBar,
+    /// A list (RFC-0052).
+    List,
+    /// One entry of a list (RFC-0052).
+    ListItem,
+    /// A message the user must hear at once (RFC-0052).
+    Alert,
+    /// A set of links that moves around the app (RFC-0052).
+    Navigation,
+    /// A set of controls grouped as a bar (RFC-0052).
+    Toolbar,
+    /// A title (RFC-0052).
+    Heading,
 }
 
 impl AccessRole {
+    /// The keywords `a11y_role:` accepts (RFC-0052 §2), each with the role it
+    /// names. The one list the checker, [`from_keyword`](Self::from_keyword)
+    /// and the tests share.
+    pub const KEYWORDS: [&'static str; 23] = [
+        "button",
+        "toggle_button",
+        "switch",
+        "checkbox",
+        "radio",
+        "radio_group",
+        "slider",
+        "tab",
+        "tab_list",
+        "menu_item",
+        "menu",
+        "link",
+        "text_field",
+        "progress_bar",
+        "list",
+        "list_item",
+        "dialog",
+        "alert",
+        "navigation",
+        "toolbar",
+        "group",
+        "image",
+        "heading",
+    ];
+
+    /// The role a `a11y_role:` keyword names, or `None` for a word outside the
+    /// closed set.
+    #[must_use]
+    pub fn from_keyword(word: &str) -> Option<Self> {
+        Some(match word {
+            "button" => Self::Button,
+            "toggle_button" => Self::ToggleButton,
+            "switch" => Self::Switch,
+            "checkbox" => Self::CheckBox,
+            "radio" => Self::RadioButton,
+            "radio_group" => Self::RadioGroup,
+            "slider" => Self::Slider,
+            "tab" => Self::Tab,
+            "tab_list" => Self::TabList,
+            "menu_item" => Self::MenuItem,
+            "menu" => Self::Menu,
+            "link" => Self::Link,
+            "text_field" => Self::TextInput,
+            "progress_bar" => Self::ProgressBar,
+            "list" => Self::List,
+            "list_item" => Self::ListItem,
+            "dialog" => Self::Dialog,
+            "alert" => Self::Alert,
+            "navigation" => Self::Navigation,
+            "toolbar" => Self::Toolbar,
+            "group" => Self::Group,
+            "image" => Self::Image,
+            "heading" => Self::Heading,
+            _ => return None,
+        })
+    }
+
     /// The role's name as the headless dump writes it.
     #[must_use]
     pub const fn name(self) -> &'static str {
@@ -90,6 +176,18 @@ impl AccessRole {
             Self::Tab => "Tab",
             Self::Dialog => "Dialog",
             Self::Group => "Group",
+            Self::ToggleButton => "ToggleButton",
+            Self::RadioGroup => "RadioGroup",
+            Self::MenuItem => "MenuItem",
+            Self::Menu => "Menu",
+            Self::Link => "Link",
+            Self::ProgressBar => "ProgressBar",
+            Self::List => "List",
+            Self::ListItem => "ListItem",
+            Self::Alert => "Alert",
+            Self::Navigation => "Navigation",
+            Self::Toolbar => "Toolbar",
+            Self::Heading => "Heading",
         }
     }
 
@@ -109,6 +207,9 @@ impl AccessRole {
                 | Self::Image
                 | Self::Tab
                 | Self::Dialog
+                | Self::ToggleButton
+                | Self::MenuItem
+                | Self::Link
         )
     }
 
@@ -117,7 +218,17 @@ impl AccessRole {
     /// (RFC-0042 §3: "`Text` inside a named control is not repeated").
     #[must_use]
     pub const fn names_from_content(self) -> bool {
-        matches!(self, Self::Button)
+        matches!(
+            self,
+            Self::Button
+                | Self::ToggleButton
+                | Self::Switch
+                | Self::CheckBox
+                | Self::RadioButton
+                | Self::Tab
+                | Self::MenuItem
+                | Self::Link
+        )
     }
 }
 
@@ -173,9 +284,12 @@ impl AccessFlags {
     pub const MIXED: Self = Self(1 << 6);
     /// The node blocks everything beneath it (a modal dialog).
     pub const MODAL: Self = Self(1 << 7);
+    /// The node can be expanded and is not (RFC-0052). `EXPANDED` and this
+    /// are both statements; a node with neither is not expandable.
+    pub const COLLAPSED: Self = Self(1 << 8);
 
     /// Every flag, in the order the dump writes them.
-    const ALL: [(Self, &'static str); 8] = [
+    const ALL: [(Self, &'static str); 9] = [
         (Self::FOCUSABLE, "focusable"),
         (Self::FOCUSED, "focused"),
         (Self::DISABLED, "disabled"),
@@ -183,6 +297,7 @@ impl AccessFlags {
         (Self::MIXED, "mixed"),
         (Self::SELECTED, "selected"),
         (Self::EXPANDED, "expanded"),
+        (Self::COLLAPSED, "collapsed"),
         (Self::MODAL, "modal"),
     ];
 

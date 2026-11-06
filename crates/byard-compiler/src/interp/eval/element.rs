@@ -106,12 +106,14 @@ impl Interpreter {
                             state_blocks: Vec::new(),
                             content,
                             env_snapshot: Vec::new(),
+                            inst: self.cur_inst,
                         }],
                         action: el.action.clone(),
                         bound_sig: None,
                         env_snapshot: self.capture_env_snapshot(),
                         measure,
                         uid,
+                        inst: self.cur_inst,
                         clip_path: None,
                     }
                 } else {
@@ -121,6 +123,7 @@ impl Interpreter {
                         state_blocks,
                         content,
                         env_snapshot,
+                        inst: self.cur_inst,
                     }
                 }
             }
@@ -129,7 +132,10 @@ impl Interpreter {
             //, it compiles its route table into a pool here and lowers each
             // screen lazily, the first time navigation reaches it.
             "NavStack" | "NavHost" => self.lower_nav(el, &attrs, state_blocks, known_views),
-            "Spacer" => RenderNode::Spacer { attrs },
+            "Spacer" => RenderNode::Spacer {
+                attrs,
+                inst: self.cur_inst,
+            },
             // Image intrinsic → TextureSampler pipeline.
             // Syntax: Image("path.jpg") #[fit: .cover, width: 200, height: 150]
             "Image" => {
@@ -144,6 +150,7 @@ impl Interpreter {
                     state_blocks,
                     src,
                     env_snapshot,
+                    inst: self.cur_inst,
                 }
             }
             // VectorIcon intrinsic → VectorMSDF pipeline. Content is an
@@ -159,6 +166,7 @@ impl Interpreter {
                     attrs: el.attrs.clone(),
                     src,
                     env_snapshot,
+                    inst: self.cur_inst,
                 }
             }
             // RFC-0020: the `Canvas` drawing surface. Its children are shape
@@ -175,6 +183,7 @@ impl Interpreter {
                     shapes,
                     action: el.action.clone(),
                     env_snapshot: self.capture_env_snapshot(),
+                    inst: self.cur_inst,
                 }
             }
             // RFC-0017: the `Overlay` escape-hatch. Its children are lowered
@@ -186,6 +195,7 @@ impl Interpreter {
                     attrs,
                     children,
                     env_snapshot: self.capture_env_snapshot(),
+                    inst: self.cur_inst,
                 }
             }
             // Value widgets: resolve bound signal and keep as leaf nodes.
@@ -204,6 +214,7 @@ impl Interpreter {
                     env_snapshot: self.capture_env_snapshot(),
                     measure,
                     uid,
+                    inst: self.cur_inst,
                     clip_path: None,
                 }
             }
@@ -224,6 +235,7 @@ impl Interpreter {
                     env_snapshot: self.capture_env_snapshot(),
                     measure,
                     uid,
+                    inst: self.cur_inst,
                     clip_path: None,
                 }
             }
@@ -241,6 +253,7 @@ impl Interpreter {
                     action: el.action.clone(),
                     env_snapshot: self.capture_env_snapshot(),
                     slot,
+                    inst: self.cur_inst,
                 }
             }
             _ => {
@@ -282,6 +295,7 @@ impl Interpreter {
                     env_snapshot: self.capture_env_snapshot(),
                     measure,
                     uid,
+                    inst: self.cur_inst,
                     clip_path,
                 }
             }
@@ -526,6 +540,7 @@ impl Interpreter {
                     els_ast: els.clone().unwrap_or_default(),
                     known_views: known_views.iter().map(|s| (*s).to_string()).collect(),
                     env_snapshot,
+                    inst: self.cur_inst,
                     then: None,
                     els: None,
                     then_scopes: Vec::new(),
@@ -556,6 +571,7 @@ impl Interpreter {
                     body: body.clone(),
                     known_views: known_views.iter().map(|s| (*s).to_string()).collect(),
                     env_snapshot,
+                    inst: self.cur_inst,
                     item_slots: Vec::new(),
                     bodies: Vec::new(),
                     slot_scopes: Vec::new(),

@@ -8,6 +8,7 @@
 //! through the same walk, which is what makes it safe to reason about; the
 //! state it keeps between frames lives here with the pools it describes.
 
+use super::animation::AnimSlot;
 use super::instance::MAX_INSTANCE_DEPTH;
 use super::navigation::NavPool;
 use super::overlay::OverlayLayout;
@@ -43,7 +44,7 @@ pub(super) fn collect_pools(nodes: &[RenderNode], out: &mut Vec<usize>) {
 #[derive(Clone, Copy)]
 pub(crate) struct Concrete<'a> {
     pub(super) node: &'a RenderNode,
-    pub(super) slot: u32,
+    pub(super) slot: super::animation::AnimSlot,
 }
 
 /// A borrowed view of the structural-reactivity caches (RFC-0018) and the
@@ -75,6 +76,9 @@ pub(super) struct WhenPool {
     pub(super) known_views: Vec<String>,
     /// Instance env captured at lower time (RFC-0019), restored when lowering.
     pub(super) env_snapshot: Vec<(Symbol, super::env::Value)>,
+    /// The view instance the `when` was written in, so a branch lowered later
+    /// belongs to it and not to whatever was being lowered by then.
+    pub(super) inst: u32,
     /// The lowered `then` branch, once first taken.
     pub(super) then: Option<Vec<RenderNode>>,
     /// The lowered `else` branch, once first taken.
@@ -102,6 +106,8 @@ pub(super) struct ForPool {
     /// The instance env captured at lower time (RFC-0019), restored when lowering
     /// a new body so it resolves against the scope the `for` was written in.
     pub(super) env_snapshot: Vec<(Symbol, super::env::Value)>,
+    /// The view instance the `for` was written in (see `WhenPool::inst`).
+    pub(super) inst: u32,
     /// One signal per pooled index, holding that slot's current element value.
     pub(super) item_slots: Vec<super::env::SignalId>,
     /// One lowered body per pooled index. A prefix of `item_slots`: a pool that
@@ -275,7 +281,7 @@ impl Interpreter {
         &self,
         nodes: &'a [RenderNode],
         pools: Pools<'a>,
-        slot: u32,
+        slot: AnimSlot,
     ) -> Vec<Concrete<'a>> {
         let mut out = Vec::new();
         for n in nodes {
@@ -304,7 +310,10 @@ impl Interpreter {
                             // The slot's own element signal, unique across the
                             // program, because a nested `for` is lowered once
                             // per outer slot and gets its own fresh signals.
-                            let row = p.item_slots.get(i).map_or(slot, |s| s.0);
+                            let row = p
+                                .item_slots
+                                .get(i)
+                                .map_or(slot, |s| AnimSlot { row: s.0, ..slot });
                             out.extend(self.expand_concrete_in(body, pools, row));
                         }
                     }
@@ -315,7 +324,13 @@ impl Interpreter {
                 // flat-id sequence, which is the RFC-0032 retained path's
                 // identity, for a node that can never draw.
                 RenderNode::Effect { .. } => {}
-                other => out.push(Concrete { node: other, slot }),
+                other => out.push(Concrete {
+                    node: other,
+                    slot: AnimSlot {
+                        inst: other.inst(),
+                        ..slot
+                    },
+                }),
             }
         }
         out
@@ -441,12 +456,14 @@ impl Interpreter {
         // has one.
         let restored = !env_snap.is_empty();
         self.restored_depth += u32::from(restored);
+        let enclosing = std::mem::replace(&mut self.cur_inst, self.when_pools[pool].inst);
         // The scopes the branch opens are recorded, so a route popped with this
         // `when` in it can retire them.
         self.ctx.push_scope_tracker();
         let nodes = self.lower_members(&ast, &known_refs);
         let scopes = self.ctx.pop_scope_tracker();
         self.restored_depth -= u32::from(restored);
+        self.cur_inst = enclosing;
         self.env.truncate(env_base);
         (nodes, scopes)
     }
@@ -481,10 +498,12 @@ impl Interpreter {
         // captures the element in its env snapshot (the binding is truncated
         // below before render, RFC-0027).
         self.for_depth += 1;
+        let enclosing = std::mem::replace(&mut self.cur_inst, self.for_pools[pool].inst);
         self.ctx.push_scope_tracker();
         let body_nodes = self.lower_members(&body_ast, &known_refs);
         let scopes = self.ctx.pop_scope_tracker();
         self.for_depth -= 1;
+        self.cur_inst = enclosing;
         self.env.truncate(env_base);
         (body_nodes, scopes)
     }
@@ -536,7 +555,7 @@ impl Interpreter {
                     if previous.is_some_and(|was| was != take) {
                         let (then_span, els_span) = self.when_pools[*pool].branch_spans;
                         let gone = if take { els_span } else { then_span };
-                        self.drop_animation_state(gone);
+                        self.drop_animation_state(gone, self.when_pools[*pool].inst);
                         dirtied = true;
                     }
                     self.when_pools[*pool].last_take = Some(take);
@@ -849,7 +868,7 @@ impl Interpreter {
                 flat_ids.extend(temp_flat);
                 Ok(id)
             }
-            RenderNode::Spacer { attrs } => {
+            RenderNode::Spacer { attrs, .. } => {
                 // RFC-0005: a `Spacer` is a *flexible* gap, `grow` (default 1)
                 // is its share of the parent's free space, `basis` its size
                 // before growing. Both are read through the ordinary prop path,
@@ -971,6 +990,7 @@ impl Interpreter {
                 content,
                 state_blocks,
                 env_snapshot,
+                ..
             } => {
                 // The scope the run was written in, so a `size:` that reads a
                 // view parameter measures with the instance's value.

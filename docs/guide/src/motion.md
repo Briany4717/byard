@@ -194,6 +194,31 @@ can run at different points. `restart: entrance` replays the cascade each time t
 button changes `entrance`, which is how you run a start-up animation again without
 reloading.
 
+## A view you call more than once
+
+An animation belongs to the element it runs on, not to the line that wrote it. A view
+with motion in it can be called as often as you like, and each call moves on its own:
+
+```byld
+View Main() {
+    Column #[gap: 4] {
+        Pill(round: true)
+        Pill(round: false)
+        Pill(round: true)
+    }
+}
+
+View Pill(round: Bool) {
+    Box #[bg: 0x3355CC, radius: round ? 28 : 2 with anim.spring(), width: 80, height: 40] {}
+}
+```
+
+The middle `Pill` is square, whatever the other two are doing. Springs, timed curves,
+keyframes, `stagger`, loops, a style's `on hover` and `on pressed` changes and a canvas's
+`morph:` all work this way, in a `when`, behind another view, or inside an `Overlay`. A
+call that goes away (its `when` turns false) starts over when it comes back, as its
+`var`s do, and a hot reload keeps the motion of the calls it keeps.
+
 ## Transforms
 
 `translate`, `scale`, `rotate` and `origin` move how an element is *drawn*, never

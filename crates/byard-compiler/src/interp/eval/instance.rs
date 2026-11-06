@@ -417,6 +417,12 @@ impl Interpreter {
         // 1) Bind arguments → parameters in the *parent* scope (RFC-0007 §3).
         let bindings = self.bind_args(&callee, el);
 
+        // From here the nodes belong to this call's instance: its path is the
+        // caller's plus this call site, so two calls of one view are two
+        // instances, and a reload lowering the same call again gets the same one.
+        let caller_inst = self.cur_inst;
+        self.cur_inst = self.instances.enter(caller_inst, el.span);
+
         // 2) Open the per-instance lexical frame (D-D): push each
         //    parameter in declaration order, a bound argument's memo, else a
         //    default evaluated in the callee scope, then the callee's
@@ -452,6 +458,7 @@ impl Interpreter {
         self.slot_stack.push(slot_nodes);
         let nodes = self.lower_members(&callee.body, known_views);
         self.slot_stack.pop();
+        self.cur_inst = caller_inst;
         out.extend(nodes);
 
         // 4) Close the instance scope (RFC-0007 §2 step 6).

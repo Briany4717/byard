@@ -28,6 +28,10 @@ mod shot;
 pub use shot::Shot;
 
 pub use app::App;
+
+/// Where the app named `app_id` keeps its data: the directory `Store` writes in.
+/// See [`byard_core::cap::data_dir`].
+pub use byard_core::cap::data_dir;
 pub use report::{ByardErrorExt, CompileReport};
 
 /// What a project failure holds (RFC-0043): [`ByardErrorExt::as_project`]

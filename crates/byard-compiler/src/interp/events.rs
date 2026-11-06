@@ -92,6 +92,21 @@ impl EventKind {
     pub fn is_continuous(self) -> bool {
         matches!(self, Self::PointerMove | Self::Scroll | Self::Wheel)
     }
+
+    /// Whether this is a press gesture: the kinds one element owns outright
+    /// and that never bubble to an element beneath it.
+    #[must_use]
+    pub fn is_press(self) -> bool {
+        matches!(
+            self,
+            Self::PointerDown
+                | Self::PointerUp
+                | Self::Tap
+                | Self::DoubleTap
+                | Self::LongPress
+                | Self::Secondary
+        )
+    }
 }
 
 /// A normalized, `Send`-able input event produced by the platform thread.
@@ -178,6 +193,9 @@ struct Focusable {
     frame: Option<Transform>,
     /// The `var` bound via `#[focused: …]`.
     focused_sig: SignalId,
+    /// How many handlers were registered before this one: where it sits in the
+    /// paint order relative to them, for deciding who owns a press.
+    after: usize,
 }
 
 struct DownState {
@@ -263,6 +281,9 @@ pub struct EventRouter {
     focusables: Vec<Focusable>,
     down: Option<DownState>,
     focused: Option<u32>,
+    /// The `var` the focused element reports into, kept from the frame that
+    /// focused it so an element that goes away can still be blurred.
+    focused_sig: Option<SignalId>,
     /// The element being dragged (RFC-0024 `dragging`): the press target, once
     /// the pointer has moved past [`TAP_SLOP`] since pressing it. Set during a
     /// held move, cleared on the next press/release. Persists across renders like
@@ -302,6 +323,10 @@ pub struct EventRouter {
     /// last). `Escape` fires the topmost one's `dismiss` action (RFC-0017
     /// resolved-questions: accessibility). Rebuilt every render.
     modal_scrims: Vec<usize>,
+    /// The overlay content's rects, per modal scrim (handler index → rects). A
+    /// press inside one belongs to the content, not the scrim: the scrim's
+    /// `dismiss` runs only for a press outside all of them.
+    scrim_keep: Vec<(usize, Vec<Rect>)>,
     /// Light-dismiss regions for anchored overlays (RFC-0036 `on dismiss`).
     ///
     /// Deliberately **not** a modal scrim. A scrim covers the viewport, raises
@@ -357,6 +382,7 @@ impl EventRouter {
         self.modal_floor = 0;
         self.focusable_floor = 0;
         self.modal_scrims.clear();
+        self.scrim_keep.clear();
         self.light_dismiss.clear();
         self.drag_captures.clear();
         self.activatable.clear();
@@ -413,6 +439,18 @@ impl EventRouter {
             action: dismiss.unwrap_or_else(|| Box::new(|_, _| {})),
         });
         self.modal_scrims.push(idx);
+    }
+
+    /// Marks `rect` as the content of the most recent modal scrim: a press
+    /// inside it does not reach the scrim, so it cannot dismiss.
+    pub fn keep_scrim_open_over(&mut self, rect: Rect) {
+        let Some(&idx) = self.modal_scrims.last() else {
+            return;
+        };
+        match self.scrim_keep.iter_mut().find(|(i, _)| *i == idx) {
+            Some((_, rects)) => rects.push(rect),
+            None => self.scrim_keep.push((idx, vec![rect])),
+        }
     }
 
     /// Registers a light dismiss for an anchored overlay (RFC-0036).
@@ -599,6 +637,7 @@ impl EventRouter {
             rect,
             frame: self.current_frame,
             focused_sig,
+            after: self.handlers.len(),
         });
     }
 
@@ -619,6 +658,44 @@ impl EventRouter {
     /// Sets the initially-focused element and its `var`.
     pub fn set_focus(&mut self, ctx: &mut ReactiveCtx, elem: u32) {
         self.steal_focus(ctx, Some(elem));
+    }
+
+    /// Whether the router holds an element index across frames: focus, a press
+    /// in flight, a drag or the element under the pointer.
+    #[must_use]
+    pub fn holds_elements(&self) -> bool {
+        self.focused.is_some()
+            || self.down.is_some()
+            || self.dragging.is_some()
+            || self.hovered.is_some()
+    }
+
+    /// Moves the pointer's elements (the press, the drag, the hover, the last
+    /// tap) to where their elements are after a relayout. An element that is
+    /// gone is let go of without an event.
+    pub fn follow_pointer(&mut self, to: &impl Fn(u32) -> Option<u32>) {
+        if let Some(d) = &mut self.down {
+            d.elem = d.elem.and_then(to);
+        }
+        self.dragging = self.dragging.and_then(to);
+        self.hovered = self.hovered.and_then(to);
+        if let Some((_, e)) = &mut self.last_tap {
+            *e = e.and_then(to);
+        }
+    }
+
+    /// Moves `focused` to where its element now is after a relayout, without
+    /// the blur and focus an actual move would fire. `None` means the element
+    /// is gone: focus ends, and its `var` is cleared.
+    pub fn follow_focus(&mut self, ctx: &mut ReactiveCtx, now: Option<u32>) {
+        if now.is_some() {
+            self.focused = now;
+        } else {
+            self.focused = None;
+            if let Some(sig) = self.focused_sig.take() {
+                ctx.write_signal(sig, Value::Bool(false));
+            }
+        }
     }
 
     /// Moves focus to `elem` if it is a focus target in the current scope
@@ -975,6 +1052,23 @@ impl EventRouter {
         let Some(i) = self.hit(atlas, pos, kind) else {
             return;
         };
+        // A press is the topmost listener's alone and does not bubble: when
+        // something above this handler also listens for presses here, that
+        // element has the press, even if it has no handler of this kind (a
+        // `TextField` over a panel with `tap`).
+        if kind.is_press()
+            && self
+                .press_owner(pos)
+                .is_some_and(|e| e != self.handlers[i].elem)
+        {
+            return;
+        }
+        // A modal scrim only owns what is outside the overlay's content.
+        if let Some((_, keep)) = self.scrim_keep.iter().find(|(s, _)| *s == i) {
+            if keep.iter().any(|r| contains(*r, pos)) {
+                return;
+            }
+        }
         // A disabled element dispatches nothing (RFC-0012 S5).
         if self.disabled.contains(&self.handlers[i].elem) {
             return;
@@ -998,14 +1092,49 @@ impl EventRouter {
             // the same `focused_sig` transition as the reflected prop above.
             self.fire_on_elem(ctx, Some(old), EventKind::Blur, (0.0, 0.0), None);
         }
+        self.focused_sig = None;
         if let Some(n) = new {
             if let Some(f) = self.focusables.iter().find(|f| f.elem == n) {
                 ctx.write_signal(f.focused_sig, Value::Bool(true));
+                self.focused_sig = Some(f.focused_sig);
             }
             // RFC-0012 S2: `focus =>` sugar fires on the rising edge.
             self.fire_on_elem(ctx, Some(n), EventKind::Focus, (0.0, 0.0), None);
         }
         self.focused = new;
+    }
+
+    /// The element owning a press at `pos`: the topmost handler of any press
+    /// kind under the pointer, above the modal floor.
+    fn press_owner(&self, pos: (f32, f32)) -> Option<u32> {
+        let handler = self
+            .handlers
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(i, h)| {
+                *i >= self.modal_floor && h.kind.is_press() && hits(h.rect, h.frame, pos)
+            })
+            .map(|(i, h)| (i, h.elem));
+        // A focusable (a `TextField`) takes the press although it registers no
+        // press handler: it is what a press on it focuses. It is above the
+        // handlers registered before it.
+        let focusable = self
+            .focusables
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(i, f)| {
+                *i >= self.focusable_floor
+                    && !self.disabled.contains(&f.elem)
+                    && hits(f.rect, f.frame, pos)
+            })
+            .map(|(_, f)| (f.after, f.elem));
+        match (handler, focusable) {
+            (Some((hi, he)), Some((after, fe))) => Some(if after > hi { fe } else { he }),
+            (Some((_, e)), None) | (None, Some((_, e))) => Some(e),
+            (None, None) => None,
+        }
     }
 
     /// Finds the topmost handler of `kind` whose registered (inflated, E8) hit

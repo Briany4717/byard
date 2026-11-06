@@ -7,6 +7,7 @@
 
 pub mod anim;
 pub mod bridge;
+pub mod clock;
 pub mod dates;
 pub(crate) mod edit;
 pub mod env;

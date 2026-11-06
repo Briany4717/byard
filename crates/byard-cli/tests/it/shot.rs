@@ -142,3 +142,54 @@ fn a_shot_taps_types_and_presses_keys_in_the_order_written() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A picture of a program `byard check` rejects shows something the program
+/// does not mean, so there is none: the errors print as `check` prints them,
+/// the exit is non-zero, and no PNG is written. The error is in a view the
+/// root never reaches, which a render of the root alone would never see.
+#[test]
+fn a_program_check_rejects_is_not_drawn() {
+    let dir = scratch_named("-rejected");
+    std::fs::write(
+        dir.join("byard.toml"),
+        "[project]\nname = \"shot\"\nentry = \"main.byd\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("main.byd"),
+        "View Main() {\n    Box #[bg: 0xE8543F, width: 50, height: 40] {}\n}\n\
+         View Elsewhere() {\n    Box #[p: true ? (1, 2, 3, 4) : (5, 6, 7, 8)] {}\n}\n",
+    )
+    .unwrap();
+    let png = dir.join("out.png");
+    let byard = |sub: &str| {
+        Command::new(env!("CARGO_BIN_EXE_byard-cli"))
+            .env("NO_COLOR", "1")
+            .args([sub, dir.to_str().unwrap()])
+            .args(if sub == "shot" {
+                vec!["-o", png.to_str().unwrap(), "--at", "0"]
+            } else {
+                vec![]
+            })
+            .output()
+            .expect("run byard")
+    };
+    let check = byard("check");
+    assert!(!check.status.success(), "the fixture must fail `check`");
+    let check_err = String::from_utf8_lossy(&check.stderr).to_string();
+
+    let out = byard("shot");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{err}");
+    assert!(!png.exists(), "no picture of a rejected program");
+    let first = check_err
+        .lines()
+        .find(|l| l.contains("error[AttributeTypeMismatch]"))
+        .expect("check printed the error");
+    assert!(err.contains(first), "shot prints what check prints:\n{err}");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        format!("{stdout}{err}").contains("no picture drawn"),
+        "{stdout}{err}"
+    );
+}

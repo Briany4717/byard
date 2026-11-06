@@ -21,6 +21,13 @@
 //      it and compose: the candidate window follows the caret to where the
 //      field actually is on screen.
 //
+//   7. The third field has a message above it that appears once you type
+//      (`byard shot crates/byard-cli/examples/text_input --size 600x900
+//      --tap 200,450 --type a --type b --type c --a11y out.txt`): all three
+//      characters land and the field is still focused. The message is a
+//      `when` before the field in the same parent, which used to take the
+//      focus with it.
+//
 // The first field also counts its edits (`input`) and remembers what was
 // last sent with Enter (`submit`). A composition is not an edit until it is
 // committed.
@@ -30,6 +37,7 @@ View Main() {
     var scroll = 0
     var edits = 0
     var sent = ""
+    var code = ""
 
     Column #[bg: 0x14161C, p: 32, gap: 16, width: 560] {
         Text("Text input, with an input method") #[color: 0xF2F3F5, size: 20]
@@ -63,5 +71,18 @@ View Main() {
             }
         }
         Text("note = \"{note}\"") #[color: 0x8A90A0, size: 14]
+
+        Text("a message appears above the third field as you type") #[color: 0x8A90A0, size: 13]
+        Column #[gap: 6] {
+            when code.len > 0 { Text("{code.len} typed") #[color: 0xE0B050, size: 13] }
+            TextField #[
+                bind: code,
+                placeholder: "Type here",
+                bg: 0x1F222B,
+                width: 420,
+                height: 44,
+                size: 18,
+            ]
+        }
     }
 }

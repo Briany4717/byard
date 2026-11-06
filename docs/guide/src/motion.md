@@ -6,7 +6,7 @@ View Main() {
 
     Column #[bg: 0x14141C, p: 40, gap: 24, align: center, grow: 1] {
         Box #[width: 90, height: 90, radius: 20, origin: center,
-              bg: on ? 0xEF5350 : 0x3B82F6 with anim.ease_in_out(300ms),
+              bg: on ? 0xEF5350 : 0x3B82F6 with anim.easeInOut(300ms),
               scale: on ? 1.3 : 1.0 with anim.spring(),
               rotate: on ? 45deg : 0deg with anim.spring(),
               tap => on = !on] {}
@@ -52,9 +52,9 @@ To grow or shrink something smoothly, animate its `scale`.
 |-------|----------|
 | `anim.spring()` | Physical: it overshoots and settles. The default for most things |
 | `anim.linear(200ms)` | A steady rate for the time given |
-| `anim.ease_in(200ms)` | Starts slow |
-| `anim.ease_out(200ms)` | Ends slow |
-| `anim.ease_in_out(200ms)`, `anim.ease(200ms)` | Slow at both ends |
+| `anim.easeIn(200ms)` | Starts slow |
+| `anim.easeOut(200ms)` | Ends slow |
+| `anim.easeInOut(200ms)`, `anim.ease(200ms)` | Slow at both ends |
 
 A spring takes `stiffness`, `damping` and `initial_velocity`, all optional:
 `anim.spring(stiffness: 200, damping: 0.6)`. A higher stiffness is quicker, and a
@@ -146,13 +146,13 @@ View Main() {
             Box #[bg: 0xD0BCFF, radius: 3, width: 100, height: 6, origin: center,
                   translate: anim.keyframes(
                       0%: (-100, 0),
-                      60%: (120, 0) ease_in_out,
-                      100%: (300, 0) ease_out,
+                      60%: (120, 0) easeInOut,
+                      100%: (300, 0) easeOut,
                       duration: 2s, loop: true),
                   scale: anim.keyframes(
                       0%: (0.3, 1),
-                      60%: (1.6, 1) ease_in_out,
-                      100%: (0.3, 1) ease_in,
+                      60%: (1.6, 1) easeInOut,
+                      100%: (0.3, 1) easeIn,
                       duration: 2s, loop: true)] {}
         }
     }
@@ -193,6 +193,31 @@ after the first. The rows are written once and each has its own timeline, so the
 can run at different points. `restart: entrance` replays the cascade each time the
 button changes `entrance`, which is how you run a start-up animation again without
 reloading.
+
+## A view you call more than once
+
+An animation belongs to the element it runs on, not to the line that wrote it. A view
+with motion in it can be called as often as you like, and each call moves on its own:
+
+```byld
+View Main() {
+    Column #[gap: 4] {
+        Pill(round: true)
+        Pill(round: false)
+        Pill(round: true)
+    }
+}
+
+View Pill(round: Bool) {
+    Box #[bg: 0x3355CC, radius: round ? 28 : 2 with anim.spring(), width: 80, height: 40] {}
+}
+```
+
+The middle `Pill` is square, whatever the other two are doing. Springs, timed curves,
+keyframes, `stagger`, loops, a style's `on hover` and `on pressed` changes and a canvas's
+`morph:` all work this way, in a `when`, behind another view, or inside an `Overlay`. A
+call that goes away (its `when` turns false) starts over when it comes back, as its
+`var`s do, and a hot reload keeps the motion of the calls it keeps.
 
 ## Transforms
 

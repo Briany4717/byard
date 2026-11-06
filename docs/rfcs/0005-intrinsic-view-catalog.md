@@ -191,7 +191,11 @@ plus intrinsic-specific props, **reflected** two-way props, **events**, and the
 - **Content:** **arity 1**, `Str` (the text; interpolation allowed). `Text()` with
   no content or >1 positional arg is `CompileError::ArityMismatch`.
 - **Children:** none.
-- **Props:** Text group + `m`, `width`, `style`.
+- **Props:** Text group + `width`, `height`, `grow`, `p`/`m` and their
+  sides, `style`. (Erratum: the first draft listed only `m` and `width`, which
+  left a `Text` unable to grow or be padded in a `Row`. `gap`, `align` and
+  `justify` stay out, a `Text` has no children, and there are no min/max sizes
+  on any element yet.)
 - **Events:** all pointer (a tappable label is just `Text(...) #[tap => …]`);
   focusable only if it registers focus/key events.
 - **Pipeline:** `TextGlyph`.

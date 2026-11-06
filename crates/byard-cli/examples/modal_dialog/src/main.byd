@@ -1,0 +1,39 @@
+// A modal dialog: the scrim over the page, and a field that works inside it.
+//
+// Draw it (from the repo root, no window):
+//   cargo run -p byard-cli -- shot crates/byard-cli/examples/modal_dialog/src/main.byd \
+//     --size 600x400 -o modal.png
+//   cargo run -p byard-cli -- shot crates/byard-cli/examples/modal_dialog/src/main.byd \
+//     --size 600x400 --tap 300,200 --type hello --a11y modal.txt -o typed.png
+//
+// What to verify:
+//   1. The page behind the dialog is dimmed by the scrim; the dialog is not.
+//   2. The note field's long placeholder stops at the field's right edge.
+//   3. Tapping the field (or the dialog's padding, or its title) keeps the
+//      dialog open; typing goes into the field. `modal.txt` reads open=true
+//      text=hello.
+//   4. Only a tap outside the dialog, on the scrim, runs `dismiss`.
+View Main() {
+    var open = true
+    var text = ""
+    Column #[grow: 1, bg: 0xFFFFFF, p: 24, gap: 12] {
+        Text("open={open} text={text}") #[color: 0x000000]
+        Box #[bg: 0xCC3344, height: 60] {}
+        Box #[bg: 0x3366CC, height: 60] {}
+        when open {
+            Overlay #[dismiss => { open = false }] {
+                Column #[anchor: center, bg: 0x333344, p: 20, gap: 10, width: 300] {
+                    Text("Ship order") #[color: 0xFFFFFF]
+                    TextField #[
+                        bind: text,
+                        width: 200,
+                        height: 40,
+                        bg: 0x4A4A5C,
+                        placeholder: "Order number, delivery, reason",
+                    ]
+                    Button("Ok") => open = false
+                }
+            }
+        }
+    }
+}

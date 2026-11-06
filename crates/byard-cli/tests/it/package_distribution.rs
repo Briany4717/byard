@@ -255,3 +255,117 @@ fn the_package_theme_example_checks_clean() {
     assert!(text(&out).contains("0 errors"), "{}", text(&out));
     let _ = std::fs::remove_dir_all(&home);
 }
+
+/// A package that fails its own `byard check` is not published: a version is
+/// immutable, and nobody can use it.
+#[test]
+fn publish_refuses_a_package_that_fails_check() {
+    let dir = scratch("publish-check");
+    let (pkg, registry) = (dir.join("brand"), dir.join("registry"));
+    make_package(&pkg);
+    write(
+        &pkg.join("src/bad.byd"),
+        "View Bad() { Box #[bg: prmary] {} }\n",
+    );
+    let publish = byard(
+        &dir,
+        &dir,
+        &[
+            "publish",
+            pkg.to_str().unwrap(),
+            "--registry",
+            registry.to_str().unwrap(),
+        ],
+    );
+    assert!(!publish.status.success(), "{}", text(&publish));
+    assert!(
+        text(&publish).contains("nothing published"),
+        "{}",
+        text(&publish)
+    );
+    assert!(text(&publish).contains("bad.byd"), "{}", text(&publish));
+    assert!(!registry.join("brand/0.1.0.tar.gz").exists());
+    assert!(!registry.join("index.toml").exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A consumer that uses a package's views without extending its theme gets
+/// told where the token lives, not only that the theme lacks it.
+#[test]
+fn a_token_only_a_dependencys_theme_declares_says_so() {
+    let dir = scratch("theme-hint");
+    let pkg = dir.join("brand");
+    make_package(&pkg);
+    write(
+        &pkg.join("byard.toml"),
+        &std::fs::read_to_string(pkg.join("byard.toml"))
+            .unwrap()
+            .replace(
+                "primary = \"#123456\"",
+                "primary = \"#123456\"\nbrand_glow = \"#00FF88\"",
+            ),
+    );
+    write(
+        &pkg.join("src/badge.byd"),
+        "View Badge() {\n    inject Theme as t\n    Box #[bg: t.brandGlow] {}\n}\n",
+    );
+    let app = dir.join("app");
+    make_app(&app, "brand = { path = \"../brand\" }", "brand/Display");
+    let manifest = std::fs::read_to_string(app.join("byard.toml")).unwrap();
+    // Without the `[theme] extends`, the package's own token is unknown.
+    write(
+        &app.join("byard.toml"),
+        &manifest.replace("[theme]\nextends = \"brand\"\n", ""),
+    );
+    write(
+        &app.join("main.byd"),
+        "use brand as b\nView Main() {\n    b.Badge()\n}\n",
+    );
+    let out = byard(&app, &dir, &["check"]);
+    assert!(!out.status.success(), "{}", text(&out));
+    assert!(
+        text(&out).contains(
+            "`brandGlow` is declared by package `brand`'s theme; add `[theme] extends = \"brand\"`, or declare it yourself"
+        ),
+        "{}",
+        text(&out)
+    );
+    // Already extending another package: only one `extends` is allowed, so
+    // the advice is to declare it or to extend this one instead.
+    let other = dir.join("other");
+    write(
+        &other.join("byard.toml"),
+        "[package]\nname = \"other\"\nversion = \"0.1.0\"\n\n[theme]\nname = \"other\"\n",
+    );
+    write(&other.join("src/lib.byd"), "View Nothing() { Box {} }\n");
+    write(
+        &app.join("byard.toml"),
+        "[project]\nname = \"app\"\nentry = \"main.byd\"\n\n[dependencies]\n\
+         brand = { path = \"../brand\" }\nother = { path = \"../other\" }\n\n\
+         [theme]\nextends = \"other\"\n",
+    );
+    let out = byard(&app, &dir, &["check"]);
+    assert!(
+        text(&out).contains(
+            "`brandGlow` is declared by package `brand`'s theme, but this theme extends `other`; declare `brandGlow` yourself, or extend `brand` instead"
+        ),
+        "{}",
+        text(&out)
+    );
+    write(
+        &app.join("byard.toml"),
+        &manifest.replace("[theme]\nextends = \"brand\"\n", ""),
+    );
+    // A token nobody declares keeps the plain message.
+    write(
+        &pkg.join("src/badge.byd"),
+        "View Badge() {\n    inject Theme as t\n    Box #[bg: t.nobodyHasThis] {}\n}\n",
+    );
+    let out = byard(&app, &dir, &["check"]);
+    assert!(
+        text(&out).contains("declares no token `nobodyHasThis`"),
+        "{}",
+        text(&out)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

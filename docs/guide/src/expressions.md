@@ -66,6 +66,22 @@ From the loosest to the tightest:
 | `++` `--` | Add or subtract one, in actions only |
 | `.` `[ ]` `( )` | Field, index, call |
 
+`? :` binds tighter than `||`, unlike C and JavaScript, so `a || b ? x : y` is
+`a || (b ? x : y)`. That is almost never what was meant, so the checker warns about
+it. Write the parentheses you mean, `(a || b) ? x : y`:
+
+```byld,fails
+View Main() {
+    var a = false
+    var b = true
+    Text(a || b ? "on" : "off")
+}
+```
+
+```diagnostic
+warning[MixedTernaryPrecedence]: `?:` binds tighter than `||`
+```
+
 `&&` and `||` stop as soon as the answer is known, so the right side may safely
 depend on the left: `xs.len > 0 && xs[0] > 5`.
 
@@ -100,6 +116,10 @@ Text("a literal \{brace\} and a \"quote\"")
 ```
 
 - `{x:.2}` shows a number with exactly two decimals. Up to nine are allowed.
+- `{x:,}` puts a comma between every three digits of the whole part, and
+  `{x:,.2}` does that and fixes the decimals: `193440.7` is `193,440.70` and
+  `-1234` is `-1,234`. There is no locale, so the comma is always `,` and the
+  point always `.`.
 - A string inside the braces needs no escaping: `{n == 1 ? "item" : "items"}`.
 - `\{` and `\}` are literal braces, `\"` a quote, `\n` a new line, `\t` a tab.
 
@@ -268,6 +288,16 @@ View Main() {
 error[EffectInPureLambda]: a `map`/`filter` lambda must be a pure expression
 ```
 
+A lambda can sit inside another and read the outer one's item, and it can call a
+`fn` with its own item; the call runs for every item:
+
+```byld,fragment
+var products = [{ category: "a", qty: 3 }, { category: "b", qty: 40 }]
+fn isLow(qty: Int) -> Bool => qty < 10
+let perCategory = ["a", "b"].map(c => products.filter(p => p.category == c).len)
+let low = products.filter(p => isLow(p.qty))
+```
+
 A lambda with a block body is an *action*, and may assign. See [state](state.md)
 and [events and actions](events-and-actions.md).
 
@@ -285,6 +315,8 @@ come up most.
 | `replace(a, b)` | Every `a` replaced by `b` |
 | `split(sep)` | The pieces between each `sep`, as a list |
 | `indexOf(t)` | Where `t` first appears, counted in characters, or `-1` |
+| `toInt()` | The whole number it spells, or nothing |
+| `toFloat()` | The decimal number it spells, or nothing |
 
 ```byld,fragment
 var query = "  Ada "
@@ -301,6 +333,45 @@ lowers both sides. `contains("")`, `startsWith("")` and `endsWith("")` are
 piece per character; `replace("", x)` changes nothing. `indexOf` counts characters,
 as `len` and `slice` do, so `s.slice(s.indexOf(t))` begins at `t`.
 
+## Numbers
+
+A `TextField` holds text. `toInt()` and `toFloat()` read it as a number, and give
+*nothing* when it is not one, so `??` is how a default is written:
+
+```byld,fragment
+var qty = " 12 "
+var price = "4.5"
+let n = qty.toInt() ?? 0
+let unit = price.toFloat() ?? 0.0
+Text("{n} x {unit:,.2} = {n.max(0).toFloat() * unit:,.2}")
+```
+
+That shows `12 x 4.50 = 54.00`. `toInt` takes white space around the number, one
+`+` or `-`, and ASCII digits: `"12"`, `" -3 "` and `"+4"` are numbers, and
+`"1_000"`, `"0x10"`, `"1.5"`, `"1,000"` and `""` are nothing. A whole number
+too big for an `Int` is nothing as well, never a wrapped one. `toFloat` also
+takes a fraction (`".5"`, `"5."`) and an exponent (`"1e3"`), and a whole number
+reads as a `Float` (`"3"` is `3.0`); `"inf"`, `"nan"` and `"1,5"` are nothing,
+since the decimal mark is a point. Nothing is not an error: it draws as empty
+text, and arithmetic with it is nothing again, so give it a default before you
+use it.
+
+| Method | On | Result |
+|--------|----|--------|
+| `round()`, `floor()`, `ceil()` | `Float` | An `Int`; nothing for `NaN` or a value too large |
+| `toFloat()` | `Int` | The `Float` |
+| `abs()` | `Int`, `Float` | The same kind |
+| `min(other)`, `max(other)` | `Int`, `Float` | The smaller or larger; `Float` if either is |
+
+`round` takes a half away from zero: `(2.5).round()` is `3` and `(-2.5).round()` is
+`-3`. `floor` goes down (`(-2.5).floor()` is `-3`) and `ceil` up. `n.max(0)` keeps a
+quantity from going below zero without a `fn`, and `n.max(0).min(10)` clamps it.
+`min` and `max` with no argument are still the ones of a list. To keep money
+exact, count it in whole cents as an `Int`; to show two decimals, use `{x:.2}`.
+
+`Int` arithmetic that goes past the largest `Int` wraps around without a
+warning today, so a sum of big numbers can come out negative.
+
 ```byld,fragment
 let moment = "2026-10-16T14:00"
 Text("{moment.formatDate("dddd D MMMM YYYY, HH:mm")}")
@@ -309,8 +380,11 @@ Text("/search?q={"Tom & Jerry".urlEncoded()}")
 
 The first shows `Friday 16 October 2026, 14:00`. `formatDate` takes an ISO date or
 date-time and these tokens: `YYYY`, `MMMM`, `MMM`, `MM`, `M`, `DD`, `D`, `dddd`,
-`ddd`, `HH`, `H`, `mm`. Anything else is kept as written. Names are in English.
-Text that is not a date reads as nothing, so `?? "unknown"` gives it a default.
+`ddd`, `HH`, `H`, `mm`, `ss`. Anything else is kept as written. Names are in English.
+The seconds are read when the text has them, and a trailing `Z` or offset is accepted
+and not applied: the hours shown are the hours written, so `now()` and `nowUtc()`
+both format as they stand. Text that is not a date reads as nothing, so
+`?? "unknown"` gives it a default.
 
 `urlEncoded()` makes text safe inside a URL. Letters, digits and `- . _ ~` stay,
 and everything else, a space included, becomes `%XX`. The second line above is

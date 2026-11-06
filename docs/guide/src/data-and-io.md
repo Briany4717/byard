@@ -39,10 +39,11 @@ View Main() {
 }
 ```
 
-A real weather screen, and no Rust. Byld reaches the network, JSON, the clock and
-storage through *capabilities*: Rust services the engine provides, that a view
-calls the same way it would call a controller of its own. This chapter covers the
-four that come with Byard.
+A real weather screen, and no Rust. Byld reaches the network, JSON and storage
+through *capabilities*: Rust services the engine provides, that a view calls the
+same way it would call a controller of its own. This chapter covers the three that
+come with Byard, then the two things that are part of the language and need no
+capability: timers and the clock.
 
 ## Asking, and being answered
 
@@ -251,6 +252,68 @@ false, and starts again from nothing when it returns. There is no handle to hold
 A reply and a tick arrive the same way, so a timer is how a screen refreshes itself: the
 forecast above asks again every five minutes, and closing the window ends it.
 
+## The clock
+
+`now()` is the time, as text, read at the moment it is called:
+
+```byld
+View Main() {
+    var time = ""
+    var log: List<Str> = []
+
+    on mount => time = now()
+    every 1s => time = now()
+
+    Column #[gap: 8] {
+        Text(time.formatDate("dddd D MMMM, HH:mm:ss"))
+        Button("Note it") => log = log.push(now())
+        Text(log.join("\n"))
+    }
+}
+```
+
+`now()` is the local date and time, `2026-11-05T14:03:12`: seconds, and no zone.
+`nowUtc()` is the same instant in UTC, with a `Z`: `2026-11-05T12:03:12Z`. Both are
+the text `formatDate` reads, they sort as text, and they compare with `<`, so
+`now() < deadline` works. `now().slice(0, 10)` is today's date and
+`now().slice(11, 16)` is `14:03`. Two values from `now()` compare with each other;
+do not compare one with a value from `nowUtc()`, which is in another zone.
+
+It answers at once. There is no `ok` arm to write and nothing to wait for, which is
+why it is not a capability: a capability is for work that takes time or can fail,
+and reading the clock does neither. It costs nothing until it is called, and starts
+no timer.
+
+**`now()` reads the clock once, when an action runs.** It is not a value that stays
+current, so it may be called only where an action runs: a button's handler, `on mount`,
+`every` and `after`, the `ok` and `err` arms of a call, and a named action
+(`let stamp = () => { at = now() }`). A `let`, an attribute, a text, a `var`'s first
+value and a `fn` cannot call it, and `byard check` says so:
+
+```text
+ClockOutsideAction: `now()` reads the clock once, when an action runs; to show the
+time, write it to a `var` in an action, such as `every 1s => time = now()`
+```
+
+To show a time that moves, write it to a `var` from an `every`, as above. To stamp
+something, call `now()` in the handler that makes it:
+`Button("Receive") => movements = movements.push({ at: now(), qty: 1 })`.
+
+### Fixing the time
+
+A test or a picture should not depend on when it runs. `byard shot --now` fixes the
+clock:
+
+```text
+byard shot --now 2026-11-05T09:00:00 -o clock.png
+```
+
+The shot then starts at that time, and `--at` advances it: the clock is the fixed time
+plus the app time that has passed. A fixed clock has no zone, so `nowUtc()` is the
+same time with a `Z`. Without `--now` a shot reads the real clock. In a Rust test,
+`Interpreter::set_wall_clock("2026-11-05T09:00:00")` does the same, and
+`set_now_ms`, which a test already calls to move animations, moves it.
+
 ## Store
 
 A *store* keeps values between runs. It is one JSON file, in the data directory your
@@ -315,5 +378,7 @@ the name of the entry file. See [the Rust half](rust-app.md).
 
 `Http`, `Json`, `Store` and `Timer` are reserved names. An app cannot provide a Rust
 controller under one of them, so `inject Http as http` means the same in every project.
+`Timer` is reserved and is not a capability: timers are the `every` and `after` lines,
+and there is nothing to inject.
 For anything else, such as a database, auth, a device, write a controller. The next
 chapters show how.

@@ -55,16 +55,49 @@ impl Greeter {
     }
 }
 
+/// Where this app's saved data lives (RFC-0029 O5). One constant, read by
+/// `App::app_id` and by `byard::data_dir`, so the two cannot disagree.
+const APP_ID: &str = "dev.byard.controller-demo";
+
+/// Writes a file beside the app's `Store`.
+#[byard::byard_controller]
+#[derive(Clone)]
+struct Notes;
+
+#[allow(
+    clippy::unused_self,
+    reason = "a controller method takes `&self` so that a view can call it"
+)]
+#[byard::byard_controller]
+impl Notes {
+    /// Writes `text` into the app's data directory and says where. A view
+    /// calls it `notes.saveNote(...)`.
+    fn save_note(&self, text: String) -> Result<String, String> {
+        let dir = byard::data_dir(APP_ID);
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        let path = dir.join("note.txt");
+        std::fs::write(&path, text).map_err(|e| e.to_string())?;
+        Ok(path.display().to_string())
+    }
+
+    /// Named by hand: the automatic name would be `dataPath`.
+    #[byard(rename = "where")]
+    fn data_path(&self) -> String {
+        byard::data_dir(APP_ID).display().to_string()
+    }
+}
+
 fn main() -> Result<(), byard::ByardError> {
     byard::App::new(concat!(env!("CARGO_MANIFEST_DIR"), "/src/main.byd"))
         .title("Byard, controller demo")
         // Where this app's persistent state would live (RFC-0029 O5). Set
         // explicitly rather than left to the executable's name, because that
         // is the decision a shipped app should be making on purpose.
-        .app_id("dev.byard.controller-demo")
+        .app_id(APP_ID)
         .size(720, 480)
         .provide(Greeter {
             prefix: "Hello".to_string(),
         })
+        .provide(Notes)
         .run()
 }

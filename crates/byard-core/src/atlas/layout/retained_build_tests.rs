@@ -364,3 +364,65 @@ fn recompute_dirty_with_text_reaches_the_sizer() {
         rect.height
     );
 }
+
+/// A container with one fixed child, built with the given style, then rebuilt
+/// retained with another: the second layout must be the one the style says.
+fn restyled_container_width(first: ContainerStyle, second: ContainerStyle) -> f32 {
+    let build = |atlas: &mut LayoutAtlas, style: ContainerStyle| {
+        let leaf = atlas.add_leaf(LeafSize::new(10.0, 10.0)).unwrap();
+        let c = atlas.add_container(style, &[leaf]).unwrap();
+        let root = atlas
+            .add_container(
+                ContainerStyle::new(Some(300.0), Some(300.0))
+                    .with_direction(FlexDir::Row)
+                    .with_align(Align::Start),
+                &[c],
+            )
+            .unwrap();
+        atlas.set_root(root).unwrap();
+        c
+    };
+    let mut atlas = LayoutAtlas::new();
+    build(&mut atlas, first);
+    atlas.compute(Viewport::new(300.0, 300.0)).unwrap();
+    atlas.begin_retained_build();
+    let c = build(&mut atlas, second);
+    assert!(atlas.end_retained_build());
+    atlas.recompute_dirty(Viewport::new(300.0, 300.0)).unwrap();
+    atlas.resolved_rect(c).unwrap().unwrap().width
+}
+
+#[test]
+fn a_changed_min_width_relayouts_on_the_retained_path() {
+    let plain = ContainerStyle::default();
+    let floored = ContainerStyle::default().with_min_size(Some(120.0), None);
+    let w = restyled_container_width(plain, floored);
+    assert!((w - 120.0).abs() < 0.5, "min_width must apply, got {w}");
+}
+
+#[test]
+fn a_changed_min_height_relayouts_on_the_retained_path() {
+    // Same shape on the other axis, read through the child's column.
+    let tall = ContainerStyle::default().with_min_size(None, Some(150.0));
+    let build = |atlas: &mut LayoutAtlas, style: ContainerStyle| {
+        let leaf = atlas.add_leaf(LeafSize::new(10.0, 10.0)).unwrap();
+        let c = atlas.add_container(style, &[leaf]).unwrap();
+        let root = atlas
+            .add_container(
+                ContainerStyle::new(Some(300.0), Some(300.0)).with_align(Align::Start),
+                &[c],
+            )
+            .unwrap();
+        atlas.set_root(root).unwrap();
+        c
+    };
+    let mut atlas = LayoutAtlas::new();
+    build(&mut atlas, ContainerStyle::default());
+    atlas.compute(Viewport::new(300.0, 300.0)).unwrap();
+    atlas.begin_retained_build();
+    let c = build(&mut atlas, tall);
+    assert!(atlas.end_retained_build());
+    atlas.recompute_dirty(Viewport::new(300.0, 300.0)).unwrap();
+    let h = atlas.resolved_rect(c).unwrap().unwrap().height;
+    assert!((h - 150.0).abs() < 0.5, "min_height must apply, got {h}");
+}

@@ -119,6 +119,9 @@ md = 640
 lg = 1024
 ```
 
+Every key is checked. A table or key the theme does not read (`[theme.motion]`, `[theme.colour]`) is an
+error that names it and suggests the closest one, not something quietly ignored.
+
 - **`name`** is the theme's name, shown in messages.
 - **`extends`** is `"byard-base"`, or the name of a dependency whose theme this one
   builds on. See [packages](packages.md).

@@ -19,6 +19,15 @@
 //   4. Heavier lines are also *wider*. That is the part that matters beyond
 //      looks: measurement and shaping have to agree, or layout would size a
 //      heading to a box measured for a lighter face.
+// Type read from a view's parameters. The sixth check:
+//   5. The "from a parameter" block draws its four samples at 12, 20, 32 and
+//      20 px, the last in bold, and the two on the right in two colours. Every
+//      one used to draw at the default size, because a `Text` was measured and
+//      painted without the parameters of the view it was written in.
+View Sample(label: Str, dim: Int, w: Int = 400, c: Int = 0xE7ECF2) {
+    Text(label) #[color: c, size: dim, weight: w]
+}
+
 View Main() {
     Column #[bg: 0x0E1116, p: 28, gap: 24, width: 460] {
         Text("The weight axis") #[color: 0xE7ECF2, size: 22, weight: 700]
@@ -45,6 +54,20 @@ View Main() {
         Column #[gap: 4] {
             Text("Indistinguishable") #[color: 0xE7ECF2, size: 24, weight: bold]
             Text("Indistinguishable") #[color: 0xE7ECF2, size: 24, weight: 700]
+        }
+
+        Text("from a parameter") #[color: 0x69737F, size: 12]
+        Row #[gap: 24] {
+            Column #[gap: 4] {
+                Sample("twelve", dim: 12)
+                Sample("twenty", dim: 20)
+                Sample("thirty-two", dim: 32)
+                Sample("twenty bold", dim: 20, w: 700)
+            }
+            Column #[gap: 4] {
+                Sample("amber", dim: 20, c: 0xF2B84B)
+                Sample("teal", dim: 20, c: 0x4BD1C2)
+            }
         }
     }
 }

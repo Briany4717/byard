@@ -118,6 +118,11 @@ pub enum CompileError {
         field: String,
         /// The theme's name, for the message.
         theme: String,
+        /// The dependency whose `[theme]` declares the token, when one does
+        /// and this theme does not extend it.
+        declared_by: Option<String>,
+        /// The dependency this theme already extends, if any.
+        extends: Option<String>,
     },
     /// An element name is neither a known intrinsic nor a `ViewDecl` in scope
     /// (RFC-0002 D4); `hint` carries a Levenshtein "did you mean …?".
@@ -520,6 +525,21 @@ pub enum CompileError {
         /// The callee view name.
         callee: String,
     },
+    /// A user-view call carries an action the view cannot receive: a trailing
+    /// `=> action`, or an event handler in its `#[...]`. A view's behaviour
+    /// comes in through its `Fn(...)` parameters (RFC-0019), so the action
+    /// would have been dropped silently.
+    ViewCallAction {
+        /// Source range of the action or handler.
+        span: Span,
+        /// The callee view name.
+        callee: String,
+        /// What was written: `None` for a trailing `=> action`, the event
+        /// name for `#[event => action]`.
+        event: Option<String>,
+        /// The callee's only `Fn()` parameter, when it has exactly one.
+        callback: Option<String>,
+    },
     /// A `ViewDecl` is named like an RFC-0005 intrinsic; the intrinsic always
     /// wins and the user view is unreachable (RFC-0007 §6).
     IntrinsicShadowed {
@@ -527,6 +547,16 @@ pub enum CompileError {
         span: Span,
         /// The shadowing view name (an intrinsic name).
         name: String,
+    },
+    /// `use pkg.{Button}` would hide the built-in `Button` for the whole file;
+    /// the package's view is reached as `pkg.Button` instead.
+    ImportShadowsBuiltin {
+        /// Source range of the imported name.
+        span: Span,
+        /// The built-in's name.
+        name: String,
+        /// The package that declares a view of that name.
+        package: String,
     },
     /// A user-`View` call cycle is not guarded by a `when`/`for` structural
     /// boundary, so instantiation would diverge (RFC-0007 §4).
@@ -891,6 +921,19 @@ pub enum CompileError {
         /// What the surrounding context is (`let`, `fn`, an attribute value).
         context: String,
     },
+    /// `now()` or `nowUtc()` appeared where no action runs: a `let`, an
+    /// attribute, a text interpolation, a `var`'s initialiser, a `fn`
+    /// (RFC-0049).
+    ///
+    /// The clock is read when the call runs, and a projection runs when what
+    /// it reads changes. The clock is not something it reads, so it would show
+    /// the time it was first computed and never move.
+    ClockOutsideAction {
+        /// Source range of the call.
+        span: Span,
+        /// Which function: `now` or `nowUtc`.
+        name: String,
+    },
     /// A controller call failed and its call site wrote no `err` arm
     /// (RFC-0028 §4).
     ///
@@ -959,6 +1002,53 @@ pub enum CompileError {
         /// The type that could not be resolved here.
         name: String,
     },
+    /// A control's `bind:` (or `value:`) names something that cannot be
+    /// written: a view parameter, a `let`, a loop variable or a literal. The
+    /// control would draw its default and never write, silently.
+    BindNotAVar {
+        /// Source range of the bound value.
+        span: Span,
+        /// The control (`TextField`, `Toggle`, …).
+        control: String,
+        /// The attribute written (`bind` or `value`).
+        attr: String,
+        /// What it was given: the name, or the literal's source form.
+        target: String,
+        /// Which kind of thing that is.
+        kind: BindTarget,
+    },
+    /// An argument of a user-`View` call does not have the type the callee
+    /// declares for that parameter.
+    ArgumentTypeMismatch {
+        /// Source range of the argument.
+        span: Span,
+        /// The callee view name.
+        callee: String,
+        /// The parameter name.
+        name: String,
+        /// The declared type.
+        expected: String,
+        /// The type of the argument.
+        found: String,
+    },
+    /// A keyword was written where a name goes (a view, function, type,
+    /// parameter, `var`/`let` or record field).
+    KeywordAsName {
+        /// Source range of the keyword.
+        span: Span,
+        /// The keyword.
+        keyword: String,
+        /// What it was used to name (`a function`, `a parameter`, …).
+        what: String,
+    },
+    /// `a || b ? x : y`: `?:` binds tighter than `||` and `&&` in Byld, so
+    /// this is `a || (b ? x : y)`, which is usually not what the writer meant.
+    MixedTernaryPrecedence {
+        /// Source range of the whole expression.
+        span: Span,
+        /// The logical operator (`||` or `&&`).
+        op: String,
+    },
     /// An app registered a controller under a name the framework reserves for
     /// one of its own capabilities (RFC-0029 §7).
     ReservedControllerName {
@@ -967,6 +1057,20 @@ pub enum CompileError {
         /// The reserved name.
         name: String,
     },
+}
+
+/// What a control's `bind:` was given in place of a `var`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BindTarget {
+    /// A parameter of the view: a copy of what the caller passed.
+    Parameter,
+    /// A `let`: computed, never written.
+    Let,
+    /// A number, text or list written in place.
+    Literal,
+    /// Anything else that is not a `var`: a loop variable, a lambda parameter,
+    /// the value an event hands over.
+    Other,
 }
 
 impl CompileError {
@@ -988,6 +1092,7 @@ impl CompileError {
             | Self::NonDataViewProp { span, .. }
             | Self::PathMustStartWithMove { span }
             | Self::EffectInPureContext { span, .. }
+            | Self::ClockOutsideAction { span, .. }
             | Self::DiscardedControllerReply { span }
             | Self::UncheckableInject { span, .. }
             | Self::ReservedControllerName { span, .. }
@@ -1030,7 +1135,9 @@ impl CompileError {
             | Self::UnknownParam { span, .. }
             | Self::MissingParam { span, .. }
             | Self::DuplicateParam { span, .. }
+            | Self::ViewCallAction { span, .. }
             | Self::IntrinsicShadowed { span, .. }
+            | Self::ImportShadowsBuiltin { span, .. }
             | Self::RecursiveView { span, .. }
             | Self::UnknownAnimation { span, .. }
             | Self::LayoutPropNotAnimatable { span, .. }
@@ -1054,6 +1161,10 @@ impl CompileError {
             | Self::CallbackArityMismatch { span, .. }
             | Self::CallbackNotInvocable { span, .. }
             | Self::CallbackTypeMismatch { span, .. }
+            | Self::BindNotAVar { span, .. }
+            | Self::ArgumentTypeMismatch { span, .. }
+            | Self::KeywordAsName { span, .. }
+            | Self::MixedTernaryPrecedence { span, .. }
             | Self::TypeMismatch { span, .. }
             | Self::PredicateNotBool { span }
             | Self::EffectInPureLambda { span }
@@ -1085,6 +1196,7 @@ impl CompileError {
             | Self::NonDataViewProp { span, .. }
             | Self::PathMustStartWithMove { span }
             | Self::EffectInPureContext { span, .. }
+            | Self::ClockOutsideAction { span, .. }
             | Self::DiscardedControllerReply { span }
             | Self::UncheckableInject { span, .. }
             | Self::ReservedControllerName { span, .. }
@@ -1127,7 +1239,9 @@ impl CompileError {
             | Self::UnknownParam { span, .. }
             | Self::MissingParam { span, .. }
             | Self::DuplicateParam { span, .. }
+            | Self::ViewCallAction { span, .. }
             | Self::IntrinsicShadowed { span, .. }
+            | Self::ImportShadowsBuiltin { span, .. }
             | Self::RecursiveView { span, .. }
             | Self::UnknownAnimation { span, .. }
             | Self::LayoutPropNotAnimatable { span, .. }
@@ -1151,6 +1265,10 @@ impl CompileError {
             | Self::CallbackArityMismatch { span, .. }
             | Self::CallbackNotInvocable { span, .. }
             | Self::CallbackTypeMismatch { span, .. }
+            | Self::BindNotAVar { span, .. }
+            | Self::ArgumentTypeMismatch { span, .. }
+            | Self::KeywordAsName { span, .. }
+            | Self::MixedTernaryPrecedence { span, .. }
             | Self::TypeMismatch { span, .. }
             | Self::PredicateNotBool { span }
             | Self::EffectInPureLambda { span }
@@ -1184,6 +1302,7 @@ impl CompileError {
             Self::NonDataViewProp { .. } => "NonDataViewProp",
             Self::PathMustStartWithMove { .. } => "PathMustStartWithMove",
             Self::EffectInPureContext { .. } => "EffectInPureContext",
+            Self::ClockOutsideAction { .. } => "ClockOutsideAction",
             Self::DiscardedControllerReply { .. } => "DiscardedControllerReply",
             Self::UncheckableInject { .. } => "UncheckableInject",
             Self::ReservedControllerName { .. } => "ReservedControllerName",
@@ -1226,7 +1345,9 @@ impl CompileError {
             Self::UnknownParam { .. } => "UnknownParam",
             Self::MissingParam { .. } => "MissingParam",
             Self::DuplicateParam { .. } => "DuplicateParam",
+            Self::ViewCallAction { .. } => "ViewCallAction",
             Self::IntrinsicShadowed { .. } => "IntrinsicShadowed",
+            Self::ImportShadowsBuiltin { .. } => "ImportShadowsBuiltin",
             Self::RecursiveView { .. } => "RecursiveView",
             Self::UnknownAnimation { .. } => "UnknownAnimation",
             Self::LayoutPropNotAnimatable { .. } => "LayoutPropNotAnimatable",
@@ -1250,6 +1371,10 @@ impl CompileError {
             Self::CallbackArityMismatch { .. } => "CallbackArityMismatch",
             Self::CallbackNotInvocable { .. } => "CallbackNotInvocable",
             Self::CallbackTypeMismatch { .. } => "CallbackTypeMismatch",
+            Self::BindNotAVar { .. } => "BindNotAVar",
+            Self::ArgumentTypeMismatch { .. } => "ArgumentTypeMismatch",
+            Self::KeywordAsName { .. } => "KeywordAsName",
+            Self::MixedTernaryPrecedence { .. } => "MixedTernaryPrecedence",
             Self::TypeMismatch { .. } => "TypeMismatch",
             Self::PredicateNotBool { .. } => "PredicateNotBool",
             Self::EffectInPureLambda { .. } => "EffectInPureLambda",
@@ -1276,7 +1401,9 @@ impl CompileError {
     pub const fn is_warning(&self) -> bool {
         matches!(
             self,
-            Self::StrokeInFusionGroup { .. } | Self::UncheckableInject { .. }
+            Self::StrokeInFusionGroup { .. }
+                | Self::UncheckableInject { .. }
+                | Self::MixedTernaryPrecedence { .. }
         )
     }
 
@@ -1328,6 +1455,10 @@ impl CompileError {
                 "a controller call is an effect and cannot appear in {context}; \
                  call it from an action and write the result to a `var`"
             ),
+            Self::ClockOutsideAction { name, .. } => format!(
+                "`{name}()` reads the clock once, when an action runs; to show the time, \
+                 write it to a `var` in an action, such as `every 1s => time = now()`"
+            ),
             Self::UncheckableInject { name, .. } => format!(
                 "`{name}` is not an ambient value here; it must be a controller the Rust \
                  half registers with `App::provide`, which this check cannot see"
@@ -1339,6 +1470,23 @@ impl CompileError {
                 format!("`{name}` is a built-in capability and cannot be provided by an app")
             }
             Self::NotAssignable { .. } => "this is not an assignable `var`".to_string(),
+            Self::UnknownThemeToken {
+                field,
+                declared_by: Some(package),
+                extends: Some(other),
+                ..
+            } => format!(
+                "`{field}` is declared by package `{package}`'s theme, but this theme extends \
+                 `{other}`; declare `{field}` yourself, or extend `{package}` instead"
+            ),
+            Self::UnknownThemeToken {
+                field,
+                declared_by: Some(package),
+                ..
+            } => format!(
+                "`{field}` is declared by package `{package}`'s theme; \
+                 add `[theme] extends = \"{package}\"`, or declare it yourself"
+            ),
             Self::UnknownThemeToken { field, theme, .. } => format!(
                 "theme `{theme}` declares no token `{field}` \
                  (checked color, typography, and shape namespaces)"
@@ -1540,9 +1688,32 @@ impl CompileError {
             Self::DuplicateParam { name, callee, .. } => {
                 format!("parameter `{name}` of view `{callee}` is bound more than once")
             }
+            Self::ViewCallAction {
+                callee,
+                event,
+                callback,
+                ..
+            } => {
+                let what = match event {
+                    Some(e) => format!("takes no `{e}` handler"),
+                    None => "takes no trailing action".to_string(),
+                };
+                match callback {
+                    Some(cb) => format!("`{callee}` {what}; pass it as `{cb}: {{ … }}`"),
+                    None => format!(
+                        "`{callee}` {what}; give it a parameter like `on_tap: Fn() = {{}}`, run \
+                         that where the view should react (`tap => on_tap()`), and pass \
+                         `on_tap: {{ … }}`"
+                    ),
+                }
+            }
             Self::IntrinsicShadowed { name, .. } => {
                 format!("view `{name}` shadows the built-in intrinsic of the same name")
             }
+            Self::ImportShadowsBuiltin { name, package, .. } => format!(
+                "importing `{name}` from `{package}` would hide the built-in `{name}` in this file; \
+                 write `{package}.{name}` (or `use {package} as m` and `m.{name}`)"
+            ),
             Self::RecursiveView { path, .. } => {
                 format!("recursive view cycle without a `when`/`for` guard: {path}")
             }
@@ -1636,6 +1807,52 @@ impl CompileError {
             Self::CallbackTypeMismatch { callee, name, .. } => format!(
                 "parameter `{name}` of view `{callee}` is a callback (`Fn(...)`); pass an action \
                  block like `{name}: {{ … }}`"
+            ),
+            Self::BindNotAVar {
+                control,
+                attr,
+                target,
+                kind,
+                ..
+            } => match kind {
+                BindTarget::Parameter => format!(
+                    "`{control} #[{attr}: {target}]` cannot change `{target}`: a parameter is a \
+                     copy of what the caller passed, so a change would be lost. Keep a `var` of \
+                     your own, bind the control to it, and hand each change up through a \
+                     callback parameter. For a `TextField`, with `on_change: Fn(Str)` a \
+                     parameter of the view: `var text = {target}`, \
+                     `on change({target}) => text = {target}`, \
+                     `TextField #[bind: text, input(t) => on_change(t)]`"
+                ),
+                BindTarget::Let => format!(
+                    "`{control} #[{attr}: {target}]`: `{target}` is a `let`, which is computed \
+                     and cannot be written, so the control would draw its default and change \
+                     nothing. Bind a `var`"
+                ),
+                BindTarget::Literal => format!(
+                    "`{control}`'s `{attr}` is {target}, which cannot be written, so the \
+                     control would draw its default and change nothing. Bind a `var`"
+                ),
+                BindTarget::Other => format!(
+                    "`{control} #[{attr}: {target}]`: `{target}` is not a `var`, so the control \
+                     would draw its default and change nothing. Bind a `var`"
+                ),
+            },
+            Self::ArgumentTypeMismatch {
+                callee,
+                name,
+                expected,
+                found,
+                ..
+            } => format!(
+                "parameter `{name}` of view `{callee}` is a `{expected}`, but this is a `{found}`"
+            ),
+            Self::KeywordAsName { keyword, what, .. } => {
+                format!("`{keyword}` is a keyword and cannot name {what}")
+            }
+            Self::MixedTernaryPrecedence { op, .. } => format!(
+                "`?:` binds tighter than `{op}`, so this reads `a {op} (b ? x : y)`; \
+                 write the parentheses you mean"
             ),
             Self::TypeMismatch {
                 op, lhs_ty, rhs_ty, ..

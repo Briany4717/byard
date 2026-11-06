@@ -1506,7 +1506,7 @@ impl Interpreter {
         let expr = content.value.clone();
         let text = match self.eval_pure(&expr) {
             Value::Str(s) => s,
-            other => format!("{other:?}"),
+            other => other.to_text(),
         };
         if text.is_empty() {
             return;

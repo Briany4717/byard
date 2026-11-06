@@ -1,0 +1,53 @@
+// A form field in a view of its own: label, the control, and a message under
+// it. A parameter is a copy, so the field keeps a `var` for the control and
+// hands each edit up through `on_change`. The message is a Str, built with the
+// parentheses the precedence needs (`||` binds looser than `? :`).
+//
+//   byard shot crates/byard-cli/examples/reusable_field --size 360x300 \
+//       --tap 60,52 --type " Lovelace" -o field.png
+//
+// `basis` sizes the three bars before `grow` shares out what is left: they
+// start 30, 90 and 150 wide and end 40, 100 and 160, a third of the 30 pixels
+// the 300 has over each.
+
+View FormField(label: Str, value: Str, error: Str, on_change: Fn(Str) = {|t| }) {
+    var text = value
+    on change(value) => text = value
+
+    Column #[gap: 4] {
+        Text(label) #[color: 0xA0A8B8, size: 13]
+        TextField #[
+            bind: text,
+            placeholder: label,
+            input(t) => on_change(t),
+            width: 320,
+            height: 36,
+            bg: 0x1E1E2A,
+            color: 0xFFFFFF,
+            radius: 8,
+        ]
+        Text(error) #[color: 0xFF6B6B, size: 12]
+    }
+}
+
+View Main() {
+    var name = "Ada"
+    var email = ""
+    var tried = false
+
+    let nameError = name.len == 0 ? "A name is needed" : ""
+    let emailError = (tried || email.len > 0) && !email.contains("@") ? "That is not an email" : ""
+
+    Column #[bg: 0x14141C, p: 20, gap: 14, grow: 1] {
+        FormField(label: "Name", value: name, error: nameError, on_change: {|t| name = t })
+        FormField(label: "Email", value: email, error: emailError, on_change: {|t| email = t })
+        Button("Send") #[bg: 0x3B82F6, color: 0xFFFFFF, radius: 8] => tried = true
+        Text("name={name}, email={email}") #[color: 0xFFFFFF, size: 13]
+
+        Row #[width: 300, height: 12, gap: 0] {
+            Box #[basis: 30, grow: 1, bg: 0x3B82F6] {}
+            Box #[basis: 90, grow: 1, bg: 0x8FD19E] {}
+            Box #[basis: 150, grow: 1, bg: 0xF5C26B] {}
+        }
+    }
+}

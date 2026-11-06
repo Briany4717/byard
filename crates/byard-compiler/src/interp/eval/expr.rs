@@ -335,17 +335,9 @@ fn eval_binary_f(op: BinOp, a: f64, b: f64) -> Value {
     })
 }
 
-/// The single scalar-formatting function (RFC-0027 §3): the display form used
-/// by both `Text("{x}")` interpolation and `Str + scalar` concatenation, so the
-/// two paths agree byte-for-byte. Non-scalar values format to an empty string.
+/// The single scalar-formatting function (RFC-0027 §3), now [`Value::to_text`].
 fn format_scalar(v: &Value) -> String {
-    match v {
-        Value::Int(n) => n.to_string(),
-        Value::Float(f) => f.to_string(),
-        Value::Bool(b) => b.to_string(),
-        Value::Str(s) => s.clone(),
-        _ => String::new(),
-    }
+    v.to_text()
 }
 
 /// `text.split(sep)` (RFC-0047 §2): every piece between occurrences of `sep`,

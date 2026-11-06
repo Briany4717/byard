@@ -66,6 +66,22 @@ From the loosest to the tightest:
 | `++` `--` | Add or subtract one, in actions only |
 | `.` `[ ]` `( )` | Field, index, call |
 
+`? :` binds tighter than `||`, unlike C and JavaScript, so `a || b ? x : y` is
+`a || (b ? x : y)`. That is almost never what was meant, so the checker warns about
+it. Write the parentheses you mean, `(a || b) ? x : y`:
+
+```byld,fails
+View Main() {
+    var a = false
+    var b = true
+    Text(a || b ? "on" : "off")
+}
+```
+
+```diagnostic
+warning[MixedTernaryPrecedence]: `?:` binds tighter than `||`
+```
+
 `&&` and `||` stop as soon as the answer is known, so the right side may safely
 depend on the left: `xs.len > 0 && xs[0] > 5`.
 

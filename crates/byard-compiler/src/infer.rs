@@ -16,7 +16,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::diagnostics::{CompileError, Span};
+use crate::diagnostics::{BindTarget, CompileError, Span};
 use crate::interp::style::check_static;
 use crate::parser::ast::{
     AttrKind, BinOp, Expr, FnDecl, Member, Param, StrPart, Type, UnOp, ViewDecl,
@@ -159,15 +159,28 @@ pub fn check_views(views: &[ViewDecl]) -> Inference {
                 .collect()
         })
         .unwrap_or_default();
+    let mut view_params: ViewParams<'_> = HashMap::new();
+    let mut shared: HashSet<&Symbol> = HashSet::new();
+    for view in views {
+        if view_params
+            .insert(view.name.clone(), &view.params)
+            .is_some()
+        {
+            shared.insert(&view.name);
+        }
+    }
+    view_params.retain(|name, _| !shared.contains(name));
     for view in views {
         let mut checker = Checker {
             errors: &mut out.errors,
             bindings: &mut out.bindings,
             env: HashMap::new(),
             undo: Vec::new(),
+            origins: HashMap::new(),
             fns: top_fns.clone(),
             declared: HashSet::new(),
             views: &names,
+            view_params: &view_params,
             records: &records,
             strict: true,
         };
@@ -182,15 +195,18 @@ pub fn check_views(views: &[ViewDecl]) -> Inference {
 fn check_top_fns(helpers: &[FnDecl], out: &mut Inference) -> HashMap<Symbol, Option<Ty>> {
     let names: std::collections::HashSet<&Symbol> = helpers.iter().map(|f| &f.name).collect();
     let no_views = HashSet::new();
+    let no_view_params = HashMap::new();
     let no_records = HashMap::new();
     let mut checker = Checker {
         errors: &mut out.errors,
         bindings: &mut out.bindings,
         env: HashMap::new(),
         undo: Vec::new(),
+        origins: HashMap::new(),
         fns: HashMap::new(),
         declared: HashSet::new(),
         views: &no_views,
+        view_params: &no_view_params,
         records: &no_records,
         // A name a shared function cannot reach is reported below, as
         // impurity, which says more than "unknown".
@@ -247,6 +263,36 @@ fn check_top_fns(helpers: &[FnDecl], out: &mut Inference) -> HashMap<Symbol, Opt
     top
 }
 
+/// Where a name in scope came from, which decides whether a control can
+/// write to it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Origin {
+    /// A `var`: the only thing a control's `bind:` can write.
+    Var,
+    /// A parameter of the view or of a `fn`.
+    Param,
+    /// A `let`.
+    Let,
+    /// A loop variable, a lambda parameter, an event's value, an `inject`.
+    Other,
+}
+
+/// The parameters of each view of the program, by name, for checking the
+/// arguments of a call. A name two views share is left out: which one a call
+/// means is the resolver's to say.
+type ViewParams<'a> = HashMap<Symbol, &'a [Param]>;
+
+/// The controls whose `bind:` writes a `var`, and the attributes that spell
+/// it (`value:` is the older name, except on a `RadioButton`, where it is the
+/// button's own identity).
+fn bind_attrs(control: &str) -> &'static [&'static str] {
+    match control {
+        "TextField" | "Toggle" | "Slider" | "Checkbox" => &["bind", "value"],
+        "RadioButton" => &["bind"],
+        _ => &[],
+    }
+}
+
 struct Checker<'a> {
     errors: &'a mut Vec<CompileError>,
     bindings: &'a mut Vec<(Symbol, Ty)>,
@@ -255,7 +301,9 @@ struct Checker<'a> {
     /// Undo log for `env`: each binding pushes the value it replaced (or
     /// `None`), and leaving a scope pops back to the length it saved, so a
     /// scope costs its own bindings rather than a copy of the whole map.
-    undo: Vec<(Symbol, Option<Ty>)>,
+    undo: Vec<(Symbol, Option<Ty>, Option<Origin>)>,
+    /// Where each name in `env` came from.
+    origins: HashMap<Symbol, Origin>,
     /// Declared return types of named `fn`s, for call inference.
     fns: HashMap<Symbol, Option<Ty>>,
     /// Every name the view declares at its top level, whatever the order: a
@@ -263,6 +311,8 @@ struct Checker<'a> {
     declared: HashSet<Symbol>,
     /// The program's views, whose call arguments are values.
     views: &'a HashSet<Symbol>,
+    /// The declared parameters of those views.
+    view_params: &'a ViewParams<'a>,
     /// The program's record types: name → fields.
     records: &'a HashMap<Symbol, Vec<(Symbol, Type)>>,
     /// Whether a bare name being checked has to be a value. `false` where it
@@ -312,17 +362,31 @@ impl Checker<'_> {
 
     /// Binds `name` in the current scope, logging what it replaces.
     fn bind(&mut self, name: Symbol, ty: Ty) {
+        self.bind_from(name, ty, Origin::Other);
+    }
+
+    /// [`bind`](Self::bind), saying where the name came from.
+    fn bind_from(&mut self, name: Symbol, ty: Ty, origin: Origin) {
         let previous = self.env.insert(name.clone(), ty);
-        self.undo.push((name, previous));
+        let previous_origin = self.origins.insert(name.clone(), origin);
+        self.undo.push((name, previous, previous_origin));
     }
 
     /// Ends the scope opened when the log had length `mark`, restoring every
     /// binding it replaced, newest first.
     fn leave(&mut self, mark: usize) {
         while self.undo.len() > mark {
-            let Some((name, previous)) = self.undo.pop() else {
+            let Some((name, previous, origin)) = self.undo.pop() else {
                 break;
             };
+            match origin {
+                Some(o) => {
+                    self.origins.insert(name.clone(), o);
+                }
+                None => {
+                    self.origins.remove(&name);
+                }
+            }
             match previous {
                 Some(ty) => {
                     self.env.insert(name, ty);
@@ -380,7 +444,7 @@ impl Checker<'_> {
     fn check_param(&mut self, param: &Param, what: &str) {
         if let Some(ty) = &param.ty {
             let resolved = self.resolve_type(ty);
-            self.bind(param.name.clone(), resolved);
+            self.bind_from(param.name.clone(), resolved, Origin::Param);
         } else {
             // `content` is the child-block slot (RFC-0007 D-A): it holds the
             // caller's `{ ... }` block, has no value type to write, and is
@@ -391,7 +455,7 @@ impl Checker<'_> {
                     what: what.to_string(),
                 });
             }
-            self.bind(param.name.clone(), Ty::Unknown);
+            self.bind_from(param.name.clone(), Ty::Unknown, Origin::Param);
         }
     }
 
@@ -432,31 +496,127 @@ impl Checker<'_> {
     }
 
     /// Checks `attrs` as written on the element `element`, when it is known.
+    /// Returns each attribute's type, [`Ty::Unknown`] for one that is not a
+    /// plain `name: value`.
     ///
     /// A property's whole value may be a word only if the property takes
     /// words. For one that takes a number, a colour, a length, an angle or a
     /// list, a bare name has to be a value: `bg: prmary` is a
     /// misspelt name, not a colour called "prmary".
-    fn check_attrs_of(&mut self, element: Option<&str>, attrs: &[crate::parser::ast::Attr]) {
+    fn check_attrs_of(
+        &mut self,
+        element: Option<&str>,
+        attrs: &[crate::parser::ast::Attr],
+    ) -> Vec<Ty> {
         let it = Symbol::intern("it");
+        let mut tys = Vec::with_capacity(attrs.len());
         for attr in attrs {
-            match &attr.kind {
+            tys.push(match &attr.kind {
                 AttrKind::Prop { value } => {
                     if element.is_some_and(|e| takes_only_a_value(e, attr.name.as_str())) {
-                        self.value(value);
+                        self.value(value)
                     } else {
-                        self.word(value);
+                        self.word(value)
                     }
                 }
                 AttrKind::Spread { value } => {
                     self.value(value);
+                    Ty::Unknown
                 }
                 AttrKind::Event { payload, action } => {
                     let mut names = vec![&it];
                     names.extend(payload.as_ref());
                     self.check_shadowed(action, &names);
+                    Ty::Unknown
                 }
+            });
+        }
+        tys
+    }
+
+    /// Checks the arguments of a call to a view of the program against the
+    /// parameters it declares: each one must be of the declared type. `tys`
+    /// holds the type of every `(...)` argument, then of every attribute.
+    fn check_view_args(&mut self, el: &crate::parser::ast::ElementNode, tys: &[Ty]) {
+        let Some(&params) = self.view_params.get(&el.name) else {
+            return;
+        };
+        // Positional arguments fill the value parameters in order: not the
+        // child slot, not a callback.
+        let mut positional = params.iter().filter(|p| {
+            p.name.as_str() != crate::interp::eval::RESERVED_CONTENT
+                && !matches!(p.ty, Some(Type::Function { .. }))
+        });
+        let named = |name: &Symbol| params.iter().find(|p| &p.name == name);
+        let mut found = Vec::new();
+        for (arg, ty) in el.content.iter().zip(tys) {
+            let param = match &arg.name {
+                Some(name) => named(name),
+                None => positional.next(),
+            };
+            found.push((param, arg.value.span(), ty));
+        }
+        for (attr, ty) in el.attrs.iter().zip(&tys[el.content.len()..]) {
+            if let AttrKind::Prop { value } = &attr.kind {
+                found.push((named(&attr.name), value.span(), ty));
             }
+        }
+        for (param, span, ty) in found {
+            let Some(param) = param else { continue };
+            let Some(declared) = param.ty.as_ref().map(plain_ty) else {
+                continue;
+            };
+            if !assignable(&declared, ty) {
+                self.errors.push(CompileError::ArgumentTypeMismatch {
+                    span,
+                    callee: el.name.as_str().to_string(),
+                    name: param.name.as_str().to_string(),
+                    expected: ty_name(&declared),
+                    found: ty_name(ty),
+                });
+            }
+        }
+    }
+
+    /// A control's `bind:` writes the `var` it names. Anything else it could
+    /// name, a parameter, a `let`, a literal, is never written, and the
+    /// control would draw its default and change nothing, with no word said.
+    fn check_binds(&mut self, el: &crate::parser::ast::ElementNode) {
+        let spellings = bind_attrs(el.name.as_str());
+        if spellings.is_empty() {
+            return;
+        }
+        for attr in &el.attrs {
+            let AttrKind::Prop { value } = &attr.kind else {
+                continue;
+            };
+            if !spellings.contains(&attr.name.as_str()) {
+                continue;
+            }
+            let (target, kind) = match value {
+                Expr::Ident(name, _) if matches!(name.as_str(), "true" | "false") => (
+                    format!("`{name}`", name = name.as_str()),
+                    BindTarget::Literal,
+                ),
+                Expr::Ident(name, _) => match self.origins.get(name) {
+                    Some(Origin::Param) => (name.as_str().to_string(), BindTarget::Parameter),
+                    Some(Origin::Let) => (name.as_str().to_string(), BindTarget::Let),
+                    Some(Origin::Other) => (name.as_str().to_string(), BindTarget::Other),
+                    // A `var`, or a name this check cannot place.
+                    Some(Origin::Var) | None => continue,
+                },
+                Expr::IntLit(..) | Expr::FloatLit(..) | Expr::StrLit(..) | Expr::Array(..) => {
+                    ("a literal".to_string(), BindTarget::Literal)
+                }
+                _ => continue,
+            };
+            self.errors.push(CompileError::BindNotAVar {
+                span: value.span(),
+                control: el.name.as_str().to_string(),
+                attr: attr.name.as_str().to_string(),
+                target,
+                kind,
+            });
         }
     }
 
@@ -475,7 +635,12 @@ impl Checker<'_> {
                 span,
             } => {
                 let inferred = self.infer_binding(ty.as_ref(), init, *span);
-                self.bind(name.clone(), inferred.clone());
+                let origin = if matches!(member, Member::Var { .. }) {
+                    Origin::Var
+                } else {
+                    Origin::Let
+                };
+                self.bind_from(name.clone(), inferred.clone(), origin);
                 if top_level {
                     self.bindings.push((name.clone(), inferred));
                 }
@@ -505,6 +670,7 @@ impl Checker<'_> {
                 // What a view is called with is a value. An intrinsic's named
                 // argument may be one of its own words.
                 let is_view = self.views.contains(&el.name);
+                let mut tys = Vec::with_capacity(el.content.len() + el.attrs.len());
                 for arg in &el.content {
                     let takes_a_value = arg.name.as_ref().is_some_and(|name| {
                         crate::interp::intrinsics::shape_argument_type(
@@ -513,13 +679,18 @@ impl Checker<'_> {
                         )
                         .is_some_and(only_values)
                     });
-                    if is_view || arg.name.is_none() || takes_a_value {
-                        self.value(&arg.value);
+                    tys.push(if is_view || arg.name.is_none() || takes_a_value {
+                        self.value(&arg.value)
                     } else {
-                        self.word(&arg.value);
-                    }
+                        self.word(&arg.value)
+                    });
                 }
-                self.check_attrs_of(Some(el.name.as_str()), &el.attrs);
+                tys.extend(self.check_attrs_of(Some(el.name.as_str()), &el.attrs));
+                if is_view {
+                    self.check_view_args(el, &tys);
+                } else {
+                    self.check_binds(el);
+                }
                 if let Some(action) = &el.action {
                     self.check_shadowed(action, &[&Symbol::intern("it")]);
                 }
@@ -663,6 +834,17 @@ impl Checker<'_> {
             } => {
                 let l = self.value(lhs);
                 let r = self.value(rhs);
+                // `a || b ? x : y` is `a || (b ? x : y)`: the ternary reaches
+                // the end of the whole expression, with no parenthesis
+                // closing it. Almost always a mistake for `(a || b) ? x : y`.
+                if *op == BinOp::Or
+                    && matches!(rhs.as_ref(), Expr::Ternary { span: t, .. } if t.end == span.end)
+                {
+                    self.errors.push(CompileError::MixedTernaryPrecedence {
+                        span: *span,
+                        op: "||".to_string(),
+                    });
+                }
                 self.check_binary(*op, &l, &r, *span)
             }
             Expr::Ternary {
@@ -753,7 +935,7 @@ impl Checker<'_> {
                 span,
             } => {
                 let bound = self.infer_binding(ty.as_ref(), value, *span);
-                self.bind(name.clone(), bound);
+                self.bind_from(name.clone(), bound, Origin::Let);
                 Ty::Unknown
             }
             Expr::Assign { target, value, .. } => {
@@ -1161,6 +1343,39 @@ impl Checker<'_> {
                 Ty::Fn(params, ret)
             }
         }
+    }
+}
+
+/// The type a written [`Type`] names, without the checks `resolve_type` makes
+/// (the declaration was checked where it was written).
+fn plain_ty(ty: &Type) -> Ty {
+    match ty {
+        Type::Named { name, args, .. } => match name.as_str() {
+            "Int" => Ty::Int,
+            "Float" => Ty::Float,
+            "Str" => Ty::Str,
+            "Bool" => Ty::Bool,
+            "Text" => Ty::Unknown,
+            "List" => Ty::List(Box::new(args.first().map_or(Ty::Unknown, plain_ty))),
+            _ => Ty::Named(name.clone()),
+        },
+        Type::Function { params, ret, .. } => Ty::Fn(
+            params.iter().map(plain_ty).collect(),
+            ret.as_deref().map(|r| Box::new(plain_ty(r))),
+        ),
+    }
+}
+
+/// Whether a value of type `found` may be given where `expected` is declared.
+/// What is not known is allowed, as everywhere in this check; an `Int` goes
+/// where a `Float` is wanted.
+fn assignable(expected: &Ty, found: &Ty) -> bool {
+    match (expected, found) {
+        (Ty::Unknown | Ty::Fn(..), _) | (_, Ty::Unknown | Ty::Fn(..)) | (Ty::Float, Ty::Int) => {
+            true
+        }
+        (Ty::List(e), Ty::List(f)) => assignable(e, f),
+        _ => expected == found,
     }
 }
 

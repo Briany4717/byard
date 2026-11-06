@@ -90,6 +90,26 @@ The types you will use:
 A [record type](expressions.md#record-types) you declare yourself works as a
 type too.
 
+### Names
+
+A view, a function, a type, a parameter, a `var`, a `let` and a record's field are
+all named with a word of your own. The words the language uses itself cannot be
+names: `View`, `var`, `let`, `fn`, `inject`, `as`, `for`, `in`, `when`, `else`,
+`style`, `untrack`, `with`, `merge` and `use`. One of them in a name's place is one
+error, at the name:
+
+```byld,fails
+fn when(at: Str) -> Str => at
+
+View Main() {
+    Text("x")
+}
+```
+
+```diagnostic
+error[KeywordAsName]: `when` is a keyword and cannot name a function
+```
+
 ### Defaults
 
 Put `= value` after a parameter's type and callers may leave it out. `Badge`
@@ -118,6 +138,29 @@ View Badge(label: Str) {
 error[UnknownParam]: `Badge` has no parameter `lable` (did you mean `label`?)
 error[MissingParam]: missing required argument `label` for view `Badge`
 ```
+
+An argument has to be the type the parameter declares. A `Bool` given to a `Str`
+parameter is an error that names both, instead of text nobody meant. An `Int` may go
+where a `Float` is wanted, and nothing else converts:
+
+```byld,fails
+View Main() {
+    var failed = false
+    Badge(failed)
+}
+
+View Badge(label: Str) {
+    Text(label)
+}
+```
+
+```diagnostic
+error[ArgumentTypeMismatch]: parameter `label` of view `Badge` is a `Str`, but this is a `Bool`
+```
+
+A parameter is a copy of the caller's value. A control cannot write to one, so
+`TextField #[bind: label]` on a parameter is an error. [Controls](controls.md#a-field-in-a-view-of-its-own)
+shows how to pass a value down and the changes back up.
 
 ## Passing children
 

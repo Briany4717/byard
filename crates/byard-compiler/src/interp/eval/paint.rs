@@ -252,7 +252,7 @@ impl Interpreter {
                     let attrs = attrs.as_ref();
                     let text = match self.binding_value(*content) {
                         Some(Value::Str(s)) => s,
-                        other => other.map_or_else(String::new, |v| format!("{v:?}")),
+                        other => other.map_or_else(String::new, |v| v.to_text()),
                     };
                     // Fall back to theme on-surface color when unset.
                     let color = self

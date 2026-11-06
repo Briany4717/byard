@@ -68,8 +68,54 @@ The type of the `var` has to match the control:
 | `RadioButton` | `Str` | One of a group |
 
 `value:` is the older name for `bind:` and does the same thing (RFC-0018). Both
-need a `var`: given a `let` or a literal, a control draws its default instead of
-that value. A `change` handler runs an action when the user changes it.
+need a `var` of the view the control is in. A `let`, a literal, a loop variable or
+a view's parameter cannot be written, so each is an error that says so: the control
+would draw its default and ignore every edit. A `change` handler runs an action
+when the user changes it.
+
+### A field in a view of its own
+
+A parameter is a copy of what the caller passed, so a control cannot write it back.
+To reuse a field, give the view a `var` of its own for the control, show the
+caller's value in it, and hand each edit back through a callback:
+
+```byld
+View Field(value: Str, on_change: Fn(Str) = {|t| }) {
+    var text = value
+    on change(value) => text = value
+    TextField #[bind: text, placeholder: "Type here", input(t) => on_change(t),
+                width: 220, height: 36]
+}
+
+View Main() {
+    var name = "Ada"
+
+    Column #[p: 16, gap: 8] {
+        Field(value: name, on_change: {|t| name = t })
+        Button("Clear") => name = ""
+        Text("name is {name}")
+    }
+}
+```
+
+`var text = value` starts the field with the caller's text, and `on change(value)`
+keeps it in step when the caller changes `name` itself, as the button does. Binding
+the parameter directly is the mistake the checker stops:
+
+```byld,fails
+View Field(value: Str) {
+    TextField #[bind: value]
+}
+
+View Main() {
+    var name = ""
+    Field(value: name)
+}
+```
+
+```diagnostic
+error[BindNotAVar]: `TextField #[bind: value]` cannot change `value`: a parameter is a copy of what the caller passed
+```
 
 ## Button
 

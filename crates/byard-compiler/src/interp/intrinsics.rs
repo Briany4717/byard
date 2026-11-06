@@ -207,8 +207,12 @@ const LAYOUT: &[(&str, PropDef)] = &[
     ("align", lay(PropType::Enum(ALIGN))),
     ("justify", lay(PropType::Enum(JUSTIFY))),
     ("grow", lay(PropType::Int)),
-    ("basis", lay(PropType::Int)),
 ];
+/// `basis`, the main-axis size an element has before it grows. Only the
+/// elements laid out as containers honour it (taffy's `flex_basis`); a leaf
+/// that took it would accept it and ignore it, so they do not list it, and
+/// writing it there is an unknown attribute.
+const BASIS: &[(&str, PropDef)] = &[("basis", lay(PropType::Int))];
 const DECORATION: &[(&str, PropDef)] = &[
     ("bg", pnt(PropType::Color)),
     ("radius", pnt(PropType::Len)),
@@ -524,7 +528,7 @@ pub fn lookup(name: &str) -> Option<Intrinsic> {
 #[must_use]
 fn lookup_intrinsic(name: &str) -> Option<Intrinsic> {
     let container = |dir_default: bool| {
-        let mut props = props_from(&[LAYOUT, DECORATION, EFFECTS, TRANSFORM]);
+        let mut props = props_from(&[LAYOUT, BASIS, DECORATION, EFFECTS, TRANSFORM]);
         if dir_default {
             props.insert("direction", lay(PropType::Enum(DIRECTION)));
         }
@@ -625,7 +629,8 @@ fn lookup_intrinsic(name: &str) -> Option<Intrinsic> {
             events: events_from(false, &[]),
         },
         "Button" => {
-            let mut props = props_from(&[LAYOUT, DECORATION, EFFECTS, TEXT_PROPS, TRANSFORM]);
+            let mut props =
+                props_from(&[LAYOUT, BASIS, DECORATION, EFFECTS, TEXT_PROPS, TRANSFORM]);
             props.insert("focused", pnt(PropType::Bool));
             props.insert("disabled", pnt(PropType::Bool));
             Intrinsic {
@@ -757,7 +762,7 @@ fn lookup_intrinsic(name: &str) -> Option<Intrinsic> {
             }
         }
         "ScrollView" => {
-            let mut props = props_from(&[LAYOUT, DECORATION, EFFECTS, TRANSFORM]);
+            let mut props = props_from(&[LAYOUT, BASIS, DECORATION, EFFECTS, TRANSFORM]);
             props.insert("axis", lay(PropType::Enum(AXIS)));
             props.insert("offset", lay(PropType::Vec2));
             // RFC-0005 windowed layout: opt-in list virtualization. `windowed`
@@ -899,7 +904,7 @@ fn lookup_intrinsic(name: &str) -> Option<Intrinsic> {
         // per-axis `col_gap`/`row_gap` (override the shared `gap`). Pipeline: the
         // generic `DecoratedBox` background, same as `Box`.
         "Grid" => {
-            let mut props = props_from(&[LAYOUT, DECORATION, EFFECTS, TRANSFORM]);
+            let mut props = props_from(&[LAYOUT, BASIS, DECORATION, EFFECTS, TRANSFORM]);
             props.insert("focused", pnt(PropType::Bool));
             props.insert("disabled", pnt(PropType::Bool));
             props.insert("anchor", lay(PropType::Enum(ANCHOR)));
@@ -938,7 +943,7 @@ fn lookup_intrinsic(name: &str) -> Option<Intrinsic> {
         // for free, where a new lexical form would need its own grammar and
         // would still have to grow all of it back.
         "Clip" => {
-            let mut props = props_from(&[LAYOUT, TRANSFORM]);
+            let mut props = props_from(&[LAYOUT, BASIS, TRANSFORM]);
             // The corner radius of the mask. Absent (or zero) is a plain
             // rectangular clip, which stays a pure scissor.
             props.insert("rrect", lay(PropType::Len));
@@ -957,7 +962,7 @@ fn lookup_intrinsic(name: &str) -> Option<Intrinsic> {
             }
         }
         "ZStack" => {
-            let mut props = props_from(&[LAYOUT, DECORATION, EFFECTS, TRANSFORM]);
+            let mut props = props_from(&[LAYOUT, BASIS, DECORATION, EFFECTS, TRANSFORM]);
             props.insert("focused", pnt(PropType::Bool));
             props.insert("disabled", pnt(PropType::Bool));
             props.insert("anchor", lay(PropType::Enum(ANCHOR)));
@@ -988,7 +993,7 @@ fn lookup_intrinsic(name: &str) -> Option<Intrinsic> {
         // transition two screens are laid out in the same cell and composited
         // with per-screen transform/opacity.
         "NavStack" => {
-            let mut props = props_from(&[LAYOUT, DECORATION, EFFECTS, TRANSFORM]);
+            let mut props = props_from(&[LAYOUT, BASIS, DECORATION, EFFECTS, TRANSFORM]);
             props.insert("transition", lay(PropType::Enum(TRANSITION)));
             props.insert("swipe_back", lay(PropType::Bool));
             props.insert("deep_link", lay(PropType::Bool));
@@ -1016,7 +1021,7 @@ fn lookup_intrinsic(name: &str) -> Option<Intrinsic> {
         // with the reflected `active` naming the visible tab; `transition`
         // defaults to `fade`, since a tab switch has no push direction.
         "NavHost" => {
-            let mut props = props_from(&[LAYOUT, DECORATION, EFFECTS, TRANSFORM]);
+            let mut props = props_from(&[LAYOUT, BASIS, DECORATION, EFFECTS, TRANSFORM]);
             props.insert("transition", lay(PropType::Enum(TRANSITION)));
             props.insert("anchor", lay(PropType::Enum(ANCHOR)));
             props.insert("col", lay(PropType::Int));

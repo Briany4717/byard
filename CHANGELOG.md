@@ -22,6 +22,11 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   value of each call.
 - **`lines:` on a `Text` is an error.** It was accepted and did nothing, so a text meant to
   stop at two lines ran on. `byard check` now says the attribute is unknown.
+- **A view with motion can be used twice on one screen.** Every call of a view shared the
+  animation of each `with` inside it, so `Pill(round: true) Pill(round: false) Pill(round: true)`
+  drew all three like the last (springs, curves, keyframes, staggers, loops, `on hover` changes and
+  `morph:` alike). Each call now animates on its own, including inside an `Overlay`, and one that
+  goes away starts over when it comes back.
 - **A lambda sees its own item.** A `fn` called with the item inside a list
   lambda (`products.filter(p => isLow(p.qty))`) was computed once, for the
   first item, and gave every item the same answer. A lambda inside another

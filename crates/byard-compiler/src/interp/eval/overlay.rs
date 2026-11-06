@@ -42,6 +42,10 @@ struct OverlayChildSlot<'a> {
     node: &'a RenderNode,
     id: byard_core::atlas::layout::AtlasNodeId,
     flat_ids: Vec<byard_core::atlas::layout::AtlasNodeId>,
+    /// The `for` row and view instance the child belongs to, for the emission
+    /// pass, which runs away from where the child was written and starts from
+    /// none.
+    anim: super::animation::AnimSlot,
 }
 
 /// The absolute, inset-0 anchor wrapper style for an overlay child (RFC-0017
@@ -273,6 +277,7 @@ impl Interpreter {
                 node: child,
                 id: cid,
                 flat_ids: cflat,
+                anim: c.slot,
             });
         }
         self.anim_slot = enclosing;
@@ -422,6 +427,7 @@ impl Interpreter {
             transform.translate[1] += shift.1;
 
             let mut flat_idx = 0;
+            self.anim_slot = slot.anim;
             self.render_node_with_atlas(
                 slot.node,
                 slot.id,

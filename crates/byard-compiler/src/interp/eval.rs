@@ -56,7 +56,7 @@ mod text_field;
 mod typography;
 mod wiring;
 
-use animation::{AnimKey, LoopClock};
+use animation::{AnimKey, AnimSlot, Instances, LoopClock};
 use canvas::{CachedMesh, MESH_CACHE_FRAMES};
 use controller::UNBOUND_CONTROLLER;
 use instance::MAX_INSTANCE_DEPTH;
@@ -216,6 +216,11 @@ pub enum RenderNode {
         /// `for` before it grows or shrinks; focus and a field's editing state
         /// follow this instead, as an instance's state follows the instance.
         uid: u32,
+        /// The view instance this node was lowered inside ([`AnimKey`]'s other
+        /// half): the call-site path that mounted it, `0` outside any user view.
+        /// Fixed at lowering and kept for as long as the node lives, which is
+        /// what lets two calls of one view keep their own animations.
+        inst: u32,
         /// The `path { … }` child of a `Clip`, lifted out of the children and
         /// used as the clip's mask (RFC-0037 `clip(path)`). `None` for every
         /// other box, and for a `Clip` that only rounds its corners.
@@ -240,6 +245,11 @@ pub enum RenderNode {
         /// written in. Empty at the top level and for a `Text` with no
         /// attributes, which read nothing.
         env_snapshot: Vec<(Symbol, super::env::Value)>,
+        /// The view instance this node was lowered inside ([`AnimKey`]'s other
+        /// half): the call-site path that mounted it, `0` outside any user view.
+        /// Fixed at lowering and kept for as long as the node lives, which is
+        /// what lets two calls of one view keep their own animations.
+        inst: u32,
     },
     /// A flexible gap (layout-only, RFC-0005): absorbs its parent's free space
     /// along the main axis. `attrs` carries `grow`/`basis`, which is why this is
@@ -247,6 +257,11 @@ pub enum RenderNode {
     Spacer {
         /// `grow` (default 1) and `basis` (default 0).
         attrs: Vec<Attr>,
+        /// The view instance this node was lowered inside ([`AnimKey`]'s other
+        /// half): the call-site path that mounted it, `0` outside any user view.
+        /// Fixed at lowering and kept for as long as the node lives, which is
+        /// what lets two calls of one view keep their own animations.
+        inst: u32,
     },
     /// A texture-sampled image.
     Image {
@@ -260,6 +275,11 @@ pub enum RenderNode {
         /// image is sized and painted so `width: w` or `opacity: o` reading a
         /// view parameter resolves in the instance it was written in.
         env_snapshot: Vec<(Symbol, super::env::Value)>,
+        /// The view instance this node was lowered inside ([`AnimKey`]'s other
+        /// half): the call-site path that mounted it, `0` outside any user view.
+        /// Fixed at lowering and kept for as long as the node lives, which is
+        /// what lets two calls of one view keep their own animations.
+        inst: u32,
     },
     /// A package-authored native view (RFC-0039): an element whose drawing,
     /// measurement and event handling are compiled-in Rust rather than an
@@ -290,6 +310,11 @@ pub enum RenderNode {
         /// no separate lifetime to manage (an extension never keeps a resource
         /// alive past the scope that owns it).
         slot: usize,
+        /// The view instance this node was lowered inside ([`AnimKey`]'s other
+        /// half): the call-site path that mounted it, `0` outside any user view.
+        /// Fixed at lowering and kept for as long as the node lives, which is
+        /// what lets two calls of one view keep their own animations.
+        inst: u32,
     },
     /// An MSDF vector glyph, the `VectorIcon` intrinsic (RFC-0009 §1)
     /// routed to the `VectorMSDF` pipeline.
@@ -300,6 +325,11 @@ pub enum RenderNode {
         src: ScopeId,
         /// The instance environment captured at lower time, as on `Image`.
         env_snapshot: Vec<(Symbol, super::env::Value)>,
+        /// The view instance this node was lowered inside ([`AnimKey`]'s other
+        /// half): the call-site path that mounted it, `0` outside any user view.
+        /// Fixed at lowering and kept for as long as the node lives, which is
+        /// what lets two calls of one view keep their own animations.
+        inst: u32,
     },
     /// A `Canvas`, the RFC-0020 programmatic drawing surface. A fixed-size
     /// leaf whose children are *shape commands*, not views: each render tick
@@ -323,6 +353,11 @@ pub enum RenderNode {
         /// shape parameters and event actions referencing instance vars
         /// resolve against the scope the canvas was instantiated in.
         env_snapshot: Vec<(Symbol, super::env::Value)>,
+        /// The view instance this node was lowered inside ([`AnimKey`]'s other
+        /// half): the call-site path that mounted it, `0` outside any user view.
+        /// Fixed at lowering and kept for as long as the node lives, which is
+        /// what lets two calls of one view keep their own animations.
+        inst: u32,
     },
     /// An `Overlay`, the RFC-0017 escape-hatch. Its children leave the normal
     /// layout flow and render in the overlay layer, above all main content and
@@ -339,6 +374,11 @@ pub enum RenderNode {
         /// `dismiss` action or a child's forwarded callback resolves against the
         /// scope the overlay was instantiated in. Empty at the top level.
         env_snapshot: Vec<(Symbol, super::env::Value)>,
+        /// The view instance this node was lowered inside ([`AnimKey`]'s other
+        /// half): the call-site path that mounted it, `0` outside any user view.
+        /// Fixed at lowering and kept for as long as the node lives, which is
+        /// what lets two calls of one view keep their own animations.
+        inst: u32,
     },
     /// A reactive `when cond { … } else { … }` (RFC-0018 structural reactivity).
     /// The driver re-reads `cond` every frame and expands the taken branch, so a
@@ -391,6 +431,24 @@ pub enum RenderNode {
         /// The reactive `path:`/`active:` projection, re-read each frame.
         path: ScopeId,
     },
+}
+
+impl RenderNode {
+    /// The view instance this node was lowered inside, `0` for the nodes that
+    /// are not drawn (`When`, `For`, `Effect`, `Nav`).
+    pub(crate) const fn inst(&self) -> u32 {
+        match self {
+            Self::Box { inst, .. }
+            | Self::Text { inst, .. }
+            | Self::Spacer { inst, .. }
+            | Self::Image { inst, .. }
+            | Self::Native { inst, .. }
+            | Self::Vector { inst, .. }
+            | Self::Canvas { inst, .. }
+            | Self::Overlay { inst, .. } => *inst,
+            Self::When { .. } | Self::For { .. } | Self::Effect { .. } | Self::Nav { .. } => 0,
+        }
+    }
 }
 
 /// A lowered reactive computation (see the module docs).
@@ -701,7 +759,13 @@ pub struct Interpreter {
     /// Set from the expansion, which is the only place that knows it: after
     /// `when`/`for` are flattened, a row of a `for` is indistinguishable from a
     /// node written literally at that position. `0` outside any `for` body.
-    anim_slot: u32,
+    anim_slot: AnimSlot,
+    /// The user-view call path the lowering walk is inside right now, stamped
+    /// on every node it creates (`RenderNode::inst`). `0` at the root.
+    cur_inst: u32,
+    /// Every call path seen so far, interned: what keeps an instance's id the
+    /// same through a hot reload.
+    instances: Instances,
     /// Set true during a render whenever an animation sampled this frame has not
     /// yet settled, the runner reads it (via [`has_active_animations`]) to keep
     /// requesting frames until motion stops (idle → 0 frames).
@@ -1626,7 +1690,7 @@ impl Interpreter {
         // The walk starts outside every `for`. Reset rather than assume,
         // so a frame that ends deep inside a list cannot leak that row's
         // identity into the next frame's top-level animations.
-        self.anim_slot = 0;
+        self.anim_slot = AnimSlot::default();
 
         // Everything that could still be called from the previous frame's
         // handlers has been cleared above, so the scopes its painting opened
@@ -1875,7 +1939,7 @@ impl Interpreter {
             // identity leaves the walk with it, it is emitted here rather than
             // where it was written, so whatever row the main pass finished
             // inside must not carry over into it.
-            self.anim_slot = 0;
+            self.anim_slot = AnimSlot::default();
             self.emit_overlay(ol, frame, width, height, pools);
         }
 
@@ -1995,6 +2059,8 @@ impl Interpreter {
         }
         self.check_anchor_refs(view);
         self.check_font_families(view);
+        // The root is outside every call, whatever the last lowering left.
+        self.cur_inst = 0;
         // RFC-0018: a fresh tree gets fresh `when`/`for` pools; the previous
         // tree's pool ids are discarded with it (hot-reload re-lowers the tree).
         self.for_pools.clear();

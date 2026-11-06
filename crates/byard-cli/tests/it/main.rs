@@ -53,6 +53,7 @@ mod text_wrap_example;
 mod theme_transition_example;
 mod todo_example;
 mod transform_stack_example;
+mod view_animations_example;
 mod workspace_example;
 mod zero_text_size;
 mod zstack_example;

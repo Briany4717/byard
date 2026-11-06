@@ -127,7 +127,8 @@ Button("Tap me") #[bg: 0x3B82F6, color: 0xFFFFFF, radius: 8] => count++
 A `Button` takes its label as content. With no `p`, it pads the label by 10 above and
 below and 24 left and right, and it is at least 40 pixels tall, so a bare button is
 already something a finger can hit. Say `p`, `width` or `height` to change that. It
-takes every layout, decoration and text attribute. It is not in the Tab order yet.
+takes every layout, decoration and text attribute. Tab reaches it, and Space or Enter presses it,
+as [the keyboard](#the-keyboard) describes.
 
 ## TextField
 

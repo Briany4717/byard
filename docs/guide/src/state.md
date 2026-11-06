@@ -206,6 +206,23 @@ View Main() {
 error[ImpureFunction]: function `double` must be pure
 ```
 
+A function is written into each place that calls it, so it cannot call itself.
+To repeat something over a range, fold over a list with `reduce`:
+
+```byld,fails
+fn fact(n: Int) -> Int => n <= 1 ? 1 : n * fact(n - 1)
+
+View Main() {
+    Text("{fact(5)}")
+}
+```
+
+```diagnostic
+error[RecursiveFunction]: function `fact` calls itself
+```
+
+`[1, 2, 3, 4, 5].reduce(1, (acc, n) => acc * n)` is the same `120`.
+
 A package's shared functions are used through the package's name, like its views.
 A view's own name wins over a function with the same name, and two functions with
 one name are an error.

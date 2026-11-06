@@ -410,6 +410,70 @@ mod tests {
         );
     }
 
+    fn view_call_action_messages(src: &str) -> Vec<String> {
+        check_source(src)
+            .iter()
+            .filter(|e| e.kind() == "ViewCallAction")
+            .map(CompileError::headline)
+            .collect()
+    }
+
+    #[test]
+    fn a_trailing_action_on_a_view_call_is_an_error_naming_the_callback() {
+        let found = view_call_action_messages(
+            "View Comp(label: Str, on_tap: Fn() = {}) { Box #[tap => on_tap()] { Text(label) } }
+             View Main() { var a = 0
+                Column { Comp(\"one\") => a++ } }",
+        );
+        assert_eq!(
+            found,
+            ["`Comp` takes no trailing action; pass it as `on_tap: { … }`"]
+        );
+    }
+
+    #[test]
+    fn a_trailing_action_on_a_view_without_one_callback_says_how_to_declare_it() {
+        let found = view_call_action_messages(
+            "View Comp(label: Str) { Text(label) }
+             View Main() { var a = 0
+                Column { Comp(\"one\") => a++ } }",
+        );
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].contains("on_tap: Fn() = {}"), "{found:?}");
+        // Two `Fn()` parameters: it cannot pick one.
+        let found = view_call_action_messages(
+            "View Comp(on_a: Fn() = {}, on_b: Fn() = {}) { Text(\"x\") }
+             View Main() { var a = 0
+                Column { Comp() => a++ } }",
+        );
+        assert!(found[0].contains("Fn() = {}"), "{found:?}");
+    }
+
+    #[test]
+    fn an_event_handler_on_a_view_call_is_an_error() {
+        let found = view_call_action_messages(
+            "View Comp(label: Str, on_tap: Fn() = {}) { Box #[tap => on_tap()] { Text(label) } }
+             View Main() { var a = 0
+                Column { Comp(\"one\") #[tap => a++] } }",
+        );
+        assert_eq!(
+            found,
+            ["`Comp` takes no `tap` handler; pass it as `on_tap: { … }`"]
+        );
+    }
+
+    #[test]
+    fn a_trailing_action_on_an_intrinsic_and_a_callback_argument_are_fine() {
+        let errs = check_source(
+            "View Comp(label: Str, on_tap: Fn() = {}) { Button(label) => on_tap() }
+             View Main() { var a = 0
+                Column { Button(\"x\") => a++
+                    Comp(\"one\", on_tap: { a++ })
+                    Box #[tap => a++] { Text(\"y\") } } }",
+        );
+        assert!(errs.is_empty(), "{errs:?}");
+    }
+
     #[test]
     fn a_routes_params_and_path_are_in_scope_in_every_route() {
         let errs = check_source(

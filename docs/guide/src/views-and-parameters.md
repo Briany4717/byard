@@ -244,6 +244,30 @@ View Choice(options: List<Str>, on_pick: Fn(Str) = {|_| }) {
 }
 ```
 
+A callback goes in by name. A view does not take a trailing `=> action` the way
+`Button` does, because `Button` is built in and knows what a tap on it is; your view
+only knows the parameters you gave it. Write the action after a view call, or an
+event handler in its `#[...]`, and the checker stops you instead of dropping it:
+
+```byld,fails
+View Card(label: Str, on_tap: Fn() = {}) {
+    Box #[bg: 0x3B82F6, p: 12, tap => on_tap()] { Text(label) }
+}
+
+View Main() {
+    var count = 0
+    Column { Card("Add") => count++ }
+}
+```
+
+```diagnostic
+error[ViewCallAction]: `Card` takes no trailing action; pass it as `on_tap: { … }`
+```
+
+If the view has one `Fn()` parameter the message names it. If it has none or
+several, it says to declare one. A wrapper around `Button` that wants `=>` at its
+call sites is a feature for after 0.1.0, together with bindable parameters.
+
 Callbacks are how views talk to the views that contain them. Data flows down as
 parameters and actions flow back up as callbacks. [Events and
 actions](events-and-actions.md) covers what an action may contain.

@@ -33,6 +33,9 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `m.Button` outside and `package.Button` inside, and `use package.{Button}` says to write the
   qualified name. An app declaring such a view is still an error. The editor completes,
   hovers and jumps to the qualified name.
+- **An action on a view call is an error, not silently dropped.** `Card("x") => count++`
+  and `Card("x") #[tap => count++]` checked clean and did nothing on a tap. `byard check`
+  now says the view takes no trailing action and names the `Fn()` parameter to pass it to.
 - **A lambda sees its own item.** A `fn` called with the item inside a list
   lambda (`products.filter(p => isLow(p.qty))`) was computed once, for the
   first item, and gave every item the same answer. A lambda inside another

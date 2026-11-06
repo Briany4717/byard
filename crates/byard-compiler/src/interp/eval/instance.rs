@@ -146,6 +146,34 @@ impl Interpreter {
             }
         }
 
+        // 2b) An action on the call itself has no parameter to land in: the
+        //    view receives behaviour only through its `Fn(...)` parameters.
+        let mut zero_fns = params
+            .iter()
+            .filter(|p| matches!(&p.ty, Some(Type::Function { params, .. }) if params.is_empty()));
+        let callback = match (zero_fns.next(), zero_fns.next()) {
+            (Some(p), None) => Some(p.name.as_str().to_string()),
+            _ => None,
+        };
+        if let Some(action) = &call.action {
+            self.errors.push(CompileError::ViewCallAction {
+                span: action.span(),
+                callee: callee_name.clone(),
+                event: None,
+                callback: callback.clone(),
+            });
+        }
+        for attr in &call.attrs {
+            if matches!(attr.kind, AttrKind::Event { .. }) {
+                self.errors.push(CompileError::ViewCallAction {
+                    span: attr.span,
+                    callee: callee_name.clone(),
+                    event: Some(attr.name.as_str().to_string()),
+                    callback: callback.clone(),
+                });
+            }
+        }
+
         // 3) Arity: more positional args than the callee declares value
         //    parameters (RFC-0007 §6).
         if positional_count > value_param_idx.len() {

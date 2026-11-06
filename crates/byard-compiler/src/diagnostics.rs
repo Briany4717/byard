@@ -520,6 +520,21 @@ pub enum CompileError {
         /// The callee view name.
         callee: String,
     },
+    /// A user-view call carries an action the view cannot receive: a trailing
+    /// `=> action`, or an event handler in its `#[...]`. A view's behaviour
+    /// comes in through its `Fn(...)` parameters (RFC-0019), so the action
+    /// would have been dropped silently.
+    ViewCallAction {
+        /// Source range of the action or handler.
+        span: Span,
+        /// The callee view name.
+        callee: String,
+        /// What was written: `None` for a trailing `=> action`, the event
+        /// name for `#[event => action]`.
+        event: Option<String>,
+        /// The callee's only `Fn()` parameter, when it has exactly one.
+        callback: Option<String>,
+    },
     /// A `ViewDecl` is named like an RFC-0005 intrinsic; the intrinsic always
     /// wins and the user view is unreachable (RFC-0007 §6).
     IntrinsicShadowed {
@@ -1115,6 +1130,7 @@ impl CompileError {
             | Self::UnknownParam { span, .. }
             | Self::MissingParam { span, .. }
             | Self::DuplicateParam { span, .. }
+            | Self::ViewCallAction { span, .. }
             | Self::IntrinsicShadowed { span, .. }
             | Self::ImportShadowsBuiltin { span, .. }
             | Self::RecursiveView { span, .. }
@@ -1218,6 +1234,7 @@ impl CompileError {
             | Self::UnknownParam { span, .. }
             | Self::MissingParam { span, .. }
             | Self::DuplicateParam { span, .. }
+            | Self::ViewCallAction { span, .. }
             | Self::IntrinsicShadowed { span, .. }
             | Self::ImportShadowsBuiltin { span, .. }
             | Self::RecursiveView { span, .. }
@@ -1323,6 +1340,7 @@ impl CompileError {
             Self::UnknownParam { .. } => "UnknownParam",
             Self::MissingParam { .. } => "MissingParam",
             Self::DuplicateParam { .. } => "DuplicateParam",
+            Self::ViewCallAction { .. } => "ViewCallAction",
             Self::IntrinsicShadowed { .. } => "IntrinsicShadowed",
             Self::ImportShadowsBuiltin { .. } => "ImportShadowsBuiltin",
             Self::RecursiveView { .. } => "RecursiveView",
@@ -1647,6 +1665,25 @@ impl CompileError {
             }
             Self::DuplicateParam { name, callee, .. } => {
                 format!("parameter `{name}` of view `{callee}` is bound more than once")
+            }
+            Self::ViewCallAction {
+                callee,
+                event,
+                callback,
+                ..
+            } => {
+                let what = match event {
+                    Some(e) => format!("takes no `{e}` handler"),
+                    None => "takes no trailing action".to_string(),
+                };
+                match callback {
+                    Some(cb) => format!("`{callee}` {what}; pass it as `{cb}: {{ … }}`"),
+                    None => format!(
+                        "`{callee}` {what}; give it a parameter like `on_tap: Fn() = {{}}`, run \
+                         that where the view should react (`tap => on_tap()`), and pass \
+                         `on_tap: {{ … }}`"
+                    ),
+                }
             }
             Self::IntrinsicShadowed { name, .. } => {
                 format!("view `{name}` shadows the built-in intrinsic of the same name")

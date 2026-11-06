@@ -35,7 +35,7 @@ cargo run -p stockroom -- --dev        # the window, following its own files
 ```
 
 It cannot run under `byard dev` or draw with `byard shot`, because it has a Rust
-controller (`src/controller.rs`: the clock, and the CSV file). `byard check`
+controller (`src/controller.rs`, which writes the CSV file). `byard check`
 works, with one warning that says so.
 
 ## Test it

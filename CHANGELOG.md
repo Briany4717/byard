@@ -137,8 +137,9 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **A method is camelCase in Byld, wherever it comes from.** A controller's
   `fn export_csv` is now `room.exportCsv(...)`, and the animation curves
   `anim.ease_in`, `anim.ease_out` and `anim.ease_in_out` are now
-  `anim.easeIn`, `anim.easeOut` and `anim.easeInOut`. An app must rename those
-  calls in its `.byd` files: the old spelling is an error that names the new
+  `anim.easeIn`, `anim.easeOut` and `anim.easeInOut`, and so is the easing word
+  on a keyframe step (`60%: 100 easeOut`). An app must rename those
+  in its `.byd` files: the old spelling is an error that names the new
   one. The Rust names do not change, `#[byard(rename = "...")]` on a controller
   method sets another name, and attributes, events and record fields keep the
   names they were given.

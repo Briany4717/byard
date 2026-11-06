@@ -146,13 +146,13 @@ View Main() {
             Box #[bg: 0xD0BCFF, radius: 3, width: 100, height: 6, origin: center,
                   translate: anim.keyframes(
                       0%: (-100, 0),
-                      60%: (120, 0) ease_in_out,
-                      100%: (300, 0) ease_out,
+                      60%: (120, 0) easeInOut,
+                      100%: (300, 0) easeOut,
                       duration: 2s, loop: true),
                   scale: anim.keyframes(
                       0%: (0.3, 1),
-                      60%: (1.6, 1) ease_in_out,
-                      100%: (0.3, 1) ease_in,
+                      60%: (1.6, 1) easeInOut,
+                      100%: (0.3, 1) easeIn,
                       duration: 2s, loop: true)] {}
         }
     }

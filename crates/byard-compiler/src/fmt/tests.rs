@@ -744,12 +744,12 @@ fn every_kind_of_difference_is_seen_by_the_meaning_check() {
             "View M() { on tap => { let b = 1 } }",
         ),
         (
-            "View M() { let a = anim.keyframes(0%: 1, 50%: 2 ease_out) }",
-            "View M() { let a = anim.keyframes(0%: 1, 60%: 2 ease_out) }",
+            "View M() { let a = anim.keyframes(0%: 1, 50%: 2 easeOut) }",
+            "View M() { let a = anim.keyframes(0%: 1, 60%: 2 easeOut) }",
         ),
         (
-            "View M() { let a = anim.keyframes(0%: 1, 50%: 2 ease_out) }",
-            "View M() { let a = anim.keyframes(0%: 1, 50%: 2 ease_in) }",
+            "View M() { let a = anim.keyframes(0%: 1, 50%: 2 easeOut) }",
+            "View M() { let a = anim.keyframes(0%: 1, 50%: 2 easeIn) }",
         ),
         ("View M() { let v = a ?? b }", "View M() { let v = b ?? a }"),
     ];

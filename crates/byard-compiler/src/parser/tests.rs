@@ -476,10 +476,10 @@ fn a_seconds_duration_canonicalizes_to_milliseconds() {
 
 #[test]
 fn keyframe_steps_parse_with_percentages_and_per_segment_easing() {
-    // RFC-0025 §4: `50%: 200 ease_out` is one step; the trailing identifier is
+    // RFC-0025 §4: `50%: 200 easeOut` is one step; the trailing identifier is
     // the segment's easing, and it must not be mistaken for the next argument.
     let view = one_view(
-        "View V() { Box #[translate: anim.keyframes(0%: 0, 50%: 200 ease_out, 100%: 0, \
+        "View V() { Box #[translate: anim.keyframes(0%: 0, 50%: 200 easeOut, 100%: 0, \
          duration: 2s, loop: true)] }",
     );
     let el = as_element(&view.body[0]);
@@ -503,11 +503,7 @@ fn keyframe_steps_parse_with_percentages_and_per_segment_easing() {
         .collect();
     assert_eq!(
         steps,
-        vec![
-            (0.0, None),
-            (0.5, Some("ease_out".to_string())),
-            (1.0, None)
-        ]
+        vec![(0.0, None), (0.5, Some("easeOut".to_string())), (1.0, None)]
     );
     // The modifiers after the steps stay ordinary named arguments.
     let named: Vec<_> = args

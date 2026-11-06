@@ -927,7 +927,7 @@ pub enum Expr {
         /// Source span.
         span: Span,
     },
-    /// One timed step of a keyframe sequence, `50%: 200 ease_out` (RFC-0025
+    /// One timed step of a keyframe sequence, `50%: 200 easeOut` (RFC-0025
     /// §4). Appears only as an argument, and the parser assigns it no meaning
     /// beyond its shape (D6): `anim.keyframes(…)` is the one call that reads
     /// these, resolved with everything else at lower time.
@@ -938,7 +938,7 @@ pub enum Expr {
         /// The value this step animates to.
         value: Box<Expr>,
         /// The optional easing name governing the segment that *arrives* at this
-        /// step (`ease_out`); absent means linear.
+        /// step (`easeOut`); absent means linear.
         easing: Option<(Symbol, Span)>,
         /// Source span.
         span: Span,

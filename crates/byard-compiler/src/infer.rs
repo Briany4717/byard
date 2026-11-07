@@ -16,7 +16,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::diagnostics::{BindTarget, CompileError, Span};
+use crate::diagnostics::{BindTarget, BindingProblem, CompileError, Span};
 use crate::interp::style::check_static;
 use crate::parser::ast::{
     AttrKind, BinOp, Expr, FnDecl, Member, Param, StrPart, Type, UnOp, ViewDecl,
@@ -442,9 +442,18 @@ impl Checker<'_> {
     }
 
     fn check_param(&mut self, param: &Param, what: &str) {
+        // A binding is the caller's `var` (RFC-0051): it is written like one.
+        let origin = if param.bind {
+            Origin::Var
+        } else {
+            Origin::Param
+        };
+        if param.bind || param.name.as_str() == "bind" {
+            self.check_binding_param(param, what);
+        }
         if let Some(ty) = &param.ty {
             let resolved = self.resolve_type(ty);
-            self.bind_from(param.name.clone(), resolved, Origin::Param);
+            self.bind_from(param.name.clone(), resolved, origin);
         } else {
             // `content` is the child-block slot (RFC-0007 D-A): it holds the
             // caller's `{ ... }` block, has no value type to write, and is
@@ -455,8 +464,33 @@ impl Checker<'_> {
                     what: what.to_string(),
                 });
             }
-            self.bind_from(param.name.clone(), Ty::Unknown, Origin::Param);
+            self.bind_from(param.name.clone(), Ty::Unknown, origin);
         }
+    }
+
+    /// A binding parameter has no default, has a type, is not a callback, and
+    /// is not called `bind`; and only a view's parameter can be one
+    /// (RFC-0051 §1).
+    fn check_binding_param(&mut self, param: &Param, what: &str) {
+        let problem = if param.name.as_str() == "bind" {
+            BindingProblem::Reserved
+        } else if what != "view parameter" {
+            BindingProblem::NotAView
+        } else if param.default.is_some() {
+            BindingProblem::Default
+        } else if param.ty.is_none() {
+            // `MissingAnnotation` says so already.
+            return;
+        } else if matches!(param.ty, Some(Type::Function { .. })) {
+            BindingProblem::Callback
+        } else {
+            return;
+        };
+        self.errors.push(CompileError::BadBindingParam {
+            span: param.span,
+            name: param.name.as_str().to_string(),
+            problem,
+        });
     }
 
     fn check_members(&mut self, members: &[Member], top_level: bool) {
@@ -535,46 +569,193 @@ impl Checker<'_> {
     }
 
     /// Checks the arguments of a call to a view of the program against the
-    /// parameters it declares: each one must be of the declared type. `tys`
-    /// holds the type of every `(...)` argument, then of every attribute.
+    /// parameters it declares: each one must be of the declared type, and a
+    /// binding (RFC-0051) must be passed as one, a `var` of the caller's.
+    /// `tys` holds the type of every `(...)` argument, then of every attribute.
     fn check_view_args(&mut self, el: &crate::parser::ast::ElementNode, tys: &[Ty]) {
         let Some(&params) = self.view_params.get(&el.name) else {
             return;
         };
+        let callee = el.name.as_str();
         // Positional arguments fill the value parameters in order: not the
-        // child slot, not a callback.
+        // child slot, not a callback, not a binding.
         let mut positional = params.iter().filter(|p| {
             p.name.as_str() != crate::interp::eval::RESERVED_CONTENT
                 && !matches!(p.ty, Some(Type::Function { .. }))
+                && !p.bind
         });
         let named = |name: &Symbol| params.iter().find(|p| &p.name == name);
+        let bindings: Vec<&Param> = params.iter().filter(|p| p.bind).collect();
+        let sole = bindings.len() == 1;
+        let bind = Symbol::intern("bind");
+
+        // Each argument, with what it fills: `None` for one that is not a
+        // match (the interpreter says so), and a flag for a binding written
+        // `bind`.
         let mut found = Vec::new();
+        let mut args: Vec<(Option<&Symbol>, bool, &Expr, Span, &Ty)> = Vec::new();
         for (arg, ty) in el.content.iter().zip(tys) {
-            let param = match &arg.name {
-                Some(name) => named(name),
-                None => positional.next(),
-            };
-            found.push((param, arg.value.span(), ty));
+            args.push((
+                arg.name.as_ref(),
+                arg.bind,
+                &arg.value,
+                arg.value.span(),
+                ty,
+            ));
         }
         for (attr, ty) in el.attrs.iter().zip(&tys[el.content.len()..]) {
             if let AttrKind::Prop { value } = &attr.kind {
-                found.push((named(&attr.name), value.span(), ty));
+                args.push((Some(&attr.name), false, value, value.span(), ty));
+            }
+        }
+        for (name, written_bind, value, span, ty) in args {
+            let param = match name {
+                // `bind: x`, the short form.
+                Some(n) if !written_bind && *n == bind => match bindings.len() {
+                    0 => continue,
+                    1 => {
+                        self.check_bind_arg(callee, bindings[0], value, ty, true);
+                        continue;
+                    }
+                    _ => {
+                        self.errors.push(CompileError::BindNeedsName {
+                            span,
+                            callee: callee.to_string(),
+                            names: bindings
+                                .iter()
+                                .map(|p| p.name.as_str().to_string())
+                                .collect(),
+                        });
+                        continue;
+                    }
+                },
+                Some(n) => named(n),
+                None => positional.next(),
+            };
+            let Some(param) = param else { continue };
+            match (param.bind, written_bind) {
+                (true, true) => self.check_bind_arg(callee, param, value, ty, sole),
+                (true, false) => self.errors.push(CompileError::BindArgMismatch {
+                    span,
+                    callee: callee.to_string(),
+                    name: param.name.as_str().to_string(),
+                    declared_binding: true,
+                    sole,
+                    passed: match value {
+                        Expr::Ident(n, _) => n.as_str().to_string(),
+                        _ => String::new(),
+                    },
+                }),
+                (false, true) => self.errors.push(CompileError::BindArgMismatch {
+                    span,
+                    callee: callee.to_string(),
+                    name: param.name.as_str().to_string(),
+                    declared_binding: false,
+                    sole,
+                    passed: String::new(),
+                }),
+                (false, false) => found.push((param, span, ty)),
             }
         }
         for (param, span, ty) in found {
-            let Some(param) = param else { continue };
             let Some(declared) = param.ty.as_ref().map(plain_ty) else {
                 continue;
             };
             if !assignable(&declared, ty) {
                 self.errors.push(CompileError::ArgumentTypeMismatch {
                     span,
-                    callee: el.name.as_str().to_string(),
+                    callee: callee.to_string(),
                     name: param.name.as_str().to_string(),
                     expected: ty_name(&declared),
                     found: ty_name(ty),
                 });
             }
+        }
+    }
+
+    /// Checks what is passed to one of a view's bindings: a `var` of the
+    /// calling view, or one of its own bindings, of the declared type exactly
+    /// (a binding is written as well as read, so an `Int` is not a `Float`
+    /// here).
+    fn check_bind_arg(&mut self, callee: &str, param: &Param, value: &Expr, ty: &Ty, sole: bool) {
+        let attr = if sole {
+            "bind".to_string()
+        } else {
+            format!("bind {}", param.name.as_str())
+        };
+        if let Some((target, kind)) = self.not_a_var(value, true) {
+            let ty_text = self.type_to_declare(value);
+            self.errors.push(CompileError::BindNotAVar {
+                span: value.span(),
+                control: callee.to_string(),
+                attr,
+                target,
+                kind,
+                view_call: true,
+                ty: ty_text,
+            });
+            return;
+        }
+        let Some(declared) = param.ty.as_ref().map(plain_ty) else {
+            return;
+        };
+        if is_concrete(&declared) && is_concrete(ty) && !same_ty(&declared, ty) {
+            self.errors.push(CompileError::ArgumentTypeMismatch {
+                span: value.span(),
+                callee: callee.to_string(),
+                name: param.name.as_str().to_string(),
+                expected: ty_name(&declared),
+                found: ty_name(ty),
+            });
+        }
+    }
+
+    /// Reports each `bind name: value` among `args`: written where only a user
+    /// view takes one (RFC-0051).
+    fn reject_bind_args(&mut self, args: &[crate::parser::ast::Arg]) {
+        for arg in args.iter().filter(|a| a.bind) {
+            self.errors.push(CompileError::BindOutsideViewCall {
+                span: arg.value.span(),
+                name: arg
+                    .name
+                    .as_ref()
+                    .map_or(String::new(), |n| n.as_str().to_string()),
+            });
+        }
+    }
+
+    /// Why `value` is not something a `bind:` can write, if it is not: the
+    /// name or the source form to put in the message, and the kind. `None` for
+    /// a `var`, a binding, the theme's scheme flag, or a name this check cannot
+    /// place. An expression the control path cannot judge is let through
+    /// unless `strict`, which a view's binding is (RFC-0051).
+    fn not_a_var(&self, value: &Expr, strict: bool) -> Option<(String, BindTarget)> {
+        match value {
+            Expr::Ident(name, _) if matches!(name.as_str(), "true" | "false") => Some((
+                format!("`{name}`", name = name.as_str()),
+                BindTarget::Literal,
+            )),
+            Expr::Ident(name, _) => match self.origins.get(name) {
+                Some(Origin::Param) => Some((name.as_str().to_string(), BindTarget::Parameter)),
+                Some(Origin::Let) => Some((name.as_str().to_string(), BindTarget::Let)),
+                Some(Origin::Other) => Some((name.as_str().to_string(), BindTarget::Other)),
+                // A `var`, or a name this check cannot place.
+                Some(Origin::Var) | None => None,
+            },
+            Expr::IntLit(..) | Expr::FloatLit(..) | Expr::StrLit(..) | Expr::Array(..) => {
+                Some(("a literal".to_string(), BindTarget::Literal))
+            }
+            // `theme.dark` is the scheme flag, which is writable.
+            Expr::Member { field, .. } if field.as_str() == "dark" => None,
+            Expr::Member { base, field, .. } if strict => {
+                let target = match base.as_ref() {
+                    Expr::Ident(b, _) => format!("`{}.{}`", b.as_str(), field.as_str()),
+                    _ => "an expression".to_string(),
+                };
+                Some((target, BindTarget::Expression))
+            }
+            _ if strict => Some(("an expression".to_string(), BindTarget::Expression)),
+            _ => None,
         }
     }
 
@@ -593,30 +774,31 @@ impl Checker<'_> {
             if !spellings.contains(&attr.name.as_str()) {
                 continue;
             }
-            let (target, kind) = match value {
-                Expr::Ident(name, _) if matches!(name.as_str(), "true" | "false") => (
-                    format!("`{name}`", name = name.as_str()),
-                    BindTarget::Literal,
-                ),
-                Expr::Ident(name, _) => match self.origins.get(name) {
-                    Some(Origin::Param) => (name.as_str().to_string(), BindTarget::Parameter),
-                    Some(Origin::Let) => (name.as_str().to_string(), BindTarget::Let),
-                    Some(Origin::Other) => (name.as_str().to_string(), BindTarget::Other),
-                    // A `var`, or a name this check cannot place.
-                    Some(Origin::Var) | None => continue,
-                },
-                Expr::IntLit(..) | Expr::FloatLit(..) | Expr::StrLit(..) | Expr::Array(..) => {
-                    ("a literal".to_string(), BindTarget::Literal)
-                }
-                _ => continue,
+            let Some((target, kind)) = self.not_a_var(value, false) else {
+                continue;
             };
+            let ty = self.type_to_declare(value);
             self.errors.push(CompileError::BindNotAVar {
                 span: value.span(),
                 control: el.name.as_str().to_string(),
                 attr: attr.name.as_str().to_string(),
                 target,
                 kind,
+                view_call: false,
+                ty,
             });
+        }
+    }
+
+    /// The type of a name in scope, written as a declaration would, or an empty
+    /// string when it is not known.
+    fn type_to_declare(&self, value: &Expr) -> String {
+        match value {
+            Expr::Ident(name, _) => match self.env.get(name) {
+                Some(ty) if is_concrete(ty) => ty_name(ty),
+                _ => String::new(),
+            },
+            _ => String::new(),
         }
     }
 
@@ -689,6 +871,7 @@ impl Checker<'_> {
                 if is_view {
                     self.check_view_args(el, &tys);
                 } else {
+                    self.reject_bind_args(&el.content);
                     self.check_binds(el);
                 }
                 if let Some(action) = &el.action {
@@ -890,6 +1073,7 @@ impl Checker<'_> {
             // record is. Unnamed items stay as written, since a positional
             // pair may be words.
             Expr::Tuple(args, _) => {
+                self.reject_bind_args(args);
                 for arg in args {
                     if arg.name.as_ref().is_some_and(|f| f.as_str() != "kind") {
                         self.value(&arg.value);
@@ -1019,6 +1203,7 @@ impl Checker<'_> {
     /// the method against the receiver type; a plain `fn` call resolves to its
     /// declared return type.
     fn check_call(&mut self, callee: &Expr, args: &[crate::parser::ast::Arg]) -> Ty {
+        self.reject_bind_args(args);
         if let Expr::Member { base, field, span } = callee {
             let recv = self.value(base);
             // What a method of a value is called with is a value. An
@@ -1369,6 +1554,16 @@ fn plain_ty(ty: &Type) -> Ty {
 /// Whether a value of type `found` may be given where `expected` is declared.
 /// What is not known is allowed, as everywhere in this check; an `Int` goes
 /// where a `Float` is wanted.
+/// Whether two types are the same, a list's element included. An unknown
+/// element is the same as any.
+fn same_ty(a: &Ty, b: &Ty) -> bool {
+    match (a, b) {
+        (Ty::Unknown, _) | (_, Ty::Unknown) => true,
+        (Ty::List(x), Ty::List(y)) => same_ty(x, y),
+        _ => a == b,
+    }
+}
+
 fn assignable(expected: &Ty, found: &Ty) -> bool {
     match (expected, found) {
         (Ty::Unknown | Ty::Fn(..), _) | (_, Ty::Unknown | Ty::Fn(..)) | (Ty::Float, Ty::Int) => {

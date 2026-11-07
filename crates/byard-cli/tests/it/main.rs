@@ -6,6 +6,7 @@
 //! could run.
 
 mod accessibility_example;
+mod bindable_params_example;
 mod broken_app;
 mod bundle;
 mod callbacks_example;

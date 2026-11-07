@@ -35,6 +35,8 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Changed
 
 - **`byard check` no longer slows with the number of calls.** A view's body is lowered once for each way a call is written, and every call is still checked against the view's signature; a screen with 1000 calls of a button checks in 37 ms where it took 340. `byard shot` runs the same check first, and a gallery's now takes 46 ms of its 377.
+- **`byard shot` and `App::shot` skip the frames of an app at rest.** Once two frames in a row ask for no more (nothing animating, no timer or call in flight, no field being generated), the run goes to its last frame, the same picture; the gallery of 190 buttons takes 199 ms where it took 503, and 1000 buttons 604 ms where it took 4.6 s. `Shot::every_frame` (and `BYARD_SHOT_EVERY_FRAME` for the command) draws them all.
+- A font in `[assets.fonts]` is read straight into the shared buffer instead of being copied once more, which saves about 5 ms for the 15 MB Material Symbols.
 - Colour animations mix in OKLab with premultiplied alpha, so a fade to or from a transparent colour keeps the other end's hue instead of passing through grey.
 - **Named motion in the theme (RFC-0053).** `[theme.motion]` declares springs
   (`spatial_fast = { stiffness = 800, damping_ratio = 0.6 }`) and durations

@@ -36,6 +36,7 @@ pub struct Shot {
     trace: Option<std::path::PathBuf>,
     access: Option<std::path::PathBuf>,
     wall_clock: Option<String>,
+    every_frame: bool,
 }
 
 impl Shot {
@@ -49,7 +50,19 @@ impl Shot {
             trace: None,
             access: None,
             wall_clock: None,
+            every_frame: false,
         }
+    }
+
+    /// Draws every 16 ms frame up to the end, even once the app is at rest.
+    ///
+    /// By default a run that has nothing animating, no timer and no call in
+    /// flight for two frames goes straight to its last frame, which is the
+    /// same picture without the wait. This is for a test that checks that.
+    #[must_use]
+    pub const fn every_frame(mut self) -> Self {
+        self.every_frame = true;
+        self
     }
 
     /// Fixes the wall clock `now()` and `nowUtc()` read at `iso`, an ISO date
@@ -260,14 +273,7 @@ impl App {
         let mut target = Target::new(pw, ph, scale, (w, h))?;
 
         if let Some(dark) = plan.system_dark {
-            interp.dispatch_events(&[InputEvent {
-                kind: EventKind::SystemScheme,
-                pos: (0.0, 0.0),
-                delta: (0.0, 0.0),
-                payload: Some(byard_core::platform::InputPayload::Bool(dark)),
-                time_ms: 0,
-                mods: byard_core::KeyModifiers::default(),
-            }]);
+            announce_scheme(&mut interp, dark);
         }
         let mut trace = plan
             .trace
@@ -276,6 +282,7 @@ impl App {
             .transpose()
             .map_err(ByardError::Platform)?;
         let mut now = 0_u32;
+        let mut still = 0_u32;
         let mut gestures = plan.gestures.iter();
         loop {
             let mut replies = Vec::new();
@@ -321,14 +328,41 @@ impl App {
                 }
                 break;
             }
+            still = if is_busy(&interp) { 0 } else { still + 1 };
             now += 16;
-            std::thread::sleep(STEP);
+            if still >= 2 && !plan.every_frame && trace.is_none() && gestures.len() == 0 {
+                // At rest: the frames up to the end would draw what this one did.
+                now += plan.run_ms.saturating_sub(now).div_ceil(16) * 16;
+            } else {
+                std::thread::sleep(STEP);
+            }
         }
 
         let pixels = target.read();
         image::save_buffer(out.as_ref(), &pixels, pw, ph, image::ColorType::Rgba8)
             .map_err(|e| gpu(&out.as_ref().display().to_string(), e))
     }
+}
+
+/// Tells the app the system's scheme, as a window would at its start.
+fn announce_scheme(interp: &mut Interpreter, dark: bool) {
+    interp.dispatch_events(&[InputEvent {
+        kind: EventKind::SystemScheme,
+        pos: (0.0, 0.0),
+        delta: (0.0, 0.0),
+        payload: Some(byard_core::platform::InputPayload::Bool(dark)),
+        time_ms: 0,
+        mods: byard_core::KeyModifiers::default(),
+    }]);
+}
+
+/// Whether another frame could draw something this one did not: something
+/// animating, a measure to settle, a field being generated, a timer or a call
+/// that will answer.
+fn is_busy(interp: &Interpreter) -> bool {
+    interp.needs_another_frame()
+        || interp.has_background_work()
+        || interp.outstanding_continuations() > 0
 }
 
 /// The offscreen texture a shot is drawn into, and the encoder that draws it.
@@ -589,6 +623,46 @@ mod tests {
         result.unwrap();
         let text = std::fs::read_to_string(&tree).unwrap();
         assert!(text.contains("2026-11-05T09:00:00"), "{text}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A shot of an app at rest goes to its last frame; with a spring in
+    /// flight, or an `every` timer ticking, it plays the frames out. Either
+    /// way the picture is the one `every_frame` draws.
+    #[test]
+    fn skipping_idle_frames_draws_the_same_picture() {
+        let dir = std::env::temp_dir().join(format!("byard-shot-idle-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let apps = [
+            "View Main() { Text(\"still\") }\n",
+            "View Main() {\n    var on = false\n    on mount => on = true\n    \
+             Box #[bg: 0x336699, width: 160, height: 30, radius: (on ? 15 : 0) with anim.spring()] {}\n}\n",
+            "View Main() {\n    var n = 0\n    every 100ms => n++\n    Text(\"{n}\")\n}\n",
+        ];
+        for (i, source) in apps.iter().enumerate() {
+            std::fs::write(dir.join("main.byd"), source).unwrap();
+            let app = || App::new(dir.join("main.byd")).size(200, 60);
+            let (fast, slow) = (
+                dir.join(format!("fast{i}.png")),
+                dir.join(format!("slow{i}.png")),
+            );
+            let result = app().shot(&fast, &Shot::after(480));
+            if let Err(ByardError::Platform(message)) = &result {
+                if message.starts_with("no GPU") {
+                    return;
+                }
+            }
+            result.unwrap();
+            app().shot(&slow, &Shot::after(480).every_frame()).unwrap();
+            if i < 2 {
+                assert_eq!(
+                    std::fs::read(&fast).unwrap(),
+                    std::fs::read(&slow).unwrap(),
+                    "app {i} differs"
+                );
+            }
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 

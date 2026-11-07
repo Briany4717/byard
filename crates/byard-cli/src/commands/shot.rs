@@ -116,6 +116,10 @@ fn pointer_event(kind: EventKind, x: f32, y: f32, time_ms: u64) -> InputEvent {
     }
 }
 
+/// When set, `byard shot` draws every 16 ms frame up to `--at`, even once the
+/// app is at rest. The output is the same; a test compares the two.
+const SHOT_EVERY_FRAME: &str = "BYARD_SHOT_EVERY_FRAME";
+
 /// What `byard shot` was asked to render.
 pub struct ShotArgs<'a> {
     /// The project directory, `byard.toml` or `.byd`; the current project
@@ -210,8 +214,25 @@ pub fn run(args: &ShotArgs<'_>) -> Result<(), String> {
         let events = what.events(now);
         step(&mut interp, &mut frame, &mut now, &events);
     }
+    // A picture of an app at rest does not need 90 frames of it. Once two
+    // frames in a row ask for no more (no animation in flight, nothing waiting
+    // on a measure), the ones that follow would draw what these drew, so the
+    // clock goes to where the loop would have ended and the last frame is drawn
+    // there. Nothing here arms a timer or a request, so no frame can be the one
+    // something happens in. `BYARD_SHOT_EVERY_FRAME` draws them all, which is
+    // how a test checks the two agree.
+    let skip_idle = std::env::var_os(SHOT_EVERY_FRAME).is_none();
+    let mut still = 0_u32;
     while now < args.at_ms {
         step(&mut interp, &mut frame, &mut now, &[]);
+        still = if interp.needs_another_frame() || interp.has_background_work() {
+            0
+        } else {
+            still + 1
+        };
+        if skip_idle && still >= 2 && now < args.at_ms {
+            now += (args.at_ms - now).div_ceil(16) * 16;
+        }
     }
     // Once more at rest, so a mesh or an image that landed a frame late is in.
     step(&mut interp, &mut frame, &mut now, &[]);

@@ -157,6 +157,15 @@ impl VectorJit {
         self.cache_dir = Some(dir);
     }
 
+    /// Whether a field is still being generated on a worker thread: its result
+    /// arrives on a later tick, so a frame drawn now is not the last one.
+    #[must_use]
+    pub fn is_generating(&self) -> bool {
+        self.entries
+            .values()
+            .any(|e| matches!(e, CacheEntry::Pending | CacheEntry::Regenerating { .. }))
+    }
+
     /// Looks up `handle` (an SVG file path). Returns its resident atlas
     /// location if already generated; otherwise dispatches a one-shot
     /// generation task (deduped, a second miss on the same handle while one

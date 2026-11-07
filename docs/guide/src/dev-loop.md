@@ -214,6 +214,10 @@ picture. Every test of a screen can pass while the screen is wrong.
 | `--type <TEXT>` | none | Type text before the picture. Repeatable |
 | `--a11y <FILE>` | none | Write the accessibility tree as text. See [accessibility](accessibility.md) |
 
+`--at` runs 16 ms frames, but only while something moves. When two frames in a row
+ask for no more, the shot goes to its last frame, which is the picture it would
+have drawn; set `BYARD_SHOT_EVERY_FRAME=1` to draw them all.
+
 Taps are how you reach a screen that needs a press. This opens the second tab of
 an app, at logical point 120, 840, and draws it dark and wide:
 

@@ -52,6 +52,7 @@ mod seed_scheme_example;
 mod self_measurement_example;
 mod shape_morph_example;
 mod shot;
+mod shot_idle;
 mod style_states_example;
 mod text_editing_example;
 mod text_input_example;

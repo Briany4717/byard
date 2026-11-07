@@ -1301,6 +1301,14 @@ impl Interpreter {
         self.has_active_animations() || self.measure_fired
     }
 
+    /// Whether work started on another thread, a vector field being
+    /// generated, has yet to land. A host that draws one picture waits for it
+    /// rather than take the frame it is missing from.
+    #[must_use]
+    pub fn has_background_work(&self) -> bool {
+        self.vector_jit.is_generating()
+    }
+
     /// The most recently projected value of a value binding (for tests).
     #[must_use]
     pub fn binding_value(&self, s: ScopeId) -> Option<Value> {

@@ -1,0 +1,26 @@
+# Scenarios for the Counters page. `byard test` runs every file in tests/.
+view = "Counters"
+
+[[test]]
+name = "the page lists both counters at zero"
+expect = ['Button "Clicks"', 'Label "Clicks: 0"', 'Label "Taps: 0"']
+
+[[test]]
+name = "a tap counts, and only its own counter"
+steps = [
+    { tap = 'Button "Clicks"' },
+    { expect = ['Label "Clicks: 1"'] },
+    { tap = 'Button "Clicks"' },
+]
+exact = ['Label "Clicks: 2"', 'Label "Taps: 0"']
+not = ['Clicks: 0']
+
+[[test]]
+name = "a held press is not yet a count"
+steps = [{ hold = 'Button "Taps"' }, { wait = 50 }]
+expect = ['Label "Taps: 0"']
+
+[[test]]
+name = "the keyboard presses the focused button"
+steps = [{ key = "Tab" }, { key = "Space" }]
+expect = ['Label "Clicks: 1"']

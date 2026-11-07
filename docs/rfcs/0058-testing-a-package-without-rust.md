@@ -102,7 +102,8 @@ test switches::space does the same from the keyboard ... FAILED
 failures:
 
 ---- switches::space does the same from the keyboard ----
-after the last step (key Space), expected a line equal to
+after the last step (key Space):
+  expected a line equal to
     Switch "Wi-Fi" = on [focusable focused]
 the tree was:
     Label "Switches" @ 24,24 392x24
@@ -226,7 +227,8 @@ refused, as for `shot`), and a gallery is such a project.
 Output is `cargo test`'s: `running N tests`, a line `test <file>::<name> ... ok`
 or `FAILED` for each, then a `failures:` section for each failed test, then
 `test result: ok. N passed; M failed; K filtered out`. A failure names the
-test, the step (`after step 3 (tap "Switch")`, or `after the last step`), the
+test, the step (`step 3 (a check, after tap "Switch")`, `step 3 (tap "Switch")
+could not run`, or `after the last step (key Space)`), the
 unmet expectation and the whole tree at that point. The first failing check
 ends the test; all the unmet strings of that check are listed.
 

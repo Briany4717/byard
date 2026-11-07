@@ -1,0 +1,8 @@
+// A button that counts its presses, with the count beside it.
+View Counter(label: Str) {
+    var n = 0
+    Row #[gap: 12, align: center] {
+        Button(label) #[width: 120, height: 36, bg: 0x3B82F6, radius: 8] => n = n + 1
+        Text("{label}: {n}") #[color: 0xE6E1E5, size: 14, width: 160]
+    }
+}

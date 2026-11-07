@@ -1,0 +1,23 @@
+view = "Settings"
+size = "440x600"
+
+[[test]]
+name = "every switch starts off"
+exact = ['Switch "Wi-Fi" = off [focusable]', 'Switch "Bluetooth" = off [focusable]']
+
+[[test]]
+name = "a tap turns a switch on"
+steps = [{ tap = 'Switch "Wi-Fi"' }]
+# A tap also focuses the switch.
+exact = ['Switch "Wi-Fi" = on [focusable focused]', 'Switch "Bluetooth" = off [focusable]']
+
+[[test]]
+name = "the same in the dark scheme, from the keyboard"
+scheme = "dark"
+steps = [
+    { key = "Tab" },
+    { key = "Tab" },
+    { key = "Space" },
+]
+expect = ['Switch "Bluetooth" = on']
+not = ['Switch "Wi-Fi" = on']

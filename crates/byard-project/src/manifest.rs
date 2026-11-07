@@ -1289,17 +1289,73 @@ fn load_fonts(
         return Ok(Vec::new());
     };
     let mut out = Vec::with_capacity(fonts.len());
-    for (family, path) in fonts {
-        let path = path.as_str().ok_or_else(|| {
-            format!("byard.toml: [assets.fonts] `{family}` must be a string path to a font file")
-        })?;
+    for (family, entry) in fonts {
+        // `family = "path"`, or the table form `family = { path = "..",
+        // icons = true, icons_include = [..] }` (RFC-0054).
+        let (path, icons, icons_include) = match entry {
+            toml::Value::String(path) => (path.as_str(), false, Vec::new()),
+            toml::Value::Table(t) => {
+                if let Some(bad) = t
+                    .keys()
+                    .find(|k| !matches!(k.as_str(), "path" | "icons" | "icons_include"))
+                {
+                    return Err(format!(
+                        "byard.toml: [assets.fonts] `{family}` has an unknown key `{bad}`; \
+                         a font takes `path`, `icons` and `icons_include`"
+                    ));
+                }
+                let path = t.get("path").and_then(toml::Value::as_str).ok_or_else(|| {
+                    format!("byard.toml: [assets.fonts] `{family}` needs a `path` to a font file")
+                })?;
+                let icons = match t.get("icons") {
+                    None => false,
+                    Some(v) => v.as_bool().ok_or_else(|| {
+                        format!(
+                            "byard.toml: [assets.fonts] `{family}` `icons` must be true or false"
+                        )
+                    })?,
+                };
+                let include = match t.get("icons_include") {
+                    None => Vec::new(),
+                    Some(v) => v
+                        .as_array()
+                        .and_then(|a| {
+                            a.iter()
+                                .map(|n| n.as_str().map(str::to_string))
+                                .collect::<Option<Vec<_>>>()
+                        })
+                        .ok_or_else(|| {
+                            format!(
+                                "byard.toml: [assets.fonts] `{family}` `icons_include` must be a \
+                                 list of icon names"
+                            )
+                        })?,
+                };
+                if !include.is_empty() && !icons {
+                    return Err(format!(
+                        "byard.toml: [assets.fonts] `{family}` lists `icons_include` but is not \
+                         an icon font; add `icons = true`"
+                    ));
+                }
+                (path, icons, include)
+            }
+            _ => {
+                return Err(format!(
+                    "byard.toml: [assets.fonts] `{family}` must be a string path to a font file, \
+                     or a table with a `path`"
+                ));
+            }
+        };
         if in_package && !is_inside_package(path) {
             return Err(format!(
                 "byard.toml: [assets.fonts] `{family}` = {path:?} is outside the package; \
                  a package's assets must live inside it"
             ));
         }
-        out.push((family.clone(), load_font(family, path, root)?));
+        let mut font = load_font(family, path, root)?;
+        font.icons = icons;
+        font.icons_include = icons_include;
+        out.push((family.clone(), font));
     }
     Ok(out)
 }
@@ -1347,6 +1403,8 @@ fn load_font(family: &str, path: &str, project_root: &Path) -> Result<DeclaredFo
         path: path.to_string(),
         resolved: std::sync::Arc::from(resolved),
         bytes,
+        icons: false,
+        icons_include: Vec::new(),
     })
 }
 
@@ -2075,6 +2133,42 @@ mod tests {
                 .unwrap();
         assert!(theme.has_font("display"));
         assert!(!theme.has_font("sfpro"));
+    }
+
+    /// RFC-0054: the table form declares an icon font and the names the
+    /// program builds at run time.
+    #[test]
+    fn a_font_can_be_declared_as_an_icon_font() {
+        let theme = theme_of(
+            "[assets.fonts]\nsymbols = { path = \"assets/fonts/ByardIcons.ttf\", icons = true, \
+             icons_include = [\"home\"] }\nbody = \"assets/fonts/Manrope-Variable.ttf\"\n",
+        )
+        .unwrap();
+        let symbols = theme.font("symbols").unwrap();
+        assert!(symbols.icons);
+        assert_eq!(symbols.icons_include, ["home"]);
+        assert!(
+            !theme.font("body").unwrap().icons,
+            "the string form is not an icon font"
+        );
+    }
+
+    #[test]
+    fn a_misdeclared_icon_font_says_what_is_wrong() {
+        let err = theme_of(
+            "[assets.fonts]\ns = { path = \"assets/fonts/ByardIcons.ttf\", icon = true }\n",
+        )
+        .unwrap_err();
+        assert!(err.contains("unknown key `icon`"), "{err}");
+        let err = theme_of(
+            "[assets.fonts]\ns = { path = \"assets/fonts/ByardIcons.ttf\", icons_include = [\"a\"] }\n",
+        )
+        .unwrap_err();
+        assert!(err.contains("add `icons = true`"), "{err}");
+        let err = theme_of("[assets.fonts]\ns = { icons = true }\n").unwrap_err();
+        assert!(err.contains("needs a `path`"), "{err}");
+        let err = theme_of("[assets.fonts]\ns = 3\n").unwrap_err();
+        assert!(err.contains("string path"), "{err}");
     }
 
     /// The bytes are loaded, not merely named, and the family name shaping

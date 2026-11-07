@@ -461,6 +461,16 @@ impl<'a> Parser<'a> {
         let mut params = Vec::new();
         while !matches!(self.cur(), Some(Token::RParen) | None) {
             let start = self.cur_span();
+            // `bind name: Type` declares a binding (RFC-0051). `bind` alone, or
+            // before `:`, `,`, `=` or `)`, is still an ordinary name.
+            let bind = matches!(self.cur(), Some(Token::Ident(w)) if w.as_str() == "bind")
+                && !matches!(
+                    self.peek2(),
+                    Some(Token::Colon | Token::Comma | Token::RParen | Token::Eq) | None
+                );
+            if bind {
+                self.advance();
+            }
             let name = self
                 .expect_decl_name("a parameter", "a parameter name")
                 .unwrap_or_else(|| Symbol::intern(""));
@@ -479,6 +489,7 @@ impl<'a> Parser<'a> {
                 name,
                 ty,
                 default,
+                bind,
                 span: self.span_from(start),
             });
             if !self.eat(&Token::Comma) {

@@ -1,0 +1,67 @@
+// A view that binds a parameter (RFC-0051). `Switch` and `FormField` read and
+// write the caller's `var`s as their own: there is no value and callback pair,
+// no copy inside the view, and no frame in which the two disagree.
+//
+//   byard shot crates/byard-cli/examples/bindable_params --size 380x420 \
+//       --tap 105,41 --tap 100,158 --key End --key Backspace --key Backspace \
+//       -o bindable.png
+//
+// The first tap flips the Wi-Fi switch, in `Switch`; the line at the bottom,
+// in `Main`, shows it in the same frame. The rest edits the name in
+// `FormField`, which writes two of `Main`'s vars: `text` through the control and
+// `valid` from the control's `input` event. This one is the "Turn all off"
+// button, in `Main`, and both switches follow it:
+//
+//   byard shot crates/byard-cli/examples/bindable_params --size 380x420 \
+//       --tap 190,226 -o bindable-off.png
+
+View Switch(bind on: Bool, label: Str = "") {
+    Row #[gap: 12, align: center] {
+        Toggle #[bind: on, bg: 0x3B82F6, width: 52, height: 30]
+        Button(label) #[bg: 0x00000000, color: 0xFFFFFF, p: 6] => on = !on
+    }
+}
+
+// Two bindings: the text, and whether it is long enough. `valid` is written in
+// an event of the control, `text` by the control itself.
+View FormField(label: Str, bind text: Str, bind valid: Bool) {
+    Column #[gap: 4] {
+        Text(label) #[color: 0xA0A8B8, size: 13]
+        TextField #[
+            bind: text,
+            input(t) => valid = t.len > 2,
+            width: 320,
+            height: 36,
+            bg: 0x1E1E2A,
+            color: 0xFFFFFF,
+            radius: 8,
+        ]
+        Text(valid ? "" : "At least three letters") #[color: 0xFF6B6B, size: 12]
+    }
+}
+
+// A binding passed on is the same binding: three views deep, one `var`.
+View Group(bind first: Bool, bind second: Bool) {
+    Column #[gap: 4] {
+        Switch(bind: first, label: "Wi-Fi")
+        Switch(bind: second, label: "Bluetooth")
+    }
+}
+
+View Main() {
+    var wifi = false
+    var bluetooth = true
+    var name = "Ada"
+    var ok = true
+
+    Column #[bg: 0x14141C, p: 20, gap: 14, grow: 1] {
+        Group(bind first: wifi, bind second: bluetooth)
+        FormField(label: "Name", bind text: name, bind valid: ok)
+        Button("Turn all off") #[bg: 0x3B82F6, color: 0xFFFFFF, radius: 8] => {
+            wifi = false
+            bluetooth = false
+        }
+        Text("wifi={wifi}, bluetooth={bluetooth}") #[color: 0xFFFFFF, size: 13]
+        Text("name={name}, valid={ok}") #[color: 0xFFFFFF, size: 13]
+    }
+}

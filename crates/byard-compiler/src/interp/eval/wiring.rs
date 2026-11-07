@@ -20,6 +20,7 @@ use super::{Interpreter, PerfWarning};
 use crate::diagnostics::CompileError;
 use crate::interp::env::Value;
 use crate::parser::ast::{Attr, AttrKind};
+use byard_core::access::AccessRole;
 
 /// Stands in for a view whose registration went missing between checking and
 /// lowering (RFC-0039).
@@ -308,17 +309,36 @@ impl Interpreter {
         }
     }
 
-    /// Registers an element as focusable if it has a `focused:` prop attr
-    /// **or** a `focus =>`/`blur =>` handler (RFC-0012 S2), the
-    /// sugar rides `focused_sig`'s edges, so an element that only wants the
-    /// one-shot event (no bound `var`) still needs a signal for
-    /// `steal_focus` to flip. That signal is the shared sink when `focused:`
-    /// wasn't given (see `focus_sink`).
+    /// Registers an element as focusable if it has a `focused:` prop attr,
+    /// a `focus =>`/`blur =>` handler (RFC-0012 S2) **or** a role that implies
+    /// focus and a `tap` to press (RFC-0052 §2). The sugar rides
+    /// `focused_sig`'s edges, so an element that only wants the one-shot event
+    /// (no bound `var`) still needs a signal for `steal_focus` to flip. That
+    /// signal is the shared sink when `focused:` wasn't given (see
+    /// `focus_sink`).
     pub(super) fn register_focusable(
         &mut self,
         attrs: &[Attr],
         hit_rect: crate::interp::intrinsics::Rect,
         elem_idx: Option<u32>,
+    ) {
+        let role = Self::declared_role(attrs);
+        self.register_focusable_as(attrs, hit_rect, elem_idx, role);
+    }
+
+    /// The role an element's `a11y_role:` names, if it has one.
+    pub(super) fn declared_role(attrs: &[Attr]) -> Option<AccessRole> {
+        Self::enum_prop(attrs, "a11y_role").and_then(AccessRole::from_keyword)
+    }
+
+    /// [`register_focusable`](Self::register_focusable) for a caller that has
+    /// already read the element's role.
+    pub(super) fn register_focusable_as(
+        &mut self,
+        attrs: &[Attr],
+        hit_rect: crate::interp::intrinsics::Rect,
+        elem_idx: Option<u32>,
+        role: Option<AccessRole>,
     ) {
         // Without an index there is nowhere to register the focusable.
         let Some(idx) = elem_idx else {
@@ -327,9 +347,53 @@ impl Interpreter {
         let has_focus_sugar = attrs.iter().any(|a| {
             matches!(a.kind, AttrKind::Event { .. }) && matches!(a.name.as_str(), "focus" | "blur")
         });
-        if has_focus_sugar || self.resolve_focused_sig(attrs).is_some() {
-            let sig = self.focus_signal(attrs);
-            self.router.focusable(idx, hit_rect, sig);
+        let asked = has_focus_sugar || self.resolve_focused_sig(attrs).is_some();
+        // A role that implies focus is a stop only when there is something to
+        // press, as for a `Button`.
+        let pressable = role.is_some_and(Self::role_takes_focus)
+            && self
+                .router
+                .has_handler(idx, crate::interp::events::EventKind::Tap);
+        if !(asked || pressable) {
+            return;
+        }
+        let sig = self.focus_signal(attrs);
+        self.router.focusable(idx, hit_rect, sig);
+        if matches!(role, Some(AccessRole::Tab | AccessRole::RadioButton)) {
+            self.router.group_member(idx);
+        }
+        if pressable
+            || self
+                .router
+                .has_handler(idx, crate::interp::events::EventKind::Tap)
+        {
+            self.router.activate_on_key(idx, Self::keys_of(role));
+        }
+    }
+
+    /// Whether a role puts an element with a `tap` into the Tab order
+    /// (RFC-0052 §2).
+    fn role_takes_focus(role: AccessRole) -> bool {
+        matches!(
+            role,
+            AccessRole::Button
+                | AccessRole::ToggleButton
+                | AccessRole::Switch
+                | AccessRole::CheckBox
+                | AccessRole::RadioButton
+                | AccessRole::Tab
+                | AccessRole::MenuItem
+                | AccessRole::Link
+        )
+    }
+
+    /// Which of Space and Enter press an element with this role (RFC-0052 §3).
+    fn keys_of(role: Option<AccessRole>) -> crate::interp::events::ActivationKeys {
+        use crate::interp::events::ActivationKeys;
+        match role {
+            Some(AccessRole::Link) => ActivationKeys::Enter,
+            Some(AccessRole::CheckBox | AccessRole::RadioButton) => ActivationKeys::Space,
+            _ => ActivationKeys::Both,
         }
     }
 

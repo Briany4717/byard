@@ -57,6 +57,7 @@ fn state_bit(kind: StyleStateKind) -> crate::interp::events::StyleState {
         StyleStateKind::Invalid => StyleState::INVALID,
         StyleStateKind::Indeterminate => StyleState::INDETERMINATE,
         StyleStateKind::Dragging => StyleState::DRAGGING,
+        StyleStateKind::FocusVisible => StyleState::FOCUS_VISIBLE,
     }
 }
 

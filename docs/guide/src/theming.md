@@ -269,6 +269,55 @@ error[UnknownFontFamily]: no font family `display` is declared
 A token can name a family, which is the point of a type scale: a screen says `typo:
 hero` and gets the face, the size and the weight together.
 
+### Icon fonts and variation axes
+
+A variable font has more axes than weight. `variations:` sets them by their four-letter tags
+on a `Text` or a `TextField`:
+
+```byld,ignore
+Text("favorite") #[font: symbols, size: 24, variations: (FILL: 1, wght: 500, GRAD: 0, opsz: 24)]
+```
+
+An axis the font does not have is ignored by it. A value can move with `with`, like any other
+paint value, so a filled heart can spring in:
+
+```byld,ignore
+Text("favorite") #[font: symbols, variations: (FILL: liked ? 1 : 0 with anim.spring())]
+```
+
+Icon fonts such as Material Symbols are one file whose icons are ligatures: the letters
+`favorite` shape to a heart. Nothing special is needed to draw one, only the family. A name
+the font does not know draws as its letters.
+
+`wght` in `variations` is the weight. Say it there or with `weight:`, not both: an element with
+both is an error (`VariationWeightConflict`), because two numbers would fight for one axis. A
+`typo:` token's weight gives way to an explicit `wght`.
+
+Two things to know. The axes are applied when the glyphs are drawn, and the text is measured
+at the weight alone, so an axis that changes advances (`wdth`) is drawn but does not resize
+the box; icon fonts keep their advances fixed, and `FILL`, `GRAD` and `opsz` do not move them.
+And a moving axis draws its glyphs again for each new value, 1/16 apart, which is a small
+outline per icon and nothing once the value settles; it never relays out the screen. A line with `variations` is drawn glyph by glyph as small
+images, unhinted and placed on whole pixels: right for icons, so keep body text on `weight:`.
+
+Declare a font as an icon font to have `byard bundle` keep only the icons the program uses:
+
+```toml
+[assets.fonts]
+symbols = { path = "fonts/MaterialSymbolsRounded.ttf", icons = true }
+```
+
+See [shipping](shipping.md#icon-fonts). `byard check` warns, with the line, on a `Text` in an
+icon font whose name is built at run time (`IconNameNotStatic`); the bundle then ships the font
+whole unless the manifest lists them:
+
+```toml
+symbols = { path = "fonts/MaterialSymbolsRounded.ttf", icons = true, icons_include = ["favorite", "home"] }
+```
+
+`byard run` and `byard shot` load the whole font. The sample `examples/icon_font` uses a 3 KB
+stand-in and says how to point it at the real one.
+
 ## The window's icon
 
 `icon = "assets/icon.png"` in `[project]` sets the window's icon in the title bar and

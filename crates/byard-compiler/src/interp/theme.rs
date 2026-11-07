@@ -418,6 +418,12 @@ pub struct DeclaredFont {
     pub resolved: std::sync::Arc<str>,
     /// The font file's bytes, shared with every `FontSystem` that loads them.
     pub bytes: std::sync::Arc<[u8]>,
+    /// Declared as an icon font (`icons = true`, RFC-0054): its glyphs are
+    /// ligature names, and `byard bundle` keeps only the ones the program uses.
+    pub icons: bool,
+    /// Names the program builds at run time and wants kept in the bundle
+    /// (`icons_include`). Listing any silences the not-static warning.
+    pub icons_include: Vec<String>,
 }
 
 /// Color, typography, and shape design tokens for a view tree (RFC-0022 §1).

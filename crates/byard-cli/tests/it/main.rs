@@ -6,12 +6,14 @@
 //! could run.
 
 mod accessibility_example;
+mod bindable_params_example;
 mod broken_app;
 mod bundle;
 mod callbacks_example;
 mod checkbox_example;
 mod clock_example;
 mod collapse_header_example;
+mod composed_controls_example;
 mod corner_smoothing_example;
 mod data_ops_example;
 mod diagnostics_shape;
@@ -23,6 +25,7 @@ mod frosted_glass_example;
 mod gradient_kinds_example;
 mod grid_example;
 mod guide;
+mod icon_font_bundle;
 mod incremental_example;
 mod keyboard_focus_example;
 mod library_check;

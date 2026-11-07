@@ -111,6 +111,12 @@ impl Interpreter {
         // and the token's weight was being dropped on the way through while
         // only its size survived.
         if !attrs.iter().any(|a| a.name.as_str() == "weight") {
+            // RFC-0054: a `wght` among the variations is the weight, so
+            // measuring and drawing read the same number.
+            if let Some(w) = self.variation_value(attrs, *b"wght") {
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                return w.round().clamp(100.0, 900.0) as u16;
+            }
             if let Some(w) = self.typo_weight(attrs) {
                 return w;
             }
@@ -139,6 +145,47 @@ impl Interpreter {
         }
     }
 
+    /// The `variations:` of a text-bearing element (RFC-0054), sorted by tag,
+    /// or `None` when it sets none.
+    pub(super) fn resolve_variations(
+        &mut self,
+        attrs: &[Attr],
+    ) -> Option<byard_core::frame::Variations> {
+        let args = Self::variation_args(attrs)?;
+        let mut out: Vec<([u8; 4], f32)> = args
+            .iter()
+            .filter_map(|a| {
+                let tag: [u8; 4] = a.name.as_ref()?.as_str().as_bytes().try_into().ok()?;
+                Some((tag, self.eval_num(&a.value)))
+            })
+            .collect();
+        if out.is_empty() {
+            return None;
+        }
+        out.sort_by_key(|(t, _)| *t);
+        Some(out.into())
+    }
+
+    /// One axis of the element's `variations:`, if it sets it.
+    fn variation_value(&mut self, attrs: &[Attr], tag: [u8; 4]) -> Option<f32> {
+        let arg = Self::variation_args(attrs)?.iter().find(|a| {
+            a.name
+                .as_ref()
+                .is_some_and(|n| n.as_str().as_bytes() == tag)
+        })?;
+        let value = arg.value.clone();
+        Some(self.eval_num(&value))
+    }
+
+    fn variation_args(attrs: &[Attr]) -> Option<&[crate::parser::ast::Arg]> {
+        attrs.iter().find_map(|a| match &a.kind {
+            AttrKind::Prop {
+                value: Expr::Tuple(args, _),
+            } if a.name.as_str() == "variations" => Some(args.as_slice()),
+            _ => None,
+        })
+    }
+
     /// The attributes that describe *type* rather than *box*, copied so a
     /// wrapper element can hand them to the text it contains.
     ///
@@ -146,7 +193,16 @@ impl Interpreter {
     /// a text-bearing widget. A widget that wraps its label in a box has to
     /// forward them or accept them into a void.
     pub(super) fn text_shaping_attrs(attrs: &[Attr]) -> Vec<Attr> {
-        const TYPE_PROPS: &[&str] = &["typo", "size", "weight", "font", "color", "align", "wrap"];
+        const TYPE_PROPS: &[&str] = &[
+            "typo",
+            "size",
+            "weight",
+            "font",
+            "variations",
+            "color",
+            "align",
+            "wrap",
+        ];
         attrs
             .iter()
             .filter(|a| TYPE_PROPS.contains(&a.name.as_str()))
@@ -284,18 +340,26 @@ impl Interpreter {
             }
             _ => None,
         }));
-        Self::walk_font_members(&view.body, &declared, &mut bound, &mut self.errors);
+        let icons: Vec<String> = self
+            .theme
+            .fonts()
+            .iter()
+            .filter(|(_, f)| f.icons && f.icons_include.is_empty())
+            .map(|(n, _)| n.clone())
+            .collect();
+        Self::walk_font_members(&view.body, &declared, &icons, &mut bound, &mut self.errors);
     }
 
     fn walk_font_members(
         members: &[Member],
         declared: &[String],
+        icons: &[String],
         bound: &mut Vec<String>,
         errors: &mut Vec<CompileError>,
     ) {
         for member in members {
             match member {
-                Member::Element(el) => Self::walk_font_element(el, declared, bound, errors),
+                Member::Element(el) => Self::walk_font_element(el, declared, icons, bound, errors),
                 Member::For {
                     var, index, body, ..
                 } => {
@@ -307,16 +371,16 @@ impl Interpreter {
                     if let Some(i) = index {
                         bound.push(i.as_str().to_string());
                     }
-                    Self::walk_font_members(body, declared, bound, errors);
+                    Self::walk_font_members(body, declared, icons, bound, errors);
                     bound.truncate(depth);
                 }
                 Member::Route { body, .. } => {
-                    Self::walk_font_members(body, declared, bound, errors);
+                    Self::walk_font_members(body, declared, icons, bound, errors);
                 }
                 Member::When { then, els, .. } => {
-                    Self::walk_font_members(then, declared, bound, errors);
+                    Self::walk_font_members(then, declared, icons, bound, errors);
                     if let Some(e) = els {
-                        Self::walk_font_members(e, declared, bound, errors);
+                        Self::walk_font_members(e, declared, icons, bound, errors);
                     }
                 }
                 _ => {}
@@ -324,12 +388,43 @@ impl Interpreter {
         }
     }
 
+    /// RFC-0054: `weight:` beside a `wght` variation fights for one axis, and
+    /// a `Text` in an icon font with content the build cannot read is
+    /// advice that the whole font will be shipped.
+    fn check_variations(el: &ElementNode, icons: &[String], errors: &mut Vec<CompileError>) {
+        let sets_wght = el.attrs.iter().any(|a| match &a.kind {
+            AttrKind::Prop {
+                value: Expr::Tuple(args, _),
+            } => {
+                a.name.as_str() == "variations"
+                    && args
+                        .iter()
+                        .any(|g| g.name.as_ref().is_some_and(|n| n.as_str() == "wght"))
+            }
+            _ => false,
+        });
+        if sets_wght && el.attrs.iter().any(|a| a.name.as_str() == "weight") {
+            errors.push(CompileError::VariationWeightConflict { span: el.span });
+        }
+        if icons.is_empty() {
+            return;
+        }
+        if let Some(family) = crate::icons::dynamic_icon_text(el, icons) {
+            errors.push(CompileError::IconNameNotStatic {
+                span: el.span,
+                family: family.clone(),
+            });
+        }
+    }
+
     fn walk_font_element(
         el: &ElementNode,
         declared: &[String],
+        icons: &[String],
         bound: &mut Vec<String>,
         errors: &mut Vec<CompileError>,
     ) {
+        Self::check_variations(el, icons, errors);
         for attr in &el.attrs {
             if attr.name.as_str() != "font" {
                 continue;
@@ -365,7 +460,7 @@ impl Interpreter {
                     .map(str::to_string),
             });
         }
-        Self::walk_font_members(&el.children, declared, bound, errors);
+        Self::walk_font_members(&el.children, declared, icons, bound, errors);
     }
 
     /// Installs `theme` as the active design-token theme and provides it as the

@@ -132,6 +132,10 @@ fn registry_entry(
     registry: &str,
     version: Option<&str>,
 ) -> Result<String, String> {
+    // A directory is written relative to the project, whatever the shell's
+    // directory was and however it was spelled, so `byard.toml` and the lock
+    // mean the same thing on another machine (RFC-0056).
+    let registry = &portable_registry(project_root, registry)?;
     let requirement = if let Some(req) = version {
         semver::VersionReq::parse(req)
             .map_err(|e| format!("`--version {req}` is not a version requirement: {e}"))?;
@@ -155,6 +159,73 @@ fn registry_entry(
     Ok(format!(
         "{{ registry = {registry:?}, version = {requirement:?} }}"
     ))
+}
+
+/// `registry` as `byard.toml` should say it: a URL as given, a directory
+/// relative to `project_root`. A directory on another root (another drive)
+/// has no relative form and stays as given.
+fn portable_registry(project_root: &Path, registry: &str) -> Result<String, String> {
+    if matches!(
+        crate::manifest::RegistryLocation::parse(registry),
+        crate::manifest::RegistryLocation::Http(_)
+    ) {
+        return Ok(registry.to_string());
+    }
+    let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
+    let at = normalised(&cwd.join(registry));
+    let at = at.canonicalize().unwrap_or(at);
+    let root = project_root
+        .canonicalize()
+        .unwrap_or_else(|_| project_root.to_path_buf());
+    Ok(relative_to(&root, &at).map_or_else(
+        || registry.to_string(),
+        |rel| rel.to_string_lossy().replace('\\', "/"),
+    ))
+}
+
+/// `path` without `.` and `x/..` parts, for a directory that may not exist yet.
+fn normalised(path: &Path) -> std::path::PathBuf {
+    use std::path::Component;
+    let mut out = std::path::PathBuf::new();
+    for c in path.components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !out.pop() {
+                    out.push("..");
+                }
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
+/// `target` as a path from `base`, both absolute: `../registry`, `.`.
+fn relative_to(base: &Path, target: &Path) -> Option<std::path::PathBuf> {
+    use std::path::Component;
+    let (b, t): (Vec<_>, Vec<_>) = (base.components().collect(), target.components().collect());
+    let common = b.iter().zip(&t).take_while(|(x, y)| x == y).count();
+    // Nothing shared but the root: another drive, or no relative form worth
+    // writing.
+    if common == 0
+        || b[common..]
+            .iter()
+            .any(|c| matches!(c, Component::ParentDir))
+    {
+        return None;
+    }
+    let mut out = std::path::PathBuf::new();
+    for _ in &b[common..] {
+        out.push("..");
+    }
+    for c in &t[common..] {
+        out.push(c.as_os_str());
+    }
+    if out.as_os_str().is_empty() {
+        out.push(".");
+    }
+    Some(out)
 }
 
 fn git_entry(url: &str, tag: Option<&str>, rev: Option<&str>) -> Result<String, String> {
@@ -216,6 +287,24 @@ mod tests {
         assert!(validate_dep_name("Material").is_err());
         assert!(validate_dep_name("my-kit").is_err());
         assert!(validate_dep_name("").is_err());
+    }
+
+    #[test]
+    fn a_path_is_written_relative_to_the_project() {
+        let rel = |base: &str, target: &str| relative_to(Path::new(base), Path::new(target));
+        assert_eq!(
+            rel("/w/app", "/w/registry"),
+            Some(std::path::PathBuf::from("../registry"))
+        );
+        assert_eq!(
+            rel("/w/app", "/w/app/vendor/reg"),
+            Some(std::path::PathBuf::from("vendor/reg"))
+        );
+        assert_eq!(rel("/w/app", "/w/app"), Some(std::path::PathBuf::from(".")));
+        assert_eq!(
+            rel("/a/b/c", "/x"),
+            Some(std::path::PathBuf::from("../../../x"))
+        );
     }
 
     #[test]

@@ -156,7 +156,11 @@ pub fn declared_assets(root: &Path) -> Result<Vec<(String, PathBuf)>, ProjectErr
 /// documentation, which is shipped but not pinned.
 pub fn publishable_files(root: &Path) -> Result<Vec<(String, PathBuf)>, ProjectError> {
     let mut files = collect_byd_files(root)?;
-    files.push(("byard.toml".to_string(), root.join("byard.toml")));
+    // A package without a manifest (a bare directory of `.byd` files as a git
+    // dependency) has none to carry; `publish` needs one and says so itself.
+    if root.join("byard.toml").exists() {
+        files.push(("byard.toml".to_string(), root.join("byard.toml")));
+    }
     files.extend(declared_assets(root)?);
     let mut entries: Vec<PathBuf> = std::fs::read_dir(root)
         .map_err(|e| ProjectError::io(root, e))?
@@ -320,7 +324,8 @@ pub struct LockedPackage {
     /// The exact version a registry requirement resolved to (empty for path
     /// and git sources).
     pub version: String,
-    /// `sha256:<hex>` over the package contents.
+    /// `sha256:<hex>` over the package contents. Empty for a path source,
+    /// which is the files on disk and is not pinned (RFC-0056).
     pub checksum: String,
 }
 
@@ -359,6 +364,7 @@ impl Lockfile {
                         })
                 };
                 let mut source = get("source")?;
+                let is_path = source.starts_with("path+");
                 let mut version = entry
                     .get("version")
                     .and_then(|v| v.as_str())
@@ -383,7 +389,13 @@ impl Lockfile {
                         .unwrap_or("")
                         .to_string(),
                     version,
-                    checksum: get("checksum")?,
+                    // A path source is not pinned: an old lock that has one
+                    // is read and the pin ignored, any other source needs it.
+                    checksum: if is_path {
+                        String::new()
+                    } else {
+                        get("checksum")?
+                    },
                 });
             }
         }
@@ -411,7 +423,9 @@ impl Lockfile {
             if !p.version.is_empty() {
                 let _ = writeln!(out, "version = {:?}", p.version);
             }
-            let _ = writeln!(out, "checksum = {:?}", p.checksum);
+            if !p.checksum.is_empty() {
+                let _ = writeln!(out, "checksum = {:?}", p.checksum);
+            }
         }
         let path = project_root.join("byard.lock");
         std::fs::write(&path, out).map_err(|e| ProjectError::io(&path, e))
@@ -583,27 +597,107 @@ pub fn fetch_git(
         Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
     };
 
-    match reference {
-        GitRef::Tag(tag) => {
-            run(
-                &[
-                    "clone",
-                    "--depth",
-                    "1",
-                    "--branch",
-                    tag,
-                    url,
-                    &dest.to_string_lossy(),
-                ],
-                None,
-            )?;
+    // Cloned beside the destination, cut down to what `byard publish` would
+    // archive, and only then renamed into place: a failure part way never
+    // leaves a directory that looks fetched, and the cache never holds the
+    // gallery, the CI files or the fonts the package does not declare.
+    let clone = sibling(dest, "clone");
+    let staging = sibling(dest, "partial");
+    let _ = std::fs::remove_dir_all(&clone);
+    let _ = std::fs::remove_dir_all(&staging);
+    let cut = || -> Result<String, ProjectError> {
+        match reference {
+            GitRef::Tag(tag) => {
+                run(
+                    &[
+                        "clone",
+                        "--depth",
+                        "1",
+                        "--branch",
+                        tag,
+                        url,
+                        &clone.to_string_lossy(),
+                    ],
+                    None,
+                )?;
+            }
+            GitRef::Rev(rev) => {
+                run(&["clone", url, &clone.to_string_lossy()], None)?;
+                run(&["checkout", "--detach", rev], Some(&clone))?;
+            }
         }
-        GitRef::Rev(rev) => {
-            run(&["clone", url, &dest.to_string_lossy()], None)?;
-            run(&["checkout", "--detach", rev], Some(dest))?;
+        let commit = run(&["rev-parse", "HEAD"], Some(&clone))?;
+        copy_publishable(&clone, &staging)?;
+        Ok(commit)
+    };
+    let result = cut();
+    let _ = std::fs::remove_dir_all(&clone);
+    let commit = match result {
+        Ok(commit) => commit,
+        Err(e) => {
+            let _ = std::fs::remove_dir_all(&staging);
+            return Err(e);
         }
+    };
+    // The copy is not a repository, so the commit is kept beside it.
+    let note = commit_note(dest);
+    std::fs::write(&note, &commit).map_err(|e| ProjectError::io(&note, e))?;
+    std::fs::rename(&staging, dest).map_err(|e| ProjectError::io(dest, e))?;
+    Ok(commit)
+}
+
+/// `dest` with `.<what>` added to its name (not replacing an extension).
+fn sibling(dest: &Path, what: &str) -> PathBuf {
+    let mut name = dest.as_os_str().to_owned();
+    name.push(format!(".{what}"));
+    PathBuf::from(name)
+}
+
+/// The file beside a cached git checkout that records the commit it is.
+fn commit_note(dest: &Path) -> PathBuf {
+    sibling(dest, "commit")
+}
+
+/// The exact commit of a git checkout already in the cache: from the note
+/// beside it, or from `.git` for a whole clone made before the cache was cut
+/// down.
+pub fn cached_git_commit(dest: &Path) -> Result<String, ProjectError> {
+    let note = commit_note(dest);
+    if let Ok(commit) = std::fs::read_to_string(&note) {
+        return Ok(commit.trim().to_string());
     }
-    run(&["rev-parse", "HEAD"], Some(dest))
+    let out = std::process::Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(dest)
+        .output()
+        .map_err(|e| ProjectError::fetch(None, dest.display().to_string(), e.to_string()))?;
+    let commit = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if !out.status.success() || commit.is_empty() {
+        return Err(ProjectError::fetch(
+            None,
+            dest.display().to_string(),
+            format!(
+                "the cached checkout `{}` does not say which commit it is\n\
+                 hint: delete it and run `byard get`",
+                dest.display()
+            ),
+        ));
+    }
+    Ok(commit)
+}
+
+/// Copies the files `byard publish` would archive from `root` into `into`,
+/// the same list ([`publishable_files`]) and not a second one, so the copy
+/// has the checksum of the package.
+fn copy_publishable(root: &Path, into: &Path) -> Result<(), ProjectError> {
+    for (rel, path) in publishable_files(root)? {
+        let target = into.join(&rel);
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| ProjectError::io(parent, e))?;
+        }
+        std::fs::copy(&path, &target).map_err(|e| ProjectError::io(&path, e))?;
+    }
+    std::fs::create_dir_all(into).map_err(|e| ProjectError::io(into, e))
 }
 
 // ── Registry (D-H, D-K) ───────────────────────────────────────────────────────

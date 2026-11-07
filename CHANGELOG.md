@@ -12,6 +12,10 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A control's states written in the control.** `on hover { … }`, `on pressed { … }` and `on focus_visible { … }` can be written inside an element, among its children, as well as in a `style`. A state that animates an attribute with `with` animates it back when the state ends, so a pressed corner springs open on release without a `with` on the resting value. A held Space or Enter now shows `on pressed`, as a press of the pointer does. RFC-0059. See `examples/interaction_styles`.
+- **`outline`, `outline_width` and `outline_offset`.** A ring drawn outside the element's shape, following `radius`, taking no layout room and animating with `with`: a focus ring that no longer needs a sibling and a `var`.
+- **`overlay`.** A colour or gradient drawn over `bg` and under the children, clipped to the element's shape, and animated with `with`: the state layer of a Material control without a wrapping view.
+- **`a11y_role` from a value.** `a11y_role: toggle ? toggle_button : button`, a `let` or a parameter holding a role as text, so one root can be a toggle and a plain button. A word that is no role is still an error that names the closest one.
 - **`shadow` from a `let`, a `?:` or with a `with`.** A list of shadow tuples kept in a `let`, chosen between with `?:`, or followed by `with` is drawn, and a `with` moves it; a value that is no shadow is an error.
 - **`shrink` on every flex child.** `shrink: 0` keeps a fixed-size child, such as a 24 wide icon beside a growing sibling, from being squeezed. It is `1` by default, and a `width` is still a size to start from and not a floor.
 - **`align_self` on every flex child** (`start`, `center`, `end`, `stretch`), to place one child across the axis whatever its parent's `align` says.

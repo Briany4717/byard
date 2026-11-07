@@ -397,11 +397,12 @@ pub struct EventRouter {
     /// Whether the element that has focus got it by the keyboard (RFC-0052
     /// §4). Gesture state like `focused`, kept across the render rebuild.
     focus_visible: bool,
-    /// Whether an activation key is held down since it last fired. A held key
-    /// delivers `KeyDown` again and again; it presses a button once, as a held
-    /// mouse button does, and is armed again by the `KeyUp`. Gesture state, kept
-    /// across the render rebuild.
-    activation_held: bool,
+    /// The element an activation key is held down on since it last fired. A held
+    /// key delivers `KeyDown` again and again; it presses a button once, as a
+    /// held mouse button does, and is armed again by the `KeyUp`. While it is
+    /// held the element reports `PRESSED`, as it does for a pointer press
+    /// (RFC-0059). Gesture state, kept across the render rebuild.
+    activation_held: Option<u32>,
 }
 
 impl EventRouter {
@@ -659,7 +660,9 @@ impl EventRouter {
         if self.hovered == Some(elem) {
             s.insert(StyleState::HOVER);
         }
-        if self.down.as_ref().and_then(|d| d.elem) == Some(elem) {
+        if self.down.as_ref().and_then(|d| d.elem) == Some(elem)
+            || self.activation_held == Some(elem)
+        {
             s.insert(StyleState::PRESSED);
         }
         if self.focused == Some(elem) {
@@ -1057,7 +1060,8 @@ impl EventRouter {
                     // once per press however long the key is held.
                     if matches!(key.as_str(), " " | "Space" | "Spacebar" | "Enter") {
                         if let Some(focused) = self.focused.filter(|&f| self.activates(f, key)) {
-                            if !std::mem::replace(&mut self.activation_held, true) {
+                            if self.activation_held.is_none() {
+                                self.activation_held = Some(focused);
                                 self.fire_on_elem(ctx, Some(focused), EventKind::Tap, ev.pos, None);
                             }
                             return;
@@ -1096,7 +1100,7 @@ impl EventRouter {
             EventKind::KeyUp => {
                 if let Some(Value::Str(key)) = &ev.value {
                     if matches!(key.as_str(), " " | "Space" | "Spacebar" | "Enter") {
-                        self.activation_held = false;
+                        self.activation_held = None;
                     }
                 }
                 self.fire_focused(ctx, EventKind::KeyUp, ev.value.as_ref());

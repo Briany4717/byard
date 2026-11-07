@@ -236,6 +236,13 @@ const DECORATION: &[(&str, PropDef)] = &[
     ("opacity", pnt(PropType::Float)),
     ("border", pnt(PropType::Color)),
     ("border_width", pnt(PropType::Int)),
+    // RFC-0059: a ring drawn *outside* the shape (it follows `radius`, takes no
+    // layout room and animates under `with`), and a colour or gradient drawn
+    // over `bg` and under the children, clipped to the shape: a state layer.
+    ("outline", pnt(PropType::Color)),
+    ("outline_width", pnt(PropType::Int)),
+    ("outline_offset", pnt(PropType::Int)),
+    ("overlay", pnt(PropType::Color)),
     ("shadow", pnt(PropType::Str)),
     // RFC-0001 §3.1: the `DecoratedBox` pipeline's declared remit includes
     // gradients. `gradient` is a named tuple (validated at lower time, like
@@ -1661,6 +1668,11 @@ fn check_value_type(ty: PropType, value: &Expr) -> Option<CompileError> {
                     ),
                 })
             }
+        }
+        // A conditional of keywords (`a11y_role: on ? toggle_button : button`):
+        // each branch is a keyword of its own, so each is held to the set.
+        (PropType::Enum(_), Expr::Ternary { then, els, .. }) => {
+            check_value_type(ty, then).or_else(|| check_value_type(ty, els))
         }
         _ => None,
     }

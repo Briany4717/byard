@@ -190,6 +190,517 @@ fn approx(a: f32, b: f32) -> bool {
     (a - b).abs() < 0.01
 }
 
+// ── outline ─────────────────────────────────────────────────────────────
+
+const OUTLINED: &str = "View Main() { Column #[width: 400, p: 20] { \
+    Box #[bg: 0x6750A4, radius: 10, width: 100, height: 40, \
+          outline: 0xFF0000, outline_width: 3, outline_offset: 2] {} } }";
+
+#[test]
+fn an_outline_is_a_ring_outside_the_shape_that_follows_the_radius() {
+    let app = App::new(OUTLINED);
+    let body = app.boxed(100.0, 40.0);
+    let ring = app
+        .decorated()
+        .into_iter()
+        .map(|(d, _)| d)
+        .find(|d| d.border_width > 0.0)
+        .expect("a ring is drawn");
+    // Offset 2 and width 3 put the ring's outer edge 5 outside the box.
+    assert!(
+        approx(ring.base.rect[0], body.rect[0] - 5.0),
+        "{:?}",
+        ring.base.rect
+    );
+    assert!(
+        approx(ring.base.rect[1], body.rect[1] - 5.0),
+        "{:?}",
+        ring.base.rect
+    );
+    assert!(approx(ring.base.rect[2], 110.0), "{:?}", ring.base.rect);
+    assert!(approx(ring.base.rect[3], 50.0), "{:?}", ring.base.rect);
+    assert!(approx(ring.border_width, 3.0));
+    // The radius 10 grows with the offset and the width.
+    assert!(
+        ring.base.radii.iter().all(|r| approx(*r, 15.0)),
+        "{:?}",
+        ring.base.radii
+    );
+    // Red, and nothing inside it: the interior is transparent.
+    assert!(ring.border_color[0] > 0.9 && ring.border_color[3] > 0.99);
+    assert_eq!(ring.base.color, [0.0; 4]);
+}
+
+#[test]
+fn an_outline_takes_no_room_in_layout() {
+    let plain = "View Main() { Column #[width: 400, p: 20, gap: 8] { \
+        Box #[bg: 0x6750A4, radius: 10, width: 100, height: 40] {} \
+        Box #[bg: 0x445566, width: 100, height: 40] {} } }";
+    let ringed = "View Main() { Column #[width: 400, p: 20, gap: 8] { \
+        Box #[bg: 0x6750A4, radius: 10, width: 100, height: 40, \
+              outline: 0xFF0000, outline_width: 6, outline_offset: 6] {} \
+        Box #[bg: 0x445566, width: 100, height: 40] {} } }";
+    let a: Vec<[f32; 4]> = App::new(plain)
+        .frame
+        .instances()
+        .iter()
+        .map(|b| b.rect)
+        .collect();
+    let b: Vec<[f32; 4]> = App::new(ringed)
+        .frame
+        .instances()
+        .iter()
+        .map(|b| b.rect)
+        .collect();
+    assert_eq!(a, b);
+}
+
+#[test]
+fn a_square_element_has_a_square_ring_and_the_width_defaults_to_two() {
+    let app = App::new(
+        "View Main() { Column #[width: 400, p: 20] { \
+         Box #[bg: 0x6750A4, width: 100, height: 40, outline: 0xFF0000] {} } }",
+    );
+    let ring = app
+        .decorated()
+        .into_iter()
+        .map(|(d, _)| d)
+        .find(|d| d.border_width > 0.0)
+        .expect("a ring");
+    assert!(approx(ring.border_width, 2.0));
+    assert!(
+        ring.base.radii.iter().all(|r| *r == 0.0),
+        "{:?}",
+        ring.base.radii
+    );
+    assert!(approx(ring.base.rect[2], 104.0), "{:?}", ring.base.rect);
+}
+
+#[test]
+fn a_negative_offset_draws_the_ring_inside() {
+    let app = App::new(
+        "View Main() { Column #[width: 400, p: 20] { \
+         Box #[bg: 0x6750A4, radius: 8, width: 100, height: 40, \
+               outline: 0xFF0000, outline_width: 2, outline_offset: -4] {} } }",
+    );
+    let ring = app
+        .decorated()
+        .into_iter()
+        .map(|(d, _)| d)
+        .find(|d| d.border_width > 0.0)
+        .expect("a ring");
+    assert!(approx(ring.base.rect[2], 96.0), "{:?}", ring.base.rect);
+    assert!(approx(ring.base.rect[3], 36.0), "{:?}", ring.base.rect);
+    assert!(
+        ring.base.radii.iter().all(|r| approx(*r, 6.0)),
+        "{:?}",
+        ring.base.radii
+    );
+}
+
+#[test]
+fn a_transparent_outline_draws_nothing() {
+    let app = App::new(
+        "View Main() { Column #[width: 400, p: 20] { \
+         Box #[bg: 0x6750A4, width: 100, height: 40, outline: 0x00FF0000, outline_width: 3] {} } }",
+    );
+    assert!(app.decorated().is_empty(), "{:?}", app.decorated());
+}
+
+#[test]
+fn an_element_with_no_outline_or_overlay_draws_as_it_did() {
+    let app = App::new(
+        "View Main() { Column #[width: 400, p: 20] { \
+         Box #[bg: 0x6750A4, radius: 10, width: 100, height: 40] {} } }",
+    );
+    assert!(app.decorated().is_empty());
+    assert_eq!(app.frame.instances().len(), 1, "just the box");
+}
+
+#[test]
+fn outline_width_and_colour_animate() {
+    let mut app = App::new(
+        "View Main() { var on: Bool = false \
+         Column #[width: 400, p: 20] { \
+         Box #[bg: 0x6750A4, radius: 8, width: 100, height: 40, \
+               outline: on ? 0xFF0000 : 0x00FF0000 with anim.linear(1000), \
+               outline_width: on ? 6 : 2 with anim.linear(1000)] {} } }",
+    );
+    assert!(app.decorated().is_empty(), "invisible at rest");
+    app.set_bool("on", true);
+    app.wait(500);
+    let ring = app
+        .decorated()
+        .into_iter()
+        .map(|(d, _)| d)
+        .find(|d| d.border_width > 0.0)
+        .expect("fading in");
+    assert!(
+        (3.0..5.0).contains(&ring.border_width),
+        "{}",
+        ring.border_width
+    );
+    assert!(
+        (0.2..0.8).contains(&ring.border_color[3]),
+        "{:?}",
+        ring.border_color
+    );
+    app.wait(1500);
+    let ring = app
+        .decorated()
+        .into_iter()
+        .map(|(d, _)| d)
+        .find(|d| d.border_width > 0.0)
+        .unwrap();
+    assert!(approx(ring.border_width, 6.0));
+    assert!(ring.border_color[3] > 0.99);
+}
+
+// ── overlay ─────────────────────────────────────────────────────────────
+
+const TINTED: &str = "View Main() { Column #[width: 400, p: 20] { \
+    Box #[bg: 0x6750A4, radius: 12, width: 100, height: 40, overlay: 0x40FFFFFF] { \
+        Box #[bg: 0x112233, width: 10, height: 10] {} } } }";
+
+#[test]
+fn an_overlay_is_drawn_over_the_fill_and_under_the_children() {
+    let app = App::new(TINTED);
+    let body = app.boxed(100.0, 40.0);
+    let child = app.boxed(10.0, 10.0);
+    let tint = app
+        .decorated()
+        .into_iter()
+        .find(|(d, _)| d.base.color[3] > 0.0)
+        .expect("an overlay is drawn");
+    let (tint, depth) = tint;
+    assert_eq!(
+        tint.base.rect, body.rect,
+        "clipped to the element's own shape"
+    );
+    assert!(
+        tint.base.radii.iter().all(|r| approx(*r, 12.0)),
+        "{:?}",
+        tint.base.radii
+    );
+    assert!(
+        (tint.base.color[3] - 64.0 / 255.0).abs() < 0.01,
+        "{:?}",
+        tint.base.color
+    );
+    // Later is nearer (a smaller depth): the fill, the tint, the child.
+    let depths = app.frame.solid_depths();
+    let at = |rect: [f32; 4]| {
+        let i = app
+            .frame
+            .instances()
+            .iter()
+            .position(|b| b.rect.iter().zip(rect).all(|(a, b)| approx(*a, b)))
+            .unwrap();
+        depths[i]
+    };
+    assert!(at(body.rect) > depth, "the tint is nearer than the fill");
+    assert!(depth > at(child.rect), "the child is nearer than the tint");
+}
+
+#[test]
+fn a_transparent_overlay_draws_nothing() {
+    let app = App::new(
+        "View Main() { Column #[width: 400, p: 20] { \
+         Box #[bg: 0x6750A4, width: 100, height: 40, overlay: 0x00FFFFFF] {} } }",
+    );
+    assert!(app.decorated().is_empty());
+}
+
+#[test]
+fn an_overlay_can_be_a_gradient() {
+    let app = App::new(
+        "View Main() { Column #[width: 400, p: 20] { \
+         Box #[bg: 0x6750A4, radius: 8, width: 100, height: 40, \
+               overlay: (angle: 90deg, from: 0x00FFFFFF, to: 0x80FFFFFF)] {} } }",
+    );
+    let (tint, _) = app
+        .decorated()
+        .into_iter()
+        .find(|(d, _)| d.gradient.is_some())
+        .expect("a gradient overlay");
+    assert!(tint.gradient.unwrap().to[3] > 0.4);
+}
+
+#[test]
+fn an_overlay_fades_with_with() {
+    let mut app = App::new(
+        "View Main() { var on: Bool = false \
+         Column #[width: 400, p: 20] { \
+         Box #[bg: 0x6750A4, width: 100, height: 40, \
+               overlay: on ? 0xFFFFFFFF : 0x00FFFFFF with anim.linear(1000)] {} } }",
+    );
+    app.set_bool("on", true);
+    app.wait(500);
+    let alpha = |app: &App| {
+        app.decorated()
+            .into_iter()
+            .map(|(d, _)| d.base.color[3])
+            .fold(0.0_f32, f32::max)
+    };
+    let mid = alpha(&app);
+    assert!((0.2..0.8).contains(&mid), "mid-way, got {mid}");
+    app.wait(1500);
+    assert!(alpha(&app) > 0.99);
+}
+
+// ── state blocks in the body ────────────────────────────────────────────
+
+const PILL: &str = "View Main() { var n = 0 \
+    Column #[width: 400, p: 20] { \
+    Box #[bg: 0x6750A4, radius: 20, width: 120, height: 40, a11y_role: button, tap => n += 1] { \
+        on hover { overlay: 0x14FFFFFF } \
+        on pressed { overlay: 0x1AFFFFFF, radius: 8 } \
+        on focus_visible { outline: 0xD0BCFF, outline_width: 3, outline_offset: 2 } \
+    } } }";
+
+fn overlay_alpha(app: &App) -> f32 {
+    app.decorated()
+        .into_iter()
+        .filter(|(d, _)| d.border_width == 0.0)
+        .map(|(d, _)| d.base.color[3])
+        .fold(0.0_f32, f32::max)
+}
+
+fn has_ring(app: &App) -> bool {
+    app.decorated().iter().any(|(d, _)| d.border_width > 0.0)
+}
+
+#[test]
+fn hover_press_and_focus_blocks_in_the_body_style_the_element() {
+    let mut app = App::new(PILL);
+    assert_eq!(overlay_alpha(&app), 0.0);
+    let at = centre(&app, 120.0, 40.0);
+
+    app.hover(at);
+    assert!(
+        (overlay_alpha(&app) - 20.0 / 255.0).abs() < 0.01,
+        "hover tint"
+    );
+
+    app.press(at);
+    assert!(
+        (overlay_alpha(&app) - 26.0 / 255.0).abs() < 0.01,
+        "pressed tint wins"
+    );
+    assert!(
+        approx(app.boxed(120.0, 40.0).radii[0], 8.0),
+        "pressed radius"
+    );
+
+    app.release(at);
+    assert!(
+        approx(app.boxed(120.0, 40.0).radii[0], 20.0),
+        "back to rest"
+    );
+    assert!(!has_ring(&app), "a pointer press is not focus_visible");
+    assert_eq!(app.int("n"), 1);
+
+    app.hover((0.0, 0.0));
+    assert_eq!(overlay_alpha(&app), 0.0, "the pointer left");
+}
+
+#[test]
+fn tab_focus_draws_the_ring_and_a_tap_does_not() {
+    let mut app = App::new(PILL);
+    assert!(!has_ring(&app));
+    app.key("Tab");
+    assert!(has_ring(&app), "Tab shows the ring");
+    let ring = app
+        .decorated()
+        .into_iter()
+        .map(|(d, _)| d)
+        .find(|d| d.border_width > 0.0)
+        .unwrap();
+    assert!(
+        approx(ring.base.rect[2], 120.0 + 10.0),
+        "{:?}",
+        ring.base.rect
+    );
+}
+
+#[test]
+fn a_body_block_wins_a_tie_with_a_style_and_the_two_mix() {
+    let mut app = App::new(
+        "View Main() { \
+         let base = style { bg: 0x6750A4, on hover { overlay: 0x40FF0000 } } \
+         Column #[width: 400, p: 20] { \
+         Box #[..base, width: 100, height: 40] { on hover { overlay: 0x80FFFFFF } } } }",
+    );
+    let at = centre(&app, 100.0, 40.0);
+    app.hover(at);
+    let (d, _) = app.decorated().into_iter().next().expect("an overlay");
+    assert!(
+        (d.base.color[3] - 128.0 / 255.0).abs() < 0.01,
+        "{:?}",
+        d.base.color
+    );
+    assert!(
+        d.base.color[1] > 0.9,
+        "white, not the style's red: {:?}",
+        d.base.color
+    );
+}
+
+#[test]
+fn a_state_block_outside_an_element_says_where_it_goes() {
+    let parsed = parse("View Main() { on hover { bg: 0xFF0000 } Box #[width: 10, height: 10] {} }");
+    let msg = messages(&parsed.errors);
+    assert!(!parsed.errors.is_empty(), "silently accepted");
+    assert!(msg.contains("inside the element"), "{msg}");
+}
+
+#[test]
+fn an_unknown_state_in_a_body_is_the_usual_error() {
+    let parsed = parse("View Main() { Box #[width: 10, height: 10] { on hovr { bg: 0xFF0000 } } }");
+    let msg = messages(&parsed.errors);
+    assert!(msg.contains("UnknownStyleState"), "{msg}");
+    assert!(msg.contains("hover"), "{msg}");
+}
+
+#[test]
+fn the_other_on_forms_still_parse_in_a_body() {
+    let parsed = parse(
+        "View Main() { var a = 0 Box #[width: 10, height: 10] { \
+         on mount => a = 1 on change(a) => a = 2 on hover { bg: 0xFF0000 } } }",
+    );
+    assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+}
+
+#[test]
+fn the_formatter_keeps_a_body_block() {
+    let src = "View Main() {\n    Box #[width: 10, height: 10] {\n        on hover { overlay: 0x14FFFFFF }\n        on focus_visible { outline: 0xD0BCFF, outline_width: 3 }\n    }\n}\n";
+    let out = byard_compiler::fmt::format(src).expect("it formats");
+    assert_eq!(out, src);
+}
+
+// ── a state that returns by the curve it left on ────────────────────────
+
+#[test]
+fn a_state_returns_to_rest_on_the_curve_it_left_on() {
+    let mut app = App::new(
+        "View Main() { Column #[width: 400, p: 20] { \
+         Box #[bg: 0x6750A4, radius: 20, width: 120, height: 40, tap => {}] { \
+             on pressed { radius: 4 with anim.linear(1000) } } } }",
+    );
+    let at = centre(&app, 120.0, 40.0);
+    app.press(at);
+    app.wait(1100);
+    assert!(
+        approx(app.boxed(120.0, 40.0).radii[0], 4.0),
+        "pressed radius"
+    );
+    app.release(at);
+    app.wait(500);
+    let r = app.boxed(120.0, 40.0).radii[0];
+    assert!((8.0..16.0).contains(&r), "half way back, not snapped: {r}");
+    app.wait(1200);
+    assert!(approx(app.boxed(120.0, 40.0).radii[0], 20.0));
+}
+
+#[test]
+fn an_overlay_set_only_in_a_state_fades_out_with_its_curve() {
+    let mut app = App::new(
+        "View Main() { Column #[width: 400, p: 20] { \
+         Box #[bg: 0x6750A4, width: 100, height: 40] { \
+             on hover { overlay: 0xFFFFFFFF with anim.linear(1000) } } } }",
+    );
+    let at = centre(&app, 100.0, 40.0);
+    app.hover(at);
+    app.wait(1200);
+    assert!(overlay_alpha(&app) > 0.99);
+    app.hover((0.0, 0.0));
+    app.wait(500);
+    let mid = overlay_alpha(&app);
+    assert!((0.2..0.8).contains(&mid), "fading out, not gone: {mid}");
+    app.wait(1200);
+    assert_eq!(overlay_alpha(&app), 0.0);
+}
+
+// ── a held key shows `on pressed` ───────────────────────────────────────
+
+#[test]
+fn a_held_space_shows_on_pressed_and_letting_go_clears_it() {
+    let mut app = App::new(PILL);
+    app.key("Tab");
+    assert_eq!(overlay_alpha(&app), 0.0);
+    app.key_down("Space");
+    assert_eq!(app.int("n"), 1, "the press ran the tap");
+    assert!(
+        (overlay_alpha(&app) - 26.0 / 255.0).abs() < 0.01,
+        "pressed shows for a key"
+    );
+    assert!(approx(app.boxed(120.0, 40.0).radii[0], 8.0));
+    app.key_up("Space");
+    assert_eq!(overlay_alpha(&app), 0.0);
+    assert!(approx(app.boxed(120.0, 40.0).radii[0], 20.0));
+}
+
+// ── a11y_role from a value ──────────────────────────────────────────────
+
+fn role_of(app: &App, name: &str) -> AccessRole {
+    app.access()
+        .into_iter()
+        .find(|n| n.name.as_deref() == Some(name))
+        .unwrap_or_else(|| panic!("no node {name:?}"))
+        .role
+}
+
+#[test]
+fn one_root_is_a_toggle_or_a_button_by_a_ternary() {
+    let mut app = App::new(
+        "View Main() { var toggle = false \
+         Column #[width: 400, p: 20] { \
+         Box #[a11y_role: toggle ? toggle_button : button, a11y_label: \"x\", \
+               width: 40, height: 40, tap => {}] {} } }",
+    );
+    assert_eq!(role_of(&app, "x"), AccessRole::Button);
+    app.set_bool("toggle", true);
+    assert_eq!(role_of(&app, "x"), AccessRole::ToggleButton);
+}
+
+#[test]
+fn a_role_can_come_from_a_let_a_parameter_or_a_string() {
+    let app = App::new(
+        "View Main() { Column #[width: 400, p: 20] { \
+         Pick(kind: \"checkbox\") } } \
+         View Pick(kind: Str) { \
+             let role = kind == \"checkbox\" ? \"checkbox\" : \"switch\" \
+             Box #[a11y_role: role, a11y_label: \"a\", width: 20, height: 20, tap => {}] {} \
+             Box #[a11y_role: kind, a11y_label: \"b\", width: 20, height: 20, tap => {}] {} \
+             Box #[a11y_role: \"radio\", a11y_label: \"c\", width: 20, height: 20, tap => {}] {} }",
+    );
+    assert_eq!(role_of(&app, "a"), AccessRole::CheckBox);
+    assert_eq!(role_of(&app, "b"), AccessRole::CheckBox);
+    assert_eq!(role_of(&app, "c"), AccessRole::RadioButton);
+}
+
+#[test]
+fn a_role_that_comes_to_text_that_is_no_role_is_an_error() {
+    let errs = errors_of(
+        "View Main() { var kind = \"chekbox\" Box #[a11y_role: kind, width: 20, height: 20] {} }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.contains("checkbox") && e.contains("`chekbox`")),
+        "the message names the text it got and the closest role: {errs:?}"
+    );
+}
+
+#[test]
+fn a_misspelt_role_word_is_still_reported_with_the_closest() {
+    let errs = errors_of("View Main() { Box #[a11y_role: chekbox, width: 20, height: 20] {} }");
+    assert!(errs.iter().any(|e| e.contains("checkbox")), "{errs:?}");
+    let errs = errors_of(
+        "View Main() { var t = true Box #[a11y_role: t ? chekbox : button, width: 20, height: 20] {} }",
+    );
+    assert!(errs.iter().any(|e| e.contains("checkbox")), "{errs:?}");
+}
+
 // ── bugs ────────────────────────────────────────────────────────────────
 
 fn face(file: &str) -> DeclaredFont {

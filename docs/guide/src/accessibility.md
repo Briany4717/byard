@@ -153,8 +153,21 @@ View Main() {
 error[AttributeTypeMismatch]: expected one of ["button", "toggle_button", "switch", "checkbox", "radio", "radio_group", "slider", "tab", "tab_list", "menu_item", "menu", "link", "text_field", "progress_bar", "list", "list_item", "dialog", "alert", "navigation", "toolbar", "group", "image", "heading"] (did you mean `checkbox`?)
 ```
 
-A role is fixed for the element, since a control that becomes another is two elements under
-a `when`. A layout container that is given one stops being flattened away: it is a node, and
+The role can come from a value, so a control that is a toggle button or a plain button
+is one element: write a conditional of the words, or a `Str` that holds one.
+
+```byld
+View Main() {
+    var starred = false
+    Box #[a11y_role: starred ? toggle_button : button, a11y_checked: starred,
+          width: 40, height: 40, bg: 0x6750A4, tap => starred = !starred]
+}
+```
+
+A word that nothing in the view binds is still checked against the set, and text that comes to
+something outside it is an error at the element, naming the closest role. Roles are chosen when
+the element is drawn, so a control whose role changes becomes the other kind to a reader at once.
+A layout container that is given one stops being flattened away: it is a node, and
 what it holds hangs under it. For the keys such a control answers to, and the ring it
 draws, see [the keyboard](controls.md#the-keyboard).
 

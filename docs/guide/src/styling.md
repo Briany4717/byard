@@ -36,7 +36,9 @@ The ones that paint:
 | `radius` | length | Corner radius. A quad rounds each corner on its own |
 | `smooth` | `0` to `1` | Corner profile. `0` is a circular arc, about `0.6` a continuous corner like an Apple icon |
 | `opacity` | `0` to `1` | Of the whole element and what it holds |
-| `border`, `border_width` | colour, number | An outline |
+| `border`, `border_width` | colour, number | A line inside the edge. A box with a `border` and no `bg` draws just the line |
+| `outline`, `outline_width`, `outline_offset` | colour, number, number | A ring outside the shape, see [below](#outline-and-overlay) |
+| `overlay` | colour or gradient | A tint over `bg`, under the children, see [below](#outline-and-overlay) |
 | `shadow` | preset, tuple or list | See below |
 | `gradient` | tuple | See below |
 | `blur`, `backdrop_tint` | number, colour | Frosted glass, see below |
@@ -139,6 +141,34 @@ gradients is the one its condition picks.
 
 A misspelt name inside the tuple is checked as well, so `gradient: (to: blak)` is
 an error and not a gradient that quietly does not draw.
+
+### Outline and overlay
+
+`outline` draws a ring **outside** the element, which is what a focus ring is. `outline_width`
+is its thickness (2 when left out) and `outline_offset` the gap between the edge and the ring
+(0). The ring follows `radius`, adds nothing to the element's size, moves no neighbour and
+takes no clicks. A negative offset draws it inside the edge. All three move with
+[`with`](motion.md), and a colour whose alpha is zero draws nothing.
+
+`overlay` is a colour drawn over the element's `bg` and under what it holds, clipped to its
+shape, so it rounds with `radius`: the state layer of a Material control. A colour with alpha
+tints; a gradient, written as `gradient` is, ramps over it. It moves with `with` like `bg`.
+
+```byld
+View Main() {
+    Row #[bg: 0xFEF7FF, p: 32, gap: 28] {
+        Box #[bg: 0x6750A4, radius: 20, width: 120, height: 40,
+              overlay: 0x29FFFFFF,
+              outline: 0x6750A4, outline_width: 3, outline_offset: 3] {}
+        Box #[bg: 0x6750A4, radius: 8, width: 120, height: 40,
+              overlay: (angle: 90deg, from: 0x00FFFFFF, to: 0x55FFFFFF)] {}
+    }
+}
+```
+
+An outline is painted where the element is, so an ancestor's `Clip` or a `ScrollView` cuts it
+at their edge, and a later sibling paints over it where they meet. Leave a gap for it, as
+you would for a shadow.
 
 ### Frosted glass and ripple
 
@@ -291,6 +321,35 @@ View Main() {
 The states come from the engine's own tracking, so you write no `var` and no
 handler for any of them. They also animate: put `with anim.spring()` on an
 attribute and it eases between its values. [Motion](motion.md) explains how.
+
+### States written in the element
+
+An `on` block can be written inside the element it styles, among its children, and needs
+no `style` at all. It is the same block: the same states, the same precedence, and it can
+sit next to a `..style` spread. Where both give an attribute for the same state, the one in
+the body wins. This is a whole control with no `var` and no handler for its states:
+
+```byld
+View Main() {
+    var taps = 0
+    Box #[bg: 0x6750A4, radius: 20, width: 140, height: 40, align: center, justify: center,
+          a11y_role: button, tap => taps += 1] {
+        on hover { overlay: 0x14FFFFFF }
+        on pressed { overlay: 0x1AFFFFFF, radius: 8 with anim.spring() }
+        on focus_visible { outline: 0xD0BCFF, outline_width: 3, outline_offset: 2 }
+        Text("Taps: {taps}") #[color: 0xFFFFFF, size: 14]
+    }
+}
+```
+
+An `on` block that is not inside an element has nothing to style, and is an error that
+says where it goes.
+
+A state that moves an attribute with `with` moves it back on the same curve when the state
+ends: the pressed corners above spring open again on release, with no `with` on the
+resting `radius`. Where there is no resting value to move back to, as for `overlay` and
+`outline`, the element rests transparent. `on pressed` also shows while Space or Enter is
+held on a focused control, as it does for a press of the pointer.
 
 ## Responsive styles
 

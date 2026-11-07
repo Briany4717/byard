@@ -179,7 +179,7 @@ impl Interpreter {
         // A role the author wrote replaces the one the element would have,
         // and gives a layout container one (RFC-0052 §1).
         let base = role_of(b.name, b.tapped);
-        let declared = Self::declared_role(b.attrs);
+        let declared = self.declared_role(b.attrs);
         let node = match (b.elem, declared.or(base)) {
             (Some(elem), Some(role)) => Some(self.box_node(role, base, elem, b)),
             _ => None,
@@ -297,7 +297,7 @@ impl Interpreter {
         }
         let Some(elem) = elem else { return };
         let name = self.access_label(attrs).unwrap_or_else(|| text.to_string());
-        let role = Self::declared_role(attrs).unwrap_or(AccessRole::Label);
+        let role = self.declared_role(attrs).unwrap_or(AccessRole::Label);
         let mut node = self.leaf(role, elem, Some(name), bounds(rect, transform));
         self.apply_declared(&mut node, attrs, false);
         self.push_leaf(frame, node);
@@ -326,7 +326,7 @@ impl Interpreter {
         if is_canvas && name.is_none() {
             return;
         }
-        let role = Self::declared_role(attrs).unwrap_or(AccessRole::Image);
+        let role = self.declared_role(attrs).unwrap_or(AccessRole::Image);
         let mut node = self.leaf(role, elem, name, bounds(rect, transform));
         self.apply_declared(&mut node, attrs, false);
         self.push_leaf(frame, node);
@@ -350,7 +350,8 @@ impl Interpreter {
         if self.eval_bool_prop(attrs, "a11y_hidden") == Some(true) {
             return;
         }
-        let role = Self::declared_role(attrs)
+        let role = self
+            .declared_role(attrs)
             .or_else(|| byard_core::render::registry::access_role(name))
             .unwrap_or(AccessRole::Group);
         let label = self.access_label(attrs);

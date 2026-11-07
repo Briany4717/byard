@@ -525,7 +525,7 @@ impl Interpreter {
         if !self.clock_set {
             return Some(goal);
         }
-        let Ok(spec) = crate::interp::anim::resolve_motion(anim) else {
+        let Ok(spec) = crate::interp::anim::resolve_motion_in(anim, Some(&self.theme)) else {
             return Some(goal);
         };
         let stops = gradient_stop_count(leaf);

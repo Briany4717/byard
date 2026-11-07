@@ -94,7 +94,13 @@ fn walk(dir: &Path, base: &Path, out: &mut Vec<String>) {
         if p.is_dir() {
             walk(&p, base, out);
         } else {
-            out.push(p.strip_prefix(base).unwrap().to_string_lossy().into_owned());
+            // With `/` on every platform, as the archive names them.
+            out.push(
+                p.strip_prefix(base)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/"),
+            );
         }
     }
 }

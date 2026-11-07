@@ -10,6 +10,13 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`shrink` on every flex child.** `shrink: 0` keeps a fixed-size child, such as a 24 wide icon beside a growing sibling, from being squeezed. It is `1` by default, and a `width` is still a size to start from and not a floor.
+- **`align_self` on every flex child** (`start`, `center`, `end`, `stretch`), to place one child across the axis whatever its parent's `align` says.
+- **A bare `TextField` a design system can style.** A field with `grow` and no `width` has no width of its own, so `grow: 1` between two icons no longer squeezes them, and `indicator: none` leaves out the focus line along its bottom edge.
+- **`bg` and `radius` on `Text`**, drawn behind the words over the whole box, `p` included, for a label that sits over a border.
+
 ### Fixed
 
 - Saving a file no longer reloads an empty program first: a save that truncates the file before writing it is read once, after the writing has stopped.

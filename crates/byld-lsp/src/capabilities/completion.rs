@@ -33,6 +33,11 @@ const STYLE_PROPS: &[(&str, &str)] = &[
     ),
     ("grow", "Int (flex grow factor)"),
     ("basis", "Int (flex basis size)"),
+    ("shrink", "Int (flex shrink factor, 0 keeps the size)"),
+    (
+        "align_self",
+        "Enum: start | center | end | stretch (this child's cross-axis alignment)",
+    ),
     ("bg", "Color (background color hex)"),
     ("radius", "Len (border radius)"),
     ("opacity", "Float (0.0 to 1.0)"),

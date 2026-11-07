@@ -797,6 +797,7 @@ impl Interpreter {
             } else {
                 self.atlas.add_fixed_text_leaf(size, boxed)?
             };
+            self.apply_flex_item(attrs, id)?;
             flat_ids.push(id);
             return Ok(id);
         }
@@ -811,6 +812,7 @@ impl Interpreter {
             },
             boxed,
         )?;
+        self.apply_flex_item(attrs, id)?;
         flat_ids.push(id);
         Ok(id)
     }
@@ -899,8 +901,9 @@ impl Interpreter {
                 }
                 let w = self.eval_px_prop(attrs, "width").unwrap_or(100.0);
                 let h = self.eval_px_prop(attrs, "height").unwrap_or(100.0);
-                self.env.truncate(env_base);
                 let id = self.atlas.add_leaf(LeafSize::new(w, h))?;
+                self.apply_flex_item(attrs, id)?;
+                self.env.truncate(env_base);
                 flat_ids.push(id);
                 Ok(id)
             }
@@ -921,8 +924,9 @@ impl Interpreter {
                 }
                 let w = self.eval_px_prop(attrs, "width").unwrap_or(0.0);
                 let h = self.eval_px_prop(attrs, "height").unwrap_or(0.0);
-                self.env.truncate(env_base);
                 let id = self.atlas.add_leaf(LeafSize::new(w, h))?;
+                self.apply_flex_item(attrs, id)?;
+                self.env.truncate(env_base);
                 flat_ids.push(id);
                 Ok(id)
             }
@@ -980,8 +984,9 @@ impl Interpreter {
                     self.env.push(k.clone(), v.clone());
                 }
                 let s = self.eval_px_prop(attrs, "size").unwrap_or(24.0);
-                self.env.truncate(env_base);
                 let id = self.atlas.add_leaf(LeafSize::new(s, s))?;
+                self.apply_flex_item(attrs, id)?;
+                self.env.truncate(env_base);
                 flat_ids.push(id);
                 Ok(id)
             }
@@ -1039,6 +1044,9 @@ impl Interpreter {
                     self.env.push(k.clone(), v.clone());
                 }
                 let out = self.build_box_layout(name, attrs, children, pools, flat_ids);
+                if let Ok(id) = &out {
+                    self.apply_flex_item(attrs, *id)?;
+                }
                 self.env.truncate(env_base);
                 // RFC-0038: pair the element with the node that will hold its
                 // resolved rect. Recorded here because this is the one point
@@ -1057,6 +1065,43 @@ impl Interpreter {
                 out
             }
         }
+    }
+
+    /// Lays the `shrink` and `align_self` an element wrote over its layout node.
+    /// An element that writes neither costs nothing, unless its node had them
+    /// last build (a breakpoint dropped them), in which case they are undone.
+    fn apply_flex_item(
+        &mut self,
+        attrs: &[Attr],
+        id: byard_core::atlas::layout::AtlasNodeId,
+    ) -> Result<(), byard_core::atlas::AtlasError> {
+        use byard_core::atlas::{Align, FlexItem};
+        let writes = attrs.iter().any(|a| {
+            matches!(a.kind, AttrKind::Prop { .. })
+                && matches!(a.name.as_str(), "shrink" | "align_self")
+        });
+        if !writes && !self.atlas.has_flex_items() {
+            return Ok(());
+        }
+        let mut item = FlexItem::default();
+        if writes {
+            #[allow(clippy::cast_possible_truncation)]
+            {
+                item.shrink = self.eval_float_prop(attrs, "shrink").map(|v| v as f32);
+            }
+            item.align_self = attrs.iter().find_map(|a| match &a.kind {
+                AttrKind::Prop { value } if a.name.as_str() == "align_self" => {
+                    Self::enum_token(value).map(|t| match t {
+                        "start" => Align::Start,
+                        "center" => Align::Center,
+                        "end" => Align::End,
+                        _ => Align::Stretch,
+                    })
+                }
+                _ => None,
+            });
+        }
+        self.atlas.set_flex_item(id, item)
     }
 
     /// The layout box of a `Text`: its `height`, `grow`, padding and
@@ -1126,10 +1171,19 @@ impl Interpreter {
                 return Ok(id);
             }
             "TextField" => {
-                let w = self.eval_px_prop(attrs, "width").unwrap_or(200.0);
+                let width = self.eval_px_prop(attrs, "width");
                 let h = self.eval_px_prop(attrs, "height").unwrap_or(36.0);
                 let grow = self.eval_float_prop(attrs, "grow").unwrap_or(0.0) as f32;
-                let id = self.atlas.add_growing_leaf(LeafSize::new(w, h), grow)?;
+                // A field that is told to grow and not how wide to start has no
+                // width of its own: it takes the room `grow` hands it, so it
+                // cannot squeeze what is beside it. The 200 is the fallback for
+                // a field that says neither.
+                let id = match width {
+                    None if grow > 0.0 => self.atlas.add_fill_leaf(h, grow)?,
+                    _ => self
+                        .atlas
+                        .add_growing_leaf(LeafSize::new(width.unwrap_or(200.0), h), grow)?,
+                };
                 flat_ids.push(id);
                 return Ok(id);
             }

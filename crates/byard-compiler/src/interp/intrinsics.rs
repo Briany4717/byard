@@ -1261,6 +1261,9 @@ pub fn validate_element(
             // answered separately and an attribute cannot be added without an
             // answer.
             let is_layout = def.class == AttrClass::Layout;
+            if an == "gradient" {
+                check_animated_gradient(value, &mut errs);
+            }
             // RFC-0010: `value with anim.*(…)`, reject an animation on a layout
             // property (it can't animate on the GPU), otherwise validate every
             // curve in the (possibly nested) chain and type-check the innermost
@@ -1388,6 +1391,92 @@ fn animated_anywhere(value: &Expr) -> bool {
         }
         Expr::KeyframeStep { value, .. } | Expr::Let { value, .. } => animated_anywhere(value),
 
+    }
+}
+
+/// The shape a gradient tuple literal has for blending (RFC-0057 §3): its kind
+/// (an absent `kind:` is `linear`) and how many colour stops it writes.
+fn gradient_shape(leaf: &Expr) -> Option<(&str, u8)> {
+    let Expr::Tuple(args, _) = leaf else {
+        return None;
+    };
+    let kind = args
+        .iter()
+        .find(|a| a.name.as_ref().is_some_and(|n| n.as_str() == "kind"))
+        .map_or(Some("linear"), |a| match &a.value {
+            Expr::Ident(sym, _) => Some(sym.as_str()),
+            _ => None,
+        })?;
+    Some((kind, super::eval::gradient_stop_count(leaf)))
+}
+
+/// Collects the tuple leaves of a gradient conditional (`c ? a : b`, nested).
+fn gradient_leaves<'e>(expr: &'e Expr, out: &mut Vec<&'e Expr>) {
+    match expr {
+        Expr::Ternary { then, els, .. } => {
+            gradient_leaves(then, out);
+            gradient_leaves(els, out);
+        }
+        other => out.push(other),
+    }
+}
+
+/// RFC-0057 §4: a `with` after a gradient. Every curve is validated, the
+/// modifiers that need two endpoints of their own (`repeat`, `delay`, `from`,
+/// `restart`, `reverse`) are refused because a gradient animates between its
+/// goals and not on a timeline (a looping ramp is `gradient_offset`), and when
+/// the conditional's gradients are all written out, ones that differ in kind or
+/// in number of stops are `GradientShapeMismatch`.
+fn check_animated_gradient(value: &Expr, errs: &mut Vec<CompileError>) {
+    let Expr::Animated { span, .. } = value else {
+        return;
+    };
+    let mut target = value;
+    while let Expr::Animated {
+        value: inner, anim, ..
+    } = target
+    {
+        if let Ok(spec) = crate::interp::anim::resolve_motion(anim) {
+            if !spec.is_plain() {
+                errs.push(CompileError::AttributeTypeMismatch {
+                    span: anim.span(),
+                    expected: "a gradient animated by a curve alone: `repeat`, `delay`, \
+                               `from`, `restart` and `reverse` do not apply to a whole \
+                               gradient (a looping ramp is `gradient_offset with …`)"
+                        .to_string(),
+                });
+            }
+        }
+        target = inner;
+    }
+    let mut leaves = Vec::new();
+    gradient_leaves(target, &mut leaves);
+    // A `with` inside the gradient moves its goal every frame, which would
+    // restart the whole-gradient animation every frame.
+    for leaf in &leaves {
+        if let Expr::Tuple(args, _) = leaf {
+            if let Some(inner) = args.iter().find(|a| animated_anywhere(&a.value)) {
+                errs.push(CompileError::AttributeTypeMismatch {
+                    span: inner.value.span(),
+                    expected: "a gradient animated as a whole or by its own fields, not both: \
+                               animate the gradient, or its stops (`from: x with ..`), not both"
+                        .to_string(),
+                });
+                break;
+            }
+        }
+    }
+    let describe = |(kind, stops): (&str, u8)| format!("{kind}, {stops} stops");
+    let mut shapes = leaves.iter().filter_map(|leaf| gradient_shape(leaf));
+    let Some(first) = shapes.next() else {
+        return;
+    };
+    if let Some(other) = shapes.find(|shape| *shape != first) {
+        errs.push(CompileError::GradientShapeMismatch {
+            span: *span,
+            first: describe(first),
+            other: describe(other),
+        });
     }
 }
 
@@ -2263,6 +2352,9 @@ pub fn validate_shape(el: &ElementNode) -> Vec<CompileError> {
                         use_instead: "morph".to_string(),
                     });
                 }
+            }
+            if matches!(pname, "gradient" | "stroke_gradient") {
+                check_animated_gradient(&arg.value, &mut errs);
             }
             // Same literal-level check as attribute values, including the
             // RFC-0010 `with` animation chain walk.

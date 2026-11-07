@@ -97,6 +97,14 @@ impl Interpreter {
             (n, AttrKind::Prop { value }) if n.as_str() == name => Some(value),
             _ => None,
         })?;
+        self.eval_color_expr(value)
+    }
+
+    /// Reads one colour from an expression, driving a `with` or an
+    /// `anim.keyframes(…)` written on it (RFC-0057 §1). Every place the language
+    /// takes a colour asks this, so a `with` after a colour is never read as the
+    /// integer it is packed in.
+    pub(super) fn eval_color_expr(&mut self, value: &Expr) -> Option<i64> {
         if let Expr::Animated {
             value: target,
             anim,
@@ -109,6 +117,17 @@ impl Interpreter {
         // the same perceptual space, for the same reason.
         if crate::interp::anim::is_keyframes_call(value) {
             return self.eval_keyframe_color(value);
+        }
+        // RFC-0057 §5: `fg.alpha(x with anim…)`. The amount is a number
+        // animation, driven here because a lowered call would drop the `with`.
+        if let Expr::Call { callee, args, .. } = value {
+            if let (Expr::Member { base, field, .. }, [arg]) = (callee.as_ref(), args.as_slice()) {
+                if field.as_str() == "alpha" && matches!(arg.value, Expr::Animated { .. }) {
+                    let color = self.eval_color_expr(base)?;
+                    let amount = self.eval_number(&arg.value, 1.0);
+                    return Some(super::expr::with_alpha(color, f64::from(amount)));
+                }
+            }
         }
         self.eval_pure(value).as_int()
     }
@@ -745,6 +764,20 @@ impl Interpreter {
         value: &Expr,
         offset: f32,
     ) -> Option<byard_core::frame::Gradient> {
+        // RFC-0057: a `with` after a whole gradient moves it, and a conditional
+        // of gradients is the gradient its condition picks.
+        match value {
+            Expr::Animated {
+                value: target,
+                anim,
+                span,
+            } => return self.eval_animated_gradient(target, anim, self.anim_key(*span), offset),
+            Expr::Ternary { .. } => {
+                let leaf = self.pick_gradient_leaf(value);
+                return self.resolve_gradient_expr(leaf, offset);
+            }
+            _ => {}
+        }
         let Expr::Tuple(args, span) = value else {
             self.errors.push(CompileError::AttributeTypeMismatch {
                 span: value.span(),
@@ -879,17 +912,7 @@ impl Interpreter {
     /// is driven through the OKLab colour path (RFC-0010 A3) like any other
     /// animated colour, so a gradient can crossfade.
     fn eval_gradient_stop(&mut self, expr: &Expr) -> [f32; 4] {
-        let packed = match expr {
-            Expr::Animated {
-                value: target,
-                anim,
-                span,
-            } => self.eval_animated_color(target, anim, self.anim_key(*span)),
-            other if crate::interp::anim::is_keyframes_call(other) => {
-                self.eval_keyframe_color(other).unwrap_or(0)
-            }
-            other => self.eval_pure(other).as_int().unwrap_or(0),
-        };
+        let packed = self.eval_color_expr(expr).unwrap_or(0);
         super::intrinsics::color_rgba_auto(packed)
     }
 
@@ -905,7 +928,7 @@ impl Interpreter {
 
     /// Evaluates a shadow `color` field (a `0xAARRGGBB` literal) to RGBA.
     fn eval_shadow_color(&mut self, e: &Expr) -> [f32; 4] {
-        let packed = self.eval_pure(e).as_int().unwrap_or(DEFAULT_SHADOW_COLOR);
+        let packed = self.eval_color_expr(e).unwrap_or(DEFAULT_SHADOW_COLOR);
         super::intrinsics::color_to_rgba(packed, true)
     }
 

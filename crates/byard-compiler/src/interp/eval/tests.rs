@@ -4,6 +4,7 @@ use crate::parser::parse;
 
 mod animation;
 mod canvas;
+mod colour_motion;
 mod controls;
 mod instance;
 mod layout;

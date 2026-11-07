@@ -10,6 +10,14 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Motion on colours and gradients (RFC-0057).** `with` after a whole gradient animates it stop by stop, a conditional of gradients is the gradient it picks, and two that cannot be blended (another `kind`, another number of stops) are `GradientShapeMismatch`. A `with` after a shape's `fill` or `stroke`, a shadow's `color` or a gradient stop now blends as a colour (it ran the packed integer as a number), and `color.alpha(x with anim..)` animates.
+
+### Changed
+
+- Colour animations mix in OKLab with premultiplied alpha, so a fade to or from a transparent colour keeps the other end's hue instead of passing through grey.
+
 ### Fixed
 
 - Saving a file no longer reloads an empty program first: a save that truncates the file before writing it is read once, after the writing has stopped.

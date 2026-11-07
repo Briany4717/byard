@@ -133,6 +133,56 @@ View Main() {
 }
 ```
 
+## Colours and gradients
+
+`with` follows every colour: `bg`, `color`, `border`, `ripple`, `backdrop_tint`,
+`selection` and `scrim`, the `fill`, `stroke` and text `color` of a canvas shape, and
+the `color` of a shadow. Colours are mixed in OKLab, a space built on linear light, with
+their alpha premultiplied, so a fade to or from a translucent colour keeps the other end's
+hue and has no grey fringe. That is what a state layer is:
+
+```byld
+View Main() {
+    var on = false
+
+    Column #[bg: 0x141218, p: 24, gap: 16, width: 360] {
+        ZStack #[width: 168, height: 48, radius: 12, tap => on = !on,
+                 bg: on ? 0xFF4A4458 : 0x00000000 with anim.spring()] {
+            Box #[width: 168, height: 48, radius: 12,
+                  bg: on ? 0x1FE8DEF8 : 0x00E8DEF8 with anim.easeInOut(150ms)] {}
+        }
+    }
+}
+```
+
+`color.alpha(x with anim.spring())` animates the alpha of a colour that stays what it is,
+a theme colour for one.
+
+A whole gradient animates too, stop by stop, and a choice between two gradients is a
+gradient:
+
+```byld
+View Main() {
+    var on = false
+
+    Box #[width: 200, height: 48, radius: 24, bg: 0x000000, tap => on = !on,
+          gradient: on ? (angle: 90deg, from: 0xFFEF5350, to: 0xFFFFCA28)
+                       : (angle: 90deg, from: 0xFF3B82F6, to: 0xFF22D3EE)
+                         with anim.easeInOut(300ms)] {}
+}
+```
+
+The stops, `angle`, `center`, `radius` and `mid_pos` move; `gradient_offset` has its own
+`with`. The two gradients have to be the same shape, the same `kind` and both with a `mid`
+or neither. `byard check` says when they are not (`GradientShapeMismatch`), and if the
+shape ever changes under a running animation, the gradient jumps to the new one instead of
+blending. A gradient takes a curve alone: `repeat`, `delay`, `from`, `restart` and
+`reverse` are for numbers and colours, and a looping ramp is a `gradient_offset`. Animate
+a gradient as a whole or its stops one by one (`from: x with ..`), not both: `byard check`
+refuses the mix. A
+colour or gradient that is not written with `with` costs nothing for the feature, and a
+running one does not allocate per frame.
+
 ## Keyframes
 
 When there are several stops, write them in the value itself, with `anim.keyframes`.

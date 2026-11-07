@@ -194,7 +194,7 @@ pub(super) fn structural_eq(a: &Value, b: &Value) -> bool {
 /// `color` with its alpha set to `amount` (0 to 1, clamped), as an
 /// alpha-first `0xAARRGGBB` carrying the has-alpha tag, so even a fully
 /// transparent result reads as transparent and not as an opaque `0xRRGGBB`.
-fn with_alpha(color: i64, amount: f64) -> i64 {
+pub(super) fn with_alpha(color: i64, amount: f64) -> i64 {
     #[allow(clippy::cast_possible_truncation)]
     let byte = (amount.clamp(0.0, 1.0) * 255.0).round() as i64;
     (color & 0x00FF_FFFF) | (byte << 24) | crate::lexer::COLOR_HAS_ALPHA_TAG

@@ -213,15 +213,19 @@ checksum = "sha256:3f1c9a0d5e7b…"
 [[package]]
 name = "kit"
 source = "path+../kit"
-checksum = "sha256:9be2d4417a30…"
 ```
 
-Each entry pins a package to exact *content*: a checksum over its sources. A git package also pins the
-commit its tag resolved to, and a registry package the version chosen. Commit `byard.lock`. With it,
-every machine builds the same program.
+Each git or registry entry pins a package to exact *content*: a checksum over its sources. A git package
+also pins the commit its tag resolved to, and a registry package the version chosen. A `path` package is
+listed and not pinned: it is the files on disk, read as they are each time, so a checksum of them would
+only go stale on the next edit. Commit `byard.lock`. With it, every machine builds the same program, and
+a package repository whose `gallery/` depends on `..` has no lock change per commit.
 
 - `check` and `dev` build from the lock. They never solve, and never contact a registry.
-- Git packages are fetched into a cache, `~/.byard/cache`, and are not fetched again once cached.
+- Git packages are fetched into a cache, `~/.byard/cache`, and are not fetched again once cached. The
+  cache keeps only the files `byard publish` would archive (the manifest, sources, declared assets, README
+  and licences), not the whole repository, so the same content has the same checksum from git, a
+  registry and a path.
 - When the lock already satisfies the manifest, `get` keeps it and does not contact the registry. When
   it does not, `get` solves again.
 - When no version can satisfy every requirement, `get` says which requirements conflict and lists the

@@ -42,17 +42,16 @@ pub fn run() -> Result<(), String> {
                 continue; // registry packages are the solver's; first path/git wins
             }
             let (root, commit) = ensure_present(&declarer_root, &dep)?;
-            let checksum = package_checksum(&root).map_err(|e| e.to_string())?;
-            style::info(&format!(
-                "{} {} ({})",
-                if matches!(dep.source, DepSource::Path(_)) {
-                    "path"
-                } else {
-                    "git "
-                },
-                dep.name,
-                short(&checksum)
-            ));
+            // A path dependency is the files on disk, read as they are each
+            // time; pinning a hash of them only goes stale (RFC-0056).
+            let checksum = if matches!(dep.source, DepSource::Path(_)) {
+                style::info(&format!("path {} (not pinned)", dep.name));
+                String::new()
+            } else {
+                let checksum = package_checksum(&root).map_err(|e| e.to_string())?;
+                style::info(&format!("git  {} ({})", dep.name, short(&checksum)));
+                checksum
+            };
             locked.push(LockedPackage {
                 name: dep.name.clone(),
                 source: source_string(&dep),
@@ -142,12 +141,7 @@ fn ensure_present(declarer_root: &Path, dep: &Dependency) -> Result<(PathBuf, St
             let dest = git_cache_path(&dep.name, url, reference);
             let commit = if dest.is_dir() {
                 // Already cached, pinned refs are immutable, no refetch.
-                let out = std::process::Command::new("git")
-                    .args(["rev-parse", "HEAD"])
-                    .current_dir(&dest)
-                    .output()
-                    .map_err(|e| format!("failed to run git: {e}"))?;
-                String::from_utf8_lossy(&out.stdout).trim().to_string()
+                crate::deps::cached_git_commit(&dest).map_err(|e| e.to_string())?
             } else {
                 style::action(&format!(
                     "fetching {} ({url}#{})",

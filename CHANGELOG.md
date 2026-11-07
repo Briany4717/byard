@@ -14,6 +14,11 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **`byard shot --hold X,Y` and `--hover X,Y`.** A held press (with `--at` for how long) and a hovering pointer, so `on pressed`, a press morph, a ripple and `on hover` can be pictured.
 
+### Changed
+
+- **`byard.lock` no longer pins a `path` dependency by checksum.** It went stale on every edit and `check` stayed green on the old one; a path package is the files on disk, so the lock lists it (`name`, `source`) and nothing more. Old locks still read. A package repository whose `gallery/` depends on `..` needs no lock diff per commit.
+- **A git dependency is cached as what `byard publish` archives**, from the same file list: the gallery, `.github` and undeclared fonts are not kept. The checksum is the same as from a path or a registry.
+
 ### Fixed
 
 - Saving a file no longer reloads an empty program first: a save that truncates the file before writing it is read once, after the writing has stopped.

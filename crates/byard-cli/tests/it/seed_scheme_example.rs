@@ -60,7 +60,7 @@ fn every_label_is_readable_on_what_it_sits_on_in_both_schemes() {
         interp.set_now_ms(if dark { 10_000 } else { 0 });
         interp.tick();
         let mut f = RenderFrame::new();
-        interp.render(&tree, &mut f, 560.0, 480.0);
+        interp.render(&tree, &mut f, 560.0, 810.0);
 
         let fills: Vec<([f32; 4], [f32; 4])> = f
             .instances()

@@ -14,3 +14,10 @@ transition = 300
 # light-scheme primary pinned while everything else follows the seed.
 # [theme.color.light]
 # primary = "#0B57D0"
+
+# RFC-0053: named motion. The view moves its squares with `t.springSpatialFast`
+# and `t.springSpatialSlow`, which `byard-base` ships. Declaring one here
+# replaces it for the whole app; uncomment to make the fast spring settle
+# without ringing (a damping ratio of 1.0 does not overshoot).
+# [theme.motion]
+# spatial_fast = { stiffness = 800, damping_ratio = 1.0 }

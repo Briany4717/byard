@@ -32,6 +32,7 @@ mod keyboard_focus_example;
 mod library_check;
 mod list_animations_example;
 mod looping_animations_example;
+mod motion_tokens_check;
 mod native_views_declared;
 mod navigation_example;
 mod number_input_example;

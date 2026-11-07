@@ -194,7 +194,7 @@ pub(super) fn structural_eq(a: &Value, b: &Value) -> bool {
 /// `color` with its alpha set to `amount` (0 to 1, clamped), as an
 /// alpha-first `0xAARRGGBB` carrying the has-alpha tag, so even a fully
 /// transparent result reads as transparent and not as an opaque `0xRRGGBB`.
-fn with_alpha(color: i64, amount: f64) -> i64 {
+pub(super) fn with_alpha(color: i64, amount: f64) -> i64 {
     #[allow(clippy::cast_possible_truncation)]
     let byte = (amount.clamp(0.0, 1.0) * 255.0).round() as i64;
     (color & 0x00FF_FFFF) | (byte << 24) | crate::lexer::COLOR_HAS_ALPHA_TAG
@@ -967,6 +967,27 @@ impl Interpreter {
                 let _ = ctx.read_signal(sig);
                 Value::Int(radius)
             }));
+        }
+
+        // Motion tokens (RFC-0053). A duration reads as its milliseconds, so
+        // `delay: t.durationShort2` works; a spring is a whole curve, which
+        // only follows `with`.
+        match self.theme.motion(f) {
+            Some(crate::interp::theme::MotionToken::Duration(ms)) => {
+                return Some(Box::new(move |_| Value::Int(i64::from(ms))));
+            }
+            Some(token @ crate::interp::theme::MotionToken::Spring { .. }) => {
+                self.errors.push(CompileError::InvalidAnimation {
+                    span,
+                    message: format!(
+                        "`{f}` is {}, a curve: it goes after `with`, as in `x with {base}.{f}`",
+                        token.describe(),
+                        base = base_name
+                    ),
+                });
+                return Some(Box::new(|_| Value::Unit));
+            }
+            None => {}
         }
 
         // A member of a theme that names no known token is a hard error.

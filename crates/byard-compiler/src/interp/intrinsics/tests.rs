@@ -1112,3 +1112,81 @@ fn the_transfer_is_the_piecewise_srgb_one() {
         "and it is not the approximation"
     );
 }
+
+// ── RFC-0057: motion on gradients ────────────────────────────────────
+
+#[test]
+fn an_animated_gradient_of_the_same_shape_is_accepted() {
+    assert_clean(
+        "View V() { Box #[gradient: true ? (from: 0xFF0000, to: 0x0000FF) : (from: 0x00FF00, to: 0xFFFF00) \
+               with anim.spring()] {} }",
+    );
+    assert_clean(
+        "View V() { Box #[gradient: true ? (kind: radial, radius: 0.8, from: 0xFF0000, mid: 0x00FF00, to: 0x0000FF) \
+                          : (kind: radial, radius: 0.4, from: 0x0000FF, mid: 0xFF0000, to: 0x00FF00) \
+               with anim.easeInOut(200ms)] {} }",
+    );
+}
+
+#[test]
+fn animating_between_gradients_of_another_kind_is_an_error() {
+    let e = errs(
+        "View V() { Box #[gradient: true ? (from: 0xFF0000, to: 0x0000FF) \
+                          : (kind: radial, radius: 0.8, from: 0xFF0000, to: 0x0000FF) \
+               with anim.spring()] {} }",
+    );
+    assert!(
+        e.iter()
+            .any(|e| matches!(e, CompileError::GradientShapeMismatch { .. })),
+        "got {e:?}"
+    );
+}
+
+#[test]
+fn animating_between_gradients_with_different_stops_is_an_error() {
+    let e = errs(
+        "View V() { Box #[gradient: true ? (from: 0xFF0000, to: 0x0000FF) \
+                          : (from: 0xFF0000, mid: 0x00FF00, to: 0x0000FF) \
+               with anim.spring()] {} }",
+    );
+    assert!(
+        e.iter()
+            .any(|e| matches!(e, CompileError::GradientShapeMismatch { .. })),
+        "got {e:?}"
+    );
+    // Without a `with` the two just jump, which is fine.
+    assert_clean(
+        "View V() { Box #[gradient: true ? (from: 0xFF0000, to: 0x0000FF) \
+                          : (from: 0xFF0000, mid: 0x00FF00, to: 0x0000FF)] {} }",
+    );
+}
+
+#[test]
+fn a_gradient_with_a_looping_modifier_is_refused() {
+    let e = errs(
+        "View V() { Box #[gradient: (from: 0xFF0000, to: 0x0000FF) \
+         with anim.linear(1s, repeat: infinite)] {} }",
+    );
+    assert!(
+        e.iter()
+            .any(|e| matches!(e, CompileError::AttributeTypeMismatch { .. })),
+        "got {e:?}"
+    );
+}
+
+#[test]
+fn a_gradient_animated_whole_and_by_its_stops_is_refused() {
+    let e = errs(
+        "View V() { Box #[gradient: (from: 0xFF0000 with anim.linear(1s), to: 0x0000FF) \
+         with anim.spring()] {} }",
+    );
+    assert!(
+        e.iter()
+            .any(|e| matches!(e, CompileError::AttributeTypeMismatch { .. })),
+        "got {e:?}"
+    );
+    // Either alone is fine.
+    assert_clean(
+        "View V() { Box #[gradient: (from: 0xFF0000 with anim.linear(1s), to: 0x0000FF)] {} }",
+    );
+}

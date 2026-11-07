@@ -124,7 +124,7 @@ def main(out):
     fb.setupGlyf(glyphs)
     fb.setupHorizontalMetrics(metrics)
     fb.setupHorizontalHeader(ascent=800, descent=-200)
-    fb.setupNameTable({"familyName": "Byard Icons", "styleName": "Regular"})
+    fb.setupNameTable({"familyName": "Byard Icons", "styleName": "Regular", "psName": "ByardIcons-Regular"})
     fb.setupOS2(sTypoAscender=800, sTypoDescender=-200, usWinAscent=800, usWinDescent=200)
     fb.setupPost()
     fb.setupFvar([("FILL", 0, 0, 1, "Fill"), ("GRAD", -25, 0, 200, "Grade"),

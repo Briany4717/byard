@@ -16,6 +16,7 @@ mod capabilities;
 use byard_project::{archive, deps, manifest};
 mod commands;
 mod hud;
+mod iconfont;
 mod statusline;
 mod style;
 mod telemetry_overlay;

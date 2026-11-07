@@ -306,6 +306,21 @@ pub enum CompileError {
         /// The closest declared family, if any.
         hint: Option<String>,
     },
+    /// An element sets `weight:` and a `wght` in `variations:` (RFC-0054).
+    /// Both drive the one `wght` axis, so one would silently win.
+    VariationWeightConflict {
+        /// Source range of the element.
+        span: Span,
+    },
+    /// A `Text` in an icon font whose name the check cannot resolve
+    /// (RFC-0054). A **warning**: the bundle ships the whole font unless the
+    /// manifest lists the names in `icons_include`.
+    IconNameNotStatic {
+        /// Source range of the `Text`.
+        span: Span,
+        /// The icon font's family name.
+        family: String,
+    },
     /// A `Canvas` child is not a recognized shape command (RFC-0020 §1:
     /// `Canvas` children are shape commands only, intrinsics, user views,
     /// declarations, and control flow are all rejected).
@@ -1112,6 +1127,8 @@ impl CompileError {
             | Self::UnmatchedRoute { span, .. }
             | Self::UnknownAnchor { span, .. }
             | Self::UnknownFontFamily { span, .. }
+            | Self::VariationWeightConflict { span }
+            | Self::IconNameNotStatic { span, .. }
             | Self::UnknownBreakpoint { span, .. }
             | Self::MisplacedAnchorTail { span, .. }
             | Self::UnknownShapeCommand { span, .. }
@@ -1216,6 +1233,8 @@ impl CompileError {
             | Self::UnmatchedRoute { span, .. }
             | Self::UnknownAnchor { span, .. }
             | Self::UnknownFontFamily { span, .. }
+            | Self::VariationWeightConflict { span }
+            | Self::IconNameNotStatic { span, .. }
             | Self::UnknownBreakpoint { span, .. }
             | Self::MisplacedAnchorTail { span, .. }
             | Self::UnknownShapeCommand { span, .. }
@@ -1322,6 +1341,8 @@ impl CompileError {
             Self::UnmatchedRoute { .. } => "UnmatchedRoute",
             Self::UnknownAnchor { .. } => "UnknownAnchor",
             Self::UnknownFontFamily { .. } => "UnknownFontFamily",
+            Self::VariationWeightConflict { .. } => "VariationWeightConflict",
+            Self::IconNameNotStatic { .. } => "IconNameNotStatic",
             Self::UnknownBreakpoint { .. } => "UnknownBreakpoint",
             Self::MisplacedAnchorTail { .. } => "MisplacedAnchorTail",
             Self::UnknownShapeCommand { .. } => "UnknownShapeCommand",
@@ -1404,6 +1425,7 @@ impl CompileError {
             Self::StrokeInFusionGroup { .. }
                 | Self::UncheckableInject { .. }
                 | Self::MixedTernaryPrecedence { .. }
+                | Self::IconNameNotStatic { .. }
         )
     }
 
@@ -1559,6 +1581,16 @@ impl CompileError {
                      in byard.toml, or write a width in logical pixels"
                 ),
                 hint.as_deref(),
+            ),
+            Self::VariationWeightConflict { .. } => {
+                "`weight:` and `variations: (wght: ..)` both set \
+                the weight axis; keep one of them"
+                    .to_string()
+            }
+            Self::IconNameNotStatic { family, .. } => format!(
+                "this icon name cannot be resolved at build time, so `byard bundle` ships the whole \
+                 `{family}` font; use a string literal, or list the names in `byard.toml` under \
+                 `[assets.fonts] {family} = {{ icons_include = [..] }}`"
             ),
             Self::UnknownFontFamily { name, hint, .. } => with_hint(
                 format!(

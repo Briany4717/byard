@@ -17,6 +17,10 @@ smallvec.workspace = true
 wgpu.workspace = true
 bytemuck = { version = "1.14", features = ["derive"] }
 glyphon = "0.11"
+# RFC-0054: glyphs of a line with `variations` are drawn by glyphon as custom
+# glyphs and rasterised here with the axes set. The same swash `cosmic-text`
+# already uses (and the workspace patches, `third_party/swash`), so no new crate.
+swash = "0.2"
 # Reading one table, `fvar`, from a registered font's bytes (RFC-0034). Already
 # in the tree beneath `glyphon` at this exact version, so this adds a name to
 # the graph and nothing to the build: `cosmic-text` parses the same files with

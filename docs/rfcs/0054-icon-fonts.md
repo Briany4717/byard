@@ -68,15 +68,21 @@ the whole font; the saving is the bundle's.
 whose values are numbers, ordinary expressions or animated values. New prop type
 `PropType::Variations`; a key longer or shorter than four characters is an error.
 
-**Drawing.** Neither glyphon nor cosmic-text can carry axes other than `wght`, and the
-glyph cache key has no room for them. The line's variation set is interned
-(sorted by tag, values quantised to 1/16) to a small id and travels in the high bits of
-`Attrs::cache_key_flags`, which cosmic-text copies into every `CacheKey`, so two sets
-never share an atlas slot or a swash scaler. cosmic-text is vendored
-(`third_party/cosmic-text`, the way swash is) with one change: `swash_image` and
-`swash_outline_commands` read the set from a registry by that id and pass it to the
-scaler along with `wght`. The swash fix clears coordinates per scaler, so axes cannot
-leak between lines; a test draws two sets in one frame.
+**Drawing.** Neither glyphon nor cosmic-text can carry axes other than `wght`: the
+glyph cache key has no room for them. A vendored cosmic-text would not survive
+`cargo publish` (`[patch]` does not reach crates.io users), so the axes go through
+glyphon's own extension point, custom glyphs. A line with `variations` is shaped by
+cosmic-text as always (layout, ligatures, advances). Its text area then points at an
+empty buffer, so glyphon draws no ordinary glyphs for it, and carries one
+`CustomGlyph` per laid-out glyph instead, placed from the layout run (cell: a quarter
+size of padding either side, 1.25 sizes above the baseline to half a size below).
+`prepare_with_depth_and_custom` rasterises them through swash with every axis of the
+font set (unnamed ones to their defaults, so nothing leaks between glyphs), and
+`(font, weight, glyph, size, axis set)` is interned to the `u16` glyph id, so two
+settings never share an atlas slot. The custom glyphs are built when the line is
+shaped and cached with it; a steady frame looks nothing up. A line without `variations`
+takes the unchanged path at no cost. The id space is 65 535 distinct glyphs; past it a
+glyph is not drawn.
 
 **Layout.** Shaping uses the face at the line's `weight`. Axes that move advances
 (`wdth`) are drawn but not re-measured; icon fonts keep their advances fixed. The
@@ -100,15 +106,17 @@ font in the bundle. A font without `icons = true` is copied as is.
 
 ## Drawbacks
 
-- A vendored cosmic-text to maintain beside the vendored swash.
+- A custom glyph is a bitmap cell, not hinted outline text, and its subpixel position snaps to a whole pixel; right for icons, not for body text.
 - The subset keeps any ligature whose letters are all kept, so a few unused icons
   can come along (`air` with `fair`). Bytes, not behaviour.
 - `fontcull-klippa` adds about thirty crates to the CLI's build, none to apps.
 
 ## Rationale and alternatives
 
+- **Google's `klippa`** (the fontations subsetter) is not on crates.io; `fontcull-klippa` is its published fork.
 - **`subsetter` (typst):** small, but drops `GSUB` and the variation tables.
   **`allsorts`:** subsets static fonts only. Neither can do the job.
+- **Vendoring cosmic-text** to add the axes to its cache key: rejected, it cannot be published.
 - **Pre-instancing a font per variation set:** needs an instancer; more bytes shipped.
 - **An `Icon` view in core:** not needed; `Text` with a font is the primitive.
 

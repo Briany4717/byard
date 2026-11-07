@@ -205,6 +205,7 @@ fn later_box_occludes_earlier_text() {
         font_size: 64.0,
         weight: 400,
         family: None,
+        variations: None,
         color: [1.0, 0.0, 0.0, 1.0],
         dirty: true,
     };
@@ -302,6 +303,7 @@ fn transparent_geometry_over_text_does_not_cull_it() {
         font_size: 64.0,
         weight: 400,
         family: None,
+        variations: None,
         color: [1.0, 0.0, 0.0, 1.0],
         dirty: true,
     };
@@ -379,6 +381,7 @@ fn scrim_in_a_later_layer_dims_text_beneath_it() {
         font_size: 64.0,
         weight: 400,
         family: None,
+        variations: None,
         color: [1.0, 0.0, 0.0, 1.0],
         dirty: true,
     };
@@ -445,6 +448,7 @@ fn wrapped_text_renders_multiple_lines() {
         font_size: 22.0,
         weight: 400,
         family: None,
+        variations: None,
         color: [1.0, 0.0, 0.0, 1.0],
         dirty: true,
     };

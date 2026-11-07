@@ -533,6 +533,7 @@ mod tests {
             font_size: 14.0,
             weight: 400,
             family: None,
+            variations: None,
             color: [1.0; 4],
             dirty: true,
         });
@@ -674,6 +675,7 @@ mod tests {
             font_size: 14.0,
             weight: 400,
             family: None,
+            variations: None,
             color: [1.0; 4],
             dirty: false,
         });

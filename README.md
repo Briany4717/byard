@@ -69,7 +69,7 @@ cargo run -p byard-cli -- shot examples/aura_weather -o aura.png
 
 There are about forty small examples under
 [`crates/byard-cli/examples`](crates/byard-cli/examples), one per feature:
-`todo`, `navigation`, `theme`, `font_families`, `text_input`, `text_editing`,
+`todo`, `navigation`, `theme`, `font_families`, `icon_font`, `text_input`, `text_editing`,
 `shape_morph`, `frosted_glass` and so on. Each one's `main.byd` starts with
 what to look for when you run it.
 

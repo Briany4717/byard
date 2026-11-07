@@ -328,6 +328,7 @@ impl Interpreter {
                     // laid-out height.
                     let weight = self.resolve_weight(attrs);
                     let family = self.resolve_family(attrs);
+                    let variations = self.resolve_variations(attrs);
                     let single_line = self.eval_bool_prop(attrs, "wrap") == Some(false);
                     let wrap_w = if single_line {
                         None
@@ -359,6 +360,7 @@ impl Interpreter {
                             font_size: scaled_size,
                             weight,
                             family,
+                            variations,
                             color: rgba,
                             dirty: true,
                         },

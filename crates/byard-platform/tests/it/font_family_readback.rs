@@ -152,6 +152,7 @@ fn frame_in(fonts: &FontTable, family: Option<&str>) -> RenderFrame {
         font_size: 40.0,
         weight: 400,
         family: family.map(Arc::from),
+        variations: None,
         color: [1.0, 1.0, 1.0, 1.0],
         dirty: true,
     });

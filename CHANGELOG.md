@@ -10,6 +10,11 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Variation axes on text.** `variations: (FILL: 1, wght: 500, GRAD: 0, opsz: 24)` on `Text` and `TextField` sets a variable font's axes, and an axis can move with `with` (`FILL: liked ? 1 : 0 with anim.spring()`). `wght` there is the weight; with `weight:` as well it is `VariationWeightConflict`.
+- **Icon fonts.** `[assets.fonts] symbols = { path = "..", icons = true }` declares an icon font, and `byard bundle` keeps only the glyphs for the names the program writes: four icons from Material Symbols Rounded ship as 16 KB, not 15 MB. `icons_include = [..]` lists names built at run time; without it `byard check` warns (`IconNameNotStatic`) and the font ships whole.
+
 ### Fixed
 
 - Saving a file no longer reloads an empty program first: a save that truncates the file before writing it is read once, after the writing has stopped.

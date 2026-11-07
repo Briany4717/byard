@@ -168,6 +168,15 @@ enum Command {
         /// Tap a logical point before the picture, `X,Y`; repeatable.
         #[arg(long, value_name = "X,Y", value_parser = parse_point)]
         tap: Vec<(f32, f32)>,
+        /// Press at a point and keep the pointer down for the picture, `X,Y`,
+        /// so `on pressed`, a press morph and a ripple show; use `--at` for
+        /// how long it is held. Repeatable, in order with `--tap`.
+        #[arg(long, value_name = "X,Y", value_parser = parse_point)]
+        hold: Vec<(f32, f32)>,
+        /// Move the pointer to a point without pressing, `X,Y`, so
+        /// `on hover` shows. Repeatable, in order with `--tap`.
+        #[arg(long, value_name = "X,Y", value_parser = parse_point)]
+        hover: Vec<(f32, f32)>,
         /// Press a key before the picture, like `Left`, `shift+Left` or
         /// `mod+a`; repeatable. Applied in order with `--tap` and `--type`.
         #[arg(long, value_name = "KEY", value_parser = parse_key)]
@@ -232,6 +241,8 @@ fn parse_key(s: &str) -> Result<commands::shot::Key, String> {
 fn shot_steps(
     matches: &clap::ArgMatches,
     taps: &[(f32, f32)],
+    holds: &[(f32, f32)],
+    hovers: &[(f32, f32)],
     keys: &[commands::shot::Key],
     typed: &[String],
 ) -> Vec<commands::shot::Step> {
@@ -250,6 +261,18 @@ fn shot_steps(
             .into_iter()
             .zip(taps)
             .map(|(i, &(x, y))| (i, Step::Tap(x, y))),
+    );
+    steps.extend(
+        at("hold")
+            .into_iter()
+            .zip(holds)
+            .map(|(i, &(x, y))| (i, Step::Hold(x, y))),
+    );
+    steps.extend(
+        at("hover")
+            .into_iter()
+            .zip(hovers)
+            .map(|(i, &(x, y))| (i, Step::Hover(x, y))),
     );
     steps.extend(
         at("key")
@@ -332,6 +355,8 @@ pub fn main() {
             dark,
             light,
             tap,
+            hold,
+            hover,
             key,
             type_text,
         } => commands::shot::run(&commands::shot::ShotArgs {
@@ -353,7 +378,7 @@ pub fn main() {
             } else {
                 None
             },
-            steps: &shot_steps(&matches, &tap, &key, &type_text),
+            steps: &shot_steps(&matches, &tap, &hold, &hover, &key, &type_text),
         }),
         Command::Publish { package, registry } => {
             commands::publish::run(&commands::publish::PublishArgs {
@@ -385,6 +410,8 @@ mod tests {
         let cli = <Cli as clap::FromArgMatches>::from_arg_matches(&matches).unwrap();
         let Command::Shot {
             tap,
+            hold,
+            hover,
             key,
             type_text,
             ..
@@ -392,7 +419,7 @@ mod tests {
         else {
             panic!("a shot");
         };
-        shot_steps(&matches, &tap, &key, &type_text)
+        shot_steps(&matches, &tap, &hold, &hover, &key, &type_text)
     }
 
     fn key(chord: &str) -> Step {
@@ -431,6 +458,24 @@ mod tests {
                 Step::Tap(10.0, 20.0),
                 Step::Type("!".into()),
                 key("mod+a"),
+            ]
+        );
+    }
+
+    /// RFC-0056: a held press and a hover are steps like a tap, in the order
+    /// written.
+    #[test]
+    fn hold_and_hover_are_steps_in_the_order_written() {
+        let steps = steps_of(&[
+            "shot", "--hover", "5,6", "--hold", "200,120", "--tap", "1,2", "--hover", "7,8",
+        ]);
+        assert_eq!(
+            steps,
+            [
+                Step::Hover(5.0, 6.0),
+                Step::Hold(200.0, 120.0),
+                Step::Tap(1.0, 2.0),
+                Step::Hover(7.0, 8.0),
             ]
         );
     }

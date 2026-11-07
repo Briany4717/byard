@@ -193,3 +193,62 @@ fn a_program_check_rejects_is_not_drawn() {
         "{stdout}{err}"
     );
 }
+
+/// Runs `byard shot` on the ripple example with `extra` arguments and returns
+/// the picture, or `None` when the machine has no GPU adapter.
+fn ripple_shot(tag: &str, extra: &[&str]) -> Option<image::RgbImage> {
+    let dir = scratch_named(tag);
+    let png = dir.join("out.png");
+    let example = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/ripple");
+    let out = Command::new(env!("CARGO_BIN_EXE_byard-cli"))
+        .args(["shot", example.to_str().unwrap(), "-o", png.to_str().unwrap()])
+        .args(["--size", "420x300", "--scale", "1"])
+        .args(extra)
+        .output()
+        .expect("run byard shot");
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    if text.contains("no GPU adapter") {
+        eprintln!("no GPU adapter, skipping byard shot");
+        return None;
+    }
+    assert!(out.status.success(), "{text}");
+    let img = image::open(&png).expect("a PNG").to_rgb8();
+    let _ = std::fs::remove_dir_all(&dir);
+    Some(img)
+}
+
+/// RFC-0056: `--hover` shows `on hover` and `--hold` keeps the press down, so
+/// the ripple has spread and `on pressed` is live; each differs from the plain
+/// picture, and a shot is deterministic.
+#[test]
+fn a_hovered_and_a_held_button_look_unlike_the_plain_one() {
+    let Some(plain) = ripple_shot("plain", &["--at", "300"]) else {
+        return;
+    };
+    let hovered = ripple_shot("hover", &["--at", "300", "--hover", "200,90"]).unwrap();
+    let held = ripple_shot("hold", &["--at", "120", "--hold", "200,90"]).unwrap();
+    let held_again = ripple_shot("hold2", &["--at", "120", "--hold", "200,90"]).unwrap();
+
+    // The button's colour away from its label and the ink's origin.
+    let corner = |img: &image::RgbImage| img.get_pixel(60, 80).0;
+    assert_eq!(corner(&plain), [0x67, 0x50, 0xA4], "the plain button");
+    assert_eq!(corner(&hovered), [0x79, 0x65, 0xAF], "`on hover` shows");
+    assert_ne!(plain.as_raw(), held.as_raw(), "a press shows");
+    assert_ne!(hovered.as_raw(), held.as_raw());
+    assert_eq!(held.as_raw(), held_again.as_raw(), "and is repeatable");
+}
+
+/// RFC-0056: a held press that is never released is still down at the
+/// picture, so a later frame of ink is further along than an early one.
+#[test]
+fn a_longer_hold_has_spread_the_ripple_further() {
+    let Some(early) = ripple_shot("early", &["--at", "48", "--hold", "200,90"]) else {
+        return;
+    };
+    let late = ripple_shot("late", &["--at", "240", "--hold", "200,90"]).unwrap();
+    assert_ne!(early.as_raw(), late.as_raw());
+}

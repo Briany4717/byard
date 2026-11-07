@@ -1596,7 +1596,7 @@ impl CompileError {
             ),
             Self::UnknownThemeToken { field, theme, .. } => format!(
                 "theme `{theme}` declares no token `{field}` \
-                 (checked color, typography, and shape namespaces)"
+                 (checked color, typography, shape, and motion namespaces)"
             ),
             Self::UnknownView { name, hint, .. } => {
                 with_hint(format!("unknown view `{name}`"), hint.as_deref())

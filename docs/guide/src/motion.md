@@ -56,13 +56,100 @@ To grow or shrink something smoothly, animate its `scale`.
 | `anim.easeOut(200ms)` | Ends slow |
 | `anim.easeInOut(200ms)`, `anim.ease(200ms)` | Slow at both ends |
 
-A spring takes `stiffness`, `damping` and `initial_velocity`, all optional:
-`anim.spring(stiffness: 200, damping: 0.6)`. A higher stiffness is quicker, and a
-lower damping rings for longer. A spring has no fixed length: it settles when it
+A spring takes `stiffness`, `damping_ratio` and `initial_velocity`, all optional:
+`anim.spring(stiffness: 200, damping_ratio: 0.6)`. A higher stiffness is quicker. The
+damping ratio is how much it bounces: 1.0 settles with no bounce, and the lower it is the
+more it overshoots and rings. A spring has no fixed length: it settles when it
 settles. A timed curve is for something that must take exactly so long.
+
+`damping:` is the same thing written as the engine's own coefficient: `damping_ratio` is
+that divided by twice the square root of the stiffness, so `stiffness: 200,
+damping_ratio: 0.6` and `stiffness: 200, damping: 17` are one spring. A spring takes one
+or the other, and both is an error. Mind the difference: `damping: 0.6` is a coefficient,
+and rings for many seconds.
 
 A mistake in a curve is reported with the name you probably meant, whether it is the
 curve (`anim.sping`), an argument, or a modifier.
+
+## Named motion
+
+An app that moves things the same way everywhere should say how once. The theme can
+name springs and durations, and `with` reads them like any other token:
+
+```byld
+View Main() {
+    inject Theme as t
+    var open = false
+
+    Column #[bg: t.surface, p: 32, gap: 16, grow: 1] {
+        Button("Toggle") => open = !open
+        Box #[bg: t.primary, width: 80, height: 80, radius: t.cornerLgIncreased,
+              scale: open ? 1.3 : 1.0 with t.springSpatialFast,
+              opacity: open ? 1.0 : 0.5 with anim.ease(t.durationShort2)] {}
+    }
+}
+```
+
+`byard-base` has Material 3 Expressive's six springs. *Spatial* ones are for things
+that move or change size, and may overshoot. *Effects* ones are for opacity and colour,
+and settle without overshoot.
+
+| Token | Stiffness | Damping ratio |
+|-------|-----------|---------------|
+| `springSpatialFast` | 800 | 0.6 |
+| `springSpatialDefault` | 380 | 0.8 |
+| `springSpatialSlow` | 200 | 0.8 |
+| `springEffectsFast` | 3800 | 1.0 |
+| `springEffectsDefault` | 1600 | 1.0 |
+| `springEffectsSlow` | 800 | 1.0 |
+
+and Material's durations, for `anim.ease`, `anim.linear` and the like: `durationShort1`
+to `durationShort4` (50, 100, 150, 200 ms), `durationMedium1` to `durationMedium4`
+(250 to 400), `durationLong1` to `durationLong4` (450 to 600) and `durationExtraLong1` to
+`durationExtraLong4` (700 to 1000). A duration also reads as a plain number of
+milliseconds, so `delay: t.durationShort2` works.
+
+A theme declares its own under `[theme.motion]`, or retunes these, and a package's are
+brought in by `extends` like its colours:
+
+```toml
+[theme.motion]
+# A spring: stiffness, and the damping as a ratio (1.0 settles without overshoot).
+spatial_fast = { stiffness = 800, damping_ratio = 0.6 }
+bouncy = { stiffness = 300, damping_ratio = 0.4 }
+# Or the damping coefficient `anim.spring` takes, with `damping`.
+snappy = { stiffness = 300, damping = 24 }
+# A duration is a whole number of milliseconds.
+short_2 = 100
+```
+
+A key is named for its kind: `spatial_fast` is `t.springSpatialFast`, `short_2` is
+`t.durationShort2`. A table with `stiffness` is a spring and a whole number is a
+duration. `damping_ratio` is the same number `anim.spring(damping_ratio:)` takes; `damping` is the
+coefficient `anim.spring(damping:)` takes, and a spring declares one or the other.
+
+A token is the whole curve, so it takes no modifiers: a loop, a delay or a `from:` is
+written out with `anim.spring(...)`, which can still use a duration token
+(`anim.linear(t.durationLong2, repeat: infinite)`). A duration token goes anywhere a
+duration does, `anim.keyframes(duration: t.durationLong2)` included. A token costs nothing until a
+`with` uses it. A mistake in one is an error that says what is wrong:
+
+```byld,fails
+View Main() {
+    inject Theme as t
+    Box #[bg: t.primary, width: 40, height: 40, scale: 1.0 with t.springSpatialFat] {}
+}
+```
+
+```diagnostic
+error[UnknownThemeToken]: theme `byard-base` declares no token `springSpatialFat`
+```
+
+A colour, type or shape token there is `is a colour, not a motion token`, a duration
+where a curve goes says to write `anim.ease(t.durationShort2)`, and a spring where a
+duration goes is `is a spring, not a duration`. Changing one spring for one use, as in
+`t.springSpatialFast.with(damping: 1.0)`, is not there yet: declare the variant in the
+theme.
 
 ## Modifiers
 

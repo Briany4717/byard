@@ -12,6 +12,25 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Named motion in the theme (RFC-0053).** `[theme.motion]` declares springs
+  (`spatial_fast = { stiffness = 800, damping_ratio = 0.6 }`) and durations
+  (`short_2 = 100`), and byld reads them as tokens wherever a curve goes:
+  `with t.springSpatialFast`, `anim.ease(t.durationShort2)`. `byard-base` ships Material 3
+  Expressive's six springs and sixteen durations, a package's come in with `extends`, and a
+  misspelt or misused token is a check error that names it. `anim.spring` takes
+  `damping_ratio:` (1.0 is no bounce) beside `damping:` (the coefficient), and every duration
+  position, `anim.keyframes(duration:)` included, takes a duration token.
+- **The rest of Material's colour roles in `byard-base`, and from a seed**: `surfaceContainerLowest`,
+  `surfaceContainerHighest`, `surfaceDim`, `surfaceBright`, `inverseSurface`, `inverseOnSurface`,
+  `inversePrimary`, `scrim`, `shadow`, the `primary`, `secondary` and `tertiary` fixed roles, and the
+  `tertiary` family, `surfaceVariant` and `errorContainer` the base lacked. A seed derives all of them,
+  and they are held to the same contrast pairs. The expressive corners (`cornerLgIncreased`,
+  `cornerXlIncreased`, `cornerXxl`) and an `...Emphasized` twin of every type style are in the base too.
+
+### Changed
+
+- A modal overlay's scrim is the theme's `scrim` at 32% (black unless the theme says otherwise), not
+  a constant.
 - **Variation axes on text.** `variations: (FILL: 1, wght: 500, GRAD: 0, opsz: 24)` on `Text` and `TextField` sets a variable font's axes, and an axis can move with `with` (`FILL: liked ? 1 : 0 with anim.spring()`). `wght` there is the weight; with `weight:` as well it is `VariationWeightConflict`.
 - **Icon fonts.** `[assets.fonts] symbols = { path = "..", icons = true }` declares an icon font, and `byard bundle` keeps only the glyphs for the names the program writes: four icons from Material Symbols Rounded ship as 16 KB, not 15 MB. `icons_include = [..]` lists names built at run time; without it `byard check` warns (`IconNameNotStatic`) and the font ships whole.
 - **`byard shot --hold X,Y` and `--hover X,Y`.** A held press (with `--at` for how long) and a hovering pointer, so `on pressed`, a press morph, a ripple and `on hover` can be pictured.

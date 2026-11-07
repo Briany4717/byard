@@ -47,7 +47,7 @@ View Main() {
                 font: symbols,
                 size: 72,
                 color: liked ? 0xE8734A : 0x9AA3AE,
-                variations: (FILL: liked ? 1 : 0 with anim.spring(stiffness: 180, damping: 0.7)),
+                variations: (FILL: liked ? 1 : 0 with anim.spring(stiffness: 180, damping: 19)),
             ]
         }
     }

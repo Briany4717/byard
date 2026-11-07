@@ -194,6 +194,13 @@ byard add brand --registry ./registry --version "^0.1"
 (with `--tag` or `--rev`), or `--registry` (with an optional `--version`, which defaults to `^` the
 newest version published). Mixing sources is an error.
 
+A registry directory is written into `byard.toml` relative to the project, however `--registry` was
+spelled (`/work/registry` from anywhere becomes `../registry`), so the manifest and the lock say the
+same on every machine. A registry URL is written as given, with or without a trailing slash, and may
+have a path: a static site such as a GitHub Pages project works with
+`byard add material --registry https://briany4717.github.io/byard-registry`. If `byard.toml` already
+names a registry directory by an absolute path, `byard get` warns that it only works on this machine.
+
 ## `byard get` and the lockfile
 
 `byard get` makes the dependencies real. It fetches every package, picks one version for each registry

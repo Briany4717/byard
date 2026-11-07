@@ -20,6 +20,7 @@ use byard_project::solve::{self, FixedPackage};
 pub fn run() -> Result<(), String> {
     let manifest = Manifest::discover(None).map_err(|e| e.to_string())?;
     let started = std::time::Instant::now();
+    warn_machine_specific_registries(&manifest);
     style::action(&format!("resolving dependencies of `{}`", manifest.name));
     let previous = Lockfile::read(&manifest.project_root).map_err(|e| e.to_string())?;
 
@@ -169,5 +170,29 @@ fn package_deps(root: &Path) -> Result<Vec<Dependency>, String> {
     match table.get("dependencies") {
         Some(d) => parse_dependencies(d, &manifest_path).map_err(|e| e.to_string()),
         None => Ok(Vec::new()),
+    }
+}
+
+/// A directory registry written as an absolute path goes into the lock as it
+/// is written, a place that exists on one machine (RFC-0056). Said once, with
+/// the fix, rather than found on the next machine.
+fn warn_machine_specific_registries(manifest: &Manifest) {
+    for dep in &manifest.dependencies {
+        if let DepSource::Registry {
+            registry: crate::manifest::RegistryLocation::Dir(dir),
+            ..
+        } = &dep.source
+        {
+            if dir.is_absolute() {
+                style::warn(&format!(
+                    "dependency `{}`: the registry `{}` is an absolute path, so byard.toml and \
+                     byard.lock only work on this machine\n\
+                     hint: write it relative to the project, like `../registry`, or serve it \
+                     and use its `https://` URL",
+                    dep.name,
+                    dir.display()
+                ));
+            }
+        }
     }
 }

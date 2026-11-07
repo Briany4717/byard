@@ -18,6 +18,8 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **`byard.lock` no longer pins a `path` dependency by checksum.** It went stale on every edit and `check` stayed green on the old one; a path package is the files on disk, so the lock lists it (`name`, `source`) and nothing more. Old locks still read. A package repository whose `gallery/` depends on `..` needs no lock diff per commit.
 - **A git dependency is cached as what `byard publish` archives**, from the same file list: the gallery, `.github` and undeclared fonts are not kept. The checksum is the same as from a path or a registry.
+- **A directory registry is written relative to the project** by `byard add --registry`, so `byard.toml` and the lock name `../registry`, not `/tmp/.../registry`; `byard get` warns when a manifest already has an absolute one. Registries served under a path, with a trailing slash, are tested end to end.
+- Stockroom's timed budget test is `#[ignore]`d in the normal run, which keeps its counter checks, and CI's budgets step runs it with `--ignored`.
 
 ### Fixed
 

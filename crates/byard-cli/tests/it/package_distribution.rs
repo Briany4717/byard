@@ -62,7 +62,12 @@ fn git_repo(pkg: &Path, work: &Path) -> String {
     let git = |args: &[&str]| {
         let out = Command::new("git")
             .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
-            .args(["-c", "commit.gpgsign=false", "-c", "init.defaultBranch=main"])
+            .args([
+                "-c",
+                "commit.gpgsign=false",
+                "-c",
+                "init.defaultBranch=main",
+            ])
             .args(args)
             .current_dir(work)
             .output()
@@ -478,7 +483,12 @@ fn a_git_dependency_caches_only_what_publish_archives() {
     let out = byard(
         &dir,
         &dir,
-        &["publish", pkg.to_str().unwrap(), "--registry", registry.to_str().unwrap()],
+        &[
+            "publish",
+            pkg.to_str().unwrap(),
+            "--registry",
+            registry.to_str().unwrap(),
+        ],
     );
     assert!(out.status.success(), "{}", text(&out));
 
@@ -494,9 +504,19 @@ fn a_git_dependency_caches_only_what_publish_archives() {
     let cached: Vec<PathBuf> = std::fs::read_dir(&cache)
         .unwrap()
         .map(|e| e.unwrap().path())
-        .filter(|p| p.is_dir() && p.file_name().unwrap().to_string_lossy().starts_with("brand-"))
+        .filter(|p| {
+            p.is_dir()
+                && p.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("brand-")
+        })
         .collect();
-    assert_eq!(cached.len(), 1, "one checkout, nothing half-made: {cached:?}");
+    assert_eq!(
+        cached.len(),
+        1,
+        "one checkout, nothing half-made: {cached:?}"
+    );
     let mut files = Vec::new();
     fn walk(dir: &Path, base: &Path, out: &mut Vec<String>) {
         for e in std::fs::read_dir(dir).unwrap() {
@@ -512,7 +532,13 @@ fn a_git_dependency_caches_only_what_publish_archives() {
     files.sort();
     assert_eq!(
         files,
-        ["LICENSE", "README.md", "byard.toml", "fonts/Display.ttf", "src/badge.byd"],
+        [
+            "LICENSE",
+            "README.md",
+            "byard.toml",
+            "fonts/Display.ttf",
+            "src/badge.byd"
+        ],
         "exactly what `byard publish` archives"
     );
     let lock = std::fs::read_to_string(app.join("byard.lock")).unwrap();
@@ -526,7 +552,11 @@ fn a_git_dependency_caches_only_what_publish_archives() {
     );
     let out = byard(&dir.join("by_registry"), &dir, &["get"]);
     assert!(out.status.success(), "{}", text(&out));
-    let pin = |lock: &str| lock.lines().find(|l| l.starts_with("checksum")).map(str::to_string);
+    let pin = |lock: &str| {
+        lock.lines()
+            .find(|l| l.starts_with("checksum"))
+            .map(str::to_string)
+    };
     let reg_lock = std::fs::read_to_string(dir.join("by_registry/byard.lock")).unwrap();
     assert!(pin(&lock).is_some());
     assert_eq!(pin(&lock), pin(&reg_lock));
@@ -535,7 +565,10 @@ fn a_git_dependency_caches_only_what_publish_archives() {
     let again = byard(&app, &dir, &["get"]);
     assert!(again.status.success(), "{}", text(&again));
     assert!(!text(&again).contains("fetching"), "{}", text(&again));
-    assert_eq!(std::fs::read_to_string(app.join("byard.lock")).unwrap(), lock);
+    assert_eq!(
+        std::fs::read_to_string(app.join("byard.lock")).unwrap(),
+        lock
+    );
     let out = byard(&app, &dir, &["check"]);
     assert!(out.status.success(), "{}", text(&out));
     let _ = std::fs::remove_dir_all(&dir);

@@ -201,7 +201,12 @@ fn ripple_shot(tag: &str, extra: &[&str]) -> Option<image::RgbImage> {
     let png = dir.join("out.png");
     let example = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/ripple");
     let out = Command::new(env!("CARGO_BIN_EXE_byard-cli"))
-        .args(["shot", example.to_str().unwrap(), "-o", png.to_str().unwrap()])
+        .args([
+            "shot",
+            example.to_str().unwrap(),
+            "-o",
+            png.to_str().unwrap(),
+        ])
         .args(["--size", "420x300", "--scale", "1"])
         .args(extra)
         .output()

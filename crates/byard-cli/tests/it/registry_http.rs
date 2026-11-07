@@ -649,3 +649,94 @@ fn a_second_source_for_a_locked_name_is_not_waved_through() {
     assert!(said.contains("two registries"), "{said}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// RFC-0056: a registry directory is written relative to the project, in the
+/// manifest and so in the lock, whether `--registry` was absolute or relative,
+/// so the lock is the same on another machine.
+#[test]
+fn a_directory_registry_is_written_relative_to_the_project() {
+    let dir = scratch("portable");
+    let registry = dir.join("registry");
+    publish(&dir, &registry, "weather", "0.2.3", "");
+    for (tag, given) in [
+        ("abs", registry.to_str().unwrap().to_string()),
+        ("rel", "../registry".to_string()),
+    ] {
+        let app = dir.join(format!("app-{tag}"));
+        make_app(&app, "", "weather");
+        let out = byard(&app, &dir, &["add", "weather", "--registry", &given]);
+        assert!(out.status.success(), "{}", text(&out));
+        let manifest = std::fs::read_to_string(app.join("byard.toml")).unwrap();
+        assert!(
+            manifest.contains("registry = \"../registry\", version = \"^0.2.3\""),
+            "{tag}: {manifest}"
+        );
+        let lock = std::fs::read_to_string(app.join("byard.lock")).unwrap();
+        assert!(
+            lock.contains("source = \"registry+../registry#weather\""),
+            "{tag}: {lock}"
+        );
+        assert!(!lock.contains(dir.to_str().unwrap()), "{tag}: {lock}");
+        let out = byard(&app, &dir, &["check"]);
+        assert!(out.status.success(), "{}", text(&out));
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// RFC-0056: a manifest that already names a directory registry by an absolute
+/// path is told it only works here.
+#[test]
+fn an_absolute_directory_registry_is_warned_about() {
+    let dir = scratch("absolute");
+    let registry = dir.join("registry");
+    publish(&dir, &registry, "weather", "0.2.3", "");
+    let app = dir.join("app");
+    make_app(
+        &app,
+        &format!(
+            "weather = {{ registry = {:?}, version = \"0.2\" }}",
+            registry.to_str().unwrap()
+        ),
+        "weather",
+    );
+    let out = byard(&app, &dir, &["get"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let said = text(&out);
+    assert!(
+        said.contains("weather") && said.contains("absolute path"),
+        "{said}"
+    );
+    assert!(said.contains("../registry"), "{said}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// RFC-0056: a static site that serves the registry under a path and is
+/// written with a trailing slash (a GitHub Pages project site,
+/// `https://<user>.github.io/<repo>/`) is added, locked as written without
+/// the slash, fetched and checked. The server here is a loopback one, and
+/// `https` differs only in the transport, which is rustls in the same client.
+#[test]
+fn a_registry_under_a_path_with_a_trailing_slash_adds_and_checks() {
+    let dir = scratch("pages");
+    let site = dir.join("site");
+    let registry = site.join("byard-registry");
+    publish(&dir, &registry, "weather", "0.2.3", "");
+    let server = Server::serve(site);
+    let url = format!("{}/byard-registry/", server.url);
+    let app = dir.join("app");
+    make_app(&app, "", "weather");
+    let out = byard(&app, &dir, &["add", "weather", "--registry", &url]);
+    assert!(out.status.success(), "{}", text(&out));
+    let lock = std::fs::read_to_string(app.join("byard.lock")).unwrap();
+    assert!(
+        lock.contains(&format!(
+            "source = \"registry+{}/byard-registry#weather\"",
+            server.url
+        )),
+        "{lock}"
+    );
+    assert_eq!(locked_version(&app, "weather"), "0.2.3");
+    let out = byard(&app, &dir, &["check"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let _ = std::fs::remove_dir_all(&dir);
+}

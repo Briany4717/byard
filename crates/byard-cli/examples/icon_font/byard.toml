@@ -1,0 +1,11 @@
+[project]
+name = "icon_font"
+entry = "src/main.byd"
+
+# RFC-0054. `icons = true` declares an icon font: its glyphs are ligature
+# names, `Text("favorite")` draws the heart, and `byard bundle` keeps only the
+# glyphs for the names this program writes (and the font's axes for them).
+# `fonts/ByardIcons.ttf` is a 3 KB stand-in with the same four axes as Material
+# Symbols; the README says how to point this at the real one.
+[assets.fonts]
+symbols = { path = "fonts/ByardIcons.ttf", icons = true }

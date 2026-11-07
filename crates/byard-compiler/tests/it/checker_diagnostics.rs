@@ -60,15 +60,12 @@ fn bind_on_a_view_parameter_is_an_error_that_says_what_to_do() {
     );
     assert_eq!(said.len(), 1, "{said:?}");
     assert!(said[0].starts_with("BindNotAVar: "), "{said:?}");
-    // It names the parameter, says a parameter is a copy, and gives the
-    // pattern that works (the one the test below runs).
+    // It names the parameter, says a parameter is a copy, and points at the
+    // fix: declare the parameter a binding, with its type, for the caller to
+    // pass a `var` to (RFC-0051).
     assert!(said[0].contains("`value`"), "{said:?}");
     assert!(said[0].contains("a copy"), "{said:?}");
-    assert!(said[0].contains("on_change: Fn(Str)"), "{said:?}");
-    assert!(
-        said[0].contains("TextField #[bind: text, input(t) => on_change(t)]"),
-        "{said:?}"
-    );
+    assert!(said[0].contains("`bind value: Str`"), "{said:?}");
 }
 
 #[test]

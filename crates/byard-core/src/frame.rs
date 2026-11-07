@@ -1560,6 +1560,10 @@ pub struct AtlasUpload {
     pub id: u64,
 }
 
+/// A line's variation-axis settings: four-byte tags and their values, sorted
+/// by tag (RFC-0054).
+pub type Variations = std::sync::Arc<[([u8; 4], f32)]>;
+
 /// One registered font family: the file's bytes plus the two names that
 /// identify it (RFC-0034 §Reference "Asset side").
 ///
@@ -1667,6 +1671,10 @@ pub struct TextLine {
     /// string or layout sizes one face and the GPU draws another (the
     /// font-agreement rule on [`FontTable`]).
     pub family: Option<std::sync::Arc<str>>,
+    /// Variable-font axes beyond `wght`, `(tag, value)` pairs (RFC-0054), or
+    /// `None` for the face as `weight` sets it. Drawn by the rasteriser; the
+    /// line is not re-measured for them.
+    pub variations: Option<Variations>,
     /// Text colour: `[r, g, b, a]` in linear space, each component 0–1.
     pub color: [f32; 4],
     /// Whether this line's content changed since the last tick.
@@ -3530,6 +3538,12 @@ mod paint_hash {
         // same one twice, which is why they are hashed together.
         t.weight.hash(&mut h);
         t.family.hash(&mut h);
+        if let Some(v) = &t.variations {
+            for (tag, value) in v.iter() {
+                tag.hash(&mut h);
+                value.to_bits().hash(&mut h);
+            }
+        }
         // The wrap width, which is not a field of the line at all (RFC-0005
         // default wrap keeps it in a parallel array). It breaks the lines, so
         // two runs that differ only in it are two different pictures.
@@ -4426,6 +4440,7 @@ mod motion_tests {
             font_size: 12.0,
             weight: 400,
             family: None,
+            variations: None,
             color: [1.0; 4],
             dirty: true,
         });
@@ -4798,6 +4813,7 @@ mod motion_tests {
             font_size: 14.0,
             weight: 400,
             family: None,
+            variations: None,
             color: [1.0; 4],
             dirty: true,
         }
@@ -4881,6 +4897,7 @@ mod paint_digest_tests {
             font_size: 12.0,
             weight: 400,
             family: None,
+            variations: None,
             color: [1.0; 4],
             dirty: true,
         }

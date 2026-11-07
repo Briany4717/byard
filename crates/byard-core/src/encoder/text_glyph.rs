@@ -111,6 +111,9 @@ pub use crate::frame::TextLine;
 /// lines cost nothing beyond one [`shape_key`] hash.
 struct CachedLine {
     buffer: Buffer,
+    /// The glyphs of a line with `variations`, drawn as custom glyphs
+    /// (RFC-0054); empty for every other line.
+    custom: Vec<glyphon::CustomGlyph>,
     /// The [`shape_key`] `buffer` was last shaped from, the authority on
     /// whether it still describes this line.
     shape_key: u64,
@@ -256,6 +259,12 @@ fn shape_key(line: &TextLine, wrap: Option<f32>) -> u64 {
     // the prop doing nothing at all.
     h.write_u16(line.weight);
     h.write(line.family.as_deref().unwrap_or("").as_bytes());
+    // RFC-0054: the axes ride in the glyphs' cache keys, which are set when the
+    // text is shaped, so a moved axis needs a fresh buffer.
+    for (tag, value) in line.variations.iter().flat_map(|v| v.iter()) {
+        h.write(tag);
+        h.write_u32(value.to_bits());
+    }
     h.finish()
 }
 
@@ -400,6 +409,11 @@ pub struct TextGlyphPipeline {
     /// row of the profile block, where a developer can watch it sit at zero on
     /// a steady scene and jump the frame something changed.
     reshaped: usize,
+    /// The interned glyphs of lines with `variations` (RFC-0054).
+    variation_glyphs: super::variation_glyphs::VariationGlyphs,
+    /// A buffer with no text, which the text area of a line drawn as custom
+    /// glyphs points at so glyphon draws nothing else for it.
+    empty_buffer: Buffer,
     /// Resolved family names already loaded into `font_system` (RFC-0034).
     ///
     /// The frame carries the *whole* registered table every frame rather than
@@ -459,8 +473,10 @@ impl TextGlyphPipeline {
             });
         }
 
+        let mut font_system = crate::text::new_font_system();
+        let empty_buffer = Buffer::new(&mut font_system, Metrics::new(12.0, 14.0));
         Ok(Self {
-            font_system: crate::text::new_font_system(),
+            font_system,
             swash_cache: SwashCache::new(),
             atlas,
             viewport,
@@ -468,6 +484,8 @@ impl TextGlyphPipeline {
             cache: Vec::new(),
             free_buffers: Vec::new(),
             reshaped: 0,
+            variation_glyphs: super::variation_glyphs::VariationGlyphs::default(),
+            empty_buffer,
             loaded_families: std::collections::HashSet::new(),
         })
     }
@@ -633,6 +651,7 @@ impl TextGlyphPipeline {
             });
             self.cache.push(CachedLine {
                 buffer,
+                custom: Vec::new(),
                 // No buffer has been shaped for this entry yet. The value is
                 // never compared, `is_new` forces the shape below, but it is
                 // set to a marker rather than to a plausible key so a future
@@ -716,6 +735,7 @@ impl TextGlyphPipeline {
             // pass 3 needs.
             let text_areas = collect_layer_text_areas(
                 &self.cache,
+                &self.empty_buffer,
                 text_lines,
                 start..end,
                 scale_factor,
@@ -736,8 +756,9 @@ impl TextGlyphPipeline {
             // out-of-range depth falls back to the far plane. An empty layer
             // still prepares, that is what clears its renderer's previous
             // glyph buffer.
+            let variation_glyphs = &mut self.variation_glyphs;
             renderer
-                .prepare_with_depth(
+                .prepare_with_depth_and_custom(
                     device,
                     queue,
                     &mut self.font_system,
@@ -751,6 +772,7 @@ impl TextGlyphPipeline {
                             .copied()
                             .unwrap_or(crate::frame::DRAW_DEPTH_CLEAR)
                     },
+                    |request| variation_glyphs.rasterize(request),
                 )
                 .map_err(|e| ByardError::TextPrepare(e.to_string()))?;
         }
@@ -807,6 +829,16 @@ impl TextGlyphPipeline {
             self.reshaped += 1;
 
             shape_line(&mut self.font_system, &mut entry.buffer, line, wrap_w, i);
+            entry.custom.clear();
+            if let Some(axes) = &line.variations {
+                self.variation_glyphs.build(
+                    &mut self.font_system,
+                    &entry.buffer,
+                    axes,
+                    i,
+                    &mut entry.custom,
+                );
+            }
         }
     }
 
@@ -849,6 +881,7 @@ impl TextGlyphPipeline {
 /// field-split borrow pattern). `range` is pre-clamped by the caller.
 fn collect_layer_text_areas<'cache>(
     cache: &'cache [CachedLine],
+    empty: &'cache Buffer,
     text_lines: &[TextLine],
     range: std::ops::Range<usize>,
     scale_factor: f32,
@@ -878,7 +911,13 @@ fn collect_layer_text_areas<'cache>(
                 (alpha.clamp(0.0, 1.0) * 255.0).round() as u8,
             );
             TextArea {
-                buffer: &cache[global].buffer,
+                // A line drawn as custom glyphs shows its glyphs only through
+                // them (RFC-0054); the empty buffer draws none of its own.
+                buffer: if line.variations.is_some() {
+                    empty
+                } else {
+                    &cache[global].buffer
+                },
                 // glyphon's Viewport/Resolution is configured in PHYSICAL
                 // pixels (see EncoderSubsystem::update_viewport), but
                 // TextLine.x/y are authored in logical pixels like every
@@ -911,7 +950,7 @@ fn collect_layer_text_areas<'cache>(
                         |c| clip_to_text_bounds(c.rect, scale_factor),
                     ),
                 default_color,
-                custom_glyphs: &[],
+                custom_glyphs: &cache[global].custom,
             }
         })
         .collect()
@@ -938,6 +977,7 @@ mod tests {
             font_size,
             weight: 400,
             family: None,
+            variations: None,
             color: [1.0, 1.0, 1.0, 1.0],
             dirty: false,
         }
@@ -1258,6 +1298,7 @@ mod tests {
             font_size: 12.0,
             weight: 400,
             family: None,
+            variations: None,
             color: [0.0, 0.0, 0.0, 1.0],
             dirty: true,
         };

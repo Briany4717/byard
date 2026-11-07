@@ -67,6 +67,24 @@ your machine rather than a blank window on someone else's. A file named from out
 such as a font at `../../fonts/x.ttf`, is left behind, which is the usual way this fails. Keep what
 the app reads inside the project.
 
+### Icon fonts
+
+A font declared `icons = true` in `[assets.fonts]` is not copied whole. Material Symbols is
+15 MB, and an app that draws four icons needs a few kilobytes of it. The bundle keeps the glyphs
+for the icon names the program writes, with the font's variation data (`fvar`, `gvar`, `avar`)
+for those glyphs, and says what it did:
+
+```text
+Icon font  symbols (fonts/MaterialSymbolsRounded.ttf): 15235612 -> 16596 bytes; 5 icons kept
+```
+
+The names are the string literals anywhere in the app and its packages that the font draws as
+one ligature, so `Icon("favorite")` passing through a package's view counts, and `icons_include`
+adds the ones a program builds. A `Text` in the font whose content is built at run time
+(`Text(name + "_off")`) has no literal: the font is left whole, the report says so, and
+`byard check` warns on the line. A font that is not declared `icons = true` is never touched, and
+neither is one the subsetter cannot cut cleanly (it is checked by shaping every kept name again).
+
 At startup, an app whose build path is gone looks for its project beside its executable: `project/`
 next to it, `../Resources/project/` inside a `.app`, or `../share/<name>/project/` in a Linux
 prefix.

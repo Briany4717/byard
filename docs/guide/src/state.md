@@ -232,7 +232,10 @@ one name are an error.
 There is no global state, and no top-level `var`. When two views need the same
 value, hold it in a view above both, and pass it down as a parameter. Pass an
 action down, as a `Fn()` parameter, for the child to change it. This is the same
-move a callback makes in [views and parameters](views-and-parameters.md).
+move a callback makes in [views and parameters](views-and-parameters.md). When the
+child is a control of your own that reads and writes the value, as a switch or a
+field does, declare the parameter [`bind`](views-and-parameters.md#binding-a-var)
+and pass the `var` itself.
 
 Anything that must outlive the app, such as a saved list, goes in a *store*, which
 [Data and I/O](data-and-io.md) covers.

@@ -36,6 +36,14 @@ image = { workspace = true, features = ["png"] }
 # RFC-0008 D-H: package archives are gzip-compressed. Already in the tree
 # (through the image stack), so this adds no new crate.
 flate2.workspace = true
+# RFC-0054: `byard bundle` cuts an icon font down to the glyphs the program
+# uses. The fontations subsetter, as forked for fontcull: it follows GSUB
+# ligatures and keeps `fvar`/`gvar`/`avar`, which `subsetter` and `allsorts` do
+# not. It brings a renamed copy of read-fonts/write-fonts/skrifa and `clap`
+# into the CLI's build; an app's own binary is unaffected.
+fontcull-klippa = "0.1.2"
+fontcull-skrifa = "0.39.2"
+fontcull-write-fonts = "0.44.3"
 
 
 [features]

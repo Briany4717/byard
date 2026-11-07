@@ -108,12 +108,15 @@ jobs:
       # this log before it is gone. They already ran, and passed or failed,
       # in `test` above; this adds the numbers and takes a few seconds. The
       # first-frame and Stockroom times are only held on Linux, where their ceilings were measured.
+      # Stockroom's timed test is `#[ignore]`d in the run above (a time flakes
+      # while the suite loads every core), so this is the only place it runs:
+      # `--ignored` selects it alone.
       - name: budgets (measured against their ceilings)
         if: runner.os == 'Linux'
         run: |
           cargo test --locked -p aura-weather --test it budgets -- --nocapture
           cargo test --locked -p aura-weather --test first_frame -- --nocapture
-          cargo test --locked -p stockroom --test budgets -- --nocapture
+          cargo test --locked -p stockroom --test budgets -- --ignored --nocapture
 
   # The resource budgets that are not tests (RFC-0046 sections 3 and 4): the
   # size of the release binary, and the speed of the engine's benchmarks. The

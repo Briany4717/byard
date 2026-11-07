@@ -85,6 +85,7 @@ pub mod pipeline;
 pub mod ripple;
 pub mod text_glyph;
 pub mod texture_sampler;
+pub mod variation_glyphs;
 pub mod vector_msdf;
 
 pub use gpu_timer::GpuTimer;

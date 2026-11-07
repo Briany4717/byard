@@ -731,6 +731,11 @@ pub struct Interpreter {
     /// The program's top-level functions (RFC-0002), by canonical name, as
     /// entries of `fn_table`. Rebuilt by [`Self::load_views`].
     top_fns: std::collections::HashMap<Symbol, super::env::AstId>,
+    /// The program's top-level constants (RFC-0055), by canonical name, each
+    /// evaluated once by [`Self::load_views`]. A read is a clone of the value.
+    consts: std::collections::HashMap<Symbol, Value>,
+    /// The program's enums (RFC-0055), by canonical name, with their cases.
+    enums: std::collections::HashMap<Symbol, Vec<Symbol>>,
     /// The top-level functions being inlined right now, outermost first, so a
     /// cycle is reported instead of lowered forever.
     inlining: Vec<Symbol>,
@@ -1144,6 +1149,25 @@ impl Interpreter {
                 );
                 self.top_fns.insert(decl.name.clone(), id);
             }
+        }
+        self.consts.clear();
+        self.enums.clear();
+        if let Some(first) = views.first() {
+            for decl in first.enums.iter() {
+                let cases = decl.cases.iter().map(|(c, _)| c.clone()).collect();
+                self.enums.insert(decl.name.clone(), cases);
+            }
+            // In an order each constant comes after the ones it reads; one in
+            // a cycle is left out, and `byard check` has said so.
+            let ordered = crate::consts::order(&first.consts, &first.helpers);
+            let caller = std::mem::replace(&mut self.env, Env::new());
+            for i in ordered.order {
+                let decl = &first.consts[i];
+                self.report_clock_in_fn(&[], &decl.init);
+                let value = self.eval_pure(&decl.init);
+                self.consts.insert(decl.name.clone(), value);
+            }
+            self.env = caller;
         }
         let (table, mut diags) = super::views::ViewTable::build(views);
         // Static cycle detection over the call graph.

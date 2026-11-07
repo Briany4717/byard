@@ -803,3 +803,83 @@ fn a_view_reached_by_its_package_name_is_formatted_like_any_other() {
     assert!(out.contains("\n        Button(\"b\")\n"), "{out}");
     assert!(out.contains("ds.Button(\"c\")"), "{out}");
 }
+
+// ---- constants, enums, private names and `else when` (RFC-0055) -----------
+
+#[test]
+fn a_constant_an_enum_and_private_are_spaced_like_the_rest() {
+    let out = fmt_stable(
+        "private  let gap=8\nlet label:Str=\"x\"\nenum Variant{filled,tonal,outlined}\nprivate   enum Tone{warm,cool}\nprivate fn tint(v:Variant)->Int=>v==Variant.filled?1:2\nprivate View Hint(){\nText(\"x\")\n}\n",
+    );
+    assert_eq!(
+        out,
+        "private let gap = 8\nlet label: Str = \"x\"\nenum Variant { filled, tonal, outlined }\nprivate enum Tone { warm, cool }\nprivate fn tint(v: Variant) -> Int => v == Variant.filled ? 1 : 2\nprivate View Hint() {\n    Text(\"x\")\n}\n"
+    );
+}
+
+#[test]
+fn an_enum_written_over_lines_keeps_its_lines_and_indents_its_cases() {
+    let out = fmt_stable("enum Variant {\nfilled,\n        tonal,\n\n\noutlined\n}\n");
+    assert_eq!(
+        out,
+        "enum Variant {\n    filled,\n    tonal,\n\n    outlined\n}\n"
+    );
+}
+
+#[test]
+fn an_enum_case_and_a_qualified_one_are_written_against_their_dots() {
+    let out = fmt_stable(
+        "use kit as m\nView M(v:m.Variant=m.Variant.filled){\nm.Button(\"a\",variant: .tonal)\nlet x = m . gap\n}\n",
+    );
+    assert!(
+        out.contains("View M(v: m.Variant = m.Variant.filled) {"),
+        "{out}"
+    );
+    assert!(out.contains("m.Button(\"a\", variant: .tonal)"), "{out}");
+    assert!(out.contains("let x = m.gap"), "{out}");
+}
+
+#[test]
+fn else_when_stays_a_chain_and_is_indented_like_a_when() {
+    let out = fmt_stable(
+        "View M(){\nwhen a{\nText(\"a\")\n}else   when b{\nText(\"b\")\n}else when c{\nText(\"c\")\n}else{\nText(\"d\")\n}\n}\n",
+    );
+    assert_eq!(
+        out,
+        "View M() {\n    when a {\n        Text(\"a\")\n    } else when b {\n        Text(\"b\")\n    } else when c {\n        Text(\"c\")\n    } else {\n        Text(\"d\")\n    }\n}\n"
+    );
+}
+
+#[test]
+fn the_nested_form_is_left_nested_and_means_the_same_as_the_chain() {
+    let nested = "View M() {\n    when a {\n        Text(\"a\")\n    } else {\n        when b {\n            Text(\"b\")\n        }\n    }\n}\n";
+    assert_eq!(fmt_stable(nested), nested);
+    let chain = "View M() {\n    when a {\n        Text(\"a\")\n    } else when b {\n        Text(\"b\")\n    }\n}\n";
+    assert!(parsed_files_span_eq(&parse(nested), &parse(chain)));
+}
+
+#[test]
+fn the_meaning_check_covers_the_new_declarations() {
+    // `private` and a constant's value are part of the tree it compares.
+    let a = parse("private let gap = 8\nenum E { a, b }");
+    assert!(parsed_files_span_eq(
+        &a,
+        &parse("private let gap = 8\nenum E { a, b }")
+    ));
+    assert!(!parsed_files_span_eq(
+        &a,
+        &parse("let gap = 8\nenum E { a, b }")
+    ));
+    assert!(!parsed_files_span_eq(
+        &a,
+        &parse("private let gap = 9\nenum E { a, b }")
+    ));
+    assert!(!parsed_files_span_eq(
+        &a,
+        &parse("private let gap = 8\nenum E { a }")
+    ));
+    assert!(!parsed_files_span_eq(
+        &a,
+        &parse("private let gap = 8\nprivate enum E { a, b }")
+    ));
+}

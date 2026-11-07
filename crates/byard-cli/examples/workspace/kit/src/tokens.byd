@@ -1,0 +1,13 @@
+// What the whole package shares (RFC-0055): a constant, an enum, and a helper
+// that stays inside it. An app reads `gap` and `Variant` through its alias
+// (`k.gap`, `k.Variant.tonal`) and cannot call `fill`.
+let gap = 8
+let pad = gap * 2
+
+enum Variant {
+    filled,
+    tonal,
+    outlined,
+}
+
+private fn fill(v: Variant) -> Int => v == Variant.filled ? 0x6750A4 : v == Variant.tonal ? 0x3A3150 : 0x14141C

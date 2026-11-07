@@ -116,6 +116,35 @@ Put `= value` after a parameter's type and callers may leave it out. `Badge`
 above has one: `Badge("new")` gets the default blue, and `Badge("sale",
 0xEF4444)` overrides it. Parameters that have no default are required.
 
+### Enum parameters
+
+A parameter typed with an [enum](expressions.md#enums) takes one of its cases. A parameter with
+a closed set of looks is what an enum is for:
+
+```byld
+enum Variant { filled, tonal, outlined }
+
+View Chip(label: Str, variant: Variant = Variant.filled) {
+    Box #[bg: variant == Variant.filled ? 0x6750A4 : 0x262636, radius: 16, p: 10, border: 0x6B6B85] {
+        Text(label) #[color: 0xFFFFFF]
+    }
+}
+
+View Main() {
+    Row #[gap: 8, p: 16] {
+        Chip("Save")
+        Chip("Cancel", variant: .tonal)
+        Chip("More", Variant.outlined)
+    }
+}
+```
+
+Where the parameter is declared with the enum, the call may write the case alone, `.tonal`,
+and so may the parameter's own default (`variant: Variant = .filled`). Anywhere else `.tonal` is
+still a style class, and `variant == .tonal` is an error that says to write `Variant.tonal`. A
+misspelt case, `.tonl`, is `UnknownEnumCase` with the suggestion, in an argument, in a default and
+in an expression alike.
+
 ### Calling a view
 
 Pass arguments by position, by name, or a mix, as long as the positional ones
@@ -426,6 +455,11 @@ View Main() {
 
 [Packages](packages.md) explains `use`. Views and functions from your own
 project need none of this.
+
+A package can keep a view to itself: `private View Hint() { … }` is visible to every file of
+the package, and an app that writes `b.Hint()` is told it is private. In an app `private` is
+accepted and changes nothing. [Packages](packages.md#what-a-package-shares-and-what-it-keeps)
+has the rest.
 
 ## Where views come from
 

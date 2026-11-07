@@ -16,6 +16,20 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **`align_self` on every flex child** (`start`, `center`, `end`, `stretch`), to place one child across the axis whatever its parent's `align` says.
 - **A bare `TextField` a design system can style.** A field with `grow` and no `width` has no width of its own, so `grow: 1` between two icons no longer squeezes them, and `indicator: none` leaves out the focus line along its bottom edge.
 - **`bg` and `radius` on `Text`**, drawn behind the words over the whole box, `p` included, for a label that sits over a border.
+- **Top-level constants.** `let gap = 8` outside any view is a constant: typed, pure, shared by every file of
+  the project or package, evaluated once, and reached from an app as `k.gap`. Constants may use other
+  constants and functions; two that need each other are `ConstantCycle`, with the path. RFC-0055.
+- **Enums.** `enum Variant { filled, tonal, outlined }` declares a closed set of cases, written `Variant.tonal`
+  (`k.Variant.tonal` from an app) and usable as a parameter type. A misspelt case is `UnknownEnumCase` with the
+  closest one, a string is not an enum, and a case is its name as text in a string, to a controller and in JSON.
+  A call writes `variant: .tonal` where the parameter says which enum it is.
+- **`private` names.** `private` before a `View`, `fn`, `type`, `let` or `enum` keeps it inside its package:
+  every file of the package sees it, and an app that uses one is told it is private (`PrivateName`). In an app
+  it is accepted and changes nothing.
+- **`else when`.** `when a { } else when b { } else { }` is the nested form without the nested blocks, with
+  every arm checked by `byard check`.
+- The formatter, completion, hover, outline and highlighting of the language server, and the VS Code grammar know
+  all of them; the `workspace` example uses each.
 - **Motion on colours and gradients (RFC-0057).** `with` after a whole gradient animates it stop by stop, a conditional of gradients is the gradient it picks, and two that cannot be blended (another `kind`, another number of stops) are `GradientShapeMismatch`. A `with` after a shape's `fill` or `stroke`, a shadow's `color` or a gradient stop now blends as a colour (it ran the packed integer as a number), and `color.alpha(x with anim..)` animates.
 
 ### Changed

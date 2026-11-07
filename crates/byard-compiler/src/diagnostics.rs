@@ -859,6 +859,94 @@ pub enum CompileError {
         /// The name.
         name: String,
     },
+    /// A name was used from another package that the package keeps private
+    /// (`private View`, `private fn`, `private let`, `private enum`,
+    /// `private type`; RFC-0055).
+    PrivateName {
+        /// Source range of the use.
+        span: Span,
+        /// The name as written.
+        name: String,
+        /// The package that declares it.
+        package: String,
+    },
+    /// The same top-level constant is declared twice within one package.
+    DuplicateConstant {
+        /// Source range of the second declaration.
+        span: Span,
+        /// The duplicated name.
+        name: String,
+        /// The package whose namespace is ambiguous ("this project" for the
+        /// root package).
+        package: String,
+    },
+    /// The same enum is declared twice within one package.
+    DuplicateEnum {
+        /// Source range of the second declaration.
+        span: Span,
+        /// The duplicated name.
+        name: String,
+        /// The package whose namespace is ambiguous.
+        package: String,
+    },
+    /// An enum lists the same case twice.
+    DuplicateEnumCase {
+        /// Source range of the second occurrence.
+        span: Span,
+        /// The enum.
+        enum_name: String,
+        /// The case.
+        name: String,
+    },
+    /// Top-level constants that read one another in a circle.
+    ConstantCycle {
+        /// Source range of the first constant of the cycle.
+        span: Span,
+        /// The cycle, e.g. `gap → pad → gap`.
+        path: String,
+    },
+    /// A top-level constant writes state, reaches a controller, or reads a
+    /// name that is none of the constants and functions: it is shared by every
+    /// view, so it must be a pure expression.
+    ImpureConstant {
+        /// Source range of the offending expression.
+        span: Span,
+        /// The constant.
+        name: String,
+    },
+    /// A constant's value is not of the type written for it.
+    ConstantTypeMismatch {
+        /// Source range of the value.
+        span: Span,
+        /// The constant.
+        name: String,
+        /// The type written.
+        expected: String,
+        /// The type of the value.
+        found: String,
+    },
+    /// An enum has no case of that name: `Variant.tonl`.
+    UnknownEnumCase {
+        /// Source range of the case name.
+        span: Span,
+        /// The enum.
+        enum_name: String,
+        /// The case as written.
+        name: String,
+        /// The closest case the enum has, if any.
+        hint: Option<String>,
+    },
+    /// A case written alone (`.tonal`) where nothing says which enum it
+    /// belongs to: it is short for `Variant.tonal` only as the argument of a
+    /// parameter declared with the enum's type.
+    EnumShorthand {
+        /// Source range of the case.
+        span: Span,
+        /// The case as written.
+        case: String,
+        /// The enum the other side of the comparison is, if it is one.
+        enum_name: Option<String>,
+    },
     /// A record type has no field of that name: `place.nmae` where `place`
     /// is a `Place`.
     UnknownField {
@@ -1277,6 +1365,15 @@ impl CompileError {
             | Self::UnknownMethod { span, .. }
             | Self::UnknownName { span, .. }
             | Self::DuplicateRecordType { span, .. }
+            | Self::PrivateName { span, .. }
+            | Self::DuplicateConstant { span, .. }
+            | Self::DuplicateEnum { span, .. }
+            | Self::DuplicateEnumCase { span, .. }
+            | Self::ConstantCycle { span, .. }
+            | Self::ImpureConstant { span, .. }
+            | Self::ConstantTypeMismatch { span, .. }
+            | Self::UnknownEnumCase { span, .. }
+            | Self::EnumShorthand { span, .. }
             | Self::UnknownField { span, .. }
             | Self::ShapeMismatch { span, .. } => *span,
         }
@@ -1388,6 +1485,15 @@ impl CompileError {
             | Self::UnknownMethod { span, .. }
             | Self::UnknownName { span, .. }
             | Self::DuplicateRecordType { span, .. }
+            | Self::PrivateName { span, .. }
+            | Self::DuplicateConstant { span, .. }
+            | Self::DuplicateEnum { span, .. }
+            | Self::DuplicateEnumCase { span, .. }
+            | Self::ConstantCycle { span, .. }
+            | Self::ImpureConstant { span, .. }
+            | Self::ConstantTypeMismatch { span, .. }
+            | Self::UnknownEnumCase { span, .. }
+            | Self::EnumShorthand { span, .. }
             | Self::UnknownField { span, .. }
             | Self::ShapeMismatch { span, .. } => {
                 span.start = (i64::from(span.start) + delta).max(0) as u32;
@@ -1501,6 +1607,15 @@ impl CompileError {
             Self::UnknownMethod { .. } => "UnknownMethod",
             Self::UnknownName { .. } => "UnknownName",
             Self::DuplicateRecordType { .. } => "DuplicateRecordType",
+            Self::PrivateName { .. } => "PrivateName",
+            Self::DuplicateConstant { .. } => "DuplicateConstant",
+            Self::DuplicateEnum { .. } => "DuplicateEnum",
+            Self::DuplicateEnumCase { .. } => "DuplicateEnumCase",
+            Self::ConstantCycle { .. } => "ConstantCycle",
+            Self::ImpureConstant { .. } => "ImpureConstant",
+            Self::ConstantTypeMismatch { .. } => "ConstantTypeMismatch",
+            Self::UnknownEnumCase { .. } => "UnknownEnumCase",
+            Self::EnumShorthand { .. } => "EnumShorthand",
             Self::ShapeMismatch { .. } => "ShapeMismatch",
             Self::UnknownField { .. } => "UnknownField",
         }
@@ -2102,6 +2217,55 @@ impl CompileError {
             Self::DuplicateRecordType { name, .. } => {
                 format!("the type `{name}` is declared twice in this program")
             }
+            Self::PrivateName { name, package, .. } => {
+                format!("`{name}` is private to {package}: only the package's own files can use it")
+            }
+            Self::DuplicateConstant { name, package, .. } => {
+                format!("constant `{name}` is declared more than once in {package}")
+            }
+            Self::DuplicateEnum { name, package, .. } => {
+                format!("enum `{name}` is declared more than once in {package}")
+            }
+            Self::DuplicateEnumCase {
+                enum_name, name, ..
+            } => {
+                format!("enum `{enum_name}` lists the case `{name}` more than once")
+            }
+            Self::ConstantCycle { path, .. } => {
+                format!("constants cannot read each other in a circle: {path}")
+            }
+            Self::ImpureConstant { name, .. } => format!(
+                "constant `{name}` must be pure: it may read only other constants and call \
+                 functions, and may not assign or reach a controller, because it is \
+                 shared by every view"
+            ),
+            Self::ConstantTypeMismatch {
+                name,
+                expected,
+                found,
+                ..
+            } => format!("constant `{name}` is declared `{expected}` but its value is `{found}`"),
+            Self::UnknownEnumCase {
+                enum_name,
+                name,
+                hint,
+                ..
+            } => with_hint(
+                format!("enum `{enum_name}` has no case `{name}`"),
+                hint.as_deref(),
+            ),
+            Self::EnumShorthand {
+                case, enum_name, ..
+            } => match enum_name {
+                Some(e) => format!(
+                    "`.{case}` is short for `{e}.{case}` only as the argument of a parameter \
+                     typed `{e}`; write `{e}.{case}` here"
+                ),
+                None => format!(
+                    "`.{case}` is short for an enum case only as the argument of a parameter \
+                     typed with that enum; write the enum's name before the case"
+                ),
+            },
             Self::UnknownField {
                 record, name, hint, ..
             } => with_hint(

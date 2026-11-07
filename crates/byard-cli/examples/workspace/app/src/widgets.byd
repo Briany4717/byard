@@ -1,7 +1,23 @@
 // Same project namespace as main.byd, referenced by its bare name.
-View Sidebar() {
+let limit = 10
+
+// `private` changes nothing in an app, and is accepted.
+private View Sidebar() {
     Row #[gap: 8, p: (vertical: 8)] {
         Text("·") #[color: 0x6495ED]
         Text("a sibling-file view, same project namespace") #[color: 0x9AA0AC, size: 13]
+    }
+}
+
+// `else when` continues a `when` without nesting a block in every `else`.
+View Inbox(count: Int) {
+    when count == 0 {
+        Text("no messages") #[color: 0x9AA0AC, size: 13]
+    } else when count == 1 {
+        Text("one message") #[color: 0xE6E1E5, size: 13]
+    } else when count < limit {
+        Text("{count} messages") #[color: 0xE6E1E5, size: 13]
+    } else {
+        Text("more than {limit - 1} messages") #[color: 0xF2B8B5, size: 13]
     }
 }

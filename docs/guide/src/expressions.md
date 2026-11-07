@@ -260,6 +260,89 @@ one name are an error. A reply from a server is compared with the declared type
 when it is written into a `var`, and the first difference is reported, such as
 "item 3 has no `country`". See [data and I/O](data-and-io.md).
 
+## Constants
+
+A `let` at the top of a file, outside any view, is a *constant*: a value with a name,
+shared by every view of the project. It is worked out once, when the program loads, and
+reading it costs nothing more than reading the value.
+
+```byld
+let gap = 8
+let pad = gap * 2
+let title: Str = "Settings"
+
+View Main() {
+    Column #[gap: gap, p: pad] {
+        Text(title)
+        Text("{gap} between, {pad} around")
+    }
+}
+```
+
+A constant's type is inferred like a `let`'s, or written after the name. Its value may use
+other constants and call the project's functions, in any order and from any file, and nothing
+else: no `var`, no parameter, no clock. Two constants that need each other are an error that
+shows the circle:
+
+```byld,fails
+let gap = pad
+let pad = gap
+
+View Main() {
+    Text("x")
+}
+```
+
+```diagnostic
+error[ConstantCycle]: constants cannot read each other in a circle: gap → pad → gap
+```
+
+A `var`, a parameter or a `let` inside a view that has the same name hides the constant in that
+view. A [package](packages.md) shares its constants with the apps that use it as `k.gap`.
+
+## Enums
+
+An enum is a closed set of named cases:
+
+```byld
+enum Size { small, medium, large }
+
+View Main() {
+    var size = Size.medium
+
+    Column #[gap: 8, p: 24] {
+        Text("size: {size}")
+        Text(size == Size.large ? "big" : "not big")
+        Button("Grow") => size = Size.large
+    }
+}
+```
+
+A case is written `Size.large`. It can be compared with `==` and `!=`, chosen with `? :`, kept in a
+`var` and passed to a view. In a string it is its name, and that is also what a controller or JSON
+sees: an enum is text at run time. To show one thing for each case, use a chain of `when`s
+(see [`else when`](state.md#else-when)) or `? :`; there is no `match`.
+
+What an enum buys over a string is that a mistake is an error where it is written, with the
+closest case, instead of a value that is never equal to anything:
+
+```byld,fails
+enum Variant { filled, tonal, outlined }
+
+View Main() {
+    Text("{Variant.tonl}")
+}
+```
+
+```diagnostic
+error[UnknownEnumCase]: enum `Variant` has no case `tonl` (did you mean `tonal`?)
+```
+
+A case is a different type from text. Comparing one with a string, or passing a string where
+the parameter is an enum, is a type error, and so is comparing two different enums. Cases are
+separated by commas or by line breaks. [Views and parameters](views-and-parameters.md#enum-parameters)
+shows an enum as a parameter, with the short form `variant: .tonal`.
+
 ## Lambdas
 
 A lambda is a small function you pass to a list method:

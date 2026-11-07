@@ -128,6 +128,15 @@ pub struct ViewDecl {
     /// The program's record types (`type Place = { … }`), shared like
     /// `helpers` and for the same reason.
     pub records: std::sync::Arc<Vec<RecordDecl>>,
+    /// The program's top-level constants (`let gap = 8`), shared like
+    /// `helpers` and for the same reason.
+    pub consts: std::sync::Arc<Vec<ConstDecl>>,
+    /// The program's enums (`enum Variant { … }`), shared like `helpers` and
+    /// for the same reason.
+    pub enums: std::sync::Arc<Vec<EnumDecl>>,
+    /// Written `private View …`: a consumer of the package cannot name it
+    /// (RFC-0055). Accepted, and without effect, in an app.
+    pub private: bool,
 }
 
 /// A record type declared at file level: `type Place = { name: Str,
@@ -139,6 +148,41 @@ pub struct RecordDecl {
     pub name: Symbol,
     /// Its fields, in the order written.
     pub fields: Vec<RecordField>,
+    /// Written `private type …` (RFC-0055).
+    pub private: bool,
+    /// Source span.
+    pub span: Span,
+}
+
+/// A top-level constant: `let gap = 8`, or `let gap: Int = 8`. Pure, shared by
+/// every file of its project or package, and reached from another package as
+/// `m.gap` (RFC-0055).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ConstDecl {
+    /// The name; a package's constants are canonical (`kit.gap`) once
+    /// resolved.
+    pub name: Symbol,
+    /// The declared type, if written (else inferred from `init`).
+    pub ty: Option<Type>,
+    /// The value, an expression of other constants and functions.
+    pub init: Expr,
+    /// Written `private let …`.
+    pub private: bool,
+    /// Source span.
+    pub span: Span,
+}
+
+/// A top-level enum: `enum Variant { filled, tonal }`. A closed set of named
+/// cases, written `Variant.tonal` (RFC-0055).
+#[derive(Clone, Debug, PartialEq)]
+pub struct EnumDecl {
+    /// The name; a package's enums are canonical (`kit.Variant`) once
+    /// resolved.
+    pub name: Symbol,
+    /// The cases, in the order written, each with its span.
+    pub cases: Vec<(Symbol, Span)>,
+    /// Written `private enum …`.
+    pub private: bool,
     /// Source span.
     pub span: Span,
 }
@@ -169,6 +213,8 @@ pub struct FnDecl {
     pub ret: Option<Type>,
     /// The body, a pure expression of the parameters.
     pub body: Expr,
+    /// Written `private fn …` (RFC-0055).
+    pub private: bool,
     /// Source span.
     pub span: Span,
 }
@@ -1073,6 +1119,9 @@ mod tests {
         let view = ViewDecl {
             helpers: std::sync::Arc::default(),
             records: std::sync::Arc::default(),
+            consts: std::sync::Arc::default(),
+            enums: std::sync::Arc::default(),
+            private: false,
             name: Symbol::intern("Counter"),
             params: Vec::new(),
             body: vec![

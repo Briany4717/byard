@@ -140,10 +140,11 @@ A consumer cannot use a private name: `m.Hint()`, `use kit.{Hint}`, `m.helper(1)
 an app, or in a package checked on its own, `private` is accepted and changes
 nothing.
 
-**`else when`** continues a `when` chain. Each arm is its own branch: the
-`var`s it declares live while that arm is the one showing, and start over when
-the condition chain moves to another arm and back, exactly as separate `when`s
-do. Only the arm being shown is built.
+**`else when`** continues a `when` chain. Each arm is its own branch, as
+separate `when`s are: only the arm being shown is built, and the views in it are
+instances of their own, which start over when the chain moves to another arm and
+back (state belongs to a view instance, so a `Counter` inside an arm counts again
+from zero).
 
 ## Reference-level explanation
 
@@ -340,8 +341,8 @@ it; (b) each arm a branch of its own, as separate `when`s are.
 
 **Resolution: (b).** The sugar is defined as the nested form, and the nested form
 is (b): the arm after `else` is built when the previous conditions are false and
-torn down when one becomes true. A `var` in an arm starts over each time its arm
-comes back. (a) would make `else when` mean something the nested form cannot say.
+torn down when one becomes true, and the view instances in it go with it. (a)
+would make `else when` mean something the nested form cannot say.
 
 ### Q2, `.tonal` where the type is known, or only strings?
 

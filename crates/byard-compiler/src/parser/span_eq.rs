@@ -104,9 +104,13 @@ impl SpanEq for Param {
             name,
             ty,
             default,
+            bind,
             span: _,
         } = self;
-        *name == other.name && ty.span_eq(&other.ty) && default.span_eq(&other.default)
+        *name == other.name
+            && *bind == other.bind
+            && ty.span_eq(&other.ty)
+            && default.span_eq(&other.default)
     }
 }
 
@@ -446,8 +450,8 @@ impl SpanEq for StyleRule {
 
 impl SpanEq for Arg {
     fn span_eq(&self, other: &Self) -> bool {
-        let Self { name, value } = self;
-        *name == other.name && value.span_eq(&other.value)
+        let Self { name, value, bind } = self;
+        *name == other.name && *bind == other.bind && value.span_eq(&other.value)
     }
 }
 

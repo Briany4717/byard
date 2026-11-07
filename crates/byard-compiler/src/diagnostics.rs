@@ -1005,17 +1005,73 @@ pub enum CompileError {
     /// A control's `bind:` (or `value:`) names something that cannot be
     /// written: a view parameter, a `let`, a loop variable or a literal. The
     /// control would draw its default and never write, silently.
+    ///
+    /// The same check covers a view's binding (RFC-0051): `Switch(bind: x)`
+    /// with an `x` that is not a `var` or a binding of the calling view.
     BindNotAVar {
         /// Source range of the bound value.
         span: Span,
-        /// The control (`TextField`, `Toggle`, …).
+        /// The control (`TextField`, `Toggle`, …) or the view called.
         control: String,
-        /// The attribute written (`bind` or `value`).
+        /// The attribute written (`bind` or `value`), or for a view `bind`
+        /// or `bind name`.
         attr: String,
         /// What it was given: the name, or the literal's source form.
         target: String,
         /// Which kind of thing that is.
         kind: BindTarget,
+        /// Whether `control` is a view of the program, called with
+        /// `Name(bind: x)`, and not a control written `Name #[bind: x]`.
+        view_call: bool,
+        /// The type of the parameter that was bound, when it is known: what a
+        /// declaration `bind x: T` should say.
+        ty: String,
+    },
+    /// A view call passes a value where the view declares a binding, or
+    /// passes `bind name:` for a parameter that is a value (RFC-0051).
+    BindArgMismatch {
+        /// Source range of the argument.
+        span: Span,
+        /// The callee view name.
+        callee: String,
+        /// The parameter.
+        name: String,
+        /// Whether the parameter is the binding (a value was passed) or the
+        /// value (`bind` was written).
+        declared_binding: bool,
+        /// Whether the parameter is the view's only binding, so that `bind:`
+        /// alone is the call to write.
+        sole: bool,
+        /// What was passed, as a name when it is one.
+        passed: String,
+    },
+    /// `bind: x` for a view with more than one binding: it does not say
+    /// which (RFC-0051).
+    BindNeedsName {
+        /// Source range of the argument.
+        span: Span,
+        /// The callee view name.
+        callee: String,
+        /// The view's bindings.
+        names: Vec<String>,
+    },
+    /// `bind name: x` where only a user view can take it: a function call, a
+    /// tuple, a control (RFC-0051).
+    BindOutsideViewCall {
+        /// Source range of the argument.
+        span: Span,
+        /// The parameter it names.
+        name: String,
+    },
+    /// A binding parameter that cannot be one: it has a default, no type, is a
+    /// callback, or is called `bind` (RFC-0051).
+    BadBindingParam {
+        /// Source range of the parameter.
+        span: Span,
+        /// The parameter name.
+        name: String,
+        /// What is wrong with it.
+        problem: BindingProblem,
     },
     /// An argument of a user-`View` call does not have the type the callee
     /// declares for that parameter.
@@ -1071,6 +1127,23 @@ pub enum BindTarget {
     /// Anything else that is not a `var`: a loop variable, a lambda parameter,
     /// the value an event hands over.
     Other,
+    /// An expression, or a field of one: `a + b`, `row.done`.
+    Expression,
+}
+
+/// What is wrong with the declaration of a binding parameter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BindingProblem {
+    /// It has a default value.
+    Default,
+    /// It has no type.
+    NoType,
+    /// Its type is `Fn(...)`.
+    Callback,
+    /// A parameter named `bind`.
+    Reserved,
+    /// A `bind` on something that is not a view's parameter (a `fn`'s).
+    NotAView,
 }
 
 impl CompileError {
@@ -1162,6 +1235,10 @@ impl CompileError {
             | Self::CallbackNotInvocable { span, .. }
             | Self::CallbackTypeMismatch { span, .. }
             | Self::BindNotAVar { span, .. }
+            | Self::BindArgMismatch { span, .. }
+            | Self::BindNeedsName { span, .. }
+            | Self::BindOutsideViewCall { span, .. }
+            | Self::BadBindingParam { span, .. }
             | Self::ArgumentTypeMismatch { span, .. }
             | Self::KeywordAsName { span, .. }
             | Self::MixedTernaryPrecedence { span, .. }
@@ -1266,6 +1343,10 @@ impl CompileError {
             | Self::CallbackNotInvocable { span, .. }
             | Self::CallbackTypeMismatch { span, .. }
             | Self::BindNotAVar { span, .. }
+            | Self::BindArgMismatch { span, .. }
+            | Self::BindNeedsName { span, .. }
+            | Self::BindOutsideViewCall { span, .. }
+            | Self::BadBindingParam { span, .. }
             | Self::ArgumentTypeMismatch { span, .. }
             | Self::KeywordAsName { span, .. }
             | Self::MixedTernaryPrecedence { span, .. }
@@ -1372,6 +1453,10 @@ impl CompileError {
             Self::CallbackNotInvocable { .. } => "CallbackNotInvocable",
             Self::CallbackTypeMismatch { .. } => "CallbackTypeMismatch",
             Self::BindNotAVar { .. } => "BindNotAVar",
+            Self::BindArgMismatch { .. } => "BindArgMismatch",
+            Self::BindNeedsName { .. } => "BindNeedsName",
+            Self::BindOutsideViewCall { .. } => "BindOutsideViewCall",
+            Self::BadBindingParam { .. } => "BadBindingParam",
             Self::ArgumentTypeMismatch { .. } => "ArgumentTypeMismatch",
             Self::KeywordAsName { .. } => "KeywordAsName",
             Self::MixedTernaryPrecedence { .. } => "MixedTernaryPrecedence",
@@ -1813,30 +1898,115 @@ impl CompileError {
                 attr,
                 target,
                 kind,
+                view_call,
+                ty,
                 ..
-            } => match kind {
-                BindTarget::Parameter => format!(
-                    "`{control} #[{attr}: {target}]` cannot change `{target}`: a parameter is a \
-                     copy of what the caller passed, so a change would be lost. Keep a `var` of \
-                     your own, bind the control to it, and hand each change up through a \
-                     callback parameter. For a `TextField`, with `on_change: Fn(Str)` a \
-                     parameter of the view: `var text = {target}`, \
-                     `on change({target}) => text = {target}`, \
-                     `TextField #[bind: text, input(t) => on_change(t)]`"
+            } => {
+                let site = if *view_call {
+                    format!("`{control}({attr}: {target})`")
+                } else {
+                    format!("`{control} #[{attr}: {target}]`")
+                };
+                let nothing = if *view_call {
+                    "so the view could not write it, and its changes would go nowhere"
+                } else {
+                    "so the control would draw its default and change nothing"
+                };
+                match kind {
+                    BindTarget::Parameter => {
+                        let ty = if ty.is_empty() { "Type" } else { ty.as_str() };
+                        format!(
+                            "{site} cannot change `{target}`: a parameter is a copy of what the \
+                             caller passed, so a change would be lost. Declare it a binding, \
+                             `bind {target}: {ty}`, and the caller passes a `var` with \
+                             `bind: …`; or keep a `var` of your own, bind to it, and hand each \
+                             change up through a callback parameter"
+                        )
+                    }
+                    BindTarget::Let => format!(
+                        "{site}: `{target}` is a `let`, which is computed and cannot be \
+                         written, {nothing}. Bind a `var`"
+                    ),
+                    BindTarget::Literal => {
+                        format!("{site}: {target} cannot be written, {nothing}. Bind a `var`")
+                    }
+                    BindTarget::Other => {
+                        format!("{site}: `{target}` is not a `var`, {nothing}. Bind a `var`")
+                    }
+                    BindTarget::Expression => format!(
+                        "{site}: {target} is a value worked out where it is written, not a \
+                         place that can be written, {nothing}. Bind a `var`"
+                    ),
+                }
+            }
+            Self::BindArgMismatch {
+                callee,
+                name,
+                declared_binding,
+                sole,
+                passed,
+                ..
+            } => {
+                if *declared_binding {
+                    let how = if *sole {
+                        "bind".to_string()
+                    } else {
+                        format!("bind {name}")
+                    };
+                    let var = if passed.is_empty() {
+                        "…"
+                    } else {
+                        passed.as_str()
+                    };
+                    format!(
+                        "parameter `{name}` of view `{callee}` is a binding, so the caller \
+                         passes a `var` of its own: write `{how}: {var}`, not `{name}: {var}`"
+                    )
+                } else {
+                    format!(
+                        "parameter `{name}` of view `{callee}` is a value, not a binding: write \
+                         `{name}: …`, without `bind`"
+                    )
+                }
+            }
+            Self::BindNeedsName { callee, names, .. } => {
+                let list = names
+                    .iter()
+                    .map(|n| format!("`bind {n}: …`"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!(
+                    "view `{callee}` has {} bindings, so `bind:` does not say which; name the \
+                     one you pass: {list}",
+                    names.len()
+                )
+            }
+            Self::BindOutsideViewCall { name, .. } => format!(
+                "`bind {name}: …` passes a binding to a view of the program; a function, a \
+                 tuple or a built-in takes a plain `{name}: …`"
+            ),
+            Self::BadBindingParam { name, problem, .. } => match problem {
+                BindingProblem::Default => format!(
+                    "binding `{name}` cannot have a default value: it is the caller's `var`, \
+                     so there is nothing for a default to stand in for. Make it a plain \
+                     parameter, or keep a `var` of your own in the view"
                 ),
-                BindTarget::Let => format!(
-                    "`{control} #[{attr}: {target}]`: `{target}` is a `let`, which is computed \
-                     and cannot be written, so the control would draw its default and change \
-                     nothing. Bind a `var`"
+                BindingProblem::NoType => {
+                    format!("binding `{name}` needs a type: write `bind {name}: Type`")
+                }
+                BindingProblem::Callback => format!(
+                    "`bind {name}` cannot be a callback: a binding holds a value. A callback is \
+                     a plain `{name}: Fn(…)` parameter"
                 ),
-                BindTarget::Literal => format!(
-                    "`{control}`'s `{attr}` is {target}, which cannot be written, so the \
-                     control would draw its default and change nothing. Bind a `var`"
+                BindingProblem::NotAView => format!(
+                    "`bind {name}` is a binding, and only a view's parameter can be one; a \
+                     function takes a plain `{name}: Type`"
                 ),
-                BindTarget::Other => format!(
-                    "`{control} #[{attr}: {target}]`: `{target}` is not a `var`, so the control \
-                     would draw its default and change nothing. Bind a `var`"
-                ),
+                BindingProblem::Reserved => {
+                    "`bind` introduces a binding, so it cannot name a parameter; at a call, \
+                     `bind:` is the short form of `bind name:`. Pick another name"
+                        .to_string()
+                }
             },
             Self::ArgumentTypeMismatch {
                 callee,

@@ -6,7 +6,18 @@ View Main() {
         Text("app + package") #[color: 0xFFFFFF, size: 20, weight: bold]
         // A view from the `kit` package, namespaced by the `k` alias.
         k.Card("hello from the kit package")
+        // The package's constant, and its enum: `.tonal` is `k.Variant.tonal`
+        // where the parameter says which enum it is.
+        Row #[gap: k.gap] {
+            k.Button("Save")
+            k.Button("Cancel", variant: .tonal)
+            k.Button("More", variant: k.Variant.outlined)
+        }
         // A view from a sibling file in *this* project's namespace (bare name).
         Sidebar()
+        Inbox(0)
+        Inbox(1)
+        Inbox(4)
+        Inbox(40)
     }
 }

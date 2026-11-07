@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use byard_compiler::parser::ast::{UseDecl, ViewDecl};
+use byard_compiler::parser::ast::{ConstDecl, EnumDecl, UseDecl, ViewDecl};
 use byard_compiler::parser::parse;
 
 /// The exported views of every package the document's manifest declares.
@@ -18,6 +18,11 @@ pub struct PackageIndex {
     pub own_package: Option<String>,
     /// The file each exported view is declared in, parallel to `exports`.
     pub files: HashMap<String, Vec<PathBuf>>,
+    /// Package name -> its public constants (RFC-0055); a private one is not
+    /// the consumer's to be offered.
+    pub consts: HashMap<String, Vec<ConstDecl>>,
+    /// Package name -> its public enums.
+    pub enums: HashMap<String, Vec<EnumDecl>>,
 }
 
 impl PackageIndex {
@@ -65,9 +70,15 @@ impl PackageIndex {
             };
             let mut views = Vec::new();
             let mut files = Vec::new();
-            collect_package_views(&scan, &mut views, &mut files);
+            let mut consts = Vec::new();
+            let mut enums = Vec::new();
+            collect_package_views(&scan, &mut views, &mut files, &mut consts, &mut enums);
+            consts.retain(|c: &ConstDecl| !c.private);
+            enums.retain(|e: &EnumDecl| !e.private);
             index.exports.insert(name.clone(), views);
             index.files.insert(name.clone(), files);
+            index.consts.insert(name.clone(), consts);
+            index.enums.insert(name.clone(), enums);
         }
         index
     }
@@ -118,7 +129,13 @@ pub fn qualified_target<'n>(
 }
 
 /// Recursively parses every `.byd` under `dir` and collects its views.
-fn collect_package_views(dir: &Path, out: &mut Vec<ViewDecl>, files: &mut Vec<PathBuf>) {
+fn collect_package_views(
+    dir: &Path,
+    out: &mut Vec<ViewDecl>,
+    files: &mut Vec<PathBuf>,
+    consts: &mut Vec<ConstDecl>,
+    enums: &mut Vec<EnumDecl>,
+) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
@@ -133,12 +150,14 @@ fn collect_package_views(dir: &Path, out: &mut Vec<ViewDecl>, files: &mut Vec<Pa
             {
                 continue;
             }
-            collect_package_views(&path, out, files);
+            collect_package_views(&path, out, files, consts, enums);
         } else if path.extension().is_some_and(|e| e == "byd") {
             if let Ok(src) = std::fs::read_to_string(&path) {
-                let views = parse(&src).views;
-                files.extend(std::iter::repeat_n(path.clone(), views.len()));
-                out.extend(views);
+                let parsed = parse(&src);
+                files.extend(std::iter::repeat_n(path.clone(), parsed.views.len()));
+                out.extend(parsed.views);
+                consts.extend(parsed.consts);
+                enums.extend(parsed.enums);
             }
         }
     }

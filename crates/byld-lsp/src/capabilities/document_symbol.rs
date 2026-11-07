@@ -52,6 +52,52 @@ pub fn handle_document_symbol(doc: &Document) -> Option<DocumentSymbolResponse> 
             },
         });
     }
+    for decl in &doc.parsed.enums {
+        let range = doc.line_index.span_to_range(&doc.content, decl.span);
+        let cases: Vec<DocumentSymbol> = decl
+            .cases
+            .iter()
+            .map(|(case, span)| {
+                let range = doc.line_index.span_to_range(&doc.content, *span);
+                #[allow(deprecated)]
+                DocumentSymbol {
+                    name: case.to_string(),
+                    detail: Some("Case".to_string()),
+                    kind: SymbolKind::ENUM_MEMBER,
+                    tags: None,
+                    deprecated: None,
+                    range,
+                    selection_range: range,
+                    children: None,
+                }
+            })
+            .collect();
+        #[allow(deprecated)]
+        symbols.push(DocumentSymbol {
+            name: decl.name.to_string(),
+            detail: Some("Enum".to_string()),
+            kind: SymbolKind::ENUM,
+            tags: None,
+            deprecated: None,
+            range,
+            selection_range: range,
+            children: if cases.is_empty() { None } else { Some(cases) },
+        });
+    }
+    for decl in &doc.parsed.consts {
+        let range = doc.line_index.span_to_range(&doc.content, decl.span);
+        #[allow(deprecated)]
+        symbols.push(DocumentSymbol {
+            name: decl.name.to_string(),
+            detail: Some("Constant".to_string()),
+            kind: SymbolKind::CONSTANT,
+            tags: None,
+            deprecated: None,
+            range,
+            selection_range: range,
+            children: None,
+        });
+    }
     for decl in &doc.parsed.fns {
         let range = doc.line_index.span_to_range(&doc.content, decl.span);
         #[allow(deprecated)]

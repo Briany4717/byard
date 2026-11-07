@@ -1723,6 +1723,9 @@ mod tests {
         vec![ViewDecl {
             helpers: std::sync::Arc::default(),
             records: std::sync::Arc::default(),
+            consts: std::sync::Arc::default(),
+            enums: std::sync::Arc::default(),
+            private: false,
             name: byard_compiler::Symbol::intern(name),
             params: Vec::new(),
             body: Vec::new(),

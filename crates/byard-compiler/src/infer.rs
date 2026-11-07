@@ -19,7 +19,8 @@ use std::collections::{HashMap, HashSet};
 use crate::diagnostics::{BindTarget, BindingProblem, CompileError, Span};
 use crate::interp::style::check_static;
 use crate::parser::ast::{
-    AttrKind, BinOp, Expr, FnDecl, Member, Param, StrPart, Type, UnOp, ViewDecl,
+    AttrKind, BinOp, ConstDecl, EnumDecl, Expr, FnDecl, Member, Param, StrPart, Type, UnOp,
+    ViewDecl,
 };
 use crate::symbol::Symbol;
 
@@ -130,18 +131,35 @@ pub struct Inference {
     pub errors: Vec<CompileError>,
     /// Inferred type of each top-level `var`/`let`, in declaration order.
     pub bindings: Vec<(Symbol, Ty)>,
+    /// The type of each top-level constant (RFC-0055), in declaration order.
+    pub consts: Vec<(Symbol, Ty)>,
 }
 
 /// Runs the D9 checks and local inference over `views`.
 #[must_use]
 pub fn check_views(views: &[ViewDecl]) -> Inference {
     let mut out = Inference::default();
-    // Every view carries the same table of top-level functions.
+    // Every view carries the same table of top-level functions, constants and
+    // enums.
     let helpers = views
         .first()
         .map(|v| std::sync::Arc::clone(&v.helpers))
         .unwrap_or_default();
-    let top_fns = check_top_fns(&helpers, &mut out);
+    let const_decls = views
+        .first()
+        .map(|v| std::sync::Arc::clone(&v.consts))
+        .unwrap_or_default();
+    let enum_decls = views
+        .first()
+        .map(|v| std::sync::Arc::clone(&v.enums))
+        .unwrap_or_default();
+    let enums = enum_table(&enum_decls);
+    let top_fns = check_top_fns(&helpers, &const_decls, &enums, &mut out);
+    let consts = check_consts(&const_decls, &helpers, &top_fns, &enums, &mut out);
+    out.consts = const_decls
+        .iter()
+        .filter_map(|c| consts.get(&c.name).map(|ty| (c.name.clone(), ty.clone())))
+        .collect();
     let names: HashSet<Symbol> = views.iter().map(|v| v.name.clone()).collect();
     let records: HashMap<Symbol, Vec<(Symbol, Type)>> = views
         .first()
@@ -182,6 +200,8 @@ pub fn check_views(views: &[ViewDecl]) -> Inference {
             views: &names,
             view_params: &view_params,
             records: &records,
+            consts: &consts,
+            enums: &enums,
             strict: true,
         };
         checker.check_view(view);
@@ -192,11 +212,24 @@ pub fn check_views(views: &[ViewDecl]) -> Inference {
 /// Checks the program's top-level functions once (annotations, purity, and
 /// that each reads only its own parameters) and returns their declared
 /// return types, so every view types its calls to them.
-fn check_top_fns(helpers: &[FnDecl], out: &mut Inference) -> HashMap<Symbol, Option<Ty>> {
-    let names: std::collections::HashSet<&Symbol> = helpers.iter().map(|f| &f.name).collect();
+fn check_top_fns(
+    helpers: &[FnDecl],
+    consts: &[ConstDecl],
+    enums: &HashMap<Symbol, Vec<Symbol>>,
+    out: &mut Inference,
+) -> HashMap<Symbol, Option<Ty>> {
+    // What a function may read besides its parameters: other functions, the
+    // constants, and the enums whose cases it names.
+    let names: std::collections::HashSet<&Symbol> = helpers
+        .iter()
+        .map(|f| &f.name)
+        .chain(consts.iter().map(|c| &c.name))
+        .chain(enums.keys())
+        .collect();
     let no_views = HashSet::new();
     let no_view_params = HashMap::new();
     let no_records = HashMap::new();
+    let no_consts = HashMap::new();
     let mut checker = Checker {
         errors: &mut out.errors,
         bindings: &mut out.bindings,
@@ -208,6 +241,8 @@ fn check_top_fns(helpers: &[FnDecl], out: &mut Inference) -> HashMap<Symbol, Opt
         views: &no_views,
         view_params: &no_view_params,
         records: &no_records,
+        consts: &no_consts,
+        enums,
         // A name a shared function cannot reach is reported below, as
         // impurity, which says more than "unknown".
         strict: false,
@@ -263,6 +298,124 @@ fn check_top_fns(helpers: &[FnDecl], out: &mut Inference) -> HashMap<Symbol, Opt
     top
 }
 
+/// The program's enums by name, each with its distinct cases.
+fn enum_table(decls: &[EnumDecl]) -> HashMap<Symbol, Vec<Symbol>> {
+    decls
+        .iter()
+        .map(|e| {
+            let mut cases: Vec<Symbol> = Vec::with_capacity(e.cases.len());
+            for (case, _) in &e.cases {
+                if !cases.contains(case) {
+                    cases.push(case.clone());
+                }
+            }
+            (e.name.clone(), cases)
+        })
+        .collect()
+}
+
+/// Checks the program's top-level constants once (RFC-0055 §3): that none
+/// reads another in a circle, that each is a pure expression of other
+/// constants and functions, and that its value is of the type written for it.
+/// Returns each constant's type, so every view types its reads of it.
+fn check_consts(
+    consts: &[ConstDecl],
+    helpers: &[FnDecl],
+    fns: &HashMap<Symbol, Option<Ty>>,
+    enums: &HashMap<Symbol, Vec<Symbol>>,
+    out: &mut Inference,
+) -> HashMap<Symbol, Ty> {
+    let mut types: HashMap<Symbol, Ty> = HashMap::new();
+    if consts.is_empty() {
+        return types;
+    }
+    let ordered = crate::consts::order(consts, helpers);
+    for (at, names) in &ordered.cycles {
+        out.errors.push(CompileError::ConstantCycle {
+            span: consts[*at].span,
+            path: names
+                .iter()
+                .map(Symbol::as_str)
+                .collect::<Vec<_>>()
+                .join(" → "),
+        });
+    }
+    // The order they can be typed in; the ones in a cycle last, unknown.
+    let mut sequence = ordered.order.clone();
+    sequence.extend((0..consts.len()).filter(|i| !ordered.order.contains(i)));
+
+    let allowed: HashSet<&Symbol> = helpers
+        .iter()
+        .map(|f| &f.name)
+        .chain(consts.iter().map(|c| &c.name))
+        .chain(enums.keys())
+        .collect();
+    let no_views = HashSet::new();
+    let no_view_params = HashMap::new();
+    let no_records = HashMap::new();
+    for i in sequence {
+        let decl = &consts[i];
+        let (ty, impure) = {
+            let mut checker = Checker {
+                errors: &mut out.errors,
+                bindings: &mut out.bindings,
+                env: HashMap::new(),
+                undo: Vec::new(),
+                origins: HashMap::new(),
+                fns: fns.clone(),
+                declared: HashSet::new(),
+                views: &no_views,
+                view_params: &no_view_params,
+                records: &no_records,
+                consts: &types,
+                enums,
+                // A name a shared constant cannot reach is reported below, as
+                // impurity, which says more than "unknown".
+                strict: false,
+            };
+            let declared = decl.ty.as_ref().map(|t| checker.resolve_type(t));
+            let found = if declared.is_some() {
+                checker.value(&decl.init)
+            } else {
+                checker.infer_binding(None, &decl.init, decl.span)
+            };
+            if let Some(expected) = &declared {
+                if is_concrete(&found) && !assignable(expected, &found) {
+                    checker.errors.push(CompileError::ConstantTypeMismatch {
+                        span: decl.init.span(),
+                        name: decl.name.as_str().to_string(),
+                        expected: ty_name(expected),
+                        found: ty_name(&found),
+                    });
+                }
+            }
+            let impure = effect_span(&decl.init).or_else(|| {
+                let mut body = decl.init.clone();
+                let mut bound: HashSet<Symbol> = HashSet::new();
+                let mut used: Vec<(Symbol, Span)> = Vec::new();
+                crate::resolve::walk::expr(&mut body, &mut |e| match e {
+                    Expr::Lambda { params, .. } => bound.extend(params.iter().cloned()),
+                    Expr::Ident(name, span) => used.push((name.clone(), *span)),
+                    _ => {}
+                });
+                used.into_iter().find_map(|(name, span)| {
+                    let keyword = matches!(name.as_str(), "true" | "false");
+                    (!keyword && !bound.contains(&name) && !allowed.contains(&name)).then_some(span)
+                })
+            });
+            (declared.unwrap_or(found), impure)
+        };
+        if let Some(span) = impure {
+            out.errors.push(CompileError::ImpureConstant {
+                span,
+                name: decl.name.as_str().to_string(),
+            });
+        }
+        types.insert(decl.name.clone(), ty);
+    }
+    types
+}
+
 /// Where a name in scope came from, which decides whether a control can
 /// write to it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -315,6 +468,10 @@ struct Checker<'a> {
     view_params: &'a ViewParams<'a>,
     /// The program's record types: name → fields.
     records: &'a HashMap<Symbol, Vec<(Symbol, Type)>>,
+    /// The program's top-level constants and their types (RFC-0055).
+    consts: &'a HashMap<Symbol, Ty>,
+    /// The program's enums and their cases (RFC-0055).
+    enums: &'a HashMap<Symbol, Vec<Symbol>>,
     /// Whether a bare name being checked has to be a value. `false` where it
     /// may be a word the element understands (`align: center`), which only
     /// the element can judge.
@@ -348,6 +505,13 @@ impl Checker<'_> {
         for member in &view.body {
             if let Member::Var { name, .. } = member {
                 vars.push(name.clone());
+            }
+        }
+        // A default is evaluated in the view's own scope, so a misspelt name or
+        // enum case in one is told here rather than when a call leaves it out.
+        for param in &view.params {
+            if let Some(default) = &param.default {
+                self.value(default);
             }
         }
         self.check_members(&view.body, true);
@@ -420,20 +584,30 @@ impl Checker<'_> {
         self.env.contains_key(name)
             || self.declared.contains(name)
             || self.fns.contains_key(name)
+            || self.consts.contains_key(name)
             || BUILT_IN_NAMES.contains(&name.as_str())
     }
 
     /// Reports `name` as undeclared, suggesting the closest name in scope.
     fn unknown_name(&mut self, name: &Symbol, span: Span) {
-        let hint = crate::util::closest_match(
-            name.as_str(),
-            self.env
-                .keys()
-                .chain(self.declared.iter())
-                .chain(self.fns.keys())
-                .map(Symbol::as_str),
-        )
-        .map(str::to_string);
+        // An enum's name on its own is not a value; its cases are.
+        let enum_case = self
+            .enums
+            .get(name)
+            .and_then(|cases| cases.first())
+            .map(|case| format!("{}.{}", name.as_str(), case.as_str()));
+        let hint = enum_case.or_else(|| {
+            crate::util::closest_match(
+                name.as_str(),
+                self.env
+                    .keys()
+                    .chain(self.declared.iter())
+                    .chain(self.fns.keys())
+                    .chain(self.consts.keys())
+                    .map(Symbol::as_str),
+            )
+            .map(str::to_string)
+        });
         self.errors.push(CompileError::UnknownName {
             span,
             name: name.as_str().to_string(),
@@ -979,7 +1153,11 @@ impl Checker<'_> {
                     if self.strict && !self.knows(sym) {
                         self.unknown_name(sym, *span);
                     }
-                    self.env.get(sym).cloned().unwrap_or(Ty::Unknown)
+                    self.env
+                        .get(sym)
+                        .or_else(|| self.consts.get(sym))
+                        .cloned()
+                        .unwrap_or(Ty::Unknown)
                 }
             }
             // A nested array only *checks* its elements, the homogeneity
@@ -1017,6 +1195,10 @@ impl Checker<'_> {
             } => {
                 let l = self.value(lhs);
                 let r = self.value(rhs);
+                if matches!(op, BinOp::Eq | BinOp::Ne) {
+                    self.check_shorthand(&l, rhs);
+                    self.check_shorthand(&r, lhs);
+                }
                 // `a || b ? x : y` is `a || (b ? x : y)`: the ternary reaches
                 // the end of the whole expression, with no parenthesis
                 // closing it. Almost always a mistake for `(a || b) ? x : y`.
@@ -1056,6 +1238,9 @@ impl Checker<'_> {
                 Ty::Unknown
             }
             Expr::Member { base, field, span } => {
+                if let Some(ty) = self.enum_case(base, field, *span) {
+                    return ty;
+                }
                 let b = self.value(base);
                 if field.as_str() == "len" && matches!(b, Ty::List(_) | Ty::Str) {
                     Ty::Int
@@ -1168,6 +1353,48 @@ impl Checker<'_> {
                 Ty::Unknown
             }
             Expr::AngleLit(..) | Expr::ClassRef(..) | Expr::Error(_) => Ty::Unknown,
+        }
+    }
+
+    /// `Enum.case` (RFC-0055): the enum's type when `base` names an enum
+    /// nothing in scope hides, `None` otherwise. A case the enum lacks is
+    /// told, with the nearest one, and the expression still has the enum's
+    /// type so the mistake is not reported twice.
+    fn enum_case(&mut self, base: &Expr, field: &Symbol, span: Span) -> Option<Ty> {
+        let Expr::Ident(name, _) = base else {
+            return None;
+        };
+        if self.env.contains_key(name) || self.declared.contains(name) {
+            return None;
+        }
+        let cases = self.enums.get(name)?;
+        if !cases.contains(field) {
+            let hint = crate::util::closest_match(field.as_str(), cases.iter().map(Symbol::as_str))
+                .map(str::to_string);
+            let len = u32::try_from(field.as_str().len()).unwrap_or(0);
+            self.errors.push(CompileError::UnknownEnumCase {
+                span: Span::new(span.end.saturating_sub(len).max(span.start), span.end),
+                enum_name: name.as_str().to_string(),
+                name: field.as_str().to_string(),
+                hint,
+            });
+        }
+        Some(Ty::Named(name.clone()))
+    }
+
+    /// A comparison of an enum with `.case`: the short form has no type to
+    /// read the enum from there, so it would compare with the text `.case`
+    /// and never be equal.
+    fn check_shorthand(&mut self, other: &Ty, expr: &Expr) {
+        let (Ty::Named(name), Expr::ClassRef(case, span)) = (other, expr) else {
+            return;
+        };
+        if self.enums.contains_key(name) {
+            self.errors.push(CompileError::EnumShorthand {
+                span: *span,
+                case: case.as_str().to_string(),
+                enum_name: Some(name.as_str().to_string()),
+            });
         }
     }
 
@@ -1472,7 +1699,11 @@ impl Checker<'_> {
                 if sym.as_str() == "true" || sym.as_str() == "false" {
                     Ty::Bool
                 } else {
-                    self.env.get(sym).cloned().unwrap_or(Ty::Unknown)
+                    self.env
+                        .get(sym)
+                        .or_else(|| self.consts.get(sym))
+                        .cloned()
+                        .unwrap_or(Ty::Unknown)
                 }
             }
             Expr::Call { callee, .. } => match callee.as_ref() {

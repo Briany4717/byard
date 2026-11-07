@@ -13,7 +13,25 @@ use crate::syntax::ast_utils::{HoverTarget, find_hover_target};
 #[must_use]
 pub fn handle_hover(doc: &Document, pos: Position) -> Option<Hover> {
     let offset = doc.line_index.position_to_offset(&doc.content, pos)?;
-    let target = find_hover_target(&doc.parsed.views, offset)?;
+    let target = find_hover_target(&doc.parsed.views, offset);
+    // A constant, an enum or one of its cases (RFC-0055), unless the cursor is
+    // on an element or an attribute name, which can be spelled the same
+    // (`gap: gap`).
+    if !matches!(
+        target,
+        Some(HoverTarget::Intrinsic { .. } | HoverTarget::Attribute { .. })
+    ) {
+        if let Some(docs) = declaration_hover_docs(doc, offset) {
+            return Some(Hover {
+                contents: HoverContents::Markup(MarkupContent {
+                    kind: MarkupKind::Markdown,
+                    value: docs,
+                }),
+                range: None,
+            });
+        }
+    }
+    let target = target?;
 
     let docs = match target {
         HoverTarget::Intrinsic { name } if name.contains('.') => qualified_hover_docs(doc, &name)?,
@@ -33,6 +51,69 @@ pub fn handle_hover(doc: &Document, pos: Position) -> Option<Hover> {
         }),
         range: None,
     })
+}
+
+/// What a hover on a constant, an enum or an enum case says: the constant's
+/// type, the enum's cases, the case's enum. The word under the cursor is read
+/// from the text, because a name can be written in a place no AST node marks.
+fn declaration_hover_docs(doc: &Document, offset: usize) -> Option<String> {
+    let text = &doc.content;
+    let is_word = |c: char| c.is_ascii_alphanumeric() || c == '_';
+    let start = text
+        .get(..offset)?
+        .rfind(|c: char| !is_word(c))
+        .map_or(0, |i| i + 1);
+    let end = text[offset..]
+        .find(|c: char| !is_word(c))
+        .map_or(text.len(), |i| offset + i);
+    let word = text.get(start..end).filter(|w| !w.is_empty())?;
+    // The name before a dot, if the word follows one.
+    let enum_before = text[..start].strip_suffix('.').and_then(|head| {
+        let from = head.rfind(|c: char| !is_word(c)).map_or(0, |i| i + 1);
+        doc.parsed
+            .enums
+            .iter()
+            .find(|e| e.name.as_str() == &head[from..])
+    });
+    if let Some(decl) = enum_before {
+        return decl.cases.iter().any(|(c, _)| c.as_str() == word).then(|| {
+            format!(
+                "```byld
+{}.{word}
+```
+
+A case of the enum `{}`.",
+                decl.name.as_str(),
+                decl.name.as_str()
+            )
+        });
+    }
+    if let Some(decl) = doc.parsed.enums.iter().find(|e| e.name.as_str() == word) {
+        let cases: Vec<&str> = decl.cases.iter().map(|(c, _)| c.as_str()).collect();
+        return Some(format!(
+            "```byld
+{}enum {word} {{ {} }}
+```",
+            if decl.private { "private " } else { "" },
+            cases.join(", ")
+        ));
+    }
+    let symbol = Symbol::intern(word);
+    let decl = doc.parsed.consts.iter().find(|c| c.name == symbol)?;
+    let ty = doc
+        .inference
+        .consts
+        .iter()
+        .find(|(n, _)| *n == symbol)
+        .map_or_else(String::new, |(_, ty)| format!(": {}", format_ty(ty)));
+    Some(format!(
+        "```byld
+{}let {word}{ty}
+```
+
+A constant, evaluated once when the program loads.",
+        if decl.private { "private " } else { "" }
+    ))
 }
 
 /// A view reached by its package's name (`m.Button`, or `material.Button`
@@ -159,7 +240,7 @@ fn var_hover_docs(name: &str, inference: &Inference) -> String {
     }
 }
 
-fn format_ty(ty: &Ty) -> String {
+pub(crate) fn format_ty(ty: &Ty) -> String {
     match ty {
         Ty::Int => "Int".to_string(),
         Ty::Float => "Float".to_string(),

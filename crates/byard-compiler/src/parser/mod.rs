@@ -12,8 +12,8 @@ mod expr;
 pub mod span_eq;
 
 use ast::{
-    Attr, AttrKind, ElementNode, FnDecl, Member, Param, RecordDecl, RecordField, RouteKind,
-    StyleRule, Type, UseDecl, ViewDecl,
+    Attr, AttrKind, ConstDecl, ElementNode, EnumDecl, FnDecl, Member, Param, RecordDecl,
+    RecordField, RouteKind, StyleRule, Type, UseDecl, ViewDecl,
 };
 
 use crate::diagnostics::{CompileError, Span};
@@ -33,6 +33,11 @@ pub struct ParsedFile {
     pub fns: Vec<FnDecl>,
     /// The file's record types, also shared into every view's `records`.
     pub records: Vec<RecordDecl>,
+    /// The file's top-level constants, also shared into every view's
+    /// `consts`.
+    pub consts: Vec<ConstDecl>,
+    /// The file's enums, also shared into every view's `enums`.
+    pub enums: Vec<EnumDecl>,
     /// All diagnostics from lexing and parsing, in source order.
     pub errors: Vec<CompileError>,
 }
@@ -41,22 +46,45 @@ pub struct ParsedFile {
 #[must_use]
 pub fn parse(source: &str) -> ParsedFile {
     let mut parser = Parser::new(source);
-    let (imports, mut views, fns, records) = parser.parse_file();
-    // A lone file's views see its own functions and types; a project's are
-    // replaced by the program-wide tables when it is resolved.
+    let Items {
+        imports,
+        mut views,
+        fns,
+        records,
+        consts,
+        enums,
+    } = parser.parse_file();
+    // A lone file's views see its own functions, types, constants and enums;
+    // a project's are replaced by the program-wide tables when it is resolved.
     let helpers = std::sync::Arc::new(fns.clone());
     let shared_records = std::sync::Arc::new(records.clone());
+    let shared_consts = std::sync::Arc::new(consts.clone());
+    let shared_enums = std::sync::Arc::new(enums.clone());
     for view in &mut views {
         view.helpers = std::sync::Arc::clone(&helpers);
         view.records = std::sync::Arc::clone(&shared_records);
+        view.consts = std::sync::Arc::clone(&shared_consts);
+        view.enums = std::sync::Arc::clone(&shared_enums);
     }
     ParsedFile {
         imports,
         views,
         fns,
         records,
+        consts,
+        enums,
         errors: parser.errors,
     }
+}
+
+/// What a file declares at its top level.
+struct Items {
+    imports: Vec<UseDecl>,
+    views: Vec<ViewDecl>,
+    fns: Vec<FnDecl>,
+    records: Vec<RecordDecl>,
+    consts: Vec<ConstDecl>,
+    enums: Vec<EnumDecl>,
 }
 
 /// A recursive-descent + Pratt parser over a lexed token stream.
@@ -277,16 +305,29 @@ impl<'a> Parser<'a> {
 
     // ---- file / view ----
 
-    #[allow(clippy::type_complexity)]
-    fn parse_file(&mut self) -> (Vec<UseDecl>, Vec<ViewDecl>, Vec<FnDecl>, Vec<RecordDecl>) {
-        let mut imports = Vec::new();
-        let mut views = Vec::new();
-        let mut fns = Vec::new();
-        let mut records = Vec::new();
+    fn parse_file(&mut self) -> Items {
+        let mut items = Items {
+            imports: Vec::new(),
+            views: Vec::new(),
+            fns: Vec::new(),
+            records: Vec::new(),
+            consts: Vec::new(),
+            enums: Vec::new(),
+        };
         while self.cur().is_some() {
             let before = self.pos;
+            // `private` before an item (RFC-0055). Contextual: only when what
+            // follows starts one, so it is an ordinary name anywhere else.
+            let private = self.at_private_item();
+            if private {
+                self.advance();
+            }
             match self.cur() {
-                Some(Token::View) => views.push(self.parse_view()),
+                Some(Token::View) => {
+                    let mut view = self.parse_view();
+                    view.private = private;
+                    items.views.push(view);
+                }
                 // `type Name = { … }`. Contextual: `type` is an ordinary name
                 // anywhere else.
                 Some(Token::Ident(word))
@@ -296,7 +337,40 @@ impl<'a> Parser<'a> {
                         })
                         && matches!(self.peek3(), Some(Token::Eq)) =>
                 {
-                    records.push(self.parse_record_decl());
+                    let mut record = self.parse_record_decl();
+                    record.private = private;
+                    items.records.push(record);
+                }
+                // `enum Name { a, b }`, contextual as `type` is.
+                Some(Token::Ident(word))
+                    if word.as_str() == "enum"
+                        && self.peek2().is_some_and(|t| {
+                            matches!(t, Token::Ident(_)) || is_name_keyword(&t)
+                        })
+                        && matches!(self.peek3(), Some(Token::LBrace)) =>
+                {
+                    let mut decl = self.parse_enum_decl();
+                    decl.private = private;
+                    items.enums.push(decl);
+                }
+                // `let name = expr`: a constant. A view's `let` is a member and
+                // never reaches here.
+                Some(Token::Let) => {
+                    if let Member::Let {
+                        name,
+                        ty,
+                        init,
+                        span,
+                    } = self.parse_binding(false)
+                    {
+                        items.consts.push(ConstDecl {
+                            name,
+                            ty,
+                            init,
+                            private,
+                            span,
+                        });
+                    }
                 }
                 Some(Token::Fn) => {
                     if let Member::Fn {
@@ -307,11 +381,12 @@ impl<'a> Parser<'a> {
                         span,
                     } = self.parse_fn()
                     {
-                        fns.push(FnDecl {
+                        items.fns.push(FnDecl {
                             name,
                             params,
                             ret,
                             body,
+                            private,
                             span,
                         });
                     }
@@ -321,14 +396,14 @@ impl<'a> Parser<'a> {
                     // Imports are legal only at file top, before any `View`
                     // (RFC-0008 Pillar A). Record the decl anyway so the
                     // resolver can still do useful work during recovery.
-                    if !views.is_empty() {
+                    if !items.views.is_empty() {
                         self.errors
                             .push(CompileError::ImportAfterView { span: import.span });
                     }
-                    imports.push(import);
+                    items.imports.push(import);
                 }
                 _ => {
-                    self.error("'View', 'use', 'fn' or 'type'");
+                    self.error("'View', 'use', 'fn', 'type', 'enum' or 'let'");
                     self.skip_to_next_item();
                 }
             }
@@ -336,7 +411,20 @@ impl<'a> Parser<'a> {
                 self.advance(); // guaranteed progress on unrecognized input
             }
         }
-        (imports, views, fns, records)
+        items
+    }
+
+    /// Whether the cursor is on a `private` that modifies the item after it.
+    fn at_private_item(&self) -> bool {
+        let Some(Token::Ident(word)) = self.cur() else {
+            return false;
+        };
+        word.as_str() == "private"
+            && match self.peek2() {
+                Some(Token::View | Token::Fn | Token::Let) => true,
+                Some(Token::Ident(next)) => matches!(next.as_str(), "type" | "enum"),
+                _ => false,
+            }
     }
 
     /// After a stray token between top-level items: skips to the next item
@@ -350,12 +438,12 @@ impl<'a> Parser<'a> {
             match tok {
                 Token::LBrace => depth += 1,
                 Token::RBrace => depth = depth.saturating_sub(1),
-                Token::View | Token::Fn | Token::Use if depth == 0 => return,
+                Token::View | Token::Fn | Token::Use | Token::Let if depth == 0 => return,
                 Token::Ident(word)
                     if depth == 0
-                        && word.as_str() == "type"
+                        && matches!(word.as_str(), "type" | "enum")
                         && matches!(self.peek2(), Some(Token::Ident(_)))
-                        && matches!(self.peek3(), Some(Token::Eq)) =>
+                        && matches!(self.peek3(), Some(Token::Eq | Token::LBrace)) =>
                 {
                     return;
                 }
@@ -393,6 +481,33 @@ impl<'a> Parser<'a> {
         RecordDecl {
             name,
             fields,
+            private: false,
+            span: self.span_from(start),
+        }
+    }
+
+    /// `enum_decl := "enum" IDENT "{" (IDENT ","?)* "}"` (RFC-0055).
+    fn parse_enum_decl(&mut self) -> EnumDecl {
+        let start = self.cur_span();
+        self.advance(); // enum
+        let name = self
+            .expect_decl_name("an enum", "an enum name")
+            .unwrap_or_else(|| Symbol::intern(""));
+        self.expect(&Token::LBrace, "'{'");
+        let mut cases = Vec::new();
+        while !matches!(self.cur(), Some(Token::RBrace) | None) {
+            let at = self.cur_span();
+            let Some(case) = self.expect_decl_name("a case", "a case name") else {
+                break;
+            };
+            cases.push((case, self.span_from(at)));
+            self.eat(&Token::Comma);
+        }
+        self.expect(&Token::RBrace, "'}'");
+        EnumDecl {
+            name,
+            cases,
+            private: false,
             span: self.span_from(start),
         }
     }
@@ -448,6 +563,9 @@ impl<'a> Parser<'a> {
         let body = self.parse_block_members();
         ViewDecl {
             records: std::sync::Arc::default(),
+            consts: std::sync::Arc::default(),
+            enums: std::sync::Arc::default(),
+            private: false,
             name,
             params,
             body,
@@ -775,7 +893,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// `when_stmt := "when" expr "{" member* "}" ("else" "{" member* "}")?`.
+    /// `when_stmt := "when" expr "{" member* "}" ("else" ("{" member* "}" | when_stmt))?`.
     fn parse_when(&mut self) -> Member {
         let start = self.cur_span();
         self.advance(); // when
@@ -783,8 +901,14 @@ impl<'a> Parser<'a> {
         self.expect(&Token::LBrace, "'{'");
         let then = self.parse_block_members();
         let els = if self.eat(&Token::Else) {
-            self.expect(&Token::LBrace, "'{'");
-            Some(self.parse_block_members())
+            // `else when …` is the nested form written without its braces
+            // (RFC-0055): the next `when` is the whole else branch.
+            if matches!(self.cur(), Some(Token::When)) {
+                Some(vec![self.parse_when()])
+            } else {
+                self.expect(&Token::LBrace, "'{'");
+                Some(self.parse_block_members())
+            }
         } else {
             None
         };
@@ -1038,9 +1162,17 @@ impl<'a> Parser<'a> {
     /// so it is recognized here by name.
     fn parse_type(&mut self) -> Type {
         let start = self.cur_span();
-        let name = self
+        let mut name = self
             .expect_ident("a type name")
             .unwrap_or_else(|| Symbol::intern(""));
+        // `m.Variant`: a type of another package, qualified by the name or
+        // alias it was imported under (RFC-0055).
+        if matches!(self.cur(), Some(Token::Dot)) && matches!(self.peek2(), Some(Token::Ident(_))) {
+            self.advance(); // .
+            if let Some(member) = self.expect_ident("a type name") {
+                name = Symbol::intern(&format!("{}.{}", name.as_str(), member.as_str()));
+            }
+        }
 
         if name.as_str() == "Fn" && matches!(self.cur(), Some(Token::LParen)) {
             self.advance(); // (

@@ -69,6 +69,25 @@ View Main() {
 }
 ```
 
+`shrink` is the other half of `grow`: what a child gives up when its siblings ask
+for more than the row has. It is `1` by default, so a child with a `width` is a size
+to start from and not a floor, as in CSS, and a 24 wide icon beside something wider than
+the row is squeezed with it. `shrink: 0` keeps a child at its size and leaves the
+squeezing to the others. A `Spacer`, and a `TextField` or `Slider` that has both a `width`
+and a `grow`, never shrink below their size, as they always did. Every element in a `Row` or
+`Column` takes `shrink`, and so does `Text`.
+
+```byld
+View Main() {
+    Row #[width: 170, gap: 16, height: 40, align: center, bg: 0x1E1E2A] {
+        Box #[bg: 0xF2B8B5, width: 24, height: 24, radius: 12, shrink: 0] {}
+        ZStack #[grow: 1, height: 10] { Box #[bg: 0x4F5B66, width: 220, height: 10] {} }
+    }
+}
+```
+
+Without `shrink: 0` the circle is squeezed to a sliver by the wide bar beside it.
+
 ## Space
 
 `gap` is the space between children. `p` is padding, inside the container, and
@@ -110,6 +129,23 @@ View Main() {
             Box #[bg: 0x3B82F6, height: 24, grow: 1] {}
             Box #[bg: 0x8FD19E, height: 24, grow: 2] {}
         }
+    }
+}
+```
+
+One child can ignore its parent's `align` with `align_self`, which takes the same words
+(`start`, `center`, `end`, `stretch`). It places that child across the main axis and leaves
+the others where `align` puts them. A bare `Column` child stretches to the column's width;
+`align_self: center` makes it its own width and centres it. `Text`, `TextField` and the other
+elements take it too, and so does a child of a `Grid`.
+
+```byld
+View Main() {
+    Row #[width: 360, height: 80, gap: 12, align: start, bg: 0x1E1E2A, p: 8] {
+        Box #[bg: 0x3B82F6, width: 60, height: 24] {}
+        Box #[bg: 0x3B82F6, width: 60, height: 24, align_self: center] {}
+        Box #[bg: 0x3B82F6, width: 60, height: 24, align_self: end] {}
+        Box #[bg: 0xE4A11B, width: 60, align_self: stretch] {}
     }
 }
 ```
@@ -307,7 +343,10 @@ View Main() {
 `it.w` and `it.h` are the element's width and height. The line is drawn to the
 measured width and not to a number written in the file, so it stays right as the
 window resizes. Use the measurement downward: a parent measures, its children
-read the number. The other way round never settles.
+read the number. The other way round never settles: a parent that is as wide as its
+content, whose child is as wide as the parent, grows by the padding on every frame.
+A card with a fixed or filled width, whose field takes `w - 32`, is the downward case and
+is stable.
 
 ## Text
 
@@ -316,7 +355,9 @@ read the number. The other way round never settles.
 its parent offers. `wrap: false` keeps it on one line. The look of text is covered under [styling](styling.md).
 
 A `Text` takes the attributes that place a child in a `Row` or `Column`: `width`,
-`height`, `grow`, `basis`, and `p` and `m` with their sides. `Text("Title")
+`height`, `grow`, `shrink`, `basis`, `align_self`, and `p` and `m` with their sides. It
+can also have a background, `bg` and `radius`, drawn behind the words over the whole box,
+`p` included (see [styling](styling.md#text)). `Text("Title")
 #[grow: 1]` takes the room left in its row after its own size, as a `Box` does, so
 two `grow: 1` texts of different lengths are not equal halves. `basis: 0` makes
 them start from nothing, and a column of such cells lines up from row to row.

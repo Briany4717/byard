@@ -1,0 +1,93 @@
+// What a component needs from layout: `shrink`, `align_self`, a bare TextField that
+// fills the way `grow` says, and a Text with a background.
+//
+//   byard shot crates/byard-cli/examples/component_layout -o field.png --size 400x640
+//   byard shot crates/byard-cli/examples/component_layout --tap 120,110 -o focused.png --size 400x640
+
+View Main() {
+    var email = ""
+    var search = ""
+
+    Column #[bg: 0x14141C, p: 20, gap: 14, grow: 1] {
+        Text("A field between two icons") #[color: 0x9AA0AC, size: 12]
+
+        // `shrink: 0` keeps each 24 wide icon its size, and the field, which has
+        // no width of its own, takes the 200 that is left. The first row is the
+        // same without `shrink`.
+        Row #[
+            width: 360,
+            height: 48,
+            gap: 16,
+            align: center,
+            bg: 0x1E1E2A,
+            radius: 8,
+            p: (horizontal: 12),
+        ] {
+            Box #[bg: 0xF2B8B5, width: 24, height: 24, radius: 12, shrink: 0] {}
+            TextField #[
+                bind: search,
+                placeholder: "Search",
+                grow: 1,
+                height: 24,
+                color: 0xFFFFFF,
+                p: (horizontal: 0),
+                indicator: none,
+            ]
+            Box #[bg: 0x8FD19E, width: 24, height: 24, radius: 12, shrink: 0] {}
+        }
+
+        Text("A label over an outlined field") #[color: 0x9AA0AC, size: 12]
+
+        // The label is a Text with a background that hides the border behind it.
+        ZStack #[width: 360, height: 72, alignment: top_start] {
+            Box #[
+                mt: 12,
+                width: 360,
+                height: 56,
+                radius: 4,
+                bg: 0x14141C,
+                border: 0x938F99,
+                border_width: 1,
+            ] {
+                TextField #[
+                    bind: email,
+                    placeholder: "name@example.com",
+                    grow: 1,
+                    color: 0xFFFFFF,
+                    p: (horizontal: 16),
+                    indicator: none,
+                ]
+            }
+            Text("Email") #[
+                ml: 12,
+                bg: 0x14141C,
+                color: 0xCAC4D0,
+                size: 12,
+                p: (horizontal: 4),
+                radius: 2,
+            ]
+        }
+
+        Text("align_self in a row of height 80") #[color: 0x9AA0AC, size: 12]
+
+        Row #[width: 360, height: 80, gap: 12, align: start, bg: 0x1E1E2A, radius: 8, p: 8] {
+            Box #[bg: 0x3B82F6, width: 60, height: 24, radius: 4] {}
+            Box #[bg: 0x3B82F6, width: 60, height: 24, radius: 4, align_self: center] {}
+            Box #[bg: 0x3B82F6, width: 60, height: 24, radius: 4, align_self: end] {}
+            Box #[bg: 0xE4A11B, width: 60, radius: 4, align_self: stretch] {}
+        }
+
+        Text("Icons beside a wide sibling: default, then shrink: 0") #[color: 0x9AA0AC, size: 12]
+
+        Row #[gap: 16, align: center] {
+            Row #[width: 170, gap: 16, height: 40, align: center, bg: 0x1E1E2A, radius: 8] {
+                Box #[bg: 0xF2B8B5, width: 24, height: 24, radius: 12] {}
+                ZStack #[grow: 1, height: 10] { Box #[bg: 0x4F5B66, width: 150, height: 10] {} }
+            }
+            Row #[width: 170, gap: 16, height: 40, align: center, bg: 0x1E1E2A, radius: 8] {
+                Box #[bg: 0xF2B8B5, width: 24, height: 24, radius: 12, shrink: 0] {}
+                ZStack #[grow: 1, height: 10] { Box #[bg: 0x4F5B66, width: 150, height: 10] {} }
+            }
+        }
+    }
+}

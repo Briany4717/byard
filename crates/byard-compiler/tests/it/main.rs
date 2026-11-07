@@ -17,6 +17,7 @@ mod checker_diagnostics;
 mod clip_path;
 mod clock;
 mod color_alpha;
+mod component_layout;
 mod control_grow;
 mod controller_boundary;
 mod disabled_gate;

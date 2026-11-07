@@ -1,0 +1,3 @@
+[project]
+name = "component_layout"
+entry = "src/main.byd"

@@ -351,6 +351,34 @@ impl Interpreter {
                             rect.height * transform.scale[1],
                         ));
                     }
+                    // `bg` and `radius`: a fill behind the glyphs, over the
+                    // whole box including its `p`. Looked at only when written.
+                    if attrs
+                        .iter()
+                        .any(|a| matches!(a.name.as_str(), "bg" | "radius"))
+                    {
+                        if let Some(bg) = self.eval_color_prop(attrs, "bg") {
+                            let mut fill = super::intrinsics::color_rgba_auto(bg);
+                            fill[3] *= inherited_opacity;
+                            let base = byard_core::BoxInstance {
+                                rect: [rect.x, rect.y, rect.width, rect.height],
+                                color: fill,
+                                radii: self.resolve_radii(attrs, "radius"),
+                                transform,
+                                smooth: 0.0,
+                            };
+                            if fill[3] < 1.0 {
+                                frame.push_decorated(byard_core::frame::DecoratedBox {
+                                    base,
+                                    opacity: 1.0,
+                                    dirty: true,
+                                    ..Default::default()
+                                });
+                            } else {
+                                frame.push_instance(base);
+                            }
+                        }
+                    }
                     frame.push_text_wrapped(
                         byard_core::TextLine {
                             x: anchor[0],

@@ -177,7 +177,9 @@ The stops, `angle`, `center`, `radius` and `mid_pos` move; `gradient_offset` has
 or neither. `byard check` says when they are not (`GradientShapeMismatch`), and if the
 shape ever changes under a running animation, the gradient jumps to the new one instead of
 blending. A gradient takes a curve alone: `repeat`, `delay`, `from`, `restart` and
-`reverse` are for numbers and colours, and a looping ramp is a `gradient_offset`. A
+`reverse` are for numbers and colours, and a looping ramp is a `gradient_offset`. Animate
+a gradient as a whole or its stops one by one (`from: x with ..`), not both: `byard check`
+refuses the mix. A
 colour or gradient that is not written with `with` costs nothing for the feature, and a
 running one does not allocate per frame.
 

@@ -1173,3 +1173,20 @@ fn a_gradient_with_a_looping_modifier_is_refused() {
         "got {e:?}"
     );
 }
+
+#[test]
+fn a_gradient_animated_whole_and_by_its_stops_is_refused() {
+    let e = errs(
+        "View V() { Box #[gradient: (from: 0xFF0000 with anim.linear(1s), to: 0x0000FF) \
+         with anim.spring()] {} }",
+    );
+    assert!(
+        e.iter()
+            .any(|e| matches!(e, CompileError::AttributeTypeMismatch { .. })),
+        "got {e:?}"
+    );
+    // Either alone is fine.
+    assert_clean(
+        "View V() { Box #[gradient: (from: 0xFF0000 with anim.linear(1s), to: 0x0000FF)] {} }",
+    );
+}

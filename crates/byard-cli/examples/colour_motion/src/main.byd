@@ -1,5 +1,5 @@
 // RFC-0057: motion on colours and gradients. Tap the chip (or run
-// `byard shot . --tap 60,40 --at 120`) and everything below changes at once:
+// `byard shot . --tap 100,90 --at 120`) and everything below changes at once:
 // the chip's fill, outline and label, the translucent state layer over it, a
 // gradient, a shadow colour and a canvas fill. Each moves with its own curve.
 View Main() {

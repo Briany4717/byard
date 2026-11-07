@@ -1451,6 +1451,21 @@ fn check_animated_gradient(value: &Expr, errs: &mut Vec<CompileError>) {
     }
     let mut leaves = Vec::new();
     gradient_leaves(target, &mut leaves);
+    // A `with` inside the gradient moves its goal every frame, which would
+    // restart the whole-gradient animation every frame.
+    for leaf in &leaves {
+        if let Expr::Tuple(args, _) = leaf {
+            if let Some(inner) = args.iter().find(|a| animated_anywhere(&a.value)) {
+                errs.push(CompileError::AttributeTypeMismatch {
+                    span: inner.value.span(),
+                    expected: "a gradient animated as a whole or by its own fields, not both: \
+                               animate the gradient, or its stops (`from: x with ..`), not both"
+                        .to_string(),
+                });
+                break;
+            }
+        }
+    }
     let describe = |(kind, stops): (&str, u8)| format!("{kind}, {stops} stops");
     let mut shapes = leaves.iter().filter_map(|leaf| gradient_shape(leaf));
     let Some(first) = shapes.next() else {

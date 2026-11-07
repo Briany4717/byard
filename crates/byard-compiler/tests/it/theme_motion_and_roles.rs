@@ -494,3 +494,36 @@ fn keyframes_take_a_duration_token() {
         bad.errors()
     );
 }
+
+#[test]
+fn a_gradient_moves_with_a_motion_token_as_with_its_literal() {
+    // RFC-0057 with RFC-0053: a whole-gradient `with` reads the theme's
+    // tokens as every other `with` does. `durationExtraLong4` is 1000 ms, so
+    // the first stop is part-way from green to red at 500 ms.
+    let src = "View V() { inject Theme as t\n var on: Bool = false\n \
+         Box #[bg: 0x000000, width: 80, height: 40, \
+         gradient: on ? (from: 0xFF0000, to: 0x0000FF) \
+                      : (from: 0x00FF00, to: 0xFFFF00) with anim.linear(t.durationExtraLong4)] }";
+    let mut app = App::new(src, Theme::byard_base());
+    assert!(app.errors().is_empty(), "{:?}", app.errors());
+    let red_at = |app: &mut App, ms: u32| {
+        app.interp.set_now_ms(ms);
+        app.interp.tick();
+        let mut frame = RenderFrame::new();
+        app.interp.render(&app.tree, &mut frame, 400.0, 300.0);
+        frame.decorated()[0].gradient.expect("a gradient").from[0]
+    };
+    let _ = red_at(&mut app, 0);
+    let sig = app.interp.var_signal(&Symbol::intern("on")).unwrap();
+    app.interp.write_var(sig, Value::Bool(true));
+    app.interp.tick();
+    let (start, mid, end) = (
+        red_at(&mut app, 0),
+        red_at(&mut app, 500),
+        red_at(&mut app, 1000),
+    );
+    assert!(
+        start < 0.02 && (0.05..0.95).contains(&mid) && end > 0.9,
+        "{start} {mid} {end}"
+    );
+}

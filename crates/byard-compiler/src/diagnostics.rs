@@ -474,6 +474,17 @@ pub enum CompileError {
         /// The construct that expresses this intent instead.
         use_instead: String,
     },
+    /// A `with` after a conditional of gradients whose leaves cannot be blended
+    /// stop for stop (RFC-0057 §4): they differ in kind, or in how many colour
+    /// stops they write.
+    GradientShapeMismatch {
+        /// Source range of the animated gradient.
+        span: Span,
+        /// What the first gradient is, e.g. `linear, two stops`.
+        first: String,
+        /// What the differing one is.
+        other: String,
+    },
     /// A `path(d: …)` command carried stroke properties (RFC-0020 §2: Tier-2
     /// MSDF rasterization is fill-only in v1; stroke a path by using the
     /// Tier-1 commands or an outlined `d`).
@@ -1216,6 +1227,7 @@ impl CompileError {
             | Self::StrokeInFusionGroup { span, .. }
             | Self::DashOnFusedStroke { span }
             | Self::NotAnimatable { span, .. }
+            | Self::GradientShapeMismatch { span, .. }
             | Self::DuplicateMeasure { span, .. }
             | Self::MeasureFeedback { span, .. }
             | Self::PathStrokeUnsupported { span }
@@ -1326,6 +1338,7 @@ impl CompileError {
             | Self::StrokeInFusionGroup { span, .. }
             | Self::DashOnFusedStroke { span }
             | Self::NotAnimatable { span, .. }
+            | Self::GradientShapeMismatch { span, .. }
             | Self::DuplicateMeasure { span, .. }
             | Self::MeasureFeedback { span, .. }
             | Self::PathStrokeUnsupported { span }
@@ -1438,6 +1451,7 @@ impl CompileError {
             Self::StrokeInFusionGroup { .. } => "StrokeInFusionGroup",
             Self::DashOnFusedStroke { .. } => "DashOnFusedStroke",
             Self::NotAnimatable { .. } => "NotAnimatable",
+            Self::GradientShapeMismatch { .. } => "GradientShapeMismatch",
             Self::DuplicateMeasure { .. } => "DuplicateMeasure",
             Self::MeasureFeedback { .. } => "MeasureFeedback",
             Self::PathStrokeUnsupported { .. } => "PathStrokeUnsupported",
@@ -1763,6 +1777,11 @@ impl CompileError {
                     "`{prop}` has no value between one step and the next, so it                      cannot be animated; use `{use_instead}` to change shape over time"
                 )
             }
+            Self::GradientShapeMismatch { first, other, .. } => format!(
+                "these gradients cannot be animated into each other: one is {first} and \
+                 another is {other}. Animate between gradients of the same kind and the \
+                 same number of stops, or fade the opacity of two boxes"
+            ),
             Self::DuplicateMeasure { .. } => {
                 "this element already declares `on measure`; one element has one \
                  measured rect, so a second handler would only race the first"

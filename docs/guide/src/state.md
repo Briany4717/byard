@@ -164,6 +164,38 @@ Every use of a view makes a new instance with its own `var`s, as `Counter` showe
 The state lives as long as the instance is on screen. A view inside a `when` that
 turns false is gone, and its state with it. Showing it again starts fresh.
 
+### `else when`
+
+A `when` shows its first block while the condition holds and its `else` block otherwise. To pick
+one of several, continue the chain with `else when` instead of opening a block in every `else`:
+
+```byld
+View Main() {
+    var step = 0
+
+    Column #[gap: 12, p: 24] {
+        when step == 0 {
+            Text("Welcome")
+        } else when step == 1 {
+            Counter()
+        } else {
+            Text("All done")
+        }
+        Button("Next") => step++
+    }
+}
+
+View Counter() {
+    var taps = 0
+    Button("Taps: {taps}") => taps++
+}
+```
+
+It means what the nested form means, `when a { … } else { when b { … } else { … } }`, and each arm is a
+branch of its own, as separate `when`s are. Only the arm that holds is built, and the views in it are
+instances of their own: `Counter` above counts from zero each time the chain comes back to it. The
+final `else` is optional. `byard check` lowers every arm, the ones not showing too.
+
 Hot reload keeps an instance's state through every edit that does not change the
 view's parameters, `var`s, `let`s or `inject`s, which is why `byard dev` keeps
 you on your screen. A [navigation](navigation.md) stack keeps the
@@ -229,8 +261,9 @@ one name are an error.
 
 ## Sharing state between views
 
-There is no global state, and no top-level `var`. When two views need the same
-value, hold it in a view above both, and pass it down as a parameter. Pass an
+There is no global state, and no top-level `var`. A top-level `let` is a
+[constant](expressions.md#constants), worked out once and never changed, so it is
+not state. When two views need the same value that can change, hold it in a view above both, and pass it down as a parameter. Pass an
 action down, as a `Fn()` parameter, for the child to change it. This is the same
 move a callback makes in [views and parameters](views-and-parameters.md).
 

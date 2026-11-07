@@ -1,0 +1,8 @@
+// A button with five looks in the making: `variant` is an enum, so a misspelt
+// case is an error where it is written, not a button that quietly draws the
+// default.
+View Button(label: Str, variant: Variant = Variant.filled) {
+    Box #[bg: fill(variant), border: 0x6B6B85, radius: 20, p: (horizontal: pad, vertical: gap)] {
+        Text(label) #[color: variant == Variant.filled ? 0xFFFFFF : 0xE6E1E5, size: 14]
+    }
+}

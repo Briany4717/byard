@@ -10,6 +10,23 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Top-level constants.** `let gap = 8` outside any view is a constant: typed, pure, shared by every file of
+  the project or package, evaluated once, and reached from an app as `k.gap`. Constants may use other
+  constants and functions; two that need each other are `ConstantCycle`, with the path. RFC-0055.
+- **Enums.** `enum Variant { filled, tonal, outlined }` declares a closed set of cases, written `Variant.tonal`
+  (`k.Variant.tonal` from an app) and usable as a parameter type. A misspelt case is `UnknownEnumCase` with the
+  closest one, a string is not an enum, and a case is its name as text in a string, to a controller and in JSON.
+  A call writes `variant: .tonal` where the parameter says which enum it is.
+- **`private` names.** `private` before a `View`, `fn`, `type`, `let` or `enum` keeps it inside its package:
+  every file of the package sees it, and an app that uses one is told it is private (`PrivateName`). In an app
+  it is accepted and changes nothing.
+- **`else when`.** `when a { } else when b { } else { }` is the nested form without the nested blocks, with
+  every arm checked by `byard check`.
+- The formatter, completion, hover, outline and highlighting of the language server, and the VS Code grammar know
+  all of them; the `workspace` example uses each.
+
 ### Fixed
 
 - Saving a file no longer reloads an empty program first: a save that truncates the file before writing it is read once, after the writing has stopped.

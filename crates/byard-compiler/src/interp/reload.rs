@@ -785,9 +785,14 @@ mod tests {
         std::thread::sleep(Duration::from_millis(200));
 
         // Truncate, then write a few milliseconds later.
+        let saving = Instant::now();
         std::fs::File::create(&file).unwrap();
         std::thread::sleep(Duration::from_millis(8));
         std::fs::write(&file, "two").unwrap();
+        // On a loaded machine the 8 ms sleep can outlast the settle time, and
+        // then the empty file really was saved and is right to read: what is
+        // pinned here is a save quicker than `SETTLE`, as an editor's is.
+        let quick = saving.elapsed() < SETTLE / 2;
 
         let deadline = Instant::now() + Duration::from_secs(5);
         while reads.lock().unwrap().last().map(String::as_str) != Some("two") {
@@ -804,10 +809,14 @@ mod tests {
         // macOS may also report the file's creation, from before the watch
         // began, as one more reload of "one". What must never be read is the
         // file between the truncate and the write.
-        assert!(
-            !reads.iter().any(String::is_empty),
-            "a half-saved file was read: {reads:?}"
-        );
+        if quick {
+            assert!(
+                !reads.iter().any(String::is_empty),
+                "a half-saved file was read: {reads:?}"
+            );
+        } else {
+            eprintln!("the save took longer than the settle time here; not a half-save");
+        }
         assert_eq!(reads.last().map(String::as_str), Some("two"), "{reads:?}");
         let _ = std::fs::remove_dir_all(&dir);
     }

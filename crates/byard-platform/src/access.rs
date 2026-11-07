@@ -56,7 +56,9 @@ pub(crate) struct WindowInfo {
 
 fn role(role: AccessRole) -> Role {
     match role {
-        AccessRole::Button => Role::Button,
+        // RFC-0052. AccessKit has no toggle-button role: it is a button with
+        // a `toggled` state, set below.
+        AccessRole::Button | AccessRole::ToggleButton => Role::Button,
         AccessRole::TextInput => Role::TextInput,
         AccessRole::Switch => Role::Switch,
         AccessRole::CheckBox => Role::CheckBox,
@@ -69,9 +71,6 @@ fn role(role: AccessRole) -> Role {
         AccessRole::Tab => Role::Tab,
         AccessRole::Dialog => Role::Dialog,
         AccessRole::Group => Role::Group,
-        // RFC-0052. AccessKit has no toggle-button role: it is a button with
-        // a `toggled` state, set below.
-        AccessRole::ToggleButton => Role::Button,
         AccessRole::RadioGroup => Role::RadioGroup,
         AccessRole::MenuItem => Role::MenuItem,
         AccessRole::Menu => Role::Menu,

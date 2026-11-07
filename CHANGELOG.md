@@ -26,6 +26,48 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   every arm checked by `byard check`.
 - The formatter, completion, hover, outline and highlighting of the language server, and the VS Code grammar know
   all of them; the `workspace` example uses each.
+- **Variation axes on text.** `variations: (FILL: 1, wght: 500, GRAD: 0, opsz: 24)` on `Text` and `TextField` sets a variable font's axes, and an axis can move with `with` (`FILL: liked ? 1 : 0 with anim.spring()`). `wght` there is the weight; with `weight:` as well it is `VariationWeightConflict`.
+- **Icon fonts.** `[assets.fonts] symbols = { path = "..", icons = true }` declares an icon font, and `byard bundle` keeps only the glyphs for the names the program writes: four icons from Material Symbols Rounded ship as 16 KB, not 15 MB. `icons_include = [..]` lists names built at run time; without it `byard check` warns (`IconNameNotStatic`) and the font ships whole.
+- **`byard shot --hold X,Y` and `--hover X,Y`.** A held press (with `--at` for how long) and a hovering pointer, so `on pressed`, a press morph, a ripple and `on hover` can be pictured.
+
+### Changed
+
+- **`byard.lock` no longer pins a `path` dependency by checksum.** It went stale on every edit and `check` stayed green on the old one; a path package is the files on disk, so the lock lists it (`name`, `source`) and nothing more. Old locks still read. A package repository whose `gallery/` depends on `..` needs no lock diff per commit.
+- **A git dependency is cached as what `byard publish` archives**, from the same file list: the gallery, `.github` and undeclared fonts are not kept. The checksum is the same as from a path or a registry.
+- **A directory registry is written relative to the project** by `byard add --registry`, so `byard.toml` and the lock name `../registry`, not `/tmp/.../registry`; `byard get` warns when a manifest already has an absolute one. Registries served under a path, with a trailing slash, are tested end to end.
+- Stockroom's timed budget test is `#[ignore]`d in the normal run, which keeps its counter checks, and CI's budgets step runs it with `--ignored`.
+- **Composed controls** (RFC-0052). A control built from a `Box` can say what it is. Every
+  element takes `a11y_role` (23 keywords: `button`, `toggle_button`, `switch`, `checkbox`,
+  `radio`, `radio_group`, `slider`, `tab`, `tab_list`, `menu_item`, `menu`, `link`, `text_field`,
+  `progress_bar`, `list`, `list_item`, `dialog`, `alert`, `navigation`, `toolbar`, `group`,
+  `image`, `heading`), `a11y_value`, `a11y_checked`, `a11y_mixed`, `a11y_selected`,
+  `a11y_expanded` and `a11y_disabled`. A misspelt role is a check error that names the closest,
+  and a misspelt keyword written as a string (`fit: "covr"`) is one too, where it used to be
+  ignored. They reach the screen reader and `byard shot --a11y`.
+- **The keyboard on a composed control.** A `Box` with a `tap` and a role that implies focus is
+  in the Tab order, and so is one with a `focus =>`; Space and Enter press it as its role says
+  (a checkbox and a radio take Space, a link takes Enter, the rest both). The arrow keys walk
+  a `tab_list` and a `radio_group` (Home and End too in a tab list), and a radio group selects
+  as it goes.
+- **`on focus_visible`**, a style state set when focus arrived by the keyboard (Tab, Shift+Tab,
+  the arrows of a group) or into a `TextField`, and not by a pointer press. `on focused` is
+  unchanged.
+- Example `composed_controls`: a switch, a checkbox and a link made from `Box`es.
+
+### Changed
+
+- **The focus ring of `keyboard_focus` is `on focus_visible`.** A click on its buttons no longer
+  leaves a ring, a key still draws it. No built-in control had a default ring (focus draws nothing
+  by itself), so nothing else moves; an app that wants a ring for the keyboard only changes
+  `on focused` to `on focus_visible` on a `Button` or a `Box`.
+  
+- **Bindable parameters (RFC-0051).** A view can declare `bind on: Bool`, and the caller passes
+  a `var` with `Switch(bind: wifi)` (`bind name: var` when the view has several). The view reads
+  and writes the caller's `var` as its own, in a text, an action, a control's `bind:` or another
+  view's binding, with no copy and no callback between the two. A `let`, a literal, an
+  expression or a loop variable is `BindNotAVar`, and a value where a binding is declared (or the
+  reverse) is `BindArgMismatch`. `BindNotAVar` on a plain parameter now names the fix. Hover,
+  completion, the formatter and hot reload know it. See `examples/bindable_params`.
 
 ### Fixed
 

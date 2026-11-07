@@ -202,6 +202,8 @@ picture. Every test of a screen can pass while the screen is wrong.
 | `--now <ISO>` | the real clock | Fix the time `now()` reads, such as `2026-11-05T09:00:00`. `--at` advances it |
 | `--dark` / `--light` | the manifest's | Force a colour scheme |
 | `--tap <X,Y>` | none | Tap a logical point before the picture. Repeat it for more taps |
+| `--hold <X,Y>` | none | Press at a point and keep the button down for the picture. `--at` is how long. Repeatable |
+| `--hover <X,Y>` | none | Move the pointer to a point, pressing nothing. Repeatable |
 | `--key <KEY>` | none | Press a key before the picture, such as `Left`, `shift+Left` or `mod+a`. Repeatable |
 | `--type <TEXT>` | none | Type text before the picture. Repeatable |
 | `--a11y <FILE>` | none | Write the accessibility tree as text. See [accessibility](accessibility.md) |
@@ -224,6 +226,15 @@ selection in a text field:
 byard shot crates/byard-cli/examples/text_editing \
   --tap 200,120 --type "hello wrold" --key Left --key Left --key Left \
   --key shift+Left --key shift+Left -o editing.png
+```
+
+`--hover` and `--hold` draw what a pointer does without a click finishing it. `--hover 200,90`
+shows `on hover`. `--hold 200,90 --at 120` presses at that point and never lets go, so the picture
+is 120 ms into a press: `on pressed`, a press morph and a ripple are all live. A `--tap` presses
+and releases in one frame, which is why it cannot show them.
+
+```sh
+byard shot crates/byard-cli/examples/ripple --hold 200,90 --at 120 -o pressed.png
 ```
 
 A key is a single character or one of `Left`, `Right`, `Up`, `Down`, `Home`, `End`,

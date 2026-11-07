@@ -764,6 +764,7 @@ fn render_error_overlay(frame: &mut RenderFrame, errors: &[CompileError], w: f32
         font_size: 18.0,
         weight: 400,
         family: None,
+        variations: None,
         color: [1.0, 0.42, 0.42, 1.0],
         dirty: true,
     });
@@ -778,6 +779,7 @@ fn render_error_overlay(frame: &mut RenderFrame, errors: &[CompileError], w: f32
             font_size: 15.0,
             weight: 400,
             family: None,
+            variations: None,
             color: [1.0, 1.0, 1.0, 1.0],
             dirty: true,
         });
@@ -793,6 +795,7 @@ fn render_error_overlay(frame: &mut RenderFrame, errors: &[CompileError], w: f32
             font_size: 13.0,
             weight: 400,
             family: None,
+            variations: None,
             color: [0.6, 0.6, 0.6, 1.0],
             dirty: true,
         });
@@ -806,6 +809,7 @@ fn render_error_overlay(frame: &mut RenderFrame, errors: &[CompileError], w: f32
         font_size: 13.0,
         weight: 400,
         family: None,
+        variations: None,
         color: [0.55, 0.55, 0.58, 1.0],
         dirty: true,
     });

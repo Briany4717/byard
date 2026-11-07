@@ -40,7 +40,8 @@ pub fn handle_hover(doc: &Document, pos: Position) -> Option<Hover> {
             element_name,
             attr_name,
         } => attribute_hover_docs(&element_name, &attr_name)?,
-        HoverTarget::VarIdent { name, .. } => var_hover_docs(&name, &doc.inference),
+        HoverTarget::VarIdent { name, .. } => binding_hover_docs(doc, offset, &name)
+            .unwrap_or_else(|| var_hover_docs(&name, &doc.inference)),
     };
 
     Some(Hover {
@@ -129,11 +130,59 @@ fn qualified_hover_docs(doc: &Document, name: &str) -> Option<String> {
     };
     // A package's view lives in another file for an import: show its
     // parameter names, which is what a call site needs.
-    let params: Vec<String> = view.params.iter().map(|p| p.name.to_string()).collect();
+    let params: Vec<String> = view.params.iter().map(param_text).collect();
     Some(format!(
         "```byld\nView {rest}({})\n```\n\nA view of {origin}.",
         params.join(", ")
     ))
+}
+
+/// A parameter as a call site needs it: its name, and `bind` before it when it
+/// is a binding (RFC-0051).
+fn param_text(param: &byard_compiler::parser::ast::Param) -> String {
+    if param.bind {
+        format!("bind {}", param.name)
+    } else {
+        param.name.to_string()
+    }
+}
+
+/// A binding of the view under the cursor, hovered by its declaration or any
+/// use in the view: `bind on: Bool`, so that it is not mistaken for a copy.
+fn binding_hover_docs(doc: &Document, offset: usize, name: &str) -> Option<String> {
+    let view = doc
+        .parsed
+        .views
+        .iter()
+        .find(|v| crate::syntax::ast_utils::span_contains(v.span, offset))?;
+    let param = view
+        .params
+        .iter()
+        .find(|p| p.bind && p.name.as_str() == name)?;
+    let ty = param.ty.as_ref().map(type_text).unwrap_or_default();
+    Some(format!(
+        "```byld\nbind {name}: {ty}\n```\n\nThe caller's `var`, read and written here as if \
+         it were this view's own."
+    ))
+}
+
+fn type_text(ty: &byard_compiler::parser::ast::Type) -> String {
+    use byard_compiler::parser::ast::Type;
+    match ty {
+        Type::Named { name, args, .. } if args.is_empty() => name.to_string(),
+        Type::Named { name, args, .. } => {
+            let args: Vec<String> = args.iter().map(type_text).collect();
+            format!("{name}<{}>", args.join(", "))
+        }
+        Type::Function { params, ret, .. } => {
+            let params: Vec<String> = params.iter().map(type_text).collect();
+            let ret = ret
+                .as_ref()
+                .map(|r| format!(" -> {}", type_text(r)))
+                .unwrap_or_default();
+            format!("Fn({}){ret}", params.join(", "))
+        }
+    }
 }
 
 fn intrinsic_hover_docs(name: &str) -> Option<String> {

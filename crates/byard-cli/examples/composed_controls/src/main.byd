@@ -1,0 +1,91 @@
+// Controls built from a Box, as good as the built-in ones (RFC-0052).
+//
+// A switch, a checkbox and a link, each a `Box` with an `a11y_role` and a `tap`.
+// The role is what puts them in the Tab order, says what a screen reader calls
+// them and which of Space and Enter presses them. The ring is `on focus_visible`:
+// it appears for the keyboard and not for the mouse.
+//
+// Run these from the repo root. No window is opened, and no GPU is needed for the
+// text dumps.
+//
+//   1. Tab focuses the switch and draws its ring:
+//        cargo run -p byard-cli -- shot crates/byard-cli/examples/composed_controls \
+//            --key Tab -o tab.png
+//   2. A tap flips the switch and leaves no ring, because the pointer focused it:
+//        cargo run -p byard-cli -- shot crates/byard-cli/examples/composed_controls \
+//            --tap 40,80 -o tap.png
+//   3. Tab, Tab, Space ticks the checkbox; Enter on it does nothing (a checkbox
+//      takes Space only), and the link below takes Enter and not Space:
+//        cargo run -p byard-cli -- shot crates/byard-cli/examples/composed_controls \
+//            --key Tab --key Tab --key Space -o checkbox.png
+//   4. What a screen reader is told, role, name, value and state:
+//        cargo run -p byard-cli -- shot crates/byard-cli/examples/composed_controls \
+//            --key Tab --a11y tree.txt
+//      The Switch reads `Switch "Wi-Fi" = on [focusable focused]`, named by the
+//      Text beside it, and the Link `Link "Docs 0" [focusable]`.
+//
+// `tests/it/composed_controls_example.rs` runs the dumps and checks them.
+View Main() {
+    var wifi = true
+    var agree = false
+    var docs = 0
+
+    let ring = style {
+        on focus_visible { border: 0xD0BCFF, border_width: 3 }
+    }
+
+    Column #[bg: 0x14141C, p: 24, gap: 18, width: 360, grow: 1] {
+        Text("Tab, Space and Enter on a Box") #[font: body, color: 0xE6E1E5, size: 18, width: 312]
+
+        Row #[gap: 14, align: center] {
+            Box #[
+                ..ring,
+                a11y_role: switch,
+                a11y_checked: wifi,
+                width: 52,
+                height: 32,
+                radius: 16,
+                p: 4,
+                bg: (wifi ? 0x6750A4 : 0x49454F),
+                tap => wifi = !wifi,
+            ] {
+                Row #[align: center, height: 24] {
+                    Box #[width: (wifi ? 20 : 0), height: 24]
+                    Box #[width: 24, height: 24, radius: 12, bg: 0xFFFFFF]
+                }
+            }
+            Text("Wi-Fi") #[font: body, color: 0xCAC4D0, size: 16, width: 200]
+        }
+
+        Row #[gap: 14, align: center] {
+            Box #[
+                ..ring,
+                a11y_role: checkbox,
+                a11y_checked: agree,
+                width: 28,
+                height: 28,
+                radius: 6,
+                align: center,
+                justify: center,
+                bg: (agree ? 0x6750A4 : 0x2A2A36),
+                tap => agree = !agree,
+            ] {
+                when agree {
+                    Box #[width: 12, height: 12, radius: 3, bg: 0xFFFFFF]
+                }
+            }
+            Text("I agree") #[font: body, color: 0xCAC4D0, size: 16, width: 200]
+        }
+
+        Box #[..ring, a11y_role: link, radius: 6, p: 6, width: 120, tap => docs += 1] {
+            Text("Docs {docs}") #[font: body, color: 0xB69DF8, size: 16, width: 100]
+        }
+
+        Text("Wi-Fi {wifi ? "on" : "off"}, agreed {agree ? "yes" : "no"}") #[
+            font: body,
+            color: 0x938F99,
+            size: 14,
+            width: 312,
+        ]
+    }
+}

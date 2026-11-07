@@ -883,3 +883,18 @@ fn the_meaning_check_covers_the_new_declarations() {
         &parse("private let gap = 8\nprivate enum E { a, b }")
     ));
 }
+
+#[test]
+fn a_binding_keeps_its_word_and_one_space_in_a_declaration_and_a_call() {
+    // RFC-0051: `bind` is a name before a name, spaced as `var x` is.
+    let out = fmt_stable(
+        "View Sw(bind   on:Bool,label:Str=\"\"){\nToggle #[bind:on]\n}\nView Main(){\nvar a=true\nvar b=\"\"\nColumn{\nSw(bind:a,label:\"x\")\nSw(  bind   on:a)\nF(bind  text:b,bind valid:a)\n}\n}",
+    );
+    assert!(
+        out.contains("View Sw(bind on: Bool, label: Str = \"\") {"),
+        "{out}"
+    );
+    assert!(out.contains("Sw(bind: a, label: \"x\")"), "{out}");
+    assert!(out.contains("Sw(bind on: a)"), "{out}");
+    assert!(out.contains("F(bind text: b, bind valid: a)"), "{out}");
+}

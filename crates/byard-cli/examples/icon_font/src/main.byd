@@ -1,0 +1,54 @@
+// RFC-0054, icon fonts: `variations:` sets a variable font's axes, and an icon
+// is a ligature, so `Text("favorite")` in the symbols font is the heart.
+//
+// Run it (from the repo root):
+//   cargo run -p byard-cli -- shot crates/byard-cli/examples/icon_font -o icons.png
+//   cargo run -p byard-cli -- shot crates/byard-cli/examples/icon_font --tap 48,470 -o liked.png
+//
+// What to verify visually:
+//   1. Row one is outline icons (FILL 0), row two the same four filled
+//      (FILL 1). Each ring's hole is closed in the second row.
+//   2. Row three is one icon at wght 100, 400 and 700: the outline grows.
+//   3. Tap the big heart and its fill springs from 0 to 1. The icon is an
+//      ordinary `Text`; the axis is animated with `with` like any value.
+//   4. `bundle` ships only the glyphs used here: see the README for sizes.
+View Main() {
+    var liked = false
+
+    Column #[bg: 0x0E1116, p: 28, gap: 18, width: 420] {
+        Text("Icon font") #[size: 26, weight: 700, color: 0xE7ECF2]
+
+        Text("FILL 0") #[size: 12, color: 0x69737F]
+        Row #[gap: 18] {
+            Text("favorite") #[font: symbols, size: 48, color: 0xE7ECF2, variations: (FILL: 0)]
+            Text("home") #[font: symbols, size: 48, color: 0xE7ECF2, variations: (FILL: 0)]
+            Text("search") #[font: symbols, size: 48, color: 0xE7ECF2, variations: (FILL: 0)]
+            Text("settings") #[font: symbols, size: 48, color: 0xE7ECF2, variations: (FILL: 0)]
+        }
+
+        Text("FILL 1") #[size: 12, color: 0x69737F]
+        Row #[gap: 18] {
+            Text("favorite") #[font: symbols, size: 48, color: 0xE8734A, variations: (FILL: 1)]
+            Text("home") #[font: symbols, size: 48, color: 0xE8734A, variations: (FILL: 1)]
+            Text("search") #[font: symbols, size: 48, color: 0xE8734A, variations: (FILL: 1)]
+            Text("settings") #[font: symbols, size: 48, color: 0xE8734A, variations: (FILL: 1)]
+        }
+
+        Text("wght 100, 400, 700") #[size: 12, color: 0x69737F]
+        Row #[gap: 18] {
+            Text("star") #[font: symbols, size: 48, color: 0xE7ECF2, variations: (wght: 100)]
+            Text("star") #[font: symbols, size: 48, color: 0xE7ECF2, variations: (wght: 400)]
+            Text("star") #[font: symbols, size: 48, color: 0xE7ECF2, variations: (wght: 700)]
+        }
+
+        Text("tap the heart") #[size: 12, color: 0x69737F]
+        Box #[width: 96, height: 96, tap => liked = !liked] {
+            Text("favorite") #[
+                font: symbols,
+                size: 72,
+                color: liked ? 0xE8734A : 0x9AA3AE,
+                variations: (FILL: liked ? 1 : 0 with anim.spring(stiffness: 180, damping: 19)),
+            ]
+        }
+    }
+}

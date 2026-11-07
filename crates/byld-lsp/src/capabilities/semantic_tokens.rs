@@ -118,7 +118,7 @@ pub fn handle_semantic_tokens(doc: &Document) -> Option<SemanticTokensResult> {
 
     // 3. Views and their members
     for view in &doc.parsed.views {
-        collect_view_tokens(view, &mut raw_tokens);
+        collect_view_tokens(view, &doc.content, &mut raw_tokens);
     }
 
     // Sort tokens by start position to ensure proper delta encoding
@@ -160,7 +160,7 @@ pub fn handle_semantic_tokens(doc: &Document) -> Option<SemanticTokensResult> {
     }))
 }
 
-fn collect_view_tokens(view: &ViewDecl, out: &mut Vec<RawToken>) {
+fn collect_view_tokens(view: &ViewDecl, content: &str, out: &mut Vec<RawToken>) {
     let view_kw_len = 4;
     out.push(RawToken {
         span: Span::new(view.span.start, view.span.start + view_kw_len),
@@ -177,11 +177,23 @@ fn collect_view_tokens(view: &ViewDecl, out: &mut Vec<RawToken>) {
     });
 
     for param in &view.params {
+        let mut name_start = param.span.start;
+        if param.bind {
+            // `bind name: Type` (RFC-0051): the word, then the name after the
+            // blanks that follow it.
+            out.push(RawToken {
+                span: Span::new(param.span.start, param.span.start + 4),
+                token_type: 0, // KEYWORD
+                modifiers: 0,
+            });
+            let after = (param.span.start + 4) as usize;
+            let blanks = content
+                .get(after..)
+                .map_or(1, |rest| rest.len() - rest.trim_start().len());
+            name_start = param.span.start + 4 + blanks as u32;
+        }
         out.push(RawToken {
-            span: Span::new(
-                param.span.start,
-                param.span.start + param.name.as_str().len() as u32,
-            ),
+            span: Span::new(name_start, name_start + param.name.as_str().len() as u32),
             token_type: 3, // VARIABLE
             modifiers: 1,  // DECLARATION
         });

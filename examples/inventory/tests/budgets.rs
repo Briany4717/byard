@@ -16,8 +16,11 @@
 //! ceiling is on the best of [`RUNS`]: a slow run measures what else the
 //! machine was doing, and a regression slows all of them.
 //!
-//! The times are held only on Linux, where the ceilings were measured. The
-//! work a keystroke does is not a time, so it is held everywhere.
+//! The times are held only on Linux, where the ceilings were measured, and
+//! only by the ignored test: CI's budgets step runs it with `--ignored`, and
+//! `cargo test -p stockroom --test budgets -- --ignored --nocapture` does it
+//! by hand. The work a keystroke does is not a time, so it is held in every
+//! run, everywhere.
 
 #[path = "it/common/mod.rs"]
 mod common;
@@ -128,19 +131,51 @@ fn measure_in_a_new_process() -> Measured {
     );
 }
 
+/// The process one timed measurement is made in: this test, run again by
+/// itself with [`CHILD`] set. Without it, it does nothing.
 #[test]
 fn two_thousand_products_open_and_search_within_budget() {
-    // The same test, run again by itself as the process one measurement is
-    // made in.
     if std::env::var_os(CHILD).is_some() {
         let m = measure();
         println!(
             "{REPORT}{} {} {} {}",
             m.open_ms, m.key_ms, m.signals, m.scopes
         );
-        return;
     }
+}
 
+/// Work, not time: the same on any machine and under any load, so it is part
+/// of every run. One measurement, in this process.
+#[test]
+fn the_list_does_the_work_it_did() {
+    let m = measure();
+    check_work(&m);
+}
+
+fn check_work(m: &Measured) {
+    assert!(
+        m.signals == SIGNALS_PER_KEYSTROKE,
+        "a keystroke in the search box created {} signals; it used to create \
+         {SIGNALS_PER_KEYSTROKE}. Find what it now builds.",
+        m.signals
+    );
+    assert!(
+        m.scopes <= LIVE_SCOPES_WITH_LIST_OPEN,
+        "{} reactive scopes are alive with {PRODUCTS} products listed, over \
+         {LIVE_SCOPES_WITH_LIST_OPEN}: each row costs more than it did. If row \
+         virtualization lowered the work, lower the constant instead.",
+        m.scopes
+    );
+}
+
+/// The times. Ignored in the normal run: a time says how busy the machine was
+/// as much as what the app costs, and under a loaded runner it failed a
+/// change that touched nothing here (411 ms against a 400 ms ceiling). The CI
+/// budgets step on Linux runs it by itself, `-- --ignored`, where the machine
+/// is quiet and the ceilings were measured.
+#[test]
+#[ignore = "timed, and a time flakes when the machine is busy; CI's budgets step runs it with --ignored"]
+fn two_thousand_products_open_and_search_within_time_budget() {
     let open_ceiling = common::ceiling("inventory", "products_open_ms");
     let key_ceiling = common::ceiling("inventory", "search_keystroke_ms");
 
@@ -175,22 +210,8 @@ fn two_thousand_products_open_and_search_within_budget() {
          list open (limit {LIVE_SCOPES_WITH_LIST_OPEN})",
         runs[0].signals, runs[0].scopes
     );
-
-    // Work, not time: the same on any machine, so held everywhere.
     for m in &runs {
-        assert!(
-            m.signals == SIGNALS_PER_KEYSTROKE,
-            "a keystroke in the search box created {} signals; it used to create \
-             {SIGNALS_PER_KEYSTROKE}. Find what it now builds.",
-            m.signals
-        );
-        assert!(
-            m.scopes <= LIVE_SCOPES_WITH_LIST_OPEN,
-            "{} reactive scopes are alive with {PRODUCTS} products listed, over \
-             {LIVE_SCOPES_WITH_LIST_OPEN}: each row costs more than it did. If row \
-             virtualization lowered the work, lower the constant instead.",
-            m.scopes
-        );
+        check_work(m);
     }
     assert!(
         !enforced || best_open <= open_ceiling,

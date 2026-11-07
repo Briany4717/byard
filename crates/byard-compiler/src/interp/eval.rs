@@ -468,6 +468,9 @@ pub struct InstanceBindings {
     /// Successfully bound `(param name, projecting memo)` pairs, in parameter
     /// declaration order.
     pub bindings: Vec<(Symbol, ScopeId)>,
+    /// The bindings (RFC-0051): `(param name, the caller's signal)`. The
+    /// callee holds the signal itself, not a memo over it.
+    pub signals: Vec<(Symbol, SignalId)>,
 }
 
 /// The reserved parameter/element name for a user view's child-block slot

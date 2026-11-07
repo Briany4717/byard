@@ -272,6 +272,13 @@ byard add brand --registry ./registry --version "^0.1"
 (with `--tag` or `--rev`), or `--registry` (with an optional `--version`, which defaults to `^` the
 newest version published). Mixing sources is an error.
 
+A registry directory is written into `byard.toml` relative to the project, however `--registry` was
+spelled (`/work/registry` from anywhere becomes `../registry`), so the manifest and the lock say the
+same on every machine. A registry URL is written as given, with or without a trailing slash, and may
+have a path: a static site such as a GitHub Pages project works with
+`byard add material --registry https://briany4717.github.io/byard-registry`. If `byard.toml` already
+names a registry directory by an absolute path, `byard get` warns that it only works on this machine.
+
 ## `byard get` and the lockfile
 
 `byard get` makes the dependencies real. It fetches every package, picks one version for each registry
@@ -291,15 +298,19 @@ checksum = "sha256:3f1c9a0d5e7b…"
 [[package]]
 name = "kit"
 source = "path+../kit"
-checksum = "sha256:9be2d4417a30…"
 ```
 
-Each entry pins a package to exact *content*: a checksum over its sources. A git package also pins the
-commit its tag resolved to, and a registry package the version chosen. Commit `byard.lock`. With it,
-every machine builds the same program.
+Each git or registry entry pins a package to exact *content*: a checksum over its sources. A git package
+also pins the commit its tag resolved to, and a registry package the version chosen. A `path` package is
+listed and not pinned: it is the files on disk, read as they are each time, so a checksum of them would
+only go stale on the next edit. Commit `byard.lock`. With it, every machine builds the same program, and
+a package repository whose `gallery/` depends on `..` has no lock change per commit.
 
 - `check` and `dev` build from the lock. They never solve, and never contact a registry.
-- Git packages are fetched into a cache, `~/.byard/cache`, and are not fetched again once cached.
+- Git packages are fetched into a cache, `~/.byard/cache`, and are not fetched again once cached. The
+  cache keeps only the files `byard publish` would archive (the manifest, sources, declared assets, README
+  and licences), not the whole repository, so the same content has the same checksum from git, a
+  registry and a path.
 - When the lock already satisfies the manifest, `get` keeps it and does not contact the registry. When
   it does not, `get` solves again.
 - When no version can satisfy every requirement, `get` says which requirements conflict and lists the

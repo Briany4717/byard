@@ -76,6 +76,46 @@ pub fn handle_semantic_tokens(doc: &Document) -> Option<SemanticTokensResult> {
         );
     }
 
+    // Constants and enums (RFC-0055). A declaration's span starts at its
+    // keyword, as a view's and a function's do.
+    for decl in &doc.parsed.consts {
+        raw_tokens.push(RawToken {
+            span: Span::new(decl.span.start, decl.span.start + 3), // "let"
+            token_type: 0,
+            modifiers: 0,
+        });
+        raw_tokens.push(RawToken {
+            span: Span::new(
+                decl.span.start + 4,
+                decl.span.start + 4 + decl.name.as_str().len() as u32,
+            ),
+            token_type: 3, // VARIABLE
+            modifiers: 3,  // DECLARATION | READONLY
+        });
+    }
+    for decl in &doc.parsed.enums {
+        raw_tokens.push(RawToken {
+            span: Span::new(decl.span.start, decl.span.start + 4), // "enum"
+            token_type: 0,
+            modifiers: 0,
+        });
+        raw_tokens.push(RawToken {
+            span: Span::new(
+                decl.span.start + 5,
+                decl.span.start + 5 + decl.name.as_str().len() as u32,
+            ),
+            token_type: 1, // TYPE
+            modifiers: 1,
+        });
+        for (_, span) in &decl.cases {
+            raw_tokens.push(RawToken {
+                span: *span,
+                token_type: 4, // PROPERTY
+                modifiers: 2,  // READONLY
+            });
+        }
+    }
+
     // 3. Views and their members
     for view in &doc.parsed.views {
         collect_view_tokens(view, &mut raw_tokens);

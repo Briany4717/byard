@@ -73,7 +73,7 @@ Material 3 Expressive fits what the engine already does well:
 ### Adding it
 
 ```sh
-byard add material --registry https://packages.byard.dev
+byard add material --registry https://briany4717.github.io/byard-registry
 ```
 
 or, before the registry exists, from git: `byard add material --git
@@ -211,7 +211,8 @@ subsetting part of prerequisite 6, not a later nicety.
 
 Views are named as Material names them, without a prefix: `m.Button`, not
 `m.MaterialButton`; the `use material as m` alias is the prefix. Variants are
-values, not separate views: `m.Button("Send", variant: m.tonal)`. The README
+values, not separate views: `m.Button("Send", variant: .tonal)`, an enum
+(RFC-0055), so a misspelt variant is a check error. The README
 says the package implements the public Material 3 guidelines and is not made by
 or affiliated with Google.
 
@@ -269,6 +270,12 @@ RFC where it changes the language.
    directory registry recorded without an absolute path.
 8. **Motion on colours and gradients**, so a state layer's alpha and a
    gradient can take `with`.
+9. **Testing a package without Rust** (RFC). `byard shot --view <Name>` draws
+   one page of the gallery, and `byard test` runs scenario files (steps and
+   the accessibility tree they should leave) on every platform, with no GPU.
+
+Items 1 to 8 are merged: RFC-0051 to RFC-0057, #406 to #413, and the
+Windows fix in #414 they turned up. Item 9 is RFC-0058.
 
 ## Decisions
 

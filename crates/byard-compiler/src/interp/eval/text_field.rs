@@ -418,6 +418,8 @@ impl Interpreter {
             // otherwise the shared sink the registry needs a signal for.
             let fsig = self.focus_signal(attrs);
             self.router.focusable(idx, hit_rect, fsig);
+            // A field shows its focus however it was reached (RFC-0052 §4).
+            self.router.text_entry(idx);
         }
     }
 

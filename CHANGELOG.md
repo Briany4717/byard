@@ -12,6 +12,31 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Composed controls** (RFC-0052). A control built from a `Box` can say what it is. Every
+  element takes `a11y_role` (23 keywords: `button`, `toggle_button`, `switch`, `checkbox`,
+  `radio`, `radio_group`, `slider`, `tab`, `tab_list`, `menu_item`, `menu`, `link`, `text_field`,
+  `progress_bar`, `list`, `list_item`, `dialog`, `alert`, `navigation`, `toolbar`, `group`,
+  `image`, `heading`), `a11y_value`, `a11y_checked`, `a11y_mixed`, `a11y_selected`,
+  `a11y_expanded` and `a11y_disabled`. A misspelt role is a check error that names the closest,
+  and a misspelt keyword written as a string (`fit: "covr"`) is one too, where it used to be
+  ignored. They reach the screen reader and `byard shot --a11y`.
+- **The keyboard on a composed control.** A `Box` with a `tap` and a role that implies focus is
+  in the Tab order, and so is one with a `focus =>`; Space and Enter press it as its role says
+  (a checkbox and a radio take Space, a link takes Enter, the rest both). The arrow keys walk
+  a `tab_list` and a `radio_group` (Home and End too in a tab list), and a radio group selects
+  as it goes.
+- **`on focus_visible`**, a style state set when focus arrived by the keyboard (Tab, Shift+Tab,
+  the arrows of a group) or into a `TextField`, and not by a pointer press. `on focused` is
+  unchanged.
+- Example `composed_controls`: a switch, a checkbox and a link made from `Box`es.
+
+### Changed
+
+- **The focus ring of `keyboard_focus` is `on focus_visible`.** A click on its buttons no longer
+  leaves a ring, a key still draws it. No built-in control had a default ring (focus draws nothing
+  by itself), so nothing else moves; an app that wants a ring for the keyboard only changes
+  `on focused` to `on focus_visible` on a `Button` or a `Box`.
+  
 - **Bindable parameters (RFC-0051).** A view can declare `bind on: Bool`, and the caller passes
   a `var` with `Switch(bind: wifi)` (`bind name: var` when the view has several). The view reads
   and writes the caller's `var` as its own, in a text, an action, a control's `bind:` or another

@@ -498,6 +498,9 @@ pub enum StyleStateKind {
     Indeterminate,
     /// The element is being dragged past the drag threshold, RFC-0024.
     Dragging,
+    /// The element holds keyboard focus *and* focus got there by the
+    /// keyboard (or into a text field), so a ring is wanted (RFC-0052).
+    FocusVisible,
 }
 
 impl StyleStateKind {
@@ -517,6 +520,7 @@ impl StyleStateKind {
             "invalid" => Some(Self::Invalid),
             "indeterminate" => Some(Self::Indeterminate),
             "dragging" => Some(Self::Dragging),
+            "focus_visible" => Some(Self::FocusVisible),
             _ => None,
         }
     }
@@ -534,11 +538,12 @@ impl StyleStateKind {
             Self::Invalid => "invalid",
             Self::Indeterminate => "indeterminate",
             Self::Dragging => "dragging",
+            Self::FocusVisible => "focus_visible",
         }
     }
 
     /// Every state name, for `closest_match` suggestions.
-    pub const NAMES: [&'static str; 9] = [
+    pub const NAMES: [&'static str; 10] = [
         "hover",
         "pressed",
         "focused",
@@ -548,6 +553,7 @@ impl StyleStateKind {
         "invalid",
         "indeterminate",
         "dragging",
+        "focus_visible",
     ];
 }
 

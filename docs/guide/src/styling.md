@@ -170,6 +170,23 @@ An outline is painted where the element is, so an ancestor's `Clip` or a `Scroll
 at their edge, and a later sibling paints over it where they meet. Leave a gap for it, as
 you would for a shadow.
 
+### Aligning text
+
+`align` on a `Text` sits its lines inside the text's width: `start`, `center`, `end` or `justify`
+(spaces stretched to both edges, the last line of a paragraph left at the start). It is not what
+`align` means on a `Row` or `Column`, where it places the children across the axis; on a `Text` there
+are no children, so it is the text's own. It needs a width to align within, which a `Text` has unless it
+says `wrap: false`, and it can be chosen with `?:`.
+
+```byld
+View Main() {
+    Column #[width: 300, p: 10, gap: 8] {
+        Text("short\nthe longer second line") #[width: 280, align: center, bg: 0xEEEEEE]
+        Text("the quick brown fox jumps over the lazy dog") #[width: 200, align: justify]
+    }
+}
+```
+
 ### Keywords chosen by a condition
 
 An attribute that takes a word (`align`, `justify`, `direction`, `align_self`, `alignment`, `fit`,

@@ -983,3 +983,53 @@ fn a_misspelt_leaf_of_a_keyword_ternary_is_the_usual_error() {
         "{errs:?}"
     );
 }
+
+// ── `align` on Text ─────────────────────────────────────────────────────
+
+fn text_align(src: &str) -> (byard_core::frame::TextAlign, Option<f32>) {
+    let app = App::new(src);
+    (app.frame.texts()[0].align, app.frame.text_wraps()[0])
+}
+
+#[test]
+fn text_align_reaches_the_run_and_a_text_without_it_is_start() {
+    use byard_core::frame::TextAlign::{Center, End, Justify, Start};
+    let run = |attr: &str| {
+        text_align(&format!(
+            "View Main() {{ Column #[width: 400] {{ Text(\"one\\ntwo words\") #[width: 200{attr}] }} }}"
+        ))
+    };
+    assert_eq!(run("").0, Start);
+    assert_eq!(run(", align: start").0, Start);
+    assert_eq!(run(", align: center").0, Center);
+    assert_eq!(run(", align: end").0, End);
+    assert_eq!(run(", align: justify").0, Justify);
+    assert_eq!(
+        run(", align: center").1,
+        Some(200.0),
+        "aligned inside the box's width"
+    );
+}
+
+#[test]
+fn text_align_chosen_by_a_ternary_follows_the_condition() {
+    use byard_core::frame::TextAlign::{Center, End};
+    let mut app = App::new(
+        "View Main() { var mid = true Column #[width: 400] { \
+         Text(\"one\\ntwo words\") #[width: 200, align: mid ? center : end] } }",
+    );
+    assert_eq!(app.frame.texts()[0].align, Center);
+    app.set_bool("mid", false);
+    assert_eq!(app.frame.texts()[0].align, End);
+}
+
+#[test]
+fn a_wrapped_paragraph_keeps_its_wrap_width_when_aligned() {
+    let (align, wrap) = text_align(
+        "View Main() { Column #[width: 400] { \
+         Text(\"the quick brown fox jumps over the lazy dog and keeps running\") \
+             #[width: 150, align: justify] } }",
+    );
+    assert_eq!(align, byard_core::frame::TextAlign::Justify);
+    assert_eq!(wrap, Some(150.0));
+}

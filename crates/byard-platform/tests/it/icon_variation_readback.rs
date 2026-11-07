@@ -127,6 +127,7 @@ fn frame(fill: Option<f32>) -> RenderFrame {
     frame.request_full_redraw();
     frame.set_fonts(Arc::new(fonts));
     frame.push_text(TextLine {
+        align: byard_core::frame::TextAlign::Start,
         x: 40.0,
         y: 40.0,
         text: "favorite".to_string(),

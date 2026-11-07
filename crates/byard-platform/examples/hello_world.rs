@@ -92,6 +92,7 @@ impl PlatformHost for App {
         // reactive label. The reactive label is Engine-internal; this vec
         // holds only lines that never change.
         let texts = vec![TextLine {
+            align: byard_core::frame::TextAlign::Start,
             x: 510.0,
             y: 190.0,
             text: "TextGlyph".to_string(),

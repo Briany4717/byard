@@ -241,7 +241,14 @@ fn shape_line(
             .weight(glyphon::Weight(line.weight))
             .metadata(metadata),
         glyphon::Shaping::Advanced,
-        None, // align: no paragraph-level override
+        // RFC-0059: `Start` hands the shaper nothing, the path every run took
+        // before alignment existed.
+        match line.align {
+            crate::frame::TextAlign::Start => None,
+            crate::frame::TextAlign::Center => Some(glyphon::cosmic_text::Align::Center),
+            crate::frame::TextAlign::End => Some(glyphon::cosmic_text::Align::End),
+            crate::frame::TextAlign::Justify => Some(glyphon::cosmic_text::Align::Justified),
+        },
     );
     buffer.shape_until_scroll(font_system, false);
 }
@@ -259,6 +266,8 @@ fn shape_key(line: &TextLine, wrap: Option<f32>) -> u64 {
     // the prop doing nothing at all.
     h.write_u16(line.weight);
     h.write(line.family.as_deref().unwrap_or("").as_bytes());
+    // RFC-0059: where the lines sit in the wrap width moves every glyph.
+    h.write_u8(line.align as u8);
     // RFC-0054: the axes ride in the glyphs' cache keys, which are set when the
     // text is shaped, so a moved axis needs a fresh buffer.
     for (tag, value) in line.variations.iter().flat_map(|v| v.iter()) {
@@ -971,6 +980,7 @@ mod tests {
     /// and defaults for the ones they must not.
     fn line(text: &str, font_size: f32) -> TextLine {
         TextLine {
+            align: crate::frame::TextAlign::Start,
             x: 0.0,
             y: 0.0,
             text: text.to_string(),
@@ -986,9 +996,69 @@ mod tests {
     /// The same line in a colour.
     fn colored(text: &str, font_size: f32, color: [f32; 4]) -> TextLine {
         TextLine {
+            align: crate::frame::TextAlign::Start,
             color,
             ..line(text, font_size)
         }
+    }
+
+    // ── Alignment inside the wrap width (RFC-0059) ──────────────────
+
+    /// The left and right edge of the first laid-out run of `text` shaped to
+    /// `wrap`, aligned as `align` says.
+    fn first_run_edges(align: crate::frame::TextAlign, text: &str, wrap: f32) -> (f32, f32) {
+        let mut fs = FontSystem::new();
+        let mut buf = Buffer::new(&mut fs, Metrics::new(20.0, 24.0));
+        let mut l = line(text, 20.0);
+        l.align = align;
+        shape_line(&mut fs, &mut buf, &l, Some(wrap), 0);
+        let run = buf.layout_runs().next().expect("a run");
+        let left = run.glyphs.iter().map(|g| g.x).fold(f32::MAX, f32::min);
+        let right = run.glyphs.iter().map(|g| g.x + g.w).fold(0.0_f32, f32::max);
+        (left, right)
+    }
+
+    #[test]
+    fn a_short_line_is_centred_or_ended_inside_the_wrap_width() {
+        use crate::frame::TextAlign::{Center, End, Start};
+        let text = "ab\nabcdefghijkl";
+        let (start_l, start_r) = first_run_edges(Start, text, 300.0);
+        let (center_l, center_r) = first_run_edges(Center, text, 300.0);
+        let (end_l, end_r) = first_run_edges(End, text, 300.0);
+        assert!(start_l < 1.0, "start is at the edge, got {start_l}");
+        let width = start_r - start_l;
+        assert!(
+            (f32::midpoint(center_l, center_r) - 150.0).abs() < 1.0,
+            "centred: {center_l}..{center_r}"
+        );
+        assert!((end_r - 300.0).abs() < 1.0, "ended: {end_l}..{end_r}");
+        assert!(
+            (center_r - center_l - width).abs() < 0.5,
+            "the same width, moved"
+        );
+    }
+
+    #[test]
+    fn a_wrapped_paragraph_justifies_to_both_edges() {
+        use crate::frame::TextAlign::{Justify, Start};
+        let text = "the quick brown fox jumps over the lazy dog and keeps running far away";
+        let (_, start_r) = first_run_edges(Start, text, 200.0);
+        let (justify_l, justify_r) = first_run_edges(Justify, text, 200.0);
+        assert!(start_r < 195.0, "ragged at the end, got {start_r}");
+        assert!(
+            justify_l < 1.0 && (justify_r - 200.0).abs() < 1.0,
+            "{justify_l}..{justify_r}"
+        );
+    }
+
+    #[test]
+    fn alignment_is_part_of_the_shape_key() {
+        let mut centred = line("hello", 16.0);
+        centred.align = crate::frame::TextAlign::Center;
+        assert_ne!(
+            shape_key(&line("hello", 16.0), Some(100.0)),
+            shape_key(&centred, Some(100.0))
+        );
     }
 
     // ── Measurement and paint resolve the same font ────────────────
@@ -1292,6 +1362,7 @@ mod tests {
     #[test]
     fn text_line_dirty_field_round_trips() {
         let dirty_line = TextLine {
+            align: crate::frame::TextAlign::Start,
             x: 0.0,
             y: 0.0,
             text: "hi".to_string(),
@@ -1305,6 +1376,7 @@ mod tests {
         assert!(dirty_line.dirty);
 
         let clean_line = TextLine {
+            align: crate::frame::TextAlign::Start,
             dirty: false,
             ..dirty_line
         };

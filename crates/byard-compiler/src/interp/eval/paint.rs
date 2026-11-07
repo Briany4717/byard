@@ -331,6 +331,16 @@ impl Interpreter {
                     let weight = self.resolve_weight(attrs);
                     let family = self.resolve_family(attrs);
                     let variations = self.resolve_variations(attrs);
+                    // RFC-0059: `align` sits the run's lines inside its wrap width.
+                    // Read only when written; a run that does not write it is
+                    // shaped as it always was. (A `wrap: false` run has no wrap
+                    // width to align within.)
+                    let align = match Self::enum_prop(attrs, "align") {
+                        Some("center") => byard_core::frame::TextAlign::Center,
+                        Some("end") => byard_core::frame::TextAlign::End,
+                        Some("justify") => byard_core::frame::TextAlign::Justify,
+                        _ => byard_core::frame::TextAlign::Start,
+                    };
                     let single_line = self.eval_bool_prop(attrs, "wrap") == Some(false);
                     let wrap_w = if single_line {
                         None
@@ -384,6 +394,7 @@ impl Interpreter {
                     }
                     frame.push_text_wrapped(
                         byard_core::TextLine {
+                            align,
                             x: anchor[0],
                             y: anchor[1],
                             text,

@@ -488,6 +488,7 @@ fn content_clip_scissors_overflow_to_the_viewport() {
         .enumerate()
     {
         frame.push_text(TextLine {
+            align: byard_core::frame::TextAlign::Start,
             x: 70.0,
             y: 110.0 + i as f32 * 28.0,
             text: (*s).to_string(),

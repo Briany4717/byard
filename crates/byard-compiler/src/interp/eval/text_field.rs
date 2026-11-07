@@ -265,6 +265,7 @@ impl Interpreter {
         let push_value = |frame: &mut byard_core::frame::RenderFrame, x: f32, text: &str| {
             if !text.is_empty() {
                 frame.push_text(byard_core::TextLine {
+                    align: byard_core::frame::TextAlign::Start,
                     weight,
                     family: family.clone(),
                     variations: variations.clone(),
@@ -294,6 +295,7 @@ impl Interpreter {
                 let color = dim_alpha(text_rgba, opacity);
                 let start = origin_x + caret_rel;
                 frame.push_text(byard_core::TextLine {
+                    align: byard_core::frame::TextAlign::Start,
                     weight,
                     family: family.clone(),
                     variations: variations.clone(),

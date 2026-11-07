@@ -84,6 +84,9 @@ pub enum PropType {
     /// type rules out is a value that could never be a family name at all;
     /// the "is it declared" half is a separate pass with the theme in hand.
     FontFamily,
+    /// Variable-font axis settings (RFC-0054): a tuple of named numbers whose
+    /// names are four-character axis tags, `(FILL: 1, wght: 500)`.
+    Variations,
     /// A scoped style class reference (`.title`).
     Class,
     /// A `Vec2` `(Float, Float)`.
@@ -298,6 +301,10 @@ const TEXT_PROPS: &[(&str, PropDef)] = &[
     // string to different widths, so a heading that changes face changes the
     // box it needs.
     ("font", lay(PropType::FontFamily)),
+    // RFC-0054: variable-font axes beyond `wght`. Paint class: the rasteriser
+    // draws them and the line is not re-measured, so animating one never
+    // touches layout.
+    ("variations", pnt(PropType::Variations)),
     ("align", lay(PropType::Enum(ALIGN))),
     ("wrap", lay(PropType::Bool)),
 ];
@@ -1480,6 +1487,21 @@ fn check_value_type(ty: PropType, value: &Expr) -> Option<CompileError> {
         (PropType::WeightAxis, Expr::StrLit(..) | Expr::FloatLit(..)) => {
             mismatch("one of the weight keywords, or a whole number 100..=900")
         }
+        (PropType::Variations, Expr::Tuple(args, _)) => args.iter().find_map(|a| match &a.name {
+            Some(n) if n.as_str().len() == 4 && n.as_str().is_ascii() => None,
+            Some(n) => Some(CompileError::AttributeTypeMismatch {
+                span: a.value.span(),
+                expected: format!(
+                    "an axis tag of four letters, like `FILL` or `wght` (got `{}`)",
+                    n.as_str()
+                ),
+            }),
+            None => Some(CompileError::AttributeTypeMismatch {
+                span: a.value.span(),
+                expected: "a named axis, like `FILL: 1`".to_string(),
+            }),
+        }),
+        (PropType::Variations, _) => mismatch("axis settings, like `(FILL: 1, wght: 500)`"),
         (PropType::FontFamily, Expr::IntLit(..) | Expr::FloatLit(..) | Expr::ClassRef(..)) => {
             mismatch("a font family declared in [assets.fonts]")
         }

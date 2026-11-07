@@ -226,6 +226,7 @@ fn encode_one_frame() -> Option<SampleBlock> {
         font_size: 12.0,
         weight: 400,
         family: None,
+        variations: None,
         color: [1.0, 1.0, 1.0, 1.0],
         dirty: true,
     });
@@ -371,6 +372,7 @@ fn a_steady_state_frame_creates_no_gpu_buffers() {
             font_size: 12.0,
             weight: 400,
             family: None,
+            variations: None,
             color: [1.0, 1.0, 1.0, 1.0],
             dirty: true,
         });

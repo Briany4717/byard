@@ -25,6 +25,7 @@ mod frosted_glass_example;
 mod gradient_kinds_example;
 mod grid_example;
 mod guide;
+mod icon_font_bundle;
 mod incremental_example;
 mod keyboard_focus_example;
 mod library_check;

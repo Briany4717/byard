@@ -36,6 +36,8 @@ fn face(file: &str) -> DeclaredFont {
         path: file.into(),
         resolved: Arc::from(resolved),
         bytes,
+        icons: false,
+        icons_include: Vec::new(),
     }
 }
 

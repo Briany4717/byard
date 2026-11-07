@@ -160,6 +160,7 @@ impl Interpreter {
         // defect this whole change exists to remove.
         let weight = self.resolve_weight(attrs);
         let family = self.resolve_family(attrs);
+        let variations = self.resolve_variations(attrs);
         let font = super::edit::FieldFont {
             size: font_size,
             weight,
@@ -261,6 +262,7 @@ impl Interpreter {
                 frame.push_text(byard_core::TextLine {
                     weight,
                     family: family.clone(),
+                    variations: variations.clone(),
                     x,
                     y: text_y,
                     text: text.to_string(),
@@ -289,6 +291,7 @@ impl Interpreter {
                 frame.push_text(byard_core::TextLine {
                     weight,
                     family: family.clone(),
+                    variations: variations.clone(),
                     x: start,
                     y: text_y,
                     text: text.clone(),

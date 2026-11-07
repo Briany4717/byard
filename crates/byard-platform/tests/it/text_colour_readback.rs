@@ -150,6 +150,7 @@ fn a_glyph_paints_the_colour_a_box_of_the_same_hex_paints() {
         font_size: 160.0,
         weight: 900,
         family: None,
+        variations: None,
         color: colour,
         dirty: true,
     });

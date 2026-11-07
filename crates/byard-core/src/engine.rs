@@ -248,6 +248,7 @@ impl ReactiveLabel {
             font_size: self.font_size,
             weight: 400,
             family: None,
+            variations: None,
             color: self.color,
             dirty,
         })

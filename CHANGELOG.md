@@ -12,6 +12,14 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`byard shot --hold X,Y` and `--hover X,Y`.** A held press (with `--at` for how long) and a hovering pointer, so `on pressed`, a press morph, a ripple and `on hover` can be pictured.
+
+### Changed
+
+- **`byard.lock` no longer pins a `path` dependency by checksum.** It went stale on every edit and `check` stayed green on the old one; a path package is the files on disk, so the lock lists it (`name`, `source`) and nothing more. Old locks still read. A package repository whose `gallery/` depends on `..` needs no lock diff per commit.
+- **A git dependency is cached as what `byard publish` archives**, from the same file list: the gallery, `.github` and undeclared fonts are not kept. The checksum is the same as from a path or a registry.
+- **A directory registry is written relative to the project** by `byard add --registry`, so `byard.toml` and the lock name `../registry`, not `/tmp/.../registry`; `byard get` warns when a manifest already has an absolute one. Registries served under a path, with a trailing slash, are tested end to end.
+- Stockroom's timed budget test is `#[ignore]`d in the normal run, which keeps its counter checks, and CI's budgets step runs it with `--ignored`.
 - **Composed controls** (RFC-0052). A control built from a `Box` can say what it is. Every
   element takes `a11y_role` (23 keywords: `button`, `toggle_button`, `switch`, `checkbox`,
   `radio`, `radio_group`, `slider`, `tab`, `tab_list`, `menu_item`, `menu`, `link`, `text_field`,

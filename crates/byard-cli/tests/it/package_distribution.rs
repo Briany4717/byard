@@ -78,7 +78,14 @@ fn git_repo(pkg: &Path, work: &Path) -> String {
     git(&["add", "-A"]);
     git(&["commit", "-q", "-m", "brand"]);
     git(&["tag", "v0.1.0"]);
-    format!("file://{}", work.display())
+    // Forward slashes, and `file:///C:/…` on Windows: a backslash in the
+    // manifest's TOML string would be read as an escape.
+    let path = work.display().to_string().replace('\\', "/");
+    if path.starts_with('/') {
+        format!("file://{path}")
+    } else {
+        format!("file:///{path}")
+    }
 }
 
 fn walk(dir: &Path, base: &Path, out: &mut Vec<String>) {

@@ -212,6 +212,11 @@ const LAYOUT: &[(&str, PropDef)] = &[
     ("align", lay(PropType::Enum(ALIGN))),
     ("justify", lay(PropType::Enum(JUSTIFY))),
     ("grow", lay(PropType::Int)),
+    // How a flex child behaves among its siblings, over what its parent says:
+    // `shrink: 0` keeps it from being squeezed, `align_self` places it on the
+    // cross axis. Costs nothing on an element that writes neither.
+    ("shrink", lay(PropType::Int)),
+    ("align_self", lay(PropType::Enum(ALIGN))),
 ];
 /// `basis`, the main-axis size an element has before it grows. Only the
 /// elements laid out as containers honour it (taffy's `flex_basis`); a leaf
@@ -648,6 +653,13 @@ fn lookup_intrinsic(name: &str) -> Option<Intrinsic> {
                     ("mb", lay(PropType::Len)),
                     ("ml", lay(PropType::Len)),
                     ("grow", lay(PropType::Int)),
+                    ("shrink", lay(PropType::Int)),
+                    ("align_self", lay(PropType::Enum(ALIGN))),
+                    // A background behind the words, inside the text's box
+                    // and its `p`, with rounded corners: a label that sits
+                    // over a border needs one.
+                    ("bg", pnt(PropType::Color)),
+                    ("radius", pnt(PropType::Len)),
                 ],
             ]),
             events: events_from(false, &[]),
@@ -677,6 +689,10 @@ fn lookup_intrinsic(name: &str) -> Option<Intrinsic> {
             // RFC-0041 §6: the colour a selection is painted in, where the
             // theme's `primary` at 30 % is not wanted.
             props.insert("selection", pnt(PropType::Color));
+            // The line along the bottom edge while the field has focus:
+            // `line` (the default) or `none`, for a field whose design draws
+            // its own indicator.
+            props.insert("indicator", pnt(PropType::Enum(&["line", "none"])));
             Intrinsic {
                 arity: 0,
                 content: None,
@@ -842,6 +858,8 @@ fn lookup_intrinsic(name: &str) -> Option<Intrinsic> {
             props.insert("size", lay(PropType::Int));
             props.insert("color", pnt(PropType::Color));
             props.insert("m", lay(PropType::Len));
+            props.insert("shrink", lay(PropType::Int));
+            props.insert("align_self", lay(PropType::Enum(ALIGN)));
             props.insert("opacity", pnt(PropType::Float));
             add_universal(&mut props);
             Intrinsic {
@@ -868,6 +886,8 @@ fn lookup_intrinsic(name: &str) -> Option<Intrinsic> {
             props.insert("height", lay(PropType::Int));
             props.insert("bg", pnt(PropType::Color));
             props.insert("grow", lay(PropType::Int));
+            props.insert("shrink", lay(PropType::Int));
+            props.insert("align_self", lay(PropType::Enum(ALIGN)));
             props.insert("m", lay(PropType::Len));
             props.insert("opacity", pnt(PropType::Float));
             // RFC-0031 §S10: `morph: <scalar>` reinterprets the canvas's shapes

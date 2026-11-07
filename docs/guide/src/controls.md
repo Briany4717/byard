@@ -149,8 +149,24 @@ TextField #[bind: query, placeholder: "Search", grow: 1, height: 40, bg: 0x1E1E2
 ```
 
 Its `color` colours the text and the caret, and the placeholder is the same colour
-fainter. `p` sets where the text starts, and a `typo` gives its size. In a `Row`,
-`grow: 1` makes it fill the rest. Without it, a field keeps its width.
+fainter. `p` sets where the text starts, and a `typo` gives its size.
+
+A field's width follows what you write. With `width` it is that wide. With `grow: 1` and no
+`width` it has no width of its own and takes whatever room is left, so a field between two
+24 wide icons in a `Row` leaves them 24 wide, and in a `Column` it spans the column. With neither, a
+field falls back to 200. Its height is 36 unless `height` says otherwise. The text sits 10 from the
+left edge unless `p` or `pl` says otherwise; that inset is part of the field and stays at 10,
+so a design that wants none writes `p: (horizontal: 0)`.
+
+While it has focus a field draws a 2 pixel line in the theme's `primary` along its bottom edge.
+`indicator: none` leaves it out, for a design that draws its own, and `indicator: line` is the
+default. Whatever else a focused field should look like is the field's own `border` and
+`on focused`, as for any element:
+
+```byld,fragment
+TextField #[bind: query, grow: 1, height: 24, p: (horizontal: 0), indicator: none,
+            color: 0xFFFFFF]
+```
 
 Its events are `input` and `change`, which run after each edit, and `submit`, which
 runs on Enter. Each can name the text, as `input(text) => …`. See

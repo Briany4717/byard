@@ -426,3 +426,76 @@ fn a_changed_min_height_relayouts_on_the_retained_path() {
     let h = atlas.resolved_rect(c).unwrap().unwrap().height;
     assert!((h - 150.0).abs() < 0.5, "min_height must apply, got {h}");
 }
+
+/// A 100 wide row of two 80 wide leaves, the first optionally `shrink: 0`,
+/// built in a fixed order for a retained rebuild.
+fn build_row(atlas: &mut LayoutAtlas, first: FlexItem) {
+    let a = atlas.add_leaf(LeafSize::new(80.0, 20.0)).unwrap();
+    atlas.set_flex_item(a, first).unwrap();
+    let b = atlas.add_leaf(LeafSize::new(80.0, 20.0)).unwrap();
+    let root = atlas
+        .add_container(ContainerStyle::new(Some(100.0), Some(40.0)), &[a, b])
+        .unwrap();
+    atlas.set_root(root).unwrap();
+}
+
+fn first_width(atlas: &LayoutAtlas) -> f32 {
+    atlas
+        .resolved_rect(atlas.nodes_by_index[0])
+        .unwrap()
+        .unwrap()
+        .width
+}
+
+#[test]
+fn a_flex_item_survives_an_identical_retained_build_without_dirtying_it() {
+    let keep = FlexItem {
+        shrink: Some(0.0),
+        ..FlexItem::default()
+    };
+    let mut atlas = LayoutAtlas::new();
+    build_row(&mut atlas, keep);
+    atlas.compute(Viewport::new(200.0, 200.0)).unwrap();
+    assert!((first_width(&atlas) - 80.0).abs() < 0.01, "shrink: 0 held");
+
+    atlas.begin_retained_build();
+    build_row(&mut atlas, keep);
+    assert!(atlas.end_retained_build());
+    assert!(
+        atlas.layout_dirty_targets().is_empty(),
+        "an unchanged item marks nothing"
+    );
+}
+
+#[test]
+fn a_flex_item_changed_or_dropped_between_retained_builds_is_followed() {
+    let keep = FlexItem {
+        shrink: Some(0.0),
+        ..FlexItem::default()
+    };
+    let mut atlas = LayoutAtlas::new();
+    build_row(&mut atlas, keep);
+    atlas.compute(Viewport::new(200.0, 200.0)).unwrap();
+
+    // Dropped: the leaf is back to the shrink it was built with.
+    atlas.begin_retained_build();
+    build_row(&mut atlas, FlexItem::default());
+    assert!(atlas.end_retained_build());
+    atlas.recompute_dirty(Viewport::new(200.0, 200.0)).unwrap();
+    assert!(
+        (first_width(&atlas) - 50.0).abs() < 0.01,
+        "{}",
+        first_width(&atlas)
+    );
+
+    // Written again.
+    atlas.begin_retained_build();
+    build_row(&mut atlas, keep);
+    assert!(atlas.end_retained_build());
+    atlas.recompute_dirty(Viewport::new(200.0, 200.0)).unwrap();
+    assert!(
+        (first_width(&atlas) - 80.0).abs() < 0.01,
+        "{}",
+        first_width(&atlas)
+    );
+}

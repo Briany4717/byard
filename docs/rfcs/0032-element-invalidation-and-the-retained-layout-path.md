@@ -522,3 +522,16 @@ change that makes them, not back in this RFC. This RFC carries no open questions
 - **A `byard dev` "why did this frame rebuild?" report**, R4's whitelist is a
   small enum; naming which condition fired turns a performance mystery into a
   one-line answer.
+
+---
+
+## Addendum (2026-11-07): per-child `shrink` and `align_self`
+
+`shrink` and `align_self` (RFC-0005 addendum) are not part of a node's built
+style or its fingerprint. `LayoutAtlas::set_flex_item` lays them over the node
+after it is placed, the way `set_grid_item` lays a grid placement, and follows
+the same retained rule: re-applying an unchanged item marks nothing, a node
+whose style was rewritten in the same build gets the item again, and an item
+that is dropped between builds puts back the values the node was built with
+(kept beside the item). An element that writes neither never reaches the atlas
+call unless a node had an item the build before.

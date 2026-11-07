@@ -31,7 +31,7 @@ The ones that paint:
 
 | Attribute | Takes | Notes |
 |-----------|-------|-------|
-| `bg` | colour | Fill |
+| `bg` | colour | Fill. On a `Text` it fills the text's box, behind the words |
 | `color` | colour | Text colour, on `Text`, `Button` and `TextField` |
 | `radius` | length | Corner radius. A quad rounds each corner on its own |
 | `smooth` | `0` to `1` | Corner profile. `0` is a circular arc, about `0.6` a continuous corner like an Apple icon |
@@ -359,6 +359,15 @@ View Main() {
   A `Float` size such as `12.5` works too. A name the view binds wins over a keyword of the
   same spelling, so a parameter called `bold` is the parameter.
 - Text wraps to the width its parent offers. `wrap: false` keeps it on a line, and with a `width` clips it to that width.
+- `bg` and `radius` give a `Text` a background. It is drawn behind the words and fills
+  the text's whole box, `p` included, so `Text("Email") #[bg: 0x14141C, p: (horizontal: 4)]`
+  is a label that hides the border it sits over. A `Text` that writes neither draws no
+  fill and pays nothing for one.
+
+```byld,fragment
+Box #[bg: 0x14141C, border: 0x938F99, border_width: 1, radius: 4, height: 56] {}
+Text("Email") #[bg: 0x14141C, color: 0xCAC4D0, size: 12, p: (horizontal: 4), ml: 12]
+```
 
 Text, like boxes, can be moved and turned. See [motion](motion.md).
 

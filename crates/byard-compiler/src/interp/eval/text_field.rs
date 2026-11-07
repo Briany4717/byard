@@ -119,8 +119,13 @@ impl Interpreter {
             .unwrap_or(16) as f32;
 
         // Focus underline (Material-style): a thin accent bar along the bottom
-        // edge when the field holds focus.
-        if is_focused {
+        // edge when the field holds focus. `indicator: none` leaves it out, for
+        // a design that draws its own.
+        let indicator = attrs.iter().find_map(|a| match &a.kind {
+            AttrKind::Prop { value } if a.name.as_str() == "indicator" => Self::enum_token(value),
+            _ => None,
+        });
+        if is_focused && indicator != Some("none") {
             let bar_h = 2.0_f32;
             frame.push_instance(byard_core::BoxInstance {
                 rect: [rect.x, rect.y + rect.h - bar_h, rect.w, bar_h],

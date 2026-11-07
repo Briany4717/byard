@@ -9,6 +9,7 @@ mod accessibility;
 mod action_if;
 mod all_events;
 mod anchored_overlay;
+mod bindable_params;
 mod button_defaults;
 mod callback_props;
 mod canvas_filled_paths;

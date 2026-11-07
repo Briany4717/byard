@@ -1151,3 +1151,24 @@ fn escaped_braces_are_literal_text_not_an_interpolation() {
         "{parts:?}"
     );
 }
+
+#[test]
+fn a_binding_parameter_and_a_binding_argument_are_parsed() {
+    // RFC-0051.
+    let src = "View Sw(bind on: Bool, label: Str = \"\", bind: Int) {\n\
+               Toggle #[bind: on]\n}\n\
+               View Main() {\n\
+               Sw(bind: a, bind on: b, label: \"x\")\n}\n";
+    let parsed = parse(src);
+    let sw = &parsed.views[0];
+    assert!(sw.params[0].bind && sw.params[0].name == sym("on"));
+    assert!(!sw.params[1].bind && sw.params[1].default.is_some());
+    // `bind` before `:` is a plain name, here a parameter called `bind`.
+    assert!(!sw.params[2].bind && sw.params[2].name == sym("bind"));
+    let call = as_element(&parsed.views[1].body[0]);
+    assert_eq!(call.content.len(), 3);
+    // The short form is an argument named `bind`, not a binding flag.
+    assert!(!call.content[0].bind && call.content[0].name == Some(sym("bind")));
+    assert!(call.content[1].bind && call.content[1].name == Some(sym("on")));
+    assert!(!call.content[2].bind);
+}

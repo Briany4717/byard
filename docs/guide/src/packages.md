@@ -73,6 +73,84 @@ To check a package alone, run `byard check` inside it. It checks the files an ap
 fonts and theme named as that app sees them. `byard dev`, `shot` and `build` there say it is a library
 and point you at `check`.
 
+## What a package shares, and what it keeps
+
+Besides views and functions, a package declares [constants](expressions.md#constants) and
+[enums](expressions.md#enums) at the top of any of its files, and its views use them by bare name:
+
+```byld
+// src/tokens.byd
+let gap = 8
+let pad = gap * 2
+
+enum Variant {
+    filled,
+    tonal,
+    outlined,
+}
+
+// private: only this package's own files can use it.
+private fn tint(v: Variant) -> Int => v == Variant.filled ? 0x6750A4 : 0x3A3150
+
+// src/action.byd
+View Action(label: Str, variant: Variant = Variant.filled) {
+    Box #[bg: tint(variant), radius: 20, p: (horizontal: pad, vertical: gap)] {
+        Text(label) #[color: 0xFFFFFF]
+    }
+}
+
+View Main() {
+    Row #[gap: gap, p: pad] {
+        Action("Save")
+        Action("Cancel", variant: .tonal)
+    }
+}
+```
+
+An app reaches them through its alias, as it reaches the package's views and functions:
+
+```byld,ignore
+// Needs the `kit` dependency above, which a lone sample cannot have.
+use kit as k
+
+View Main() {
+    Row #[gap: k.gap] {
+        k.Action("Save")
+        k.Action("Cancel", variant: .tonal)
+        k.Action("More", variant: k.Variant.outlined)
+    }
+}
+
+View Chosen(variant: k.Variant = k.Variant.filled) {
+    k.Action("x", variant: variant)
+}
+```
+
+`k.gap` is the package's constant, `k.Variant.outlined` a case of its enum, and `k.Variant` is how
+the enum is named as a type. `variant: .tonal` is short for `k.Variant.tonal`, because the
+parameter says which enum.
+
+Write `private` before a `View`, `fn`, `type`, `let` or `enum` to keep it inside. A private name is
+visible to every file of the package, the other views included, and to nobody else: an app that
+reaches one is told so, and is not offered it by the editor.
+
+```byld,ignore
+// Needs the `kit` dependency above.
+use kit as k
+
+View Main() {
+    k.Hint()
+}
+```
+
+```text
+error[PrivateName]: `Hint` is private to package `kit`: only the package's own files can use it
+```
+
+A public view may use private ones, so a package can be rewritten behind its public names. In an
+app, or in a package checked on its own, `private` is accepted and changes nothing. The names an
+app can reach are the ones a package has not marked.
+
 ## Using one
 
 A dependency is declared in `[dependencies]`, by where it comes from:

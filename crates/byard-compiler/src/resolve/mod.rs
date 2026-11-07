@@ -30,14 +30,19 @@
 //! parse-time or lower-time, can be located back to `file:line:col`.
 
 mod rebase;
+mod shorthand;
 pub(crate) mod walk;
+
+pub use shorthand::rewrite as resolve_shorthand;
 
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 
 use crate::diagnostics::{CompileError, Span};
 use crate::interp::intrinsics;
-use crate::parser::ast::{ElementNode, Expr, FnDecl, Member, UseDecl, ViewDecl};
+use crate::parser::ast::{
+    ConstDecl, ElementNode, EnumDecl, Expr, FnDecl, Member, Type, UseDecl, ViewDecl,
+};
 use crate::parser::parse;
 use crate::symbol::Symbol;
 use crate::util::closest_match;
@@ -257,6 +262,88 @@ fn view_bindings(view: &ViewDecl) -> std::collections::HashSet<Symbol> {
     names
 }
 
+/// What a value rewrite needs to know about where an expression is written.
+struct ValueScope<'a> {
+    /// The package the expression is in.
+    pkg_name: &'a str,
+    /// The `use` names of its file.
+    aliases: &'a HashMap<Symbol, String>,
+    /// Names the enclosing view or function binds, which hide a constant of
+    /// the same name.
+    shadowed: &'a std::collections::HashSet<Symbol>,
+}
+
+/// Every name a view binds anywhere in it: its parameters, its `var`, `let`,
+/// `fn` and `inject` names at any depth, loop variables, route parameters,
+/// event payloads, lambda parameters, the `let`s of action blocks and the
+/// bindings of result arms. A constant of one of these names is not reachable
+/// by its bare name in this view (RFC-0055 §2).
+fn view_binders(view: &mut ViewDecl) -> std::collections::HashSet<Symbol> {
+    use crate::parser::ast::AttrKind;
+    fn members(list: &[Member], names: &mut std::collections::HashSet<Symbol>) {
+        for m in list {
+            match m {
+                Member::Var { name, .. }
+                | Member::Let { name, .. }
+                | Member::Inject { name, .. } => {
+                    names.insert(name.clone());
+                }
+                Member::Fn { name, params, .. } => {
+                    names.insert(name.clone());
+                    names.extend(params.iter().map(|p| p.name.clone()));
+                }
+                Member::Element(el) => {
+                    for attr in &el.attrs {
+                        if let AttrKind::Event {
+                            payload: Some(p), ..
+                        } = &attr.kind
+                        {
+                            names.insert(p.clone());
+                        }
+                    }
+                    members(&el.children, names);
+                }
+                Member::For {
+                    var, index, body, ..
+                } => {
+                    names.insert(var.clone());
+                    names.extend(index.iter().cloned());
+                    members(body, names);
+                }
+                Member::When { then, els, .. } => {
+                    members(then, names);
+                    if let Some(els) = els {
+                        members(els, names);
+                    }
+                }
+                Member::Route { params, body, .. } => {
+                    names.extend(params.iter().cloned());
+                    members(body, names);
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut names: std::collections::HashSet<Symbol> =
+        view.params.iter().map(|p| p.name.clone()).collect();
+    members(&view.body, &mut names);
+    for member in &mut view.body {
+        walk::member_exprs(member, &mut |e| match e {
+            Expr::Lambda { params, .. } => names.extend(params.iter().cloned()),
+            Expr::Let { name, .. } => {
+                names.insert(name.clone());
+            }
+            Expr::ControllerCall { ok, err, .. } => {
+                for arm in [ok, err].into_iter().flatten() {
+                    names.insert(arm.binding.clone());
+                }
+            }
+            _ => {}
+        });
+    }
+    names
+}
+
 /// Human name of a package for diagnostics.
 fn pkg_display(name: &str) -> String {
     if name == ROOT_PACKAGE {
@@ -272,6 +359,8 @@ struct ParsedModule {
     views: Vec<ViewDecl>,
     fns: Vec<FnDecl>,
     records: Vec<crate::parser::ast::RecordDecl>,
+    consts: Vec<ConstDecl>,
+    enums: Vec<EnumDecl>,
 }
 
 /// A loaded package: its parsed files and flat export table.
@@ -282,6 +371,19 @@ struct PackageData {
     exports: HashMap<Symbol, Span>,
     /// Bare top-level function name → span of its declaration.
     fn_exports: HashMap<Symbol, Span>,
+    /// Bare constant name → span of its declaration.
+    const_exports: HashMap<Symbol, Span>,
+    /// Bare enum name → its cases.
+    enum_exports: HashMap<Symbol, Vec<Symbol>>,
+    /// Bare record type names the package declares.
+    record_names: std::collections::HashSet<Symbol>,
+    /// The names declared `private` (RFC-0055), by kind. A name can be a view
+    /// and an enum at once, so each kind has its own set.
+    private_views: std::collections::HashSet<Symbol>,
+    private_fns: std::collections::HashSet<Symbol>,
+    private_consts: std::collections::HashSet<Symbol>,
+    private_enums: std::collections::HashSet<Symbol>,
+    private_records: std::collections::HashSet<Symbol>,
 }
 
 struct Resolver<'p> {
@@ -353,11 +455,15 @@ fn resolve_root(
     let mut views = Vec::new();
     let mut fns = Vec::new();
     let mut records: Vec<crate::parser::ast::RecordDecl> = Vec::new();
+    let mut consts: Vec<ConstDecl> = Vec::new();
+    let mut enums: Vec<EnumDecl> = Vec::new();
     for name in &r.order {
         if let Some(pkg) = r.packages.get(name) {
             for module in &pkg.modules {
                 views.extend(module.views.iter().cloned());
                 fns.extend(module.fns.iter().cloned());
+                consts.extend(module.consts.iter().cloned());
+                enums.extend(module.enums.iter().cloned());
                 for record in &module.records {
                     // A type's name is the program's: two of one name are
                     // one name too many, wherever each was written.
@@ -377,9 +483,15 @@ fn resolve_root(
     // record type, shared by every view.
     let helpers = std::sync::Arc::new(fns);
     let records = std::sync::Arc::new(records);
+    // A case written alone, where the callee's parameter says which enum.
+    shorthand::rewrite(&mut views, &enums);
+    let consts = std::sync::Arc::new(consts);
+    let enums = std::sync::Arc::new(enums);
     for view in &mut views {
         view.helpers = std::sync::Arc::clone(&helpers);
         view.records = std::sync::Arc::clone(&records);
+        view.consts = std::sync::Arc::clone(&consts);
+        view.enums = std::sync::Arc::clone(&enums);
     }
 
     // The type checks run over the merged, rebased views, so their spans are
@@ -410,6 +522,7 @@ impl Resolver<'_> {
         let mut modules = Vec::new();
         let mut exports: HashMap<Symbol, Span> = HashMap::new();
         let mut fn_exports: HashMap<Symbol, Span> = HashMap::new();
+        let mut data = PackageData::default();
         let mut dep_requests: Vec<(String, Span)> = Vec::new();
 
         for file in files {
@@ -428,6 +541,9 @@ impl Resolver<'_> {
             let mut views = parsed.views;
             for view in &mut views {
                 rebase::shift_view(view, base);
+                if view.private {
+                    data.private_views.insert(view.name.clone());
+                }
                 match exports.entry(view.name.clone()) {
                     Entry::Vacant(v) => {
                         v.insert(view.span);
@@ -442,6 +558,9 @@ impl Resolver<'_> {
             let mut fns = parsed.fns;
             for decl in &mut fns {
                 rebase::shift_fn(decl, base);
+                if decl.private {
+                    data.private_fns.insert(decl.name.clone());
+                }
                 match fn_exports.entry(decl.name.clone()) {
                     Entry::Vacant(v) => {
                         v.insert(decl.span);
@@ -459,19 +578,74 @@ impl Resolver<'_> {
                 for field in &mut record.fields {
                     rebase::shift_type(&mut field.ty, base);
                 }
+                data.record_names.insert(record.name.clone());
+                if record.private {
+                    data.private_records.insert(record.name.clone());
+                }
+            }
+            let mut consts = parsed.consts;
+            for decl in &mut consts {
+                rebase::shift_const(decl, base);
+                if decl.private {
+                    data.private_consts.insert(decl.name.clone());
+                }
+                match data.const_exports.entry(decl.name.clone()) {
+                    Entry::Vacant(v) => {
+                        v.insert(decl.span);
+                    }
+                    Entry::Occupied(_) => self.errors.push(CompileError::DuplicateConstant {
+                        span: decl.span,
+                        name: decl.name.as_str().to_string(),
+                        package: pkg_display(name),
+                    }),
+                }
+            }
+            let mut enums = parsed.enums;
+            for decl in &mut enums {
+                rebase::shift_enum(decl, base);
+                if decl.private {
+                    data.private_enums.insert(decl.name.clone());
+                }
+                let mut cases: Vec<Symbol> = Vec::with_capacity(decl.cases.len());
+                for (case, span) in &decl.cases {
+                    if cases.contains(case) {
+                        self.errors.push(CompileError::DuplicateEnumCase {
+                            span: *span,
+                            enum_name: decl.name.as_str().to_string(),
+                            name: case.as_str().to_string(),
+                        });
+                    } else {
+                        cases.push(case.clone());
+                    }
+                }
+                match data.enum_exports.entry(decl.name.clone()) {
+                    Entry::Vacant(v) => {
+                        v.insert(cases);
+                    }
+                    Entry::Occupied(_) => self.errors.push(CompileError::DuplicateEnum {
+                        span: decl.span,
+                        name: decl.name.as_str().to_string(),
+                        package: pkg_display(name),
+                    }),
+                }
             }
             modules.push(ParsedModule {
                 imports,
                 views,
                 fns,
                 records,
+                consts,
+                enums,
             });
         }
 
         if let Some(pkg) = self.packages.get_mut(name) {
-            pkg.modules = modules;
-            pkg.exports = exports;
-            pkg.fn_exports = fn_exports;
+            *pkg = PackageData {
+                modules,
+                exports,
+                fn_exports,
+                ..data
+            };
         }
 
         // Load dependencies depth-first, in first-`use` order (deterministic).
@@ -608,10 +782,320 @@ impl Resolver<'_> {
                 decl.name = Symbol::intern(&format!("{prefix}.{}", decl.name.as_str()));
             }
         }
+
+        // Constants, enums and the types that name them (RFC-0055): a value
+        // or a type written as `gap`, `m.gap`, `Variant.tonal` or `m.Variant`
+        // becomes the canonical name of the declaration it means.
+        let mut consts = std::mem::take(
+            &mut self.packages.get_mut(pkg_name).unwrap().modules[module_idx].consts,
+        );
+        let mut enums =
+            std::mem::take(&mut self.packages.get_mut(pkg_name).unwrap().modules[module_idx].enums);
+        let mut records = std::mem::take(
+            &mut self.packages.get_mut(pkg_name).unwrap().modules[module_idx].records,
+        );
+        for view in &mut views {
+            let shadowed = view_binders(view);
+            let sc = ValueScope {
+                pkg_name,
+                aliases: &aliases,
+                shadowed: &shadowed,
+            };
+            for p in &mut view.params {
+                if let Some(default) = &mut p.default {
+                    walk::expr(default, &mut |e| self.rewrite_value(e, &sc, &mut errors));
+                }
+            }
+            for member in &mut view.body {
+                walk::member_exprs(member, &mut |e| self.rewrite_value(e, &sc, &mut errors));
+            }
+            walk::view_types(view, &mut |t| {
+                self.rewrite_type(t, pkg_name, &aliases, &mut errors);
+            });
+        }
+        for decl in &mut fns {
+            let shadowed: std::collections::HashSet<Symbol> =
+                decl.params.iter().map(|p| p.name.clone()).collect();
+            let sc = ValueScope {
+                pkg_name,
+                aliases: &aliases,
+                shadowed: &shadowed,
+            };
+            walk::expr(&mut decl.body, &mut |e| {
+                self.rewrite_value(e, &sc, &mut errors);
+            });
+            for p in &mut decl.params {
+                walk::param_types(p, &mut |t| {
+                    self.rewrite_type(t, pkg_name, &aliases, &mut errors);
+                });
+            }
+            if let Some(ret) = &mut decl.ret {
+                walk::ty(ret, &mut |t| {
+                    self.rewrite_type(t, pkg_name, &aliases, &mut errors);
+                });
+            }
+        }
+        let no_shadow = std::collections::HashSet::new();
+        let sc = ValueScope {
+            pkg_name,
+            aliases: &aliases,
+            shadowed: &no_shadow,
+        };
+        for decl in &mut consts {
+            walk::expr(&mut decl.init, &mut |e| {
+                self.rewrite_value(e, &sc, &mut errors);
+            });
+            // Own calls to functions, like a function's own.
+            let own_fns = &own_fns;
+            walk::expr(&mut decl.init, &mut |e| {
+                self.rewrite_call(e, pkg_name, own_fns, &no_shadow, &aliases, &mut errors);
+            });
+            if let Some(ty) = &mut decl.ty {
+                walk::ty(ty, &mut |t| {
+                    self.rewrite_type(t, pkg_name, &aliases, &mut errors);
+                });
+            }
+            if let Some(prefix) = self.prefix(pkg_name) {
+                decl.name = Symbol::intern(&format!("{prefix}.{}", decl.name.as_str()));
+            }
+        }
+        for decl in &mut enums {
+            if let Some(prefix) = self.prefix(pkg_name) {
+                decl.name = Symbol::intern(&format!("{prefix}.{}", decl.name.as_str()));
+            }
+        }
+        for decl in &mut records {
+            for field in &mut decl.fields {
+                walk::ty(&mut field.ty, &mut |t| {
+                    self.rewrite_type(t, pkg_name, &aliases, &mut errors);
+                });
+            }
+        }
         let module = &mut self.packages.get_mut(pkg_name).unwrap().modules[module_idx];
         module.views = views;
         module.fns = fns;
+        module.consts = consts;
+        module.enums = enums;
+        module.records = records;
         self.errors.extend(errors);
+    }
+
+    /// `prefix.name` for a declaration of package `pkg`, the name the rest of
+    /// the pipeline sees. The root project has no prefix.
+    fn canonical(&self, pkg: &str, name: &str) -> Symbol {
+        match self.prefix(pkg) {
+            Some(prefix) => Symbol::intern(&format!("{prefix}.{name}")),
+            None => Symbol::intern(name),
+        }
+    }
+
+    /// Reports `name` of package `target` as private when `pkg_name`, the
+    /// package using it, is another one.
+    fn deny_private(
+        pkg_name: &str,
+        target: &str,
+        private: bool,
+        name: &str,
+        span: Span,
+        errors: &mut Vec<CompileError>,
+    ) {
+        if private && pkg_name != target {
+            errors.push(CompileError::PrivateName {
+                span,
+                name: name.to_string(),
+                package: pkg_display(target),
+            });
+        }
+    }
+
+    /// The names of `target` that `pkg_name` may suggest and use: every one
+    /// when it is the package itself, the public ones otherwise.
+    fn visible<'a>(
+        pkg_name: &str,
+        target: &str,
+        names: impl Iterator<Item = &'a Symbol>,
+        private: &std::collections::HashSet<Symbol>,
+    ) -> Vec<&'a str> {
+        names
+            .filter(|n| pkg_name == target || !private.contains(*n))
+            .map(Symbol::as_str)
+            .collect()
+    }
+
+    /// Rewrites one expression node that names a constant or an enum to the
+    /// canonical form (RFC-0055 §2).
+    fn rewrite_value(&self, e: &mut Expr, sc: &ValueScope<'_>, errors: &mut Vec<CompileError>) {
+        match e {
+            // A bare constant of this package, inside the package.
+            Expr::Ident(name, _) => {
+                if self.prefix(sc.pkg_name).is_some()
+                    && !sc.shadowed.contains(name)
+                    && self.packages[sc.pkg_name].const_exports.contains_key(name)
+                {
+                    *name = self.canonical(sc.pkg_name, name.as_str());
+                }
+            }
+            Expr::Member { base, field, span } => match base.as_mut() {
+                // `m.gap`, `Variant.tonal` (the enum of this package).
+                Expr::Ident(alias, _) if !sc.shadowed.contains(alias) => {
+                    if let Some(target) = sc.aliases.get(alias) {
+                        let pkg = &self.packages[target];
+                        if pkg.const_exports.contains_key(field) {
+                            Self::deny_private(
+                                sc.pkg_name,
+                                target,
+                                pkg.private_consts.contains(field),
+                                field.as_str(),
+                                *span,
+                                errors,
+                            );
+                            *e = Expr::Ident(self.canonical(target, field.as_str()), *span);
+                        } else if !(pkg.enum_exports.contains_key(field)
+                            || pkg.fn_exports.contains_key(field)
+                            || pkg.exports.contains_key(field))
+                        {
+                            let names = Self::visible(
+                                sc.pkg_name,
+                                target,
+                                pkg.const_exports
+                                    .keys()
+                                    .chain(pkg.enum_exports.keys())
+                                    .chain(pkg.fn_exports.keys())
+                                    .chain(pkg.exports.keys()),
+                                &pkg.private_consts
+                                    .iter()
+                                    .chain(&pkg.private_enums)
+                                    .chain(&pkg.private_fns)
+                                    .chain(&pkg.private_views)
+                                    .cloned()
+                                    .collect(),
+                            );
+                            errors.push(CompileError::UnknownImportSymbol {
+                                span: *span,
+                                package: target.clone(),
+                                name: field.as_str().to_string(),
+                                hint: closest_match(field.as_str(), names).map(str::to_string),
+                            });
+                        }
+                    } else if self.prefix(sc.pkg_name).is_some()
+                        && self.packages[sc.pkg_name].enum_exports.contains_key(alias)
+                    {
+                        *alias = self.canonical(sc.pkg_name, alias.as_str());
+                    }
+                }
+                // `m.Variant.tonal`.
+                Expr::Member {
+                    base: inner,
+                    field: enum_name,
+                    span: inner_span,
+                } => {
+                    let Expr::Ident(alias, _) = inner.as_ref() else {
+                        return;
+                    };
+                    if sc.shadowed.contains(alias) {
+                        return;
+                    }
+                    let Some(target) = sc.aliases.get(alias) else {
+                        return;
+                    };
+                    let pkg = &self.packages[target];
+                    if pkg.enum_exports.contains_key(enum_name) {
+                        Self::deny_private(
+                            sc.pkg_name,
+                            target,
+                            pkg.private_enums.contains(enum_name),
+                            enum_name.as_str(),
+                            *inner_span,
+                            errors,
+                        );
+                        **base =
+                            Expr::Ident(self.canonical(target, enum_name.as_str()), *inner_span);
+                    }
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+
+    /// Rewrites one type annotation that names an enum or a record of
+    /// another package, or an enum of this one, to its canonical name.
+    fn rewrite_type(
+        &self,
+        t: &mut Type,
+        pkg_name: &str,
+        aliases: &HashMap<Symbol, String>,
+        errors: &mut Vec<CompileError>,
+    ) {
+        let Type::Named { name, span, .. } = t else {
+            return;
+        };
+        if let Some((head, rest)) = name.as_str().split_once('.') {
+            let rest = Symbol::intern(rest);
+            let Some(target) = aliases.get(&Symbol::intern(head)) else {
+                errors.push(CompileError::UnknownPackage {
+                    span: *span,
+                    name: head.to_string(),
+                    detail: format!("no `use {head}` in this file"),
+                });
+                return;
+            };
+            let pkg = &self.packages[target];
+            if pkg.enum_exports.contains_key(&rest) {
+                Self::deny_private(
+                    pkg_name,
+                    target,
+                    pkg.private_enums.contains(&rest),
+                    rest.as_str(),
+                    *span,
+                    errors,
+                );
+                *name = self.canonical(target, rest.as_str());
+            } else if pkg.record_names.contains(&rest) {
+                Self::deny_private(
+                    pkg_name,
+                    target,
+                    pkg.private_records.contains(&rest),
+                    rest.as_str(),
+                    *span,
+                    errors,
+                );
+                // Record types are program-wide and keep their bare names.
+                *name = rest;
+            } else {
+                let names = Self::visible(
+                    pkg_name,
+                    target,
+                    pkg.enum_exports.keys().chain(&pkg.record_names),
+                    &pkg.private_enums
+                        .iter()
+                        .chain(&pkg.private_records)
+                        .cloned()
+                        .collect(),
+                );
+                errors.push(CompileError::UnknownImportSymbol {
+                    span: *span,
+                    package: target.clone(),
+                    name: rest.as_str().to_string(),
+                    hint: closest_match(rest.as_str(), names).map(str::to_string),
+                });
+            }
+            return;
+        }
+        // A bare name: an enum of this package, or a record another package
+        // keeps private.
+        if self.prefix(pkg_name).is_some()
+            && self.packages[pkg_name].enum_exports.contains_key(name)
+        {
+            *name = self.canonical(pkg_name, name.as_str());
+        } else if !self.packages[pkg_name].record_names.contains(name) {
+            for (other, pkg) in &self.packages {
+                if other != pkg_name && pkg.private_records.contains(name) {
+                    Self::deny_private(pkg_name, other, true, name.as_str(), *span, errors);
+                    break;
+                }
+            }
+        }
     }
 
     /// Rewrites one call to a top-level function to its canonical name.
@@ -637,6 +1121,14 @@ impl Resolver<'_> {
                 };
                 if self.packages[target].fn_exports.contains_key(field) {
                     let span = *span;
+                    Self::deny_private(
+                        pkg_name,
+                        target,
+                        self.packages[target].private_fns.contains(field),
+                        field.as_str(),
+                        span,
+                        errors,
+                    );
                     let prefix = self.prefix(target).unwrap_or_default();
                     **callee = Expr::Ident(
                         Symbol::intern(&format!("{prefix}.{}", field.as_str())),
@@ -645,7 +1137,12 @@ impl Resolver<'_> {
                 } else {
                     let hint = closest_match(
                         field.as_str(),
-                        self.packages[target].fn_exports.keys().map(Symbol::as_str),
+                        Self::visible(
+                            pkg_name,
+                            target,
+                            self.packages[target].fn_exports.keys(),
+                            &self.packages[target].private_fns,
+                        ),
                     )
                     .map(str::to_string);
                     errors.push(CompileError::UnknownImportSymbol {
@@ -678,9 +1175,22 @@ impl Resolver<'_> {
         bare: &mut HashMap<Symbol, String>,
     ) {
         let exports = &self.packages[target].exports;
+        if exports.contains_key(sym) && self.packages[target].private_views.contains(sym) {
+            self.errors.push(CompileError::PrivateName {
+                span,
+                name: sym.as_str().to_string(),
+                package: pkg_display(target),
+            });
+        }
+        let exports = &self.packages[target].exports;
         if !exports.contains_key(sym) {
-            let hint =
-                closest_match(sym.as_str(), exports.keys().map(Symbol::as_str)).map(str::to_string);
+            let names = Self::visible(
+                "",
+                target,
+                exports.keys(),
+                &self.packages[target].private_views,
+            );
+            let hint = closest_match(sym.as_str(), names).map(str::to_string);
             self.errors.push(CompileError::UnknownImportSymbol {
                 span,
                 package: target.to_string(),
@@ -773,13 +1283,29 @@ impl Resolver<'_> {
         if let Some((head, rest)) = name.split_once('.') {
             // Qualified reference `alias.View` (Pillar B).
             if let Some(target) = aliases.get(&Symbol::intern(head)) {
-                if !self.packages[target]
+                if self.packages[target]
                     .exports
                     .contains_key(&Symbol::intern(rest))
                 {
+                    Self::deny_private(
+                        pkg_name,
+                        target,
+                        self.packages[target]
+                            .private_views
+                            .contains(&Symbol::intern(rest)),
+                        rest,
+                        Span::new(el.span.start, el.span.start + name.len() as u32),
+                        errors,
+                    );
+                } else {
                     let hint = closest_match(
                         rest,
-                        self.packages[target].exports.keys().map(Symbol::as_str),
+                        Self::visible(
+                            pkg_name,
+                            target,
+                            self.packages[target].exports.keys(),
+                            &self.packages[target].private_views,
+                        ),
                     )
                     .map(str::to_string);
                     errors.push(CompileError::UnknownImportSymbol {

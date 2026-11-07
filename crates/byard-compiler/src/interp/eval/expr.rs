@@ -867,6 +867,9 @@ impl Interpreter {
             // other member access needs controller metadata (not modeled in
             // Phase 2); lambdas/assignments are actions, not projected values.
             Expr::Member { base, field, span } => {
+                if let Some(lowered) = self.lower_enum_case(base, field, payload_name) {
+                    return lowered;
+                }
                 if let Some(lowered) = self.lower_theme_member(base, field, *span) {
                     return lowered;
                 }
@@ -878,6 +881,33 @@ impl Interpreter {
                 Box::new(move |ctx| data_member(&base_c(ctx), &field))
             }
             Expr::Lambda { .. } | Expr::Error(_) => Box::new(|_| Value::Unit),
+        }
+    }
+
+    /// `Enum.case` (RFC-0055): the case's name as text. `None` when `base` is
+    /// not an enum of the program or something in scope hides its name. A case
+    /// the enum lacks is `Unit`, and `byard check` has told it.
+    fn lower_enum_case(
+        &self,
+        base: &Expr,
+        field: &Symbol,
+        payload_name: Option<&Symbol>,
+    ) -> Option<Lowered> {
+        let Expr::Ident(name, _) = base else {
+            return None;
+        };
+        let cases = self.enums.get(name)?;
+        if payload_name == Some(name)
+            || self.lambda_params.contains(name)
+            || self.env.lookup(name).is_some()
+        {
+            return None;
+        }
+        if cases.contains(field) {
+            let text = field.as_str().to_string();
+            Some(Box::new(move |_| Value::Str(text.clone())))
+        } else {
+            Some(Box::new(|_| Value::Unit))
         }
     }
 
@@ -1019,6 +1049,12 @@ impl Interpreter {
             Some(v) => {
                 let v = v.clone();
                 Box::new(move |_| v.clone())
+            }
+            // A top-level constant (RFC-0055): its value, computed when the
+            // program loaded. Anything the view binds is found first.
+            None if self.consts.contains_key(name) => {
+                let value = self.consts[name].clone();
+                Box::new(move |_| value.clone())
             }
             // An unresolved identifier is treated as an enum/style token
             // (e.g. `center`, `cover`); intrinsics validate it.

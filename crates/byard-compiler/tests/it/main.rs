@@ -14,6 +14,7 @@ mod button_defaults;
 mod callback_props;
 mod canvas_filled_paths;
 mod caret_blink;
+mod check_calls;
 mod checker_diagnostics;
 mod clip_path;
 mod clock;

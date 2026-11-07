@@ -10,6 +10,7 @@ mod bindable_params_example;
 mod broken_app;
 mod bundle;
 mod callbacks_example;
+mod check_scales;
 mod checkbox_example;
 mod clock_example;
 mod collapse_header_example;

@@ -117,6 +117,7 @@ jobs:
           cargo test --locked -p aura-weather --test it budgets -- --nocapture
           cargo test --locked -p aura-weather --test first_frame -- --nocapture
           cargo test --locked -p stockroom --test budgets -- --ignored --nocapture
+          cargo test --locked -p byard-cli --test it check_scales -- --ignored --nocapture
 
   # The resource budgets that are not tests (RFC-0046 sections 3 and 4): the
   # size of the release binary, and the speed of the engine's benchmarks. The

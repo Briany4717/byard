@@ -34,6 +34,7 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **`byard check` no longer slows with the number of calls.** A view's body is lowered once for each way a call is written, and every call is still checked against the view's signature; a screen with 1000 calls of a button checks in 37 ms where it took 340. `byard shot` runs the same check first, and a gallery's now takes 46 ms of its 377.
 - Colour animations mix in OKLab with premultiplied alpha, so a fade to or from a transparent colour keeps the other end's hue instead of passing through grey.
 - **Named motion in the theme (RFC-0053).** `[theme.motion]` declares springs
   (`spatial_fast = { stiffness = 800, damping_ratio = 0.6 }`) and durations

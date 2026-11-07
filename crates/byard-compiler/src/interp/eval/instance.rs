@@ -514,6 +514,14 @@ impl Interpreter {
         // 1) Bind arguments → parameters in the *parent* scope (RFC-0007 §3).
         let bindings = self.bind_args(&callee, el);
 
+        // Checking: a call written like one whose body was lowered already has
+        // nothing more to say. Its arguments and its block are checked above
+        // and below, its body is the same body.
+        if self.already_expanded(&callee, el) {
+            self.instance_depth -= 1;
+            return;
+        }
+
         // From here the nodes belong to this call's instance: its path is the
         // caller's plus this call site, so two calls of one view are two
         // instances, and a reload lowering the same call again gets the same one.
@@ -573,6 +581,91 @@ impl Interpreter {
         // 4) Close the instance scope (RFC-0007 §2 step 6).
         self.env.truncate(snapshot);
         self.instance_depth -= 1;
+    }
+}
+
+/// The calls of each user view, from each view, whose body checking has
+/// lowered: one representative call per shape (children left out, they are
+/// lowered in the caller and are not part of the shape).
+pub(crate) type ExpandedCalls = std::collections::HashMap<(Symbol, Span, Symbol), Vec<ElementNode>>;
+
+impl Interpreter {
+    /// Whether this call of `callee` repeats a shape checking has lowered the
+    /// body for; if it does not, remembers the shape (checking mode only).
+    fn already_expanded(&mut self, callee: &ViewDecl, el: &ElementNode) -> bool {
+        let Some(seen) = self.expanded_calls.as_mut() else {
+            return false;
+        };
+        let home = self
+            .lowered_view
+            .clone()
+            .unwrap_or_else(|| (Symbol::intern(""), Span::new(0, 0)));
+        let shapes = seen
+            .entry((home.0, home.1, callee.name.clone()))
+            .or_default();
+        if shapes.iter().any(|known| same_shape(known, el)) {
+            return true;
+        }
+        shapes.push(ElementNode {
+            children: Vec::new(),
+            ..el.clone()
+        });
+        false
+    }
+}
+
+/// Whether two calls are written the same way, apart from positions and from
+/// the value of an argument that is a plain literal: a text, an integer or a
+/// number stands for its kind (and for empty or not, zero or not, negative or
+/// not, because a body can branch on those). Anything else, a name, a block,
+/// an enum case, a sum, must be the same.
+fn same_shape(a: &ElementNode, b: &ElementNode) -> bool {
+    use crate::parser::span_eq::SpanEq;
+    if a.name != b.name
+        || a.content.len() != b.content.len()
+        || a.attrs.len() != b.attrs.len()
+        || a.action.is_some() != b.action.is_some()
+    {
+        return false;
+    }
+    if let (Some(x), Some(y)) = (&a.action, &b.action) {
+        if !x.span_eq(y) {
+            return false;
+        }
+    }
+    a.content
+        .iter()
+        .zip(&b.content)
+        .all(|(x, y)| x.name == y.name && x.bind == y.bind && same_value(&x.value, &y.value))
+        && a.attrs.iter().zip(&b.attrs).all(|(x, y)| {
+            x.name == y.name
+                && x.axis == y.axis
+                && match (&x.kind, &y.kind) {
+                    (AttrKind::Prop { value: p }, AttrKind::Prop { value: q }) => same_value(p, q),
+                    (p, q) => p.span_eq(q),
+                }
+        })
+}
+
+fn same_value(a: &Expr, b: &Expr) -> bool {
+    use crate::parser::ast::StrPart;
+    use crate::parser::span_eq::SpanEq;
+    fn plain(parts: &[StrPart]) -> Option<bool> {
+        match parts {
+            [] => Some(true),
+            [StrPart::Text(t)] => Some(t.is_empty()),
+            _ => None,
+        }
+    }
+    match (a, b) {
+        (Expr::StrLit(p, _), Expr::StrLit(q, _)) if plain(p).is_some() && plain(q).is_some() => {
+            plain(p) == plain(q)
+        }
+        (Expr::IntLit(x, _), Expr::IntLit(y, _)) => x.signum() == y.signum(),
+        (Expr::FloatLit(x, _), Expr::FloatLit(y, _)) => {
+            (*x == 0.0, x.is_sign_negative()) == (*y == 0.0, y.is_sign_negative())
+        }
+        _ => a.span_eq(b),
     }
 }
 

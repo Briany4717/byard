@@ -48,3 +48,15 @@ regression_percent = 10
 # Read by examples/inventory/tests/budgets.rs.
 products_open_ms = 6000
 search_keystroke_ms = 400
+
+[check]
+# `byard check` of an app that calls one view 1000 times (a pill with state, a
+# style, a `when` and a nested view), in the debug build the test suite uses, as
+# the whole process: milliseconds for 1000 calls, and what they cost as a
+# percentage of 10 calls. A body is checked once for each shape of call, so a
+# thousand calls cost about the same as ten; before that they cost nine times
+# as much. The ceilings are about three times what a CI runner measures.
+# Read by crates/byard-cli/tests/it/check_scales.rs (ignored there, run by the
+# `budgets` step in ci.yml).
+calls_1000_ms = 500
+calls_1000_over_10_percent = 300

@@ -110,6 +110,12 @@ including what is not on screen at the start: a tab that is not the active one, 
 route the first path does not match, both arms of a `when`, the body of a `for`
 over a list that has not loaded yet. It is what CI runs.
 
+Every call of a view is checked against the view: its arguments, the block it
+is given, the callbacks it takes. The view's body is lowered once for each way
+of writing the call (the same arguments, with the text or number in a literal
+being whatever it is), not once per call, so a screen with two hundred buttons
+checks in about the time of one.
+
 ```text
 →    checking /home/ada/hello/main.byd
 ok   0 errors                                                              101ms

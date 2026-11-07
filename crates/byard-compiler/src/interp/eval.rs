@@ -817,6 +817,12 @@ pub struct Interpreter {
     /// declaration span: lowering a different one is a new tree (RFC-0032
     /// §R4).
     lowered_view: Option<(crate::symbol::Symbol, Span)>,
+    /// `Some` while the interpreter is checking rather than running: the calls
+    /// of a user view whose body has been lowered already, by the view that
+    /// calls and the view called, so another call of the same shape is checked
+    /// against the signature and its body is not lowered again. See
+    /// [`set_checking`](Self::set_checking).
+    expanded_calls: Option<instance::ExpandedCalls>,
     /// The IME composition in progress, if any (RFC-0040 §2).
     ///
     /// Engine state, not app state: it has no name in byld and never touches
@@ -1120,6 +1126,20 @@ impl Interpreter {
     #[must_use]
     pub fn errors(&self) -> &[CompileError] {
         &self.errors
+    }
+
+    /// Turns on checking mode, what `byard check` and the language server run.
+    ///
+    /// A call of a user view is then checked against the callee's signature
+    /// every time (a missing, unknown or doubled argument, a block passed to a
+    /// view with no `content`), but the callee's body is lowered only for the
+    /// first call of each shape from one view: a call whose arguments are
+    /// written the same way, literals of the same kind apart. Checking a body
+    /// once per call made the cost of `check` grow with the number of calls
+    /// (0.3 ms a call for a Material button). Running an app never does this,
+    /// every instance there has its own state.
+    pub fn set_checking(&mut self, on: bool) {
+        self.expanded_calls = on.then(Default::default);
     }
 
     /// Builds the user-`View` registry (RFC-0007 §1) from a whole file's

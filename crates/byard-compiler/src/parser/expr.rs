@@ -910,11 +910,33 @@ impl Parser<'_> {
                 args.push(Arg {
                     name: None,
                     value: step,
+                    bind: false,
                 });
                 if !self.eat(&Token::Comma) {
                     break;
                 }
                 continue;
+            }
+            // A binding argument `bind name: expr` (RFC-0051): two names in a
+            // row can be nothing else.
+            if let (Some(Token::Ident(word)), Some(Token::Ident(sym)), Some(Token::Colon)) =
+                (self.cur().cloned(), self.peek2(), self.peek3())
+            {
+                if word.as_str() == "bind" {
+                    self.advance(); // bind
+                    self.advance(); // name
+                    self.advance(); // :
+                    let value = self.parse_expr(0);
+                    args.push(Arg {
+                        name: Some(sym),
+                        value,
+                        bind: true,
+                    });
+                    if !self.eat(&Token::Comma) {
+                        break;
+                    }
+                    continue;
+                }
             }
             // Named argument `name: expr` (two-token lookahead).
             let name = if let (Some(Token::Ident(sym)), Some(Token::Colon)) =
@@ -927,7 +949,11 @@ impl Parser<'_> {
                 None
             };
             let value = self.parse_expr(0);
-            args.push(Arg { name, value });
+            args.push(Arg {
+                name,
+                value,
+                bind: false,
+            });
             if !self.eat(&Token::Comma) {
                 break;
             }

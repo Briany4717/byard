@@ -145,8 +145,19 @@ pub fn handle_completion(doc: &Document, pos: Position) -> Option<CompletionResp
                             items.push(CompletionItem {
                                 label: param.name.to_string(),
                                 kind: Some(CompletionItemKind::PROPERTY),
-                                detail: Some("View Parameter".to_string()),
-                                insert_text: Some(format!("{}: ", param.name)),
+                                detail: Some(
+                                    if param.bind {
+                                        "View Binding"
+                                    } else {
+                                        "View Parameter"
+                                    }
+                                    .to_string(),
+                                ),
+                                insert_text: Some(if param.bind {
+                                    format!("bind {}: ", param.name)
+                                } else {
+                                    format!("{}: ", param.name)
+                                }),
                                 ..Default::default()
                             });
                         }
@@ -236,7 +247,7 @@ pub fn handle_completion(doc: &Document, pos: Position) -> Option<CompletionResp
             locals.push((
                 param.name.to_string(),
                 CompletionItemKind::VARIABLE,
-                "Parameter".to_string(),
+                if param.bind { "Binding" } else { "Parameter" }.to_string(),
             ));
         }
         collect_locals_in_members(&active_view.body, offset, &mut locals);

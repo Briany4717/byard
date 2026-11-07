@@ -68,39 +68,40 @@ The type of the `var` has to match the control:
 | `RadioButton` | `Str` | One of a group |
 
 `value:` is the older name for `bind:` and does the same thing (RFC-0018). Both
-need a `var` of the view the control is in. A `let`, a literal, a loop variable or
-a view's parameter cannot be written, so each is an error that says so: the control
-would draw its default and ignore every edit. A `change` handler runs an action
+need a `var` of the view the control is in, or a parameter the view declares with
+`bind` (below). A `let`, a literal, a loop variable or a plain parameter cannot be
+written, so each is an error that says so: the control would draw its default and
+ignore every edit. A `change` handler runs an action
 when the user changes it.
 
 ### A field in a view of its own
 
 A parameter is a copy of what the caller passed, so a control cannot write it back.
-To reuse a field, give the view a `var` of its own for the control, show the
-caller's value in it, and hand each edit back through a callback:
+To reuse a field, declare the parameter a *binding*: `bind value: Str`. The caller
+passes a `var` of its own, and the view reads and writes that `var` as if it were its
+own, so the control inside binds it like any other:
 
 ```byld
-View Field(value: Str, on_change: Fn(Str) = {|t| }) {
-    var text = value
-    on change(value) => text = value
-    TextField #[bind: text, placeholder: "Type here", input(t) => on_change(t),
-                width: 220, height: 36]
+View Field(bind value: Str) {
+    TextField #[bind: value, placeholder: "Type here", width: 220, height: 36]
 }
 
 View Main() {
     var name = "Ada"
 
     Column #[p: 16, gap: 8] {
-        Field(value: name, on_change: {|t| name = t })
+        Field(bind: name)
         Button("Clear") => name = ""
         Text("name is {name}")
     }
 }
 ```
 
-`var text = value` starts the field with the caller's text, and `on change(value)`
-keeps it in step when the caller changes `name` itself, as the button does. Binding
-the parameter directly is the mistake the checker stops:
+There is no copy in between. Typing in the field writes `name` in `Main`, the line under
+it follows in the same frame, and the button clearing `name` empties the field. This is
+how every control above works, now for a view of your own. [Views and
+parameters](views-and-parameters.md#binding-a-var) has the rules, and `bind` on a
+parameter that is not a binding is the mistake the checker stops:
 
 ```byld,fails
 View Field(value: Str) {
@@ -116,6 +117,10 @@ View Main() {
 ```diagnostic
 error[BindNotAVar]: `TextField #[bind: value]` cannot change `value`: a parameter is a copy of what the caller passed
 ```
+
+The message names the fix: declare it `bind value: Str`. A view that wants to keep a
+copy of what it was given, to edit it and hand the result up when the user is done,
+still takes a value and a callback. `examples/reusable_field` does.
 
 ## Button
 
@@ -290,11 +295,66 @@ What a focused control does with a key:
 | `RadioButton` | Arrow keys | Selects the neighbour in its group |
 | `TextField` | Space types a space; Enter submits | Nothing else is pressed |
 
-Focus draws nothing by itself. Style it with `on focused`, as in
-`style { on focused { border: 0xB69DF8, border_width: 2 } }`, and a control that does
-not shows no ring. `examples/keyboard_focus` does, and
+Focus draws nothing by itself. Style it with `on focus_visible`, as in
+`style { on focus_visible { border: 0xB69DF8, border_width: 2 } }`, and a control that does
+not shows no ring. `focus_visible` is the state for a ring: it is set when the keyboard
+moved focus and not when a mouse press did, so clicking a button does not leave a ring on it
+and pressing Tab draws one. A `TextField` is always focus-visible, since you are typing in
+it. `on focused` is the state for every kind of focus, a click included, and still works as
+it did. `examples/keyboard_focus` draws the ring, and
 `byard shot crates/byard-cli/examples/keyboard_focus --key Tab --key Space -o after.png`
 draws it with the first button focused and pressed.
+
+### A control you build from a Box
+
+A `Box` with a `tap` is not in the Tab order by itself, and a reader hears a button with
+no state. Give it a role and it is a control like the built-in ones: `a11y_role` says what
+it is, and an element with a role that implies focus and a `tap` is in the Tab order, pressed
+by the keys its role takes.
+
+```byld
+View Main() {
+    var wifi = true
+    let ring = style { on focus_visible { border: 0xD0BCFF, border_width: 3 } }
+
+    Row #[p: 24, gap: 12, align: center] {
+        Box #[..ring, a11y_role: switch, a11y_checked: wifi, width: 52, height: 32,
+              radius: 16, bg: (wifi ? 0x6750A4 : 0x49454F), tap => wifi = !wifi]
+        Text("Wi-Fi") #[color: 0xCAC4D0, size: 16]
+    }
+}
+```
+
+A role that implies focus is `button`, `toggle_button`, `switch`, `checkbox`, `radio`,
+`tab`, `menu_item` and `link`. A role alone does not put an element in the Tab order if it
+has nothing to press; an element with a `focus =>`, a `blur =>` or a `focused:` is in it
+whatever its role, and a `tap` there is pressed by the keys too. A `Box` with only a `tap`
+and no role stays out of the order. What presses it follows the role:
+
+| Role | Space | Enter |
+|------|-------|-------|
+| none, `button`, `toggle_button`, `menu_item`, `tab` | presses | presses |
+| `switch` | presses | presses |
+| `checkbox`, `radio` | presses | does nothing |
+| `link` | does nothing | presses |
+
+A key a role does not take goes on to the element's own `key_down`. Holding a key presses
+once.
+
+A row with `a11y_role: tab_list`, or `radio_group`, holds the elements with the role `tab`
+or `radio` inside it as a group, and the arrow keys walk it:
+
+| Key | Does |
+|-----|------|
+| Right, Down | Focus the next, wrapping at the end |
+| Left, Up | Focus the previous, wrapping |
+| Home, End | Focus the first, the last (a `tab_list` only) |
+
+A disabled member is skipped. In a `radio_group` the one that gets focus is also pressed, as
+the arrow keys select among built-in `RadioButton`s. In a `tab_list` it is not: Enter or
+Space selects, and a tab that should select as focus arrives says `focus =>`. The arrows
+draw the ring, like Tab. [Accessibility](accessibility.md) has the roles and what each
+attribute tells a reader.
 
 ## Disabled, focused, invalid
 

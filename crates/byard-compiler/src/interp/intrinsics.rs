@@ -12,8 +12,9 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::diagnostics::CompileError;
-use crate::parser::ast::{Attr, AttrKind, ElementNode, Expr, Member};
+use crate::parser::ast::{Attr, AttrKind, ElementNode, Expr, Member, StrPart};
 use crate::util::closest_match;
+use byard_core::access::AccessRole;
 
 /// The closed set of intrinsic names (RFC-0005 §4).
 pub const INTRINSIC_NAMES: &[&str] = &[
@@ -409,6 +410,20 @@ fn add_universal(m: &mut HashMap<&'static str, PropDef>) {
     // frame an assistive technology is listening.
     m.insert("a11y_label", pnt(PropType::Str));
     m.insert("a11y_hidden", pnt(PropType::Bool));
+    // RFC-0052: what a control built from a `Box` says it is, and its state.
+    // Paint class like the two above. The role is a closed keyword set, so
+    // a misspelling is a check error with the closest word.
+    m.insert("a11y_role", pnt(PropType::Enum(&AccessRole::KEYWORDS)));
+    m.insert("a11y_value", pnt(PropType::Str));
+    for flag in [
+        "a11y_checked",
+        "a11y_mixed",
+        "a11y_selected",
+        "a11y_expanded",
+        "a11y_disabled",
+    ] {
+        m.insert(flag, pnt(PropType::Bool));
+    }
 }
 
 fn events_from(focusable: bool, extra: &[&'static str]) -> HashSet<&'static str> {
@@ -1489,6 +1504,26 @@ fn check_value_type(ty: PropType, value: &Expr) -> Option<CompileError> {
         (PropType::Variations, _) => mismatch("axis settings, like `(FILL: 1, wght: 500)`"),
         (PropType::FontFamily, Expr::IntLit(..) | Expr::FloatLit(..) | Expr::ClassRef(..)) => {
             mismatch("a font family declared in [assets.fonts]")
+        }
+        (PropType::Enum(set), Expr::StrLit(parts, _)) => {
+            // A keyword may be written as a plain string (`fit: "cover"`); one
+            // outside the set is as much a mistake as a bare word outside it.
+            // An interpolated string is not a token and is left alone.
+            let [StrPart::Text(tok)] = parts.as_slice() else {
+                return None;
+            };
+            if set.contains(&tok.as_str()) {
+                None
+            } else {
+                let hint = closest_match(tok, set.iter().copied()).map(str::to_string);
+                Some(CompileError::AttributeTypeMismatch {
+                    span,
+                    expected: hint.map_or_else(
+                        || format!("one of {set:?}"),
+                        |h| format!("one of {set:?} (did you mean `{h}`?)"),
+                    ),
+                })
+            }
         }
         (PropType::Enum(set), Expr::Ident(sym, _)) => {
             let tok = sym.as_str();

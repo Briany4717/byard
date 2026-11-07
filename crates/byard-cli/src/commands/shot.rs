@@ -42,6 +42,10 @@ pub struct Key {
 pub enum Step {
     /// Tap a logical point.
     Tap(f32, f32),
+    /// Press at a logical point and keep the button down (RFC-0056).
+    Hold(f32, f32),
+    /// Move the pointer to a logical point, pressing nothing (RFC-0056).
+    Hover(f32, f32),
     /// Press a key.
     Key(Key),
     /// Type text.
@@ -64,6 +68,14 @@ impl Step {
                     mods: byard_core::KeyModifiers::default(),
                 })
                 .collect(),
+            // A pointer moves before it presses, and hover is driven by the
+            // move; the button is never released, so the picture is a press
+            // in progress: the morph, the ripple and `on pressed` are live.
+            Self::Hold(x, y) => [EventKind::PointerMove, EventKind::PointerDown]
+                .into_iter()
+                .map(|kind| pointer_event(kind, *x, *y, time_ms))
+                .collect(),
+            Self::Hover(x, y) => vec![pointer_event(EventKind::PointerMove, *x, *y, time_ms)],
             Self::Key(Key { name, mods }) => [EventKind::KeyDown, EventKind::KeyUp]
                 .into_iter()
                 .map(|kind| InputEvent {
@@ -89,6 +101,18 @@ impl Step {
                 })
                 .collect(),
         }
+    }
+}
+
+/// A pointer event at a logical point, with no payload or modifiers.
+fn pointer_event(kind: EventKind, x: f32, y: f32, time_ms: u64) -> InputEvent {
+    InputEvent {
+        kind,
+        pos: (x, y),
+        delta: (0.0, 0.0),
+        payload: None,
+        time_ms,
+        mods: byard_core::KeyModifiers::default(),
     }
 }
 

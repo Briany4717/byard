@@ -896,13 +896,13 @@ impl Interpreter {
         let Expr::Ident(name, _) = base else {
             return None;
         };
+        let cases = self.enums.get(name)?;
         if payload_name == Some(name)
             || self.lambda_params.contains(name)
             || self.env.lookup(name).is_some()
         {
             return None;
         }
-        let cases = self.enums.get(name)?;
         if cases.contains(field) {
             let text = field.as_str().to_string();
             Some(Box::new(move |_| Value::Str(text.clone())))

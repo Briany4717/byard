@@ -21,6 +21,7 @@ use super::{Interpreter, RenderNode, access};
 use crate::interp::env::Value;
 use crate::parser::ast::{Attr, AttrKind, StyleStateKind};
 use crate::symbol::Symbol;
+use byard_core::access::AccessRole;
 
 /// A shadow-only [`DecoratedBox`](byard_core::frame::DecoratedBox): the box's
 /// geometry (rect/radii/transform) with a transparent fill and no border, so it
@@ -328,6 +329,7 @@ impl Interpreter {
                     // laid-out height.
                     let weight = self.resolve_weight(attrs);
                     let family = self.resolve_family(attrs);
+                    let variations = self.resolve_variations(attrs);
                     let single_line = self.eval_bool_prop(attrs, "wrap") == Some(false);
                     let wrap_w = if single_line {
                         None
@@ -359,6 +361,7 @@ impl Interpreter {
                             font_size: scaled_size,
                             weight,
                             family,
+                            variations,
                             color: rgba,
                             dirty: true,
                         },
@@ -424,6 +427,8 @@ impl Interpreter {
                 // The accessibility scope this box opened (RFC-0042), closed on
                 // the way out with the node it described.
                 let mut access_scope = access::Scope::default();
+                // Whether this box opened a tab list or radio group (RFC-0052).
+                let mut group_open = false;
                 // Likewise the composed paint transform children inherit (RFC-0011
                 // group transforms): this box's own transform ∘ its ancestors',
                 // set once the rect is known, else passed through unchanged.
@@ -801,6 +806,10 @@ impl Interpreter {
                     // and Space or Enter presses it; one with nothing to press is
                     // not, there is nothing for focus to do there. `Toggle` and
                     // `Slider` register their own, as the rest do.
+                    //
+                    // RFC-0052: its `a11y_role:` is read once, for the focus
+                    // rule and for a tab list or radio group to open.
+                    let declared = Self::declared_role(attrs);
                     if element_name == "Button" {
                         if let Some(idx) = elem_idx.filter(|&i| {
                             self.router
@@ -808,15 +817,26 @@ impl Interpreter {
                         }) {
                             let fsig = self.focus_signal(attrs);
                             self.router.focusable(idx, hit_rect, fsig);
-                            self.router.activate_on_key(idx);
+                            self.router
+                                .activate_on_key(idx, crate::interp::events::ActivationKeys::Both);
                         } else {
-                            self.register_focusable(attrs, hit_rect, elem_idx);
+                            self.register_focusable_as(attrs, hit_rect, elem_idx, declared);
                         }
                     } else if !matches!(
                         element_name,
                         "TextField" | "Checkbox" | "RadioButton" | "Toggle" | "Slider"
                     ) {
-                        self.register_focusable(attrs, hit_rect, elem_idx);
+                        self.register_focusable_as(attrs, hit_rect, elem_idx, declared);
+                    }
+                    if let Some(kind) = match declared {
+                        Some(AccessRole::TabList) => Some(crate::interp::events::GroupKind::Tabs),
+                        Some(AccessRole::RadioGroup) => {
+                            Some(crate::interp::events::GroupKind::Radios)
+                        }
+                        _ => None,
+                    } {
+                        self.router.open_group(kind);
+                        group_open = true;
                     }
 
                     // RFC-0042: describe the box now that its handlers and
@@ -1207,6 +1227,9 @@ impl Interpreter {
                     frame.end_group();
                 }
                 self.access_leave(frame, access_scope);
+                if group_open {
+                    self.router.close_group();
+                }
                 // Close the RFC-0019 instance-env scope opened at the top of this
                 // arm (balanced with `env_base`), restoring the caller's env for
                 // the remaining siblings.

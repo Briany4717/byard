@@ -11,7 +11,7 @@
 
 use super::{InstanceBindings, Interpreter, RESERVED_CONTENT, RenderNode};
 use crate::diagnostics::{CompileError, Span};
-use crate::interp::env::Value;
+use crate::interp::env::{SignalId, Value};
 use crate::interp::reactive::ScopeId;
 use crate::parser::ast::{AttrKind, ElementNode, Expr, Param, Type, ViewDecl};
 use crate::symbol::Symbol;
@@ -61,13 +61,41 @@ impl Interpreter {
         name: &Symbol,
         value: &Expr,
         slots: &mut [Option<ScopeId>],
+        binds: &mut [Option<SignalId>],
     ) {
         // The reserved `content` slot is filled by the child block, never a
         // named value.
         if name.as_str() == RESERVED_CONTENT {
             return;
         }
-        match params.iter().position(|p| &p.name == name) {
+        // `bind: x` is the short form of `bind name: x` for the view's only
+        // binding (RFC-0051 §2). With none, or several, the checker has said
+        // so (`BindNeedsName`); here it is `UnknownParam` for none.
+        let position = if name.as_str() == "bind" {
+            let mut bindings = params.iter().enumerate().filter(|(_, p)| p.bind);
+            match (bindings.next(), bindings.next()) {
+                (Some((i, _)), None) => Some(i),
+                (Some(_), Some(_)) => return,
+                (None, _) => None,
+            }
+        } else {
+            params.iter().position(|p| &p.name == name)
+        };
+        match position {
+            // A binding takes the caller's signal, not a projection of it. A
+            // value passed to one is bound the same way: `BindArgMismatch` is
+            // the checker's, and one word is enough.
+            Some(i) if params[i].bind => {
+                if binds[i].is_none() {
+                    binds[i] = Some(self.resolve_binding_arg(value));
+                } else {
+                    self.errors.push(CompileError::DuplicateParam {
+                        span: value.span(),
+                        name: params[i].name.as_str().to_string(),
+                        callee: callee.to_string(),
+                    });
+                }
+            }
             // A callback prop is bound separately (RFC-0019): it captures the
             // caller's action block, not a projected value, so leave its slot
             // empty here and let `bind_callbacks` handle it.
@@ -93,6 +121,23 @@ impl Interpreter {
         }
     }
 
+    /// The signal a binding argument names, looked up where the call is
+    /// written: a `var` or a binding of the calling view, or `theme.dark`. Any
+    /// other argument was reported by the checker (`BindNotAVar`); the callee
+    /// still gets a cell of its own, so that the body does not report a second
+    /// time for the one mistake.
+    fn resolve_binding_arg(&mut self, value: &Expr) -> SignalId {
+        if let Expr::Ident(name, _) = value {
+            if let Some(Value::Signal(sig)) = self.env.lookup(name) {
+                return *sig;
+            }
+        }
+        if let Some(sig) = self.resolve_theme_scheme_target(value) {
+            return sig;
+        }
+        self.ctx.create_signal(Value::Unit)
+    }
+
     /// Binds a user-view call's positional `content` and named `content`/`attrs`
     /// arguments to the callee's declared parameters, producing one reactive memo
     /// per bound parameter (RFC-0007 §3) and the §6 diagnostics
@@ -104,12 +149,15 @@ impl Interpreter {
         let params = &callee.params;
         let callee_name = callee.name.as_str().to_string();
         let mut slots: Vec<Option<ScopeId>> = vec![None; params.len()];
+        let mut binds: Vec<Option<SignalId>> = vec![None; params.len()];
         // Positional arguments map only to *value* parameters; the reserved
         // `content` slot is filled by the child block, not a value.
         let value_param_idx: Vec<usize> = params
             .iter()
             .enumerate()
-            .filter(|(_, p)| p.name.as_str() != RESERVED_CONTENT && !is_callback_param(p))
+            .filter(|(_, p)| {
+                p.name.as_str() != RESERVED_CONTENT && !is_callback_param(p) && !p.bind
+            })
             .map(|(i, _)| i)
             .collect();
         let mut positional_count = 0usize;
@@ -118,7 +166,14 @@ impl Interpreter {
         // 1) `(...)` content: unnamed → positional by order; named → by symbol.
         for arg in &call.content {
             if let Some(name) = &arg.name {
-                self.bind_named_arg(params, &callee_name, name, &arg.value, &mut slots);
+                self.bind_named_arg(
+                    params,
+                    &callee_name,
+                    name,
+                    &arg.value,
+                    &mut slots,
+                    &mut binds,
+                );
             } else {
                 positional_count += 1;
                 if let Some(&i) = value_param_idx.get(next_positional) {
@@ -142,7 +197,14 @@ impl Interpreter {
         // 2) `#[name: value]` attrs: named arguments (events are not parameters).
         for attr in &call.attrs {
             if let AttrKind::Prop { value } = &attr.kind {
-                self.bind_named_arg(params, &callee_name, &attr.name, value, &mut slots);
+                self.bind_named_arg(
+                    params,
+                    &callee_name,
+                    &attr.name,
+                    value,
+                    &mut slots,
+                    &mut binds,
+                );
             }
         }
 
@@ -190,6 +252,7 @@ impl Interpreter {
         //    defaults to an empty block.
         for (i, slot) in slots.iter().enumerate() {
             if slot.is_none()
+                && binds[i].is_none()
                 && param_default(&params[i]).is_none()
                 && params[i].name.as_str() != RESERVED_CONTENT
                 // Callback params are checked for presence in `bind_callbacks`.
@@ -208,6 +271,11 @@ impl Interpreter {
                 .into_iter()
                 .enumerate()
                 .filter_map(|(i, s)| s.map(|sc| (params[i].name.clone(), sc)))
+                .collect(),
+            signals: binds
+                .into_iter()
+                .enumerate()
+                .filter_map(|(i, s)| s.map(|sig| (params[i].name.clone(), sig)))
                 .collect(),
         }
     }
@@ -324,6 +392,7 @@ impl Interpreter {
                                 .map(|p| crate::parser::ast::Arg {
                                     name: None,
                                     value: Expr::Ident(p.clone(), *span),
+                                    bind: false,
                                 })
                                 .collect();
                             let body = Expr::Call {
@@ -465,7 +534,19 @@ impl Interpreter {
                 self.bind_callback_param(param, el, &mut call_site);
                 continue;
             }
-            if let Some((_, scope)) = bindings.bindings.iter().find(|(n, _)| n == &param.name) {
+            // A binding (RFC-0051) is the caller's signal itself, so a read
+            // subscribes to it and an assignment writes it. A binding the call
+            // did not pass was reported as `MissingParam`; it gets a cell of
+            // its own so that the body is not reported for it again.
+            if param.bind {
+                let sig = match bindings.signals.iter().find(|(n, _)| n == &param.name) {
+                    Some(&(_, sig)) => sig,
+                    None => self.ctx.create_signal(Value::Unit),
+                };
+                self.env.push(param.name.clone(), Value::Signal(sig));
+            } else if let Some((_, scope)) =
+                bindings.bindings.iter().find(|(n, _)| n == &param.name)
+            {
                 self.env.push(param.name.clone(), Value::Memo(*scope));
             } else if let Some(default) = param_default(param) {
                 // Lowered in the current (callee) frame, so a default may

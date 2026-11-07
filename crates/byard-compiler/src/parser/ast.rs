@@ -59,6 +59,10 @@ pub struct Param {
     /// defaulted parameter omitted at a user-view call site evaluates this in
     /// the callee scope.
     pub default: Option<Expr>,
+    /// Whether the parameter is a binding, declared `bind name: Type`
+    /// (RFC-0051): the caller passes a `var`, and the view reads and writes it
+    /// as its own.
+    pub bind: bool,
     /// Source span.
     pub span: Span,
 }
@@ -494,6 +498,9 @@ pub enum StyleStateKind {
     Indeterminate,
     /// The element is being dragged past the drag threshold, RFC-0024.
     Dragging,
+    /// The element holds keyboard focus *and* focus got there by the
+    /// keyboard (or into a text field), so a ring is wanted (RFC-0052).
+    FocusVisible,
 }
 
 impl StyleStateKind {
@@ -513,6 +520,7 @@ impl StyleStateKind {
             "invalid" => Some(Self::Invalid),
             "indeterminate" => Some(Self::Indeterminate),
             "dragging" => Some(Self::Dragging),
+            "focus_visible" => Some(Self::FocusVisible),
             _ => None,
         }
     }
@@ -530,11 +538,12 @@ impl StyleStateKind {
             Self::Invalid => "invalid",
             Self::Indeterminate => "indeterminate",
             Self::Dragging => "dragging",
+            Self::FocusVisible => "focus_visible",
         }
     }
 
     /// Every state name, for `closest_match` suggestions.
-    pub const NAMES: [&'static str; 9] = [
+    pub const NAMES: [&'static str; 10] = [
         "hover",
         "pressed",
         "focused",
@@ -544,6 +553,7 @@ impl StyleStateKind {
         "invalid",
         "indeterminate",
         "dragging",
+        "focus_visible",
     ];
 }
 
@@ -621,13 +631,17 @@ pub struct StyleRule {
     pub span: Span,
 }
 
-/// A call / content argument: `(IDENT ":")? expr`.
+/// A call / content argument: `(IDENT ":")? expr`, or `bind IDENT ":" expr`
+/// (RFC-0051) for a view's binding.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Arg {
     /// The optional `name:` label.
     pub name: Option<Symbol>,
     /// The argument value.
     pub value: Expr,
+    /// Whether it was written `bind name: value`, naming a binding of the
+    /// view called. `name` is then the binding's name.
+    pub bind: bool,
 }
 
 /// Binary operators. Arithmetic (`+ - * /`) is the original minimal surface
@@ -1037,6 +1051,7 @@ mod tests {
             content: vec![Arg {
                 name: None,
                 value: Expr::StrLit(vec![StrPart::Text("+".to_string())], sp()),
+                bind: false,
             }],
             attrs: vec![Attr {
                 name: Symbol::intern("bg"),

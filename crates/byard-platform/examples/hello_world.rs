@@ -98,6 +98,7 @@ impl PlatformHost for App {
             font_size: 14.0,
             weight: 400,
             family: None,
+            variations: None,
             color: [0.1, 0.05, 0.0, 1.0],
             dirty: false,
         }];

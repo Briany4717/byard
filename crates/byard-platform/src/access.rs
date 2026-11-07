@@ -56,7 +56,9 @@ pub(crate) struct WindowInfo {
 
 fn role(role: AccessRole) -> Role {
     match role {
-        AccessRole::Button => Role::Button,
+        // RFC-0052. AccessKit has no toggle-button role: it is a button with
+        // a `toggled` state, set below.
+        AccessRole::Button | AccessRole::ToggleButton => Role::Button,
         AccessRole::TextInput => Role::TextInput,
         AccessRole::Switch => Role::Switch,
         AccessRole::CheckBox => Role::CheckBox,
@@ -69,6 +71,17 @@ fn role(role: AccessRole) -> Role {
         AccessRole::Tab => Role::Tab,
         AccessRole::Dialog => Role::Dialog,
         AccessRole::Group => Role::Group,
+        AccessRole::RadioGroup => Role::RadioGroup,
+        AccessRole::MenuItem => Role::MenuItem,
+        AccessRole::Menu => Role::Menu,
+        AccessRole::Link => Role::Link,
+        AccessRole::ProgressBar => Role::ProgressIndicator,
+        AccessRole::List => Role::List,
+        AccessRole::ListItem => Role::ListItem,
+        AccessRole::Alert => Role::Alert,
+        AccessRole::Navigation => Role::Navigation,
+        AccessRole::Toolbar => Role::Toolbar,
+        AccessRole::Heading => Role::Heading,
     }
 }
 
@@ -127,7 +140,10 @@ fn node(n: &AccessNode, children: Vec<NodeId>) -> Node {
         out.set_toggled(Toggled::Mixed);
     } else if flags.contains(AccessFlags::CHECKED) {
         out.set_toggled(Toggled::True);
-    } else if matches!(n.role, AccessRole::CheckBox | AccessRole::RadioButton) {
+    } else if matches!(
+        n.role,
+        AccessRole::CheckBox | AccessRole::RadioButton | AccessRole::ToggleButton
+    ) {
         out.set_toggled(Toggled::False);
     }
     if flags.contains(AccessFlags::SELECTED) {
@@ -135,6 +151,8 @@ fn node(n: &AccessNode, children: Vec<NodeId>) -> Node {
     }
     if flags.contains(AccessFlags::EXPANDED) {
         out.set_expanded(true);
+    } else if flags.contains(AccessFlags::COLLAPSED) {
+        out.set_expanded(false);
     }
     if flags.contains(AccessFlags::MODAL) {
         out.set_modal();
@@ -417,6 +435,18 @@ mod tests {
             (R::Tab, Role::Tab),
             (R::Dialog, Role::Dialog),
             (R::Group, Role::Group),
+            (R::ToggleButton, Role::Button),
+            (R::RadioGroup, Role::RadioGroup),
+            (R::MenuItem, Role::MenuItem),
+            (R::Menu, Role::Menu),
+            (R::Link, Role::Link),
+            (R::ProgressBar, Role::ProgressIndicator),
+            (R::List, Role::List),
+            (R::ListItem, Role::ListItem),
+            (R::Alert, Role::Alert),
+            (R::Navigation, Role::Navigation),
+            (R::Toolbar, Role::Toolbar),
+            (R::Heading, Role::Heading),
         ];
         for (ours, theirs) in pairs {
             assert_eq!(role(ours), theirs);
@@ -498,10 +528,18 @@ mod tests {
             max_y: 300.0,
         });
 
+        let mut toggle = element(9, None, AccessRole::ToggleButton, "Bold");
+        toggle.flags.insert(AccessFlags::CHECKED);
+        let mut collapsed = element(10, None, AccessRole::MenuItem, "More");
+        collapsed.flags.insert(AccessFlags::COLLAPSED);
+        let mut expanded = element(11, None, AccessRole::MenuItem, "Less");
+        expanded.flags.insert(AccessFlags::EXPANDED);
+
         let update = TreeSender::default()
             .update(
                 &tree(vec![
-                    slider, field, switch, mixed, checked, unchecked, tab, dialog, scroll,
+                    slider, field, switch, mixed, checked, unchecked, tab, dialog, scroll, toggle,
+                    collapsed, expanded,
                 ]),
                 &window(),
             )
@@ -524,6 +562,12 @@ mod tests {
         assert_eq!(find(&update, 5).toggled(), Some(Toggled::False));
         assert_eq!(find(&update, 6).is_selected(), Some(true));
         assert!(find(&update, 7).is_modal());
+        // A toggle button is a button that is on (RFC-0052).
+        let toggle = find(&update, 9);
+        assert_eq!(toggle.role(), Role::Button);
+        assert_eq!(toggle.toggled(), Some(Toggled::True));
+        assert_eq!(find(&update, 10).is_expanded(), Some(false));
+        assert_eq!(find(&update, 11).is_expanded(), Some(true));
         let scroll = find(&update, 8);
         assert_eq!(scroll.scroll_y(), Some(30.0));
         assert_eq!(scroll.scroll_y_max(), Some(300.0));

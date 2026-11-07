@@ -101,11 +101,13 @@ library package.
 | `--dark` | | Forces the dark scheme. Conflicts with `--light`. |
 | `--light` | | Forces the light scheme. |
 | `--tap <X,Y>` | | Taps a logical point before the picture. Repeat it to tap more than once. |
+| `--hold <X,Y>` | | Presses at a logical point and keeps the pointer down for the picture, so a press, a morph and a ripple show. `--at` is how long it is held. Repeatable. |
+| `--hover <X,Y>` | | Moves the pointer to a logical point without pressing, so `on hover` shows. Repeatable. |
 | `--key <KEY>` | | Presses a key before the picture, such as `Left`, `shift+Left` or `mod+a`. Repeat it to press more. |
 | `--type <TEXT>` | | Types text before the picture. Repeat it to type more. |
 | `--a11y <FILE>` | | Writes the accessibility tree to a text file, one node a line. A control a screen reader could not name is marked `(unnamed)`. |
 
-`--tap`, `--key` and `--type` run in the order they are written on the command line. A key is a single
+`--tap`, `--hold`, `--hover`, `--key` and `--type` run in the order they are written on the command line. A key is a single
 character or one of `Left`, `Right`, `Up`, `Down`, `Home`, `End`, `Backspace`, `Delete`, `Enter`,
 `Tab`, `Escape` and `Space`, with any of `shift`, `ctrl`, `alt`, `meta` and `mod` before it, joined
 by `+`. `mod` is Command on macOS and Control elsewhere. With `--a11y`, the picture is drawn only if

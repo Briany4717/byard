@@ -118,6 +118,7 @@ fn text(x: f32, y: f32, s: &str, color: [f32; 4]) -> TextLine {
         font_size: 12.0,
         weight: 400,
         family: None,
+        variations: None,
         color,
         dirty: true,
     }

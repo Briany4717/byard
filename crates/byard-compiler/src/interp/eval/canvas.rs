@@ -1525,6 +1525,7 @@ impl Interpreter {
             font_size: size * transform.uniform_scale(),
             weight: 400,
             family: None,
+            variations: None,
             color: dim_alpha(color, opacity),
             dirty: true,
         });

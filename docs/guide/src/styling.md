@@ -225,7 +225,8 @@ View Main() {
 |-------|------|
 | `hover` | The pointer is over the element |
 | `pressed` | A press is on it |
-| `focused` | It has keyboard focus |
+| `focused` | It has keyboard focus, however it got there |
+| `focus_visible` | It has focus, and the keyboard put it there (Tab, an arrow key in a tab list or radio group), or it is a `TextField`. A mouse press does not set it |
 | `disabled` | It has `disabled: true` |
 | `checked` | A `Checkbox` or `Toggle` is on |
 | `selected` | It has `selected: true`, for a tab, a chip, a list item |
@@ -248,6 +249,24 @@ View Main() {
 
 ```diagnostic
 error[UnknownStyleState]: unknown interaction state `hovr`
+```
+
+`focused` is true after a click as well as after Tab. A ring that should show for the
+keyboard only is written `on focus_visible`, which is what the browsers' `:focus-visible`
+does and what Material asks for. A press on a button focuses it without the ring, and the
+next Tab draws it on the next control. A `TextField` is the exception: you are typing in
+it, so it is focus-visible however you got there. Keep `on focused` for anything that is
+true of every kind of focus, such as the tint of the field you are in.
+
+```byld
+View Main() {
+    var n = 0
+    let ring = style {
+        border: 0x2F2F40, border_width: 2
+        on focus_visible { border: 0xB69DF8, border_width: 3 }
+    }
+    Button("Save") #[..ring, bg: 0x3B82F6, radius: 8, width: 120, height: 40] => n += 1
+}
 ```
 
 The states come from the engine's own tracking, so you write no `var` and no

@@ -888,3 +888,98 @@ fn a_zstack_with_no_filling_child_lays_out_as_it_always_did() {
         stack.rect
     );
 }
+
+// ── a keyword chosen with `?:` ──────────────────────────────────────────
+
+fn child_y(app: &App) -> f32 {
+    app.boxed(40.0, 20.0).rect[1] - app.boxed(300.0, 60.0).rect[1]
+}
+
+#[test]
+fn align_chosen_by_a_ternary_places_the_child_and_follows_the_condition() {
+    let mut app = App::new(
+        "View Main() { var on = true Column #[width: 400] { \
+         Row #[width: 300, height: 60, align: on ? center : end, bg: 0xCCCCCC] { \
+             Box #[bg: 0x3B82F6, width: 40, height: 20] {} } } }",
+    );
+    assert!(
+        approx(child_y(&app), 20.0),
+        "centred, got {}",
+        child_y(&app)
+    );
+    app.set_bool("on", false);
+    assert!(
+        approx(child_y(&app), 40.0),
+        "at the end, got {}",
+        child_y(&app)
+    );
+}
+
+#[test]
+fn a_nested_ternary_and_justify_and_direction_read_the_leaf() {
+    let mut app = App::new(
+        "View Main() { var a = false var b = true Column #[width: 400] { \
+         Row #[width: 300, height: 60, justify: a ? center : b ? end : start, bg: 0xCCCCCC] { \
+             Box #[bg: 0x3B82F6, width: 40, height: 20] {} } \
+         Box #[direction: a ? column : row, width: 100, height: 50, bg: 0xEEEEEE] { \
+             Box #[bg: 0xFF0000, width: 10, height: 10] {} Box #[bg: 0x00FF00, width: 10, height: 10] {} } } }",
+    );
+    let x = |app: &App| app.boxed(40.0, 20.0).rect[0] - app.boxed(300.0, 60.0).rect[0];
+    assert!(
+        approx(x(&app), 260.0),
+        "the nested leaf `end`, got {}",
+        x(&app)
+    );
+    let red_green_same_row = |app: &App| {
+        let find = |g: bool| {
+            app.frame
+                .instances()
+                .iter()
+                .find(|i| approx(i.rect[2], 10.0) && (i.color[1] > 0.5) == g)
+                .map(|i| i.rect)
+                .unwrap()
+        };
+        approx(find(true)[1], find(false)[1])
+    };
+    assert!(red_green_same_row(&app), "direction: row");
+    app.set_bool("a", true);
+    assert!(
+        approx(x(&app), 130.0),
+        "centred once `a` holds, got {}",
+        x(&app)
+    );
+    assert!(!red_green_same_row(&app), "direction: column");
+}
+
+#[test]
+fn a_paint_keyword_chosen_by_a_ternary_is_read_too() {
+    // `blur_quality` is a paint attribute: the tier the backdrop is drawn at.
+    let mut app = App::new(
+        "View Main() { var on = true Column #[width: 400] { \
+         Box #[blur: 10, blur_quality: on ? low : high, width: 100, height: 40] {} } }",
+    );
+    let low = byard_core::frame::BLUR_QUALITY_LOW;
+    assert_eq!(app.frame.backdrops()[0].quality, low);
+    app.set_bool("on", false);
+    assert_ne!(app.frame.backdrops()[0].quality, low);
+}
+
+#[test]
+fn a_misspelt_leaf_of_a_keyword_ternary_is_the_usual_error() {
+    let errs = errors_of(
+        "View Main() { var on = true Row #[align: on ? centre : end, width: 10, height: 10] {} }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.contains("center") && e.contains("AttributeTypeMismatch")),
+        "{errs:?}"
+    );
+    let errs = errors_of(
+        "View Main() { var a = true var b = true \
+         Row #[justify: a ? start : b ? midle : end, width: 10, height: 10] {} }",
+    );
+    assert!(
+        errs.iter().any(|e| e.contains("AttributeTypeMismatch")),
+        "{errs:?}"
+    );
+}

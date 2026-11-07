@@ -769,6 +769,7 @@ impl Interpreter {
             crate::interp::events::StyleState::empty(),
             &|c| viewport_holds(c, self.viewport, &self.theme),
         );
+        let attrs = self.pick_keywords(attrs);
         let attrs: &[Attr] = &attrs;
         let text = match self.binding_value(content) {
             Some(Value::Str(s)) => s,
@@ -1042,7 +1043,6 @@ impl Interpreter {
                     crate::interp::events::StyleState::empty(),
                     &|c| viewport_holds(c, self.viewport, &self.theme),
                 );
-                let attrs: &[Attr] = &attrs;
                 // The same restore the paint walk does, for the same reason and
                 // one pass earlier: a box's *size* is as much a function of the
                 // scope it was instantiated in as its colour is. `width: row.w`
@@ -1055,6 +1055,9 @@ impl Interpreter {
                 for (k, v) in env_snapshot {
                     self.env.push(k.clone(), v.clone());
                 }
+                // A `?:` between keywords is read now that the scope is back.
+                let attrs = self.pick_keywords(attrs);
+                let attrs: &[Attr] = &attrs;
                 // Taken before the children are built, so only the direct child
                 // of a `ZStack` sees that it is one.
                 let in_stack = std::mem::take(&mut self.stacked) == Stacked::Yes;

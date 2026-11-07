@@ -26,6 +26,27 @@ pub(super) struct ShadowSpec {
     pub(super) color: [f32; 4],
 }
 
+/// The attributes whose value is a bare keyword (the `PropType::Enum` ones), which
+/// [`Interpreter::pick_keywords`] resolves when a `?:` chooses between words.
+const KEYWORD_ATTRS: &[&str] = &[
+    "align",
+    "justify",
+    "direction",
+    "align_self",
+    "alignment",
+    "anchor",
+    "anchor_edge",
+    "anchor_align",
+    "fit",
+    "axis",
+    "snap",
+    "snap_align",
+    "transition",
+    "indicator",
+    "blur_quality",
+    "morph_mode",
+];
+
 /// A preset shadow (`sm`, `md`, `lg`): an offset and a blur, with an alpha that
 /// scales gently with size (`sm` 0x44 to `lg` 0x66).
 fn shadow_preset(dy: f32, blur: f32) -> ShadowSpec {
@@ -256,6 +277,41 @@ impl Interpreter {
             },
             _ => None,
         }
+    }
+
+    /// RFC-0059: the keyword attributes (`align`, `justify`, `fit`, `axis`, ...)
+    /// read their word from the syntax, which a `?:` is not. This is the one
+    /// place that turns a conditional into the word its condition picks, to any
+    /// depth, before the element's attributes are read by layout or paint, so
+    /// every keyword reader sees a plain word and none has to know. A list
+    /// without a conditional keyword is returned as it came, borrowed.
+    /// (`a11y_role` and `weight` read their values themselves.)
+    pub(super) fn pick_keywords<'a>(
+        &mut self,
+        attrs: std::borrow::Cow<'a, [Attr]>,
+    ) -> std::borrow::Cow<'a, [Attr]> {
+        let is_choice = |a: &Attr| {
+            matches!(
+                &a.kind,
+                AttrKind::Prop {
+                    value: Expr::Ternary { .. }
+                }
+            ) && KEYWORD_ATTRS.contains(&a.name.as_str())
+        };
+        if !attrs.iter().any(is_choice) {
+            return attrs;
+        }
+        let mut owned = attrs.into_owned();
+        for a in &mut owned {
+            if !is_choice(a) {
+                continue;
+            }
+            if let AttrKind::Prop { value } = &mut a.kind {
+                let leaf = self.pick_gradient_leaf(value).clone();
+                *value = leaf;
+            }
+        }
+        std::borrow::Cow::Owned(owned)
     }
 
     /// [`enum_token`](Self::enum_token) for a named attribute: the keyword token

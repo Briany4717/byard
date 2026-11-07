@@ -258,6 +258,7 @@ impl Interpreter {
                     let attrs = resolve_state_attrs(attrs, state_blocks, state, &|c| {
                         viewport_holds(c, self.viewport, &self.theme)
                     });
+                    let attrs = self.pick_keywords(attrs);
                     let attrs = attrs.as_ref();
                     let text = match self.binding_value(*content) {
                         Some(Value::Str(s)) => s,
@@ -444,6 +445,9 @@ impl Interpreter {
                 for (k, v) in env_snapshot {
                     self.env.push(k.clone(), v.clone());
                 }
+                // A `?:` between keywords is read now that the scope is back.
+                let attrs = self.pick_keywords(std::borrow::Cow::Borrowed(attrs.as_slice()));
+                let attrs: &[Attr] = &attrs;
                 let mut current_rect = parent_rect;
                 // Opacity children inherit from this box: its effective opacity
                 // when it has a resolved rect (set below), else whatever it
@@ -1304,6 +1308,7 @@ impl Interpreter {
                 let paint_attrs = resolve_state_attrs(&p.attrs, &p.state_blocks, state, &|c| {
                     viewport_holds(c, self.viewport, &self.theme)
                 });
+                let paint_attrs = self.pick_keywords(paint_attrs);
                 let paint_attrs = paint_attrs.as_ref();
                 let own_transform = self.resolve_transform(paint_attrs, nav_rect);
                 let transform = inherited_transform.compose(&own_transform);
@@ -1441,6 +1446,7 @@ impl Interpreter {
                     let attrs = resolve_state_attrs(attrs, state_blocks, state, &|c| {
                         viewport_holds(c, self.viewport, &self.theme)
                     });
+                    let attrs = self.pick_keywords(attrs);
                     let attrs = attrs.as_ref();
                     let src_val = self
                         .binding_value(*src)

@@ -170,6 +170,23 @@ An outline is painted where the element is, so an ancestor's `Clip` or a `Scroll
 at their edge, and a later sibling paints over it where they meet. Leave a gap for it, as
 you would for a shadow.
 
+### Keywords chosen by a condition
+
+An attribute that takes a word (`align`, `justify`, `direction`, `align_self`, `alignment`, `fit`,
+`axis`, `snap`, `transition`, `blur_quality`, `a11y_role`) can be chosen with `?:`, nested as deep as
+you like. The word the condition picks is the one used, and it follows the condition as it changes.
+Every word in the conditional is checked, so a misspelt one is an error naming it.
+
+```byld
+View Main() {
+    var centred = true
+    Row #[width: 240, height: 60, bg: 0xE8DEF8, align: centred ? center : end,
+          tap => centred = !centred] {
+        Box #[bg: 0x6750A4, width: 40, height: 20] {}
+    }
+}
+```
+
 ### Frosted glass and ripple
 
 ```byld

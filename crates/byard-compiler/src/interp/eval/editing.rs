@@ -60,6 +60,16 @@ pub(super) struct Blink {
     timer: EngineTimer,
 }
 
+impl Blink {
+    pub(super) const fn owner(&self) -> u32 {
+        self.owner
+    }
+
+    pub(super) const fn set_owner(&mut self, owner: u32) {
+        self.owner = owner;
+    }
+}
+
 /// Where a field's text sits, so a handler can turn the pointer into a place
 /// in it. Captured when the field is rendered.
 #[derive(Clone)]

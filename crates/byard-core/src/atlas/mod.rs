@@ -150,8 +150,9 @@ pub mod layout;
 pub mod spatial;
 
 pub use layout::{
-    Align, AtlasError, AtlasNodeId, AtlasNodeSpec, ContainerStyle, FlexDir, GridItemPlacement,
-    GridTrack, Justify, LayoutAtlas, LayoutAtlasBuilder, LeafSize, Spacing, StackAlign, TextLeaf,
+    Align, AtlasError, AtlasNodeId, AtlasNodeSpec, ContainerStyle, FlexDir, FlexItem,
+    GridItemPlacement, GridTrack, Justify, LayoutAtlas, LayoutAtlasBuilder, LeafSize, Spacing,
+    StackAlign, TextBox, TextLeaf,
 };
 
 pub use spatial::{CELL_SIZE, SpatialGrid};

@@ -1598,3 +1598,112 @@ fn hit_targets_follow_the_scroll_offset() {
     tap_at(&mut interp, 100.0, 110.0, 200);
     assert_eq!(taps(&interp), 1, "the stale laid-out position is inert");
 }
+
+/// A windowed `ScrollView` is as tall as layout makes it, not only as tall as
+/// its own `height`: with `grow`, a parent's size, or a `max`, the rows that
+/// fit are all built.
+#[test]
+fn windowed_scrollview_fills_the_space_grow_gives_it() {
+    let list = |attrs: &str| {
+        format!(
+            "View V() {{ var y: Float = 0.0 \
+                 Column #[width: 300, height: 280] {{ \
+                     Box #[height: 40] {{}} \
+                     ScrollView #[{attrs} windowed: true, row_height: 20, offset: (0, y)] {{ \
+                         Column {{ for i in [{}] {{ Box #[bg: 0x6495ED, width: 180, height: 20] {{}} }} }} \
+                     }} \
+                 }} }}",
+            (0..500)
+                .map(|n| n.to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
+    };
+    let rows = |src: String| {
+        let parsed = parse(&src);
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let mut interp = Interpreter::new();
+        let tree = interp.lower_view(&parsed.views[0], &[]);
+        assert!(interp.errors().is_empty(), "{:?}", interp.errors());
+        interp.tick();
+        let mut frame = byard_core::frame::RenderFrame::new();
+        interp.render(&tree, &mut frame, 400.0, 600.0);
+        frame.instances().len()
+    };
+    // The ScrollView gets 280 - 40 = 240px: twelve 20px rows are on screen.
+    let grown = rows(list("grow: 1,"));
+    assert!(
+        grown >= 12,
+        "grow: 1 shows every row that fits, got {grown}"
+    );
+    // The window never builds the whole list.
+    assert!(grown < 60, "still O(visible), got {grown}");
+    // An explicit height is unchanged.
+    let fixed = rows(list("height: 240,"));
+    assert!(fixed >= 12, "an explicit height still works, got {fixed}");
+}
+
+/// A `ScrollView` that scrolls sideways is not windowed (windowing is a
+/// vertical list's), so every row is built and none is lost.
+#[test]
+fn a_horizontal_windowed_scrollview_is_laid_out_whole() {
+    let src = format!(
+        "View V() {{ ScrollView #[width: 100, height: 40, axis: horizontal, windowed: true, row_height: 20] {{ \
+             Row {{ for i in [{}] {{ Box #[bg: 0x6495ED, width: 20, height: 20] {{}} }} }} \
+         }} }}",
+        (0..50)
+            .map(|n| n.to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    let parsed = parse(&src);
+    assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+    let mut interp = Interpreter::new();
+    let tree = interp.lower_view(&parsed.views[0], &[]);
+    assert!(interp.errors().is_empty(), "{:?}", interp.errors());
+    interp.tick();
+    let mut frame = byard_core::frame::RenderFrame::new();
+    interp.render(&tree, &mut frame, 400.0, 300.0);
+    assert!(
+        interp.atlas_node_count() > 50,
+        "the whole row is laid out, got {}",
+        interp.atlas_node_count()
+    );
+}
+
+/// The usual shape: a screen whose root says `grow: 1`, a header, and a
+/// growing windowed list. The list takes what the header leaves, however long
+/// it is, and the footer under it stays on screen.
+#[test]
+fn a_growing_windowed_scrollview_does_not_push_its_siblings_off_screen() {
+    let src = format!(
+        "View V() {{ var y: Float = 0.0 \
+             Column #[grow: 1] {{ \
+                 Box #[height: 40] {{}} \
+                 ScrollView #[grow: 1, windowed: true, row_height: 20, offset: (0, y)] {{ \
+                     Column {{ for i in [{}] {{ Box #[bg: 0x6495ED, width: 180, height: 20] {{}} }} }} \
+                 }} \
+                 Text(\"footer\") \
+             }} }}",
+        (0..500)
+            .map(|n| n.to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    let parsed = parse(&src);
+    assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+    let mut interp = Interpreter::new();
+    let tree = interp.lower_view(&parsed.views[0], &[]);
+    assert!(interp.errors().is_empty(), "{:?}", interp.errors());
+    interp.tick();
+    let mut frame = byard_core::frame::RenderFrame::new();
+    interp.render(&tree, &mut frame, 400.0, 300.0);
+    let footer = frame.texts().iter().find(|t| t.text == "footer").unwrap();
+    assert!(
+        footer.y < 300.0,
+        "the footer is on screen, got y={}",
+        footer.y
+    );
+    // 300 - 40 - the footer leaves about 240px: twelve rows are visible.
+    assert!(frame.instances().len() >= 12, "rows fill the space");
+}

@@ -176,8 +176,12 @@ impl Interpreter {
                 ..Scope::default()
             };
         }
-        let node = match (b.elem, role_of(b.name, b.tapped)) {
-            (Some(elem), Some(role)) => Some(self.box_node(role, elem, b)),
+        // A role the author wrote replaces the one the element would have,
+        // and gives a layout container one (RFC-0052 §1).
+        let base = role_of(b.name, b.tapped);
+        let declared = Self::declared_role(b.attrs);
+        let node = match (b.elem, declared.or(base)) {
+            (Some(elem), Some(role)) => Some(self.box_node(role, base, elem, b)),
             _ => None,
         };
         let scroller = node
@@ -241,7 +245,7 @@ impl Interpreter {
                 }
                 let text = match self.binding_value(*content) {
                     Some(Value::Str(s)) => s,
-                    other => other.map_or_else(String::new, |v| format!("{v:?}")),
+                    other => other.map_or_else(String::new, |v| v.to_text()),
                 };
                 if let Some(open) = self.access.open.last_mut() {
                     if text.is_empty() {
@@ -293,7 +297,9 @@ impl Interpreter {
         }
         let Some(elem) = elem else { return };
         let name = self.access_label(attrs).unwrap_or_else(|| text.to_string());
-        let node = self.leaf(AccessRole::Label, elem, Some(name), bounds(rect, transform));
+        let role = Self::declared_role(attrs).unwrap_or(AccessRole::Label);
+        let mut node = self.leaf(role, elem, Some(name), bounds(rect, transform));
+        self.apply_declared(&mut node, attrs, false);
         self.push_leaf(frame, node);
     }
 
@@ -320,7 +326,9 @@ impl Interpreter {
         if is_canvas && name.is_none() {
             return;
         }
-        let node = self.leaf(AccessRole::Image, elem, name, bounds(rect, transform));
+        let role = Self::declared_role(attrs).unwrap_or(AccessRole::Image);
+        let mut node = self.leaf(role, elem, name, bounds(rect, transform));
+        self.apply_declared(&mut node, attrs, false);
         self.push_leaf(frame, node);
     }
 
@@ -342,10 +350,13 @@ impl Interpreter {
         if self.eval_bool_prop(attrs, "a11y_hidden") == Some(true) {
             return;
         }
-        let role = byard_core::render::registry::access_role(name).unwrap_or(AccessRole::Group);
+        let role = Self::declared_role(attrs)
+            .or_else(|| byard_core::render::registry::access_role(name))
+            .unwrap_or(AccessRole::Group);
         let label = self.access_label(attrs);
         let mut node = self.leaf(role, elem, label, bounds(rect, transform));
         self.add_interaction(&mut node, elem);
+        self.apply_declared(&mut node, attrs, false);
         self.push_leaf(frame, node);
     }
 
@@ -612,11 +623,21 @@ impl Interpreter {
 
     /// The node a box with a role becomes: its name, value, state and what
     /// can be done to it (RFC-0042 §2, §3).
-    fn box_node(&mut self, role: AccessRole, elem: u32, b: &BoxFacts<'_>) -> AccessNode {
+    ///
+    /// `base` is the role the element has by being what it is; `role` is what
+    /// it is called, which differs when the author wrote `a11y_role:`. The
+    /// value and state a built-in control reads from its `var` follow `base`.
+    fn box_node(
+        &mut self,
+        role: AccessRole,
+        base: Option<AccessRole>,
+        elem: u32,
+        b: &BoxFacts<'_>,
+    ) -> AccessNode {
         let label = self.access_label(b.attrs);
         let mut node = self.leaf(role, elem, label, bounds(b.rect, &b.transform));
         let peek = |this: &Self| b.bound_sig.map(|s| this.ctx.peek_signal(s));
-        match role {
+        match base.unwrap_or(role) {
             AccessRole::TextInput => {
                 let placeholder = self
                     .eval_str_prop(b.paint_attrs, "placeholder")
@@ -691,7 +712,54 @@ impl Interpreter {
         if role != AccessRole::ScrollView {
             self.add_interaction(&mut node, elem);
         }
+        self.apply_declared(&mut node, b.attrs, role_of(b.name, false).is_some());
         node
+    }
+
+    /// What the author wrote about the element for a reader (RFC-0052 §1):
+    /// `a11y_value`, `a11y_checked`, `a11y_mixed`, `a11y_selected`,
+    /// `a11y_expanded` and `a11y_disabled`, laid over what the element's own
+    /// kind already said.
+    ///
+    /// `built_in` is whether the element is a control that reports its own
+    /// state; a switch it names has no state of its own to default to, so an
+    /// author's switch with no `a11y_checked` is off.
+    fn apply_declared(&mut self, node: &mut AccessNode, attrs: &[Attr], built_in: bool) {
+        if let Some(text) = self.eval_str_prop(attrs, "a11y_value") {
+            node.value = Some(AccessValue::Text(text));
+        }
+        // A built-in switch called something else is a state, not a value.
+        if node.role != AccessRole::Switch {
+            if let Some(AccessValue::Toggled(on)) = node.value {
+                node.value = None;
+                if on {
+                    node.flags.insert(AccessFlags::CHECKED);
+                }
+            }
+        }
+        let checked = self.eval_bool_prop(attrs, "a11y_checked");
+        match (node.role, checked) {
+            (AccessRole::Switch, Some(on)) => node.value = Some(AccessValue::Toggled(on)),
+            (AccessRole::Switch, None) if !built_in && node.value.is_none() => {
+                node.value = Some(AccessValue::Toggled(false));
+            }
+            (_, Some(true)) => node.flags.insert(AccessFlags::CHECKED),
+            _ => {}
+        }
+        if self.eval_bool_prop(attrs, "a11y_mixed") == Some(true) {
+            node.flags.insert(AccessFlags::MIXED);
+        }
+        if self.eval_bool_prop(attrs, "a11y_selected") == Some(true) {
+            node.flags.insert(AccessFlags::SELECTED);
+        }
+        match self.eval_bool_prop(attrs, "a11y_expanded") {
+            Some(true) => node.flags.insert(AccessFlags::EXPANDED),
+            Some(false) => node.flags.insert(AccessFlags::COLLAPSED),
+            None => {}
+        }
+        if self.eval_bool_prop(attrs, "a11y_disabled") == Some(true) {
+            node.flags.insert(AccessFlags::DISABLED);
+        }
     }
 
     /// The "label beside it" rule (RFC-0042 §3): a switch, checkbox or radio

@@ -45,8 +45,9 @@ A node needs a name, because a reader says the name. Byard looks for one in this
 1. `a11y_label`, if the element has one.
 2. For a `TextField`, its `placeholder`.
 3. The text inside the control, so `Button("Save")` is "Save".
-4. For a `Toggle`, `Checkbox` or `RadioButton` with no text of its own, the `Text` that
-   follows it in the same `Row`. This is the usual "control, then its label" layout.
+4. For a `Toggle`, `Checkbox` or `RadioButton` with no text of its own, or a `Box` with the
+   role `switch`, `checkbox` or `radio`, the `Text` that follows it in the same `Row`. This is the
+   usual "control, then its label" layout.
 
 The `Text` that named a control is not listed again, or a reader would say "Wi-Fi" twice.
 
@@ -77,6 +78,86 @@ Image("hero.png") #[width: 352, height: 48, a11y_hidden: true]
 `byard check` accepts both attributes on every element, and checks that `a11y_label` is a
 string and `a11y_hidden` a bool.
 
+## Controls you build from a Box
+
+A `Switch` or a `Tab` that a package draws from a `Box` has no role of its own. Left alone,
+a reader hears "button", with no state, for anything with a `tap`. Seven more attributes, on
+any element, say what the control is:
+
+| Attribute | Type | What a reader is told |
+|-----------|------|-----------------------|
+| `a11y_role` | a keyword, below | What it is |
+| `a11y_value` | `Str` | Its value as text, such as `"40 percent"` |
+| `a11y_checked` | `Bool` | On or off, for a `switch`, `checkbox`, `radio` and `toggle_button` |
+| `a11y_mixed` | `Bool` | Neither: the mixed state of a checkbox. Wins over `a11y_checked` |
+| `a11y_selected` | `Bool` | Selected, for a `tab` or a `list_item` |
+| `a11y_expanded` | `Bool` | Expanded when true, collapsed when false. Leave it out if it does not expand |
+| `a11y_disabled` | `Bool` | Disabled, for a reader only. `disabled:` does this and stops input too |
+
+`a11y_checked` is a `Bool` and the mixed state its own attribute, so the common case is
+`a11y_checked: on`, an expression you already have, and the rare one is a second line.
+
+```byld
+View Main() {
+    var wifi = true
+    var agree = false
+
+    Column #[p: 24, gap: 14] {
+        Row #[gap: 12, align: center] {
+            Box #[a11y_role: switch, a11y_checked: wifi, width: 52, height: 32, radius: 16,
+                  bg: (wifi ? 0x6750A4 : 0x49454F), tap => wifi = !wifi]
+            Text("Wi-Fi") #[color: 0xCAC4D0, size: 16]
+        }
+        Box #[a11y_role: checkbox, a11y_checked: agree, width: 180, height: 28,
+              tap => agree = !agree] {
+            Text("I agree") #[color: 0xCAC4D0, size: 16]
+        }
+        Text("Settings") #[a11y_role: heading, color: 0xE6E1E5, size: 20]
+    }
+}
+```
+
+```text
+Switch "Wi-Fi" = on [focusable] @ 24,24 52x32
+CheckBox "I agree" [focusable] @ 24,70 180x28
+Heading "Settings" @ 24,112 392x24
+```
+
+The switch is named by the `Text` beside it, as a built-in `Toggle` is. A `button`,
+`toggle_button`, `switch`, `checkbox`, `radio`, `tab`, `menu_item` or `link` is named by the
+`Text` inside it, like a `Button`. The role is a word, not a string, and the set is closed:
+
+| Role | A reader says |
+|------|---------------|
+| `button`, `toggle_button` | Button; a toggle button is a button that is on or off |
+| `switch`, `checkbox`, `radio`, `radio_group` | Switch, check box, radio button, radio group |
+| `slider`, `progress_bar` | Slider, progress indicator |
+| `tab`, `tab_list` | Tab, tab list |
+| `menu_item`, `menu` | Menu item, menu |
+| `link` | Link |
+| `text_field` | Text input (names it only: a composed field has no caret or text editing) |
+| `list`, `list_item` | List, list item |
+| `dialog`, `alert` | Dialog, alert |
+| `navigation`, `toolbar` | Navigation, toolbar |
+| `group`, `image`, `heading` | Group, image, heading |
+
+A misspelt one is an error that names the closest, so it cannot be a silent no-op:
+
+```byld,fails
+View Main() {
+    Box #[a11y_role: chekbox, width: 24, height: 24] {}
+}
+```
+
+```diagnostic
+error[AttributeTypeMismatch]: expected one of ["button", "toggle_button", "switch", "checkbox", "radio", "radio_group", "slider", "tab", "tab_list", "menu_item", "menu", "link", "text_field", "progress_bar", "list", "list_item", "dialog", "alert", "navigation", "toolbar", "group", "image", "heading"] (did you mean `checkbox`?)
+```
+
+A role is fixed for the element, since a control that becomes another is two elements under
+a `when`. A layout container that is given one stops being flattened away: it is a node, and
+what it holds hangs under it. For the keys such a control answers to, and the ring it
+draws, see [the keyboard](controls.md#the-keyboard).
+
 ## What is in the tree
 
 The tree is the controls and not the layout around them. `Row`, `Column`, `Box`, `Grid`
@@ -88,6 +169,7 @@ rows.
 |---------|------|
 | `Button` | Button |
 | An element with a `tap` handler | Button |
+| An element with `a11y_role` | That role, [as below](#controls-you-build-from-a-box) |
 | `TextField` | TextInput, with its text |
 | `Toggle` | Switch, on or off |
 | `Checkbox` | CheckBox, checked or not |

@@ -35,12 +35,14 @@
 
 mod access;
 mod animation;
+pub(crate) use animation::gradient_stop_count;
 mod canvas;
 mod controller;
 mod controls;
 mod editing;
 mod element;
 mod expr;
+mod follow;
 mod instance;
 mod layout;
 mod measure;
@@ -55,7 +57,7 @@ mod text_field;
 mod typography;
 mod wiring;
 
-use animation::{AnimKey, LoopClock};
+use animation::{AnimKey, AnimSlot, Instances, LoopClock};
 use canvas::{CachedMesh, MESH_CACHE_FRAMES};
 use controller::UNBOUND_CONTROLLER;
 use instance::MAX_INSTANCE_DEPTH;
@@ -209,6 +211,17 @@ pub enum RenderNode {
         /// the element and the rect it wants are only in the same hand during
         /// the layout build; `None` is the whole cost of not using the feature.
         measure: Option<u32>,
+        /// This element's identity, fixed when it is lowered and kept for as
+        /// long as the node lives. The layout index an element gets is its
+        /// place in the build order, and that moves whenever a `when` or a
+        /// `for` before it grows or shrinks; focus and a field's editing state
+        /// follow this instead, as an instance's state follows the instance.
+        uid: u32,
+        /// The view instance this node was lowered inside (`AnimKey`'s other
+        /// half): the call-site path that mounted it, `0` outside any user view.
+        /// Fixed at lowering and kept for as long as the node lives, which is
+        /// what lets two calls of one view keep their own animations.
+        inst: u32,
         /// The `path { … }` child of a `Clip`, lifted out of the children and
         /// used as the clip's mask (RFC-0037 `clip(path)`). `None` for every
         /// other box, and for a `Clip` that only rounds its corners.
@@ -227,6 +240,17 @@ pub enum RenderNode {
         state_blocks: Vec<StateBlock>,
         /// The reactive scope projecting the text content.
         content: ScopeId,
+        /// The instance environment captured at lower time, restored while the
+        /// run is measured and painted so a `size:` (or `color:`, `weight:`...)
+        /// that reads a view parameter resolves against the instance it was
+        /// written in. Empty at the top level and for a `Text` with no
+        /// attributes, which read nothing.
+        env_snapshot: Vec<(Symbol, super::env::Value)>,
+        /// The view instance this node was lowered inside (`AnimKey`'s other
+        /// half): the call-site path that mounted it, `0` outside any user view.
+        /// Fixed at lowering and kept for as long as the node lives, which is
+        /// what lets two calls of one view keep their own animations.
+        inst: u32,
     },
     /// A flexible gap (layout-only, RFC-0005): absorbs its parent's free space
     /// along the main axis. `attrs` carries `grow`/`basis`, which is why this is
@@ -234,6 +258,11 @@ pub enum RenderNode {
     Spacer {
         /// `grow` (default 1) and `basis` (default 0).
         attrs: Vec<Attr>,
+        /// The view instance this node was lowered inside (`AnimKey`'s other
+        /// half): the call-site path that mounted it, `0` outside any user view.
+        /// Fixed at lowering and kept for as long as the node lives, which is
+        /// what lets two calls of one view keep their own animations.
+        inst: u32,
     },
     /// A texture-sampled image.
     Image {
@@ -243,6 +272,15 @@ pub enum RenderNode {
         state_blocks: Vec<StateBlock>,
         /// The reactive scope that evaluates to the image source path/URL.
         src: ScopeId,
+        /// The instance environment captured at lower time, restored while the
+        /// image is sized and painted so `width: w` or `opacity: o` reading a
+        /// view parameter resolves in the instance it was written in.
+        env_snapshot: Vec<(Symbol, super::env::Value)>,
+        /// The view instance this node was lowered inside (`AnimKey`'s other
+        /// half): the call-site path that mounted it, `0` outside any user view.
+        /// Fixed at lowering and kept for as long as the node lives, which is
+        /// what lets two calls of one view keep their own animations.
+        inst: u32,
     },
     /// A package-authored native view (RFC-0039): an element whose drawing,
     /// measurement and event handling are compiled-in Rust rather than an
@@ -273,6 +311,11 @@ pub enum RenderNode {
         /// no separate lifetime to manage (an extension never keeps a resource
         /// alive past the scope that owns it).
         slot: usize,
+        /// The view instance this node was lowered inside (`AnimKey`'s other
+        /// half): the call-site path that mounted it, `0` outside any user view.
+        /// Fixed at lowering and kept for as long as the node lives, which is
+        /// what lets two calls of one view keep their own animations.
+        inst: u32,
     },
     /// An MSDF vector glyph, the `VectorIcon` intrinsic (RFC-0009 §1)
     /// routed to the `VectorMSDF` pipeline.
@@ -281,6 +324,13 @@ pub enum RenderNode {
         attrs: Vec<Attr>,
         /// The reactive scope evaluating to the asset handle (a `Str` path).
         src: ScopeId,
+        /// The instance environment captured at lower time, as on `Image`.
+        env_snapshot: Vec<(Symbol, super::env::Value)>,
+        /// The view instance this node was lowered inside (`AnimKey`'s other
+        /// half): the call-site path that mounted it, `0` outside any user view.
+        /// Fixed at lowering and kept for as long as the node lives, which is
+        /// what lets two calls of one view keep their own animations.
+        inst: u32,
     },
     /// A `Canvas`, the RFC-0020 programmatic drawing surface. A fixed-size
     /// leaf whose children are *shape commands*, not views: each render tick
@@ -304,6 +354,11 @@ pub enum RenderNode {
         /// shape parameters and event actions referencing instance vars
         /// resolve against the scope the canvas was instantiated in.
         env_snapshot: Vec<(Symbol, super::env::Value)>,
+        /// The view instance this node was lowered inside (`AnimKey`'s other
+        /// half): the call-site path that mounted it, `0` outside any user view.
+        /// Fixed at lowering and kept for as long as the node lives, which is
+        /// what lets two calls of one view keep their own animations.
+        inst: u32,
     },
     /// An `Overlay`, the RFC-0017 escape-hatch. Its children leave the normal
     /// layout flow and render in the overlay layer, above all main content and
@@ -320,6 +375,11 @@ pub enum RenderNode {
         /// `dismiss` action or a child's forwarded callback resolves against the
         /// scope the overlay was instantiated in. Empty at the top level.
         env_snapshot: Vec<(Symbol, super::env::Value)>,
+        /// The view instance this node was lowered inside (`AnimKey`'s other
+        /// half): the call-site path that mounted it, `0` outside any user view.
+        /// Fixed at lowering and kept for as long as the node lives, which is
+        /// what lets two calls of one view keep their own animations.
+        inst: u32,
     },
     /// A reactive `when cond { … } else { … }` (RFC-0018 structural reactivity).
     /// The driver re-reads `cond` every frame and expands the taken branch, so a
@@ -374,8 +434,30 @@ pub enum RenderNode {
     },
 }
 
+impl RenderNode {
+    /// The view instance this node was lowered inside, `0` for the nodes that
+    /// are not drawn (`When`, `For`, `Effect`, `Nav`).
+    pub(crate) const fn inst(&self) -> u32 {
+        match self {
+            Self::Box { inst, .. }
+            | Self::Text { inst, .. }
+            | Self::Spacer { inst, .. }
+            | Self::Image { inst, .. }
+            | Self::Native { inst, .. }
+            | Self::Vector { inst, .. }
+            | Self::Canvas { inst, .. }
+            | Self::Overlay { inst, .. } => *inst,
+            Self::When { .. } | Self::For { .. } | Self::Effect { .. } | Self::Nav { .. } => 0,
+        }
+    }
+}
+
 /// A lowered reactive computation (see the module docs).
 type Lowered = Box<dyn FnMut(&mut ReactiveCtx) -> Value>;
+
+/// One entry of the function table: parameter names, body, whether it is a
+/// callback prop, and, for a callback, the names visible where it was written.
+type FnEntry = (Vec<Symbol>, Expr, bool, Option<env::Captured>);
 
 /// The per-instance parameter bindings produced by binding a user-view call's
 /// arguments to the callee's declared parameters (RFC-0007 §3). Each entry
@@ -387,6 +469,9 @@ pub struct InstanceBindings {
     /// Successfully bound `(param name, projecting memo)` pairs, in parameter
     /// declaration order.
     pub bindings: Vec<(Symbol, ScopeId)>,
+    /// The bindings (RFC-0051): `(param name, the caller's signal)`. The
+    /// callee holds the signal itself, not a memo over it.
+    pub signals: Vec<(Symbol, SignalId)>,
 }
 
 /// The reserved parameter/element name for a user view's child-block slot
@@ -473,12 +558,14 @@ pub struct Interpreter {
     theme_mix_dark: Option<bool>,
     /// Parameterized `fn` definitions (`fn f(params) => body`) *and*
     /// callback-prop bindings (RFC-0019): stored as `(param names, body expr,
-    /// is_callback)` and indexed by `AstId`. Both share the invocation path in
-    /// [`Self::lower_call`], a callback is a caller-supplied action block
-    /// inlined at the callee's invocation site; the `is_callback` flag turns on
+    /// is_callback, captured names)` and indexed by `AstId`. Both share the
+    /// invocation path in [`Self::lower_call`], a callback is a caller-supplied
+    /// action block inlined at the callee's invocation site, lowered among the
+    /// names captured where it was written (never the callee's); the
+    /// `is_callback` flag turns on
     /// the RFC-0019 §4 arity/invocability diagnostics that plain `fn`s don't
     /// want.
-    fn_table: Vec<(Vec<Symbol>, Expr, bool)>,
+    fn_table: Vec<FnEntry>,
     /// The resolved user-`View` registry for this program (RFC-0007 §1).
     /// Built once from `ParsedFile::views` via [`Interpreter::load_views`]; a
     /// call whose name resolves here is a user-view instantiation, not a
@@ -599,6 +686,10 @@ pub struct Interpreter {
     /// animating alongside (RFC-0023: a tint fading in is an alpha ramp), and
     /// is interruptible like the scalar props. Keyed by the `with` node's span.
     color_animations: rustc_hash::FxHashMap<AnimKey, [byard_core::frame::Motion; 4]>,
+    /// Persisted animated-gradient state (RFC-0057): one fixed record per
+    /// `with` after a whole gradient, keyed like the maps above. Empty, and so
+    /// unallocated, until a program animates a gradient.
+    gradient_animations: rustc_hash::FxHashMap<AnimKey, animation::GradientAnim>,
     /// Loop clocks for repeating, delayed and keyframed animations (RFC-0025),
     /// keyed by the animation node's span like the two maps above. A repeating
     /// animation cannot sample against `now − start_ms` the way a one-shot does:
@@ -628,6 +719,12 @@ pub struct Interpreter {
     /// declare it allocates nothing, which is the whole cost model: the event
     /// is a slot, not a per-element field.
     measures: Vec<MeasureSlot>,
+    /// The next [`RenderNode::Box::uid`] to hand out.
+    next_elem_uid: u32,
+    /// This frame's `(layout index, uid)` of every box, recorded by the layout
+    /// build; and the last frame's, which focus and editing state were keyed by.
+    elem_uids: Vec<(u32, u32)>,
+    prev_elem_uids: Vec<(u32, u32)>,
     /// The elements to measure this frame, `(laid-out node, slot)`, refilled by
     /// the layout build walk.
     ///
@@ -642,9 +739,24 @@ pub struct Interpreter {
     /// The program's top-level functions (RFC-0002), by canonical name, as
     /// entries of `fn_table`. Rebuilt by [`Self::load_views`].
     top_fns: std::collections::HashMap<Symbol, super::env::AstId>,
+    /// The program's top-level constants (RFC-0055), by canonical name, each
+    /// evaluated once by [`Self::load_views`]. A read is a clone of the value.
+    consts: std::collections::HashMap<Symbol, Value>,
+    /// The program's enums (RFC-0055), by canonical name, with their cases.
+    enums: std::collections::HashMap<Symbol, Vec<Symbol>>,
     /// The top-level functions being inlined right now, outermost first, so a
     /// cycle is reported instead of lowered forever.
     inlining: Vec<Symbol>,
+    /// The wall clock `now()` and `nowUtc()` read (RFC-0049), shared by every
+    /// lowered call. The system's until a host fixes it.
+    clock: std::rc::Rc<super::clock::Clock>,
+    /// The entries of `fn_table` that are `fn`s, not named actions: pure, so a
+    /// `now()` in their body is [`CompileError::ClockOutsideAction`] whoever
+    /// calls them (RFC-0049 §3).
+    pure_fns: std::collections::HashSet<u32>,
+    /// How many `fn` bodies are being lowered right now. Above zero, an
+    /// enclosing action does not make the clock readable.
+    pure_depth: u32,
     /// Names bound as parameters of a multi-parameter lambda while its body is
     /// being lowered; `lower_ident` reads them from [`LAMBDA_ARGS`].
     lambda_params: Vec<Symbol>,
@@ -660,7 +772,13 @@ pub struct Interpreter {
     /// Set from the expansion, which is the only place that knows it: after
     /// `when`/`for` are flattened, a row of a `for` is indistinguishable from a
     /// node written literally at that position. `0` outside any `for` body.
-    anim_slot: u32,
+    anim_slot: AnimSlot,
+    /// The user-view call path the lowering walk is inside right now, stamped
+    /// on every node it creates (`RenderNode::inst`). `0` at the root.
+    cur_inst: u32,
+    /// Every call path seen so far, interned: what keeps an instance's id the
+    /// same through a hot reload.
+    instances: Instances,
     /// Set true during a render whenever an animation sampled this frame has not
     /// yet settled, the runner reads it (via [`has_active_animations`]) to keep
     /// requesting frames until motion stops (idle → 0 frames).
@@ -986,6 +1104,12 @@ impl Interpreter {
         Self::default()
     }
 
+    /// A fresh identity for an element being lowered.
+    pub(super) fn fresh_elem_uid(&mut self) -> u32 {
+        self.next_elem_uid += 1;
+        self.next_elem_uid
+    }
+
     /// The reactive context (for tests and the engine bridge).
     #[must_use]
     pub fn ctx(&self) -> &ReactiveCtx {
@@ -1021,9 +1145,37 @@ impl Interpreter {
             for decl in first.helpers.iter() {
                 let id = super::env::AstId(u32::try_from(self.fn_table.len()).unwrap_or(u32::MAX));
                 let params = decl.params.iter().map(|p| p.name.clone()).collect();
-                self.fn_table.push((params, decl.body.clone(), false));
+                self.fn_table.push((params, decl.body.clone(), false, None));
+                self.pure_fns.insert(id.0);
+                self.report_clock_in_fn(
+                    &decl
+                        .params
+                        .iter()
+                        .map(|p| p.name.clone())
+                        .collect::<Vec<_>>(),
+                    &decl.body,
+                );
                 self.top_fns.insert(decl.name.clone(), id);
             }
+        }
+        self.consts.clear();
+        self.enums.clear();
+        if let Some(first) = views.first() {
+            for decl in first.enums.iter() {
+                let cases = decl.cases.iter().map(|(c, _)| c.clone()).collect();
+                self.enums.insert(decl.name.clone(), cases);
+            }
+            // In an order each constant comes after the ones it reads; one in
+            // a cycle is left out, and `byard check` has said so.
+            let ordered = crate::consts::order(&first.consts, &first.helpers);
+            let caller = std::mem::replace(&mut self.env, Env::new());
+            for i in ordered.order {
+                let decl = &first.consts[i];
+                self.report_clock_in_fn(&[], &decl.init);
+                let value = self.eval_pure(&decl.init);
+                self.consts.insert(decl.name.clone(), value);
+            }
+            self.env = caller;
         }
         let (table, mut diags) = super::views::ViewTable::build(views);
         // Static cycle detection over the call graph.
@@ -1071,6 +1223,20 @@ impl Interpreter {
     pub fn set_now_ms(&mut self, ms: u32) {
         self.now_ms = ms;
         self.clock_set = true;
+        self.clock.set_app_ms(ms);
+    }
+
+    /// Fixes the wall clock `now()` and `nowUtc()` read at `iso` (an ISO date
+    /// or date-time, `2026-11-05T09:00:00`), as of the app time now. From then
+    /// on it reads that time plus the app time that passes, so
+    /// [`set_now_ms`](Self::set_now_ms) advances it (RFC-0049 §4). A fixed
+    /// clock has no zone: `nowUtc()` is the same time with a `Z`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a message when `iso` is not a date or date-time.
+    pub fn set_wall_clock(&mut self, iso: &str) -> Result<(), String> {
+        self.clock.fix(iso)
     }
 
     /// Wires in the channel the render thread reports applied vector-atlas
@@ -1345,7 +1511,12 @@ impl Interpreter {
             self.define_let(name.clone(), body);
         } else {
             let names: Vec<Symbol> = params.iter().map(|p| p.name.clone()).collect();
-            self.define_callable(name, names, body);
+            self.define_callable(name, names.clone(), body);
+            // A `fn` is pure; a `let f = (x) => …` is a named action.
+            self.report_clock_in_fn(&names, body);
+            if let Some(Value::Fn(id)) = self.env.lookup(name).cloned() {
+                self.pure_fns.insert(id.0);
+            }
         }
     }
 
@@ -1376,7 +1547,7 @@ impl Interpreter {
     /// Binds `name` to a body [`Self::lower_call`] inlines at each call.
     fn define_callable(&mut self, name: &Symbol, params: Vec<Symbol>, body: &Expr) {
         let id = crate::interp::env::AstId(u32::try_from(self.fn_table.len()).unwrap_or(u32::MAX));
-        self.fn_table.push((params, body.clone(), false));
+        self.fn_table.push((params, body.clone(), false, None));
         self.env.push(name.clone(), Value::Fn(id));
     }
 
@@ -1456,6 +1627,7 @@ impl Interpreter {
         // Every frame answers `needs_another_frame` for itself, including one
         // that returns before layout.
         self.measure_fired = false;
+        self.elem_uids.clear();
 
         // RFC-0034: the registered families ride every frame, not just the one
         // after registration. The relay keeps only the latest frame, so a pool
@@ -1550,7 +1722,7 @@ impl Interpreter {
         // The walk starts outside every `for`. Reset rather than assume,
         // so a frame that ends deep inside a list cannot leak that row's
         // identity into the next frame's top-level animations.
-        self.anim_slot = 0;
+        self.anim_slot = AnimSlot::default();
 
         // Everything that could still be called from the previous frame's
         // handlers has been cleared above, so the scopes its painting opened
@@ -1737,6 +1909,9 @@ impl Interpreter {
         // feeds the same frame's layout). Elements whose rect did not change are not
         // told anything, which is what keeps a static screen at zero writes.
         self.fire_measures();
+        // Layout indices have just been reassigned: focus and editing state
+        // find their elements again before anything paints or reads them.
+        self.follow_elements();
 
         self.retained.flat_ids.clear();
         self.retained.flat_ids.extend_from_slice(&flat_ids);
@@ -1796,7 +1971,7 @@ impl Interpreter {
             // identity leaves the walk with it, it is emitted here rather than
             // where it was written, so whatever row the main pass finished
             // inside must not carry over into it.
-            self.anim_slot = 0;
+            self.anim_slot = AnimSlot::default();
             self.emit_overlay(ol, frame, width, height, pools);
         }
 
@@ -1916,6 +2091,8 @@ impl Interpreter {
         }
         self.check_anchor_refs(view);
         self.check_font_families(view);
+        // The root is outside every call, whatever the last lowering left.
+        self.cur_inst = 0;
         // RFC-0018: a fresh tree gets fresh `when`/`for` pools; the previous
         // tree's pool ids are discarded with it (hot-reload re-lowers the tree).
         self.for_pools.clear();
@@ -1939,6 +2116,19 @@ impl Interpreter {
         self.native_views.clear();
         self.native_call_owners.clear();
         self.native_generation = self.native_generation.wrapping_add(1);
+        // Lowered standalone (by `check`, or as an app's root) nothing calls
+        // the view, so nothing binds its parameters. They go into scope as
+        // unset values: a name an attribute reads is then known to be a name
+        // the view binds, the same as inside a call, and not a bare keyword.
+        // A parameter that is already a name here keeps its value. An unset one
+        // is the zero of its declared type, so a number is a number where a
+        // number goes (`radius: v`) and a `Str` there is still the mismatch it
+        // should be; a type with no obvious zero stays `Unit`.
+        for param in &view.params {
+            if self.env.lookup(&param.name).is_none() {
+                self.env.push(param.name.clone(), unset_param(param));
+            }
+        }
         self.eval_view_decls(view);
         // A view that declares a `content` slot (RFC-0007 D-A) may reference it in
         // its body. When the view is lowered *standalone*, e.g. `byard check`
@@ -1959,6 +2149,21 @@ impl Interpreter {
             self.slot_stack.pop();
         }
         nodes
+    }
+}
+
+/// What a parameter reads as when its view is lowered with no call: the zero of
+/// its declared type.
+fn unset_param(param: &Param) -> Value {
+    match &param.ty {
+        Some(Type::Named { name, args, .. }) if args.is_empty() => match name.as_str() {
+            "Int" => Value::Int(0),
+            "Float" => Value::Float(0.0),
+            "Bool" => Value::Bool(false),
+            "Str" => Value::Str(String::new()),
+            _ => Value::Unit,
+        },
+        _ => Value::Unit,
     }
 }
 

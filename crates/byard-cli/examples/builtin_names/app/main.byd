@@ -1,0 +1,11 @@
+use ds as d
+
+View Main() {
+    Column #[bg: 0x14141C, p: 24, gap: 12, width: 360] {
+        Text("built-in Button, then the design system's") #[color: 0xE6E1E5, size: 14]
+        // A bare `Button` is always the built-in.
+        Button("built-in") #[bg: 0x3C3C52, color: 0xFFFFFF, radius: 4]
+        d.Button("from the ds package")
+        d.Pair("one", "two")
+    }
+}

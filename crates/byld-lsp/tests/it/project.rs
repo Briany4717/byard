@@ -221,3 +221,20 @@ fn closing_a_file_clears_its_diagnostics() {
     client.close(&main);
     assert_clean(&client.next_diagnostics(&main));
 }
+
+/// The editor shows what `byard check` shows: code that is not on screen when
+/// the program starts (a tab that is not the active one, an arm of a `when`
+/// that starts false) is checked too.
+#[test]
+fn a_tab_that_is_not_the_active_one_is_checked() {
+    let src = "View Main() {\n  var tab = \"a\"\n  var on = false\n  \
+        NavHost(active: tab) {\n    tab \"a\" { Text(\"x\") }\n    tab \"b\" { Bogus() }\n  }\n  \
+        when on { Text(\"y\") } else { Other() }\n}\n";
+    let dir = Dir::new("tabs");
+    dir.write("byard.toml", MANIFEST);
+    let main = dir.write("main.byd", src);
+    let mut client = Client::start(false);
+    client.open(&main, src);
+    let found = client.next_diagnostics(&main);
+    assert_eq!(kinds(&found), ["UnknownView", "UnknownView"], "{found:#?}");
+}

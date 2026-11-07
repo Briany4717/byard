@@ -364,3 +364,138 @@ fn recompute_dirty_with_text_reaches_the_sizer() {
         rect.height
     );
 }
+
+/// A container with one fixed child, built with the given style, then rebuilt
+/// retained with another: the second layout must be the one the style says.
+fn restyled_container_width(first: ContainerStyle, second: ContainerStyle) -> f32 {
+    let build = |atlas: &mut LayoutAtlas, style: ContainerStyle| {
+        let leaf = atlas.add_leaf(LeafSize::new(10.0, 10.0)).unwrap();
+        let c = atlas.add_container(style, &[leaf]).unwrap();
+        let root = atlas
+            .add_container(
+                ContainerStyle::new(Some(300.0), Some(300.0))
+                    .with_direction(FlexDir::Row)
+                    .with_align(Align::Start),
+                &[c],
+            )
+            .unwrap();
+        atlas.set_root(root).unwrap();
+        c
+    };
+    let mut atlas = LayoutAtlas::new();
+    build(&mut atlas, first);
+    atlas.compute(Viewport::new(300.0, 300.0)).unwrap();
+    atlas.begin_retained_build();
+    let c = build(&mut atlas, second);
+    assert!(atlas.end_retained_build());
+    atlas.recompute_dirty(Viewport::new(300.0, 300.0)).unwrap();
+    atlas.resolved_rect(c).unwrap().unwrap().width
+}
+
+#[test]
+fn a_changed_min_width_relayouts_on_the_retained_path() {
+    let plain = ContainerStyle::default();
+    let floored = ContainerStyle::default().with_min_size(Some(120.0), None);
+    let w = restyled_container_width(plain, floored);
+    assert!((w - 120.0).abs() < 0.5, "min_width must apply, got {w}");
+}
+
+#[test]
+fn a_changed_min_height_relayouts_on_the_retained_path() {
+    // Same shape on the other axis, read through the child's column.
+    let tall = ContainerStyle::default().with_min_size(None, Some(150.0));
+    let build = |atlas: &mut LayoutAtlas, style: ContainerStyle| {
+        let leaf = atlas.add_leaf(LeafSize::new(10.0, 10.0)).unwrap();
+        let c = atlas.add_container(style, &[leaf]).unwrap();
+        let root = atlas
+            .add_container(
+                ContainerStyle::new(Some(300.0), Some(300.0)).with_align(Align::Start),
+                &[c],
+            )
+            .unwrap();
+        atlas.set_root(root).unwrap();
+        c
+    };
+    let mut atlas = LayoutAtlas::new();
+    build(&mut atlas, ContainerStyle::default());
+    atlas.compute(Viewport::new(300.0, 300.0)).unwrap();
+    atlas.begin_retained_build();
+    let c = build(&mut atlas, tall);
+    assert!(atlas.end_retained_build());
+    atlas.recompute_dirty(Viewport::new(300.0, 300.0)).unwrap();
+    let h = atlas.resolved_rect(c).unwrap().unwrap().height;
+    assert!((h - 150.0).abs() < 0.5, "min_height must apply, got {h}");
+}
+
+/// A 100 wide row of two 80 wide leaves, the first optionally `shrink: 0`,
+/// built in a fixed order for a retained rebuild.
+fn build_row(atlas: &mut LayoutAtlas, first: FlexItem) {
+    let a = atlas.add_leaf(LeafSize::new(80.0, 20.0)).unwrap();
+    atlas.set_flex_item(a, first).unwrap();
+    let b = atlas.add_leaf(LeafSize::new(80.0, 20.0)).unwrap();
+    let root = atlas
+        .add_container(ContainerStyle::new(Some(100.0), Some(40.0)), &[a, b])
+        .unwrap();
+    atlas.set_root(root).unwrap();
+}
+
+fn first_width(atlas: &LayoutAtlas) -> f32 {
+    atlas
+        .resolved_rect(atlas.nodes_by_index[0])
+        .unwrap()
+        .unwrap()
+        .width
+}
+
+#[test]
+fn a_flex_item_survives_an_identical_retained_build_without_dirtying_it() {
+    let keep = FlexItem {
+        shrink: Some(0.0),
+        ..FlexItem::default()
+    };
+    let mut atlas = LayoutAtlas::new();
+    build_row(&mut atlas, keep);
+    atlas.compute(Viewport::new(200.0, 200.0)).unwrap();
+    assert!((first_width(&atlas) - 80.0).abs() < 0.01, "shrink: 0 held");
+
+    atlas.begin_retained_build();
+    build_row(&mut atlas, keep);
+    assert!(atlas.end_retained_build());
+    assert!(
+        atlas.layout_dirty_targets().is_empty(),
+        "an unchanged item marks nothing"
+    );
+}
+
+#[test]
+fn a_flex_item_changed_or_dropped_between_retained_builds_is_followed() {
+    let keep = FlexItem {
+        shrink: Some(0.0),
+        ..FlexItem::default()
+    };
+    let mut atlas = LayoutAtlas::new();
+    build_row(&mut atlas, keep);
+    atlas.compute(Viewport::new(200.0, 200.0)).unwrap();
+
+    // Dropped: the leaf is back to the shrink it was built with.
+    atlas.begin_retained_build();
+    build_row(&mut atlas, FlexItem::default());
+    assert!(atlas.end_retained_build());
+    atlas.recompute_dirty(Viewport::new(200.0, 200.0)).unwrap();
+    assert!(
+        (first_width(&atlas) - 50.0).abs() < 0.01,
+        "{}",
+        first_width(&atlas)
+    );
+
+    // Written again.
+    atlas.begin_retained_build();
+    build_row(&mut atlas, keep);
+    assert!(atlas.end_retained_build());
+    atlas.recompute_dirty(Viewport::new(200.0, 200.0)).unwrap();
+    assert!(
+        (first_width(&atlas) - 80.0).abs() < 0.01,
+        "{}",
+        first_width(&atlas)
+    );
+}

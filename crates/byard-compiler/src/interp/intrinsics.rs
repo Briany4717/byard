@@ -12,8 +12,10 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::diagnostics::CompileError;
-use crate::parser::ast::{Attr, AttrKind, ElementNode, Expr, Member};
+use crate::interp::theme::Theme;
+use crate::parser::ast::{Attr, AttrKind, ElementNode, Expr, Member, StrPart};
 use crate::util::closest_match;
+use byard_core::access::AccessRole;
 
 /// The closed set of intrinsic names (RFC-0005 §4).
 pub const INTRINSIC_NAMES: &[&str] = &[
@@ -83,6 +85,9 @@ pub enum PropType {
     /// type rules out is a value that could never be a family name at all;
     /// the "is it declared" half is a separate pass with the theme in hand.
     FontFamily,
+    /// Variable-font axis settings (RFC-0054): a tuple of named numbers whose
+    /// names are four-character axis tags, `(FILL: 1, wght: 500)`.
+    Variations,
     /// A scoped style class reference (`.title`).
     Class,
     /// A `Vec2` `(Float, Float)`.
@@ -207,8 +212,18 @@ const LAYOUT: &[(&str, PropDef)] = &[
     ("align", lay(PropType::Enum(ALIGN))),
     ("justify", lay(PropType::Enum(JUSTIFY))),
     ("grow", lay(PropType::Int)),
-    ("basis", lay(PropType::Int)),
+    // How a flex child behaves among its siblings, over what its parent says:
+    // `shrink: 0` keeps it from being squeezed, `align_self` places it on the
+    // cross axis. Costs nothing on an element that writes neither.
+    ("shrink", lay(PropType::Int)),
+    ("align_self", lay(PropType::Enum(ALIGN))),
 ];
+/// `basis`, the main-axis size an element has before it grows. Only the
+/// elements laid out as containers honour it (taffy's `flex_basis`); a leaf
+/// that took it would accept it and ignore it, so they do not list it, and
+/// writing it there is an unknown attribute. `Text` is the exception: it is a
+/// flex item whose layout reads `basis`.
+const BASIS: &[(&str, PropDef)] = &[("basis", lay(PropType::Int))];
 const DECORATION: &[(&str, PropDef)] = &[
     ("bg", pnt(PropType::Color)),
     ("radius", pnt(PropType::Len)),
@@ -292,8 +307,11 @@ const TEXT_PROPS: &[(&str, PropDef)] = &[
     // string to different widths, so a heading that changes face changes the
     // box it needs.
     ("font", lay(PropType::FontFamily)),
+    // RFC-0054: variable-font axes beyond `wght`. Paint class: the rasteriser
+    // draws them and the line is not re-measured, so animating one never
+    // touches layout.
+    ("variations", pnt(PropType::Variations)),
     ("align", lay(PropType::Enum(ALIGN))),
-    ("lines", lay(PropType::Int)),
     ("wrap", lay(PropType::Bool)),
 ];
 
@@ -398,6 +416,20 @@ fn add_universal(m: &mut HashMap<&'static str, PropDef>) {
     // frame an assistive technology is listening.
     m.insert("a11y_label", pnt(PropType::Str));
     m.insert("a11y_hidden", pnt(PropType::Bool));
+    // RFC-0052: what a control built from a `Box` says it is, and its state.
+    // Paint class like the two above. The role is a closed keyword set, so
+    // a misspelling is a check error with the closest word.
+    m.insert("a11y_role", pnt(PropType::Enum(&AccessRole::KEYWORDS)));
+    m.insert("a11y_value", pnt(PropType::Str));
+    for flag in [
+        "a11y_checked",
+        "a11y_mixed",
+        "a11y_selected",
+        "a11y_expanded",
+        "a11y_disabled",
+    ] {
+        m.insert(flag, pnt(PropType::Bool));
+    }
 }
 
 fn events_from(focusable: bool, extra: &[&'static str]) -> HashSet<&'static str> {
@@ -524,7 +556,7 @@ pub fn lookup(name: &str) -> Option<Intrinsic> {
 #[must_use]
 fn lookup_intrinsic(name: &str) -> Option<Intrinsic> {
     let container = |dir_default: bool| {
-        let mut props = props_from(&[LAYOUT, DECORATION, EFFECTS, TRANSFORM]);
+        let mut props = props_from(&[LAYOUT, BASIS, DECORATION, EFFECTS, TRANSFORM]);
         if dir_default {
             props.insert("direction", lay(PropType::Enum(DIRECTION)));
         }
@@ -601,12 +633,40 @@ fn lookup_intrinsic(name: &str) -> Option<Intrinsic> {
             props: props_from(&[
                 TEXT_PROPS,
                 TRANSFORM,
-                &[("m", lay(PropType::Len)), ("width", lay(PropType::Int))],
+                // The layout attributes of a leaf in a `Row` or `Column`:
+                // size, spacing and flex share. `gap`, `align` and `justify`
+                // are about children, which a `Text` has none of.
+                &[
+                    ("width", lay(PropType::Int)),
+                    ("height", lay(PropType::Int)),
+                    ("basis", lay(PropType::Int)),
+                    ("p", lay(PropType::Len)),
+                    ("m", lay(PropType::Len)),
+                    ("pt", lay(PropType::Len)),
+                    ("pr", lay(PropType::Len)),
+                    ("pb", lay(PropType::Len)),
+                    ("pl", lay(PropType::Len)),
+                    ("mx", lay(PropType::Len)),
+                    ("my", lay(PropType::Len)),
+                    ("mt", lay(PropType::Len)),
+                    ("mr", lay(PropType::Len)),
+                    ("mb", lay(PropType::Len)),
+                    ("ml", lay(PropType::Len)),
+                    ("grow", lay(PropType::Int)),
+                    ("shrink", lay(PropType::Int)),
+                    ("align_self", lay(PropType::Enum(ALIGN))),
+                    // A background behind the words, inside the text's box
+                    // and its `p`, with rounded corners: a label that sits
+                    // over a border needs one.
+                    ("bg", pnt(PropType::Color)),
+                    ("radius", pnt(PropType::Len)),
+                ],
             ]),
             events: events_from(false, &[]),
         },
         "Button" => {
-            let mut props = props_from(&[LAYOUT, DECORATION, EFFECTS, TEXT_PROPS, TRANSFORM]);
+            let mut props =
+                props_from(&[LAYOUT, BASIS, DECORATION, EFFECTS, TEXT_PROPS, TRANSFORM]);
             props.insert("focused", pnt(PropType::Bool));
             props.insert("disabled", pnt(PropType::Bool));
             Intrinsic {
@@ -629,6 +689,10 @@ fn lookup_intrinsic(name: &str) -> Option<Intrinsic> {
             // RFC-0041 §6: the colour a selection is painted in, where the
             // theme's `primary` at 30 % is not wanted.
             props.insert("selection", pnt(PropType::Color));
+            // The line along the bottom edge while the field has focus:
+            // `line` (the default) or `none`, for a field whose design draws
+            // its own indicator.
+            props.insert("indicator", pnt(PropType::Enum(&["line", "none"])));
             Intrinsic {
                 arity: 0,
                 content: None,
@@ -738,7 +802,7 @@ fn lookup_intrinsic(name: &str) -> Option<Intrinsic> {
             }
         }
         "ScrollView" => {
-            let mut props = props_from(&[LAYOUT, DECORATION, EFFECTS, TRANSFORM]);
+            let mut props = props_from(&[LAYOUT, BASIS, DECORATION, EFFECTS, TRANSFORM]);
             props.insert("axis", lay(PropType::Enum(AXIS)));
             props.insert("offset", lay(PropType::Vec2));
             // RFC-0005 windowed layout: opt-in list virtualization. `windowed`
@@ -794,6 +858,8 @@ fn lookup_intrinsic(name: &str) -> Option<Intrinsic> {
             props.insert("size", lay(PropType::Int));
             props.insert("color", pnt(PropType::Color));
             props.insert("m", lay(PropType::Len));
+            props.insert("shrink", lay(PropType::Int));
+            props.insert("align_self", lay(PropType::Enum(ALIGN)));
             props.insert("opacity", pnt(PropType::Float));
             add_universal(&mut props);
             Intrinsic {
@@ -820,6 +886,8 @@ fn lookup_intrinsic(name: &str) -> Option<Intrinsic> {
             props.insert("height", lay(PropType::Int));
             props.insert("bg", pnt(PropType::Color));
             props.insert("grow", lay(PropType::Int));
+            props.insert("shrink", lay(PropType::Int));
+            props.insert("align_self", lay(PropType::Enum(ALIGN)));
             props.insert("m", lay(PropType::Len));
             props.insert("opacity", pnt(PropType::Float));
             // RFC-0031 §S10: `morph: <scalar>` reinterprets the canvas's shapes
@@ -861,6 +929,7 @@ fn lookup_intrinsic(name: &str) -> Option<Intrinsic> {
             let mut props: HashMap<&'static str, PropDef> = HashMap::new();
             props.insert("modal", lay(PropType::Bool));
             props.insert("dismiss_on_outside", lay(PropType::Bool));
+            props.insert("scrim", pnt(PropType::Color));
             add_universal(&mut props);
             Intrinsic {
                 arity: 0,
@@ -879,7 +948,7 @@ fn lookup_intrinsic(name: &str) -> Option<Intrinsic> {
         // per-axis `col_gap`/`row_gap` (override the shared `gap`). Pipeline: the
         // generic `DecoratedBox` background, same as `Box`.
         "Grid" => {
-            let mut props = props_from(&[LAYOUT, DECORATION, EFFECTS, TRANSFORM]);
+            let mut props = props_from(&[LAYOUT, BASIS, DECORATION, EFFECTS, TRANSFORM]);
             props.insert("focused", pnt(PropType::Bool));
             props.insert("disabled", pnt(PropType::Bool));
             props.insert("anchor", lay(PropType::Enum(ANCHOR)));
@@ -918,7 +987,7 @@ fn lookup_intrinsic(name: &str) -> Option<Intrinsic> {
         // for free, where a new lexical form would need its own grammar and
         // would still have to grow all of it back.
         "Clip" => {
-            let mut props = props_from(&[LAYOUT, TRANSFORM]);
+            let mut props = props_from(&[LAYOUT, BASIS, TRANSFORM]);
             // The corner radius of the mask. Absent (or zero) is a plain
             // rectangular clip, which stays a pure scissor.
             props.insert("rrect", lay(PropType::Len));
@@ -937,7 +1006,7 @@ fn lookup_intrinsic(name: &str) -> Option<Intrinsic> {
             }
         }
         "ZStack" => {
-            let mut props = props_from(&[LAYOUT, DECORATION, EFFECTS, TRANSFORM]);
+            let mut props = props_from(&[LAYOUT, BASIS, DECORATION, EFFECTS, TRANSFORM]);
             props.insert("focused", pnt(PropType::Bool));
             props.insert("disabled", pnt(PropType::Bool));
             props.insert("anchor", lay(PropType::Enum(ANCHOR)));
@@ -968,7 +1037,7 @@ fn lookup_intrinsic(name: &str) -> Option<Intrinsic> {
         // transition two screens are laid out in the same cell and composited
         // with per-screen transform/opacity.
         "NavStack" => {
-            let mut props = props_from(&[LAYOUT, DECORATION, EFFECTS, TRANSFORM]);
+            let mut props = props_from(&[LAYOUT, BASIS, DECORATION, EFFECTS, TRANSFORM]);
             props.insert("transition", lay(PropType::Enum(TRANSITION)));
             props.insert("swipe_back", lay(PropType::Bool));
             props.insert("deep_link", lay(PropType::Bool));
@@ -996,7 +1065,7 @@ fn lookup_intrinsic(name: &str) -> Option<Intrinsic> {
         // with the reflected `active` naming the visible tab; `transition`
         // defaults to `fade`, since a tab switch has no push direction.
         "NavHost" => {
-            let mut props = props_from(&[LAYOUT, DECORATION, EFFECTS, TRANSFORM]);
+            let mut props = props_from(&[LAYOUT, BASIS, DECORATION, EFFECTS, TRANSFORM]);
             props.insert("transition", lay(PropType::Enum(TRANSITION)));
             props.insert("anchor", lay(PropType::Enum(ANCHOR)));
             props.insert("col", lay(PropType::Int));
@@ -1123,6 +1192,18 @@ pub fn validate_element(
     attrs: &[Attr],
     known_views: &[&str],
 ) -> Vec<CompileError> {
+    validate_element_in(el, attrs, known_views, None)
+}
+
+/// [`validate_element`] against a theme, so a motion token in a `with`
+/// (`with t.springSpatialFast`, RFC-0053) is checked rather than refused.
+#[must_use]
+pub fn validate_element_in(
+    el: &ElementNode,
+    attrs: &[Attr],
+    known_views: &[&str],
+    theme: Option<&Theme>,
+) -> Vec<CompileError> {
     let mut errs = Vec::new();
     let name = el.name.as_str();
 
@@ -1235,6 +1316,9 @@ pub fn validate_element(
             // answered separately and an attribute cannot be added without an
             // answer.
             let is_layout = def.class == AttrClass::Layout;
+            if an == "gradient" {
+                check_animated_gradient(value, &mut errs);
+            }
             // RFC-0010: `value with anim.*(…)`, reject an animation on a layout
             // property (it can't animate on the GPU), otherwise validate every
             // curve in the (possibly nested) chain and type-check the innermost
@@ -1264,7 +1348,7 @@ pub fn validate_element(
                         // the curve, a misspelt `revrse:` or an out-of-range
                         // `repeat:` is a diagnostic, never a silently ignored
                         // modifier.
-                        if let Err(err) = crate::interp::anim::resolve_motion(anim) {
+                        if let Err(err) = crate::interp::anim::resolve_motion_in(anim, theme) {
                             errs.push(err);
                         }
                         target = inner;
@@ -1273,7 +1357,7 @@ pub fn validate_element(
                         errs.push(err);
                     }
                 }
-            } else if let Some(track) = crate::interp::anim::resolve_keyframes(value) {
+            } else if let Some(track) = crate::interp::anim::resolve_keyframes_in(value, theme) {
                 // Same rule for the keyframe form (RFC-0025 §3).
                 // RFC-0025 §3: `anim.keyframes(…)` stands in value position. It
                 // is rejected on a layout property for the same reason `with`
@@ -1365,6 +1449,92 @@ fn animated_anywhere(value: &Expr) -> bool {
     }
 }
 
+/// The shape a gradient tuple literal has for blending (RFC-0057 §3): its kind
+/// (an absent `kind:` is `linear`) and how many colour stops it writes.
+fn gradient_shape(leaf: &Expr) -> Option<(&str, u8)> {
+    let Expr::Tuple(args, _) = leaf else {
+        return None;
+    };
+    let kind = args
+        .iter()
+        .find(|a| a.name.as_ref().is_some_and(|n| n.as_str() == "kind"))
+        .map_or(Some("linear"), |a| match &a.value {
+            Expr::Ident(sym, _) => Some(sym.as_str()),
+            _ => None,
+        })?;
+    Some((kind, super::eval::gradient_stop_count(leaf)))
+}
+
+/// Collects the tuple leaves of a gradient conditional (`c ? a : b`, nested).
+fn gradient_leaves<'e>(expr: &'e Expr, out: &mut Vec<&'e Expr>) {
+    match expr {
+        Expr::Ternary { then, els, .. } => {
+            gradient_leaves(then, out);
+            gradient_leaves(els, out);
+        }
+        other => out.push(other),
+    }
+}
+
+/// RFC-0057 §4: a `with` after a gradient. Every curve is validated, the
+/// modifiers that need two endpoints of their own (`repeat`, `delay`, `from`,
+/// `restart`, `reverse`) are refused because a gradient animates between its
+/// goals and not on a timeline (a looping ramp is `gradient_offset`), and when
+/// the conditional's gradients are all written out, ones that differ in kind or
+/// in number of stops are `GradientShapeMismatch`.
+fn check_animated_gradient(value: &Expr, errs: &mut Vec<CompileError>) {
+    let Expr::Animated { span, .. } = value else {
+        return;
+    };
+    let mut target = value;
+    while let Expr::Animated {
+        value: inner, anim, ..
+    } = target
+    {
+        if let Ok(spec) = crate::interp::anim::resolve_motion(anim) {
+            if !spec.is_plain() {
+                errs.push(CompileError::AttributeTypeMismatch {
+                    span: anim.span(),
+                    expected: "a gradient animated by a curve alone: `repeat`, `delay`, \
+                               `from`, `restart` and `reverse` do not apply to a whole \
+                               gradient (a looping ramp is `gradient_offset with …`)"
+                        .to_string(),
+                });
+            }
+        }
+        target = inner;
+    }
+    let mut leaves = Vec::new();
+    gradient_leaves(target, &mut leaves);
+    // A `with` inside the gradient moves its goal every frame, which would
+    // restart the whole-gradient animation every frame.
+    for leaf in &leaves {
+        if let Expr::Tuple(args, _) = leaf {
+            if let Some(inner) = args.iter().find(|a| animated_anywhere(&a.value)) {
+                errs.push(CompileError::AttributeTypeMismatch {
+                    span: inner.value.span(),
+                    expected: "a gradient animated as a whole or by its own fields, not both: \
+                               animate the gradient, or its stops (`from: x with ..`), not both"
+                        .to_string(),
+                });
+                break;
+            }
+        }
+    }
+    let describe = |(kind, stops): (&str, u8)| format!("{kind}, {stops} stops");
+    let mut shapes = leaves.iter().filter_map(|leaf| gradient_shape(leaf));
+    let Some(first) = shapes.next() else {
+        return;
+    };
+    if let Some(other) = shapes.find(|shape| *shape != first) {
+        errs.push(CompileError::GradientShapeMismatch {
+            span: *span,
+            first: describe(first),
+            other: describe(other),
+        });
+    }
+}
+
 /// Light, false-positive-averse type check: only clear scalar-literal
 /// mismatches and unknown enum tokens are flagged; identifiers/members (which
 /// may resolve to a reactive `var`) are accepted.
@@ -1439,8 +1609,43 @@ fn check_value_type(ty: PropType, value: &Expr) -> Option<CompileError> {
         (PropType::WeightAxis, Expr::StrLit(..) | Expr::FloatLit(..)) => {
             mismatch("one of the weight keywords, or a whole number 100..=900")
         }
+        (PropType::Variations, Expr::Tuple(args, _)) => args.iter().find_map(|a| match &a.name {
+            Some(n) if n.as_str().len() == 4 && n.as_str().is_ascii() => None,
+            Some(n) => Some(CompileError::AttributeTypeMismatch {
+                span: a.value.span(),
+                expected: format!(
+                    "an axis tag of four letters, like `FILL` or `wght` (got `{}`)",
+                    n.as_str()
+                ),
+            }),
+            None => Some(CompileError::AttributeTypeMismatch {
+                span: a.value.span(),
+                expected: "a named axis, like `FILL: 1`".to_string(),
+            }),
+        }),
+        (PropType::Variations, _) => mismatch("axis settings, like `(FILL: 1, wght: 500)`"),
         (PropType::FontFamily, Expr::IntLit(..) | Expr::FloatLit(..) | Expr::ClassRef(..)) => {
             mismatch("a font family declared in [assets.fonts]")
+        }
+        (PropType::Enum(set), Expr::StrLit(parts, _)) => {
+            // A keyword may be written as a plain string (`fit: "cover"`); one
+            // outside the set is as much a mistake as a bare word outside it.
+            // An interpolated string is not a token and is left alone.
+            let [StrPart::Text(tok)] = parts.as_slice() else {
+                return None;
+            };
+            if set.contains(&tok.as_str()) {
+                None
+            } else {
+                let hint = closest_match(tok, set.iter().copied()).map(str::to_string);
+                Some(CompileError::AttributeTypeMismatch {
+                    span,
+                    expected: hint.map_or_else(
+                        || format!("one of {set:?}"),
+                        |h| format!("one of {set:?} (did you mean `{h}`?)"),
+                    ),
+                })
+            }
         }
         (PropType::Enum(set), Expr::Ident(sym, _)) => {
             let tok = sym.as_str();
@@ -1774,6 +1979,16 @@ fn validate_path_members(members: &[Member], errs: &mut Vec<CompileError>) {
 /// canvas's own attrs/events through the ordinary intrinsic contract).
 #[must_use]
 pub fn validate_canvas(el: &ElementNode, attrs: &[Attr]) -> Vec<CompileError> {
+    validate_canvas_in(el, attrs, None)
+}
+
+/// [`validate_canvas`] against a theme (motion tokens in a shape's `with`).
+#[must_use]
+pub fn validate_canvas_in(
+    el: &ElementNode,
+    attrs: &[Attr],
+    theme: Option<&Theme>,
+) -> Vec<CompileError> {
     let mut errs = Vec::new();
 
     // A canvas is a fixed-size surface: it never sizes to content, so both
@@ -1787,7 +2002,7 @@ pub fn validate_canvas(el: &ElementNode, attrs: &[Attr]) -> Vec<CompileError> {
         errs.push(CompileError::CanvasMissingSize { span: el.span });
     }
 
-    validate_canvas_body(&el.children, &mut errs);
+    validate_canvas_body(&el.children, &mut errs, theme);
     validate_group_cap(el, attrs, &mut errs);
     validate_group_mode(el, attrs, &mut errs);
     errs
@@ -2081,11 +2296,11 @@ fn collect_group_members(members: &[Member], out: &mut Vec<crate::diagnostics::S
 /// surface is for. Everything else stays rejected: a `var` or a `style` block
 /// inside a canvas has no meaning to give it, and silently ignoring one is how
 /// a developer spends an afternoon on a shape that was never going to appear.
-fn validate_canvas_body(members: &[Member], errs: &mut Vec<CompileError>) {
+fn validate_canvas_body(members: &[Member], errs: &mut Vec<CompileError>, theme: Option<&Theme>) {
     for member in members {
         match member {
             Member::Element(child) if is_shape_command(child.name.as_str()) => {
-                errs.extend(validate_shape(child));
+                errs.extend(validate_shape(child, theme));
             }
             Member::Element(child) => {
                 let name = child.name.as_str();
@@ -2096,11 +2311,11 @@ fn validate_canvas_body(members: &[Member], errs: &mut Vec<CompileError>) {
                         .map(str::to_string),
                 });
             }
-            Member::For { body, .. } => validate_canvas_body(body, errs),
+            Member::For { body, .. } => validate_canvas_body(body, errs, theme),
             Member::When { then, els, .. } => {
-                validate_canvas_body(then, errs);
+                validate_canvas_body(then, errs, theme);
                 if let Some(els) = els {
-                    validate_canvas_body(els, errs);
+                    validate_canvas_body(els, errs, theme);
                 }
             }
             // Declarations and style blocks are not shape commands. Reported
@@ -2134,7 +2349,7 @@ fn push_non_shape(errs: &mut Vec<CompileError>, span: crate::diagnostics::Span, 
 /// scalar-literal type mismatches, no attribute block, no children, and the
 /// `path`-is-fill-only rule ([`CompileError::PathStrokeUnsupported`]).
 #[must_use]
-pub fn validate_shape(el: &ElementNode) -> Vec<CompileError> {
+pub fn validate_shape(el: &ElementNode, theme: Option<&Theme>) -> Vec<CompileError> {
     let mut errs = Vec::new();
     let shape = el.name.as_str();
     let (required, optional) = shape_geometry(shape);
@@ -2238,11 +2453,14 @@ pub fn validate_shape(el: &ElementNode) -> Vec<CompileError> {
                     });
                 }
             }
+            if matches!(pname, "gradient" | "stroke_gradient") {
+                check_animated_gradient(&arg.value, &mut errs);
+            }
             // Same literal-level check as attribute values, including the
             // RFC-0010 `with` animation chain walk.
             let mut target = &arg.value;
             while let Expr::Animated { value, anim, .. } = target {
-                if let Err(err) = crate::interp::anim::resolve_curve(anim) {
+                if let Err(err) = crate::interp::anim::resolve_curve_in(anim, theme) {
                     errs.push(err);
                 }
                 target = value;

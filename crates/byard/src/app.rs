@@ -76,7 +76,17 @@ pub struct App {
     app_id: String,
     title: String,
     pub(crate) size: (u32, u32),
-    pub(crate) registry: ControllerRegistry,
+    /// Whether the framework's own capabilities are registered
+    /// ([`without_default_capabilities`](App::without_default_capabilities)).
+    defaults: bool,
+    /// The controllers the app provided, in the order it provided them.
+    ///
+    /// Kept apart from the framework's capabilities and combined only when the
+    /// app runs ([`registry`](App::registry)). Building the registry as the
+    /// chain went made every method that touched it (`app_id`, which re-keys
+    /// `Store`; `without_default_capabilities`) discard whatever an earlier
+    /// call had put there, so the chain's order changed what ran.
+    provided: Vec<Arc<dyn Controller>>,
     /// Controllers rejected for taking a reserved capability name (RFC-0029
     /// §7), reported by [`App::run`].
     ///
@@ -126,9 +136,10 @@ impl App {
         let app_id = executable_name().unwrap_or_else(|| title.clone());
         Self {
             entry,
-            // Seeded with the framework's own capabilities (RFC-0029 §7), so
+            // The framework's own capabilities (RFC-0029 §7) are on, so
             // `inject Http as http` works in an app that provided nothing.
-            registry: byard_core::cap::default_registry(&app_id),
+            defaults: true,
+            provided: Vec::new(),
             app_id,
             title,
             size: (1280, 720),
@@ -188,7 +199,7 @@ impl App {
     /// rather than silently reaching a capability the app meant to remove.
     #[must_use]
     pub fn without_default_capabilities(mut self) -> Self {
-        self.registry = ControllerRegistry::new();
+        self.defaults = false;
         self
     }
 
@@ -203,7 +214,6 @@ impl App {
     #[must_use]
     pub fn app_id(mut self, app_id: impl Into<String>) -> Self {
         self.app_id = app_id.into();
-        self.registry = byard_core::cap::default_registry(&self.app_id);
         self
     }
 
@@ -243,7 +253,7 @@ impl App {
             self.reserved.push(name);
             return self;
         }
-        self.registry.insert(Arc::new(controller));
+        self.provided.push(Arc::new(controller));
         self
     }
 
@@ -318,6 +328,22 @@ impl App {
         self
     }
 
+    /// What `inject` resolves against: the framework's capabilities (unless
+    /// dropped), keyed to the app's identity, then the app's own controllers.
+    /// A provided controller of a name already there replaces it, so the last
+    /// provider wins.
+    pub(crate) fn registry(&self) -> ControllerRegistry {
+        let mut registry = if self.defaults {
+            byard_core::cap::default_registry(&self.app_id)
+        } else {
+            ControllerRegistry::new()
+        };
+        for controller in &self.provided {
+            registry.insert(Arc::clone(controller));
+        }
+        registry
+    }
+
     /// Refuses a set of registrations [`run`](Self::run) could not honour: a
     /// controller under a reserved name, or two native views under one name.
     pub(crate) fn check_registrations(&self) -> Result<(), ByardError> {
@@ -385,7 +411,7 @@ impl App {
         } else {
             None
         };
-        let mut registry = self.registry;
+        let mut registry = self.registry();
         byard_core::cap::configure_http(&mut registry, http.base_url.as_deref(), &http.hosts);
         let trace = self
             .trace
@@ -1183,7 +1209,10 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(20));
         };
         assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        // The first reload is the complete one, not a read between the
+        // truncate and the write.
         assert_eq!(parsed.views.len(), 1);
+        assert!(format!("{:?}", parsed.views[0]).contains("two"));
     }
 
     /// A declaration that has drifted from the view registered under its name
@@ -1434,7 +1463,81 @@ mod tests {
     fn app_id_overrides_the_default_and_rebuilds_the_registry() {
         let app = App::new("src/main.byd").app_id("dev.example.weather");
         assert_eq!(app.app_id, "dev.example.weather");
-        assert!(app.registry.contains("Store"));
+        assert!(app.registry().contains("Store"));
+    }
+
+    /// A controller the app provides, under a name of its own.
+    #[derive(Clone)]
+    struct Room;
+    impl byard_core::bridge::Controller for Room {
+        fn type_name(&self) -> &'static str {
+            "Room"
+        }
+        fn invoke(
+            &self,
+            _method: &str,
+            _args: Vec<byard_core::bridge::HostValue>,
+        ) -> byard_core::bridge::BoxFuture<
+            'static,
+            Result<byard_core::bridge::HostValue, byard_core::bridge::HostValue>,
+        > {
+            Box::pin(async { Ok(byard_core::bridge::HostValue::Unit) })
+        }
+    }
+
+    #[test]
+    fn app_id_after_provide_keeps_the_controller() {
+        let app = App::new("src/main.byd")
+            .provide(Room)
+            .app_id("dev.example.x");
+        assert!(app.registry().contains("Room"), "provided before app_id");
+        assert!(app.registry().contains("Store"));
+        let app = App::new("src/main.byd")
+            .app_id("dev.example.x")
+            .provide(Room);
+        assert!(app.registry().contains("Room"), "provided after app_id");
+    }
+
+    #[test]
+    fn the_builder_methods_that_touch_the_registry_commute() {
+        // Every order of provide, app_id and without_default_capabilities
+        // gives the same registry: the controller, and the built-ins unless
+        // dropped, and never the built-ins back after they were dropped.
+        let steps: [fn(App) -> App; 3] = [
+            |a| a.provide(Room),
+            |a| a.app_id("dev.example.x"),
+            App::without_default_capabilities,
+        ];
+        let orders = [
+            [0, 1, 2],
+            [0, 2, 1],
+            [1, 0, 2],
+            [1, 2, 0],
+            [2, 0, 1],
+            [2, 1, 0],
+        ];
+        for order in orders {
+            let app = order
+                .iter()
+                .fold(App::new("src/main.byd"), |app, &i| steps[i](app));
+            let registry = app.registry();
+            assert!(registry.contains("Room"), "{order:?} lost the controller");
+            assert!(!registry.contains("Store"), "{order:?} brought Store back");
+            assert!(!registry.contains("Http"), "{order:?} brought Http back");
+            assert_eq!(app.app_id, "dev.example.x", "{order:?}");
+        }
+    }
+
+    #[test]
+    fn the_other_builder_methods_leave_the_registry_alone() {
+        let app = App::new("src/main.byd")
+            .provide(Room)
+            .title("T")
+            .size(10, 10)
+            .hot_reload(true)
+            .trace("t.json");
+        let registry = app.registry();
+        assert!(registry.contains("Room") && registry.contains("Store"));
     }
 
     #[test]
@@ -1463,7 +1566,7 @@ mod tests {
             .provide(Impostor);
         assert_eq!(app.reserved, vec!["Http"]);
         assert!(
-            !app.registry.contains("Http"),
+            !app.registry().contains("Http"),
             "the built-in really is gone"
         );
     }

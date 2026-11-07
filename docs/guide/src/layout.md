@@ -50,6 +50,48 @@ children with `grow: 1` and `grow: 2` split it one to two. `Spacer` is a child
 that does nothing but `grow`. The root of a screen usually says `grow: 1`, so it
 fills the window instead of hugging its content.
 
+`basis` is the size a child starts from on the main axis, its width in a `Row` and
+its height in a `Column`, before `grow` hands out what is left. A `Box #[basis: 100,
+grow: 1]` and another `Box #[basis: 200, grow: 1]` in a 500 wide row end up 200 and
+300 wide: each gets its basis, and the 200 left over is shared equally. `Box`,
+`Row`, `Column`, `Button`, `ScrollView`, `Grid`, `ZStack`, `Clip`, `Spacer` and `Text`
+take it. An element that lays itself out from its own content or its own `width` and
+`height` (`Image`, `Canvas`, `TextField`, `Toggle`, `Slider`, `Checkbox`,
+`RadioButton`, `VectorIcon`) has nothing for it to set, and `basis` there is an
+unknown attribute.
+
+```byld
+View Main() {
+    Row #[width: 500, height: 40] {
+        Box #[basis: 100, grow: 1, bg: 0x3B82F6] {}
+        Box #[basis: 200, grow: 1, bg: 0x8FD19E] {}
+    }
+}
+```
+
+`shrink` is the other half of `grow`: what a child gives up when its siblings ask
+for more than the row has. It is `1` by default, so a child with a `width` is a size
+to start from and not a floor, as in CSS, and a 24 wide icon beside something wider than
+the row is squeezed with it. `shrink: 0` keeps a child at its size and leaves the
+squeezing to the others. A `Spacer`, and a `TextField` or `Slider` that has both a `width`
+and a `grow`, never shrink below their size, as they always did. Every element in a `Row` or
+`Column` takes `shrink`, and so does `Text`.
+
+```byld
+View Main() {
+    Row #[width: 170, gap: 16, height: 40, align: center, bg: 0x1E1E2A] {
+        Box #[bg: 0xF2B8B5, width: 24, height: 24, radius: 12, shrink: 0] {}
+        Clip #[grow: 1, width: 0, height: 10] { Box #[bg: 0x4F5B66, width: 220, height: 10] {} }
+    }
+}
+```
+
+Without `shrink: 0` the circle is squeezed to a sliver by the wide bar beside it.
+A child never shrinks below what its content needs, so the bar must be told it may:
+`width: 0` with `grow: 1` starts it from nothing and gives it what is left, and the
+`Clip` cuts the bar to that. A one-line `Text` between two icons takes the same
+`grow: 1, width: 0`, or it pushes the icon after it out of the row.
+
 ## Space
 
 `gap` is the space between children. `p` is padding, inside the container, and
@@ -91,6 +133,23 @@ View Main() {
             Box #[bg: 0x3B82F6, height: 24, grow: 1] {}
             Box #[bg: 0x8FD19E, height: 24, grow: 2] {}
         }
+    }
+}
+```
+
+One child can ignore its parent's `align` with `align_self`, which takes the same words
+(`start`, `center`, `end`, `stretch`). It places that child across the main axis and leaves
+the others where `align` puts them. A bare `Column` child stretches to the column's width;
+`align_self: center` makes it its own width and centres it. `Text`, `TextField` and the other
+elements take it too, and so does a child of a `Grid`.
+
+```byld
+View Main() {
+    Row #[width: 360, height: 80, gap: 12, align: start, bg: 0x1E1E2A, p: 8] {
+        Box #[bg: 0x3B82F6, width: 60, height: 24] {}
+        Box #[bg: 0x3B82F6, width: 60, height: 24, align_self: center] {}
+        Box #[bg: 0x3B82F6, width: 60, height: 24, align_self: end] {}
+        Box #[bg: 0xE4A11B, width: 60, align_self: stretch] {}
     }
 }
 ```
@@ -142,7 +201,10 @@ The values are `center`, `top`, `bottom`, `start`, `end`, and the corners
 
 A `ScrollView` holds content larger than itself and scrolls it with the wheel, a
 trackpad or a drag. Give it a size, and its `offset` a `var` if you want to read
-or set where it is:
+or set where it is. A size is a `height` and `width`, or `grow` inside a parent
+that has room to give (a screen whose root says `grow: 1` does), or a parent's
+own size. A `ScrollView` that grows takes what its siblings leave, however long
+its content is:
 
 ```byld
 View Main() {
@@ -167,7 +229,10 @@ moves the content. `axis` is `vertical` (the default), `horizontal` or `both`.
 For a long list, add `windowed: true` and `row_height`. Only the rows in view are
 built. Every row must then be exactly `row_height` tall, margins included, because
 the window works out which rows are visible by multiplying. Put spacing in the
-row's own height or margin, not the container's `gap`.
+row's own height or margin, not the container's `gap`. The list fills whatever
+size the view ends up with, so `grow: 1` works as well as a `height`. Windowing is
+for a list that scrolls up and down: a `ScrollView` with `axis: horizontal` or
+`both` builds all of its content.
 
 A `ScrollView` also snaps to pages or items (`snap: page`, `snap: item`, with
 `snap_align`), reports `page` and `page_count`, calls `end_reached =>` near the
@@ -204,7 +269,13 @@ View Main() {
 ```
 
 By default an overlay is *modal*: a scrim covers the page and takes its input.
-`dismiss =>` runs when the scrim is tapped or Escape is pressed. A child places
+The scrim is the theme's `scrim` colour at 32%, which is black unless the theme says
+otherwise; `scrim: 0x80000000` gives the overlay another colour,
+and a fully transparent one draws none. A child that fills the whole window is
+taken for a scrim you wrote yourself, and then no other is drawn. A non-modal
+overlay has no scrim. `dismiss =>` runs when the scrim is tapped (a press outside
+the overlay's content, not on a panel, its padding or a field in it) or Escape is
+pressed. A child places
 itself with `anchor`: `center`, `top`, `bottom`, `start` or `end`.
 `at: (x, y)` puts a child at an exact offset from the window's top-left instead.
 
@@ -277,12 +348,32 @@ View Main() {
 `it.w` and `it.h` are the element's width and height. The line is drawn to the
 measured width and not to a number written in the file, so it stays right as the
 window resizes. Use the measurement downward: a parent measures, its children
-read the number. The other way round never settles.
+read the number. The other way round never settles: a parent that is as wide as its
+content, whose child is as wide as the parent, grows by the padding on every frame.
+A card with a fixed or filled width, whose field takes `w - 32`, is the downward case and
+is stable.
 
 ## Text
 
 `Text` is the one element that shows words. Its content may be any text, with
 [interpolation](expressions.md#text-and-interpolation), and it wraps to the width
 its parent offers. `wrap: false` keeps it on one line. The look of text is covered under [styling](styling.md).
+
+A `Text` takes the attributes that place a child in a `Row` or `Column`: `width`,
+`height`, `grow`, `shrink`, `basis`, `align_self`, and `p` and `m` with their sides. It
+can also have a background, `bg` and `radius`, drawn behind the words over the whole box,
+`p` included (see [styling](styling.md#text)). `Text("Title")
+#[grow: 1]` takes the room left in its row after its own size, as a `Box` does, so
+two `grow: 1` texts of different lengths are not equal halves. `basis: 0` makes
+them start from nothing, and a column of such cells lines up from row to row.
+`p` insets the words inside the text's own box, `m`
+leaves room around it. A `Text` has no children, so `gap`, `align` and `justify`
+do not apply (its `align` positions the words, see [styling](styling.md)).
+
+`wrap: false` with a `width` makes a cell of exactly that width, whatever the text
+measures. Words that do not fit are clipped at the cell's edge, not drawn over the
+next cell, which is what a table column needs. Without a `width` a one-line text is
+as wide as its words and overflows its parent. Spaces in a text are text: leading
+and trailing ones are drawn and take room, `Text("   {error}")` is indented.
 
 Next, [styling](styling.md) makes all of this look like something.

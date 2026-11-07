@@ -111,6 +111,8 @@ which groups it accepts). All map to RFC-0001's pipelines/Taffy.
 | `justify` | `Justify` | `start` | main-axis distribution of children |
 | `grow` | `Int` | `0` | flex-grow factor |
 | `basis` | `Int` | auto | flex basis |
+| `shrink` | `Int` | `1` | flex-shrink factor (addendum 2026-11-07: `0` keeps a fixed-size child from being squeezed) |
+| `align_self` | `Align` | the parent's `align` | this child's cross-axis alignment (addendum 2026-11-07) |
 
 **Decoration (`DecoratedBox`/`SolidBox`, §3.1)**, accepted by box-like intrinsics:
 
@@ -191,7 +193,17 @@ plus intrinsic-specific props, **reflected** two-way props, **events**, and the
 - **Content:** **arity 1**, `Str` (the text; interpolation allowed). `Text()` with
   no content or >1 positional arg is `CompileError::ArityMismatch`.
 - **Children:** none.
-- **Props:** Text group + `m`, `width`, `style`.
+- **Props:** Text group + `width`, `height`, `grow`, `p`/`m` and their
+  sides, `style`. (Erratum: the first draft listed only `m` and `width`, which
+  left a `Text` unable to grow or be padded in a `Row`. `gap`, `align` and
+  `justify` stay out, a `Text` has no children, and there are no min/max sizes
+  on any element yet.)
+  *Addendum (2026-11-07):* a `Text` also takes `shrink`, `align_self`, and `bg`
+  and `radius`. The fill is drawn behind the glyphs over the whole box, `p`
+  included, and a `Text` that writes neither pays nothing for it. This replaces
+  the "no `bg` on `Text`" answer in Unresolved questions: a label that sits
+  over a border needs a background, and wrapping it in a `Box` only to get one
+  cost a node and a layout box per label.
 - **Events:** all pointer (a tappable label is just `Text(...) #[tap => …]`);
   focusable only if it registers focus/key events.
 - **Pipeline:** `TextGlyph`.
@@ -213,6 +225,15 @@ plus intrinsic-specific props, **reflected** two-way props, **events**, and the
 - **Events:** `change(e: ChangeEvent<Str>)`, `input`, `submit`, `focus`, `blur`,
   `key_down`, `key_up`, all pointer; **focusable by default**.
 - **Pipeline:** `DecoratedBox` + `TextGlyph` (text + caret).
+- *Addendum (2026-11-07), a field a design system can style:* the 200 wide size
+  is a fallback for a field that says neither `width` nor `grow`. With `grow`
+  and no `width` the field has no width of its own and takes what `grow` hands
+  it, so `grow: 1` between two icons squeezes neither; in a column it spans the
+  column. `indicator: line | none` (default `line`) is the line along the
+  bottom edge while the field has focus; `none` leaves it out. A field's own
+  `border` and `on focused` already restyle a focus border, so nothing more is
+  added to restyle the line. The intrinsic `p` (10 from the left when no `p` is
+  written) is unchanged.
 
 #### `Toggle`, boolean switch
 - **Content:** none.
@@ -363,7 +384,8 @@ presets keeps the intrinsic table small and the lowering uniform.
   - [ ] **Theme token namespace.** Are typography tokens bare (`titleLarge`) or
     namespaced (`m3.titleLarge` as in RFC-0001's example)? Pick one and apply
     across the catalog.
-  - [ ] **`color` vs `bg` on `Text`.** Confirm `Text` uses `color` for glyphs and
+  - [x] *(Resolved 2026-11-07: `Text` takes `bg` and `radius`, see its addendum.)*
+    **`color` vs `bg` on `Text`.** Confirm `Text` uses `color` for glyphs and
     has no `bg` (a background behind text = wrap in a `Box`), to keep `Text`
     glyph-only.
 - **During implementation:**

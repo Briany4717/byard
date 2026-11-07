@@ -84,8 +84,32 @@ impl std::fmt::Debug for Store {
     }
 }
 
+/// The directory where the app named `app_id` keeps its data: the one
+/// [`Store`] writes its file in, and the place for any file an app keeps
+/// beside it.
+///
+/// macOS `~/Library/Application Support/<app>`, Linux `~/.local/share/<app>`,
+/// Windows `%APPDATA%\<app>`, resolved by the `directories` crate. The
+/// directory is not created; create it before writing (`Store` does so on its
+/// first write).
+///
+/// `app_id` is the app's identity (RFC-0029 O5): the executable's name unless
+/// the app sets `App::app_id`, and the project's name under `byard dev`. This
+/// is the only place that turns an identity into a path, so a controller and
+/// the `Store` cannot disagree about it.
+///
+/// Falls back to a `.byard` directory under the current working directory when
+/// the OS reports no data dir (a sandbox, a service account).
+#[must_use]
+pub fn data_dir(app_id: &str) -> PathBuf {
+    directories::ProjectDirs::from("dev", "byard", app_id).map_or_else(
+        || PathBuf::from(".byard").join(app_id),
+        |dirs| dirs.data_dir().to_path_buf(),
+    )
+}
+
 impl Store {
-    /// A store in the platform's data directory for `app_name`.
+    /// A store in [`data_dir`]`(app_name)`, the platform's data directory for the app.
     ///
     /// macOS `~/Library/Application Support/<app>`, Linux
     /// `~/.local/share/<app>`, Windows `%APPDATA%\<app>`, resolved by the
@@ -97,11 +121,7 @@ impl Store {
     /// that writes somewhere is better than a capability that vanishes.
     #[must_use]
     pub fn for_app(app_name: &str) -> Self {
-        let dir = directories::ProjectDirs::from("dev", "byard", app_name).map_or_else(
-            || PathBuf::from(".byard").join(app_name),
-            |dirs| dirs.data_dir().to_path_buf(),
-        );
-        Self::at(dir.join(FILE_NAME))
+        Self::at(data_dir(app_name).join(FILE_NAME))
     }
 
     /// A store backed by an explicit file. Used by tests and by an app that
@@ -349,6 +369,23 @@ impl Controller for Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_store_for_an_app_lives_in_the_apps_data_dir() {
+        // The directory an app can ask for and the one `Store` writes in are
+        // one function's answer, so they cannot drift apart.
+        let store = Store::for_app("dev.example.dirs");
+        assert_eq!(
+            store.path(),
+            data_dir("dev.example.dirs").join(FILE_NAME).as_path()
+        );
+        assert_ne!(data_dir("dev.example.dirs"), data_dir("dev.example.other"));
+        assert!(
+            data_dir("dev.example.dirs")
+                .to_string_lossy()
+                .contains("dev.example.dirs")
+        );
+    }
 
     /// A store in a fresh temporary directory, removed when the test ends.
     struct TempStore {

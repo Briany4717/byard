@@ -21,6 +21,7 @@ use super::{Interpreter, RenderNode, access};
 use crate::interp::env::Value;
 use crate::parser::ast::{Attr, AttrKind, StyleStateKind};
 use crate::symbol::Symbol;
+use byard_core::access::AccessRole;
 
 /// A shadow-only [`DecoratedBox`](byard_core::frame::DecoratedBox): the box's
 /// geometry (rect/radii/transform) with a transparent fill and no border, so it
@@ -75,6 +76,16 @@ pub(super) struct ActiveRipple {
     pub(super) duration_ms: f32,
     /// `ripple_radius` override; `None` auto-expands to the farthest corner.
     max_radius: Option<f32>,
+}
+
+impl ActiveRipple {
+    pub(super) const fn elem(&self) -> u32 {
+        self.elem
+    }
+
+    pub(super) const fn set_elem(&mut self, elem: u32) {
+        self.elem = elem;
+    }
 }
 
 /// Default ripple fade-out duration in ms (RFC-0023 §"Ripple properties").
@@ -225,7 +236,15 @@ impl Interpreter {
                 attrs,
                 state_blocks,
                 content,
+                env_snapshot,
+                ..
             } => {
+                // The scope the run was written in: a `size:` or `color:` that
+                // reads a view parameter resolves against it (empty: no-op).
+                let env_base = self.env.len();
+                for (k, v) in env_snapshot {
+                    self.env.push(k.clone(), v.clone());
+                }
                 if let Ok(Some(rect)) = self.atlas.resolved_rect(atlas_node) {
                     // RFC-0016: overlay any active `on <state>` block against the
                     // live engine mask before reading paint properties. RFC-0024:
@@ -242,7 +261,7 @@ impl Interpreter {
                     let attrs = attrs.as_ref();
                     let text = match self.binding_value(*content) {
                         Some(Value::Str(s)) => s,
-                        other => other.map_or_else(String::new, |v| format!("{v:?}")),
+                        other => other.map_or_else(String::new, |v| v.to_text()),
                     };
                     // Fall back to theme on-surface color when unset.
                     let color = self
@@ -251,10 +270,7 @@ impl Interpreter {
                     // Resolve `typo:` token to font size; inline `size:` overrides
                     // (RFC-0005 `Typo`, completed by RFC-0022).
                     let typo_size = self.eval_typo_size(attrs);
-                    let size =
-                        self.eval_int_prop(attrs, "size")
-                            .or(typo_size)
-                            .unwrap_or(self.theme.font_size as i64) as f32;
+                    let size = self.text_font_size(attrs, typo_size);
                     let mut rgba = super::intrinsics::color_rgba_auto(color);
                     rgba[3] *= inherited_opacity;
                     // RFC-0011: the run's own transform, composed with its
@@ -300,7 +316,10 @@ impl Interpreter {
                             &transform,
                         );
                     }
-                    let anchor = transform.apply_point([rect.x, rect.y]);
+                    // A `Text` with `p` draws its glyphs inside the padding. The
+                    // atlas reports none for the common padding-less one.
+                    let pad = self.atlas.padding_of(atlas_node);
+                    let anchor = transform.apply_point([rect.x + pad.left, rect.y + pad.top]);
                     let scaled_size = size * transform.uniform_scale();
                     // RFC-0005 default text wrap: shape the run to the width layout
                     // resolved for this leaf (its parent-offered width), scaled by
@@ -310,11 +329,58 @@ impl Interpreter {
                     // laid-out height.
                     let weight = self.resolve_weight(attrs);
                     let family = self.resolve_family(attrs);
-                    let wrap_w = if self.eval_bool_prop(attrs, "wrap") == Some(false) {
+                    let variations = self.resolve_variations(attrs);
+                    let single_line = self.eval_bool_prop(attrs, "wrap") == Some(false);
+                    let wrap_w = if single_line {
                         None
                     } else {
-                        Some(rect.width * transform.uniform_scale())
+                        Some(
+                            (rect.width - pad.left - pad.right).max(0.0)
+                                * transform.uniform_scale(),
+                        )
                     };
+                    // A single line given a `width` is a fixed-width cell: what
+                    // does not fit is clipped at the cell's edge, not drawn over
+                    // its neighbour. Without a `width` the line is as wide as
+                    // its text and overflows its parent, as it always did.
+                    let clipped = single_line && self.eval_px_prop(attrs, "width").is_some();
+                    if clipped {
+                        let tl = transform.apply_point([rect.x, rect.y]);
+                        frame.begin_clip(byard_core::frame::Rect::new(
+                            tl[0],
+                            tl[1],
+                            rect.width * transform.scale[0],
+                            rect.height * transform.scale[1],
+                        ));
+                    }
+                    // `bg` and `radius`: a fill behind the glyphs, over the
+                    // whole box including its `p`. Looked at only when written.
+                    if attrs
+                        .iter()
+                        .any(|a| matches!(a.name.as_str(), "bg" | "radius"))
+                    {
+                        if let Some(bg) = self.eval_color_prop(attrs, "bg") {
+                            let mut fill = super::intrinsics::color_rgba_auto(bg);
+                            fill[3] *= inherited_opacity;
+                            let base = byard_core::BoxInstance {
+                                rect: [rect.x, rect.y, rect.width, rect.height],
+                                color: fill,
+                                radii: self.resolve_radii(attrs, "radius"),
+                                transform,
+                                smooth: 0.0,
+                            };
+                            if fill[3] < 1.0 {
+                                frame.push_decorated(byard_core::frame::DecoratedBox {
+                                    base,
+                                    opacity: 1.0,
+                                    dirty: true,
+                                    ..Default::default()
+                                });
+                            } else {
+                                frame.push_instance(base);
+                            }
+                        }
+                    }
                     frame.push_text_wrapped(
                         byard_core::TextLine {
                             x: anchor[0],
@@ -323,11 +389,15 @@ impl Interpreter {
                             font_size: scaled_size,
                             weight,
                             family,
+                            variations,
                             color: rgba,
                             dirty: true,
                         },
                         wrap_w,
                     );
+                    if clipped {
+                        frame.end_clip();
+                    }
                     if own_group {
                         frame.end_group();
                     }
@@ -350,6 +420,7 @@ impl Interpreter {
                         self.register_event_attrs(attrs, hit_rect, elem_idx);
                     }
                 }
+                self.env.truncate(env_base);
             }
             RenderNode::Box {
                 name,
@@ -362,6 +433,8 @@ impl Interpreter {
                 anchor_name,
                 measure: _,
                 clip_path,
+                uid: _,
+                inst: _,
             } => {
                 // RFC-0019 §2: restore the instance environment captured at lower
                 // time so event actions re-lowered below (a forwarded callback,
@@ -382,6 +455,8 @@ impl Interpreter {
                 // The accessibility scope this box opened (RFC-0042), closed on
                 // the way out with the node it described.
                 let mut access_scope = access::Scope::default();
+                // Whether this box opened a tab list or radio group (RFC-0052).
+                let mut group_open = false;
                 // Likewise the composed paint transform children inherit (RFC-0011
                 // group transforms): this box's own transform ∘ its ancestors',
                 // set once the rect is known, else passed through unchanged.
@@ -759,6 +834,10 @@ impl Interpreter {
                     // and Space or Enter presses it; one with nothing to press is
                     // not, there is nothing for focus to do there. `Toggle` and
                     // `Slider` register their own, as the rest do.
+                    //
+                    // RFC-0052: its `a11y_role:` is read once, for the focus
+                    // rule and for a tab list or radio group to open.
+                    let declared = Self::declared_role(attrs);
                     if element_name == "Button" {
                         if let Some(idx) = elem_idx.filter(|&i| {
                             self.router
@@ -766,15 +845,26 @@ impl Interpreter {
                         }) {
                             let fsig = self.focus_signal(attrs);
                             self.router.focusable(idx, hit_rect, fsig);
-                            self.router.activate_on_key(idx);
+                            self.router
+                                .activate_on_key(idx, crate::interp::events::ActivationKeys::Both);
                         } else {
-                            self.register_focusable(attrs, hit_rect, elem_idx);
+                            self.register_focusable_as(attrs, hit_rect, elem_idx, declared);
                         }
                     } else if !matches!(
                         element_name,
                         "TextField" | "Checkbox" | "RadioButton" | "Toggle" | "Slider"
                     ) {
-                        self.register_focusable(attrs, hit_rect, elem_idx);
+                        self.register_focusable_as(attrs, hit_rect, elem_idx, declared);
+                    }
+                    if let Some(kind) = match declared {
+                        Some(AccessRole::TabList) => Some(crate::interp::events::GroupKind::Tabs),
+                        Some(AccessRole::RadioGroup) => {
+                            Some(crate::interp::events::GroupKind::Radios)
+                        }
+                        _ => None,
+                    } {
+                        self.router.open_group(kind);
+                        group_open = true;
                     }
 
                     // RFC-0042: describe the box now that its handlers and
@@ -1165,6 +1255,9 @@ impl Interpreter {
                     frame.end_group();
                 }
                 self.access_leave(frame, access_scope);
+                if group_open {
+                    self.router.close_group();
+                }
                 // Close the RFC-0019 instance-env scope opened at the top of this
                 // arm (balanced with `env_base`), restoring the caller's env for
                 // the remaining siblings.
@@ -1310,7 +1403,13 @@ impl Interpreter {
                 attrs,
                 state_blocks,
                 src,
+                env_snapshot,
+                ..
             } => {
+                let env_base = self.env.len();
+                for (k, v) in env_snapshot {
+                    self.env.push(k.clone(), v.clone());
+                }
                 if let Ok(Some(rect)) = self.atlas.resolved_rect(atlas_node) {
                     // RFC-0016: overlay active `on <state>` blocks before reading
                     // paint properties (fit/radius/opacity). RFC-0024: fold in the
@@ -1375,6 +1474,7 @@ impl Interpreter {
                         dirty: true,
                     });
                 }
+                self.env.truncate(env_base);
             }
             // RFC-0039: hand the view its rect and let it draw. Props are
             // re-evaluated every tick through the same `eval_*` chokepoints an
@@ -1388,6 +1488,7 @@ impl Interpreter {
                 action,
                 env_snapshot,
                 slot,
+                ..
             } => {
                 if let Ok(Some(rect)) = self.atlas.resolved_rect(atlas_node) {
                     let elem_idx = self.atlas.node_index(atlas_node);
@@ -1499,7 +1600,16 @@ impl Interpreter {
                     }
                 }
             }
-            RenderNode::Vector { attrs, src } => {
+            RenderNode::Vector {
+                attrs,
+                src,
+                env_snapshot,
+                ..
+            } => {
+                let env_base = self.env.len();
+                for (k, v) in env_snapshot {
+                    self.env.push(k.clone(), v.clone());
+                }
                 if let Ok(Some(rect)) = self.atlas.resolved_rect(atlas_node) {
                     if self.access.on {
                         let elem = self.atlas.node_index(atlas_node);
@@ -1559,6 +1669,7 @@ impl Interpreter {
                         layer,
                     ));
                 }
+                self.env.truncate(env_base);
             }
             // RFC-0020: the `Canvas` drawing surface. Shape parameters are
             // re-evaluated every tick through `eval_pure`, so a reactive or
@@ -1570,6 +1681,7 @@ impl Interpreter {
                 shapes,
                 action,
                 env_snapshot,
+                ..
             } => {
                 if let Ok(Some(rect)) = self.atlas.resolved_rect(atlas_node) {
                     let elem_idx = self.atlas.node_index(atlas_node);

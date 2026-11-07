@@ -73,6 +73,84 @@ To check a package alone, run `byard check` inside it. It checks the files an ap
 fonts and theme named as that app sees them. `byard dev`, `shot` and `build` there say it is a library
 and point you at `check`.
 
+## What a package shares, and what it keeps
+
+Besides views and functions, a package declares [constants](expressions.md#constants) and
+[enums](expressions.md#enums) at the top of any of its files, and its views use them by bare name:
+
+```byld
+// src/tokens.byd
+let gap = 8
+let pad = gap * 2
+
+enum Variant {
+    filled,
+    tonal,
+    outlined,
+}
+
+// private: only this package's own files can use it.
+private fn tint(v: Variant) -> Int => v == Variant.filled ? 0x6750A4 : 0x3A3150
+
+// src/action.byd
+View Action(label: Str, variant: Variant = Variant.filled) {
+    Box #[bg: tint(variant), radius: 20, p: (horizontal: pad, vertical: gap)] {
+        Text(label) #[color: 0xFFFFFF]
+    }
+}
+
+View Main() {
+    Row #[gap: gap, p: pad] {
+        Action("Save")
+        Action("Cancel", variant: .tonal)
+    }
+}
+```
+
+An app reaches them through its alias, as it reaches the package's views and functions:
+
+```byld,ignore
+// Needs the `kit` dependency above, which a lone sample cannot have.
+use kit as k
+
+View Main() {
+    Row #[gap: k.gap] {
+        k.Action("Save")
+        k.Action("Cancel", variant: .tonal)
+        k.Action("More", variant: k.Variant.outlined)
+    }
+}
+
+View Chosen(variant: k.Variant = k.Variant.filled) {
+    k.Action("x", variant: variant)
+}
+```
+
+`k.gap` is the package's constant, `k.Variant.outlined` a case of its enum, and `k.Variant` is how
+the enum is named as a type. `variant: .tonal` is short for `k.Variant.tonal`, because the
+parameter says which enum.
+
+Write `private` before a `View`, `fn`, `type`, `let` or `enum` to keep it inside. A private name is
+visible to every file of the package, the other views included, and to nobody else: an app that
+reaches one is told so, and is not offered it by the editor.
+
+```byld,ignore
+// Needs the `kit` dependency above.
+use kit as k
+
+View Main() {
+    k.Hint()
+}
+```
+
+```text
+error[PrivateName]: `Hint` is private to package `kit`: only the package's own files can use it
+```
+
+A public view may use private ones, so a package can be rewritten behind its public names. In an
+app, or in a package checked on its own, `private` is accepted and changes nothing. The names an
+app can reach are the ones a package has not marked.
+
 ## Using one
 
 A dependency is declared in `[dependencies]`, by where it comes from:
@@ -107,6 +185,50 @@ Then `use` it in a `.byd` file, before any view:
 Functions a package declares are used the same way: `k.describe(…)`. If two names collide, the
 checker asks for an alias. Your own project's views never need a prefix.
 
+### A view named like a built-in
+
+A package may declare a view with a built-in's name, `Button`, `TextField`, `Toggle`, which a
+design system needs. The two never meet, because the package's view is only reached by the
+package's name:
+
+```byld,ignore
+// Needs the `ds` package below, which declares `View Button`.
+use ds as m
+
+View Main() {
+    Column {
+        m.Button("the package's")
+        Button("the built-in")
+    }
+}
+```
+
+- **Outside the package**, a bare `Button` is always the built-in, and the package's is `m.Button`.
+- `use ds.{Button}` would hide the built-in in that file, so it is an error
+  (`ImportShadowsBuiltin`) that says to write `ds.Button`. The selective form has no alias.
+- **Inside the package**, a bare `Button` is also the built-in, so the package's own `Button` can be
+  built from it, and the package's view is reached by the package's own name, as its callers reach it:
+
+```byld,ignore
+// In the package `ds`: wraps the built-in, which keeps its keyboard and accessibility.
+View Button(label: Str) {
+    Button(label) #[bg: 0x6750A4, color: 0xFFFFFF, radius: 20]
+}
+
+View Pair() {
+    Row #[gap: 8] {
+        ds.Button("one")
+        ds.Button("two")
+    }
+}
+```
+
+  A view that calls itself this way gets the usual recursion error.
+- **In an app**, a view named like a built-in is still an error (`IntrinsicShadowed`): an app has no
+  name to keep the two apart.
+
+The `builtin_names` example has the package and an app that uses both.
+
 ### Fonts and themes from a package
 
 A package's fonts are named `package/Family`, whatever the app calls the dependency:
@@ -130,7 +252,9 @@ brand = { path = "../brand" }
 extends = "brand"
 ```
 
-The palette, type scale, shapes and typefaces all arrive. See
+The palette, type scale, shapes and typefaces all arrive. A package's views read the package's tokens, so
+an app that uses them without `extends` gets an error saying which package's theme declares the token and
+that `[theme] extends = "brand"` brings it (or declare the token yourself). See
 [theming](theming.md). The `package_theme` example shows a package that declares only a seed colour
 and one font, and an app that has no colours or fonts of its own.
 
@@ -147,6 +271,13 @@ byard add brand --registry ./registry --version "^0.1"
 `byard get`. `install` is another name for the same command. Choose one source: `--path`, `--git`
 (with `--tag` or `--rev`), or `--registry` (with an optional `--version`, which defaults to `^` the
 newest version published). Mixing sources is an error.
+
+A registry directory is written into `byard.toml` relative to the project, however `--registry` was
+spelled (`/work/registry` from anywhere becomes `../registry`), so the manifest and the lock say the
+same on every machine. A registry URL is written as given, with or without a trailing slash, and may
+have a path: a static site such as a GitHub Pages project works with
+`byard add material --registry https://briany4717.github.io/byard-registry`. If `byard.toml` already
+names a registry directory by an absolute path, `byard get` warns that it only works on this machine.
 
 ## `byard get` and the lockfile
 
@@ -167,15 +298,19 @@ checksum = "sha256:3f1c9a0d5e7b…"
 [[package]]
 name = "kit"
 source = "path+../kit"
-checksum = "sha256:9be2d4417a30…"
 ```
 
-Each entry pins a package to exact *content*: a checksum over its sources. A git package also pins the
-commit its tag resolved to, and a registry package the version chosen. Commit `byard.lock`. With it,
-every machine builds the same program.
+Each git or registry entry pins a package to exact *content*: a checksum over its sources. A git package
+also pins the commit its tag resolved to, and a registry package the version chosen. A `path` package is
+listed and not pinned: it is the files on disk, read as they are each time, so a checksum of them would
+only go stale on the next edit. Commit `byard.lock`. With it, every machine builds the same program, and
+a package repository whose `gallery/` depends on `..` has no lock change per commit.
 
 - `check` and `dev` build from the lock. They never solve, and never contact a registry.
-- Git packages are fetched into a cache, `~/.byard/cache`, and are not fetched again once cached.
+- Git packages are fetched into a cache, `~/.byard/cache`, and are not fetched again once cached. The
+  cache keeps only the files `byard publish` would archive (the manifest, sources, declared assets, README
+  and licences), not the whole repository, so the same content has the same checksum from git, a
+  registry and a path.
 - When the lock already satisfies the manifest, `get` keeps it and does not contact the registry. When
   it does not, `get` solves again.
 - When no version can satisfy every requirement, `get` says which requirements conflict and lists the
@@ -192,7 +327,8 @@ byard publish ../kit --registry ./registry
 BYARD_REGISTRY=./registry byard publish
 ```
 
-It needs `name` and `version` in `[package]`. It writes an archive of what the package is made of, its
+It needs `name` and `version` in `[package]`, and the package has to pass `byard check`: the errors are
+printed and nothing is published otherwise, since a version cannot be replaced. It writes an archive of what the package is made of, its
 manifest, sources, declared assets, README and licence, as `registry/kit/0.1.0.tar.gz`, and adds a line
 to the registry's `index.toml` naming the archive, its hash and its dependencies.
 

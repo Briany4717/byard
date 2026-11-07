@@ -245,13 +245,30 @@ impl Interpreter {
         if self.eval_bool_prop(sv_attrs, "windowed") != Some(true) {
             return None;
         }
+        // Windowing stacks the elided rows as spacers above and below, so it is
+        // a vertical list's. A view that scrolls sideways is laid out whole,
+        // correctly, rather than windowed along the wrong axis.
+        if matches!(
+            Self::enum_prop(sv_attrs, "axis"),
+            Some("horizontal" | "both")
+        ) {
+            return None;
+        }
         #[allow(clippy::cast_precision_loss)]
         let row_height = self.eval_px_prop(sv_attrs, "row_height").unwrap_or(0.0);
         if row_height <= 0.0 {
             return None;
         }
-        #[allow(clippy::cast_precision_loss)]
-        let viewport_h = self.eval_px_prop(sv_attrs, "height").unwrap_or(0.0);
+        // The rows to build are chosen before layout has run, so the viewport's
+        // own height is not known yet. An explicit `height` is exact. Without
+        // one the view's size comes from `grow`, its parent, or min/max, none
+        // of which exist until the tree is laid out, so the bound is the window
+        // itself: a viewport cannot show more rows than the window has room
+        // for. That costs a few rows more than the view needs on a short list
+        // area, and it can never leave the view blank.
+        let viewport_h = self
+            .eval_px_prop(sv_attrs, "height")
+            .unwrap_or(self.viewport.1);
         let (_, offset_y) = self.resolve_axis_pair(sv_attrs, "offset", (0.0, 0.0));
 
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -315,7 +332,7 @@ impl Interpreter {
             AttrKind::Prop { value } if a.name.as_str() == "snap_spring" => Some(value),
             _ => None,
         })?;
-        match crate::interp::anim::resolve_curve(value) {
+        match crate::interp::anim::resolve_curve_in(value, Some(&self.theme)) {
             Ok(curve) => Some(pack_curve(curve)),
             Err(e) => {
                 self.errors.push(e);

@@ -245,6 +245,31 @@ mod tests {
     }
 
     #[test]
+    fn a_weight_read_from_a_parameter_is_not_a_keyword_error() {
+        let errs =
+            check_source("View K(w: Int) { Text(\"a\") #[weight: w] }\nView Main() { K(w: 700) }");
+        assert!(errs.is_empty(), "{errs:?}");
+        // The same in a view that is not the root, through a `let`, a `var`
+        // and a loop variable, and in a view whose parameter is spelt like a
+        // keyword.
+        let errs = check_source(
+            "View Inner(w: Int) { let k = w\n var v = 300\n Column {\n\
+             Text(\"a\") #[weight: k]\n Text(\"b\") #[weight: v]\n\
+             for x in [400, 700] { Text(\"c\") #[weight: x] } } }\n\
+             View Mid(bold: Int) { Text(\"d\") #[weight: bold] }\n\
+             View Main() { Column { Inner(w: 500) Mid(bold: 200) } }",
+        );
+        assert!(errs.is_empty(), "{errs:?}");
+        // A word nobody binds is still a misspelt keyword.
+        let errs = check_source("View Main() { Text(\"a\") #[weight: bld] }");
+        assert!(
+            errs.iter()
+                .any(|e| matches!(e, CompileError::AttributeTypeMismatch { .. })),
+            "{errs:?}"
+        );
+    }
+
+    #[test]
     fn bad_attr_is_reported() {
         let errs = check_source("View Main() { Column #[bogus: 1] {} }");
         assert!(
@@ -293,5 +318,182 @@ mod tests {
             )),
             "{errs:?}"
         );
+    }
+
+    // The cases below are code that is not on screen when the program starts.
+    // Lowering is lazy for it, so `check` used to say `0 errors` for all of it.
+
+    fn unknown_views(src: &str) -> Vec<String> {
+        check_source(src)
+            .iter()
+            .filter_map(|e| match e {
+                CompileError::UnknownView { name, .. } => Some(name.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_tab_that_is_not_active_is_checked() {
+        let found = unknown_views(
+            "View Main() { var tab = \"a\"
+                NavHost(active: tab) { tab \"a\" { Text(\"x\") }  tab \"b\" { Bogus() } } }",
+        );
+        assert_eq!(found, ["Bogus"]);
+    }
+
+    #[test]
+    fn a_route_the_initial_path_misses_is_checked() {
+        let found = unknown_views(
+            "View Main() { var p = \"/\"
+                NavStack(path: p) { route \"/\" { Text(\"x\") }
+                    route \"/x/:id\" {|params| Bogus2() } } }",
+        );
+        assert_eq!(found, ["Bogus2"]);
+    }
+
+    #[test]
+    fn both_arms_of_a_when_that_starts_false_are_checked() {
+        let mut found = unknown_views(
+            "View Main() { var on = false
+                when on { Bogus3() } else { Text(\"x\") }
+                when on { Text(\"y\") } else { Bogus4() } }",
+        );
+        found.sort();
+        assert_eq!(found, ["Bogus3", "Bogus4"]);
+    }
+
+    #[test]
+    fn a_when_inside_a_when_is_checked() {
+        let found = unknown_views(
+            "View Main() { var on = false
+                when on { when on { Text(\"a\") } else { when on { Bogus5() } } } }",
+        );
+        assert_eq!(found, ["Bogus5"]);
+    }
+
+    #[test]
+    fn the_body_of_a_for_over_a_list_that_has_not_loaded_is_checked() {
+        let errs = check_source(
+            "View Main() { var xs: List<Int> = []
+                for x in xs { Text(x) #[bogus: 1] } }",
+        );
+        assert!(
+            errs.iter()
+                .any(|e| matches!(e, CompileError::UnknownAttribute { .. })),
+            "{errs:?}"
+        );
+    }
+
+    #[test]
+    fn a_view_used_only_inside_an_inactive_tab_is_checked_with_its_arguments() {
+        let errs = check_source(
+            "View Detail(id: Str) { Text(id) }
+             View Main() { var tab = \"a\"
+                NavHost(active: tab) { tab \"a\" { Text(\"x\") }
+                    tab \"b\" { Detail(id: \"1\", extra: 2) } } }",
+        );
+        assert!(
+            errs.iter()
+                .any(|e| matches!(e, CompileError::UnknownParam { .. })),
+            "{errs:?}"
+        );
+        let errs = check_source(
+            "View Detail(id: Str) { Text(id) }
+             View Main() { var on = false
+                when on { Detail() } }",
+        );
+        assert!(
+            errs.iter()
+                .any(|e| matches!(e, CompileError::MissingParam { .. })),
+            "{errs:?}"
+        );
+    }
+
+    fn view_call_action_messages(src: &str) -> Vec<String> {
+        check_source(src)
+            .iter()
+            .filter(|e| e.kind() == "ViewCallAction")
+            .map(CompileError::headline)
+            .collect()
+    }
+
+    #[test]
+    fn a_trailing_action_on_a_view_call_is_an_error_naming_the_callback() {
+        let found = view_call_action_messages(
+            "View Comp(label: Str, on_tap: Fn() = {}) { Box #[tap => on_tap()] { Text(label) } }
+             View Main() { var a = 0
+                Column { Comp(\"one\") => a++ } }",
+        );
+        assert_eq!(
+            found,
+            ["`Comp` takes no trailing action; pass it as `on_tap: { … }`"]
+        );
+    }
+
+    #[test]
+    fn a_trailing_action_on_a_view_without_one_callback_says_how_to_declare_it() {
+        let found = view_call_action_messages(
+            "View Comp(label: Str) { Text(label) }
+             View Main() { var a = 0
+                Column { Comp(\"one\") => a++ } }",
+        );
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(found[0].contains("on_tap: Fn() = {}"), "{found:?}");
+        // Two `Fn()` parameters: it cannot pick one.
+        let found = view_call_action_messages(
+            "View Comp(on_a: Fn() = {}, on_b: Fn() = {}) { Text(\"x\") }
+             View Main() { var a = 0
+                Column { Comp() => a++ } }",
+        );
+        assert!(found[0].contains("Fn() = {}"), "{found:?}");
+    }
+
+    #[test]
+    fn an_event_handler_on_a_view_call_is_an_error() {
+        let found = view_call_action_messages(
+            "View Comp(label: Str, on_tap: Fn() = {}) { Box #[tap => on_tap()] { Text(label) } }
+             View Main() { var a = 0
+                Column { Comp(\"one\") #[tap => a++] } }",
+        );
+        assert_eq!(
+            found,
+            ["`Comp` takes no `tap` handler; pass it as `on_tap: { … }`"]
+        );
+    }
+
+    #[test]
+    fn a_trailing_action_on_an_intrinsic_and_a_callback_argument_are_fine() {
+        let errs = check_source(
+            "View Comp(label: Str, on_tap: Fn() = {}) { Button(label) => on_tap() }
+             View Main() { var a = 0
+                Column { Button(\"x\") => a++
+                    Comp(\"one\", on_tap: { a++ })
+                    Box #[tap => a++] { Text(\"y\") } } }",
+        );
+        assert!(errs.is_empty(), "{errs:?}");
+    }
+
+    #[test]
+    fn a_routes_params_and_path_are_in_scope_in_every_route() {
+        let errs = check_source(
+            "View Detail(id: Str) { Text(id) }
+             View Main() { var p = \"/\"
+                NavStack(path: p) { route \"/\" { Text(\"x\") }
+                    route \"/x/:id\" {|params| Detail(id: params.id)
+                        Detail(id: route.params.id) Text(route.path) } } }",
+        );
+        assert!(errs.is_empty(), "{errs:?}");
+    }
+
+    #[test]
+    fn a_for_body_and_a_recursive_view_are_checked_once_and_end() {
+        // The offline pass visits each distinct body once, so a view that
+        // contains itself under a `when` neither loops nor reports twice.
+        let found = unknown_views(
+            "View Tree(n: Int) { when n > 0 { Tree(n: n - 1) Bogus6() } }
+             View Main() { Tree(n: 0) }",
+        );
+        assert_eq!(found, ["Bogus6"]);
     }
 }

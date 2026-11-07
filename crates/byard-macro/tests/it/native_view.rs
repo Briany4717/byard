@@ -169,3 +169,27 @@ fn a_view_declares_its_accessibility_role_and_is_a_group_otherwise() {
     assert_eq!(<Gauge as NativeViewMeta>::INFO.name, "Gauge");
     assert_eq!(<Chart as NativeViewMeta>::ACCESS_ROLE, AccessRole::Group);
 }
+
+#[byard::native_view]
+#[derive(Default)]
+struct Meter {
+    #[prop]
+    max_value: f32,
+    #[event]
+    value_change: (),
+}
+
+impl NativeView for Meter {
+    fn render(&mut self, _layout: Layout, _cx: &mut RenderCtx<'_>) {}
+}
+
+#[test]
+fn props_and_events_keep_their_snake_case_names() {
+    // Attributes and events are snake_case in Byld (`row_height`, `key_down`).
+    let info = <Meter as NativeViewMeta>::INFO;
+    assert_eq!(info.props[0].name, "max_value");
+    assert_eq!(info.events, &["value_change"]);
+    let mut meter = Meter::default();
+    meter.set_prop("max_value", &HostValue::Float(4.0));
+    assert!((meter.max_value - 4.0).abs() < f32::EPSILON);
+}

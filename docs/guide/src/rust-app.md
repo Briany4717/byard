@@ -38,7 +38,7 @@ write `byard = { version = "0.1", default-features = false }`.
 
 ## What you can set
 
-Every step is a method on `App`, chained before `run`:
+Every step is a method on `App`, chained before `run`, in any order:
 
 | Method | Does |
 |--------|------|
@@ -62,13 +62,15 @@ executable's name. Set it when the binary might be renamed, or shipped under sev
 and its data should follow the app and not the file:
 
 ```rust,ignore,excerpt
+const APP_ID: &str = "dev.byard.controller-demo";
 byard::App::new(env!("CARGO_MANIFEST_DIR"))
-    .app_id("dev.byard.controller-demo")
+    .app_id(APP_ID)
     .run()
 ```
 
 It is a decision about data, which is why it is separate from the title. Changing it points
-the app at a different store.
+the app at a different store. Where that data lives on disk is `byard::data_dir(app_id)`, see
+[controllers](rust-controllers.md#the-apps-data-directory).
 
 ### `hot_reload`
 
@@ -120,8 +122,9 @@ of real time and drawn into a PNG. Calls to controllers are really made, and the
 applied, so a screen that loads data shows the data. `Shot::after(ms)` says how long to run. The
 plan can also script what happens first: `.tap(x, y)` opens the screen you want, `.wait(ms)` waits
 for what a tap started, `.drag(from, to, frames)` pans or scrolls, `.system_dark(true)` reports a
-dark system appearance to an app whose theme follows it, and `.trace(path)` writes a trace of the
-run.
+dark system appearance to an app whose theme follows it, `.now("2026-11-05T09:00:00")` fixes the
+clock `now()` reads (the same as `byard shot --now`, and app time still advances it), and
+`.trace(path)` writes a trace of the run.
 
 Because it needs no window, it runs in a test:
 

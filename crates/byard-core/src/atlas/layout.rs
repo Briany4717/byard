@@ -161,6 +161,8 @@ impl LayoutFingerprint {
     fn container(&mut self, s: &ContainerStyle) -> &mut Self {
         self.opt_f32(s.width)
             .opt_f32(s.height)
+            .opt_f32(s.min_width)
+            .opt_f32(s.min_height)
             .u8(s.direction as u8)
             .f32(s.gap)
             .spacing(s.padding)
@@ -168,6 +170,7 @@ impl LayoutFingerprint {
             .u8(s.align as u8)
             .u8(s.justify as u8)
             .f32(s.grow)
+            .opt_f32(s.basis)
             .bool(s.scroll_x)
             .bool(s.scroll_y)
             .bool(s.absolute)
@@ -301,6 +304,69 @@ pub struct TextLeaf {
     pub fallback: (f32, f32),
 }
 
+/// The box a `Text` leaf takes part in layout with, beyond its content: what
+/// an element in a `Row` or `Column` needs (`grow`, `height`,
+/// padding and margin). The all-default value is "no box", the plain leaf a
+/// `Text` with none of these attributes always was, and it adds nothing to the
+/// node's style or its fingerprint.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct TextBox {
+    /// Explicit height in logical px; `None` is the height of the text.
+    pub height: Option<f32>,
+    /// Flex-grow factor along the parent's main axis.
+    pub grow: f32,
+    /// The main-axis size the leaf starts from before `grow` shares out what
+    /// is left; `None` is its own size, as for any flex item.
+    pub basis: Option<f32>,
+    /// Space inside the leaf, around the glyphs. A leaf's `width` and
+    /// `height` include it, as a box's do.
+    pub padding: Spacing,
+    /// Space around the leaf.
+    pub margin: Spacing,
+}
+
+impl TextBox {
+    fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// Lays this box over `style`. A default box leaves `style` untouched.
+    fn apply(&self, style: &mut Style) {
+        if self.is_default() {
+            return;
+        }
+        if let Some(h) = self.height {
+            style.size.height = Dimension::from_length(h);
+        }
+        style.flex_grow = self.grow;
+        if let Some(b) = self.basis {
+            style.flex_basis = Dimension::from_length(b.max(0.0));
+        }
+        style.padding = TaffyRect {
+            left: LengthPercentage::from_length(self.padding.left),
+            right: LengthPercentage::from_length(self.padding.right),
+            top: LengthPercentage::from_length(self.padding.top),
+            bottom: LengthPercentage::from_length(self.padding.bottom),
+        };
+        style.margin = TaffyRect {
+            left: LengthPercentageAuto::length(self.margin.left),
+            right: LengthPercentageAuto::length(self.margin.right),
+            top: LengthPercentageAuto::length(self.margin.top),
+            bottom: LengthPercentageAuto::length(self.margin.bottom),
+        };
+    }
+
+    fn fingerprint(&self, fp: &mut LayoutFingerprint) {
+        if self.is_default() {
+            return;
+        }
+        fp.opt_f32(self.height).f32(self.grow).opt_f32(self.basis);
+        for s in [self.padding, self.margin] {
+            fp.f32(s.top).f32(s.right).f32(s.bottom).f32(s.left);
+        }
+    }
+}
+
 /// 2-D alignment of a `ZStack`'s children within the stack rect (RFC-0018
 /// `Align2D`). The first word is the block (vertical) edge, the second the
 /// inline (horizontal) edge; the single-edge tokens centre on the other axis.
@@ -370,6 +436,47 @@ pub enum Align {
     Stretch,
 }
 
+impl Align {
+    fn to_taffy(self) -> AlignItems {
+        match self {
+            Self::Start => AlignItems::FlexStart,
+            Self::Center => AlignItems::Center,
+            Self::End => AlignItems::FlexEnd,
+            Self::Stretch => AlignItems::Stretch,
+        }
+    }
+}
+
+/// What a single flex child says about itself, over what its parent and its
+/// own kind decide: `shrink` and `align_self`. The all-default value says
+/// nothing and costs nothing. See [`LayoutAtlas::set_flex_item`].
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct FlexItem {
+    /// Flex-shrink factor along the parent's main axis. `None` keeps what the
+    /// node has (1, taffy's own default, for most nodes).
+    pub shrink: Option<f32>,
+    /// This child's cross-axis alignment, overriding the parent's `align`.
+    /// `None` follows the parent.
+    pub align_self: Option<Align>,
+}
+
+impl FlexItem {
+    /// Whether this item says nothing.
+    #[must_use]
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// The style values a [`FlexItem`] overrode, kept so removing the override puts
+/// the node back as it was built.
+#[derive(Debug, Clone, Copy)]
+struct FlexItemEntry {
+    item: FlexItem,
+    base_shrink: f32,
+    base_align_self: Option<AlignItems>,
+}
+
 /// Main-axis distribution of a flex container's children.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Justify {
@@ -421,6 +528,12 @@ pub struct ContainerStyle {
     /// Flex-grow factor (how much this node expands to fill its parent's main
     /// axis).
     pub grow: f32,
+    /// Flex-basis in logical pixels: the size along the parent's main axis
+    /// before `grow` hands out the free space (CSS `flex-basis`). `None` is
+    /// `auto`, the node's content, and costs nothing. A container may declare
+    /// it with `basis`; a growing `ScrollView` sets it to `0`, so what it
+    /// holds does not decide how much room it asks its parent for.
+    pub basis: Option<f32>,
     /// Whether this is a **horizontal scroll container** (RFC-0005 `ScrollView`
     /// `axis: horizontal|both`): content is measured at natural width and
     /// overflows the fixed viewport on the inline axis (Taffy `overflow.x =
@@ -503,6 +616,13 @@ impl ContainerStyle {
         self
     }
 
+    /// Sets the flex-basis, `None` for `auto`.
+    #[must_use]
+    pub fn with_basis(mut self, basis: Option<f32>) -> Self {
+        self.basis = basis;
+        self
+    }
+
     /// Sets the flex-grow factor.
     #[must_use]
     pub fn with_grow(mut self, grow: f32) -> Self {
@@ -564,12 +684,7 @@ impl ContainerStyle {
                 top: LengthPercentageAuto::length(self.margin.top),
                 bottom: LengthPercentageAuto::length(self.margin.bottom),
             },
-            align_items: Some(match self.align {
-                Align::Start => AlignItems::FlexStart,
-                Align::Center => AlignItems::Center,
-                Align::End => AlignItems::FlexEnd,
-                Align::Stretch => AlignItems::Stretch,
-            }),
+            align_items: Some(self.align.to_taffy()),
             justify_content: Some(match self.justify {
                 Justify::Start => JustifyContent::FlexStart,
                 Justify::Center => JustifyContent::Center,
@@ -579,6 +694,9 @@ impl ContainerStyle {
                 Justify::Evenly => JustifyContent::SpaceEvenly,
             }),
             flex_grow: self.grow,
+            flex_basis: self
+                .basis
+                .map_or_else(Dimension::auto, |b| Dimension::from_length(b.max(0.0))),
             // RFC-0017 overlay layer: an absolute node leaves its parent's flex
             // flow and is pinned to the containing block's edges (inset 0), so it
             // stretches to fill the viewport and stacks over siblings without
@@ -994,6 +1112,8 @@ pub struct LayoutAtlas {
     /// Explicit grid placements, so a retained build can tell a re-application
     /// of the same placement (skip) from a real change (restyle + mark).
     grid_items: rustc_hash::FxHashMap<NodeId, GridItemPlacement>,
+    /// Per-child `shrink` / `align_self` overrides and the values they replaced.
+    flex_items: rustc_hash::FxHashMap<NodeId, FlexItemEntry>,
     /// Nodes whose style was rewritten during the current retained build,
     /// [`Self::set_grid_item`] must re-apply its placement on top of a
     /// rewritten style even when the placement itself did not change.
@@ -1051,6 +1171,7 @@ impl LayoutAtlas {
             node_kinds: Vec::new(),
             layout_fingerprints: Vec::new(),
             grid_items: rustc_hash::FxHashMap::default(),
+            flex_items: rustc_hash::FxHashMap::default(),
             restyled: rustc_hash::FxHashSet::default(),
             retained: None,
             layout_dirty: Vec::new(),
@@ -1114,6 +1235,7 @@ impl LayoutAtlas {
         self.node_kinds.clear();
         self.layout_fingerprints.clear();
         self.grid_items.clear();
+        self.flex_items.clear();
         self.restyled.clear();
         self.retained = None;
         self.layout_dirty.clear();
@@ -1379,6 +1501,35 @@ impl LayoutAtlas {
         self.place(NodeKind::Leaf, fp.finish(), style, &[], None)
     }
 
+    /// Adds a leaf of a given `height` with no width of its own: it takes the
+    /// width the way a box with no `width` does, a stretch across a column and a
+    /// share of the free space (`grow`) in a row. A text field written with
+    /// `grow: 1` and no `width` is this, so it has no wide size to squeeze its
+    /// neighbours with.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the atlas is in the `Computed` state.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AtlasError::Backend`] if the backend refuses the node.
+    pub fn add_fill_leaf(&mut self, height: f32, grow: f32) -> Result<AtlasNodeId, AtlasError> {
+        self.assert_building("add_fill_leaf");
+        let style = Style {
+            size: Size {
+                width: Dimension::auto(),
+                height: Dimension::from_length(height),
+            },
+            flex_grow: grow.max(0.0),
+            flex_shrink: 0.0,
+            ..Default::default()
+        };
+        let mut fp = LayoutFingerprint::new(NodeKind::Leaf);
+        fp.f32(height).f32(grow.max(0.0)).u8(1);
+        self.place(NodeKind::Leaf, fp.finish(), style, &[], None)
+    }
+
     /// Adds a **flexible leaf**, a node with no intrinsic size that absorbs the
     /// free space of its parent's main axis (RFC-0005 `Spacer`: "flexible gap",
     /// `grow` / `basis`).
@@ -1426,15 +1577,35 @@ impl LayoutAtlas {
     ///
     /// Returns [`AtlasError::Backend`] if the backend refuses the node.
     pub fn add_text_leaf(&mut self, spec: TextLeaf) -> Result<AtlasNodeId, AtlasError> {
+        self.add_text_leaf_boxed(spec, TextBox::default())
+    }
+
+    /// [`add_text_leaf`](Self::add_text_leaf) for a `Text` that also carries
+    /// layout attributes (`grow`, `height`, `p`, `m`, ...). A default `boxed`
+    /// is exactly `add_text_leaf`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the atlas is in the `Computed` state.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AtlasError::Backend`] if the backend refuses the node.
+    pub fn add_text_leaf_boxed(
+        &mut self,
+        spec: TextLeaf,
+        boxed: TextBox,
+    ) -> Result<AtlasNodeId, AtlasError> {
         self.assert_building("add_text_leaf");
 
-        let style = Style {
+        let mut style = Style {
             size: Size {
                 width: spec.width.map_or(Dimension::auto(), Dimension::from_length),
                 height: Dimension::auto(),
             },
             ..Default::default()
         };
+        boxed.apply(&mut style);
 
         // **Text content is layout-class** (RFC-0032 §R2), the single most
         // important row of that table. It is what lets a clean text leaf skip
@@ -1457,7 +1628,58 @@ impl LayoutAtlas {
             .opt_f32(spec.width)
             .f32(spec.fallback.0)
             .f32(spec.fallback.1);
+        boxed.fingerprint(&mut fp);
         self.place(NodeKind::TextLeaf, fp.finish(), style, &[], Some(spec))
+    }
+
+    /// Adds a **single-line `Text` leaf** of a fixed size (`wrap: false`): the
+    /// run is not reshaped to the width it is given, so `size` is the leaf's
+    /// size whatever the text measures, and the text is clipped at the leaf's
+    /// edge by the paint pass. `boxed` is as for
+    /// [`add_text_leaf_boxed`](Self::add_text_leaf_boxed); `size` includes its
+    /// padding.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the atlas is in the `Computed` state.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AtlasError::Backend`] if the backend refuses the node.
+    pub fn add_fixed_text_leaf(
+        &mut self,
+        size: LeafSize,
+        boxed: TextBox,
+    ) -> Result<AtlasNodeId, AtlasError> {
+        self.assert_building("add_fixed_text_leaf");
+        let mut style = Style {
+            size: Size {
+                width: Dimension::from_length(size.width),
+                height: Dimension::from_length(size.height),
+            },
+            ..Default::default()
+        };
+        boxed.apply(&mut style);
+        let mut fp = LayoutFingerprint::new(NodeKind::Leaf);
+        fp.f32(size.width).f32(size.height);
+        boxed.fingerprint(&mut fp);
+        self.place(NodeKind::Leaf, fp.finish(), style, &[], None)
+    }
+
+    /// The padding a node was laid out with, `Spacing::default()` for a node
+    /// that has none or is unknown. The paint pass reads it to place a `Text`'s
+    /// glyphs inside its padding.
+    #[must_use]
+    pub fn padding_of(&self, node: AtlasNodeId) -> Spacing {
+        self.tree.layout(node.node_id).map_or_else(
+            |_| Spacing::default(),
+            |l| Spacing {
+                top: l.padding.top,
+                right: l.padding.right,
+                bottom: l.padding.bottom,
+                left: l.padding.left,
+            },
+        )
     }
 
     /// Adds a container node that wraps the given children.
@@ -1634,6 +1856,77 @@ impl LayoutAtlas {
             .map_err(|e| AtlasError::from_taffy(&e))?;
         let changed = self.grid_items.insert(node.node_id, placement) != Some(placement);
         if self.retained.is_some() && changed {
+            if let Some(index) = self.nodes_by_index.iter().position(|n| *n == node) {
+                self.mark_layout_dirty(index, node);
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether any node carries a [`FlexItem`] override from the build before.
+    #[must_use]
+    pub fn has_flex_items(&self) -> bool {
+        !self.flex_items.is_empty()
+    }
+
+    /// Lays a child's own `shrink` and `align_self` over the style it was built
+    /// with (`shrink: 0` keeps a fixed-size child from being squeezed;
+    /// `align_self` places it on the cross axis whatever the parent's `align`
+    /// says). A default `item` on a node that never had one does nothing, so an
+    /// element that writes neither costs nothing. Giving a default `item` to a
+    /// node that had one puts the built values back.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the atlas is in the `Computed` state.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AtlasError::ForeignNode`] if `node` came from another atlas, or
+    /// [`AtlasError::Backend`] if the backend rejects the restyle.
+    pub fn set_flex_item(&mut self, node: AtlasNodeId, item: FlexItem) -> Result<(), AtlasError> {
+        self.assert_building("set_flex_item");
+        self.validate_node(node)?;
+        let had = self.flex_items.get(&node.node_id).copied();
+        if item.is_default() && had.is_none() {
+            return Ok(());
+        }
+        // The same retained-build rule as `set_grid_item`: re-applying an
+        // unchanged item must not mark the node dirty, but a node whose style
+        // was rewritten this build lost the override and needs it again.
+        let restyled = self.restyled.contains(&node.node_id);
+        if self.retained.is_some() && !restyled && had.is_some_and(|e| e.item == item) {
+            return Ok(());
+        }
+        let mut style = self
+            .tree
+            .style(node.node_id)
+            .map_err(|e| AtlasError::from_taffy(&e))?
+            .clone();
+        let (base_shrink, base_align_self) = match had {
+            Some(e) if !restyled => (e.base_shrink, e.base_align_self),
+            _ => (style.flex_shrink, style.align_self),
+        };
+        style.flex_shrink = item.shrink.map_or(base_shrink, |s| s.max(0.0));
+        style.align_self = item
+            .align_self
+            .map_or(base_align_self, |a| Some(a.to_taffy()));
+        self.tree
+            .set_style(node.node_id, style)
+            .map_err(|e| AtlasError::from_taffy(&e))?;
+        if item.is_default() {
+            self.flex_items.remove(&node.node_id);
+        } else {
+            self.flex_items.insert(
+                node.node_id,
+                FlexItemEntry {
+                    item,
+                    base_shrink,
+                    base_align_self,
+                },
+            );
+        }
+        if self.retained.is_some() && !restyled {
             if let Some(index) = self.nodes_by_index.iter().position(|n| *n == node) {
                 self.mark_layout_dirty(index, node);
             }

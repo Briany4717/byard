@@ -333,17 +333,17 @@ fn keyframe_pairs_interpolate_component_wise() {
 
 #[test]
 fn a_keyframe_segment_uses_its_own_easing() {
-    // Same two-segment shape, but the first arrives with `ease_out`: at the
+    // Same two-segment shape, but the first arrives with `easeOut`: at the
     // quarter mark it must be further along than the linear version.
     let linear = "View V() { Box #[bg: 0x808080, width: 10, height: 10, \
                       translate: anim.keyframes(0%: 0, 50%: 100, 100%: 0, duration: 400ms)] }";
     let eased = "View V() { Box #[bg: 0x808080, width: 10, height: 10, \
-                     translate: anim.keyframes(0%: 0, 50%: 100 ease_out, 100%: 0, \
+                     translate: anim.keyframes(0%: 0, 50%: 100 easeOut, 100%: 0, \
                      duration: 400ms)] }";
     let at_quarter = |src: &str| sample_over_time(src, &[0, 100], translate_x)[1].0;
     assert!(
         at_quarter(eased) > at_quarter(linear) + 10.0,
-        "ease_out leads linear: {} vs {}",
+        "easeOut leads linear: {} vs {}",
         at_quarter(eased),
         at_quarter(linear)
     );
@@ -1127,4 +1127,371 @@ fn opacity_dims_descendant_text_not_only_the_background() {
         (effective - 0.4).abs() < 1e-3,
         "label should reach the screen at the 0.4 opacity, got {effective}"
     );
+}
+
+// ── One view, several call sites ─────────────────────────────────────────
+//
+// A view is written once, so every call of it shares the source span of each
+// `with` inside it. Animation state keyed on the span alone gave every call
+// one `Motion`: the calls retargeted it in turn, every frame, and the last one
+// won. Only a `for` row had an identity of its own. These tests call one view
+// from several places with different targets and ask each to reach its own.
+
+/// A fresh interpreter with `Main` lowered, the clock at 0 and one render done.
+fn start(src: &str) -> (Interpreter, Vec<RenderNode>) {
+    let (mut interp, tree) = lower_named(src, "Main");
+    assert!(interp.errors().is_empty(), "{:?}", interp.errors());
+    interp.tick();
+    let mut here = Probe { interp, tree };
+    here.frame(0);
+    (here.interp, here.tree)
+}
+
+struct Probe {
+    interp: Interpreter,
+    tree: Vec<RenderNode>,
+}
+
+impl Probe {
+    fn frame(&mut self, ms: u32) -> byard_core::frame::RenderFrame {
+        self.interp.tick();
+        self.interp.set_now_ms(ms);
+        let mut frame = byard_core::frame::RenderFrame::new();
+        self.interp.render(&self.tree, &mut frame, 400.0, 400.0);
+        frame
+    }
+
+    fn xs(&mut self, ms: u32) -> Vec<f32> {
+        self.frame(ms)
+            .instances()
+            .iter()
+            .map(|b| b.transform.translate[0])
+            .collect()
+    }
+}
+
+fn probe(src: &str) -> Probe {
+    let (interp, tree) = start(src);
+    Probe { interp, tree }
+}
+
+fn near(got: &[f32], want: &[f32], what: &str) {
+    assert_eq!(got.len(), want.len(), "{what}: {got:?}");
+    for (g, w) in got.iter().zip(want) {
+        assert!((g - w).abs() < 3.0, "{what}: wanted {want:?}, got {got:?}");
+    }
+}
+
+const SLIDER: &str = "View Slide(to: Int) { \
+    Box #[bg: 0x808080, width: 10, height: 10, \
+          translate: (to, 0) with anim.linear(200ms, from: 0)] {} }";
+
+#[test]
+fn two_calls_of_one_view_each_reach_their_own_target() {
+    let mut p = probe(&format!(
+        "View Main() {{ Column {{ Slide(to: 40) Slide(to: 200) }} }} {SLIDER}"
+    ));
+    near(&p.xs(100), &[20.0, 100.0], "halfway, each toward its own");
+    near(&p.xs(400), &[40.0, 200.0], "each arrived at its own");
+    assert!(!p.interp.has_active_animations());
+}
+
+#[test]
+fn three_calls_do_not_let_the_last_one_win() {
+    let mut p = probe(&format!(
+        "View Main() {{ Column {{ Slide(to: 100) Slide(to: 20) Slide(to: 100) }} }} {SLIDER}"
+    ));
+    near(
+        &p.xs(100),
+        &[50.0, 10.0, 50.0],
+        "the middle call has its own",
+    );
+    near(&p.xs(400), &[100.0, 20.0, 100.0], "and arrives at its own");
+}
+
+#[test]
+fn calls_in_different_branches_and_rows_are_different_instances() {
+    let mut p = probe(&format!(
+        "View Main() {{ var on = true \
+             Column {{ Row {{ Slide(to: 40) }} \
+                       when on {{ Row {{ Slide(to: 200) }} }} \
+                       Slide(to: 80) }} }} {SLIDER}"
+    ));
+    near(&p.xs(100), &[20.0, 100.0, 40.0], "each its own");
+    near(&p.xs(400), &[40.0, 200.0, 80.0], "arrived");
+}
+
+#[test]
+fn a_view_used_inside_other_views_animates_per_outer_call() {
+    // `Slide` is called once from each `Wrap` and once straight from `Main`:
+    // three instances reached by three different call paths.
+    let mut p = probe(&format!(
+        "View Main() {{ Column {{ Wrap(to: 40) Wrap(to: 200) Slide(to: 120) }} }} \
+         View Wrap(to: Int) {{ Column {{ Slide(to: to) }} }} {SLIDER}"
+    ));
+    near(&p.xs(100), &[20.0, 100.0, 60.0], "halfway");
+    near(&p.xs(400), &[40.0, 200.0, 120.0], "arrived");
+}
+
+#[test]
+fn a_view_with_a_row_inside_keeps_rows_and_calls_apart() {
+    let mut p = probe(
+        "View Main() { Column { Rows(a: 40) Rows(a: 160) } } \
+         View Rows(a: Int) { Column { for k in [1, 2] { \
+             Box #[bg: 0x808080, width: 10, height: 10, \
+                   translate: (a * k, 0) with anim.linear(200ms, from: 0)] {} } } }",
+    );
+    near(
+        &p.xs(100),
+        &[20.0, 40.0, 80.0, 160.0],
+        "four boxes, four goals",
+    );
+    near(&p.xs(400), &[40.0, 80.0, 160.0, 320.0], "arrived");
+}
+
+#[test]
+fn a_spring_in_a_called_view_settles_on_each_target() {
+    // The case as it was reported: a spring on `radius`, the middle call of
+    // three drawn with the last call's radius.
+    let mut p = probe(
+        "View Main() { Column { S(r: 20) S(r: 2) S(r: 20) } } \
+         View S(r: Int) { Box #[bg: 0x808080, width: 60, height: 30, \
+             radius: r with anim.spring()] {} }",
+    );
+    let radii = |p: &mut Probe, ms| -> Vec<f32> {
+        p.frame(ms).instances().iter().map(|b| b.radii[0]).collect()
+    };
+    radii(&mut p, 16);
+    let end = radii(&mut p, 20_000);
+    near(&end, &[20.0, 2.0, 20.0], "a spring each");
+    assert!(!p.interp.has_active_animations());
+}
+
+#[test]
+fn a_colour_in_a_called_view_is_its_own() {
+    let mut p = probe(
+        "View Main() { Column { C(c: 0xFF0000) C(c: 0x0000FF) } } \
+         View C(c: Int) { Box #[bg: c with anim.linear(100ms), width: 10, height: 10] {} }",
+    );
+    p.xs(0);
+    let frame = p.frame(1_000);
+    let reds: Vec<f32> = frame.instances().iter().map(|b| b.color[0]).collect();
+    assert!(reds[0] > 0.9 && reds[1] < 0.1, "got {reds:?}");
+}
+
+#[test]
+fn looping_calls_each_keep_their_own_clock() {
+    // Two spinners with different reach. They shared one `LoopClock`, so each
+    // frame the second found the first's endpoints, restarted the timeline,
+    // and both sat at the start for good.
+    let mut p = probe(
+        "View Main() { Column { Pulse(to: 100) Pulse(to: 300) } } \
+         View Pulse(to: Int) { Box #[bg: 0x808080, width: 10, height: 10, \
+             translate: (to, 0) with anim.linear(400ms, from: 0, repeat: infinite)] {} }",
+    );
+    near(&p.xs(100), &[25.0, 75.0], "a quarter in");
+    near(&p.xs(200), &[50.0, 150.0], "halfway");
+    near(&p.xs(500), &[25.0, 75.0], "second play");
+    assert!(p.interp.has_active_animations(), "loops never settle");
+}
+
+#[test]
+fn keyframes_in_a_called_view_are_per_call() {
+    let mut p = probe(
+        "View Main() { Column { K(to: 100) K(to: 300) } } \
+         View K(to: Int) { Box #[bg: 0x808080, width: 10, height: 10, \
+             translate: anim.keyframes(0%: (0, 0), 100%: (to, 0), duration: 400ms, \
+                                       repeat: infinite)] {} }",
+    );
+    near(&p.xs(200), &[50.0, 150.0], "halfway through");
+}
+
+#[test]
+fn a_stagger_in_a_called_view_offsets_each_call_by_its_index() {
+    let mut p = probe(
+        "View Main() { Column { Step(i: 0, to: 100) Step(i: 1, to: 300) Step(i: 2, to: 100) } } \
+         View Step(i: Int, to: Int) { Box #[bg: 0x808080, width: 10, height: 10, \
+             translate: (to, 0) with anim.stagger(linear(200ms, from: 0), 100ms, i)] {} }",
+    );
+    near(&p.xs(100), &[50.0, 0.0, 0.0], "only the first has moved");
+    near(&p.xs(200), &[100.0, 150.0, 0.0], "the wave advances");
+    near(&p.xs(1_000), &[100.0, 300.0, 100.0], "all arrived");
+}
+
+#[test]
+fn a_hovered_call_transitions_and_its_siblings_stay_put() {
+    // The hover transition is the base attribute's own animation, so a chip
+    // that is hovered eases while the other, which is not, must not.
+    let mut p = probe(
+        "View Main() { Column { Chip(n: 1) Chip(n: 2) } } \
+         View Chip(n: Int) { \
+             let s = style { radius: 4 with anim.linear(1000) on hover { radius: 20 } } \
+             Box #[..s, bg: 0x808080, width: 40, height: 40] {} }",
+    );
+    let radii = |p: &mut Probe, ms| -> Vec<f32> {
+        p.frame(ms).instances().iter().map(|b| b.radii[0]).collect()
+    };
+    near(&radii(&mut p, 10), &[4.0, 4.0], "at rest");
+    p.interp
+        .dispatch_events(&[byard_core::platform::InputEvent {
+            kind: byard_core::platform::EventKind::PointerMove,
+            pos: (10.0, 10.0),
+            delta: (0.0, 0.0),
+            payload: None,
+            time_ms: 0,
+            mods: byard_core::KeyModifiers::default(),
+        }]);
+    radii(&mut p, 20);
+    let mid = radii(&mut p, 520);
+    near(&mid, &[12.0, 4.0], "only the hovered chip is moving");
+    near(&radii(&mut p, 2_000), &[20.0, 4.0], "and arrives alone");
+}
+
+#[test]
+fn a_pressed_call_transitions_alone() {
+    let mut p = probe(
+        "View Main() { Column { Btn(n: 1) Btn(n: 2) } } \
+         View Btn(n: Int) { \
+             let s = style { scale: 1.0 with anim.linear(1000) on pressed { scale: 0.5 } } \
+             Box #[..s, bg: 0x808080, width: 40, height: 40, tap => {}] {} }",
+    );
+    let scales = |p: &mut Probe, ms| -> Vec<f32> {
+        p.frame(ms)
+            .instances()
+            .iter()
+            .map(|b| b.transform.scale[0])
+            .collect()
+    };
+    near(&scales(&mut p, 10), &[1.0, 1.0], "at rest");
+    p.interp
+        .dispatch_events(&[byard_core::platform::InputEvent {
+            kind: byard_core::platform::EventKind::PointerDown,
+            pos: (10.0, 10.0),
+            delta: (0.0, 0.0),
+            payload: None,
+            time_ms: 20,
+            mods: byard_core::KeyModifiers::default(),
+        }]);
+    scales(&mut p, 20);
+    let mid = scales(&mut p, 520);
+    assert!(
+        (mid[0] - 0.75).abs() < 0.05,
+        "the pressed one eases: {mid:?}"
+    );
+    assert!((mid[1] - 1.0).abs() < 0.01, "the other does not: {mid:?}");
+}
+
+#[test]
+fn a_canvas_morph_scalar_in_a_called_view_is_per_call() {
+    let mut p = probe(
+        "View Main() { Column { M(p: 0.0) M(p: 2.0) } } \
+         View M(p: Float) { Canvas #[width: 40, height: 40, morph: p with anim.linear(1000, from: 0.0)] { \
+             ngon(cx: 20, cy: 20, r: 16, n: 4, fill: 0x6750A4) \
+             ngon(cx: 20, cy: 20, r: 16, n: 6, fill: 0x6750A4) \
+             ngon(cx: 20, cy: 20, r: 16, n: 7, fill: 0x6750A4) } }",
+    );
+    let phase = |p: &mut Probe, ms| -> Vec<f32> {
+        p.frame(ms)
+            .canvas_shapes()
+            .iter()
+            .map(|s| s.group_param)
+            .collect()
+    };
+    let mid = phase(&mut p, 500);
+    assert!(
+        mid[0].abs() < 0.05 && (mid[1] - 1.0).abs() < 0.1,
+        "got {mid:?}"
+    );
+    let end = phase(&mut p, 2_000);
+    assert!(
+        end[0].abs() < 0.05 && (end[1] - 2.0).abs() < 0.05,
+        "got {end:?}"
+    );
+}
+
+#[test]
+fn a_called_view_inside_an_overlay_animates_per_call() {
+    let mut p = probe(&format!(
+        "View Main() {{ Column {{ Slide(to: 60) \
+             Overlay #[modal: false] {{ Slide(to: 120) Slide(to: 240) }} }} }} {SLIDER}"
+    ));
+    let mut xs = p.xs(100);
+    xs.sort_by(f32::total_cmp);
+    near(&xs, &[30.0, 60.0, 120.0], "halfway, each toward its own");
+    let mut xs = p.xs(400);
+    xs.sort_by(f32::total_cmp);
+    near(&xs, &[60.0, 120.0, 240.0], "arrived");
+}
+
+// ── Mount, unmount, reload ───────────────────────────────────────────────
+
+#[test]
+fn a_call_that_unmounts_and_mounts_again_starts_fresh_and_alone() {
+    // `Slide` twice: one always there, one inside a `when`. Hiding the branch
+    // must forget that instance's motion (a remount starts over, like its
+    // state does) and must not touch the other call's, which is the same view.
+    let mut p = probe(&format!(
+        "View Main() {{ var shown = true \
+             Column {{ Slide(to: 100) when shown {{ Slide(to: 200) }} }} }} {SLIDER}"
+    ));
+    near(&p.xs(100), &[50.0, 100.0], "both on their way");
+    near(&p.xs(400), &[100.0, 200.0], "both arrived");
+
+    let shown = p.interp.var_signal(&Symbol::intern("shown")).unwrap();
+    p.interp.write_var(shown, Value::Bool(false));
+    near(
+        &p.xs(500),
+        &[100.0],
+        "the other call stays where it arrived",
+    );
+    assert!(!p.interp.has_active_animations(), "and nothing is moving");
+
+    p.interp.write_var(shown, Value::Bool(true));
+    near(&p.xs(600), &[100.0, 0.0], "the remounted call starts over");
+    near(&p.xs(700), &[100.0, 100.0], "and runs from there");
+    near(&p.xs(900), &[100.0, 200.0], "and arrives");
+}
+
+#[test]
+fn a_view_unmounted_with_its_branch_forgets_what_it_called() {
+    // The animation lives in `Slide`, a view the branch only *calls*: its
+    // `with` is nowhere in the branch's source range, only its call is.
+    let mut p = probe(&format!(
+        "View Main() {{ var shown = true \
+             when shown {{ Slide(to: 200) }} }} {SLIDER}"
+    ));
+    near(&p.xs(400), &[200.0], "arrived");
+    let shown = p.interp.var_signal(&Symbol::intern("shown")).unwrap();
+    p.interp.write_var(shown, Value::Bool(false));
+    p.xs(500);
+    p.interp.write_var(shown, Value::Bool(true));
+    near(&p.xs(500), &[0.0], "a remount is a new start");
+}
+
+#[test]
+fn a_hot_reload_keeps_the_animations_of_the_instances_it_keeps() {
+    use crate::interp::reload::apply_program;
+    let before = parse(&format!(
+        "View Main() {{ Column #[gap: 4] {{ Slide(to: 100) Slide(to: 300) }} }} {SLIDER}"
+    ));
+    let mut interp = Interpreter::new();
+    interp.load_views(&before.views);
+    let known: Vec<&str> = before.views.iter().map(|v| v.name.as_str()).collect();
+    let tree = interp.lower_view(&before.views[0], &known);
+    let mut p = Probe { interp, tree };
+    p.frame(0);
+    near(&p.xs(100), &[50.0, 150.0], "halfway");
+
+    // The same program with one number changed in the root, which is lowered
+    // again (spans are what an edit leaves in place, so none of them moves).
+    let after = parse(&format!(
+        "View Main() {{ Column #[gap: 8] {{ Slide(to: 100) Slide(to: 300) }} }} {SLIDER}"
+    ));
+    p.tree = apply_program(&mut p.interp, &before.views, &after.views).expect("lowered again");
+    near(
+        &p.xs(120),
+        &[60.0, 180.0],
+        "it carries on, it does not restart",
+    );
+    near(&p.xs(400), &[100.0, 300.0], "and arrives");
 }

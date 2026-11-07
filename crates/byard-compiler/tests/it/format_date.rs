@@ -43,3 +43,17 @@ fn the_checker_knows_it() {
     );
     assert!(errors.contains("formatDate"), "a suggestion: {errors}");
 }
+
+#[test]
+fn seconds_are_a_token_and_a_z_is_accepted() {
+    // What `now()` and `nowUtc()` answer (RFC-0049).
+    assert_eq!(
+        shows("\"2026-11-05T14:03:12\".formatDate(\"HH:mm:ss\")"),
+        "14:03:12"
+    );
+    assert_eq!(
+        shows("\"2026-11-05T14:03:12Z\".formatDate(\"ddd D MMM HH:mm:ss\")"),
+        "Thu 5 Nov 14:03:12"
+    );
+    assert_eq!(shows("\"2026-11-05T14:03\".formatDate(\"ss\")"), "00");
+}

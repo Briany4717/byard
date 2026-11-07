@@ -11,7 +11,28 @@
 use super::layout::Pools;
 use super::{Interpreter, RenderNode, access};
 use crate::diagnostics::{CompileError, Span};
+use crate::interp::intrinsics::color_rgba_auto;
 use crate::parser::ast::{Attr, AttrKind, ElementNode, Expr, Member, ViewDecl};
+
+/// How opaque the theme's `scrim` colour is drawn over the page (the Material 3
+/// scrim opacity).
+const SCRIM_ALPHA: f32 = 0.32;
+
+impl Interpreter {
+    /// The colour a modal overlay dims the page with when it names none: the
+    /// active scheme's `scrim` role at [`SCRIM_ALPHA`], linear RGBA. A theme
+    /// without the role (it cannot be: `byard-base` has it) dims with black.
+    fn theme_scrim(&self) -> [f32; 4] {
+        let hex = self.theme.color("scrim", self.theme_is_dark()).unwrap_or(0);
+        let [r, g, b, _] = color_rgba_auto(hex);
+        [r, g, b, SCRIM_ALPHA]
+    }
+}
+
+/// Whether the overlay names its own `scrim:` colour.
+fn has_scrim_prop(attrs: &[Attr]) -> bool {
+    attrs.iter().any(|a| a.name.as_str() == "scrim")
+}
 
 /// One `Overlay`'s built layout (RFC-0017): its absolute wrapper node plus a
 /// per-child emission slot. Holds borrows into the frozen render tree, so its
@@ -32,6 +53,10 @@ struct OverlayChildSlot<'a> {
     node: &'a RenderNode,
     id: byard_core::atlas::layout::AtlasNodeId,
     flat_ids: Vec<byard_core::atlas::layout::AtlasNodeId>,
+    /// The `for` row and view instance the child belongs to, for the emission
+    /// pass, which runs away from where the child was written and starts from
+    /// none.
+    anim: super::animation::AnimSlot,
 }
 
 /// The absolute, inset-0 anchor wrapper style for an overlay child (RFC-0017
@@ -263,6 +288,7 @@ impl Interpreter {
                 node: child,
                 id: cid,
                 flat_ids: cflat,
+                anim: c.slot,
             });
         }
         self.anim_slot = enclosing;
@@ -376,6 +402,29 @@ impl Interpreter {
             self.env.truncate(env_base);
             let elem = self.atlas.node_index(ol.wrapper_id).unwrap_or(u32::MAX);
             self.router.push_modal_scrim(elem, viewport, dismiss);
+
+            // The scrim: the page under a dialog is dimmed. `scrim: <colour>`
+            // replaces the default (the theme's `scrim` at 32%, RFC-0053), and a fully
+            // transparent colour turns it off.
+            //
+            // A child that fills the viewport is the overlay's own scrim (the
+            // RFC-0017 way of writing one: a first child `Box #[grow: 1]`), so
+            // the default is not drawn over it, and a press on it is a press
+            // on the scrim.
+            let own_scrim = ol
+                .children
+                .iter()
+                .any(|slot| self.fills(slot, width, height));
+            let colour = self
+                .eval_color_prop(attrs, "scrim")
+                .map_or_else(|| self.theme_scrim(), color_rgba_auto);
+            if colour[3] > 0.0 && (!own_scrim || has_scrim_prop(attrs)) {
+                frame.push_instance(byard_core::BoxInstance {
+                    rect: [0.0, 0.0, width, height],
+                    color: colour,
+                    ..Default::default()
+                });
+            }
         }
 
         for slot in &ol.children {
@@ -389,6 +438,7 @@ impl Interpreter {
             transform.translate[1] += shift.1;
 
             let mut flat_idx = 0;
+            self.anim_slot = slot.anim;
             self.render_node_with_atlas(
                 slot.node,
                 slot.id,
@@ -404,6 +454,19 @@ impl Interpreter {
                 pools,
             );
 
+            // A press on the content is the content's, not the scrim's.
+            if modal && !self.fills(slot, width, height) {
+                if let Ok(Some(own)) = self.atlas.resolved_rect(slot.id) {
+                    self.router
+                        .keep_scrim_open_over(crate::interp::intrinsics::Rect::new(
+                            own.x + shift.0,
+                            own.y + shift.1,
+                            own.width,
+                            own.height,
+                        ));
+                }
+            }
+
             // RFC-0036 `on dismiss`: registered after the child has painted,
             // because the rects it keeps are the ones the child just landed
             // on.
@@ -412,6 +475,15 @@ impl Interpreter {
 
         self.access_leave(frame, dialog);
         frame.end_clip();
+    }
+
+    /// Whether an overlay child covers the whole viewport: a scrim written by
+    /// hand, not content.
+    fn fills(&self, slot: &OverlayChildSlot<'_>, width: f32, height: f32) -> bool {
+        matches!(
+            self.atlas.resolved_rect(slot.id),
+            Ok(Some(r)) if r.width >= width - 0.5 && r.height >= height - 0.5
+        )
     }
 
     /// Registers an anchored overlay child's `on dismiss` with the router

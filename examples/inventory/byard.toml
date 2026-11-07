@@ -1,0 +1,46 @@
+[project]
+name = "stockroom"
+entry = "src/main.byd"
+
+[bundle]
+name = "Stockroom"
+id = "dev.byard.stockroom"
+version = "0.1.0"
+categories = ["Office"]
+summary = "A small stock-keeping app: products, movements, low-stock alerts"
+license = "MIT OR Apache-2.0"
+
+[theme]
+name = "stockroom"
+scheme = "system"
+transition = 250
+seed = "#2F6FED"
+
+[theme.color.dark]
+background = "#0E1116"
+on_background = "#E6EAF0"
+surface = "#12161D"
+surface_container_low = "#161B23"
+surface_container = "#1B212B"
+surface_container_high = "#232A36"
+on_surface = "#E6EAF0"
+on_surface_variant = "#98A2B3"
+outline = "#3A4352"
+outline_variant = "#262D39"
+primary = "#7AA7FF"
+on_primary = "#0A1E44"
+primary_container = "#1B3768"
+on_primary_container = "#D6E4FF"
+secondary = "#F5B455"
+on_secondary = "#3A2600"
+tertiary = "#6FD6A4"
+on_tertiary = "#00391F"
+error = "#FF8A80"
+on_error = "#5C0B06"
+
+[theme.typography]
+headline = { size = 26, weight = "bold" }
+title = { size = 17, weight = "medium" }
+body = { size = 14, weight = "regular" }
+label = { size = 13, weight = "medium" }
+caption = { size = 12, weight = "regular" }

@@ -234,7 +234,8 @@ fn the_same_helper_twice_in_one_project_is_an_error() {
 
 #[test]
 fn file_level_state_is_still_not_a_thing() {
-    let program = resolve(&[("main.byd", "let shared = 1\nView Main() { Text(\"x\") }")]);
+    // A top-level `let` is a constant (RFC-0055); a `var` would be state.
+    let program = resolve(&[("main.byd", "var shared = 1\nView Main() { Text(\"x\") }")]);
     assert!(
         kinds(&program).contains(&"UnexpectedToken"),
         "{:?}",

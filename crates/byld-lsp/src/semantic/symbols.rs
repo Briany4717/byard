@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use byard_compiler::parser::ast::{UseDecl, ViewDecl};
+use byard_compiler::parser::ast::{ConstDecl, EnumDecl, UseDecl, ViewDecl};
 use byard_compiler::parser::parse;
 
 /// The exported views of every package the document's manifest declares.
@@ -13,6 +13,16 @@ pub struct PackageIndex {
     pub exports: HashMap<String, Vec<ViewDecl>>,
     /// Every declared dependency name (even unresolvable ones), for `use <TAB>` completions.
     pub declared: Vec<String>,
+    /// The name of the library package the document belongs to, when its
+    /// manifest is a `[package]`: the prefix it reaches its own views by.
+    pub own_package: Option<String>,
+    /// The file each exported view is declared in, parallel to `exports`.
+    pub files: HashMap<String, Vec<PathBuf>>,
+    /// Package name -> its public constants (RFC-0055); a private one is not
+    /// the consumer's to be offered.
+    pub consts: HashMap<String, Vec<ConstDecl>>,
+    /// Package name -> its public enums.
+    pub enums: HashMap<String, Vec<EnumDecl>>,
 }
 
 impl PackageIndex {
@@ -35,11 +45,18 @@ impl PackageIndex {
         let Ok(table) = src.parse::<toml::Table>() else {
             return Self::default();
         };
+        let mut index = Self::default();
+        if !table.contains_key("project") {
+            index.own_package = table
+                .get("package")
+                .and_then(|p| p.get("name"))
+                .and_then(|n| n.as_str())
+                .map(str::to_string);
+        }
         let Some(deps) = table.get("dependencies").and_then(|d| d.as_table()) else {
-            return Self::default();
+            return index;
         };
 
-        let mut index = Self::default();
         for (name, spec) in deps {
             index.declared.push(name.clone());
             let Some(rel) = spec.get("path").and_then(|p| p.as_str()) else {
@@ -52,8 +69,16 @@ impl PackageIndex {
                 root.clone()
             };
             let mut views = Vec::new();
-            collect_package_views(&scan, &mut views);
+            let mut files = Vec::new();
+            let mut consts = Vec::new();
+            let mut enums = Vec::new();
+            collect_package_views(&scan, &mut views, &mut files, &mut consts, &mut enums);
+            consts.retain(|c: &ConstDecl| !c.private);
+            enums.retain(|e: &EnumDecl| !e.private);
             index.exports.insert(name.clone(), views);
+            index.files.insert(name.clone(), files);
+            index.consts.insert(name.clone(), consts);
+            index.enums.insert(name.clone(), enums);
         }
         index
     }
@@ -66,10 +91,51 @@ impl PackageIndex {
             .iter()
             .find(|v| v.name.as_str() == view)
     }
+
+    /// The exported view named `view` of package `pkg` and the file that
+    /// declares it.
+    #[must_use]
+    pub fn view_in_file(&self, pkg: &str, view: &str) -> Option<(&ViewDecl, &Path)> {
+        let at = self
+            .exports
+            .get(pkg)?
+            .iter()
+            .position(|v| v.name.as_str() == view)?;
+        Some((&self.exports[pkg][at], self.files.get(pkg)?.get(at)?))
+    }
+}
+
+/// The package a qualified element name `head.Rest` names, as the document's
+/// imports and its own package name bind `head`: `Some((package, Rest))`, the
+/// package being `None` for the document's own package.
+#[must_use]
+pub fn qualified_target<'n>(
+    el_name: &'n str,
+    imports: &[UseDecl],
+    own_package: Option<&str>,
+) -> Option<(Option<String>, &'n str)> {
+    let (head, rest) = el_name.split_once('.')?;
+    let imported = imports.iter().find(|i| {
+        i.symbols.is_none()
+            && i.alias
+                .as_ref()
+                .map_or(i.package.as_str(), byard_compiler::Symbol::as_str)
+                == head
+    });
+    if let Some(import) = imported {
+        return Some((Some(import.package.as_str().to_string()), rest));
+    }
+    (own_package == Some(head)).then_some((None, rest))
 }
 
 /// Recursively parses every `.byd` under `dir` and collects its views.
-fn collect_package_views(dir: &Path, out: &mut Vec<ViewDecl>) {
+fn collect_package_views(
+    dir: &Path,
+    out: &mut Vec<ViewDecl>,
+    files: &mut Vec<PathBuf>,
+    consts: &mut Vec<ConstDecl>,
+    enums: &mut Vec<EnumDecl>,
+) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
@@ -84,10 +150,14 @@ fn collect_package_views(dir: &Path, out: &mut Vec<ViewDecl>) {
             {
                 continue;
             }
-            collect_package_views(&path, out);
+            collect_package_views(&path, out, files, consts, enums);
         } else if path.extension().is_some_and(|e| e == "byd") {
             if let Ok(src) = std::fs::read_to_string(&path) {
-                out.extend(parse(&src).views);
+                let parsed = parse(&src);
+                files.extend(std::iter::repeat_n(path.clone(), parsed.views.len()));
+                out.extend(parsed.views);
+                consts.extend(parsed.consts);
+                enums.extend(parsed.enums);
             }
         }
     }

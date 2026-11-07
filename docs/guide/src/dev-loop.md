@@ -31,6 +31,9 @@ and its state starts again. Changing what the view shows, its elements, texts,
 styles and expressions, never does. Add a `var` and you will see that view reset
 once. That is the cost of a changed shape, and the other views are untouched.
 
+A save is read once, 40 ms after the last change to the files, so an editor that
+truncates a file before writing it never shows a half-saved one.
+
 What it watches:
 
 - every `.byd` file in the project,
@@ -102,8 +105,10 @@ byard check
 
 `check` reads the whole project, entry file, siblings and packages, and reports
 every problem it can find without opening a window. It parses, resolves every
-name, checks types and attributes, and lowers every view the way the app would.
-It is what CI runs.
+name, checks types and attributes, and lowers every view the way the app would,
+including what is not on screen at the start: a tab that is not the active one, a
+route the first path does not match, both arms of a `when`, the body of a `for`
+over a list that has not loaded yet. It is what CI runs.
 
 ```text
 →    checking /home/ada/hello/main.byd
@@ -194,8 +199,11 @@ picture. Every test of a screen can pass while the screen is wrong.
 | `--size <WIDTHxHEIGHT>` | `440x880` | The logical size of the window |
 | `--scale <SCALE>` | `2` | Device pixels per logical pixel |
 | `--at <MS>` | `1500` | Milliseconds of app time to run first, so animations settle |
+| `--now <ISO>` | the real clock | Fix the time `now()` reads, such as `2026-11-05T09:00:00`. `--at` advances it |
 | `--dark` / `--light` | the manifest's | Force a colour scheme |
 | `--tap <X,Y>` | none | Tap a logical point before the picture. Repeat it for more taps |
+| `--hold <X,Y>` | none | Press at a point and keep the button down for the picture. `--at` is how long. Repeatable |
+| `--hover <X,Y>` | none | Move the pointer to a point, pressing nothing. Repeatable |
 | `--key <KEY>` | none | Press a key before the picture, such as `Left`, `shift+Left` or `mod+a`. Repeatable |
 | `--type <TEXT>` | none | Type text before the picture. Repeatable |
 | `--a11y <FILE>` | none | Write the accessibility tree as text. See [accessibility](accessibility.md) |
@@ -218,6 +226,15 @@ selection in a text field:
 byard shot crates/byard-cli/examples/text_editing \
   --tap 200,120 --type "hello wrold" --key Left --key Left --key Left \
   --key shift+Left --key shift+Left -o editing.png
+```
+
+`--hover` and `--hold` draw what a pointer does without a click finishing it. `--hover 200,90`
+shows `on hover`. `--hold 200,90 --at 120` presses at that point and never lets go, so the picture
+is 120 ms into a press: `on pressed`, a press morph and a ripple are all live. A `--tap` presses
+and releases in one frame, which is why it cannot show them.
+
+```sh
+byard shot crates/byard-cli/examples/ripple --hold 200,90 --at 120 -o pressed.png
 ```
 
 A key is a single character or one of `Left`, `Right`, `Up`, `Down`, `Home`, `End`,

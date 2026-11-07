@@ -45,7 +45,7 @@
       "patterns": [
         {
           "name": "keyword.control.byld",
-          "match": "\\b(View|var|let|fn|inject|as|for|in|when|else|style|untrack|with|merge|use)\\b"
+          "match": "\\b(View|var|let|fn|inject|as|for|in|when|else|style|untrack|with|merge|use|enum|private)\\b"
         },
         {
           "comment": "RFC-0026 navigation cases. Contextual, not reserved: only a `route`/`tab` introducing a pattern literal is a keyword.",

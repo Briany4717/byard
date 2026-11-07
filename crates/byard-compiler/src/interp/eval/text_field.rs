@@ -25,6 +25,16 @@ pub(crate) struct Composition {
     cursor: Option<(usize, usize)>,
 }
 
+impl Composition {
+    pub(super) const fn owner(&self) -> u32 {
+        self.owner
+    }
+
+    pub(super) const fn set_owner(&mut self, owner: u32) {
+        self.owner = owner;
+    }
+}
+
 /// How far a `TextField`'s text sits from its left edge when the field writes
 /// no padding.
 const FIELD_PAD_X: f32 = 10.0;
@@ -109,8 +119,13 @@ impl Interpreter {
             .unwrap_or(16) as f32;
 
         // Focus underline (Material-style): a thin accent bar along the bottom
-        // edge when the field holds focus.
-        if is_focused {
+        // edge when the field holds focus. `indicator: none` leaves it out, for
+        // a design that draws its own.
+        let indicator = attrs.iter().find_map(|a| match &a.kind {
+            AttrKind::Prop { value } if a.name.as_str() == "indicator" => Self::enum_token(value),
+            _ => None,
+        });
+        if is_focused && indicator != Some("none") {
             let bar_h = 2.0_f32;
             frame.push_instance(byard_core::BoxInstance {
                 rect: [rect.x, rect.y + rect.h - bar_h, rect.w, bar_h],
@@ -150,6 +165,7 @@ impl Interpreter {
         // defect this whole change exists to remove.
         let weight = self.resolve_weight(attrs);
         let family = self.resolve_family(attrs);
+        let variations = self.resolve_variations(attrs);
         let font = super::edit::FieldFont {
             size: font_size,
             weight,
@@ -206,7 +222,14 @@ impl Interpreter {
         let origin_x = text_x - scroll;
         // The text is clipped to the content box when it overflows it, which is
         // the only time it can reach outside.
-        let clipped = editing.is_some() && value_w + preedit_w > view_w;
+        // A field that is not being edited does not scroll, so what it shows
+        // (its placeholder, or a value longer than it) is cut at the content
+        // box instead of drawing past the field.
+        let clipped = if editing.is_some() {
+            value_w + preedit_w > view_w
+        } else {
+            !display_text.is_empty() && self.measure_in(&display_text, &font) > view_w
+        };
         if clipped {
             frame.begin_clip(byard_core::frame::Rect::new(text_x, rect.y, view_w, rect.h));
         }
@@ -244,6 +267,7 @@ impl Interpreter {
                 frame.push_text(byard_core::TextLine {
                     weight,
                     family: family.clone(),
+                    variations: variations.clone(),
                     x,
                     y: text_y,
                     text: text.to_string(),
@@ -272,6 +296,7 @@ impl Interpreter {
                 frame.push_text(byard_core::TextLine {
                     weight,
                     family: family.clone(),
+                    variations: variations.clone(),
                     x: start,
                     y: text_y,
                     text: text.clone(),
@@ -401,6 +426,8 @@ impl Interpreter {
             // otherwise the shared sink the registry needs a signal for.
             let fsig = self.focus_signal(attrs);
             self.router.focusable(idx, hit_rect, fsig);
+            // A field shows its focus however it was reached (RFC-0052 §4).
+            self.router.text_entry(idx);
         }
     }
 

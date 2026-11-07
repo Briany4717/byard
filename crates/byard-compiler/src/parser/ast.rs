@@ -59,6 +59,10 @@ pub struct Param {
     /// defaulted parameter omitted at a user-view call site evaluates this in
     /// the callee scope.
     pub default: Option<Expr>,
+    /// Whether the parameter is a binding, declared `bind name: Type`
+    /// (RFC-0051): the caller passes a `var`, and the view reads and writes it
+    /// as its own.
+    pub bind: bool,
     /// Source span.
     pub span: Span,
 }
@@ -124,6 +128,15 @@ pub struct ViewDecl {
     /// The program's record types (`type Place = { … }`), shared like
     /// `helpers` and for the same reason.
     pub records: std::sync::Arc<Vec<RecordDecl>>,
+    /// The program's top-level constants (`let gap = 8`), shared like
+    /// `helpers` and for the same reason.
+    pub consts: std::sync::Arc<Vec<ConstDecl>>,
+    /// The program's enums (`enum Variant { … }`), shared like `helpers` and
+    /// for the same reason.
+    pub enums: std::sync::Arc<Vec<EnumDecl>>,
+    /// Written `private View …`: a consumer of the package cannot name it
+    /// (RFC-0055). Accepted, and without effect, in an app.
+    pub private: bool,
 }
 
 /// A record type declared at file level: `type Place = { name: Str,
@@ -135,6 +148,41 @@ pub struct RecordDecl {
     pub name: Symbol,
     /// Its fields, in the order written.
     pub fields: Vec<RecordField>,
+    /// Written `private type …` (RFC-0055).
+    pub private: bool,
+    /// Source span.
+    pub span: Span,
+}
+
+/// A top-level constant: `let gap = 8`, or `let gap: Int = 8`. Pure, shared by
+/// every file of its project or package, and reached from another package as
+/// `m.gap` (RFC-0055).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ConstDecl {
+    /// The name; a package's constants are canonical (`kit.gap`) once
+    /// resolved.
+    pub name: Symbol,
+    /// The declared type, if written (else inferred from `init`).
+    pub ty: Option<Type>,
+    /// The value, an expression of other constants and functions.
+    pub init: Expr,
+    /// Written `private let …`.
+    pub private: bool,
+    /// Source span.
+    pub span: Span,
+}
+
+/// A top-level enum: `enum Variant { filled, tonal }`. A closed set of named
+/// cases, written `Variant.tonal` (RFC-0055).
+#[derive(Clone, Debug, PartialEq)]
+pub struct EnumDecl {
+    /// The name; a package's enums are canonical (`kit.Variant`) once
+    /// resolved.
+    pub name: Symbol,
+    /// The cases, in the order written, each with its span.
+    pub cases: Vec<(Symbol, Span)>,
+    /// Written `private enum …`.
+    pub private: bool,
     /// Source span.
     pub span: Span,
 }
@@ -165,6 +213,8 @@ pub struct FnDecl {
     pub ret: Option<Type>,
     /// The body, a pure expression of the parameters.
     pub body: Expr,
+    /// Written `private fn …` (RFC-0055).
+    pub private: bool,
     /// Source span.
     pub span: Span,
 }
@@ -494,6 +544,9 @@ pub enum StyleStateKind {
     Indeterminate,
     /// The element is being dragged past the drag threshold, RFC-0024.
     Dragging,
+    /// The element holds keyboard focus *and* focus got there by the
+    /// keyboard (or into a text field), so a ring is wanted (RFC-0052).
+    FocusVisible,
 }
 
 impl StyleStateKind {
@@ -513,6 +566,7 @@ impl StyleStateKind {
             "invalid" => Some(Self::Invalid),
             "indeterminate" => Some(Self::Indeterminate),
             "dragging" => Some(Self::Dragging),
+            "focus_visible" => Some(Self::FocusVisible),
             _ => None,
         }
     }
@@ -530,11 +584,12 @@ impl StyleStateKind {
             Self::Invalid => "invalid",
             Self::Indeterminate => "indeterminate",
             Self::Dragging => "dragging",
+            Self::FocusVisible => "focus_visible",
         }
     }
 
     /// Every state name, for `closest_match` suggestions.
-    pub const NAMES: [&'static str; 9] = [
+    pub const NAMES: [&'static str; 10] = [
         "hover",
         "pressed",
         "focused",
@@ -544,6 +599,7 @@ impl StyleStateKind {
         "invalid",
         "indeterminate",
         "dragging",
+        "focus_visible",
     ];
 }
 
@@ -621,13 +677,17 @@ pub struct StyleRule {
     pub span: Span,
 }
 
-/// A call / content argument: `(IDENT ":")? expr`.
+/// A call / content argument: `(IDENT ":")? expr`, or `bind IDENT ":" expr`
+/// (RFC-0051) for a view's binding.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Arg {
     /// The optional `name:` label.
     pub name: Option<Symbol>,
     /// The argument value.
     pub value: Expr,
+    /// Whether it was written `bind name: value`, naming a binding of the
+    /// view called. `name` is then the binding's name.
+    pub bind: bool,
 }
 
 /// Binary operators. Arithmetic (`+ - * /`) is the original minimal surface
@@ -704,8 +764,18 @@ pub enum StrPart {
     /// A literal text run.
     Text(String),
     /// An interpolated `{ expr }`, or `{ expr:.N }` with a fixed number of
-    /// decimals (RFC-0027): `{21.46:.1}` reads `21.5`.
-    Interp(Box<Expr>, Option<u8>),
+    /// decimals (RFC-0027): `{21.46:.1}` reads `21.5`; `{n:,}` and `{n:,.2}`
+    /// group the integer part by thousands (RFC-0048).
+    Interp(Box<Expr>, Option<NumFormat>),
+}
+
+/// The spec after the colon of an interpolation: `:.2`, `:,` or `:,.2`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NumFormat {
+    /// A comma between every three digits of the integer part (`,`).
+    pub group: bool,
+    /// A fixed number of decimals (`.N`), or the number as `{x}` writes it.
+    pub decimals: Option<u8>,
 }
 
 /// An expression. Every variant carries its own [`Span`].
@@ -917,7 +987,7 @@ pub enum Expr {
         /// Source span.
         span: Span,
     },
-    /// One timed step of a keyframe sequence, `50%: 200 ease_out` (RFC-0025
+    /// One timed step of a keyframe sequence, `50%: 200 easeOut` (RFC-0025
     /// §4). Appears only as an argument, and the parser assigns it no meaning
     /// beyond its shape (D6): `anim.keyframes(…)` is the one call that reads
     /// these, resolved with everything else at lower time.
@@ -928,7 +998,7 @@ pub enum Expr {
         /// The value this step animates to.
         value: Box<Expr>,
         /// The optional easing name governing the segment that *arrives* at this
-        /// step (`ease_out`); absent means linear.
+        /// step (`easeOut`); absent means linear.
         easing: Option<(Symbol, Span)>,
         /// Source span.
         span: Span,
@@ -1027,6 +1097,7 @@ mod tests {
             content: vec![Arg {
                 name: None,
                 value: Expr::StrLit(vec![StrPart::Text("+".to_string())], sp()),
+                bind: false,
             }],
             attrs: vec![Attr {
                 name: Symbol::intern("bg"),
@@ -1048,6 +1119,9 @@ mod tests {
         let view = ViewDecl {
             helpers: std::sync::Arc::default(),
             records: std::sync::Arc::default(),
+            consts: std::sync::Arc::default(),
+            enums: std::sync::Arc::default(),
+            private: false,
             name: Symbol::intern("Counter"),
             params: Vec::new(),
             body: vec![

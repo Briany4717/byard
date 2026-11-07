@@ -1,0 +1,6 @@
+[project]
+name = "app"
+entry = "main.byd"
+
+[dependencies]
+ds = { path = "../ds" }

@@ -22,6 +22,16 @@ fn fmt_stable(source: &str) -> String {
     once
 }
 
+#[test]
+fn a_grouping_spec_in_an_interpolation_is_kept_as_written() {
+    // RFC-0048: a string literal is never reflowed, so `{x:,.2}` stays.
+    let out = fmt_stable("View M(){\nText(\"{ total:,.2 } and {n:,} and {a+1:.0}\")\n}");
+    assert!(
+        out.contains("\"{ total:,.2 } and {n:,} and {a+1:.0}\""),
+        "{out}"
+    );
+}
+
 // ---- spacing ------------------------------------------------------------
 
 #[test]
@@ -609,6 +619,14 @@ fn every_kind_of_difference_is_seen_by_the_meaning_check() {
             "View M() { let a = \"{x:.2}\" }",
         ),
         (
+            "View M() { let a = \"{x:,.2}\" }",
+            "View M() { let a = \"{x:.2}\" }",
+        ),
+        (
+            "View M() { let a = \"{x:,}\" }",
+            "View M() { let a = \"{x}\" }",
+        ),
+        (
             "View M() { let a = {k: 1} }",
             "View M() { let a = {k: 1, j: 2} }",
         ),
@@ -726,12 +744,12 @@ fn every_kind_of_difference_is_seen_by_the_meaning_check() {
             "View M() { on tap => { let b = 1 } }",
         ),
         (
-            "View M() { let a = anim.keyframes(0%: 1, 50%: 2 ease_out) }",
-            "View M() { let a = anim.keyframes(0%: 1, 60%: 2 ease_out) }",
+            "View M() { let a = anim.keyframes(0%: 1, 50%: 2 easeOut) }",
+            "View M() { let a = anim.keyframes(0%: 1, 60%: 2 easeOut) }",
         ),
         (
-            "View M() { let a = anim.keyframes(0%: 1, 50%: 2 ease_out) }",
-            "View M() { let a = anim.keyframes(0%: 1, 50%: 2 ease_in) }",
+            "View M() { let a = anim.keyframes(0%: 1, 50%: 2 easeOut) }",
+            "View M() { let a = anim.keyframes(0%: 1, 50%: 2 easeIn) }",
         ),
         ("View M() { let v = a ?? b }", "View M() { let v = b ?? a }"),
     ];
@@ -772,4 +790,111 @@ fn a_remainder_is_spaced_and_a_keyframe_percent_is_left_alone() {
         out.contains("anim.keyframes(0%: 0, 50%: 1, 100%: 0)"),
         "{out}"
     );
+}
+
+#[test]
+fn a_view_reached_by_its_package_name_is_formatted_like_any_other() {
+    // `m.Button(...)` from an app and `ds.Button(...)` inside the package
+    // `ds`, next to the bare built-in.
+    let out = fmt_stable(
+        "use ds as m\nView Main(){\nColumn{\nm.Button(\"a\") #[bg:0xFF0000]\nButton(\"b\")\nds.Button(\"c\")\n}\n}",
+    );
+    assert!(out.contains("m.Button(\"a\") #[bg: 0xFF0000]"), "{out}");
+    assert!(out.contains("\n        Button(\"b\")\n"), "{out}");
+    assert!(out.contains("ds.Button(\"c\")"), "{out}");
+}
+
+// ---- constants, enums, private names and `else when` (RFC-0055) -----------
+
+#[test]
+fn a_constant_an_enum_and_private_are_spaced_like_the_rest() {
+    let out = fmt_stable(
+        "private  let gap=8\nlet label:Str=\"x\"\nenum Variant{filled,tonal,outlined}\nprivate   enum Tone{warm,cool}\nprivate fn tint(v:Variant)->Int=>v==Variant.filled?1:2\nprivate View Hint(){\nText(\"x\")\n}\n",
+    );
+    assert_eq!(
+        out,
+        "private let gap = 8\nlet label: Str = \"x\"\nenum Variant { filled, tonal, outlined }\nprivate enum Tone { warm, cool }\nprivate fn tint(v: Variant) -> Int => v == Variant.filled ? 1 : 2\nprivate View Hint() {\n    Text(\"x\")\n}\n"
+    );
+}
+
+#[test]
+fn an_enum_written_over_lines_keeps_its_lines_and_indents_its_cases() {
+    let out = fmt_stable("enum Variant {\nfilled,\n        tonal,\n\n\noutlined\n}\n");
+    assert_eq!(
+        out,
+        "enum Variant {\n    filled,\n    tonal,\n\n    outlined\n}\n"
+    );
+}
+
+#[test]
+fn an_enum_case_and_a_qualified_one_are_written_against_their_dots() {
+    let out = fmt_stable(
+        "use kit as m\nView M(v:m.Variant=m.Variant.filled){\nm.Button(\"a\",variant: .tonal)\nlet x = m . gap\n}\n",
+    );
+    assert!(
+        out.contains("View M(v: m.Variant = m.Variant.filled) {"),
+        "{out}"
+    );
+    assert!(out.contains("m.Button(\"a\", variant: .tonal)"), "{out}");
+    assert!(out.contains("let x = m.gap"), "{out}");
+}
+
+#[test]
+fn else_when_stays_a_chain_and_is_indented_like_a_when() {
+    let out = fmt_stable(
+        "View M(){\nwhen a{\nText(\"a\")\n}else   when b{\nText(\"b\")\n}else when c{\nText(\"c\")\n}else{\nText(\"d\")\n}\n}\n",
+    );
+    assert_eq!(
+        out,
+        "View M() {\n    when a {\n        Text(\"a\")\n    } else when b {\n        Text(\"b\")\n    } else when c {\n        Text(\"c\")\n    } else {\n        Text(\"d\")\n    }\n}\n"
+    );
+}
+
+#[test]
+fn the_nested_form_is_left_nested_and_means_the_same_as_the_chain() {
+    let nested = "View M() {\n    when a {\n        Text(\"a\")\n    } else {\n        when b {\n            Text(\"b\")\n        }\n    }\n}\n";
+    assert_eq!(fmt_stable(nested), nested);
+    let chain = "View M() {\n    when a {\n        Text(\"a\")\n    } else when b {\n        Text(\"b\")\n    }\n}\n";
+    assert!(parsed_files_span_eq(&parse(nested), &parse(chain)));
+}
+
+#[test]
+fn the_meaning_check_covers_the_new_declarations() {
+    // `private` and a constant's value are part of the tree it compares.
+    let a = parse("private let gap = 8\nenum E { a, b }");
+    assert!(parsed_files_span_eq(
+        &a,
+        &parse("private let gap = 8\nenum E { a, b }")
+    ));
+    assert!(!parsed_files_span_eq(
+        &a,
+        &parse("let gap = 8\nenum E { a, b }")
+    ));
+    assert!(!parsed_files_span_eq(
+        &a,
+        &parse("private let gap = 9\nenum E { a, b }")
+    ));
+    assert!(!parsed_files_span_eq(
+        &a,
+        &parse("private let gap = 8\nenum E { a }")
+    ));
+    assert!(!parsed_files_span_eq(
+        &a,
+        &parse("private let gap = 8\nprivate enum E { a, b }")
+    ));
+}
+
+#[test]
+fn a_binding_keeps_its_word_and_one_space_in_a_declaration_and_a_call() {
+    // RFC-0051: `bind` is a name before a name, spaced as `var x` is.
+    let out = fmt_stable(
+        "View Sw(bind   on:Bool,label:Str=\"\"){\nToggle #[bind:on]\n}\nView Main(){\nvar a=true\nvar b=\"\"\nColumn{\nSw(bind:a,label:\"x\")\nSw(  bind   on:a)\nF(bind  text:b,bind valid:a)\n}\n}",
+    );
+    assert!(
+        out.contains("View Sw(bind on: Bool, label: Str = \"\") {"),
+        "{out}"
+    );
+    assert!(out.contains("Sw(bind: a, label: \"x\")"), "{out}");
+    assert!(out.contains("Sw(bind on: a)"), "{out}");
+    assert!(out.contains("F(bind text: b, bind valid: a)"), "{out}");
 }

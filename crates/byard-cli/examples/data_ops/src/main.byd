@@ -24,8 +24,15 @@
 // n. The sum, the largest and smallest, the first value above 2, n's index
 // (-1 when it is not in the list) and the list sorted largest first all
 // follow.
+// A `fn` called with a lambda's item runs once per item, and a lambda inside
+// a lambda reads the outer item (see the LAMBDAS block).
+type Item = { qty: Int, cat: Str }
+fn isBig(qty: Int) -> Bool => qty > 10
+fn plus(qty: Int, by: Int) -> Int => qty + by
+
 View Main() {
     var n = 3
+    var items: List<Item> = [{ qty: 50, cat: "a" }, { qty: 3, cat: "b" }]
     var xs = [1, 2, 3]
     var user = { name: "Ada", score: 0 }
 
@@ -120,6 +127,15 @@ View Main() {
                 Text("{x}") #[color: 0x8AD1A0, size: 14]
             }
         }
+
+        // ── a fn and nested lambdas, per item ────────────────────────────
+        Text("LAMBDAS") #[color: 0x6750A4, size: 12, weight: bold]
+        Text("big items  →  {items.filter(i => isBig(i.qty)).len}   (1)")
+            #[color: 0xCCD2E0, size: 15]
+        Text("qty + 100  →  {items.map(i => plus(i.qty, 100)).join(",")}   (150,103)")
+            #[color: 0xCCD2E0, size: 15]
+        Text("per category  →  {["a", "b"].map(k => items.filter(i => i.cat == k).len).join(",")}   (1,1)")
+            #[color: 0xCCD2E0, size: 15]
 
         // ── records + immutable spread update (§6) ───────────────────────
         Text("RECORDS  \{ ..r, k: v \}") #[color: 0x6750A4, size: 12, weight: bold]

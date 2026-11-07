@@ -12,8 +12,8 @@ mod expr;
 pub mod span_eq;
 
 use ast::{
-    Attr, AttrKind, ElementNode, FnDecl, Member, Param, RecordDecl, RecordField, RouteKind,
-    StyleRule, Type, UseDecl, ViewDecl,
+    Attr, AttrKind, ConstDecl, ElementNode, EnumDecl, FnDecl, Member, Param, RecordDecl,
+    RecordField, RouteKind, StyleRule, Type, UseDecl, ViewDecl,
 };
 
 use crate::diagnostics::{CompileError, Span};
@@ -33,6 +33,11 @@ pub struct ParsedFile {
     pub fns: Vec<FnDecl>,
     /// The file's record types, also shared into every view's `records`.
     pub records: Vec<RecordDecl>,
+    /// The file's top-level constants, also shared into every view's
+    /// `consts`.
+    pub consts: Vec<ConstDecl>,
+    /// The file's enums, also shared into every view's `enums`.
+    pub enums: Vec<EnumDecl>,
     /// All diagnostics from lexing and parsing, in source order.
     pub errors: Vec<CompileError>,
 }
@@ -41,22 +46,45 @@ pub struct ParsedFile {
 #[must_use]
 pub fn parse(source: &str) -> ParsedFile {
     let mut parser = Parser::new(source);
-    let (imports, mut views, fns, records) = parser.parse_file();
-    // A lone file's views see its own functions and types; a project's are
-    // replaced by the program-wide tables when it is resolved.
+    let Items {
+        imports,
+        mut views,
+        fns,
+        records,
+        consts,
+        enums,
+    } = parser.parse_file();
+    // A lone file's views see its own functions, types, constants and enums;
+    // a project's are replaced by the program-wide tables when it is resolved.
     let helpers = std::sync::Arc::new(fns.clone());
     let shared_records = std::sync::Arc::new(records.clone());
+    let shared_consts = std::sync::Arc::new(consts.clone());
+    let shared_enums = std::sync::Arc::new(enums.clone());
     for view in &mut views {
         view.helpers = std::sync::Arc::clone(&helpers);
         view.records = std::sync::Arc::clone(&shared_records);
+        view.consts = std::sync::Arc::clone(&shared_consts);
+        view.enums = std::sync::Arc::clone(&shared_enums);
     }
     ParsedFile {
         imports,
         views,
         fns,
         records,
+        consts,
+        enums,
         errors: parser.errors,
     }
+}
+
+/// What a file declares at its top level.
+struct Items {
+    imports: Vec<UseDecl>,
+    views: Vec<ViewDecl>,
+    fns: Vec<FnDecl>,
+    records: Vec<RecordDecl>,
+    consts: Vec<ConstDecl>,
+    enums: Vec<EnumDecl>,
 }
 
 /// A recursive-descent + Pratt parser over a lexed token stream.
@@ -206,6 +234,27 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// Consumes the name a declaration introduces (`what` is how the error
+    /// names the thing: "a function"). A keyword there is one error, at the
+    /// keyword, and is taken as the name so that the rest of the declaration
+    /// parses as it was meant, instead of every token after it going wrong.
+    fn expect_decl_name(&mut self, what: &str, expected: &str) -> Option<Symbol> {
+        match self.cur() {
+            Some(tok) if is_name_keyword(tok) => {
+                let span = self.cur_span();
+                let keyword = self.text(span).to_string();
+                self.errors.push(CompileError::KeywordAsName {
+                    span,
+                    keyword: keyword.clone(),
+                    what: what.to_string(),
+                });
+                self.advance();
+                Some(Symbol::intern(&keyword))
+            }
+            _ => self.expect_ident(expected),
+        }
+    }
+
     /// Consumes a *name*: an identifier or a contextual keyword used as one
     /// (e.g. `style` in `#[style: .title]`). Keywords are recovered from their
     /// source slice and interned.
@@ -256,24 +305,72 @@ impl<'a> Parser<'a> {
 
     // ---- file / view ----
 
-    #[allow(clippy::type_complexity)]
-    fn parse_file(&mut self) -> (Vec<UseDecl>, Vec<ViewDecl>, Vec<FnDecl>, Vec<RecordDecl>) {
-        let mut imports = Vec::new();
-        let mut views = Vec::new();
-        let mut fns = Vec::new();
-        let mut records = Vec::new();
+    fn parse_file(&mut self) -> Items {
+        let mut items = Items {
+            imports: Vec::new(),
+            views: Vec::new(),
+            fns: Vec::new(),
+            records: Vec::new(),
+            consts: Vec::new(),
+            enums: Vec::new(),
+        };
         while self.cur().is_some() {
             let before = self.pos;
+            // `private` before an item (RFC-0055). Contextual: only when what
+            // follows starts one, so it is an ordinary name anywhere else.
+            let private = self.at_private_item();
+            if private {
+                self.advance();
+            }
             match self.cur() {
-                Some(Token::View) => views.push(self.parse_view()),
+                Some(Token::View) => {
+                    let mut view = self.parse_view();
+                    view.private = private;
+                    items.views.push(view);
+                }
                 // `type Name = { … }`. Contextual: `type` is an ordinary name
                 // anywhere else.
                 Some(Token::Ident(word))
                     if word.as_str() == "type"
-                        && matches!(self.peek2(), Some(Token::Ident(_)))
+                        && self.peek2().is_some_and(|t| {
+                            matches!(t, Token::Ident(_)) || is_name_keyword(&t)
+                        })
                         && matches!(self.peek3(), Some(Token::Eq)) =>
                 {
-                    records.push(self.parse_record_decl());
+                    let mut record = self.parse_record_decl();
+                    record.private = private;
+                    items.records.push(record);
+                }
+                // `enum Name { a, b }`, contextual as `type` is.
+                Some(Token::Ident(word))
+                    if word.as_str() == "enum"
+                        && self.peek2().is_some_and(|t| {
+                            matches!(t, Token::Ident(_)) || is_name_keyword(&t)
+                        })
+                        && matches!(self.peek3(), Some(Token::LBrace)) =>
+                {
+                    let mut decl = self.parse_enum_decl();
+                    decl.private = private;
+                    items.enums.push(decl);
+                }
+                // `let name = expr`: a constant. A view's `let` is a member and
+                // never reaches here.
+                Some(Token::Let) => {
+                    if let Member::Let {
+                        name,
+                        ty,
+                        init,
+                        span,
+                    } = self.parse_binding(false)
+                    {
+                        items.consts.push(ConstDecl {
+                            name,
+                            ty,
+                            init,
+                            private,
+                            span,
+                        });
+                    }
                 }
                 Some(Token::Fn) => {
                     if let Member::Fn {
@@ -284,11 +381,12 @@ impl<'a> Parser<'a> {
                         span,
                     } = self.parse_fn()
                     {
-                        fns.push(FnDecl {
+                        items.fns.push(FnDecl {
                             name,
                             params,
                             ret,
                             body,
+                            private,
                             span,
                         });
                     }
@@ -298,19 +396,61 @@ impl<'a> Parser<'a> {
                     // Imports are legal only at file top, before any `View`
                     // (RFC-0008 Pillar A). Record the decl anyway so the
                     // resolver can still do useful work during recovery.
-                    if !views.is_empty() {
+                    if !items.views.is_empty() {
                         self.errors
                             .push(CompileError::ImportAfterView { span: import.span });
                     }
-                    imports.push(import);
+                    items.imports.push(import);
                 }
-                _ => self.error("'View', 'use', 'fn' or 'type'"),
+                _ => {
+                    self.error("'View', 'use', 'fn', 'type', 'enum' or 'let'");
+                    self.skip_to_next_item();
+                }
             }
             if self.pos == before {
                 self.advance(); // guaranteed progress on unrecognized input
             }
         }
-        (imports, views, fns, records)
+        items
+    }
+
+    /// Whether the cursor is on a `private` that modifies the item after it.
+    fn at_private_item(&self) -> bool {
+        let Some(Token::Ident(word)) = self.cur() else {
+            return false;
+        };
+        word.as_str() == "private"
+            && match self.peek2() {
+                Some(Token::View | Token::Fn | Token::Let) => true,
+                Some(Token::Ident(next)) => matches!(next.as_str(), "type" | "enum"),
+                _ => false,
+            }
+    }
+
+    /// After a stray token between top-level items: skips to the next item
+    /// (a `View`, `fn`, `use` or `type` outside any braces), so one mistake is
+    /// one error, not one per token that follows it.
+    fn skip_to_next_item(&mut self) {
+        let mut depth = 0usize;
+        // The stray token itself is never the start of an item.
+        self.advance();
+        while let Some(tok) = self.cur() {
+            match tok {
+                Token::LBrace => depth += 1,
+                Token::RBrace => depth = depth.saturating_sub(1),
+                Token::View | Token::Fn | Token::Use | Token::Let if depth == 0 => return,
+                Token::Ident(word)
+                    if depth == 0
+                        && matches!(word.as_str(), "type" | "enum")
+                        && matches!(self.peek2(), Some(Token::Ident(_)))
+                        && matches!(self.peek3(), Some(Token::Eq | Token::LBrace)) =>
+                {
+                    return;
+                }
+                _ => {}
+            }
+            self.advance();
+        }
     }
 
     /// `record_decl := "type" IDENT "=" "{" (IDENT ":" type "?"? ","?)* "}"`.
@@ -318,13 +458,13 @@ impl<'a> Parser<'a> {
         let start = self.cur_span();
         self.advance(); // type
         let name = self
-            .expect_ident("a type name")
+            .expect_decl_name("a type", "a type name")
             .unwrap_or_else(|| Symbol::intern(""));
         self.expect(&Token::Eq, "'='");
         self.expect(&Token::LBrace, "'{'");
         let mut fields = Vec::new();
         while !matches!(self.cur(), Some(Token::RBrace) | None) {
-            let Some(field) = self.expect_ident("a field name") else {
+            let Some(field) = self.expect_decl_name("a field", "a field name") else {
                 break;
             };
             self.expect(&Token::Colon, "':'");
@@ -341,6 +481,33 @@ impl<'a> Parser<'a> {
         RecordDecl {
             name,
             fields,
+            private: false,
+            span: self.span_from(start),
+        }
+    }
+
+    /// `enum_decl := "enum" IDENT "{" (IDENT ","?)* "}"` (RFC-0055).
+    fn parse_enum_decl(&mut self) -> EnumDecl {
+        let start = self.cur_span();
+        self.advance(); // enum
+        let name = self
+            .expect_decl_name("an enum", "an enum name")
+            .unwrap_or_else(|| Symbol::intern(""));
+        self.expect(&Token::LBrace, "'{'");
+        let mut cases = Vec::new();
+        while !matches!(self.cur(), Some(Token::RBrace) | None) {
+            let at = self.cur_span();
+            let Some(case) = self.expect_decl_name("a case", "a case name") else {
+                break;
+            };
+            cases.push((case, self.span_from(at)));
+            self.eat(&Token::Comma);
+        }
+        self.expect(&Token::RBrace, "'}'");
+        EnumDecl {
+            name,
+            cases,
+            private: false,
             span: self.span_from(start),
         }
     }
@@ -387,7 +554,7 @@ impl<'a> Parser<'a> {
         let start = self.cur_span();
         self.advance(); // View
         let name = self
-            .expect_ident("a view name")
+            .expect_decl_name("a view", "a view name")
             .unwrap_or_else(|| Symbol::intern(""));
         self.expect(&Token::LParen, "'('");
         let params = self.parse_params();
@@ -396,6 +563,9 @@ impl<'a> Parser<'a> {
         let body = self.parse_block_members();
         ViewDecl {
             records: std::sync::Arc::default(),
+            consts: std::sync::Arc::default(),
+            enums: std::sync::Arc::default(),
+            private: false,
             name,
             params,
             body,
@@ -409,8 +579,18 @@ impl<'a> Parser<'a> {
         let mut params = Vec::new();
         while !matches!(self.cur(), Some(Token::RParen) | None) {
             let start = self.cur_span();
+            // `bind name: Type` declares a binding (RFC-0051). `bind` alone, or
+            // before `:`, `,`, `=` or `)`, is still an ordinary name.
+            let bind = matches!(self.cur(), Some(Token::Ident(w)) if w.as_str() == "bind")
+                && !matches!(
+                    self.peek2(),
+                    Some(Token::Colon | Token::Comma | Token::RParen | Token::Eq) | None
+                );
+            if bind {
+                self.advance();
+            }
             let name = self
-                .expect_ident("a parameter name")
+                .expect_decl_name("a parameter", "a parameter name")
                 .unwrap_or_else(|| Symbol::intern(""));
             let ty = if self.eat(&Token::Colon) {
                 Some(self.parse_type())
@@ -427,6 +607,7 @@ impl<'a> Parser<'a> {
                 name,
                 ty,
                 default,
+                bind,
                 span: self.span_from(start),
             });
             if !self.eat(&Token::Comma) {
@@ -532,7 +713,7 @@ impl<'a> Parser<'a> {
         let start = self.cur_span();
         self.advance(); // var | let
         let name = self
-            .expect_ident("a binding name")
+            .expect_decl_name(if is_var { "a `var`" } else { "a `let`" }, "a binding name")
             .unwrap_or_else(|| Symbol::intern(""));
         let ty = if self.eat(&Token::Colon) {
             Some(self.parse_type())
@@ -564,7 +745,7 @@ impl<'a> Parser<'a> {
         let start = self.cur_span();
         self.advance(); // fn
         let name = self
-            .expect_ident("a function name")
+            .expect_decl_name("a function", "a function name")
             .unwrap_or_else(|| Symbol::intern(""));
         self.expect(&Token::LParen, "'('");
         let params = self.parse_params();
@@ -671,7 +852,7 @@ impl<'a> Parser<'a> {
         let ty = self.parse_type();
         self.expect(&Token::As, "'as'");
         let name = self
-            .expect_ident("an inject binding name")
+            .expect_decl_name("an `inject` binding", "an inject binding name")
             .unwrap_or_else(|| Symbol::intern(""));
         Member::Inject {
             ty,
@@ -712,7 +893,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// `when_stmt := "when" expr "{" member* "}" ("else" "{" member* "}")?`.
+    /// `when_stmt := "when" expr "{" member* "}" ("else" ("{" member* "}" | when_stmt))?`.
     fn parse_when(&mut self) -> Member {
         let start = self.cur_span();
         self.advance(); // when
@@ -720,8 +901,14 @@ impl<'a> Parser<'a> {
         self.expect(&Token::LBrace, "'{'");
         let then = self.parse_block_members();
         let els = if self.eat(&Token::Else) {
-            self.expect(&Token::LBrace, "'{'");
-            Some(self.parse_block_members())
+            // `else when …` is the nested form written without its braces
+            // (RFC-0055): the next `when` is the whole else branch.
+            if matches!(self.cur(), Some(Token::When)) {
+                Some(vec![self.parse_when()])
+            } else {
+                self.expect(&Token::LBrace, "'{'");
+                Some(self.parse_block_members())
+            }
         } else {
             None
         };
@@ -975,9 +1162,17 @@ impl<'a> Parser<'a> {
     /// so it is recognized here by name.
     fn parse_type(&mut self) -> Type {
         let start = self.cur_span();
-        let name = self
+        let mut name = self
             .expect_ident("a type name")
             .unwrap_or_else(|| Symbol::intern(""));
+        // `m.Variant`: a type of another package, qualified by the name or
+        // alias it was imported under (RFC-0055).
+        if matches!(self.cur(), Some(Token::Dot)) && matches!(self.peek2(), Some(Token::Ident(_))) {
+            self.advance(); // .
+            if let Some(member) = self.expect_ident("a type name") {
+                name = Symbol::intern(&format!("{}.{}", name.as_str(), member.as_str()));
+            }
+        }
 
         if name.as_str() == "Fn" && matches!(self.cur(), Some(Token::LParen)) {
             self.advance(); // (
@@ -1017,6 +1212,12 @@ impl<'a> Parser<'a> {
             span: self.span_from(start),
         }
     }
+}
+
+/// Whether `tok` is any reserved word, which no declaration may use as its
+/// name.
+fn is_name_keyword(tok: &Token) -> bool {
+    is_keyword(tok) || matches!(tok, Token::With | Token::Merge)
 }
 
 /// Whether `tok` is a reserved keyword that may also be used as a contextual

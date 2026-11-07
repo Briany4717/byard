@@ -31,7 +31,7 @@ The ones that paint:
 
 | Attribute | Takes | Notes |
 |-----------|-------|-------|
-| `bg` | colour | Fill |
+| `bg` | colour | Fill. On a `Text` it fills the text's box, behind the words |
 | `color` | colour | Text colour, on `Text`, `Button` and `TextField` |
 | `radius` | length | Corner radius. A quad rounds each corner on its own |
 | `smooth` | `0` to `1` | Corner profile. `0` is a circular arc, about `0.6` a continuous corner like an Apple icon |
@@ -42,7 +42,7 @@ The ones that paint:
 | `blur`, `backdrop_tint` | number, colour | Frosted glass, see below |
 
 Text has its own: `size`, `weight`, `font`, `typo`, `align`, `wrap`. They are
-under [Text](#text) below. Every attribute is checked. A name the element does not
+under [Text](#text) below. Its size and spacing are [layout](layout.md#text). Every attribute is checked. A name the element does not
 take is an error, with the nearest one suggested:
 
 ```byld,fails
@@ -114,6 +114,9 @@ and `start` turns a conic. Gradients are drawn as part of the box, so they follo
 its rounded corners, and `gradient_offset` slides the ramp, which is how a
 [shimmer](motion.md#looping) works. The same descriptor is used on canvas strokes
 and filled paths, see [drawing](drawing.md).
+
+A gradient moves with [`with`](motion.md#colours-and-gradients), and a conditional of
+gradients is the one its condition picks.
 
 A misspelt name inside the tuple is checked as well, so `gradient: (to: blak)` is
 an error and not a gradient that quietly does not draw.
@@ -222,7 +225,8 @@ View Main() {
 |-------|------|
 | `hover` | The pointer is over the element |
 | `pressed` | A press is on it |
-| `focused` | It has keyboard focus |
+| `focused` | It has keyboard focus, however it got there |
+| `focus_visible` | It has focus, and the keyboard put it there (Tab, an arrow key in a tab list or radio group), or it is a `TextField`. A mouse press does not set it |
 | `disabled` | It has `disabled: true` |
 | `checked` | A `Checkbox` or `Toggle` is on |
 | `selected` | It has `selected: true`, for a tab, a chip, a list item |
@@ -245,6 +249,24 @@ View Main() {
 
 ```diagnostic
 error[UnknownStyleState]: unknown interaction state `hovr`
+```
+
+`focused` is true after a click as well as after Tab. A ring that should show for the
+keyboard only is written `on focus_visible`, which is what the browsers' `:focus-visible`
+does and what Material asks for. A press on a button focuses it without the ring, and the
+next Tab draws it on the next control. A `TextField` is the exception: you are typing in
+it, so it is focus-visible however you got there. Keep `on focused` for anything that is
+true of every kind of focus, such as the tint of the field you are in.
+
+```byld
+View Main() {
+    var n = 0
+    let ring = style {
+        border: 0x2F2F40, border_width: 2
+        on focus_visible { border: 0xB69DF8, border_width: 3 }
+    }
+    Button("Save") #[..ring, bg: 0x3B82F6, radius: 8, width: 120, height: 40] => n += 1
+}
 ```
 
 The states come from the engine's own tracking, so you write no `var` and no
@@ -332,7 +354,20 @@ View Main() {
   family together. This is the better way to style text, because a screen then
   says what a piece of text *is*, not three loose numbers.
 - `align` places the text within its width.
-- Text wraps to the width its parent offers. `wrap: false` keeps it on a line.
+- Any of these can read a view's parameter, a `let` or a `var`: `size: dim`,
+  `weight: w`, `color: c`, `wrap: on`, or `typo: name` with a `Str` holding a token name.
+  A `Float` size such as `12.5` works too. A name the view binds wins over a keyword of the
+  same spelling, so a parameter called `bold` is the parameter.
+- Text wraps to the width its parent offers. `wrap: false` keeps it on a line, and with a `width` clips it to that width.
+- `bg` and `radius` give a `Text` a background. It is drawn behind the words and fills
+  the text's whole box, `p` included, so `Text("Email") #[bg: 0x14141C, p: (horizontal: 4)]`
+  is a label that hides the border it sits over. A `Text` that writes neither draws no
+  fill and pays nothing for one.
+
+```byld,fragment
+Box #[bg: 0x14141C, border: 0x938F99, border_width: 1, radius: 4, height: 56] {}
+Text("Email") #[bg: 0x14141C, color: 0xCAC4D0, size: 12, p: (horizontal: 4), ml: 12]
+```
 
 Text, like boxes, can be moved and turned. See [motion](motion.md).
 

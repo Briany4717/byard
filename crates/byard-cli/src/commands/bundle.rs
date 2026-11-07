@@ -135,6 +135,16 @@ pub fn run(
     if !deps.is_empty() {
         style::fact("Packages", &deps.len().to_string());
     }
+    for font in &written.fonts {
+        let sizes = font.after.map_or_else(
+            || format!("{} bytes, whole", font.before),
+            |after| format!("{} -> {after} bytes", font.before),
+        );
+        style::fact(
+            "Icon font",
+            &format!("{} ({}): {sizes}; {}", font.family, font.path, font.detail),
+        );
+    }
     if layout == Layout::Linux {
         validate_linux_entries(&written.root, &naming.id);
     }
@@ -232,6 +242,21 @@ struct Written {
     root: PathBuf,
     /// The project copy inside it.
     project: PathBuf,
+    /// What became of each icon font (RFC-0054), for the report.
+    fonts: Vec<IconFontReport>,
+}
+
+/// What `bundle` did to one icon font.
+struct IconFontReport {
+    /// Where it is in the project, from the unit's root.
+    path: String,
+    /// The family as the manifest names it.
+    family: String,
+    /// Its size before, and after if it was cut.
+    before: usize,
+    after: Option<usize>,
+    /// Why it was shipped whole, or the icons it kept.
+    detail: String,
 }
 
 fn write_bundle(
@@ -283,6 +308,8 @@ fn write_bundle(
         rewrite_dependencies(&to.join("byard.toml"), |name| format!("../{name}"))?;
     }
 
+    let fonts = subset_icon_fonts(&project, deps)?;
+
     if layout == Layout::App {
         let resources = root.join("Contents/Resources");
         let icon_file = match &manifest.icon {
@@ -301,7 +328,11 @@ fn write_bundle(
     if layout == Layout::Linux {
         write_linux_entries(manifest, naming, &exe.to_string_lossy(), &root)?;
     }
-    Ok(Written { root, project })
+    Ok(Written {
+        root,
+        project,
+        fonts,
+    })
 }
 
 /// Writes `text` to `path`, its directory made.
@@ -684,6 +715,156 @@ fn info_plist(naming: &Naming, exe: &str, icon: Option<&str>) -> String {
         let _ = write!(out, "    <key>{key}</key>\n    <string>{value}</string>\n");
     }
     out.push_str("    <key>NSHighResolutionCapable</key>\n    <true/>\n</dict>\n</plist>\n");
+    out
+}
+
+/// Cuts every icon font in the bundle (RFC-0054) down to the glyphs the
+/// program uses.
+///
+/// An icon font is one declared `icons = true` in a manifest's
+/// `[assets.fonts]`. The icons it needs are the string literals anywhere in
+/// the bundle (the app and its packages) that the font draws as one ligature,
+/// plus the manifest's `icons_include`. A `Text` in the font whose content is
+/// built at run time has no literal, so without `icons_include` the font is
+/// left whole and the report says why (`byard check` warns on the same text).
+/// A font that cannot be cut is also left whole: a large font works.
+fn subset_icon_fonts(
+    project: &Path,
+    deps: &[(String, PathBuf)],
+) -> Result<Vec<IconFontReport>, String> {
+    let mut units = vec![project.to_path_buf()];
+    units.extend(
+        deps.iter()
+            .map(|(name, _)| project.join(".byard/deps").join(name)),
+    );
+    let mut declared = Vec::new();
+    for unit in &units {
+        let fonts = icon_fonts_of(unit)?;
+        if !fonts.is_empty() {
+            declared.push((unit, fonts));
+        }
+    }
+    if declared.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut literals = std::collections::BTreeSet::new();
+    for unit in &units {
+        for file in byd_files(unit) {
+            if let Ok(source) = std::fs::read_to_string(&file) {
+                literals.extend(byard_compiler::icons::string_literals(&source));
+            }
+        }
+    }
+    let mut reports = Vec::new();
+    for (unit, fonts) in declared {
+        let families: Vec<String> = fonts.iter().map(|f| f.family.clone()).collect();
+        let mut dynamic = Vec::new();
+        for file in byd_files(unit) {
+            if let Ok(source) = std::fs::read_to_string(&file) {
+                for view in byard_compiler::parser::parse(&source).views {
+                    byard_compiler::icons::dynamic_icon_texts(&view.body, &families, &mut dynamic);
+                }
+            }
+        }
+        for font in fonts {
+            let file = unit.join(&font.path);
+            let bytes = std::fs::read(&file).map_err(|e| io(&file, &e))?;
+            let mut report = IconFontReport {
+                path: font.path.clone(),
+                family: font.family.clone(),
+                before: bytes.len(),
+                after: None,
+                detail: String::new(),
+            };
+            if font.include.is_empty() && !dynamic.is_empty() {
+                report.detail = format!(
+                    "{} `Text` in it cannot be read at build time; list the names in \
+                     `icons_include` to cut it",
+                    dynamic.len()
+                );
+                reports.push(report);
+                continue;
+            }
+            let mut names: Vec<String> = literals.iter().cloned().collect();
+            names.extend(font.include.iter().cloned());
+            match crate::iconfont::subset(&bytes, &names) {
+                Ok(cut) => {
+                    std::fs::write(&file, &cut.bytes).map_err(|e| io(&file, &e))?;
+                    report.after = Some(cut.bytes.len());
+                    report.detail = format!("{} icons kept", cut.names.len());
+                }
+                Err(why) => report.detail = format!("left whole, it could not be cut: {why}"),
+            }
+            reports.push(report);
+        }
+    }
+    Ok(reports)
+}
+
+/// One icon font a manifest declares.
+struct IconFontDecl {
+    family: String,
+    path: String,
+    include: Vec<String>,
+}
+
+/// The `icons = true` entries of the manifest in `unit`.
+fn icon_fonts_of(unit: &Path) -> Result<Vec<IconFontDecl>, String> {
+    let manifest = unit.join("byard.toml");
+    let Ok(text) = std::fs::read_to_string(&manifest) else {
+        return Ok(Vec::new());
+    };
+    let table: toml::Table = text
+        .parse()
+        .map_err(|e| format!("{}: {e}", manifest.display()))?;
+    let Some(fonts) = table
+        .get("assets")
+        .and_then(|a| a.get("fonts"))
+        .and_then(toml::Value::as_table)
+    else {
+        return Ok(Vec::new());
+    };
+    Ok(fonts
+        .iter()
+        .filter_map(|(family, v)| {
+            let t = v.as_table()?;
+            t.get("icons")?.as_bool()?.then_some(())?;
+            Some(IconFontDecl {
+                family: family.clone(),
+                path: t.get("path")?.as_str()?.to_string(),
+                include: t
+                    .get("icons_include")
+                    .and_then(toml::Value::as_array)
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|n| n.as_str().map(str::to_string))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            })
+        })
+        .collect())
+}
+
+/// The `.byd` files under `dir`, not descending into hidden directories
+/// (a package's own copies are separate units).
+fn byd_files(dir: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return out;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name();
+        if name.to_string_lossy().starts_with('.') {
+            continue;
+        }
+        if path.is_dir() {
+            out.extend(byd_files(&path));
+        } else if path.extension().is_some_and(|e| e == "byd") {
+            out.push(path);
+        }
+    }
     out
 }
 

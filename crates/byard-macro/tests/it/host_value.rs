@@ -209,3 +209,37 @@ fn a_struct_that_borrows_can_be_sent() {
     let host = Borrowing { text: "hi" }.into_host();
     assert_eq!(host.field("label"), Some(&HostValue::Str("hi".into())));
 }
+
+// ── Field names: data keeps the name it was given ───────────────────────────
+
+#[derive(Debug, PartialEq, Eq, byard_macro::HostValue)]
+struct Line {
+    unit_price: i64,
+    sku: String,
+    #[host(rename = "onHand")]
+    on_hand: i64,
+}
+
+#[test]
+fn a_field_is_a_record_key_exactly_as_declared() {
+    let line = Line {
+        unit_price: 5,
+        sku: "A".into(),
+        on_hand: 2,
+    };
+    let HostValue::Record(fields) = line.into_host() else {
+        panic!("a struct is a record")
+    };
+    let keys: Vec<&str> = fields.iter().map(|(k, _)| k.as_str()).collect();
+    // `unit_price` stays `unit_price`, so a struct that is also JSON reads the
+    // same in Byld; an explicit rename is used as written.
+    assert_eq!(keys, ["unit_price", "sku", "onHand"]);
+
+    let back = Line::from_host(record(&[
+        ("unit_price", HostValue::Int(9)),
+        ("sku", HostValue::Str("B".into())),
+        ("onHand", HostValue::Int(1)),
+    ]));
+    assert_eq!(back.unit_price, 9);
+    assert_eq!(back.on_hand, 1);
+}

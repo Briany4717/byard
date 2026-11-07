@@ -222,7 +222,8 @@ impl Interpreter {
             // (WAI-ARIA switch pattern): Tab and a click both reach it.
             let fsig = self.focus_signal(attrs);
             self.router.focusable(idx, hit_rect, fsig);
-            self.router.activate_on_key(idx);
+            self.router
+                .activate_on_key(idx, super::events::ActivationKeys::Both);
         } else {
             self.register_focusable(attrs, hit_rect, elem_idx);
         }

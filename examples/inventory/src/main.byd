@@ -1,0 +1,243 @@
+// Stockroom: a small stock-keeping app. This file is the shell and the only
+// place the data lives: the catalogue, the movement log and the settings are
+// `var`s here, passed down to the screens as parameters and changed through
+// the actions below, which also save them.
+
+// A product on the shelves. `location` may be left out.
+type Product = {
+    id: Int,
+    sku: Str,
+    name: Str,
+    category: Str,
+    qty: Int,
+    min: Int,
+    price: Float,
+    location: Str?,
+    updated: Str,
+}
+
+// One change of a product's quantity. `kind` is "in", "out" or "adjust". For
+// "in" and "out" the quantity is the amount moved; for "adjust" it is the
+// signed difference.
+type Movement = {
+    id: Int,
+    productId: Int,
+    kind: Str,
+    qty: Int,
+    note: Str,
+    at: Str,
+}
+
+View Main() {
+    inject Theme as t
+    inject Store as store
+
+    var products: List<Product> = []
+    var movements: List<Movement> = []
+    // What a new product's minimum starts as. Kept in Settings.
+    var minDefault: Int = 5
+    // Whether the saved data has been read; until it has there is nothing to show.
+    var loaded: Bool = false
+    // Set when a save fails, so the screen says so and not nothing.
+    var problem: Str = ""
+
+    var tab = "dashboard"
+    // Set by the dashboard's "and K more": the product list opens on low stock.
+    var lowFilter = false
+    var productsPath = "/"
+
+    // First run: nothing is saved yet, so the sample catalogue is the data.
+    on mount => {
+        store.get("seeded", false)
+            ok seeded => {
+                if seeded {
+                    store.get("products", [])
+                        ok saved => {
+                            products = saved
+                            store.get("movements", [])
+                                ok log => {
+                                    movements = log
+                                    store.get("minDefault", 5)
+                                        ok m => {
+                                            minDefault = m
+                                            loaded = true
+                                        }
+                                }
+                        }
+                } else {
+                    products = sampleProducts()
+                    movements = sampleMovements()
+                    store.set("seeded", true)
+                    store.set("products", products)
+                    store.set("movements", movements)
+                    loaded = true
+                }
+            }
+            err e => {
+                problem = "Could not read the saved data: {e.message}"
+                products = sampleProducts()
+                movements = sampleMovements()
+                loaded = true
+            }
+    }
+
+    // ── What the screens may do ───────────────────────────────────────────
+
+    let save = () => {
+        store.set("products", products)
+            err e => { problem = "Could not save: {e.message}" }
+        store.set("movements", movements)
+            err e => { problem = "Could not save: {e.message}" }
+    }
+
+    // A new product, stamped with the time it was made.
+    let create = (sku: Str, name: Str, category: Str, qty: Int, min: Int, price: Float, location: Str) => {
+        let at = now()
+        let id = products.reduce(0, (m, p) => p.id > m ? p.id : m) + 1
+        let made: Product = {
+            id: id,
+            sku: sku,
+            name: name,
+            category: category,
+            qty: qty,
+            min: min,
+            price: price,
+            location: location,
+            updated: at,
+        }
+        products = products.push(made)
+        if qty > 0 {
+            let mid = movements.reduce(0, (m, x) => x.id > m ? x.id : m) + 1
+            movements = [{ id: mid, productId: id, kind: "in", qty: qty, note: "Opening stock", at: at }] + movements
+        }
+        save()
+        replace(productsPath, "/product/{id}")
+    }
+
+    let update = (id: Int, sku: Str, name: Str, category: Str, min: Int, price: Float, location: Str) => {
+        let at = now()
+        products = products.map(p => p.id == id ? { ..p, sku: sku, name: name, category: category, min: min, price: price, location: location, updated: at } : p)
+        save()
+        back(productsPath)
+    }
+
+    // Receive ("in"), ship ("out") or adjust. A shipment larger than what is on
+    // hand is refused here as well as in the dialog.
+    let move = (productId: Int, kind: Str, qty: Int, note: Str) => {
+        let at = now()
+        let cur = products.find(p => p.id == productId)
+        let delta = kind == "out" ? 0 - qty : qty
+        if (cur.qty ?? 0) + delta >= 0 && qty != 0 {
+            products = products.map(p => p.id == productId ? { ..p, qty: p.qty + delta, updated: at } : p)
+            let mid = movements.reduce(0, (m, x) => x.id > m ? x.id : m) + 1
+            movements = [{ id: mid, productId: productId, kind: kind, qty: qty, note: note, at: at }] + movements
+            save()
+        }
+    }
+
+    // The movements stay: the log still reads, with the product's id.
+    let remove = (id: Int) => {
+        products = products.filter(p => p.id != id)
+        save()
+        productsPath = "/"
+    }
+
+    let resetSample = () => {
+        products = sampleProducts()
+        movements = sampleMovements()
+        save()
+        productsPath = "/"
+    }
+
+    let saveMinDefault = (m: Int) => {
+        minDefault = m
+        store.set("minDefault", m)
+    }
+
+    let open = (id: Int) => {
+        tab = "products"
+        productsPath = "/product/{id}"
+    }
+
+    let tabButton = style {
+        radius: 18, p: (vertical: 8, horizontal: 16), color: t.onSurfaceVariant, typo: t.label
+        on selected { bg: t.primaryContainer, color: t.onPrimaryContainer }
+    }
+
+    Column #[bg: t.background, grow: 1] {
+        Row #[bg: t.surfaceContainer, p: (vertical: 10, horizontal: 20), gap: 6, align: center] {
+            Text("Stockroom") #[typo: t.title, color: t.onSurface, m: (right: 16)]
+            Button("Dashboard") #[..tabButton, selected: tab == "dashboard"] => { lowFilter = false tab = "dashboard" }
+            Button("Products") #[..tabButton, selected: tab == "products"] => tab = "products"
+            Button("Movements") #[..tabButton, selected: tab == "movements"] => tab = "movements"
+            Button("Settings") #[..tabButton, selected: tab == "settings"] => tab = "settings"
+            Spacer
+            when problem != "" {
+                Text(problem) #[typo: t.caption, color: t.error]
+            }
+        }
+
+        when !loaded {
+            Text("Loading the stockroom") #[typo: t.body, color: t.onSurfaceVariant, m: 24]
+        }
+        when loaded {
+            NavHost(active: tab) #[grow: 1, transition: fade] {
+                tab "dashboard" {
+                    Dashboard(products: products, movements: movements, on_open: {|id| open(id) }, on_low: { lowFilter = true tab = "products" })
+                }
+                tab "products" {
+                    NavStack(path: productsPath) #[grow: 1, transition: slide, swipe_back: true] {
+                        route "/" {
+                            ProductList(
+                                products: products,
+                                low: lowFilter,
+                                on_open: {|id| productsPath = "/product/{id}" },
+                                on_new: { productsPath = "/new" },
+                            )
+                        }
+                        route "/new" {
+                            ProductForm(
+                                editing: 0,
+                                products: products,
+                                min_default: minDefault,
+                                on_create: {|sku, name, category, qty, min, price, location| create(sku, name, category, qty, min, price, location) },
+                                on_cancel: { back(productsPath) },
+                            )
+                        }
+                        route "/product/:id" {|params|
+                            ProductDetail(
+                                id: params.id.toInt() ?? 0,
+                                products: products,
+                                movements: movements,
+                                on_edit: { productsPath = "/product/{params.id}/edit" },
+                                on_delete: {|id| remove(id) },
+                                on_move: {|id, kind, qty, note| move(id, kind, qty, note) },
+                                on_back: { back(productsPath) },
+                            )
+                        }
+                        route "/product/:id/edit" {|params|
+                            ProductForm(
+                                editing: params.id.toInt() ?? 0,
+                                products: products,
+                                min_default: minDefault,
+                                on_update: {|id, sku, name, category, min, price, location| update(id, sku, name, category, min, price, location) },
+                                on_cancel: { back(productsPath) },
+                            )
+                        }
+                    }
+                }
+                tab "movements" {
+                    MovementLog(products: products, movements: movements)
+                }
+                tab "settings" {
+                    Settings(
+                        products: products,
+                        min_default: minDefault,
+                        on_min: {|m| saveMinDefault(m) },
+                        on_reset: { resetSample() },
+                    )
+                }
+            }
+        }
+    }
+}

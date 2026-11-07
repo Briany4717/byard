@@ -433,6 +433,44 @@ fn declare_axis_weights(db: &mut glyphon::fontdb::Database, id: glyphon::fontdb:
     }
 }
 
+/// Which of `candidates` an icon font draws as one ligature glyph (RFC-0054),
+/// each with the glyph id it shapes to.
+///
+/// An icon font's glyphs are named by ligatures (`favorite` is a heart), so
+/// shaping is the one honest way to ask whether a string is a name in it: a
+/// name shapes to a single glyph, any other string to its letters. Used by
+/// `byard bundle` to tell the icon names among a program's string literals,
+/// and again on the font it writes to prove none was lost. Candidates shorter
+/// than two characters cannot be ligatures and are skipped.
+///
+/// The font is loaded alone into a database of its own, so the system's fonts
+/// are neither scanned nor consulted.
+#[must_use]
+pub fn ligatures(font: &Arc<[u8]>, candidates: &[String]) -> Vec<(String, u16)> {
+    use glyphon::{Attrs, Buffer, Metrics, Shaping};
+    let mut db = glyphon::fontdb::Database::new();
+    let Some(family) = register_into(&mut db, font) else {
+        return Vec::new();
+    };
+    let mut fs = FontSystem::new_with_locale_and_db("en-US".to_string(), db);
+    let mut buffer = Buffer::new(&mut fs, Metrics::new(16.0, 19.0));
+    let attrs = Attrs::new().family(Family::Name(&family));
+    let mut out = Vec::new();
+    for c in candidates {
+        if c.chars().count() < 2 || c.contains(char::is_whitespace) {
+            continue;
+        }
+        buffer.set_text(&mut fs, c, &attrs, Shaping::Advanced, None);
+        buffer.shape_until_scroll(&mut fs, false);
+        if let Some(run) = buffer.layout_runs().next() {
+            if let [glyph] = run.glyphs {
+                out.push((c.clone(), glyph.glyph_id));
+            }
+        }
+    }
+    out
+}
+
 /// A `FontSystem` with the system's fonts, prepared the way every Byard
 /// `FontSystem` must be: the measuring one here and the painting one in
 /// `encoder::text_glyph` both come from this, so they cannot disagree about
@@ -702,6 +740,57 @@ mod tests {
         let (w, h) = m.measure("", 16.0, 400, None);
         assert!(w.abs() < 1e-6, "empty text has zero width, got {w}");
         assert!(h > 0.0);
+    }
+
+    const ICONS: &[u8] = include_bytes!("../../byard-cli/examples/assets/fonts/ByardIcons.ttf");
+
+    /// How many glyphs `text` shapes to in the icon font.
+    fn icon_glyphs(fs: &mut FontSystem, family: &str, text: &str) -> usize {
+        use glyphon::{Attrs, Buffer, Metrics, Shaping};
+        let mut b = Buffer::new(fs, Metrics::new(48.0, 58.0));
+        b.set_text(
+            fs,
+            text,
+            &Attrs::new().family(Family::Name(family)),
+            Shaping::Advanced,
+            None,
+        );
+        b.shape_until_scroll(fs, false);
+        b.layout_runs().next().expect("one run").glyphs.len()
+    }
+
+    /// An icon's name is a ligature: eight letters shape to one glyph the
+    /// width of an em, and a misspelling is eight letters.
+    #[test]
+    fn an_icon_name_shapes_to_one_ligature_glyph() {
+        let mut fs = new_font_system();
+        let family = register_into(fs.db_mut(), &Arc::from(ICONS)).expect("the icon font parses");
+        assert_eq!(icon_glyphs(&mut fs, &family, "favorite"), 1);
+        assert_eq!(
+            icon_glyphs(&mut fs, &family, "favoritx"),
+            8,
+            "a misspelt name is its letters"
+        );
+        let mut m = TextMeasurer::new();
+        let family = m.register_family(&Arc::from(ICONS)).expect("registers");
+        let (w, _) = m.measure("favorite", 48.0, 400, Some(&family));
+        assert!((w - 48.0).abs() < 0.5, "an icon is an em wide, got {w}");
+    }
+
+    #[test]
+    fn ligatures_tells_icon_names_from_words() {
+        let font: Arc<[u8]> = Arc::from(ICONS);
+        let candidates: Vec<String> = ["favorite", "home", "hello", "Home", "star", "x", "a b"]
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
+        assert_eq!(
+            ligatures(&font, &candidates)
+                .into_iter()
+                .map(|(n, _)| n)
+                .collect::<Vec<_>>(),
+            vec!["favorite", "home", "star"]
+        );
     }
 
     /// A glyph rasterizes to the same image whatever was rasterized before it.

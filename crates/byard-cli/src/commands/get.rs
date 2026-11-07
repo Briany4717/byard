@@ -20,6 +20,7 @@ use byard_project::solve::{self, FixedPackage};
 pub fn run() -> Result<(), String> {
     let manifest = Manifest::discover(None).map_err(|e| e.to_string())?;
     let started = std::time::Instant::now();
+    warn_machine_specific_registries(&manifest);
     style::action(&format!("resolving dependencies of `{}`", manifest.name));
     let previous = Lockfile::read(&manifest.project_root).map_err(|e| e.to_string())?;
 
@@ -42,17 +43,16 @@ pub fn run() -> Result<(), String> {
                 continue; // registry packages are the solver's; first path/git wins
             }
             let (root, commit) = ensure_present(&declarer_root, &dep)?;
-            let checksum = package_checksum(&root).map_err(|e| e.to_string())?;
-            style::info(&format!(
-                "{} {} ({})",
-                if matches!(dep.source, DepSource::Path(_)) {
-                    "path"
-                } else {
-                    "git "
-                },
-                dep.name,
-                short(&checksum)
-            ));
+            // A path dependency is the files on disk, read as they are each
+            // time; pinning a hash of them only goes stale (RFC-0056).
+            let checksum = if matches!(dep.source, DepSource::Path(_)) {
+                style::info(&format!("path {} (not pinned)", dep.name));
+                String::new()
+            } else {
+                let checksum = package_checksum(&root).map_err(|e| e.to_string())?;
+                style::info(&format!("git  {} ({})", dep.name, short(&checksum)));
+                checksum
+            };
             locked.push(LockedPackage {
                 name: dep.name.clone(),
                 source: source_string(&dep),
@@ -142,12 +142,7 @@ fn ensure_present(declarer_root: &Path, dep: &Dependency) -> Result<(PathBuf, St
             let dest = git_cache_path(&dep.name, url, reference);
             let commit = if dest.is_dir() {
                 // Already cached, pinned refs are immutable, no refetch.
-                let out = std::process::Command::new("git")
-                    .args(["rev-parse", "HEAD"])
-                    .current_dir(&dest)
-                    .output()
-                    .map_err(|e| format!("failed to run git: {e}"))?;
-                String::from_utf8_lossy(&out.stdout).trim().to_string()
+                crate::deps::cached_git_commit(&dest).map_err(|e| e.to_string())?
             } else {
                 style::action(&format!(
                     "fetching {} ({url}#{})",
@@ -175,5 +170,29 @@ fn package_deps(root: &Path) -> Result<Vec<Dependency>, String> {
     match table.get("dependencies") {
         Some(d) => parse_dependencies(d, &manifest_path).map_err(|e| e.to_string()),
         None => Ok(Vec::new()),
+    }
+}
+
+/// A directory registry written as an absolute path goes into the lock as it
+/// is written, a place that exists on one machine (RFC-0056). Said once, with
+/// the fix, rather than found on the next machine.
+fn warn_machine_specific_registries(manifest: &Manifest) {
+    for dep in &manifest.dependencies {
+        if let DepSource::Registry {
+            registry: crate::manifest::RegistryLocation::Dir(dir),
+            ..
+        } = &dep.source
+        {
+            if dir.is_absolute() {
+                style::warn(&format!(
+                    "dependency `{}`: the registry `{}` is an absolute path, so byard.toml and \
+                     byard.lock only work on this machine\n\
+                     hint: write it relative to the project, like `../registry`, or serve it \
+                     and use its `https://` URL",
+                    dep.name,
+                    dir.display()
+                ));
+            }
+        }
     }
 }

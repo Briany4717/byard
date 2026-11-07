@@ -1,0 +1,3 @@
+[project]
+name = "view_animations"
+entry = "src/main.byd"

@@ -117,7 +117,8 @@ it a `focus` handler and it becomes focusable.
 Three things are worth knowing:
 
 - **The topmost element that listens gets the event.** A press does not bubble to
-  the elements under it. To close a menu on a click outside it, use `dismiss`.
+  the elements under it, so a `tap` on a panel does not run when a field inside it
+  is pressed. To close a menu on a click outside it, use `dismiss`.
 - **Small targets are still tappable.** Anything with a handler gets a hit area of
   at least 44 by 44 pixels, so a small icon is easy to hit.
 - **A double tap is only a double tap where someone listens.** Without a

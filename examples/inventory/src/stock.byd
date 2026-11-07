@@ -1,0 +1,17 @@
+// What a product's quantity says, and how money is written. Shared by every
+// screen, so a number means one thing everywhere.
+
+// "out", "low" (at or under the minimum) or "ok".
+fn stockState(qty: Int, min: Int) -> Str => qty <= 0 ? "out" : qty <= min ? "low" : "ok"
+
+fn stockLabel(qty: Int, min: Int) -> Str => qty <= 0 ? "Out" : qty <= min ? "Low" : "In stock"
+
+fn money(v: Float) -> Str => "${v:,.2}"
+
+// A movement's quantity as the log shows it: "+50", "-4", "+3".
+fn signed(kind: Str, qty: Int) -> Str => kind == "out" ? "-{qty}" : qty > 0 ? "+{qty}" : "{qty}"
+
+fn kindLabel(kind: Str) -> Str => kind == "in" ? "Received" : kind == "out" ? "Shipped" : "Adjusted"
+
+// "2026-10-03T11:20" as "3 Oct 2026, 11:20".
+fn stamp(at: Str) -> Str => at.formatDate("D MMM YYYY, HH:mm") ?? at

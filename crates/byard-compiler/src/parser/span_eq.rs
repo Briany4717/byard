@@ -14,8 +14,9 @@
 
 use super::ParsedFile;
 use super::ast::{
-    Arg, Attr, AttrKind, Breakpoint, ElementNode, Expr, FnDecl, Member, Param, RecordDecl,
-    RecordField, ResultArm, StateBlock, StrPart, StyleRule, Type, UseDecl, ViewDecl, ViewportCond,
+    Arg, Attr, AttrKind, Breakpoint, ConstDecl, ElementNode, EnumDecl, Expr, FnDecl, Member, Param,
+    RecordDecl, RecordField, ResultArm, StateBlock, StrPart, StyleRule, Type, UseDecl, ViewDecl,
+    ViewportCond,
 };
 use crate::symbol::Symbol;
 
@@ -58,12 +59,16 @@ pub fn parsed_files_span_eq(a: &ParsedFile, b: &ParsedFile) -> bool {
         views,
         fns,
         records,
+        consts,
+        enums,
         errors: _,
     } = a;
     imports.span_eq(&b.imports)
         && views.span_eq(&b.views)
         && fns.span_eq(&b.fns)
         && records.span_eq(&b.records)
+        && consts.span_eq(&b.consts)
+        && enums.span_eq(&b.enums)
 }
 
 impl SpanEq for Type {
@@ -104,9 +109,13 @@ impl SpanEq for Param {
             name,
             ty,
             default,
+            bind,
             span: _,
         } = self;
-        *name == other.name && ty.span_eq(&other.ty) && default.span_eq(&other.default)
+        *name == other.name
+            && *bind == other.bind
+            && ty.span_eq(&other.ty)
+            && default.span_eq(&other.default)
     }
 }
 
@@ -141,8 +150,14 @@ impl SpanEq for ViewDecl {
             // once in `parsed_files_span_eq`.
             helpers: _,
             records: _,
+            consts: _,
+            enums: _,
+            private,
         } = self;
-        *name == other.name && params.span_eq(&other.params) && body.span_eq(&other.body)
+        *name == other.name
+            && *private == other.private
+            && params.span_eq(&other.params)
+            && body.span_eq(&other.body)
     }
 }
 
@@ -151,9 +166,44 @@ impl SpanEq for RecordDecl {
         let Self {
             name,
             fields,
+            private,
             span: _,
         } = self;
-        *name == other.name && fields.span_eq(&other.fields)
+        *name == other.name && *private == other.private && fields.span_eq(&other.fields)
+    }
+}
+
+impl SpanEq for ConstDecl {
+    fn span_eq(&self, other: &Self) -> bool {
+        let Self {
+            name,
+            ty,
+            init,
+            private,
+            span: _,
+        } = self;
+        *name == other.name
+            && *private == other.private
+            && ty.span_eq(&other.ty)
+            && init.span_eq(&other.init)
+    }
+}
+
+impl SpanEq for EnumDecl {
+    fn span_eq(&self, other: &Self) -> bool {
+        let Self {
+            name,
+            cases,
+            private,
+            span: _,
+        } = self;
+        *name == other.name
+            && *private == other.private
+            && cases.len() == other.cases.len()
+            && cases
+                .iter()
+                .zip(&other.cases)
+                .all(|((a, _), (b, _))| a == b)
     }
 }
 
@@ -171,9 +221,11 @@ impl SpanEq for FnDecl {
             params,
             ret,
             body,
+            private,
             span: _,
         } = self;
         *name == other.name
+            && *private == other.private
             && params.span_eq(&other.params)
             && ret.span_eq(&other.ret)
             && body.span_eq(&other.body)
@@ -446,8 +498,8 @@ impl SpanEq for StyleRule {
 
 impl SpanEq for Arg {
     fn span_eq(&self, other: &Self) -> bool {
-        let Self { name, value } = self;
-        *name == other.name && value.span_eq(&other.value)
+        let Self { name, value, bind } = self;
+        *name == other.name && *bind == other.bind && value.span_eq(&other.value)
     }
 }
 

@@ -40,11 +40,12 @@ Change the scheme, light to dark, and the colours cross-fade.
 | Colour | `t.primary`, `t.onSurface`, `t.surfaceContainer` | `bg:`, `color:`, `border:` |
 | Type | `t.headlineLarge`, `t.bodyMedium` | `typo:` |
 | Shape | `t.cornerMd`, `t.cornerXl` | `radius:` |
+| Motion | `t.springSpatialFast`, `t.durationShort2` | after `with`, see [motion](motion.md#named-motion) |
 | Scheme | `t.dark`, `t.mode` | `t.dark` is a `Bool` you can write, and `t.mode` is its name as text |
 
 Tokens are spelt in `snake_case` in `byard.toml` and in `camelCase` in byld:
 `primary_container` is `t.primaryContainer`. A token that the theme does not have is
-an error, and it names the three places it looked:
+an error, and it names the four places it looked (colour, type, shape and motion):
 
 ```byld,fails
 View Main() {
@@ -66,20 +67,37 @@ so is `Button("flip") => t.dark = !t.dark`.
 
 ## The built-in theme
 
-With no `[theme]` at all you get `byard-base`, which is close to Material 3. Colours:
-`primary`, `onPrimary`, `primaryContainer`, `onPrimaryContainer`, `secondary`,
-`onSecondary`, `secondaryContainer`, `onSecondaryContainer`, `surface`,
-`surfaceContainerLow`, `surfaceContainer`, `surfaceContainerHigh`, `onSurface`,
-`onSurfaceVariant`, `outline`, `outlineVariant`, `background`, `onBackground`, `error`
-and `onError`, each in a light and a dark scheme.
+With no `[theme]` at all you get `byard-base`, which is close to Material 3. Every
+colour role has a light and a dark value:
+
+- the accents, each with an `on` colour, a container and an `on` colour for the
+  container: `primary`, `secondary`, `tertiary` and `error`;
+- the surfaces, from `surfaceContainerLowest` through `surfaceContainerLow`,
+  `surfaceContainer` and `surfaceContainerHigh` to `surfaceContainerHighest`, plus
+  `surface`, `surfaceDim`, `surfaceBright`, `surfaceVariant`, `onSurface`,
+  `onSurfaceVariant`, `background` and `onBackground`;
+- `outline` and `outlineVariant`;
+- the inverse roles for a snackbar or a tooltip, which are dark on a light app and
+  light on a dark one: `inverseSurface`, `inverseOnSurface` and `inversePrimary`;
+- `scrim` and `shadow`, both black. A modal overlay dims the page with `scrim` at 32%,
+  so a theme that declares another `scrim` changes every dialog at once;
+- the fixed roles, which are the same colour in both schemes, for something that must
+  not change with the scheme: `primaryFixed`, `primaryFixedDim`, `onPrimaryFixed` and
+  `onPrimaryFixedVariant`, and the same four for `secondary` and `tertiary`.
 
 The type scale is `displayLarge`, `displayMedium`, `displaySmall`, `headlineLarge`,
 `headlineMedium`, `headlineSmall`, `titleLarge`, `titleMedium`, `titleSmall`,
 `bodyLarge`, `bodyMedium`, `bodySmall`, `labelLarge`, `labelMedium` and `labelSmall`,
 plus the short names `display`, `headline`, `title`, `body`, `caption` and `label`.
+Each of the fifteen has an emphasized twin, `labelLargeEmphasized` and so on: the same
+size and spacing at the next weight up (regular becomes medium, medium becomes bold).
 
 The shapes are `cornerNone` (0), `cornerXs` (4), `cornerSm` (8), `cornerMd` (12),
-`cornerLg` (16), `cornerXl` (28) and `cornerFull`.
+`cornerLg` (16), `cornerLgIncreased` (20), `cornerXl` (28), `cornerXlIncreased` (32),
+`cornerXxl` (48) and `cornerFull`.
+
+The motion tokens are the six springs of Material 3 Expressive and its sixteen
+durations; they are listed under [named motion](motion.md#named-motion).
 
 ## Declaring your own: `byard.toml`
 
@@ -117,7 +135,14 @@ corner_xl = 28
 [theme.breakpoints]
 md = 640
 lg = 1024
+
+[theme.motion]
+spatial_fast = { stiffness = 800, damping_ratio = 0.6 }
+short_2 = 100
 ```
+
+Every key is checked. A table or key the theme does not read (`[theme.motions]`, `[theme.colour]`) is an
+error that names it and suggests the closest one, not something quietly ignored.
 
 - **`name`** is the theme's name, shown in messages.
 - **`extends`** is `"byard-base"`, or the name of a dependency whose theme this one
@@ -134,6 +159,9 @@ lg = 1024
   line_height }`. Only `size` is required. `weight` is `thin`, `light`, `regular`,
   `medium`, `semibold`, `bold` or `black`, and `family` names one of your fonts.
 - **`[theme.shape]`** declares corner radii.
+- **`[theme.motion]`** names springs and durations for `with`: a table with `stiffness`
+  and a `damping_ratio` is a spring, a whole number is a duration in milliseconds. See
+  [named motion](motion.md#named-motion).
 - **`[theme.breakpoints]`** names widths for [responsive styles](styling.md#responsive-styles).
 
 A token you declare is used by name. With `hero = { size = 44, weight = "bold" }` and
@@ -164,7 +192,9 @@ transition = 300
 ```
 
 That gives `primary`, `secondary`, `tertiary`, each with its `on` colour and container,
-the `surface` family, `outline`, `error` and so on, light and dark, from one hex. Change
+the `surface` family from `surfaceContainerLowest` to `surfaceContainerHighest`, the
+inverse and fixed roles, `scrim`, `shadow`, `outline`, `error` and so on, light and dark,
+from one hex. Change
 the seed, save, and the whole app moves to the new hue under `byard dev`.
 
 A colour you declare yourself wins over the derived one, so you can take the seed's
@@ -238,6 +268,55 @@ error[UnknownFontFamily]: no font family `display` is declared
 
 A token can name a family, which is the point of a type scale: a screen says `typo:
 hero` and gets the face, the size and the weight together.
+
+### Icon fonts and variation axes
+
+A variable font has more axes than weight. `variations:` sets them by their four-letter tags
+on a `Text` or a `TextField`:
+
+```byld,ignore
+Text("favorite") #[font: symbols, size: 24, variations: (FILL: 1, wght: 500, GRAD: 0, opsz: 24)]
+```
+
+An axis the font does not have is ignored by it. A value can move with `with`, like any other
+paint value, so a filled heart can spring in:
+
+```byld,ignore
+Text("favorite") #[font: symbols, variations: (FILL: liked ? 1 : 0 with anim.spring())]
+```
+
+Icon fonts such as Material Symbols are one file whose icons are ligatures: the letters
+`favorite` shape to a heart. Nothing special is needed to draw one, only the family. A name
+the font does not know draws as its letters.
+
+`wght` in `variations` is the weight. Say it there or with `weight:`, not both: an element with
+both is an error (`VariationWeightConflict`), because two numbers would fight for one axis. A
+`typo:` token's weight gives way to an explicit `wght`.
+
+Two things to know. The axes are applied when the glyphs are drawn, and the text is measured
+at the weight alone, so an axis that changes advances (`wdth`) is drawn but does not resize
+the box; icon fonts keep their advances fixed, and `FILL`, `GRAD` and `opsz` do not move them.
+And a moving axis draws its glyphs again for each new value, 1/16 apart, which is a small
+outline per icon and nothing once the value settles; it never relays out the screen. A line with `variations` is drawn glyph by glyph as small
+images, unhinted and placed on whole pixels: right for icons, so keep body text on `weight:`.
+
+Declare a font as an icon font to have `byard bundle` keep only the icons the program uses:
+
+```toml
+[assets.fonts]
+symbols = { path = "fonts/MaterialSymbolsRounded.ttf", icons = true }
+```
+
+See [shipping](shipping.md#icon-fonts). `byard check` warns, with the line, on a `Text` in an
+icon font whose name is built at run time (`IconNameNotStatic`); the bundle then ships the font
+whole unless the manifest lists them:
+
+```toml
+symbols = { path = "fonts/MaterialSymbolsRounded.ttf", icons = true, icons_include = ["favorite", "home"] }
+```
+
+`byard run` and `byard shot` load the whole font. The sample `examples/icon_font` uses a 3 KB
+stand-in and says how to point it at the real one.
 
 ## The window's icon
 

@@ -15,11 +15,44 @@ use super::states::attrs_with_states;
 use super::{Interpreter, RESERVED_CONTENT, RenderNode, controller, members_span};
 use crate::diagnostics::{CompileError, Span};
 use crate::interp::env::Value;
-use crate::interp::intrinsics::validate_element;
+use crate::interp::intrinsics::validate_element_in;
 use crate::parser::ast::{ElementNode, Expr, Member};
 use crate::symbol::Symbol;
 
 impl Interpreter {
+    /// The instance environment for a leaf that reads attributes outside the
+    /// walk that lowered it. Empty for one with no attributes, which read
+    /// nothing, so the common bare `Text` pays nothing.
+    fn attrs_snapshot(
+        &self,
+        attrs: &[crate::parser::ast::Attr],
+        state_blocks: &[crate::parser::ast::StateBlock],
+    ) -> Vec<(Symbol, Value)> {
+        if attrs.is_empty() && state_blocks.is_empty() {
+            Vec::new()
+        } else {
+            self.capture_env_snapshot()
+        }
+    }
+
+    /// Whether `error` is the keyword complaint about a `weight:` whose bare
+    /// word names something in scope (a view parameter, a `let`, a `var`).
+    fn is_bound_weight_word(
+        &self,
+        attrs: &[crate::parser::ast::Attr],
+        error: &CompileError,
+    ) -> bool {
+        let CompileError::AttributeTypeMismatch { span, .. } = error else {
+            return false;
+        };
+        attrs.iter().any(|a| {
+            a.name.as_str() == "weight"
+                && matches!(&a.kind, crate::parser::ast::AttrKind::Prop {
+                    value: Expr::Ident(sym, sp),
+                } if sp == span && self.env.lookup(sym).is_some())
+        })
+    }
+
     // ── element lowering (RFC-0005) ─────────────────────────────────────
 
     /// Lowers an element to a [`RenderNode`], validating it against the §5
@@ -36,13 +69,20 @@ impl Interpreter {
         // not affect the emitted base set.
         self.check_breakpoints(&state_blocks);
         let to_validate = attrs_with_states(&attrs, &state_blocks);
-        self.errors
-            .extend(validate_element(el, &to_validate, known_views));
+        let mut found = validate_element_in(el, &to_validate, known_views, Some(&self.theme));
+        // The contract reads a bare word in `weight:` as a keyword, because
+        // without a scope that is all it can be. Here the scope is known: a
+        // word the view binds is a value (`weight: w`), and is not an error.
+        if !found.is_empty() {
+            found.retain(|e| !self.is_bound_weight_word(&to_validate, e));
+        }
+        self.errors.extend(found);
         // RFC-0038: an `on measure` member is *about* this element, so it is
         // consumed here and never reaches the child list. `el_children` is the
         // element's members minus those declarations, borrowed unchanged in the
         // overwhelming case where there are none.
         let (measure, el_children) = self.lower_measures(el, &attrs);
+        let uid = self.fresh_elem_uid();
         let el_children: &[Member] = &el_children;
         match el.name.as_str() {
             "Text" | "Button" if !el.content.is_empty() => {
@@ -65,18 +105,25 @@ impl Interpreter {
                             attrs: label_attrs,
                             state_blocks: Vec::new(),
                             content,
+                            env_snapshot: Vec::new(),
+                            inst: self.cur_inst,
                         }],
                         action: el.action.clone(),
                         bound_sig: None,
                         env_snapshot: self.capture_env_snapshot(),
                         measure,
+                        uid,
+                        inst: self.cur_inst,
                         clip_path: None,
                     }
                 } else {
+                    let env_snapshot = self.attrs_snapshot(&attrs, &state_blocks);
                     RenderNode::Text {
                         attrs,
                         state_blocks,
                         content,
+                        env_snapshot,
+                        inst: self.cur_inst,
                     }
                 }
             }
@@ -85,7 +132,10 @@ impl Interpreter {
             //, it compiles its route table into a pool here and lowers each
             // screen lazily, the first time navigation reaches it.
             "NavStack" | "NavHost" => self.lower_nav(el, &attrs, state_blocks, known_views),
-            "Spacer" => RenderNode::Spacer { attrs },
+            "Spacer" => RenderNode::Spacer {
+                attrs,
+                inst: self.cur_inst,
+            },
             // Image intrinsic → TextureSampler pipeline.
             // Syntax: Image("path.jpg") #[fit: .cover, width: 200, height: 150]
             "Image" => {
@@ -94,10 +144,13 @@ impl Interpreter {
                     |c| c.value.clone(),
                 );
                 let src = self.bind_value(&src_expr);
+                let env_snapshot = self.attrs_snapshot(&attrs, &state_blocks);
                 RenderNode::Image {
                     attrs,
                     state_blocks,
                     src,
+                    env_snapshot,
+                    inst: self.cur_inst,
                 }
             }
             // VectorIcon intrinsic → VectorMSDF pipeline. Content is an
@@ -108,9 +161,12 @@ impl Interpreter {
                     |c| c.value.clone(),
                 );
                 let src = self.bind_value(&src_expr);
+                let env_snapshot = self.attrs_snapshot(&el.attrs, &[]);
                 RenderNode::Vector {
                     attrs: el.attrs.clone(),
                     src,
+                    env_snapshot,
+                    inst: self.cur_inst,
                 }
             }
             // RFC-0020: the `Canvas` drawing surface. Its children are shape
@@ -118,8 +174,11 @@ impl Interpreter {
             // AST elements, the render walk re-evaluates their parameter
             // expressions every tick, which is what makes them reactive.
             "Canvas" => {
-                self.errors
-                    .extend(super::intrinsics::validate_canvas(el, &to_validate));
+                self.errors.extend(super::intrinsics::validate_canvas_in(
+                    el,
+                    &to_validate,
+                    Some(&self.theme),
+                ));
                 let shapes = lower_canvas_items(el_children);
                 RenderNode::Canvas {
                     attrs,
@@ -127,6 +186,7 @@ impl Interpreter {
                     shapes,
                     action: el.action.clone(),
                     env_snapshot: self.capture_env_snapshot(),
+                    inst: self.cur_inst,
                 }
             }
             // RFC-0017: the `Overlay` escape-hatch. Its children are lowered
@@ -138,6 +198,7 @@ impl Interpreter {
                     attrs,
                     children,
                     env_snapshot: self.capture_env_snapshot(),
+                    inst: self.cur_inst,
                 }
             }
             // Value widgets: resolve bound signal and keep as leaf nodes.
@@ -155,6 +216,8 @@ impl Interpreter {
                     bound_sig,
                     env_snapshot: self.capture_env_snapshot(),
                     measure,
+                    uid,
+                    inst: self.cur_inst,
                     clip_path: None,
                 }
             }
@@ -174,6 +237,8 @@ impl Interpreter {
                     bound_sig,
                     env_snapshot: self.capture_env_snapshot(),
                     measure,
+                    uid,
+                    inst: self.cur_inst,
                     clip_path: None,
                 }
             }
@@ -191,6 +256,7 @@ impl Interpreter {
                     action: el.action.clone(),
                     env_snapshot: self.capture_env_snapshot(),
                     slot,
+                    inst: self.cur_inst,
                 }
             }
             _ => {
@@ -231,6 +297,8 @@ impl Interpreter {
                     bound_sig,
                     env_snapshot: self.capture_env_snapshot(),
                     measure,
+                    uid,
+                    inst: self.cur_inst,
                     clip_path,
                 }
             }
@@ -475,6 +543,7 @@ impl Interpreter {
                     els_ast: els.clone().unwrap_or_default(),
                     known_views: known_views.iter().map(|s| (*s).to_string()).collect(),
                     env_snapshot,
+                    inst: self.cur_inst,
                     then: None,
                     els: None,
                     then_scopes: Vec::new(),
@@ -505,6 +574,7 @@ impl Interpreter {
                     body: body.clone(),
                     known_views: known_views.iter().map(|s| (*s).to_string()).collect(),
                     env_snapshot,
+                    inst: self.cur_inst,
                     item_slots: Vec::new(),
                     bodies: Vec::new(),
                     slot_scopes: Vec::new(),

@@ -47,6 +47,77 @@ fn text(out: &Output) -> String {
 /// A package, `brand`, that ships a variable font and a theme whose type
 /// scale uses it. Its font lives under the package; nothing is copied to the
 /// consumer.
+/// Makes `pkg` a commit and a tag `v0.1.0` of a repository in `work`, with
+/// what a package repository carries besides the package (a gallery app, CI
+/// files, a font nobody declares), and returns its `file://` URL.
+fn git_repo(pkg: &Path, work: &Path) -> String {
+    let _ = std::fs::remove_dir_all(work);
+    copy_dir(pkg, work);
+    write(&work.join("README.md"), "# brand\n");
+    write(&work.join("LICENSE"), "MIT\n");
+    write(&work.join("gallery/main.byd"), "View Main() { Box {} }\n");
+    write(&work.join(".github/workflows/ci.yml"), "name: ci\n");
+    write(&work.join("fonts/Unused.ttf"), "not declared");
+    write(&work.join("notes.txt"), "not part of the package");
+    let git = |args: &[&str]| {
+        let out = Command::new("git")
+            .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+            .args([
+                "-c",
+                "commit.gpgsign=false",
+                "-c",
+                "init.defaultBranch=main",
+            ])
+            .args(args)
+            .current_dir(work)
+            .output()
+            .expect("run git");
+        assert!(out.status.success(), "git {args:?}: {}", text(&out));
+    };
+    git(&["init", "-q"]);
+    git(&["add", "-A"]);
+    git(&["commit", "-q", "-m", "brand"]);
+    git(&["tag", "v0.1.0"]);
+    // Forward slashes, and `file:///C:/…` on Windows: a backslash in the
+    // manifest's TOML string would be read as an escape.
+    let path = work.display().to_string().replace('\\', "/");
+    if path.starts_with('/') {
+        format!("file://{path}")
+    } else {
+        format!("file:///{path}")
+    }
+}
+
+fn walk(dir: &Path, base: &Path, out: &mut Vec<String>) {
+    for e in std::fs::read_dir(dir).unwrap() {
+        let p = e.unwrap().path();
+        if p.is_dir() {
+            walk(&p, base, out);
+        } else {
+            // With `/` on every platform, as the archive names them.
+            out.push(
+                p.strip_prefix(base)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/"),
+            );
+        }
+    }
+}
+
+fn copy_dir(from: &Path, to: &Path) {
+    std::fs::create_dir_all(to).unwrap();
+    for entry in std::fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let target = to.join(entry.file_name());
+        if entry.path().is_dir() {
+            copy_dir(&entry.path(), &target);
+        } else {
+            std::fs::copy(entry.path(), target).unwrap();
+        }
+    }
+}
+
 fn make_package(root: &Path) {
     let font = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("examples/assets/fonts/SpaceGrotesk-Variable.ttf");
@@ -200,15 +271,17 @@ fn a_published_package_is_a_registry_source_with_the_same_pin() {
     assert!(text(&out).contains("immutable"), "{}", text(&out));
     std::fs::remove_file(pkg.join("src/extra.byd")).unwrap();
 
-    // The same package as a path source, locked: the reference pin.
+    // The same package as a git source, locked: the reference pin (a path
+    // source is not pinned, RFC-0056).
+    let git_url = git_repo(&pkg, &dir.join("brand.git-work"));
     make_app(
-        &dir.join("by_path"),
-        "brand = { path = \"../brand\" }",
+        &dir.join("by_git"),
+        &format!("brand = {{ git = \"{git_url}\", tag = \"v0.1.0\" }}"),
         "brand/Display",
     );
-    let out = byard(&dir.join("by_path"), &dir, &["get"]);
+    let out = byard(&dir.join("by_git"), &dir, &["get"]);
     assert!(out.status.success(), "{}", text(&out));
-    let path_lock = std::fs::read_to_string(dir.join("by_path/byard.lock")).unwrap();
+    let path_lock = std::fs::read_to_string(dir.join("by_git/byard.lock")).unwrap();
 
     // And as a registry source.
     make_app(
@@ -233,7 +306,7 @@ fn a_published_package_is_a_registry_source_with_the_same_pin() {
     assert_eq!(
         checksum(&reg_lock),
         checksum(&path_lock),
-        "a published package pins the same checksum as its source"
+        "a published package pins the same checksum as its git source"
     );
 
     // The consumer checks clean against the unpacked copy, font included.
@@ -254,4 +327,263 @@ fn the_package_theme_example_checks_clean() {
     assert!(out.status.success(), "{}", text(&out));
     assert!(text(&out).contains("0 errors"), "{}", text(&out));
     let _ = std::fs::remove_dir_all(&home);
+}
+
+/// A package that fails its own `byard check` is not published: a version is
+/// immutable, and nobody can use it.
+#[test]
+fn publish_refuses_a_package_that_fails_check() {
+    let dir = scratch("publish-check");
+    let (pkg, registry) = (dir.join("brand"), dir.join("registry"));
+    make_package(&pkg);
+    write(
+        &pkg.join("src/bad.byd"),
+        "View Bad() { Box #[bg: prmary] {} }\n",
+    );
+    let publish = byard(
+        &dir,
+        &dir,
+        &[
+            "publish",
+            pkg.to_str().unwrap(),
+            "--registry",
+            registry.to_str().unwrap(),
+        ],
+    );
+    assert!(!publish.status.success(), "{}", text(&publish));
+    assert!(
+        text(&publish).contains("nothing published"),
+        "{}",
+        text(&publish)
+    );
+    assert!(text(&publish).contains("bad.byd"), "{}", text(&publish));
+    assert!(!registry.join("brand/0.1.0.tar.gz").exists());
+    assert!(!registry.join("index.toml").exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A consumer that uses a package's views without extending its theme gets
+/// told where the token lives, not only that the theme lacks it.
+#[test]
+fn a_token_only_a_dependencys_theme_declares_says_so() {
+    let dir = scratch("theme-hint");
+    let pkg = dir.join("brand");
+    make_package(&pkg);
+    write(
+        &pkg.join("byard.toml"),
+        &std::fs::read_to_string(pkg.join("byard.toml"))
+            .unwrap()
+            .replace(
+                "primary = \"#123456\"",
+                "primary = \"#123456\"\nbrand_glow = \"#00FF88\"",
+            ),
+    );
+    write(
+        &pkg.join("src/badge.byd"),
+        "View Badge() {\n    inject Theme as t\n    Box #[bg: t.brandGlow] {}\n}\n",
+    );
+    let app = dir.join("app");
+    make_app(&app, "brand = { path = \"../brand\" }", "brand/Display");
+    let manifest = std::fs::read_to_string(app.join("byard.toml")).unwrap();
+    // Without the `[theme] extends`, the package's own token is unknown.
+    write(
+        &app.join("byard.toml"),
+        &manifest.replace("[theme]\nextends = \"brand\"\n", ""),
+    );
+    write(
+        &app.join("main.byd"),
+        "use brand as b\nView Main() {\n    b.Badge()\n}\n",
+    );
+    let out = byard(&app, &dir, &["check"]);
+    assert!(!out.status.success(), "{}", text(&out));
+    assert!(
+        text(&out).contains(
+            "`brandGlow` is declared by package `brand`'s theme; add `[theme] extends = \"brand\"`, or declare it yourself"
+        ),
+        "{}",
+        text(&out)
+    );
+    // Already extending another package: only one `extends` is allowed, so
+    // the advice is to declare it or to extend this one instead.
+    let other = dir.join("other");
+    write(
+        &other.join("byard.toml"),
+        "[package]\nname = \"other\"\nversion = \"0.1.0\"\n\n[theme]\nname = \"other\"\n",
+    );
+    write(&other.join("src/lib.byd"), "View Nothing() { Box {} }\n");
+    write(
+        &app.join("byard.toml"),
+        "[project]\nname = \"app\"\nentry = \"main.byd\"\n\n[dependencies]\n\
+         brand = { path = \"../brand\" }\nother = { path = \"../other\" }\n\n\
+         [theme]\nextends = \"other\"\n",
+    );
+    let out = byard(&app, &dir, &["check"]);
+    assert!(
+        text(&out).contains(
+            "`brandGlow` is declared by package `brand`'s theme, but this theme extends `other`; declare `brandGlow` yourself, or extend `brand` instead"
+        ),
+        "{}",
+        text(&out)
+    );
+    write(
+        &app.join("byard.toml"),
+        &manifest.replace("[theme]\nextends = \"brand\"\n", ""),
+    );
+    // A token nobody declares keeps the plain message.
+    write(
+        &pkg.join("src/badge.byd"),
+        "View Badge() {\n    inject Theme as t\n    Box #[bg: t.nobodyHasThis] {}\n}\n",
+    );
+    let out = byard(&app, &dir, &["check"]);
+    assert!(
+        text(&out).contains("declares no token `nobodyHasThis`"),
+        "{}",
+        text(&out)
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// RFC-0056: a path dependency is the files on disk, so the lock lists it and
+/// does not pin it; editing the package leaves `check` and the lock as they
+/// were, and a lock an older `byard` wrote, with a pin, still reads.
+#[test]
+fn a_path_dependency_is_listed_in_the_lock_but_not_pinned() {
+    let dir = scratch("pathlock");
+    make_package(&dir.join("brand"));
+    make_app(
+        &dir.join("app"),
+        "brand = { path = \"../brand\" }",
+        "brand/Display",
+    );
+    let app = dir.join("app");
+    let out = byard(&app, &dir, &["get"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let lock = std::fs::read_to_string(app.join("byard.lock")).unwrap();
+    assert!(lock.contains("source = \"path+../brand\""), "{lock}");
+    assert!(!lock.contains("checksum"), "a path is not pinned:\n{lock}");
+
+    // An edit to the dependency: `check` sees it, and the lock is still right.
+    write(
+        &dir.join("brand/src/extra.byd"),
+        "View Extra() { Text(\"new\") }\n",
+    );
+    write(
+        &app.join("main.byd"),
+        &std::fs::read_to_string(app.join("main.byd"))
+            .unwrap()
+            .replace("b.Badge()", "b.Badge()\n b.Extra()"),
+    );
+    let out = byard(&app, &dir, &["check"]);
+    assert!(out.status.success(), "{}", text(&out));
+    assert_eq!(
+        std::fs::read_to_string(app.join("byard.lock")).unwrap(),
+        lock,
+        "check never writes the lock"
+    );
+
+    // A lock written before, with the pin of a content since edited.
+    std::fs::write(
+        app.join("byard.lock"),
+        "version = 1\n\n[[package]]\nname = \"brand\"\nsource = \"path+../brand\"\n\
+         checksum = \"sha256:00\"\n",
+    )
+    .unwrap();
+    let out = byard(&app, &dir, &["check"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// RFC-0056: the cached copy of a git dependency is what `publish` archives
+/// and nothing else, it has the checksum its registry copy has, and it is
+/// reused (with its commit) on the next `get`.
+#[test]
+fn a_git_dependency_caches_only_what_publish_archives() {
+    let dir = scratch("gitcache");
+    let (pkg, registry) = (dir.join("brand"), dir.join("registry"));
+    make_package(&pkg);
+    write(&pkg.join("README.md"), "# brand\n");
+    write(&pkg.join("LICENSE"), "MIT\n");
+    let url = git_repo(&pkg, &dir.join("brand-git"));
+    let out = byard(
+        &dir,
+        &dir,
+        &[
+            "publish",
+            pkg.to_str().unwrap(),
+            "--registry",
+            registry.to_str().unwrap(),
+        ],
+    );
+    assert!(out.status.success(), "{}", text(&out));
+
+    let app = dir.join("app");
+    make_app(
+        &app,
+        &format!("brand = {{ git = \"{url}\", tag = \"v0.1.0\" }}"),
+        "brand/Display",
+    );
+    let out = byard(&app, &dir, &["get"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let cache = dir.join(".byard/cache");
+    let cached: Vec<PathBuf> = std::fs::read_dir(&cache)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| {
+            p.is_dir()
+                && p.file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .starts_with("brand-")
+        })
+        .collect();
+    assert_eq!(
+        cached.len(),
+        1,
+        "one checkout, nothing half-made: {cached:?}"
+    );
+    let mut files = Vec::new();
+    walk(&cached[0], &cached[0], &mut files);
+    files.sort();
+    assert_eq!(
+        files,
+        [
+            "LICENSE",
+            "README.md",
+            "byard.toml",
+            "fonts/Display.ttf",
+            "src/badge.byd"
+        ],
+        "exactly what `byard publish` archives"
+    );
+    let lock = std::fs::read_to_string(app.join("byard.lock")).unwrap();
+    assert!(lock.contains("commit = \""), "{lock}");
+
+    // The same content has the same checksum from a registry.
+    make_app(
+        &dir.join("by_registry"),
+        "brand = { registry = \"../registry\", version = \"0.1.0\" }",
+        "brand/Display",
+    );
+    let out = byard(&dir.join("by_registry"), &dir, &["get"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let pin = |lock: &str| {
+        lock.lines()
+            .find(|l| l.starts_with("checksum"))
+            .map(str::to_string)
+    };
+    let reg_lock = std::fs::read_to_string(dir.join("by_registry/byard.lock")).unwrap();
+    assert!(pin(&lock).is_some());
+    assert_eq!(pin(&lock), pin(&reg_lock));
+
+    // Cached: the next get fetches nothing and keeps the commit; check builds.
+    let again = byard(&app, &dir, &["get"]);
+    assert!(again.status.success(), "{}", text(&again));
+    assert!(!text(&again).contains("fetching"), "{}", text(&again));
+    assert_eq!(
+        std::fs::read_to_string(app.join("byard.lock")).unwrap(),
+        lock
+    );
+    let out = byard(&app, &dir, &["check"]);
+    assert!(out.status.success(), "{}", text(&out));
+    let _ = std::fs::remove_dir_all(&dir);
 }

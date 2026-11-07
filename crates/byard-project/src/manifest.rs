@@ -372,25 +372,7 @@ impl Manifest {
 
         let project = table.get("project");
 
-        // Warn on unknown top-level keys (C2: forward-compatible), except
-        // `[dependencies]`, which is parsed strictly below, `[package]`,
-        // reserved for package manifests, and `[assets]` (RFC-0009 §4).
-        for key in table.keys() {
-            if !matches!(
-                key.as_str(),
-                "project"
-                    | "dependencies"
-                    | "package"
-                    | "assets"
-                    | "theme"
-                    | "dev"
-                    | "http"
-                    | "native_views"
-                    | "bundle"
-            ) {
-                eprintln!("byard.toml: warning: unknown key `{key}` (ignored)");
-            }
-        }
+        reject_unknown_manifest_keys(&table).map_err(in_manifest)?;
 
         // `[assets.vectors] include = ["a.svg", ...]`, the AOT escape hatch.
         let vector_includes = table
@@ -480,6 +462,70 @@ impl Manifest {
             bundle,
         })
     }
+}
+
+/// Every table of a project or package manifest is read strictly: a key
+/// nothing reads is a setting the author thinks is on (`[theme.motion]`, a
+/// misspelt `[package]` key), so each is an error with the closest known one.
+fn reject_unknown_manifest_keys(table: &toml::Table) -> Result<(), String> {
+    reject_unknown_keys(
+        table,
+        "",
+        &[
+            "project",
+            "dependencies",
+            "package",
+            "assets",
+            "theme",
+            "dev",
+            "http",
+            "native_views",
+            "bundle",
+        ],
+    )?;
+    for (section, keys) in [
+        ("project", &["name", "entry", "icon"][..]),
+        ("package", &["name", "version"][..]),
+        ("assets", &["fonts", "vectors"][..]),
+    ] {
+        if let Some(t) = table.get(section).and_then(toml::Value::as_table) {
+            reject_unknown_keys(t, &format!("[{section}]"), keys)?;
+        }
+    }
+    if let Some(t) = table
+        .get("assets")
+        .and_then(|a| a.get("vectors"))
+        .and_then(toml::Value::as_table)
+    {
+        reject_unknown_keys(t, "[assets.vectors]", &["include"])?;
+    }
+    Ok(())
+}
+
+/// Errors on the first key of `table` that is not in `known`, naming the key
+/// and the closest known one. `section` is how the table is written in the
+/// manifest (`[package]`), or empty for the top level.
+fn reject_unknown_keys(table: &toml::Table, section: &str, known: &[&str]) -> Result<(), String> {
+    let Some(key) = table.keys().find(|k| !known.contains(&k.as_str())) else {
+        return Ok(());
+    };
+    let place = if section.is_empty() {
+        String::new()
+    } else {
+        format!(" {section}:")
+    };
+    let hint = match byard_compiler::util::closest_match(key, known.iter().copied()) {
+        Some(near) => format!("did you mean `{near}`?"),
+        None => format!(
+            "known keys: {}",
+            known
+                .iter()
+                .map(|k| format!("`{k}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    };
+    Err(format!("byard.toml:{place} unknown key `{key}`; {hint}"))
 }
 
 /// Parses `[bundle]`. An identifier is reverse-DNS: dot-separated parts of
@@ -921,6 +967,43 @@ fn parse_theme(
         apply_theme_table(&mut theme, theme_tbl, library_name, project_root)?;
     }
 
+    // The tokens of a dependency's theme this one did not take. The package's
+    // views use them, so a consumer that did not extend it gets
+    // `UnknownThemeToken` for each; remembering where they live lets the
+    // error say what to add. Best effort: a theme that does not apply is
+    // reported where it is extended, not here.
+    let extended = table
+        .get("theme")
+        .and_then(|t| t.get("extends"))
+        .and_then(toml::Value::as_str);
+    if let Some(base) = extended.filter(|b| *b != "byard-base") {
+        theme.set_extended(base);
+    }
+    {
+        let base: std::collections::HashSet<String> = Theme::byard_base()
+            .token_names()
+            .map(str::to_string)
+            .collect();
+        for (name, owner, pkg, root) in packages.iter().filter(|(n, ..)| Some(*n) != extended) {
+            let Some(pkg_theme) = pkg.get("theme").and_then(toml::Value::as_table) else {
+                continue;
+            };
+            let mut scratch = Theme::byard_base();
+            if apply_theme_table(&mut scratch, pkg_theme, Some(owner), root).is_err() {
+                continue;
+            }
+            let mut names: Vec<&str> = scratch
+                .token_names()
+                .filter(|t| !base.contains(*t))
+                .collect();
+            names.sort_unstable();
+            names.dedup();
+            for token in names {
+                theme.note_unapplied_token(token, name);
+            }
+        }
+    }
+
     // The project's own fonts, relative to the project. A library package's
     // are named as its consumers name them, `"<package>/<Family>"`, and must
     // live inside it, so checking the package sees what a consumer will.
@@ -946,6 +1029,30 @@ fn read_package_manifest(root: &Path) -> Result<Option<toml::Table>, String> {
         .map_err(|e: toml::de::Error| format!("{}: {e}", path.display()))
 }
 
+/// Errors on a `[theme]` key, or a `[theme.color]` scheme, nothing reads.
+fn reject_unknown_theme_keys(theme_tbl: &toml::Table) -> Result<(), String> {
+    reject_unknown_keys(
+        theme_tbl,
+        "[theme]",
+        &[
+            "name",
+            "scheme",
+            "transition",
+            "seed",
+            "extends",
+            "color",
+            "typography",
+            "breakpoints",
+            "shape",
+            "motion",
+        ],
+    )?;
+    if let Some(colors) = theme_tbl.get("color").and_then(toml::Value::as_table) {
+        reject_unknown_keys(colors, "[theme.color]", &["light", "dark"])?;
+    }
+    Ok(())
+}
+
 /// Applies one `[theme]` table's tokens onto `theme`. `package` names the
 /// package the table came from, so a typography token's `family` resolves to
 /// that package's own font when it declares one (`"Roboto"` inside
@@ -957,6 +1064,7 @@ fn apply_theme_table(
     package: Option<&str>,
     root: &Path,
 ) -> Result<(), String> {
+    reject_unknown_theme_keys(theme_tbl)?;
     if let Some(name) = theme_tbl.get("name").and_then(toml::Value::as_str) {
         theme.name = name.to_string();
     }
@@ -1073,7 +1181,88 @@ fn apply_theme_table(
         }
     }
 
+    // [theme.motion], `key = { stiffness, damping_ratio | damping }` for a
+    // spring, `key = <ms>` for a duration (RFC-0053).
+    if let Some(motion) = theme_tbl.get("motion") {
+        let motion = motion.as_table().ok_or_else(|| {
+            "byard.toml: [theme.motion] must be a table of springs and durations".to_string()
+        })?;
+        for (key, value) in motion {
+            apply_motion_entry(theme, key, value)?;
+        }
+    }
+
     Ok(())
+}
+
+/// Parses one `[theme.motion]` entry onto `theme`: a spring table or a whole
+/// number of milliseconds.
+fn apply_motion_entry(theme: &mut Theme, key: &str, value: &toml::Value) -> Result<(), String> {
+    let spring_hint = "like `{ stiffness = 800, damping_ratio = 0.6 }`";
+    match value {
+        toml::Value::Integer(ms) => {
+            let ms = u32::try_from(*ms).map_err(|_| {
+                format!(
+                    "byard.toml: motion `{key}` is a duration and must be between 0 and {} milliseconds",
+                    u32::MAX
+                )
+            })?;
+            theme.set_duration(key, ms);
+            Ok(())
+        }
+        toml::Value::Table(spring) => {
+            reject_unknown_keys(
+                spring,
+                &format!("motion `{key}`"),
+                &["stiffness", "damping_ratio", "damping"],
+            )?;
+            let number = |name: &str| -> Result<Option<f64>, String> {
+                spring
+                    .get(name)
+                    .map(|v| {
+                        as_number(v).filter(|n| n.is_finite()).ok_or_else(|| {
+                            format!("byard.toml: motion `{key}`: `{name}` must be a number")
+                        })
+                    })
+                    .transpose()
+            };
+            let stiffness = number("stiffness")?.filter(|k| *k > 0.0).ok_or_else(|| {
+                format!(
+                    "byard.toml: motion `{key}` is a spring and needs a `stiffness` above zero, {spring_hint}"
+                )
+            })?;
+            #[allow(clippy::cast_possible_truncation)]
+            let stiffness = stiffness as f32;
+            match (number("damping_ratio")?, number("damping")?) {
+                (Some(ratio), None) if ratio > 0.0 => {
+                    #[allow(clippy::cast_possible_truncation)]
+                    theme.set_spring_ratio(key, stiffness, ratio as f32);
+                }
+                (None, Some(damping)) if damping >= 0.0 => {
+                    #[allow(clippy::cast_possible_truncation)]
+                    theme.set_spring(key, stiffness, damping as f32);
+                }
+                (Some(_), Some(_)) => {
+                    return Err(format!(
+                        "byard.toml: motion `{key}` has both `damping_ratio` and `damping`; use one \
+                         (`damping_ratio` is Material's, 1.0 settles without overshoot; `damping` is \
+                         the `damping:` of `anim.spring`)"
+                    ));
+                }
+                _ => {
+                    return Err(format!(
+                        "byard.toml: motion `{key}` is a spring and needs a `damping_ratio` above zero \
+                         (or a `damping` of zero or more), {spring_hint}"
+                    ));
+                }
+            }
+            Ok(())
+        }
+        _ => Err(format!(
+            "byard.toml: motion `{key}` must be a spring, {spring_hint}, or a duration in whole \
+             milliseconds, like `{key} = 200`"
+        )),
+    }
 }
 
 /// Reads a manifest's `[assets.fonts]`, `family = "path/to/font.ttf"`
@@ -1100,17 +1289,73 @@ fn load_fonts(
         return Ok(Vec::new());
     };
     let mut out = Vec::with_capacity(fonts.len());
-    for (family, path) in fonts {
-        let path = path.as_str().ok_or_else(|| {
-            format!("byard.toml: [assets.fonts] `{family}` must be a string path to a font file")
-        })?;
+    for (family, entry) in fonts {
+        // `family = "path"`, or the table form `family = { path = "..",
+        // icons = true, icons_include = [..] }` (RFC-0054).
+        let (path, icons, icons_include) = match entry {
+            toml::Value::String(path) => (path.as_str(), false, Vec::new()),
+            toml::Value::Table(t) => {
+                if let Some(bad) = t
+                    .keys()
+                    .find(|k| !matches!(k.as_str(), "path" | "icons" | "icons_include"))
+                {
+                    return Err(format!(
+                        "byard.toml: [assets.fonts] `{family}` has an unknown key `{bad}`; \
+                         a font takes `path`, `icons` and `icons_include`"
+                    ));
+                }
+                let path = t.get("path").and_then(toml::Value::as_str).ok_or_else(|| {
+                    format!("byard.toml: [assets.fonts] `{family}` needs a `path` to a font file")
+                })?;
+                let icons = match t.get("icons") {
+                    None => false,
+                    Some(v) => v.as_bool().ok_or_else(|| {
+                        format!(
+                            "byard.toml: [assets.fonts] `{family}` `icons` must be true or false"
+                        )
+                    })?,
+                };
+                let include = match t.get("icons_include") {
+                    None => Vec::new(),
+                    Some(v) => v
+                        .as_array()
+                        .and_then(|a| {
+                            a.iter()
+                                .map(|n| n.as_str().map(str::to_string))
+                                .collect::<Option<Vec<_>>>()
+                        })
+                        .ok_or_else(|| {
+                            format!(
+                                "byard.toml: [assets.fonts] `{family}` `icons_include` must be a \
+                                 list of icon names"
+                            )
+                        })?,
+                };
+                if !include.is_empty() && !icons {
+                    return Err(format!(
+                        "byard.toml: [assets.fonts] `{family}` lists `icons_include` but is not \
+                         an icon font; add `icons = true`"
+                    ));
+                }
+                (path, icons, include)
+            }
+            _ => {
+                return Err(format!(
+                    "byard.toml: [assets.fonts] `{family}` must be a string path to a font file, \
+                     or a table with a `path`"
+                ));
+            }
+        };
         if in_package && !is_inside_package(path) {
             return Err(format!(
                 "byard.toml: [assets.fonts] `{family}` = {path:?} is outside the package; \
                  a package's assets must live inside it"
             ));
         }
-        out.push((family.clone(), load_font(family, path, root)?));
+        let mut font = load_font(family, path, root)?;
+        font.icons = icons;
+        font.icons_include = icons_include;
+        out.push((family.clone(), font));
     }
     Ok(out)
 }
@@ -1158,6 +1403,8 @@ fn load_font(family: &str, path: &str, project_root: &Path) -> Result<DeclaredFo
         path: path.to_string(),
         resolved: std::sync::Arc::from(resolved),
         bytes,
+        icons: false,
+        icons_include: Vec::new(),
     })
 }
 
@@ -1748,6 +1995,137 @@ mod tests {
         assert_eq!(theme.shape("cornerXl"), Some(28.0));
     }
 
+    /// `[theme.motion]` declares springs and durations (RFC-0053): a spring by
+    /// its damping ratio (Material's) or its damping coefficient (the engine's),
+    /// a duration in whole milliseconds, each named for its kind.
+    #[test]
+    fn motion_tokens_parse_and_name_themselves_by_kind() {
+        use byard_compiler::interp::theme::{MotionToken, spring_damping};
+        let theme = theme_of(
+            "[theme.motion]\n\
+             spatial_fast = { stiffness = 700, damping_ratio = 0.5 }\n\
+             snappy = { stiffness = 300, damping = 24 }\n\
+             short_2 = 120\n",
+        )
+        .unwrap();
+        assert_eq!(
+            theme.motion("springSpatialFast"),
+            Some(MotionToken::Spring {
+                stiffness: 700.0,
+                damping: spring_damping(700.0, 0.5)
+            }),
+            "the project retunes a base spring"
+        );
+        assert_eq!(
+            theme.motion("springSnappy"),
+            Some(MotionToken::Spring {
+                stiffness: 300.0,
+                damping: 24.0
+            })
+        );
+        assert_eq!(
+            theme.motion("durationShort2"),
+            Some(MotionToken::Duration(120))
+        );
+        assert_eq!(
+            theme.motion("springSpatialSlow"),
+            Theme::byard_base().motion("springSpatialSlow"),
+            "what it does not redeclare stays the base's"
+        );
+    }
+
+    #[test]
+    fn a_motion_entry_that_is_wrong_says_how() {
+        let err = |toml: &str| theme_of(&format!("[theme.motion]\n{toml}\n")).unwrap_err();
+        let e = err("a = \"fast\"");
+        assert!(e.contains("motion `a`") && e.contains("spring"), "{e}");
+        let e = err("a = 1.5");
+        assert!(e.contains("motion `a`") && e.contains("whole"), "{e}");
+        let e = err("a = -4");
+        assert!(
+            e.contains("motion `a`") && e.contains("milliseconds"),
+            "{e}"
+        );
+        let e = err("a = { damping_ratio = 0.5 }");
+        assert!(e.contains("`stiffness`"), "{e}");
+        let e = err("a = { stiffness = 200 }");
+        assert!(e.contains("damping_ratio"), "{e}");
+        let e = err("a = { stiffness = 200, damping_ratio = 0.5, damping = 10 }");
+        assert!(e.contains("both"), "{e}");
+        let e = err("a = { stiffness = 0, damping_ratio = 0.5 }");
+        assert!(e.contains("stiffness"), "{e}");
+        let e = err("a = { stiffness = 200, damping_ratio = 0 }");
+        assert!(e.contains("damping_ratio"), "{e}");
+        let e = err("a = { stiffness = 200, dampening = 0.5 }");
+        assert!(
+            e.contains("unknown key `dampening`") && e.contains("damping"),
+            "{e}"
+        );
+    }
+
+    /// A package's springs come in with `extends`, and the project's own win.
+    #[test]
+    fn an_extended_package_theme_brings_its_motion() {
+        use byard_compiler::interp::theme::{MotionToken, spring_damping};
+        let dir = std::env::temp_dir().join(format!("byard-pkgmotion-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("kit/src")).unwrap();
+        std::fs::create_dir_all(dir.join("app")).unwrap();
+        std::fs::write(
+            dir.join("kit/byard.toml"),
+            "[package]\nname = \"kit\"\nversion = \"0.1.0\"\n\
+             [theme.motion]\nplayful = { stiffness = 250, damping_ratio = 0.4 }\n\
+             lazy = { stiffness = 50, damping_ratio = 1.0 }\nbeat = 640\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("kit/src/a.byd"), "View A() { Box {} }\n").unwrap();
+        std::fs::write(dir.join("app/main.byd"), "View Main() { Box {} }\n").unwrap();
+        let app = |theme: &str| {
+            std::fs::write(
+                dir.join("app/byard.toml"),
+                format!(
+                    "[project]\nname = \"app\"\nentry = \"main.byd\"\n\
+                     [dependencies]\nkit = {{ path = \"../kit\" }}\n{theme}"
+                ),
+            )
+            .unwrap();
+            Manifest::discover(Some(&dir.join("app"))).unwrap().theme
+        };
+        let extended = app(
+            "[theme]\nextends = \"kit\"\n[theme.motion]\nlazy = { stiffness = 60, damping = 14 }\n",
+        );
+        assert_eq!(
+            extended.motion("springPlayful"),
+            Some(MotionToken::Spring {
+                stiffness: 250.0,
+                damping: spring_damping(250.0, 0.4)
+            }),
+            "from the package"
+        );
+        assert_eq!(
+            extended.motion("durationBeat"),
+            Some(MotionToken::Duration(640))
+        );
+        assert_eq!(
+            extended.motion("springLazy"),
+            Some(MotionToken::Spring {
+                stiffness: 60.0,
+                damping: 14.0
+            }),
+            "the project wins"
+        );
+        assert!(
+            extended.motion("springSpatialFast").is_some(),
+            "and the base stays"
+        );
+        // Without `extends` the package's springs are not taken, and the theme
+        // knows which package would have supplied them.
+        let plain = app("");
+        assert_eq!(plain.motion("springPlayful"), None);
+        assert_eq!(plain.unapplied_token_owner("springPlayful"), Some("kit"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn font_assets_register_families() {
         let theme =
@@ -1755,6 +2133,42 @@ mod tests {
                 .unwrap();
         assert!(theme.has_font("display"));
         assert!(!theme.has_font("sfpro"));
+    }
+
+    /// RFC-0054: the table form declares an icon font and the names the
+    /// program builds at run time.
+    #[test]
+    fn a_font_can_be_declared_as_an_icon_font() {
+        let theme = theme_of(
+            "[assets.fonts]\nsymbols = { path = \"assets/fonts/ByardIcons.ttf\", icons = true, \
+             icons_include = [\"home\"] }\nbody = \"assets/fonts/Manrope-Variable.ttf\"\n",
+        )
+        .unwrap();
+        let symbols = theme.font("symbols").unwrap();
+        assert!(symbols.icons);
+        assert_eq!(symbols.icons_include, ["home"]);
+        assert!(
+            !theme.font("body").unwrap().icons,
+            "the string form is not an icon font"
+        );
+    }
+
+    #[test]
+    fn a_misdeclared_icon_font_says_what_is_wrong() {
+        let err = theme_of(
+            "[assets.fonts]\ns = { path = \"assets/fonts/ByardIcons.ttf\", icon = true }\n",
+        )
+        .unwrap_err();
+        assert!(err.contains("unknown key `icon`"), "{err}");
+        let err = theme_of(
+            "[assets.fonts]\ns = { path = \"assets/fonts/ByardIcons.ttf\", icons_include = [\"a\"] }\n",
+        )
+        .unwrap_err();
+        assert!(err.contains("add `icons = true`"), "{err}");
+        let err = theme_of("[assets.fonts]\ns = { icons = true }\n").unwrap_err();
+        assert!(err.contains("needs a `path`"), "{err}");
+        let err = theme_of("[assets.fonts]\ns = 3\n").unwrap_err();
+        assert!(err.contains("string path"), "{err}");
     }
 
     /// The bytes are loaded, not merely named, and the family name shaping
@@ -2102,5 +2516,84 @@ mod tests {
         let dir = project_with("bad-key", "[bundle]\ncolour = \"red\"", &[]);
         let err = Manifest::discover(Some(&dir)).err().unwrap().to_string();
         assert!(err.contains("unknown key `colour`"), "{err}");
+    }
+
+    /// The manifest's error for `extra` appended to a valid project, or `None`.
+    fn manifest_error(tag: &str, extra: &str) -> Option<String> {
+        let dir = project_with(tag, extra, &[]);
+        let result = Manifest::discover(Some(&dir));
+        let _ = std::fs::remove_dir_all(&dir);
+        result.err().map(|e| e.to_string())
+    }
+
+    #[test]
+    fn an_unknown_theme_table_is_an_error_naming_it() {
+        let err = manifest_error("motion", "[theme.motionn]\nfast = 1\n").expect("an error");
+        assert!(
+            err.contains("[theme]") && err.contains("unknown key `motionn`"),
+            "{err}"
+        );
+        let err = manifest_error("colour", "[theme.colour.light]\nprimary = \"#123456\"\n")
+            .expect("an error");
+        assert!(
+            err.contains("unknown key `colour`; did you mean `color`?"),
+            "{err}"
+        );
+        let err = manifest_error("scheme", "[theme.color.darker]\nprimary = \"#123456\"\n")
+            .expect("an error");
+        assert!(
+            err.contains("[theme.color]") && err.contains("`darker`"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn an_unknown_key_in_package_project_or_assets_is_an_error() {
+        let err =
+            manifest_error("pkg", "[package]\nname = \"x\"\nversoin = \"1\"\n").expect("an error");
+        assert!(
+            err.contains("[package]")
+                && err.contains("`versoin`")
+                && err.contains("did you mean `version`?"),
+            "{err}"
+        );
+        let err = manifest_error("proj", "foo = 1\n").expect("an error");
+        assert!(err.contains("[project]") && err.contains("`foo`"), "{err}");
+        let err = manifest_error("top", "[bogus]\nx = 1\n").expect("an error");
+        assert!(err.contains("unknown key `bogus`"), "{err}");
+        let err = manifest_error("assets", "[assets]\nfont = {}\n").expect("an error");
+        assert!(err.contains("did you mean `fonts`?"), "{err}");
+    }
+
+    #[test]
+    fn every_committed_manifest_still_parses() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let mut found = 0;
+        let mut stack = vec![root.join("crates"), root.join("examples")];
+        while let Some(dir) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    if path
+                        .file_name()
+                        .is_some_and(|n| n != "target" && n != "node_modules")
+                    {
+                        stack.push(path);
+                    }
+                } else if path.file_name().is_some_and(|n| n == "byard.toml") {
+                    found += 1;
+                    // A manifest that does not resolve its dependencies yet
+                    // is not this test's business; an unknown key is.
+                    if let Err(e) = Manifest::from_toml(&path) {
+                        let e = e.to_string();
+                        assert!(!e.contains("unknown key"), "{}: {e}", path.display());
+                    }
+                }
+            }
+        }
+        assert!(found > 20, "found only {found} manifests");
     }
 }

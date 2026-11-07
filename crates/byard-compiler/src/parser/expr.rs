@@ -8,7 +8,7 @@
 //! `r_bp < l_bp`.
 
 use super::Parser;
-use super::ast::{Arg, AssignOp, BinOp, Expr, PostfixOp, StrPart, UnOp};
+use super::ast::{Arg, AssignOp, BinOp, Expr, NumFormat, PostfixOp, StrPart, UnOp};
 use crate::diagnostics::Span;
 use crate::lexer::Token;
 use crate::symbol::Symbol;
@@ -904,17 +904,39 @@ impl Parser<'_> {
     pub(super) fn parse_arg_list(&mut self, close: &Token) -> Vec<Arg> {
         let mut args = Vec::new();
         while self.cur().is_some() && self.cur() != Some(close) {
-            // A keyframe step `50%: value ease_out` (RFC-0025 §4). Any call may
+            // A keyframe step `50%: value easeOut` (RFC-0025 §4). Any call may
             // *carry* one; only `anim.keyframes(…)` gives it meaning (D6).
             if let Some(step) = self.parse_keyframe_step() {
                 args.push(Arg {
                     name: None,
                     value: step,
+                    bind: false,
                 });
                 if !self.eat(&Token::Comma) {
                     break;
                 }
                 continue;
+            }
+            // A binding argument `bind name: expr` (RFC-0051): two names in a
+            // row can be nothing else.
+            if let (Some(Token::Ident(word)), Some(Token::Ident(sym)), Some(Token::Colon)) =
+                (self.cur().cloned(), self.peek2(), self.peek3())
+            {
+                if word.as_str() == "bind" {
+                    self.advance(); // bind
+                    self.advance(); // name
+                    self.advance(); // :
+                    let value = self.parse_expr(0);
+                    args.push(Arg {
+                        name: Some(sym),
+                        value,
+                        bind: true,
+                    });
+                    if !self.eat(&Token::Comma) {
+                        break;
+                    }
+                    continue;
+                }
             }
             // Named argument `name: expr` (two-token lookahead).
             let name = if let (Some(Token::Ident(sym)), Some(Token::Colon)) =
@@ -927,7 +949,11 @@ impl Parser<'_> {
                 None
             };
             let value = self.parse_expr(0);
-            args.push(Arg { name, value });
+            args.push(Arg {
+                name,
+                value,
+                bind: false,
+            });
             if !self.eat(&Token::Comma) {
                 break;
             }
@@ -936,7 +962,7 @@ impl Parser<'_> {
     }
 
     /// `keyframe_step := PERCENT ":" expr IDENT?` (RFC-0025 §4), one timed step
-    /// of an `anim.keyframes(…)` sequence, e.g. `50%: 200 ease_out`. Returns
+    /// of an `anim.keyframes(…)` sequence, e.g. `50%: 200 easeOut`. Returns
     /// `None` (consuming nothing) when the cursor is not on a percentage, so the
     /// ordinary argument forms parse exactly as before.
     ///
@@ -953,7 +979,7 @@ impl Parser<'_> {
         self.advance(); // :
         let value = Box::new(self.parse_expr(0));
         let easing = match (self.cur().cloned(), self.peek2()) {
-            // `ease_out`, but not `ease_out:`, which is the next named argument.
+            // `easeOut`, but not `easeOut:`, which is the next named argument.
             (Some(Token::Ident(name)), next) if next != Some(Token::Colon) => {
                 let span = self.cur_span();
                 self.advance();
@@ -1009,13 +1035,13 @@ impl Parser<'_> {
                     parts.push(StrPart::Text(std::mem::take(&mut text)));
                 }
                 let (frag, mut offsets, next) = collect_interpolation(cs, i + 1, end);
-                // A trailing `:.N` is not part of the expression: the
-                // expression ends at the colon, and its end offset is the
-                // colon's.
-                let (len, decimals) = split_decimals(&frag);
+                // A trailing `:.N`, `:,` or `:,.N` is not part of the
+                // expression: the expression ends at the colon, and its end
+                // offset is the colon's.
+                let (len, spec) = split_spec(&frag);
                 offsets.truncate(len + 1);
                 let expr = self.parse_fragment_expr(&frag[..len], offsets);
-                parts.push(StrPart::Interp(Box::new(expr), decimals));
+                parts.push(StrPart::Interp(Box::new(expr), spec));
                 i = next;
                 continue;
             }
@@ -1040,14 +1066,16 @@ impl Parser<'_> {
     }
 }
 
-/// Finds a trailing `:.N` decimals spec in an interpolation fragment and
-/// returns how many bytes of it are the expression: for `temp:.0`, 4 and
-/// `Some(0)`; with no spec, the whole length and `None`.
+/// Finds a trailing format spec (`:.N`, `:,` or `:,.N`) in an interpolation
+/// fragment and returns how many bytes of it are the expression: for
+/// `temp:.0`, 4 and a spec of no grouping and no decimals; with no spec, the
+/// whole length and `None`.
 ///
 /// Only a `:` outside brackets and strings counts, and only when what follows
-/// it is `.` and digits. That cannot be the tail of an expression, because a
-/// float literal never starts with a dot, so `a ? b : c` is never split.
-fn split_decimals(frag: &str) -> (usize, Option<u8>) {
+/// it is a `,` and/or a `.` and digits. That cannot be the tail of an
+/// expression, because a float literal never starts with a dot and a comma
+/// never ends one, so `a ? b : c` is never split.
+fn split_spec(frag: &str) -> (usize, Option<NumFormat>) {
     let mut depth = 0i32;
     let mut in_str = false;
     let mut colon = None;
@@ -1064,11 +1092,32 @@ fn split_decimals(frag: &str) -> (usize, Option<u8>) {
         return (frag.len(), None);
     };
     let spec = frag[i + 1..].trim();
-    let digits = spec.strip_prefix('.').unwrap_or("");
+    let (group, rest) = match spec.strip_prefix(',') {
+        Some(rest) => (true, rest),
+        None => (false, spec),
+    };
+    if rest.is_empty() {
+        return if group {
+            (
+                i,
+                Some(NumFormat {
+                    group,
+                    decimals: None,
+                }),
+            )
+        } else {
+            (frag.len(), None)
+        };
+    }
+    let digits = rest.strip_prefix('.').unwrap_or("");
     match digits.parse::<u8>() {
-        Ok(n) if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) => {
-            (i, Some(n.min(MAX_DECIMALS)))
-        }
+        Ok(n) if !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()) => (
+            i,
+            Some(NumFormat {
+                group,
+                decimals: Some(n.min(MAX_DECIMALS)),
+            }),
+        ),
         _ => (frag.len(), None),
     }
 }

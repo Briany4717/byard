@@ -13,7 +13,7 @@ use byard_compiler::resolve::ResolvedProgram;
 /// `UnknownThemeToken`.
 ///
 /// Resolve and parse errors short-circuit; otherwise every `View` is lowered
-/// and rendered into a throwaway
+/// (every branch of it, shown or not) and rendered into a throwaway
 /// [`RenderFrame`](byard_core::frame::RenderFrame), so attribute-contract and
 /// `Len`-form validation checks, which run during lowering and render, are
 /// exercised across the whole module graph.
@@ -63,6 +63,20 @@ pub fn check_views_where(
         interp.tick();
         interp.render(&tree, &mut frame, 1024.0, 768.0);
         frame.clear();
+        // Lowering is lazy: a tab that is not the active one, a route the
+        // initial path misses, a `when` that starts false and a `for` over a
+        // list that has not loaded are not lowered by the render above, so
+        // their diagnostics would wait for the first time somebody opens
+        // them. Lower each once more, offline (nothing is mounted).
+        interp.lower_every_branch();
     }
-    interp.errors().to_vec()
+    let mut errors: Vec<CompileError> = Vec::new();
+    for e in interp.errors() {
+        // The same branch of a view reached through two callers reports the
+        // same error twice.
+        if !errors.contains(e) {
+            errors.push(e.clone());
+        }
+    }
+    errors
 }

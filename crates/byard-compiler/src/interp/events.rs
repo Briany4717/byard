@@ -92,6 +92,21 @@ impl EventKind {
     pub fn is_continuous(self) -> bool {
         matches!(self, Self::PointerMove | Self::Scroll | Self::Wheel)
     }
+
+    /// Whether this is a press gesture: the kinds one element owns outright
+    /// and that never bubble to an element beneath it.
+    #[must_use]
+    pub fn is_press(self) -> bool {
+        matches!(
+            self,
+            Self::PointerDown
+                | Self::PointerUp
+                | Self::Tap
+                | Self::DoubleTap
+                | Self::LongPress
+                | Self::Secondary
+        )
+    }
 }
 
 /// A normalized, `Send`-able input event produced by the platform thread.
@@ -178,6 +193,9 @@ struct Focusable {
     frame: Option<Transform>,
     /// The `var` bound via `#[focused: …]`.
     focused_sig: SignalId,
+    /// How many handlers were registered before this one: where it sits in the
+    /// paint order relative to them, for deciding who owns a press.
+    after: usize,
 }
 
 struct DownState {
@@ -194,6 +212,32 @@ struct DownState {
 /// `bool`s so a whole state can be passed and matched at once.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub struct StyleState(u16);
+
+/// Which of Space and Enter presses a focused element (RFC-0052 §3).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ActivationKeys {
+    /// Both: a button.
+    Both,
+    /// Space only: a checkbox, a radio button.
+    Space,
+    /// Enter only: a link.
+    Enter,
+}
+
+/// What a group's arrow keys do (RFC-0052 §3).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GroupKind {
+    /// A tab list: the arrows, Home and End move focus.
+    Tabs,
+    /// A radio group: the arrows move focus and select what they reach.
+    Radios,
+}
+
+/// A set of focus targets the arrow keys move between.
+struct Group {
+    kind: GroupKind,
+    members: Vec<u32>,
+}
 
 impl StyleState {
     /// The pointer is over the element.
@@ -218,6 +262,11 @@ impl StyleState {
     /// The element is being dragged (pointer moved past the drag threshold
     /// after pressing it).
     pub const DRAGGING: StyleState = StyleState(1 << 8);
+    /// The element has keyboard focus and focus got there by the keyboard
+    /// (Tab, the arrow keys of a group), by an assistive technology, or into a
+    /// text field (RFC-0052). A pointer press on anything else focuses
+    /// without it.
+    pub const FOCUS_VISIBLE: StyleState = StyleState(1 << 9);
 
     /// The empty state (no interaction flags).
     #[must_use]
@@ -263,6 +312,9 @@ pub struct EventRouter {
     focusables: Vec<Focusable>,
     down: Option<DownState>,
     focused: Option<u32>,
+    /// The `var` the focused element reports into, kept from the frame that
+    /// focused it so an element that goes away can still be blurred.
+    focused_sig: Option<SignalId>,
     /// The element being dragged (RFC-0024 `dragging`): the press target, once
     /// the pointer has moved past [`TAP_SLOP`] since pressing it. Set during a
     /// held move, cleared on the next press/release. Persists across renders like
@@ -302,6 +354,10 @@ pub struct EventRouter {
     /// last). `Escape` fires the topmost one's `dismiss` action (RFC-0017
     /// resolved-questions: accessibility). Rebuilt every render.
     modal_scrims: Vec<usize>,
+    /// The overlay content's rects, per modal scrim (handler index → rects). A
+    /// press inside one belongs to the content, not the scrim: the scrim's
+    /// `dismiss` runs only for a press outside all of them.
+    scrim_keep: Vec<(usize, Vec<Rect>)>,
     /// Light-dismiss regions for anchored overlays (RFC-0036 `on dismiss`).
     ///
     /// Deliberately **not** a modal scrim. A scrim covers the viewport, raises
@@ -328,7 +384,19 @@ pub struct EventRouter {
     /// handler: a `Button`, a `Toggle`. Rebuilt every render like the handler
     /// set. Left to the element itself for everything else (a `TextField` types
     /// the space, and Enter submits it).
-    activatable: Vec<u32>,
+    activatable: Vec<(u32, ActivationKeys)>,
+    /// The elements that show their focus however it got there: text fields
+    /// (RFC-0052 §4). Rebuilt every render.
+    text_entries: Vec<u32>,
+    /// The groups whose arrow keys move focus (RFC-0052 §3), in the order
+    /// they were opened. Rebuilt every render.
+    groups: Vec<Group>,
+    /// The groups the render walk is inside right now, as indices into
+    /// `groups`, innermost last.
+    open_groups: Vec<usize>,
+    /// Whether the element that has focus got it by the keyboard (RFC-0052
+    /// §4). Gesture state like `focused`, kept across the render rebuild.
+    focus_visible: bool,
     /// Whether an activation key is held down since it last fired. A held key
     /// delivers `KeyDown` again and again; it presses a button once, as a held
     /// mouse button does, and is armed again by the `KeyUp`. Gesture state, kept
@@ -357,15 +425,63 @@ impl EventRouter {
         self.modal_floor = 0;
         self.focusable_floor = 0;
         self.modal_scrims.clear();
+        self.scrim_keep.clear();
         self.light_dismiss.clear();
         self.drag_captures.clear();
         self.activatable.clear();
+        self.text_entries.clear();
+        self.groups.clear();
+        self.open_groups.clear();
     }
 
     /// Makes a focused Space or Enter press `elem`: it fires its `Tap` handler.
-    /// Registered after the handler it presses.
-    pub fn activate_on_key(&mut self, elem: u32) {
-        self.activatable.push(elem);
+    /// Registered after the handler it presses. `keys` says which of the two
+    /// does it (RFC-0052 §3); the other goes on to the element's own `key_down`.
+    pub fn activate_on_key(&mut self, elem: u32, keys: ActivationKeys) {
+        self.activatable.push((elem, keys));
+    }
+
+    /// Marks `elem` as one that shows focus however it was reached, a text
+    /// field (RFC-0052 §4).
+    pub fn text_entry(&mut self, elem: u32) {
+        self.text_entries.push(elem);
+    }
+
+    /// Opens a group of focus targets the arrow keys move between (RFC-0052
+    /// §3). Members registered until [`close_group`](Self::close_group) belong
+    /// to it.
+    pub fn open_group(&mut self, kind: GroupKind) {
+        self.open_groups.push(self.groups.len());
+        self.groups.push(Group {
+            kind,
+            members: Vec::new(),
+        });
+    }
+
+    /// Closes the innermost open group.
+    pub fn close_group(&mut self) {
+        self.open_groups.pop();
+    }
+
+    /// Adds a focus target to the innermost open group, if there is one.
+    pub fn group_member(&mut self, elem: u32) {
+        if let Some(&g) = self.open_groups.last() {
+            self.groups[g].members.push(elem);
+        }
+    }
+
+    /// Whether a key press of `key` ("Space" or "Enter", however the platform
+    /// spells them) presses `elem`.
+    fn activates(&self, elem: u32, key: &str) -> bool {
+        let space = key != "Enter";
+        self.activatable.iter().any(|&(e, keys)| {
+            e == elem
+                && match keys {
+                    ActivationKeys::Both => true,
+                    ActivationKeys::Space => space,
+                    ActivationKeys::Enter => !space,
+                }
+        })
     }
 
     /// Makes `elem` keep the drag of a press that began on it (RFC-0041 §4).
@@ -413,6 +529,18 @@ impl EventRouter {
             action: dismiss.unwrap_or_else(|| Box::new(|_, _| {})),
         });
         self.modal_scrims.push(idx);
+    }
+
+    /// Marks `rect` as the content of the most recent modal scrim: a press
+    /// inside it does not reach the scrim, so it cannot dismiss.
+    pub fn keep_scrim_open_over(&mut self, rect: Rect) {
+        let Some(&idx) = self.modal_scrims.last() else {
+            return;
+        };
+        match self.scrim_keep.iter_mut().find(|(i, _)| *i == idx) {
+            Some((_, rects)) => rects.push(rect),
+            None => self.scrim_keep.push((idx, vec![rect])),
+        }
     }
 
     /// Registers a light dismiss for an anchored overlay (RFC-0036).
@@ -536,6 +664,9 @@ impl EventRouter {
         }
         if self.focused == Some(elem) {
             s.insert(StyleState::FOCUSED);
+            if self.focus_visible {
+                s.insert(StyleState::FOCUS_VISIBLE);
+            }
         }
         if self.disabled.contains(&elem) {
             s.insert(StyleState::DISABLED);
@@ -599,6 +730,7 @@ impl EventRouter {
             rect,
             frame: self.current_frame,
             focused_sig,
+            after: self.handlers.len(),
         });
     }
 
@@ -618,7 +750,45 @@ impl EventRouter {
 
     /// Sets the initially-focused element and its `var`.
     pub fn set_focus(&mut self, ctx: &mut ReactiveCtx, elem: u32) {
-        self.steal_focus(ctx, Some(elem));
+        self.steal_focus(ctx, Some(elem), true);
+    }
+
+    /// Whether the router holds an element index across frames: focus, a press
+    /// in flight, a drag or the element under the pointer.
+    #[must_use]
+    pub fn holds_elements(&self) -> bool {
+        self.focused.is_some()
+            || self.down.is_some()
+            || self.dragging.is_some()
+            || self.hovered.is_some()
+    }
+
+    /// Moves the pointer's elements (the press, the drag, the hover, the last
+    /// tap) to where their elements are after a relayout. An element that is
+    /// gone is let go of without an event.
+    pub fn follow_pointer(&mut self, to: &impl Fn(u32) -> Option<u32>) {
+        if let Some(d) = &mut self.down {
+            d.elem = d.elem.and_then(to);
+        }
+        self.dragging = self.dragging.and_then(to);
+        self.hovered = self.hovered.and_then(to);
+        if let Some((_, e)) = &mut self.last_tap {
+            *e = e.and_then(to);
+        }
+    }
+
+    /// Moves `focused` to where its element now is after a relayout, without
+    /// the blur and focus an actual move would fire. `None` means the element
+    /// is gone: focus ends, and its `var` is cleared.
+    pub fn follow_focus(&mut self, ctx: &mut ReactiveCtx, now: Option<u32>) {
+        if now.is_some() {
+            self.focused = now;
+        } else {
+            self.focused = None;
+            if let Some(sig) = self.focused_sig.take() {
+                ctx.write_signal(sig, Value::Bool(false));
+            }
+        }
     }
 
     /// Moves focus to `elem` if it is a focus target in the current scope
@@ -633,7 +803,7 @@ impl EventRouter {
         if self.disabled.contains(&elem) || !self.is_focus_target(elem) {
             return false;
         }
-        self.steal_focus(ctx, Some(elem));
+        self.steal_focus(ctx, Some(elem), true);
         true
     }
 
@@ -747,8 +917,10 @@ impl EventRouter {
                     self.fire(ctx, atlas, EventKind::PointerDown, ev.pos, None);
                 }
                 // A press on a focusable steals focus (E3).
+                // It shows focus only if it is a text field (RFC-0052 §4).
                 if let Some(f) = self.focusable_at(atlas, ev.pos) {
-                    self.steal_focus(ctx, Some(f));
+                    let visible = self.text_entries.contains(&f);
+                    self.steal_focus(ctx, Some(f), visible);
                 }
             }
             EventKind::PointerUp => {
@@ -884,13 +1056,24 @@ impl EventRouter {
                     // A focused button or switch is pressed by Space or Enter,
                     // once per press however long the key is held.
                     if matches!(key.as_str(), " " | "Space" | "Spacebar" | "Enter") {
-                        if let Some(focused) = self.focused.filter(|f| self.activatable.contains(f))
-                        {
+                        if let Some(focused) = self.focused.filter(|&f| self.activates(f, key)) {
                             if !std::mem::replace(&mut self.activation_held, true) {
                                 self.fire_on_elem(ctx, Some(focused), EventKind::Tap, ev.pos, None);
                             }
                             return;
                         }
+                    }
+                    // RFC-0052: the arrow keys move focus within a tab list or
+                    // a radio group.
+                    if !self.groups.is_empty()
+                        && matches!(
+                            key.as_str(),
+                            "ArrowLeft" | "ArrowRight" | "ArrowUp" | "ArrowDown" | "Home" | "End"
+                        )
+                        && !(ev.mods.ctrl || ev.mods.alt || ev.mods.meta)
+                        && self.group_key(ctx, key)
+                    {
+                        return;
                     }
                     // RFC-0017: Escape dismisses the topmost modal overlay.
                     // RFC-0036: and every open anchored overlay, which has no
@@ -975,6 +1158,23 @@ impl EventRouter {
         let Some(i) = self.hit(atlas, pos, kind) else {
             return;
         };
+        // A press is the topmost listener's alone and does not bubble: when
+        // something above this handler also listens for presses here, that
+        // element has the press, even if it has no handler of this kind (a
+        // `TextField` over a panel with `tap`).
+        if kind.is_press()
+            && self
+                .press_owner(pos)
+                .is_some_and(|e| e != self.handlers[i].elem)
+        {
+            return;
+        }
+        // A modal scrim only owns what is outside the overlay's content.
+        if let Some((_, keep)) = self.scrim_keep.iter().find(|(s, _)| *s == i) {
+            if keep.iter().any(|r| contains(*r, pos)) {
+                return;
+            }
+        }
         // A disabled element dispatches nothing (RFC-0012 S5).
         if self.disabled.contains(&self.handlers[i].elem) {
             return;
@@ -986,10 +1186,16 @@ impl EventRouter {
     }
 
     /// Focus stealing (E3): blur the previous element's `var`, focus the new.
-    fn steal_focus(&mut self, ctx: &mut ReactiveCtx, new: Option<u32>) {
+    ///
+    /// `visible` says the focus arrived by the keyboard, or somewhere that
+    /// shows it regardless (RFC-0052 §4); it is what `focus_visible` reports.
+    fn steal_focus(&mut self, ctx: &mut ReactiveCtx, new: Option<u32>, visible: bool) {
         if self.focused == new {
+            // The same element reached again by a key shows its ring.
+            self.focus_visible |= visible && new.is_some();
             return;
         }
+        self.focus_visible = visible && new.is_some();
         if let Some(old) = self.focused {
             if let Some(f) = self.focusables.iter().find(|f| f.elem == old) {
                 ctx.write_signal(f.focused_sig, Value::Bool(false));
@@ -998,14 +1204,49 @@ impl EventRouter {
             // the same `focused_sig` transition as the reflected prop above.
             self.fire_on_elem(ctx, Some(old), EventKind::Blur, (0.0, 0.0), None);
         }
+        self.focused_sig = None;
         if let Some(n) = new {
             if let Some(f) = self.focusables.iter().find(|f| f.elem == n) {
                 ctx.write_signal(f.focused_sig, Value::Bool(true));
+                self.focused_sig = Some(f.focused_sig);
             }
             // RFC-0012 S2: `focus =>` sugar fires on the rising edge.
             self.fire_on_elem(ctx, Some(n), EventKind::Focus, (0.0, 0.0), None);
         }
         self.focused = new;
+    }
+
+    /// The element owning a press at `pos`: the topmost handler of any press
+    /// kind under the pointer, above the modal floor.
+    fn press_owner(&self, pos: (f32, f32)) -> Option<u32> {
+        let handler = self
+            .handlers
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(i, h)| {
+                *i >= self.modal_floor && h.kind.is_press() && hits(h.rect, h.frame, pos)
+            })
+            .map(|(i, h)| (i, h.elem));
+        // A focusable (a `TextField`) takes the press although it registers no
+        // press handler: it is what a press on it focuses. It is above the
+        // handlers registered before it.
+        let focusable = self
+            .focusables
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(i, f)| {
+                *i >= self.focusable_floor
+                    && !self.disabled.contains(&f.elem)
+                    && hits(f.rect, f.frame, pos)
+            })
+            .map(|(_, f)| (f.after, f.elem));
+        match (handler, focusable) {
+            (Some((hi, he)), Some((after, fe))) => Some(if after > hi { fe } else { he }),
+            (Some((_, e)), None) | (None, Some((_, e))) => Some(e),
+            (None, None) => None,
+        }
     }
 
     /// Finds the topmost handler of `kind` whose registered (inflated, E8) hit
@@ -1139,7 +1380,43 @@ impl EventRouter {
                 }
             }
         };
-        self.steal_focus(ctx, Some(scope[next_idx]));
+        self.steal_focus(ctx, Some(scope[next_idx]), true);
+    }
+
+    /// Moves focus within the group the focused element is a member of, for an
+    /// arrow, Home or End key (RFC-0052 §3). Returns whether the key was used.
+    fn group_key(&mut self, ctx: &mut ReactiveCtx, key: &str) -> bool {
+        let Some(focused) = self.focused else {
+            return false;
+        };
+        let Some(group) = self.groups.iter().find(|g| g.members.contains(&focused)) else {
+            return false;
+        };
+        let kind = group.kind;
+        let live: smallvec::SmallVec<[u32; 16]> = group
+            .members
+            .iter()
+            .copied()
+            .filter(|m| !self.disabled.contains(m))
+            .collect();
+        let Some(here) = live.iter().position(|&m| m == focused) else {
+            return false;
+        };
+        let n = live.len();
+        let next = match key {
+            "ArrowRight" | "ArrowDown" => (here + 1) % n,
+            "ArrowLeft" | "ArrowUp" => (here + n - 1) % n,
+            "Home" if kind == GroupKind::Tabs => 0,
+            "End" if kind == GroupKind::Tabs => n - 1,
+            _ => return false,
+        };
+        let target = live[next];
+        self.steal_focus(ctx, Some(target), true);
+        // A radio button is selected as it is reached; a tab waits for a key.
+        if kind == GroupKind::Radios && target != focused {
+            self.fire_on_elem(ctx, Some(target), EventKind::Tap, (0.0, 0.0), None);
+        }
+        true
     }
 
     /// Fires the topmost mounted modal overlay's `dismiss` action (RFC-0017:

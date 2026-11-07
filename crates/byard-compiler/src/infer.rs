@@ -16,10 +16,11 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::diagnostics::{CompileError, Span};
+use crate::diagnostics::{BindTarget, BindingProblem, CompileError, Span};
 use crate::interp::style::check_static;
 use crate::parser::ast::{
-    AttrKind, BinOp, Expr, FnDecl, Member, Param, StrPart, Type, UnOp, ViewDecl,
+    AttrKind, BinOp, ConstDecl, EnumDecl, Expr, FnDecl, Member, Param, StrPart, Type, UnOp,
+    ViewDecl,
 };
 use crate::symbol::Symbol;
 
@@ -33,7 +34,7 @@ const LIST_METHODS: [&str; 15] = [
 /// The methods a `Str` has at runtime (`len` is a field). Any other call on a
 /// `Str` silently evaluates to nothing, which is exactly what this diagnostic
 /// exists to stop.
-const STR_METHODS: [&str; 12] = [
+const STR_METHODS: [&str; 14] = [
     "slice",
     "urlEncoded",
     "formatDate",
@@ -46,7 +47,16 @@ const STR_METHODS: [&str; 12] = [
     "replace",
     "split",
     "indexOf",
+    "toInt",
+    "toFloat",
 ];
+
+/// The methods an `Int` has (RFC-0048); `alpha` is a colour's, which is an
+/// `Int` too.
+const INT_METHODS: [&str; 5] = ["toFloat", "abs", "min", "max", "alpha"];
+
+/// The methods a `Float` has (RFC-0048).
+const FLOAT_METHODS: [&str; 6] = ["round", "floor", "ceil", "abs", "min", "max"];
 
 /// Names the engine puts in scope itself: the animation namespace
 /// (`anim.spring`), a collapsing header's `scroll_fraction`, and the `route`
@@ -54,9 +64,11 @@ const STR_METHODS: [&str; 12] = [
 const BUILT_IN_NAMES: [&str; 3] = ["anim", "scroll_fraction", "route"];
 
 /// Functions the language itself provides: `untrack(expr)`, the
-/// `match(element)` width of an anchored overlay, and the navigation actions
-/// (`navigate`, `back`, `replace`).
-const BUILT_IN_CALLS: [&str; 5] = ["untrack", "match", "navigate", "back", "replace"];
+/// `match(element)` width of an anchored overlay, the navigation actions
+/// (`navigate`, `back`, `replace`), and the clock (`now`, `nowUtc`; RFC-0049).
+const BUILT_IN_CALLS: [&str; 7] = [
+    "untrack", "match", "navigate", "back", "replace", "now", "nowUtc",
+];
 
 /// Whether the property `prop` of the element `element` takes only values (a
 /// number, a colour, a length, an angle, a list) and never words. A pair and
@@ -119,18 +131,35 @@ pub struct Inference {
     pub errors: Vec<CompileError>,
     /// Inferred type of each top-level `var`/`let`, in declaration order.
     pub bindings: Vec<(Symbol, Ty)>,
+    /// The type of each top-level constant (RFC-0055), in declaration order.
+    pub consts: Vec<(Symbol, Ty)>,
 }
 
 /// Runs the D9 checks and local inference over `views`.
 #[must_use]
 pub fn check_views(views: &[ViewDecl]) -> Inference {
     let mut out = Inference::default();
-    // Every view carries the same table of top-level functions.
+    // Every view carries the same table of top-level functions, constants and
+    // enums.
     let helpers = views
         .first()
         .map(|v| std::sync::Arc::clone(&v.helpers))
         .unwrap_or_default();
-    let top_fns = check_top_fns(&helpers, &mut out);
+    let const_decls = views
+        .first()
+        .map(|v| std::sync::Arc::clone(&v.consts))
+        .unwrap_or_default();
+    let enum_decls = views
+        .first()
+        .map(|v| std::sync::Arc::clone(&v.enums))
+        .unwrap_or_default();
+    let enums = enum_table(&enum_decls);
+    let top_fns = check_top_fns(&helpers, &const_decls, &enums, &mut out);
+    let consts = check_consts(&const_decls, &helpers, &top_fns, &enums, &mut out);
+    out.consts = const_decls
+        .iter()
+        .filter_map(|c| consts.get(&c.name).map(|ty| (c.name.clone(), ty.clone())))
+        .collect();
     let names: HashSet<Symbol> = views.iter().map(|v| v.name.clone()).collect();
     let records: HashMap<Symbol, Vec<(Symbol, Type)>> = views
         .first()
@@ -148,16 +177,31 @@ pub fn check_views(views: &[ViewDecl]) -> Inference {
                 .collect()
         })
         .unwrap_or_default();
+    let mut view_params: ViewParams<'_> = HashMap::new();
+    let mut shared: HashSet<&Symbol> = HashSet::new();
+    for view in views {
+        if view_params
+            .insert(view.name.clone(), &view.params)
+            .is_some()
+        {
+            shared.insert(&view.name);
+        }
+    }
+    view_params.retain(|name, _| !shared.contains(name));
     for view in views {
         let mut checker = Checker {
             errors: &mut out.errors,
             bindings: &mut out.bindings,
             env: HashMap::new(),
             undo: Vec::new(),
+            origins: HashMap::new(),
             fns: top_fns.clone(),
             declared: HashSet::new(),
             views: &names,
+            view_params: &view_params,
             records: &records,
+            consts: &consts,
+            enums: &enums,
             strict: true,
         };
         checker.check_view(view);
@@ -168,19 +212,37 @@ pub fn check_views(views: &[ViewDecl]) -> Inference {
 /// Checks the program's top-level functions once (annotations, purity, and
 /// that each reads only its own parameters) and returns their declared
 /// return types, so every view types its calls to them.
-fn check_top_fns(helpers: &[FnDecl], out: &mut Inference) -> HashMap<Symbol, Option<Ty>> {
-    let names: std::collections::HashSet<&Symbol> = helpers.iter().map(|f| &f.name).collect();
+fn check_top_fns(
+    helpers: &[FnDecl],
+    consts: &[ConstDecl],
+    enums: &HashMap<Symbol, Vec<Symbol>>,
+    out: &mut Inference,
+) -> HashMap<Symbol, Option<Ty>> {
+    // What a function may read besides its parameters: other functions, the
+    // constants, and the enums whose cases it names.
+    let names: std::collections::HashSet<&Symbol> = helpers
+        .iter()
+        .map(|f| &f.name)
+        .chain(consts.iter().map(|c| &c.name))
+        .chain(enums.keys())
+        .collect();
     let no_views = HashSet::new();
+    let no_view_params = HashMap::new();
     let no_records = HashMap::new();
+    let no_consts = HashMap::new();
     let mut checker = Checker {
         errors: &mut out.errors,
         bindings: &mut out.bindings,
         env: HashMap::new(),
         undo: Vec::new(),
+        origins: HashMap::new(),
         fns: HashMap::new(),
         declared: HashSet::new(),
         views: &no_views,
+        view_params: &no_view_params,
         records: &no_records,
+        consts: &no_consts,
+        enums,
         // A name a shared function cannot reach is reported below, as
         // impurity, which says more than "unknown".
         strict: false,
@@ -236,6 +298,154 @@ fn check_top_fns(helpers: &[FnDecl], out: &mut Inference) -> HashMap<Symbol, Opt
     top
 }
 
+/// The program's enums by name, each with its distinct cases.
+fn enum_table(decls: &[EnumDecl]) -> HashMap<Symbol, Vec<Symbol>> {
+    decls
+        .iter()
+        .map(|e| {
+            let mut cases: Vec<Symbol> = Vec::with_capacity(e.cases.len());
+            for (case, _) in &e.cases {
+                if !cases.contains(case) {
+                    cases.push(case.clone());
+                }
+            }
+            (e.name.clone(), cases)
+        })
+        .collect()
+}
+
+/// Checks the program's top-level constants once (RFC-0055 §3): that none
+/// reads another in a circle, that each is a pure expression of other
+/// constants and functions, and that its value is of the type written for it.
+/// Returns each constant's type, so every view types its reads of it.
+fn check_consts(
+    consts: &[ConstDecl],
+    helpers: &[FnDecl],
+    fns: &HashMap<Symbol, Option<Ty>>,
+    enums: &HashMap<Symbol, Vec<Symbol>>,
+    out: &mut Inference,
+) -> HashMap<Symbol, Ty> {
+    let mut types: HashMap<Symbol, Ty> = HashMap::new();
+    if consts.is_empty() {
+        return types;
+    }
+    let ordered = crate::consts::order(consts, helpers);
+    for (at, names) in &ordered.cycles {
+        out.errors.push(CompileError::ConstantCycle {
+            span: consts[*at].span,
+            path: names
+                .iter()
+                .map(Symbol::as_str)
+                .collect::<Vec<_>>()
+                .join(" → "),
+        });
+    }
+    // The order they can be typed in; the ones in a cycle last, unknown.
+    let mut sequence = ordered.order.clone();
+    sequence.extend((0..consts.len()).filter(|i| !ordered.order.contains(i)));
+
+    let allowed: HashSet<&Symbol> = helpers
+        .iter()
+        .map(|f| &f.name)
+        .chain(consts.iter().map(|c| &c.name))
+        .chain(enums.keys())
+        .collect();
+    let no_views = HashSet::new();
+    let no_view_params = HashMap::new();
+    let no_records = HashMap::new();
+    for i in sequence {
+        let decl = &consts[i];
+        let (ty, impure) = {
+            let mut checker = Checker {
+                errors: &mut out.errors,
+                bindings: &mut out.bindings,
+                env: HashMap::new(),
+                undo: Vec::new(),
+                origins: HashMap::new(),
+                fns: fns.clone(),
+                declared: HashSet::new(),
+                views: &no_views,
+                view_params: &no_view_params,
+                records: &no_records,
+                consts: &types,
+                enums,
+                // A name a shared constant cannot reach is reported below, as
+                // impurity, which says more than "unknown".
+                strict: false,
+            };
+            let declared = decl.ty.as_ref().map(|t| checker.resolve_type(t));
+            let found = if declared.is_some() {
+                checker.value(&decl.init)
+            } else {
+                checker.infer_binding(None, &decl.init, decl.span)
+            };
+            if let Some(expected) = &declared {
+                if is_concrete(&found) && !assignable(expected, &found) {
+                    checker.errors.push(CompileError::ConstantTypeMismatch {
+                        span: decl.init.span(),
+                        name: decl.name.as_str().to_string(),
+                        expected: ty_name(expected),
+                        found: ty_name(&found),
+                    });
+                }
+            }
+            let impure = effect_span(&decl.init).or_else(|| {
+                let mut body = decl.init.clone();
+                let mut bound: HashSet<Symbol> = HashSet::new();
+                let mut used: Vec<(Symbol, Span)> = Vec::new();
+                crate::resolve::walk::expr(&mut body, &mut |e| match e {
+                    Expr::Lambda { params, .. } => bound.extend(params.iter().cloned()),
+                    Expr::Ident(name, span) => used.push((name.clone(), *span)),
+                    _ => {}
+                });
+                used.into_iter().find_map(|(name, span)| {
+                    let keyword = matches!(name.as_str(), "true" | "false");
+                    (!keyword && !bound.contains(&name) && !allowed.contains(&name)).then_some(span)
+                })
+            });
+            (declared.unwrap_or(found), impure)
+        };
+        if let Some(span) = impure {
+            out.errors.push(CompileError::ImpureConstant {
+                span,
+                name: decl.name.as_str().to_string(),
+            });
+        }
+        types.insert(decl.name.clone(), ty);
+    }
+    types
+}
+
+/// Where a name in scope came from, which decides whether a control can
+/// write to it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Origin {
+    /// A `var`: the only thing a control's `bind:` can write.
+    Var,
+    /// A parameter of the view or of a `fn`.
+    Param,
+    /// A `let`.
+    Let,
+    /// A loop variable, a lambda parameter, an event's value, an `inject`.
+    Other,
+}
+
+/// The parameters of each view of the program, by name, for checking the
+/// arguments of a call. A name two views share is left out: which one a call
+/// means is the resolver's to say.
+type ViewParams<'a> = HashMap<Symbol, &'a [Param]>;
+
+/// The controls whose `bind:` writes a `var`, and the attributes that spell
+/// it (`value:` is the older name, except on a `RadioButton`, where it is the
+/// button's own identity).
+fn bind_attrs(control: &str) -> &'static [&'static str] {
+    match control {
+        "TextField" | "Toggle" | "Slider" | "Checkbox" => &["bind", "value"],
+        "RadioButton" => &["bind"],
+        _ => &[],
+    }
+}
+
 struct Checker<'a> {
     errors: &'a mut Vec<CompileError>,
     bindings: &'a mut Vec<(Symbol, Ty)>,
@@ -244,7 +454,9 @@ struct Checker<'a> {
     /// Undo log for `env`: each binding pushes the value it replaced (or
     /// `None`), and leaving a scope pops back to the length it saved, so a
     /// scope costs its own bindings rather than a copy of the whole map.
-    undo: Vec<(Symbol, Option<Ty>)>,
+    undo: Vec<(Symbol, Option<Ty>, Option<Origin>)>,
+    /// Where each name in `env` came from.
+    origins: HashMap<Symbol, Origin>,
     /// Declared return types of named `fn`s, for call inference.
     fns: HashMap<Symbol, Option<Ty>>,
     /// Every name the view declares at its top level, whatever the order: a
@@ -252,8 +464,14 @@ struct Checker<'a> {
     declared: HashSet<Symbol>,
     /// The program's views, whose call arguments are values.
     views: &'a HashSet<Symbol>,
+    /// The declared parameters of those views.
+    view_params: &'a ViewParams<'a>,
     /// The program's record types: name → fields.
     records: &'a HashMap<Symbol, Vec<(Symbol, Type)>>,
+    /// The program's top-level constants and their types (RFC-0055).
+    consts: &'a HashMap<Symbol, Ty>,
+    /// The program's enums and their cases (RFC-0055).
+    enums: &'a HashMap<Symbol, Vec<Symbol>>,
     /// Whether a bare name being checked has to be a value. `false` where it
     /// may be a word the element understands (`align: center`), which only
     /// the element can judge.
@@ -289,6 +507,13 @@ impl Checker<'_> {
                 vars.push(name.clone());
             }
         }
+        // A default is evaluated in the view's own scope, so a misspelt name or
+        // enum case in one is told here rather than when a call leaves it out.
+        for param in &view.params {
+            if let Some(default) = &param.default {
+                self.value(default);
+            }
+        }
         self.check_members(&view.body, true);
         // Run style check for all style blocks
         for member in &view.body {
@@ -301,17 +526,31 @@ impl Checker<'_> {
 
     /// Binds `name` in the current scope, logging what it replaces.
     fn bind(&mut self, name: Symbol, ty: Ty) {
+        self.bind_from(name, ty, Origin::Other);
+    }
+
+    /// [`bind`](Self::bind), saying where the name came from.
+    fn bind_from(&mut self, name: Symbol, ty: Ty, origin: Origin) {
         let previous = self.env.insert(name.clone(), ty);
-        self.undo.push((name, previous));
+        let previous_origin = self.origins.insert(name.clone(), origin);
+        self.undo.push((name, previous, previous_origin));
     }
 
     /// Ends the scope opened when the log had length `mark`, restoring every
     /// binding it replaced, newest first.
     fn leave(&mut self, mark: usize) {
         while self.undo.len() > mark {
-            let Some((name, previous)) = self.undo.pop() else {
+            let Some((name, previous, origin)) = self.undo.pop() else {
                 break;
             };
+            match origin {
+                Some(o) => {
+                    self.origins.insert(name.clone(), o);
+                }
+                None => {
+                    self.origins.remove(&name);
+                }
+            }
             match previous {
                 Some(ty) => {
                     self.env.insert(name, ty);
@@ -345,20 +584,30 @@ impl Checker<'_> {
         self.env.contains_key(name)
             || self.declared.contains(name)
             || self.fns.contains_key(name)
+            || self.consts.contains_key(name)
             || BUILT_IN_NAMES.contains(&name.as_str())
     }
 
     /// Reports `name` as undeclared, suggesting the closest name in scope.
     fn unknown_name(&mut self, name: &Symbol, span: Span) {
-        let hint = crate::util::closest_match(
-            name.as_str(),
-            self.env
-                .keys()
-                .chain(self.declared.iter())
-                .chain(self.fns.keys())
-                .map(Symbol::as_str),
-        )
-        .map(str::to_string);
+        // An enum's name on its own is not a value; its cases are.
+        let enum_case = self
+            .enums
+            .get(name)
+            .and_then(|cases| cases.first())
+            .map(|case| format!("{}.{}", name.as_str(), case.as_str()));
+        let hint = enum_case.or_else(|| {
+            crate::util::closest_match(
+                name.as_str(),
+                self.env
+                    .keys()
+                    .chain(self.declared.iter())
+                    .chain(self.fns.keys())
+                    .chain(self.consts.keys())
+                    .map(Symbol::as_str),
+            )
+            .map(str::to_string)
+        });
         self.errors.push(CompileError::UnknownName {
             span,
             name: name.as_str().to_string(),
@@ -367,9 +616,18 @@ impl Checker<'_> {
     }
 
     fn check_param(&mut self, param: &Param, what: &str) {
+        // A binding is the caller's `var` (RFC-0051): it is written like one.
+        let origin = if param.bind {
+            Origin::Var
+        } else {
+            Origin::Param
+        };
+        if param.bind || param.name.as_str() == "bind" {
+            self.check_binding_param(param, what);
+        }
         if let Some(ty) = &param.ty {
             let resolved = self.resolve_type(ty);
-            self.bind(param.name.clone(), resolved);
+            self.bind_from(param.name.clone(), resolved, origin);
         } else {
             // `content` is the child-block slot (RFC-0007 D-A): it holds the
             // caller's `{ ... }` block, has no value type to write, and is
@@ -380,8 +638,33 @@ impl Checker<'_> {
                     what: what.to_string(),
                 });
             }
-            self.bind(param.name.clone(), Ty::Unknown);
+            self.bind_from(param.name.clone(), Ty::Unknown, origin);
         }
+    }
+
+    /// A binding parameter has no default, has a type, is not a callback, and
+    /// is not called `bind`; and only a view's parameter can be one
+    /// (RFC-0051 §1).
+    fn check_binding_param(&mut self, param: &Param, what: &str) {
+        let problem = if param.name.as_str() == "bind" {
+            BindingProblem::Reserved
+        } else if what != "view parameter" {
+            BindingProblem::NotAView
+        } else if param.default.is_some() {
+            BindingProblem::Default
+        } else if param.ty.is_none() {
+            // `MissingAnnotation` says so already.
+            return;
+        } else if matches!(param.ty, Some(Type::Function { .. })) {
+            BindingProblem::Callback
+        } else {
+            return;
+        };
+        self.errors.push(CompileError::BadBindingParam {
+            span: param.span,
+            name: param.name.as_str().to_string(),
+            problem,
+        });
     }
 
     fn check_members(&mut self, members: &[Member], top_level: bool) {
@@ -421,31 +704,275 @@ impl Checker<'_> {
     }
 
     /// Checks `attrs` as written on the element `element`, when it is known.
+    /// Returns each attribute's type, [`Ty::Unknown`] for one that is not a
+    /// plain `name: value`.
     ///
     /// A property's whole value may be a word only if the property takes
     /// words. For one that takes a number, a colour, a length, an angle or a
     /// list, a bare name has to be a value: `bg: prmary` is a
     /// misspelt name, not a colour called "prmary".
-    fn check_attrs_of(&mut self, element: Option<&str>, attrs: &[crate::parser::ast::Attr]) {
+    fn check_attrs_of(
+        &mut self,
+        element: Option<&str>,
+        attrs: &[crate::parser::ast::Attr],
+    ) -> Vec<Ty> {
         let it = Symbol::intern("it");
+        let mut tys = Vec::with_capacity(attrs.len());
         for attr in attrs {
-            match &attr.kind {
+            tys.push(match &attr.kind {
                 AttrKind::Prop { value } => {
                     if element.is_some_and(|e| takes_only_a_value(e, attr.name.as_str())) {
-                        self.value(value);
+                        self.value(value)
                     } else {
-                        self.word(value);
+                        self.word(value)
                     }
                 }
                 AttrKind::Spread { value } => {
                     self.value(value);
+                    Ty::Unknown
                 }
                 AttrKind::Event { payload, action } => {
                     let mut names = vec![&it];
                     names.extend(payload.as_ref());
                     self.check_shadowed(action, &names);
+                    Ty::Unknown
                 }
+            });
+        }
+        tys
+    }
+
+    /// Checks the arguments of a call to a view of the program against the
+    /// parameters it declares: each one must be of the declared type, and a
+    /// binding (RFC-0051) must be passed as one, a `var` of the caller's.
+    /// `tys` holds the type of every `(...)` argument, then of every attribute.
+    fn check_view_args(&mut self, el: &crate::parser::ast::ElementNode, tys: &[Ty]) {
+        let Some(&params) = self.view_params.get(&el.name) else {
+            return;
+        };
+        let callee = el.name.as_str();
+        // Positional arguments fill the value parameters in order: not the
+        // child slot, not a callback, not a binding.
+        let mut positional = params.iter().filter(|p| {
+            p.name.as_str() != crate::interp::eval::RESERVED_CONTENT
+                && !matches!(p.ty, Some(Type::Function { .. }))
+                && !p.bind
+        });
+        let named = |name: &Symbol| params.iter().find(|p| &p.name == name);
+        let bindings: Vec<&Param> = params.iter().filter(|p| p.bind).collect();
+        let sole = bindings.len() == 1;
+        let bind = Symbol::intern("bind");
+
+        // Each argument, with what it fills: `None` for one that is not a
+        // match (the interpreter says so), and a flag for a binding written
+        // `bind`.
+        let mut found = Vec::new();
+        let mut args: Vec<(Option<&Symbol>, bool, &Expr, Span, &Ty)> = Vec::new();
+        for (arg, ty) in el.content.iter().zip(tys) {
+            args.push((
+                arg.name.as_ref(),
+                arg.bind,
+                &arg.value,
+                arg.value.span(),
+                ty,
+            ));
+        }
+        for (attr, ty) in el.attrs.iter().zip(&tys[el.content.len()..]) {
+            if let AttrKind::Prop { value } = &attr.kind {
+                args.push((Some(&attr.name), false, value, value.span(), ty));
             }
+        }
+        for (name, written_bind, value, span, ty) in args {
+            let param = match name {
+                // `bind: x`, the short form.
+                Some(n) if !written_bind && *n == bind => match bindings.len() {
+                    0 => continue,
+                    1 => {
+                        self.check_bind_arg(callee, bindings[0], value, ty, true);
+                        continue;
+                    }
+                    _ => {
+                        self.errors.push(CompileError::BindNeedsName {
+                            span,
+                            callee: callee.to_string(),
+                            names: bindings
+                                .iter()
+                                .map(|p| p.name.as_str().to_string())
+                                .collect(),
+                        });
+                        continue;
+                    }
+                },
+                Some(n) => named(n),
+                None => positional.next(),
+            };
+            let Some(param) = param else { continue };
+            match (param.bind, written_bind) {
+                (true, true) => self.check_bind_arg(callee, param, value, ty, sole),
+                (true, false) => self.errors.push(CompileError::BindArgMismatch {
+                    span,
+                    callee: callee.to_string(),
+                    name: param.name.as_str().to_string(),
+                    declared_binding: true,
+                    sole,
+                    passed: match value {
+                        Expr::Ident(n, _) => n.as_str().to_string(),
+                        _ => String::new(),
+                    },
+                }),
+                (false, true) => self.errors.push(CompileError::BindArgMismatch {
+                    span,
+                    callee: callee.to_string(),
+                    name: param.name.as_str().to_string(),
+                    declared_binding: false,
+                    sole,
+                    passed: String::new(),
+                }),
+                (false, false) => found.push((param, span, ty)),
+            }
+        }
+        for (param, span, ty) in found {
+            let Some(declared) = param.ty.as_ref().map(plain_ty) else {
+                continue;
+            };
+            if !assignable(&declared, ty) {
+                self.errors.push(CompileError::ArgumentTypeMismatch {
+                    span,
+                    callee: callee.to_string(),
+                    name: param.name.as_str().to_string(),
+                    expected: ty_name(&declared),
+                    found: ty_name(ty),
+                });
+            }
+        }
+    }
+
+    /// Checks what is passed to one of a view's bindings: a `var` of the
+    /// calling view, or one of its own bindings, of the declared type exactly
+    /// (a binding is written as well as read, so an `Int` is not a `Float`
+    /// here).
+    fn check_bind_arg(&mut self, callee: &str, param: &Param, value: &Expr, ty: &Ty, sole: bool) {
+        let attr = if sole {
+            "bind".to_string()
+        } else {
+            format!("bind {}", param.name.as_str())
+        };
+        if let Some((target, kind)) = self.not_a_var(value, true) {
+            let ty_text = self.type_to_declare(value);
+            self.errors.push(CompileError::BindNotAVar {
+                span: value.span(),
+                control: callee.to_string(),
+                attr,
+                target,
+                kind,
+                view_call: true,
+                ty: ty_text,
+            });
+            return;
+        }
+        let Some(declared) = param.ty.as_ref().map(plain_ty) else {
+            return;
+        };
+        if is_concrete(&declared) && is_concrete(ty) && !same_ty(&declared, ty) {
+            self.errors.push(CompileError::ArgumentTypeMismatch {
+                span: value.span(),
+                callee: callee.to_string(),
+                name: param.name.as_str().to_string(),
+                expected: ty_name(&declared),
+                found: ty_name(ty),
+            });
+        }
+    }
+
+    /// Reports each `bind name: value` among `args`: written where only a user
+    /// view takes one (RFC-0051).
+    fn reject_bind_args(&mut self, args: &[crate::parser::ast::Arg]) {
+        for arg in args.iter().filter(|a| a.bind) {
+            self.errors.push(CompileError::BindOutsideViewCall {
+                span: arg.value.span(),
+                name: arg
+                    .name
+                    .as_ref()
+                    .map_or(String::new(), |n| n.as_str().to_string()),
+            });
+        }
+    }
+
+    /// Why `value` is not something a `bind:` can write, if it is not: the
+    /// name or the source form to put in the message, and the kind. `None` for
+    /// a `var`, a binding, the theme's scheme flag, or a name this check cannot
+    /// place. An expression the control path cannot judge is let through
+    /// unless `strict`, which a view's binding is (RFC-0051).
+    fn not_a_var(&self, value: &Expr, strict: bool) -> Option<(String, BindTarget)> {
+        match value {
+            Expr::Ident(name, _) if matches!(name.as_str(), "true" | "false") => Some((
+                format!("`{name}`", name = name.as_str()),
+                BindTarget::Literal,
+            )),
+            Expr::Ident(name, _) => match self.origins.get(name) {
+                Some(Origin::Param) => Some((name.as_str().to_string(), BindTarget::Parameter)),
+                Some(Origin::Let) => Some((name.as_str().to_string(), BindTarget::Let)),
+                Some(Origin::Other) => Some((name.as_str().to_string(), BindTarget::Other)),
+                // A `var`, or a name this check cannot place.
+                Some(Origin::Var) | None => None,
+            },
+            Expr::IntLit(..) | Expr::FloatLit(..) | Expr::StrLit(..) | Expr::Array(..) => {
+                Some(("a literal".to_string(), BindTarget::Literal))
+            }
+            // `theme.dark` is the scheme flag, which is writable.
+            Expr::Member { field, .. } if field.as_str() == "dark" => None,
+            Expr::Member { base, field, .. } if strict => {
+                let target = match base.as_ref() {
+                    Expr::Ident(b, _) => format!("`{}.{}`", b.as_str(), field.as_str()),
+                    _ => "an expression".to_string(),
+                };
+                Some((target, BindTarget::Expression))
+            }
+            _ if strict => Some(("an expression".to_string(), BindTarget::Expression)),
+            _ => None,
+        }
+    }
+
+    /// A control's `bind:` writes the `var` it names. Anything else it could
+    /// name, a parameter, a `let`, a literal, is never written, and the
+    /// control would draw its default and change nothing, with no word said.
+    fn check_binds(&mut self, el: &crate::parser::ast::ElementNode) {
+        let spellings = bind_attrs(el.name.as_str());
+        if spellings.is_empty() {
+            return;
+        }
+        for attr in &el.attrs {
+            let AttrKind::Prop { value } = &attr.kind else {
+                continue;
+            };
+            if !spellings.contains(&attr.name.as_str()) {
+                continue;
+            }
+            let Some((target, kind)) = self.not_a_var(value, false) else {
+                continue;
+            };
+            let ty = self.type_to_declare(value);
+            self.errors.push(CompileError::BindNotAVar {
+                span: value.span(),
+                control: el.name.as_str().to_string(),
+                attr: attr.name.as_str().to_string(),
+                target,
+                kind,
+                view_call: false,
+                ty,
+            });
+        }
+    }
+
+    /// The type of a name in scope, written as a declaration would, or an empty
+    /// string when it is not known.
+    fn type_to_declare(&self, value: &Expr) -> String {
+        match value {
+            Expr::Ident(name, _) => match self.env.get(name) {
+                Some(ty) if is_concrete(ty) => ty_name(ty),
+                _ => String::new(),
+            },
+            _ => String::new(),
         }
     }
 
@@ -464,7 +991,12 @@ impl Checker<'_> {
                 span,
             } => {
                 let inferred = self.infer_binding(ty.as_ref(), init, *span);
-                self.bind(name.clone(), inferred.clone());
+                let origin = if matches!(member, Member::Var { .. }) {
+                    Origin::Var
+                } else {
+                    Origin::Let
+                };
+                self.bind_from(name.clone(), inferred.clone(), origin);
                 if top_level {
                     self.bindings.push((name.clone(), inferred));
                 }
@@ -494,6 +1026,7 @@ impl Checker<'_> {
                 // What a view is called with is a value. An intrinsic's named
                 // argument may be one of its own words.
                 let is_view = self.views.contains(&el.name);
+                let mut tys = Vec::with_capacity(el.content.len() + el.attrs.len());
                 for arg in &el.content {
                     let takes_a_value = arg.name.as_ref().is_some_and(|name| {
                         crate::interp::intrinsics::shape_argument_type(
@@ -502,13 +1035,19 @@ impl Checker<'_> {
                         )
                         .is_some_and(only_values)
                     });
-                    if is_view || arg.name.is_none() || takes_a_value {
-                        self.value(&arg.value);
+                    tys.push(if is_view || arg.name.is_none() || takes_a_value {
+                        self.value(&arg.value)
                     } else {
-                        self.word(&arg.value);
-                    }
+                        self.word(&arg.value)
+                    });
                 }
-                self.check_attrs_of(Some(el.name.as_str()), &el.attrs);
+                tys.extend(self.check_attrs_of(Some(el.name.as_str()), &el.attrs));
+                if is_view {
+                    self.check_view_args(el, &tys);
+                } else {
+                    self.reject_bind_args(&el.content);
+                    self.check_binds(el);
+                }
                 if let Some(action) = &el.action {
                     self.check_shadowed(action, &[&Symbol::intern("it")]);
                 }
@@ -614,7 +1153,11 @@ impl Checker<'_> {
                     if self.strict && !self.knows(sym) {
                         self.unknown_name(sym, *span);
                     }
-                    self.env.get(sym).cloned().unwrap_or(Ty::Unknown)
+                    self.env
+                        .get(sym)
+                        .or_else(|| self.consts.get(sym))
+                        .cloned()
+                        .unwrap_or(Ty::Unknown)
                 }
             }
             // A nested array only *checks* its elements, the homogeneity
@@ -652,6 +1195,21 @@ impl Checker<'_> {
             } => {
                 let l = self.value(lhs);
                 let r = self.value(rhs);
+                if matches!(op, BinOp::Eq | BinOp::Ne) {
+                    self.check_shorthand(&l, rhs);
+                    self.check_shorthand(&r, lhs);
+                }
+                // `a || b ? x : y` is `a || (b ? x : y)`: the ternary reaches
+                // the end of the whole expression, with no parenthesis
+                // closing it. Almost always a mistake for `(a || b) ? x : y`.
+                if *op == BinOp::Or
+                    && matches!(rhs.as_ref(), Expr::Ternary { span: t, .. } if t.end == span.end)
+                {
+                    self.errors.push(CompileError::MixedTernaryPrecedence {
+                        span: *span,
+                        op: "||".to_string(),
+                    });
+                }
                 self.check_binary(*op, &l, &r, *span)
             }
             Expr::Ternary {
@@ -680,6 +1238,9 @@ impl Checker<'_> {
                 Ty::Unknown
             }
             Expr::Member { base, field, span } => {
+                if let Some(ty) = self.enum_case(base, field, *span) {
+                    return ty;
+                }
                 let b = self.value(base);
                 if field.as_str() == "len" && matches!(b, Ty::List(_) | Ty::Str) {
                     Ty::Int
@@ -697,6 +1258,7 @@ impl Checker<'_> {
             // record is. Unnamed items stay as written, since a positional
             // pair may be words.
             Expr::Tuple(args, _) => {
+                self.reject_bind_args(args);
                 for arg in args {
                     if arg.name.as_ref().is_some_and(|f| f.as_str() != "kind") {
                         self.value(&arg.value);
@@ -742,7 +1304,7 @@ impl Checker<'_> {
                 span,
             } => {
                 let bound = self.infer_binding(ty.as_ref(), value, *span);
-                self.bind(name.clone(), bound);
+                self.bind_from(name.clone(), bound, Origin::Let);
                 Ty::Unknown
             }
             Expr::Assign { target, value, .. } => {
@@ -794,6 +1356,48 @@ impl Checker<'_> {
         }
     }
 
+    /// `Enum.case` (RFC-0055): the enum's type when `base` names an enum
+    /// nothing in scope hides, `None` otherwise. A case the enum lacks is
+    /// told, with the nearest one, and the expression still has the enum's
+    /// type so the mistake is not reported twice.
+    fn enum_case(&mut self, base: &Expr, field: &Symbol, span: Span) -> Option<Ty> {
+        let Expr::Ident(name, _) = base else {
+            return None;
+        };
+        if self.env.contains_key(name) || self.declared.contains(name) {
+            return None;
+        }
+        let cases = self.enums.get(name)?;
+        if !cases.contains(field) {
+            let hint = crate::util::closest_match(field.as_str(), cases.iter().map(Symbol::as_str))
+                .map(str::to_string);
+            let len = u32::try_from(field.as_str().len()).unwrap_or(0);
+            self.errors.push(CompileError::UnknownEnumCase {
+                span: Span::new(span.end.saturating_sub(len).max(span.start), span.end),
+                enum_name: name.as_str().to_string(),
+                name: field.as_str().to_string(),
+                hint,
+            });
+        }
+        Some(Ty::Named(name.clone()))
+    }
+
+    /// A comparison of an enum with `.case`: the short form has no type to
+    /// read the enum from there, so it would compare with the text `.case`
+    /// and never be equal.
+    fn check_shorthand(&mut self, other: &Ty, expr: &Expr) {
+        let (Ty::Named(name), Expr::ClassRef(case, span)) = (other, expr) else {
+            return;
+        };
+        if self.enums.contains_key(name) {
+            self.errors.push(CompileError::EnumShorthand {
+                span: *span,
+                case: case.as_str().to_string(),
+                enum_name: Some(name.as_str().to_string()),
+            });
+        }
+    }
+
     /// The type of `record.field`, for a record type the program declares;
     /// an `UnknownField` for a field it does not have. Any other named type
     /// (a controller, a theme) is not modelled, so nothing is claimed.
@@ -826,6 +1430,7 @@ impl Checker<'_> {
     /// the method against the receiver type; a plain `fn` call resolves to its
     /// declared return type.
     fn check_call(&mut self, callee: &Expr, args: &[crate::parser::ast::Arg]) -> Ty {
+        self.reject_bind_args(args);
         if let Expr::Member { base, field, span } = callee {
             let recv = self.value(base);
             // What a method of a value is called with is a value. An
@@ -863,7 +1468,14 @@ impl Checker<'_> {
                 if self.strict && !self.knows(name) && !BUILT_IN_CALLS.contains(&name.as_str()) {
                     self.unknown_name(name, *span);
                 }
-                self.fns.get(name).cloned().flatten().unwrap_or(Ty::Unknown)
+                self.fns.get(name).cloned().flatten().unwrap_or_else(|| {
+                    // The clock answers text (RFC-0049).
+                    if matches!(name.as_str(), "now" | "nowUtc") && !self.knows(name) {
+                        Ty::Str
+                    } else {
+                        Ty::Unknown
+                    }
+                })
             }
             _ => Ty::Unknown,
         }
@@ -883,6 +1495,8 @@ impl Checker<'_> {
         let known: Option<&[&str]> = match recv {
             Ty::List(_) => Some(&LIST_METHODS),
             Ty::Str => Some(&STR_METHODS),
+            Ty::Int => Some(&INT_METHODS),
+            Ty::Float => Some(&FLOAT_METHODS),
             // Anything else (a controller handle, a record, an `anim.*` curve,
             // an unresolved type) is not modelled, so nothing is claimed.
             _ => None,
@@ -949,8 +1563,26 @@ impl Checker<'_> {
             (
                 Ty::List(_),
                 "push" | "removeAt" | "filter" | "slice" | "sort" | "sortBy" | "reverse",
-            ) => recv.clone(),
-            (Ty::List(_) | Ty::Str, "indexOf") | (Ty::Int, "alpha") => Ty::Int,
+            )
+            | (Ty::Int | Ty::Float, "abs") => recv.clone(),
+            (Ty::List(_) | Ty::Str, "indexOf")
+            | (Ty::Int, "alpha")
+            | (Ty::Str, "toInt")
+            | (Ty::Float, "round" | "floor" | "ceil") => Ty::Int,
+            // Text read as a number may be nothing, which `??` defaults; the
+            // checker has no optional type, so (as for `find`) it is the type
+            // it is when it is a value (RFC-0048 §5).
+            (Ty::Str | Ty::Int, "toFloat") => Ty::Float,
+            (Ty::Int | Ty::Float, "min" | "max") => {
+                let other = args
+                    .first()
+                    .map_or(Ty::Unknown, |a| self.infer_expr(&a.value));
+                if matches!(other, Ty::Int | Ty::Float) {
+                    join_numeric(recv, &other)
+                } else {
+                    recv.clone()
+                }
+            }
             (
                 Ty::Str,
                 "slice" | "urlEncoded" | "formatDate" | "trim" | "toLower" | "toUpper" | "replace",
@@ -1067,13 +1699,23 @@ impl Checker<'_> {
                 if sym.as_str() == "true" || sym.as_str() == "false" {
                     Ty::Bool
                 } else {
-                    self.env.get(sym).cloned().unwrap_or(Ty::Unknown)
+                    self.env
+                        .get(sym)
+                        .or_else(|| self.consts.get(sym))
+                        .cloned()
+                        .unwrap_or(Ty::Unknown)
                 }
             }
             Expr::Call { callee, .. } => match callee.as_ref() {
                 // A call to a named `fn` resolves to its declared return type.
                 Expr::Ident(name, _) => {
-                    self.fns.get(name).cloned().flatten().unwrap_or(Ty::Unknown)
+                    self.fns.get(name).cloned().flatten().unwrap_or_else(|| {
+                        if matches!(name.as_str(), "now" | "nowUtc") && !self.knows(name) {
+                            Ty::Str
+                        } else {
+                            Ty::Unknown
+                        }
+                    })
                 }
                 // Method calls need a catalog Phase 2 does not have.
                 _ => Ty::Unknown,
@@ -1117,6 +1759,49 @@ impl Checker<'_> {
                 Ty::Fn(params, ret)
             }
         }
+    }
+}
+
+/// The type a written [`Type`] names, without the checks `resolve_type` makes
+/// (the declaration was checked where it was written).
+fn plain_ty(ty: &Type) -> Ty {
+    match ty {
+        Type::Named { name, args, .. } => match name.as_str() {
+            "Int" => Ty::Int,
+            "Float" => Ty::Float,
+            "Str" => Ty::Str,
+            "Bool" => Ty::Bool,
+            "Text" => Ty::Unknown,
+            "List" => Ty::List(Box::new(args.first().map_or(Ty::Unknown, plain_ty))),
+            _ => Ty::Named(name.clone()),
+        },
+        Type::Function { params, ret, .. } => Ty::Fn(
+            params.iter().map(plain_ty).collect(),
+            ret.as_deref().map(|r| Box::new(plain_ty(r))),
+        ),
+    }
+}
+
+/// Whether a value of type `found` may be given where `expected` is declared.
+/// What is not known is allowed, as everywhere in this check; an `Int` goes
+/// where a `Float` is wanted.
+/// Whether two types are the same, a list's element included. An unknown
+/// element is the same as any.
+fn same_ty(a: &Ty, b: &Ty) -> bool {
+    match (a, b) {
+        (Ty::Unknown, _) | (_, Ty::Unknown) => true,
+        (Ty::List(x), Ty::List(y)) => same_ty(x, y),
+        _ => a == b,
+    }
+}
+
+fn assignable(expected: &Ty, found: &Ty) -> bool {
+    match (expected, found) {
+        (Ty::Unknown | Ty::Fn(..), _) | (_, Ty::Unknown | Ty::Fn(..)) | (Ty::Float, Ty::Int) => {
+            true
+        }
+        (Ty::List(e), Ty::List(f)) => assignable(e, f),
+        _ => expected == found,
     }
 }
 

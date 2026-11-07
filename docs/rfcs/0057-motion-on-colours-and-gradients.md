@@ -102,7 +102,7 @@ Box #[gradient: on ? (from: 0xFF0000, to: 0x0000FF)
 ```
 
 ```diagnostic
-error[GradientShapeMismatch]: these gradients cannot be animated into each other: one is linear and one is radial
+error[GradientShapeMismatch]: these gradients cannot be animated into each other: one is linear, 2 stops and another is radial, 2 stops
 ```
 
 Split such a change into two boxes and fade their `opacity`, which is what a

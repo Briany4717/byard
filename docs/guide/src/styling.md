@@ -115,6 +115,9 @@ its rounded corners, and `gradient_offset` slides the ramp, which is how a
 [shimmer](motion.md#looping) works. The same descriptor is used on canvas strokes
 and filled paths, see [drawing](drawing.md).
 
+A gradient moves with [`with`](motion.md#colours-and-gradients), and a conditional of
+gradients is the one its condition picks.
+
 A misspelt name inside the tuple is checked as well, so `gradient: (to: blak)` is
 an error and not a gradient that quietly does not draw.
 

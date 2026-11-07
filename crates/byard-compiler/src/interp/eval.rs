@@ -35,6 +35,7 @@
 
 mod access;
 mod animation;
+pub(crate) use animation::gradient_stop_count;
 mod canvas;
 mod controller;
 mod controls;
@@ -682,6 +683,10 @@ pub struct Interpreter {
     /// animating alongside (RFC-0023: a tint fading in is an alpha ramp), and
     /// is interruptible like the scalar props. Keyed by the `with` node's span.
     color_animations: rustc_hash::FxHashMap<AnimKey, [byard_core::frame::Motion; 4]>,
+    /// Persisted animated-gradient state (RFC-0057): one fixed record per
+    /// `with` after a whole gradient, keyed like the maps above. Empty, and so
+    /// unallocated, until a program animates a gradient.
+    gradient_animations: rustc_hash::FxHashMap<AnimKey, animation::GradientAnim>,
     /// Loop clocks for repeating, delayed and keyframed animations (RFC-0025),
     /// keyed by the animation node's span like the two maps above. A repeating
     /// animation cannot sample against `now − start_ms` the way a one-shot does:

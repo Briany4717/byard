@@ -7,7 +7,6 @@
 //! (cached across frames), shape groups with a combine mode, and the path
 //! morph that blends two paths command by command on the CPU.
 
-use super::animation::{hex_from_oklab, linear_to_srgb, oklab_from_hex};
 use super::paint::dim_alpha;
 use super::{CanvasItem, Interpreter};
 use crate::diagnostics::{CompileError, Span};
@@ -413,21 +412,11 @@ pub(super) fn tessellate_path(
     }
 }
 
-/// Mixes two linear RGBA colours in OKLab at factor `t`, alpha linearly, so
-/// a path morph blends its fill the way every other colour animation does
-/// (RFC-0031 §S10).
+/// Mixes two linear RGBA colours in premultiplied OKLab at factor `t`, so a
+/// path morph blends its fill the way every other colour animation does
+/// (RFC-0031 §S10, RFC-0057 §2).
 fn mix_rgba_oklab(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    let hex = |c: [f32; 4]| -> i64 {
-        let byte = |v: f32| i64::from((linear_to_srgb(v.clamp(0.0, 1.0)) * 255.0).round() as u8);
-        (byte(c[0]) << 16) | (byte(c[1]) << 8) | byte(c[2])
-    };
-    let (la, lb) = (oklab_from_hex(hex(a)), oklab_from_hex(hex(b)));
-    let rgb = super::intrinsics::color_to_rgba(
-        hex_from_oklab(std::array::from_fn(|i| la[i] + (lb[i] - la[i]) * t)),
-        false,
-    );
-    [rgb[0], rgb[1], rgb[2], a[3] + (b[3] - a[3]) * t]
+    super::animation::mix_linear_rgba(a, b, t)
 }
 
 /// The two members a morph phase falls between and the blend factor, for a
@@ -709,7 +698,7 @@ impl Interpreter {
     /// matching every alpha-aware colour consumer (RFC-0011).
     fn shape_color(&mut self, el: &ElementNode, name: &str) -> Option<[f32; 4]> {
         let e = Self::shape_arg(el, name)?.clone();
-        let packed = self.eval_pure(&e).as_int()?;
+        let packed = self.eval_color_expr(&e)?;
         Some(super::intrinsics::color_rgba_auto(packed))
     }
 

@@ -56,6 +56,22 @@ pub(super) struct LoopClock {
     honor_delay: bool,
 }
 
+/// The persisted state of one animated gradient (RFC-0057 §3): where it left
+/// from, where it is going, and the one progress that carries it between.
+///
+/// `Copy` and fixed in size, so the first frame inserts it and every later
+/// frame only rewrites it: no allocation while it runs. `offset` is not part
+/// of either end, a `gradient_offset` has an animation of its own.
+#[derive(Clone, Copy)]
+pub(super) struct GradientAnim {
+    from: byard_core::frame::Gradient,
+    to: byard_core::frame::Gradient,
+    /// How many colour stops both ends have (2, or 3 with a written `mid`).
+    pub(super) stops: u8,
+    /// `0 → 1`, restarted on every retarget.
+    progress: byard_core::frame::Motion,
+}
+
 /// Where a keyframe sequence sits right now: the two step *values* surrounding
 /// the current time and the eased factor between them (RFC-0025 §3).
 ///
@@ -208,15 +224,18 @@ fn lerp_value(a: &Value, b: &Value, t: f32) -> Value {
 
 /// Converts a packed `0xRRGGBB` colour to OKLab `[L, a, b]` for perceptually
 /// uniform interpolation (RFC-0010 A3).
-#[allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    clippy::many_single_char_names
-)] // standard colour-space notation
+#[allow(clippy::cast_precision_loss)]
 pub(super) fn oklab_from_hex(hex: i64) -> [f32; 3] {
-    let r = srgb_to_linear(((hex >> 16) & 0xFF) as f32 / 255.0);
-    let g = srgb_to_linear(((hex >> 8) & 0xFF) as f32 / 255.0);
-    let b = srgb_to_linear((hex & 0xFF) as f32 / 255.0);
+    oklab_from_linear([
+        srgb_to_linear(((hex >> 16) & 0xFF) as f32 / 255.0),
+        srgb_to_linear(((hex >> 8) & 0xFF) as f32 / 255.0),
+        srgb_to_linear((hex & 0xFF) as f32 / 255.0),
+    ])
+}
+
+/// Converts linear-light sRGB `[r, g, b]` to OKLab `[L, a, b]`.
+#[allow(clippy::many_single_char_names)] // standard colour-space notation
+pub(super) fn oklab_from_linear([r, g, b]: [f32; 3]) -> [f32; 3] {
     // Björn Ottosson's linear-sRGB → OKLab.
     let l = 0.412_221_47 * r + 0.536_332_55 * g + 0.051_445_995 * b;
     let m = 0.211_903_5 * r + 0.680_699_5 * g + 0.107_396_96 * b;
@@ -229,29 +248,37 @@ pub(super) fn oklab_from_hex(hex: i64) -> [f32; 3] {
     ]
 }
 
-/// Converts OKLab `[L, a, b]` back to a packed `0xRRGGBB` colour, clamping any
-/// out-of-gamut result (a spring can overshoot a channel).
-#[allow(
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss,
-    clippy::cast_precision_loss,
-    clippy::many_single_char_names
-)] // standard colour-space notation
-pub(super) fn hex_from_oklab(lab: [f32; 3]) -> i64 {
-    let [big_l, a, b] = lab;
+/// Converts OKLab `[L, a, b]` back to linear-light sRGB, unclamped (a spring
+/// can overshoot a channel out of gamut; the caller decides what to do).
+#[allow(clippy::many_single_char_names)] // standard colour-space notation
+pub(super) fn linear_from_oklab([big_l, a, b]: [f32; 3]) -> [f32; 3] {
     let l_ = big_l + 0.396_337_78 * a + 0.215_803_76 * b;
     let m_ = big_l - 0.105_561_346 * a - 0.063_854_17 * b;
     let s_ = big_l - 0.089_484_18 * a - 1.291_485_5 * b;
     let (l, m, s) = (l_ * l_ * l_, m_ * m_ * m_, s_ * s_ * s_);
-    let r = 4.076_741_7 * l - 3.307_711_6 * m + 0.230_969_94 * s;
-    let g = -1.268_438 * l + 2.609_757_4 * m - 0.341_319_38 * s;
-    let bl = -0.004_196_086_3 * l - 0.703_418_6 * m + 1.707_614_7 * s;
+    [
+        4.076_741_7 * l - 3.307_711_6 * m + 0.230_969_94 * s,
+        -1.268_438 * l + 2.609_757_4 * m - 0.341_319_38 * s,
+        -0.004_196_086_3 * l - 0.703_418_6 * m + 1.707_614_7 * s,
+    ]
+}
+
+/// Converts OKLab `[L, a, b]` back to a packed `0xRRGGBB` colour, clamping any
+/// out-of-gamut result (a spring can overshoot a channel).
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+pub(super) fn hex_from_oklab(lab: [f32; 3]) -> i64 {
+    let [r, g, bl] = linear_from_oklab(lab);
     let to_byte = |c: f32| -> i64 { (linear_to_srgb(c).clamp(0.0, 1.0) * 255.0).round() as i64 };
     (to_byte(r) << 16) | (to_byte(g) << 8) | to_byte(bl)
 }
 
 /// Splits a packed colour into the four channels a colour animation drives:
-/// OKLab `L`/`a`/`b` plus alpha as `0..=1` (RFC-0010 A3, RFC-0023's alpha ramp).
+/// OKLab `L`/`a`/`b` **premultiplied by alpha**, then alpha as `0..=1`
+/// (RFC-0010 A3, RFC-0023's alpha ramp, RFC-0057 §2).
+///
+/// Premultiplied, so a fade from or to a translucent colour keeps the other
+/// end's hue the whole way: halfway from `0x00000000` to `0xFF5B8DEF` is half
+/// of the blue, not a darker colour that is turning blue.
 ///
 /// Alpha is auto-detected exactly as every other colour consumer does it (the
 /// lexer's 8-digit tag, else the magnitude heuristic), which is what lets
@@ -264,23 +291,61 @@ fn color_channels(hex: i64) -> [f32; 4] {
     } else {
         1.0
     };
-    [lab[0], lab[1], lab[2], alpha]
+    [lab[0] * alpha, lab[1] * alpha, lab[2] * alpha, alpha]
 }
 
 /// Packs the four animated channels back into `0xAARRGGBB`, tagged like an
 /// 8-digit literal so a downstream consumer honours a mid-ramp alpha of exactly
 /// zero instead of reading it as opaque.
 fn color_from_channels(ch: [f32; 4]) -> i64 {
-    let rgb = hex_from_oklab([ch[0], ch[1], ch[2]]);
     #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
-    let alpha_byte = i64::from((ch[3].clamp(0.0, 1.0) * 255.0).round() as u8);
-    crate::lexer::COLOR_HAS_ALPHA_TAG | (alpha_byte << 24) | rgb
+    let alpha_byte = (ch[3].clamp(0.0, 1.0) * 255.0).round() as u8;
+    // Nothing is visible below half a step of alpha, and the colour of
+    // nothing is undefined (the division below would amplify noise).
+    let rgb = if alpha_byte == 0 {
+        0
+    } else {
+        let a = ch[3];
+        hex_from_oklab([ch[0] / a, ch[1] / a, ch[2] / a])
+    };
+    crate::lexer::COLOR_HAS_ALPHA_TAG | (i64::from(alpha_byte) << 24) | rgb
 }
 
-/// Mixes two packed colours in OKLab at factor `t` (RFC-0025 §3 keyframes).
+/// Mixes two packed colours in premultiplied OKLab at factor `t` (RFC-0025 §3
+/// keyframes).
 pub(super) fn mix_hex_oklab(a: i64, b: i64, t: f32) -> i64 {
     let (from, to) = (color_channels(a), color_channels(b));
     color_from_channels(std::array::from_fn(|i| from[i] + (to[i] - from[i]) * t))
+}
+
+/// Mixes two linear straight-alpha RGBA colours (a gradient's stops, a shape's
+/// colour) in premultiplied OKLab at factor `t`, the same mixing a `with` on a
+/// colour does (RFC-0057 §2), without packing through bytes. Out-of-gamut
+/// results of an overshooting spring are clamped.
+pub(super) fn mix_linear_rgba(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
+    if t <= 0.0 {
+        return a;
+    }
+    if (t - 1.0).abs() < f32::EPSILON {
+        return b;
+    }
+    let premultiplied = |c: [f32; 4]| {
+        let lab = oklab_from_linear([c[0], c[1], c[2]]);
+        [lab[0] * c[3], lab[1] * c[3], lab[2] * c[3], c[3]]
+    };
+    let (pa, pb) = (premultiplied(a), premultiplied(b));
+    let ch: [f32; 4] = std::array::from_fn(|i| pa[i] + (pb[i] - pa[i]) * t);
+    let alpha = ch[3].clamp(0.0, 1.0);
+    if ch[3] <= 1e-6 {
+        return [0.0; 4];
+    }
+    let rgb = linear_from_oklab([ch[0] / ch[3], ch[1] / ch[3], ch[2] / ch[3]]);
+    [
+        rgb[0].clamp(0.0, 1.0),
+        rgb[1].clamp(0.0, 1.0),
+        rgb[2].clamp(0.0, 1.0),
+        alpha,
+    ]
 }
 
 /// sRGB gamma → linear (per channel).
@@ -298,6 +363,42 @@ pub(super) fn linear_to_srgb(c: f32) -> f32 {
         12.92 * c
     } else {
         1.055 * c.powf(1.0 / 2.4) - 0.055
+    }
+}
+
+/// How many colour stops a gradient tuple writes: `from` and `to`, and `mid`
+/// when it has one (`mid_pos` is a position, not a stop). RFC-0057 §3.
+pub(crate) fn gradient_stop_count(leaf: &Expr) -> u8 {
+    let Expr::Tuple(args, _) = leaf else {
+        return 2;
+    };
+    let has_mid = args
+        .iter()
+        .any(|a| a.name.as_ref().is_some_and(|n| n.as_str() == "mid"));
+    if has_mid { 3 } else { 2 }
+}
+
+/// Blends two gradients of the same kind at progress `t` (RFC-0057 §3): the
+/// stops in premultiplied OKLab, the geometry as numbers. `offset` is `a`'s.
+fn blend_gradients(
+    a: &byard_core::frame::Gradient,
+    b: &byard_core::frame::Gradient,
+    t: f32,
+) -> byard_core::frame::Gradient {
+    let lerp = |x: f32, y: f32| x + (y - x) * t;
+    byard_core::frame::Gradient {
+        kind: b.kind,
+        angle: lerp(a.angle, b.angle),
+        center: [
+            lerp(a.center[0], b.center[0]),
+            lerp(a.center[1], b.center[1]),
+        ],
+        radius: lerp(a.radius, b.radius),
+        from: mix_linear_rgba(a.from, b.from, t),
+        mid: mix_linear_rgba(a.mid, b.mid, t),
+        to: mix_linear_rgba(a.to, b.to, t),
+        mid_pos: lerp(a.mid_pos, b.mid_pos),
+        offset: a.offset,
     }
 }
 
@@ -363,7 +464,7 @@ impl Interpreter {
         if !self.clock_set {
             return target_int;
         }
-        let Ok(spec) = crate::interp::anim::resolve_motion(anim) else {
+        let Ok(spec) = crate::interp::anim::resolve_motion_in(anim, Some(&self.theme)) else {
             return target_int;
         };
         let packed = pack_curve(spec.curve);
@@ -402,6 +503,95 @@ impl Interpreter {
             self.any_active = true;
         }
         color_from_channels(current)
+    }
+
+    /// Drives a `with` after a whole gradient (RFC-0057 §3): `target` is a
+    /// gradient tuple or a conditional of them, `anim` the curve.
+    ///
+    /// The chosen leaf is the goal. The persisted [`GradientAnim`] moves the
+    /// gradient toward it with one progress `Motion`, blending the stops in
+    /// premultiplied OKLab and the geometry as numbers. A goal of another kind
+    /// or with another number of stops cannot be blended, so it is jumped to
+    /// (the checker reports the cases a program can show, `GradientShapeMismatch`).
+    pub(super) fn eval_animated_gradient(
+        &mut self,
+        target: &Expr,
+        anim: &Expr,
+        key: AnimKey,
+        offset: f32,
+    ) -> Option<byard_core::frame::Gradient> {
+        let leaf = self.pick_gradient_leaf(target);
+        let mut goal = self.resolve_gradient_expr(leaf, offset)?;
+        if !self.clock_set {
+            return Some(goal);
+        }
+        let Ok(spec) = crate::interp::anim::resolve_motion_in(anim, Some(&self.theme)) else {
+            return Some(goal);
+        };
+        let stops = gradient_stop_count(leaf);
+        // The ends are compared and stored without the offset, which the
+        // gradient's own `gradient_offset` owns.
+        goal.offset = 0.0;
+        let (now, curve) = (self.now_ms, pack_curve(spec.curve));
+        let rest = |to| GradientAnim {
+            from: to,
+            to,
+            stops,
+            progress: byard_core::frame::Motion {
+                from: 1.0,
+                to: 1.0,
+                start_ms: now,
+                curve,
+            },
+        };
+        let record = self
+            .gradient_animations
+            .entry(key)
+            .or_insert_with(|| rest(goal));
+        if record.stops != stops || record.to.kind != goal.kind {
+            *record = rest(goal);
+        } else if record.to != goal {
+            let here = blend_gradients(&record.from, &record.to, record.progress.sample(now));
+            record.from = here;
+            record.to = goal;
+            record.progress = byard_core::frame::Motion {
+                from: 0.0,
+                to: 1.0,
+                start_ms: now,
+                curve,
+            };
+        }
+        record.progress.curve = curve;
+        let settled =
+            record
+                .progress
+                .is_settled_with_eps(now, ANIM_SETTLE_EPS_POS, ANIM_SETTLE_EPS_VEL);
+        let mut shown = if settled {
+            record.to
+        } else {
+            blend_gradients(&record.from, &record.to, record.progress.sample(now))
+        };
+        shown.offset = offset;
+        if !settled {
+            self.any_active = true;
+        }
+        Some(shown)
+    }
+
+    /// The gradient tuple a gradient value stands for: the value itself, or the
+    /// branch of a conditional its condition picks, to any depth.
+    pub(super) fn pick_gradient_leaf<'e>(&mut self, mut expr: &'e Expr) -> &'e Expr {
+        while let Expr::Ternary {
+            cond, then, els, ..
+        } = expr
+        {
+            expr = if self.eval_pure(cond).as_bool() == Some(true) {
+                then
+            } else {
+                els
+            };
+        }
+        expr
     }
 
     /// Drives one repeating / delayed colour animation (RFC-0025 × RFC-0010 A3).
@@ -449,7 +639,7 @@ impl Interpreter {
         if !self.clock_set {
             return target_value;
         }
-        let Ok(spec) = crate::interp::anim::resolve_motion(anim) else {
+        let Ok(spec) = crate::interp::anim::resolve_motion_in(anim, Some(&self.theme)) else {
             // The checker already reported this; render the target inertly.
             return target_value;
         };
@@ -676,7 +866,7 @@ impl Interpreter {
     fn keyframe_blend<'a>(&mut self, expr: &'a Expr) -> Option<KeyframeBlend<'a>> {
         use byard_core::frame::{MAX_KEYFRAME_STEPS, MotionCurve, keyframe_cursor, loop_phase};
 
-        let track = crate::interp::anim::resolve_keyframes(expr)?.ok()?;
+        let track = crate::interp::anim::resolve_keyframes_in(expr, Some(&self.theme))?.ok()?;
         let key = self.anim_key(expr.span());
         // Without an advancing clock, resolve to the sequence's first value,
         // mirrors the `with` path, and never latches the active set at `t = 0`.
@@ -813,6 +1003,8 @@ impl Interpreter {
         let dead: std::collections::HashSet<u32> = dead.into_iter().collect();
         self.animations.retain(|k, _| !dead.contains(&k.slot));
         self.color_animations.retain(|k, _| !dead.contains(&k.slot));
+        self.gradient_animations
+            .retain(|k, _| !dead.contains(&k.slot));
         self.anim_clocks.retain(|k, _| !dead.contains(&k.slot));
     }
 
@@ -852,6 +1044,7 @@ impl Interpreter {
         };
         self.animations.retain(|key, _| !goes(key));
         self.color_animations.retain(|key, _| !goes(key));
+        self.gradient_animations.retain(|key, _| !goes(key));
         self.anim_clocks.retain(|key, _| !goes(key));
     }
 

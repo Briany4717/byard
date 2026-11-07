@@ -138,6 +138,10 @@ enum Command {
         /// The project directory, `byard.toml` or `.byd`. Defaults to the
         /// current project.
         path: Option<PathBuf>,
+        /// Draw this view instead of `Main`. It must take no required
+        /// parameters.
+        #[arg(long, value_name = "NAME")]
+        view: Option<String>,
         /// Where to write the PNG. Defaults to `shot.png`, unless `--a11y` is
         /// given: then no picture is drawn unless this asks for one.
         #[arg(short, long, value_name = "PNG")]
@@ -186,6 +190,24 @@ enum Command {
         /// `--tap` and `--key`.
         #[arg(long = "type", value_name = "TEXT")]
         type_text: Vec<String>,
+        /// Let this many milliseconds of app time pass before the next input
+        /// (or the picture); repeatable, in order with `--tap`.
+        #[arg(long, value_name = "MS")]
+        wait: Vec<u32>,
+    },
+    /// Run the project's scenario files, `tests/*.toml`, without a window or
+    /// a GPU (RFC-0058).
+    Test {
+        /// The project directory or `byard.toml`. Defaults to the current
+        /// project.
+        path: Option<PathBuf>,
+        /// Run only the tests whose `file::name` contains this text.
+        #[arg(long, value_name = "TEXT")]
+        filter: Option<String>,
+        /// Also write each test's final picture to this directory, when
+        /// there is a GPU.
+        #[arg(long, value_name = "DIR")]
+        shots: Option<PathBuf>,
     },
     /// Publish the package in this directory to a registry (RFC-0008).
     Publish {
@@ -246,6 +268,7 @@ fn shot_steps(
     hovers: &[(f32, f32)],
     keys: &[commands::shot::Key],
     typed: &[String],
+    waits: &[u32],
 ) -> Vec<commands::shot::Step> {
     use commands::shot::Step;
     let Some(shot) = matches.subcommand_matches("shot") else {
@@ -287,12 +310,19 @@ fn shot_steps(
             .zip(typed)
             .map(|(i, t)| (i, Step::Type(t.clone()))),
     );
+    steps.extend(
+        at("wait")
+            .into_iter()
+            .zip(waits)
+            .map(|(i, &ms)| (i, Step::Wait(ms))),
+    );
     steps.sort_by_key(|(i, _)| *i);
     steps.into_iter().map(|(_, s)| s).collect()
 }
 
 /// Runs the `byard` command with the process's arguments, and exits with its
 /// status. What the `byard` binary's `main` is.
+#[allow(clippy::too_many_lines)]
 pub fn main() {
     let matches = <Cli as clap::CommandFactory>::command().get_matches();
     let cli =
@@ -347,6 +377,7 @@ pub fn main() {
         Command::Get => commands::get::run(),
         Command::Shot {
             path,
+            view,
             out,
             a11y,
             size,
@@ -360,8 +391,10 @@ pub fn main() {
             hover,
             key,
             type_text,
+            wait,
         } => commands::shot::run(&commands::shot::ShotArgs {
             path: path.as_deref(),
+            view: view.as_deref(),
             out: match (out.as_deref(), a11y.is_some()) {
                 (Some(out), _) => Some(out),
                 (None, true) => None,
@@ -379,7 +412,16 @@ pub fn main() {
             } else {
                 None
             },
-            steps: &shot_steps(&matches, &tap, &hold, &hover, &key, &type_text),
+            steps: &shot_steps(&matches, &tap, &hold, &hover, &key, &type_text, &wait),
+        }),
+        Command::Test {
+            path,
+            filter,
+            shots,
+        } => commands::test::run(&commands::test::TestArgs {
+            path: path.as_deref(),
+            filter: filter.as_deref(),
+            shots: shots.as_deref(),
         }),
         Command::Publish { package, registry } => {
             commands::publish::run(&commands::publish::PublishArgs {
@@ -415,12 +457,13 @@ mod tests {
             hover,
             key,
             type_text,
+            wait,
             ..
         } = cli.command
         else {
             panic!("a shot");
         };
-        shot_steps(&matches, &tap, &hold, &hover, &key, &type_text)
+        shot_steps(&matches, &tap, &hold, &hover, &key, &type_text, &wait)
     }
 
     fn key(chord: &str) -> Step {
@@ -478,6 +521,15 @@ mod tests {
                 Step::Tap(1.0, 2.0),
                 Step::Hover(7.0, 8.0),
             ]
+        );
+    }
+
+    /// RFC-0058: a wait is a step in the order written.
+    #[test]
+    fn a_wait_is_a_step_in_the_order_written() {
+        assert_eq!(
+            steps_of(&["shot", "--tap", "1,2", "--wait", "300", "--key", "Enter"]),
+            [Step::Tap(1.0, 2.0), Step::Wait(300), key("Enter")]
         );
     }
 

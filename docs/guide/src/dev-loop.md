@@ -195,6 +195,7 @@ picture. Every test of a screen can pass while the screen is wrong.
 
 | Flag | Default | What it does |
 |------|---------|--------------|
+| `--view <NAME>` | `Main` | Draw this view instead of the root |
 | `-o`, `--out <PNG>` | `shot.png` | Where to write the picture |
 | `--size <WIDTHxHEIGHT>` | `440x880` | The logical size of the window |
 | `--scale <SCALE>` | `2` | Device pixels per logical pixel |
@@ -206,6 +207,7 @@ picture. Every test of a screen can pass while the screen is wrong.
 | `--hover <X,Y>` | none | Move the pointer to a point, pressing nothing. Repeatable |
 | `--key <KEY>` | none | Press a key before the picture, such as `Left`, `shift+Left` or `mod+a`. Repeatable |
 | `--type <TEXT>` | none | Type text before the picture. Repeatable |
+| `--wait <MS>` | none | Let app time pass before the next input or the picture. Repeatable |
 | `--a11y <FILE>` | none | Write the accessibility tree as text. See [accessibility](accessibility.md) |
 
 Taps are how you reach a screen that needs a press. This opens the second tab of
@@ -245,6 +247,14 @@ modifiers, joined by `+`: `shift`, `ctrl`, `alt` (or `option`), `meta` (or `cmd`
 burst, so undo takes it back in one step. The clipboard in a shot is private to it, so a
 paste never reads yours.
 
+### Another view
+
+`--view Settings` draws the view called `Settings` instead of `Main`. It works in an app that
+depends on packages, and it is how a package's gallery is drawn a page at a time. A name that is no
+view lists the closest ones, and a view with a required parameter cannot be drawn alone, so the
+error names the parameters. Pass the project's directory: a path to a `.byd` file reads no manifest,
+so none of its packages either.
+
 ### The accessibility tree
 
 `--a11y tree.txt` writes what a screen reader would be told, one node a line, instead of
@@ -256,6 +266,87 @@ Because it runs the app for real, a screen that fetches data draws the data, as
 long as the network is there. `shot` cannot draw an app with a Rust half,
 because it knows nothing of your controllers or native views. An app can draw
 itself the same way from Rust. See [the Rust half](rust-app.md).
+
+## `byard test`
+
+```sh
+byard test
+byard test gallery --filter switch
+```
+
+`test` runs the scenarios in the project's `tests/*.toml`, with no window and no GPU. A scenario
+draws a view, presses and types as `shot` does, and checks the accessibility tree, the text
+`shot --a11y` writes. A package written in Byld is tested with it, on any system, with no Rust. Its
+gallery is an app that depends on it, with a view a page (see [packages](packages.md#testing-a-package)).
+
+```toml
+view = "Settings"            # defaults for the tests in this file
+size = "440x600"
+
+[[test]]
+name = "a tap turns a switch on"
+steps = [
+    { tap = 'Switch "Wi-Fi"' },
+    { expect = ['Switch "Wi-Fi" = on'] },     # a check, in the middle
+    { key = "Tab" },
+]
+exact = ['Switch "Bluetooth" = off [focusable focused]']
+not = ['(unnamed)']
+```
+
+A file's top-level `view`, `size`, `scheme` (`"light"` or `"dark"`), `at` and `now` are defaults
+for its tests, and a test can set any of them. `view` is `Main` and `size` `"440x880"` unless
+said. `at` is the app time, in milliseconds, to have passed before the last checks; it is `0`, so a
+test that needs an animation to finish has a `{ wait = 400 }` where it matters.
+
+`steps` run in order. Each is one of:
+
+| Step | |
+|------|-|
+| `{ tap = ... }`, `{ hold = ... }`, `{ hover = ... }` | A point `[x, y]`, or text from a line of the tree: the pointer goes to the centre of that node. No line, or more than one, is a failure that lists the lines |
+| `{ key = "mod+a" }` | A key, as `--key` |
+| `{ type = "text" }` | Typed text |
+| `{ wait = 200 }` | Milliseconds of app time pass |
+| `{ expect = ... }` | A check (below), on the tree at that point |
+
+Naming a node by its line is better than a point: it keeps working when a padding changes.
+
+A check is any of four keys, each a string or a list of strings, matched against the lines of the
+tree with their indentation removed:
+
+| Key | Passes when |
+|-----|-------------|
+| `expect` | each string is inside some line |
+| `exact` | each string is a whole line, not counting the ` @ x,y WxH` at its end |
+| `not` | no line has any of the strings inside |
+| `not_exact` | no line is any of the strings |
+
+Written on the test itself, they are checked after the last step. A test that checks nothing is
+an error, and so is any mistake in a scenario file (an unknown key, a bad chord, a view that does not
+exist): all are listed, and no test runs.
+
+```text
+running 2 tests
+test settings::every switch starts off ... ok
+test settings::a tap turns a switch on ... FAILED
+
+failures:
+
+---- settings::a tap turns a switch on ----
+after the last step (tap "Switch \"Wi-Fi\""):
+  expected a line equal to
+    Switch "Wi-Fi" = on [focusable]
+the tree was:
+    Label "Settings" @ 24,24 352x24
+    Switch "Wi-Fi" = on [focusable focused] @ 24,60 52x30
+    Switch "Bluetooth" = off [focusable] @ 24,102 52x30
+
+test result: FAILED. 1 passed; 1 failed; 0 filtered out
+```
+
+`--filter` keeps tests whose `file::name` contains the text. `--shots pictures/` also writes each
+test's last frame, in the test's scheme, as `pictures/<file>-<name>.png`: the gallery's own
+screenshots. Without a GPU the tests still run and the pictures are skipped, with a note.
 
 ## `byard fmt`
 

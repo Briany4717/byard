@@ -1,0 +1,8 @@
+// A switch named by the text beside it, as a screen reader reads it.
+View Setting(label: Str) {
+    var on = false
+    Row #[gap: 12, align: center] {
+        Toggle #[bind: on, width: 52, height: 30]
+        Text(label) #[color: 0xCAC4D0, size: 16, width: 200]
+    }
+}

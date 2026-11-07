@@ -81,6 +81,17 @@ fn git_repo(pkg: &Path, work: &Path) -> String {
     format!("file://{}", work.display())
 }
 
+fn walk(dir: &Path, base: &Path, out: &mut Vec<String>) {
+    for e in std::fs::read_dir(dir).unwrap() {
+        let p = e.unwrap().path();
+        if p.is_dir() {
+            walk(&p, base, out);
+        } else {
+            out.push(p.strip_prefix(base).unwrap().to_string_lossy().into_owned());
+        }
+    }
+}
+
 fn copy_dir(from: &Path, to: &Path) {
     std::fs::create_dir_all(to).unwrap();
     for entry in std::fs::read_dir(from).unwrap() {
@@ -518,16 +529,6 @@ fn a_git_dependency_caches_only_what_publish_archives() {
         "one checkout, nothing half-made: {cached:?}"
     );
     let mut files = Vec::new();
-    fn walk(dir: &Path, base: &Path, out: &mut Vec<String>) {
-        for e in std::fs::read_dir(dir).unwrap() {
-            let p = e.unwrap().path();
-            if p.is_dir() {
-                walk(&p, base, out);
-            } else {
-                out.push(p.strip_prefix(base).unwrap().to_string_lossy().into_owned());
-            }
-        }
-    }
     walk(&cached[0], &cached[0], &mut files);
     files.sort();
     assert_eq!(

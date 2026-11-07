@@ -580,7 +580,10 @@ pub fn fetch_git(
     let fail = |message: String| ProjectError::fetch(Some(name), url, message);
     let run = |args: &[&str], cwd: Option<&Path>| -> Result<String, ProjectError> {
         let mut cmd = std::process::Command::new("git");
-        cmd.args(args);
+        // The files as the repository holds them: with `core.autocrlf` on (as
+        // on Windows by default) a checkout turns LF into CRLF, and the same
+        // commit would pin another checksum there than here or in a registry.
+        cmd.args(["-c", "core.autocrlf=false"]).args(args);
         if let Some(cwd) = cwd {
             cmd.current_dir(cwd);
         }

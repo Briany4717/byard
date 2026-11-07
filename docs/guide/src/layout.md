@@ -197,6 +197,19 @@ View Main() {
 The values are `center`, `top`, `bottom`, `start`, `end`, and the corners
 `top_start`, `top_end`, `bottom_start` and `bottom_end`.
 
+A child that should fill the stack says `grow: 1` or `align_self: stretch`. It then takes the
+stack's whole width and height, unless it has a `width` or a `height` of its own, which it
+keeps. This is how an overlay or a background layer is written:
+
+```byld
+View Main() {
+    ZStack #[width: 200, height: 80] {
+        Box #[bg: 0x1F3A34, radius: 12, grow: 1] {}
+        Text("On top") #[color: 0xFFFFFF, size: 16]
+    }
+}
+```
+
 ## ScrollView
 
 A `ScrollView` holds content larger than itself and scrolls it with the wheel, a

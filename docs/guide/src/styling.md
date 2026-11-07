@@ -89,6 +89,25 @@ A plain tuple is positional: `(x, y, blur, spread, color)`, and any slot may be
 left out from the end. A list paints its first shadow on top. A shadow follows
 the element's corner radius and smoothing.
 
+A `shadow` can be any expression that comes to a shadow: a `let` holding a list, a
+conditional choosing between them, `()` for none. A `with` after it moves every offset, blur
+and colour, and a list that gains a shadow fades it in:
+
+```byld
+View Main() {
+    var lifted = false
+    let rest = [(y: 1, blur: 3, color: 0x33000000)]
+    let raised = [(y: 8, blur: 20, color: 0x40000000), (y: 2, blur: 4, color: 0x30000000)]
+    Column #[bg: 0xF2F3F5, p: 40] {
+        Box #[bg: 0xFFFFFF, radius: 12, width: 160, height: 56,
+              shadow: lifted ? raised : rest with anim.spring(),
+              tap => lifted = !lifted]
+    }
+}
+```
+
+A value that is not a shadow is an error that says so.
+
 ### Gradients
 
 ```byld

@@ -618,7 +618,11 @@ impl Interpreter {
                     // A gradient is a fill in its own right, so a box with a ramp
                     // and no `bg` still has a surface to paint (the ramp over a
                     // transparent base).
-                    if !owns_visuals && (bg.is_some() || gradient.is_some()) {
+                    // A `border` is a surface too: a box with a border and no fill
+                    // strokes it over a transparent interior.
+                    if !owns_visuals
+                        && (bg.is_some() || gradient.is_some() || border_color.is_some())
+                    {
                         let base = byard_core::BoxInstance {
                             rect: [rect.x, rect.y, rect.width, rect.height],
                             color: bg_rgba,
@@ -635,7 +639,7 @@ impl Interpreter {
                         for sh in shadows.iter().rev() {
                             frame.push_decorated(shadow_decorated(base, opacity, sh));
                         }
-                        if translucent || gradient.is_some() {
+                        if translucent || gradient.is_some() || bg.is_none() {
                             // A translucent or gradient-filled box blends its fill
                             // as one unit on the decorated pipeline; keep it whole.
                             frame.push_decorated(byard_core::frame::DecoratedBox {

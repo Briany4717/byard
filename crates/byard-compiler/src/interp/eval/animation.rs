@@ -72,6 +72,16 @@ pub(super) struct GradientAnim {
     progress: byard_core::frame::Motion,
 }
 
+/// The persisted state of one animated shadow value (RFC-0059): the list it left
+/// from, the list it is going to, and the one progress between. A list is not
+/// `Copy`, so it allocates when a shadow retargets and not on the frames between.
+pub(super) struct ShadowAnim {
+    from: Vec<super::props::ShadowSpec>,
+    to: Vec<super::props::ShadowSpec>,
+    /// `0 -> 1`, restarted on every retarget.
+    progress: byard_core::frame::Motion,
+}
+
 /// Where a keyframe sequence sits right now: the two step *values* surrounding
 /// the current time and the eased factor between them (RFC-0025 §3).
 ///
@@ -378,6 +388,40 @@ pub(crate) fn gradient_stop_count(leaf: &Expr) -> u8 {
     if has_mid { 3 } else { 2 }
 }
 
+/// Blends two shadow lists at progress `t` (RFC-0059): geometry as numbers, the
+/// colour in premultiplied OKLab. The shorter list is padded with copies of the
+/// other's shadows at zero alpha, so a shadow that appears or goes fades in
+/// place instead of jumping.
+fn blend_shadows(
+    from: &[super::props::ShadowSpec],
+    to: &[super::props::ShadowSpec],
+    t: f32,
+) -> Vec<super::props::ShadowSpec> {
+    use super::props::ShadowSpec;
+    let lerp = |p: f32, q: f32| p + (q - p) * t;
+    let faded = |s: &ShadowSpec| ShadowSpec {
+        color: [s.color[0], s.color[1], s.color[2], 0.0],
+        ..*s
+    };
+    (0..from.len().max(to.len()))
+        .map(|i| {
+            let (start, end) = match (from.get(i), to.get(i)) {
+                (Some(start), Some(end)) => (*start, *end),
+                (Some(start), None) => (*start, faded(start)),
+                (None, Some(end)) => (faded(end), *end),
+                (None, None) => unreachable!("i is below the longer length"),
+            };
+            ShadowSpec {
+                dx: lerp(start.dx, end.dx),
+                dy: lerp(start.dy, end.dy),
+                blur: lerp(start.blur, end.blur),
+                spread: lerp(start.spread, end.spread),
+                color: mix_linear_rgba(start.color, end.color, t),
+            }
+        })
+        .collect()
+}
+
 /// Blends two gradients of the same kind at progress `t` (RFC-0057 §3): the
 /// stops in premultiplied OKLab, the geometry as numbers. `offset` is `a`'s.
 fn blend_gradients(
@@ -576,6 +620,65 @@ impl Interpreter {
             self.any_active = true;
         }
         Some(shown)
+    }
+
+    /// RFC-0059: a `with` after a whole `shadow:` value. The chosen shadows are
+    /// the goal; the persisted [`ShadowAnim`] moves the list toward it with one
+    /// progress, every offset, blur and spread as a number and every colour in
+    /// premultiplied OKLab (RFC-0057). A list that grows or shrinks fades its
+    /// extra shadows in or out where they stand.
+    pub(super) fn eval_animated_shadows(
+        &mut self,
+        target: &Expr,
+        anim: &Expr,
+        key: AnimKey,
+    ) -> Vec<super::props::ShadowSpec> {
+        let goal = self.shadows_of(target);
+        if !self.clock_set {
+            return goal;
+        }
+        let Ok(spec) = crate::interp::anim::resolve_motion_in(anim, Some(&self.theme)) else {
+            return goal;
+        };
+        let (now, curve) = (self.now_ms, pack_curve(spec.curve));
+        let record = self
+            .shadow_animations
+            .entry(key)
+            .or_insert_with(|| ShadowAnim {
+                from: goal.clone(),
+                to: goal.clone(),
+                progress: byard_core::frame::Motion {
+                    from: 1.0,
+                    to: 1.0,
+                    start_ms: now,
+                    curve,
+                },
+            });
+        if record.to != goal {
+            let t = record.progress.sample(now);
+            record.from = blend_shadows(&record.from, &record.to, t);
+            record.to = goal;
+            record.progress = byard_core::frame::Motion {
+                from: 0.0,
+                to: 1.0,
+                start_ms: now,
+                curve,
+            };
+        }
+        record.progress.curve = curve;
+        let settled =
+            record
+                .progress
+                .is_settled_with_eps(now, ANIM_SETTLE_EPS_POS, ANIM_SETTLE_EPS_VEL);
+        let shown = if settled {
+            record.to.clone()
+        } else {
+            blend_shadows(&record.from, &record.to, record.progress.sample(now))
+        };
+        if !settled {
+            self.any_active = true;
+        }
+        shown
     }
 
     /// The gradient tuple a gradient value stands for: the value itself, or the
@@ -1005,6 +1108,8 @@ impl Interpreter {
         self.color_animations.retain(|k, _| !dead.contains(&k.slot));
         self.gradient_animations
             .retain(|k, _| !dead.contains(&k.slot));
+        self.shadow_animations
+            .retain(|k, _| !dead.contains(&k.slot));
         self.anim_clocks.retain(|k, _| !dead.contains(&k.slot));
     }
 
@@ -1045,6 +1150,7 @@ impl Interpreter {
         self.animations.retain(|key, _| !goes(key));
         self.color_animations.retain(|key, _| !goes(key));
         self.gradient_animations.retain(|key, _| !goes(key));
+        self.shadow_animations.retain(|key, _| !goes(key));
         self.anim_clocks.retain(|key, _| !goes(key));
     }
 

@@ -12,6 +12,7 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`shadow` from a `let`, a `?:` or with a `with`.** A list of shadow tuples kept in a `let`, chosen between with `?:`, or followed by `with` is drawn, and a `with` moves it; a value that is no shadow is an error.
 - **`shrink` on every flex child.** `shrink: 0` keeps a fixed-size child, such as a 24 wide icon beside a growing sibling, from being squeezed. It is `1` by default, and a `width` is still a size to start from and not a floor.
 - **`align_self` on every flex child** (`start`, `center`, `end`, `stretch`), to place one child across the axis whatever its parent's `align` says.
 - **A bare `TextField` a design system can style.** A field with `grow` and no `width` has no width of its own, so `grow: 1` between two icons no longer squeezes them, and `indicator: none` leaves out the focus line along its bottom edge.
@@ -99,6 +100,9 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`typo:` chosen with `?:` keeps its font family and weight.** `typo: big ? t.titleLarge : t.labelLarge` drew in the default face at regular weight, with the right size.
+- **A `Box` with a `border` and no `bg` draws its border.** It drew nothing.
+- **A `ZStack` child with `grow: 1` or `align_self: stretch` fills the stack.** It came out a pixel wide.
 - Saving a file no longer reloads an empty program first: a save that truncates the file before writing it is read once, after the writing has stopped.
 - **Text reads the parameters of its view.** `Text("Aa") #[size: dim]` in a view with a
   `dim` parameter drew at the default size, and so did `weight`, `color`, `wrap` and `typo`

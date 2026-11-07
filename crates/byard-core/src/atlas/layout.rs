@@ -458,6 +458,10 @@ pub struct FlexItem {
     /// This child's cross-axis alignment, overriding the parent's `align`.
     /// `None` follows the parent.
     pub align_self: Option<Align>,
+    /// This child's alignment along the other axis, for a child of a `ZStack`
+    /// (a single grid cell, where `align_self` places a child vertically and
+    /// this places it horizontally). `None` follows the parent.
+    pub justify_self: Option<Align>,
 }
 
 impl FlexItem {
@@ -475,6 +479,7 @@ struct FlexItemEntry {
     item: FlexItem,
     base_shrink: f32,
     base_align_self: Option<AlignItems>,
+    base_justify_self: Option<AlignItems>,
 }
 
 /// Main-axis distribution of a flex container's children.
@@ -1903,14 +1908,17 @@ impl LayoutAtlas {
             .style(node.node_id)
             .map_err(|e| AtlasError::from_taffy(&e))?
             .clone();
-        let (base_shrink, base_align_self) = match had {
-            Some(e) if !restyled => (e.base_shrink, e.base_align_self),
-            _ => (style.flex_shrink, style.align_self),
+        let (base_shrink, base_align_self, base_justify_self) = match had {
+            Some(e) if !restyled => (e.base_shrink, e.base_align_self, e.base_justify_self),
+            _ => (style.flex_shrink, style.align_self, style.justify_self),
         };
         style.flex_shrink = item.shrink.map_or(base_shrink, |s| s.max(0.0));
         style.align_self = item
             .align_self
             .map_or(base_align_self, |a| Some(a.to_taffy()));
+        style.justify_self = item
+            .justify_self
+            .map_or(base_justify_self, |a| Some(a.to_taffy()));
         self.tree
             .set_style(node.node_id, style)
             .map_err(|e| AtlasError::from_taffy(&e))?;
@@ -1923,6 +1931,7 @@ impl LayoutAtlas {
                     item,
                     base_shrink,
                     base_align_self,
+                    base_justify_self,
                 },
             );
         }
@@ -2016,9 +2025,25 @@ impl LayoutAtlas {
         // it (the ZStack keeps each child at its natural size).
         taffy_style.justify_items = Some(justify);
         taffy_style.align_items = Some(align_items);
+        // A child that stretches (`align_self: stretch`, or `grow`) is asked to
+        // fill the stack. The cell is then the whole stack: otherwise the column
+        // is only as wide as the widest child, packed at the start, and a
+        // stretching empty box is as wide as nothing (RFC-0059). A stack with no
+        // such child keeps the layout it always had.
+        let fills = children.iter().any(|c| {
+            self.tree
+                .style(c.node_id)
+                .is_ok_and(|s| s.justify_self == Some(AlignItems::Stretch))
+        });
+        if fills {
+            taffy_style.justify_content = Some(JustifyContent::Stretch);
+        }
 
         let mut fp = LayoutFingerprint::new(NodeKind::Stack);
-        fp.container(&style).u8(align as u8).children(children);
+        fp.container(&style)
+            .u8(align as u8)
+            .u8(u8::from(fills))
+            .children(children);
         let id = self.place(NodeKind::Stack, fp.finish(), taffy_style, children, None)?;
 
         // Pin every child to the same cell (line 1, span 1 on both axes) so they

@@ -277,7 +277,26 @@ impl Interpreter {
             (n, AttrKind::Prop { value }) if n.as_str() == "typo" => Some(value),
             _ => None,
         })?;
+        self.typo_token_of(value)
+    }
+
+    /// [`typo_token_name`](Self::typo_token_name) for the value itself, which a
+    /// `?:` chooses between: the condition is evaluated and the chosen branch is
+    /// read by these same rules, to any depth (RFC-0059). Without that, a token
+    /// picked by a conditional kept its size, which the evaluated value carries,
+    /// and lost the family and weight, which only the name does.
+    fn typo_token_of(&mut self, value: &Expr) -> Option<String> {
         match value {
+            Expr::Ternary {
+                cond, then, els, ..
+            } => {
+                let chosen = if self.eval_pure(cond).as_bool() == Some(true) {
+                    then
+                } else {
+                    els
+                };
+                self.typo_token_of(chosen)
+            }
             // A name the view binds (`typo: style` with `style: Str`) is the
             // token its value names, not a token called `style`.
             Expr::Ident(sym, _)

@@ -41,6 +41,7 @@ mod ime_input;
 mod incremental_paths;
 mod input_hit_test;
 mod instrumentation;
+mod interaction_styles;
 mod keyboard_focus;
 mod lambda_items;
 mod let_functions;

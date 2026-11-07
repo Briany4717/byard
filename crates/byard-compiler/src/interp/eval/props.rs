@@ -26,6 +26,20 @@ pub(super) struct ShadowSpec {
     pub(super) color: [f32; 4],
 }
 
+/// A preset shadow (`sm`, `md`, `lg`): an offset and a blur, with an alpha that
+/// scales gently with size (`sm` 0x44 to `lg` 0x66).
+fn shadow_preset(dy: f32, blur: f32) -> ShadowSpec {
+    #[allow(clippy::cast_possible_truncation)]
+    let alpha = (0x44 + (blur as i64 - 3) * 2).clamp(0x44, 0x66);
+    ShadowSpec {
+        dx: 0.0,
+        dy,
+        blur,
+        spread: 0.0,
+        color: super::intrinsics::color_to_rgba(alpha << 24, true),
+    }
+}
+
 /// Default drop-shadow colour (`0xAARRGGBB`, ~33% black) when a shadow omits its
 /// own `color`.
 const DEFAULT_SHADOW_COLOR: i64 = 0x5500_0000;
@@ -634,14 +648,40 @@ impl Interpreter {
         }) else {
             return Vec::new();
         };
+        self.shadows_of(value)
+    }
+
+    /// The shadows a `shadow:` value stands for (RFC-0059).
+    ///
+    /// A literal list or tuple is read as written, field by field, so a `with`
+    /// on one of its fields still animates it. A `?:` has its condition
+    /// evaluated and its chosen branch read by these same rules; a `with` after
+    /// the whole value animates it as a whole; and anything else (a `let`, a
+    /// parameter, a call) is evaluated and its value read as a shadow. A value
+    /// that is no shadow is an error, never an element with none.
+    ///
+    /// First-listed paints on top (CSS order), so the caller emits them
+    /// reversed to sit nearest.
+    pub(super) fn shadows_of(&mut self, value: &Expr) -> Vec<ShadowSpec> {
         match value {
-            // Layered shadows: first-listed paints on top (CSS order), so the
-            // caller emits them reversed to sit nearest.
+            Expr::Animated {
+                value: target,
+                anim,
+                span,
+            } => self.eval_animated_shadows(target, anim, self.anim_key(*span)),
             Expr::Array(items, _) => items
                 .iter()
                 .filter_map(|e| self.shadow_from_expr(e))
                 .collect(),
-            other => self.shadow_from_expr(other).into_iter().collect(),
+            Expr::Ternary { .. } => {
+                let leaf = self.pick_gradient_leaf(value);
+                self.shadows_of(leaf)
+            }
+            Expr::Tuple(args, _) => vec![self.shadow_from_tuple(args)],
+            other => {
+                let v = self.eval_pure(other);
+                self.shadows_from_value(&v, other.span())
+            }
         }
     }
 
@@ -650,26 +690,112 @@ impl Interpreter {
         if let Expr::Tuple(args, _) = value {
             return Some(self.shadow_from_tuple(args));
         }
-        // A preset token (`sm`/`md`/`lg`); `none`/anything else → no shadow.
-        let (dy, blur) = match self.eval_pure(value) {
+        let v = self.eval_pure(value);
+        self.shadows_from_value(&v, value.span()).into_iter().next()
+    }
+
+    /// The shadows an evaluated value is: a list of them, one tuple, a preset
+    /// word (`sm`, `md`, `lg`), or nothing (`()`, `"none"`). Anything else is
+    /// reported once at `span`.
+    fn shadows_from_value(
+        &mut self,
+        value: &Value,
+        span: crate::diagnostics::Span,
+    ) -> Vec<ShadowSpec> {
+        match value {
+            Value::List(items) => items
+                .iter()
+                .flat_map(|v| match v {
+                    Value::List(_) => Vec::new(),
+                    other => self.shadows_from_value(other, span),
+                })
+                .collect(),
+            Value::Tuple(fields) if fields.is_empty() => Vec::new(),
+            Value::Tuple(fields) => vec![self.shadow_from_values(fields)],
             Value::Str(t) => match t.as_str() {
-                "sm" => (1.0, 3.0),
-                "md" => (3.0, 8.0),
-                "lg" => (6.0, 16.0),
-                _ => return None,
+                "sm" => vec![shadow_preset(1.0, 3.0)],
+                "md" => vec![shadow_preset(3.0, 8.0)],
+                "lg" => vec![shadow_preset(6.0, 16.0)],
+                "none" | "" => Vec::new(),
+                other => {
+                    self.report_not_a_shadow(span, &format!("the word `{other}`"));
+                    Vec::new()
+                }
             },
-            _ => return None,
-        };
-        // Preset alpha scales gently with size (sm 0x44 → lg 0x66).
-        #[allow(clippy::cast_possible_truncation)]
-        let alpha = (0x44 + (blur as i64 - 3) * 2).clamp(0x44, 0x66);
-        Some(ShadowSpec {
+            // A name nothing binds was reported when the view was lowered.
+            Value::Unit => Vec::new(),
+            other => {
+                let what = match other {
+                    Value::Int(_) | Value::Float(_) => "a number",
+                    Value::Bool(_) => "a boolean",
+                    _ => "something else",
+                };
+                self.report_not_a_shadow(span, what);
+                Vec::new()
+            }
+        }
+    }
+
+    fn report_not_a_shadow(&mut self, span: crate::diagnostics::Span, found: &str) {
+        let already = self.errors.iter().any(
+            |e| matches!(e, CompileError::AttributeTypeMismatch { span: s, .. } if *s == span),
+        );
+        if !already {
+            self.errors.push(CompileError::AttributeTypeMismatch {
+                span,
+                expected: format!(
+                    "a shadow: a preset (\"sm\", \"md\", \"lg\"), a tuple like \
+                     `(y: 2, blur: 4, color: 0x33000000)`, or a list of them, `()` for none \
+                     (found {found})"
+                ),
+            });
+        }
+    }
+
+    /// A shadow from an evaluated tuple, by the rules of
+    /// [`shadow_from_tuple`](Self::shadow_from_tuple): named fields in any
+    /// order, or positional slots `(x, y, blur, spread, color)`.
+    fn shadow_from_values(&mut self, fields: &[(Option<crate::Symbol>, Value)]) -> ShadowSpec {
+        let mut s = ShadowSpec {
             dx: 0.0,
-            dy,
-            blur,
+            dy: 0.0,
+            blur: 0.0,
             spread: 0.0,
-            color: super::intrinsics::color_to_rgba(alpha << 24, true),
-        })
+            color: super::intrinsics::color_to_rgba(DEFAULT_SHADOW_COLOR, true),
+        };
+        let num = |v: &Value| match v {
+            Value::Float(f) => *f as f32,
+            Value::Int(n) => *n as f32,
+            _ => 0.0,
+        };
+        let colour = |v: &Value| match v {
+            Value::Int(c) => super::intrinsics::color_to_rgba(*c, true),
+            _ => super::intrinsics::color_to_rgba(DEFAULT_SHADOW_COLOR, true),
+        };
+        let named = fields.iter().any(|(n, _)| n.is_some());
+        for (i, (name, v)) in fields.iter().enumerate() {
+            let slot = if named {
+                match name.as_ref().map(crate::Symbol::as_str) {
+                    Some("x" | "dx") => 0,
+                    Some("y" | "dy") => 1,
+                    Some("blur") => 2,
+                    Some("spread") => 3,
+                    Some("color") => 4,
+                    _ => continue,
+                }
+            } else {
+                i
+            };
+            match slot {
+                0 => s.dx = num(v),
+                1 => s.dy = num(v),
+                2 => s.blur = num(v),
+                3 => s.spread = num(v),
+                4 => s.color = colour(v),
+                _ => {}
+            }
+        }
+        s
     }
 
     /// Builds a [`ShadowSpec`] from a `shadow` tuple. Named fields (`x`/`dx`,

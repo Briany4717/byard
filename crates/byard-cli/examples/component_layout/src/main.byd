@@ -86,7 +86,10 @@ View Main() {
             }
             Row #[width: 170, gap: 16, height: 40, align: center, bg: 0x1E1E2A, radius: 8] {
                 Box #[bg: 0xF2B8B5, width: 24, height: 24, radius: 12, shrink: 0] {}
-                ZStack #[grow: 1, height: 10] { Box #[bg: 0x4F5B66, width: 150, height: 10] {} }
+                // The bar may only give way below its content with `width: 0`.
+                Clip #[grow: 1, width: 0, height: 10] {
+                    Box #[bg: 0x4F5B66, width: 150, height: 10] {}
+                }
             }
         }
     }

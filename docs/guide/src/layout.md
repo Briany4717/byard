@@ -81,12 +81,16 @@ and a `grow`, never shrink below their size, as they always did. Every element i
 View Main() {
     Row #[width: 170, gap: 16, height: 40, align: center, bg: 0x1E1E2A] {
         Box #[bg: 0xF2B8B5, width: 24, height: 24, radius: 12, shrink: 0] {}
-        ZStack #[grow: 1, height: 10] { Box #[bg: 0x4F5B66, width: 220, height: 10] {} }
+        Clip #[grow: 1, width: 0, height: 10] { Box #[bg: 0x4F5B66, width: 220, height: 10] {} }
     }
 }
 ```
 
 Without `shrink: 0` the circle is squeezed to a sliver by the wide bar beside it.
+A child never shrinks below what its content needs, so the bar must be told it may:
+`width: 0` with `grow: 1` starts it from nothing and gives it what is left, and the
+`Clip` cuts the bar to that. A one-line `Text` between two icons takes the same
+`grow: 1, width: 0`, or it pushes the icon after it out of the row.
 
 ## Space
 

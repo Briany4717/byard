@@ -653,9 +653,16 @@ impl EventRouter {
     /// The interaction-state mask of `elem` (RFC-0012 Part B): `HOVER`/`PRESSED`/
     /// `FOCUSED` from the live gesture state, `DISABLED` from [`set_disabled`].
     ///
+    /// A disabled element is only `DISABLED`. Its handlers don't fire and Tab
+    /// skips it, so it isn't hovered, pressed, focused or dragged either, and an
+    /// `on hover` tint can't show on a control that does nothing (RFC-0059).
+    ///
     /// [`set_disabled`]: Self::set_disabled
     #[must_use]
     pub fn style_state(&self, elem: u32) -> StyleState {
+        if self.disabled.contains(&elem) {
+            return StyleState::DISABLED;
+        }
         let mut s = StyleState::empty();
         if self.hovered == Some(elem) {
             s.insert(StyleState::HOVER);
@@ -670,9 +677,6 @@ impl EventRouter {
             if self.focus_visible {
                 s.insert(StyleState::FOCUS_VISIBLE);
             }
-        }
-        if self.disabled.contains(&elem) {
-            s.insert(StyleState::DISABLED);
         }
         if self.dragging == Some(elem) {
             s.insert(StyleState::DRAGGING);

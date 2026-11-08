@@ -43,6 +43,7 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **A disabled element shows no hover or press.** `disabled: true` stopped the handlers and Tab but still let `on hover` and `on pressed` style the element, so a disabled button tinted under the pointer. It is now only `disabled`, and `on disabled+hover` (or `pressed`, `focused`, `focus_visible`, `dragging`), which could never apply, is the error `DisabledStateNeverMet`. RFC-0059.
 - **`byard check` no longer slows with the number of calls.** A view's body is lowered once for each way a call is written, and every call is still checked against the view's signature; a screen with 1000 calls of a button checks in 37 ms where it took 340. `byard shot` runs the same check first, and a gallery's now takes 46 ms of its 377.
 - **`byard shot` and `App::shot` skip the frames of an app at rest.** Once two frames in a row ask for no more (nothing animating, no timer or call in flight, no field being generated), the run goes to its last frame, the same picture; the gallery of 190 buttons takes 199 ms where it took 503, and 1000 buttons 604 ms where it took 4.6 s. `Shot::every_frame` (and `BYARD_SHOT_EVERY_FRAME` for the command) draws them all.
 - A font in `[assets.fonts]` is read straight into the shared buffer instead of being copied once more, which saves about 5 ms for the 15 MB Material Symbols.

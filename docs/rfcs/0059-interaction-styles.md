@@ -3,7 +3,7 @@
 - **Status:** Accepted
 - **Author(s):** Briany4717
 - **Created:** 2026-11-07
-- **Last updated:** 2026-11-07
+- **Last updated:** 2026-11-07 (a disabled element has no interaction states, §8)
 - **Depends on:** RFC-0016 (`on <state>` blocks and style values), RFC-0024
   (compound states), RFC-0052 (composed controls, `focus_visible` and
   `a11y_role`), RFC-0057 (motion on colours), RFC-0050 (Byard Material, whose
@@ -290,6 +290,23 @@ clears it. Nothing is registered or allocated; the field changes from `bool` to
   it always had, its column as wide as the widest child, so that no program that
   works today moves. The other `align_self` words are unchanged, and `alignment`
   stays the way to place a child that does not fill.
+
+### 8. A disabled element has no interaction states
+
+Found writing Byard Material's buttons on top of this RFC. `disabled: true`
+already stopped the element's handlers and took it out of the Tab order, but the
+router still reported `HOVER` and `PRESSED` for it. RFC-0012's order, `disabled >
+pressed > focused > hover`, only settles an attribute two blocks both set, so an
+`overlay` only `on hover` set was drawn on a disabled button, and a `radius` only
+`on pressed` set still moved. Every control had to write `disabled ? 0.0 :` into
+each state.
+
+A disabled element now reports `DISABLED` and nothing else: it is not hovered,
+pressed, focused or dragged. A block that names `disabled` with one of those
+(`on disabled+hover`) could never apply, so it is `DisabledStateNeverMet`, an
+error that says to write `on disabled`. `disabled` with `selected`, `checked`,
+`invalid` or `indeterminate` is fine, since a disabled control can be any of
+those.
 
 ## Drawbacks
 

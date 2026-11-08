@@ -327,6 +327,27 @@ impl Parser<'_> {
         if !all_known || states.is_empty() {
             return None;
         }
+        // A disabled element is never hovered, pressed, focused or dragged, so a
+        // block that asks for both would never apply. Said, not dropped quietly.
+        if states.contains(&StyleStateKind::Disabled) {
+            if let Some(other) = states.iter().find(|k| {
+                matches!(
+                    k,
+                    StyleStateKind::Hover
+                        | StyleStateKind::Pressed
+                        | StyleStateKind::Focused
+                        | StyleStateKind::FocusVisible
+                        | StyleStateKind::Dragging
+                )
+            }) {
+                self.errors
+                    .push(crate::diagnostics::CompileError::DisabledStateNeverMet {
+                        span: self.span_from(start),
+                        state: other.as_str(),
+                    });
+                return None;
+            }
+        }
         Some(super::ast::StateBlock {
             states,
             attrs,

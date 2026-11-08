@@ -1,0 +1,42 @@
+// RFC-0058: testing a package without Rust.
+//
+// A package's gallery is an app with one view a page. Draw a page, or run its
+// scenarios, from the repo root (neither opens a window or needs a GPU for the
+// tree):
+//   cargo run -p byard-cli -- shot crates/byard-cli/examples/package_testing/gallery --view Counters -o counters.png
+//   cargo run -p byard-cli -- test crates/byard-cli/examples/package_testing/gallery
+// The scenarios are in `tests/*.toml`. What to verify:
+//   1. `shot --view Counters` and `--view Settings` draw one page each.
+//   2. `test` runs the scenarios: it taps the counter's button, switches a
+//      setting on from the keyboard, and checks the tree after each.
+//   3. `shot --view Section` says the view needs a title, and
+//      `--view Countrs` suggests `Counters`.
+use kit as k
+
+View Main() {
+    Column #[bg: 0x14141C, p: 24, gap: 12, width: 400] {
+        Text("Gallery") #[color: 0xFFFFFF, size: 20, width: 352]
+        Text("Pages: Counters, Settings") #[color: 0x938F99, size: 14, width: 352]
+    }
+}
+
+// A heading every page uses. It has a required parameter, so it is not a page.
+View Section(title: Str) {
+    Text(title) #[color: 0xFFFFFF, size: 20, width: 352]
+}
+
+View Counters() {
+    Column #[bg: 0x14141C, p: 24, gap: 12, width: 400] {
+        Section("Counters")
+        k.Counter("Clicks")
+        k.Counter("Taps")
+    }
+}
+
+View Settings() {
+    Column #[bg: 0x14141C, p: 24, gap: 12, width: 400] {
+        Section("Settings")
+        k.Setting("Wi-Fi")
+        k.Setting("Bluetooth")
+    }
+}

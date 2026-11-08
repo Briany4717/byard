@@ -9,3 +9,4 @@ pub mod get;
 pub mod new;
 pub mod publish;
 pub mod shot;
+pub mod test;

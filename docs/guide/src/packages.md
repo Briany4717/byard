@@ -73,6 +73,31 @@ To check a package alone, run `byard check` inside it. It checks the files an ap
 fonts and theme named as that app sees them. `byard dev`, `shot` and `build` there say it is a library
 and point you at `check`.
 
+## Testing a package
+
+A package is tested the way an app is, from an app. Keep a `gallery/` project in the package's
+repository that depends on it by path (`kit = { path = ".." }`), with one view a page:
+
+```byld,ignore
+// Not checked here: it needs the `kit` package from the gallery's manifest.
+use kit as k
+
+View Settings() {
+    Column {
+        k.Setting("Wi-Fi")
+        k.Setting("Bluetooth")
+    }
+}
+```
+
+`byard shot gallery --view Settings --dark -o settings.png` draws that page, and `byard test gallery`
+runs `gallery/tests/*.toml`, which tap, hover and type into the page and check the
+[accessibility tree](accessibility.md) after each step (the format is in
+[the dev loop](dev-loop.md#byard-test)). Neither opens a window; the tests need no GPU, so the same
+two commands are a CI job on Linux, macOS and Windows with no Rust toolchain. `byard test gallery
+--shots pictures/` also writes each test's picture where there is a GPU. The repository's
+`crates/byard-cli/examples/package_testing` is a small one.
+
 ## What a package shares, and what it keeps
 
 Besides views and functions, a package declares [constants](expressions.md#constants) and

@@ -1,0 +1,7 @@
+[project]
+name = "gallery"
+entry = "src/main.byd"
+
+# The package under test, by path, as a package's own gallery depends on it.
+[dependencies]
+kit = { path = "../kit" }

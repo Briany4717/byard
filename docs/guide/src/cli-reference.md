@@ -10,6 +10,7 @@ byard <COMMAND>
 | [`dev`](#byard-dev) | Open the app in a window that reloads as you save |
 | [`check`](#byard-check) | Check the project without a window |
 | [`shot`](#byard-shot) | Draw the project to a PNG without a window |
+| [`test`](#byard-test) | Run the project's scenarios in `tests/` without a window or a GPU |
 | [`fmt`](#byard-fmt) | Format `.byd` files in place |
 | [`build`](#byard-build) | Bake the vector icon atlas |
 | [`bundle`](#byard-bundle) | Package a built app with its project |
@@ -92,7 +93,8 @@ library package.
 
 | Argument or flag | Default | |
 |------------------|---------|-|
-| `[PATH]` | the current project | The project directory, `byard.toml` or `.byd` file. |
+| `[PATH]` | the current project | The project directory, `byard.toml` or `.byd` file. A `.byd` path reads no manifest, so none of its packages. |
+| `--view <NAME>` | the root, `Main` | Draws this view instead. An unknown name is an error listing the closest views; a view with a required parameter is an error naming the parameters. |
 | `-o`, `--out <PNG>` | `shot.png` | Where to write the picture. |
 | `--size <SIZE>` | `440x880` | Logical size, as `WIDTHxHEIGHT`. |
 | `--scale <SCALE>` | `2` | Device pixels per logical pixel. |
@@ -105,9 +107,10 @@ library package.
 | `--hover <X,Y>` | | Moves the pointer to a logical point without pressing, so `on hover` shows. Repeatable. |
 | `--key <KEY>` | | Presses a key before the picture, such as `Left`, `shift+Left` or `mod+a`. Repeat it to press more. |
 | `--type <TEXT>` | | Types text before the picture. Repeat it to type more. |
+| `--wait <MS>` | | Lets this many milliseconds of app time pass before the next input or the picture. Repeatable. |
 | `--a11y <FILE>` | | Writes the accessibility tree to a text file, one node a line. A control a screen reader could not name is marked `(unnamed)`. |
 
-`--tap`, `--hold`, `--hover`, `--key` and `--type` run in the order they are written on the command line. A key is a single
+`--tap`, `--hold`, `--hover`, `--key`, `--type` and `--wait` run in the order they are written on the command line. A key is a single
 character or one of `Left`, `Right`, `Up`, `Down`, `Home`, `End`, `Backspace`, `Delete`, `Enter`,
 `Tab`, `Escape` and `Space`, with any of `shift`, `ctrl`, `alt`, `meta` and `mod` before it, joined
 by `+`. `mod` is Command on macOS and Control elsewhere. With `--a11y`, the picture is drawn only if
@@ -116,6 +119,24 @@ by `+`. `mod` is Command on macOS and Control elsewhere. With `--a11y`, the pict
 
 Text that starts with `-`, such as a negative number, would be read as another option. Join it to the
 option with `=`: `--type=-1.5`.
+
+## `byard test`
+
+```text
+byard test [OPTIONS] [PATH]
+```
+
+Runs the scenario files `tests/*.toml` of a project: each test draws a view headlessly, drives it
+with the inputs `shot` takes, and checks the accessibility tree. It opens no window and never needs a
+GPU. Output is one line per test and a summary, as `cargo test` prints; the exit status is 1 if any
+test failed or any scenario file is wrong. A project with no `tests/*.toml` is an error. The format is
+in [the dev loop](dev-loop.md#byard-test).
+
+| Argument or flag | Default | |
+|------------------|---------|-|
+| `[PATH]` | the current project | The project directory or `byard.toml`. A `.byd` file is refused. |
+| `--filter <TEXT>` | | Runs the tests whose `file::name` contains the text. A filter that matches none is an error. |
+| `--shots <DIR>` | | Also writes each test's final picture, `<file>-<name>.png`, at scale 2 in the test's scheme. Without a GPU it says so once and skips the pictures. |
 
 ## `byard fmt`
 

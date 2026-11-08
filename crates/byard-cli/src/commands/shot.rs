@@ -20,6 +20,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use byard_compiler::interp::eval::Interpreter;
+use byard_compiler::parser::ast::ViewDecl;
 use byard_core::encoder::EncoderSubsystem;
 use byard_core::frame::{RenderFrame, Viewport};
 use byard_core::platform::{EventKind, InputEvent};
@@ -50,6 +51,8 @@ pub enum Step {
     Key(Key),
     /// Type text.
     Type(String),
+    /// Let this many milliseconds of app time pass with no input (RFC-0058).
+    Wait(u32),
 }
 
 impl Step {
@@ -57,6 +60,7 @@ impl Step {
     fn events(&self, now: u32) -> Vec<InputEvent> {
         let time_ms = u64::from(now);
         match self {
+            Self::Wait(_) => Vec::new(),
             Self::Tap(x, y) => [EventKind::PointerDown, EventKind::PointerUp]
                 .into_iter()
                 .map(|kind| InputEvent {
@@ -125,6 +129,8 @@ pub struct ShotArgs<'a> {
     /// The project directory, `byard.toml` or `.byd`; the current project
     /// when absent.
     pub path: Option<&'a Path>,
+    /// The view to draw instead of the root (RFC-0058).
+    pub view: Option<&'a str>,
     /// Where the PNG goes, or `None` to draw none (a run that only wants the
     /// accessibility tree needs no GPU).
     pub out: Option<&'a Path>,
@@ -149,93 +155,252 @@ pub struct ShotArgs<'a> {
     pub steps: &'a [Step],
 }
 
-pub fn run(args: &ShotArgs<'_>) -> Result<(), String> {
-    let started = std::time::Instant::now();
-    let manifest = Manifest::discover(args.path).map_err(|e| e.to_string())?;
-    manifest.require_app("render").map_err(|e| e.to_string())?;
-    let (program, _) = resolve_project(&manifest).map_err(|e| e.to_string())?;
-    // The same check `byard check` runs, over every view and branch, not just
-    // the root's first frame: a picture of a program `check` rejects shows
-    // something the program does not mean (an attribute that failed to type is
-    // dropped and the box is drawn without it). Warnings print and do not stop
-    // the picture, as in `check`.
-    let diagnostics =
-        crate::commands::check::check_program_with_theme(&program, manifest.theme.clone());
-    if !diagnostics.is_empty() {
-        crate::commands::check::print_diagnostics(&diagnostics, &program.source_map, false);
-    }
-    let n = diagnostics.iter().filter(|d| !d.is_warning()).count();
-    if n > 0 {
-        style::err(&format!(
-            "{n} error{}; no picture drawn (`byard check` rejects this program)",
-            if n == 1 { "" } else { "s" }
-        ));
-        return Err(String::new());
-    }
-    let root = byard_compiler::parser::ast::root_view(&program.views)
-        .ok_or("the program declares no `View`")?;
+/// A project read and checked, ready to be run any number of times.
+pub struct Project {
+    manifest: Manifest,
+    program: byard_compiler::resolve::ResolvedProgram,
+}
 
-    let mut interp = Interpreter::new();
-    if let Some(iso) = args.wall_clock {
-        interp
-            .set_wall_clock(iso)
-            .map_err(|e| format!("--now: {e}"))?;
+impl Project {
+    /// Reads the project at `path` (the current one when absent) and runs the
+    /// same check as `byard check` over every view and branch, not just the
+    /// root's first frame: a picture of a program `check` rejects shows
+    /// something the program does not mean (an attribute that failed to type
+    /// is dropped and the box is drawn without it). Warnings print and do not
+    /// stop the run, as in `check`. `what` is the verb for the refusal of a
+    /// library: "render", "test".
+    pub fn load(path: Option<&Path>, what: &str) -> Result<Self, String> {
+        let manifest = Manifest::discover(path).map_err(|e| e.to_string())?;
+        manifest.require_app(what).map_err(|e| e.to_string())?;
+        let (program, _) = resolve_project(&manifest).map_err(|e| e.to_string())?;
+        let diagnostics =
+            crate::commands::check::check_program_with_theme(&program, manifest.theme.clone());
+        if !diagnostics.is_empty() {
+            crate::commands::check::print_diagnostics(&diagnostics, &program.source_map, false);
+        }
+        let n = diagnostics.iter().filter(|d| !d.is_warning()).count();
+        if n > 0 {
+            style::err(&format!(
+                "{n} error{}; {} (`byard check` rejects this program)",
+                if n == 1 { "" } else { "s" },
+                if what == "render" {
+                    "no picture drawn"
+                } else {
+                    "no test run"
+                }
+            ));
+            return Err(String::new());
+        }
+        if byard_compiler::parser::ast::root_view(&program.views).is_none() {
+            return Err("the program declares no `View`".into());
+        }
+        Ok(Self { manifest, program })
     }
-    // As `check` does: the framework's own capabilities resolve, so a view
-    // that injects `Http` renders its not-yet-loaded state instead of failing.
-    interp.declare_controllers(&byard_core::cap::provided_names());
-    interp.set_theme(manifest.theme.clone());
-    if let Some(dark) = args.dark {
-        interp.set_theme_dark(dark);
+
+    /// The directory of the project, where `tests/` is.
+    pub fn root(&self) -> &Path {
+        &self.manifest.project_root
     }
-    interp.load_views(&program.views);
-    let known: Vec<&str> = program.views.iter().map(|v| v.name.as_str()).collect();
-    let tree = interp.lower_view(root, &known);
-    #[allow(clippy::cast_precision_loss)]
-    let (w, h) = (args.size.0 as f32, args.size.1 as f32);
-    let mut frame = RenderFrame::new();
-    let mut now = 0_u32;
-    let step = |interp: &mut Interpreter,
-                frame: &mut RenderFrame,
-                now: &mut u32,
-                events: &[InputEvent]| {
-        interp.set_now_ms(*now);
-        interp.dispatch_events(events);
-        interp.tick();
-        *frame = RenderFrame::new();
-        frame.request_full_redraw();
-        // Asked for like the platform asks: by the frame's flag.
-        frame.set_access_wanted(args.a11y.is_some());
-        interp.render(&tree, frame, w, h);
-        *now += 16;
+
+    /// The view to draw: the one named, or the root. A name that is not a
+    /// view, or a view that needs arguments, is an error that says what to do
+    /// (RFC-0058).
+    pub fn view(&self, name: Option<&str>) -> Result<&ViewDecl, String> {
+        pick_view(&self.program.views, name)
+    }
+}
+
+/// The view `name` names among `views`, or the root when there is no name.
+pub fn pick_view<'a>(views: &'a [ViewDecl], name: Option<&str>) -> Result<&'a ViewDecl, String> {
+    let Some(name) = name else {
+        return Ok(byard_compiler::parser::ast::root_view(views).expect("a program with a view"));
     };
-    step(&mut interp, &mut frame, &mut now, &[]);
-    for what in args.steps {
-        let events = what.events(now);
-        step(&mut interp, &mut frame, &mut now, &events);
+    let Some(view) = views.iter().find(|v| v.name.as_str() == name) else {
+        let mut near: Vec<(usize, &str)> = views
+            .iter()
+            .map(|v| v.name.as_str())
+            .map(|n| (byard_compiler::util::levenshtein(name, n), n))
+            .collect();
+        near.sort_unstable();
+        near.dedup();
+        let near: Vec<&str> = near.into_iter().take(5).map(|(_, n)| n).collect();
+        return Err(format!(
+            "no view `{name}` in this project; closest: {}",
+            near.join(", ")
+        ));
+    };
+    let required: Vec<&str> = view
+        .params
+        .iter()
+        .filter(|p| p.default.is_none())
+        .map(|p| p.name.as_str())
+        .collect();
+    if !required.is_empty() {
+        return Err(format!(
+            "view `{name}` has required parameters ({}), so it cannot be drawn on its own; \
+             give them defaults or draw a view that has none",
+            required.join(", ")
+        ));
     }
-    // A picture of an app at rest does not need 90 frames of it. Once two
-    // frames in a row ask for no more (no animation in flight, nothing waiting
-    // on a measure), the ones that follow would draw what these drew, so the
-    // clock goes to where the loop would have ended and the last frame is drawn
-    // there. Nothing here arms a timer or a request, so no frame can be the one
-    // something happens in. `BYARD_SHOT_EVERY_FRAME` draws them all, which is
-    // how a test checks the two agree.
-    let skip_idle = std::env::var_os(SHOT_EVERY_FRAME).is_none();
-    let mut still = 0_u32;
-    while now < args.at_ms {
-        step(&mut interp, &mut frame, &mut now, &[]);
-        still = if interp.needs_another_frame() || interp.has_background_work() {
-            0
-        } else {
-            still + 1
+    Ok(view)
+}
+
+/// A program running headlessly, one frame at a time: what `byard shot` and
+/// `byard test` both drive.
+pub struct Scene {
+    interp: Interpreter,
+    tree: Vec<byard_compiler::interp::eval::RenderNode>,
+    frame: RenderFrame,
+    now: u32,
+    size: (f32, f32),
+    access: bool,
+    /// Off under `BYARD_SHOT_EVERY_FRAME`: see [`Scene::run_to`].
+    skip_idle: bool,
+}
+
+/// What a [`Scene`] starts as.
+pub struct SceneOptions<'a> {
+    /// Logical size of the viewport.
+    pub size: (u32, u32),
+    /// The dark scheme, the light one, or the manifest's.
+    pub dark: Option<bool>,
+    /// The fixed wall clock, if any.
+    pub wall_clock: Option<&'a str>,
+    /// Build the accessibility tree on every frame.
+    pub access: bool,
+}
+
+impl Scene {
+    /// Starts `view` of `project` and runs its first frame.
+    pub fn new(
+        project: &Project,
+        view: &ViewDecl,
+        options: &SceneOptions<'_>,
+    ) -> Result<Self, String> {
+        let mut interp = Interpreter::new();
+        if let Some(iso) = options.wall_clock {
+            interp
+                .set_wall_clock(iso)
+                .map_err(|e| format!("now: {e}"))?;
+        }
+        // As `check` does: the framework's own capabilities resolve, so a view
+        // that injects `Http` renders its not-yet-loaded state instead of failing.
+        interp.declare_controllers(&byard_core::cap::provided_names());
+        interp.set_theme(project.manifest.theme.clone());
+        if let Some(dark) = options.dark {
+            interp.set_theme_dark(dark);
+        }
+        interp.load_views(&project.program.views);
+        let known: Vec<&str> = project
+            .program
+            .views
+            .iter()
+            .map(|v| v.name.as_str())
+            .collect();
+        let tree = interp.lower_view(view, &known);
+        #[allow(clippy::cast_precision_loss)]
+        let size = (options.size.0 as f32, options.size.1 as f32);
+        let mut scene = Self {
+            interp,
+            tree,
+            frame: RenderFrame::new(),
+            now: 0,
+            size,
+            access: options.access,
+            skip_idle: std::env::var_os(SHOT_EVERY_FRAME).is_none(),
         };
-        if skip_idle && still >= 2 && now < args.at_ms {
-            now += (args.at_ms - now).div_ceil(16) * 16;
+        scene.frame_with(&[]);
+        Ok(scene)
+    }
+
+    /// One frame: the events, a tick, a full render. 16 ms pass.
+    fn frame_with(&mut self, events: &[InputEvent]) {
+        self.interp.set_now_ms(self.now);
+        self.interp.dispatch_events(events);
+        self.interp.tick();
+        self.frame = RenderFrame::new();
+        self.frame.request_full_redraw();
+        // Asked for like the platform asks: by the frame's flag.
+        self.frame.set_access_wanted(self.access);
+        self.interp
+            .render(&self.tree, &mut self.frame, self.size.0, self.size.1);
+        self.now += 16;
+    }
+
+    /// Does one step: one frame, or for a wait, as many as the time takes.
+    pub fn apply(&mut self, what: &Step) {
+        if let Step::Wait(ms) = what {
+            self.run_to(self.now + ms);
+            return;
+        }
+        let events = what.events(self.now);
+        self.frame_with(&events);
+    }
+
+    /// Runs frames until `at_ms` of app time has passed, then once more at
+    /// rest, so a mesh or an image that landed a frame late is in.
+    pub fn settle(&mut self, at_ms: u32) {
+        self.run_to(at_ms);
+        self.frame_with(&[]);
+    }
+
+    /// Runs frames with no input until `until` ms of app time.
+    ///
+    /// A picture of an app at rest does not need 90 frames of it. Once two
+    /// frames in a row ask for no more (no animation in flight, no timer or
+    /// call waiting, nothing being measured), the ones that follow would draw
+    /// what these drew, so the clock goes to where the loop would have ended,
+    /// on the same 16 ms grid. No input arrives in between, so no skipped
+    /// frame can be the one something happens in. `BYARD_SHOT_EVERY_FRAME`
+    /// draws them all, which is how a test checks the two agree.
+    fn run_to(&mut self, until: u32) {
+        let mut still = 0_u32;
+        while self.now < until {
+            self.frame_with(&[]);
+            still = if self.interp.needs_another_frame() || self.interp.has_background_work() {
+                0
+            } else {
+                still + 1
+            };
+            if self.skip_idle && still >= 2 && self.now < until {
+                self.now += (until - self.now).div_ceil(16) * 16;
+            }
         }
     }
-    // Once more at rest, so a mesh or an image that landed a frame late is in.
-    step(&mut interp, &mut frame, &mut now, &[]);
+
+    /// The last frame.
+    pub fn frame(&self) -> &RenderFrame {
+        &self.frame
+    }
+
+    /// The accessibility tree of the last frame.
+    pub fn access(&self) -> Option<&byard_core::access::AccessTree> {
+        self.frame.access()
+    }
+}
+
+pub fn run(args: &ShotArgs<'_>) -> Result<(), String> {
+    let started = std::time::Instant::now();
+    let project = Project::load(args.path, "render")?;
+    let view = project.view(args.view)?;
+    let mut scene = Scene::new(
+        &project,
+        view,
+        &SceneOptions {
+            size: args.size,
+            dark: args.dark,
+            wall_clock: args.wall_clock,
+            access: args.a11y.is_some(),
+        },
+    )
+    .map_err(|e| format!("--{e}"))?;
+    for what in args.steps {
+        scene.apply(what);
+    }
+    scene.settle(args.at_ms);
+    let frame = scene.frame();
+    #[allow(clippy::cast_precision_loss)]
+    let (w, h) = (args.size.0 as f32, args.size.1 as f32);
 
     if let Some(path) = args.a11y {
         let tree = frame
@@ -250,7 +415,7 @@ pub fn run(args: &ShotArgs<'_>) -> Result<(), String> {
     let Some(out) = args.out else {
         return Ok(());
     };
-    let pixels = paint(&frame, args.size, args.scale)?;
+    let pixels = Gpu::open()?.paint(frame, args.size, args.scale)?;
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let (pw, ph) = (
         (w * args.scale).round() as u32,
@@ -265,82 +430,104 @@ pub fn run(args: &ShotArgs<'_>) -> Result<(), String> {
     Ok(())
 }
 
-/// Draws `frame` offscreen and reads it back as RGBA8 (sRGB) rows.
-fn paint(frame: &RenderFrame, size: (u32, u32), scale: f32) -> Result<Vec<u8>, String> {
-    let instance =
-        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
-    let adapter =
-        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
-            .map_err(|e| format!("no GPU adapter: {e}"))?;
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("byard shot"),
-        required_features: wgpu::Features::empty(),
-        required_limits: byard_core::engine::device_limits(&adapter),
-        memory_hints: wgpu::MemoryHints::Performance,
-        ..Default::default()
-    }))
-    .map_err(|e| format!("no GPU device: {e}"))?;
-    let (device, queue) = (Arc::new(device), Arc::new(queue));
-    #[allow(
-        clippy::cast_precision_loss,
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss
-    )]
-    let (pw, ph) = (
-        (size.0 as f32 * scale).round() as u32,
-        (size.1 as f32 * scale).round() as u32,
-    );
-    let format = wgpu::TextureFormat::Rgba8UnormSrgb;
-    let mut enc = pollster::block_on(EncoderSubsystem::init(
-        Arc::clone(&device),
-        Arc::clone(&queue),
-        format,
-        scale,
-        pw,
-        ph,
-    ))
-    .map_err(|e| e.to_string())?;
-    #[allow(clippy::cast_precision_loss)]
-    enc.update_viewport(
-        Viewport {
-            width: size.0 as f32,
-            height: size.1 as f32,
-        },
-        pw,
-        ph,
-        scale,
-    );
-    let target = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("byard shot target"),
-        size: wgpu::Extent3d {
-            width: pw,
-            height: ph,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-            | wgpu::TextureUsages::COPY_SRC
-            | wgpu::TextureUsages::COPY_DST,
-        view_formats: &[],
-    });
-    let cmd = enc
-        .encode_frame_from_relay(&target, frame)
-        .map_err(|e| e.to_string())?;
-    queue.submit(std::iter::once(cmd));
+/// A GPU device to draw frames on, opened once and used for any number of
+/// pictures.
+pub struct Gpu {
+    device: Arc<wgpu::Device>,
+    queue: Arc<wgpu::Queue>,
+}
 
-    let mut pixels = read_back(&device, &queue, &target, pw, ph);
-    // The window's surface is opaque, so wherever the app drew nothing it
-    // shows black. The offscreen target keeps alpha, which a PNG viewer would
-    // show as white or a checkerboard; flattening onto black makes the shot
-    // the picture the window shows. The colour is premultiplied, so black is
-    // already underneath and only the alpha changes.
-    for alpha in pixels.iter_mut().skip(3).step_by(4) {
-        *alpha = 255;
+impl Gpu {
+    /// Opens the default adapter. `Err` says there is none.
+    pub fn open() -> Result<Self, String> {
+        let instance =
+            wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let adapter =
+            pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+                .map_err(|e| format!("no GPU adapter: {e}"))?;
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("byard shot"),
+            required_features: wgpu::Features::empty(),
+            required_limits: byard_core::engine::device_limits(&adapter),
+            memory_hints: wgpu::MemoryHints::Performance,
+            ..Default::default()
+        }))
+        .map_err(|e| format!("no GPU device: {e}"))?;
+        Ok(Self {
+            device: Arc::new(device),
+            queue: Arc::new(queue),
+        })
     }
-    Ok(pixels)
+
+    /// Draws `frame` offscreen and reads it back as RGBA8 (sRGB) rows.
+    pub fn paint(
+        &self,
+        frame: &RenderFrame,
+        size: (u32, u32),
+        scale: f32,
+    ) -> Result<Vec<u8>, String> {
+        let (device, queue) = (&self.device, &self.queue);
+        #[allow(
+            clippy::cast_precision_loss,
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss
+        )]
+        let (pw, ph) = (
+            (size.0 as f32 * scale).round() as u32,
+            (size.1 as f32 * scale).round() as u32,
+        );
+        let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+        let mut enc = pollster::block_on(EncoderSubsystem::init(
+            Arc::clone(device),
+            Arc::clone(queue),
+            format,
+            scale,
+            pw,
+            ph,
+        ))
+        .map_err(|e| e.to_string())?;
+        #[allow(clippy::cast_precision_loss)]
+        enc.update_viewport(
+            Viewport {
+                width: size.0 as f32,
+                height: size.1 as f32,
+            },
+            pw,
+            ph,
+            scale,
+        );
+        let target = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("byard shot target"),
+            size: wgpu::Extent3d {
+                width: pw,
+                height: ph,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let cmd = enc
+            .encode_frame_from_relay(&target, frame)
+            .map_err(|e| e.to_string())?;
+        queue.submit(std::iter::once(cmd));
+
+        let mut pixels = read_back(device, queue, &target, pw, ph);
+        // The window's surface is opaque, so wherever the app drew nothing it
+        // shows black. The offscreen target keeps alpha, which a PNG viewer would
+        // show as white or a checkerboard; flattening onto black makes the shot
+        // the picture the window shows. The colour is premultiplied, so black is
+        // already underneath and only the alpha changes.
+        for alpha in pixels.iter_mut().skip(3).step_by(4) {
+            *alpha = 255;
+        }
+        Ok(pixels)
+    }
 }
 
 /// Copies `target` out of the GPU as tightly packed RGBA8 rows.

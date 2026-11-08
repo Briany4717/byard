@@ -41,6 +41,7 @@ mod on_change_example;
 mod organic_fusion_example;
 mod package_builtin_names;
 mod package_distribution;
+mod package_testing_example;
 mod profiling_example;
 mod radio_button_example;
 mod registry_http;

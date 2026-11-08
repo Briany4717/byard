@@ -19,7 +19,7 @@ use super::scroll::ScrollDrag;
 use super::{Interpreter, PerfWarning};
 use crate::diagnostics::CompileError;
 use crate::interp::env::Value;
-use crate::parser::ast::{Attr, AttrKind};
+use crate::parser::ast::{Attr, AttrKind, Expr, StrPart};
 use byard_core::access::AccessRole;
 
 /// Stands in for a view whose registration went missing between checking and
@@ -322,13 +322,75 @@ impl Interpreter {
         hit_rect: crate::interp::intrinsics::Rect,
         elem_idx: Option<u32>,
     ) {
-        let role = Self::declared_role(attrs);
+        let role = self.declared_role(attrs);
         self.register_focusable_as(attrs, hit_rect, elem_idx, role);
     }
 
     /// The role an element's `a11y_role:` names, if it has one.
-    pub(super) fn declared_role(attrs: &[Attr]) -> Option<AccessRole> {
-        Self::enum_prop(attrs, "a11y_role").and_then(AccessRole::from_keyword)
+    ///
+    /// A keyword, bare or quoted, is read from the syntax and evaluates nothing,
+    /// which is what every element that writes one pays. Anything else is a
+    /// value (RFC-0059): a `?:` has its condition evaluated and its chosen
+    /// branch read by these same rules, and a name or expression must come to
+    /// text that is a keyword.
+    pub(super) fn declared_role(&mut self, attrs: &[Attr]) -> Option<AccessRole> {
+        let value = attrs.iter().find_map(|a| match &a.kind {
+            AttrKind::Prop { value } if a.name.as_str() == "a11y_role" => Some(value),
+            _ => None,
+        })?;
+        self.role_of(value)
+    }
+
+    fn role_of(&mut self, value: &Expr) -> Option<AccessRole> {
+        if let Some(word) = Self::enum_token(value) {
+            if let Some(role) = AccessRole::from_keyword(word) {
+                return Some(role);
+            }
+        }
+        match value {
+            Expr::Ternary {
+                cond, then, els, ..
+            } => {
+                let chosen = if self.eval_pure(cond).as_bool() == Some(true) {
+                    then
+                } else {
+                    els
+                };
+                self.role_of(chosen)
+            }
+            // A bare word nothing binds, or a string literal outside the set,
+            // was reported when the view was lowered.
+            Expr::Ident(sym, _) if self.env.lookup(sym).is_none() => None,
+            Expr::StrLit(parts, _) if matches!(parts.as_slice(), [StrPart::Text(_)]) => None,
+            other => {
+                let Value::Str(text) = self.eval_pure(other) else {
+                    return None;
+                };
+                let role = AccessRole::from_keyword(&text);
+                if role.is_none() {
+                    self.report_not_a_role(other.span(), &text);
+                }
+                role
+            }
+        }
+    }
+
+    /// A role that came to text which is no role: reported once per place, as
+    /// the checker reports a keyword outside the set, with the closest word.
+    fn report_not_a_role(&mut self, span: crate::diagnostics::Span, text: &str) {
+        let known = AccessRole::KEYWORDS;
+        let hint = crate::util::closest_match(text, known.iter().copied())
+            .map(|h| format!(" (did you mean `{h}`?)"))
+            .unwrap_or_default();
+        let already = self.errors.iter().any(
+            |e| matches!(e, CompileError::AttributeTypeMismatch { span: s, .. } if *s == span),
+        );
+        if !already {
+            self.errors.push(CompileError::AttributeTypeMismatch {
+                span,
+                expected: format!("one of {known:?}{hint}, but the value is `{text}`"),
+            });
+        }
     }
 
     /// [`register_focusable`](Self::register_focusable) for a caller that has

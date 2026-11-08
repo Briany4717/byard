@@ -169,6 +169,7 @@ fn static_decorated_box_survives_unrelated_incremental_text_frames() {
             ..Default::default()
         });
         f.push_text(TextLine {
+            align: byard_core::frame::TextAlign::Start,
             x: 40.0,
             y: 40.0,
             text: text.to_string(),

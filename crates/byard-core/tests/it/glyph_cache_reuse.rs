@@ -112,6 +112,7 @@ fn box_at(rect: [f32; 4], color: [f32; 4]) -> BoxInstance {
 
 fn text(x: f32, y: f32, s: &str, color: [f32; 4]) -> TextLine {
     TextLine {
+        align: byard_core::frame::TextAlign::Start,
         x,
         y,
         text: s.to_string(),

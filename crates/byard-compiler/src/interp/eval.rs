@@ -690,6 +690,10 @@ pub struct Interpreter {
     /// `with` after a whole gradient, keyed like the maps above. Empty, and so
     /// unallocated, until a program animates a gradient.
     gradient_animations: rustc_hash::FxHashMap<AnimKey, animation::GradientAnim>,
+    /// Persisted animated-shadow state (RFC-0059): one record per `with` after a
+    /// whole `shadow:` value. Empty, and so unallocated, until a program
+    /// animates one.
+    shadow_animations: rustc_hash::FxHashMap<AnimKey, animation::ShadowAnim>,
     /// Loop clocks for repeating, delayed and keyframed animations (RFC-0025),
     /// keyed by the animation node's span like the two maps above. A repeating
     /// animation cannot sample against `now − start_ms` the way a one-shot does:
@@ -773,6 +777,9 @@ pub struct Interpreter {
     /// `when`/`for` are flattened, a row of a `for` is indistinguishable from a
     /// node written literally at that position. `0` outside any `for` body.
     anim_slot: AnimSlot,
+    /// Set by a `ZStack` while it builds one of its children and taken by that
+    /// child's layout, so only a direct child knows it is stacked (RFC-0059).
+    stacked: layout::Stacked,
     /// The user-view call path the lowering walk is inside right now, stamped
     /// on every node it creates (`RenderNode::inst`). `0` at the root.
     cur_inst: u32,

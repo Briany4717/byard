@@ -28,6 +28,109 @@ fn override_attr(set: &mut Vec<Attr>, attr: Attr) {
     }
 }
 
+/// The value a state-only attribute rests at, for a base that does not write
+/// it: nothing visible (a fully transparent colour, no width, no offset).
+/// `None` for an attribute with no such rest, which then keeps whatever the base
+/// writes.
+fn resting_value(name: &str, span: crate::diagnostics::Span) -> Option<Expr> {
+    match name {
+        // Transparent, and tagged as carrying alpha so it is not read as the
+        // opaque black `0` would be.
+        "overlay" | "outline" => Some(Expr::IntLit(crate::lexer::COLOR_HAS_ALPHA_TAG, span)),
+        "outline_width" | "outline_offset" => Some(Expr::IntLit(0, span)),
+        _ => None,
+    }
+}
+
+/// RFC-0059: a state that moves an attribute with `with` moves it back on the
+/// same curve when the state ends.
+///
+/// `override_state_attr` keeps the base's `with` when a block gives a bare
+/// value. This closes the other direction, once, when the element is lowered,
+/// so a frame costs what it did:
+///
+/// - the base value of an attribute a block animates takes the block's curve,
+///   unless it has one of its own, and where the base does not write the
+///   attribute at all and it has a resting value (`overlay`, `outline`, the
+///   outline's width and offset) the rest is written for it;
+/// - every block's animated value of the same attribute shares one animation
+///   identity (the base's, else the first block's), so `hover` to `pressed`
+///   retargets one motion and does not start a second.
+///
+/// An element with no state block, or none with a `with`, is not touched.
+pub(super) fn inherit_state_motion(base: &mut Vec<Attr>, blocks: &mut [StateBlock]) {
+    fn animated(a: &Attr) -> Option<(&Expr, crate::diagnostics::Span)> {
+        match &a.kind {
+            AttrKind::Prop {
+                value: Expr::Animated { anim, span, .. },
+            } => Some((anim, *span)),
+            _ => None,
+        }
+    }
+    let mut names: Vec<(crate::Symbol, Option<crate::Symbol>)> = Vec::new();
+    for a in blocks.iter().flat_map(|b| &b.attrs) {
+        if animated(a).is_some() && !names.iter().any(|(n, x)| *n == a.name && *x == a.axis) {
+            names.push((a.name.clone(), a.axis.clone()));
+        }
+    }
+    for (name, axis) in names {
+        let first = blocks
+            .iter()
+            .flat_map(|b| &b.attrs)
+            .find(|a| a.name == name && a.axis == axis && animated(a).is_some())
+            .and_then(animated)
+            .map(|(anim, span)| (anim.clone(), span));
+        let Some((state_anim, state_span)) = first else {
+            continue;
+        };
+        let at = base.iter().position(|a| a.name == name && a.axis == axis);
+        // The base has a curve of its own, and with it the identity; else the
+        // base takes the block's curve (written for it where there is none).
+        let key = if let Some((_, span)) = at.and_then(|i| animated(&base[i])) {
+            span
+        } else {
+            if let Some(i) = at {
+                if let AttrKind::Prop { value } = &mut base[i].kind {
+                    let inner = std::mem::replace(value, Expr::IntLit(0, state_span));
+                    *value = Expr::Animated {
+                        value: Box::new(inner),
+                        anim: Box::new(state_anim),
+                        span: state_span,
+                    };
+                }
+            } else {
+                let Some(rest) = resting_value(name.as_str(), state_span) else {
+                    continue;
+                };
+                base.push(Attr {
+                    name: name.clone(),
+                    axis: axis.clone(),
+                    kind: AttrKind::Prop {
+                        value: Expr::Animated {
+                            value: Box::new(rest),
+                            anim: Box::new(state_anim),
+                            span: state_span,
+                        },
+                    },
+                    span: state_span,
+                });
+            }
+            state_span
+        };
+        for a in blocks.iter_mut().flat_map(|b| &mut b.attrs) {
+            if a.name != name || a.axis != axis {
+                continue;
+            }
+            if let AttrKind::Prop {
+                value: Expr::Animated { span, .. },
+            } = &mut a.kind
+            {
+                *span = key;
+            }
+        }
+    }
+}
+
 /// Builds a flat attribute list for *validation only* (RFC-0016): the base
 /// attributes followed by every `on <state>` block's attributes, so a state
 /// block's `bg:`/`scale:`/… is checked against the intrinsic's §5 contract just
@@ -310,6 +413,7 @@ impl Interpreter {
                 override_attr(&mut resolved, a.clone());
             }
         }
+        inherit_state_motion(&mut resolved, &mut states);
         (resolved, states)
     }
 

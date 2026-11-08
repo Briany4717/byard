@@ -1519,6 +1519,7 @@ impl Interpreter {
         let ty = y - size * 0.6;
         let anchor = transform.apply_point([tx, ty]);
         frame.push_text(byard_core::TextLine {
+            align: byard_core::frame::TextAlign::Start,
             x: anchor[0],
             y: anchor[1],
             text,

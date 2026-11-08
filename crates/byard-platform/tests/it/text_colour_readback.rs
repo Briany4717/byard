@@ -144,6 +144,7 @@ fn a_glyph_paints_the_colour_a_box_of_the_same_hex_paints() {
         smooth: 0.0,
     });
     frame.push_text(TextLine {
+        align: byard_core::frame::TextAlign::Start,
         x: 10.0,
         y: 10.0,
         text: "I".to_string(),

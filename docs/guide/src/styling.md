@@ -36,7 +36,9 @@ The ones that paint:
 | `radius` | length | Corner radius. A quad rounds each corner on its own |
 | `smooth` | `0` to `1` | Corner profile. `0` is a circular arc, about `0.6` a continuous corner like an Apple icon |
 | `opacity` | `0` to `1` | Of the whole element and what it holds |
-| `border`, `border_width` | colour, number | An outline |
+| `border`, `border_width` | colour, number | A line inside the edge. A box with a `border` and no `bg` draws just the line |
+| `outline`, `outline_width`, `outline_offset` | colour, number, number | A ring outside the shape, see [below](#outline-and-overlay) |
+| `overlay` | colour or gradient | A tint over `bg`, under the children, see [below](#outline-and-overlay) |
 | `shadow` | preset, tuple or list | See below |
 | `gradient` | tuple | See below |
 | `blur`, `backdrop_tint` | number, colour | Frosted glass, see below |
@@ -89,6 +91,25 @@ A plain tuple is positional: `(x, y, blur, spread, color)`, and any slot may be
 left out from the end. A list paints its first shadow on top. A shadow follows
 the element's corner radius and smoothing.
 
+A `shadow` can be any expression that comes to a shadow: a `let` holding a list, a
+conditional choosing between them, `()` for none. A `with` after it moves every offset, blur
+and colour, and a list that gains a shadow fades it in:
+
+```byld
+View Main() {
+    var lifted = false
+    let rest = [(y: 1, blur: 3, color: 0x33000000)]
+    let raised = [(y: 8, blur: 20, color: 0x40000000), (y: 2, blur: 4, color: 0x30000000)]
+    Column #[bg: 0xF2F3F5, p: 40] {
+        Box #[bg: 0xFFFFFF, radius: 12, width: 160, height: 56,
+              shadow: lifted ? raised : rest with anim.spring(),
+              tap => lifted = !lifted]
+    }
+}
+```
+
+A value that is not a shadow is an error that says so.
+
 ### Gradients
 
 ```byld
@@ -120,6 +141,68 @@ gradients is the one its condition picks.
 
 A misspelt name inside the tuple is checked as well, so `gradient: (to: blak)` is
 an error and not a gradient that quietly does not draw.
+
+### Outline and overlay
+
+`outline` draws a ring **outside** the element, which is what a focus ring is. `outline_width`
+is its thickness (2 when left out) and `outline_offset` the gap between the edge and the ring
+(0). The ring follows `radius`, adds nothing to the element's size, moves no neighbour and
+takes no clicks. A negative offset draws it inside the edge. All three move with
+[`with`](motion.md), and a colour whose alpha is zero draws nothing.
+
+`overlay` is a colour drawn over the element's `bg` and under what it holds, clipped to its
+shape, so it rounds with `radius`: the state layer of a Material control. A colour with alpha
+tints; a gradient, written as `gradient` is, ramps over it. It moves with `with` like `bg`.
+
+```byld
+View Main() {
+    Row #[bg: 0xFEF7FF, p: 32, gap: 28] {
+        Box #[bg: 0x6750A4, radius: 20, width: 120, height: 40,
+              overlay: 0x29FFFFFF,
+              outline: 0x6750A4, outline_width: 3, outline_offset: 3] {}
+        Box #[bg: 0x6750A4, radius: 8, width: 120, height: 40,
+              overlay: (angle: 90deg, from: 0x00FFFFFF, to: 0x55FFFFFF)] {}
+    }
+}
+```
+
+An outline is painted where the element is, so an ancestor's `Clip` or a `ScrollView` cuts it
+at their edge, and a later sibling paints over it where they meet. Leave a gap for it, as
+you would for a shadow.
+
+### Aligning text
+
+`align` on a `Text` sits its lines inside the text's width: `start`, `center`, `end` or `justify`
+(spaces stretched to both edges, the last line of a paragraph left at the start). It is not what
+`align` means on a `Row` or `Column`, where it places the children across the axis; on a `Text` there
+are no children, so it is the text's own. It needs a width to align within, which a `Text` has unless it
+says `wrap: false`, and it can be chosen with `?:`.
+
+```byld
+View Main() {
+    Column #[width: 300, p: 10, gap: 8] {
+        Text("short\nthe longer second line") #[width: 280, align: center, bg: 0xEEEEEE]
+        Text("the quick brown fox jumps over the lazy dog") #[width: 200, align: justify]
+    }
+}
+```
+
+### Keywords chosen by a condition
+
+An attribute that takes a word (`align`, `justify`, `direction`, `align_self`, `alignment`, `fit`,
+`axis`, `snap`, `transition`, `blur_quality`, `a11y_role`) can be chosen with `?:`, nested as deep as
+you like. The word the condition picks is the one used, and it follows the condition as it changes.
+Every word in the conditional is checked, so a misspelt one is an error naming it.
+
+```byld
+View Main() {
+    var centred = true
+    Row #[width: 240, height: 60, bg: 0xE8DEF8, align: centred ? center : end,
+          tap => centred = !centred] {
+        Box #[bg: 0x6750A4, width: 40, height: 20] {}
+    }
+}
+```
 
 ### Frosted glass and ripple
 
@@ -272,6 +355,35 @@ View Main() {
 The states come from the engine's own tracking, so you write no `var` and no
 handler for any of them. They also animate: put `with anim.spring()` on an
 attribute and it eases between its values. [Motion](motion.md) explains how.
+
+### States written in the element
+
+An `on` block can be written inside the element it styles, among its children, and needs
+no `style` at all. It is the same block: the same states, the same precedence, and it can
+sit next to a `..style` spread. Where both give an attribute for the same state, the one in
+the body wins. This is a whole control with no `var` and no handler for its states:
+
+```byld
+View Main() {
+    var taps = 0
+    Box #[bg: 0x6750A4, radius: 20, width: 140, height: 40, align: center, justify: center,
+          a11y_role: button, tap => taps += 1] {
+        on hover { overlay: 0x14FFFFFF }
+        on pressed { overlay: 0x1AFFFFFF, radius: 8 with anim.spring() }
+        on focus_visible { outline: 0xD0BCFF, outline_width: 3, outline_offset: 2 }
+        Text("Taps: {taps}") #[color: 0xFFFFFF, size: 14]
+    }
+}
+```
+
+An `on` block that is not inside an element has nothing to style, and is an error that
+says where it goes.
+
+A state that moves an attribute with `with` moves it back on the same curve when the state
+ends: the pressed corners above spring open again on release, with no `with` on the
+resting `radius`. Where there is no resting value to move back to, as for `overlay` and
+`outline`, the element rests transparent. `on pressed` also shows while Space or Enter is
+held on a focused control, as it does for a press of the pointer.
 
 ## Responsive styles
 

@@ -101,6 +101,7 @@ impl Harness {
 
 fn line(y: f32, text: &str) -> TextLine {
     TextLine {
+        align: byard_core::frame::TextAlign::Start,
         x: 4.0,
         y,
         text: text.to_string(),

@@ -899,6 +899,7 @@ mod tests {
     /// A text line the producer reported as changed.
     fn dirty_line(text: &str) -> crate::frame::TextLine {
         crate::frame::TextLine {
+            align: crate::frame::TextAlign::Start,
             x: 0.0,
             y: 0.0,
             text: text.to_string(),
@@ -914,6 +915,7 @@ mod tests {
     /// The same line, reported unchanged.
     fn clean_line(text: &str) -> crate::frame::TextLine {
         crate::frame::TextLine {
+            align: crate::frame::TextAlign::Start,
             dirty: false,
             ..dirty_line(text)
         }

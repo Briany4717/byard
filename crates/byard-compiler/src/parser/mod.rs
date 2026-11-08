@@ -4,7 +4,7 @@
 //! Declarations, elements, and control flow are ordinary recursive descent,
 //! one function per production, following the EBNF. Expressions use the Pratt
 //! parser in `expr`. Error recovery records a [`CompileError`], substitutes an
-//! [`Expr::Error`](ast::Expr::Error) (or skips one token at member level), and continues, so a
+//! [`Expr::Error`] (or skips one token at member level), and continues, so a
 //! single pass collects multiple diagnostics.
 
 pub mod ast;
@@ -12,8 +12,8 @@ mod expr;
 pub mod span_eq;
 
 use ast::{
-    Attr, AttrKind, ConstDecl, ElementNode, EnumDecl, FnDecl, Member, Param, RecordDecl,
-    RecordField, RouteKind, StyleRule, Type, UseDecl, ViewDecl,
+    Attr, AttrKind, ConstDecl, ElementNode, EnumDecl, Expr, FnDecl, Member, Param, RecordDecl,
+    RecordField, RouteKind, StateBlock, StyleRule, Type, UseDecl, ViewDecl,
 };
 
 use crate::diagnostics::{CompileError, Span};
@@ -636,6 +636,54 @@ impl<'a> Parser<'a> {
         members
     }
 
+    /// The members of an element's `{ … }`: [`parse_block_members`] plus the
+    /// `on <state> { … }` blocks (RFC-0059), which belong to the element and are
+    /// collected into `states` rather than left among its children.
+    fn parse_element_members(&mut self, states: &mut Vec<StateBlock>) -> Vec<Member> {
+        let mut members = Vec::new();
+        while !matches!(self.cur(), Some(Token::RBrace) | None) {
+            let before = self.pos;
+            if self.at_state_block_member() {
+                if let Some(block) = self.parse_state_block() {
+                    states.push(block);
+                }
+            } else if let Some(m) = self.parse_member() {
+                members.push(m);
+            }
+            if self.pos == before {
+                self.advance(); // recovery: skip the offending token
+            }
+        }
+        self.expect(&Token::RBrace, "'}'");
+        members
+    }
+
+    /// Whether the cursor is on an `on <state> { … }` block, as opposed to the
+    /// other forms that start with `on` (`on mount =>`, `on unmount =>`,
+    /// `on measure =>`, `on change(…) =>`, and an element that is called `on`).
+    /// It is one when the word after `on` is a state or an axis (`width`,
+    /// `height`), or when what follows it is the `{` or `+` of a block, so a
+    /// misspelt state is still reported as one.
+    fn at_state_block_member(&self) -> bool {
+        use ast::StyleStateKind;
+        let Some(Token::Ident(word)) = self.peek2() else {
+            return false;
+        };
+        if !self.at_state_block() {
+            return false;
+        }
+        let word = word.as_str();
+        if matches!(word, "mount" | "unmount" | "measure" | "change") {
+            return false;
+        }
+        StyleStateKind::from_name(word).is_some()
+            || matches!(word, "width" | "height")
+            || matches!(
+                self.tokens.get(self.pos + 2).map(|(t, _)| t),
+                Some(Token::LBrace | Token::Plus)
+            )
+    }
+
     fn parse_member(&mut self) -> Option<Member> {
         match self.cur() {
             Some(Token::Var) => Some(self.parse_binding(true)),
@@ -699,6 +747,18 @@ impl<'a> Parser<'a> {
                     "tab" => Some(self.parse_route(RouteKind::Tab)),
                     _ => Some(Member::Element(self.parse_element())),
                 }
+            }
+            // RFC-0059: a state block styles the element it is written in. Here
+            // there is none, which is said once and the block is skipped whole.
+            Some(Token::Ident(_)) if self.at_state_block_member() => {
+                let start = self.cur_span();
+                let _ = self.parse_state_block();
+                self.error_at(
+                    self.span_from(start),
+                    "a declaration or element (an `on` state block goes inside the element \
+                     it styles)",
+                );
+                None
             }
             Some(Token::Ident(_)) => Some(Member::Element(self.parse_element())),
             _ => {
@@ -1028,7 +1088,8 @@ impl<'a> Parser<'a> {
             Vec::new()
         };
 
-        let attrs = if matches!(self.cur(), Some(Token::HashBracket)) {
+        let mut states = Vec::new();
+        let mut attrs = if matches!(self.cur(), Some(Token::HashBracket)) {
             self.parse_attr_block()
         } else {
             Vec::new()
@@ -1055,7 +1116,27 @@ impl<'a> Parser<'a> {
         if self.eat(&Token::Arrow) {
             action = Some(self.parse_expr(0));
         } else if self.eat(&Token::LBrace) {
-            children = self.parse_block_members();
+            children = self.parse_element_members(&mut states);
+        }
+
+        // RFC-0059: `on hover { … }` written in the body styles this element, as
+        // the same block in a `style` does. They ride as one inline style spread
+        // after the written attributes, so a tie is won by the body and nothing
+        // downstream needs to know a second spelling exists.
+        if let (Some(first), Some(last)) = (states.first(), states.last()) {
+            let span = Span::new(first.span.start, last.span.end);
+            attrs.push(Attr {
+                name: Symbol::intern(""),
+                axis: None,
+                kind: AttrKind::Spread {
+                    value: Expr::StyleValue {
+                        attrs: Vec::new(),
+                        states,
+                        span,
+                    },
+                },
+                span,
+            });
         }
 
         ElementNode {

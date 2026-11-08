@@ -18,6 +18,18 @@ use super::{Interpreter, RenderNode};
 use crate::diagnostics::{CompileError, Span};
 use crate::interp::env::Value;
 use crate::interp::reactive::ScopeId;
+
+/// Whether the element being laid out is the direct child of a `ZStack`, which
+/// places it in one grid cell where `align_self` and `grow` mean "fill the
+/// stack" (RFC-0059).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum Stacked {
+    /// Not a direct child of a stack.
+    #[default]
+    No,
+    /// A direct child of a stack.
+    Yes,
+}
 use crate::parser::ast::{Attr, AttrKind, Member};
 use crate::symbol::Symbol;
 
@@ -757,6 +769,7 @@ impl Interpreter {
             crate::interp::events::StyleState::empty(),
             &|c| viewport_holds(c, self.viewport, &self.theme),
         );
+        let attrs = self.pick_keywords(attrs);
         let attrs: &[Attr] = &attrs;
         let text = match self.binding_value(content) {
             Some(Value::Str(s)) => s,
@@ -797,7 +810,7 @@ impl Interpreter {
             } else {
                 self.atlas.add_fixed_text_leaf(size, boxed)?
             };
-            self.apply_flex_item(attrs, id)?;
+            self.apply_flex_item(attrs, id, false)?;
             flat_ids.push(id);
             return Ok(id);
         }
@@ -812,7 +825,7 @@ impl Interpreter {
             },
             boxed,
         )?;
-        self.apply_flex_item(attrs, id)?;
+        self.apply_flex_item(attrs, id, false)?;
         flat_ids.push(id);
         Ok(id)
     }
@@ -902,7 +915,7 @@ impl Interpreter {
                 let w = self.eval_px_prop(attrs, "width").unwrap_or(100.0);
                 let h = self.eval_px_prop(attrs, "height").unwrap_or(100.0);
                 let id = self.atlas.add_leaf(LeafSize::new(w, h))?;
-                self.apply_flex_item(attrs, id)?;
+                self.apply_flex_item(attrs, id, false)?;
                 self.env.truncate(env_base);
                 flat_ids.push(id);
                 Ok(id)
@@ -925,7 +938,7 @@ impl Interpreter {
                 let w = self.eval_px_prop(attrs, "width").unwrap_or(0.0);
                 let h = self.eval_px_prop(attrs, "height").unwrap_or(0.0);
                 let id = self.atlas.add_leaf(LeafSize::new(w, h))?;
-                self.apply_flex_item(attrs, id)?;
+                self.apply_flex_item(attrs, id, false)?;
                 self.env.truncate(env_base);
                 flat_ids.push(id);
                 Ok(id)
@@ -985,7 +998,7 @@ impl Interpreter {
                 }
                 let s = self.eval_px_prop(attrs, "size").unwrap_or(24.0);
                 let id = self.atlas.add_leaf(LeafSize::new(s, s))?;
-                self.apply_flex_item(attrs, id)?;
+                self.apply_flex_item(attrs, id, false)?;
                 self.env.truncate(env_base);
                 flat_ids.push(id);
                 Ok(id)
@@ -1030,7 +1043,6 @@ impl Interpreter {
                     crate::interp::events::StyleState::empty(),
                     &|c| viewport_holds(c, self.viewport, &self.theme),
                 );
-                let attrs: &[Attr] = &attrs;
                 // The same restore the paint walk does, for the same reason and
                 // one pass earlier: a box's *size* is as much a function of the
                 // scope it was instantiated in as its colour is. `width: row.w`
@@ -1043,9 +1055,15 @@ impl Interpreter {
                 for (k, v) in env_snapshot {
                     self.env.push(k.clone(), v.clone());
                 }
+                // A `?:` between keywords is read now that the scope is back.
+                let attrs = self.pick_keywords(attrs);
+                let attrs: &[Attr] = &attrs;
+                // Taken before the children are built, so only the direct child
+                // of a `ZStack` sees that it is one.
+                let in_stack = std::mem::take(&mut self.stacked) == Stacked::Yes;
                 let out = self.build_box_layout(name, attrs, children, pools, flat_ids);
                 if let Ok(id) = &out {
-                    self.apply_flex_item(attrs, *id)?;
+                    self.apply_flex_item(attrs, *id, in_stack)?;
                 }
                 self.env.truncate(env_base);
                 // RFC-0038: pair the element with the node that will hold its
@@ -1070,15 +1088,22 @@ impl Interpreter {
     /// Lays the `shrink` and `align_self` an element wrote over its layout node.
     /// An element that writes neither costs nothing, unless its node had them
     /// last build (a breakpoint dropped them), in which case they are undone.
+    ///
+    /// In a `ZStack` (`in_stack`) the child is placed in one grid cell, where
+    /// `align_self` reaches only the vertical axis. `align_self: stretch`, and a
+    /// `grow` above zero, both mean "fill the stack" there, so they stretch the
+    /// horizontal axis too (RFC-0059); a child with a size of its own keeps it.
     fn apply_flex_item(
         &mut self,
         attrs: &[Attr],
         id: byard_core::atlas::layout::AtlasNodeId,
+        in_stack: bool,
     ) -> Result<(), byard_core::atlas::AtlasError> {
         use byard_core::atlas::{Align, FlexItem};
         let writes = attrs.iter().any(|a| {
             matches!(a.kind, AttrKind::Prop { .. })
-                && matches!(a.name.as_str(), "shrink" | "align_self")
+                && (matches!(a.name.as_str(), "shrink" | "align_self")
+                    || (in_stack && a.name.as_str() == "grow"))
         });
         if !writes && !self.atlas.has_flex_items() {
             return Ok(());
@@ -1100,6 +1125,13 @@ impl Interpreter {
                 }
                 _ => None,
             });
+            if in_stack {
+                let grows = self.eval_float_prop(attrs, "grow").is_some_and(|g| g > 0.0);
+                if grows || item.align_self == Some(Align::Stretch) {
+                    item.align_self = Some(Align::Stretch);
+                    item.justify_self = Some(Align::Stretch);
+                }
+            }
         }
         self.atlas.set_flex_item(id, item)
     }
@@ -1393,9 +1425,11 @@ impl Interpreter {
         let enclosing = self.anim_slot;
         for c in concrete {
             self.anim_slot = c.slot;
+            self.stacked = Stacked::Yes;
             if let Ok(cid) = self.build_layout_tree(c.node, pools, &mut temp_flat) {
                 child_ids.push(cid);
             }
+            self.stacked = Stacked::No;
         }
         self.anim_slot = enclosing;
         let base = self.eval_container_style("ZStack", attrs);

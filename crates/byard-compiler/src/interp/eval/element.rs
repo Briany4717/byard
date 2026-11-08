@@ -35,9 +35,22 @@ impl Interpreter {
         }
     }
 
-    /// Whether `error` is the keyword complaint about a `weight:` whose bare
-    /// word names something in scope (a view parameter, a `let`, a `var`).
-    fn is_bound_weight_word(
+    /// Whether `value` is, or chooses between, bare words one of which sits at
+    /// `span` and names something in scope.
+    fn names_bound_word(&self, value: &Expr, span: crate::diagnostics::Span) -> bool {
+        match value {
+            Expr::Ident(sym, sp) => *sp == span && self.env.lookup(sym).is_some(),
+            Expr::Ternary { then, els, .. } => {
+                self.names_bound_word(then, span) || self.names_bound_word(els, span)
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether `error` is the keyword complaint about a `weight:` or an
+    /// `a11y_role:` whose bare word names something in scope (a view parameter,
+    /// a `let`, a `var`), in the value itself or in either branch of a `?:`.
+    fn is_bound_keyword_word(
         &self,
         attrs: &[crate::parser::ast::Attr],
         error: &CompileError,
@@ -46,10 +59,9 @@ impl Interpreter {
             return false;
         };
         attrs.iter().any(|a| {
-            a.name.as_str() == "weight"
-                && matches!(&a.kind, crate::parser::ast::AttrKind::Prop {
-                    value: Expr::Ident(sym, sp),
-                } if sp == span && self.env.lookup(sym).is_some())
+            matches!(a.name.as_str(), "weight" | "a11y_role")
+                && matches!(&a.kind, crate::parser::ast::AttrKind::Prop { value }
+                    if self.names_bound_word(value, *span))
         })
     }
 
@@ -70,11 +82,12 @@ impl Interpreter {
         self.check_breakpoints(&state_blocks);
         let to_validate = attrs_with_states(&attrs, &state_blocks);
         let mut found = validate_element_in(el, &to_validate, known_views, Some(&self.theme));
-        // The contract reads a bare word in `weight:` as a keyword, because
-        // without a scope that is all it can be. Here the scope is known: a
-        // word the view binds is a value (`weight: w`), and is not an error.
+        // The contract reads a bare word in `weight:` or `a11y_role:` as a
+        // keyword, because without a scope that is all it can be. Here the
+        // scope is known: a word the view binds is a value (`weight: w`,
+        // `a11y_role: role`), and is not an error.
         if !found.is_empty() {
-            found.retain(|e| !self.is_bound_weight_word(&to_validate, e));
+            found.retain(|e| !self.is_bound_keyword_word(&to_validate, e));
         }
         self.errors.extend(found);
         // RFC-0038: an `on measure` member is *about* this element, so it is

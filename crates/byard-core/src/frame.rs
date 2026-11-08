@@ -1637,6 +1637,25 @@ impl FontTable {
     }
 }
 
+/// How a text run's lines sit inside the width it was shaped to (RFC-0059).
+///
+/// `Start` is what a run did before this existed and takes exactly that path
+/// (no paragraph alignment is handed to the shaper). The others align every line
+/// of the run within its wrap width; a run with no wrap width has nothing to
+/// align within.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum TextAlign {
+    /// The writing direction's start edge: the shaper's own default.
+    #[default]
+    Start,
+    /// Centred.
+    Center,
+    /// The end edge.
+    End,
+    /// Both edges, spaces stretched, the last line of a paragraph at the start.
+    Justify,
+}
+
 /// A single line of text to be rendered in a frame.
 ///
 /// Shared between the logic thread (which populates [`RenderFrame::texts`]) and
@@ -1677,6 +1696,9 @@ pub struct TextLine {
     pub variations: Option<Variations>,
     /// Text colour: `[r, g, b, a]` in linear space, each component 0–1.
     pub color: [f32; 4],
+    /// How the run's lines sit inside its wrap width (RFC-0059). Part of the
+    /// shape: a change re-shapes the run.
+    pub align: TextAlign,
     /// Whether this line's content changed since the last tick.
     ///
     /// Set upstream by the Evaluator → Atlas → `RenderFrame` pipeline, never
@@ -3538,6 +3560,7 @@ mod paint_hash {
         // same one twice, which is why they are hashed together.
         t.weight.hash(&mut h);
         t.family.hash(&mut h);
+        t.align.hash(&mut h);
         if let Some(v) = &t.variations {
             for (tag, value) in v.iter() {
                 tag.hash(&mut h);
@@ -4434,6 +4457,7 @@ mod motion_tests {
         f.push_instance(box_at(0.0, 0.0));
         f.push_instance(box_at(1.0, 1.0));
         f.push_text(TextLine {
+            align: crate::frame::TextAlign::Start,
             x: 0.0,
             y: 0.0,
             text: "hi".to_string(),
@@ -4807,6 +4831,7 @@ mod motion_tests {
 
     fn line(text: &str) -> TextLine {
         TextLine {
+            align: crate::frame::TextAlign::Start,
             x: 0.0,
             y: 0.0,
             text: text.to_string(),
@@ -4891,6 +4916,7 @@ mod paint_digest_tests {
 
     fn line(text: &str) -> TextLine {
         TextLine {
+            align: crate::frame::TextAlign::Start,
             x: 0.0,
             y: 0.0,
             text: text.to_string(),
@@ -4975,6 +5001,7 @@ mod paint_digest_tests {
     #[test]
     fn a_line_that_changed_only_its_weight_or_family_is_repainted() {
         let heavier = TextLine {
+            align: crate::frame::TextAlign::Start,
             weight: 700,
             ..line("a")
         };
@@ -4984,6 +5011,7 @@ mod paint_digest_tests {
         assert!(f.texts()[0].dirty, "a weight change must repaint");
 
         let other_face = TextLine {
+            align: crate::frame::TextAlign::Start,
             family: Some(std::sync::Arc::from("Space Grotesk")),
             ..heavier
         };

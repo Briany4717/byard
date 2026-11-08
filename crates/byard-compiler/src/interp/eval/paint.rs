@@ -19,7 +19,7 @@ use super::states::{resolve_state_attrs, viewport_holds};
 use super::wiring::NativeTarget;
 use super::{Interpreter, RenderNode, access};
 use crate::interp::env::Value;
-use crate::parser::ast::{Attr, AttrKind, StyleStateKind};
+use crate::parser::ast::{Attr, AttrKind, Expr, StyleStateKind};
 use crate::symbol::Symbol;
 use byard_core::access::AccessRole;
 
@@ -258,6 +258,7 @@ impl Interpreter {
                     let attrs = resolve_state_attrs(attrs, state_blocks, state, &|c| {
                         viewport_holds(c, self.viewport, &self.theme)
                     });
+                    let attrs = self.pick_keywords(attrs);
                     let attrs = attrs.as_ref();
                     let text = match self.binding_value(*content) {
                         Some(Value::Str(s)) => s,
@@ -330,6 +331,16 @@ impl Interpreter {
                     let weight = self.resolve_weight(attrs);
                     let family = self.resolve_family(attrs);
                     let variations = self.resolve_variations(attrs);
+                    // RFC-0059: `align` sits the run's lines inside its wrap width.
+                    // Read only when written; a run that does not write it is
+                    // shaped as it always was. (A `wrap: false` run has no wrap
+                    // width to align within.)
+                    let align = match Self::enum_prop(attrs, "align") {
+                        Some("center") => byard_core::frame::TextAlign::Center,
+                        Some("end") => byard_core::frame::TextAlign::End,
+                        Some("justify") => byard_core::frame::TextAlign::Justify,
+                        _ => byard_core::frame::TextAlign::Start,
+                    };
                     let single_line = self.eval_bool_prop(attrs, "wrap") == Some(false);
                     let wrap_w = if single_line {
                         None
@@ -383,6 +394,7 @@ impl Interpreter {
                     }
                     frame.push_text_wrapped(
                         byard_core::TextLine {
+                            align,
                             x: anchor[0],
                             y: anchor[1],
                             text,
@@ -444,6 +456,9 @@ impl Interpreter {
                 for (k, v) in env_snapshot {
                     self.env.push(k.clone(), v.clone());
                 }
+                // A `?:` between keywords is read now that the scope is back.
+                let attrs = self.pick_keywords(std::borrow::Cow::Borrowed(attrs.as_slice()));
+                let attrs: &[Attr] = &attrs;
                 let mut current_rect = parent_rect;
                 // Opacity children inherit from this box: its effective opacity
                 // when it has a resolved rect (set below), else whatever it
@@ -618,7 +633,11 @@ impl Interpreter {
                     // A gradient is a fill in its own right, so a box with a ramp
                     // and no `bg` still has a surface to paint (the ramp over a
                     // transparent base).
-                    if !owns_visuals && (bg.is_some() || gradient.is_some()) {
+                    // A `border` is a surface too: a box with a border and no fill
+                    // strokes it over a transparent interior.
+                    if !owns_visuals
+                        && (bg.is_some() || gradient.is_some() || border_color.is_some())
+                    {
                         let base = byard_core::BoxInstance {
                             rect: [rect.x, rect.y, rect.width, rect.height],
                             color: bg_rgba,
@@ -635,7 +654,7 @@ impl Interpreter {
                         for sh in shadows.iter().rev() {
                             frame.push_decorated(shadow_decorated(base, opacity, sh));
                         }
-                        if translucent || gradient.is_some() {
+                        if translucent || gradient.is_some() || bg.is_none() {
                             // A translucent or gradient-filled box blends its fill
                             // as one unit on the decorated pipeline; keep it whole.
                             frame.push_decorated(byard_core::frame::DecoratedBox {
@@ -680,6 +699,19 @@ impl Interpreter {
                     // pane samples everything painted behind it, its own
                     // background included, and its children render on top.
                     self.emit_backdrop(
+                        paint_attrs,
+                        current_rect,
+                        radii,
+                        smooth,
+                        transform,
+                        opacity,
+                        frame,
+                    );
+
+                    // RFC-0059: the overlay (a state layer) over the fill and the
+                    // pane, and the outline ring outside the shape. Both are read
+                    // only when the element writes them.
+                    self.emit_overlay_and_outline(
                         paint_attrs,
                         current_rect,
                         radii,
@@ -837,7 +869,7 @@ impl Interpreter {
                     //
                     // RFC-0052: its `a11y_role:` is read once, for the focus
                     // rule and for a tab list or radio group to open.
-                    let declared = Self::declared_role(attrs);
+                    let declared = self.declared_role(attrs);
                     if element_name == "Button" {
                         if let Some(idx) = elem_idx.filter(|&i| {
                             self.router
@@ -1287,6 +1319,7 @@ impl Interpreter {
                 let paint_attrs = resolve_state_attrs(&p.attrs, &p.state_blocks, state, &|c| {
                     viewport_holds(c, self.viewport, &self.theme)
                 });
+                let paint_attrs = self.pick_keywords(paint_attrs);
                 let paint_attrs = paint_attrs.as_ref();
                 let own_transform = self.resolve_transform(paint_attrs, nav_rect);
                 let transform = inherited_transform.compose(&own_transform);
@@ -1424,6 +1457,7 @@ impl Interpreter {
                     let attrs = resolve_state_attrs(attrs, state_blocks, state, &|c| {
                         viewport_holds(c, self.viewport, &self.theme)
                     });
+                    let attrs = self.pick_keywords(attrs);
                     let attrs = attrs.as_ref();
                     let src_val = self
                         .binding_value(*src)
@@ -1832,6 +1866,113 @@ impl Interpreter {
                 }
             }
         }
+    }
+
+    /// RFC-0059: draws an element's `overlay` and its `outline`, in that order,
+    /// after its fill and backdrop pane and before its ripple and children.
+    ///
+    /// The overlay is a decorated quad over the element's own shape (rect, radii,
+    /// corner profile, transform and opacity), so it rounds with `radius` and
+    /// moves with the element; a colour with no alpha, and a ramp whose stops
+    /// have none, draw nothing. The outline is a ring stroked on the inside edge
+    /// of the rect grown by `offset + width`, with every round corner grown by
+    /// the same amount, so it sits outside the shape, follows `radius` as it
+    /// animates, and is not part of layout. An element that writes neither costs
+    /// two attribute scans.
+    #[allow(clippy::too_many_arguments)]
+    fn emit_overlay_and_outline(
+        &mut self,
+        attrs: &[Attr],
+        rect: crate::interp::intrinsics::Rect,
+        radii: [f32; 4],
+        smooth: f32,
+        transform: byard_core::frame::Transform,
+        opacity: f32,
+        frame: &mut byard_core::frame::RenderFrame,
+    ) {
+        let writes = |name: &str| attrs.iter().any(|a| a.name.as_str() == name);
+        if writes("overlay") {
+            if let Some((tint, ramp)) = self.resolve_overlay(attrs) {
+                frame.push_decorated(byard_core::frame::DecoratedBox {
+                    base: byard_core::BoxInstance {
+                        rect: [rect.x, rect.y, rect.w, rect.h],
+                        color: tint,
+                        radii,
+                        transform,
+                        smooth,
+                    },
+                    opacity,
+                    gradient: ramp,
+                    dirty: true,
+                    ..Default::default()
+                });
+            }
+        }
+        if writes("outline") {
+            let Some(color) = self.eval_color_prop(attrs, "outline") else {
+                return;
+            };
+            // The width and the offset are read whether or not the ring is
+            // visible, so a `with` on them keeps its place while the colour
+            // fades in.
+            #[allow(clippy::cast_possible_truncation)]
+            let (width, offset) = (
+                self.eval_float_prop(attrs, "outline_width")
+                    .map_or(2.0, |v| v as f32),
+                self.eval_float_prop(attrs, "outline_offset")
+                    .map_or(0.0, |v| v as f32),
+            );
+            let rgba = super::intrinsics::color_rgba_auto(color);
+            let grow = offset + width;
+            let (w, h) = (rect.w + 2.0 * grow, rect.h + 2.0 * grow);
+            if rgba[3] <= 0.0 || width <= 0.0 || w <= 0.0 || h <= 0.0 {
+                return;
+            }
+            frame.push_decorated(byard_core::frame::DecoratedBox {
+                base: byard_core::BoxInstance {
+                    rect: [rect.x - grow, rect.y - grow, w, h],
+                    color: [0.0; 4],
+                    radii: radii.map(|r| if r > 0.0 { (r + grow).max(0.0) } else { 0.0 }),
+                    transform,
+                    smooth,
+                },
+                border_width: width,
+                border_color: rgba,
+                opacity,
+                dirty: true,
+                ..Default::default()
+            });
+        }
+    }
+
+    /// The `overlay` an element writes: the tint it paints, or the ramp it paints
+    /// in its place. `None` when it paints nothing (no alpha anywhere).
+    ///
+    /// A tuple is a gradient and is read by the one parser `gradient:` uses,
+    /// through a `?:` and a `with` on the whole ramp; anything else is a colour,
+    /// read where every colour is, so `with`, keyframes and `.alpha(x with …)`
+    /// work on it.
+    fn resolve_overlay(
+        &mut self,
+        attrs: &[Attr],
+    ) -> Option<([f32; 4], Option<byard_core::frame::Gradient>)> {
+        let value = attrs.iter().find_map(|a| match (&a.name, &a.kind) {
+            (n, AttrKind::Prop { value }) if n.as_str() == "overlay" => Some(value),
+            _ => None,
+        })?;
+        let mut leaf = value;
+        while let Expr::Animated { value: inner, .. } = leaf {
+            leaf = inner;
+        }
+        let leaf = self.pick_gradient_leaf(leaf);
+        if matches!(leaf, Expr::Tuple(..)) {
+            let ramp = self.resolve_gradient_expr(value, 0.0)?;
+            let visible = ramp.from[3] > 0.0 || ramp.mid[3] > 0.0 || ramp.to[3] > 0.0;
+            return visible.then_some(([0.0; 4], Some(ramp)));
+        }
+        let packed = self.eval_color_expr(value)?;
+        let rgba = super::intrinsics::color_rgba_auto(packed);
+        (rgba[3] > 0.0).then_some((rgba, None))
     }
 
     /// Emits the RFC-0023 §2 backdrop-blur pane for one element, called from

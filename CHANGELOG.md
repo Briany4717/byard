@@ -12,6 +12,14 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A control's states written in the control.** `on hover { … }`, `on pressed { … }` and `on focus_visible { … }` can be written inside an element, among its children, as well as in a `style`. A state that animates an attribute with `with` animates it back when the state ends, so a pressed corner springs open on release without a `with` on the resting value. A held Space or Enter now shows `on pressed`, as a press of the pointer does. RFC-0059. See `examples/interaction_styles`.
+- **`outline`, `outline_width` and `outline_offset`.** A ring drawn outside the element's shape, following `radius`, taking no layout room and animating with `with`: a focus ring that no longer needs a sibling and a `var`.
+- **`overlay`.** A colour or gradient drawn over `bg` and under the children, clipped to the element's shape, and animated with `with`: the state layer of a Material control without a wrapping view.
+- **`a11y_role` from a value.** `a11y_role: toggle ? toggle_button : button`, a `let` or a parameter holding a role as text, so one root can be a toggle and a plain button. A word that is no role is still an error that names the closest one.
+- **`align` on `Text`.** `start`, `center`, `end` and `justify` place a text's lines inside its width; the attribute was accepted and did nothing. It can be chosen with `?:`, and a `Text` that does not write it is shaped as before.
+- **A keyword chosen with `?:`.** `align: on ? center : end`, and the same for `justify`, `direction`, `align_self`, `alignment`, `fit`, `axis`, `snap`, `transition`, `blur_quality` and a nested conditional, uses the word the condition picks and follows it; it was ignored without a word. Every word in it is checked.
+- **A state-only `with` animates back.** `on pressed { radius: 8 with anim.spring() }` now returns to the resting value on the same curve when the press ends; it used to snap back.
+- **`shadow` from a `let`, a `?:` or with a `with`.** A list of shadow tuples kept in a `let`, chosen between with `?:`, or followed by `with` is drawn, and a `with` moves it; a value that is no shadow is an error.
 - **`byard test`, and `byard shot --view`.** `shot --view Settings` draws a named view instead of `Main`, and `--wait MS` lets time pass between inputs. `byard test` runs a project's `tests/*.toml`: each test draws a view, taps, holds, hovers, presses keys and types, and checks the accessibility tree after any step. It needs no window and no GPU, so a package written only in Byld can test its own gallery in CI; `--shots DIR` also writes each test's picture where there is a GPU. RFC-0058.
 - **`shrink` on every flex child.** `shrink: 0` keeps a fixed-size child, such as a 24 wide icon beside a growing sibling, from being squeezed. It is `1` by default, and a `width` is still a size to start from and not a floor.
 - **`align_self` on every flex child** (`start`, `center`, `end`, `stretch`), to place one child across the axis whatever its parent's `align` says.
@@ -103,6 +111,9 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`typo:` chosen with `?:` keeps its font family and weight.** `typo: big ? t.titleLarge : t.labelLarge` drew in the default face at regular weight, with the right size.
+- **A `Box` with a `border` and no `bg` draws its border.** It drew nothing.
+- **A `ZStack` child with `grow: 1` or `align_self: stretch` fills the stack.** It came out a pixel wide.
 - Saving a file no longer reloads an empty program first: a save that truncates the file before writing it is read once, after the writing has stopped.
 - **Text reads the parameters of its view.** `Text("Aa") #[size: dim]` in a view with a
   `dim` parameter drew at the default size, and so did `weight`, `color`, `wrap` and `typo`

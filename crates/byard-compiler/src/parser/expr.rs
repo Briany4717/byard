@@ -259,7 +259,7 @@ impl Parser<'_> {
     /// True when the cursor is on an `on <state> { … }` interaction-state block
     /// (RFC-0016). `on` is a *contextual* keyword: it opens a state block only
     /// here (followed by an identifier), so nothing else that spells `on` breaks.
-    fn at_state_block(&self) -> bool {
+    pub(super) fn at_state_block(&self) -> bool {
         matches!(self.cur(), Some(Token::Ident(s)) if s.as_str() == "on")
             && matches!(self.peek2(), Some(Token::Ident(_)))
     }
@@ -268,7 +268,7 @@ impl Parser<'_> {
     /// selectors). Each unknown state name records an
     /// [`UnknownStyleState`](crate::diagnostics::CompileError::UnknownStyleState)
     /// but the block body is still consumed so parsing recovers cleanly.
-    fn parse_state_block(&mut self) -> Option<super::ast::StateBlock> {
+    pub(super) fn parse_state_block(&mut self) -> Option<super::ast::StateBlock> {
         use super::ast::StyleStateKind;
         let start = self.cur_span();
         self.advance(); // `on`

@@ -42,6 +42,16 @@ const STYLE_PROPS: &[(&str, &str)] = &[
     ("radius", "Len (border radius)"),
     ("opacity", "Float (0.0 to 1.0)"),
     ("border", "Color (border color)"),
+    ("outline", "Color (a ring outside the shape, RFC-0059)"),
+    ("outline_width", "Int (outline thickness, default 2)"),
+    (
+        "outline_offset",
+        "Int (gap between the edge and the outline)",
+    ),
+    (
+        "overlay",
+        "Color or gradient (drawn over bg, under the children, RFC-0059)",
+    ),
     ("shadow", "Str (shadow specification)"),
     ("ripple", "Color (ripple ink color, RFC-0023)"),
     ("ripple_active", "Bool (triggers the ripple, RFC-0023)"),

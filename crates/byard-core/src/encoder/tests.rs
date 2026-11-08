@@ -828,6 +828,7 @@ fn assert_f32_eq(actual: f32, expected: f32) {
 
 fn line(x: f32, y: f32, text: &str, font_size: f32, dirty: bool) -> TextLine {
     TextLine {
+        align: crate::frame::TextAlign::Start,
         weight: 400,
         family: None,
         variations: None,

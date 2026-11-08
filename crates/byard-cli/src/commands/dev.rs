@@ -758,6 +758,7 @@ fn render_error_overlay(frame: &mut RenderFrame, errors: &[CompileError], w: f32
         format!("Parse errors ({})", errors.len())
     };
     frame.push_text(TextLine {
+        align: byard_core::frame::TextAlign::Start,
         x,
         y,
         text: title,
@@ -773,6 +774,7 @@ fn render_error_overlay(frame: &mut RenderFrame, errors: &[CompileError], w: f32
     for err in &errors[..shown] {
         let headline = truncate_str(&err.headline(), OVERLAY_MAX_HEADLINE_CHARS);
         frame.push_text(TextLine {
+            align: byard_core::frame::TextAlign::Start,
             x,
             y,
             text: headline,
@@ -789,6 +791,7 @@ fn render_error_overlay(frame: &mut RenderFrame, errors: &[CompileError], w: f32
     if truncated {
         y += line_height * 0.3;
         frame.push_text(TextLine {
+            align: byard_core::frame::TextAlign::Start,
             x,
             y,
             text: format!("… and {} more error(s)", errors.len() - OVERLAY_MAX_ERRORS),
@@ -803,6 +806,7 @@ fn render_error_overlay(frame: &mut RenderFrame, errors: &[CompileError], w: f32
     }
 
     frame.push_text(TextLine {
+        align: byard_core::frame::TextAlign::Start,
         x,
         y: y + line_height * 0.6,
         text: "Fix the file and save to dismiss, the last good view is behind this.".to_string(),

@@ -1033,3 +1033,88 @@ fn a_wrapped_paragraph_keeps_its_wrap_width_when_aligned() {
     assert_eq!(align, byard_core::frame::TextAlign::Justify);
     assert_eq!(wrap, Some(150.0));
 }
+
+// ── a disabled element has no interaction states ────────────────────────
+
+const DISABLED_PILL: &str = "View Main() { var n = 0 var off = true \
+    Column #[width: 400, p: 20] { \
+    Box #[bg: 0x6750A4, radius: 20, width: 120, height: 40, a11y_role: button, \
+          disabled: off, tap => n += 1] { \
+        on hover { overlay: 0x14FFFFFF } \
+        on pressed { overlay: 0x1AFFFFFF, radius: 8 } \
+        on focus_visible { outline: 0xD0BCFF, outline_width: 3, outline_offset: 2 } \
+        on disabled { overlay: 0x05FFFFFF } \
+    } } }";
+
+#[test]
+fn a_disabled_element_is_never_hovered_pressed_or_focused() {
+    let mut app = App::new(DISABLED_PILL);
+    let at = centre(&app, 120.0, 40.0);
+    let resting = 5.0 / 255.0;
+    assert!(
+        (overlay_alpha(&app) - resting).abs() < 0.01,
+        "on disabled applies"
+    );
+
+    app.hover(at);
+    assert!(
+        (overlay_alpha(&app) - resting).abs() < 0.01,
+        "no hover tint on a disabled element"
+    );
+    app.press(at);
+    assert!(
+        (overlay_alpha(&app) - resting).abs() < 0.01,
+        "no pressed tint"
+    );
+    assert!(
+        approx(app.boxed(120.0, 40.0).radii[0], 20.0),
+        "no pressed radius"
+    );
+    app.release(at);
+    app.key("Tab");
+    app.key_down("Space");
+    assert!(!has_ring(&app), "Tab skips it");
+    assert!(
+        (overlay_alpha(&app) - resting).abs() < 0.01,
+        "a held key doesn't press it"
+    );
+    app.key_up("Space");
+    assert_eq!(app.int("n"), 0);
+
+    // Enabled again, the same pointer over it hovers it.
+    app.set_bool("off", false);
+    app.hover(at);
+    assert!(
+        (overlay_alpha(&app) - 20.0 / 255.0).abs() < 0.01,
+        "hover tint once enabled"
+    );
+}
+
+#[test]
+fn a_block_for_disabled_and_hover_is_an_error() {
+    for state in ["hover", "pressed", "focused", "focus_visible", "dragging"] {
+        let src = format!(
+            "View Main() {{ Box #[width: 10, height: 10, disabled: true] {{ \
+             on disabled+{state} {{ overlay: 0x14FFFFFF }} }} }}"
+        );
+        let errors = parse(&src).errors;
+        assert_eq!(errors.len(), 1, "{state}: {}", messages(&errors));
+        assert_eq!(errors[0].kind(), "DisabledStateNeverMet", "{state}");
+        assert!(
+            errors[0]
+                .headline()
+                .contains(&format!("on disabled+{state}")),
+            "{}",
+            errors[0].headline()
+        );
+    }
+    // In either order.
+    let errors = parse(
+        "View Main() { Box #[disabled: true] { on hover+disabled { overlay: 0x14FFFFFF } } }",
+    )
+    .errors;
+    assert_eq!(errors.len(), 1, "{}", messages(&errors));
+    // `disabled` with a state a disabled element can have is fine.
+    let errors = parse("View Main() { Box #[disabled: true, selected: true] { on disabled+selected { overlay: 0x14FFFFFF } } }").errors;
+    assert!(errors.is_empty(), "{}", messages(&errors));
+}

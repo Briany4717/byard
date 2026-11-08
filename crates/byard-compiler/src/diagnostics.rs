@@ -645,6 +645,15 @@ pub enum CompileError {
         /// The closest known state, if one is near (D4-style suggestion).
         hint: Option<String>,
     },
+    /// An `on disabled+hover { … }` block (or `pressed`, `focused`,
+    /// `focus_visible`, `dragging`): a disabled element never is any of those,
+    /// so the block could never apply (RFC-0059).
+    DisabledStateNeverMet {
+        /// Source range of the block.
+        span: Span,
+        /// The state that can't be true together with `disabled`.
+        state: &'static str,
+    },
     /// A `use` declaration appeared after the first `View`, imports are legal
     /// only at file top (RFC-0008 Pillar A).
     ImportAfterView {
@@ -1335,6 +1344,7 @@ impl CompileError {
             | Self::InvalidAnimation { span, .. }
             | Self::NotAStyle { span }
             | Self::UnknownStyleState { span, .. }
+            | Self::DisabledStateNeverMet { span, .. }
             | Self::ImportAfterView { span }
             | Self::UnknownPackage { span, .. }
             | Self::UnknownImportSymbol { span, .. }
@@ -1455,6 +1465,7 @@ impl CompileError {
             | Self::InvalidAnimation { span, .. }
             | Self::NotAStyle { span }
             | Self::UnknownStyleState { span, .. }
+            | Self::DisabledStateNeverMet { span, .. }
             | Self::ImportAfterView { span }
             | Self::UnknownPackage { span, .. }
             | Self::UnknownImportSymbol { span, .. }
@@ -1577,6 +1588,7 @@ impl CompileError {
             Self::InvalidAnimation { .. } => "InvalidAnimation",
             Self::NotAStyle { .. } => "NotAStyle",
             Self::UnknownStyleState { .. } => "UnknownStyleState",
+            Self::DisabledStateNeverMet { .. } => "DisabledStateNeverMet",
             Self::ImportAfterView { .. } => "ImportAfterView",
             Self::UnknownPackage { .. } => "UnknownPackage",
             Self::UnknownImportSymbol { .. } => "UnknownImportSymbol",
@@ -1981,6 +1993,15 @@ impl CompileError {
                     "unknown interaction state `{name}` (expected hover/pressed/focused/disabled)"
                 ),
                 hint.as_deref(),
+            ),
+            Self::DisabledStateNeverMet { state, .. } => format!(
+                "`on disabled+{state}` never applies: a disabled element is never \
+                 {}; write `on disabled` for how it looks",
+                match *state {
+                    "focus_visible" => "focused",
+                    "hover" => "hovered",
+                    other => other,
+                }
             ),
             Self::TooManyKeyframes { found, .. } => format!(
                 "`anim.keyframes` takes at most {} steps, found {found}",

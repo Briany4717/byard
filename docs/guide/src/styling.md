@@ -310,7 +310,7 @@ View Main() {
 | `pressed` | A press is on it |
 | `focused` | It has keyboard focus, however it got there |
 | `focus_visible` | It has focus, and the keyboard put it there (Tab, an arrow key in a tab list or radio group), or it is a `TextField`. A mouse press does not set it |
-| `disabled` | It has `disabled: true` |
+| `disabled` | It has `disabled: true`. A disabled element is never hovered, pressed, focused or dragged, so only `on disabled` applies to it |
 | `checked` | A `Checkbox` or `Toggle` is on |
 | `selected` | It has `selected: true`, for a tab, a chip, a list item |
 | `invalid` | It has `invalid: true` |
@@ -332,6 +332,22 @@ View Main() {
 
 ```diagnostic
 error[UnknownStyleState]: unknown interaction state `hovr`
+```
+
+A disabled element is only `disabled`: it stops its handlers, Tab skips it, and
+no `on hover` or `on pressed` tints it. So a block that asks for both can never
+apply, and says so:
+
+```byld,fails
+View Main() {
+    Box #[disabled: true] {
+        on disabled+hover { overlay: 0x14FFFFFF }
+    }
+}
+```
+
+```diagnostic
+error[DisabledStateNeverMet]: `on disabled+hover` never applies: a disabled element is never hovered; write `on disabled` for how it looks
 ```
 
 `focused` is true after a click as well as after Tab. A ring that should show for the

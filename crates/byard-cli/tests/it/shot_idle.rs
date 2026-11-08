@@ -112,3 +112,21 @@ fn input_then_rest_draws_the_same_picture() {
         &["--at", "1500", "--tap", "100,100", "--type", "hi"],
     );
 }
+
+#[test]
+fn a_wait_between_inputs_draws_the_same_picture() {
+    // The ripple is over before the wait ends, so the wait skips its rest, and
+    // the second tap must land at the same time as when every frame is drawn.
+    same_either_way(
+        "ripple",
+        &[
+            "--at", "1500", "--tap", "100,100", "--wait", "700", "--tap", "120,100",
+        ],
+    );
+    same_either_way(
+        "text_editing",
+        &[
+            "--at", "1500", "--tap", "100,100", "--wait", "1000", "--type", "hi",
+        ],
+    );
+}

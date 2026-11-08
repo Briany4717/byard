@@ -358,11 +358,12 @@ fn announce_scheme(interp: &mut Interpreter, dark: bool) {
 
 /// Whether another frame could draw something this one did not: something
 /// animating, a measure to settle, a field being generated, a timer or a call
-/// that will answer.
+/// that will answer, from Byld or from a native view.
 fn is_busy(interp: &Interpreter) -> bool {
     interp.needs_another_frame()
         || interp.has_background_work()
         || interp.outstanding_continuations() > 0
+        || interp.outstanding_native_requests() > 0
 }
 
 /// The offscreen texture a shot is drawn into, and the encoder that draws it.

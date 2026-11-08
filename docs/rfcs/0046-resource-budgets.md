@@ -131,4 +131,4 @@ it guards nothing.
 ## Future possibilities
 
 Memory high-water mark per frame; the same budgets for the CLI's `check` on a
-large project; a dedicated benchmark runner.
+large project (the `[check]` ceilings in `ci/budgets.toml` are a start: a thousand calls of one view against ten); a dedicated benchmark runner.

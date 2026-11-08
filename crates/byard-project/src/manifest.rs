@@ -1376,6 +1376,23 @@ pub fn is_inside_package(path: &str) -> bool {
         })
 }
 
+/// Reads a file straight into the `Arc` every user of it shares.
+///
+/// `std::fs::read` into a `Vec` and then `Arc::from` allocates the file twice
+/// and copies it once, which for the 15 MB Material Symbols font was as long
+/// as the read. The `Arc` is sized from the file, filled in place, and never
+/// copied.
+fn read_shared(path: &Path) -> std::io::Result<std::sync::Arc<[u8]>> {
+    use std::io::Read;
+    let mut file = std::fs::File::open(path)?;
+    let len = usize::try_from(file.metadata()?.len())
+        .map_err(|_| std::io::Error::other("the file is too large"))?;
+    let mut bytes: std::sync::Arc<[u8]> = std::sync::Arc::from(vec![0u8; len]);
+    let buffer = std::sync::Arc::get_mut(&mut bytes).expect("a new Arc has one owner");
+    file.read_exact(buffer)?;
+    Ok(bytes)
+}
+
 /// Reads one `[assets.fonts]` entry's bytes and resolves the family name the
 /// face carries (RFC-0034 §Reference "Asset side").
 ///
@@ -1386,13 +1403,13 @@ pub fn is_inside_package(path: &str) -> bool {
 /// can tell a missing file from a font that simply looks like that.
 fn load_font(family: &str, path: &str, project_root: &Path) -> Result<DeclaredFont, String> {
     let full = project_root.join(path);
-    let bytes = std::fs::read(&full).map_err(|e| {
+    let unreadable = |e: std::io::Error| {
         format!(
             "byard.toml: [assets.fonts] `{family}` points at `{}`, which could not be read: {e}",
             full.display()
         )
-    })?;
-    let bytes: std::sync::Arc<[u8]> = std::sync::Arc::from(bytes);
+    };
+    let bytes = read_shared(&full).map_err(unreadable)?;
     let resolved = byard_core::text::family_name(&bytes).ok_or_else(|| {
         format!(
             "byard.toml: [assets.fonts] `{family}` points at `{}`, which is not a font file this build can read",

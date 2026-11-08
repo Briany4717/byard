@@ -110,6 +110,12 @@ including what is not on screen at the start: a tab that is not the active one, 
 route the first path does not match, both arms of a `when`, the body of a `for`
 over a list that has not loaded yet. It is what CI runs.
 
+Every call of a view is checked against the view: its arguments, the block it
+is given, the callbacks it takes. The view's body is lowered once for each way
+of writing the call (the same arguments, with the text or number in a literal
+being whatever it is), not once per call, so a screen with two hundred buttons
+checks in about the time of one.
+
 ```text
 →    checking /home/ada/hello/main.byd
 ok   0 errors                                                              101ms
@@ -209,6 +215,10 @@ picture. Every test of a screen can pass while the screen is wrong.
 | `--type <TEXT>` | none | Type text before the picture. Repeatable |
 | `--wait <MS>` | none | Let app time pass before the next input or the picture. Repeatable |
 | `--a11y <FILE>` | none | Write the accessibility tree as text. See [accessibility](accessibility.md) |
+
+`--at` runs 16 ms frames, but only while something moves. When two frames in a row
+ask for no more, the shot goes to its last frame, which is the picture it would
+have drawn; set `BYARD_SHOT_EVERY_FRAME=1` to draw them all.
 
 Taps are how you reach a screen that needs a press. This opens the second tab of
 an app, at logical point 120, 840, and draws it dark and wide:

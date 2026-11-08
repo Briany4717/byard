@@ -120,6 +120,10 @@ fn pointer_event(kind: EventKind, x: f32, y: f32, time_ms: u64) -> InputEvent {
     }
 }
 
+/// When set, `byard shot` draws every 16 ms frame up to `--at`, even once the
+/// app is at rest. The output is the same; a test compares the two.
+const SHOT_EVERY_FRAME: &str = "BYARD_SHOT_EVERY_FRAME";
+
 /// What `byard shot` was asked to render.
 pub struct ShotArgs<'a> {
     /// The project directory, `byard.toml` or `.byd`; the current project
@@ -250,6 +254,8 @@ pub struct Scene {
     now: u32,
     size: (f32, f32),
     access: bool,
+    /// Off under `BYARD_SHOT_EVERY_FRAME`: see [`Scene::run_to`].
+    skip_idle: bool,
 }
 
 /// What a [`Scene`] starts as.
@@ -301,6 +307,7 @@ impl Scene {
             now: 0,
             size,
             access: options.access,
+            skip_idle: std::env::var_os(SHOT_EVERY_FRAME).is_none(),
         };
         scene.frame_with(&[]);
         Ok(scene)
@@ -323,10 +330,7 @@ impl Scene {
     /// Does one step: one frame, or for a wait, as many as the time takes.
     pub fn apply(&mut self, what: &Step) {
         if let Step::Wait(ms) = what {
-            let until = self.now + ms;
-            while self.now < until {
-                self.frame_with(&[]);
-            }
+            self.run_to(self.now + ms);
             return;
         }
         let events = what.events(self.now);
@@ -336,10 +340,32 @@ impl Scene {
     /// Runs frames until `at_ms` of app time has passed, then once more at
     /// rest, so a mesh or an image that landed a frame late is in.
     pub fn settle(&mut self, at_ms: u32) {
-        while self.now < at_ms {
-            self.frame_with(&[]);
-        }
+        self.run_to(at_ms);
         self.frame_with(&[]);
+    }
+
+    /// Runs frames with no input until `until` ms of app time.
+    ///
+    /// A picture of an app at rest does not need 90 frames of it. Once two
+    /// frames in a row ask for no more (no animation in flight, no timer or
+    /// call waiting, nothing being measured), the ones that follow would draw
+    /// what these drew, so the clock goes to where the loop would have ended,
+    /// on the same 16 ms grid. No input arrives in between, so no skipped
+    /// frame can be the one something happens in. `BYARD_SHOT_EVERY_FRAME`
+    /// draws them all, which is how a test checks the two agree.
+    fn run_to(&mut self, until: u32) {
+        let mut still = 0_u32;
+        while self.now < until {
+            self.frame_with(&[]);
+            still = if self.interp.needs_another_frame() || self.interp.has_background_work() {
+                0
+            } else {
+                still + 1
+            };
+            if self.skip_idle && still >= 2 && self.now < until {
+                self.now += (until - self.now).div_ceil(16) * 16;
+            }
+        }
     }
 
     /// The last frame.

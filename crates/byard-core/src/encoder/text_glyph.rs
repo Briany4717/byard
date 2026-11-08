@@ -1006,10 +1006,17 @@ mod tests {
 
     /// The left and right edge of the first laid-out run of `text` shaped to
     /// `wrap`, aligned as `align` says.
+    ///
+    /// Shaped with the one font the tree ships, not the system's: where a line
+    /// breaks depends on the face, and a machine whose sans-serif is wider or
+    /// narrower would move the break the assertions are about.
     fn first_run_edges(align: crate::frame::TextAlign, text: &str, wrap: f32) -> (f32, f32) {
-        let mut fs = FontSystem::new();
+        let mut db = glyphon::fontdb::Database::new();
+        db.load_font_data(DISPLAY_FONT.to_vec());
+        let mut fs = FontSystem::new_with_locale_and_db("en-US".into(), db);
         let mut buf = Buffer::new(&mut fs, Metrics::new(20.0, 24.0));
         let mut l = line(text, 20.0);
+        l.family = Some(std::sync::Arc::from("Space Grotesk"));
         l.align = align;
         shape_line(&mut fs, &mut buf, &l, Some(wrap), 0);
         let run = buf.layout_runs().next().expect("a run");
@@ -1044,7 +1051,9 @@ mod tests {
         let text = "the quick brown fox jumps over the lazy dog and keeps running far away";
         let (_, start_r) = first_run_edges(Start, text, 200.0);
         let (justify_l, justify_r) = first_run_edges(Justify, text, 200.0);
-        assert!(start_r < 195.0, "ragged at the end, got {start_r}");
+        // In Space Grotesk at 20 px the first line ends near 194: short of
+        // the edge, so justify has room to show it spreads the words.
+        assert!(200.0 - start_r > 3.0, "ragged at the end, got {start_r}");
         assert!(
             justify_l < 1.0 && (justify_r - 200.0).abs() < 1.0,
             "{justify_l}..{justify_r}"

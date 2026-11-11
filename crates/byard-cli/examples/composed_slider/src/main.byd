@@ -1,0 +1,60 @@
+// A slider made of Boxes, with the pointer and the keyboard (RFC-0063).
+//
+// One composed control: a `Row` with the role `slider`, a filled part, a thumb
+// and the rest of the track. It needs no invisible built-in `Slider` laid over
+// it to get the pointer: `pointer_down(e)` and `drag(e)` say where in the Row
+// the pointer is (`e.x`, `e.width`), and `key_down` takes Home, End and the
+// arrows because `focus =>` makes the Row a stop in the Tab order.
+//
+// Run these from the repo root. No window is opened, and no GPU is needed for
+// the text dumps.
+//
+//   1. The slider at rest, 40 percent:
+//        cargo run -p byard-cli -- shot crates/byard-cli/examples/composed_slider -o rest.png
+//   2. A press at 100,80 jumps there, and the drag moves the thumb with the pointer:
+//        cargo run -p byard-cli -- shot crates/byard-cli/examples/composed_slider \
+//            --hold 100,80 --hover 200,80 --release 200,80 -o drag.png
+//   3. Tab, then End: the ring the keyboard draws, and the value at 100:
+//        cargo run -p byard-cli -- shot crates/byard-cli/examples/composed_slider \
+//            --key Tab --key End -o end.png
+//   4. What a screen reader is told, role, name, value and description:
+//        cargo run -p byard-cli -- shot crates/byard-cli/examples/composed_slider \
+//            --key Tab --a11y tree.txt
+//
+// `byard test crates/byard-cli/examples/composed_slider` runs tests/slider.toml.
+View Main() {
+    var value = 0.4
+
+    Column #[bg: 0x14141C, p: 24, gap: 18, width: 360, grow: 1] {
+        Text("Volume {(value * 100).round()}") #[font: body, color: 0xE6E1E5, size: 18, width: 312]
+
+        Row #[
+            a11y_role: slider,
+            a11y_label: "Volume",
+            a11y_value: "{(value * 100).round()} percent",
+            a11y_description: "Drag, or use the arrow keys, Home and End",
+            width: 312,
+            height: 40,
+            align: center,
+            focus => {},
+            pointer_down(e) => value = (e.x / e.width).max(0).min(1),
+            drag(e) => value = (e.x / e.width).max(0).min(1),
+            key_down(k) => {
+                if k == "ArrowRight" { value = (value + 0.05).min(1) }
+                if k == "ArrowUp" { value = (value + 0.05).min(1) }
+                if k == "ArrowLeft" { value = (value - 0.05).max(0) }
+                if k == "ArrowDown" { value = (value - 0.05).max(0) }
+                if k == "Home" { value = 0 }
+                if k == "End" { value = 1 }
+            },
+        ] {
+            on focus_visible { outline: 0xD0BCFF, outline_width: 3, outline_offset: 2, radius: 4 }
+
+            Box #[width: 8 + value * 280, height: 6, radius: 3, bg: 0xD0BCFF]
+            Box #[width: 24, height: 24, radius: 12, bg: 0xD0BCFF]
+            Box #[grow: 1, height: 6, radius: 3, bg: 0x49454F]
+        }
+
+        Text("Press, drag and release on the track. Tab, then Home, End or an arrow.") #[font: body, color: 0xCAC4D0, size: 14, width: 312]
+    }
+}

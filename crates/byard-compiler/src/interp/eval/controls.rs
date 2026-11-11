@@ -638,11 +638,28 @@ impl Interpreter {
                         ctx.write_signal(sig, Value::Float(val));
                     })
                 };
+            // RFC-0063 §3: what the element wrote runs too, and for the kinds
+            // the slider handles itself it runs first, from the one handler
+            // the router fires per kind.
+            self.register_event_attrs_except(
+                attrs,
+                hit_rect,
+                rect,
+                elem_idx,
+                &["pointer_down", "key_down", "change"],
+            );
+            let mut user_down = self.user_actions(attrs, "pointer_down", hit_rect, rect);
+            let mut slider_down = make_drag_action(min_f, max_f, step_f);
             self.router.on(
                 idx,
                 hit_rect,
                 super::events::EventKind::PointerDown,
-                make_drag_action(min_f, max_f, step_f),
+                Box::new(move |ctx, p| {
+                    for a in &mut user_down {
+                        a(ctx, p);
+                    }
+                    slider_down(ctx, p);
+                }),
             );
             self.router.on(
                 idx,
@@ -653,22 +670,32 @@ impl Interpreter {
             // Change write-back (RFC-0003 E1), as the other value widgets
             // have: the way a value set from outside the pointer, an
             // assistive technology (RFC-0042), reaches the `var`.
+            let mut user_change = self.user_actions(attrs, "change", hit_rect, rect);
             self.router.on(
                 idx,
                 hit_rect,
                 super::events::EventKind::Change,
-                super::events::write_back_action(sig),
+                Box::new(move |ctx, p| {
+                    for a in &mut user_change {
+                        a(ctx, p);
+                    }
+                    super::events::write_back_action(sig)(ctx, p);
+                }),
             );
 
             // Arrow keys step the value while it has focus (WAI-ARIA slider
             // pattern): by `step:`, or a tenth of the range without one.
             let key_step = step_f.unwrap_or((max_f - min_f) / 10.0);
             let decimals = step_f.map_or(SLIDER_DEFAULT_DECIMALS, step_decimals);
+            let mut user_key = self.user_actions(attrs, "key_down", hit_rect, rect);
             self.router.on(
                 idx,
                 hit_rect,
                 super::events::EventKind::KeyDown,
                 Box::new(move |ctx, payload| {
+                    for a in &mut user_key {
+                        a(ctx, payload);
+                    }
                     let Some(Value::Str(key)) = payload else {
                         return;
                     };
@@ -692,6 +719,7 @@ impl Interpreter {
             let fsig = self.focus_signal(attrs);
             self.router.focusable(idx, hit_rect, fsig);
         } else {
+            self.register_event_attrs(attrs, hit_rect, rect, elem_idx);
             self.register_focusable(attrs, hit_rect, elem_idx);
         }
     }

@@ -726,6 +726,12 @@ impl Interpreter {
     /// state; a switch it names has no state of its own to default to, so an
     /// author's switch with no `a11y_checked` is off.
     fn apply_declared(&mut self, node: &mut AccessNode, attrs: &[Attr], built_in: bool) {
+        if let Some(text) = self
+            .eval_str_prop(attrs, "a11y_description")
+            .filter(|t| !t.is_empty())
+        {
+            node.description = Some(text);
+        }
         if let Some(text) = self.eval_str_prop(attrs, "a11y_value") {
             node.value = Some(AccessValue::Text(text));
         }

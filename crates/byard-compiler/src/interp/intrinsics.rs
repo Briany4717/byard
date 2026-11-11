@@ -335,6 +335,11 @@ const POINTER_EVENTS: &[&str] = &[
     "double_tap",
     "secondary",
     "wheel",
+    // RFC-0063: a press that has moved past the tap slop, delivered to the
+    // element it began on.
+    "drag_start",
+    "drag",
+    "drag_end",
     // `focus =>`/`blur =>` sugar (RFC-0012 S2) makes *any* interactive
     // element focusable on demand (`register_focusable` creates a fresh
     // internal `focused_sig` when `focused:` wasn't given), so, unlike
@@ -428,6 +433,9 @@ fn add_universal(m: &mut HashMap<&'static str, PropDef>) {
     // a misspelling is a check error with the closest word.
     m.insert("a11y_role", pnt(PropType::Enum(&AccessRole::KEYWORDS)));
     m.insert("a11y_value", pnt(PropType::Str));
+    // RFC-0063: what a reader says after the name, a field's supporting or
+    // error text.
+    m.insert("a11y_description", pnt(PropType::Str));
     for flag in [
         "a11y_checked",
         "a11y_mixed",
@@ -446,6 +454,70 @@ fn events_from(focusable: bool, extra: &[&'static str]) -> HashSet<&'static str>
     }
     s.extend(extra.iter().copied());
     s
+}
+
+/// Whether a role puts an element with a `tap` into the Tab order (RFC-0052
+/// §2): the roles marked "focus implied".
+#[must_use]
+pub fn role_implies_focus(role: AccessRole) -> bool {
+    matches!(
+        role,
+        AccessRole::Button
+            | AccessRole::ToggleButton
+            | AccessRole::Switch
+            | AccessRole::CheckBox
+            | AccessRole::RadioButton
+            | AccessRole::Tab
+            | AccessRole::MenuItem
+            | AccessRole::Link
+    )
+}
+
+/// Whether an `a11y_role:` value can be a role that implies focus. A keyword
+/// is read as it is; a `?:` counts if either branch can be one; anything the
+/// checker cannot read (a `let`, a parameter) is given the benefit of the
+/// doubt, as the run-time rule decides it (RFC-0063 §1).
+fn role_value_may_take_focus(value: &Expr) -> bool {
+    let word = match value {
+        Expr::Ident(sym, _) => Some(sym.as_str()),
+        Expr::StrLit(parts, _) => match parts.as_slice() {
+            [StrPart::Text(s)] => Some(s.as_str()),
+            _ => return true,
+        },
+        Expr::Ternary { then, els, .. } => {
+            return role_value_may_take_focus(then) || role_value_may_take_focus(els);
+        }
+        _ => return true,
+    };
+    // A bare word that is no role is reported on its own; here it is just not
+    // one that takes focus. A name the program binds is a value.
+    word.and_then(AccessRole::from_keyword)
+        .is_some_and(role_implies_focus)
+}
+
+/// Whether the attributes make the element a stop in the Tab order, so that
+/// the keyboard reaches it and `key_down`/`key_up` can ever run (RFC-0063 §1):
+/// a `focus` or `blur` handler, a `focused:` binding, or a `tap` with a role
+/// that implies focus.
+fn focus_reachable(attrs: &[Attr]) -> bool {
+    let mut tap = false;
+    let mut role_focus = false;
+    for a in attrs {
+        match &a.kind {
+            AttrKind::Event { .. } => match a.name.as_str() {
+                "focus" | "blur" => return true,
+                "tap" | "click" => tap = true,
+                _ => {}
+            },
+            AttrKind::Prop { value } => match a.name.as_str() {
+                "focused" => return true,
+                "a11y_role" => role_focus = role_value_may_take_focus(value),
+                _ => {}
+            },
+            AttrKind::Spread { .. } => {}
+        }
+    }
+    tap && role_focus
 }
 
 /// Parses a `Grid` `columns:`/`rows:` template string (RFC-0018) into engine
@@ -1277,6 +1349,24 @@ pub fn validate_element_in(
         let prop_def = info.props.get(an).copied();
         let prop_ty = prop_def.map(|d| d.ty);
         let is_event = info.events.contains(an);
+
+        // RFC-0063 §1: a key event is accepted on any element the keyboard
+        // can reach, not only on the built-in controls that are focusable by
+        // default. On one it cannot, the error says how to make it reachable.
+        if !is_event
+            && prop_ty.is_none()
+            && KEY_EVENTS.contains(&an)
+            && matches!(attr.kind, AttrKind::Event { .. })
+        {
+            if !focus_reachable(attrs) {
+                errs.push(CompileError::KeyNeedsFocus {
+                    span: attr.span,
+                    element: name.to_string(),
+                    name: an.to_string(),
+                });
+            }
+            continue;
+        }
 
         if prop_ty.is_none() && !is_event {
             // Rule 4, unknown attribute.

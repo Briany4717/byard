@@ -81,18 +81,27 @@ string and `a11y_hidden` a bool.
 ## Controls you build from a Box
 
 A `Switch` or a `Tab` that a package draws from a `Box` has no role of its own. Left alone,
-a reader hears "button", with no state, for anything with a `tap`. Seven more attributes, on
+a reader hears "button", with no state, for anything with a `tap`. Eight more attributes, on
 any element, say what the control is:
 
 | Attribute | Type | What a reader is told |
 |-----------|------|-----------------------|
 | `a11y_role` | a keyword, below | What it is |
 | `a11y_value` | `Str` | Its value as text, such as `"40 percent"` |
+| `a11y_description` | `Str` | What it says after the name: a field's supporting or error text |
 | `a11y_checked` | `Bool` | On or off, for a `switch`, `checkbox`, `radio` and `toggle_button` |
 | `a11y_mixed` | `Bool` | Neither: the mixed state of a checkbox. Wins over `a11y_checked` |
 | `a11y_selected` | `Bool` | Selected, for a `tab` or a `list_item` |
 | `a11y_expanded` | `Bool` | Expanded when true, collapsed when false. Leave it out if it does not expand |
 | `a11y_disabled` | `Bool` | Disabled, for a reader only. `disabled:` does this and stops input too |
+
+`a11y_description` is read on an element that is in the tree, one with a role, a built-in
+control or a `Text`; a plain `Box` with none is not. `byard shot --a11y` prints it after
+the name:
+
+```text
+TextInput "Email" description "Enter a valid address" = "ada@" [focusable]
+```
 
 `a11y_checked` is a `Bool` and the mixed state its own attribute, so the common case is
 `a11y_checked: on`, an expression you already have, and the rare one is a second line.

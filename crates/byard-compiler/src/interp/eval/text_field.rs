@@ -364,7 +364,7 @@ impl Interpreter {
         // written on the field are registered first (pointer events, focus,
         // blur, key_up reach them as on any element) and the ones that share
         // a kind with the field's own editing are folded into it below.
-        self.register_event_attrs(attrs, hit_rect, elem_idx);
+        self.register_event_attrs(attrs, hit_rect, rect, elem_idx);
         let on_edit = self.field_actions(attrs, &["input", "change"]);
         let on_typed = self.field_actions(attrs, &["text_input"]);
         let on_key = self.field_actions(attrs, &["key_down"]);

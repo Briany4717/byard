@@ -260,14 +260,64 @@ impl Interpreter {
         out
     }
 
+    /// The actions written for the event `name`, lowered, each given the
+    /// pointer value when it names one (RFC-0063 §3).
+    pub(super) fn user_actions(
+        &mut self,
+        attrs: &[Attr],
+        name: &str,
+        _hit_rect: crate::interp::intrinsics::Rect,
+        bounds: crate::interp::intrinsics::Rect,
+    ) -> Vec<super::events::Action> {
+        let kind = match name {
+            "pointer_down" => super::events::EventKind::PointerDown,
+            _ => super::events::EventKind::KeyDown,
+        };
+        let mut out = Vec::new();
+        for attr in attrs {
+            if let AttrKind::Event { payload, action } = &attr.kind {
+                if attr.name.as_str() == name {
+                    if let Ok(lowered) = self.lower_action(action, payload.clone()) {
+                        out.push(if payload.is_some() {
+                            self.with_pointer_value(lowered, kind, bounds)
+                        } else {
+                            lowered
+                        });
+                    }
+                }
+            }
+        }
+        out
+    }
+
     pub(super) fn register_event_attrs(
         &mut self,
         attrs: &[Attr],
         hit_rect: crate::interp::intrinsics::Rect,
+        bounds: crate::interp::intrinsics::Rect,
         elem_idx: Option<u32>,
+    ) {
+        self.register_event_attrs_except(attrs, hit_rect, bounds, elem_idx, &[]);
+    }
+
+    /// [`register_event_attrs`](Self::register_event_attrs) leaving out the
+    /// events in `skip`, for a widget that composes those with its own.
+    ///
+    /// `bounds` is the element's own rectangle where it is drawn, which is
+    /// what a pointer handler's `e.x` is relative to (RFC-0063 §2).
+    pub(super) fn register_event_attrs_except(
+        &mut self,
+        attrs: &[Attr],
+        hit_rect: crate::interp::intrinsics::Rect,
+        bounds: crate::interp::intrinsics::Rect,
+        elem_idx: Option<u32>,
+        skip: &[&str],
     ) {
         for attr in attrs {
             if let AttrKind::Event { payload, action } = &attr.kind {
+                if skip.contains(&attr.name.as_str()) {
+                    continue;
+                }
                 let event_kind = match attr.name.as_str() {
                     "tap" | "click" => super::events::EventKind::Tap, // "click" is an alias (RFC-0012 §A)
                     "pointer_down" => super::events::EventKind::PointerDown,
@@ -293,6 +343,10 @@ impl Interpreter {
                     "long_press" => super::events::EventKind::LongPress,
                     "double_tap" => super::events::EventKind::DoubleTap,
                     "secondary" => super::events::EventKind::Secondary,
+                    // RFC-0063: a press that moved past the tap slop.
+                    "drag_start" => super::events::EventKind::DragStart,
+                    "drag" => super::events::EventKind::Drag,
+                    "drag_end" => super::events::EventKind::DragEnd,
                     // RFC-0012 S2: `focus =>`/`blur =>` sugar over `focused_sig`'s
                     // edges, registered as ordinary handlers here; `steal_focus`
                     // fires them directly (see `interp::events::EventKind::Focus`).
@@ -301,12 +355,61 @@ impl Interpreter {
                     _ => continue,
                 };
                 if let Ok(closure) = self.lower_action(action, payload.clone()) {
+                    // RFC-0063: a handler that names the value is given the
+                    // pointer; one that does not is registered as it is.
+                    let closure = if payload.is_some() {
+                        self.with_pointer_value(closure, event_kind, bounds)
+                    } else {
+                        closure
+                    };
                     if let Some(idx) = elem_idx {
                         self.router.on(idx, hit_rect, event_kind, closure);
                     }
                 }
             }
         }
+    }
+
+    /// Wraps `inner` so that it is called with a `PointerEvent` (or, for a
+    /// drag event, a `DragEvent`) record (RFC-0063 §2): the pointer relative
+    /// to `bounds`, the ancestors' transform undone. Other kinds are returned
+    /// as they came.
+    pub(super) fn with_pointer_value(
+        &self,
+        mut inner: super::events::Action,
+        kind: super::events::EventKind,
+        bounds: crate::interp::intrinsics::Rect,
+    ) -> super::events::Action {
+        use super::events::EventKind as K;
+        let drag = match kind {
+            K::DragStart | K::Drag | K::DragEnd => true,
+            K::PointerDown
+            | K::PointerUp
+            | K::PointerMove
+            | K::PointerEnter
+            | K::PointerExit
+            | K::Hover => false,
+            _ => return inner,
+        };
+        let frame = self.router.current_frame();
+        let names = ["x", "y", "width", "height", "dx", "dy"].map(crate::symbol::Symbol::intern);
+        Box::new(move |ctx, _| {
+            let pos = super::events::CURRENT_EVENT_POS.with(std::cell::Cell::get);
+            let (px, py) = super::events::local_point(frame, pos);
+            let mut fields = vec![
+                (names[0].clone(), Value::Float(f64::from(px - bounds.x))),
+                (names[1].clone(), Value::Float(f64::from(py - bounds.y))),
+                (names[2].clone(), Value::Float(f64::from(bounds.w))),
+                (names[3].clone(), Value::Float(f64::from(bounds.h))),
+            ];
+            if drag {
+                let start = super::events::CURRENT_PRESS_POS.with(std::cell::Cell::get);
+                let (sx, sy) = super::events::local_point(frame, start);
+                fields.push((names[4].clone(), Value::Float(f64::from(px - sx))));
+                fields.push((names[5].clone(), Value::Float(f64::from(py - sy))));
+            }
+            inner(ctx, Some(&Value::Record(fields)));
+        })
     }
 
     /// Registers an element as focusable if it has a `focused:` prop attr,
@@ -422,7 +525,13 @@ impl Interpreter {
         let sig = self.focus_signal(attrs);
         self.router.focusable(idx, hit_rect, sig);
         if matches!(role, Some(AccessRole::Tab | AccessRole::RadioButton)) {
-            self.router.group_member(idx);
+            // RFC-0063 §4: where Tab enters the group. Read only for a member
+            // of a group.
+            let selected = self.router.in_group()
+                && ["a11y_selected", "a11y_checked", "selected"]
+                    .iter()
+                    .any(|p| self.eval_bool_prop(attrs, p) == Some(true));
+            self.router.group_member(idx, selected);
         }
         if pressable
             || self
@@ -436,17 +545,7 @@ impl Interpreter {
     /// Whether a role puts an element with a `tap` into the Tab order
     /// (RFC-0052 §2).
     fn role_takes_focus(role: AccessRole) -> bool {
-        matches!(
-            role,
-            AccessRole::Button
-                | AccessRole::ToggleButton
-                | AccessRole::Switch
-                | AccessRole::CheckBox
-                | AccessRole::RadioButton
-                | AccessRole::Tab
-                | AccessRole::MenuItem
-                | AccessRole::Link
-        )
+        crate::interp::intrinsics::role_implies_focus(role)
     }
 
     /// Which of Space and Enter press an element with this role (RFC-0052 §3).

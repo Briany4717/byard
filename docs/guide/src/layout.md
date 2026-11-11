@@ -92,6 +92,23 @@ A child never shrinks below what its content needs, so the bar must be told it m
 `Clip` cuts the bar to that. A one-line `Text` between two icons takes the same
 `grow: 1, width: 0`, or it pushes the icon after it out of the row.
 
+### Minimum and maximum
+
+`min_width`, `max_width`, `min_height` and `max_height` bound the size layout settles
+on, in logical pixels: a size under the minimum is raised to it, one over the maximum
+is lowered to it, and when the two disagree the minimum wins, as in CSS. They work on
+everything that takes `width` and `height`, so a card that is "at most 560 wide" and a
+chip that is "at least 32 high" are one attribute each, and they hold when the content
+or the window changes, which a `width` does not. Like every layout attribute they take
+a value that may be computed but not animated.
+
+```byld,fragment
+Box #[bg: 0x2B2930, radius: 12, p: 16, max_width: 560, min_height: 48] {}
+```
+
+A `Button` has a minimum already, the theme's touch size; writing `min_height` or
+`min_width` on the button replaces it.
+
 ## Space
 
 `gap` is the space between children. `p` is padding, inside the container, and
@@ -108,6 +125,31 @@ Named sides are `top`, `right`, `bottom`, `left`, `horizontal` and `vertical`. A
 named form cannot mix with a positional one, and naming a side twice, or `left`
 beside `horizontal`, is an error. Single sides have short forms too: `pt`, `pr`,
 `pb`, `pl`, and for margin `mt`, `mr`, `mb`, `ml`, `mx` and `my`.
+
+### A row that wraps
+
+A `Row` with `wrap: true` moves the children that do not fit to a new line, the way a
+set of chips does in a narrow window. `gap` is the space between neighbours on a line and
+`row_gap` the space between lines; `row_gap` is `gap` when it is not written.
+
+```byld
+View Chip(label: Str) {
+    Text(label) #[bg: 0xD0BCFF, color: 0x1D1B20, radius: 8, p: (6, 12)]
+}
+
+View Main() {
+    Row #[wrap: true, gap: 8, row_gap: 12, width: 220, bg: 0x1E1E2A, p: 10] {
+        Chip("Bluegrass")
+        Chip("Jazz")
+        Chip("Folk")
+        Chip("Electronic")
+    }
+}
+```
+
+The row is as tall as its lines. `wrap` can be a value, so a row can wrap only on a
+narrow window. `row_gap` without `wrap: true` is an error, since there are no lines to
+put space between, and only `Row` wraps. See `examples/layout_and_text`.
 
 ## Alignment
 
@@ -382,6 +424,16 @@ them start from nothing, and a column of such cells lines up from row to row.
 `p` insets the words inside the text's own box, `m`
 leaves room around it. A `Text` has no children, so `gap`, `align` and `justify`
 do not apply (its `align` positions the words, see [styling](styling.md)).
+
+`max_lines: 2` stops the text after two lines: the `Text` is at most that tall and the
+last line ends in `…` where words were left out. `overflow: clip` cuts without the mark,
+and `overflow: ellipsis` is what `max_lines` does without it. It is how a list item or
+a card keeps its supporting text to a line or two. `overflow` without `max_lines`, and
+`max_lines` on a `wrap: false` text, are errors; `max_lines` must be 1 or more.
+
+```byld,fragment
+Text("A long supporting line") #[max_lines: 2, size: 14]
+```
 
 `wrap: false` with a `width` makes a cell of exactly that width, whatever the text
 measures. Words that do not fit are clipped at the cell's edge, not drawn over the

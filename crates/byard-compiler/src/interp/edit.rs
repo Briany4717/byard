@@ -188,6 +188,103 @@ impl Widths {
     }
 }
 
+/// The wrapped lines of a value (RFC-0064), for the value, width and font they
+/// were computed for.
+#[derive(Clone, Debug, Default)]
+struct LineCache {
+    key: Option<(String, u32, FieldFont)>,
+    lines: Vec<(usize, usize)>,
+}
+
+/// What a multiline field's keys and pointer need to know that the model does
+/// not: where the lines break, and how wide text is (RFC-0064).
+pub(crate) struct Multi<'a> {
+    /// The field's font.
+    pub font: &'a FieldFont,
+    /// How wide the content box is, which the text wraps at.
+    pub width: f32,
+    /// The height of one line.
+    pub line_h: f32,
+    /// The visual lines of a text wrapped to `width`, as byte ranges.
+    pub lines_of: &'a mut dyn FnMut(&str) -> Vec<(usize, usize)>,
+    /// The width of a piece of text on one line.
+    pub measure: &'a mut dyn FnMut(&str) -> f32,
+}
+
+/// The index of the line `off` is on: the last that starts at or before it.
+pub(crate) fn line_of(lines: &[(usize, usize)], off: usize) -> usize {
+    lines
+        .partition_point(|&(start, _)| start <= off)
+        .saturating_sub(1)
+}
+
+/// The furthest a caret goes on line `i` and still shows on it: its end, less
+/// the break a soft wrap left at the end, which is the next line's start.
+fn line_end(value: &str, lines: &[(usize, usize)], i: usize) -> usize {
+    let (start, end) = lines[i];
+    if lines.get(i + 1).is_some_and(|next| next.0 == end) && end > start {
+        prev_grapheme(value, end).max(start)
+    } else {
+        end
+    }
+}
+
+/// The grapheme boundary on line `i` nearest `x` from the start of the line
+/// (or, with `floor`, the last one at or before it that is not the end).
+fn offset_in_line(
+    value: &str,
+    lines: &[(usize, usize)],
+    i: usize,
+    x: f32,
+    floor: bool,
+    measure: &mut dyn FnMut(&str) -> f32,
+) -> usize {
+    let start = lines[i].0;
+    let end = line_end(value, lines, i);
+    if end <= start || x <= 0.0 {
+        return start;
+    }
+    let mut bounds = vec![start];
+    bounds.extend(
+        value[start..end]
+            .grapheme_indices(true)
+            .map(|(at, g)| start + at + g.len()),
+    );
+    let last = bounds.len() - 1;
+    let px = |k: usize, m: &mut dyn FnMut(&str) -> f32| m(&value[start..bounds[k]]);
+    // The first boundary whose prefix reaches `x`.
+    let (mut lo, mut hi) = (1, last + 1);
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        if px(mid, measure) >= x {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    if lo > last {
+        return if floor && last > 0 {
+            bounds[last - 1]
+        } else {
+            bounds[last]
+        };
+    }
+    let after = px(lo, measure);
+    let before = px(lo - 1, measure);
+    if floor {
+        return if after <= x && lo < last {
+            bounds[lo]
+        } else {
+            bounds[lo - 1]
+        };
+    }
+    if x - before < after - x {
+        bounds[lo - 1]
+    } else {
+        bounds[lo]
+    }
+}
+
 /// One field's editing state (RFC-0041 §1): where the caret and the selection
 /// are, what undo can return to, and how far the text is scrolled.
 #[derive(Clone, Debug, Default)]
@@ -209,6 +306,18 @@ pub(crate) struct EditState {
     /// Whether a press began in this field and has not been released: the
     /// pointer is dragging a selection.
     pub dragging: bool,
+    /// Whether the field is multiline (RFC-0064): Enter inserts a line break,
+    /// and typed and pasted text keeps its own. Set by whoever hands the state
+    /// an event, from the field's attributes.
+    pub multiline: bool,
+    /// How far the text is scrolled up in a multiline field, in logical pixels.
+    pub scroll_y: f32,
+    /// The x a run of Up and Down presses is trying to keep, measured from the
+    /// start of the line; forgotten by anything else.
+    goal_x: Option<f32>,
+    /// The wrapped lines of the value, for the width and font they were
+    /// computed for.
+    lines: LineCache,
     widths: Widths,
     /// The `frame_seq` this state was last rendered on; one that is not
     /// rendered any more is dropped.
@@ -271,6 +380,29 @@ pub(crate) fn single_line(text: &str) -> String {
                 out.push(' ');
             }
             '\n' | '\u{2028}' | '\u{2029}' => out.push(' '),
+            c if c.is_control() => {}
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// A paste or typed text as a multiline field takes it (RFC-0064): every kind
+/// of line break becomes `\n` (`\r\n` is one), a tab a space, and other
+/// control characters, which a field cannot draw, are dropped.
+pub(crate) fn multi_line(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\r' => {
+                if chars.peek() == Some(&'\n') {
+                    chars.next();
+                }
+                out.push('\n');
+            }
+            '\n' | '\u{2028}' | '\u{2029}' => out.push('\n'),
+            '\t' => out.push(' '),
             c if c.is_control() => {}
             c => out.push(c),
         }
@@ -393,6 +525,7 @@ impl EditState {
             self.anchor = self.caret;
         }
         self.typing = None;
+        self.goal_x = None;
         self.check(value);
         if (self.caret, self.anchor) == before {
             Outcome::None
@@ -445,6 +578,7 @@ impl EditState {
         new.push_str(&value[hi..]);
         self.caret = snap(&new, lo + with.len());
         self.anchor = self.caret;
+        self.goal_x = None;
         self.typing = typed_at.map(|at_ms| Typing {
             at_ms,
             caret: self.caret,
@@ -457,7 +591,11 @@ impl EditState {
     /// Typed text, or an input method's commit: replaces the selection, or is
     /// inserted at the caret (RFC-0041 §1).
     pub fn insert(&mut self, value: &str, text: &str, now_ms: u64) -> Outcome {
-        let text = single_line(text);
+        let text = if self.multiline {
+            multi_line(text)
+        } else {
+            single_line(text)
+        };
         if text.is_empty() {
             return Outcome::None;
         }
@@ -518,7 +656,11 @@ impl EditState {
         let Some(text) = clipboard.read_text() else {
             return Outcome::None;
         };
-        let text = single_line(&text);
+        let text = if self.multiline {
+            multi_line(&text)
+        } else {
+            single_line(&text)
+        };
         if text.is_empty() {
             return Outcome::None;
         }
@@ -571,6 +713,7 @@ impl EditState {
     /// name as the platform reports it (`"ArrowLeft"`, `"Backspace"`, `"a"`).
     ///
     /// The caller has run [`sync`](Self::sync) with `value`.
+    #[cfg(test)]
     pub fn on_key(
         &mut self,
         value: &str,
@@ -579,7 +722,29 @@ impl EditState {
         keys: Keymap,
         clipboard: &mut dyn Clipboard,
     ) -> Outcome {
+        self.on_key_in(value, key, mods, keys, clipboard, None)
+    }
+
+    /// [`on_key`](Self::on_key) in a field that may be multiline (RFC-0064):
+    /// with `multi`, Up and Down move between lines, Home and End go to the
+    /// ends of a line, and the shortcut modifier with them to the ends of the
+    /// text. Enter inserts a line break whenever the state is `multiline`.
+    pub fn on_key_in(
+        &mut self,
+        value: &str,
+        key: &str,
+        mods: KeyModifiers,
+        keys: Keymap,
+        clipboard: &mut dyn Clipboard,
+        mut multi: Option<&mut Multi<'_>>,
+    ) -> Outcome {
         let extend = mods.shift;
+        #[allow(clippy::needless_option_as_deref)]
+        if self.multiline {
+            if let Some(out) = self.multiline_key(value, key, mods, keys, multi.as_deref_mut()) {
+                return out;
+            }
+        }
         let word = keys.word(mods);
         let line = keys.mac && mods.meta;
         // Offsets are only trusted on a boundary of this value.
@@ -612,6 +777,187 @@ impl EditState {
             _ if keys.is_shortcut(mods) => self.shortcut(value, key, mods, clipboard),
             _ => Outcome::None,
         }
+    }
+
+    /// The keys a multiline field reads differently (RFC-0064), or `None` for
+    /// one that is RFC-0041's.
+    fn multiline_key(
+        &mut self,
+        value: &str,
+        key: &str,
+        mods: KeyModifiers,
+        keys: Keymap,
+        multi: Option<&mut Multi<'_>>,
+    ) -> Option<Outcome> {
+        let extend = mods.shift;
+        let to_text_edge = |back: bool| if back { 0 } else { value.len() };
+        match key {
+            "Enter" => {
+                self.typing = None;
+                let range = self.range();
+                Some(self.replace(value, range, "\n", None))
+            }
+            "ArrowUp" | "ArrowDown" => {
+                let down = key == "ArrowDown";
+                if keys.mac && mods.meta {
+                    return Some(self.move_to(value, to_text_edge(!down), extend));
+                }
+                Some(match multi {
+                    Some(m) => self.move_vertical(value, down, extend, m),
+                    None => self.move_to(value, to_text_edge(!down), extend),
+                })
+            }
+            "Home" | "End" => {
+                let back = key == "Home";
+                if keys.shortcut(mods) {
+                    return Some(self.move_to(value, to_text_edge(back), extend));
+                }
+                let m = multi?;
+                let lines = self.lines(value, m).to_vec();
+                let i = line_of(&lines, self.caret);
+                let to = if back {
+                    lines[i].0
+                } else {
+                    line_end(value, &lines, i)
+                };
+                Some(self.move_to(value, to, extend))
+            }
+            "ArrowLeft" | "ArrowRight" if keys.mac && mods.meta => {
+                let back = key == "ArrowLeft";
+                let m = multi?;
+                let lines = self.lines(value, m).to_vec();
+                let i = line_of(&lines, self.caret);
+                let to = if back {
+                    lines[i].0
+                } else {
+                    line_end(value, &lines, i)
+                };
+                Some(self.move_to(value, to, extend))
+            }
+            _ => None,
+        }
+    }
+
+    /// The wrapped lines of `value`, worked out again only when the value, the
+    /// width or the font is not what they were worked out for.
+    pub fn lines(&mut self, value: &str, m: &mut Multi<'_>) -> &[(usize, usize)] {
+        let fresh = self
+            .lines
+            .key
+            .as_ref()
+            .is_some_and(|(v, w, f)| v == value && *w == m.width.to_bits() && f == m.font);
+        if !fresh {
+            self.lines.lines = (m.lines_of)(value);
+            self.lines.key = Some((value.to_string(), m.width.to_bits(), m.font.clone()));
+        }
+        &self.lines.lines
+    }
+
+    /// The caret's line, and how far into it the caret is.
+    pub fn caret_line(&mut self, value: &str, m: &mut Multi<'_>) -> (usize, f32) {
+        let lines = self.lines(value, m).to_vec();
+        let i = line_of(&lines, self.caret);
+        (
+            i,
+            (m.measure)(&value[lines[i].0..self.caret.max(lines[i].0)]),
+        )
+    }
+
+    /// Up or Down a line, keeping the column: the caret goes to the place on
+    /// the next line nearest the x it started at, and the x is kept for the
+    /// press after. On the first or last line it goes to the start or end of
+    /// the text.
+    fn move_vertical(
+        &mut self,
+        value: &str,
+        down: bool,
+        extend: bool,
+        m: &mut Multi<'_>,
+    ) -> Outcome {
+        let lines = self.lines(value, m).to_vec();
+        let cur = line_of(&lines, self.caret);
+        let goal = self
+            .goal_x
+            .unwrap_or_else(|| (m.measure)(&value[lines[cur].0..self.caret.max(lines[cur].0)]));
+        let next = if down {
+            (cur + 1 < lines.len()).then_some(cur + 1)
+        } else {
+            cur.checked_sub(1)
+        };
+        let Some(next) = next else {
+            let to = if down { value.len() } else { 0 };
+            return self.move_to(value, to, extend);
+        };
+        let to = offset_in_line(value, &lines, next, goal, false, m.measure);
+        let out = self.move_to(value, to, extend);
+        self.goal_x = Some(goal);
+        out
+    }
+
+    /// The offset a pointer at `(x, y)` is over, from the start of the text
+    /// and the top of its first line, `y` already moved by the scroll.
+    fn offset_at(&mut self, value: &str, x: f32, y: f32, floor: bool, m: &mut Multi<'_>) -> usize {
+        let lines = self.lines(value, m).to_vec();
+        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+        let row = (y / m.line_h).floor().max(0.0) as usize;
+        let i = row.min(lines.len() - 1);
+        offset_in_line(value, &lines, i, x, floor, m.measure)
+    }
+
+    /// A press in a multiline field, `(x, y)` from the start of the text.
+    pub fn press_at(
+        &mut self,
+        value: &str,
+        x: f32,
+        y: f32,
+        extend: bool,
+        m: &mut Multi<'_>,
+    ) -> Outcome {
+        let to = self.offset_at(value, x, y, false, m);
+        self.dragging = true;
+        self.move_to(value, to, extend)
+    }
+
+    /// The pointer moved with the press held, in a multiline field.
+    pub fn drag_at(&mut self, value: &str, x: f32, y: f32, m: &mut Multi<'_>) -> Outcome {
+        if !self.dragging {
+            return Outcome::None;
+        }
+        let to = self.offset_at(value, x, y, false, m);
+        self.move_to(value, to, true)
+    }
+
+    /// A double press in a multiline field: the word under the pointer.
+    pub fn select_word_at(&mut self, value: &str, x: f32, y: f32, m: &mut Multi<'_>) -> Outcome {
+        let under = self.offset_at(value, x, y, true, m);
+        let (lo, hi) = word_around(value, under);
+        let before = (self.caret, self.anchor);
+        self.anchor = lo;
+        self.caret = hi;
+        self.typing = None;
+        self.goal_x = None;
+        self.check(value);
+        if before == (self.caret, self.anchor) {
+            Outcome::None
+        } else {
+            Outcome::Moved
+        }
+    }
+
+    /// Keeps the caret's line inside a content box `view_h` high (the vertical
+    /// half of [`follow_caret`](Self::follow_caret)): `line` of `count`, each
+    /// `line_h` tall.
+    pub fn follow_caret_y(&mut self, line: usize, count: usize, line_h: f32, view_h: f32) {
+        let top = line as f32 * line_h;
+        let mut scroll = self.scroll_y;
+        if top < scroll {
+            scroll = top;
+        }
+        if top + line_h > scroll + view_h {
+            scroll = top + line_h - view_h;
+        }
+        let furthest = (count as f32 * line_h - view_h).max(0.0);
+        self.scroll_y = scroll.clamp(0.0, furthest);
     }
 
     /// A key pressed with the shortcut modifier held: select all, copy, cut,

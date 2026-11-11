@@ -173,6 +173,28 @@ runs on Enter. Each can name the text, as `input(text) => …`. See
 [events](events-and-actions.md#handlers-that-take-a-value). An edit that changes nothing,
 such as Backspace at the start, runs nothing.
 
+### More than one line
+
+`lines` makes a field several lines high, and `min_lines` and `max_lines` let it grow with
+what it holds:
+
+```byld,fragment
+TextField #[bind: notes, lines: 3, width: 320]                      // always 3 lines
+TextField #[bind: notes, min_lines: 2, max_lines: 6, width: 320]    // 2 to 6, then it scrolls
+```
+
+Long lines wrap at the field's width. Enter inserts a line break and does not run `submit`
+(there is no "submit" in a text area; use a button), and a paste keeps its breaks. Up and
+Down move between lines and keep the column, Home and End go to the ends of a line, and
+`Mod`+Home and `Mod`+End to the ends of the text (`Cmd`+Up and `Cmd`+Down on macOS). The
+selection is painted a rectangle to a line, and the text scrolls to keep the caret in view
+once it is longer than the field. The vertical padding is 8 unless `p`, `pt` or `pb` says
+otherwise, an explicit `height` beats `lines`, and `min_lines` alone has no ceiling.
+
+`lines: 1`, `max_lines: 1` and writing none of them are the single-line field, so a view can
+forward `lines: lines` with a default of 1. `lines` together with `min_lines` or `max_lines`,
+a minimum above the maximum, and a count below 1 are errors.
+
 ### Editing
 
 A field edits like a text field anywhere else, and the `byld` above needs nothing
@@ -196,7 +218,7 @@ more for it. While it has focus:
 
 `Mod` is Command on macOS and Control elsewhere. A character is a whole grapheme, so
 an accented letter or an emoji moves and deletes as one. Typing replaces the selection.
-A paste is one line: its line breaks become spaces. The clipboard is the system's.
+A paste is one line: its line breaks become spaces (a [multiline field](#more-than-one-line) keeps them). The clipboard is the system's.
 
 Typing is undone a word at a time, and a paste, a cut or a deleted selection is a step of
 its own. When the `var` is written from somewhere else, such as a button's action or a

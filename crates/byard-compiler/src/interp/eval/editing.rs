@@ -12,7 +12,7 @@ use std::rc::Rc;
 use byard_core::{Clipboard, KeyModifiers, MemoryClipboard};
 
 use super::{Interpreter, controller::EngineTimer};
-use crate::interp::edit::{Edge, EditStore, FieldFont, Keymap, Outcome};
+use crate::interp::edit::{Edge, EditStore, FieldFont, Keymap, Multi, Outcome};
 use crate::interp::env::{SignalId, Value};
 use crate::interp::events::{Action, CURRENT_EVENT_MODS, CURRENT_EVENT_POS, CURRENT_EVENT_TIME};
 use crate::interp::reactive::ReactiveCtx;
@@ -83,6 +83,17 @@ pub(super) struct FieldGeom {
     /// The ancestors' paint transform, which the pointer is mapped back
     /// through (RFC-0011).
     pub frame: Option<byard_core::frame::Transform>,
+    /// What a multiline field adds (RFC-0064); `None` for a single line.
+    pub multi: Option<MultiGeom>,
+}
+
+/// Where a multiline field's lines are, in the field's own space.
+#[derive(Clone, Copy)]
+pub(super) struct MultiGeom {
+    /// The top of the first line, before the scroll.
+    pub text_y: f32,
+    /// The height of one line.
+    pub line_h: f32,
 }
 
 /// What a field's handlers share: the model of every field, the clipboard, the
@@ -119,6 +130,40 @@ impl FieldHandle {
             .0
     }
 
+    /// The visual lines of `text` at the field's width, from the same shaping
+    /// the paint pass draws it with.
+    fn wrap_lines(&self, text: &str) -> Vec<(usize, usize)> {
+        let f = &self.geom.font;
+        self.measurer
+            .borrow_mut()
+            .get_or_insert_with(byard_core::text::TextMeasurer::new)
+            .wrap_lines(
+                text,
+                f.size,
+                self.geom.view_w,
+                f.weight,
+                f.family.as_deref(),
+            )
+    }
+
+    /// Runs `f` with what a multiline field's keys and pointer need, or with
+    /// `None` for a single line.
+    fn with_multi<R>(&self, f: impl FnOnce(Option<&mut Multi<'_>>) -> R) -> R {
+        let Some(g) = self.geom.multi else {
+            return f(None);
+        };
+        let mut measure = |t: &str| self.width(t);
+        let mut lines_of = |t: &str| self.wrap_lines(t);
+        let mut m = Multi {
+            font: &self.geom.font,
+            width: self.geom.view_w,
+            line_h: g.line_h,
+            lines_of: &mut lines_of,
+            measure: &mut measure,
+        };
+        f(Some(&mut m))
+    }
+
     /// The pointer of the event being dispatched, in the field's own space.
     fn pointer(&self) -> (f32, f32) {
         let pos = CURRENT_EVENT_POS.with(std::cell::Cell::get);
@@ -143,6 +188,7 @@ impl FieldHandle {
         let value = text_of(ctx, self.sig);
         let mut store = self.store.borrow_mut();
         let state = store.state(self.elem);
+        state.multiline = self.geom.multi.is_some();
         state.sync(&value);
         let outcome = f(state, &value);
         store.note(&outcome);
@@ -193,7 +239,9 @@ impl FieldHandle {
             let before = text_of(ctx, self.sig);
             let outcome = self.edit(ctx, |state, value| {
                 let mut clipboard = self.clipboard.0.borrow_mut();
-                state.on_key(value, key, mods, Keymap::HERE, &mut **clipboard)
+                self.with_multi(|m| {
+                    state.on_key_in(value, key, mods, Keymap::HERE, &mut **clipboard, m)
+                })
             });
             self.write(ctx, &outcome);
             for action in &mut keys {
@@ -207,7 +255,8 @@ impl FieldHandle {
                     action(ctx, Some(&now));
                 }
             }
-            if key.as_str() == "Enter" {
+            // Enter in a multiline field is a line break, not a submit.
+            if key.as_str() == "Enter" && self.geom.multi.is_none() {
                 for action in &mut submit {
                     action(ctx, Some(&now));
                 }
@@ -221,9 +270,16 @@ impl FieldHandle {
     pub(super) fn pointer_down(self, mut user: Vec<Action>) -> Action {
         Box::new(move |ctx, payload| {
             let mods = CURRENT_EVENT_MODS.with(std::cell::Cell::get);
-            let (x, _) = self.pointer();
+            let (x, y) = self.pointer();
             let geom = &self.geom;
             self.edit(ctx, |state, value| {
+                if let Some(g) = geom.multi {
+                    let (at_x, at_y) = (x - geom.text_x, y - g.text_y + state.scroll_y);
+                    return self.with_multi(|m| match m {
+                        Some(m) => state.press_at(value, at_x, at_y, mods.shift, m),
+                        None => Outcome::None,
+                    });
+                }
                 let at = x - geom.text_x + state.scroll;
                 state.press(value, &geom.font, at, mods.shift, &mut |t| self.width(t))
             });
@@ -239,11 +295,18 @@ impl FieldHandle {
     /// the text scrolls after it.
     pub(super) fn pointer_drag(self) -> Action {
         Box::new(move |ctx, _| {
-            let (x, _) = self.pointer();
+            let (x, y) = self.pointer();
             let geom = &self.geom;
             self.edit(ctx, |state, value| {
                 if !state.dragging {
                     return Outcome::None;
+                }
+                if let Some(g) = geom.multi {
+                    let (at_x, at_y) = (x - geom.text_x, y - g.text_y + state.scroll_y);
+                    return self.with_multi(|m| match m {
+                        Some(m) => state.drag_at(value, at_x, at_y, m),
+                        None => Outcome::None,
+                    });
                 }
                 let overflows = state.x_of(value, &geom.font, value.len(), &mut |t| self.width(t))
                     > geom.view_w;
@@ -277,9 +340,16 @@ impl FieldHandle {
     /// The `DoubleTap` handler: selects the word under the pointer.
     pub(super) fn double_tap(self, mut user: Vec<Action>) -> Action {
         Box::new(move |ctx, payload| {
-            let (x, _) = self.pointer();
+            let (x, y) = self.pointer();
             let geom = &self.geom;
             self.edit(ctx, |state, value| {
+                if let Some(g) = geom.multi {
+                    let (at_x, at_y) = (x - geom.text_x, y - g.text_y + state.scroll_y);
+                    return self.with_multi(|m| match m {
+                        Some(m) => state.select_word_at(value, at_x, at_y, m),
+                        None => Outcome::None,
+                    });
+                }
                 let at = x - geom.text_x + state.scroll;
                 state.select_word(value, &geom.font, at, &mut |t| self.width(t))
             });

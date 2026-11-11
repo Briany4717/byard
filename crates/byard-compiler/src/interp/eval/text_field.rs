@@ -8,6 +8,7 @@
 
 use super::paint::{dim_alpha, push_fill};
 use super::{Interpreter, editing, floor_char_boundary};
+use crate::interp::edit::{FieldFont, Multi};
 use crate::interp::env::Value;
 use crate::parser::ast::{Attr, AttrKind};
 
@@ -51,7 +52,346 @@ const CARET_DX: f32 = -0.5;
 /// when the field writes no `selection:` colour (RFC-0041 §6).
 const SELECTION_ALPHA: f32 = 0.3;
 
+/// How many lines a `TextField` is (RFC-0064).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum FieldLines {
+    /// One line: the field it always was.
+    Single,
+    /// `lines: n`: always `n` lines high.
+    Fixed(u32),
+    /// `min_lines`/`max_lines`: as tall as its content, between the two.
+    Range {
+        /// The fewest lines.
+        min: u32,
+        /// The most lines, `None` for no limit.
+        max: Option<u32>,
+    },
+}
+
+/// A selected line break is drawn as this much selection past the end of its
+/// line, so an empty line in a selection is not a gap in it.
+const NEWLINE_STUB: f32 = 5.0;
+
+/// What a multiline field is painted from (RFC-0064).
+pub(super) struct MultiPaint<'a> {
+    pub attrs: &'a [Attr],
+    pub rect: crate::interp::intrinsics::Rect,
+    /// What is drawn: the value, or the placeholder in its place.
+    pub display_text: &'a str,
+    /// What the caret indexes into: the value, empty under a placeholder.
+    pub value: &'a str,
+    pub editing: Option<u32>,
+    pub elem_idx: Option<u32>,
+    pub is_focused: bool,
+    pub preedit: Option<(String, Option<(usize, usize)>)>,
+    pub text_rgba: [f32; 4],
+    pub value_rgba: [f32; 4],
+    pub font: &'a FieldFont,
+    pub variations: Option<byard_core::frame::Variations>,
+    pub transform: byard_core::frame::Transform,
+    pub opacity: f32,
+    /// `(left and right, top, bottom)`.
+    pub pad: (f32, f32, f32),
+}
+
+/// A multiline field's padding above and below its text when it writes none.
+const FIELD_PAD_Y: f32 = 8.0;
+
 impl Interpreter {
+    /// The line count a field's attributes ask for. A field that writes none of
+    /// the three is `Single` without evaluating anything. `lines: 1` and
+    /// `max_lines: 1` are `Single` too, so a component can forward a default.
+    pub(super) fn field_lines(&mut self, attrs: &[Attr]) -> FieldLines {
+        if !attrs.iter().any(|a| {
+            matches!(a.kind, AttrKind::Prop { .. })
+                && matches!(a.name.as_str(), "lines" | "min_lines" | "max_lines")
+        }) {
+            return FieldLines::Single;
+        }
+        let count = |this: &mut Self, name: &str| {
+            this.eval_int_prop(attrs, name)
+                .map(|n| u32::try_from(n.max(1)).unwrap_or(u32::MAX))
+        };
+        if let Some(n) = count(self, "lines") {
+            return if n > 1 {
+                FieldLines::Fixed(n)
+            } else {
+                FieldLines::Single
+            };
+        }
+        let min = count(self, "min_lines");
+        let max = count(self, "max_lines");
+        if min.unwrap_or(1) > 1 || max.is_some_and(|m| m > 1) {
+            let min = min.unwrap_or(1);
+            FieldLines::Range {
+                min,
+                max: max.map(|m| m.max(min)),
+            }
+        } else {
+            FieldLines::Single
+        }
+    }
+
+    /// Paints a multiline field's text, selection and caret (RFC-0064), and
+    /// says where its lines are for the handlers.
+    ///
+    /// The text is one wrapped run at the content width, moved up by the
+    /// scroll and clipped to the content box. The caret and the selection come
+    /// from the same wrapped lines the editing model uses, which the shared
+    /// measurer works out by shaping the value as the run is shaped.
+    #[allow(clippy::too_many_lines)]
+    pub(super) fn paint_multiline(
+        &mut self,
+        paint: &MultiPaint<'_>,
+        frame: &mut byard_core::frame::RenderFrame,
+    ) -> editing::MultiGeom {
+        let font = paint.font;
+        let (pad_x, pad_top, pad_bottom) = paint.pad;
+        let line_h = font.size * 1.2;
+        let text_x = paint.rect.x + pad_x;
+        let text_top = paint.rect.y + pad_top;
+        let view_w = (paint.rect.w - pad_x * 2.0).max(1.0);
+        let view_h = (paint.rect.h - pad_top - pad_bottom).max(line_h);
+        let geom = editing::MultiGeom {
+            text_y: text_top,
+            line_h,
+        };
+
+        // Where the caret and the selection are, in lines and pixels.
+        let mut caret: Option<(usize, f32)> = None;
+        // `(line, x0, x1)` per selected line.
+        let mut selection: Vec<(usize, f32, f32)> = Vec::new();
+        let mut scroll_y = 0.0_f32;
+        let mut preedit_w = 0.0_f32;
+        let mut preedit_cursor: Option<(f32, f32)> = None;
+        if let Some(idx) = paint.editing {
+            let store = std::rc::Rc::clone(&self.edit);
+            let measurer = std::rc::Rc::clone(&self.text_measurer);
+            let seq = self.frame_seq;
+            let mut measure = |t: &str| self.measure_in(t, font);
+            let mut lines_of = |t: &str| {
+                measurer
+                    .borrow_mut()
+                    .get_or_insert_with(byard_core::text::TextMeasurer::new)
+                    .wrap_lines(t, font.size, view_w, font.weight, font.family.as_deref())
+            };
+            if let Some((text, cursor)) = &paint.preedit {
+                preedit_w = measure(text);
+                preedit_cursor = cursor.map(|(b, e)| {
+                    let at = |upto: usize| measure(&text[..floor_char_boundary(text, upto)]);
+                    (at(b), at(e))
+                });
+            }
+            let mut ctx = Multi {
+                font,
+                width: view_w,
+                line_h,
+                lines_of: &mut lines_of,
+                measure: &mut measure,
+            };
+            let mut store = store.borrow_mut();
+            let state = store.state(idx);
+            state.multiline = true;
+            state.sync(paint.value);
+            state.seen = seq;
+            let lines = state.lines(paint.value, &mut ctx).to_vec();
+            let (line, along) = state.caret_line(paint.value, &mut ctx);
+            caret = Some((line, along));
+            if state.has_selection() && paint.preedit.is_none() {
+                let (lo, hi) = state.range();
+                for (i, &(start, end)) in lines.iter().enumerate() {
+                    let (a, b) = (lo.max(start), hi.min(end));
+                    let breaks = lines.get(i + 1).is_some_and(|n| n.0 > end);
+                    let stub = if breaks && lo <= end && hi > end {
+                        NEWLINE_STUB
+                    } else {
+                        0.0
+                    };
+                    if b <= a && stub == 0.0 {
+                        continue;
+                    }
+                    let x0 = if b > a {
+                        (ctx.measure)(&paint.value[start..a])
+                    } else {
+                        (ctx.measure)(&paint.value[start..end])
+                    };
+                    let x1 = if b > a {
+                        (ctx.measure)(&paint.value[start..b])
+                    } else {
+                        x0
+                    };
+                    selection.push((i, x0, x1 + stub));
+                }
+            }
+            state.follow_caret_y(line, lines.len(), line_h, view_h);
+            scroll_y = state.scroll_y;
+        } else if let Some(idx) = paint.elem_idx {
+            let seq = self.frame_seq;
+            let mut store = self.edit.borrow_mut();
+            if !store.is_empty() {
+                store.touch(idx, seq);
+            }
+        }
+
+        let top = text_top - scroll_y;
+        frame.begin_clip(byard_core::frame::Rect::new(
+            text_x - 2.0,
+            text_top,
+            view_w + 4.0,
+            // A pixel more than the lines, for the rounding layout does.
+            view_h + 1.0,
+        ));
+        if !selection.is_empty() {
+            let color = self.eval_color_prop(paint.attrs, "selection").map_or_else(
+                || {
+                    let c = super::intrinsics::color_to_rgba(self.theme.primary(), false);
+                    [c[0], c[1], c[2], c[3] * SELECTION_ALPHA]
+                },
+                super::intrinsics::color_rgba_auto,
+            );
+            for (line, x0, x1) in selection {
+                push_fill(
+                    frame,
+                    byard_core::BoxInstance {
+                        rect: [text_x + x0, top + line as f32 * line_h, x1 - x0, line_h],
+                        color: dim_alpha(color, paint.opacity),
+                        radii: [0.0; 4],
+                        transform: paint.transform,
+                        smooth: 0.0,
+                    },
+                );
+            }
+        }
+        let line_at = |text: &str, x: f32, y: f32, color: [f32; 4]| byard_core::TextLine {
+            align: byard_core::frame::TextAlign::Start,
+            max_lines: 0,
+            ellipsis: false,
+            weight: font.weight,
+            family: font.family.clone(),
+            variations: paint.variations.clone(),
+            x,
+            y,
+            text: text.to_string(),
+            font_size: font.size,
+            color,
+            dirty: true,
+        };
+        if !paint.display_text.is_empty() {
+            frame.push_text_wrapped(
+                line_at(
+                    paint.display_text,
+                    text_x,
+                    top,
+                    dim_alpha(paint.text_rgba, paint.opacity),
+                ),
+                Some(view_w),
+            );
+        }
+        if paint.is_focused {
+            let (line, along) = caret.unwrap_or((0, 0.0));
+            let line_top = top + line as f32 * line_h;
+            let mut caret_x = text_x + along + CARET_DX;
+            if let Some((text, _)) = &paint.preedit {
+                let color = dim_alpha(paint.text_rgba, paint.opacity);
+                let start = text_x + along;
+                frame.push_text(line_at(text, start, line_top, color));
+                let underline_y = line_top + font.size + 1.0;
+                let mut bar = |x: f32, w: f32, h: f32| {
+                    frame.push_instance(byard_core::BoxInstance {
+                        rect: [x, underline_y, w, h],
+                        color,
+                        radii: [0.0; 4],
+                        transform: paint.transform,
+                        smooth: 0.0,
+                    });
+                };
+                bar(start, preedit_w, 1.0);
+                if let Some((b, e)) = preedit_cursor.filter(|(b, e)| e > b) {
+                    bar(start + b, e - b, 2.0);
+                }
+                caret_x = start + preedit_cursor.map_or(preedit_w, |(_, e)| e) + CARET_DX;
+            }
+            let caret_visible = paint.preedit.as_ref().is_none_or(|(_, c)| c.is_some());
+            if let Some(idx) = paint.editing {
+                self.start_blink(idx);
+            }
+            if caret_visible && self.caret_shown() {
+                frame.push_instance(byard_core::BoxInstance {
+                    rect: [caret_x, line_top, 1.5, font.size],
+                    color: dim_alpha(paint.value_rgba, paint.opacity),
+                    radii: [0.0; 4],
+                    transform: paint.transform,
+                    smooth: 0.0,
+                });
+            }
+            let from = paint.transform.apply_point([caret_x, line_top]);
+            let to = paint
+                .transform
+                .apply_point([caret_x + 1.5, line_top + font.size]);
+            frame.set_text_input(byard_core::frame::TextInputState {
+                caret: byard_core::frame::Rect::new(
+                    from[0].min(to[0]),
+                    from[1].min(to[1]),
+                    (to[0] - from[0]).abs(),
+                    (to[1] - from[1]).abs(),
+                ),
+            });
+        }
+        frame.end_clip();
+        geom
+    }
+
+    /// `size:` first, then the `typo:` token's size, as a `Text` does.
+    pub(super) fn field_font_size(&mut self, attrs: &[Attr]) -> f32 {
+        let typo_size = self.eval_typo_size(attrs);
+        self.eval_int_prop(attrs, "size")
+            .or(typo_size)
+            .unwrap_or(16) as f32
+    }
+
+    /// The height of one line of a field's text: 1.2 times its size, as a
+    /// `Text`'s.
+    pub(super) fn field_line_height(&mut self, attrs: &[Attr]) -> f32 {
+        self.field_font_size(attrs) * 1.2
+    }
+
+    /// A multiline field's padding: `(left and right, top, bottom)`. What it
+    /// writes (`p`, `pl`, `pt`, `pb`), else 10 across and 8 above and below.
+    /// Layout and paint both ask, so the box and the text agree.
+    pub(super) fn field_pads(&mut self, attrs: &[Attr]) -> (f32, f32, f32) {
+        let writes = |names: &[&str]| attrs.iter().any(|a| names.contains(&a.name.as_str()));
+        let any = writes(&[
+            "p",
+            "padding",
+            "pl",
+            "padding_left",
+            "padding-left",
+            "pt",
+            "padding_top",
+            "padding-top",
+            "pb",
+            "padding_bottom",
+            "padding-bottom",
+        ]);
+        let style = any.then(|| self.eval_container_style("Box", attrs).padding);
+        let x = if writes(&["p", "padding", "pl", "padding_left", "padding-left"]) {
+            style.map_or(FIELD_PAD_X, |p| p.left)
+        } else {
+            FIELD_PAD_X
+        };
+        let top = if writes(&["p", "padding", "pt", "padding_top", "padding-top"]) {
+            style.map_or(FIELD_PAD_Y, |p| p.top)
+        } else {
+            FIELD_PAD_Y
+        };
+        let bottom = if writes(&["p", "padding", "pb", "padding_bottom", "padding-bottom"]) {
+            style.map_or(FIELD_PAD_Y, |p| p.bottom)
+        } else {
+            FIELD_PAD_Y
+        };
+        (x, top, bottom)
+    }
+
     /// Renders a `TextField` widget: background box + text/placeholder, and,
     /// while it has focus, the selection and the caret (RFC-0041 §6). Registers
     /// the handlers that edit it.
@@ -172,191 +512,225 @@ impl Interpreter {
             family: family.clone(),
         };
 
-        // RFC-0041: where the caret and the selection are, in pixels from the
-        // start of the text, and how far the text has scrolled to keep the
-        // caret in view. Measured through the shared measurer, whose cache
-        // makes a prefix that was measured last frame free this frame.
-        let mut caret_rel = 0.0_f32;
-        let mut value_w = 0.0_f32;
-        let mut selection: Option<(f32, f32)> = None;
-        let mut scroll = 0.0_f32;
-        // The preedit's width, and the IME's cursor inside it, as x ranges.
-        let mut preedit_w = 0.0_f32;
-        let mut preedit_cursor: Option<(f32, f32)> = None;
-        if let Some(idx) = editing {
-            let store = std::rc::Rc::clone(&self.edit);
-            let seq = self.frame_seq;
-            let mut measure = |t: &str| self.measure_in(t, &font);
-            if let Some((text, cursor)) = &preedit {
-                preedit_w = measure(text);
-                preedit_cursor = cursor.map(|(b, e)| {
-                    let at = |upto: usize| measure(&text[..floor_char_boundary(text, upto)]);
-                    (at(b), at(e))
-                });
-            }
-            let mut store = store.borrow_mut();
-            let state = store.state(idx);
-            state.sync(value);
-            state.seen = seq;
-            caret_rel = state.x_of(value, &font, state.caret, &mut measure);
-            value_w = state.x_of(value, &font, value.len(), &mut measure);
-            if state.has_selection() && preedit.is_none() {
-                let (lo, hi) = state.range();
-                selection = Some((
-                    state.x_of(value, &font, lo, &mut measure),
-                    state.x_of(value, &font, hi, &mut measure),
-                ));
-            }
-            let cursor_x = caret_rel + preedit_cursor.map_or(preedit_w, |(_, e)| e);
-            state.follow_caret(cursor_x, value_w + preedit_w, view_w);
-            scroll = state.scroll;
-        } else if let Some(idx) = elem_idx {
-            // A field that is not focused keeps its state while it is on
-            // screen and loses it with its element (§1).
-            let seq = self.frame_seq;
-            let mut store = self.edit.borrow_mut();
-            if !store.is_empty() {
-                store.touch(idx, seq);
-            }
-        }
-        let origin_x = text_x - scroll;
-        // The text is clipped to the content box when it overflows it, which is
-        // the only time it can reach outside.
-        // A field that is not being edited does not scroll, so what it shows
-        // (its placeholder, or a value longer than it) is cut at the content
-        // box instead of drawing past the field.
-        let clipped = if editing.is_some() {
-            value_w + preedit_w > view_w
-        } else {
-            !display_text.is_empty() && self.measure_in(&display_text, &font) > view_w
-        };
-        if clipped {
-            frame.begin_clip(byard_core::frame::Rect::new(text_x, rect.y, view_w, rect.h));
-        }
-
-        // The selection, behind the text: the theme's `primary` at 30 %, or the
-        // field's own `selection:` colour.
-        if let Some((x0, x1)) = selection.filter(|(a, b)| b > a) {
-            let color = self.eval_color_prop(attrs, "selection").map_or_else(
-                || {
-                    let c = super::intrinsics::color_to_rgba(self.theme.primary(), false);
-                    [c[0], c[1], c[2], c[3] * SELECTION_ALPHA]
-                },
-                super::intrinsics::color_rgba_auto,
-            );
-            push_fill(
-                frame,
-                byard_core::BoxInstance {
-                    rect: [origin_x + x0, text_y - 1.0, x1 - x0, font_size + 2.0],
-                    color: dim_alpha(color, opacity),
-                    radii: [0.0; 4],
+        // RFC-0064: a field of several lines is drawn by its own pass. The
+        // single line below is the field it always was, untouched.
+        let multiline = self.field_lines(attrs) != FieldLines::Single;
+        let multi_geom = if multiline {
+            let (pad_x, pad_top, pad_bottom) = self.field_pads(attrs);
+            Some(self.paint_multiline(
+                &MultiPaint {
+                    attrs,
+                    rect,
+                    display_text: &display_text,
+                    value,
+                    editing,
+                    elem_idx,
+                    is_focused,
+                    preedit: preedit.clone(),
+                    text_rgba,
+                    value_rgba,
+                    font: &font,
+                    variations: variations.clone(),
                     transform,
-                    smooth: 0.0,
+                    opacity,
+                    pad: (pad_x, pad_top, pad_bottom),
                 },
-            );
-        }
-
-        // The value's text. A preedit is drawn at the caret, so the part of the
-        // value after the caret moves out of its way (RFC-0040 §1).
-        let caret_at = editing
-            .and_then(|_| self.edit.borrow().get(elem_idx?).map(|s| s.caret))
-            .unwrap_or(value.len());
-        let split = preedit.is_some() && caret_at < value.len();
-        let push_value = |frame: &mut byard_core::frame::RenderFrame, x: f32, text: &str| {
-            if !text.is_empty() {
-                frame.push_text(byard_core::TextLine {
-                    align: byard_core::frame::TextAlign::Start,
-                    weight,
-                    family: family.clone(),
-                    variations: variations.clone(),
-                    x,
-                    y: text_y,
-                    text: text.to_string(),
-                    font_size,
-                    color: dim_alpha(text_rgba, opacity),
-                    dirty: true,
-                });
-            }
-        };
-        if split {
-            let (head, tail) = value.split_at(caret_at);
-            push_value(frame, origin_x, head);
-            push_value(frame, origin_x + caret_rel + preedit_w, tail);
+                frame,
+            ))
         } else {
-            push_value(frame, origin_x, &display_text);
-        }
+            None
+        };
+        if !multiline {
+            // RFC-0041: where the caret and the selection are, in pixels from the
+            // start of the text, and how far the text has scrolled to keep the
+            // caret in view. Measured through the shared measurer, whose cache
+            // makes a prefix that was measured last frame free this frame.
+            let mut caret_rel = 0.0_f32;
+            let mut value_w = 0.0_f32;
+            let mut selection: Option<(f32, f32)> = None;
+            let mut scroll = 0.0_f32;
+            // The preedit's width, and the IME's cursor inside it, as x ranges.
+            let mut preedit_w = 0.0_f32;
+            let mut preedit_cursor: Option<(f32, f32)> = None;
+            if let Some(idx) = editing {
+                let store = std::rc::Rc::clone(&self.edit);
+                let seq = self.frame_seq;
+                let mut measure = |t: &str| self.measure_in(t, &font);
+                if let Some((text, cursor)) = &preedit {
+                    preedit_w = measure(text);
+                    preedit_cursor = cursor.map(|(b, e)| {
+                        let at = |upto: usize| measure(&text[..floor_char_boundary(text, upto)]);
+                        (at(b), at(e))
+                    });
+                }
+                let mut store = store.borrow_mut();
+                let state = store.state(idx);
+                state.sync(value);
+                state.seen = seq;
+                caret_rel = state.x_of(value, &font, state.caret, &mut measure);
+                value_w = state.x_of(value, &font, value.len(), &mut measure);
+                if state.has_selection() && preedit.is_none() {
+                    let (lo, hi) = state.range();
+                    selection = Some((
+                        state.x_of(value, &font, lo, &mut measure),
+                        state.x_of(value, &font, hi, &mut measure),
+                    ));
+                }
+                let cursor_x = caret_rel + preedit_cursor.map_or(preedit_w, |(_, e)| e);
+                state.follow_caret(cursor_x, value_w + preedit_w, view_w);
+                scroll = state.scroll;
+            } else if let Some(idx) = elem_idx {
+                // A field that is not focused keeps its state while it is on
+                // screen and loses it with its element (§1).
+                let seq = self.frame_seq;
+                let mut store = self.edit.borrow_mut();
+                if !store.is_empty() {
+                    store.touch(idx, seq);
+                }
+            }
+            let origin_x = text_x - scroll;
+            // The text is clipped to the content box when it overflows it, which is
+            // the only time it can reach outside.
+            // A field that is not being edited does not scroll, so what it shows
+            // (its placeholder, or a value longer than it) is cut at the content
+            // box instead of drawing past the field.
+            let clipped = if editing.is_some() {
+                value_w + preedit_w > view_w
+            } else {
+                !display_text.is_empty() && self.measure_in(&display_text, &font) > view_w
+            };
+            if clipped {
+                frame.begin_clip(byard_core::frame::Rect::new(text_x, rect.y, view_w, rect.h));
+            }
 
-        // The caret, in the field's own text colour: at the caret's place in
-        // the value, or at the IME's cursor inside the preedit while composing
-        // (RFC-0040).
-        if is_focused {
-            let mut caret_x = origin_x + caret_rel + CARET_DX;
-            if let Some((text, _)) = &preedit {
-                let color = dim_alpha(text_rgba, opacity);
-                let start = origin_x + caret_rel;
-                frame.push_text(byard_core::TextLine {
-                    align: byard_core::frame::TextAlign::Start,
-                    weight,
-                    family: family.clone(),
-                    variations: variations.clone(),
-                    x: start,
-                    y: text_y,
-                    text: text.clone(),
-                    font_size,
-                    color,
-                    dirty: true,
-                });
-                // §5: the whole preedit thinly underlined, the IME's cursor
-                // range, the active clause on IMEs that use it, thickly.
-                let underline_y = text_y + font_size + 1.0;
-                let mut bar = |x: f32, w: f32, h: f32| {
-                    frame.push_instance(byard_core::BoxInstance {
-                        rect: [x, underline_y, w, h],
+            // The selection, behind the text: the theme's `primary` at 30 %, or the
+            // field's own `selection:` colour.
+            if let Some((x0, x1)) = selection.filter(|(a, b)| b > a) {
+                let color = self.eval_color_prop(attrs, "selection").map_or_else(
+                    || {
+                        let c = super::intrinsics::color_to_rgba(self.theme.primary(), false);
+                        [c[0], c[1], c[2], c[3] * SELECTION_ALPHA]
+                    },
+                    super::intrinsics::color_rgba_auto,
+                );
+                push_fill(
+                    frame,
+                    byard_core::BoxInstance {
+                        rect: [origin_x + x0, text_y - 1.0, x1 - x0, font_size + 2.0],
+                        color: dim_alpha(color, opacity),
+                        radii: [0.0; 4],
+                        transform,
+                        smooth: 0.0,
+                    },
+                );
+            }
+
+            // The value's text. A preedit is drawn at the caret, so the part of the
+            // value after the caret moves out of its way (RFC-0040 §1).
+            let caret_at = editing
+                .and_then(|_| self.edit.borrow().get(elem_idx?).map(|s| s.caret))
+                .unwrap_or(value.len());
+            let split = preedit.is_some() && caret_at < value.len();
+            let push_value = |frame: &mut byard_core::frame::RenderFrame, x: f32, text: &str| {
+                if !text.is_empty() {
+                    frame.push_text(byard_core::TextLine {
+                        align: byard_core::frame::TextAlign::Start,
+                        max_lines: 0,
+                        ellipsis: false,
+                        weight,
+                        family: family.clone(),
+                        variations: variations.clone(),
+                        x,
+                        y: text_y,
+                        text: text.to_string(),
+                        font_size,
+                        color: dim_alpha(text_rgba, opacity),
+                        dirty: true,
+                    });
+                }
+            };
+            if split {
+                let (head, tail) = value.split_at(caret_at);
+                push_value(frame, origin_x, head);
+                push_value(frame, origin_x + caret_rel + preedit_w, tail);
+            } else {
+                push_value(frame, origin_x, &display_text);
+            }
+
+            // The caret, in the field's own text colour: at the caret's place in
+            // the value, or at the IME's cursor inside the preedit while composing
+            // (RFC-0040).
+            if is_focused {
+                let mut caret_x = origin_x + caret_rel + CARET_DX;
+                if let Some((text, _)) = &preedit {
+                    let color = dim_alpha(text_rgba, opacity);
+                    let start = origin_x + caret_rel;
+                    frame.push_text(byard_core::TextLine {
+                        align: byard_core::frame::TextAlign::Start,
+                        max_lines: 0,
+                        ellipsis: false,
+                        weight,
+                        family: family.clone(),
+                        variations: variations.clone(),
+                        x: start,
+                        y: text_y,
+                        text: text.clone(),
+                        font_size,
                         color,
+                        dirty: true,
+                    });
+                    // §5: the whole preedit thinly underlined, the IME's cursor
+                    // range, the active clause on IMEs that use it, thickly.
+                    let underline_y = text_y + font_size + 1.0;
+                    let mut bar = |x: f32, w: f32, h: f32| {
+                        frame.push_instance(byard_core::BoxInstance {
+                            rect: [x, underline_y, w, h],
+                            color,
+                            radii: [0.0; 4],
+                            transform,
+                            smooth: 0.0,
+                        });
+                    };
+                    bar(start, preedit_w, 1.0);
+                    if let Some((b, e)) = preedit_cursor.filter(|(b, e)| e > b) {
+                        bar(start + b, e - b, 2.0);
+                    }
+                    caret_x = start + preedit_cursor.map_or(preedit_w, |(_, e)| e) + CARET_DX;
+                }
+                // `None` from the IME hides its cursor; the caret rectangle is
+                // still reported, since the candidate window needs a place.
+                let caret_visible = preedit.as_ref().is_none_or(|(_, c)| c.is_some());
+                // The blink (RFC-0041 §6): one timer wake per phase, started by the
+                // first frame that draws the caret and stopped when it stops being
+                // drawn.
+                if let Some(idx) = editing {
+                    self.start_blink(idx);
+                }
+                if caret_visible && self.caret_shown() {
+                    frame.push_instance(byard_core::BoxInstance {
+                        rect: [caret_x, text_y, 1.5, font_size],
+                        color: dim_alpha(value_rgba, opacity),
                         radii: [0.0; 4],
                         transform,
                         smooth: 0.0,
                     });
-                };
-                bar(start, preedit_w, 1.0);
-                if let Some((b, e)) = preedit_cursor.filter(|(b, e)| e > b) {
-                    bar(start + b, e - b, 2.0);
                 }
-                caret_x = start + preedit_cursor.map_or(preedit_w, |(_, e)| e) + CARET_DX;
-            }
-            // `None` from the IME hides its cursor; the caret rectangle is
-            // still reported, since the candidate window needs a place.
-            let caret_visible = preedit.as_ref().is_none_or(|(_, c)| c.is_some());
-            // The blink (RFC-0041 §6): one timer wake per phase, started by the
-            // first frame that draws the caret and stopped when it stops being
-            // drawn.
-            if let Some(idx) = editing {
-                self.start_blink(idx);
-            }
-            if caret_visible && self.caret_shown() {
-                frame.push_instance(byard_core::BoxInstance {
-                    rect: [caret_x, text_y, 1.5, font_size],
-                    color: dim_alpha(value_rgba, opacity),
-                    radii: [0.0; 4],
-                    transform,
-                    smooth: 0.0,
+                // RFC-0040 §4: where the platform puts its candidate window, in
+                // viewport space, so through the field's transform.
+                let a = transform.apply_point([caret_x, text_y]);
+                let b = transform.apply_point([caret_x + 1.5, text_y + font_size]);
+                frame.set_text_input(byard_core::frame::TextInputState {
+                    caret: byard_core::frame::Rect::new(
+                        a[0].min(b[0]),
+                        a[1].min(b[1]),
+                        (b[0] - a[0]).abs(),
+                        (b[1] - a[1]).abs(),
+                    ),
                 });
             }
-            // RFC-0040 §4: where the platform puts its candidate window, in
-            // viewport space, so through the field's transform.
-            let a = transform.apply_point([caret_x, text_y]);
-            let b = transform.apply_point([caret_x + 1.5, text_y + font_size]);
-            frame.set_text_input(byard_core::frame::TextInputState {
-                caret: byard_core::frame::Rect::new(
-                    a[0].min(b[0]),
-                    a[1].min(b[1]),
-                    (b[0] - a[0]).abs(),
-                    (b[1] - a[1]).abs(),
-                ),
-            });
-        }
-        if clipped {
-            frame.end_clip();
+            if clipped {
+                frame.end_clip();
+            }
         }
 
         // The field's own events. The router runs one handler per event kind
@@ -381,6 +755,7 @@ impl Interpreter {
                     text_x,
                     view_w,
                     frame: self.router.current_frame(),
+                    multi: multi_geom,
                 },
             );
             // `input` and `change` see the value already written.

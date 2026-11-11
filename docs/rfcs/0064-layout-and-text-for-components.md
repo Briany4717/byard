@@ -87,7 +87,7 @@ Box #[min_height: 32, max_width: 560, p: (4, 16)] { ... }
 
 `min_width`, `max_width`, `min_height`, `max_height` bound an element after
 layout has decided its size: a size below the minimum is raised to it, above
-the maximum lowered to it, and the maximum wins over the minimum when they
+the maximum lowered to it, and the minimum wins over the maximum when they
 disagree, as in CSS. They take numbers (logical pixels), static in this
 version: `min_width: x with anim.spring()` is the `LayoutPropNotAnimatable`
 every layout attribute gives. A `Button` keeps its theme minimum unless the
@@ -324,7 +324,8 @@ spacing nobody wants. `row_gap: 0` still says it.
 
 ### Q2, which wins, a minimum or a maximum?
 
-**Resolution.** The maximum, as CSS. Taffy does the same.
+**Resolution.** The minimum, as CSS and as Taffy do it: an element that is
+told it is at least 200 wide and at most 150 is 200 wide.
 
 ### Q3, what is `max_lines` on a `wrap: false` text?
 

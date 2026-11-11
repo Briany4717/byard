@@ -243,6 +243,8 @@ impl ReactiveLabel {
 
         Ok(TextLine {
             align: crate::frame::TextAlign::Start,
+            max_lines: 0,
+            ellipsis: false,
             x: self.x,
             y: self.y,
             text: self.signal.read(String::clone),

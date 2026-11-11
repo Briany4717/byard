@@ -282,6 +282,90 @@ impl TextMeasurer {
         register_into(self.font_system.db_mut(), bytes)
     }
 
+    /// The visual lines `text` is laid out in when wrapped to `width` logical
+    /// pixels (RFC-0064): the byte range of each, in order. A hard break (`\n`)
+    /// ends a line and is in none of the ranges; a soft break leaves the next
+    /// line starting where the last ended. Together the ranges cover every
+    /// byte but the breaks, and an empty line is an empty range, the one after
+    /// a final `\n` included.
+    ///
+    /// Shaped exactly as [`measure_wrapped`](Self::measure_wrapped) and the
+    /// paint pass shape a run, so the lines are the ones that are drawn. Not
+    /// memoised: the caller keeps what it asked for against its value.
+    #[must_use]
+    pub fn wrap_lines(
+        &mut self,
+        text: &str,
+        font_size: f32,
+        width: f32,
+        weight: u16,
+        family: Option<&str>,
+    ) -> Vec<(usize, usize)> {
+        // Where each hard line starts and ends.
+        let mut logical: Vec<(usize, usize)> = Vec::new();
+        let mut at = 0;
+        for piece in text.split('\n') {
+            logical.push((at, at + piece.len()));
+            at += piece.len() + 1;
+        }
+        if !is_drawable_size(font_size) {
+            return logical;
+        }
+        self.scratch.set_metrics_and_size(
+            &mut self.font_system,
+            Metrics::new(font_size, font_size * 1.2),
+            Some(width),
+            None,
+        );
+        self.scratch.set_text(
+            &mut self.font_system,
+            text,
+            &Attrs::new()
+                .family(family_of(family))
+                .weight(glyphon::Weight(weight)),
+            Shaping::Advanced,
+            None,
+        );
+        self.scratch
+            .shape_until_scroll(&mut self.font_system, false);
+        // The end of each visual line, per hard line, from its last glyph.
+        let mut ends: Vec<Vec<usize>> = vec![Vec::new(); logical.len()];
+        for run in self.scratch.layout_runs() {
+            let Some(hard) = ends.get_mut(run.line_i) else {
+                continue;
+            };
+            let base = logical[run.line_i].0;
+            if let Some(last) = run.glyphs.iter().map(|g| g.end).max() {
+                hard.push(base + last);
+            }
+        }
+        if text.len() > SCRATCH_RETAINS_UP_TO {
+            self.scratch.set_text(
+                &mut self.font_system,
+                "",
+                &Attrs::new(),
+                Shaping::Basic,
+                None,
+            );
+        }
+        let mut out = Vec::with_capacity(logical.len());
+        for ((start, end), cuts) in logical.into_iter().zip(ends) {
+            let mut from = start;
+            // Every visual line but the last ends where its last glyph does;
+            // the last runs to the end of the hard line, so a trailing space
+            // the shaper left off the glyphs is in it.
+            if let Some((_, soft)) = cuts.split_last() {
+                for &cut in soft {
+                    let cut = cut.clamp(from, end);
+                    out.push((from, cut));
+                    from = cut;
+                }
+            }
+            out.push((from, end));
+        }
+        out
+    }
+
     /// Shapes `text` through `cosmic-text` and returns its `(width, height)`,
     /// optionally bounded to `max_width` so it wraps.
     fn shape(
@@ -564,6 +648,50 @@ fn axis_weights_of(bytes: &[u8], index: u32) -> Vec<glyphon::fontdb::Weight> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── the visual lines of a wrapped text (RFC-0064) ────────────────
+
+    #[test]
+    fn hard_breaks_end_lines_and_an_empty_line_is_an_empty_range() {
+        let mut m = TextMeasurer::new();
+        assert_eq!(m.wrap_lines("", 16.0, 300.0, 400, None), [(0, 0)]);
+        assert_eq!(
+            m.wrap_lines("a\n\nb", 16.0, 300.0, 400, None),
+            [(0, 1), (2, 2), (3, 4)]
+        );
+        assert_eq!(
+            m.wrap_lines("a\n", 16.0, 300.0, 400, None),
+            [(0, 1), (2, 2)],
+            "the line after a final break is there to put the caret on"
+        );
+    }
+
+    #[test]
+    fn a_long_line_wraps_into_lines_that_cover_it() {
+        let mut m = TextMeasurer::new();
+        let text = "the quick brown fox jumps over the lazy dog and keeps going";
+        let lines = m.wrap_lines(text, 16.0, 100.0, 400, None);
+        assert!(lines.len() > 2, "{lines:?}");
+        assert_eq!(lines[0].0, 0);
+        assert_eq!(lines.last().unwrap().1, text.len());
+        for pair in lines.windows(2) {
+            assert_eq!(pair[0].1, pair[1].0, "no gap, no overlap: {lines:?}");
+        }
+        // The same count the measurer's height says.
+        let (_, h) = m.measure_wrapped(text, 16.0, Some(100.0), 400, None);
+        assert!(
+            (h - f32::from(u16::try_from(lines.len()).unwrap()) * 19.2).abs() < 0.5,
+            "{h} for {lines:?}"
+        );
+    }
+
+    #[test]
+    fn a_text_ending_in_a_break_is_as_tall_as_its_lines() {
+        let mut m = TextMeasurer::new();
+        let (_, one) = m.measure_wrapped("a", 16.0, Some(100.0), 400, None);
+        let (_, two) = m.measure_wrapped("a\n", 16.0, Some(100.0), 400, None);
+        assert!((two - 2.0 * one).abs() < 0.5, "{one} {two}");
+    }
 
     /// A size of zero, below zero or not a number takes no room, where it used
     /// to panic inside `cosmic-text` ("line height cannot be 0").

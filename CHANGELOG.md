@@ -12,6 +12,12 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`Row #[wrap: true]`.** A row moves the children that do not fit onto new lines, `gap` apart and `row_gap` between lines (`gap` when it is not written), as a chip set does. `row_gap` without `wrap` is an error. RFC-0064. See `crates/byard-cli/examples/layout_and_text`.
+- **`min_width`, `max_width`, `min_height` and `max_height`** on every element, to bound the size layout settles on (the minimum wins when they disagree). A `Button` that writes its own replaces the theme's touch minimum. Static, like every layout attribute.
+- **`max_lines` and `overflow` on `Text`.** A text stops after that many lines, ending the last in `…` (`overflow: ellipsis`, the default) or cutting without a mark (`overflow: clip`).
+- **A multiline `TextField`.** `lines: 3` is a field three lines high, `min_lines` and `max_lines` one that grows with its content and then scrolls. Enter inserts a line break instead of submitting, long lines wrap, a paste keeps its breaks, and Up, Down, Home, End and the selection work by line.
+- **`border_gap: (start, length)`** cuts a gap in the top edge of a border, for the label of an outlined field, with what is under it showing through instead of a patch over the border.
+- **Shadow presets `"xl"` and `"2xl"`,** Material's elevation levels 4 and 5, and the mapping of every preset to a level in the styling guide.
 - **A control's states written in the control.** `on hover { … }`, `on pressed { … }` and `on focus_visible { … }` can be written inside an element, among its children, as well as in a `style`. A state that animates an attribute with `with` animates it back when the state ends, so a pressed corner springs open on release without a `with` on the resting value. A held Space or Enter now shows `on pressed`, as a press of the pointer does. RFC-0059. See `examples/interaction_styles`.
 - **`outline`, `outline_width` and `outline_offset`.** A ring drawn outside the element's shape, following `radius`, taking no layout room and animating with `with`: a focus ring that no longer needs a sibling and a `var`.
 - **`overlay`.** A colour or gradient drawn over `bg` and under the children, clipped to the element's shape, and animated with `with`: the state layer of a Material control without a wrapping view.

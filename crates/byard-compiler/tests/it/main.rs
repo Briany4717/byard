@@ -45,6 +45,7 @@ mod instrumentation;
 mod interaction_styles;
 mod keyboard_focus;
 mod lambda_items;
+mod layout_and_text;
 mod let_functions;
 mod let_in_actions;
 mod list_reductions;

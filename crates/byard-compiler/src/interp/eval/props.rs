@@ -43,11 +43,12 @@ const KEYWORD_ATTRS: &[&str] = &[
     "snap_align",
     "transition",
     "indicator",
+    "overflow",
     "blur_quality",
     "morph_mode",
 ];
 
-/// A preset shadow (`sm`, `md`, `lg`): an offset and a blur, with an alpha that
+/// A preset shadow (`sm`, `md`, `lg`, `xl`, `2xl`): an offset and a blur, with an alpha that
 /// scales gently with size (`sm` 0x44 to `lg` 0x66).
 fn shadow_preset(dy: f32, blur: f32) -> ShadowSpec {
     #[allow(clippy::cast_possible_truncation)]
@@ -384,9 +385,9 @@ impl Interpreter {
                 // animatable (`LayoutPropNotAnimatable`), so skipping the
                 // rest removes wasted work without changing behaviour.
                 let val = match attr.name.as_str() {
-                    "width" | "height" | "gap" | "grow" | "basis" | "pt" | "padding_top"
-                    | "padding-top" | "pr" | "padding_right" | "padding-right" | "pb"
-                    | "padding_bottom" | "padding-bottom" | "pl" | "padding_left"
+                    "width" | "height" | "gap" | "row_gap" | "wrap" | "grow" | "basis" | "pt"
+                    | "padding_top" | "padding-top" | "pr" | "padding_right" | "padding-right"
+                    | "pb" | "padding_bottom" | "padding-bottom" | "pl" | "padding_left"
                     | "padding-left" | "mt" | "margin_top" | "margin-top" | "mr"
                     | "margin_right" | "margin-right" | "mb" | "margin_bottom"
                     | "margin-bottom" | "ml" | "margin_left" | "margin-left" | "mx"
@@ -428,6 +429,10 @@ impl Interpreter {
                         if let Some(v) = val_to_f32(&val) {
                             style.gap = v;
                         }
+                    }
+                    "row_gap" if element_name == "Row" => style.row_gap = val_to_f32(&val),
+                    "wrap" if element_name == "Row" => {
+                        style.wrap = matches!(val, Value::Bool(true));
                     }
                     "p" | "padding" => {
                         style.padding = self.resolve_spacing(value, "p");
@@ -772,6 +777,9 @@ impl Interpreter {
                 "sm" => vec![shadow_preset(1.0, 3.0)],
                 "md" => vec![shadow_preset(3.0, 8.0)],
                 "lg" => vec![shadow_preset(6.0, 16.0)],
+                // Material elevation levels 4 and 5 (RFC-0064).
+                "xl" => vec![shadow_preset(8.0, 20.0)],
+                "2xl" => vec![shadow_preset(12.0, 28.0)],
                 "none" | "" => Vec::new(),
                 other => {
                     self.report_not_a_shadow(span, &format!("the word `{other}`"));
@@ -800,7 +808,7 @@ impl Interpreter {
             self.errors.push(CompileError::AttributeTypeMismatch {
                 span,
                 expected: format!(
-                    "a shadow: a preset (\"sm\", \"md\", \"lg\"), a tuple like \
+                    "a shadow: a preset (\"sm\", \"md\", \"lg\", \"xl\", \"2xl\"), a tuple like \
                      `(y: 2, blur: 4, color: 0x33000000)`, or a list of them, `()` for none \
                      (found {found})"
                 ),
@@ -1178,6 +1186,28 @@ impl Interpreter {
     /// `frame.rs` for why). `rect` is the element's own laid-out rect,
     /// logical pixels, needed to resolve a token/fractional `origin` into an
     /// absolute pivot.
+    /// The `border_gap: (start, length)` of an element, `[0, 0]` (no gap) when
+    /// it writes none or writes something that is not a pair of numbers (the
+    /// checker said so already).
+    pub(super) fn resolve_border_gap(&mut self, attrs: &[Attr]) -> [f32; 2] {
+        let Some(value) = attrs.iter().find_map(|a| match &a.kind {
+            AttrKind::Prop { value } if a.name.as_str() == "border_gap" => Some(value),
+            _ => None,
+        }) else {
+            return [0.0; 2];
+        };
+        let Value::Tuple(fields) = self.eval_pure(value) else {
+            return [0.0; 2];
+        };
+        match fields.as_slice() {
+            [(_, a), (_, b)] => match (spacing_value(a), spacing_value(b)) {
+                (Some(start), Some(len)) if len > 0.0 => [start, len],
+                _ => [0.0; 2],
+            },
+            _ => [0.0; 2],
+        }
+    }
+
     pub(super) fn resolve_transform(
         &mut self,
         attrs: &[Attr],

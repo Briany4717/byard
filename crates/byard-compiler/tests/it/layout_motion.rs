@@ -502,3 +502,55 @@ fn a_let_in_a_when_body_feeds_a_length() {
     );
     assert_eq!(app.by_colour(0x11).radii, [7.0; 4]);
 }
+
+// ── `on <state>` on a Text, a Grid and a ZStack ──────────────────────────
+
+#[test]
+fn a_text_state_padding_moves_its_box() {
+    let mut app = App::new(
+        "View Main() { var n = 0 \
+         Row #[width: 400] { \
+           Text(\"hello\") #[wrap: false, width: 60, a11y_role: button, tap => n += 1] { \
+             on pressed { width: 120 with anim.linear(1000) } } \
+           Box #[bg: 0x220000, width: 30, height: 30] {} } }",
+    );
+    assert!(near(app.by_colour(0x22).rect[0], 60.0));
+    app.press((10.0, 8.0));
+    app.wait(1100);
+    assert!(near(app.by_colour(0x22).rect[0], 120.0));
+    app.release((10.0, 8.0));
+    app.wait(1100);
+    assert!(near(app.by_colour(0x22).rect[0], 60.0));
+}
+
+#[test]
+fn a_grid_state_width_moves_its_box() {
+    let mut app = App::new(
+        "View Main() { var n = 0 \
+         Row #[width: 400] { \
+           Grid #[columns: \"1fr\", rows: \"40\", width: 60, a11y_role: button, tap => n += 1] { \
+             on pressed { width: 120 with anim.linear(1000) } \
+             Box #[bg: 0x110000, height: 40] {} } \
+           Box #[bg: 0x220000, width: 30, height: 30] {} } }",
+    );
+    assert!(near(app.by_colour(0x22).rect[0], 60.0));
+    app.press((10.0, 10.0));
+    app.wait(1100);
+    assert!(near(app.by_colour(0x22).rect[0], 120.0));
+}
+
+#[test]
+fn a_zstack_state_width_moves_its_box() {
+    let mut app = App::new(
+        "View Main() { var n = 0 \
+         Row #[width: 400] { \
+           ZStack #[width: 60, height: 40, a11y_role: button, tap => n += 1] { \
+             on pressed { width: 120 with anim.linear(1000) } \
+             Box #[bg: 0x110000, width: 20, height: 20] {} } \
+           Box #[bg: 0x220000, width: 30, height: 30] {} } }",
+    );
+    assert!(near(app.by_colour(0x22).rect[0], 60.0));
+    app.press((10.0, 10.0));
+    app.wait(1100);
+    assert!(near(app.by_colour(0x22).rect[0], 120.0));
+}

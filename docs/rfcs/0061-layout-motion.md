@@ -179,10 +179,10 @@ and starts it again. That is the author's to design; the guide says so, and the
 Material controls that widen on press do so on `pressed`, which a pointer keeps
 until released.
 
-The state applies to a `Row`, `Column`, `Box` and `Button`, the elements that
-take the generic container path. A `Text`, `Grid` or `ZStack` still resolves its
-`on <state>` blocks against the viewport alone at layout time; the Unresolved
-questions say what is done about it.
+The state applies to every element that lays out as a node of its own: `Row`,
+`Column`, `Box`, `Button`, `Grid`, `ZStack` and `Text`. A `Text` is a leaf, so its
+place in the build order is known before it is measured; a `Grid` and a `ZStack`
+are read like a container, after their children.
 
 ### 4. Tuples
 
@@ -271,15 +271,10 @@ padding, margin and gap; every radius form; the `for`/`let` repro.
 
 ## Unresolved questions
 
-- An `on <state>` block of a `Text`, `Grid` or `ZStack` that writes a layout
-  property is still ignored there, which is the silent no-op this RFC removes
-  for containers. The fix is to resolve them too, not to diagnose them, and it
-  waits for a component that needs it (a `Text` with a state padding).
 - `anim.keyframes` on a padding tuple is allowed because the tuple resolver
   reads values; its interpolation between tuple steps is per component, which
   has not been needed yet.
 
 ## Future possibilities
 
-- State blocks for every element kind.
 - `grow`, once a use shows what its in-between means.

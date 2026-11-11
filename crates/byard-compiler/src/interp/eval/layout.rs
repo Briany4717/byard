@@ -800,13 +800,25 @@ impl Interpreter {
         use byard_core::atlas::layout::LeafSize;
         // RFC-0016: a responsive `size:` changes what is measured, so
         // it has to be seen here as well as at paint.
+        let raw_attrs = attrs;
         let attrs = resolve_state_attrs(
             attrs,
             state_blocks,
             crate::interp::events::StyleState::empty(),
             &|c| viewport_holds(c, self.viewport, &self.theme),
         );
-        let attrs = self.pick_keywords(attrs);
+        // RFC-0061: a leaf has no children, so its place in the build order is
+        // known now and its interaction states can move its layout properties.
+        let attrs = self.with_layout_states(
+            "Text",
+            &attrs,
+            StateSource {
+                raw: raw_attrs,
+                blocks: state_blocks,
+                bound_sig: None,
+            },
+        );
+        let attrs = self.pick_keywords(std::borrow::Cow::Owned(attrs.into_owned()));
         let attrs: &[Attr] = &attrs;
         let text = match self.binding_value(content) {
             Some(Value::Str(s)) => s,
@@ -1312,11 +1324,11 @@ impl Interpreter {
         // the parent gets grid tracks/gaps and each child can carry an
         // explicit placement.
         if name.as_str() == "Grid" {
-            return self.build_grid(attrs, children, pools, flat_ids);
+            return self.build_grid(attrs, states, children, pools, flat_ids);
         }
         // RFC-0018 `ZStack`: overlapping children, a single-cell grid.
         if name.as_str() == "ZStack" {
-            return self.build_zstack(attrs, children, pools, flat_ids);
+            return self.build_zstack(attrs, states, children, pools, flat_ids);
         }
         let mut temp_flat = Vec::new();
         // RFC-0018: expand reactive `when`/`for` children before layout.
@@ -1380,6 +1392,7 @@ impl Interpreter {
     fn build_grid(
         &mut self,
         attrs: &[Attr],
+        states: StateSource<'_>,
         children: &[RenderNode],
         pools: Pools<'_>,
         flat_ids: &mut Vec<byard_core::atlas::layout::AtlasNodeId>,
@@ -1402,6 +1415,8 @@ impl Interpreter {
             }
         }
         self.anim_slot = enclosing;
+        let attrs = self.with_layout_states("Grid", attrs, states);
+        let attrs: &[Attr] = &attrs;
         let base = self.eval_container_style("Grid", attrs);
         let (cols, rows) = self.eval_grid_templates(attrs);
         let (col_gap, row_gap) = self.eval_grid_gaps(attrs);
@@ -1509,6 +1524,7 @@ impl Interpreter {
     fn build_zstack(
         &mut self,
         attrs: &[Attr],
+        states: StateSource<'_>,
         children: &[RenderNode],
         pools: Pools<'_>,
         flat_ids: &mut Vec<byard_core::atlas::layout::AtlasNodeId>,
@@ -1526,6 +1542,8 @@ impl Interpreter {
             self.stacked = Stacked::No;
         }
         self.anim_slot = enclosing;
+        let attrs = self.with_layout_states("ZStack", attrs, states);
+        let attrs: &[Attr] = &attrs;
         let base = self.eval_container_style("ZStack", attrs);
         let align = self.eval_stack_align(attrs);
         let id = self.atlas.add_stack_container(base, align, &child_ids)?;

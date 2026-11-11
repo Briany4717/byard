@@ -16,9 +16,8 @@
 //   3. The same press, settled at 120 wide:
 //        cargo run -p byard-cli -- shot crates/byard-cli/examples/layout_motion \
 //            --hold 164,60 --at 1000 -o hold.png
-//   4. Tab to Two and hold Space, which widens it too:
-//        cargo run -p byard-cli -- shot crates/byard-cli/examples/layout_motion \
-//            --key Tab --key Tab --hold 0,0 --at 1000 -o space.png
+//   4. A held Space widens Two as a held pointer does, but `shot --key` presses and releases,
+//      so it cannot show it; `a_held_space_widens_it_too` in `tests/it/layout_motion.rs` does.
 //   5. A tap on the chip opens the check slot (the label slides right), mid-way and open:
 //        cargo run -p byard-cli -- shot crates/byard-cli/examples/layout_motion \
 //            --tap 60,140 --at 60 -o chip-mid.png
@@ -53,7 +52,9 @@ View Main() {
             tap => { chip = !chip },
         ] {
             Row #[align: center] {
-                Box #[width: chip ? 20 : 0 with t.springSpatialFast, height: 18] {
+                // The slot is a Clip: at width 0 it shows nothing, so the check
+                // does not draw over the label while it is closed.
+                Clip #[width: chip ? 20 : 0 with t.springSpatialFast, height: 18] {
                     Text("v") #[color: t.onSecondaryContainer, size: 14, wrap: false]
                 }
                 Text("Chip") #[color: t.onSurface, size: 14, wrap: false]

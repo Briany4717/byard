@@ -95,8 +95,9 @@ any element, say what the control is:
 | `a11y_expanded` | `Bool` | Expanded when true, collapsed when false. Leave it out if it does not expand |
 | `a11y_disabled` | `Bool` | Disabled, for a reader only. `disabled:` does this and stops input too |
 
-`a11y_description` is read on an element that is in the tree, one with a role, a built-in
-control or a `Text`; a plain `Box` with none is not. `byard shot --a11y` prints it after
+`a11y_description` is read on an element that is in the tree: one with a role, a built-in
+control or a `Text`. A `Box`, `Row` or `Column` with no role and no `tap` is not, so a
+`a11y_description` or `a11y_label` on one is an error that says to give it an `a11y_role`. `byard shot --a11y` prints it after
 the name:
 
 ```text

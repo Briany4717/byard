@@ -827,6 +827,7 @@ impl Interpreter {
                                 paint_attrs,
                                 current_rect,
                                 hit_rect,
+                                shifted_rect(current_rect, scroll_shift),
                                 elem_idx,
                                 transform,
                                 opacity,

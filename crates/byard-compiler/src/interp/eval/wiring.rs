@@ -245,6 +245,7 @@ impl Interpreter {
     pub(super) fn field_actions(
         &mut self,
         attrs: &[Attr],
+        bounds: crate::interp::intrinsics::Rect,
         names: &[&str],
     ) -> Vec<super::events::Action> {
         let mut out = Vec::new();
@@ -252,7 +253,17 @@ impl Interpreter {
             if let AttrKind::Event { payload, action } = &attr.kind {
                 if names.contains(&attr.name.as_str()) {
                     if let Ok(lowered) = self.lower_action(action, payload.clone()) {
-                        out.push(lowered);
+                        let kind = match attr.name.as_str() {
+                            "pointer_down" => Some(super::events::EventKind::PointerDown),
+                            "pointer_up" => Some(super::events::EventKind::PointerUp),
+                            _ => None,
+                        };
+                        out.push(match kind {
+                            Some(kind) if payload.is_some() => {
+                                self.with_pointer_value(lowered, kind, bounds)
+                            }
+                            _ => lowered,
+                        });
                     }
                 }
             }
@@ -260,25 +271,24 @@ impl Interpreter {
         out
     }
 
-    /// The actions written for the event `name`, lowered, each given the
-    /// pointer value when it names one (RFC-0063 §3).
-    pub(super) fn user_actions(
+    /// `builtin` preceded by the actions the element wrote for the event
+    /// `name`, which run first, from the one handler the router fires per
+    /// kind (RFC-0063 §3): how a built-in control keeps what is written on
+    /// it. Each is given the pointer value when it names one.
+    pub(super) fn composed(
         &mut self,
         attrs: &[Attr],
         name: &str,
-        _hit_rect: crate::interp::intrinsics::Rect,
+        kind: super::events::EventKind,
         bounds: crate::interp::intrinsics::Rect,
-    ) -> Vec<super::events::Action> {
-        let kind = match name {
-            "pointer_down" => super::events::EventKind::PointerDown,
-            _ => super::events::EventKind::KeyDown,
-        };
-        let mut out = Vec::new();
+        mut builtin: super::events::Action,
+    ) -> super::events::Action {
+        let mut user: Vec<super::events::Action> = Vec::new();
         for attr in attrs {
             if let AttrKind::Event { payload, action } = &attr.kind {
                 if attr.name.as_str() == name {
                     if let Ok(lowered) = self.lower_action(action, payload.clone()) {
-                        out.push(if payload.is_some() {
+                        user.push(if payload.is_some() {
                             self.with_pointer_value(lowered, kind, bounds)
                         } else {
                             lowered
@@ -287,7 +297,15 @@ impl Interpreter {
                 }
             }
         }
-        out
+        if user.is_empty() {
+            return builtin;
+        }
+        Box::new(move |ctx, p| {
+            for a in &mut user {
+                a(ctx, p);
+            }
+            builtin(ctx, p);
+        })
     }
 
     pub(super) fn register_event_attrs(

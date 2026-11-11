@@ -1334,6 +1334,31 @@ pub fn validate_element_in(
         }
     }
 
+    // RFC-0063 §5: a layout container is in the accessibility tree only when
+    // it has a role (or a `tap`, which makes it a button), so a label or
+    // description written on one that has neither would be read by nothing.
+    if matches!(name, "Box" | "Column" | "Row" | "Grid" | "ZStack" | "Clip")
+        && el.action.is_none()
+        && !attrs.iter().any(|a| {
+            matches!(a.kind, AttrKind::Spread { .. })
+                || (matches!(a.kind, AttrKind::Event { .. })
+                    && matches!(a.name.as_str(), "tap" | "click"))
+                || (matches!(a.kind, AttrKind::Prop { .. }) && a.name.as_str() == "a11y_role")
+        })
+    {
+        for attr in attrs {
+            if matches!(attr.kind, AttrKind::Prop { .. })
+                && matches!(attr.name.as_str(), "a11y_label" | "a11y_description")
+            {
+                errs.push(CompileError::A11yNeedsRole {
+                    span: attr.span,
+                    element: name.to_string(),
+                    attr: attr.name.as_str().to_string(),
+                });
+            }
+        }
+    }
+
     // Rule 8, children on a childless intrinsic.
     if !info.children && !el.children.is_empty() {
         errs.push(CompileError::UnexpectedChildren {

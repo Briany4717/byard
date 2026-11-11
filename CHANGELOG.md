@@ -47,7 +47,8 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- **Tab enters a `tab_list` or `radio_group` once, at its selected member.** The group is one stop, the next Tab leaves it, and the arrow keys move inside it; with nothing selected Tab enters at the first. It used to stop at every member. RFC-0063.
+- **`a11y_label` or `a11y_description` on a `Box`, `Row`, `Column`, `Grid`, `ZStack` or `Clip` with no role and no `tap` is an error.** Such a container is not in the accessibility tree, so the label was read by nothing; give it an `a11y_role`. RFC-0063.
+- **Tab enters a `tab_list` or `radio_group` once, at its selected member.** The group is one stop, as WAI-ARIA has it: the next Tab leaves it and the arrow keys move inside it; with nothing selected Tab enters at the first. This changes the Tab order of an app with one; it used to stop at every member. RFC-0063.
 - **`tap(e)` is an error.** A `tap` carries no value, so a name on it read as empty; the error points to `pointer_down(e)`, which has the position.
 
 - **A disabled element shows no hover or press.** `disabled: true` stopped the handlers and Tab but still let `on hover` and `on pressed` style the element, so a disabled button tinted under the pointer. It is now only `disabled`, and `on disabled+hover` (or `pressed`, `focused`, `focus_visible`, `dragging`), which could never apply, is the error `DisabledStateNeverMet`. RFC-0059.
@@ -119,7 +120,7 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-- **A `pointer_down`, `key_down` or `change` written on a built-in `Slider` never ran**, and neither did its `tap`, `hover` or any other event. They run now, before the slider's own handling.
+- **A `pointer_down`, `key_down` or `change` written on a built-in `Slider` never ran**, and neither did its `tap`, `hover` or any other event. They run now, before the slider's own handling; `Toggle`, `Checkbox` and `RadioButton` had the same gap and the same fix. A `pointer_down(e)` on any element inside a `ScrollView` reads `e.x` and `e.y` from the element as drawn.
 
 - **`typo:` chosen with `?:` keeps its font family and weight.** `typo: big ? t.titleLarge : t.labelLarge` drew in the default face at regular weight, with the right size.
 - **A `Box` with a `border` and no `bg` draws its border.** It drew nothing.

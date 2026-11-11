@@ -279,9 +279,11 @@ An event that carries no value takes none. `tap`, `click`, `double_tap`,
   slider's. (A handler that wants the slider not to move writes `disabled:`.)
 - `pointer_down(e)` on a `Slider` sees the same `PointerEvent` any element does.
 
-`Toggle`, `Checkbox` and `RadioButton` have the same gap for events they do not
-handle themselves (`pointer_enter`, `hover`, …); this RFC leaves them, as it
-found it for the slider only. See Unresolved.
+`Toggle`, `Checkbox` and `RadioButton` had the same gap and get the same fix:
+every event written on them is registered, and for `tap`, `key_down` and
+`change` (which they handle) the user's actions run first. A `TextField`'s
+`pointer_down(e)` and `pointer_up(e)` are given the pointer value as well.
+`e.x` and `e.y` are relative to the element as drawn, scroll offset applied.
 
 ### 4. Tab enters a group once, at its selected member
 
@@ -297,7 +299,8 @@ For Tab and Shift+Tab, a group is **one stop**. The member that is the stop is:
    evaluates `true`, or the universal `selected:` prop does; otherwise
 3. the first enabled member.
 
-The others are not Tab stops; they stay focus targets (a press focuses them, the
+This is the WAI-ARIA roving pattern, decided over the alternative of entering at
+the selected member and still stopping at every one. The others are not Tab stops; they stay focus targets (a press focuses them, the
 arrow keys and an assistive technology's `Focus` reach them). Disabled members
 are never the stop. The router is told each member's selected state when it
 registers the member (`group_member(elem, selected)`), which evaluates the
@@ -317,10 +320,15 @@ the bridge, RFC-0042), after the name. An empty string says nothing. On a
 The dump (`byard shot --a11y`) already prints a description after the name:
 ` description "…"`; it now does so for this too.
 
-As with `a11y_label`, the attribute is read on an element that is a node: a
-built-in control, a `Text`, an `Image`, or an element with an `a11y_role`. On
-a plain layout `Box` with no role it is not read, because the `Box` is not in
-the tree.
+The attribute is read on an element that is a node: a built-in control, a
+`Text`, an `Image`, or an element with an `a11y_role`. A layout container
+(`Box`, `Column`, `Row`, `Grid`, `ZStack`, `Clip`) with **no role, no `tap` and
+no `=>`** is not in the tree, so a label or description written on it would be
+read by nothing. That is the new check error `A11yNeedsRole`, for `a11y_description`
+and for `a11y_label`, which says to give it an `a11y_role`. An element with a
+`..style` spread is not checked (the style may carry the role). The one program
+in the repository this found, a `Box` in `examples/view_animations` with a label
+and no role, now says `a11y_role: image`.
 
 ## Cost
 
@@ -399,12 +407,6 @@ conservative reading (an expression role counts) never rejects a valid program.
 
 ## Unresolved
 
-- **`Toggle`, `Checkbox`, `RadioButton`** drop the events they do not handle
-  themselves, as the slider did. Composing their handlers as §3 does is the same
-  change, left until a component needs it.
-- **`a11y_description` on a role-less `Box`** is not read. A warning from
-  `byard check` would be the loud form; it is the same question as `a11y_label`
-  on a role-less `Box`, which RFC-0052 already left.
 - **The built-in `Slider` on `Drag`** instead of the internal `PointerDrag`.
 - **Pointer capture for `pointer_up`.** It goes to the element under the pointer,
   not the one pressed; `drag_end` is the one that is guaranteed.

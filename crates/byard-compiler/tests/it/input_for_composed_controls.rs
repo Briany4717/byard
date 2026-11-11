@@ -793,3 +793,181 @@ View Main() {
         Some("Fix the form first")
     );
 }
+
+// ── 6. Every built-in control keeps the events written on it ─────────────
+
+const WIDGETS: &str = r#"
+View Main() {
+    var on = false
+    var agreed = false
+    var size = "s"
+    var before = 0
+    var taps = 0
+    var keys = ""
+    var entered = 0
+    var changes = 0
+    Column #[p: 10, gap: 8] {
+        Toggle #[bind: on, width: 52, height: 30, a11y_label: "T",
+                 tap => { before = on ? 1 : 2  taps++ },
+                 pointer_enter => entered++]
+        Checkbox #[bind: agreed, width: 24, height: 24, a11y_label: "C",
+                   tap => taps++, key_down(k) => keys = k, pointer_enter => entered++]
+        RadioButton #[bind: size, value: "m", width: 24, height: 24, a11y_label: "R",
+                      tap => taps++, key_down(k) => keys = k, pointer_enter => entered++]
+    }
+}
+"#;
+
+fn press(app: &mut App, name: &str) {
+    let at = app.at(name, 5.0, 5.0);
+    app.pointer(EventKind::PointerDown, at);
+    app.pointer(EventKind::PointerUp, at);
+}
+
+#[test]
+fn a_toggle_runs_what_is_written_on_it_before_it_flips() {
+    let mut app = App::new(WIDGETS);
+    press(&mut app, "T");
+    assert_eq!(app.int("taps"), 1);
+    assert_eq!(app.int("before"), 2, "it saw the old value");
+    assert_eq!(app.value("on"), Value::Bool(true), "and it still flipped");
+    // The keyboard presses it through the same handler.
+    app.key("Space");
+    assert_eq!(app.int("taps"), 2);
+    assert_eq!(app.int("before"), 1);
+    assert_eq!(app.value("on"), Value::Bool(false));
+}
+
+#[test]
+fn a_toggle_checkbox_and_radio_take_their_other_events_too() {
+    let mut app = App::new(WIDGETS);
+    for name in ["T", "C", "R"] {
+        let at = app.at(name, 5.0, 5.0);
+        app.pointer(EventKind::PointerMove, (at.0 + 100.0, at.1 + 100.0));
+        app.pointer(EventKind::PointerMove, at);
+    }
+    assert_eq!(app.int("entered"), 3);
+}
+
+#[test]
+fn a_checkbox_runs_its_tap_and_key_down_and_still_toggles() {
+    let mut app = App::new(WIDGETS);
+    press(&mut app, "C");
+    assert_eq!(app.value("agreed"), Value::Bool(true));
+    assert_eq!(app.int("taps"), 1);
+    assert_eq!(app.focused().as_deref(), Some("C"));
+    app.key("Space");
+    assert_eq!(app.text("keys"), "Space");
+    assert_eq!(
+        app.value("agreed"),
+        Value::Bool(false),
+        "Space still toggles"
+    );
+}
+
+#[test]
+fn a_radio_runs_its_tap_and_key_down_and_still_selects() {
+    let mut app = App::new(WIDGETS);
+    press(&mut app, "R");
+    assert_eq!(app.text("size"), "m");
+    assert_eq!(app.int("taps"), 1);
+    app.key("ArrowDown");
+    assert_eq!(app.text("keys"), "ArrowDown");
+}
+
+// ── 7. The position under a scroll ───────────────────────────────────────
+
+#[test]
+fn the_pointer_position_is_relative_to_the_element_as_drawn_in_a_scroll_view() {
+    let mut app = App::new(
+        r#"
+View Main() {
+    var px = 0.0
+    var py = 0.0
+    var fx = 0.0
+    var fy = 0.0
+    var y = 150.0
+    var text = ""
+    ScrollView #[width: 300, height: 100, offset: (0, y)] {
+        Column #[gap: 0] {
+            Box #[width: 100, height: 100]
+            Box #[width: 100, height: 100]
+            Box #[a11y_role: slider, a11y_label: "S", width: 200, height: 80,
+                  pointer_down(e) => { px = e.x  py = e.y }]
+            TextField #[bind: text, a11y_label: "F", width: 200, height: 60,
+                        pointer_down(e) => { fx = e.x  fy = e.y }]
+        }
+    }
+}
+"#,
+    );
+    let s = app.named("S").bounds;
+    assert!(s.y < 100.0, "the slider is scrolled into view: {s:?}");
+    let at = app.at("S", 30.0, 12.0);
+    app.pointer(EventKind::PointerDown, at);
+    assert!((app.float("px") - 30.0).abs() < 0.01, "{}", app.float("px"));
+    assert!((app.float("py") - 12.0).abs() < 0.01, "{}", app.float("py"));
+}
+
+#[test]
+fn a_text_fields_pointer_position_follows_the_scroll_too() {
+    let mut app = App::new(
+        r#"
+View Main() {
+    var fx = 0.0
+    var fy = 0.0
+    var y = 250.0
+    var text = ""
+    ScrollView #[width: 300, height: 100, offset: (0, y)] {
+        Column #[gap: 0] {
+            Box #[width: 100, height: 100]
+            Box #[width: 100, height: 100]
+            Box #[width: 100, height: 100]
+            TextField #[bind: text, a11y_label: "F", width: 200, height: 60,
+                        pointer_down(e) => { fx = e.x  fy = e.y }]
+        }
+    }
+}
+"#,
+    );
+    let at = app.at("F", 30.0, 20.0);
+    app.pointer(EventKind::PointerDown, at);
+    assert!((app.float("fx") - 30.0).abs() < 0.01, "{}", app.float("fx"));
+    assert!((app.float("fy") - 20.0).abs() < 0.01, "{}", app.float("fy"));
+}
+
+// ── 8. A label or description nothing would read ─────────────────────────
+
+#[test]
+fn a_label_or_description_on_a_container_outside_the_tree_is_an_error() {
+    for body in [
+        "Box #[a11y_label: \"x\", width: 10, height: 10]",
+        "Row #[a11y_description: \"x\"] {}",
+        "Column #[a11y_label: \"x\"] {}",
+    ] {
+        let errors = lower_errors(&format!("View Main() {{ var n = 0\n {body} }}"));
+        assert_eq!(kinds(&errors), ["A11yNeedsRole"], "{body}: {errors:?}");
+        assert!(errors[0].headline().contains("a11y_role"));
+    }
+}
+
+#[test]
+fn a_label_is_fine_where_something_reads_it() {
+    for body in [
+        "Box #[a11y_role: group, a11y_label: \"x\", width: 10, height: 10]",
+        "Box #[a11y_role: on ? image : group, a11y_label: \"x\", width: 10, height: 10]",
+        "Box #[a11y_label: \"x\", width: 10, height: 10, tap => n++]",
+        "Box #[a11y_label: \"x\", width: 10, height: 10] => n++",
+        "Text(\"t\") #[a11y_label: \"x\"]",
+        "Button(\"t\") #[a11y_label: \"x\"] => n++",
+        "VectorIcon(\"play\") #[a11y_label: \"x\"]",
+    ] {
+        let errors = lower_errors(&format!(
+            "View Main() {{ var n = 0\n var on = true\n {body} }}"
+        ));
+        assert!(
+            !kinds(&errors).contains(&"A11yNeedsRole"),
+            "{body}: {errors:?}"
+        );
+    }
+}

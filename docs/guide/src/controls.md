@@ -367,7 +367,7 @@ or `radio` inside it as a group, and the arrow keys walk it:
 | Left, Up | Focus the previous, wrapping |
 | Home, End | Focus the first, the last (a `tab_list` only) |
 
-A group is one stop for Tab. Tab enters it at the member that is selected (`a11y_selected`
+A group is one stop for Tab, as the WAI-ARIA pattern for tab lists and radio groups has it. Tab enters it at the member that is selected (`a11y_selected`
 or `a11y_checked` true), or at the first when none is, and the next Tab leaves it;
 Shift+Tab comes back to the selected one. The arrows move inside it.
 

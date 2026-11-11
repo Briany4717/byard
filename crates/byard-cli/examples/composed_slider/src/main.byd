@@ -55,6 +55,11 @@ View Main() {
             Box #[grow: 1, height: 6, radius: 3, bg: 0x49454F]
         }
 
-        Text("Press, drag and release on the track. Tab, then Home, End or an arrow.") #[font: body, color: 0xCAC4D0, size: 14, width: 312]
+        Text("Press, drag and release on the track. Tab, then Home, End or an arrow.") #[
+            font: body,
+            color: 0xCAC4D0,
+            size: 14,
+            width: 312,
+        ]
     }
 }

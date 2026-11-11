@@ -193,6 +193,24 @@ const ALIGN2D: &[&str] = &[
     "end",
 ];
 
+/// The attributes a view call may carry besides its parameters (RFC-0062 §4):
+/// the ones a parent reads from its child, applied to the view's root element.
+pub(crate) const VIEW_CALL_LAYOUT: &[&str] = &[
+    "width",
+    "height",
+    "m",
+    "mx",
+    "my",
+    "mt",
+    "mr",
+    "mb",
+    "ml",
+    "grow",
+    "shrink",
+    "basis",
+    "align_self",
+];
+
 const LAYOUT: &[(&str, PropDef)] = &[
     ("width", lay(PropType::Int)),
     ("height", lay(PropType::Int)),
@@ -1418,6 +1436,7 @@ fn animated_anywhere(value: &Expr) -> bool {
         | Expr::Ident(..)
         | Expr::ClassRef(..)
         | Expr::StyleValue { .. }
+        | Expr::SlotBlock { .. }
         // A controller call is a statement, never a property value, so it can
         // never carry a layout animation.
         | Expr::ControllerCall { .. }

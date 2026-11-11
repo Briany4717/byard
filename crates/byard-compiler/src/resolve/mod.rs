@@ -1339,6 +1339,22 @@ impl Resolver<'_> {
         for child in &mut el.children {
             self.rewrite_member(child, pkg_name, local, aliases, bare, errors);
         }
+        // RFC-0062: the blocks handed to a `Slot` name views too.
+        let slot_values =
+            el.content
+                .iter_mut()
+                .map(|a| &mut a.value)
+                .chain(el.attrs.iter_mut().filter_map(|a| match &mut a.kind {
+                    crate::parser::ast::AttrKind::Prop { value } => Some(value),
+                    _ => None,
+                }));
+        for value in slot_values {
+            if let Expr::SlotBlock { members, .. } = value {
+                for child in members {
+                    self.rewrite_member(child, pkg_name, local, aliases, bare, errors);
+                }
+            }
+        }
     }
 }
 

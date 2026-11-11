@@ -480,6 +480,9 @@ impl Interpreter {
             });
         }
         Self::walk_font_members(&el.children, declared, icons, bound, errors);
+        for slot in el.slot_members() {
+            Self::walk_font_members(slot, declared, icons, bound, errors);
+        }
     }
 
     /// Installs `theme` as the active design-token theme and provides it as the

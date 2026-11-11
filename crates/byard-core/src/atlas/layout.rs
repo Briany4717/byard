@@ -2457,6 +2457,13 @@ impl LayoutAtlas {
         }
     }
 
+    /// The node whose context index is `index`, in the tree built last
+    /// (the inverse of [`node_index`](Self::node_index)), if there is one.
+    #[must_use]
+    pub fn node_at(&self, index: u32) -> Option<AtlasNodeId> {
+        self.nodes_by_index.get(index as usize).copied()
+    }
+
     /// Returns the parent node of the given node, if it belongs to this atlas and has a parent.
     #[must_use]
     pub fn parent_node(&self, node: AtlasNodeId) -> Option<AtlasNodeId> {

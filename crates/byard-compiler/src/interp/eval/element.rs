@@ -12,7 +12,7 @@ use super::canvas::{
 };
 use super::layout::{ForPool, WhenPool};
 use super::states::attrs_with_states;
-use super::{Interpreter, RESERVED_CONTENT, RenderNode, controller, members_span};
+use super::{Interpreter, RenderNode, controller, members_span};
 use crate::diagnostics::{CompileError, Span};
 use crate::interp::env::Value;
 use crate::interp::intrinsics::validate_element_in;
@@ -74,7 +74,9 @@ impl Interpreter {
         // RFC-0016: expand `..style` spreads into a flat attribute set *before*
         // validating or lowering, so everything downstream sees ordinary
         // resolved attributes (and a spread can never leak into the checker).
-        let (attrs, state_blocks) = self.expand_style_spreads(&el.attrs);
+        let (attrs, mut state_blocks) = self.expand_style_spreads(&el.attrs);
+        // RFC-0062: `on field.focused` names another element; find it.
+        self.resolve_remote_states(&mut state_blocks);
         // Validate the base *and* every state block's attributes against the
         // intrinsic's contract (an `on hover { bg: … }` must obey the same §5
         // rules as an inline `bg:`); the state attrs are validation-only and do
@@ -96,6 +98,15 @@ impl Interpreter {
         // overwhelming case where there are none.
         let (measure, el_children) = self.lower_measures(el, &attrs);
         let uid = self.fresh_elem_uid();
+        // RFC-0062: `as name` also makes this element's states nameable, by the
+        // elements after it in the view (and by branches lowered later, which
+        // restore the environment this is pushed into).
+        if let Some(name) = &el.anchor_name {
+            self.env.push(
+                Symbol::intern(&format!("@{}", name.as_str())),
+                Value::Int(i64::from(uid)),
+            );
+        }
         let el_children: &[Member] = &el_children;
         match el.name.as_str() {
             "Text" | "Button" if !el.content.is_empty() => {
@@ -459,10 +470,13 @@ impl Interpreter {
             // current instance was called with (RFC-0007 D-A). The slot
             // nodes were pre-lowered in the caller scope.
             Member::Element(e)
-                if e.name.as_str() == RESERVED_CONTENT && !self.slot_stack.is_empty() =>
+                if self
+                    .slot_stack
+                    .last()
+                    .is_some_and(|f| f.get(&e.name).is_some()) =>
             {
-                if let Some(slot) = self.slot_stack.last() {
-                    out.extend(slot.clone());
+                if let Some(Some(nodes)) = self.slot_stack.last().and_then(|f| f.get(&e.name)) {
+                    out.extend(nodes.iter().cloned());
                 }
             }
             Member::Element(e) if self.is_user_view_call(e) => {
@@ -557,6 +571,7 @@ impl Interpreter {
                     known_views: known_views.iter().map(|s| (*s).to_string()).collect(),
                     env_snapshot,
                     inst: self.cur_inst,
+                    slots: self.slot_stack.last().cloned(),
                     then: None,
                     els: None,
                     then_scopes: Vec::new(),
@@ -588,6 +603,7 @@ impl Interpreter {
                     known_views: known_views.iter().map(|s| (*s).to_string()).collect(),
                     env_snapshot,
                     inst: self.cur_inst,
+                    slots: self.slot_stack.last().cloned(),
                     item_slots: Vec::new(),
                     bodies: Vec::new(),
                     slot_scopes: Vec::new(),

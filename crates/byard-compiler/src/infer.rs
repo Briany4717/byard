@@ -203,6 +203,7 @@ pub fn check_views(views: &[ViewDecl]) -> Inference {
             consts: &consts,
             enums: &enums,
             strict: true,
+            optional: HashSet::new(),
         };
         checker.check_view(view);
     }
@@ -246,6 +247,7 @@ fn check_top_fns(
         // A name a shared function cannot reach is reported below, as
         // impurity, which says more than "unknown".
         strict: false,
+        optional: HashSet::new(),
     };
     let mut top = HashMap::new();
     for decl in helpers {
@@ -372,6 +374,7 @@ fn check_consts(
                 // A name a shared constant cannot reach is reported below, as
                 // impurity, which says more than "unknown".
                 strict: false,
+                optional: HashSet::new(),
             };
             let declared = decl.ty.as_ref().map(|t| checker.resolve_type(t));
             let found = if declared.is_some() {
@@ -476,13 +479,23 @@ struct Checker<'a> {
     /// may be a word the element understands (`align: center`), which only
     /// the element can judge.
     strict: bool,
+    /// The parameters of the view being checked that can be absent: `content`
+    /// and the ones declared `= none` (RFC-0062), the only names `none` may be
+    /// compared with.
+    optional: HashSet<Symbol>,
 }
 
 impl Checker<'_> {
     fn check_view(&mut self, view: &ViewDecl) {
         // View parameters must be annotated (D9).
+        self.optional.clear();
         for param in &view.params {
             self.check_param(param, "view parameter");
+            if param.name.as_str() == crate::interp::eval::RESERVED_CONTENT
+                || param.default.as_ref().is_some_and(is_none)
+            {
+                self.optional.insert(param.name.clone());
+            }
         }
         // Pre-collect `fn` return types so calls in any order can resolve them.
         for member in &view.body {
@@ -510,7 +523,7 @@ impl Checker<'_> {
         // A default is evaluated in the view's own scope, so a misspelt name or
         // enum case in one is told here rather than when a call leaves it out.
         for param in &view.params {
-            if let Some(default) = &param.default {
+            if let Some(default) = param.default.as_ref().filter(|d| !is_none(d)) {
                 self.value(default);
             }
         }
@@ -613,6 +626,40 @@ impl Checker<'_> {
             name: name.as_str().to_string(),
             hint,
         });
+    }
+
+    /// The side of `a == b` that is not `none`, when the other is the word
+    /// `none` and nothing in the view is called that.
+    fn none_side<'e>(&self, a: &'e Expr, b: &'e Expr) -> Option<&'e Expr> {
+        let bare = |e: &Expr| is_none(e) && !self.env.contains_key(&Symbol::intern("none"));
+        match (bare(a), bare(b)) {
+            (false, true) => Some(a),
+            (true, false) => Some(b),
+            _ => None,
+        }
+    }
+
+    /// Reports a block of elements written where no `Slot` parameter takes it:
+    /// in the arguments of an element that is not a view of the program.
+    fn reject_slot_blocks(&mut self, el: &crate::parser::ast::ElementNode) {
+        let values = el
+            .content
+            .iter()
+            .map(|a| &a.value)
+            .chain(el.attrs.iter().filter_map(|a| match &a.kind {
+                AttrKind::Prop { value } => Some(value),
+                _ => None,
+            }));
+        for value in values {
+            if let Expr::SlotBlock { span, .. } = value {
+                self.errors.push(CompileError::SlotArgument {
+                    span: *span,
+                    name: String::new(),
+                    callee: String::new(),
+                    wants_slot: false,
+                });
+            }
+        }
     }
 
     fn check_param(&mut self, param: &Param, what: &str) {
@@ -756,6 +803,7 @@ impl Checker<'_> {
         let mut positional = params.iter().filter(|p| {
             p.name.as_str() != crate::interp::eval::RESERVED_CONTENT
                 && !matches!(p.ty, Some(Type::Function { .. }))
+                && !is_slot_param(p)
                 && !p.bind
         });
         let named = |name: &Symbol| params.iter().find(|p| &p.name == name);
@@ -828,6 +876,28 @@ impl Checker<'_> {
                     sole,
                     passed: String::new(),
                 }),
+                (false, false) if is_slot_param(param) => {
+                    let given = matches!(
+                        value,
+                        Expr::SlotBlock { .. } | Expr::Ident(..) | Expr::Lambda { .. }
+                    );
+                    if !given {
+                        self.errors.push(CompileError::SlotArgument {
+                            span,
+                            name: param.name.as_str().to_string(),
+                            callee: callee.to_string(),
+                            wants_slot: true,
+                        });
+                    }
+                }
+                (false, false) if matches!(value, Expr::SlotBlock { .. }) => {
+                    self.errors.push(CompileError::SlotArgument {
+                        span,
+                        name: param.name.as_str().to_string(),
+                        callee: callee.to_string(),
+                        wants_slot: false,
+                    });
+                }
                 (false, false) => found.push((param, span, ty)),
             }
         }
@@ -1046,6 +1116,7 @@ impl Checker<'_> {
                     self.check_view_args(el, &tys);
                 } else {
                     self.reject_bind_args(&el.content);
+                    self.reject_slot_blocks(el);
                     self.check_binds(el);
                 }
                 if let Some(action) = &el.action {
@@ -1192,6 +1263,25 @@ impl Checker<'_> {
             }
             Expr::Binary {
                 op, lhs, rhs, span, ..
+            } if matches!(op, BinOp::Eq | BinOp::Ne) && self.none_side(lhs, rhs).is_some() => {
+                // `x == none` / `x != none` (RFC-0062): only a parameter that
+                // can be absent has something to say.
+                let other = self.none_side(lhs, rhs).unwrap_or(lhs);
+                match other {
+                    Expr::Ident(name, _) if self.optional.contains(name) => {}
+                    Expr::Ident(name, _) => self.errors.push(CompileError::NoneNeedsOptional {
+                        span: *span,
+                        name: name.as_str().to_string(),
+                    }),
+                    _ => self.errors.push(CompileError::NoneNeedsOptional {
+                        span: *span,
+                        name: "this value".to_string(),
+                    }),
+                }
+                Ty::Bool
+            }
+            Expr::Binary {
+                op, lhs, rhs, span, ..
             } => {
                 let l = self.value(lhs);
                 let r = self.value(rhs);
@@ -1296,6 +1386,13 @@ impl Checker<'_> {
                     self.value(stmt);
                 }
                 Ty::Unknown
+            }
+            // The elements a call hands to a `Slot`, checked in the caller's
+            // scope. Whether it is *a call's argument* is `check_view_args`'s
+            // and `reject_slot_blocks`'s to say.
+            Expr::SlotBlock { members, .. } => {
+                self.check_scoped(members, &[]);
+                Ty::Named(Symbol::intern("Slot"))
             }
             Expr::Let {
                 name,
@@ -1760,6 +1857,16 @@ impl Checker<'_> {
             }
         }
     }
+}
+
+/// Whether `e` is the word `none` (RFC-0062).
+fn is_none(e: &Expr) -> bool {
+    matches!(e, Expr::Ident(n, _) if n.as_str() == "none")
+}
+
+/// Whether a parameter is declared `: Slot` (RFC-0062).
+fn is_slot_param(p: &Param) -> bool {
+    matches!(&p.ty, Some(Type::Named { name, .. }) if name.as_str() == "Slot")
 }
 
 /// The type a written [`Type`] names, without the checks `resolve_type` makes

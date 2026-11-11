@@ -122,6 +122,11 @@ pub(crate) fn expr(e: &mut Expr, f: &mut dyn FnMut(&mut Expr)) {
                 arg(a, f);
             }
         }
+        Expr::SlotBlock { members, .. } => {
+            for m in members {
+                member_exprs(m, f);
+            }
+        }
         Expr::Member { base, .. } => expr(base, f),
         Expr::Call { callee, args, .. } => {
             expr(callee, f);

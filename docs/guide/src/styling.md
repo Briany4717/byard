@@ -316,6 +316,7 @@ View Main() {
 | `invalid` | It has `invalid: true` |
 | `indeterminate` | A `Checkbox` has `indeterminate: true` |
 | `dragging` | A drag gesture is under way on it |
+| `focus_within` | It, or an element inside it, has keyboard focus |
 
 `selected` and `invalid` are plain attributes on any element. You decide when
 they are true, and the style reacts: `selected: tab == "home"` turns a tab
@@ -400,6 +401,32 @@ ends: the pressed corners above spring open again on release, with no `with` on 
 resting `radius`. Where there is no resting value to move back to, as for `overlay` and
 `outline`, the element rests transparent. `on pressed` also shows while Space or Enter is
 held on a focused control, as it does for a press of the pointer.
+
+### States of another element
+
+An element named with `as name` publishes its states, and a state block on a descendant, or on an
+element after it in the same view, can name them: `on name.hover`, `on name.focused`,
+`on name.pressed`, any state in the table, joined with `+` to each other and to the element's own.
+A floating label and an indicator follow a field this way, with no `var` and no handler:
+
+```byld
+View LabelledField(label: Str, bind value: Str) {
+    ZStack #[width: 300, height: 64, alignment: top_start] {
+        TextField #[bind: value, width: 300, height: 56, indicator: none] as field
+        Text(label) #[color: 0x79747E, ml: 16, mt: 18] {
+            on field.focused { color: 0x6750A4, translate.y: -18, scale: 0.75 }
+        }
+        Box #[width: 300, height: 1, mt: 56, bg: 0x79747E] {
+            on field.focused + hover { bg: 0x6750A4, height: 2 }
+        }
+    }
+}
+```
+
+The name has to be declared before the block, as an overlay's anchor does; otherwise it is
+`UnknownStateTarget`, with the closest name. A state block changes what is painted, never the layout,
+so a label that floats moves with `translate` and `scale`. Two calls of one view keep their own
+names. See `examples/composing_components`.
 
 ## Responsive styles
 

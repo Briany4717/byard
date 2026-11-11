@@ -279,6 +279,7 @@ fn collect_name_spans_in_expr(expr: &Expr, target_name: &str, out: &mut Vec<Span
                 collect_name_spans_in_expr(els, target_name, out);
             }
         }
+        Expr::SlotBlock { members, .. } => collect_name_spans_in_members(members, target_name, out),
         Expr::Unary { rhs, .. } => {
             collect_name_spans_in_expr(rhs, target_name, out);
         }

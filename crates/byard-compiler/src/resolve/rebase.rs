@@ -280,6 +280,12 @@ fn shift_expr(expr: &mut Expr, delta: u32) {
             shift(span, delta);
             shift_expr(body, delta);
         }
+        Expr::SlotBlock { members, span } => {
+            shift(span, delta);
+            for m in members {
+                shift_member(m, delta);
+            }
+        }
         Expr::Block(stmts, span) => {
             shift(span, delta);
             for stmt in stmts {

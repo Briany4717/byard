@@ -282,6 +282,7 @@ impl Parser<'_> {
             self.expect(&Token::RBrace, "'}' to close the responsive block");
             return Some(super::ast::StateBlock {
                 states: Vec::new(),
+                remote: Vec::new(),
                 attrs,
                 viewport: Some(viewport),
                 span: self.span_from(start),
@@ -291,12 +292,37 @@ impl Parser<'_> {
         // The `+`-joined state list. Every state must be known for the block to
         // apply; any unknown name is diagnosed (and the block dropped).
         let mut states = Vec::new();
+        let mut remote = Vec::new();
         let mut all_known = true;
         loop {
             let name_span = self.cur_span();
-            let name = self.expect_ident("an interaction state (e.g. hover, focused, checked)")?;
+            let mut name =
+                self.expect_ident("an interaction state (e.g. hover, focused, checked)")?;
+            // `field.focused` (RFC-0062): a state of the element tagged `as field`.
+            let mut target = None;
+            if matches!(self.cur(), Some(Token::Dot))
+                && matches!(self.peek2(), Some(Token::Ident(_)))
+            {
+                self.advance(); // .
+                target = Some(name);
+                name = self.expect_ident("an interaction state after the name")?;
+            }
+            let name_span = if target.is_some() {
+                self.span_from(name_span)
+            } else {
+                name_span
+            };
             if let Some(kind) = StyleStateKind::from_name(name.as_str()) {
-                states.push(kind);
+                if let Some(target) = target {
+                    remote.push(super::ast::RemoteState {
+                        name: target,
+                        kind,
+                        span: name_span,
+                        target: None,
+                    });
+                } else {
+                    states.push(kind);
+                }
             } else {
                 all_known = false;
                 let hint = crate::util::closest_match(
@@ -324,7 +350,7 @@ impl Parser<'_> {
         self.expect(&Token::RBrace, "'}' to close the state block");
         // Only yield a block when every state parsed, an unknown one is dropped
         // (the error is already recorded) rather than silently mis-applied.
-        if !all_known || states.is_empty() {
+        if !all_known || (states.is_empty() && remote.is_empty()) {
             return None;
         }
         // A disabled element is never hovered, pressed, focused or dragged, so a
@@ -350,6 +376,7 @@ impl Parser<'_> {
         }
         Some(super::ast::StateBlock {
             states,
+            remote,
             attrs,
             viewport: None,
             span: self.span_from(start),
@@ -472,8 +499,57 @@ impl Parser<'_> {
     fn parse_brace_value(&mut self) -> Expr {
         if self.at_record_literal() {
             self.parse_record()
+        } else if self.at_slot_block() {
+            self.parse_slot_block()
         } else {
             self.parse_callback_block()
+        }
+    }
+
+    /// True when the cursor sits on a `{` that opens a **slot block** (RFC-0062
+    /// §2), the elements a call hands to a `Slot` parameter, as opposed to a
+    /// callback body. An element is capitalised and an action is not, so the
+    /// first token decides: a capitalised name (`Icon`), a qualified one
+    /// (`m.Switch`), `when` or `for`, or a lone name (`{ leading }`, a slot
+    /// passed on). A record was ruled out before this is asked, and `{}` stays
+    /// the empty callback.
+    fn at_slot_block(&self) -> bool {
+        if !matches!(self.cur(), Some(Token::LBrace)) {
+            return false;
+        }
+        let capital = |sym: &crate::symbol::Symbol| {
+            sym.as_str().chars().next().is_some_and(char::is_uppercase)
+        };
+        match self.peek2() {
+            Some(Token::When | Token::For) => true,
+            Some(Token::Ident(first)) => {
+                if capital(&first) {
+                    return true;
+                }
+                match (
+                    self.tokens.get(self.pos + 2).map(|(t, _)| t),
+                    self.tokens.get(self.pos + 3).map(|(t, _)| t),
+                ) {
+                    (Some(Token::Dot), Some(Token::Ident(second))) => capital(second),
+                    (Some(Token::RBrace), _) => true,
+                    _ => false,
+                }
+            }
+            _ => false,
+        }
+    }
+
+    /// `slot_block := "{" member* "}"`, the argument form of a `Slot`
+    /// parameter. The members are the ones an element's body holds, so
+    /// everything below it (resolution, checking, lowering, formatting) walks
+    /// what it already walks.
+    fn parse_slot_block(&mut self) -> Expr {
+        let start = self.cur_span();
+        self.advance(); // {
+        let members = self.parse_block_members();
+        Expr::SlotBlock {
+            members,
+            span: self.span_from(start),
         }
     }
 

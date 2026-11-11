@@ -849,5 +849,8 @@ impl Interpreter {
             declared.push(name.as_str().to_string());
         }
         Self::walk_anchor_members(&el.children, declared, errors);
+        for slot in el.slot_members() {
+            Self::walk_anchor_members(slot, declared, errors);
+        }
     }
 }

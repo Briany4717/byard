@@ -456,11 +456,19 @@ impl SpanEq for StateBlock {
     fn span_eq(&self, other: &Self) -> bool {
         let Self {
             states,
+            remote,
             attrs,
             viewport,
             span: _,
         } = self;
-        *states == other.states && attrs.span_eq(&other.attrs) && viewport.span_eq(&other.viewport)
+        *states == other.states
+            && remote.len() == other.remote.len()
+            && remote
+                .iter()
+                .zip(&other.remote)
+                .all(|(a, b)| a.name == b.name && a.kind == b.kind)
+            && attrs.span_eq(&other.attrs)
+            && viewport.span_eq(&other.viewport)
     }
 }
 
@@ -534,6 +542,9 @@ impl SpanEq for Expr {
                 a.span_eq(b)
             }
             (Self::Tuple(a, _), Self::Tuple(b, _)) => a.span_eq(b),
+            (Self::SlotBlock { members: a, .. }, Self::SlotBlock { members: b, .. }) => {
+                a.span_eq(b)
+            }
             (
                 Self::Member {
                     base,

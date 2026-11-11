@@ -68,6 +68,9 @@ pub fn dynamic_icon_texts(members: &[Member], icons: &[String], out: &mut Vec<Sp
                     out.push(el.span);
                 }
                 dynamic_icon_texts(&el.children, icons, out);
+                for slot in el.slot_members() {
+                    dynamic_icon_texts(slot, icons, out);
+                }
             }
             Member::For { body, .. } | Member::Route { body, .. } => {
                 dynamic_icon_texts(body, icons, out);

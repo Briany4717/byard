@@ -473,6 +473,26 @@ pub struct ElementNode {
     pub span: Span,
 }
 
+impl ElementNode {
+    /// The members of every slot block written as an argument of this call
+    /// (RFC-0062), in written order: elements in them are part of this view's
+    /// body as much as its children are.
+    pub fn slot_members(&self) -> impl Iterator<Item = &[Member]> {
+        let attrs = self.attrs.iter().filter_map(|a| match &a.kind {
+            AttrKind::Prop { value } => Some(value),
+            _ => None,
+        });
+        self.content
+            .iter()
+            .map(|a| &a.value)
+            .chain(attrs)
+            .filter_map(|v| match v {
+                Expr::SlotBlock { members, .. } => Some(members.as_slice()),
+                _ => None,
+            })
+    }
+}
+
 /// One `#[...]` attribute: either a property (`name: expr`) or an engine event
 /// (`name(payload)? => expr`), RFC-0003 D4-bis. The kind is decided
 /// syntactically by the separator; a mismatch against the intrinsic's contract
@@ -547,6 +567,8 @@ pub enum StyleStateKind {
     /// The element holds keyboard focus *and* focus got there by the
     /// keyboard (or into a text field), so a ring is wanted (RFC-0052).
     FocusVisible,
+    /// The element, or an element inside it, holds keyboard focus (RFC-0062).
+    FocusWithin,
 }
 
 impl StyleStateKind {
@@ -567,6 +589,7 @@ impl StyleStateKind {
             "indeterminate" => Some(Self::Indeterminate),
             "dragging" => Some(Self::Dragging),
             "focus_visible" => Some(Self::FocusVisible),
+            "focus_within" => Some(Self::FocusWithin),
             _ => None,
         }
     }
@@ -585,11 +608,12 @@ impl StyleStateKind {
             Self::Indeterminate => "indeterminate",
             Self::Dragging => "dragging",
             Self::FocusVisible => "focus_visible",
+            Self::FocusWithin => "focus_within",
         }
     }
 
     /// Every state name, for `closest_match` suggestions.
-    pub const NAMES: [&'static str; 10] = [
+    pub const NAMES: [&'static str; 11] = [
         "hover",
         "pressed",
         "focused",
@@ -600,6 +624,7 @@ impl StyleStateKind {
         "indeterminate",
         "dragging",
         "focus_visible",
+        "focus_within",
     ];
 }
 
@@ -613,6 +638,9 @@ pub struct StateBlock {
     /// apply (RFC-0024 combined selectors: `on focused+hover { … }`). A single
     /// state is the common case; the block's *specificity* is `states.len()`.
     pub states: Vec<StyleStateKind>,
+    /// States of *other* elements, named with `as` (RFC-0062): `on field.focused`.
+    /// Every one must hold, together with `states`, for the block to apply.
+    pub remote: Vec<RemoteState>,
     /// The attributes overlaid onto the base while every `states` entry is active.
     pub attrs: Vec<Attr>,
     /// A viewport condition that must also hold (RFC-0016 responsive
@@ -621,6 +649,21 @@ pub struct StateBlock {
     pub viewport: Option<ViewportCond>,
     /// Source span.
     pub span: Span,
+}
+
+/// One `name.state` condition of a state block (RFC-0062): a state of the
+/// element tagged `as name`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RemoteState {
+    /// The name the element was tagged with.
+    pub name: Symbol,
+    /// The state that must hold on it.
+    pub kind: StyleStateKind,
+    /// Source span of `name.state`.
+    pub span: Span,
+    /// The identity of the named element, set when the block is lowered; `None`
+    /// before, and for a name that was not declared (which is an error).
+    pub target: Option<u32>,
 }
 
 /// Which viewport extent a responsive block compares (RFC-0016).
@@ -869,6 +912,16 @@ pub enum Expr {
     ///
     /// [`Value::Unit`]: crate::interp::env::Value::Unit
     Block(Vec<Expr>, Span),
+    /// A block of elements handed to a `Slot` parameter at a view call
+    /// (RFC-0062): `leading: { Icon("wifi") }`. Written in the caller, lowered
+    /// there, and placed by the callee by name. Only meaningful as a call's
+    /// argument; anywhere else the checker says so.
+    SlotBlock {
+        /// The elements, `when`s and `for`s the block holds.
+        members: Vec<Member>,
+        /// Source span.
+        span: Span,
+    },
     /// An assignment `target op value` (`= += -=`).
     Assign {
         /// The l-value target.
@@ -1049,6 +1102,7 @@ impl Expr {
             | Self::ControllerCall { span, .. }
             | Self::Lambda { span, .. }
             | Self::Block(_, span)
+            | Self::SlotBlock { span, .. }
             | Self::Assign { span, .. }
             | Self::Postfix { span, .. }
             | Self::Unary { span, .. }

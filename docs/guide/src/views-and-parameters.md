@@ -212,10 +212,70 @@ View Callout(kind: Str, content) {
 }
 ```
 
-`content` is a *slot*, not a value. You cannot store it, pass it on or inspect it.
-There is one per view, and that covers wrappers such as cards, dialogs and
-screens that share a frame. Aura Weather's `Screen` view puts a title above
-whatever each screen passes in.
+`content` is a *slot*, not a value. You cannot store it or inspect its elements. It can go
+anywhere in the body: in both branches of a `when`, in a `for`, as many times as you need. The
+block is written in the caller and sees the caller's names wherever the view puts it.
+
+```byld
+View Card(on_tap: Fn() = none, content) {
+    when on_tap != none {
+        Box #[tap => on_tap(), a11y_role: button] { content }
+    } else {
+        Box { content }
+    }
+}
+```
+
+### Several slots
+
+A parameter of type `Slot` is a slot of its own. The call fills it with `name: { … }`, in
+the parentheses or in `#[ ]`, and the view places it by writing its name, as it does `content`.
+The trailing block of a call is still `content`.
+
+```byld
+View ListItem(headline: Str, leading: Slot = none, trailing: Slot = none) {
+    Row #[gap: 16, align: center] {
+        when leading != none { leading }
+        Text(headline) #[grow: 1]
+        when trailing != none { trailing }
+    }
+}
+
+View Main() {
+    var on = true
+    ListItem("Wi-Fi", leading: { Text("W") }, trailing: { Toggle #[bind: on] })
+    ListItem("About")
+}
+```
+
+`= none` makes a slot optional; without it the call has to give one (`MissingParam`).
+`leading != none` is true when the call gave it, decided when the view is instantiated, and
+`content != none` asks the same of the trailing block. A slot can be passed on to another view,
+`Inner(icon: icon)`. A value given to a `Slot`, or a block given to anything else, is
+`SlotArgument`. In a `for`, a slot is the same elements for every row.
+
+## Layout on a call
+
+A view call takes the layout attributes a parent reads from its children, besides its parameters.
+They apply to the view's root element, as if written on it:
+
+```byld
+View Main() {
+    Row #[gap: 8, height: 40] {
+        Dot() #[ml: 8, align_self: center]
+        Text("Wi-Fi") #[grow: 1]
+    }
+}
+
+View Dot() {
+    Box #[width: 12, height: 12, radius: 6, bg: 0x3B82F6] {}
+}
+```
+
+They are `width`, `height`, `m`, `mx`, `my`, `mt`, `mr`, `mb`, `ml`, `grow`, `shrink`, `basis` and
+`align_self`. A view with several roots, a `when` at its root, gives them to each root that is drawn,
+and what the call writes wins over what the root wrote. A parameter of the same name takes the value
+instead. Any other name is `UnknownParam`, and its message lists these.
 
 ## Passing behaviour
 
@@ -245,6 +305,12 @@ The braces run in the *caller's* scope. `ActionButton` never sees `count`, yet a
 tap inside it changes it. That is the whole trick, and it is how a reusable
 component stays ignorant of what it is used for. A default of `{}` is an action
 that does nothing, so the callback is optional.
+
+When the view has to behave differently depending on whether it was given one, the default is
+`none`: `on_tap: Fn() = none`. `when on_tap != none { … }` asks whether the call passed a callback,
+and calling one that was not given does nothing, so `tap => on_tap()` needs no guard. `none` can
+only be compared with a parameter that declared it (or `content`); comparing anything else is
+`NoneNeedsOptional`.
 
 The names in the braces mean what they mean where you wrote them, always. If
 `ActionButton` has a parameter, a `let` or a `var` called `count` of its own, the

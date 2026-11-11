@@ -1186,6 +1186,37 @@ pub enum CompileError {
         /// The parameter it names.
         name: String,
     },
+    /// A value given to a `Slot` parameter, or a block of elements given to a
+    /// parameter that is not one, or a block anywhere but a call's arguments
+    /// (RFC-0062).
+    SlotArgument {
+        /// Source range of the argument.
+        span: Span,
+        /// The parameter, or empty for a block outside a call.
+        name: String,
+        /// The callee, or empty for a block outside a call.
+        callee: String,
+        /// Whether the parameter is a slot (a value was given) or not (a block was).
+        wants_slot: bool,
+    },
+    /// `none` compared with something that did not declare it (RFC-0062): only
+    /// a parameter written `= none`, or `content`, can be absent.
+    NoneNeedsOptional {
+        /// Source range of the comparison.
+        span: Span,
+        /// What it was compared to, as written.
+        name: String,
+    },
+    /// `on name.state` where no element tagged `as name` comes before it
+    /// (RFC-0062).
+    UnknownStateTarget {
+        /// Source range of `name.state`.
+        span: Span,
+        /// The name.
+        name: String,
+        /// The closest declared name.
+        hint: Option<String>,
+    },
     /// A binding parameter that cannot be one: it has a default, no type, is a
     /// callback, or is called `bind` (RFC-0051).
     BadBindingParam {
@@ -1366,6 +1397,9 @@ impl CompileError {
             | Self::BindNeedsName { span, .. }
             | Self::BindOutsideViewCall { span, .. }
             | Self::BadBindingParam { span, .. }
+            | Self::SlotArgument { span, .. }
+            | Self::NoneNeedsOptional { span, .. }
+            | Self::UnknownStateTarget { span, .. }
             | Self::ArgumentTypeMismatch { span, .. }
             | Self::KeywordAsName { span, .. }
             | Self::MixedTernaryPrecedence { span, .. }
@@ -1487,6 +1521,9 @@ impl CompileError {
             | Self::BindNeedsName { span, .. }
             | Self::BindOutsideViewCall { span, .. }
             | Self::BadBindingParam { span, .. }
+            | Self::SlotArgument { span, .. }
+            | Self::NoneNeedsOptional { span, .. }
+            | Self::UnknownStateTarget { span, .. }
             | Self::ArgumentTypeMismatch { span, .. }
             | Self::KeywordAsName { span, .. }
             | Self::MixedTernaryPrecedence { span, .. }
@@ -1610,6 +1647,9 @@ impl CompileError {
             Self::BindNeedsName { .. } => "BindNeedsName",
             Self::BindOutsideViewCall { .. } => "BindOutsideViewCall",
             Self::BadBindingParam { .. } => "BadBindingParam",
+            Self::SlotArgument { .. } => "SlotArgument",
+            Self::NoneNeedsOptional { .. } => "NoneNeedsOptional",
+            Self::UnknownStateTarget { .. } => "UnknownStateTarget",
             Self::ArgumentTypeMismatch { .. } => "ArgumentTypeMismatch",
             Self::KeywordAsName { .. } => "KeywordAsName",
             Self::MixedTernaryPrecedence { .. } => "MixedTernaryPrecedence",
@@ -1941,9 +1981,13 @@ impl CompileError {
             ),
             Self::UnknownParam {
                 name, callee, hint, ..
-            } => with_hint(
-                format!("`{callee}` has no parameter `{name}`"),
-                hint.as_deref(),
+            } => format!(
+                "{}; a view call also takes the layout attributes {}",
+                with_hint(
+                    format!("`{callee}` has no parameter `{name}`"),
+                    hint.as_deref()
+                ),
+                crate::interp::intrinsics::VIEW_CALL_LAYOUT.join(", ")
             ),
             Self::MissingParam { name, callee, .. } => {
                 format!("missing required argument `{name}` for view `{callee}`")
@@ -2171,6 +2215,40 @@ impl CompileError {
             Self::BindOutsideViewCall { name, .. } => format!(
                 "`bind {name}: …` passes a binding to a view of the program; a function, a \
                  tuple or a built-in takes a plain `{name}: …`"
+            ),
+            Self::SlotArgument {
+                name,
+                callee,
+                wants_slot,
+                ..
+            } => {
+                if callee.is_empty() {
+                    "a block of elements `{ … }` is the argument of a `Slot` parameter; \
+                     it means nothing anywhere else"
+                        .to_string()
+                } else if *wants_slot {
+                    format!(
+                        "`{name}` of `{callee}` is a `Slot`: give it a block of elements, \
+                         `{name}: {{ … }}`, not a value"
+                    )
+                } else {
+                    format!(
+                        "`{name}` of `{callee}` is not a `Slot`: a block of elements goes to \
+                         a parameter declared `{name}: Slot`"
+                    )
+                }
+            }
+            Self::NoneNeedsOptional { name, .. } => format!(
+                "`{name}` cannot be compared with `none`: only a parameter declared with \
+                 `= none` (`on_tap: Fn() = none`, `icon: Slot = none`), or `content`, can be \
+                 absent"
+            ),
+            Self::UnknownStateTarget { name, hint, .. } => with_hint(
+                format!(
+                    "no element named `{name}` comes before this block: tag one with \
+                     `as {name}` earlier in the view"
+                ),
+                hint.as_deref(),
             ),
             Self::BadBindingParam { name, problem, .. } => match problem {
                 BindingProblem::Default => format!(

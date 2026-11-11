@@ -12,6 +12,8 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Several slots, optional callbacks and layout on a call.** A view takes any number of slots, `View ListItem(headline: Str, leading: Slot = none, trailing: Slot = none)`, filled at the call with `leading: { Icon("wifi") }`, placed in the body by name, and tested with `when leading != none`. `on_tap: Fn() = none` makes a callback optional: `when on_tap != none` asks whether it was given, and calling one that was not does nothing. `none` compared with anything else is `NoneNeedsOptional`. `m.Icon("x") #[ml: 8, grow: 1, align_self: center]` puts the layout attributes (`width`, `height`, `m` and its sides, `grow`, `shrink`, `basis`, `align_self`) on the view's root element; any other name that is not a parameter is `UnknownParam`, which now lists them. RFC-0062. See `examples/composing_components`.
+- **States that reach other elements.** An element tagged `as field` publishes its states, and the elements after it in the view, and its descendants, write `on field.focused { … }`, `on field.hover + pressed { … }`, so a floating label or an indicator follows a field without a `var`. `focus_within` is a state of every element with focus inside it. A name nothing declared is `UnknownStateTarget`. RFC-0062.
 - **A control's states written in the control.** `on hover { … }`, `on pressed { … }` and `on focus_visible { … }` can be written inside an element, among its children, as well as in a `style`. A state that animates an attribute with `with` animates it back when the state ends, so a pressed corner springs open on release without a `with` on the resting value. A held Space or Enter now shows `on pressed`, as a press of the pointer does. RFC-0059. See `examples/interaction_styles`.
 - **`outline`, `outline_width` and `outline_offset`.** A ring drawn outside the element's shape, following `radius`, taking no layout room and animating with `with`: a focus ring that no longer needs a sibling and a `var`.
 - **`overlay`.** A colour or gradient drawn over `bg` and under the children, clipped to the element's shape, and animated with `with`: the state layer of a Material control without a wrapping view.
@@ -111,6 +113,8 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   completion, the formatter and hot reload know it. See `examples/bindable_params`.
 
 ### Fixed
+
+- **A slot inside `when`, `else` and `for`.** `content` placed in a branch of a `when`, or in a `for` body, was "unknown view `content`"; it is spliced there as anywhere else, to any depth of nesting. RFC-0062.
 
 - **`typo:` chosen with `?:` keeps its font family and weight.** `typo: big ? t.titleLarge : t.labelLarge` drew in the default face at regular weight, with the right size.
 - **A `Box` with a `border` and no `bg` draws its border.** It drew nothing.

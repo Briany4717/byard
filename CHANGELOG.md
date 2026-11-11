@@ -12,6 +12,8 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Layout properties animate.** `width`, `height`, `gap`, padding (`p`, `pt`, `pr`, `pb`, `pl`) and margin (`m`, `mt`, `mr`, `mb`, `ml`, `mx`, `my`) take `with`, also inside `on pressed`, `on hover` and the other state blocks, and a held Space shows it too. Layout is redone only on the frames a motion is in flight; a still screen costs nothing. The properties that still cannot (`grow`, the keywords, text shaping, grid placements) are `LayoutPropNotAnimatable`, and the error says which and why. RFC-0061. See `examples/layout_motion`.
+- **Radius, padding and margin tuples take expressions and move slot by slot.** `radius: (a ? 4 : 8, 4, 4, 4) with spring`, `radius: c ? (4, 4, 0, 0) : 4` and `p: (8, open ? 16 : 8) with spring` were `AttributeTypeMismatch`.
 - **A control's states written in the control.** `on hover { … }`, `on pressed { … }` and `on focus_visible { … }` can be written inside an element, among its children, as well as in a `style`. A state that animates an attribute with `with` animates it back when the state ends, so a pressed corner springs open on release without a `with` on the resting value. A held Space or Enter now shows `on pressed`, as a press of the pointer does. RFC-0059. See `examples/interaction_styles`.
 - **`outline`, `outline_width` and `outline_offset`.** A ring drawn outside the element's shape, following `radius`, taking no layout room and animating with `with`: a focus ring that no longer needs a sibling and a `var`.
 - **`overlay`.** A colour or gradient drawn over `bg` and under the children, clipped to the element's shape, and animated with `with`: the state layer of a Material control without a wrapping view.
@@ -112,6 +114,7 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A `let` in a `for` or `when` body** is defined where it is written. It was dropped, so a length it fed was "expected a length" (or, on `width`, silently the default size).
 - **`typo:` chosen with `?:` keeps its font family and weight.** `typo: big ? t.titleLarge : t.labelLarge` drew in the default face at regular weight, with the right size.
 - **A `Box` with a `border` and no `bg` draws its border.** It drew nothing.
 - **A `ZStack` child with `grow: 1` or `align_self: stretch` fills the stack.** It came out a pixel wide.

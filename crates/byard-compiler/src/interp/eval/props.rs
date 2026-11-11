@@ -77,6 +77,34 @@ pub(super) fn spacing_value(v: &Value) -> Option<f32> {
     }
 }
 
+/// A tuple of lengths that exists only as a value (a `?:` that chose one, a
+/// name bound to one) written back as the literal tuple the syntactic readers
+/// take, at `span`. `None` when `value` is no tuple or holds something that is
+/// not a number, which the caller reports as the type error it is.
+///
+/// This is what lets `radius: c ? (4, 4, 0, 0) : 4`, `p: c ? (4, 30) : 10` and
+/// their `with` forms share the arity, naming and conflict rules of the tuple
+/// written out, instead of a second copy of them (RFC-0061).
+fn tuple_expr_of(value: &Value, span: Span) -> Option<Expr> {
+    let Value::Tuple(items) = value else {
+        return None;
+    };
+    let mut args = Vec::with_capacity(items.len());
+    for (name, item) in items {
+        let literal = match item {
+            Value::Int(n) => Expr::IntLit(*n, span),
+            Value::Float(f) => Expr::FloatLit(*f, span),
+            _ => return None,
+        };
+        args.push(Arg {
+            name: name.clone(),
+            value: literal,
+            bind: false,
+        });
+    }
+    Some(Expr::Tuple(args, span))
+}
+
 /// Reads an already-evaluated two-axis value (`(x, y)` positional or
 /// `(x: …, y: …)` named) as a pair, leaving unset axes at `default`.
 ///
@@ -555,6 +583,23 @@ impl Interpreter {
     fn resolve_spacing(&mut self, expr: &Expr, prop: &str) -> byard_core::atlas::layout::Spacing {
         use byard_core::atlas::layout::Spacing;
         match expr {
+            // RFC-0061: `p: (8, open ? 16 : 8) with curve` moves each side on
+            // its own motion. The value under the `with` is read by the rules
+            // below, as if it stood alone, and then animated side by side.
+            Expr::Animated { value, anim, span } => {
+                let target = self.resolve_spacing(value, prop);
+                let [top, right, bottom, left] = self.animate_quad(
+                    [target.top, target.right, target.bottom, target.left],
+                    anim,
+                    *span,
+                );
+                Spacing {
+                    top,
+                    right,
+                    bottom,
+                    left,
+                }
+            }
             Expr::Tuple(args, span) => {
                 let any_named = args.iter().any(|a| a.name.is_some());
                 let all_named = args.iter().all(|a| a.name.is_some());
@@ -576,6 +621,10 @@ impl Interpreter {
                 let val = self.eval_pure(other);
                 if let Some(v) = spacing_value(&val) {
                     Spacing::all(v)
+                } else if let Some(tuple) = tuple_expr_of(&val, other.span()) {
+                    // A `?:` (or a name) that is a tuple of lengths: the same
+                    // forms, read from the value instead of from the syntax.
+                    self.resolve_spacing(&tuple, prop)
                 } else {
                     self.errors.push(CompileError::AttributeTypeMismatch {
                         span: other.span(),
@@ -1121,7 +1170,22 @@ impl Interpreter {
         let AttrKind::Prop { value } = &attr.kind else {
             return [0.0; 4];
         };
+        self.radii_of(value, name)
+    }
+
+    /// The four corner radii a `radius` value stands for (RFC-0061): a number
+    /// for all four, a tuple of four, a `?:` between either, or any of them
+    /// followed by `with`, which moves each corner on a motion of its own.
+    fn radii_of(&mut self, value: &Expr, name: &str) -> [f32; 4] {
         match value {
+            Expr::Animated {
+                value: target,
+                anim,
+                span,
+            } => {
+                let target = self.radii_of(target, name);
+                self.animate_quad(target, anim, *span)
+            }
             Expr::Tuple(args, span) => {
                 if args.iter().any(|a| a.name.is_some()) {
                     self.errors.push(CompileError::ConflictingSpacingField {
@@ -1161,6 +1225,8 @@ impl Interpreter {
                 let val = self.eval_pure(other);
                 if let Some(v) = spacing_value(&val) {
                     [v; 4]
+                } else if let Some(tuple) = tuple_expr_of(&val, other.span()) {
+                    self.radii_of(&tuple, name)
                 } else {
                     self.errors.push(CompileError::AttributeTypeMismatch {
                         span: other.span(),

@@ -31,6 +31,7 @@ mod icon_font_bundle;
 mod incremental_example;
 mod interaction_styles_example;
 mod keyboard_focus_example;
+mod layout_motion_example;
 mod library_check;
 mod list_animations_example;
 mod looping_animations_example;

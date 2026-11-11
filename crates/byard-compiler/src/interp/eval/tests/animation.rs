@@ -958,19 +958,19 @@ fn stopping_the_looping_example_empties_the_active_set() {
 }
 
 #[test]
-fn a_layout_property_cannot_be_keyframed() {
+fn a_layout_property_without_motion_cannot_be_keyframed() {
     // RFC-0025 §3 defers to RFC-0010: keyframes on a layout prop would relayout
     // every frame (animation is paint-time only), so they are rejected like
     // `with` is.
     let parsed = parse(
         "View V() { Box #[bg: 0x808080, height: 10, \
-             width: anim.keyframes(0%: 0, 100%: 200, duration: 1s)] }",
+             grow: anim.keyframes(0%: 0, 100%: 2, duration: 1s)] }",
     );
     let mut interp = Interpreter::new();
     let _ = interp.lower_view(&parsed.views[0], &[]);
     assert!(
         interp.errors().iter().any(
-            |e| matches!(e, CompileError::LayoutPropNotAnimatable { prop, .. } if prop == "width")
+            |e| matches!(e, CompileError::LayoutPropNotAnimatable { prop, .. } if prop == "grow")
         ),
         "expected LayoutPropNotAnimatable, got {:?}",
         interp.errors()

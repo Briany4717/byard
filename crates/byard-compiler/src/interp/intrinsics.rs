@@ -1322,12 +1322,13 @@ pub fn validate_element_in(
             // name list, so `align` on a `Column` and `align` on a `Text` are
             // answered separately and an attribute cannot be added without an
             // answer.
-            let is_layout = def.class == AttrClass::Layout;
+            let is_layout = def.class == AttrClass::Layout && !layout_motion(an);
             if an == "gradient" {
                 check_animated_gradient(value, &mut errs);
             }
             // RFC-0010: `value with anim.*(…)`, reject an animation on a layout
-            // property (it can't animate on the GPU), otherwise validate every
+            // property that has no motion (RFC-0061 lists the ones that do, and
+            // `layout_motion` is the list), otherwise validate every
             // curve in the (possibly nested) chain and type-check the innermost
             // target value. The chain walk matters: `(x with a) with b` must not
             // let its inner curve or value slip past unchecked.
@@ -1391,9 +1392,36 @@ pub fn validate_element_in(
     errs
 }
 
-/// Whether `name` is a layout-affecting attribute, one whose value feeds Taffy
-/// and so cannot be GPU-animated (RFC-0010 §"Layout properties"). Covers the
-/// [`LAYOUT`] group plus the container `direction`.
+/// The layout properties that take `with` (RFC-0061): the sizes, the gap, and the
+/// padding and margin families, in every spelling the language accepts.
+///
+/// A second column to the class table, not a second table: a layout property
+/// added to `LAYOUT` is refused by the checker until it is listed here. Each
+/// name is a length that layout reads through the evaluator, where a `with` is
+/// sampled; the rest (`grow`, the keywords, the text shaping props, the grid
+/// placements) have no in-between or no reader that would sample one.
+#[must_use]
+pub fn layout_motion(name: &str) -> bool {
+    matches!(
+        name,
+        "width"
+            | "height"
+            | "gap"
+            | "p"
+            | "pt"
+            | "pr"
+            | "pb"
+            | "pl"
+            | "m"
+            | "mt"
+            | "mr"
+            | "mb"
+            | "ml"
+            | "mx"
+            | "my"
+    )
+}
+
 /// Whether an animation appears **anywhere** inside `value`, a `with` clause or
 /// an `anim.keyframes(…)` call, at any depth (RFC-0010 §"Layout properties").
 ///

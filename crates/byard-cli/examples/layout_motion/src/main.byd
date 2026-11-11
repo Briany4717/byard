@@ -1,0 +1,82 @@
+// Layout properties that move (RFC-0061): a button group whose pressed button widens while
+// its neighbours give way, and a chip whose check slot opens.
+//
+// `on pressed { width: 120 with … }` is a real width, so the row lays out again on each frame
+// of the spring, and only then: once it settles nothing is recomputed. A held Space or Enter
+// shows it as a held pointer does. The chip's slot is a `width` on an empty box, and the
+// corners of the middle button move slot by slot.
+//
+// Run these from the repo root. No window is opened.
+//
+//   1. At rest, three 80 wide buttons and the chip with its slot closed:
+//        cargo run -p byard-cli -- shot crates/byard-cli/examples/layout_motion -o rest.png
+//   2. A held press on Two, mid-spring: it is wider, One and Three are pushed aside:
+//        cargo run -p byard-cli -- shot crates/byard-cli/examples/layout_motion \
+//            --hold 164,60 --at 60 -o hold-mid.png
+//   3. The same press, settled at 120 wide:
+//        cargo run -p byard-cli -- shot crates/byard-cli/examples/layout_motion \
+//            --hold 164,60 --at 1000 -o hold.png
+//   4. Tab to Two and hold Space, which widens it too:
+//        cargo run -p byard-cli -- shot crates/byard-cli/examples/layout_motion \
+//            --key Tab --key Tab --hold 0,0 --at 1000 -o space.png
+//   5. A tap on the chip opens the check slot (the label slides right), mid-way and open:
+//        cargo run -p byard-cli -- shot crates/byard-cli/examples/layout_motion \
+//            --tap 60,140 --at 60 -o chip-mid.png
+//        cargo run -p byard-cli -- shot crates/byard-cli/examples/layout_motion \
+//            --tap 60,140 --at 1000 -o chip.png
+//
+// `tests/it/layout_motion_example.rs` runs the checks.
+View Main() {
+    inject Theme as t
+    var picked = 0
+    var chip = false
+
+    Column #[bg: t.surface, p: 24, gap: 28, width: 420, grow: 1] {
+        Row #[gap: 2] {
+            Seg(label: "One", left: true, on_tap: { picked = 1 })
+            Seg(label: "Two", on_tap: { picked = 2 })
+            Seg(label: "Three", right: true, on_tap: { picked = 3 })
+        }
+        Text("Picked: {picked}") #[color: t.onSurface, size: 14]
+
+        Box #[
+            bg: chip ? t.secondaryContainer : t.surfaceContainer,
+            radius: 8,
+            height: 32,
+            pl: chip ? 8 : 12 with t.springSpatialFast,
+            pr: 12,
+            align: center,
+            align_self: start,
+            a11y_role: toggle_button,
+            a11y_label: "Chip",
+            a11y_checked: chip,
+            tap => { chip = !chip },
+        ] {
+            Row #[align: center] {
+                Box #[width: chip ? 20 : 0 with t.springSpatialFast, height: 18] {
+                    Text("v") #[color: t.onSecondaryContainer, size: 14, wrap: false]
+                }
+                Text("Chip") #[color: t.onSurface, size: 14, wrap: false]
+            }
+        }
+    }
+}
+
+View Seg(label: Str, left: Bool = false, right: Bool = false, on_tap: Fn() = {}) {
+    inject Theme as t
+
+    Box #[
+        bg: t.primary,
+        width: 80,
+        height: 48,
+        radius: (left ? 24 : 4, right ? 24 : 4, right ? 24 : 4, left ? 24 : 4) with t.springSpatialFast,
+        align: center,
+        justify: center,
+        a11y_role: button,
+        a11y_label: label,
+        tap => on_tap(),
+    ] {
+        on pressed { width: 120 with t.springSpatialFast }
+        Text(label) #[color: t.onPrimary, size: 14, wrap: false]
+    }
+}

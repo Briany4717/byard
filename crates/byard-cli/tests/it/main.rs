@@ -16,6 +16,7 @@ mod clock_example;
 mod collapse_header_example;
 mod colour_motion_example;
 mod composed_controls_example;
+mod composed_slider_example;
 mod corner_smoothing_example;
 mod data_ops_example;
 mod diagnostics_shape;

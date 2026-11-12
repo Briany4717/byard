@@ -63,6 +63,7 @@ impl Interpreter {
         attrs: &[Attr],
         rect: crate::interp::intrinsics::Rect,
         hit_rect: crate::interp::intrinsics::Rect,
+        bounds: crate::interp::intrinsics::Rect,
         elem_idx: Option<u32>,
         transform: byard_core::frame::Transform,
         opacity: f32,
@@ -364,11 +365,11 @@ impl Interpreter {
         // written on the field are registered first (pointer events, focus,
         // blur, key_up reach them as on any element) and the ones that share
         // a kind with the field's own editing are folded into it below.
-        self.register_event_attrs(attrs, hit_rect, elem_idx);
-        let on_edit = self.field_actions(attrs, &["input", "change"]);
-        let on_typed = self.field_actions(attrs, &["text_input"]);
-        let on_key = self.field_actions(attrs, &["key_down"]);
-        let on_submit = self.field_actions(attrs, &["submit"]);
+        self.register_event_attrs(attrs, hit_rect, bounds, elem_idx);
+        let on_edit = self.field_actions(attrs, bounds, &["input", "change"]);
+        let on_typed = self.field_actions(attrs, bounds, &["text_input"]);
+        let on_key = self.field_actions(attrs, bounds, &["key_down"]);
+        let on_submit = self.field_actions(attrs, bounds, &["submit"]);
 
         // Handlers: typing and the keys edit the value at the caret, the
         // pointer places it and selects (RFC-0041).
@@ -384,7 +385,7 @@ impl Interpreter {
                 },
             );
             // `input` and `change` see the value already written.
-            let edited = self.field_actions(attrs, &["input", "change"]);
+            let edited = self.field_actions(attrs, bounds, &["input", "change"]);
             let events = [
                 (Kind::TextInput, handle.clone().text_input(on_typed, edited)),
                 (
@@ -393,20 +394,22 @@ impl Interpreter {
                 ),
                 (
                     Kind::PointerDown,
-                    handle
-                        .clone()
-                        .pointer_down(self.field_actions(attrs, &["pointer_down"])),
+                    handle.clone().pointer_down(self.field_actions(
+                        attrs,
+                        bounds,
+                        &["pointer_down"],
+                    )),
                 ),
                 (Kind::PointerDrag, handle.clone().pointer_drag()),
                 (
                     Kind::PointerUp,
                     handle
                         .clone()
-                        .pointer_up(self.field_actions(attrs, &["pointer_up"])),
+                        .pointer_up(self.field_actions(attrs, bounds, &["pointer_up"])),
                 ),
                 (
                     Kind::DoubleTap,
-                    handle.double_tap(self.field_actions(attrs, &["double_tap"])),
+                    handle.double_tap(self.field_actions(attrs, bounds, &["double_tap"])),
                 ),
             ];
             for (kind, action) in events {

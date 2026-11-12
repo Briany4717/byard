@@ -354,7 +354,8 @@ and no role stays out of the order. What presses it follows the role:
 | `checkbox`, `radio` | presses | does nothing |
 | `link` | does nothing | presses |
 
-A key a role does not take goes on to the element's own `key_down`. Holding a key presses
+A key a role does not take goes on to the element's own `key_down`, which any element Tab
+can reach takes (see [Events and actions](events-and-actions.md)). Holding a key presses
 once.
 
 A row with `a11y_role: tab_list`, or `radio_group`, holds the elements with the role `tab`
@@ -365,6 +366,10 @@ or `radio` inside it as a group, and the arrow keys walk it:
 | Right, Down | Focus the next, wrapping at the end |
 | Left, Up | Focus the previous, wrapping |
 | Home, End | Focus the first, the last (a `tab_list` only) |
+
+A group is one stop for Tab, as the WAI-ARIA pattern for tab lists and radio groups has it. Tab enters it at the member that is selected (`a11y_selected`
+or `a11y_checked` true), or at the first when none is, and the next Tab leaves it;
+Shift+Tab comes back to the selected one. The arrows move inside it.
 
 A disabled member is skipped. In a `radio_group` the one that gets focus is also pressed, as
 the arrow keys select among built-in `RadioButton`s. In a `tab_list` it is not: Enter or

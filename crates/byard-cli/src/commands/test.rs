@@ -33,6 +33,7 @@ enum Target {
 enum Act {
     Tap(Target),
     Hold(Target),
+    Release(Target),
     Hover(Target),
     Key(Key, String),
     Type(String),
@@ -98,7 +99,7 @@ const TEST_KEYS: &[&str] = &[
     "not",
     "not_exact",
 ];
-const ACT_KEYS: &[&str] = &["tap", "hold", "hover", "key", "type", "wait"];
+const ACT_KEYS: &[&str] = &["tap", "hold", "release", "hover", "key", "type", "wait"];
 const CHECK_KEYS: &[&str] = &["expect", "exact", "not", "not_exact"];
 
 fn unknown_key(key: &str, allowed: &[&str]) -> String {
@@ -206,7 +207,7 @@ fn step_of(t: &Table) -> Result<TestStep, String> {
         ([], true) => Ok(TestStep::Check(check_of(t)?)),
         ([], false) => Err("an empty step".into()),
         ([_], true) | ([_, _, ..], _) => Err(
-            "a step does one thing: one of tap, hold, hover, key, type, wait, or checks \
+            "a step does one thing: one of tap, hold, release, hover, key, type, wait, or checks \
              (expect, exact, not, not_exact)"
                 .into(),
         ),
@@ -215,6 +216,7 @@ fn step_of(t: &Table) -> Result<TestStep, String> {
             Ok(TestStep::Act(match *act {
                 "tap" => Act::Tap(target_of(v, act)?),
                 "hold" => Act::Hold(target_of(v, act)?),
+                "release" => Act::Release(target_of(v, act)?),
                 "hover" => Act::Hover(target_of(v, act)?),
                 "key" => {
                     let chord = string_of(v, act)?;
@@ -421,6 +423,7 @@ fn describe(act: &Act) -> String {
     match act {
         Act::Tap(t) => format!("tap {}", target(t)),
         Act::Hold(t) => format!("hold {}", target(t)),
+        Act::Release(t) => format!("release {}", target(t)),
         Act::Hover(t) => format!("hover {}", target(t)),
         Act::Key(_, chord) => format!("key {chord}"),
         Act::Type(s) => format!("type {s:?}"),
@@ -478,6 +481,10 @@ fn shot_step(scene: &Scene, act: &Act) -> Result<Step, Vec<String>> {
         Act::Hold(t) => {
             let (x, y) = point(t)?;
             Step::Hold(x, y)
+        }
+        Act::Release(t) => {
+            let (x, y) = point(t)?;
+            Step::Release(x, y)
         }
         Act::Hover(t) => {
             let (x, y) = point(t)?;

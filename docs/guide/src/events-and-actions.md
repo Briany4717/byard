@@ -97,13 +97,14 @@ Every element except `Spacer` takes the pointer events:
 | `pointer_move` | The pointer moves over the element |
 | `pointer_enter`, `pointer_exit`, `hover` | The pointer comes, goes, is over |
 | `wheel` | A mouse wheel or trackpad notch |
+| `drag_start`, `drag`, `drag_end` | A held press moves past a few pixels; moves on; is released |
 | `focus`, `blur` | The element gains or loses keyboard focus |
 
 Some elements add their own:
 
 | Element | Events |
 |---------|--------|
-| `Button`, `TextField`, `Toggle`, `Slider`, `Checkbox`, `RadioButton` | `key_down`, `key_up` |
+| `Button`, `TextField`, `Toggle`, `Slider`, `Checkbox`, `RadioButton`, and any element the keyboard can reach | `key_down`, `key_up` |
 | `TextField` | `input`, `change`, `submit` |
 | `Toggle`, `Slider`, `Checkbox`, `RadioButton` | `change` |
 | `ScrollView` | `scroll`, `end_reached`, `page_change`, `scroll_end`, `refresh` |
@@ -111,8 +112,11 @@ Some elements add their own:
 | `NavStack` | `route_change` |
 
 An event the element does not have is an error, with the nearest name suggested. A
-`Box` takes no `key_down`, because it is not something the keyboard can reach. Give
-it a `focus` handler and it becomes focusable.
+`Box` takes `key_down` and `key_up` when the keyboard can reach it: it has a `focus` or
+`blur` handler or a `focused:`, or a `tap` and an `a11y_role` that takes focus (`button`,
+`switch`, `checkbox`, `radio`, `tab`, `menu_item`, `link`). On one it cannot reach, the error
+says so and says how to fix it. Space and Enter press such a control as its role says and
+do not reach `key_down`; every other key does.
 
 Three things are worth knowing:
 
@@ -123,6 +127,38 @@ Three things are worth knowing:
   at least 44 by 44 pixels, so a small icon is easy to hit.
 - **A double tap is only a double tap where someone listens.** Without a
   `double_tap` handler under the pointer, two quick taps are two taps.
+
+### Where the pointer is, and dragging
+
+A pointer handler can name an event value and read where the pointer is, in the element's
+own space, from its top-left corner:
+
+```byld
+View Main() {
+    var value = 0.3
+
+    Box #[
+        a11y_role: slider, a11y_label: "Level", width: 240, height: 40, bg: 0x2A2A36,
+        pointer_down(e) => value = (e.x / e.width).max(0).min(1),
+        drag(e) => value = (e.x / e.width).max(0).min(1),
+    ] {
+        Box #[width: 240 * value, height: 40, bg: 0x6750A4]
+    }
+}
+```
+
+`pointer_down`, `pointer_up`, `pointer_move`, `pointer_enter`, `pointer_exit` and `hover`
+give `e.x`, `e.y`, `e.width` and `e.height`. `drag_start` fires once when a held press
+has moved more than a few pixels, `drag` on every move after, and `drag_end` on the
+release; they add `e.dx` and `e.dy`, how far the pointer has travelled since the press, and
+set the `dragging` state. The element the press began on gets all three wherever the pointer
+goes, so `e.x` can be negative or past `e.width`: clamp it. A press that does not move
+past the slop is a tap and fires none of them.
+
+Any other field, `e.z` or `e.dx` on a `pointer_down`, is an error with the nearest name, and
+so is naming a value on an event that has none: `tap` can come from a key, so `tap(e)` is an
+error that points to `pointer_down(e)`. A `pointer_down`, `key_down` or `change` written on a
+built-in `Slider` runs before the slider's own handling.
 
 ### Handlers that take a value
 

@@ -14,6 +14,7 @@ use super::navigation::NavPool;
 use super::overlay::OverlayLayout;
 use super::scroll::WindowSpec;
 use super::states::{resolve_state_attrs, viewport_holds};
+use super::text_field::FieldLines;
 use super::{Interpreter, RenderNode};
 use crate::diagnostics::{CompileError, Span};
 use crate::interp::env::Value;
@@ -863,6 +864,7 @@ impl Interpreter {
             flat_ids.push(id);
             return Ok(id);
         }
+        let max_lines = self.text_max_lines(attrs);
         let id = self.atlas.add_text_leaf_boxed(
             byard_core::atlas::TextLeaf {
                 content: text,
@@ -871,6 +873,7 @@ impl Interpreter {
                 family,
                 width: explicit_w,
                 fallback: (nat_w + pad_w, nat_h + pad_h),
+                max_lines,
             },
             boxed,
         )?;
@@ -1015,7 +1018,6 @@ impl Interpreter {
                     width: self.eval_px_prop(attrs, "width"),
                     height: self.eval_px_prop(attrs, "height"),
                 };
-                self.env.truncate(env_base);
                 let answer = self
                     .native_views
                     .get(*slot)
@@ -1031,6 +1033,8 @@ impl Interpreter {
                         leaf
                     }
                 };
+                self.apply_flex_item(attrs, id, false)?;
+                self.env.truncate(env_base);
                 flat_ids.push(id);
                 Ok(id)
             }
@@ -1164,8 +1168,15 @@ impl Interpreter {
         use byard_core::atlas::{Align, FlexItem};
         let writes = attrs.iter().any(|a| {
             matches!(a.kind, AttrKind::Prop { .. })
-                && (matches!(a.name.as_str(), "shrink" | "align_self")
-                    || (in_stack && a.name.as_str() == "grow"))
+                && (matches!(
+                    a.name.as_str(),
+                    "shrink"
+                        | "align_self"
+                        | "min_width"
+                        | "max_width"
+                        | "min_height"
+                        | "max_height"
+                ) || (in_stack && a.name.as_str() == "grow"))
         });
         if !writes && !self.atlas.has_flex_items() {
             return Ok(());
@@ -1176,6 +1187,11 @@ impl Interpreter {
             {
                 item.shrink = self.eval_float_prop(attrs, "shrink").map(|v| v as f32);
             }
+            // RFC-0064: static bounds on the size layout settles on.
+            item.min_width = self.eval_px_prop(attrs, "min_width");
+            item.max_width = self.eval_px_prop(attrs, "max_width");
+            item.min_height = self.eval_px_prop(attrs, "min_height");
+            item.max_height = self.eval_px_prop(attrs, "max_height");
             item.align_self = attrs.iter().find_map(|a| match &a.kind {
                 AttrKind::Prop { value } if a.name.as_str() == "align_self" => {
                     Self::enum_token(value).map(|t| match t {
@@ -1198,6 +1214,12 @@ impl Interpreter {
         self.atlas.set_flex_item(id, item)
     }
 
+    /// The `max_lines` of a `Text`, `None` when it writes none (RFC-0064).
+    pub(super) fn text_max_lines(&mut self, attrs: &[Attr]) -> Option<u32> {
+        self.eval_int_prop(attrs, "max_lines")
+            .map(|n| u32::try_from(n.max(1)).unwrap_or(u32::MAX))
+    }
+
     /// The layout box of a `Text`: its `height`, `grow`, padding and
     /// margin. All-default, without evaluating anything, when the `Text`
     /// writes none of them.
@@ -1215,6 +1237,8 @@ impl Interpreter {
             basis: style.basis,
             padding: style.padding,
             margin: style.margin,
+            min_height: None,
+            max_height: None,
         }
     }
 
@@ -1267,8 +1291,58 @@ impl Interpreter {
             }
             "TextField" => {
                 let width = self.eval_px_prop(attrs, "width");
-                let h = self.eval_px_prop(attrs, "height").unwrap_or(36.0);
+                let explicit_h = self.eval_px_prop(attrs, "height");
                 let grow = self.eval_float_prop(attrs, "grow").unwrap_or(0.0) as f32;
+                // RFC-0064: a field of several lines is as tall as its lines,
+                // or, with a range, as its content, between the two.
+                let lines = self.field_lines(attrs);
+                let (pad_x, pad_top, pad_bottom) = self.field_pads(attrs);
+                let line_h = self.field_line_height(attrs);
+                let h = match (explicit_h, lines) {
+                    (None, FieldLines::Fixed(n)) => n as f32 * line_h + pad_top + pad_bottom,
+                    (Some(h), _) => h,
+                    _ => 36.0,
+                };
+                if let (None, FieldLines::Range { min, max }) = (explicit_h, lines) {
+                    let text = match states.bound_sig.map(|s| self.ctx.peek_signal(s)) {
+                        Some(Value::Str(t)) => t,
+                        _ => String::new(),
+                    };
+                    let font_size = self.field_font_size(attrs);
+                    let weight = self.resolve_weight(attrs);
+                    let family = self.resolve_family(attrs);
+                    let pad = byard_core::atlas::Spacing {
+                        top: pad_top,
+                        right: pad_x,
+                        bottom: pad_bottom,
+                        left: pad_x,
+                    };
+                    let fill = width.is_none() && grow > 0.0;
+                    let w = width.unwrap_or(200.0);
+                    let boxed = byard_core::atlas::TextBox {
+                        height: None,
+                        grow,
+                        basis: fill.then_some(0.0),
+                        padding: pad,
+                        margin: byard_core::atlas::Spacing::default(),
+                        min_height: Some(min as f32 * line_h + pad_top + pad_bottom),
+                        max_height: max.map(|m| m as f32 * line_h + pad_top + pad_bottom),
+                    };
+                    let id = self.atlas.add_text_leaf_boxed(
+                        byard_core::atlas::TextLeaf {
+                            content: text,
+                            font_size,
+                            weight,
+                            family,
+                            width: (!fill).then_some(w),
+                            fallback: (w, line_h + pad_top + pad_bottom),
+                            max_lines: None,
+                        },
+                        boxed,
+                    )?;
+                    flat_ids.push(id);
+                    return Ok(id);
+                }
                 // A field that is told to grow and not how wide to start has no
                 // width of its own: it takes the room `grow` hands it, so it
                 // cannot squeeze what is beside it. The 200 is the fallback for

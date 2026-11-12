@@ -93,6 +93,8 @@ impl PlatformHost for App {
         // holds only lines that never change.
         let texts = vec![TextLine {
             align: byard_core::frame::TextAlign::Start,
+            max_lines: 0,
+            ellipsis: false,
             x: 510.0,
             y: 190.0,
             text: "TextGlyph".to_string(),

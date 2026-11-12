@@ -184,6 +184,10 @@ thread_local! {
     /// the handlers that need a clock (a text field coalescing typed
     /// characters into one undo step).
     pub static CURRENT_EVENT_TIME: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// The delta of the event currently being dispatched (a wheel's lines or a
+    /// trackpad's pixels), for the handlers that scroll by it.
+    pub static CURRENT_EVENT_DELTA: std::cell::Cell<(f32, f32)> =
+        const { std::cell::Cell::new((0.0, 0.0)) };
     /// Where the press in flight began, for the drag events' `dx` and `dy`
     /// (RFC-0063). The event's own position when no press is held.
     pub static CURRENT_PRESS_POS: std::cell::Cell<(f32, f32)> =
@@ -934,6 +938,7 @@ impl EventRouter {
         CURRENT_EVENT_POS.with(|c| c.set(ev.pos));
         CURRENT_EVENT_MODS.with(|c| c.set(ev.mods));
         CURRENT_EVENT_TIME.with(|c| c.set(ev.time_ms));
+        CURRENT_EVENT_DELTA.with(|c| c.set(ev.delta));
         CURRENT_PRESS_POS.with(|c| c.set(self.down.as_ref().map_or(ev.pos, |d| d.pos)));
 
         match ev.kind {

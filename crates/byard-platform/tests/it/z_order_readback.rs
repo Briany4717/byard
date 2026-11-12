@@ -200,6 +200,8 @@ fn later_box_occludes_earlier_text() {
     let (w, h) = (400.0_f32, 200.0_f32);
     let text = || TextLine {
         align: byard_core::frame::TextAlign::Start,
+        max_lines: 0,
+        ellipsis: false,
         x: 40.0,
         y: 60.0,
         text: "OCCLUSION".to_string(),
@@ -299,6 +301,8 @@ fn transparent_geometry_over_text_does_not_cull_it() {
     let (w, h) = (400.0_f32, 200.0_f32);
     let text = || TextLine {
         align: byard_core::frame::TextAlign::Start,
+        max_lines: 0,
+        ellipsis: false,
         x: 40.0,
         y: 60.0,
         text: "SCRIM".to_string(),
@@ -378,6 +382,8 @@ fn scrim_in_a_later_layer_dims_text_beneath_it() {
     let (w, h) = (400.0_f32, 200.0_f32);
     let text = || TextLine {
         align: byard_core::frame::TextAlign::Start,
+        max_lines: 0,
+        ellipsis: false,
         x: 40.0,
         y: 60.0,
         text: "DIMMED".to_string(),
@@ -446,6 +452,8 @@ fn wrapped_text_renders_multiple_lines() {
     let (w, h) = (240.0_f32, 200.0_f32);
     let line = || TextLine {
         align: byard_core::frame::TextAlign::Start,
+        max_lines: 0,
+        ellipsis: false,
         x: 10.0,
         y: 20.0,
         text: "the quick brown fox jumps over the lazy dog".to_string(),

@@ -372,6 +372,18 @@ impl Interpreter {
         self.write_var(sig, v);
     }
 
+    /// Whether a wheel of `(dx, dy)` pixels would move `t` on one of its
+    /// axes: not already at that end of its travel.
+    pub(super) fn can_nudge(&self, t: &ScrollTarget, dx: f32, dy: f32) -> bool {
+        let moves = |axis: Option<ScrollAxis>, delta: f32| {
+            axis.is_some_and(|a| {
+                let at = self.peek_scroll(a.sig);
+                ((at - delta).clamp(0.0, a.max) - at).abs() > 0.01
+            })
+        };
+        moves(t.x, dx) || moves(t.y, dy)
+    }
+
     /// Nudges one scroll axis by `delta` logical px (wheel/trackpad), clamped to
     /// `[0, max]`. A forward delta reveals earlier content, so the offset shrinks.
     pub(super) fn nudge_scroll(&mut self, axis: ScrollAxis, delta: f32) {

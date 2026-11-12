@@ -537,6 +537,15 @@ pub enum CompileError {
         /// Human-readable description of the conflict.
         message: String,
     },
+    /// Two attributes of one element that disagree, or one that means nothing
+    /// without another: `row_gap` without `wrap`, `overflow` without
+    /// `max_lines`, `lines` with `min_lines` (RFC-0064).
+    InvalidAttributeCombination {
+        /// Source range of the attribute that is out of place.
+        span: Span,
+        /// What is wrong and what to write instead.
+        message: String,
+    },
     /// A user-`View` call supplied more positional content arguments than the
     /// callee declares parameters (RFC-0007 §6).
     ViewArityMismatch {
@@ -1363,6 +1372,7 @@ impl CompileError {
             | Self::PathStrokeUnsupported { span }
             | Self::DynamicStyleForbidden { span }
             | Self::ConflictingSpacingField { span, .. }
+            | Self::InvalidAttributeCombination { span, .. }
             | Self::ViewArityMismatch { span, .. }
             | Self::UnknownParam { span, .. }
             | Self::MissingParam { span, .. }
@@ -1487,6 +1497,7 @@ impl CompileError {
             | Self::PathStrokeUnsupported { span }
             | Self::DynamicStyleForbidden { span }
             | Self::ConflictingSpacingField { span, .. }
+            | Self::InvalidAttributeCombination { span, .. }
             | Self::ViewArityMismatch { span, .. }
             | Self::UnknownParam { span, .. }
             | Self::MissingParam { span, .. }
@@ -1613,6 +1624,7 @@ impl CompileError {
             Self::PathStrokeUnsupported { .. } => "PathStrokeUnsupported",
             Self::DynamicStyleForbidden { .. } => "DynamicStyleForbidden",
             Self::ConflictingSpacingField { .. } => "ConflictingSpacingField",
+            Self::InvalidAttributeCombination { .. } => "InvalidAttributeCombination",
             Self::ViewArityMismatch { .. } => "ViewArityMismatch",
             Self::UnknownParam { .. } => "UnknownParam",
             Self::MissingParam { .. } => "MissingParam",
@@ -1992,6 +2004,7 @@ impl CompileError {
                 "a `style` block cannot read a `var` (styles are static in Phase 2)".to_string()
             }
             Self::ConflictingSpacingField { message, .. }
+            | Self::InvalidAttributeCombination { message, .. }
             | Self::InvalidAnimation { message, .. }
             | Self::Project { message, .. } => message.clone(),
             Self::ViewArityMismatch {

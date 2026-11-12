@@ -225,7 +225,22 @@ fn shape_line(
     // RFC-0018 text wrap: a `Some(w)` bound shapes the line onto multiple
     // lines within `w` logical pixels; `None` keeps the natural single-line
     // width. Height stays unbounded so every wrapped line is shaped.
+    // RFC-0064: a run capped at `max_lines` is shaped whole first; one that
+    // takes no more lines than the cap is as it always was.
+    let capped = line.max_lines > 0 && wrap.is_some();
     buffer.set_size(font_system, wrap, None);
+    let attrs = Attrs::new()
+        .family(crate::text::family_of(line.family.as_deref()))
+        .weight(glyphon::Weight(line.weight))
+        .metadata(metadata);
+    // RFC-0059: `Start` hands the shaper nothing, the path every run took
+    // before alignment existed.
+    let align = match line.align {
+        crate::frame::TextAlign::Start => None,
+        crate::frame::TextAlign::Center => Some(glyphon::cosmic_text::Align::Center),
+        crate::frame::TextAlign::End => Some(glyphon::cosmic_text::Align::End),
+        crate::frame::TextAlign::Justify => Some(glyphon::cosmic_text::Align::Justified),
+    };
     // Color is applied per-TextArea in pass 2 (default_color field). Here we
     // only need to shape the text; color does not affect layout. Tag every
     // glyph of this line with its line index as glyphon `metadata`, so pass
@@ -236,21 +251,89 @@ fn shape_line(
     buffer.set_text(
         font_system,
         &line.text,
-        &Attrs::new()
-            .family(crate::text::family_of(line.family.as_deref()))
-            .weight(glyphon::Weight(line.weight))
-            .metadata(metadata),
+        &attrs,
         glyphon::Shaping::Advanced,
-        // RFC-0059: `Start` hands the shaper nothing, the path every run took
-        // before alignment existed.
-        match line.align {
-            crate::frame::TextAlign::Start => None,
-            crate::frame::TextAlign::Center => Some(glyphon::cosmic_text::Align::Center),
-            crate::frame::TextAlign::End => Some(glyphon::cosmic_text::Align::End),
-            crate::frame::TextAlign::Justify => Some(glyphon::cosmic_text::Align::Justified),
-        },
+        align,
     );
     buffer.shape_until_scroll(font_system, false);
+    if capped {
+        cap_lines(
+            font_system,
+            buffer,
+            line,
+            wrap.unwrap_or(0.0),
+            &attrs,
+            align,
+        );
+    }
+}
+
+/// Cuts a shaped run to `line.max_lines` lines (RFC-0064), when it has more.
+///
+/// `overflow: clip` shortens the buffer to the cap, so the lines past it are
+/// not laid out. `overflow: ellipsis` ends the last line in `…`, which is done
+/// here rather than by the shaper's own ellipsizing: that one moves the last
+/// line a space to the right. The line is shortened a glyph at a time until it
+/// and the mark fit the width, which is a handful of shapings of one line, and
+/// only for a run that is actually cut.
+fn cap_lines(
+    font_system: &mut FontSystem,
+    buffer: &mut Buffer,
+    line: &TextLine,
+    wrap: f32,
+    attrs: &Attrs<'_>,
+    align: Option<glyphon::cosmic_text::Align>,
+) {
+    let n = usize::from(line.max_lines);
+    let lh = line.font_size * 1.2;
+    if buffer.layout_runs().count() <= n {
+        return;
+    }
+    if !line.ellipsis {
+        // To the middle of the last line kept, so the next is not laid out.
+        buffer.set_size(
+            font_system,
+            Some(wrap),
+            Some((f32::from(line.max_lines) - 0.5) * lh),
+        );
+        buffer.shape_until_scroll(font_system, false);
+        return;
+    }
+    // Where each glyph of the last kept line ends, in the text.
+    let mut ends: Vec<usize> = Vec::new();
+    if let Some(run) = buffer.layout_runs().nth(n - 1) {
+        let base: usize = buffer
+            .lines
+            .iter()
+            .take(run.line_i)
+            .map(|l| l.text().len() + l.ending().as_str().len())
+            .sum();
+        ends.extend(run.glyphs.iter().map(|g| base + g.end));
+        ends.sort_unstable();
+        ends.dedup();
+        // The line starts where its first glyph does; a candidate of nothing
+        // but the mark is the last resort.
+        if let Some(first) = run.glyphs.iter().map(|g| base + g.start).min() {
+            ends.insert(0, first);
+        }
+    }
+    while let Some(cut) = ends.pop() {
+        let kept = line.text.get(..cut).unwrap_or("").trim_end();
+        let candidate = format!("{kept}\u{2026}");
+        buffer.set_text(
+            font_system,
+            &candidate,
+            attrs,
+            glyphon::Shaping::Advanced,
+            align,
+        );
+        buffer.shape_until_scroll(font_system, false);
+        let runs = buffer.layout_runs().count();
+        let width = buffer.layout_runs().nth(n - 1).map_or(0.0, |r| r.line_w);
+        if runs <= n && width <= wrap + 0.05 {
+            return;
+        }
+    }
 }
 
 fn shape_key(line: &TextLine, wrap: Option<f32>) -> u64 {
@@ -268,6 +351,9 @@ fn shape_key(line: &TextLine, wrap: Option<f32>) -> u64 {
     h.write(line.family.as_deref().unwrap_or("").as_bytes());
     // RFC-0059: where the lines sit in the wrap width moves every glyph.
     h.write_u8(line.align as u8);
+    // RFC-0064: the cap and the mark change which glyphs the run has.
+    h.write_u16(line.max_lines);
+    h.write_u8(u8::from(line.ellipsis));
     // RFC-0054: the axes ride in the glyphs' cache keys, which are set when the
     // text is shaped, so a moved axis needs a fresh buffer.
     for (tag, value) in line.variations.iter().flat_map(|v| v.iter()) {
@@ -981,6 +1067,8 @@ mod tests {
     fn line(text: &str, font_size: f32) -> TextLine {
         TextLine {
             align: crate::frame::TextAlign::Start,
+            max_lines: 0,
+            ellipsis: false,
             x: 0.0,
             y: 0.0,
             text: text.to_string(),
@@ -997,6 +1085,8 @@ mod tests {
     fn colored(text: &str, font_size: f32, color: [f32; 4]) -> TextLine {
         TextLine {
             align: crate::frame::TextAlign::Start,
+            max_lines: 0,
+            ellipsis: false,
             color,
             ..line(text, font_size)
         }
@@ -1068,6 +1158,112 @@ mod tests {
             shape_key(&line("hello", 16.0), Some(100.0)),
             shape_key(&centred, Some(100.0))
         );
+    }
+
+    // ── A cap on the lines of a run (RFC-0064) ──────────────────────
+
+    /// The glyph ids of each laid-out run of `text` at 20 px in 100 px, capped
+    /// as `max_lines` and `ellipsis` say.
+    fn capped_runs(max_lines: u16, ellipsis: bool) -> Vec<Vec<u16>> {
+        let mut db = glyphon::fontdb::Database::new();
+        db.load_font_data(DISPLAY_FONT.to_vec());
+        let mut fs = FontSystem::new_with_locale_and_db("en-US".into(), db);
+        let mut buf = Buffer::new(&mut fs, Metrics::new(20.0, 24.0));
+        let mut l = line(
+            "one two three four five six seven eight nine ten eleven twelve",
+            20.0,
+        );
+        l.family = Some(std::sync::Arc::from("Space Grotesk"));
+        l.max_lines = max_lines;
+        l.ellipsis = ellipsis;
+        shape_line(&mut fs, &mut buf, &l, Some(100.0), 0);
+        buf.layout_runs()
+            .map(|r| r.glyphs.iter().map(|g| g.glyph_id).collect())
+            .collect()
+    }
+
+    #[test]
+    fn a_run_with_no_cap_keeps_every_line() {
+        assert!(capped_runs(0, true).len() > 3);
+    }
+
+    #[test]
+    fn a_capped_run_stops_at_that_many_lines() {
+        assert_eq!(capped_runs(2, true).len(), 2);
+        assert_eq!(capped_runs(2, false).len(), 2);
+        assert_eq!(capped_runs(3, false).len(), 3);
+    }
+
+    #[test]
+    fn the_ellipsis_changes_the_last_line_and_clip_does_not() {
+        let cut = capped_runs(2, true);
+        let clipped = capped_runs(2, false);
+        assert_eq!(cut[0], clipped[0], "the first line is the same");
+        assert_ne!(cut[1], clipped[1], "the last one ends in the mark");
+        // And the unlimited run's second line is what clip keeps.
+        assert_eq!(capped_runs(0, false)[1], clipped[1]);
+    }
+
+    #[test]
+    fn the_marked_line_fits_the_width_and_starts_where_the_others_do() {
+        let mut db = glyphon::fontdb::Database::new();
+        db.load_font_data(DISPLAY_FONT.to_vec());
+        let mut fs = FontSystem::new_with_locale_and_db("en-US".into(), db);
+        let mut buf = Buffer::new(&mut fs, Metrics::new(20.0, 24.0));
+        let mut l = line(
+            "one two three four five six seven eight nine ten eleven twelve",
+            20.0,
+        );
+        l.family = Some(std::sync::Arc::from("Space Grotesk"));
+        l.max_lines = 2;
+        l.ellipsis = true;
+        shape_line(&mut fs, &mut buf, &l, Some(100.0), 0);
+        let runs: Vec<_> = buf.layout_runs().collect();
+        assert_eq!(runs.len(), 2);
+        for r in &runs {
+            let first = r.glyphs.iter().map(|g| g.x).fold(f32::MAX, f32::min);
+            assert!(first < 1.0, "a line starts at the edge, not {first}");
+            assert!(r.line_w <= 100.05, "{}", r.line_w);
+        }
+    }
+
+    #[test]
+    fn a_run_that_fits_its_cap_is_shaped_as_if_it_had_none() {
+        let uncapped = {
+            let mut l = line("one two", 20.0);
+            l.family = Some(std::sync::Arc::from("Space Grotesk"));
+            l
+        };
+        let mut capped = uncapped.clone();
+        capped.max_lines = 3;
+        capped.ellipsis = true;
+        let shape = |l: &TextLine| {
+            let mut db = glyphon::fontdb::Database::new();
+            db.load_font_data(DISPLAY_FONT.to_vec());
+            let mut fs = FontSystem::new_with_locale_and_db("en-US".into(), db);
+            let mut buf = Buffer::new(&mut fs, Metrics::new(20.0, 24.0));
+            shape_line(&mut fs, &mut buf, l, Some(300.0), 0);
+            buf.layout_runs()
+                .map(|r| {
+                    r.glyphs
+                        .iter()
+                        .map(|g| (g.glyph_id, g.x.to_bits()))
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(shape(&uncapped), shape(&capped));
+    }
+
+    #[test]
+    fn the_cap_and_the_mark_are_part_of_the_shape_key() {
+        let a = line("hello", 16.0);
+        let mut b = line("hello", 16.0);
+        b.max_lines = 2;
+        let mut c = b.clone();
+        c.ellipsis = true;
+        assert_ne!(shape_key(&a, Some(100.0)), shape_key(&b, Some(100.0)));
+        assert_ne!(shape_key(&b, Some(100.0)), shape_key(&c, Some(100.0)));
     }
 
     // ── Measurement and paint resolve the same font ────────────────
@@ -1372,6 +1568,8 @@ mod tests {
     fn text_line_dirty_field_round_trips() {
         let dirty_line = TextLine {
             align: crate::frame::TextAlign::Start,
+            max_lines: 0,
+            ellipsis: false,
             x: 0.0,
             y: 0.0,
             text: "hi".to_string(),
@@ -1386,6 +1584,8 @@ mod tests {
 
         let clean_line = TextLine {
             align: crate::frame::TextAlign::Start,
+            max_lines: 0,
+            ellipsis: false,
             dirty: false,
             ..dirty_line
         };

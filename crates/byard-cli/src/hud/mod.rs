@@ -528,6 +528,8 @@ mod tests {
         let mut frame = RenderFrame::new();
         frame.push_text(byard_core::frame::TextLine {
             align: byard_core::frame::TextAlign::Start,
+            max_lines: 0,
+            ellipsis: false,
             x: 0.0,
             y: 0.0,
             text: "the app".to_string(),
@@ -671,6 +673,8 @@ mod tests {
         let mut second = RenderFrame::new();
         second.push_text(byard_core::frame::TextLine {
             align: byard_core::frame::TextAlign::Start,
+            max_lines: 0,
+            ellipsis: false,
             x: 0.0,
             y: 0.0,
             text: "the app".to_string(),

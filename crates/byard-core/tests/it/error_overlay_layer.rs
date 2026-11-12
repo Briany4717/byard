@@ -304,6 +304,8 @@ fn mark_dirty_since_marks_forward_and_leaves_everything_before_it_alone() {
     let mut f = RenderFrame::new();
     let line = |text: &str| byard_core::frame::TextLine {
         align: byard_core::frame::TextAlign::Start,
+        max_lines: 0,
+        ellipsis: false,
         x: 0.0,
         y: 0.0,
         text: text.to_string(),
@@ -365,6 +367,8 @@ fn mark_dirty_since_a_cursor_past_the_end_is_a_no_op() {
     assert!(f.texts().is_empty());
     f.push_text(byard_core::frame::TextLine {
         align: byard_core::frame::TextAlign::Start,
+        max_lines: 0,
+        ellipsis: false,
         x: 0.0,
         y: 0.0,
         text: "after".to_string(),

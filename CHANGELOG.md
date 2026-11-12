@@ -19,6 +19,10 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Nested scrolling.** A wheel goes to the innermost scroll view or multiline field under the pointer that can still move that way, and on to the one around it at its end; a `ScrollView` inside a `ScrollView` used to keep every event.
 - **`border_gap: (start, length)`** cuts a gap in the top edge of a border, for the label of an outlined field, with what is under it showing through instead of a patch over the border.
 - **Shadow presets `"xl"` and `"2xl"`,** Material's elevation levels 4 and 5, and the mapping of every preset to a level in the styling guide.
+- **Keys on any element the keyboard can reach.** `key_down` and `key_up` are accepted on a `Box` or `Row` with a `focus`, a `blur` or a `focused:`, or with a `tap` and a role that takes focus, so a composed chip can remove itself on Backspace and a composed slider can take Home and End. On an element Tab cannot reach it is still an error, and now says how to make it reachable. RFC-0063.
+- **The pointer's position, and dragging.** `pointer_down(e)`, `pointer_up`, `pointer_move`, `pointer_enter`, `pointer_exit` and `hover` give `e.x`, `e.y` (in the element), `e.width` and `e.height`; the new `drag_start`, `drag` and `drag_end` add `e.dx` and `e.dy` and set `dragging`. See `examples/composed_slider`. `byard shot --release X,Y` and `release` in `byard test` end a held press.
+- **`a11y_description`.** The text a screen reader reads after the name, for a field's supporting or error text; `byard shot --a11y` prints it.
+
 - **A control's states written in the control.** `on hover { … }`, `on pressed { … }` and `on focus_visible { … }` can be written inside an element, among its children, as well as in a `style`. A state that animates an attribute with `with` animates it back when the state ends, so a pressed corner springs open on release without a `with` on the resting value. A held Space or Enter now shows `on pressed`, as a press of the pointer does. RFC-0059. See `examples/interaction_styles`.
 - **`outline`, `outline_width` and `outline_offset`.** A ring drawn outside the element's shape, following `radius`, taking no layout room and animating with `with`: a focus ring that no longer needs a sibling and a `var`.
 - **`overlay`.** A colour or gradient drawn over `bg` and under the children, clipped to the element's shape, and animated with `with`: the state layer of a Material control without a wrapping view.
@@ -49,6 +53,10 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Motion on colours and gradients (RFC-0057).** `with` after a whole gradient animates it stop by stop, a conditional of gradients is the gradient it picks, and two that cannot be blended (another `kind`, another number of stops) are `GradientShapeMismatch`. A `with` after a shape's `fill` or `stroke`, a shadow's `color` or a gradient stop now blends as a colour (it ran the packed integer as a number), and `color.alpha(x with anim..)` animates.
 
 ### Changed
+
+- **`a11y_label` or `a11y_description` on a `Box`, `Row`, `Column`, `Grid`, `ZStack` or `Clip` with no role and no `tap` is an error.** Such a container is not in the accessibility tree, so the label was read by nothing; give it an `a11y_role`. RFC-0063.
+- **Tab enters a `tab_list` or `radio_group` once, at its selected member.** The group is one stop, as WAI-ARIA has it: the next Tab leaves it and the arrow keys move inside it; with nothing selected Tab enters at the first. This changes the Tab order of an app with one; it used to stop at every member. RFC-0063.
+- **`tap(e)` is an error.** A `tap` carries no value, so a name on it read as empty; the error points to `pointer_down(e)`, which has the position.
 
 - **A disabled element shows no hover or press.** `disabled: true` stopped the handlers and Tab but still let `on hover` and `on pressed` style the element, so a disabled button tinted under the pointer. It is now only `disabled`, and `on disabled+hover` (or `pressed`, `focused`, `focus_visible`, `dragging`), which could never apply, is the error `DisabledStateNeverMet`. RFC-0059.
 - **`byard check` no longer slows with the number of calls.** A view's body is lowered once for each way a call is written, and every call is still checked against the view's signature; a screen with 1000 calls of a button checks in 37 ms where it took 340. `byard shot` runs the same check first, and a gallery's now takes 46 ms of its 377.
@@ -118,6 +126,8 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   completion, the formatter and hot reload know it. See `examples/bindable_params`.
 
 ### Fixed
+
+- **A `pointer_down`, `key_down` or `change` written on a built-in `Slider` never ran**, and neither did its `tap`, `hover` or any other event. They run now, before the slider's own handling; `Toggle`, `Checkbox` and `RadioButton` had the same gap and the same fix. A `pointer_down(e)` on any element inside a `ScrollView` reads `e.x` and `e.y` from the element as drawn.
 
 - **`typo:` chosen with `?:` keeps its font family and weight.** `typo: big ? t.titleLarge : t.labelLarge` drew in the default face at regular weight, with the right size.
 - **A `Box` with a `border` and no `bg` draws its border.** It drew nothing.

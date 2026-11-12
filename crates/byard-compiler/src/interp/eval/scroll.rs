@@ -131,6 +131,15 @@ pub(super) struct WindowSpec {
 /// the enclosing scroll viewport (RFC-0005): interaction follows the content
 /// to its *on-screen* position, and content scrolled out of the viewport
 /// stops being hittable, it is not visible, so it must not be tappable.
+/// `r` moved by the scroll shift, not clipped or inflated: where the element
+/// itself is drawn, which a pointer handler's `e.x` is relative to.
+pub(super) fn shifted_rect(
+    r: crate::interp::intrinsics::Rect,
+    shift: (f32, f32),
+) -> crate::interp::intrinsics::Rect {
+    crate::interp::intrinsics::Rect::new(r.x + shift.0, r.y + shift.1, r.w, r.h)
+}
+
 pub(super) fn scrolled_hit_rect(
     r: crate::interp::intrinsics::Rect,
     shift: (f32, f32),

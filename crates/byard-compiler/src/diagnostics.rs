@@ -144,6 +144,36 @@ pub enum CompileError {
         /// The closest recognized attribute, if any.
         hint: Option<String>,
     },
+    /// A `key_down` or `key_up` on an element the keyboard cannot reach, so
+    /// the handler could never run (RFC-0063 §1).
+    KeyNeedsFocus {
+        /// Source range of the attribute.
+        span: Span,
+        /// The element it was written on.
+        element: String,
+        /// `key_down` or `key_up`.
+        name: String,
+    },
+    /// `a11y_label` or `a11y_description` on a layout container that is not in
+    /// the accessibility tree, so nothing would read it (RFC-0063 §5).
+    A11yNeedsRole {
+        /// Source range of the attribute.
+        span: Span,
+        /// The element it was written on.
+        element: String,
+        /// The attribute.
+        attr: String,
+    },
+    /// A handler named a value for an event that carries none, `tap(e)`
+    /// (RFC-0063 §2): the name would read as empty.
+    EventHasNoValue {
+        /// Source range of the attribute.
+        span: Span,
+        /// The event.
+        event: String,
+        /// What to write instead, if there is something.
+        hint: Option<String>,
+    },
     /// An attribute used the wrong separator for its kind, a property given
     /// `=>`, or an event given `:` (RFC-0003 D4-bis).
     WrongAttributeSeparator {
@@ -1305,6 +1335,9 @@ impl CompileError {
             | Self::UnknownThemeToken { span, .. }
             | Self::UnknownView { span, .. }
             | Self::UnknownAttribute { span, .. }
+            | Self::KeyNeedsFocus { span, .. }
+            | Self::A11yNeedsRole { span, .. }
+            | Self::EventHasNoValue { span, .. }
             | Self::WrongAttributeSeparator { span, .. }
             | Self::ArityMismatch { span, .. }
             | Self::AttributeTypeMismatch { span, .. }
@@ -1427,6 +1460,9 @@ impl CompileError {
             | Self::UnknownThemeToken { span, .. }
             | Self::UnknownView { span, .. }
             | Self::UnknownAttribute { span, .. }
+            | Self::KeyNeedsFocus { span, .. }
+            | Self::A11yNeedsRole { span, .. }
+            | Self::EventHasNoValue { span, .. }
             | Self::WrongAttributeSeparator { span, .. }
             | Self::ArityMismatch { span, .. }
             | Self::AttributeTypeMismatch { span, .. }
@@ -1551,6 +1587,9 @@ impl CompileError {
             Self::UnknownThemeToken { .. } => "UnknownThemeToken",
             Self::UnknownView { .. } => "UnknownView",
             Self::UnknownAttribute { .. } => "UnknownAttribute",
+            Self::KeyNeedsFocus { .. } => "KeyNeedsFocus",
+            Self::A11yNeedsRole { .. } => "A11yNeedsRole",
+            Self::EventHasNoValue { .. } => "EventHasNoValue",
             Self::WrongAttributeSeparator { .. } => "WrongAttributeSeparator",
             Self::ArityMismatch { .. } => "ArityMismatch",
             Self::AttributeTypeMismatch { .. } => "AttributeTypeMismatch",
@@ -1756,6 +1795,30 @@ impl CompileError {
             }
             Self::UnknownAttribute { name, hint, .. } => {
                 with_hint(format!("unknown attribute `{name}`"), hint.as_deref())
+            }
+            Self::KeyNeedsFocus { element, name, .. } => format!(
+                "`{name}` needs an element the keyboard can reach, and a `{element}` written \
+                 like this is not one; give it a `focus => …` handler, or an `a11y_role` that \
+                 takes focus (button, toggle_button, switch, checkbox, radio, tab, menu_item, \
+                 link) together with a `tap`"
+            ),
+            Self::A11yNeedsRole { element, attr, .. } => format!(
+                "`{attr}` on a `{element}` is read by nothing: a layout container is in \
+                 the accessibility tree only with a role; give it an `a11y_role` (button, \
+                 group, list_item, …), or put the {} on the control or `Text` inside",
+                if attr == "a11y_label" {
+                    "label"
+                } else {
+                    "description"
+                }
+            ),
+            Self::EventHasNoValue { event, hint, .. } => {
+                let base =
+                    format!("`{event}` carries no value to name; write `{event} => …` without one");
+                match hint {
+                    Some(h) => format!("{base} (for a position, use `{h}`)"),
+                    None => base,
+                }
             }
             Self::WrongAttributeSeparator {
                 name,

@@ -45,6 +45,8 @@ pub enum Step {
     Tap(f32, f32),
     /// Press at a logical point and keep the button down (RFC-0056).
     Hold(f32, f32),
+    /// Let go of the pointer at a logical point (RFC-0063).
+    Release(f32, f32),
     /// Move the pointer to a logical point, pressing nothing (RFC-0056).
     Hover(f32, f32),
     /// Press a key.
@@ -79,6 +81,7 @@ impl Step {
                 .into_iter()
                 .map(|kind| pointer_event(kind, *x, *y, time_ms))
                 .collect(),
+            Self::Release(x, y) => vec![pointer_event(EventKind::PointerUp, *x, *y, time_ms)],
             Self::Hover(x, y) => vec![pointer_event(EventKind::PointerMove, *x, *y, time_ms)],
             Self::Key(Key { name, mods }) => [EventKind::KeyDown, EventKind::KeyUp]
                 .into_iter()

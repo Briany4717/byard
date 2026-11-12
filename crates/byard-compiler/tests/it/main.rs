@@ -41,6 +41,7 @@ mod hot_reload_state;
 mod http_capability;
 mod ime_input;
 mod incremental_paths;
+mod input_for_composed_controls;
 mod input_hit_test;
 mod instrumentation;
 mod interaction_styles;

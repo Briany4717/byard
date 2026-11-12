@@ -128,7 +128,7 @@ View Main() {
     Column #[bg: t.background, ..chip] {
         Text(\"{double} {label(count)} {twice(count)}\")
         for i, item in [1, 2] { Text(\"{i}: {item}\") }
-        Button(\"x\") #[tap(e) => count = count + 1]
+        Button(\"x\") #[pointer_down(e) => count = count + 1]
         Button(\"y\") => reset()
         Box { on measure => count = it.w }
         Card(title: \"{count}\", shown: count > 0) { Text(\"inside\") }
@@ -175,7 +175,7 @@ fn a_name_does_not_outlive_its_block() {
         ["item"]
     );
     assert_eq!(
-        unknown("Button(\"x\") #[tap(e) => count = 1]\nText(\"{e}\")"),
+        unknown("Button(\"x\") #[pointer_down(e) => count = 1]\nText(\"{e}\")"),
         ["e"]
     );
 }

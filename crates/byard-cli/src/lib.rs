@@ -178,6 +178,10 @@ enum Command {
         /// how long it is held. Repeatable, in order with `--tap`.
         #[arg(long, value_name = "X,Y", value_parser = parse_point)]
         hold: Vec<(f32, f32)>,
+        /// Release the pointer at a point, `X,Y`, ending a `--hold`: with a
+        /// `--hover` between them, a drag. Repeatable, in order with `--tap`.
+        #[arg(long, value_name = "X,Y", value_parser = parse_point)]
+        release: Vec<(f32, f32)>,
         /// Move the pointer to a point without pressing, `X,Y`, so
         /// `on hover` shows. Repeatable, in order with `--tap`.
         #[arg(long, value_name = "X,Y", value_parser = parse_point)]
@@ -261,10 +265,12 @@ fn parse_key(s: &str) -> Result<commands::shot::Key, String> {
 /// The taps, keys and typed text of `byard shot`, in the order they were
 /// written on the command line. clap collects each flag into its own list, so
 /// the order between lists is read back from the positions it recorded.
+#[allow(clippy::too_many_arguments)]
 fn shot_steps(
     matches: &clap::ArgMatches,
     taps: &[(f32, f32)],
     holds: &[(f32, f32)],
+    releases: &[(f32, f32)],
     hovers: &[(f32, f32)],
     keys: &[commands::shot::Key],
     typed: &[String],
@@ -291,6 +297,12 @@ fn shot_steps(
             .into_iter()
             .zip(holds)
             .map(|(i, &(x, y))| (i, Step::Hold(x, y))),
+    );
+    steps.extend(
+        at("release")
+            .into_iter()
+            .zip(releases)
+            .map(|(i, &(x, y))| (i, Step::Release(x, y))),
     );
     steps.extend(
         at("hover")
@@ -388,6 +400,7 @@ pub fn main() {
             light,
             tap,
             hold,
+            release,
             hover,
             key,
             type_text,
@@ -412,7 +425,9 @@ pub fn main() {
             } else {
                 None
             },
-            steps: &shot_steps(&matches, &tap, &hold, &hover, &key, &type_text, &wait),
+            steps: &shot_steps(
+                &matches, &tap, &hold, &release, &hover, &key, &type_text, &wait,
+            ),
         }),
         Command::Test {
             path,
@@ -454,6 +469,7 @@ mod tests {
         let Command::Shot {
             tap,
             hold,
+            release,
             hover,
             key,
             type_text,
@@ -463,7 +479,9 @@ mod tests {
         else {
             panic!("a shot");
         };
-        shot_steps(&matches, &tap, &hold, &hover, &key, &type_text, &wait)
+        shot_steps(
+            &matches, &tap, &hold, &release, &hover, &key, &type_text, &wait,
+        )
     }
 
     fn key(chord: &str) -> Step {
@@ -520,6 +538,27 @@ mod tests {
                 Step::Hold(200.0, 120.0),
                 Step::Tap(1.0, 2.0),
                 Step::Hover(7.0, 8.0),
+            ]
+        );
+    }
+
+    /// RFC-0063: a drag is a hold, a hover and a release.
+    #[test]
+    fn a_drag_is_a_hold_a_hover_and_a_release() {
+        assert_eq!(
+            steps_of(&[
+                "shot",
+                "--hold",
+                "10,10",
+                "--hover",
+                "50,10",
+                "--release",
+                "50,10"
+            ]),
+            [
+                Step::Hold(10.0, 10.0),
+                Step::Hover(50.0, 10.0),
+                Step::Release(50.0, 10.0)
             ]
         );
     }

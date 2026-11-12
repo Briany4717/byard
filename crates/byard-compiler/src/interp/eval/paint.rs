@@ -14,6 +14,7 @@ use super::navigation::NavKind;
 use super::props::ShadowSpec;
 use super::scroll::{
     PULL_THRESHOLD, ScrollAxis, ScrollTarget, SnapAlign, SnapMode, WindowSpec, scrolled_hit_rect,
+    shifted_rect,
 };
 use super::states::{resolve_state_attrs, viewport_holds};
 use super::wiring::NativeTarget;
@@ -430,7 +431,12 @@ impl Interpreter {
                             scroll_shift,
                             cull_clip,
                         );
-                        self.register_event_attrs(attrs, hit_rect, elem_idx);
+                        self.register_event_attrs(
+                            attrs,
+                            hit_rect,
+                            shifted_rect(self_rect, scroll_shift),
+                            elem_idx,
+                        );
                     }
                 }
                 self.env.truncate(env_base);
@@ -832,6 +838,7 @@ impl Interpreter {
                                 paint_attrs,
                                 current_rect,
                                 hit_rect,
+                                shifted_rect(current_rect, scroll_shift),
                                 elem_idx,
                                 transform,
                                 opacity,
@@ -848,7 +855,12 @@ impl Interpreter {
                                 || action.is_some();
 
                             if is_interactive {
-                                self.register_event_attrs(attrs, hit_rect, elem_idx);
+                                self.register_event_attrs(
+                                    attrs,
+                                    hit_rect,
+                                    shifted_rect(current_rect, scroll_shift),
+                                    elem_idx,
+                                );
 
                                 if let Some(action_expr) = action {
                                     if let Ok(action_closure) = self.lower_action(action_expr, None)
@@ -1356,7 +1368,12 @@ impl Interpreter {
                 }
                 // `route_change` and any pointer handlers on the container.
                 let hit_rect = scrolled_hit_rect(nav_rect, scroll_shift, cull_clip);
-                self.register_event_attrs(&p.attrs, hit_rect, elem_idx);
+                self.register_event_attrs(
+                    &p.attrs,
+                    hit_rect,
+                    shifted_rect(nav_rect, scroll_shift),
+                    elem_idx,
+                );
                 // RFC-0042: tabs are a tab list; a stack's screens have no
                 // role of their own and their content is simply the tree's.
                 let host = p.kind == NavKind::Host;
@@ -1634,7 +1651,12 @@ impl Interpreter {
                         for (k, v) in env_snapshot {
                             self.env.push(k.clone(), v.clone());
                         }
-                        self.register_event_attrs(attrs, hit_rect, elem_idx);
+                        self.register_event_attrs(
+                            attrs,
+                            hit_rect,
+                            shifted_rect(view_rect, scroll_shift),
+                            elem_idx,
+                        );
                         if let Some(action_expr) = action {
                             if let (Ok(closure), Some(idx)) =
                                 (self.lower_action(action_expr, None), elem_idx)
@@ -1866,7 +1888,12 @@ impl Interpreter {
                         .any(|a| matches!(a.kind, AttrKind::Event { .. }))
                         || action.is_some();
                     if has_events {
-                        self.register_event_attrs(attrs, hit_rect, elem_idx);
+                        self.register_event_attrs(
+                            attrs,
+                            hit_rect,
+                            shifted_rect(canvas_rect, scroll_shift),
+                            elem_idx,
+                        );
                         if let Some(action_expr) = action {
                             if let Ok(closure) = self.lower_action(action_expr, None) {
                                 if let Some(idx) = elem_idx {

@@ -215,6 +215,8 @@ impl Interpreter {
                 let cur = ctx.peek_signal(sig).as_bool().unwrap_or(false);
                 ctx.write_signal(sig, Value::Bool(!cur));
             });
+            self.register_event_attrs_except(attrs, hit_rect, rect, elem_idx, &["tap"]);
+            let flip = self.composed(attrs, "tap", super::events::EventKind::Tap, rect, flip);
             self.router
                 .on(idx, hit_rect, super::events::EventKind::Tap, flip);
 
@@ -225,6 +227,7 @@ impl Interpreter {
             self.router
                 .activate_on_key(idx, super::events::ActivationKeys::Both);
         } else {
+            self.register_event_attrs(attrs, hit_rect, rect, elem_idx);
             self.register_focusable(attrs, hit_rect, elem_idx);
         }
     }
@@ -353,6 +356,14 @@ impl Interpreter {
                 let cur = ctx.peek_signal(sig).as_bool().unwrap_or(false);
                 ctx.write_signal(sig, Value::Bool(!cur));
             });
+            self.register_event_attrs_except(
+                attrs,
+                hit_rect,
+                rect,
+                elem_idx,
+                &["tap", "key_down", "change"],
+            );
+            let flip = self.composed(attrs, "tap", super::events::EventKind::Tap, rect, flip);
             self.router
                 .on(idx, hit_rect, super::events::EventKind::Tap, flip);
 
@@ -365,21 +376,34 @@ impl Interpreter {
                     }
                 }
             });
+            let key_flip = self.composed(
+                attrs,
+                "key_down",
+                super::events::EventKind::KeyDown,
+                rect,
+                key_flip,
+            );
             self.router
                 .on(idx, hit_rect, super::events::EventKind::KeyDown, key_flip);
 
             // Change write-back from the platform (RFC-0003 E1).
-            self.router.on(
-                idx,
-                hit_rect,
+            let change = self.composed(
+                attrs,
+                "change",
                 super::events::EventKind::Change,
+                rect,
                 super::events::write_back_action(sig),
             );
+            self.router
+                .on(idx, hit_rect, super::events::EventKind::Change, change);
 
             // Focus target so Tab and click reach the box. Uses the element's own
             // `focused:` var when given, else the shared sink.
             let fsig = self.focus_signal(attrs);
             self.router.focusable(idx, hit_rect, fsig);
+        } else {
+            self.register_event_attrs(attrs, hit_rect, rect, elem_idx);
+            self.register_focusable(attrs, hit_rect, elem_idx);
         }
     }
 
@@ -475,6 +499,14 @@ impl Interpreter {
             let select: super::events::Action = Box::new(move |ctx, _| {
                 ctx.write_signal(sig, Value::Str(val.clone()));
             });
+            self.register_event_attrs_except(
+                attrs,
+                hit_rect,
+                rect,
+                elem_idx,
+                &["tap", "key_down", "change"],
+            );
+            let select = self.composed(attrs, "tap", super::events::EventKind::Tap, rect, select);
             self.router
                 .on(idx, hit_rect, super::events::EventKind::Tap, select);
 
@@ -510,20 +542,33 @@ impl Interpreter {
                 };
                 ctx.write_signal(sig, Value::Str(vals[next].clone()));
             });
+            let arrows = self.composed(
+                attrs,
+                "key_down",
+                super::events::EventKind::KeyDown,
+                rect,
+                arrows,
+            );
             self.router
                 .on(idx, hit_rect, super::events::EventKind::KeyDown, arrows);
 
             // Change write-back from the platform (RFC-0003 E1).
-            self.router.on(
-                idx,
-                hit_rect,
+            let change = self.composed(
+                attrs,
+                "change",
                 super::events::EventKind::Change,
+                rect,
                 super::events::write_back_action(sig),
             );
+            self.router
+                .on(idx, hit_rect, super::events::EventKind::Change, change);
 
             // Focus target so Tab and click reach the button.
             let fsig = self.focus_signal(attrs);
             self.router.focusable(idx, hit_rect, fsig);
+        } else {
+            self.register_event_attrs(attrs, hit_rect, rect, elem_idx);
+            self.register_focusable(attrs, hit_rect, elem_idx);
         }
     }
 
@@ -638,12 +683,25 @@ impl Interpreter {
                         ctx.write_signal(sig, Value::Float(val));
                     })
                 };
-            self.router.on(
-                idx,
+            // RFC-0063 §3: what the element wrote runs too, and for the kinds
+            // the slider handles itself it runs first, from the one handler
+            // the router fires per kind.
+            self.register_event_attrs_except(
+                attrs,
                 hit_rect,
+                rect,
+                elem_idx,
+                &["pointer_down", "key_down", "change"],
+            );
+            let down = self.composed(
+                attrs,
+                "pointer_down",
                 super::events::EventKind::PointerDown,
+                rect,
                 make_drag_action(min_f, max_f, step_f),
             );
+            self.router
+                .on(idx, hit_rect, super::events::EventKind::PointerDown, down);
             self.router.on(
                 idx,
                 hit_rect,
@@ -653,45 +711,53 @@ impl Interpreter {
             // Change write-back (RFC-0003 E1), as the other value widgets
             // have: the way a value set from outside the pointer, an
             // assistive technology (RFC-0042), reaches the `var`.
-            self.router.on(
-                idx,
-                hit_rect,
+            let change = self.composed(
+                attrs,
+                "change",
                 super::events::EventKind::Change,
+                rect,
                 super::events::write_back_action(sig),
             );
+            self.router
+                .on(idx, hit_rect, super::events::EventKind::Change, change);
 
             // Arrow keys step the value while it has focus (WAI-ARIA slider
             // pattern): by `step:`, or a tenth of the range without one.
             let key_step = step_f.unwrap_or((max_f - min_f) / 10.0);
             let decimals = step_f.map_or(SLIDER_DEFAULT_DECIMALS, step_decimals);
-            self.router.on(
-                idx,
-                hit_rect,
+            let arrows: super::events::Action = Box::new(move |ctx, payload| {
+                let Some(Value::Str(key)) = payload else {
+                    return;
+                };
+                let direction = match key.as_str() {
+                    "ArrowRight" | "ArrowUp" => 1.0,
+                    "ArrowLeft" | "ArrowDown" => -1.0,
+                    _ => return,
+                };
+                let current = match ctx.peek_signal(sig) {
+                    Value::Float(f) => f,
+                    #[allow(clippy::cast_precision_loss)]
+                    Value::Int(n) => n as f64,
+                    _ => min_f,
+                };
+                let next = (current + direction * key_step).clamp(min_f, max_f);
+                ctx.write_signal(sig, Value::Float(round_to_decimals(next, decimals)));
+            });
+            let arrows = self.composed(
+                attrs,
+                "key_down",
                 super::events::EventKind::KeyDown,
-                Box::new(move |ctx, payload| {
-                    let Some(Value::Str(key)) = payload else {
-                        return;
-                    };
-                    let direction = match key.as_str() {
-                        "ArrowRight" | "ArrowUp" => 1.0,
-                        "ArrowLeft" | "ArrowDown" => -1.0,
-                        _ => return,
-                    };
-                    let current = match ctx.peek_signal(sig) {
-                        Value::Float(f) => f,
-                        #[allow(clippy::cast_precision_loss)]
-                        Value::Int(n) => n as f64,
-                        _ => min_f,
-                    };
-                    let next = (current + direction * key_step).clamp(min_f, max_f);
-                    ctx.write_signal(sig, Value::Float(round_to_decimals(next, decimals)));
-                }),
+                rect,
+                arrows,
             );
+            self.router
+                .on(idx, hit_rect, super::events::EventKind::KeyDown, arrows);
 
             // Focus target, so Tab and a click reach it.
             let fsig = self.focus_signal(attrs);
             self.router.focusable(idx, hit_rect, fsig);
         } else {
+            self.register_event_attrs(attrs, hit_rect, rect, elem_idx);
             self.register_focusable(attrs, hit_rect, elem_idx);
         }
     }

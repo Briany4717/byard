@@ -24,6 +24,16 @@ pub enum EventKind {
     PointerDown,
     /// A pointer release.
     PointerUp,
+    /// A held press has moved past the tap slop (RFC-0063). **Internal**:
+    /// fired by the router on the element the press began on, once per press.
+    DragStart,
+    /// The pointer moved while a press that is a drag is held (RFC-0063).
+    /// **Internal**: fired on the element the press began on, wherever the
+    /// pointer is.
+    Drag,
+    /// A press that was a drag was released (RFC-0063). **Internal**: fired on
+    /// the element the press began on.
+    DragEnd,
     /// A qualifying tap (down+up within thresholds; E4).
     Tap,
     /// Continuous pointer movement.
@@ -101,6 +111,9 @@ impl EventKind {
             self,
             Self::PointerDown
                 | Self::PointerUp
+                | Self::DragStart
+                | Self::Drag
+                | Self::DragEnd
                 | Self::Tap
                 | Self::DoubleTap
                 | Self::LongPress
@@ -171,6 +184,10 @@ thread_local! {
     /// the handlers that need a clock (a text field coalescing typed
     /// characters into one undo step).
     pub static CURRENT_EVENT_TIME: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// Where the press in flight began, for the drag events' `dx` and `dy`
+    /// (RFC-0063). The event's own position when no press is held.
+    pub static CURRENT_PRESS_POS: std::cell::Cell<(f32, f32)> =
+        const { std::cell::Cell::new((0.0, 0.0)) };
 }
 
 /// A handler's reactive action. Receives the context (for `var` mutation) and
@@ -236,7 +253,14 @@ pub enum GroupKind {
 /// A set of focus targets the arrow keys move between.
 struct Group {
     kind: GroupKind,
-    members: Vec<u32>,
+    /// The members, each with whether it is the selected one (RFC-0063 §4).
+    members: Vec<(u32, bool)>,
+}
+
+impl Group {
+    fn has(&self, elem: u32) -> bool {
+        self.members.iter().any(|&(m, _)| m == elem)
+    }
 }
 
 impl StyleState {
@@ -468,10 +492,19 @@ impl EventRouter {
     }
 
     /// Adds a focus target to the innermost open group, if there is one.
-    pub fn group_member(&mut self, elem: u32) {
+    /// `selected` is whether it is the group's selected member, where Tab
+    /// enters the group (RFC-0063 §4).
+    pub fn group_member(&mut self, elem: u32, selected: bool) {
         if let Some(&g) = self.open_groups.last() {
-            self.groups[g].members.push(elem);
+            self.groups[g].members.push((elem, selected));
         }
+    }
+
+    /// Whether the innermost open group exists: a member's selected state is
+    /// worth reading only then.
+    #[must_use]
+    pub fn in_group(&self) -> bool {
+        !self.open_groups.is_empty()
     }
 
     /// Whether a key press of `key` ("Space" or "Enter", however the platform
@@ -735,6 +768,8 @@ impl EventRouter {
                     EventKind::Tap
                         | EventKind::PointerDown
                         | EventKind::PointerDrag
+                        | EventKind::DragStart
+                        | EventKind::Drag
                         | EventKind::Change
                 )
         })
@@ -909,6 +944,7 @@ impl EventRouter {
         CURRENT_EVENT_POS.with(|c| c.set(ev.pos));
         CURRENT_EVENT_MODS.with(|c| c.set(ev.mods));
         CURRENT_EVENT_TIME.with(|c| c.set(ev.time_ms));
+        CURRENT_PRESS_POS.with(|c| c.set(self.down.as_ref().map_or(ev.pos, |d| d.pos)));
 
         match ev.kind {
             EventKind::PointerDown => {
@@ -928,6 +964,7 @@ impl EventRouter {
                 });
                 // A fresh press starts a new gesture, not yet a drag (RFC-0024).
                 self.dragging = None;
+                CURRENT_PRESS_POS.with(|c| c.set(ev.pos));
                 if secondary {
                     self.fire(ctx, atlas, EventKind::Secondary, ev.pos, None);
                 } else {
@@ -949,6 +986,14 @@ impl EventRouter {
                         self.fire_on_elem(ctx, Some(elem), EventKind::PointerUp, ev.pos, None);
                     }
                     None => self.fire(ctx, atlas, EventKind::PointerUp, ev.pos, None),
+                }
+                // RFC-0063: a press that was a drag ends, on the element it
+                // began on, after the release itself.
+                if let Some(elem) = self
+                    .dragging
+                    .filter(|_| self.down.as_ref().is_some_and(|d| !d.secondary))
+                {
+                    self.fire_on_elem(ctx, Some(elem), EventKind::DragEnd, ev.pos, None);
                 }
                 // The gesture ends, clear the drag latch (RFC-0024).
                 self.dragging = None;
@@ -1003,8 +1048,19 @@ impl EventRouter {
                         // RFC-0024 `dragging`: latch once the pointer travels past
                         // the drag threshold from the press point.
                         let (dx, dy) = (ev.pos.0 - dpos.0, ev.pos.1 - dpos.1);
+                        let primary = self.down.as_ref().is_some_and(|d| !d.secondary);
                         if (dx * dx + dy * dy).sqrt() > TAP_SLOP {
+                            // RFC-0063: the latch rising is the drag starting.
+                            let began = self.dragging.is_none() && elem.is_some() && primary;
                             self.dragging = elem;
+                            if began {
+                                self.fire_on_elem(ctx, elem, EventKind::DragStart, ev.pos, None);
+                            }
+                        }
+                        // Once it is a drag it stays one, however near the
+                        // press point the pointer comes back to.
+                        if primary && self.dragging.is_some() {
+                            self.fire_on_elem(ctx, self.dragging, EventKind::Drag, ev.pos, None);
                         }
                         match self.captured_drag() {
                             Some(elem) => self.fire_on_elem(
@@ -1054,6 +1110,9 @@ impl EventRouter {
             }
             EventKind::Tap
             | EventKind::PointerDrag
+            | EventKind::DragStart
+            | EventKind::Drag
+            | EventKind::DragEnd
             | EventKind::PointerEnter
             | EventKind::PointerExit
             | EventKind::Hover
@@ -1370,11 +1429,30 @@ impl EventRouter {
         // its scope (`focusables[focusable_floor..]`), wrapping last→first inside
         // it. Outside a modal overlay, `focusable_floor` is 0, the whole set.
         let floor = self.focusable_floor;
-        let scope: smallvec::SmallVec<[u32; 16]> = self.focusables[floor..]
+        let mut scope: smallvec::SmallVec<[u32; 16]> = self.focusables[floor..]
             .iter()
             .filter(|f| !self.disabled.contains(&f.elem))
             .map(|f| f.elem)
             .collect();
+        // RFC-0063 §4: a tab list or radio group is one stop, at the member
+        // with focus, else the selected one, else the first.
+        for group in &self.groups {
+            let live: smallvec::SmallVec<[(u32, bool); 8]> = group
+                .members
+                .iter()
+                .copied()
+                .filter(|(m, _)| scope.contains(m))
+                .collect();
+            let stop = live
+                .iter()
+                .find(|(m, _)| self.focused == Some(*m))
+                .or_else(|| live.iter().find(|(_, selected)| *selected))
+                .or_else(|| live.first())
+                .map(|&(m, _)| m);
+            if let Some(stop) = stop {
+                scope.retain(|e| *e == stop || !group.has(*e));
+            }
+        }
         if scope.is_empty() {
             return;
         }
@@ -1407,14 +1485,14 @@ impl EventRouter {
         let Some(focused) = self.focused else {
             return false;
         };
-        let Some(group) = self.groups.iter().find(|g| g.members.contains(&focused)) else {
+        let Some(group) = self.groups.iter().find(|g| g.has(focused)) else {
             return false;
         };
         let kind = group.kind;
         let live: smallvec::SmallVec<[u32; 16]> = group
             .members
             .iter()
-            .copied()
+            .map(|&(m, _)| m)
             .filter(|m| !self.disabled.contains(m))
             .collect();
         let Some(here) = live.iter().position(|&m| m == focused) else {

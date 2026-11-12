@@ -54,6 +54,7 @@ View Chip(r: Int, tint: Int, label: Str) {
         radius: r with anim.spring(),
         width: 80,
         height: 50,
+        a11y_role: image,
         a11y_label: "{label}",
     ] {}
 }

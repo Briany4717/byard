@@ -135,6 +135,40 @@ pub struct Inference {
     pub consts: Vec<(Symbol, Ty)>,
 }
 
+/// What the value a handler may name is, by event (RFC-0063 §2).
+enum EventValue {
+    /// A record of the given built-in type.
+    Record(&'static str),
+    /// The event carries no value; the string says what to write instead.
+    None(Option<&'static str>),
+    /// Any other event: a text, a number, a key, as the element defines it.
+    Other,
+}
+
+fn event_value(event: &str) -> EventValue {
+    match event {
+        "pointer_down" | "pointer_up" | "pointer_move" | "pointer_enter" | "pointer_exit"
+        | "hover" => EventValue::Record("PointerEvent"),
+        "drag_start" | "drag" | "drag_end" => EventValue::Record("DragEvent"),
+        // `tap` can come from a key, so it has no position.
+        "tap" | "click" | "double_tap" | "long_press" | "secondary" => {
+            EventValue::None(Some("pointer_down(e)"))
+        }
+        "focus" | "blur" => EventValue::None(None),
+        _ => EventValue::Other,
+    }
+}
+
+/// The fields of the built-in event records a pointer or drag handler is
+/// given (RFC-0063 §2), all `Float`.
+fn event_record_fields(record: &str) -> Option<&'static [&'static str]> {
+    match record {
+        "PointerEvent" => Some(&["x", "y", "width", "height"]),
+        "DragEvent" => Some(&["x", "y", "width", "height", "dx", "dy"]),
+        _ => None,
+    }
+}
+
 /// Runs the D9 checks and local inference over `views`.
 #[must_use]
 pub fn check_views(views: &[ViewDecl]) -> Inference {
@@ -779,6 +813,30 @@ impl Checker<'_> {
                     Ty::Unknown
                 }
                 AttrKind::Event { payload, action } => {
+                    if let Some(name) = payload {
+                        // RFC-0063 §2: the value of a pointer or drag handler
+                        // is a typed record, one that carries none takes no
+                        // name.
+                        match event_value(attr.name.as_str()) {
+                            EventValue::Record(ty) => {
+                                let mark = self.undo.len();
+                                self.bind(it.clone(), Ty::Unknown);
+                                self.bind(name.clone(), Ty::Named(Symbol::intern(ty)));
+                                self.value(action);
+                                self.leave(mark);
+                                tys.push(Ty::Unknown);
+                                continue;
+                            }
+                            EventValue::None(hint) => {
+                                self.errors.push(CompileError::EventHasNoValue {
+                                    span: attr.span,
+                                    event: attr.name.as_str().to_string(),
+                                    hint: hint.map(str::to_string),
+                                });
+                            }
+                            EventValue::Other => {}
+                        }
+                    }
                     let mut names = vec![&it];
                     names.extend(payload.as_ref());
                     self.check_shadowed(action, &names);
@@ -1520,6 +1578,25 @@ impl Checker<'_> {
     /// an `UnknownField` for a field it does not have. Any other named type
     /// (a controller, a theme) is not modelled, so nothing is claimed.
     fn record_field(&mut self, record: &Symbol, field: &Symbol, span: Span) -> Ty {
+        // RFC-0063: the value of a pointer or drag handler, unless the
+        // program declares a record of the same name.
+        if !self.records.contains_key(record) {
+            if let Some(fields) = event_record_fields(record.as_str()) {
+                if fields.contains(&field.as_str()) {
+                    return Ty::Float;
+                }
+                let hint = crate::util::closest_match(field.as_str(), fields.iter().copied())
+                    .map(str::to_string);
+                let len = u32::try_from(field.as_str().len()).unwrap_or(0);
+                self.errors.push(CompileError::UnknownField {
+                    span: Span::new(span.end.saturating_sub(len).max(span.start), span.end),
+                    record: record.as_str().to_string(),
+                    name: field.as_str().to_string(),
+                    hint,
+                });
+                return Ty::Unknown;
+            }
+        }
         let Some(fields) = self.records.get(record) else {
             return Ty::Unknown;
         };

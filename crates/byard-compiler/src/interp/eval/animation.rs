@@ -133,6 +133,11 @@ pub(crate) struct AnimKey {
     slot: u32,
     /// The view instance, or `0` outside any user view.
     inst: u32,
+    /// Which slot of a tuple this motion is (RFC-0061): `0` for a lone value,
+    /// `1..=4` for the slots of a radius, padding or margin that moves slot by
+    /// slot. The slots of one `with` retarget independently, so each needs a
+    /// motion of its own.
+    part: u8,
 }
 
 impl AnimKey {
@@ -142,7 +147,13 @@ impl AnimKey {
             span,
             slot: at.row,
             inst: at.inst,
+            part: 0,
         }
+    }
+
+    /// The key of slot `part` (`1..=4`) of the tuple this key names.
+    const fn part(self, part: u8) -> Self {
+        Self { part, ..self }
     }
 }
 
@@ -762,11 +773,24 @@ impl Interpreter {
             // (the checker already restricts `with` to numeric props).
             other => return other,
         };
+        Value::Float(f64::from(self.animate_f32(target_val, &spec, key)))
+    }
+
+    /// Moves one number towards `target_val` on the motion `spec` names, under
+    /// `key`, and returns where it is now (RFC-0010, RFC-0025). Marks the frame
+    /// active until the motion settles. The scalar `with` and each slot of an
+    /// animated tuple ([`Self::animate_quad`]) go through here.
+    fn animate_f32(
+        &mut self,
+        target_val: f32,
+        spec: &crate::interp::anim::MotionSpec<'_>,
+        key: AnimKey,
+    ) -> f32 {
         // RFC-0025: a repeating, delayed or explicitly-started animation runs on
         // its own timeline; everything else keeps the original single-shot path
         // below, byte for byte.
         if !spec.is_plain() {
-            return Value::Float(f64::from(self.eval_looped(target_val, &spec, key)));
+            return self.eval_looped(target_val, spec, key);
         }
         let packed = pack_curve(spec.curve);
         let now = self.now_ms;
@@ -800,7 +824,31 @@ impl Interpreter {
         if !settled {
             self.any_active = true;
         }
-        Value::Float(f64::from(sampled))
+        sampled
+    }
+
+    /// Moves the four slots of a radius, a padding or a margin towards
+    /// `target` on the motion `anim` names, each on a motion of its own
+    /// (RFC-0061), and returns where they are now.
+    ///
+    /// The slots are keyed by the `with` node's `span` and their index, so a
+    /// `?:` between `(4, 4, 0, 0)` and `4` retargets only the slots whose goal
+    /// changed, and an interrupted slot continues from where it is. With no
+    /// clock, or a curve the checker already rejected, the target is returned
+    /// as is.
+    pub(super) fn animate_quad(&mut self, target: [f32; 4], anim: &Expr, span: Span) -> [f32; 4] {
+        if !self.clock_set {
+            return target;
+        }
+        let Ok(spec) = crate::interp::anim::resolve_motion_in(anim, Some(&self.theme)) else {
+            return target;
+        };
+        let key = self.anim_key(span);
+        let mut out = target;
+        for (part, slot) in (1_u8..).zip(out.iter_mut()) {
+            *slot = self.animate_f32(*slot, &spec, key.part(part));
+        }
+        out
     }
 
     /// Drives one repeating / delayed / explicitly-started `with` animation

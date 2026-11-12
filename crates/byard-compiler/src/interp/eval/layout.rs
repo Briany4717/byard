@@ -33,6 +33,16 @@ pub(super) enum Stacked {
 use crate::parser::ast::{Attr, AttrKind, Member};
 use crate::symbol::Symbol;
 
+/// What a container's layout needs to apply its interaction states (RFC-0061):
+/// its attributes as written, its `on <state>` blocks, and the signal a value
+/// widget is bound to.
+#[derive(Clone, Copy)]
+pub(super) struct StateSource<'a> {
+    pub(super) raw: &'a [Attr],
+    pub(super) blocks: &'a [crate::parser::ast::StateBlock],
+    pub(super) bound_sig: Option<super::super::env::SignalId>,
+}
+
 /// Every `for` pool reachable from `nodes` without leaving them, in any order.
 pub(super) fn collect_pools(nodes: &[RenderNode], out: &mut Vec<usize>) {
     for n in nodes {
@@ -181,6 +191,13 @@ pub(super) struct RetainedLayout {
     /// Set by [`Interpreter::reload`] and [`Interpreter::set_theme`]; cleared
     /// by the next render, which is forced to be a full one.
     pub(super) invalidated: bool,
+}
+
+/// Whether a body writes a `let` of its own (RFC-0061).
+fn has_lets(members: &[crate::parser::ast::Member]) -> bool {
+    members
+        .iter()
+        .any(|m| matches!(m, crate::parser::ast::Member::Let { .. }))
 }
 
 impl Interpreter {
@@ -444,6 +461,25 @@ impl Interpreter {
         }
     }
 
+    /// Lowers the members of a `for` or `when` body (RFC-0061): its `let`s are
+    /// defined first, in the body's own scope, so the elements read them; then
+    /// the body is lowered as a scope of its own, with its `as` names declared
+    /// before any element reads them (RFC-0062). A view body defines its `let`s
+    /// when the view is instantiated, which is why this is not in
+    /// [`lower_members`](Self::lower_members).
+    fn lower_body_members(
+        &mut self,
+        members: &[crate::parser::ast::Member],
+        known_views: &[&str],
+    ) -> Vec<RenderNode> {
+        for m in members {
+            if matches!(m, crate::parser::ast::Member::Let { .. }) {
+                self.eval_member(m);
+            }
+        }
+        self.lower_scope(members, known_views)
+    }
+
     /// Lowers one branch of a `when` pool from its AST and the environment
     /// captured where the `when` was written, returning the nodes and the
     /// reactive scopes lowering opened. The one place a branch is lowered, so
@@ -474,7 +510,9 @@ impl Interpreter {
         // belongs to, a nested `for`/`when` pool, has to capture that scope
         // now, or it will look for the row in an environment that no longer
         // has one.
-        let restored = !env_snap.is_empty();
+        // A `let` in the branch has to be captured by the elements that read
+        // it (RFC-0061), which they only do while the scope counts as restored.
+        let restored = !env_snap.is_empty() || has_lets(&ast);
         self.restored_depth += u32::from(restored);
         let enclosing = std::mem::replace(&mut self.cur_inst, self.when_pools[pool].inst);
         let slots = self.when_pools[pool].slots.clone();
@@ -485,7 +523,7 @@ impl Interpreter {
         // The scopes the branch opens are recorded, so a route popped with this
         // `when` in it can retire them.
         self.ctx.push_scope_tracker();
-        let nodes = self.lower_scope(&ast, &known_refs);
+        let nodes = self.lower_body_members(&ast, &known_refs);
         let scopes = self.ctx.pop_scope_tracker();
         if pushed {
             self.slot_stack.pop();
@@ -533,7 +571,7 @@ impl Interpreter {
             self.slot_stack.push(frame);
         }
         self.ctx.push_scope_tracker();
-        let body_nodes = self.lower_scope(&body_ast, &known_refs);
+        let body_nodes = self.lower_body_members(&body_ast, &known_refs);
         let scopes = self.ctx.pop_scope_tracker();
         if pushed {
             self.slot_stack.pop();
@@ -787,6 +825,7 @@ impl Interpreter {
         use byard_core::atlas::layout::LeafSize;
         // RFC-0016: a responsive `size:` changes what is measured, so
         // it has to be seen here as well as at paint.
+        let raw_attrs = attrs;
         let attrs = resolve_state_attrs(
             attrs,
             state_blocks,
@@ -794,7 +833,18 @@ impl Interpreter {
             &std::collections::HashMap::new(),
             &|c| viewport_holds(c, self.viewport, &self.theme),
         );
-        let attrs = self.pick_keywords(attrs);
+        // RFC-0061: a leaf has no children, so its place in the build order is
+        // known now and its interaction states can move its layout properties.
+        let attrs = self.with_layout_states(
+            "Text",
+            &attrs,
+            StateSource {
+                raw: raw_attrs,
+                blocks: state_blocks,
+                bound_sig: None,
+            },
+        );
+        let attrs = self.pick_keywords(std::borrow::Cow::Owned(attrs.into_owned()));
         let attrs: &[Attr] = &attrs;
         let text = match self.binding_value(content) {
             Some(Value::Str(s)) => s,
@@ -1063,6 +1113,7 @@ impl Interpreter {
                 // a breakpoint's do, since a narrow window is exactly when a
                 // padding or a direction should change. Borrowed unchanged when
                 // the box has no blocks, which is nearly every box.
+                let raw_attrs: &[Attr] = attrs;
                 let attrs = resolve_state_attrs(
                     attrs,
                     state_blocks,
@@ -1088,7 +1139,18 @@ impl Interpreter {
                 // Taken before the children are built, so only the direct child
                 // of a `ZStack` sees that it is one.
                 let in_stack = std::mem::take(&mut self.stacked) == Stacked::Yes;
-                let out = self.build_box_layout(name, attrs, children, pools, flat_ids);
+                let out = self.build_box_layout(
+                    name,
+                    attrs,
+                    StateSource {
+                        raw: raw_attrs,
+                        blocks: state_blocks,
+                        bound_sig: *bound_sig,
+                    },
+                    children,
+                    pools,
+                    flat_ids,
+                );
                 if let Ok(id) = &out {
                     self.apply_flex_item(attrs, *id, in_stack)?;
                 }
@@ -1200,6 +1262,7 @@ impl Interpreter {
         &mut self,
         name: &Symbol,
         attrs: &[Attr],
+        states: StateSource<'_>,
         children: &[RenderNode],
         pools: Pools<'_>,
         flat_ids: &mut Vec<byard_core::atlas::layout::AtlasNodeId>,
@@ -1299,20 +1362,64 @@ impl Interpreter {
         // the parent gets grid tracks/gaps and each child can carry an
         // explicit placement.
         if name.as_str() == "Grid" {
-            return self.build_grid(attrs, children, pools, flat_ids);
+            return self.build_grid(attrs, states, children, pools, flat_ids);
         }
         // RFC-0018 `ZStack`: overlapping children, a single-cell grid.
         if name.as_str() == "ZStack" {
-            return self.build_zstack(attrs, children, pools, flat_ids);
+            return self.build_zstack(attrs, states, children, pools, flat_ids);
         }
         let mut temp_flat = Vec::new();
         // RFC-0018: expand reactive `when`/`for` children before layout.
         let child_ids = self.build_children(children, pools, &mut temp_flat);
-        let style = self.eval_container_style(name.as_str(), attrs);
+        // RFC-0061: with the children built, this container's place in the build
+        // order is known, which is what names it to the router, so its `on
+        // <state>` blocks can move its layout properties.
+        let attrs = self.with_layout_states(name.as_str(), attrs, states);
+        let style = self.eval_container_style(name.as_str(), &attrs);
         let id = self.atlas.add_container(style, &child_ids)?;
         flat_ids.push(id);
         flat_ids.extend(temp_flat);
         Ok(id)
+    }
+
+    /// `attrs` with the interaction states the container is in applied, when a
+    /// state block writes a layout property (RFC-0061); `attrs` as they are, with
+    /// no work, when none does (nearly every box).
+    ///
+    /// The mask is the one paint reads: the router's hover, pressed, focus and
+    /// drag bits for the node this container is about to become, and the
+    /// prop-driven ones. `disabled:` is read from the element, not from the
+    /// router, which only learns of it at paint.
+    fn with_layout_states<'a>(
+        &mut self,
+        name: &str,
+        attrs: &'a [Attr],
+        states: StateSource<'_>,
+    ) -> std::borrow::Cow<'a, [Attr]> {
+        use crate::interp::events::StyleState;
+        let moves_layout = states.blocks.iter().any(|b| {
+            !b.states.is_empty()
+                && b.attrs
+                    .iter()
+                    .any(|a| crate::interp::intrinsics::layout_motion(a.name.as_str()))
+        });
+        if !moves_layout {
+            return std::borrow::Cow::Borrowed(attrs);
+        }
+        let state = if self.eval_bool_prop(states.raw, "disabled") == Some(true) {
+            StyleState::DISABLED
+        } else {
+            self.router
+                .style_state(self.atlas.next_build_slot())
+                .union(self.prop_style_state(states.raw, states.bound_sig, name))
+        };
+        let resolved =
+            resolve_state_attrs(states.raw, states.blocks, state, &self.elem_states, &|c| {
+                viewport_holds(c, self.viewport, &self.theme)
+            })
+            .into_owned();
+        let resolved = self.pick_keywords(std::borrow::Cow::Owned(resolved));
+        std::borrow::Cow::Owned(resolved.into_owned())
     }
 
     /// Builds the atlas subtree for a `Grid` (RFC-0018). Children are expanded
@@ -1324,6 +1431,7 @@ impl Interpreter {
     fn build_grid(
         &mut self,
         attrs: &[Attr],
+        states: StateSource<'_>,
         children: &[RenderNode],
         pools: Pools<'_>,
         flat_ids: &mut Vec<byard_core::atlas::layout::AtlasNodeId>,
@@ -1346,6 +1454,8 @@ impl Interpreter {
             }
         }
         self.anim_slot = enclosing;
+        let attrs = self.with_layout_states("Grid", attrs, states);
+        let attrs: &[Attr] = &attrs;
         let base = self.eval_container_style("Grid", attrs);
         let (cols, rows) = self.eval_grid_templates(attrs);
         let (col_gap, row_gap) = self.eval_grid_gaps(attrs);
@@ -1453,6 +1563,7 @@ impl Interpreter {
     fn build_zstack(
         &mut self,
         attrs: &[Attr],
+        states: StateSource<'_>,
         children: &[RenderNode],
         pools: Pools<'_>,
         flat_ids: &mut Vec<byard_core::atlas::layout::AtlasNodeId>,
@@ -1470,6 +1581,8 @@ impl Interpreter {
             self.stacked = Stacked::No;
         }
         self.anim_slot = enclosing;
+        let attrs = self.with_layout_states("ZStack", attrs, states);
+        let attrs: &[Attr] = &attrs;
         let base = self.eval_container_style("ZStack", attrs);
         let align = self.eval_stack_align(attrs);
         let id = self.atlas.add_stack_container(base, align, &child_ids)?;

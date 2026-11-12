@@ -221,8 +221,16 @@ nearest boundary on it; a drag does the same with the anchor kept. A selection
 is one rectangle per line it touches. The vertical scroll follows the caret as
 the horizontal one does (RFC-0041 §6), and is clamped to the text.
 
+*Wheel and preedit.* A multiline field that holds more lines than it shows
+scrolls with the wheel (a line is 40 px) and the trackpad; the scroll follows
+the caret only when the caret or the text moved. An input method's preedit is
+put into the text at the caret for drawing and wrapping, so what follows it
+moves aside and the caret and the underlines sit where the preedit wraps to. The
+accessibility node carries a `multiline` flag, AccessKit's
+`MultilineTextInput`.
+
 *Keys.* In a multiline field `Enter` inserts `\n` and does not fire `submit`;
-`Home`/`End` go to the start/end of the visual line, with `Ctrl` (`Cmd+Up`/`Down`
+`Mod+Enter` fires `submit` and inserts nothing; `PageUp`/`PageDown` move a page of lines (the lines in view) keeping the goal column; `Home`/`End` go to the start/end of the visual line, with `Ctrl` (`Cmd+Up`/`Down`
 on macOS) to the ends of the text; `ArrowUp`/`ArrowDown` as above, and on the
 first or last line they go to the start or the end of the text, as a browser's
 text area does; `Shift` extends the selection with any of them. Everything else
@@ -273,8 +281,8 @@ that means nothing without, or with, another: `row_gap` without `wrap`,
   is off by a glyph. A test shapes both and compares.
 - **A limit replaces a built value.** `min_height: 0` on a `Button` removes its
   touch floor, which is the point, and a way to build a button nobody can hit.
-- **No wheel scrolling of a field, no PageUp/PageDown.** The scroll follows the
-  caret.
+- **The wheel scrolls a field and a ScrollView around it too**, when the field
+  sits in one: both see the event.
 
 ## Rationale and alternatives
 
@@ -348,16 +356,14 @@ need two spellings.
 
 **Options.** (a) never; (b) `Enter` inserts and `Cmd/Ctrl+Enter` submits.
 
-**Resolution: (a).** The brief for this change; (b) is open to add without
-breaking anyone, since no `Ctrl+Enter` does anything in a field today.
+**Resolution: (b).** A chat box or a comment form wants a keyboard submit, and
+no `Ctrl+Enter` did anything in a field before.
 
 ## Future possibilities
 
 - Layout attributes under `with` (limits, `wrap`), in the change that makes
   layout animatable.
 - `border_gap` animated, for a label that moves into the notch.
-- `Ctrl+Enter` to submit a multiline field; the mouse wheel and PageUp and
-  PageDown scrolling it.
 - `overflow: fade` for a text, and `overflow: ellipsis` on a single line with no
   `max_lines`.
 - A `Column` that wraps.

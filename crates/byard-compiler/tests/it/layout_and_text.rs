@@ -993,3 +993,122 @@ fn the_selection_is_one_rectangle_per_line() {
     let after = count(&app);
     assert!(after - before >= 3, "{before} -> {after}");
 }
+
+// ── the second round: submit, paging, the wheel, the preedit ─────────────
+
+impl App {
+    fn wheel(&mut self, pos: (f32, f32), lines: f32) {
+        let mut e = self.event(EventKind::Wheel, pos, None, none());
+        e.delta = (0.0, lines);
+        self.send(&[e]);
+    }
+
+    fn preedit(&mut self, text: &str, cursor: Option<(usize, usize)>) {
+        self.t += 50;
+        let inputs: Vec<InputEvent> = [byard_core::ImeEvent::Preedit {
+            text: text.into(),
+            cursor,
+        }]
+        .into_iter()
+        .filter_map(|e| e.into_input(self.t))
+        .collect();
+        self.send(&inputs);
+    }
+}
+
+#[test]
+fn the_shortcut_with_enter_submits_a_multiline_field_and_enter_alone_does_not() {
+    let mut app = App::with(THREE, "ab");
+    app.key("Enter", modk());
+    assert_eq!(app.submitted(), 1);
+    assert_eq!(app.q(), "ab", "no line break came with it");
+    app.key("Enter", none());
+    assert_eq!(app.submitted(), 1);
+    assert_eq!(app.q(), "ab\n");
+}
+
+#[test]
+fn page_down_and_up_move_a_page_of_lines_and_keep_the_column() {
+    // Three lines are in view, so a page is three lines.
+    let text = (0..10)
+        .map(|i| format!("xx{i}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut app = App::with(THREE, &text);
+    app.key("Home", modk());
+    app.key("ArrowRight", none());
+    assert_eq!(app.sel().1, 1);
+    app.key("PageDown", none());
+    assert_eq!(app.sel().1, 3 * 4 + 1, "the same column, three lines on");
+    app.key("PageUp", none());
+    assert_eq!(app.sel().1, 1);
+    app.key("PageUp", none());
+    assert_eq!(app.sel().1, 0, "the first page goes to the start");
+    app.key("PageDown", shift());
+    assert_eq!(app.sel(), (0, 12), "Shift selects a page");
+}
+
+#[test]
+fn the_wheel_scrolls_a_field_that_has_more_lines_than_it_shows() {
+    let lines = "x\n".repeat(7);
+    let mut app = App::with(", lines: 2", &lines);
+    let field = rect_of(&app.frame, 0xFF0000);
+    let at = (field[0] + 40.0, field[1] + 20.0);
+    let bottom = app.caret().y;
+    app.wheel(at, 1.0);
+    assert!(
+        (app.caret().y - bottom - 40.0).abs() < 1.0,
+        "a line of wheel is 40 px: {} from {bottom}",
+        app.caret().y
+    );
+    // The scroll stays where it was put while nothing moves the caret.
+    app.send(&[]);
+    assert!((app.caret().y - bottom - 40.0).abs() < 1.0);
+    // And typing brings the caret back into view.
+    app.insert("y");
+    assert!((app.caret().y - bottom).abs() < 1.0, "{}", app.caret().y);
+    // The wheel never scrolls past the text.
+    for _ in 0..10 {
+        app.wheel(at, 1.0);
+    }
+    assert!(app.caret().y < bottom + 120.0);
+    for _ in 0..10 {
+        app.wheel(at, -1.0);
+    }
+    assert!((app.caret().y - bottom).abs() < 1.0, "back at the end");
+}
+
+#[test]
+fn a_field_that_fits_its_text_does_not_scroll() {
+    let mut app = App::with(", lines: 4", "a\nb");
+    let before = app.caret().y;
+    let field = rect_of(&app.frame, 0xFF0000);
+    app.wheel((field[0] + 40.0, field[1] + 20.0), -3.0);
+    assert!((app.caret().y - before).abs() < 0.5);
+}
+
+#[test]
+fn a_preedit_is_inside_the_text_and_moves_what_follows_it_aside() {
+    let mut app = App::with(THREE, "ab\ncd");
+    app.key("Home", modk());
+    app.keys("ArrowRight", none(), 2);
+    assert_eq!(app.sel().1, 2);
+    let before = app.caret().x;
+    app.preedit("XY", None);
+    let text = app
+        .frame
+        .texts()
+        .iter()
+        .map(|t| t.text.clone())
+        .collect::<Vec<_>>();
+    assert!(
+        text.iter().any(|t| t == "abXY\ncd"),
+        "the preedit is in the run, before the rest: {text:?}"
+    );
+    assert!(app.caret().x > before + 5.0, "the caret is after it");
+    assert_eq!(app.q(), "ab\ncd", "and the value is not touched");
+    // A preedit long enough to wrap takes the caret to the next line.
+    let top = app.caret().y;
+    app.preedit(&"W".repeat(40), None);
+    assert!(app.caret().y > top + LINE - 1.0, "wrapped");
+}

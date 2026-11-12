@@ -8,7 +8,7 @@
 
 use super::paint::{dim_alpha, push_fill};
 use super::{Interpreter, editing, floor_char_boundary};
-use crate::interp::edit::{FieldFont, Multi};
+use crate::interp::edit::{FieldFont, Multi, line_of};
 use crate::interp::env::Value;
 use crate::parser::ast::{Attr, AttrKind};
 
@@ -68,9 +68,30 @@ pub(super) enum FieldLines {
     },
 }
 
+/// What one line of a wheel is in pixels, as a `ScrollView` takes it.
+const WHEEL_LINE_PX: f32 = 40.0;
+
 /// A selected line break is drawn as this much selection past the end of its
 /// line, so an empty line in a selection is not a gap in it.
 const NEWLINE_STUB: f32 = 5.0;
+
+/// The part of each line in `lo..hi`, as `(line, x0, x1)` from the line's start.
+fn spans_in(
+    text: &str,
+    lines: &[(usize, usize)],
+    lo: usize,
+    hi: usize,
+    measure: &mut dyn FnMut(&str) -> f32,
+) -> Vec<(usize, f32, f32)> {
+    let mut out = Vec::new();
+    for (i, &(start, end)) in lines.iter().enumerate() {
+        let (from, to) = (lo.max(start), hi.min(end));
+        if to > from {
+            out.push((i, measure(&text[start..from]), measure(&text[start..to])));
+        }
+    }
+    out
+}
 
 /// What a multiline field is painted from (RFC-0064).
 pub(super) struct MultiPaint<'a> {
@@ -155,6 +176,7 @@ impl Interpreter {
         let geom = editing::MultiGeom {
             text_y: text_top,
             line_h,
+            view_h,
         };
 
         // Where the caret and the selection are, in lines and pixels.
@@ -162,8 +184,11 @@ impl Interpreter {
         // `(line, x0, x1)` per selected line.
         let mut selection: Vec<(usize, f32, f32)> = Vec::new();
         let mut scroll_y = 0.0_f32;
-        let mut preedit_w = 0.0_f32;
-        let mut preedit_cursor: Option<(f32, f32)> = None;
+        // The text with an input method's preedit in it, at the caret, so the
+        // text after the caret wraps and moves out of its way (RFC-0040 §1).
+        let mut composed: Option<String> = None;
+        // `(line, x0, x1, thickness)` of the preedit's underlines.
+        let mut marks: Vec<(usize, f32, f32, f32)> = Vec::new();
         if let Some(idx) = paint.editing {
             let store = std::rc::Rc::clone(&self.edit);
             let measurer = std::rc::Rc::clone(&self.text_measurer);
@@ -175,17 +200,11 @@ impl Interpreter {
                     .get_or_insert_with(byard_core::text::TextMeasurer::new)
                     .wrap_lines(t, font.size, view_w, font.weight, font.family.as_deref())
             };
-            if let Some((text, cursor)) = &paint.preedit {
-                preedit_w = measure(text);
-                preedit_cursor = cursor.map(|(b, e)| {
-                    let at = |upto: usize| measure(&text[..floor_char_boundary(text, upto)]);
-                    (at(b), at(e))
-                });
-            }
             let mut ctx = Multi {
                 font,
                 width: view_w,
                 line_h,
+                view_h,
                 lines_of: &mut lines_of,
                 measure: &mut measure,
             };
@@ -194,8 +213,36 @@ impl Interpreter {
             state.multiline = true;
             state.sync(paint.value);
             state.seen = seq;
-            let lines = state.lines(paint.value, &mut ctx).to_vec();
-            let (line, along) = state.caret_line(paint.value, &mut ctx);
+            let (lines, line, along, value_len) = if let Some((ptext, cursor)) = &paint.preedit {
+                let at = state.caret.min(paint.value.len());
+                let text = format!("{}{}{}", &paint.value[..at], ptext, &paint.value[at..]);
+                let lines = (ctx.lines_of)(&text);
+                // The IME's cursor inside the preedit, else its end.
+                let (cb, ce) = cursor.map_or((ptext.len(), ptext.len()), |(b, e)| {
+                    (floor_char_boundary(ptext, b), floor_char_boundary(ptext, e))
+                });
+                let spans = |lo: usize, hi: usize, ctx: &mut Multi<'_>| {
+                    spans_in(&text, &lines, at + lo, at + hi, &mut *ctx.measure)
+                };
+                for (i, x0, x1) in spans(0, ptext.len(), &mut ctx) {
+                    marks.push((i, x0, x1, 1.0));
+                }
+                if ce > cb {
+                    for (i, x0, x1) in spans(cb, ce, &mut ctx) {
+                        marks.push((i, x0, x1, 2.0));
+                    }
+                }
+                let end = at + ce;
+                let line = line_of(&lines, end);
+                let along = (ctx.measure)(&text[lines[line].0..end]);
+                let len = text.len();
+                composed = Some(text);
+                (lines, line, along, len)
+            } else {
+                let lines = state.lines(paint.value, &mut ctx).to_vec();
+                let (line, along) = state.caret_line(paint.value, &mut ctx);
+                (lines, line, along, paint.value.len())
+            };
             caret = Some((line, along));
             if state.has_selection() && paint.preedit.is_none() {
                 let (lo, hi) = state.range();
@@ -223,13 +270,15 @@ impl Interpreter {
                     selection.push((i, x0, x1 + stub));
                 }
             }
-            state.follow_caret_y(line, lines.len(), line_h, view_h);
+            state.follow_caret_y(line, lines.len(), line_h, view_h, value_len);
             scroll_y = state.scroll_y;
         } else if let Some(idx) = paint.elem_idx {
             let seq = self.frame_seq;
             let mut store = self.edit.borrow_mut();
             if !store.is_empty() {
                 store.touch(idx, seq);
+                // A field the wheel scrolled keeps where it was scrolled to.
+                scroll_y = store.get(idx).map_or(0.0, |s| s.scroll_y);
             }
         }
 
@@ -276,10 +325,11 @@ impl Interpreter {
             color,
             dirty: true,
         };
-        if !paint.display_text.is_empty() {
+        let shown = composed.as_deref().unwrap_or(paint.display_text);
+        if !shown.is_empty() {
             frame.push_text_wrapped(
                 line_at(
-                    paint.display_text,
+                    shown,
                     text_x,
                     top,
                     dim_alpha(paint.text_rgba, paint.opacity),
@@ -290,26 +340,23 @@ impl Interpreter {
         if paint.is_focused {
             let (line, along) = caret.unwrap_or((0, 0.0));
             let line_top = top + line as f32 * line_h;
-            let mut caret_x = text_x + along + CARET_DX;
-            if let Some((text, _)) = &paint.preedit {
-                let color = dim_alpha(paint.text_rgba, paint.opacity);
-                let start = text_x + along;
-                frame.push_text(line_at(text, start, line_top, color));
-                let underline_y = line_top + font.size + 1.0;
-                let mut bar = |x: f32, w: f32, h: f32| {
-                    frame.push_instance(byard_core::BoxInstance {
-                        rect: [x, underline_y, w, h],
-                        color,
-                        radii: [0.0; 4],
-                        transform: paint.transform,
-                        smooth: 0.0,
-                    });
-                };
-                bar(start, preedit_w, 1.0);
-                if let Some((b, e)) = preedit_cursor.filter(|(b, e)| e > b) {
-                    bar(start + b, e - b, 2.0);
-                }
-                caret_x = start + preedit_cursor.map_or(preedit_w, |(_, e)| e) + CARET_DX;
+            let caret_x = text_x + along + CARET_DX;
+            // §5: the whole preedit thinly underlined, the IME's cursor range
+            // thickly.
+            let color = dim_alpha(paint.text_rgba, paint.opacity);
+            for &(line, x0, x1, thick) in &marks {
+                frame.push_instance(byard_core::BoxInstance {
+                    rect: [
+                        text_x + x0,
+                        top + line as f32 * line_h + font.size + 1.0,
+                        x1 - x0,
+                        thick,
+                    ],
+                    color,
+                    radii: [0.0; 4],
+                    transform: paint.transform,
+                    smooth: 0.0,
+                });
             }
             let caret_visible = paint.preedit.as_ref().is_none_or(|(_, c)| c.is_some());
             if let Some(idx) = paint.editing {
@@ -781,11 +828,25 @@ impl Interpreter {
                 ),
                 (
                     Kind::DoubleTap,
-                    handle.double_tap(self.field_actions(attrs, &["double_tap"])),
+                    handle
+                        .clone()
+                        .double_tap(self.field_actions(attrs, &["double_tap"])),
                 ),
             ];
             for (kind, action) in events {
                 self.router.on(idx, hit_rect, kind, action);
+            }
+            // RFC-0064: a multiline field scrolls with the wheel and a
+            // trackpad. A wheel's delta is in lines, a trackpad's in pixels.
+            if multi_geom.is_some() {
+                self.router.on(
+                    idx,
+                    hit_rect,
+                    Kind::Wheel,
+                    handle.clone().wheel(WHEEL_LINE_PX),
+                );
+                self.router
+                    .on(idx, hit_rect, Kind::Scroll, handle.clone().wheel(1.0));
             }
             // A selection that starts in the field goes on past its edge.
             self.router.capture_drag(idx);

@@ -648,6 +648,9 @@ impl Interpreter {
                     _ => String::new(),
                 };
                 node.value = Some(AccessValue::Text(text));
+                if self.field_lines(b.paint_attrs) != super::text_field::FieldLines::Single {
+                    node.flags.insert(AccessFlags::MULTILINE);
+                }
                 // The placeholder names the field when nothing else does, and
                 // is a description when something does.
                 if node.name.is_none() {

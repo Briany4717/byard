@@ -14,7 +14,9 @@ use byard_core::{Clipboard, KeyModifiers, MemoryClipboard};
 use super::{Interpreter, controller::EngineTimer};
 use crate::interp::edit::{Edge, EditStore, FieldFont, Keymap, Multi, Outcome};
 use crate::interp::env::{SignalId, Value};
-use crate::interp::events::{Action, CURRENT_EVENT_MODS, CURRENT_EVENT_POS, CURRENT_EVENT_TIME};
+use crate::interp::events::{
+    Action, CURRENT_EVENT_DELTA, CURRENT_EVENT_MODS, CURRENT_EVENT_POS, CURRENT_EVENT_TIME,
+};
 use crate::interp::reactive::ReactiveCtx;
 
 /// The caret shows for this long, then hides for as long, and starts again
@@ -94,6 +96,8 @@ pub(super) struct MultiGeom {
     pub text_y: f32,
     /// The height of one line.
     pub line_h: f32,
+    /// The height of the content box.
+    pub view_h: f32,
 }
 
 /// What a field's handlers share: the model of every field, the clipboard, the
@@ -158,6 +162,7 @@ impl FieldHandle {
             font: &self.geom.font,
             width: self.geom.view_w,
             line_h: g.line_h,
+            view_h: g.view_h,
             lines_of: &mut lines_of,
             measure: &mut measure,
         };
@@ -255,8 +260,11 @@ impl FieldHandle {
                     action(ctx, Some(&now));
                 }
             }
-            // Enter in a multiline field is a line break, not a submit.
-            if key.as_str() == "Enter" && self.geom.multi.is_none() {
+            // Enter in a multiline field is a line break, not a submit; with
+            // the shortcut modifier held it is the submit.
+            if key.as_str() == "Enter"
+                && (self.geom.multi.is_none() || Keymap::HERE.is_shortcut(mods))
+            {
                 for action in &mut submit {
                     action(ctx, Some(&now));
                 }
@@ -321,6 +329,25 @@ impl FieldHandle {
                 };
                 let at = x - geom.text_x + state.scroll;
                 state.drag(value, &geom.font, at, edge, &mut |t| self.width(t))
+            });
+        })
+    }
+
+    /// The wheel over a multiline field: scrolls its text `step` pixels per
+    /// unit of the event's delta (a wheel's lines, a trackpad's pixels).
+    pub(super) fn wheel(self, step: f32) -> Action {
+        Box::new(move |ctx, _| {
+            let (_, dy) = CURRENT_EVENT_DELTA.with(std::cell::Cell::get);
+            let value = text_of(ctx, self.sig);
+            let mut store = self.store.borrow_mut();
+            let state = store.state(self.elem);
+            // Forward (delta > 0) reveals earlier text.
+            self.with_multi(|m| {
+                if let Some(m) = m {
+                    state.multiline = true;
+                    state.sync(&value);
+                    state.scroll_by_y(-dy * step, &value, m);
+                }
             });
         })
     }

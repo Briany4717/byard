@@ -183,10 +183,13 @@ TextField #[bind: notes, lines: 3, width: 320]                      // always 3 
 TextField #[bind: notes, min_lines: 2, max_lines: 6, width: 320]    // 2 to 6, then it scrolls
 ```
 
-Long lines wrap at the field's width. Enter inserts a line break and does not run `submit`
-(there is no "submit" in a text area; use a button), and a paste keeps its breaks. Up and
+Long lines wrap at the field's width. Enter inserts a line break and does not run `submit`;
+`Mod`+Enter runs it instead, without a break. A paste keeps its breaks. Up and
 Down move between lines and keep the column, Home and End go to the ends of a line, and
-`Mod`+Home and `Mod`+End to the ends of the text (`Cmd`+Up and `Cmd`+Down on macOS). The
+`Mod`+Home and `Mod`+End to the ends of the text (`Cmd`+Up and `Cmd`+Down on macOS), and PageUp and
+PageDown a page of lines. The wheel and a trackpad scroll a field that holds more lines than it
+shows, and the text stays where it was scrolled until the caret moves or something is typed. A
+screen reader is told the field has several lines. The
 selection is painted a rectangle to a line, and the text scrolls to keep the caret in view
 once it is longer than the field. The vertical padding is 8 unless `p`, `pt` or `pb` says
 otherwise, an explicit `height` beats `lines`, and `min_lines` alone has no ceiling.

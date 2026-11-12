@@ -171,6 +171,10 @@ thread_local! {
     /// the handlers that need a clock (a text field coalescing typed
     /// characters into one undo step).
     pub static CURRENT_EVENT_TIME: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// The delta of the event currently being dispatched (a wheel's lines or a
+    /// trackpad's pixels), for the handlers that scroll by it.
+    pub static CURRENT_EVENT_DELTA: std::cell::Cell<(f32, f32)> =
+        const { std::cell::Cell::new((0.0, 0.0)) };
 }
 
 /// A handler's reactive action. Receives the context (for `var` mutation) and
@@ -899,6 +903,7 @@ impl EventRouter {
         CURRENT_EVENT_POS.with(|c| c.set(ev.pos));
         CURRENT_EVENT_MODS.with(|c| c.set(ev.mods));
         CURRENT_EVENT_TIME.with(|c| c.set(ev.time_ms));
+        CURRENT_EVENT_DELTA.with(|c| c.set(ev.delta));
 
         match ev.kind {
             EventKind::PointerDown => {

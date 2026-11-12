@@ -205,6 +205,8 @@ pub(crate) struct Multi<'a> {
     pub width: f32,
     /// The height of one line.
     pub line_h: f32,
+    /// The height of the content box, which a page of lines is as tall as.
+    pub view_h: f32,
     /// The visual lines of a text wrapped to `width`, as byte ranges.
     pub lines_of: &'a mut dyn FnMut(&str) -> Vec<(usize, usize)>,
     /// The width of a piece of text on one line.
@@ -312,6 +314,10 @@ pub(crate) struct EditState {
     pub multiline: bool,
     /// How far the text is scrolled up in a multiline field, in logical pixels.
     pub scroll_y: f32,
+    /// The caret and value length the vertical scroll last followed. The
+    /// scroll follows the caret when it is not these, and only then, so a
+    /// wheel can move the text away from a caret that has not moved.
+    followed: Option<(usize, usize)>,
     /// The x a run of Up and Down presses is trying to keep, measured from the
     /// start of the line; forgotten by anything else.
     goal_x: Option<f32>,
@@ -792,6 +798,8 @@ impl EditState {
         let extend = mods.shift;
         let to_text_edge = |back: bool| if back { 0 } else { value.len() };
         match key {
+            // Mod+Enter submits (the handler's business), and is not a break.
+            "Enter" if keys.is_shortcut(mods) => Some(Outcome::None),
             "Enter" => {
                 self.typing = None;
                 let range = self.range();
@@ -803,9 +811,15 @@ impl EditState {
                     return Some(self.move_to(value, to_text_edge(!down), extend));
                 }
                 Some(match multi {
-                    Some(m) => self.move_vertical(value, down, extend, m),
+                    Some(m) => self.move_vertical(value, down, extend, 1, m),
                     None => self.move_to(value, to_text_edge(!down), extend),
                 })
+            }
+            "PageUp" | "PageDown" => {
+                let m = multi?;
+                #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+                let page = ((m.view_h / m.line_h).floor() as usize).max(1);
+                Some(self.move_vertical(value, key == "PageDown", extend, page, m))
             }
             "Home" | "End" => {
                 let back = key == "Home";
@@ -872,6 +886,7 @@ impl EditState {
         value: &str,
         down: bool,
         extend: bool,
+        by: usize,
         m: &mut Multi<'_>,
     ) -> Outcome {
         let lines = self.lines(value, m).to_vec();
@@ -880,9 +895,9 @@ impl EditState {
             .goal_x
             .unwrap_or_else(|| (m.measure)(&value[lines[cur].0..self.caret.max(lines[cur].0)]));
         let next = if down {
-            (cur + 1 < lines.len()).then_some(cur + 1)
+            (cur + by < lines.len()).then_some(cur + by)
         } else {
-            cur.checked_sub(1)
+            cur.checked_sub(by)
         };
         let Some(next) = next else {
             let to = if down { value.len() } else { 0 };
@@ -946,18 +961,42 @@ impl EditState {
 
     /// Keeps the caret's line inside a content box `view_h` high (the vertical
     /// half of [`follow_caret`](Self::follow_caret)): `line` of `count`, each
-    /// `line_h` tall.
-    pub fn follow_caret_y(&mut self, line: usize, count: usize, line_h: f32, view_h: f32) {
-        let top = line as f32 * line_h;
-        let mut scroll = self.scroll_y;
-        if top < scroll {
-            scroll = top;
+    /// `line_h` tall. Follows only a caret or a value that moved since the
+    /// last time, so the text can be scrolled away from a caret that did not;
+    /// always clamps to the text.
+    pub fn follow_caret_y(
+        &mut self,
+        line: usize,
+        count: usize,
+        line_h: f32,
+        view_h: f32,
+        value_len: usize,
+    ) {
+        let key = Some((self.caret, value_len));
+        if self.followed != key {
+            self.followed = key;
+            let top = line as f32 * line_h;
+            if top < self.scroll_y {
+                self.scroll_y = top;
+            }
+            if top + line_h > self.scroll_y + view_h {
+                self.scroll_y = top + line_h - view_h;
+            }
         }
-        if top + line_h > scroll + view_h {
-            scroll = top + line_h - view_h;
-        }
+        self.clamp_scroll_y(count, line_h, view_h);
+    }
+
+    /// Keeps the vertical scroll inside the text.
+    pub fn clamp_scroll_y(&mut self, count: usize, line_h: f32, view_h: f32) {
         let furthest = (count as f32 * line_h - view_h).max(0.0);
-        self.scroll_y = scroll.clamp(0.0, furthest);
+        self.scroll_y = self.scroll_y.clamp(0.0, furthest);
+    }
+
+    /// The wheel: scrolls the text `dy` pixels, within it.
+    pub fn scroll_by_y(&mut self, dy: f32, value: &str, m: &mut Multi<'_>) {
+        let count = self.lines(value, m).len();
+        self.scroll_y += dy;
+        self.clamp_scroll_y(count, m.line_h, m.view_h);
     }
 
     /// A key pressed with the shortcut modifier held: select all, copy, cut,

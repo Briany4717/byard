@@ -14,9 +14,7 @@ use byard_core::{Clipboard, KeyModifiers, MemoryClipboard};
 use super::{Interpreter, controller::EngineTimer};
 use crate::interp::edit::{Edge, EditStore, FieldFont, Keymap, Multi, Outcome};
 use crate::interp::env::{SignalId, Value};
-use crate::interp::events::{
-    Action, CURRENT_EVENT_DELTA, CURRENT_EVENT_MODS, CURRENT_EVENT_POS, CURRENT_EVENT_TIME,
-};
+use crate::interp::events::{Action, CURRENT_EVENT_MODS, CURRENT_EVENT_POS, CURRENT_EVENT_TIME};
 use crate::interp::reactive::ReactiveCtx;
 
 /// The caret shows for this long, then hides for as long, and starts again
@@ -333,22 +331,23 @@ impl FieldHandle {
         })
     }
 
-    /// The wheel over a multiline field: scrolls its text `step` pixels per
-    /// unit of the event's delta (a wheel's lines, a trackpad's pixels).
-    pub(super) fn wheel(self, step: f32) -> Action {
-        Box::new(move |ctx, _| {
-            let (_, dy) = CURRENT_EVENT_DELTA.with(std::cell::Cell::get);
-            let value = text_of(ctx, self.sig);
-            let mut store = self.store.borrow_mut();
-            let state = store.state(self.elem);
-            // Forward (delta > 0) reveals earlier text.
-            self.with_multi(|m| {
-                if let Some(m) = m {
-                    state.multiline = true;
-                    state.sync(&value);
-                    state.scroll_by_y(-dy * step, &value, m);
-                }
-            });
+    /// The wheel over a multiline field: scrolls its text `dy` pixels (forward
+    /// is positive and reveals earlier text), and says whether it moved. A
+    /// field already at the end of its text in that direction does not take
+    /// the event, and it goes on to whatever scrolls around it.
+    pub(super) fn scroll_text(&self, ctx: &mut ReactiveCtx, dy: f32) -> bool {
+        let value = text_of(ctx, self.sig);
+        let mut store = self.store.borrow_mut();
+        let state = store.state(self.elem);
+        self.with_multi(|m| {
+            let Some(m) = m else {
+                return false;
+            };
+            state.multiline = true;
+            state.sync(&value);
+            let before = state.scroll_y;
+            state.scroll_by_y(-dy, &value, m);
+            (state.scroll_y - before).abs() > f32::EPSILON
         })
     }
 

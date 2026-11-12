@@ -222,7 +222,9 @@ is one rectangle per line it touches. The vertical scroll follows the caret as
 the horizontal one does (RFC-0041 §6), and is clamped to the text.
 
 *Wheel and preedit.* A multiline field that holds more lines than it shows
-scrolls with the wheel (a line is 40 px) and the trackpad; the scroll follows
+scrolls with the wheel (a line is 40 px) and the trackpad while its text can
+move that way, and at either end the event goes on to the `ScrollView` around it
+(and from one scroll view to the next outside it); the scroll follows
 the caret only when the caret or the text moved. An input method's preedit is
 put into the text at the caret for drawing and wrapping, so what follows it
 moves aside and the caret and the underlines sit where the preedit wraps to. The
@@ -281,8 +283,11 @@ that means nothing without, or with, another: `row_gap` without `wrap`,
   is off by a glyph. A test shapes both and compares.
 - **A limit replaces a built value.** `min_height: 0` on a `Button` removes its
   touch floor, which is the point, and a way to build a button nobody can hit.
-- **The wheel scrolls a field and a ScrollView around it too**, when the field
-  sits in one: both see the event.
+- **Nested scrolling is the usual rule, and it changed `ScrollView` too.** A
+  wheel goes to the innermost thing under the pointer that can still move that
+  way: a multiline field, then the scroll views around it from the inside out.
+  A `ScrollView` inside a `ScrollView` used to keep every wheel event even at its
+  end; it now passes it out.
 
 ## Rationale and alternatives
 

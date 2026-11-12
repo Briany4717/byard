@@ -595,16 +595,38 @@ impl Interpreter {
                 _ => continue,
             };
             let (px, py) = ev.pos;
+            // RFC-0064: a multiline field under the pointer is the innermost
+            // thing there is, and takes the wheel while its text can still
+            // move that way. At either end it does not, and the event goes on
+            // to the scroll view around it.
+            let field = self
+                .wheel_fields
+                .iter()
+                .rev()
+                .find(|(r, _)| px >= r.x && px < r.x + r.w && py >= r.y && py < r.y + r.h)
+                .map(|(_, h)| h.clone());
+            if let Some(field) = field {
+                if field.scroll_text(&mut self.ctx, ev.delta.1 * step) {
+                    continue;
+                }
+            }
+            // The innermost scroll view under the pointer that can still move
+            // the way the wheel asks; when none can, the innermost, which has
+            // nothing to do but is the one the event is for.
+            let inside = |t: &&super::scroll::ScrollTarget| {
+                px >= t.rect.x
+                    && px < t.rect.x + t.rect.w
+                    && py >= t.rect.y
+                    && py < t.rect.y + t.rect.h
+            };
+            let (dx, dy) = (ev.delta.0 * step, ev.delta.1 * step);
             let Some(t) = self
                 .scroll_targets
                 .iter()
                 .rev()
-                .find(|t| {
-                    px >= t.rect.x
-                        && px < t.rect.x + t.rect.w
-                        && py >= t.rect.y
-                        && py < t.rect.y + t.rect.h
-                })
+                .filter(inside)
+                .find(|t| self.can_nudge(t, dx, dy))
+                .or_else(|| self.scroll_targets.iter().rev().find(inside))
                 .copied()
             else {
                 continue;

@@ -188,7 +188,7 @@ Long lines wrap at the field's width. Enter inserts a line break and does not ru
 Down move between lines and keep the column, Home and End go to the ends of a line, and
 `Mod`+Home and `Mod`+End to the ends of the text (`Cmd`+Up and `Cmd`+Down on macOS), and PageUp and
 PageDown a page of lines. The wheel and a trackpad scroll a field that holds more lines than it
-shows, and the text stays where it was scrolled until the caret moves or something is typed. A
+shows (at its top or bottom the wheel goes on to a `ScrollView` around it), and the text stays where it was scrolled until the caret moves or something is typed. A
 screen reader is told the field has several lines. The
 selection is painted a rectangle to a line, and the text scrolls to keep the caret in view
 once it is longer than the field. The vertical padding is 8 unless `p`, `pt` or `pb` says

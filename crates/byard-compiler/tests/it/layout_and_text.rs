@@ -7,7 +7,11 @@
 //! `text_editing.rs` does.
 
 // Colours are written as the hex a `.byd` file writes them in.
-#![allow(clippy::unreadable_literal, clippy::cast_precision_loss)]
+#![allow(
+    clippy::unreadable_literal,
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation
+)]
 
 use byard_compiler::interp::env::Value;
 use byard_compiler::interp::eval::{Interpreter, RenderNode};
@@ -1111,4 +1115,142 @@ fn a_preedit_is_inside_the_text_and_moves_what_follows_it_aside() {
     let top = app.caret().y;
     app.preedit(&"W".repeat(40), None);
     assert!(app.caret().y > top + LINE - 1.0, "wrapped");
+}
+
+// ── nested scrolling: the innermost that can move takes the wheel ────────
+
+/// A view and its tree, a wheel at `(100, 20)` of `dy` lines, and a way to
+/// read a `Float` var.
+struct Wheeler {
+    interp: Interpreter,
+    tree: Vec<RenderNode>,
+    frame: RenderFrame,
+}
+
+impl Wheeler {
+    fn new(src: &str) -> Self {
+        let parsed = parse(src);
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let mut interp = Interpreter::new();
+        let tree = interp.lower_view(&parsed.views[0], &[]);
+        assert!(interp.errors().is_empty(), "{:?}", interp.errors());
+        let mut w = Self {
+            interp,
+            tree,
+            frame: RenderFrame::new(),
+        };
+        w.render();
+        w
+    }
+
+    fn render(&mut self) {
+        self.interp.tick();
+        self.frame.clear();
+        self.interp
+            .render(&self.tree, &mut self.frame, 400.0, 300.0);
+    }
+
+    fn wheel(&mut self, dy: f32) {
+        self.wheel_at((100.0, 20.0), dy);
+    }
+
+    fn wheel_at(&mut self, pos: (f32, f32), dy: f32) {
+        self.interp.dispatch_events(&[InputEvent {
+            kind: EventKind::Wheel,
+            pos,
+            delta: (0.0, dy),
+            payload: None,
+            time_ms: 0,
+            mods: none(),
+        }]);
+        self.render();
+    }
+
+    fn var(&self, name: &str) -> f32 {
+        let sig = self.interp.var_signal(&Symbol::intern(name)).unwrap();
+        match self.interp.peek(sig) {
+            Value::Float(f) => f as f32,
+            Value::Int(n) => n as f32,
+            other => panic!("{name} is {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn a_field_in_a_scrollview_takes_the_wheel_until_it_is_at_its_end() {
+    let src = "View V() {
+        var off: Float = 0.0
+        var q: Str = \"x\\nx\\nx\\nx\\nx\\nx\\nx\"
+        ScrollView #[width: 200, height: 100, offset: (0, off)] {
+            Column {
+                TextField #[bind: q, lines: 2, width: 180]
+                Box #[bg: 0x00FF00, width: 180, height: 300] {}
+            }
+        }
+    }";
+    let mut w = Wheeler::new(src);
+    // The field has 96 px of text to scroll: two notches and part of a third.
+    for _ in 0..3 {
+        w.wheel(-1.0);
+        assert!(
+            w.var("off").abs() < 0.5,
+            "the field took it: {}",
+            w.var("off")
+        );
+    }
+    // It is at its end now, so the next one is the ScrollView's.
+    w.wheel(-1.0);
+    assert!((w.var("off") - 40.0).abs() < 0.5, "{}", w.var("off"));
+    // Going back over the field, which is 40 px higher now: it is at its end
+    // and the ScrollView is not at its top, and the field scrolls up first.
+    w.wheel_at((100.0, 5.0), 1.0);
+    assert!((w.var("off") - 40.0).abs() < 0.5, "{}", w.var("off"));
+}
+
+#[test]
+fn a_field_with_nowhere_to_scroll_leaves_the_wheel_to_the_scrollview() {
+    let src = "View V() {
+        var off: Float = 0.0
+        var q: Str = \"a\"
+        ScrollView #[width: 200, height: 100, offset: (0, off)] {
+            Column {
+                TextField #[bind: q, lines: 3, width: 180]
+                Box #[bg: 0x00FF00, width: 180, height: 300] {}
+            }
+        }
+    }";
+    let mut w = Wheeler::new(src);
+    w.wheel(-1.0);
+    assert!((w.var("off") - 40.0).abs() < 0.5, "{}", w.var("off"));
+}
+
+#[test]
+fn a_scrollview_in_a_scrollview_passes_the_wheel_out_at_its_end() {
+    let src = "View V() {
+        var outer: Float = 0.0
+        var inner: Float = 0.0
+        ScrollView #[width: 300, height: 200, offset: (0, outer)] {
+            Column {
+                ScrollView #[width: 200, height: 100, offset: (0, inner)] {
+                    Column { Box #[bg: 0xFF0000, width: 180, height: 200] {} }
+                }
+                Box #[bg: 0x00FF00, width: 180, height: 400] {}
+            }
+        }
+    }";
+    let mut w = Wheeler::new(src);
+    // The inner one has 100 px to go.
+    for _ in 0..3 {
+        w.wheel(-1.0);
+    }
+    assert!((w.var("inner") - 100.0).abs() < 0.5, "{}", w.var("inner"));
+    assert!(w.var("outer").abs() < 0.5, "{}", w.var("outer"));
+    // At its end: the outer one.
+    w.wheel(-1.0);
+    assert!((w.var("outer") - 40.0).abs() < 0.5, "{}", w.var("outer"));
+    assert!((w.var("inner") - 100.0).abs() < 0.5);
+    // And back: the inner one is not at its top, so it goes first.
+    w.wheel(1.0);
+    assert!((w.var("inner") - 60.0).abs() < 0.5, "{}", w.var("inner"));
+    assert!((w.var("outer") - 40.0).abs() < 0.5);
 }

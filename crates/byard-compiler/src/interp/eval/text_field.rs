@@ -68,9 +68,6 @@ pub(super) enum FieldLines {
     },
 }
 
-/// What one line of a wheel is in pixels, as a `ScrollView` takes it.
-const WHEEL_LINE_PX: f32 = 40.0;
-
 /// A selected line break is drawn as this much selection past the end of its
 /// line, so an empty line in a selection is not a gap in it.
 const NEWLINE_STUB: f32 = 5.0;
@@ -837,16 +834,9 @@ impl Interpreter {
                 self.router.on(idx, hit_rect, kind, action);
             }
             // RFC-0064: a multiline field scrolls with the wheel and a
-            // trackpad. A wheel's delta is in lines, a trackpad's in pixels.
+            // trackpad, ahead of what is around it; `dispatch_events` asks it.
             if multi_geom.is_some() {
-                self.router.on(
-                    idx,
-                    hit_rect,
-                    Kind::Wheel,
-                    handle.clone().wheel(WHEEL_LINE_PX),
-                );
-                self.router
-                    .on(idx, hit_rect, Kind::Scroll, handle.clone().wheel(1.0));
+                self.wheel_fields.push((hit_rect, handle.clone()));
             }
             // A selection that starts in the field goes on past its edge.
             self.router.capture_drag(idx);

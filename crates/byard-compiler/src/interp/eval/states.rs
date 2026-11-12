@@ -338,20 +338,27 @@ impl Interpreter {
         }
     }
 
-    /// Publishes, before the frame paints, the pointer and focus states of every
-    /// element a state block names (RFC-0062 §5), so that an element written
-    /// *before* the one it follows reads this frame's. The element replaces it
-    /// with its full mask when it paints, which also has the value states
-    /// (`checked`, `selected`, `invalid`, `disabled`), so those reach the
-    /// elements written after it.
-    pub(super) fn publish_named_states(&mut self) {
-        if self.remote_targets.is_empty() {
-            return;
-        }
-        let table = self.elem_uids.clone();
-        for (index, uid) in table {
+    /// Publishes, before the frame paints, the states of every element a state
+    /// block names (RFC-0062 §5): the router's pointer and focus states and the
+    /// value states layout read, so that an element written *before* the one it
+    /// follows sees this frame's. The element replaces it with the same mask
+    /// when it paints.
+    pub(super) fn publish_named_states(&mut self, table: &[(u32, u32)]) {
+        for &(index, uid) in table {
             if self.remote_targets.contains(&uid) {
-                let state = self.element_style_state(index);
+                let value = self
+                    .elem_value_states
+                    .get(&uid)
+                    .copied()
+                    .unwrap_or_default();
+                // A disabled element has no pointer or focus state, as the router
+                // reports it; its value states are still its own.
+                let pointer = if value.contains(crate::interp::events::StyleState::DISABLED) {
+                    crate::interp::events::StyleState::empty()
+                } else {
+                    self.element_style_state(index)
+                };
+                let state = pointer.union(value);
                 self.elem_states.insert(uid, state);
             }
         }

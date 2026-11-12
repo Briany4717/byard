@@ -7,6 +7,7 @@
 use byard_compiler::interp::env::Value;
 use byard_compiler::interp::eval::{Interpreter, RenderNode};
 use byard_compiler::parser::parse;
+use byard_compiler::resolve::{PackageProvider, SourceFile, resolve_program};
 use byard_compiler::symbol::Symbol;
 use byard_core::frame::{BoxInstance, RenderFrame};
 use byard_core::{EventKind, InputEvent, InputPayload, KeyModifiers};
@@ -899,4 +900,134 @@ fn a_layout_attribute_in_a_block_on_another_elements_states_is_an_error() {
          Box #[width: 10, height: 10] { on field.focused { translate.y: -8, scale: 0.75 } } } }",
     );
     assert!(errors.is_empty(), "{errors:?}");
+}
+
+// ── only the chosen reading of a block speaks ───────────────────────────
+
+struct Kits(Vec<(&'static str, &'static str, &'static str)>);
+
+impl PackageProvider for Kits {
+    fn package_files(
+        &mut self,
+        _dependent: &str,
+        package: &str,
+    ) -> Result<Vec<SourceFile>, String> {
+        self.0
+            .iter()
+            .find(|(name, ..)| *name == package)
+            .map(|(_, file, source)| {
+                vec![SourceFile {
+                    name: (*file).to_string(),
+                    source: (*source).to_string(),
+                }]
+            })
+            .ok_or_else(|| "not declared".to_string())
+    }
+}
+
+fn resolved_errors(
+    source: &str,
+    kits: Vec<(&'static str, &'static str, &'static str)>,
+) -> Vec<String> {
+    let program = resolve_program(
+        vec![SourceFile {
+            name: "main.byd".into(),
+            source: source.into(),
+        }],
+        &mut Kits(kits),
+    );
+    program.errors.iter().map(|e| format!("{e:?}")).collect()
+}
+
+const CARD_VIEW: &str =
+    "View Card(on_tap: Fn() = none, content) { Box #[tap => on_tap()] { content } }";
+
+#[test]
+fn a_capability_call_in_a_callback_block_is_not_read_as_a_package() {
+    let errors = resolved_errors(
+        &format!(
+            "View Main() {{ inject Http as http\n Card(on_tap: {{ http.get(\"https://example.com\") }}) {{ Text(\"x\") }} }}\n{CARD_VIEW}"
+        ),
+        Vec::new(),
+    );
+    assert!(
+        !errors.iter().any(|e| e.contains("UnknownPackage")),
+        "{errors:?}"
+    );
+    // The same call as an event action checks the same.
+    let action = resolved_errors(
+        "View Main() { inject Http as http\n Button(\"go\") => http.get(\"https://example.com\") }",
+        Vec::new(),
+    );
+    assert_eq!(errors, action, "a block and an action say the same");
+}
+
+#[test]
+fn a_capability_call_with_result_arms_is_a_callback() {
+    let errors = resolved_errors(
+        &format!(
+            "View Main() {{ inject Http as http\n var n = 0\n \
+             Card(on_tap: {{ http.get(\"https://example.com\") ok res => {{ n = 1 }} err e => {{ n = 2 }} }}) {{ Text(\"x\") }} }}\n{CARD_VIEW}"
+        ),
+        Vec::new(),
+    );
+    assert!(
+        !errors.iter().any(|e| e.contains("UnknownPackage")),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn a_package_qualified_view_in_a_block_is_a_slot() {
+    let kits = vec![(
+        "kit",
+        "kit/icon.byd",
+        "View Glyph(name: Str) { Text(name) }",
+    )];
+    let source = "use kit as m\nView Main() { Panel(leading: { m.Glyph(\"wifi\") }) }\n\
+                  View Panel(leading: Slot = none) { Row { leading } }";
+    let program = resolve_program(
+        vec![SourceFile {
+            name: "main.byd".into(),
+            source: source.into(),
+        }],
+        &mut Kits(kits),
+    );
+    assert!(program.errors.is_empty(), "{:?}", program.errors);
+    let mut interp = Interpreter::new();
+    interp.load_views(&program.views);
+    let known: Vec<&str> = program.views.iter().map(|v| v.name.as_str()).collect();
+    let root = byard_compiler::parser::ast::root_view(&program.views).unwrap();
+    let tree = interp.lower_view(root, &known);
+    interp.tick();
+    let mut frame = RenderFrame::new();
+    interp.render(&tree, &mut frame, W, H);
+    assert!(interp.errors().is_empty(), "{:?}", interp.errors());
+    let texts: Vec<String> = frame.texts().iter().map(|t| t.text.clone()).collect();
+    assert_eq!(texts, vec!["wifi"]);
+}
+
+#[test]
+fn value_states_of_a_named_element_reach_elements_written_before_it() {
+    let mut app = App::new(
+        "View Main() { var on = false Column #[width: 400, p: 20, gap: 10] { \
+         Box #[width: 61, height: 20, bg: 0x00FF00] { on field.invalid { bg: 0xFF0000 } } \
+         Box #[width: 62, height: 20, bg: 0x00FF00] { on field.selected { bg: 0xFF0000 } } \
+         Box #[width: 63, height: 20, bg: 0x00FF00] { on field.disabled { bg: 0xFF0000 } } \
+         Box #[width: 64, height: 20, bg: 0x00FF00] { on sw.checked { bg: 0xFF0000 } } \
+         Box #[width: 100, height: 40, invalid: true, selected: true, disabled: true] as field {} \
+         Toggle #[bind: on] as sw } }",
+    );
+    for w in [61.0, 62.0, 63.0] {
+        assert!(
+            has_box(&app, w, 20.0, 0xFF0000),
+            "{w} follows the field written after it"
+        );
+    }
+    assert!(has_box(&app, 64.0, 20.0, 0x00FF00), "the switch is off");
+    app.set_bool("on", true);
+    assert!(
+        has_box(&app, 64.0, 20.0, 0xFF0000),
+        "the switch is on, the same frame"
+    );
 }

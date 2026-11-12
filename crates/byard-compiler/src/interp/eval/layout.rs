@@ -227,6 +227,7 @@ impl Interpreter {
         // second run is the one that describes the frame.
         self.measure_targets.clear();
         self.elem_uids.clear();
+        self.elem_value_states.clear();
         // Expand reactive `when`/`for` at the root, then build each concrete node.
         let root_children = self.build_children(tree, pools, flat_ids);
 
@@ -1050,6 +1051,7 @@ impl Interpreter {
                 state_blocks,
                 children,
                 env_snapshot,
+                bound_sig,
                 measure,
                 uid,
                 ..
@@ -1089,6 +1091,17 @@ impl Interpreter {
                 let out = self.build_box_layout(name, attrs, children, pools, flat_ids);
                 if let Ok(id) = &out {
                     self.apply_flex_item(attrs, *id, in_stack)?;
+                }
+                // RFC-0062: an element whose states another names has its value
+                // states (`checked`, `selected`, `invalid`, `disabled`) read here,
+                // where its attributes are in scope, so that an element written
+                // before it can follow them in the same frame.
+                if self.remote_targets.contains(uid) {
+                    let mut value = self.prop_style_state(attrs, *bound_sig, name.as_str());
+                    if self.eval_bool_prop(attrs, "disabled") == Some(true) {
+                        value = value.union(crate::interp::events::StyleState::DISABLED);
+                    }
+                    self.elem_value_states.insert(*uid, value);
                 }
                 self.env.truncate(env_base);
                 // RFC-0038: pair the element with the node that will hold its

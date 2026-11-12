@@ -768,6 +768,9 @@ pub struct Interpreter {
     /// far this frame, by [`RenderNode::Box::uid`] (RFC-0062 §5). Filled only
     /// when a state block that names another element was lowered.
     elem_states: std::collections::HashMap<u32, crate::interp::events::StyleState>,
+    /// The value states of the same elements, read during layout, where their
+    /// attributes are in scope, and published before the frame paints.
+    elem_value_states: std::collections::HashMap<u32, crate::interp::events::StyleState>,
     /// The elements whose states another element's state block names
     /// (RFC-0062), by [`RenderNode::Box::uid`]: only these publish theirs.
     remote_targets: std::collections::HashSet<u32>,
@@ -2000,10 +2003,16 @@ impl Interpreter {
         self.fire_measures();
         // Layout indices have just been reassigned: focus and editing state
         // find their elements again before anything paints or reads them.
+        // This frame's elements, before following swaps the tables.
+        let named = if self.remote_targets.is_empty() {
+            Vec::new()
+        } else {
+            self.elem_uids.clone()
+        };
         self.follow_elements();
-        // RFC-0062: what a named element's pointer and focus states are, known
-        // before anything paints, so an element written before it can follow.
-        self.publish_named_states();
+        // RFC-0062: what a named element's states are, known before anything
+        // paints, so an element written before it can follow.
+        self.publish_named_states(&named);
 
         self.retained.flat_ids.clear();
         self.retained.flat_ids.extend_from_slice(&flat_ids);

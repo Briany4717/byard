@@ -427,8 +427,8 @@ A name belongs to the whole view, so the label may be written before its field. 
 tagged with is `UnknownStateTarget`, with the closest name. A block on another element's states, or on
 `focus_within`, changes what is painted and never the layout, so a layout attribute in one
 (`width`, `height`, `p`, `m`, `grow`, ...) is `LayoutInStateBlock`: a label that floats moves with
-`translate` and `scale`. An element written before the named one follows its pointer and focus states;
-`checked`, `selected`, `invalid` and `disabled` reach the elements written after it. Two calls of one view keep their own
+`translate` and `scale`. The states are this frame's whichever is written first, pointer, focus and value states (`checked`,
+`selected`, `invalid`, `disabled`) alike. Two calls of one view keep their own
 names. See `examples/composing_components`.
 
 ## Responsive styles

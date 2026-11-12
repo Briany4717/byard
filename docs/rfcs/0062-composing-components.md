@@ -211,7 +211,11 @@ body is not lowered again for it.
   the call settles it once the callee is known: elements for a `Slot`, actions for
   an `Fn`, elements (so that the checker can say a `Slot` was wanted) for any
   other parameter. A callback passed to an intrinsic is never touched. If neither
-  reading is valid, `BlockFitsNeither` gives what each expected. `{}` is the empty
+  reading is valid, `BlockFitsNeither` gives what each expected. Only the chosen
+  reading is resolved and reported on: the resolver knows every view's
+  parameters, so it settles a call's blocks as soon as the callee is named and
+  rewrites the package names of the elements or of the actions, never both (an
+  injected `http.get(…)` is not a package, and `m.Icon("x")` is not a function). `{}` is the empty
   callback and is accepted as an empty slot.
 - **At the call.** For each slot parameter the call's argument of that name is
   lowered in the caller's scope to a list of nodes, a `Slot` argument that is a
@@ -289,14 +293,13 @@ them lands; the list is one constant.
   mask contains its state. The table of masks, keyed by identity, is cleared at the
   start of a frame, so an element not drawn is in no state. Only an element some
   block names publishes anything. Right after layout, before anything paints, each
-  such element's pointer and focus states (`hover`, `pressed`, `focused`,
-  `focus_visible`, `focus_within`, `dragging`) are published from the router, so an
-  element written before it sees this frame's. When the element itself paints it
-  replaces that with its full mask, which also holds the value states (`checked`,
-  `selected`, `invalid`, `indeterminate`, `disabled`); those reach the elements
-  written after it, and an element before it does not see them, since they are
-  known only from the element's own attributes. A control whose label has to
-  follow `checked` is written after the control.
+  such element's states are published: the router's pointer and focus states
+  (`hover`, `pressed`, `focused`, `focus_visible`, `focus_within`, `dragging`) and
+  its value states (`checked`, `selected`, `invalid`, `indeterminate`, `disabled`),
+  which layout reads from the element's attributes while they are in scope. So an
+  element written before the named one sees this frame's, which is what a
+  `TextField`'s label needs. The element replaces the entry with the same mask when
+  it paints.
 - **A layout attribute in such a block is `LayoutInStateBlock`.** Layout runs once
   with no state; `translate` and `scale` are what a label that floats moves with.
   The check is made where the block is lowered, for every block that names another
@@ -323,10 +326,8 @@ them lands; the list is one constant.
 - **`none` is not a value.** It is only a default and one side of a comparison,
   decided per instance. A view cannot store it or pass it as an argument other than
   to a parameter that declares it.
-- **Value states reach forward only.** An element written before the named one
-  follows its pointer and focus states in the same frame, but `checked`,
-  `selected`, `invalid`, `indeterminate` and `disabled` come from the element's
-  attributes, read when it paints.
+- **A named element's value states are read during layout** as well as at paint,
+  for the elements a block names, and only for them.
 - **A name belongs to the whole view**, so a typo that happens to name another
   element's tag is not caught as unknown.
 

@@ -158,7 +158,6 @@ The row is as tall as its lines. `wrap` can be a value, so a row can wrap only o
 narrow window. `row_gap` without `wrap: true` is an error, since there are no lines to
 put space between, and only `Row` wraps. See `examples/layout_and_text`.
 
-
 ## Alignment
 
 Two attributes position children, and they work on different axes.

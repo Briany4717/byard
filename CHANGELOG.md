@@ -19,6 +19,8 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Nested scrolling.** A wheel goes to the innermost scroll view or multiline field under the pointer that can still move that way, and on to the one around it at its end; a `ScrollView` inside a `ScrollView` used to keep every event.
 - **`border_gap: (start, length)`** cuts a gap in the top edge of a border, for the label of an outlined field, with what is under it showing through instead of a patch over the border.
 - **Shadow presets `"xl"` and `"2xl"`,** Material's elevation levels 4 and 5, and the mapping of every preset to a level in the styling guide.
+- **Layout properties animate.** `width`, `height`, `gap`, padding (`p`, `pt`, `pr`, `pb`, `pl`) and margin (`m`, `mt`, `mr`, `mb`, `ml`, `mx`, `my`) take `with`, also inside `on pressed`, `on hover` and the other state blocks, and a held Space shows it too. Layout is redone only on the frames a motion is in flight; a still screen costs nothing. The properties that still cannot (`grow`, the keywords, text shaping, grid placements) are `LayoutPropNotAnimatable`, and the error says which and why. RFC-0061. See `examples/layout_motion`.
+- **Radius, padding and margin tuples take expressions and move slot by slot.** `radius: (a ? 4 : 8, 4, 4, 4) with spring`, `radius: c ? (4, 4, 0, 0) : 4` and `p: (8, open ? 16 : 8) with spring` were `AttributeTypeMismatch`.
 - **Keys on any element the keyboard can reach.** `key_down` and `key_up` are accepted on a `Box` or `Row` with a `focus`, a `blur` or a `focused:`, or with a `tap` and a role that takes focus, so a composed chip can remove itself on Backspace and a composed slider can take Home and End. On an element Tab cannot reach it is still an error, and now says how to make it reachable. RFC-0063.
 - **The pointer's position, and dragging.** `pointer_down(e)`, `pointer_up`, `pointer_move`, `pointer_enter`, `pointer_exit` and `hover` give `e.x`, `e.y` (in the element), `e.width` and `e.height`; the new `drag_start`, `drag` and `drag_end` add `e.dx` and `e.dy` and set `dragging`. See `examples/composed_slider`. `byard shot --release X,Y` and `release` in `byard test` end a held press.
 - **`a11y_description`.** The text a screen reader reads after the name, for a field's supporting or error text; `byard shot --a11y` prints it.
@@ -127,6 +129,7 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A `let` in a `for` or `when` body** is defined where it is written. It was dropped, so a length it fed was "expected a length" (or, on `width`, silently the default size).
 - **A `pointer_down`, `key_down` or `change` written on a built-in `Slider` never ran**, and neither did its `tap`, `hover` or any other event. They run now, before the slider's own handling; `Toggle`, `Checkbox` and `RadioButton` had the same gap and the same fix. A `pointer_down(e)` on any element inside a `ScrollView` reads `e.x` and `e.y` from the element as drawn.
 
 - **`typo:` chosen with `?:` keeps its font family and weight.** `typo: big ? t.titleLarge : t.labelLarge` drew in the default face at regular weight, with the right size.

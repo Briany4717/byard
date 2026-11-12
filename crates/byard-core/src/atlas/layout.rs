@@ -1376,6 +1376,18 @@ impl LayoutAtlas {
         &self.layout_dirty
     }
 
+    /// The element index the next `add_*` call will give its node, on the full
+    /// path and on a retained build alike (RFC-0061): the number of nodes this
+    /// build has placed so far. [`Self::next_target_index`] is the size of the
+    /// tree, which on a retained build is the old tree's, not this walk's place.
+    #[must_use]
+    pub fn next_build_slot(&self) -> u32 {
+        #[allow(clippy::cast_possible_truncation)]
+        self.retained
+            .as_ref()
+            .map_or_else(|| self.next_target_index(), |r| r.cursor as u32)
+    }
+
     /// Places a node into the next build-order slot: creates it on the full
     /// path, or reuses (and restyles when its fingerprint moved) the node that
     /// already occupies the slot on the retained path.

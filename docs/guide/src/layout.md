@@ -126,6 +126,13 @@ named form cannot mix with a positional one, and naming a side twice, or `left`
 beside `horizontal`, is an error. Single sides have short forms too: `pt`, `pr`,
 `pb`, `pl`, and for margin `mt`, `mr`, `mb`, `ml`, `mx` and `my`.
 
+Each slot of a tuple is an expression, and a `?:` may choose between a tuple and a
+number: `p: wide ? (8, 24) : 12`. Sizes, gap, padding and margin move with `with`,
+also inside `on pressed` and the other state blocks; see [Motion](motion.md).
+
+A `let` written inside a `for` or `when` body is defined there, per row, and can feed
+any value in it: `for i, x in xs { let q = i + 3  Box #[radius: q] {} }`.
+
 ### A row that wraps
 
 A `Row` with `wrap: true` moves the children that do not fit to a new line, the way a
@@ -150,6 +157,7 @@ View Main() {
 The row is as tall as its lines. `wrap` can be a value, so a row can wrap only on a
 narrow window. `row_gap` without `wrap: true` is an error, since there are no lines to
 put space between, and only `Row` wraps. See `examples/layout_and_text`.
+
 
 ## Alignment
 

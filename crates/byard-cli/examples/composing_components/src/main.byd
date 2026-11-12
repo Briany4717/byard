@@ -9,7 +9,7 @@
 //        cargo run -p byard-cli -- shot crates/byard-cli/examples/composing_components -o rest.png
 //   2. Tab three times focuses the field (the stops before it are the switch and the clickable
 //      "About" item): the label floats
-//      up and turns purple, and the indicator thickens, though neither is the field:
+//      up and turns purple, and the indicator turns purple, though neither is the field:
 //        cargo run -p byard-cli -- shot crates/byard-cli/examples/composing_components \
 //            --key Tab --key Tab --key Tab -o focus.png
 //   3. The same, typing a name; the label stays up:
@@ -66,9 +66,13 @@ View Dot(colour: Int) {
 }
 
 // A text field with a floating label and an indicator. Both are siblings of the field, and both
-// read its focus by its name: `as field`, then `on field.focused`.
+// read its focus by its name, `as field` and `on field.focused`. The label is written before the
+// field, which is fine: a name belongs to the whole view.
 View LabelledField(label: Str, bind value: Str) {
     ZStack #[width: 300, height: 64, alignment: top_start] {
+        Text(label) #[color: 0x79747E, size: 16, ml: 16, mt: 18] {
+            on field.focused { color: 0x6750A4, translate.y: -18, scale: 0.75 }
+        }
         TextField #[
             bind: value,
             width: 300,
@@ -78,11 +82,8 @@ View LabelledField(label: Str, bind value: Str) {
             size: 16,
             color: 0x1D1B20,
         ] as field
-        Text(label) #[color: 0x79747E, size: 16, ml: 16, mt: 18] {
-            on field.focused { color: 0x6750A4, translate.y: -18, scale: 0.75 }
-        }
         Box #[width: 300, height: 1, mt: 56, bg: 0x79747E] {
-            on field.focused { bg: 0x6750A4, height: 2 }
+            on field.focused { bg: 0x6750A4 }
         }
     }
 }

@@ -86,10 +86,16 @@ fn walk(member: &mut Member, table: &HashMap<Symbol, Option<Vec<Slot>>>) {
                         _ => None,
                     }));
             for value in slot_values {
-                if let crate::parser::ast::Expr::SlotBlock { members, .. } = value {
-                    for m in members {
-                        walk(m, table);
-                    }
+                let members = match value {
+                    crate::parser::ast::Expr::SlotBlock { members, .. }
+                    | crate::parser::ast::Expr::Lambda {
+                        slot: Some(members),
+                        ..
+                    } => Some(members),
+                    _ => None,
+                };
+                for m in members.into_iter().flatten() {
+                    walk(m, table);
                 }
             }
         }

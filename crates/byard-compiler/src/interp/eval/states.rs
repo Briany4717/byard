@@ -338,6 +338,64 @@ impl Interpreter {
         }
     }
 
+    /// Publishes, before the frame paints, the pointer and focus states of every
+    /// element a state block names (RFC-0062 §5), so that an element written
+    /// *before* the one it follows reads this frame's. The element replaces it
+    /// with its full mask when it paints, which also has the value states
+    /// (`checked`, `selected`, `invalid`, `disabled`), so those reach the
+    /// elements written after it.
+    pub(super) fn publish_named_states(&mut self) {
+        if self.remote_targets.is_empty() {
+            return;
+        }
+        let table = self.elem_uids.clone();
+        for (index, uid) in table {
+            if self.remote_targets.contains(&uid) {
+                let state = self.element_style_state(index);
+                self.elem_states.insert(uid, state);
+            }
+        }
+    }
+
+    /// Declares, before a view's body (a `when` branch, a `for` body, a slot's
+    /// block) is lowered, the identity of every element in it tagged `as name`,
+    /// so that a state block can name an element written after it
+    /// (RFC-0062 §5). The scan stops at a nested `when`, `for` or route, which
+    /// declare their own, and costs nothing when no element is named.
+    pub(super) fn declare_state_names(&mut self, members: &[crate::parser::ast::Member]) {
+        fn scan(members: &[crate::parser::ast::Member], names: &mut Vec<Symbol>) {
+            for member in members {
+                if let crate::parser::ast::Member::Element(el) = member {
+                    if let Some(name) = &el.anchor_name {
+                        if !names.contains(name) {
+                            names.push(name.clone());
+                        }
+                    }
+                    scan(&el.children, names);
+                }
+            }
+        }
+        let mut names = Vec::new();
+        scan(members, &mut names);
+        for name in names {
+            let uid = self.fresh_elem_uid();
+            self.env.push(
+                Symbol::intern(&format!("@{}", name.as_str())),
+                Value::Int(i64::from(uid)),
+            );
+        }
+    }
+
+    /// Lowers a body that opens a scope of its own, `declare_state_names` first.
+    pub(super) fn lower_scope(
+        &mut self,
+        members: &[crate::parser::ast::Member],
+        known_views: &[&str],
+    ) -> Vec<super::RenderNode> {
+        self.declare_state_names(members);
+        self.lower_members(members, known_views)
+    }
+
     /// Resolves the names in `blocks` that refer to other elements (RFC-0062
     /// §5) against the elements tagged `as name` so far in this view, and
     /// notes which features the frame has to pay for. A name nothing declared
@@ -352,11 +410,34 @@ impl Interpreter {
             {
                 self.state_uses.focus_within = true;
             }
+            // Layout is computed before states, so a block that follows another
+            // element's states, or focus within, can only paint.
+            let state = block
+                .remote
+                .first()
+                .map(|r| format!("{}.{}", r.name.as_str(), r.kind.as_str()))
+                .or_else(|| {
+                    block
+                        .states
+                        .contains(&StyleStateKind::FocusWithin)
+                        .then(|| "focus_within".to_string())
+                });
+            if let Some(state) = state {
+                for attr in &block.attrs {
+                    if crate::interp::intrinsics::is_layout_attribute(attr.name.as_str()) {
+                        self.errors.push(CompileError::LayoutInStateBlock {
+                            span: attr.span,
+                            name: attr.name.as_str().to_string(),
+                            state: state.clone(),
+                        });
+                    }
+                }
+            }
             for remote in &mut block.remote {
                 let key = Symbol::intern(&format!("@{}", remote.name.as_str()));
                 if let Some(Value::Int(uid)) = self.env.lookup(&key) {
                     remote.target = u32::try_from(*uid).ok();
-                    self.state_uses.remote = true;
+                    self.remote_targets.extend(remote.target);
                 } else {
                     remote.target = None;
                     let names: Vec<String> = self

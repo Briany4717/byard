@@ -531,7 +531,7 @@ impl Interpreter {
                     // RFC-0062: an element tagged `as name` publishes the states it
                     // resolved, for the elements after it that name them. Before
                     // its children paint, so a descendant sees this frame's.
-                    if self.state_uses.remote && anchor_name.is_some() {
+                    if self.remote_targets.contains(uid) {
                         self.elem_states.insert(*uid, paint_state);
                     }
                     let paint_attrs = resolve_state_attrs(

@@ -604,14 +604,6 @@ fn an_unknown_or_later_state_target_is_told() {
         .find(|e| e.contains("UnknownStateTarget"))
         .unwrap_or_else(|| panic!("{errors:?}"));
     assert!(e.contains("field"), "the closest name is offered: {e}");
-    let errors = checked(
-        "View Main() { Column { Box { on later.hover { bg: 0xFF0000 } } \
-         Box #[width: 10, height: 10] as later {} } }",
-    );
-    assert!(
-        errors.iter().any(|e| e.contains("UnknownStateTarget")),
-        "declared after the block: {errors:?}"
-    );
     let parsed = parse(
         "View Main() { Column { Box #[width: 10, height: 10] as field {} \
          Box { on field.hovr { bg: 0xFF0000 } } } }",
@@ -653,4 +645,258 @@ fn focus_within_reaches_other_elements_through_a_name() {
     assert!(has_box(&app, 60.0, 20.0, 0x00FF00));
     app.key("Tab");
     assert!(has_box(&app, 60.0, 20.0, 0xFF0000));
+}
+
+// ── a slot placed in a `for` is its own element in every row ────────────
+
+const ROWS: &str = "View Main() { Column #[width: 400, p: 20, gap: 10] { \
+    Rows(rows: [1, 2, 3]) { \
+    Box #[width: 100, height: 40, bg: 0x888888, a11y_role: button, tap => {}] { \
+    on focused { bg: 0xFF0000 } \
+    on hover { bg: 0x0000FF with anim.linear(50) } } } } } \
+    View Rows(rows: List<Int>, content) { Column { for r in rows { Row { content } } } }";
+
+fn grey_boxes(app: &App) -> usize {
+    app.frame
+        .instances()
+        .iter()
+        .filter(|b| (b.rect[2] - 100.0).abs() < 0.5 && (b.rect[3] - 40.0).abs() < 0.5)
+        .count()
+}
+
+fn boxes_of(app: &App, rgb: u32) -> usize {
+    let lin = |byte: u32| {
+        let c = f32::from(u8::try_from(byte).unwrap()) / 255.0;
+        if c <= 0.04045 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let want = [lin(rgb >> 16 & 255), lin(rgb >> 8 & 255), lin(rgb & 255)];
+    app.frame
+        .instances()
+        .iter()
+        .filter(|b| {
+            (b.rect[2] - 100.0).abs() < 0.5 && (0..3).all(|i| (b.color[i] - want[i]).abs() < 0.02)
+        })
+        .count()
+}
+
+#[test]
+fn a_slot_in_a_for_has_its_own_focus_in_every_row() {
+    let mut app = App::new(ROWS);
+    assert_eq!(grey_boxes(&app), 3);
+    app.key("Tab");
+    app.t += 200;
+    app.send(&[]);
+    assert_eq!(boxes_of(&app, 0xFF0000), 1, "only the focused row");
+    app.key("Tab");
+    app.t += 200;
+    app.send(&[]);
+    assert_eq!(boxes_of(&app, 0xFF0000), 1, "focus moved to the next row");
+}
+
+#[test]
+fn a_slot_in_a_for_animates_each_row_alone() {
+    let mut app = App::new(ROWS);
+    let rows: Vec<(f32, f32)> = app
+        .frame
+        .instances()
+        .iter()
+        .filter(|b| (b.rect[2] - 100.0).abs() < 0.5)
+        .map(|b| (b.rect[0] + 50.0, b.rect[1] + 20.0))
+        .collect();
+    app.hover(rows[1]);
+    app.t += 200;
+    app.send(&[]);
+    assert_eq!(boxes_of(&app, 0x0000FF), 1, "only the hovered row");
+    assert_eq!(boxes_of(&app, 0x888888), 2);
+}
+
+/// The identities of the boxes directly under the first box of the tree.
+fn child_uids(app: &App) -> Vec<u32> {
+    let RenderNode::Box { children, .. } = &app.tree[0] else {
+        panic!("expected a box, got {:?}", app.tree[0]);
+    };
+    children
+        .iter()
+        .filter_map(|c| match c {
+            RenderNode::Box { uid, .. } => Some(*uid),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn a_slot_placed_twice_is_two_elements_with_identities_of_their_own() {
+    let app = App::new(
+        "View Main() { Twice() { Box #[width: 10, height: 10, a11y_role: button, tap => {}] {} } } \
+         View Twice(content) { Column { content content } }",
+    );
+    let uids = child_uids(&app);
+    assert_eq!(uids.len(), 2, "{uids:?}");
+    assert_ne!(uids[0], uids[1], "one identity shared by two elements");
+}
+
+// ── a `{ … }` argument is actions or elements by the parameter's type ───
+
+const BLOCKS: &str = "View Main() { var Count = 0 let Bump = () => { Count += 1 } Column { \
+    Pad(on_tap: { Bump() }, leading: { Text(\"slot\") }) \
+    Pad(on_tap: { Count += 1 }) } } \
+    View Pad(on_tap: Fn() = none, leading: Slot = none) { Row { \
+    when leading != none { leading } \
+    Box #[width: 30, height: 30, bg: 0xFF0000, tap => on_tap()] {} } }";
+
+#[test]
+fn a_capitalised_call_in_a_block_is_a_callback_when_the_parameter_is_an_fn() {
+    let mut app = App::new(BLOCKS);
+    assert_eq!(texts(&app), vec!["slot"], "the same shape given to a Slot");
+    let boxes: Vec<(f32, f32)> = app
+        .frame
+        .instances()
+        .iter()
+        .filter(|b| (b.rect[2] - 30.0).abs() < 0.5)
+        .map(|b| (b.rect[0] + 15.0, b.rect[1] + 15.0))
+        .collect();
+    assert_eq!(boxes.len(), 2);
+    for at in boxes {
+        app.press(at);
+        app.release(at);
+    }
+    assert_eq!(
+        app.int("Count"),
+        2,
+        "`{{ Bump() }}` and `{{ Count += 1 }}` both ran"
+    );
+}
+
+#[test]
+fn a_block_that_fits_either_reading_keeps_both_until_the_callee_is_known() {
+    let parsed =
+        parse("View Main() { Item(a: { Text(\"x\") }, b: { m.Icon(\"x\") }, c: { Api.save() }) }");
+    assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+    let byard_compiler::parser::ast::Member::Element(call) = &parsed.views[0].body[0] else {
+        panic!("a call");
+    };
+    for arg in &call.content {
+        assert!(
+            matches!(
+                &arg.value,
+                byard_compiler::parser::ast::Expr::Lambda { slot: Some(_), .. }
+            ),
+            "{:?}",
+            arg.value
+        );
+    }
+    // Settled by the parameters: `a` and `b` are slots, `c` an `Fn`.
+    let settled = call
+        .with_blocks_settled(|n| matches!(n.as_str(), "a" | "b"), |n| n.as_str() == "c")
+        .expect("ambiguous arguments");
+    let kinds: Vec<&str> = settled
+        .content
+        .iter()
+        .map(|a| match &a.value {
+            byard_compiler::parser::ast::Expr::SlotBlock { .. } => "slot",
+            byard_compiler::parser::ast::Expr::Lambda { slot: None, .. } => "callback",
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(kinds, ["slot", "slot", "callback"]);
+}
+
+#[test]
+fn a_block_of_elements_given_to_an_fn_and_actions_given_to_a_slot_are_told() {
+    // Only elements parse (an attribute block), given to a callback.
+    let errors = checked(
+        "View Main() { Card(on_tap: { Row #[gap: 1] { } }) } View Card(on_tap: Fn() = none) { Box {} }",
+    );
+    assert!(
+        errors.iter().any(|e| e.contains("SlotArgument")),
+        "{errors:?}"
+    );
+    // Only actions parse, given to a Slot.
+    let errors = checked(
+        "View Main() { var n = 0 Card(head: { n++ }) } View Card(head: Slot = none) { Box { head } }",
+    );
+    assert!(
+        errors.iter().any(|e| e.contains("SlotArgument")),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn a_block_that_is_neither_says_what_each_reading_expected() {
+    let parsed = parse("View Main() { var n = 0 Card(x: { Row #[gap: 1] n++ }) }");
+    let e = parsed
+        .errors
+        .iter()
+        .find(|e| format!("{e:?}").contains("BlockFitsNeither"))
+        .unwrap_or_else(|| panic!("{:?}", parsed.errors));
+    let text = e.headline();
+    assert!(text.contains("Fn") && text.contains("Slot"), "{text}");
+}
+
+// ── names are the whole view's, and a state block only paints ───────────
+
+#[test]
+fn a_label_written_before_its_field_follows_the_fields_focus() {
+    let mut app = App::new(
+        "View Main() { Column #[width: 400, p: 20, gap: 10] { \
+         Box #[width: 60, height: 20, bg: 0x00FF00] { on field.focused { bg: 0xFF0000 } } \
+         Box #[width: 100, height: 40, bg: 0x888888, a11y_role: button, tap => {}] as field {} } }",
+    );
+    assert!(has_box(&app, 60.0, 20.0, 0x00FF00));
+    app.key("Tab");
+    assert!(
+        has_box(&app, 60.0, 20.0, 0xFF0000),
+        "the field is written after the label, and the frame it gains focus is the one that shows it"
+    );
+}
+
+#[test]
+fn a_name_used_before_its_declaration_is_still_scoped_to_its_own_view() {
+    let errors = checked(
+        "View Main() { Column { Box { on field.hover { bg: 0xFF0000 } } Other() } } \
+         View Other() { Box #[width: 10, height: 10] as field {} }",
+    );
+    assert!(
+        errors.iter().any(|e| e.contains("UnknownStateTarget")),
+        "{errors:?}"
+    );
+}
+
+#[test]
+fn a_layout_attribute_in_a_block_on_another_elements_states_is_an_error() {
+    let errors = checked(
+        "View Main() { Column { Box #[width: 10, height: 10] as field {} \
+         Box #[width: 10, height: 10] { on field.focused { height: 40, bg: 0xFF0000 } } } }",
+    );
+    let e = errors
+        .iter()
+        .find(|e| e.contains("LayoutInStateBlock"))
+        .unwrap_or_else(|| panic!("{errors:?}"));
+    assert!(e.contains("height") && e.contains("field.focused"), "{e}");
+    assert_eq!(
+        errors
+            .iter()
+            .filter(|e| e.contains("LayoutInStateBlock"))
+            .count(),
+        1,
+        "`bg` is paint: {errors:?}"
+    );
+    let errors = checked(
+        "View Main() { Row #[width: 100, height: 30] { on focus_within { width: 200 } \
+         Box #[width: 10, height: 10] {} } }",
+    );
+    assert!(
+        errors.iter().any(|e| e.contains("LayoutInStateBlock")),
+        "{errors:?}"
+    );
+    // Paint attributes are fine, and so is `translate`.
+    let errors = checked(
+        "View Main() { Column { Box #[width: 10, height: 10] as field {} \
+         Box #[width: 10, height: 10] { on field.focused { translate.y: -8, scale: 0.75 } } } }",
+    );
+    assert!(errors.is_empty(), "{errors:?}");
 }

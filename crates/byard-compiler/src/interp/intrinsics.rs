@@ -211,6 +211,12 @@ pub(crate) const VIEW_CALL_LAYOUT: &[&str] = &[
     "align_self",
 ];
 
+/// Whether `name` is an attribute that takes part in layout, which is computed
+/// before states are resolved (RFC-0062 §5).
+pub(crate) fn is_layout_attribute(name: &str) -> bool {
+    name == "basis" || LAYOUT.iter().any(|(n, _)| *n == name)
+}
+
 const LAYOUT: &[(&str, PropDef)] = &[
     ("width", lay(PropType::Int)),
     ("height", lay(PropType::Int)),

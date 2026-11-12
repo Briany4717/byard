@@ -484,7 +484,7 @@ impl Interpreter {
         // The scopes the branch opens are recorded, so a route popped with this
         // `when` in it can retire them.
         self.ctx.push_scope_tracker();
-        let nodes = self.lower_members(&ast, &known_refs);
+        let nodes = self.lower_scope(&ast, &known_refs);
         let scopes = self.ctx.pop_scope_tracker();
         if pushed {
             self.slot_stack.pop();
@@ -532,7 +532,7 @@ impl Interpreter {
             self.slot_stack.push(frame);
         }
         self.ctx.push_scope_tracker();
-        let body_nodes = self.lower_members(&body_ast, &known_refs);
+        let body_nodes = self.lower_scope(&body_ast, &known_refs);
         let scopes = self.ctx.pop_scope_tracker();
         if pushed {
             self.slot_stack.pop();

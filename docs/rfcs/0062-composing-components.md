@@ -154,9 +154,14 @@ An element named with `as name` publishes its interaction states. A state block
 written on a later element of the same view, or on a descendant, can name them:
 `on name.hover`, `on name.pressed`, `on name.focused`, `on name.focus_visible`, and
 every other state, joined with `+` to each other and to the element's own
-(`on field.focused + hover`). The name must be declared before the block that
-uses it, as an overlay's anchor must; `UnknownStateTarget` says so otherwise,
-with the closest name.
+(`on field.focused + hover`). A name belongs to the whole view, so a label may be
+written before its field. A name no element of the view is tagged with is
+`UnknownStateTarget`, with the closest one.
+
+A block on another element's states only changes what is painted, and layout
+was computed before. A layout attribute in one (`width`, `height`, `p`, `m…`,
+`grow`, `align`, …) is `LayoutInStateBlock`, which says to use `translate` or
+`scale`; the same holds for `focus_within`.
 
 `focus_within` is a state of every element: it holds while the element or any
 element inside it has the keyboard focus.
@@ -182,22 +187,32 @@ declares a slot) and put back while the branch is lowered. A pool created inside
 a branch captures the frame it finds, so nesting works to any depth. Navigation
 routes capture it the same way.
 
-A slot's nodes are lowered once, in the caller, and cloned where they are placed.
-Placing it in two branches costs nothing, since only one is drawn; in a `for` each
-row gets the clone, and an animation or a state inside it is keyed by the
-instance and the source position as any other element lowered from one source
-position is.
+A slot is kept as the block the caller wrote, with the names visible at the call
+(captured as a callback's are) and the view instance that wrote it. It is
+lowered where the callee places it, once for each placement, as that instance
+and among those names. A slot placed in every row of a `for`, or twice in a
+body, is therefore a set of elements of its own each time: its own identity
+(so its own focus and editing state), and its own pools if it holds a `when` or
+a `for`. A call still has what it wrote in its slots checked when the callee's
+body is not lowered again for it.
 
 ### 2. Named slots
 
 - A parameter is a slot when its name is `content` or its type is `Slot`. Slot
   parameters take no positional argument, no value and no `bind`.
-- **Parsing.** A `{` in a value position opens a slot block, as opposed to a
-  callback body or a record, when its first token is a capitalised name
-  (`Icon`, `Row`), a qualified one (`m.Switch`), `when`, `for`, or a lone name
-  (`{ leading }`). `{}` stays the empty callback and is accepted as an empty slot.
-  The block is parsed as the members of an element body and kept as
-  `Expr::SlotBlock`.
+- **Parsing.** Whether a `{ … }` argument holds actions (an `Fn`'s callback) or
+  elements (a `Slot`'s block) is decided by the callee's parameter, never by what
+  the block starts with: controllers are capitalised too (`{ Api.save() }`). The
+  parser cannot see a callee's signature (a package's views included), so a `{`
+  that starts a call's argument or attribute value is read both ways, as actions
+  and as the members of an element body. If only one reading is valid, that is
+  the node (`Expr::Lambda`, or `Expr::SlotBlock` for elements). If both are, it
+  is the callback with the elements riding along (`Expr::Lambda { slot }`), and
+  the call settles it once the callee is known: elements for a `Slot`, actions for
+  an `Fn`, elements (so that the checker can say a `Slot` was wanted) for any
+  other parameter. A callback passed to an intrinsic is never touched. If neither
+  reading is valid, `BlockFitsNeither` gives what each expected. `{}` is the empty
+  callback and is accepted as an empty slot.
 - **At the call.** For each slot parameter the call's argument of that name is
   lowered in the caller's scope to a list of nodes, a `Slot` argument that is a
   slot of the caller's own (`leading: leading`) is forwarded, and the trailing
@@ -208,8 +223,8 @@ position is.
   nothing. In an expression, a slot parameter reads as a value that `== none` /
   `!= none` can test; it is decided per instance, so the untaken branch of `when
   leading != none` is not drawn, and checking still lowers both.
-- **Checks.** A value given to a `Slot` parameter, or a block to anything else,
-  is `SlotArgument`; a block outside a call's arguments is the same error. A name
+- **Checks.** A value given to a `Slot` parameter (an action block is a value
+  here), or a block of elements to anything else, is `SlotArgument`; a block outside a call's arguments is the same error. A name
   that is a slot of the view and is written with arguments or attributes is
   `UnknownView`, as `content` with them is today. Checking a view with a
   slot lowers it with every slot absent.
@@ -253,11 +268,16 @@ them lands; the list is one constant.
 
 ### 5. States that reach other elements
 
-- **`as name`** already tags an element. Lowering it also binds, in the instance's
-  environment, the element's identity under the name (an id the element had
-  already, `uid`). Because the environment is what lazily lowered branches
-  capture, a name declared outside a `when` or `for` is visible inside it, and a
-  name declared inside is not visible outside.
+- **`as name`** already tags an element. Before a scope is lowered (a view's
+  body, a `when` branch, a `for` body, a route, a slot's block) the elements in it
+  tagged `as` are found, without entering a nested `when`, `for` or route, and
+  each name is bound in the environment to the identity (`uid`) its element will
+  have. A reference may therefore come before its element. Because the
+  environment is what lazily lowered branches capture, a name declared outside a
+  `when` or `for` is visible inside it, and one declared inside is not visible
+  outside; a `for` row declares its own. Two elements of one scope with the same
+  name share it, which is not supported. The scan walks the scope's elements once
+  and finds nothing when none is named.
 - **`on name.state`** is parsed in a state block's list as `IDENT "." state`. A
   block keeps its own states (`states`) and the remote ones (`remote`: name, state,
   and the id once resolved). Lowering resolves each name through the environment;
@@ -265,14 +285,22 @@ them lands; the list is one constant.
   and a note when the name is declared later in the view. An unknown state after the
   dot is `UnknownStyleState` as ever. A block's specificity is the number of states
   it names, own and remote.
-- **At paint**, an element with a name publishes the mask it resolved, router and
-  value states and `focus_within` together, into a table keyed by its id, *after*
-  resolving its own blocks and before painting its children. A block with remote
-  states applies when every remote mask contains its state. Paint order is tree
-  order, so a descendant and a later sibling see the current frame's mask; the table
-  is cleared at the start of a frame, so an element not drawn is in no state. The
-  table and the cost of filling it exist only when a block with a remote state was
-  lowered.
+- **At paint.** A block with remote states applies when every named element's
+  mask contains its state. The table of masks, keyed by identity, is cleared at the
+  start of a frame, so an element not drawn is in no state. Only an element some
+  block names publishes anything. Right after layout, before anything paints, each
+  such element's pointer and focus states (`hover`, `pressed`, `focused`,
+  `focus_visible`, `focus_within`, `dragging`) are published from the router, so an
+  element written before it sees this frame's. When the element itself paints it
+  replaces that with its full mask, which also holds the value states (`checked`,
+  `selected`, `invalid`, `indeterminate`, `disabled`); those reach the elements
+  written after it, and an element before it does not see them, since they are
+  known only from the element's own attributes. A control whose label has to
+  follow `checked` is written after the control.
+- **A layout attribute in such a block is `LayoutInStateBlock`.** Layout runs once
+  with no state; `translate` and `scale` are what a label that floats moves with.
+  The check is made where the block is lowered, for every block that names another
+  element's state or `focus_within`.
 - **`focus_within`** is a bit of `StyleState` beside `FOCUSED`. The set of elements
   that have the focused one inside is the focused element and its ancestors in the
   layout tree, computed the first time a frame asks and only when a block that
@@ -285,22 +313,22 @@ them lands; the list is one constant.
 
 ## Drawbacks
 
-- **`{` is read by its first token.** A slot block and a callback body differ only
-  in what they start with. A callback whose first statement starts with a capital
-  letter (calling an enum case as a statement, which does nothing) is read as a
-  slot. No program written today does that, and the checker's error on a slot
-  given to a callback parameter names the cause.
-- **A slot placed in a `for` is one set of nodes cloned per row.** State and
-  animation inside it are keyed by source position and instance, so rows share
-  them. A row that needs its own makes the content a view.
+- **A `{ … }` argument is parsed twice.** Once as actions and once as elements, to
+  wait for the callee's signature. Blocks are small and the second parse is
+  discarded unless it is the only valid one, but a slot nested in a slot parses
+  each level twice.
+- **A slot is lowered at every placement.** A slot placed in a `for` row is the
+  work of lowering it once per row, as the loop body already is, in exchange for
+  each row having elements of its own.
 - **`none` is not a value.** It is only a default and one side of a comparison,
   decided per instance. A view cannot store it or pass it as an argument other than
   to a parameter that declares it.
-- **A name published by `as` is seen by every element after it in the view**, not
-  only by siblings and descendants. A cousin can use it. A narrower rule would have
-  to be explained for no gain.
-- **A state reaches forward only.** An element painted before the named one sees
-  nothing, which is why it is an error to name one declared later.
+- **Value states reach forward only.** An element written before the named one
+  follows its pointer and focus states in the same frame, but `checked`,
+  `selected`, `invalid`, `indeterminate` and `disabled` come from the element's
+  attributes, read when it paints.
+- **A name belongs to the whole view**, so a typo that happens to name another
+  element's tag is not caught as unknown.
 
 ## Rationale and alternatives
 
@@ -340,11 +368,14 @@ them lands; the list is one constant.
 ### Q1, how is a slot told apart from a callback body?
 
 **Options.** (a) by the parameter's type, which the parser does not know; (b) a
-distinct opener (`slot { … }`, `<…>`); (c) by the first token.
+distinct opener (`slot { … }`, `<…>`); (c) by the first token, a capital letter
+meaning elements.
 
-**Resolution: (c).** An element is capitalised and an action is not, so the first
-token is enough and the call reads like the body it fills. The checker's message
-for the mixed-up cases says which one the parameter wanted.
+**Resolution: (a), by reading the block both ways until the callee is known.**
+(c) was tried first and is wrong: controllers are capitalised (`{ Api.save() }`,
+`{ Store.count += 1 }`), so a real callback was a slot. The type is what the
+author wrote to say which they meant, and the call settles it, including for a
+package's views.
 
 ### Q2, does a slot argument see the callee's names?
 
@@ -357,11 +388,11 @@ for the mixed-up cases says which one the parameter wanted.
 two, and the attributes are about the one that is drawn. A view that wants them on
 something else takes a parameter of that name.
 
-### Q4, can `on name.state` name an element declared later?
+### Q4, can `on name.state` name an element written later?
 
-**Resolution: no.** It would need a pre-pass over the view, and paint order would
-give it last frame's state. The same rule as an overlay's anchor, and the same
-message.
+**Resolution: yes.** A scope finds its `as` names before it is lowered, and the
+named element's pointer and focus states are published after layout and before
+paint. A block cannot follow the value states of an element written after it.
 
 ## Future possibilities
 

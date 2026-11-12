@@ -588,15 +588,26 @@ impl SpanEq for Expr {
                     params,
                     types,
                     body,
+                    slot,
                     span: _,
                 },
                 Self::Lambda {
                     params: p2,
                     types: t2,
                     body: b2,
+                    slot: s2,
                     span: _,
                 },
-            ) => params == p2 && types.span_eq(t2) && body.span_eq(b2),
+            ) => {
+                params == p2
+                    && types.span_eq(t2)
+                    && body.span_eq(b2)
+                    && match (slot, s2) {
+                        (Some(a), Some(b)) => a.span_eq(b),
+                        (None, None) => true,
+                        _ => false,
+                    }
+            }
             (
                 Self::Assign {
                     target,

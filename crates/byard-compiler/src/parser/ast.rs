@@ -487,9 +487,77 @@ impl ElementNode {
             .map(|a| &a.value)
             .chain(attrs)
             .filter_map(|v| match v {
-                Expr::SlotBlock { members, .. } => Some(members.as_slice()),
+                Expr::SlotBlock { members, .. }
+                | Expr::Lambda {
+                    slot: Some(members),
+                    ..
+                } => Some(members.as_slice()),
                 _ => None,
             })
+    }
+
+    /// This call with each `{ … }` argument that reads both ways settled by
+    /// the callee's parameters (RFC-0062 §2): the actions for a name `is_callback`
+    /// says is an `Fn`, the elements for any other. `None` when no argument
+    /// was ambiguous, which is nearly every call.
+    #[must_use]
+    pub fn with_blocks_settled(
+        &self,
+        is_slot: impl Fn(&Symbol) -> bool,
+        is_callback: impl Fn(&Symbol) -> bool,
+    ) -> Option<ElementNode> {
+        let ambiguous = |v: &Expr| matches!(v, Expr::Lambda { slot: Some(_), .. });
+        let any = self.content.iter().any(|a| ambiguous(&a.value))
+            || self
+                .attrs
+                .iter()
+                .any(|a| matches!(&a.kind, AttrKind::Prop { value } if ambiguous(value)));
+        if !any {
+            return None;
+        }
+        let settle = |name: Option<&Symbol>, value: &Expr| -> Option<Expr> {
+            let Expr::Lambda {
+                slot: Some(members),
+                params,
+                types,
+                body,
+                span,
+            } = value
+            else {
+                return None;
+            };
+            // Elements for a `Slot`, and for a parameter that is no callback
+            // either, so that the checker can say it wanted a `Slot`.
+            Some(if name.is_some_and(|n| is_slot(n) || !is_callback(n)) {
+                Expr::SlotBlock {
+                    members: members.clone(),
+                    span: *span,
+                }
+            } else {
+                Expr::Lambda {
+                    params: params.clone(),
+                    types: types.clone(),
+                    body: body.clone(),
+                    slot: None,
+                    span: *span,
+                }
+            })
+        };
+        let mut node = self.clone();
+        for arg in &mut node.content {
+            if let Some(settled) = settle(arg.name.as_ref(), &arg.value) {
+                arg.value = settled;
+            }
+        }
+        for attr in &mut node.attrs {
+            let name = attr.name.clone();
+            if let AttrKind::Prop { value } = &mut attr.kind {
+                if let Some(settled) = settle(Some(&name), value) {
+                    *value = settled;
+                }
+            }
+        }
+        Some(node)
     }
 }
 
@@ -900,6 +968,11 @@ pub enum Expr {
         types: Vec<Option<Type>>,
         /// The body expression.
         body: Box<Expr>,
+        /// A `{ … }` argument of a view call that reads both as actions and as
+        /// elements (`{ Text("x") }`, `{ Api.save() }`): the elements. The
+        /// callee's parameter says which it was meant to be (RFC-0062 §2), and
+        /// a call resolves it before anything else reads the argument.
+        slot: Option<Vec<Member>>,
         /// Source span.
         span: Span,
     },

@@ -97,16 +97,19 @@ impl Interpreter {
         // element's members minus those declarations, borrowed unchanged in the
         // overwhelming case where there are none.
         let (measure, el_children) = self.lower_measures(el, &attrs);
-        let uid = self.fresh_elem_uid();
-        // RFC-0062: `as name` also makes this element's states nameable, by the
-        // elements after it in the view (and by branches lowered later, which
-        // restore the environment this is pushed into).
-        if let Some(name) = &el.anchor_name {
-            self.env.push(
-                Symbol::intern(&format!("@{}", name.as_str())),
-                Value::Int(i64::from(uid)),
-            );
-        }
+        // RFC-0062: an element tagged `as name` has the identity its scope
+        // declared for the name before lowering began, so that a state block
+        // written before the element can name it too.
+        let declared = el.anchor_name.as_ref().and_then(|name| {
+            match self
+                .env
+                .lookup(&Symbol::intern(&format!("@{}", name.as_str())))
+            {
+                Some(Value::Int(uid)) => u32::try_from(*uid).ok(),
+                _ => None,
+            }
+        });
+        let uid = declared.unwrap_or_else(|| self.fresh_elem_uid());
         let el_children: &[Member] = &el_children;
         match el.name.as_str() {
             "Text" | "Button" if !el.content.is_empty() => {
@@ -475,8 +478,13 @@ impl Interpreter {
                     .last()
                     .is_some_and(|f| f.get(&e.name).is_some()) =>
             {
-                if let Some(Some(nodes)) = self.slot_stack.last().and_then(|f| f.get(&e.name)) {
-                    out.extend(nodes.iter().cloned());
+                let source = self
+                    .slot_stack
+                    .last()
+                    .and_then(|f| f.get(&e.name))
+                    .and_then(Clone::clone);
+                if let Some(source) = source {
+                    out.extend(self.lower_slot_source(&source));
                 }
             }
             Member::Element(e) if self.is_user_view_call(e) => {

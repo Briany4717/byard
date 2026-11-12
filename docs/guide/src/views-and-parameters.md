@@ -248,11 +248,17 @@ View Main() {
 }
 ```
 
+The call writes `leading: { … }` for a slot and `on_tap: { … }` for a callback in the same way; it is the
+parameter's type that says which the braces are, so `{ Api.save() }` is an action for an `Fn` and
+`{ Text("x") }` is an element for a `Slot`. A block that is neither says what each expected
+(`BlockFitsNeither`). A slot is the block written where the call is, lowered where the view places
+it, so a slot placed in each row of a `for` is a set of elements of its own in every row.
+
 `= none` makes a slot optional; without it the call has to give one (`MissingParam`).
 `leading != none` is true when the call gave it, decided when the view is instantiated, and
 `content != none` asks the same of the trailing block. A slot can be passed on to another view,
 `Inner(icon: icon)`. A value given to a `Slot`, or a block given to anything else, is
-`SlotArgument`. In a `for`, a slot is the same elements for every row.
+`SlotArgument`.
 
 ## Layout on a call
 

@@ -654,7 +654,7 @@ impl Interpreter {
             self.slot_stack.push(frame);
         }
         self.ctx.push_scope_tracker();
-        let nodes = self.lower_members(&body, &known_refs);
+        let nodes = self.lower_scope(&body, &known_refs);
         let scopes = self.ctx.pop_scope_tracker();
         if pushed {
             self.slot_stack.pop();

@@ -877,10 +877,15 @@ impl Checker<'_> {
                     passed: String::new(),
                 }),
                 (false, false) if is_slot_param(param) => {
-                    let given = matches!(
-                        value,
-                        Expr::SlotBlock { .. } | Expr::Ident(..) | Expr::Lambda { .. }
-                    );
+                    // `{}` is an empty slot; any other action block is not one.
+                    let given = match value {
+                        Expr::SlotBlock { .. } | Expr::Ident(..) => true,
+                        Expr::Lambda { params, body, .. } => {
+                            params.is_empty()
+                                && matches!(body.as_ref(), Expr::Block(s, _) if s.is_empty())
+                        }
+                        _ => false,
+                    };
                     if !given {
                         self.errors.push(CompileError::SlotArgument {
                             span,
@@ -1096,6 +1101,22 @@ impl Checker<'_> {
                 // What a view is called with is a value. An intrinsic's named
                 // argument may be one of its own words.
                 let is_view = self.views.contains(&el.name);
+                // A `{ … }` argument that reads as actions and as elements is
+                // settled by what the callee's parameter is (RFC-0062 §2).
+                let settled = if is_view {
+                    let params = self.view_params.get(&el.name).copied().unwrap_or(&[]);
+                    el.with_blocks_settled(
+                        |name| params.iter().any(|p| &p.name == name && is_slot_param(p)),
+                        |name| {
+                            params.iter().any(|p| {
+                                &p.name == name && matches!(p.ty, Some(Type::Function { .. }))
+                            })
+                        },
+                    )
+                } else {
+                    None
+                };
+                let el = settled.as_ref().unwrap_or(el);
                 let mut tys = Vec::with_capacity(el.content.len() + el.attrs.len());
                 for arg in &el.content {
                     let takes_a_value = arg.name.as_ref().is_some_and(|name| {

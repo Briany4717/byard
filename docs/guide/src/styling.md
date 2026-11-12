@@ -412,20 +412,23 @@ A floating label and an indicator follow a field this way, with no `var` and no 
 ```byld
 View LabelledField(label: Str, bind value: Str) {
     ZStack #[width: 300, height: 64, alignment: top_start] {
-        TextField #[bind: value, width: 300, height: 56, indicator: none] as field
         Text(label) #[color: 0x79747E, ml: 16, mt: 18] {
             on field.focused { color: 0x6750A4, translate.y: -18, scale: 0.75 }
         }
+        TextField #[bind: value, width: 300, height: 56, indicator: none] as field
         Box #[width: 300, height: 1, mt: 56, bg: 0x79747E] {
-            on field.focused + hover { bg: 0x6750A4, height: 2 }
+            on field.focused + hover { bg: 0x6750A4 }
         }
     }
 }
 ```
 
-The name has to be declared before the block, as an overlay's anchor does; otherwise it is
-`UnknownStateTarget`, with the closest name. A state block changes what is painted, never the layout,
-so a label that floats moves with `translate` and `scale`. Two calls of one view keep their own
+A name belongs to the whole view, so the label may be written before its field. A name no element is
+tagged with is `UnknownStateTarget`, with the closest name. A block on another element's states, or on
+`focus_within`, changes what is painted and never the layout, so a layout attribute in one
+(`width`, `height`, `p`, `m`, `grow`, ...) is `LayoutInStateBlock`: a label that floats moves with
+`translate` and `scale`. An element written before the named one follows its pointer and focus states;
+`checked`, `selected`, `invalid` and `disabled` reach the elements written after it. Two calls of one view keep their own
 names. See `examples/composing_components`.
 
 ## Responsive styles

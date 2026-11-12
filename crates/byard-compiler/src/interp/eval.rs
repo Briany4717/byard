@@ -477,26 +477,38 @@ pub struct InstanceBindings {
     pub layout: Vec<(Symbol, ScopeId, Option<Symbol>)>,
 }
 
+/// A block a call gave to a slot (RFC-0062): the elements as written, and what
+/// lowering them needs, the names visible at the call and the view instance
+/// that wrote them. Lowered where the callee places the slot, once for each
+/// placement, so a slot placed in every row of a `for` is a set of elements of
+/// its own in each: its own focus, its own editing state.
+#[derive(Debug)]
+pub(crate) struct SlotSource {
+    pub(crate) members: Vec<Member>,
+    pub(crate) env: super::env::Captured,
+    pub(crate) inst: u32,
+    /// The slots of the view that wrote the block, for a slot it passes on.
+    pub(crate) outer: Option<std::rc::Rc<SlotFrame>>,
+    pub(crate) known_views: Vec<String>,
+}
+
 /// The RFC-0062 state features lowering found in use.
 #[derive(Debug, Default, Clone, Copy)]
 pub(crate) struct StateUses {
-    /// A block names another element's states (`on field.focused`).
-    pub(crate) remote: bool,
-    /// A block names `focus_within`.
+    /// A state block names `focus_within`.
     pub(crate) focus_within: bool,
 }
 
 /// The slots one view instance was called with (RFC-0062): for each `Slot`
-/// parameter and `content`, `None` when the call did not give it, else its
-/// nodes, lowered once in the caller and cloned where the body places them.
+/// parameter and `content`, `None` when the call did not give it.
 #[derive(Debug, Default)]
 pub(crate) struct SlotFrame {
-    pub(crate) slots: Vec<(Symbol, Option<Vec<RenderNode>>)>,
+    pub(crate) slots: Vec<(Symbol, Option<std::rc::Rc<SlotSource>>)>,
 }
 
 impl SlotFrame {
     /// The entry for `name`: `None` when the view has no such slot.
-    pub(crate) fn get(&self, name: &Symbol) -> Option<&Option<Vec<RenderNode>>> {
+    pub(crate) fn get(&self, name: &Symbol) -> Option<&Option<std::rc::Rc<SlotSource>>> {
         self.slots.iter().find(|(n, _)| n == name).map(|(_, s)| s)
     }
 }
@@ -756,8 +768,10 @@ pub struct Interpreter {
     /// far this frame, by [`RenderNode::Box::uid`] (RFC-0062 §5). Filled only
     /// when a state block that names another element was lowered.
     elem_states: std::collections::HashMap<u32, crate::interp::events::StyleState>,
-    /// Which of RFC-0062's state features a lowered block has asked for, so a
-    /// frame pays only for those.
+    /// The elements whose states another element's state block names
+    /// (RFC-0062), by [`RenderNode::Box::uid`]: only these publish theirs.
+    remote_targets: std::collections::HashSet<u32>,
+    /// What lowering found the frame has to pay for.
     state_uses: StateUses,
     /// The layout indices of the focused element and its ancestors, for this
     /// frame, once something asked.
@@ -1987,6 +2001,9 @@ impl Interpreter {
         // Layout indices have just been reassigned: focus and editing state
         // find their elements again before anything paints or reads them.
         self.follow_elements();
+        // RFC-0062: what a named element's pointer and focus states are, known
+        // before anything paints, so an element written before it can follow.
+        self.publish_named_states();
 
         self.retained.flat_ids.clear();
         self.retained.flat_ids.extend_from_slice(&flat_ids);
@@ -2224,7 +2241,7 @@ impl Interpreter {
             };
             self.slot_stack.push(std::rc::Rc::new(frame));
         }
-        let nodes = self.lower_members(&view.body, known_views);
+        let nodes = self.lower_scope(&view.body, known_views);
         if has_slots {
             self.slot_stack.pop();
         }

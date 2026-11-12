@@ -78,6 +78,7 @@ impl Parser<'_> {
                         params: vec![sym],
                         types: vec![None],
                         body,
+                        slot: None,
                         span: self.span_from(span),
                     }
                 } else {
@@ -499,43 +500,80 @@ impl Parser<'_> {
     fn parse_brace_value(&mut self) -> Expr {
         if self.at_record_literal() {
             self.parse_record()
-        } else if self.at_slot_block() {
-            self.parse_slot_block()
         } else {
             self.parse_callback_block()
         }
     }
 
-    /// True when the cursor sits on a `{` that opens a **slot block** (RFC-0062
-    /// §2), the elements a call hands to a `Slot` parameter, as opposed to a
-    /// callback body. An element is capitalised and an action is not, so the
-    /// first token decides: a capitalised name (`Icon`), a qualified one
-    /// (`m.Switch`), `when` or `for`, or a lone name (`{ leading }`, a slot
-    /// passed on). A record was ruled out before this is asked, and `{}` stays
-    /// the empty callback.
-    fn at_slot_block(&self) -> bool {
-        if !matches!(self.cur(), Some(Token::LBrace)) {
-            return false;
+    /// The value of a call's argument or attribute. A `{` there may open a
+    /// callback or the elements of a `Slot`, and which is up to the parameter
+    /// the callee declares, which the parser cannot see (a package's views
+    /// included). So the block is read both ways: as actions, and as the members
+    /// of an element's body. When only one reading is valid that is the node;
+    /// when both are, the actions are the expression and the elements ride along
+    /// for the call to choose (RFC-0062 §2); when neither is, the error says
+    /// what each expected.
+    pub(super) fn parse_arg_value(&mut self) -> Expr {
+        if !matches!(self.cur(), Some(Token::LBrace)) || self.at_record_literal() {
+            return self.parse_expr(0);
         }
-        let capital = |sym: &crate::symbol::Symbol| {
-            sym.as_str().chars().next().is_some_and(char::is_uppercase)
-        };
-        match self.peek2() {
-            Some(Token::When | Token::For) => true,
-            Some(Token::Ident(first)) => {
-                if capital(&first) {
-                    return true;
-                }
-                match (
-                    self.tokens.get(self.pos + 2).map(|(t, _)| t),
-                    self.tokens.get(self.pos + 3).map(|(t, _)| t),
-                ) {
-                    (Some(Token::Dot), Some(Token::Ident(second))) => capital(second),
-                    (Some(Token::RBrace), _) => true,
-                    _ => false,
+        let start = (self.pos, self.errors.len());
+        let actions = self.parse_callback_block();
+        let actions_end = self.pos;
+        let actions_errors: Vec<_> = self.errors.drain(start.1..).collect();
+        self.pos = start.0;
+        let elements = self.parse_slot_block();
+        let elements_end = self.pos;
+        let elements_errors: Vec<_> = self.errors.drain(start.1..).collect();
+        match (actions_errors.is_empty(), elements_errors.is_empty()) {
+            (true, true) => {
+                self.pos = actions_end;
+                match (actions, elements) {
+                    (
+                        Expr::Lambda {
+                            params,
+                            types,
+                            body,
+                            span,
+                            ..
+                        },
+                        Expr::SlotBlock { members, .. },
+                    ) => Expr::Lambda {
+                        params,
+                        types,
+                        body,
+                        slot: Some(members),
+                        span,
+                    },
+                    (actions, _) => actions,
                 }
             }
-            _ => false,
+            (true, false) => {
+                self.pos = actions_end;
+                actions
+            }
+            (false, true) => {
+                self.pos = elements_end;
+                elements
+            }
+            (false, false) => {
+                let first = |errors: &[crate::diagnostics::CompileError]| match errors.first() {
+                    Some(crate::diagnostics::CompileError::UnexpectedToken {
+                        expected, ..
+                    }) => expected.clone(),
+                    _ => "something else".to_string(),
+                };
+                let span =
+                    self.span_from(self.tokens.get(start.0).map_or(self.cur_span(), |t| t.1));
+                self.pos = actions_end.max(elements_end);
+                self.errors
+                    .push(crate::diagnostics::CompileError::BlockFitsNeither {
+                        span,
+                        as_actions: first(&actions_errors),
+                        as_elements: first(&elements_errors),
+                    });
+                Expr::Error(span)
+            }
         }
     }
 
@@ -886,6 +924,7 @@ impl Parser<'_> {
                     params: Vec::new(),
                     types: Vec::new(),
                     body,
+                    slot: None,
                     span: self.span_from(start),
                 };
             }
@@ -915,6 +954,7 @@ impl Parser<'_> {
                 params,
                 types,
                 body,
+                slot: None,
                 span: self.span_from(start),
             };
         }
@@ -951,6 +991,7 @@ impl Parser<'_> {
             types: vec![None; params.len()],
             params,
             body,
+            slot: None,
             span: self.span_from(start),
         }
     }
@@ -991,6 +1032,7 @@ impl Parser<'_> {
             types: vec![None; params.len()],
             params,
             body: Box::new(Expr::Block(stmts, span)),
+            slot: None,
             span,
         }
     }
@@ -1045,7 +1087,7 @@ impl Parser<'_> {
             } else {
                 None
             };
-            let value = self.parse_expr(0);
+            let value = self.parse_arg_value();
             args.push(Arg {
                 name,
                 value,

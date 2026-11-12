@@ -1199,6 +1199,29 @@ pub enum CompileError {
         /// Whether the parameter is a slot (a value was given) or not (a block was).
         wants_slot: bool,
     },
+    /// A `{ … }` argument that is neither a callback (a list of actions) nor a
+    /// block of elements (RFC-0062 §2). Which one it is depends on the
+    /// parameter it is given to, so both readings are tried and this says what
+    /// each expected.
+    BlockFitsNeither {
+        /// Source range of the block.
+        span: Span,
+        /// What reading it as actions expected at the first mistake.
+        as_actions: String,
+        /// What reading it as elements expected at the first mistake.
+        as_elements: String,
+    },
+    /// A layout attribute in a state block that names another element's
+    /// states or `focus_within` (RFC-0062 §5): states change what is painted,
+    /// and layout has been computed before them.
+    LayoutInStateBlock {
+        /// Source range of the attribute.
+        span: Span,
+        /// The attribute.
+        name: String,
+        /// The state the block is for, as written.
+        state: String,
+    },
     /// `none` compared with something that did not declare it (RFC-0062): only
     /// a parameter written `= none`, or `content`, can be absent.
     NoneNeedsOptional {
@@ -1399,6 +1422,8 @@ impl CompileError {
             | Self::BadBindingParam { span, .. }
             | Self::SlotArgument { span, .. }
             | Self::NoneNeedsOptional { span, .. }
+            | Self::BlockFitsNeither { span, .. }
+            | Self::LayoutInStateBlock { span, .. }
             | Self::UnknownStateTarget { span, .. }
             | Self::ArgumentTypeMismatch { span, .. }
             | Self::KeywordAsName { span, .. }
@@ -1523,6 +1548,8 @@ impl CompileError {
             | Self::BadBindingParam { span, .. }
             | Self::SlotArgument { span, .. }
             | Self::NoneNeedsOptional { span, .. }
+            | Self::BlockFitsNeither { span, .. }
+            | Self::LayoutInStateBlock { span, .. }
             | Self::UnknownStateTarget { span, .. }
             | Self::ArgumentTypeMismatch { span, .. }
             | Self::KeywordAsName { span, .. }
@@ -1649,6 +1676,8 @@ impl CompileError {
             Self::BadBindingParam { .. } => "BadBindingParam",
             Self::SlotArgument { .. } => "SlotArgument",
             Self::NoneNeedsOptional { .. } => "NoneNeedsOptional",
+            Self::BlockFitsNeither { .. } => "BlockFitsNeither",
+            Self::LayoutInStateBlock { .. } => "LayoutInStateBlock",
             Self::UnknownStateTarget { .. } => "UnknownStateTarget",
             Self::ArgumentTypeMismatch { .. } => "ArgumentTypeMismatch",
             Self::KeywordAsName { .. } => "KeywordAsName",
@@ -2238,6 +2267,20 @@ impl CompileError {
                     )
                 }
             }
+            Self::BlockFitsNeither {
+                as_actions,
+                as_elements,
+                ..
+            } => format!(
+                "this block is neither actions nor elements. As the actions of an `Fn` \
+                 parameter it expected {as_actions}; as the elements of a `Slot` parameter \
+                 it expected {as_elements}"
+            ),
+            Self::LayoutInStateBlock { name, state, .. } => format!(
+                "`{name}` is a layout attribute, and layout is computed before states: a \
+                 block on `{state}` only changes what is painted. Use `translate` or \
+                 `scale` to move or resize it on screen, or a `var` to change the layout"
+            ),
             Self::NoneNeedsOptional { name, .. } => format!(
                 "`{name}` cannot be compared with `none`: only a parameter declared with \
                  `= none` (`on_tap: Fn() = none`, `icon: Slot = none`), or `content`, can be \
@@ -2245,8 +2288,8 @@ impl CompileError {
             ),
             Self::UnknownStateTarget { name, hint, .. } => with_hint(
                 format!(
-                    "no element named `{name}` comes before this block: tag one with \
-                     `as {name}` earlier in the view"
+                    "no element in this view is tagged `as {name}`: tag the element \
+                     whose states this block follows with `as {name}`"
                 ),
                 hint.as_deref(),
             ),

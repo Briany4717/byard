@@ -134,7 +134,12 @@ pub(crate) fn expr(e: &mut Expr, f: &mut dyn FnMut(&mut Expr)) {
                 arg(a, f);
             }
         }
-        Expr::Lambda { body, .. } => expr(body, f),
+        Expr::Lambda { body, slot, .. } => {
+            for m in slot.iter_mut().flatten() {
+                member_exprs(m, f);
+            }
+            expr(body, f);
+        }
         Expr::Assign { target, value, .. } => {
             expr(target, f);
             expr(value, f);

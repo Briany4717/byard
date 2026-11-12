@@ -1224,7 +1224,7 @@ impl<'a> Parser<'a> {
                 span: self.span_from(start),
             })
         } else if self.eat(&Token::Colon) {
-            let value = self.parse_expr(0);
+            let value = self.parse_arg_value();
             Some(Attr {
                 name,
                 axis: None,

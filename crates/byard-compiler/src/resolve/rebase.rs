@@ -276,8 +276,13 @@ fn shift_expr(expr: &mut Expr, delta: u32) {
                 shift_arg(arg, delta);
             }
         }
-        Expr::Lambda { body, span, .. } => {
+        Expr::Lambda {
+            body, span, slot, ..
+        } => {
             shift(span, delta);
+            for m in slot.iter_mut().flatten() {
+                shift_member(m, delta);
+            }
             shift_expr(body, delta);
         }
         Expr::SlotBlock { members, span } => {

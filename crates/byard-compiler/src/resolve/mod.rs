@@ -1349,10 +1349,16 @@ impl Resolver<'_> {
                     _ => None,
                 }));
         for value in slot_values {
-            if let Expr::SlotBlock { members, .. } = value {
-                for child in members {
-                    self.rewrite_member(child, pkg_name, local, aliases, bare, errors);
-                }
+            let members = match value {
+                Expr::SlotBlock { members, .. }
+                | Expr::Lambda {
+                    slot: Some(members),
+                    ..
+                } => Some(members),
+                _ => None,
+            };
+            for child in members.into_iter().flatten() {
+                self.rewrite_member(child, pkg_name, local, aliases, bare, errors);
             }
         }
     }

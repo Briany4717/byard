@@ -632,10 +632,10 @@ pub enum CompileError {
         /// The closest known curve name, if any.
         hint: Option<String>,
     },
-    /// A `with` clause attached an animation to a layout-affecting property
-    /// (`width`/`height`/`p`/`m`/`gap`/…), which cannot animate on the GPU
-    /// because it would require a per-frame relayout (RFC-0010 §"Layout
-    /// properties").
+    /// A `with` clause attached an animation to a layout property that has no
+    /// motion: a keyword, a text shaping property, a flex share or a grid
+    /// placement. The sizes, the gap, and the padding and margin families do
+    /// move (RFC-0061); the message says why this one cannot.
     LayoutPropNotAnimatable {
         /// Source range of the animated attribute.
         span: Span,
@@ -2047,8 +2047,8 @@ impl CompileError {
                 with_hint(format!("unknown animation curve `{name}`"), hint.as_deref())
             }
             Self::LayoutPropNotAnimatable { prop, .. } => format!(
-                "`{prop}` is a layout property and cannot be animated with `with` \
-                 (it would relayout every frame); animate a `scale` transform instead"
+                "`{prop}` is a layout property and cannot be animated with `with`: {}",
+                layout_prop_reason(prop)
             ),
             Self::NotAStyle { .. } => "`..` can only spread a `style { … }` value".to_string(),
             Self::UnknownStyleState { name, hint, .. } => with_hint(
@@ -2393,6 +2393,31 @@ impl CompileError {
             headline = self.headline(),
             col1 = col + 1,
         )
+    }
+}
+/// Why a layout property has no motion, for `LayoutPropNotAnimatable`
+/// (RFC-0061), and what to animate instead.
+fn layout_prop_reason(prop: &str) -> &'static str {
+    match prop {
+        "align" | "justify" | "align_self" | "alignment" | "direction" | "anchor" | "axis"
+        | "anchor_edge" | "anchor_align" => {
+            "it is a keyword, and there is nothing between two keywords to move through; \
+             animate `width`, `height`, `gap`, a padding or a margin instead"
+        }
+        "size" | "typo" | "weight" | "font" | "wrap" => {
+            "it changes how the text is shaped, which would be redone every frame; \
+             animate a `scale` transform instead"
+        }
+        "grow" | "shrink" | "basis" => {
+            "it is a share of the free space among siblings; animate the `width` or \
+             `height` it divides instead"
+        }
+        "col" | "row" | "col_span" | "row_span" | "col_gap" | "row_gap" | "columns" | "rows"
+        | "at" => "it names a grid cell, track or position, not a length that can move",
+        _ => {
+            "it has no motion defined; animate `width`, `height`, `gap`, a padding or a \
+              margin, or a `scale` transform instead"
+        }
     }
 }
 

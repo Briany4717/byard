@@ -26,22 +26,58 @@ the transforms `translate`, `scale`, `rotate` and `origin`. Paint properties cha
 pixels inside a rectangle layout has already decided, so animating them costs no
 layout and runs on the GPU.
 
-It does not follow a *layout* property. `width`, `height`, `gap`, padding and the
-rest decide where other things go, so animating them would lay the screen out every
-frame. The checker refuses, and says what to do:
+It also follows the properties that size and space things: `width`, `height`, `gap`,
+padding (`p`, `pt`, `pr`, `pb`, `pl`) and margin (`m`, `mt`, `mr`, `mb`, `ml`, `mx`,
+`my`). These are real sizes, so what is laid out beside them moves too: a pressed
+button can widen while its neighbours narrow. They cost a layout pass for as long as
+they move, on the frames they move and for the part of the tree they reach; once they
+settle they cost nothing. A paragraph whose width moves is re-wrapped every frame, so
+for that, and for anything that should not push its neighbours, animate `scale`.
+
+```byld
+View Main() {
+    var wide = false
+    Box #[width: wide ? 200 : 80 with anim.spring(), height: 20, bg: 0x6750A4] {
+        on pressed { height: 28 with anim.spring() }
+    }
+}
+```
+
+A layout property inside `on pressed`, `on hover` and the other states moves its box
+like any other, and a held Space or Enter shows it as the pointer does. Mind that a
+state that moves the box away from the pointer ends itself: `on hover` that shrinks the
+box under the pointer's edge will flicker; `pressed` keeps until release.
+
+The rest of the layout properties have no motion, and the checker says which and why:
 
 ```byld,fails
 View Main() {
-    var wide = false
-    Box #[width: wide ? 200 : 80 with anim.spring(), height: 20] {}
+    var on = false
+    Box #[grow: on ? 2 : 1 with anim.spring(), height: 20] {}
 }
 ```
 
 ```diagnostic
-error[LayoutPropNotAnimatable]: `width` is a layout property and cannot be animated
+error[LayoutPropNotAnimatable]: `grow` is a layout property and cannot be animated with `with`: it is a share of the free space among siblings; animate the `width` or `height` it divides instead
 ```
 
-To grow or shrink something smoothly, animate its `scale`.
+### Corners and spacing, slot by slot
+
+A `radius`, `p` or `m` tuple takes any expression in each slot, a `?:` between a tuple
+and a number (or two tuples), and `with`, after which each slot moves on the curve by
+itself:
+
+```byld
+View Main() {
+    var open = false
+    var joined = false
+    Column {
+        Box #[radius: (open ? 4 : 20, 20, 20, open ? 4 : 20) with anim.spring(), width: 80, height: 40] {}
+        Box #[radius: joined ? (4, 4, 0, 0) : 4, width: 80, height: 40] {}
+        Row #[p: (8, open ? 16 : 8) with anim.spring()] {}
+    }
+}
+```
 
 `with` has the lowest precedence of the expression operators short of assignment, so
 `on ? a : b with anim.spring()` animates the whole choice.

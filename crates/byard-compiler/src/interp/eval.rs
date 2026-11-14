@@ -848,6 +848,12 @@ pub struct Interpreter {
     /// Whether an `on measure` ran during the last [`render`](Self::render).
     /// Its writes land after layout, so only the next frame shows them.
     measure_fired: bool,
+    /// The [`frame_seq`](Self::frame_seq) on which an `on measure` fired for
+    /// the first time for its element, `0` before any. What it wrote is drawn
+    /// on the next frame, where an animation that has not moved yet takes the
+    /// new target as its start: a first measurement is where the element is,
+    /// not a change to move to.
+    first_measure_seq: u64,
     /// The program's top-level functions (RFC-0002), by canonical name, as
     /// entries of `fn_table`. Rebuilt by [`Self::load_views`].
     top_fns: std::collections::HashMap<Symbol, super::env::AstId>,

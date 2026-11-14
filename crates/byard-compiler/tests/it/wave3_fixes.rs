@@ -19,6 +19,7 @@ struct App {
     interp: Interpreter,
     tree: Vec<RenderNode>,
     frame: RenderFrame,
+    now: u32,
 }
 
 impl App {
@@ -39,6 +40,7 @@ impl App {
             interp,
             tree,
             frame: RenderFrame::new(),
+            now: 0,
         };
         app.render();
         app
@@ -53,7 +55,14 @@ impl App {
             .collect()
     }
 
+    /// Moves the clock on by `ms` and draws one frame.
+    fn advance(&mut self, ms: u32) {
+        self.now += ms;
+        self.render();
+    }
+
     fn render(&mut self) {
+        self.interp.set_now_ms(self.now);
         self.interp.tick();
         self.frame.clear();
         self.frame.set_access_wanted(true);
@@ -84,6 +93,7 @@ impl App {
     }
 
     /// Where the solid box painted `rgb` is drawn: its layout rect moved by its translate.
+    #[allow(dead_code)]
     fn drawn(&self, rgb: u32) -> [f32; 4] {
         let r = self.rect(rgb);
         let t = self
@@ -119,6 +129,7 @@ impl App {
     }
 }
 
+#[allow(dead_code)]
 fn near(a: f32, b: f32) -> bool {
     (a - b).abs() < 1.0
 }
@@ -203,4 +214,55 @@ fn a_name_tagged_in_a_when_is_visible_to_attributes_outside_it() {
     assert!(app.errors().is_empty(), "{:?}", app.errors());
     let text = app.frame.access().unwrap().to_text();
     assert!(!text.contains("described_by"), "{text}");
+}
+
+// ── 31. the first measured value lands without motion ────────────────────
+
+const MEASURED: &str = "View Main() {
+    var w = 0.0
+    Column #[width: 120] {
+        Row #[width: 120, height: 10] {
+            on measure => { w = it.w }
+        }
+        Box #[height: 6, bg: 0xFF0000, width: w with t.springSpatialFast] {}
+    }
+}";
+
+#[test]
+fn a_value_the_first_measure_writes_lands_without_motion() {
+    let mut app = App::new(MEASURED);
+    assert!(app.errors().is_empty(), "{:?}", app.errors());
+    for _ in 0..4 {
+        app.advance(16);
+    }
+    // The frame after the measure shows the measured width at once.
+    let first = app.rect(0xFF0000)[2];
+    assert!(near(first, 120.0), "{first}");
+}
+
+#[test]
+fn a_later_measure_still_moves() {
+    let mut app = App::new(
+        "View Main() {
+            var w = 0.0
+            var wide = false
+            Column {
+                Row #[width: wide ? 200 : 100, height: 10] {
+                    on measure => { w = it.w }
+                }
+                Box #[height: 6, bg: 0xFF0000, width: w with t.springSpatialFast] {}
+                Box #[width: 10, height: 10, bg: 0x0000FF, tap => wide = true] {}
+            }
+        }",
+    );
+    for _ in 0..40 {
+        app.advance(16);
+    }
+    assert!(near(app.rect(0xFF0000)[2], 100.0));
+    app.tap((5.0, 20.0));
+    for _ in 0..2 {
+        app.advance(16);
+    }
+    let mid = app.rect(0xFF0000)[2];
+    assert!(mid > 100.0 && mid < 200.0, "{mid}");
 }

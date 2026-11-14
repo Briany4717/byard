@@ -814,6 +814,10 @@ impl Interpreter {
         }
         let packed = pack_curve(spec.curve);
         let now = self.now_ms;
+        // The frame after an element is measured for the first time: what it
+        // wrote is where the element is, so an animation still on its first
+        // value starts from there and does not travel from the placeholder.
+        let measured = self.first_measure_seq != 0 && self.frame_seq == self.first_measure_seq + 1;
         let motion = self
             .animations
             .entry(key)
@@ -826,7 +830,11 @@ impl Interpreter {
         // Retarget on a goal change: reseed `from` to where the property
         // actually is right now (interruptible spring), restart the clock.
         if (motion.to - target_val).abs() > f32::EPSILON {
-            let current = motion.sample(now);
+            let current = if measured && motion.from == motion.to {
+                target_val
+            } else {
+                motion.sample(now)
+            };
             motion.from = current;
             motion.to = target_val;
             motion.start_ms = now;

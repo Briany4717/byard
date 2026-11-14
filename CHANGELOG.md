@@ -140,6 +140,7 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **The first `on measure` of an element lands without motion.** A value it wrote (a tab indicator's width and position, a line's length) used to spring from its starting 0 on the first frame; now the first measurement is drawn where it is, and later changes move as before.
 - **`a11y_described_by` reaches a bare `Text`, and a name tagged inside a `when`.** `Text("…") as tip` gave the reader nothing to point at, and an `as` in a `when` branch was `UnknownStateTarget` for an attribute outside it; it now describes while the branch is shown.
 - **`none` in a `?:` arm is none.** `provide C(color: on ? 0xFF0000 : none)` and `Pill(color: on ? red : none)` gave a `Color?` the text "none", which `!= none` took as present and drew as colour 0.
 - **`after` and `every` run in `byard shot` and `byard test`.** They followed the app clock only in `App::shot`; the command line never armed them, so a snackbar's timeout or a ticking clock stayed where it started however long a `--wait`, `--at` or `wait` step was. Skipping idle frames stops at the next timer, so it fires on the frame it is due.

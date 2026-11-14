@@ -174,6 +174,9 @@ impl Interpreter {
             if slot.fired_frame == frame || slot.last == Some(size) {
                 continue;
             }
+            if slot.last.is_none() {
+                self.first_measure_seq = frame;
+            }
             let flipped_back = slot.prev == Some(size);
             slot.prev = slot.last;
             slot.last = Some(size);

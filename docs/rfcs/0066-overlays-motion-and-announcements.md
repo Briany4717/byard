@@ -3,7 +3,7 @@
 - **Status:** Accepted
 - **Author(s):** Briany4717
 - **Created:** 2026-11-14
-- **Last updated:** 2026-11-14
+- **Last updated:** 2026-11-14 (what the build found: focus returns when an overlay starts to leave; rows leave from the tail; a pair moves on a plain curve)
 - **Depends on:** RFC-0010 (implicit animations and `from:`), RFC-0017 (overlays,
   scrims and the focus trap), RFC-0025 (`anim.stagger`), RFC-0036 (anchored
   overlays and light dismiss), RFC-0042 (the accessibility tree), RFC-0052 and
@@ -150,7 +150,7 @@ changes, after what it is saying now. `assertive` interrupts. `a11y_value_min`,
   opened by a press, the same rule as a Tab after a click (RFC-0052).
 - **While mounted**, Tab and Shift-Tab cycle inside the topmost scope (RFC-0017's
   trap, extended to the non-modal scopes).
-- **On unmount** (including after an `on leave` ends), focus returns to the
+- **On unmount** (when the overlay goes, or, with an `on leave`, when it starts to leave: a leaving element takes no input, so focus on it would be somewhere no key reaches for the length of the motion), focus returns to the
   return target if it is still drawn and focusable; otherwise to the nearest
   focusable ancestor of where it was; otherwise it is cleared.
 - **`autofocus: Bool`** is accepted on any element that can take focus. On one
@@ -181,7 +181,7 @@ changes, after what it is saying now. `assertive` interrupts. `a11y_value_min`,
   starts at that value and moves to its resolved value with the attribute's `with`
   (or instantly without one). An element without `on enter` is unchanged.
 - **Leave.** When the element is removed (its `when` turns false, its `for` row
-  goes, its overlay closes), it is kept in a *leaving* list with its last layout
+  goes, its overlay closes; rows of a `for` are positional, so it is the last rows that leave), it is kept in a *leaving* list with its last layout
   and its subtree. The attributes in `on leave` move to those values with their
   `with`. When every one of them has settled, it is removed. A leaving element
   draws where it was, takes no input, is skipped by Tab and hit-testing, and is not
@@ -191,6 +191,10 @@ changes, after what it is saying now. `assertive` interrupts. `a11y_value_min`,
   token (`with t.springSpatialFast`) and `anim.stagger(token, step, i)` need no
   `from:`. `InvalidAnimation`'s message points to `on enter` when a token is given
   `from:`.
+- **Plain curves move pairs.** A `with` after a pair (`translate`, `scale`) with a
+  plain curve or a token moves each axis; until now only a delayed or staggered one
+  did. A delayed, staggered or repeating `with` with no `from:` starts from the
+  target it had before, so `on enter`'s start value is all a token or a stagger needs.
 - **Cost.** Nothing for an element without these blocks. A leaving element is
   drawn from its retained instances for as long as its motion runs.
 

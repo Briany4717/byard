@@ -473,6 +473,19 @@ mod tests {
     }
 
     #[test]
+    fn a_live_region_and_a_description_reach_accesskit() {
+        let mut said = element(1, None, AccessRole::Label, "Saved");
+        said.live = AccessLive::Assertive;
+        let mut field = element(2, None, AccessRole::Group, "Field");
+        field.described_by = Some(AccessId(1));
+        let update = TreeSender::default()
+            .update(&tree(vec![said, field]), &window())
+            .expect("a first tree is always sent");
+        assert_eq!(find(&update, 1).live(), Some(Live::Assertive));
+        assert_eq!(find(&update, 2).described_by(), &[node_id(AccessId(1))]);
+    }
+
+    #[test]
     fn a_first_update_is_the_whole_tree_under_the_window() {
         let mut button = element(0, None, AccessRole::Button, "Save");
         button.actions.insert(AccessActions::PRESS);

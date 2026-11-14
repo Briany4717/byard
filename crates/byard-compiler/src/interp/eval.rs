@@ -499,6 +499,7 @@ pub(crate) struct SlotSource {
 
 /// The RFC-0062 state features lowering found in use.
 #[derive(Debug, Default, Clone, Copy)]
+#[allow(clippy::struct_excessive_bools)]
 pub(crate) struct StateUses {
     /// A state block names `focus_within`.
     pub(crate) focus_within: bool,
@@ -506,6 +507,8 @@ pub(crate) struct StateUses {
     pub(crate) enter: bool,
     /// An element has an `on leave` block (RFC-0066).
     pub(crate) leave: bool,
+    /// An element is tagged `as name` (RFC-0062, RFC-0066).
+    pub(crate) names: bool,
 }
 
 /// The slots one view instance was called with (RFC-0062): for each `Slot`

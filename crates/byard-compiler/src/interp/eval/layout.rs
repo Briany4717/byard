@@ -898,7 +898,11 @@ impl Interpreter {
             navs: &self.nav_pools,
         };
         let p = &self.when_pools[pool];
-        let branch = if then { p.then.as_ref() } else { p.els.as_ref() };
+        let branch = if then {
+            p.then.as_ref()
+        } else {
+            p.els.as_ref()
+        };
         branch.is_some_and(|nodes| has_leave_block(nodes, &pools))
     }
 

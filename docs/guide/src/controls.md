@@ -402,6 +402,14 @@ Space selects, and a tab that should select as focus arrives says `focus =>`. Th
 draw the ring, like Tab. [Accessibility](accessibility.md) has the roles and what each
 attribute tells a reader.
 
+## Moving focus yourself
+
+`autofocus: true` names the element focus goes to when its [overlay opens](layout.md#where-focus-goes);
+on one that is not in an overlay it takes focus the first time it is drawn, if nothing has it. It
+is `AutofocusNeedsFocus` on an element nothing can focus. `focused: v` goes both ways: a write of
+`true` to `v` focuses the element if it can take focus and is drawn, `false` blurs it, and when
+several are written in one frame the last wins.
+
 ## Disabled, focused, invalid
 
 Any control can say `disabled: true`, and it stops taking input and shows its

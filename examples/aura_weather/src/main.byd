@@ -121,7 +121,7 @@ View Main() {
     when open {
         Overlay #[modal: false] {
             Column #[
-                anchor_to: "searchField",
+                anchor_to: searchField,
                 anchor_edge: below,
                 anchor_gap: 6,
                 width: match(searchField),

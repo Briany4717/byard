@@ -1299,6 +1299,14 @@ pub enum CompileError {
         /// it was not a state block.
         attr: Option<String>,
     },
+    /// `anchor_to: "name"`, a text looked up in the whole window, where the name
+    /// itself would reach this view's own element (RFC-0066 §5). A warning.
+    AnchorToText {
+        /// Source range of the text.
+        span: Span,
+        /// The name it holds.
+        name: String,
+    },
     /// Two `on enter` (or two `on leave`) blocks on one element (RFC-0066 §3):
     /// an element has one way of arriving and one of going.
     DuplicateStateBlock {
@@ -1422,6 +1430,7 @@ impl CompileError {
             | Self::AutofocusNeedsFocus { span, .. }
             | Self::AttributeNeedsRole { span, .. }
             | Self::DuplicateStateBlock { span, .. }
+            | Self::AnchorToText { span, .. }
             | Self::EventHasNoValue { span, .. }
             | Self::WrongAttributeSeparator { span, .. }
             | Self::ArityMismatch { span, .. }
@@ -1555,6 +1564,7 @@ impl CompileError {
             | Self::AutofocusNeedsFocus { span, .. }
             | Self::AttributeNeedsRole { span, .. }
             | Self::DuplicateStateBlock { span, .. }
+            | Self::AnchorToText { span, .. }
             | Self::EventHasNoValue { span, .. }
             | Self::WrongAttributeSeparator { span, .. }
             | Self::ArityMismatch { span, .. }
@@ -1690,6 +1700,7 @@ impl CompileError {
             Self::AutofocusNeedsFocus { .. } => "AutofocusNeedsFocus",
             Self::AttributeNeedsRole { .. } => "AttributeNeedsRole",
             Self::DuplicateStateBlock { .. } => "DuplicateStateBlock",
+            Self::AnchorToText { .. } => "AnchorToText",
             Self::EventHasNoValue { .. } => "EventHasNoValue",
             Self::WrongAttributeSeparator { .. } => "WrongAttributeSeparator",
             Self::ArityMismatch { .. } => "ArityMismatch",
@@ -1809,6 +1820,7 @@ impl CompileError {
                 | Self::UncheckableInject { .. }
                 | Self::MixedTernaryPrecedence { .. }
                 | Self::IconNameNotStatic { .. }
+                | Self::AnchorToText { .. }
         )
     }
 
@@ -1918,6 +1930,11 @@ impl CompileError {
                 "`{attr}` is the range of a value, and only a `slider` or a `progress_bar` \
                  has one: add `a11y_role: slider` (or `progress_bar`) to this element, or \
                  drop the attribute"
+            ),
+            Self::AnchorToText { name, .. } => format!(
+                "`anchor_to: \"{name}\"` is looked up among every `as` in the window, so two \
+                 copies of a view share one name; write `anchor_to: {name}` to point at the \
+                 element tagged `as {name}` in this view"
             ),
             Self::DuplicateStateBlock { state, .. } => format!(
                 "an element has one `on {state}` block: write the values together in the \

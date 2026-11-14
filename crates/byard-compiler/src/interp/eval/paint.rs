@@ -537,8 +537,11 @@ impl Interpreter {
                     if let Some(name) = anchor_name {
                         let tl = inherited_transform.apply_point([rect.x, rect.y]);
                         let landed = crate::interp::intrinsics::Rect::new(
-                            tl[0] + scroll_shift.0,
-                            tl[1] + scroll_shift.1,
+                            // The transform already carries the scroll and the
+                            // overlay's shift; adding `scroll_shift` as well,
+                            // which rides the same two, counted them twice.
+                            tl[0],
+                            tl[1],
                             rect.width * inherited_transform.scale[0],
                             rect.height * inherited_transform.scale[1],
                         );

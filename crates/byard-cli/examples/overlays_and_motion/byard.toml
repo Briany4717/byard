@@ -1,0 +1,3 @@
+[project]
+name = "overlays_and_motion"
+entry = "src/main.byd"

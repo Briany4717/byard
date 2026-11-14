@@ -13,10 +13,10 @@ use super::Interpreter;
 use super::layout::collect_pools;
 use super::props::spacing_value;
 use crate::diagnostics::Span;
-use byard_core::frame::RepeatMode;
 use crate::interp::env::Value;
 use crate::parser::ast::Expr;
 use crate::symbol::Symbol;
+use byard_core::frame::RepeatMode;
 
 /// Settling thresholds for the CPU-sampled animation path (RFC-0010).
 ///
@@ -774,6 +774,21 @@ impl Interpreter {
             Value::Tuple(items) if !spec.is_plain() => {
                 return self.eval_looped_pair(items, &spec, key);
             }
+            // RFC-0066: a pair moves on a plain curve too, each axis on a motion
+            // of its own, so `translate: (0, 0) with t.springSpatialFast` and the
+            // `on enter` and `on leave` that start and end it are motion and not
+            // a jump.
+            Value::Tuple(mut items) => {
+                if items.iter().any(|(_, v)| spacing_value(v).is_none()) {
+                    return Value::Tuple(items);
+                }
+                for (axis, (_, v)) in items.iter_mut().enumerate() {
+                    let to = spacing_value(v).unwrap_or_default();
+                    let part = u8::try_from(axis + 1).unwrap_or(4).min(4);
+                    *v = Value::Float(f64::from(self.animate_f32(to, &spec, key.part(part))));
+                }
+                return Value::Tuple(items);
+            }
             // Anything else can't be interpolated, pass it through untouched
             // (the checker already restricts `with` to numeric props).
             other => return other,
@@ -895,7 +910,12 @@ impl Interpreter {
     /// arrives at a value (`on enter` gave it the first) moves from that value
     /// to its own, whatever the curve's delay or stagger. The target itself while
     /// it has not changed, which is what an animation with no `from:` always did.
-    fn remembered_start(&mut self, key: AnimKey, target: f32, curve: byard_core::frame::MotionCurve) -> f32 {
+    fn remembered_start(
+        &mut self,
+        key: AnimKey,
+        target: f32,
+        curve: byard_core::frame::MotionCurve,
+    ) -> f32 {
         let now = self.now_ms;
         let m = self
             .animations

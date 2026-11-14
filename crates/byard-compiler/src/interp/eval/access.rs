@@ -800,10 +800,7 @@ impl Interpreter {
                 _ => AccessLive::Off,
             };
         }
-        if attrs
-            .iter()
-            .any(|a| a.name.as_str() == "a11y_described_by")
-        {
+        if attrs.iter().any(|a| a.name.as_str() == "a11y_described_by") {
             if let Some(uid) = self.element_ref(attrs, "a11y_described_by") {
                 node.described_by = self
                     .prev_elem_uids
@@ -826,9 +823,7 @@ impl Interpreter {
                         max,
                         step,
                     }) => (Some(*value), Some(*min), Some(*max), *step),
-                    Some(AccessValue::Text(t)) => {
-                        (t.trim().parse::<f64>().ok(), None, None, None)
-                    }
+                    Some(AccessValue::Text(t)) => (t.trim().parse::<f64>().ok(), None, None, None),
                     _ => (None, None, None, None),
                 };
                 let min = min.or(was_min).unwrap_or(0.0);

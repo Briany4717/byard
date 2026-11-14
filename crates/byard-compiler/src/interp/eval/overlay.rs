@@ -357,7 +357,9 @@ impl Interpreter {
         }
         let target = match self.element_ref(attrs, "anchor_to") {
             Some(uid) => Some(AnchorTarget::Element(uid)),
-            None => self.eval_str_prop(attrs, "anchor_to").map(AnchorTarget::Name),
+            None => self
+                .eval_str_prop(attrs, "anchor_to")
+                .map(AnchorTarget::Name),
         };
         self.env.truncate(base);
         target
@@ -915,7 +917,12 @@ impl Interpreter {
             let [crate::parser::ast::StrPart::Text(name)] = parts.as_slice() else {
                 continue;
             };
-            if !declared.iter().any(|d| d == name) {
+            if declared.iter().any(|d| d == name) {
+                errors.push(CompileError::AnchorToText {
+                    span: *span,
+                    name: name.clone(),
+                });
+            } else {
                 errors.push(CompileError::UnknownAnchor {
                     span: *span,
                     name: name.clone(),

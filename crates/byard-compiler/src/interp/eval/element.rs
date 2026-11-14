@@ -81,11 +81,13 @@ impl Interpreter {
         // RFC-0066: an `on enter` needs the element to be told apart from the
         // same one on the frame before, which a canvas or a package's native
         // view cannot be. Said, not dropped.
-        if el.name.as_str() == "Canvas" || byard_core::render::registry::info(el.name.as_str()).is_some() {
-            if let Some(block) = state_blocks
-                .iter()
-                .find(|b| b.states.contains(&crate::parser::ast::StyleStateKind::Enter))
-            {
+        if el.name.as_str() == "Canvas"
+            || byard_core::render::registry::info(el.name.as_str()).is_some()
+        {
+            if let Some(block) = state_blocks.iter().find(|b| {
+                b.states
+                    .contains(&crate::parser::ast::StyleStateKind::Enter)
+            }) {
                 self.errors.push(CompileError::InvalidAttributeCombination {
                     span: block.span,
                     message: format!(

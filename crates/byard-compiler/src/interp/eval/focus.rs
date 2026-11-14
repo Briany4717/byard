@@ -146,7 +146,8 @@ impl Interpreter {
                 .iter()
                 .filter_map(|u| self.index_of_uid(*u))
                 .find(|i| self.router.is_focusable_now(*i));
-            self.router.move_focus(&mut self.ctx, target, visible && target.is_some());
+            self.router
+                .move_focus(&mut self.ctx, target, visible && target.is_some());
             moved = true;
         }
 
@@ -167,7 +168,8 @@ impl Interpreter {
             // With nothing in it to go to, focus is cleared, so the keys go to
             // the scope and not to the page behind it.
             let entry = self.router.scope_entry(scope);
-            self.router.move_focus(&mut self.ctx, entry, visible && entry.is_some());
+            self.router
+                .move_focus(&mut self.ctx, entry, visible && entry.is_some());
             moved = true;
         }
 

@@ -506,11 +506,7 @@ impl Interpreter {
     }
 
     /// The element indices of everything laid out inside `node`.
-    fn collect_subtree(
-        &self,
-        node: byard_core::atlas::layout::AtlasNodeId,
-        out: &mut Vec<u32>,
-    ) {
+    fn collect_subtree(&self, node: byard_core::atlas::layout::AtlasNodeId, out: &mut Vec<u32>) {
         for child in self.atlas.children(node) {
             out.extend(self.atlas.node_index(child));
             self.collect_subtree(child, out);

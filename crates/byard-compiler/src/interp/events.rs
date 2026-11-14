@@ -639,13 +639,13 @@ impl EventRouter {
     /// would reach in it, `None` when it holds nothing focus can go to.
     #[must_use]
     pub fn scope_entry(&self, scope: &Scope) -> Option<u32> {
-        let inside = &self.focusables[scope.first.min(self.focusables.len())
-            ..scope.end.min(self.focusables.len())];
-        if let Some(marked) = self
-            .autofocus
-            .iter()
-            .find(|a| inside.iter().any(|f| f.elem == **a && !self.disabled.contains(&f.elem)))
-        {
+        let inside = &self.focusables
+            [scope.first.min(self.focusables.len())..scope.end.min(self.focusables.len())];
+        if let Some(marked) = self.autofocus.iter().find(|a| {
+            inside
+                .iter()
+                .any(|f| f.elem == **a && !self.disabled.contains(&f.elem))
+        }) {
             return Some(*marked);
         }
         self.tab_stops(scope.first).first().copied()
@@ -679,7 +679,8 @@ impl EventRouter {
     /// that are focusable this frame.
     #[must_use]
     pub fn scope_holds(&self, scope: &Scope, elem: u32) -> bool {
-        self.focusables[scope.first.min(self.focusables.len())..scope.end.min(self.focusables.len())]
+        self.focusables
+            [scope.first.min(self.focusables.len())..scope.end.min(self.focusables.len())]
             .iter()
             .any(|f| f.elem == elem)
     }
@@ -1437,8 +1438,9 @@ impl EventRouter {
                     // RFC-0066 §2: Right opens the submenu of a menu item that
                     // has one, and Left closes the one focus is in.
                     if key == "ArrowRight" {
-                        if let Some(opener) =
-                            self.focused.filter(|f| self.submenu_openers.contains(&(*f, true)))
+                        if let Some(opener) = self
+                            .focused
+                            .filter(|f| self.submenu_openers.contains(&(*f, true)))
                         {
                             self.fire_on_elem(ctx, Some(opener), EventKind::Tap, ev.pos, None);
                             return;
@@ -1600,7 +1602,14 @@ impl EventRouter {
         let old = self.focused;
         self.focused = new;
         // RFC-0066 §5: and for the elements it is inside of.
-        self.cross(ctx, EventKind::FocusIn, EventKind::FocusOut, old, new, (0.0, 0.0));
+        self.cross(
+            ctx,
+            EventKind::FocusIn,
+            EventKind::FocusOut,
+            old,
+            new,
+            (0.0, 0.0),
+        );
     }
 
     /// Whether `x` is `listener` or inside it (RFC-0066 §5).

@@ -38,7 +38,8 @@ impl App {
         self.interp.tick();
         self.frame.clear();
         self.frame.set_access_wanted(true);
-        self.interp.render(&self.tree, &mut self.frame, 400.0, 400.0);
+        self.interp
+            .render(&self.tree, &mut self.frame, 400.0, 400.0);
     }
 
     /// Frames, `ms` apart, until `total` has passed.
@@ -50,7 +51,12 @@ impl App {
         }
     }
 
-    fn ev(&mut self, kind: EventKind, payload: Option<InputPayload>, pos: (f32, f32)) -> InputEvent {
+    fn ev(
+        &mut self,
+        kind: EventKind,
+        payload: Option<InputPayload>,
+        pos: (f32, f32),
+    ) -> InputEvent {
         self.t += 10;
         InputEvent {
             kind,
@@ -63,8 +69,16 @@ impl App {
     }
 
     fn key(&mut self, name: &str) {
-        let d = self.ev(EventKind::KeyDown, Some(InputPayload::Key(name.into())), (0.0, 0.0));
-        let u = self.ev(EventKind::KeyUp, Some(InputPayload::Key(name.into())), (0.0, 0.0));
+        let d = self.ev(
+            EventKind::KeyDown,
+            Some(InputPayload::Key(name.into())),
+            (0.0, 0.0),
+        );
+        let u = self.ev(
+            EventKind::KeyUp,
+            Some(InputPayload::Key(name.into())),
+            (0.0, 0.0),
+        );
         self.send(&[d, u]);
         self.send(&[]);
     }
@@ -335,7 +349,10 @@ fn a_leaving_element_comes_back_when_shown_again() {
     let mid = card_opacity(&app);
     app.tap(40.0, 15.0);
     let at_tap = card_opacity(&app);
-    assert!(at_tap <= mid && at_tap > 0.3, "from where it was: {mid} then {at_tap}");
+    assert!(
+        at_tap <= mid && at_tap > 0.3,
+        "from where it was: {mid} then {at_tap}"
+    );
     app.wait(32);
     let back = card_opacity(&app);
     assert!(back > at_tap, "turns round: {at_tap} then {back}");
@@ -397,11 +414,11 @@ View Main() {
 #[test]
 fn range_attributes_need_a_role_that_has_a_value() {
     let parsed = parse(
-        r#"
+        "
 View Main() {
     Box #[a11y_role: button, a11y_value_min: 0, width: 10, height: 10]
 }
-"#,
+",
     );
     let mut interp = Interpreter::new();
     let known: Vec<&str> = parsed.views.iter().map(|v| v.name.as_str()).collect();
@@ -424,10 +441,19 @@ fn the_diagnostics_are_raised() {
         let _ = interp.lower_view(&parsed.views[0], &known);
         format!("{:?}", interp.errors())
     };
-    assert!(check("View Main() { Box #[autofocus: true, width: 10, height: 10] }").contains("AutofocusNeedsFocus"));
-    assert!(check("View Main() { Box #[width: 10, height: 10] { on enter { width: 5 } } }").contains("LayoutInStateBlock"));
+    assert!(
+        check("View Main() { Box #[autofocus: true, width: 10, height: 10] }")
+            .contains("AutofocusNeedsFocus")
+    );
+    assert!(
+        check("View Main() { Box #[width: 10, height: 10] { on enter { width: 5 } } }")
+            .contains("LayoutInStateBlock")
+    );
     assert!(check("View Main() { Box #[width: 10, height: 10] { on enter { opacity: 0.0 } on enter { opacity: 0.5 } } }").contains("DuplicateStateBlock"));
-    assert!(check("View Main() { Box #[width: 10, height: 10, a11y_described_by: nothing] }").contains("UnknownStateTarget"));
+    assert!(
+        check("View Main() { Box #[width: 10, height: 10, a11y_described_by: nothing] }")
+            .contains("UnknownStateTarget")
+    );
 }
 
 const TIPS: &str = r#"
@@ -457,14 +483,24 @@ fn two_tooltips_anchor_to_their_own_targets_and_pointer_events_cross_a_wrapper()
     let mut app = App::new(TIPS);
     app.moved(20.0, 10.0);
     app.send(&[]);
-    let t1 = app.frame.texts().iter().find(|t| t.text == "tip-one").map(|t| t.x);
+    let t1 = app
+        .frame
+        .texts()
+        .iter()
+        .find(|t| t.text == "tip-one")
+        .map(|t| t.x);
     assert!(t1.is_some(), "the first tip shows");
     app.moved(300.0, 300.0);
     app.send(&[]);
     assert!(!app.frame.texts().iter().any(|t| t.text == "tip-one"));
     app.moved(100.0, 10.0);
     app.send(&[]);
-    let t2 = app.frame.texts().iter().find(|t| t.text == "tip-two").map(|t| t.x);
+    let t2 = app
+        .frame
+        .texts()
+        .iter()
+        .find(|t| t.text == "tip-two")
+        .map(|t| t.x);
     assert!(t2.is_some(), "the second shows");
     assert!(t2.unwrap() > t1.unwrap() + 40.0, "{t1:?} {t2:?}");
 }
@@ -484,10 +520,16 @@ View Main() {
 "#;
     let mut app = App::new(src);
     app.tap(50.0, 50.0);
-    assert!(app.frame.texts().iter().any(|t| t.text == "1:0"), "{:?}", app.frame.texts().iter().map(|t| t.text.clone()).collect::<Vec<_>>());
+    assert!(
+        app.frame.texts().iter().any(|t| t.text == "1:0"),
+        "{:?}",
+        app.frame
+            .texts()
+            .iter()
+            .map(|t| t.text.clone())
+            .collect::<Vec<_>>()
+    );
 }
-
-
 
 #[test]
 fn a_wrapper_over_a_slot_hears_the_crossings_once() {
@@ -518,6 +560,10 @@ View Wrap(bind ins: Int, bind outs: Int, content: Slot) {
     assert!(
         shown(&app),
         "{:?}",
-        app.frame.texts().iter().map(|t| t.text.clone()).collect::<Vec<_>>()
+        app.frame
+            .texts()
+            .iter()
+            .map(|t| t.text.clone())
+            .collect::<Vec<_>>()
     );
 }

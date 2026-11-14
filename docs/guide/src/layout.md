@@ -357,7 +357,7 @@ View Main() {
 
     when query != "" {
         Overlay #[modal: false] {
-            Box #[anchor_to: "searchField", anchor_edge: below, anchor_align: start,
+            Box #[anchor_to: searchField, anchor_edge: below, anchor_align: start,
                   anchor_gap: 6, width: match(searchField), bg: 0x1C2430, radius: 10, p: 10,
                   dismiss => query = ""] {
                 Text("Bucharest") #[color: 0xE7ECF2]
@@ -374,6 +374,50 @@ start (`anchor_align` is `start`, `center` or `end`), sits 6 pixels off
 (`anchor_gap`) and is as wide as the field (`width: match(searchField)`). If there
 is no room below, it flips above. `dismiss =>` here runs on a press outside both
 the panel and its anchor, and it needs an `anchor_to` on the same element.
+
+`anchor_to` takes the name itself, not a text. The name is looked up in the view the
+overlay is written in, so a view called a hundred times, a tooltip, anchors each copy to
+its own element and needs no name of its own. A text, `anchor_to: "searchField"`, still
+works and is looked up in the whole window; it is a warning, which points at the name
+form. A name no element is tagged with is `UnknownStateTarget`.
+
+### Where focus goes
+
+An overlay that is modal, or whose first element with a role is a `dialog` or a `menu`,
+is a focus scope. When it appears focus moves into it: to the element marked
+`autofocus: true`, else to the first one Tab would reach, else nowhere, so the keys go to
+the overlay and not to the page. Tab cycles inside it. When it goes, or starts to leave,
+focus goes back to the element that had it; if that is gone, to the nearest focusable
+element around where it was. A focus that moved by itself shows its ring only if the
+overlay was opened by a key. A tooltip, or a list of suggestions, is not a scope and
+leaves focus where it is.
+
+`Escape` dismisses the topmost overlay that has a `dismiss`, and only that one, so a
+submenu closes before its menu. `focused: v` goes both ways: writing `v = true` moves
+focus to the element, `v = false` takes it away.
+
+### Menus
+
+<!-- ignore: a piece of a larger view, with names it does not declare -->
+```byld,ignore
+Column #[a11y_role: menu] {
+    Button("Copy") #[a11y_role: menu_item] => copy()
+    Button("Share") #[a11y_role: menu_item, a11y_expanded: sub] as share => { sub = true }
+}
+```
+
+A `menu` is one Tab stop, entered at its selected item (`a11y_selected`), else the first.
+Up and Down move between its `menu_item`s and wrap, Home and End go to the ends, Enter and
+Space press. A menu written as a `Row` runs along Left and Right. A menu item that writes
+`a11y_expanded: false` opens a submenu with Right (or Enter); the submenu is an overlay
+with a `menu` in it, takes focus, and closes with Left or Escape, returning focus to the
+item.
+
+### Passing the pointer through
+
+`interactive: false` takes an element and what is in it out of hit-testing: presses,
+hover and the wheel go to what is under it. It is still drawn and still in the
+accessibility tree. A tooltip is one.
 
 ## Images and icons
 

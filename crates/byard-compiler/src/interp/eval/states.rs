@@ -457,6 +457,7 @@ impl Interpreter {
         let mut names = Vec::new();
         scan(members, &mut names);
         for name in names {
+            self.state_uses.names = true;
             let uid = self.fresh_elem_uid();
             self.env.push(
                 Symbol::intern(&format!("@{}", name.as_str())),

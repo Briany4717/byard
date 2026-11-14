@@ -9,7 +9,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::parser::ast::{ElementNode, EnumDecl, Expr, Member, Param, Type, ViewDecl};
+use crate::parser::ast::{ElementNode, EnumDecl, Expr, Member, Param, RecordDecl, Type, ViewDecl};
 use crate::symbol::Symbol;
 
 /// What a call needs to know about one parameter of the view it calls.
@@ -23,12 +23,32 @@ struct Slot {
 }
 
 /// Rewrites, in `views`, every `.case` that is the argument of a parameter
-/// typed with one of `enums`, and every parameter default of that kind.
-pub fn rewrite(views: &mut [ViewDecl], enums: &[EnumDecl]) {
+/// typed with one of `enums`, and every parameter default of that kind. The
+/// same for the fields of a context (RFC-0065): their defaults, and the values
+/// a `provide` gives them.
+pub fn rewrite(views: &mut [ViewDecl], enums: &[EnumDecl], records: &mut [RecordDecl]) {
     if enums.is_empty() {
         return;
     }
     let known: HashSet<&Symbol> = enums.iter().map(|e| &e.name).collect();
+    // The enum each context field is declared as.
+    let mut contexts: HashMap<Symbol, Vec<(Symbol, Symbol)>> = HashMap::new();
+    for record in records.iter_mut().filter(|r| r.context) {
+        let mut fields = Vec::new();
+        for field in &mut record.fields {
+            if let Type::Named { name, args, .. } = &field.ty {
+                if args.is_empty() && known.contains(name) {
+                    if let Some(default) = &mut field.default {
+                        case(default, name);
+                    }
+                    fields.push((field.name.clone(), name.clone()));
+                }
+            }
+        }
+        if !fields.is_empty() {
+            contexts.insert(record.name.clone(), fields);
+        }
+    }
     let slot = |p: &Param| Slot {
         name: p.name.clone(),
         enum_name: match &p.ty {
@@ -62,20 +82,41 @@ pub fn rewrite(views: &mut [ViewDecl], enums: &[EnumDecl]) {
                 case(default, &enum_name);
             }
         }
-        if !table.is_empty() {
+        if !table.is_empty() || !contexts.is_empty() {
             for member in &mut view.body {
-                walk(member, &table);
+                walk(member, &table, &contexts);
             }
         }
     }
 }
 
-fn walk(member: &mut Member, table: &HashMap<Symbol, Option<Vec<Slot>>>) {
+fn walk(
+    member: &mut Member,
+    table: &HashMap<Symbol, Option<Vec<Slot>>>,
+    contexts: &HashMap<Symbol, Vec<(Symbol, Symbol)>>,
+) {
     match member {
+        Member::Provide {
+            ty: Type::Named { name, .. },
+            fields,
+            ..
+        } => {
+            if let Some(declared) = contexts.get(name) {
+                for arg in fields {
+                    let wanted = arg
+                        .name
+                        .as_ref()
+                        .and_then(|n| declared.iter().find(|(f, _)| f == n));
+                    if let Some((_, enum_name)) = wanted {
+                        case(&mut arg.value, enum_name);
+                    }
+                }
+            }
+        }
         Member::Element(el) => {
             call(el, table);
             for child in &mut el.children {
-                walk(child, table);
+                walk(child, table, contexts);
             }
             let slot_values =
                 el.content
@@ -95,22 +136,22 @@ fn walk(member: &mut Member, table: &HashMap<Symbol, Option<Vec<Slot>>>) {
                     _ => None,
                 };
                 for m in members.into_iter().flatten() {
-                    walk(m, table);
+                    walk(m, table, contexts);
                 }
             }
         }
         Member::For { body, .. } | Member::Route { body, .. } => {
             for m in body {
-                walk(m, table);
+                walk(m, table, contexts);
             }
         }
         Member::When { then, els, .. } => {
             for m in then {
-                walk(m, table);
+                walk(m, table, contexts);
             }
             if let Some(els) = els {
                 for m in els {
-                    walk(m, table);
+                    walk(m, table, contexts);
                 }
             }
         }

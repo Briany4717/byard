@@ -154,6 +154,8 @@ pub(super) struct NavPool {
     /// The slots of the view instance the container was written in (see
     /// `WhenPool::slots`).
     slots: Option<std::rc::Rc<super::SlotFrame>>,
+    /// The contexts provided above the container (see `WhenPool::ctx`).
+    ctx: Option<std::rc::Rc<super::CtxNode>>,
     /// The view instance the container was written in (see `WhenPool::inst`).
     pub(super) inst: u32,
     /// The live history stack (a `NavHost`'s instantiated, preserved tabs).
@@ -434,6 +436,7 @@ impl Interpreter {
             known_views: known_views.iter().map(|s| (*s).to_string()).collect(),
             env_snapshot: self.capture_env_snapshot(),
             slots: self.slot_stack.last().cloned(),
+            ctx: self.ctx_chain.clone(),
             inst: self.cur_inst,
             entries: Vec::new(),
             current: 0,
@@ -653,12 +656,14 @@ impl Interpreter {
         if let Some(frame) = slots {
             self.slot_stack.push(frame);
         }
+        let outer_ctx = std::mem::replace(&mut self.ctx_chain, self.nav_pools[pool].ctx.clone());
         self.ctx.push_scope_tracker();
         let nodes = self.lower_scope(&body, &known_refs);
         let scopes = self.ctx.pop_scope_tracker();
         if pushed {
             self.slot_stack.pop();
         }
+        self.ctx_chain = outer_ctx;
         self.nav_depth -= 1;
         self.cur_inst = enclosing;
         self.env.truncate(env_base);

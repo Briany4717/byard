@@ -196,8 +196,8 @@ pub fn handle_completion(doc: &Document, pos: Position) -> Option<CompletionResp
     let mut items = Vec::new();
 
     let keywords = &[
-        "use", "var", "let", "fn", "inject", "for", "in", "when", "else", "style", "route", "tab",
-        "enum", "private",
+        "use", "var", "let", "fn", "inject", "provide", "context", "for", "in", "when", "else",
+        "style", "route", "tab", "enum", "private",
     ];
     for kw in keywords {
         items.push(CompletionItem {

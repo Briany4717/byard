@@ -1,0 +1,67 @@
+// RFC-0065: a tab bar whose tabs read their container's context, an optional
+// colour, a group that keeps its own selection, and an indicator that slides
+// to the selected tab through `it.x`.
+
+context TabsStyle {
+    current: Int = 0
+    place: Fn(Int, Float, Float) = none
+    select: Fn(Int) = none
+}
+
+View Main() {
+    var page = 1
+    Column #[bg: 0x14141C, p: 24, gap: 24, width: 420] {
+        Tabs(bind: page) {
+            Tab("Flights", 0)
+            Tab("Hotels and stays", 1)
+            Tab("Cars", 2)
+        }
+        Row #[gap: 12] {
+            Pill("Default")
+            Pill("Tinted", color: 0x3B82F6)
+        }
+        Counter()
+    }
+}
+
+View Tabs(bind current: Int = 0, content) {
+    var ix: Float = 0.0
+    var iw: Float = 0.0
+    provide TabsStyle(current: current, select: {|i| current = i }, place: {|i, x, w|
+        ix = i == current ? x : ix
+        iw = i == current ? w : iw
+    })
+    Column {
+        Row { content }
+        Box #[width: iw, height: 3, translate.x: ix, bg: 0x3B82F6]
+    }
+}
+
+View Tab(label: Str, index: Int) {
+    inject TabsStyle as s
+    var tx: Float = 0.0
+    var tw: Float = 0.0
+    // A tab reports where it is when it moves, and again when the selection
+    // changes, so the indicator can slide to the one that is selected.
+    on change(s.current) => s.place(index, tx, tw)
+    Box #[p: 12, tap => s.select(index)] {
+        on measure => {
+            tx = it.x
+            tw = it.w
+            s.place(index, tx, tw)
+        }
+        Text(label) #[color: index == s.current ? 0xFFFFFF : 0x8A8AA0]
+    }
+}
+
+View Pill(label: Str, color: Color? = none) {
+    Box #[bg: color ?? 0x2A2A3A, p: 10, radius: 16] {
+        Text(label) #[color: 0xFFFFFF]
+    }
+}
+
+View Counter(bind n: Int = 0) {
+    Box #[bg: 0x2A2A3A, p: 12, radius: 8, tap => n = n + 1] {
+        Text("Taps: {n}") #[color: 0xFFFFFF]
+    }
+}

@@ -32,6 +32,14 @@ const fn numeric_literal(expr: &Expr) -> Option<Value> {
 /// Multiplies a colour's alpha by `opacity`, folds an element's effective
 /// opacity into the widget/text primitives it emits so a translucent control
 /// dims as a whole, not just its background (RFC-0011 T4 approximation).
+/// What `x == none` can be told at once, and what only reading says.
+enum NoneTest<'e> {
+    /// Known as the view is instantiated: given or not.
+    Static(bool),
+    /// A value to read: it is none when it reads as none.
+    Read(&'e Expr),
+}
+
 /// Evaluates one binary arithmetic operation (`+ - * /`, RFC-0020 enabler)
 /// with numeric promotion: Int∘Int → Int (division truncates), any Float
 /// operand → Float. Division by zero yields the zero of the promoted type and
@@ -566,9 +574,21 @@ impl Interpreter {
                 // `x != none` (RFC-0062): whether a slot or callback parameter
                 // was given is known when the view is instantiated.
                 if matches!(op, BinOp::Eq | BinOp::Ne) {
-                    if let Some(present) = self.none_test(lhs, rhs) {
-                        let answer = present == (op == BinOp::Ne);
-                        return Box::new(move |_| Value::Bool(answer));
+                    match self.none_test(lhs, rhs) {
+                        Some(NoneTest::Static(present)) => {
+                            let answer = present == (op == BinOp::Ne);
+                            return Box::new(move |_| Value::Bool(answer));
+                        }
+                        // An optional value that arrived as a computation: it
+                        // is none when it reads as none, and follows it.
+                        Some(NoneTest::Read(other)) => {
+                            let mut read = self.lower_expr(other, payload_name);
+                            let want_present = op == BinOp::Ne;
+                            return Box::new(move |ctx| {
+                                Value::Bool(!matches!(read(ctx), Value::Unit) == want_present)
+                            });
+                        }
+                        None => {}
                     }
                 }
                 let mut lc = self.lower_expr(lhs, payload_name);
@@ -882,6 +902,15 @@ impl Interpreter {
                 if let Some(lowered) = self.lower_theme_member(base, field, *span) {
                     return lowered;
                 }
+                // `s.variant` on an injected context (RFC-0065): the field's
+                // value, read where it is used so a change follows.
+                if let Some(value) = self.context_field(base, field) {
+                    return match value {
+                        Value::Memo(m) => Box::new(move |ctx| ctx.read_memo(m)),
+                        Value::Signal(sig) => Box::new(move |ctx| ctx.read_signal(sig)),
+                        value => Box::new(move |_| value.clone()),
+                    };
+                }
                 // Data member access (RFC-0027 §4/§6): `xs.len` (list length) and
                 // `r.field` (record field). Unknown members degrade to `Unit`;
                 // the checker reports genuinely unknown ones.
@@ -1041,8 +1070,9 @@ impl Interpreter {
     }
 
     /// For `x == none` / `x != none` where `x` names a parameter bound in this
-    /// instance: whether it was given.
-    fn none_test(&self, lhs: &Expr, rhs: &Expr) -> Option<bool> {
+    /// instance, or a field of an injected context: whether it was given,
+    /// when that is known as the view is instantiated, else the value to read.
+    fn none_test<'e>(&self, lhs: &'e Expr, rhs: &'e Expr) -> Option<NoneTest<'e>> {
         let is_none = |e: &Expr| {
             matches!(e, Expr::Ident(n, _) if n.as_str() == "none")
                 && self.env.lookup(&Symbol::intern("none")).is_none()
@@ -1052,13 +1082,21 @@ impl Interpreter {
             (true, false) => rhs,
             _ => return None,
         };
-        let Expr::Ident(name, _) = other else {
-            return None;
+        let value = match other {
+            Expr::Ident(name, _) => {
+                if self.lambda_params.contains(name) {
+                    return None;
+                }
+                self.env.lookup(name)?.clone()
+            }
+            Expr::Member { base, field, .. } => self.context_field(base, field)?,
+            _ => return None,
         };
-        if self.lambda_params.contains(name) {
-            return None;
-        }
-        Some(!matches!(self.env.lookup(name)?, Value::Unit))
+        Some(match value {
+            // A computation: only reading it says.
+            Value::Memo(_) | Value::Signal(_) => NoneTest::Read(other),
+            value => NoneTest::Static(!matches!(value, Value::Unit)),
+        })
     }
 
     fn lower_ident(&self, name: &Symbol, payload_name: Option<&Symbol>) -> Lowered {
@@ -1153,6 +1191,20 @@ impl Interpreter {
         if let Some(lowered) = self.lower_nav_action(callee, args, payload_name) {
             return lowered;
         }
+        // `s.place(…)`: a callback an injected context carries (RFC-0065). One
+        // the provider did not give does nothing, like an `Fn` left out.
+        if let Expr::Member { base, field, span } = callee {
+            match self.context_field(base, field) {
+                Some(Value::Fn(id)) => {
+                    if let Some(lowered) = self.inline_fn_call(id, field, *span, args, payload_name)
+                    {
+                        return lowered;
+                    }
+                }
+                Some(Value::Unit) => return Box::new(|_| Value::Unit),
+                _ => {}
+            }
+        }
         // `untrack(expr)`, the reserved escape hatch (D2).
         if let Expr::Ident(name, _) = callee {
             if name.as_str() == "untrack" {
@@ -1178,68 +1230,10 @@ impl Interpreter {
                 }
             }
             if let Some(Value::Fn(id)) = self.env.lookup(name).cloned() {
-                if (id.0 as usize) < self.fn_table.len() {
-                    let (params, body, is_callback, captured) =
-                        self.fn_table[id.0 as usize].clone();
-                    // A callback invoked with the wrong arity is a hard error
-                    // (RFC-0019 §4); a plain `fn` keeps the historical lenient
-                    // zip (extra args ignored, missing bound to nothing).
-                    if is_callback && params.len() != args.len() {
-                        self.errors.push(CompileError::CallbackArityMismatch {
-                            span: callee.span(),
-                            name: name.as_str().to_string(),
-                            expected: params.len(),
-                            found: args.len(),
-                        });
-                    }
-                    // Each argument is evaluated once, when the call runs, and
-                    // its value bound to the parameter: a write the body makes
-                    // must not change what a later read of the parameter
-                    // sees (`on_x(items[0])` then `items = ...`). The argument
-                    // is lowered here, in the caller's names, whatever the
-                    // body is lowered among.
-                    let mut arg_cs: Vec<(Symbol, Lowered)> = Vec::with_capacity(params.len());
-                    for (param, arg) in params.iter().zip(args.iter()) {
-                        arg_cs.push((param.clone(), self.lower_expr(&arg.value, payload_name)));
-                    }
-                    // A callback's body is lowered where it was written, among
-                    // the names visible there: its own parameters, the
-                    // caller's `var`s and `let`s, and nothing the view that
-                    // runs it declares. The names of the lambdas this call
-                    // sits in are the running view's too.
-                    // A `fn`'s body is pure whatever calls it (RFC-0049 §3).
-                    let pure = self.pure_fns.contains(&id.0);
-                    self.pure_depth += u32::from(pure);
-                    let mut body_lowered = if let Some(captured) = captured {
-                        let frame = self.env.enter_closure(captured);
-                        let outer_params = std::mem::take(&mut self.lambda_params);
-                        let outer_inlined = std::mem::take(&mut self.inlined_params);
-                        self.lambda_params.extend(params.iter().cloned());
-                        let lowered = self.lower_expr(&body, None);
-                        self.inlined_params = outer_inlined;
-                        self.lambda_params = outer_params;
-                        self.env.leave_closure(frame);
-                        lowered
-                    } else {
-                        let mark = self.lambda_params.len();
-                        self.lambda_params.extend(params.iter().cloned());
-                        let own = payload_name.filter(|n| !params.contains(n));
-                        let lowered = self.lower_expr(&body, own);
-                        self.lambda_params.truncate(mark);
-                        lowered
-                    };
-                    self.pure_depth -= u32::from(pure);
-                    return Box::new(move |ctx| {
-                        let values: Vec<(Symbol, Value)> = arg_cs
-                            .iter_mut()
-                            .map(|(name, c)| (name.clone(), c(ctx)))
-                            .collect();
-                        let base = LAMBDA_ARGS.with(|args| args.borrow().len());
-                        LAMBDA_ARGS.with(|args| args.borrow_mut().extend(values));
-                        let result = body_lowered(ctx);
-                        LAMBDA_ARGS.with(|args| args.borrow_mut().truncate(base));
-                        result
-                    });
+                if let Some(lowered) =
+                    self.inline_fn_call(id, name, callee.span(), args, payload_name)
+                {
+                    return lowered;
                 }
             }
         }
@@ -1267,6 +1261,83 @@ impl Interpreter {
             return lowered;
         }
         Box::new(|_| Value::Unit)
+    }
+
+    /// Inlines a call to the callback or `fn` `id` (RFC-0019 §3): its body is
+    /// lowered where it was written, with the arguments bound as it runs.
+    /// `None` when `id` names nothing.
+    fn inline_fn_call(
+        &mut self,
+        id: crate::interp::env::AstId,
+        name: &Symbol,
+        callee_span: Span,
+        args: &[crate::parser::ast::Arg],
+        payload_name: Option<&Symbol>,
+    ) -> Option<Lowered> {
+        if (id.0 as usize) < self.fn_table.len() {
+            let (params, body, is_callback, captured) = self.fn_table[id.0 as usize].clone();
+            // A callback invoked with the wrong arity is a hard error
+            // (RFC-0019 §4); a plain `fn` keeps the historical lenient
+            // zip (extra args ignored, missing bound to nothing).
+            if is_callback && params.len() != args.len() {
+                self.errors.push(CompileError::CallbackArityMismatch {
+                    span: callee_span,
+                    name: name.as_str().to_string(),
+                    expected: params.len(),
+                    found: args.len(),
+                });
+            }
+            // Each argument is evaluated once, when the call runs, and
+            // its value bound to the parameter: a write the body makes
+            // must not change what a later read of the parameter
+            // sees (`on_x(items[0])` then `items = ...`). The argument
+            // is lowered here, in the caller's names, whatever the
+            // body is lowered among.
+            let mut arg_cs: Vec<(Symbol, Lowered)> = Vec::with_capacity(params.len());
+            for (param, arg) in params.iter().zip(args.iter()) {
+                arg_cs.push((param.clone(), self.lower_expr(&arg.value, payload_name)));
+            }
+            // A callback's body is lowered where it was written, among
+            // the names visible there: its own parameters, the
+            // caller's `var`s and `let`s, and nothing the view that
+            // runs it declares. The names of the lambdas this call
+            // sits in are the running view's too.
+            // A `fn`'s body is pure whatever calls it (RFC-0049 §3).
+            let pure = self.pure_fns.contains(&id.0);
+            self.pure_depth += u32::from(pure);
+            let mut body_lowered = if let Some(captured) = captured {
+                let frame = self.env.enter_closure(captured);
+                let outer_params = std::mem::take(&mut self.lambda_params);
+                let outer_inlined = std::mem::take(&mut self.inlined_params);
+                self.lambda_params.extend(params.iter().cloned());
+                let lowered = self.lower_expr(&body, None);
+                self.inlined_params = outer_inlined;
+                self.lambda_params = outer_params;
+                self.env.leave_closure(frame);
+                lowered
+            } else {
+                let mark = self.lambda_params.len();
+                self.lambda_params.extend(params.iter().cloned());
+                let own = payload_name.filter(|n| !params.contains(n));
+                let lowered = self.lower_expr(&body, own);
+                self.lambda_params.truncate(mark);
+                lowered
+            };
+            self.pure_depth -= u32::from(pure);
+            return Some(Box::new(move |ctx| {
+                let values: Vec<(Symbol, Value)> = arg_cs
+                    .iter_mut()
+                    .map(|(name, c)| (name.clone(), c(ctx)))
+                    .collect();
+                let base = LAMBDA_ARGS.with(|args| args.borrow().len());
+                LAMBDA_ARGS.with(|args| args.borrow_mut().extend(values));
+                let result = body_lowered(ctx);
+                LAMBDA_ARGS.with(|args| args.borrow_mut().truncate(base));
+                result
+            }));
+        }
+
+        None
     }
 
     /// Lowers the body of a one-parameter list lambda. At the top (no event

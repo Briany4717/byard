@@ -52,6 +52,18 @@ pub(super) fn shift_const(decl: &mut ConstDecl, delta: u32) {
     shift_expr(&mut decl.init, delta);
 }
 
+/// Rebases a record type or a context (field types and defaults) by `delta`
+/// bytes.
+pub(super) fn shift_record(decl: &mut crate::parser::ast::RecordDecl, delta: u32) {
+    shift(&mut decl.span, delta);
+    for field in &mut decl.fields {
+        shift_type(&mut field.ty, delta);
+        if let Some(default) = &mut field.default {
+            shift_expr(default, delta);
+        }
+    }
+}
+
 /// Rebases an enum and its cases by `delta` bytes.
 pub(super) fn shift_enum(decl: &mut EnumDecl, delta: u32) {
     shift(&mut decl.span, delta);
@@ -128,6 +140,13 @@ fn shift_member(member: &mut Member, delta: u32) {
         Member::Inject { ty, span, .. } => {
             shift(span, delta);
             shift_type(ty, delta);
+        }
+        Member::Provide { ty, fields, span } => {
+            shift(span, delta);
+            shift_type(ty, delta);
+            for arg in fields {
+                shift_expr(&mut arg.value, delta);
+            }
         }
         Member::Element(el) => shift_element(el, delta),
         Member::For {

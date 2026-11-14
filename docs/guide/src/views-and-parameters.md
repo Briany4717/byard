@@ -318,6 +318,24 @@ and calling one that was not given does nothing, so `tap => on_tap()` needs no g
 only be compared with a parameter that declared it (or `content`); comparing anything else is
 `NoneNeedsOptional`.
 
+### Leaving a value out
+
+`Fn` and `Slot` may be left out with `= none`, and so may a value of any type: write
+the type with a `?`. `color: Color? = none` is a colour or nothing (a colour is an
+`Int`, and `Color` is the name for it).
+
+```byld
+View Pill(label: Str, color: Color? = none) {
+    Box #[bg: color ?? 0x2A2A3A, p: 10] { Text(label) }
+}
+```
+
+Read it with `??`, which gives the right side when there is nothing, or inside
+`when color != none { … }` and the true arm of `color != none ? a : b`, where `color`
+is a colour. Any other read, such as `bg: color`, is `NoneNotHandled`, which shows both
+ways to write it. The default of a `T?` is `none` and nothing else; a call may pass
+`none` too. Without a default the parameter is required.
+
 The names in the braces mean what they mean where you wrote them, always. If
 `ActionButton` has a parameter, a `let` or a `var` called `count` of its own, the
 braces above still change the caller's `count`, and a callback that passes
@@ -403,10 +421,24 @@ on to another view's binding. Every write goes to `wifi` in `Main`. There is no 
 in the view and no callback between the two, so tapping the button changes the
 caller's text in the same frame, and `Main` changing `wifi` moves the switch.
 
-A binding is declared with its type and has no default value: it is the caller's
-`var`, so there is nothing a default could stand in for. A view that wants to work
-without a caller's `var` keeps one of its own, and takes a plain parameter for its
-starting value.
+A binding is declared with its type. Without a default it is required: the call has
+to pass a `var`. With one, `bind selected: Int = 0`, the call may leave it out, and
+the view keeps a `var` of its own that starts at the default, as if it had written
+`var selected = 0`. A caller that passes `bind: page` owns the state, and one that
+passes nothing leaves it to the view; the view reads and writes it the same way
+either time. Compose's controls work like this, taking state when you hoist it and
+keeping it when you do not.
+
+```byld
+View Counter(bind n: Int = 0) {
+    Button("Taps: {n}") => n = n + 1
+}
+
+View Main() {
+    var shared = 10
+    Column { Counter() Counter(bind: shared) }
+}
+```
 
 ### At the call
 
@@ -511,6 +543,52 @@ If the view that owns the `var` goes away (a `when` turned false) while a view h
 its binding is still being used, nothing breaks: the binding keeps reading and writing
 the cell it was given, and the view that owned it starts over with a new one when it is
 shown again.
+
+## Context: values for everything a view draws
+
+A container often decides something for all its items: which tab is selected, how
+the bar looks. Writing it on every item invites a mixed bar, and an item written in
+the caller's block cannot see the container that places it. A *context* hands values
+down instead.
+
+```byld
+context TabsStyle {
+    current: Int = 0
+    select: Fn(Int) = none
+}
+
+View Tabs(bind current: Int = 0, content) {
+    provide TabsStyle(current: current, select: {|i| current = i })
+    Row { content }
+}
+
+View Tab(label: Str, index: Int) {
+    inject TabsStyle as s
+    Button(label) #[color: index == s.current ? 0xFFFFFF : 0x8A8AA0] => s.select(index)
+}
+
+View Main() {
+    Tabs {
+        Tab("Flights", 0)
+        Tab("Hotels", 1)
+    }
+}
+```
+
+`context Name { field: Type = default }` declares the values, each with a default.
+`provide Name(field: value)` at the top of a view gives them to everything it draws,
+slots included: a `Tab` written in the caller's block and drawn inside `Tabs` reads
+`Tabs`' context, not the caller's. `inject Name as s` reads the nearest provider above,
+at any depth, or the defaults when there is none, so a `Tab` alone still works. Values
+are live: change what `Tabs` provides and every `Tab` follows. A field may be a callback
+(`Fn`), which is how an item reports to its container, and may be `T?`. Providing a
+context twice in one view is `DuplicateProvide`, a name that is no context is
+`UnknownContext`, a field the context lacks is `UnknownField`, and a field without a
+default is `ContextFieldNeedsDefault`.
+
+Use a parameter for what one call decides and a context for what a container decides
+for all its items. A view that neither provides nor injects pays nothing for any of this.
+See `crates/byard-cli/examples/context_and_optional`.
 
 ## Views from other places
 

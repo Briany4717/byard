@@ -1027,6 +1027,19 @@ impl Interpreter {
         })
     }
 
+    /// When the next timer on the app clock is due, in ms of app time, or
+    /// `None` when none is waiting. A headless runner that skips idle frames
+    /// stops there, so the timer fires on the frame it is due.
+    #[must_use]
+    pub fn next_virtual_timer_ms(&self) -> Option<u64> {
+        self.bridge.virtual_timers.as_ref().and_then(|t| {
+            t.iter()
+                .filter(|t| self.bridge.continuations.contains_key(&t.continuation))
+                .map(|t| t.due_ms)
+                .min()
+        })
+    }
+
     /// Fires the timers on the app clock that are due at `now_ms`.
     pub(super) fn fire_due_timers(&mut self, now_ms: u64) {
         let Some(timers) = self.bridge.virtual_timers.as_mut() else {

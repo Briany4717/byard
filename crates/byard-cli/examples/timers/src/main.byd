@@ -17,8 +17,9 @@
 // the clock and tap the button:
 //   cargo run -p byard-cli -- shot crates/byard-cli/examples/timers \
 //     --size 640x640 --now 2026-11-05T09:00:00 --tap 100,324 -o clock.png
-// reads `Thu 5 Nov, 09:00:00` above and `2026-11-05T09:00:00` beside the button.
-// (`every` runs on the real clock and does not tick in a shot.)
+// reads `Thu 5 Nov, 09:00:01` above (a second of the shot has passed) and
+// `2026-11-05T09:00:00` beside the button.
+// `every` and `after` run on the shot's own clock: `--at 3500` shows 3s and the panel.
 //
 // A tick is delivered through exactly the path a controller reply travels
 // (RFC-0028 §5): it lands on the logic thread, runs the written action, writes

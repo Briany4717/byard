@@ -281,6 +281,9 @@ impl Scene {
         options: &SceneOptions<'_>,
     ) -> Result<Self, String> {
         let mut interp = Interpreter::new();
+        // `after` and `every` count the scene's own frames, not the real time
+        // they take to draw, as `App::shot` does.
+        interp.use_virtual_timers();
         if let Some(iso) = options.wall_clock {
             interp
                 .set_wall_clock(iso)
@@ -353,7 +356,7 @@ impl Scene {
     /// frames in a row ask for no more (no animation in flight, no timer or
     /// call waiting, nothing being measured), the ones that follow would draw
     /// what these drew, so the clock goes to where the loop would have ended,
-    /// on the same 16 ms grid. No input arrives in between, so no skipped
+    /// or to the next timer on the app clock, on the same 16 ms grid. No input arrives in between, so no skipped
     /// frame can be the one something happens in. `BYARD_SHOT_EVERY_FRAME`
     /// draws them all, which is how a test checks the two agree.
     fn run_to(&mut self, until: u32) {
@@ -366,7 +369,16 @@ impl Scene {
                 still + 1
             };
             if self.skip_idle && still >= 2 && self.now < until {
-                self.now += (until - self.now).div_ceil(16) * 16;
+                // Up to `until`, or to the frame a waiting timer is due on,
+                // whichever comes first, so it fires when it would have.
+                let target = self
+                    .interp
+                    .next_virtual_timer_ms()
+                    .and_then(|due| u32::try_from(due).ok())
+                    .map_or(until, |due| due.min(until));
+                if target > self.now {
+                    self.now += (target - self.now).div_ceil(16) * 16;
+                }
             }
         }
     }

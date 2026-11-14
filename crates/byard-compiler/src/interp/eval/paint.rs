@@ -1264,7 +1264,11 @@ impl Interpreter {
                     // slice. Advance the cursor past the skipped subtree so the
                     // remaining children stay aligned.
                     if let Some(clip) = child_clip {
-                        if this.child_fully_clipped(child_id, child_transform, clip) {
+                        // Where it is drawn, not only where it was laid out: its
+                        // own `translate` can bring it into view from a slot
+                        // that is off screen.
+                        let drawn = this.child_drawn_transform(child, child_id, child_transform);
+                        if this.child_fully_clipped(child_id, drawn, clip) {
                             // RFC-0042: its words still name the button it is in.
                             this.access_culled(child, pools);
                             *flat_idx += this.flat_len(child, pools);

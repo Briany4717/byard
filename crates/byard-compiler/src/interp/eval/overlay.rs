@@ -478,7 +478,15 @@ impl Interpreter {
             // RFC-0036 `on dismiss`: registered after the child has painted,
             // because the rects it keeps are the ones the child just landed
             // on.
+            //
+            // Lowered in the scope the overlay was written in, so an action
+            // that writes a `var` or a binding of its view reaches it.
+            let env_base = self.env.len();
+            for (k, v) in env_snapshot {
+                self.env.push(k.clone(), v.clone());
+            }
             self.register_light_dismiss(slot, shift);
+            self.env.truncate(env_base);
         }
 
         self.access_leave(frame, dialog);

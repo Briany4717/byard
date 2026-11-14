@@ -62,7 +62,8 @@ Box #[a11y_label: "Close", width: 36, height: 36, bg: 0x2A2A36, radius: 8,
 ```
 
 `a11y_label` is a string expression, so `a11y_label: "{count} unread"` is read out as the
-count changes. It is allowed on any element. A `Slider` has no text of its own, so it is
+count changes. It is allowed on any element, a modal `Overlay` included, where it names the
+dialog and may read the parameters of the view the overlay is written in. A `Slider` has no text of its own, so it is
 the usual place for one.
 
 ## Hiding decoration

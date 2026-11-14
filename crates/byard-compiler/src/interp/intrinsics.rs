@@ -509,6 +509,9 @@ pub fn role_implies_focus(role: AccessRole) -> bool {
             | AccessRole::Tab
             | AccessRole::MenuItem
             | AccessRole::Link
+            // A list item you can tap opens something, as a row in a settings
+            // list does; one without a `tap` stays out, like the others.
+            | AccessRole::ListItem
     )
 }
 

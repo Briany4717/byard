@@ -141,6 +141,7 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A drag over a `tap` scrolls inside a focusable ancestor.** `Box #[focus => {}, key_down(k) => …] { ScrollView { Box #[tap => …] } }` took every press on the inner box for a tap, because something around it could take focus; only a focusable that is itself the tapping element keeps the press now.
 - **A modal overlay's scrim fades with its content.** It appeared and went at once while the dialog faded; it now follows the opacity of the overlay's first element, so `on enter { opacity: 0.0 }` and `on leave` fade both.
 - **`on enter` waits out a delayed `with`.** `opacity: 1.0 with anim.ease(150ms, delay: 2s)` and `on enter { opacity: 0.0 }` showed the element at once; the move off the `on enter` values counted as a retarget, which cancels a delay. A `with` inside `on leave` already gave the way out its own speed; the guide says so.
 - **The first `on measure` of an element lands without motion.** A value it wrote (a tab indicator's width and position, a line's length) used to spring from its starting 0 on the first frame; now the first measurement is drawn where it is, and later changes move as before.

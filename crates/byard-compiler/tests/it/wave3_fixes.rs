@@ -84,6 +84,45 @@ impl App {
         self.render();
     }
 
+    /// One pointer event, then a frame.
+    fn pointer(&mut self, kind: EventKind, pos: (f32, f32)) {
+        self.now += 16;
+        let ev = InputEvent {
+            kind,
+            pos,
+            delta: (0.0, 0.0),
+            payload: None,
+            time_ms: u64::from(self.now),
+            mods: KeyModifiers::default(),
+        };
+        self.interp.set_now_ms(self.now);
+        self.interp.dispatch_events(&[ev]);
+        self.render();
+    }
+
+    /// A press at `from`, eight moves and a release at `to`.
+    fn drag(&mut self, from: (f32, f32), to: (f32, f32)) {
+        self.pointer(EventKind::PointerMove, from);
+        self.pointer(EventKind::PointerDown, from);
+        for i in 1..=8 {
+            let t = i as f32 / 8.0;
+            let at = (from.0 + (to.0 - from.0) * t, from.1 + (to.1 - from.1) * t);
+            self.pointer(EventKind::PointerMove, at);
+        }
+        self.pointer(EventKind::PointerUp, to);
+    }
+
+    fn float(&self, name: &str) -> f64 {
+        let sig = self
+            .interp
+            .var_signal(&Symbol::intern(name))
+            .unwrap_or_else(|| panic!("`{name}` is declared"));
+        match self.interp.peek(sig) {
+            byard_compiler::interp::env::Value::Float(f) => f,
+            _ => -1.0,
+        }
+    }
+
     fn count(&self, name: &str) -> i64 {
         let sig = self
             .interp
@@ -392,4 +431,37 @@ fn the_modal_scrim_fades_with_its_overlay() {
     }
     let out = scrim_alpha(&app);
     assert!(out > 0.0 && out < 0.3, "{out}");
+}
+
+// ── 36. a drag over a tap, inside a focusable ancestor ───────────────────
+
+const LIST: &str = "View Main() {
+    var n = 0
+    var keys = 0
+    var y = 0.0
+    Box #[a11y_role: list, a11y_label: \"L\", width: 300, height: 200,
+          focus => {}, key_down(k) => keys = keys + 1] {
+        ScrollView #[width: 300, height: 200, offset: (0.0, y)] {
+            Column {
+                Box #[width: 300, height: 100, bg: 0xFF0000, tap => n++] {}
+                Box #[width: 300, height: 600, bg: 0x0000FF] {}
+            }
+        }
+    }
+}";
+
+#[test]
+fn a_drag_over_a_tap_scrolls_inside_a_focusable_ancestor() {
+    let mut app = App::new(LIST);
+    assert!(app.errors().is_empty(), "{:?}", app.errors());
+    app.drag((150.0, 80.0), (150.0, 20.0));
+    assert!(app.float("y") > 40.0, "scrolled to {}", app.float("y"));
+    assert_eq!(app.count("n"), 0, "a drag is not a tap");
+}
+
+#[test]
+fn a_tap_over_a_tap_inside_a_focusable_ancestor_still_taps() {
+    let mut app = App::new(LIST);
+    app.tap((150.0, 50.0));
+    assert_eq!(app.count("n"), 1);
 }

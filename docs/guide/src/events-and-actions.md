@@ -126,7 +126,9 @@ do not reach `key_down`; every other key does.
 
 A press on something that only taps, inside a `ScrollView`, still scrolls it: once the
 pointer moves past a few pixels the view takes the drag and the `tap` is cancelled. An
-element with its own `drag`, `pointer_drag` or `change` keeps its drag.
+element with its own `drag`, `pointer_drag` or `change` keeps its drag. A focusable element
+around the `ScrollView` (a list that takes the arrow keys) does not change that; one that is itself
+the tapping element keeps its press.
 
 Three things are worth knowing:
 

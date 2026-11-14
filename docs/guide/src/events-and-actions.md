@@ -96,7 +96,7 @@ Every element except `Spacer` takes the pointer events:
 | `pointer_down`, `pointer_up` | The raw press and release |
 | `pointer_move` | The pointer moves over the element |
 | `pointer_enter`, `pointer_leave` (or `pointer_exit`), `hover` | The pointer comes, goes, is over |
-| `focus_in`, `focus_out` | Focus arrives in the element or anything inside it, and leaves all of it |
+| `focus_in`, `focus_out` | Focus arrives in the element or anything inside it, and leaves all of it. A press that focuses it counts, as `focusin` does in a browser; what only the keyboard sets is the state `focus_visible` |
 | `wheel` | A mouse wheel or trackpad notch |
 | `drag_start`, `drag`, `drag_end` | A held press moves past a few pixels; moves on; is released |
 | `focus`, `blur` | The element gains or loses keyboard focus |

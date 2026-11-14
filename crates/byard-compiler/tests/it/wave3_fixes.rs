@@ -576,3 +576,52 @@ fn a_spring_beside_a_loop_still_has_to_be_stepped_through() {
     app.tap((5.0, 30.0));
     assert!(app.interp.needs_another_frame_besides_loops());
 }
+
+// ── 41. a click and `focus_in` (decided: not an engine bug) ──────────────
+//
+// `focus_in` is the browsers' `focusin`: focus arrived, however it got there.
+// What tells a press from the keyboard is the state `focus_visible`. These pin
+// that split, which a package that wants "keyboard focus only" (a tooltip)
+// has to build on.
+
+#[test]
+fn a_click_fires_focus_in_but_does_not_show_focus() {
+    let src = "View Main() {
+        var seen = 0
+        Column {
+            Box #[width: 60, height: 30, bg: 0x0000FF, focus => {}, focus_in => seen = seen + 1] {
+                on focus_visible { bg: 0xFF0000 }
+            }
+            Box #[width: 60, height: 30, bg: 0x00FF00, focus => {}] {}
+        }
+    }";
+    let mut app = App::new(src);
+    app.tap((10.0, 10.0));
+    assert_eq!(app.count("seen"), 1, "focus arrived");
+    app.rect(0x0000FF);
+    // A key press moves focus on and Shift+Tab brings it back: now the
+    // keyboard put it there.
+    app.interp.dispatch_events(&[
+        InputEvent {
+            kind: EventKind::KeyDown,
+            pos: (0.0, 0.0),
+            delta: (0.0, 0.0),
+            payload: Some(byard_core::InputPayload::Key("Tab".into())),
+            time_ms: 100,
+            mods: KeyModifiers::default(),
+        },
+        InputEvent {
+            kind: EventKind::KeyDown,
+            pos: (0.0, 0.0),
+            delta: (0.0, 0.0),
+            payload: Some(byard_core::InputPayload::Key("Tab".into())),
+            time_ms: 110,
+            mods: KeyModifiers {
+                shift: true,
+                ..KeyModifiers::default()
+            },
+        },
+    ]);
+    app.render();
+    app.rect(0xFF0000);
+}

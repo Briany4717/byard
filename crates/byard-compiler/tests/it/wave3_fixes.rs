@@ -465,3 +465,22 @@ fn a_tap_over_a_tap_inside_a_focusable_ancestor_still_taps() {
     app.tap((150.0, 50.0));
     assert_eq!(app.count("n"), 1);
 }
+
+// ── 39. a path inside a `Clip` ───────────────────────────────────────────
+
+#[test]
+fn a_path_inside_a_clip_is_emitted_under_that_clip() {
+    let app = App::new(
+        "View Main() { Column {
+            Clip #[width: 80, height: 10] { Canvas #[width: 400, height: 10] {
+                path(stroke: 0xFF0000, stroke_width: 4) { move(0, 5) line(400, 5) } } }
+            Canvas #[width: 400, height: 10] {
+                path(stroke: 0x00AA00, stroke_width: 4) { move(0, 5) line(400, 5) } }
+        } }",
+    );
+    assert!(app.errors().is_empty(), "{:?}", app.errors());
+    assert_eq!(app.frame.fills().len(), 2);
+    let clips = app.frame.fill_clips();
+    assert!(clips[0].is_some(), "the one in the Clip is clipped: {clips:?}");
+    assert!(clips[1].is_none(), "the one outside it is not: {clips:?}");
+}

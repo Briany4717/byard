@@ -2064,6 +2064,8 @@ pub struct FrameClips<'a> {
     pub vector: &'a [Option<u16>],
     /// Parallel to `CanvasShape`s (RFC-0020).
     pub canvas: &'a [Option<u16>],
+    /// Parallel to `CanvasFill`s (RFC-0037).
+    pub fill: &'a [Option<u16>],
     /// Parallel to `RippleInstance`s (RFC-0023).
     pub ripple: &'a [Option<u16>],
     /// Parallel to `BackdropInstance`s (RFC-0023 §2).
@@ -2087,6 +2089,7 @@ fn frame_clips(frame: &RenderFrame) -> FrameClips<'_> {
         text: frame.text_clips(),
         vector: frame.vector_clips(),
         canvas: frame.canvas_clips(),
+        fill: frame.fill_clips(),
         ripple: frame.ripple_clips(),
         backdrop: frame.backdrop_clips(),
         text_wrap: frame.text_wraps(),
@@ -2232,6 +2235,7 @@ fn stage_segment(
         &mut out.fills,
         &primitives.fills[seg.fill.clone()],
         sub_slice(primitives.fill_depths, &seg.fill),
+        sub_slice(primitives.clips.fill, &seg.fill),
     );
     stage_native_batches(
         &primitives.native[seg.native.clone()],

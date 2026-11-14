@@ -172,6 +172,35 @@ impl Interpreter {
         self.router.restore_hit_frame(previous);
     }
 
+    /// Makes the hit regions this element registers follow its own transform
+    /// too, so a press lands where the element is drawn: a `translate` or a
+    /// `scale` of its own moves its target with it, as an ancestor's already
+    /// does. `drawn` is the element's transform composed with its ancestors'.
+    ///
+    /// An element that moves nothing of its own keeps the frame it inherited,
+    /// and costs nothing. The scroll displacement is in `drawn` for paint but
+    /// reaches the hit rects another way, so it is taken out, and the pivot
+    /// moves with the rects.
+    #[allow(clippy::float_cmp)]
+    fn hit_where_drawn(
+        &mut self,
+        own: &byard_core::frame::Transform,
+        drawn: byard_core::frame::Transform,
+        scroll_shift: (f32, f32),
+    ) {
+        if own.translate == [0.0, 0.0] && own.scale == [1.0, 1.0] && own.rotate == 0.0 {
+            return;
+        }
+        let mut hit = drawn;
+        hit.translate[0] -= scroll_shift.0;
+        hit.translate[1] -= scroll_shift.1;
+        hit.origin[0] += scroll_shift.0;
+        hit.origin[1] += scroll_shift.1;
+        hit.opacity = 1.0;
+        // The wrapper around the node puts back the frame it replaced.
+        let _ = self.router.set_hit_frame(hit);
+    }
+
     /// The body of [`render_node_with_atlas`](Self::render_node_with_atlas),
     /// which owns the hit-frame bookkeeping around it.
     #[allow(clippy::similar_names)]
@@ -275,8 +304,14 @@ impl Interpreter {
                     // (RFC-0005 `Typo`, completed by RFC-0022).
                     let typo_size = self.eval_typo_size(attrs);
                     let size = self.text_font_size(attrs, typo_size);
+                    // The run's own `opacity`, folded with what it inherited.
+                    #[allow(clippy::cast_possible_truncation)]
+                    let text_opacity = inherited_opacity
+                        * self
+                            .eval_float_prop(attrs, "opacity")
+                            .map_or(1.0, |v| v as f32);
                     let mut rgba = super::intrinsics::color_rgba_auto(color);
-                    rgba[3] *= inherited_opacity;
+                    rgba[3] *= text_opacity;
                     // RFC-0011: the run's own transform, composed with its
                     // ancestors'. Scale and translate are baked into the baseline
                     // anchor and the font size (glyph extents scale from the
@@ -296,6 +331,7 @@ impl Interpreter {
                         ),
                     );
                     let transform = inherited_transform.compose(&own);
+                    self.hit_where_drawn(&own, transform, scroll_shift);
                     let own_group = own.rotate.abs() > f32::EPSILON
                         && frame.begin_group_rotated(
                             1.0,
@@ -383,7 +419,7 @@ impl Interpreter {
                     {
                         if let Some(bg) = self.eval_color_prop(attrs, "bg") {
                             let mut fill = super::intrinsics::color_rgba_auto(bg);
-                            fill[3] *= inherited_opacity;
+                            fill[3] *= text_opacity;
                             let base = byard_core::BoxInstance {
                                 rect: [rect.x, rect.y, rect.width, rect.height],
                                 color: fill,
@@ -572,6 +608,7 @@ impl Interpreter {
                     let own_transform = self.resolve_transform(paint_attrs, current_rect);
                     let transform = inherited_transform.compose(&own_transform);
                     child_transform = transform;
+                    self.hit_where_drawn(&own_transform, transform, scroll_shift);
                     let bg = self.eval_color_prop(paint_attrs, "bg");
                     let radii = self.resolve_radii(paint_attrs, "radius");
                     // RFC-0031 §S1: the corner profile `radii` are measured

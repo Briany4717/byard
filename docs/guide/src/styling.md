@@ -35,7 +35,7 @@ The ones that paint:
 | `color` | colour | Text colour, on `Text`, `Button` and `TextField` |
 | `radius` | length | Corner radius. A quad rounds each corner on its own |
 | `smooth` | `0` to `1` | Corner profile. `0` is a circular arc, about `0.6` a continuous corner like an Apple icon |
-| `opacity` | `0` to `1` | Of the whole element and what it holds |
+| `opacity` | `0` to `1` | Of the whole element and what it holds, a `Text` included |
 | `border`, `border_width` | colour, number | A line inside the edge. A box with a `border` and no `bg` draws just the line |
 | `border_gap` | `(start, length)` | A gap in the top edge of the border, below |
 | `outline`, `outline_width`, `outline_offset` | colour, number, number | A ring outside the shape, see [below](#outline-and-overlay) |

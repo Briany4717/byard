@@ -771,6 +771,7 @@ fn lookup_intrinsic(name: &str) -> Option<Intrinsic> {
                     ("max_height", lay(PropType::Int)),
                     ("max_lines", lay(PropType::Int)),
                     ("overflow", pnt(PropType::Enum(OVERFLOW))),
+                    ("opacity", pnt(PropType::Float)),
                     ("basis", lay(PropType::Int)),
                     ("p", lay(PropType::Len)),
                     ("m", lay(PropType::Len)),

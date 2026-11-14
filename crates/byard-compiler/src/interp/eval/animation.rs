@@ -1059,7 +1059,7 @@ impl Interpreter {
         if !phase.finished {
             // A loop that never ends does not keep a leaving element drawn.
             if matches!(spec.repeat, RepeatMode::Infinite) {
-                self.any_active = true;
+                self.endless_active = true;
             } else {
                 self.note_active();
             }
@@ -1139,7 +1139,7 @@ impl Interpreter {
         );
         if !phase.finished {
             if matches!(track.repeat, RepeatMode::Infinite) {
-                self.any_active = true;
+                self.endless_active = true;
             } else {
                 self.note_active();
             }

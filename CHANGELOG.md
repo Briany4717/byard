@@ -141,6 +141,7 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`byard shot` no longer draws every frame of an endless animation.** A page with a loop that never ends (a progress bar, a spinner) was drawn frame by frame up to `--at`, 17 s for a page of keyframed paths in a debug build; a loop depends only on the clock, so the frames in between are skipped when nothing else is in motion, and the picture is the same bytes (`BYARD_SHOT_EVERY_FRAME=1` compares).
 - **More than eight `anim.keyframes` stops is `TooManyKeyframes` everywhere.** In a path body (`line(anim.keyframes(…), y)`) or a shape argument the sequence was not checked and drew flat; the error now comes from there too.
 - **A path inside a `Clip` is drawn, and cut at the clip.** A filled or stroked `Canvas` path ignored the content clip it was in (a `Clip`, a `ScrollView`), so it showed past the edge, and next to a clipped shape it could vanish. See `crates/byard-cli/examples/path_in_clip`.
 - **A drag over a `tap` scrolls inside a focusable ancestor.** `Box #[focus => {}, key_down(k) => …] { ScrollView { Box #[tap => …] } }` took every press on the inner box for a tap, because something around it could take focus; only a focusable that is itself the tapping element keeps the press now.

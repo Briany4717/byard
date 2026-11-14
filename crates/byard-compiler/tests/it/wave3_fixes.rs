@@ -540,3 +540,39 @@ fn eight_keyframe_stops_in_a_path_are_fine() {
     ));
     assert!(app.errors().is_empty(), "{:?}", app.errors());
 }
+
+// ── 42. a loop that never ends does not keep a shot stepping ─────────────
+
+#[test]
+fn an_endless_loop_asks_for_frames_but_not_to_be_stepped_through() {
+    let mut app = App::new(
+        "View Main() {
+            Box #[width: 20, height: 20, bg: 0xFF0000,
+                  rotate: 360deg with anim.linear(1s, from: 0deg, repeat: infinite)] {}
+        }",
+    );
+    app.advance(16);
+    assert!(app.interp.has_active_animations(), "a host keeps drawing it");
+    assert!(app.interp.needs_another_frame());
+    assert!(
+        !app.interp.needs_another_frame_besides_loops(),
+        "but nothing in it has to be stepped through"
+    );
+}
+
+#[test]
+fn a_spring_beside_a_loop_still_has_to_be_stepped_through() {
+    let mut app = App::new(
+        "View Main() {
+            var on = false
+            Column {
+                Box #[width: 20, height: 20, bg: 0xFF0000,
+                      rotate: 360deg with anim.linear(1s, from: 0deg, repeat: infinite)] {}
+                Box #[width: on ? 100 : 20 with anim.spring(), height: 20, bg: 0x0000FF, tap => on = true] {}
+            }
+        }",
+    );
+    app.advance(16);
+    app.tap((5.0, 30.0));
+    assert!(app.interp.needs_another_frame_besides_loops());
+}

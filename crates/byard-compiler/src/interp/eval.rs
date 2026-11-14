@@ -912,6 +912,11 @@ pub struct Interpreter {
     ///
     /// [`has_active_animations`]: Self::has_active_animations
     any_active: bool,
+    /// Whether a looping animation that never ends was sampled in the last
+    /// render. Kept apart from `any_active` because it asks for frames for
+    /// good but is a function of the clock alone: a shot that runs to a time
+    /// need not draw the frames in between.
+    endless_active: bool,
     /// First-class style values (RFC-0016): `let name = style { … }` registers
     /// its base attributes and `on <state>` blocks here, and a `..name` spread
     /// on an element splices them in at lower time. Static and view-scoped, no
@@ -1436,7 +1441,17 @@ impl Interpreter {
     /// is true and lets the app idle (0 frames) once every animation settles.
     #[must_use]
     pub fn has_active_animations(&self) -> bool {
-        self.any_active || self.theme_transitioning()
+        self.any_active || self.endless_active || self.theme_transitioning()
+    }
+
+    /// [`needs_another_frame`](Self::needs_another_frame) without the loops
+    /// that never end: whether something that has to be stepped through, a
+    /// spring, a measure, a scroll glide, is still going. A loop is a function
+    /// of the clock, so when only loops remain the frames up to a given time
+    /// can be skipped (`byard shot`).
+    #[must_use]
+    pub fn needs_another_frame_besides_loops(&self) -> bool {
+        self.any_active || self.theme_transitioning() || self.measure_fired
     }
 
     /// Whether the host should produce another frame without waiting for an
@@ -1847,6 +1862,7 @@ impl Interpreter {
         // Recomputed every frame: an animation re-marks itself active below if it
         // sampled without having settled this tick (RFC-0010).
         self.any_active = false;
+        self.endless_active = false;
         self.leave_busy_prev = std::mem::take(&mut self.leave_busy);
         self.focus_requests.clear();
         // RFC-0023: retire fully-faded ripples by time. Gesture-like state kept

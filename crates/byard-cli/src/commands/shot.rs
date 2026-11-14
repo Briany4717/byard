@@ -389,7 +389,12 @@ impl Scene {
         let mut still = 0_u32;
         while self.now < until {
             self.frame_with(&[]);
-            still = if self.interp.needs_another_frame() || self.interp.has_background_work() {
+            // A loop that never ends is a function of the clock, so it does not
+            // keep the frames in between from being skipped; anything that has
+            // to be stepped through does.
+            still = if self.interp.needs_another_frame_besides_loops()
+                || self.interp.has_background_work()
+            {
                 0
             } else {
                 still + 1

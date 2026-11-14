@@ -219,7 +219,9 @@ picture. Every test of a screen can pass while the screen is wrong.
 
 `--at` runs 16 ms frames, but only while something moves. When two frames in a row
 ask for no more, the shot goes to its last frame, which is the picture it would
-have drawn; set `BYARD_SHOT_EVERY_FRAME=1` to draw them all.
+have drawn; set `BYARD_SHOT_EVERY_FRAME=1` to draw them all. A loop that never ends
+(`repeat: infinite`, `loop: true`) does not count as something that moves: it is a function of
+the clock, so a page of spinners and progress bars is shot as fast as a still one.
 
 Taps are how you reach a screen that needs a press. This opens the second tab of
 an app, at logical point 120, 840, and draws it dark and wide:

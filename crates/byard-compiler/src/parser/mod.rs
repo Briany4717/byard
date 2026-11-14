@@ -676,7 +676,19 @@ impl<'a> Parser<'a> {
         if matches!(word, "mount" | "unmount" | "measure" | "change") {
             return false;
         }
-        StyleStateKind::from_name(word).is_some()
+        // `on field.focused { … }` (RFC-0062): a name, a dot, a state.
+        let remote = matches!(
+            self.tokens.get(self.pos + 2).map(|(t, _)| t),
+            Some(Token::Dot)
+        ) && matches!(
+            self.tokens.get(self.pos + 3).map(|(t, _)| t),
+            Some(Token::Ident(_))
+        ) && matches!(
+            self.tokens.get(self.pos + 4).map(|(t, _)| t),
+            Some(Token::LBrace | Token::Plus)
+        );
+        remote
+            || StyleStateKind::from_name(word).is_some()
             || matches!(word, "width" | "height")
             || matches!(
                 self.tokens.get(self.pos + 2).map(|(t, _)| t),
@@ -1212,7 +1224,7 @@ impl<'a> Parser<'a> {
                 span: self.span_from(start),
             })
         } else if self.eat(&Token::Colon) {
-            let value = self.parse_expr(0);
+            let value = self.parse_arg_value();
             Some(Attr {
                 name,
                 axis: None,

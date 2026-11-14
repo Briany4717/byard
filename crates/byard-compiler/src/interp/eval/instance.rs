@@ -9,7 +9,7 @@
 //! bounded, so a guarded recursion that never terminates ends in a
 //! diagnostic rather than a stack overflow.
 
-use super::{InstanceBindings, Interpreter, RESERVED_CONTENT, RenderNode};
+use super::{InstanceBindings, Interpreter, RESERVED_CONTENT, RenderNode, SlotFrame, SlotSource};
 use crate::diagnostics::{CompileError, Span};
 use crate::interp::env::{SignalId, Value};
 use crate::interp::reactive::ScopeId;
@@ -32,6 +32,18 @@ fn param_default(param: &Param) -> Option<&Expr> {
     param.default.as_ref()
 }
 
+/// Whether a parameter is a slot (RFC-0062): `content`, or declared `: Slot`.
+/// It takes a block of elements from the call and no value.
+pub(super) fn is_slot_param(param: &Param) -> bool {
+    param.name.as_str() == RESERVED_CONTENT
+        || matches!(&param.ty, Some(Type::Named { name, .. }) if name.as_str() == "Slot")
+}
+
+/// Whether `expr` is the word `none` (RFC-0062).
+fn is_none(expr: &Expr) -> bool {
+    matches!(expr, Expr::Ident(n, _) if n.as_str() == "none")
+}
+
 /// Whether a parameter is a callback prop, declared with a function type
 /// `Fn(...)` (RFC-0019). Callback params bind a caller-supplied action block
 /// rather than a projected value, so they take a separate binding path and are
@@ -40,7 +52,179 @@ fn is_callback_param(param: &Param) -> bool {
     matches!(param.ty, Some(Type::Function { .. }))
 }
 
+/// What a call wrote for a slot parameter.
+enum SlotArg {
+    /// A block of elements.
+    Members(Vec<crate::parser::ast::Member>),
+    /// A slot of the calling view, passed on (`None` inside: it was not given).
+    Forward(Option<std::rc::Rc<SlotSource>>),
+}
+
+/// `members` with `attrs` appended to every root element (RFC-0062 §4): into
+/// both branches of a root `when` and the body of a root `for`, and onto a user
+/// view called at the root as its own layout attributes. A slot placed at the
+/// root has no element to take them and is left alone. An attribute the root
+/// already wrote under the same name is replaced: the caller knows the
+/// neighbours, and the callee does not.
+fn with_layout(
+    members: &[crate::parser::ast::Member],
+    attrs: &[crate::parser::ast::Attr],
+    params: &[Param],
+) -> Vec<crate::parser::ast::Member> {
+    use crate::parser::ast::Member;
+    members
+        .iter()
+        .map(|m| match m {
+            Member::Element(e) if params.iter().any(|p| p.name == e.name && is_slot_param(p)) => {
+                m.clone()
+            }
+            Member::Element(e) => {
+                let mut e = e.clone();
+                e.attrs
+                    .retain(|a| a.axis.is_some() || !attrs.iter().any(|n| n.name == a.name));
+                e.content.retain(|a| {
+                    !a.name
+                        .as_ref()
+                        .is_some_and(|n| attrs.iter().any(|x| &x.name == n))
+                });
+                e.attrs.extend(attrs.iter().cloned());
+                Member::Element(e)
+            }
+            Member::When {
+                cond,
+                then,
+                els,
+                span,
+            } => Member::When {
+                cond: cond.clone(),
+                then: with_layout(then, attrs, params),
+                els: els.as_deref().map(|e| with_layout(e, attrs, params)),
+                span: *span,
+            },
+            Member::For {
+                var,
+                index,
+                iter,
+                body,
+                span,
+            } => Member::For {
+                var: var.clone(),
+                index: index.clone(),
+                iter: iter.clone(),
+                body: with_layout(body, attrs, params),
+                span: *span,
+            },
+            other => other.clone(),
+        })
+        .collect()
+}
+
 impl Interpreter {
+    /// The slots this call gives its callee (RFC-0062 §2): `content` from the
+    /// trailing block and each `Slot` parameter from its argument, lowered in
+    /// the caller's scope. `None` when the callee has no slot. A required slot
+    /// the call leaves out is `MissingParam`.
+    fn build_slot_frame(
+        &mut self,
+        callee: &ViewDecl,
+        el: &ElementNode,
+        known_views: &[&str],
+    ) -> Option<std::rc::Rc<SlotFrame>> {
+        let has_content = callee
+            .params
+            .iter()
+            .any(|p| p.name.as_str() == RESERVED_CONTENT);
+        if !has_content && !el.children.is_empty() {
+            self.errors.push(CompileError::UnexpectedChildren {
+                span: el.span,
+                name: el.name.as_str().to_string(),
+            });
+        }
+        if !callee.params.iter().any(is_slot_param) {
+            return None;
+        }
+        let mut slots = Vec::new();
+        let mut captured: Option<super::env::Captured> = None;
+        for param in callee.params.iter().filter(|p| is_slot_param(p)) {
+            let wrote = if param.name.as_str() == RESERVED_CONTENT {
+                (!el.children.is_empty()).then(|| SlotArg::Members(el.children.clone()))
+            } else {
+                self.slot_argument(param, el)
+            };
+            let given = match wrote {
+                // A slot passed on keeps the source of the view that wrote it.
+                Some(SlotArg::Forward(source)) => source,
+                Some(SlotArg::Members(members)) => {
+                    let env = captured
+                        .get_or_insert_with(|| self.env.capture(self.env.len()))
+                        .clone();
+                    Some(std::rc::Rc::new(SlotSource {
+                        members,
+                        env,
+                        inst: self.cur_inst,
+                        outer: self.slot_stack.last().cloned(),
+                        known_views: known_views.iter().map(|s| (*s).to_string()).collect(),
+                    }))
+                }
+                None => None,
+            };
+            if given.is_none()
+                && param.name.as_str() != RESERVED_CONTENT
+                && param_default(param).is_none()
+            {
+                self.errors.push(CompileError::MissingParam {
+                    span: el.span,
+                    name: param.name.as_str().to_string(),
+                    callee: el.name.as_str().to_string(),
+                });
+            }
+            slots.push((param.name.clone(), given));
+        }
+        Some(std::rc::Rc::new(SlotFrame { slots }))
+    }
+
+    /// What the call wrote for slot `param`: a block (`{ … }`, and `{}` is empty
+    /// but given), or a slot of the caller's own passed on by name. Anything
+    /// else is not a slot argument; the checker says so.
+    fn slot_argument(&mut self, param: &Param, el: &ElementNode) -> Option<SlotArg> {
+        match self.find_named_arg(el, &param.name)? {
+            Expr::SlotBlock { members, .. } => Some(SlotArg::Members(members.clone())),
+            Expr::Lambda { params, body, .. }
+                if params.is_empty()
+                    && matches!(body.as_ref(), Expr::Block(s, _) if s.is_empty()) =>
+            {
+                Some(SlotArg::Members(Vec::new()))
+            }
+            Expr::Ident(name, _) => self
+                .slot_stack
+                .last()
+                .and_then(|f| f.get(name))
+                .map(|source| SlotArg::Forward(source.clone())),
+            _ => None,
+        }
+    }
+
+    /// Lowers a slot's block where the callee places it (RFC-0062): among the
+    /// names visible where the call was written, as that view instance, with
+    /// that view's own slots. Each placement is lowered afresh, which is what
+    /// gives the elements of one a focus and an editing state of their own.
+    pub(super) fn lower_slot_source(&mut self, source: &SlotSource) -> Vec<RenderNode> {
+        let frame = self.env.enter_closure(source.env.clone());
+        let enclosing = std::mem::replace(&mut self.cur_inst, source.inst);
+        let pushed = source.outer.is_some();
+        if let Some(outer) = &source.outer {
+            self.slot_stack.push(outer.clone());
+        }
+        let known: Vec<&str> = source.known_views.iter().map(String::as_str).collect();
+        let nodes = self.lower_scope(&source.members, &known);
+        if pushed {
+            self.slot_stack.pop();
+        }
+        self.cur_inst = enclosing;
+        self.env.leave_closure(frame);
+        nodes
+    }
+
     // ── argument → parameter binding (RFC-0007 §3) ──────────────────
 
     /// Projects one call argument into a reactive memo over the **parent** scope
@@ -54,6 +238,7 @@ impl Interpreter {
     /// Binds a single named argument (`name: value`, from `(...)` or `#[...]`) to
     /// the callee parameter of the same `Symbol`, filling `slots[i]` and emitting
     /// `UnknownParam`/`DuplicateParam` as needed (RFC-0007 §3/§6).
+    #[allow(clippy::too_many_arguments)]
     fn bind_named_arg(
         &mut self,
         params: &[Param],
@@ -62,10 +247,13 @@ impl Interpreter {
         value: &Expr,
         slots: &mut [Option<ScopeId>],
         binds: &mut [Option<SignalId>],
+        layout: &mut Vec<(Symbol, ScopeId, Option<Symbol>)>,
     ) {
-        // The reserved `content` slot is filled by the child block, never a
-        // named value.
-        if name.as_str() == RESERVED_CONTENT {
+        // A slot (`content`, or one declared `: Slot`) is filled by a block,
+        // which `lower_user_view_call` lowers; it is never a projected value.
+        if name.as_str() == RESERVED_CONTENT
+            || params.iter().any(|p| &p.name == name && is_slot_param(p))
+        {
             return;
         }
         // `bind: x` is the short form of `bind name: x` for the view's only
@@ -108,6 +296,26 @@ impl Interpreter {
                 name: name.as_str().to_string(),
                 callee: callee.to_string(),
             }),
+            // A layout attribute (RFC-0062 §4): the view's parent decides where it
+            // sits, so it goes to the callee's root element.
+            None if crate::interp::intrinsics::VIEW_CALL_LAYOUT.contains(&name.as_str()) => {
+                if layout.iter().any(|(n, ..)| n == name) {
+                    self.errors.push(CompileError::DuplicateParam {
+                        span: value.span(),
+                        name: name.as_str().to_string(),
+                        callee: callee.to_string(),
+                    });
+                } else {
+                    // A bare word (`align_self: center`) is passed on as the
+                    // word, which is all an enum attribute reads.
+                    let word = match value {
+                        Expr::Ident(w, _) if self.env.lookup(w).is_none() => Some(w.clone()),
+                        _ => None,
+                    };
+                    let scope = self.project_arg(value);
+                    layout.push((name.clone(), scope, word));
+                }
+            }
             None => {
                 let hint = closest_match(name.as_str(), params.iter().map(|p| p.name.as_str()))
                     .map(str::to_string);
@@ -150,14 +358,13 @@ impl Interpreter {
         let callee_name = callee.name.as_str().to_string();
         let mut slots: Vec<Option<ScopeId>> = vec![None; params.len()];
         let mut binds: Vec<Option<SignalId>> = vec![None; params.len()];
+        let mut layout: Vec<(Symbol, ScopeId, Option<Symbol>)> = Vec::new();
         // Positional arguments map only to *value* parameters; the reserved
         // `content` slot is filled by the child block, not a value.
         let value_param_idx: Vec<usize> = params
             .iter()
             .enumerate()
-            .filter(|(_, p)| {
-                p.name.as_str() != RESERVED_CONTENT && !is_callback_param(p) && !p.bind
-            })
+            .filter(|(_, p)| !is_slot_param(p) && !is_callback_param(p) && !p.bind)
             .map(|(i, _)| i)
             .collect();
         let mut positional_count = 0usize;
@@ -173,6 +380,7 @@ impl Interpreter {
                     &arg.value,
                     &mut slots,
                     &mut binds,
+                    &mut layout,
                 );
             } else {
                 positional_count += 1;
@@ -204,6 +412,7 @@ impl Interpreter {
                     value,
                     &mut slots,
                     &mut binds,
+                    &mut layout,
                 );
             }
         }
@@ -254,7 +463,7 @@ impl Interpreter {
             if slot.is_none()
                 && binds[i].is_none()
                 && param_default(&params[i]).is_none()
-                && params[i].name.as_str() != RESERVED_CONTENT
+                && !is_slot_param(&params[i])
                 // Callback params are checked for presence in `bind_callbacks`.
                 && !is_callback_param(&params[i])
             {
@@ -277,6 +486,7 @@ impl Interpreter {
                 .enumerate()
                 .filter_map(|(i, s)| s.map(|sig| (params[i].name.clone(), sig)))
                 .collect(),
+            layout,
         }
     }
 
@@ -348,6 +558,13 @@ impl Interpreter {
         };
         if let Some(arg) = self.find_named_arg(call, &param.name) {
             match arg {
+                // `on_tap: none`, given on purpose: not given (RFC-0062).
+                Expr::Ident(word, _)
+                    if word.as_str() == "none"
+                        && call_site.captured(&self.env).iter().all(|(k, _)| k != word) =>
+                {
+                    self.env.push(param.name.clone(), Value::Unit);
+                }
                 Expr::Lambda {
                     params, body, span, ..
                 } => {
@@ -378,7 +595,10 @@ impl Interpreter {
                         .rev()
                         .find(|(k, _)| k == other)
                         .map(|(_, v)| v.clone());
-                    if let Some(Value::Fn(id)) = found {
+                    if matches!(found, Some(Value::Unit)) {
+                        // Forwarded from a view that was not given one.
+                        self.env.push(param.name.clone(), Value::Unit);
+                    } else if let Some(Value::Fn(id)) = found {
                         if self.fn_table.get(id.0 as usize).is_some_and(|e| e.2) {
                             self.env.push(param.name.clone(), Value::Fn(id));
                         } else {
@@ -414,6 +634,9 @@ impl Interpreter {
                     name: param.name.as_str().to_string(),
                 }),
             }
+        } else if param_default(param).is_some_and(is_none) {
+            // `= none`: not given, and calling it does nothing (RFC-0062).
+            self.env.push(param.name.clone(), Value::Unit);
         } else if let Some(Expr::Lambda { params, body, .. }) = param_default(param) {
             // The default is an action block (`= {}` / `= {|_|}`) written in
             // the callee: it sees the callee's frame so far.
@@ -474,6 +697,23 @@ impl Interpreter {
         // Own the callee so the `&self.view_table` borrow does not conflict with
         // the `&mut self` lowering below (the table is `Send` and owns its declarations).
         let callee = self.view_table.decl(id).clone();
+        // A `{ … }` argument that reads as actions and as elements is settled by
+        // what the callee's parameter is (RFC-0062 §2).
+        let settled = el.with_blocks_settled(
+            |name| {
+                callee
+                    .params
+                    .iter()
+                    .any(|p| &p.name == name && is_slot_param(p))
+            },
+            |name| {
+                callee
+                    .params
+                    .iter()
+                    .any(|p| &p.name == name && is_callback_param(p))
+            },
+        );
+        let el = settled.as_ref().unwrap_or(el);
 
         // Runtime depth bound (RFC-0007 §4): a guarded recursion whose
         // guard never terminates at lower time is truncated with a diagnostic
@@ -490,26 +730,11 @@ impl Interpreter {
         }
         self.instance_depth += 1;
 
-        // Slot (RFC-0007 D-A): a `{ ... }` block is allowed only when
-        // the callee declares a `content` parameter; the block is pre-lowered in
-        // the *caller* scope (capturing caller `var`s) and pushed as this
-        // instance's slot. A block passed to a slot-less callee is
-        // `UnexpectedChildren`.
-        let has_content_param = callee
-            .params
-            .iter()
-            .any(|p| p.name.as_str() == RESERVED_CONTENT);
-        let slot_nodes = if el.children.is_empty() {
-            Vec::new()
-        } else if has_content_param {
-            self.lower_members(&el.children, known_views)
-        } else {
-            self.errors.push(CompileError::UnexpectedChildren {
-                span: el.span,
-                name: el.name.as_str().to_string(),
-            });
-            Vec::new()
-        };
+        // Slots (RFC-0007 D-A, RFC-0062): each is lowered here, in the
+        // *caller's* scope, capturing the caller's names, and handed to the
+        // instance as a frame. A block passed to a view with no `content`
+        // parameter is `UnexpectedChildren`.
+        let frame = self.build_slot_frame(&callee, el, known_views);
 
         // 1) Bind arguments → parameters in the *parent* scope (RFC-0007 §3).
         let bindings = self.bind_args(&callee, el);
@@ -518,6 +743,13 @@ impl Interpreter {
         // nothing more to say. Its arguments and its block are checked above
         // and below, its body is the same body.
         if self.already_expanded(&callee, el) {
+            // The body is not lowered again, but what this call wrote in its
+            // slots is its own and still has to be checked.
+            if let Some(frame) = &frame {
+                for source in frame.slots.iter().filter_map(|(_, s)| s.as_ref()) {
+                    let _ = self.lower_slot_source(source);
+                }
+            }
             self.instance_depth -= 1;
             return;
         }
@@ -535,6 +767,20 @@ impl Interpreter {
         let snapshot = self.env.len();
         let mut call_site = CallerFrame::new(snapshot);
         for param in &callee.params {
+            // A slot is present or not, which `slot != none` asks (RFC-0062).
+            if is_slot_param(param) {
+                let given = frame
+                    .as_ref()
+                    .and_then(|f| f.get(&param.name))
+                    .is_some_and(Option::is_some);
+                let value = if given {
+                    Value::Bool(true)
+                } else {
+                    Value::Unit
+                };
+                self.env.push(param.name.clone(), value);
+                continue;
+            }
             // A callback prop (RFC-0019) binds the caller's action block as a
             // `Value::Fn`, resolved at invocation in `lower_call`, rather than a
             // projected value memo.
@@ -572,9 +818,44 @@ impl Interpreter {
         // 3) Lower the callee body and splice the roots as siblings (RFC-0007
         //    §2 step 5; reuses the multi-node `when`/`for` splice shape). The
         //    slot is live for `content` references within the body.
-        self.slot_stack.push(slot_nodes);
-        let nodes = self.lower_members(&callee.body, known_views);
-        self.slot_stack.pop();
+        // Layout attributes on the call go to the root elements (RFC-0062 §4).
+        // The caller's values are bound under names no program can write, and
+        // the body is copied with the attributes appended only when there are
+        // any: a call without them lowers the shared body as before.
+        let layout: Vec<crate::parser::ast::Attr> = bindings
+            .layout
+            .iter()
+            .map(|(name, scope, word)| {
+                let hidden = word.clone().unwrap_or_else(|| {
+                    let hidden = Symbol::intern(&format!("$layout:{}", name.as_str()));
+                    self.env.push(hidden.clone(), Value::Memo(*scope));
+                    hidden
+                });
+                crate::parser::ast::Attr {
+                    name: name.clone(),
+                    axis: None,
+                    kind: AttrKind::Prop {
+                        value: Expr::Ident(hidden, el.span),
+                    },
+                    span: el.span,
+                }
+            })
+            .collect();
+        let laid_out;
+        let body: &[crate::parser::ast::Member] = if layout.is_empty() {
+            &callee.body
+        } else {
+            laid_out = with_layout(&callee.body, &layout, &callee.params);
+            &laid_out
+        };
+        let pushed = frame.is_some();
+        if let Some(frame) = frame {
+            self.slot_stack.push(frame);
+        }
+        let nodes = self.lower_scope(body, known_views);
+        if pushed {
+            self.slot_stack.pop();
+        }
         self.cur_inst = caller_inst;
         out.extend(nodes);
 
@@ -625,6 +906,7 @@ fn same_shape(a: &ElementNode, b: &ElementNode) -> bool {
         || a.content.len() != b.content.len()
         || a.attrs.len() != b.attrs.len()
         || a.action.is_some() != b.action.is_some()
+        || a.children.is_empty() != b.children.is_empty()
     {
         return false;
     }
@@ -658,6 +940,8 @@ fn same_value(a: &Expr, b: &Expr) -> bool {
         }
     }
     match (a, b) {
+        // Whether a slot was given is what a body can branch on, not what is in it.
+        (Expr::SlotBlock { .. }, Expr::SlotBlock { .. }) => true,
         (Expr::StrLit(p, _), Expr::StrLit(q, _)) if plain(p).is_some() && plain(q).is_some() => {
             plain(p) == plain(q)
         }

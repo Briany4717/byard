@@ -295,6 +295,9 @@ impl StyleState {
     /// text field (RFC-0052). A pointer press on anything else focuses
     /// without it.
     pub const FOCUS_VISIBLE: StyleState = StyleState(1 << 9);
+    /// The element, or an element inside it, has keyboard focus (RFC-0062).
+    /// Not reported by the router, which knows no tree; the paint walk adds it.
+    pub const FOCUS_WITHIN: StyleState = StyleState(1 << 10);
 
     /// The empty state (no interaction flags).
     #[must_use]
@@ -719,6 +722,13 @@ impl EventRouter {
             s.insert(StyleState::DRAGGING);
         }
         s
+    }
+
+    /// The element that holds keyboard focus, if any (RFC-0062: `focus_within`
+    /// is the focused element and its ancestors).
+    #[must_use]
+    pub fn focused_element(&self) -> Option<u32> {
+        self.focused
     }
 
     /// Registers a handler for `kind` on element `elem`'s `rect`.

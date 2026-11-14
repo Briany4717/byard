@@ -93,6 +93,7 @@ impl Interpreter {
         w.els_ast = Vec::new();
         w.known_views = Vec::new();
         w.env_snapshot = Vec::new();
+        w.slots = None;
         w.last_take = None;
         self.free_when_pools.push(pool);
         self.retired.scopes.extend(then_scopes);
@@ -113,6 +114,7 @@ impl Interpreter {
         f.body = Vec::new();
         f.known_views = Vec::new();
         f.env_snapshot = Vec::new();
+        f.slots = None;
         f.len = 0;
         self.free_for_pools.push(pool);
         // The signals themselves stay in the table (signals are not recycled),

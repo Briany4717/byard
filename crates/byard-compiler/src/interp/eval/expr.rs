@@ -560,8 +560,17 @@ impl Interpreter {
             // `Bool`; `+` also does string/list concat (RFC-0027 §3/§4). The
             // short-circuiting `&&`/`||` (RFC-0027 §2) are lowered as control
             // flow so the un-taken side is neither evaluated nor read-tracked.
+            Expr::SlotBlock { .. } => Box::new(|_| Value::Unit),
             Expr::Binary { op, lhs, rhs, .. } => {
                 let op = *op;
+                // `x != none` (RFC-0062): whether a slot or callback parameter
+                // was given is known when the view is instantiated.
+                if matches!(op, BinOp::Eq | BinOp::Ne) {
+                    if let Some(present) = self.none_test(lhs, rhs) {
+                        let answer = present == (op == BinOp::Ne);
+                        return Box::new(move |_| Value::Bool(answer));
+                    }
+                }
                 let mut lc = self.lower_expr(lhs, payload_name);
                 let mut rc = self.lower_expr(rhs, payload_name);
                 match op {
@@ -1029,6 +1038,27 @@ impl Interpreter {
             extends: self.theme.extended().map(str::to_string),
         });
         Some(Box::new(|_| Value::Unit))
+    }
+
+    /// For `x == none` / `x != none` where `x` names a parameter bound in this
+    /// instance: whether it was given.
+    fn none_test(&self, lhs: &Expr, rhs: &Expr) -> Option<bool> {
+        let is_none = |e: &Expr| {
+            matches!(e, Expr::Ident(n, _) if n.as_str() == "none")
+                && self.env.lookup(&Symbol::intern("none")).is_none()
+        };
+        let other = match (is_none(lhs), is_none(rhs)) {
+            (false, true) => lhs,
+            (true, false) => rhs,
+            _ => return None,
+        };
+        let Expr::Ident(name, _) = other else {
+            return None;
+        };
+        if self.lambda_params.contains(name) {
+            return None;
+        }
+        Some(!matches!(self.env.lookup(name)?, Value::Unit))
     }
 
     fn lower_ident(&self, name: &Symbol, payload_name: Option<&Symbol>) -> Lowered {

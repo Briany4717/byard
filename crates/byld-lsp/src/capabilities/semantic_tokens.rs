@@ -546,6 +546,7 @@ fn collect_expr_tokens(expr: &Expr, out: &mut Vec<RawToken>) {
                 collect_expr_tokens(value, out);
             }
         }
+        Expr::SlotBlock { members, .. } => collect_member_tokens(members, out),
         Expr::Lambda { body, .. } => collect_expr_tokens(body, out),
         Expr::Block(statements, _) => {
             for statement in statements {

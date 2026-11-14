@@ -222,6 +222,7 @@ pub(super) fn children(expr: &Expr) -> Vec<&Expr> {
         | Expr::AngleLit(..)
         | Expr::Ident(..)
         | Expr::ClassRef(..)
+        | Expr::SlotBlock { .. }
         | Expr::Error(_) => Vec::new(),
         Expr::StrLit(parts, _) => parts
             .iter()

@@ -386,6 +386,9 @@ struct PackageData {
     private_records: std::collections::HashSet<Symbol>,
 }
 
+/// A view's parameters as `(name, is a Slot, is an Fn)`, by view name.
+type CalleeKinds = HashMap<Symbol, Vec<(Symbol, bool, bool)>>;
+
 struct Resolver<'p> {
     provider: &'p mut dyn PackageProvider,
     map: SourceMap,
@@ -396,6 +399,12 @@ struct Resolver<'p> {
     /// package's name, which its views are canonically named under, as they
     /// are for the app that uses it.
     root_library: Option<String>,
+    /// For each view the program declares, by canonical name, what each of its
+    /// parameters is: `(name, is a Slot, is an Fn)`. Lets a call's `{ … }`
+    /// argument that reads both as actions and as elements (RFC-0062 §2) be
+    /// settled here, so that only the reading that was meant is resolved and
+    /// reported on.
+    callee_kinds: std::cell::RefCell<CalleeKinds>,
 }
 
 impl Resolver<'_> {
@@ -445,6 +454,7 @@ fn resolve_root(
         packages: HashMap::new(),
         order: Vec::new(),
         root_library,
+        callee_kinds: std::cell::RefCell::default(),
     };
 
     let mut stack = Vec::new();
@@ -748,6 +758,7 @@ impl Resolver<'_> {
         let local: HashMap<Symbol, Span> = self.packages[pkg_name].exports.clone();
         let mut views =
             std::mem::take(&mut self.packages.get_mut(pkg_name).unwrap().modules[module_idx].views);
+        self.collect_callee_kinds(pkg_name, &views);
         let mut errors = Vec::new();
         for view in &mut views {
             if let Some(prefix) = self.prefix(pkg_name) {
@@ -1165,6 +1176,62 @@ impl Resolver<'_> {
         }
     }
 
+    /// Fills `callee_kinds` with the views of every loaded package and of
+    /// `current` (the module being rewritten, whose views are taken out of its
+    /// package), under the canonical names calls will have by then.
+    fn collect_callee_kinds(&self, pkg_name: &str, current: &[ViewDecl]) {
+        let mut kinds = self.callee_kinds.borrow_mut();
+        kinds.clear();
+        let mut add = |prefix: Option<&str>, view: &ViewDecl| {
+            let name = match prefix {
+                Some(p) if !view.name.as_str().starts_with(&format!("{p}.")) => {
+                    Symbol::intern(&format!("{p}.{}", view.name.as_str()))
+                }
+                _ => view.name.clone(),
+            };
+            let params = view
+                .params
+                .iter()
+                .map(|p| {
+                    let slot = p.name.as_str() == crate::interp::eval::RESERVED_CONTENT
+                        || matches!(&p.ty, Some(crate::parser::ast::Type::Named { name, .. })
+                            if name.as_str() == "Slot");
+                    let callback = matches!(p.ty, Some(crate::parser::ast::Type::Function { .. }));
+                    (p.name.clone(), slot, callback)
+                })
+                .collect();
+            kinds.insert(name, params);
+        };
+        for (name, package) in &self.packages {
+            let prefix = self.prefix(name);
+            for module in &package.modules {
+                for view in &module.views {
+                    add(prefix, view);
+                }
+            }
+        }
+        let prefix = self.prefix(pkg_name);
+        for view in current {
+            add(prefix, view);
+        }
+    }
+
+    /// Settles the `{ … }` arguments of `el` that read both ways, by the
+    /// parameters of the view it calls, when that view is known.
+    fn settle_blocks(&self, el: &mut ElementNode) {
+        let kinds = self.callee_kinds.borrow();
+        let Some(params) = kinds.get(&el.name) else {
+            return;
+        };
+        let settled = el.with_blocks_settled(
+            |n| params.iter().any(|(p, slot, _)| p == n && *slot),
+            |n| params.iter().any(|(p, _, callback)| p == n && *callback),
+        );
+        if let Some(settled) = settled {
+            *el = settled;
+        }
+    }
+
     /// Validates one `use pkg.{sym}` entry and records the bare binding.
     fn check_selective_symbol(
         &mut self,
@@ -1336,8 +1403,46 @@ impl Resolver<'_> {
         // Anything else stays as written; ViewTable validation reports
         // UnknownView with hints over the canonical name set.
 
+        // RFC-0062: with the callee named, what its `{ … }` arguments are is
+        // known, and only that reading is resolved below.
+        self.settle_blocks(el);
+
         for child in &mut el.children {
             self.rewrite_member(child, pkg_name, local, aliases, bare, errors);
+        }
+        // RFC-0062: the blocks handed to a `Slot` name views too.
+        let slot_values =
+            el.content
+                .iter_mut()
+                .map(|a| &mut a.value)
+                .chain(el.attrs.iter_mut().filter_map(|a| match &mut a.kind {
+                    crate::parser::ast::AttrKind::Prop { value } => Some(value),
+                    _ => None,
+                }));
+        for value in slot_values {
+            match value {
+                Expr::SlotBlock { members, .. } => {
+                    for child in members {
+                        self.rewrite_member(child, pkg_name, local, aliases, bare, errors);
+                    }
+                }
+                // A block that reads as actions and as elements is settled only
+                // when the callee is known, later. Its names are rewritten, so
+                // that it works as elements, but what that reading finds wrong
+                // (`http.get(…)` is no package) is not said: if the block is
+                // actions, it is not a mistake, and if it is elements, lowering
+                // reports the view it could not find.
+                Expr::Lambda {
+                    slot: Some(members),
+                    ..
+                } => {
+                    let mut unsaid = Vec::new();
+                    for child in members {
+                        self.rewrite_member(child, pkg_name, local, aliases, bare, &mut unsaid);
+                    }
+                }
+                _ => {}
+            }
         }
     }
 }

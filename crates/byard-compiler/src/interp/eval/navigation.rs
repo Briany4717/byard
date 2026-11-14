@@ -151,6 +151,9 @@ pub(super) struct NavPool {
     /// The instance env captured at lower time (RFC-0019), restored when a new
     /// entry's body is lowered.
     env_snapshot: Vec<(Symbol, Value)>,
+    /// The slots of the view instance the container was written in (see
+    /// `WhenPool::slots`).
+    slots: Option<std::rc::Rc<super::SlotFrame>>,
     /// The view instance the container was written in (see `WhenPool::inst`).
     pub(super) inst: u32,
     /// The live history stack (a `NavHost`'s instantiated, preserved tabs).
@@ -192,6 +195,7 @@ impl NavPool {
         self.state_blocks = Vec::new();
         self.known_views = Vec::new();
         self.env_snapshot = Vec::new();
+        self.slots = None;
         self.live = Vec::new();
         self.anim = None;
         self.current = 0;
@@ -429,6 +433,7 @@ impl Interpreter {
             routes,
             known_views: known_views.iter().map(|s| (*s).to_string()).collect(),
             env_snapshot: self.capture_env_snapshot(),
+            slots: self.slot_stack.last().cloned(),
             inst: self.cur_inst,
             entries: Vec::new(),
             current: 0,
@@ -643,9 +648,17 @@ impl Interpreter {
         // time (an event action, a reactive prop) captures `route`/`params` in
         // its env snapshot, the bindings are truncated out just below.
         self.nav_depth += 1;
+        let slots = self.nav_pools[pool].slots.clone();
+        let pushed = slots.is_some();
+        if let Some(frame) = slots {
+            self.slot_stack.push(frame);
+        }
         self.ctx.push_scope_tracker();
-        let nodes = self.lower_members(&body, &known_refs);
+        let nodes = self.lower_scope(&body, &known_refs);
         let scopes = self.ctx.pop_scope_tracker();
+        if pushed {
+            self.slot_stack.pop();
+        }
         self.nav_depth -= 1;
         self.cur_inst = enclosing;
         self.env.truncate(env_base);

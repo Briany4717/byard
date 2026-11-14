@@ -12,7 +12,7 @@ use super::canvas::{
 };
 use super::layout::{ForPool, WhenPool};
 use super::states::attrs_with_states;
-use super::{Interpreter, RESERVED_CONTENT, RenderNode, controller, members_span};
+use super::{Interpreter, RenderNode, controller, members_span};
 use crate::diagnostics::{CompileError, Span};
 use crate::interp::env::Value;
 use crate::interp::intrinsics::validate_element_in;
@@ -74,7 +74,9 @@ impl Interpreter {
         // RFC-0016: expand `..style` spreads into a flat attribute set *before*
         // validating or lowering, so everything downstream sees ordinary
         // resolved attributes (and a spread can never leak into the checker).
-        let (attrs, state_blocks) = self.expand_style_spreads(&el.attrs);
+        let (attrs, mut state_blocks) = self.expand_style_spreads(&el.attrs);
+        // RFC-0062: `on field.focused` names another element; find it.
+        self.resolve_remote_states(&mut state_blocks);
         // Validate the base *and* every state block's attributes against the
         // intrinsic's contract (an `on hover { bg: … }` must obey the same §5
         // rules as an inline `bg:`); the state attrs are validation-only and do
@@ -95,7 +97,19 @@ impl Interpreter {
         // element's members minus those declarations, borrowed unchanged in the
         // overwhelming case where there are none.
         let (measure, el_children) = self.lower_measures(el, &attrs);
-        let uid = self.fresh_elem_uid();
+        // RFC-0062: an element tagged `as name` has the identity its scope
+        // declared for the name before lowering began, so that a state block
+        // written before the element can name it too.
+        let declared = el.anchor_name.as_ref().and_then(|name| {
+            match self
+                .env
+                .lookup(&Symbol::intern(&format!("@{}", name.as_str())))
+            {
+                Some(Value::Int(uid)) => u32::try_from(*uid).ok(),
+                _ => None,
+            }
+        });
+        let uid = declared.unwrap_or_else(|| self.fresh_elem_uid());
         let el_children: &[Member] = &el_children;
         match el.name.as_str() {
             "Text" | "Button" if !el.content.is_empty() => {
@@ -459,10 +473,18 @@ impl Interpreter {
             // current instance was called with (RFC-0007 D-A). The slot
             // nodes were pre-lowered in the caller scope.
             Member::Element(e)
-                if e.name.as_str() == RESERVED_CONTENT && !self.slot_stack.is_empty() =>
+                if self
+                    .slot_stack
+                    .last()
+                    .is_some_and(|f| f.get(&e.name).is_some()) =>
             {
-                if let Some(slot) = self.slot_stack.last() {
-                    out.extend(slot.clone());
+                let source = self
+                    .slot_stack
+                    .last()
+                    .and_then(|f| f.get(&e.name))
+                    .and_then(Clone::clone);
+                if let Some(source) = source {
+                    out.extend(self.lower_slot_source(&source));
                 }
             }
             Member::Element(e) if self.is_user_view_call(e) => {
@@ -557,6 +579,7 @@ impl Interpreter {
                     known_views: known_views.iter().map(|s| (*s).to_string()).collect(),
                     env_snapshot,
                     inst: self.cur_inst,
+                    slots: self.slot_stack.last().cloned(),
                     then: None,
                     els: None,
                     then_scopes: Vec::new(),
@@ -588,6 +611,7 @@ impl Interpreter {
                     known_views: known_views.iter().map(|s| (*s).to_string()).collect(),
                     env_snapshot,
                     inst: self.cur_inst,
+                    slots: self.slot_stack.last().cloned(),
                     item_slots: Vec::new(),
                     bodies: Vec::new(),
                     slot_scopes: Vec::new(),

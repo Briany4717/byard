@@ -102,6 +102,10 @@ pub(super) struct WhenPool {
     /// The view instance the `when` was written in, so a branch lowered later
     /// belongs to it and not to whatever was being lowered by then.
     pub(super) inst: u32,
+    /// The slots of the view instance the `when` was written in (RFC-0062),
+    /// put back while a branch is lowered so `content` and the named slots
+    /// resolve there as they do outside it.
+    pub(super) slots: Option<std::rc::Rc<super::SlotFrame>>,
     /// The lowered `then` branch, once first taken.
     pub(super) then: Option<Vec<RenderNode>>,
     /// The lowered `else` branch, once first taken.
@@ -131,6 +135,9 @@ pub(super) struct ForPool {
     pub(super) env_snapshot: Vec<(Symbol, super::env::Value)>,
     /// The view instance the `for` was written in (see `WhenPool::inst`).
     pub(super) inst: u32,
+    /// The slots of the view instance the `for` was written in (see
+    /// `WhenPool::slots`).
+    pub(super) slots: Option<std::rc::Rc<super::SlotFrame>>,
     /// One signal per pooled index, holding that slot's current element value.
     pub(super) item_slots: Vec<super::env::SignalId>,
     /// One lowered body per pooled index. A prefix of `item_slots`: a pool that
@@ -238,6 +245,7 @@ impl Interpreter {
         // second run is the one that describes the frame.
         self.measure_targets.clear();
         self.elem_uids.clear();
+        self.elem_value_states.clear();
         // Expand reactive `when`/`for` at the root, then build each concrete node.
         let root_children = self.build_children(tree, pools, flat_ids);
 
@@ -454,15 +462,10 @@ impl Interpreter {
         }
     }
 
-    /// Lowers one branch of a `when` pool from its AST and the environment
-    /// captured where the `when` was written, returning the nodes and the
-    /// reactive scopes lowering opened. The one place a branch is lowered, so
-    /// the render-time reconcile and the offline
-    /// [`lower_every_branch`](Self::lower_every_branch) (`byard check`) cannot
-    /// disagree about what a branch means.
     /// Lowers the members of a `for` or `when` body (RFC-0061): its `let`s are
     /// defined first, in the body's own scope, so the elements read them; then
-    /// the members are lowered as everywhere. A view body defines its `let`s
+    /// the body is lowered as a scope of its own, with its `as` names declared
+    /// before any element reads them (RFC-0062). A view body defines its `let`s
     /// when the view is instantiated, which is why this is not in
     /// [`lower_members`](Self::lower_members).
     fn lower_body_members(
@@ -475,9 +478,15 @@ impl Interpreter {
                 self.eval_member(m);
             }
         }
-        self.lower_members(members, known_views)
+        self.lower_scope(members, known_views)
     }
 
+    /// Lowers one branch of a `when` pool from its AST and the environment
+    /// captured where the `when` was written, returning the nodes and the
+    /// reactive scopes lowering opened. The one place a branch is lowered, so
+    /// the render-time reconcile and the offline
+    /// [`lower_every_branch`](Self::lower_every_branch) (`byard check`) cannot
+    /// disagree about what a branch means.
     pub(super) fn lower_when_branch(
         &mut self,
         pool: usize,
@@ -507,11 +516,19 @@ impl Interpreter {
         let restored = !env_snap.is_empty() || has_lets(&ast);
         self.restored_depth += u32::from(restored);
         let enclosing = std::mem::replace(&mut self.cur_inst, self.when_pools[pool].inst);
+        let slots = self.when_pools[pool].slots.clone();
+        let pushed = slots.is_some();
+        if let Some(frame) = slots {
+            self.slot_stack.push(frame);
+        }
         // The scopes the branch opens are recorded, so a route popped with this
         // `when` in it can retire them.
         self.ctx.push_scope_tracker();
         let nodes = self.lower_body_members(&ast, &known_refs);
         let scopes = self.ctx.pop_scope_tracker();
+        if pushed {
+            self.slot_stack.pop();
+        }
         self.restored_depth -= u32::from(restored);
         self.cur_inst = enclosing;
         self.env.truncate(env_base);
@@ -549,9 +566,17 @@ impl Interpreter {
         // below before render, RFC-0027).
         self.for_depth += 1;
         let enclosing = std::mem::replace(&mut self.cur_inst, self.for_pools[pool].inst);
+        let slots = self.for_pools[pool].slots.clone();
+        let pushed = slots.is_some();
+        if let Some(frame) = slots {
+            self.slot_stack.push(frame);
+        }
         self.ctx.push_scope_tracker();
         let body_nodes = self.lower_body_members(&body_ast, &known_refs);
         let scopes = self.ctx.pop_scope_tracker();
+        if pushed {
+            self.slot_stack.pop();
+        }
         self.for_depth -= 1;
         self.cur_inst = enclosing;
         self.env.truncate(env_base);
@@ -806,6 +831,7 @@ impl Interpreter {
             attrs,
             state_blocks,
             crate::interp::events::StyleState::empty(),
+            &std::collections::HashMap::new(),
             &|c| viewport_holds(c, self.viewport, &self.theme),
         );
         // RFC-0061: a leaf has no children, so its place in the build order is
@@ -1079,9 +1105,9 @@ impl Interpreter {
                 state_blocks,
                 children,
                 env_snapshot,
+                bound_sig,
                 measure,
                 uid,
-                bound_sig,
                 ..
             } => {
                 // RFC-0016 responsive variants reach layout here, one pass ahead
@@ -1096,6 +1122,7 @@ impl Interpreter {
                     attrs,
                     state_blocks,
                     crate::interp::events::StyleState::empty(),
+                    &std::collections::HashMap::new(),
                     &|c| viewport_holds(c, self.viewport, &self.theme),
                 );
                 // The same restore the paint walk does, for the same reason and
@@ -1130,6 +1157,17 @@ impl Interpreter {
                 );
                 if let Ok(id) = &out {
                     self.apply_flex_item(attrs, *id, in_stack)?;
+                }
+                // RFC-0062: an element whose states another names has its value
+                // states (`checked`, `selected`, `invalid`, `disabled`) read here,
+                // where its attributes are in scope, so that an element written
+                // before it can follow them in the same frame.
+                if self.remote_targets.contains(uid) {
+                    let mut value = self.prop_style_state(attrs, *bound_sig, name.as_str());
+                    if self.eval_bool_prop(attrs, "disabled") == Some(true) {
+                        value = value.union(crate::interp::events::StyleState::DISABLED);
+                    }
+                    self.elem_value_states.insert(*uid, value);
                 }
                 self.env.truncate(env_base);
                 // RFC-0038: pair the element with the node that will hold its
@@ -1449,10 +1487,11 @@ impl Interpreter {
                 .style_state(self.atlas.next_build_slot())
                 .union(self.prop_style_state(states.raw, states.bound_sig, name))
         };
-        let resolved = resolve_state_attrs(states.raw, states.blocks, state, &|c| {
-            viewport_holds(c, self.viewport, &self.theme)
-        })
-        .into_owned();
+        let resolved =
+            resolve_state_attrs(states.raw, states.blocks, state, &self.elem_states, &|c| {
+                viewport_holds(c, self.viewport, &self.theme)
+            })
+            .into_owned();
         let resolved = self.pick_keywords(std::borrow::Cow::Owned(resolved));
         std::borrow::Cow::Owned(resolved.into_owned())
     }

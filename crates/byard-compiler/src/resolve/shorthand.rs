@@ -77,6 +77,27 @@ fn walk(member: &mut Member, table: &HashMap<Symbol, Option<Vec<Slot>>>) {
             for child in &mut el.children {
                 walk(child, table);
             }
+            let slot_values =
+                el.content
+                    .iter_mut()
+                    .map(|a| &mut a.value)
+                    .chain(el.attrs.iter_mut().filter_map(|a| match &mut a.kind {
+                        crate::parser::ast::AttrKind::Prop { value } => Some(value),
+                        _ => None,
+                    }));
+            for value in slot_values {
+                let members = match value {
+                    crate::parser::ast::Expr::SlotBlock { members, .. }
+                    | crate::parser::ast::Expr::Lambda {
+                        slot: Some(members),
+                        ..
+                    } => Some(members),
+                    _ => None,
+                };
+                for m in members.into_iter().flatten() {
+                    walk(m, table);
+                }
+            }
         }
         Member::For { body, .. } | Member::Route { body, .. } => {
             for m in body {

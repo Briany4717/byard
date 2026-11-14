@@ -472,6 +472,45 @@ pub struct InstanceBindings {
     /// The bindings (RFC-0051): `(param name, the caller's signal)`. The
     /// callee holds the signal itself, not a memo over it.
     pub signals: Vec<(Symbol, SignalId)>,
+    /// Layout attributes written on the call (RFC-0062 §4): `(attribute,
+    /// memo over the caller's value, the bare word the caller wrote if it wrote one)`, to be put on the callee's root elements.
+    pub layout: Vec<(Symbol, ScopeId, Option<Symbol>)>,
+}
+
+/// A block a call gave to a slot (RFC-0062): the elements as written, and what
+/// lowering them needs, the names visible at the call and the view instance
+/// that wrote them. Lowered where the callee places the slot, once for each
+/// placement, so a slot placed in every row of a `for` is a set of elements of
+/// its own in each: its own focus, its own editing state.
+#[derive(Debug)]
+pub(crate) struct SlotSource {
+    pub(crate) members: Vec<Member>,
+    pub(crate) env: super::env::Captured,
+    pub(crate) inst: u32,
+    /// The slots of the view that wrote the block, for a slot it passes on.
+    pub(crate) outer: Option<std::rc::Rc<SlotFrame>>,
+    pub(crate) known_views: Vec<String>,
+}
+
+/// The RFC-0062 state features lowering found in use.
+#[derive(Debug, Default, Clone, Copy)]
+pub(crate) struct StateUses {
+    /// A state block names `focus_within`.
+    pub(crate) focus_within: bool,
+}
+
+/// The slots one view instance was called with (RFC-0062): for each `Slot`
+/// parameter and `content`, `None` when the call did not give it.
+#[derive(Debug, Default)]
+pub(crate) struct SlotFrame {
+    pub(crate) slots: Vec<(Symbol, Option<std::rc::Rc<SlotSource>>)>,
+}
+
+impl SlotFrame {
+    /// The entry for `name`: `None` when the view has no such slot.
+    pub(crate) fn get(&self, name: &Symbol) -> Option<&Option<std::rc::Rc<SlotSource>>> {
+        self.slots.iter().find(|(n, _)| n == name).map(|(_, s)| s)
+    }
 }
 
 /// The reserved parameter/element name for a user view's child-block slot
@@ -598,7 +637,7 @@ pub struct Interpreter {
     /// user-view instance (RFC-0007 D-A). The block is
     /// pre-lowered in the *caller* scope so a `content` element reference inside
     /// the callee body splices nodes that capture the caller's environment.
-    slot_stack: Vec<Vec<RenderNode>>,
+    slot_stack: Vec<std::rc::Rc<SlotFrame>>,
     /// Reactive `for` body pools (RFC-0018), indexed by [`RenderNode::For::pool`].
     /// Grows as `for` loops are lowered; each pool holds that loop's reusable
     /// per-slot bodies and element signals. Reconciled once per frame before the
@@ -725,6 +764,21 @@ pub struct Interpreter {
     measures: Vec<MeasureSlot>,
     /// The next [`RenderNode::Box::uid`] to hand out.
     next_elem_uid: u32,
+    /// The interaction states of every named element (`as name`) painted so
+    /// far this frame, by [`RenderNode::Box::uid`] (RFC-0062 §5). Filled only
+    /// when a state block that names another element was lowered.
+    elem_states: std::collections::HashMap<u32, crate::interp::events::StyleState>,
+    /// The value states of the same elements, read during layout, where their
+    /// attributes are in scope, and published before the frame paints.
+    elem_value_states: std::collections::HashMap<u32, crate::interp::events::StyleState>,
+    /// The elements whose states another element's state block names
+    /// (RFC-0062), by [`RenderNode::Box::uid`]: only these publish theirs.
+    remote_targets: std::collections::HashSet<u32>,
+    /// What lowering found the frame has to pay for.
+    state_uses: StateUses,
+    /// The layout indices of the focused element and its ancestors, for this
+    /// frame, once something asked.
+    focus_chain: Option<Vec<u32>>,
     /// This frame's `(layout index, uid)` of every box, recorded by the layout
     /// build; and the last frame's, which focus and editing state were keyed by.
     elem_uids: Vec<(u32, u32)>,
@@ -1714,6 +1768,9 @@ impl Interpreter {
         // rects have to go first. An anchor whose element unmounted must stop
         // existing rather than keep pointing at where it used to be.
         self.anchor_rects.clear();
+        // RFC-0062: the states named elements publish are this frame's too.
+        self.elem_states.clear();
+        self.focus_chain = None;
         // The atlas is **not** torn down here any more (RFC-0032 §R3). Whether
         // it can be retained is not knowable until `reconcile_structure` has
         // run, so the decision, and the `clear()` that follows from it, moves
@@ -1950,7 +2007,16 @@ impl Interpreter {
         self.fire_measures();
         // Layout indices have just been reassigned: focus and editing state
         // find their elements again before anything paints or reads them.
+        // This frame's elements, before following swaps the tables.
+        let named = if self.remote_targets.is_empty() {
+            Vec::new()
+        } else {
+            self.elem_uids.clone()
+        };
         self.follow_elements();
+        // RFC-0062: what a named element's states are, known before anything
+        // paints, so an element written before it can follow.
+        self.publish_named_states(&named);
 
         self.retained.flat_ids.clear();
         self.retained.flat_ids.extend_from_slice(&flat_ids);
@@ -2176,15 +2242,20 @@ impl Interpreter {
         // `content` reference then splices nothing instead of being mistaken for
         // an `UnknownView`. A real call (`lower_user_view_call`) pushes the
         // caller's block over this before lowering the body.
-        let has_content_slot = view
-            .params
-            .iter()
-            .any(|p| p.name.as_str() == RESERVED_CONTENT);
-        if has_content_slot {
-            self.slot_stack.push(Vec::new());
+        let has_slots = view.params.iter().any(instance::is_slot_param);
+        if has_slots {
+            let frame = SlotFrame {
+                slots: view
+                    .params
+                    .iter()
+                    .filter(|p| instance::is_slot_param(p))
+                    .map(|p| (p.name.clone(), None))
+                    .collect(),
+            };
+            self.slot_stack.push(std::rc::Rc::new(frame));
         }
-        let nodes = self.lower_members(&view.body, known_views);
-        if has_content_slot {
+        let nodes = self.lower_scope(&view.body, known_views);
+        if has_slots {
             self.slot_stack.pop();
         }
         nodes

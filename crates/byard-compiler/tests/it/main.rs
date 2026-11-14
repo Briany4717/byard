@@ -21,6 +21,7 @@ mod clock;
 mod color_alpha;
 mod component_layout;
 mod composed_controls;
+mod composing_components;
 mod control_grow;
 mod controller_boundary;
 mod disabled_gate;

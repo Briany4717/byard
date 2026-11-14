@@ -254,12 +254,13 @@ impl Interpreter {
                     let elem_idx = self.atlas.node_index(atlas_node);
                     let state = elem_idx
                         .map_or_else(crate::interp::events::StyleState::empty, |i| {
-                            self.router.style_state(i)
+                            self.element_style_state(i)
                         })
                         .union(self.prop_style_state(attrs, None, ""));
-                    let attrs = resolve_state_attrs(attrs, state_blocks, state, &|c| {
-                        viewport_holds(c, self.viewport, &self.theme)
-                    });
+                    let attrs =
+                        resolve_state_attrs(attrs, state_blocks, state, &self.elem_states, &|c| {
+                            viewport_holds(c, self.viewport, &self.theme)
+                        });
                     let attrs = self.pick_keywords(attrs);
                     let attrs = attrs.as_ref();
                     let text = match self.binding_value(*content) {
@@ -462,7 +463,7 @@ impl Interpreter {
                 anchor_name,
                 measure: _,
                 clip_path,
-                uid: _,
+                uid,
                 inst: _,
             } => {
                 // RFC-0019 §2: restore the instance environment captured at lower
@@ -541,12 +542,22 @@ impl Interpreter {
                     // pointer/focus/drag mask so `on checked { … }` etc. resolve.
                     let paint_state = elem_idx
                         .map_or_else(crate::interp::events::StyleState::empty, |i| {
-                            self.router.style_state(i)
+                            self.element_style_state(i)
                         })
                         .union(self.prop_style_state(attrs, *bound_sig, name.as_str()));
-                    let paint_attrs = resolve_state_attrs(attrs, state_blocks, paint_state, &|c| {
-                        viewport_holds(c, self.viewport, &self.theme)
-                    });
+                    // RFC-0062: an element tagged `as name` publishes the states it
+                    // resolved, for the elements after it that name them. Before
+                    // its children paint, so a descendant sees this frame's.
+                    if self.remote_targets.contains(uid) {
+                        self.elem_states.insert(*uid, paint_state);
+                    }
+                    let paint_attrs = resolve_state_attrs(
+                        attrs,
+                        state_blocks,
+                        paint_state,
+                        &self.elem_states,
+                        &|c| viewport_holds(c, self.viewport, &self.theme),
+                    );
                     let paint_attrs = paint_attrs.as_ref();
                     // Resolve the paint-time transform once, up front, so it can
                     // be applied both to a plain container's `bg` fill *and* to
@@ -1344,12 +1355,16 @@ impl Interpreter {
                 let elem_idx = self.atlas.node_index(atlas_node);
                 let state = elem_idx
                     .map_or_else(crate::interp::events::StyleState::empty, |i| {
-                        self.router.style_state(i)
+                        self.element_style_state(i)
                     })
                     .union(self.prop_style_state(&p.attrs, None, ""));
-                let paint_attrs = resolve_state_attrs(&p.attrs, &p.state_blocks, state, &|c| {
-                    viewport_holds(c, self.viewport, &self.theme)
-                });
+                let paint_attrs = resolve_state_attrs(
+                    &p.attrs,
+                    &p.state_blocks,
+                    state,
+                    &self.elem_states,
+                    &|c| viewport_holds(c, self.viewport, &self.theme),
+                );
                 let paint_attrs = self.pick_keywords(paint_attrs);
                 let paint_attrs = paint_attrs.as_ref();
                 let own_transform = self.resolve_transform(paint_attrs, nav_rect);
@@ -1487,12 +1502,13 @@ impl Interpreter {
                         .atlas
                         .node_index(atlas_node)
                         .map_or_else(crate::interp::events::StyleState::empty, |i| {
-                            self.router.style_state(i)
+                            self.element_style_state(i)
                         })
                         .union(self.prop_style_state(attrs, None, ""));
-                    let attrs = resolve_state_attrs(attrs, state_blocks, state, &|c| {
-                        viewport_holds(c, self.viewport, &self.theme)
-                    });
+                    let attrs =
+                        resolve_state_attrs(attrs, state_blocks, state, &self.elem_states, &|c| {
+                            viewport_holds(c, self.viewport, &self.theme)
+                        });
                     let attrs = self.pick_keywords(attrs);
                     let attrs = attrs.as_ref();
                     let src_val = self
@@ -1564,12 +1580,13 @@ impl Interpreter {
                     let elem_idx = self.atlas.node_index(atlas_node);
                     let state = elem_idx
                         .map_or_else(crate::interp::events::StyleState::empty, |i| {
-                            self.router.style_state(i)
+                            self.element_style_state(i)
                         })
                         .union(self.prop_style_state(attrs, None, ""));
-                    let paint_attrs = resolve_state_attrs(attrs, state_blocks, state, &|c| {
-                        viewport_holds(c, self.viewport, &self.theme)
-                    });
+                    let paint_attrs =
+                        resolve_state_attrs(attrs, state_blocks, state, &self.elem_states, &|c| {
+                            viewport_holds(c, self.viewport, &self.theme)
+                        });
                     let paint_attrs = paint_attrs.as_ref();
 
                     // RFC-0019 §2: prop expressions resolve against the scope
@@ -1764,12 +1781,13 @@ impl Interpreter {
                     // reading paint properties. RFC-0024: fold in universal states.
                     let state = elem_idx
                         .map_or_else(crate::interp::events::StyleState::empty, |i| {
-                            self.router.style_state(i)
+                            self.element_style_state(i)
                         })
                         .union(self.prop_style_state(attrs, None, ""));
-                    let paint_attrs = resolve_state_attrs(attrs, state_blocks, state, &|c| {
-                        viewport_holds(c, self.viewport, &self.theme)
-                    });
+                    let paint_attrs =
+                        resolve_state_attrs(attrs, state_blocks, state, &self.elem_states, &|c| {
+                            viewport_holds(c, self.viewport, &self.theme)
+                        });
                     let paint_attrs = paint_attrs.as_ref();
 
                     // RFC-0019 §2: restore the instance environment so shape

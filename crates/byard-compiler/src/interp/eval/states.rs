@@ -13,6 +13,7 @@ use super::{Interpreter, StyleDef};
 use crate::diagnostics::CompileError;
 use crate::interp::env::Value;
 use crate::parser::ast::{Attr, AttrKind, Expr, StateBlock, StyleStateKind};
+use crate::symbol::Symbol;
 
 /// Inserts `attr` into a resolved style set, replacing any existing attribute
 /// with the same name and sub-property axis (last-wins) or appending it, so a
@@ -161,6 +162,7 @@ fn state_bit(kind: StyleStateKind) -> crate::interp::events::StyleState {
         StyleStateKind::Indeterminate => StyleState::INDETERMINATE,
         StyleStateKind::Dragging => StyleState::DRAGGING,
         StyleStateKind::FocusVisible => StyleState::FOCUS_VISIBLE,
+        StyleStateKind::FocusWithin => StyleState::FOCUS_WITHIN,
     }
 }
 
@@ -221,6 +223,7 @@ pub(super) fn resolve_state_attrs<'a>(
     base: &'a [Attr],
     state_blocks: &[StateBlock],
     active: crate::interp::events::StyleState,
+    remote: &std::collections::HashMap<u32, crate::interp::events::StyleState>,
     holds: &dyn Fn(&crate::parser::ast::ViewportCond) -> bool,
 ) -> std::borrow::Cow<'a, [Attr]> {
     if state_blocks.is_empty() {
@@ -233,8 +236,16 @@ pub(super) fn resolve_state_attrs<'a>(
         .filter_map(|(i, sb)| {
             let required = state_block_mask(sb);
             let viewport_ok = sb.viewport.as_ref().is_none_or(holds);
-            let spec = required.count() + u32::from(sb.viewport.is_some());
-            (active.contains(required) && viewport_ok).then_some((spec, i))
+            // RFC-0062: every state of another element named by the block holds
+            // there too. A name that did not resolve, or an element not drawn
+            // this frame, holds nothing.
+            let remote_ok = sb.remote.iter().all(|r| {
+                r.target
+                    .and_then(|t| remote.get(&t))
+                    .is_some_and(|m| m.contains(state_bit(r.kind)))
+            });
+            let spec = required.count() + sb.remote.len() as u32 + u32::from(sb.viewport.is_some());
+            (active.contains(required) && viewport_ok && remote_ok).then_some((spec, i))
         })
         .collect();
     if matching.is_empty() {
@@ -295,6 +306,168 @@ fn override_state_attr(set: &mut Vec<Attr>, attr: Attr) {
 }
 
 impl Interpreter {
+    /// The router's interaction states of element `index`, with `focus_within`
+    /// added when a block asked for it (RFC-0062): held by the focused element
+    /// and every ancestor of it in the layout tree. The chain is built the first
+    /// time a frame asks, and nothing is built unless a block names the state.
+    pub(super) fn element_style_state(&mut self, index: u32) -> crate::interp::events::StyleState {
+        let state = self.router.style_state(index);
+        if !self.state_uses.focus_within {
+            return state;
+        }
+        if self.focus_chain.is_none() {
+            let mut chain = Vec::new();
+            let mut node = self
+                .router
+                .focused_element()
+                .and_then(|f| self.atlas.node_at(f));
+            while let Some(n) = node {
+                chain.extend(self.atlas.node_index(n));
+                node = self.atlas.parent_node(n);
+            }
+            self.focus_chain = Some(chain);
+        }
+        if self
+            .focus_chain
+            .as_ref()
+            .is_some_and(|c| c.contains(&index))
+        {
+            state.union(crate::interp::events::StyleState::FOCUS_WITHIN)
+        } else {
+            state
+        }
+    }
+
+    /// Publishes, before the frame paints, the states of every element a state
+    /// block names (RFC-0062 §5): the router's pointer and focus states and the
+    /// value states layout read, so that an element written *before* the one it
+    /// follows sees this frame's. The element replaces it with the same mask
+    /// when it paints.
+    pub(super) fn publish_named_states(&mut self, table: &[(u32, u32)]) {
+        for &(index, uid) in table {
+            if self.remote_targets.contains(&uid) {
+                let value = self
+                    .elem_value_states
+                    .get(&uid)
+                    .copied()
+                    .unwrap_or_default();
+                // A disabled element has no pointer or focus state, as the router
+                // reports it; its value states are still its own.
+                let pointer = if value.contains(crate::interp::events::StyleState::DISABLED) {
+                    crate::interp::events::StyleState::empty()
+                } else {
+                    self.element_style_state(index)
+                };
+                let state = pointer.union(value);
+                self.elem_states.insert(uid, state);
+            }
+        }
+    }
+
+    /// Declares, before a view's body (a `when` branch, a `for` body, a slot's
+    /// block) is lowered, the identity of every element in it tagged `as name`,
+    /// so that a state block can name an element written after it
+    /// (RFC-0062 §5). The scan stops at a nested `when`, `for` or route, which
+    /// declare their own, and costs nothing when no element is named.
+    pub(super) fn declare_state_names(&mut self, members: &[crate::parser::ast::Member]) {
+        fn scan(members: &[crate::parser::ast::Member], names: &mut Vec<Symbol>) {
+            for member in members {
+                if let crate::parser::ast::Member::Element(el) = member {
+                    if let Some(name) = &el.anchor_name {
+                        if !names.contains(name) {
+                            names.push(name.clone());
+                        }
+                    }
+                    scan(&el.children, names);
+                }
+            }
+        }
+        let mut names = Vec::new();
+        scan(members, &mut names);
+        for name in names {
+            let uid = self.fresh_elem_uid();
+            self.env.push(
+                Symbol::intern(&format!("@{}", name.as_str())),
+                Value::Int(i64::from(uid)),
+            );
+        }
+    }
+
+    /// Lowers a body that opens a scope of its own, `declare_state_names` first.
+    pub(super) fn lower_scope(
+        &mut self,
+        members: &[crate::parser::ast::Member],
+        known_views: &[&str],
+    ) -> Vec<super::RenderNode> {
+        self.declare_state_names(members);
+        self.lower_members(members, known_views)
+    }
+
+    /// Resolves the names in `blocks` that refer to other elements (RFC-0062
+    /// §5) against the elements tagged `as name` so far in this view, and
+    /// notes which features the frame has to pay for. A name nothing declared
+    /// is `UnknownStateTarget`.
+    pub(super) fn resolve_remote_states(&mut self, blocks: &mut [StateBlock]) {
+        for block in blocks {
+            if block.states.contains(&StyleStateKind::FocusWithin)
+                || block
+                    .remote
+                    .iter()
+                    .any(|r| r.kind == StyleStateKind::FocusWithin)
+            {
+                self.state_uses.focus_within = true;
+            }
+            // Layout is computed before states, so a block that follows another
+            // element's states, or focus within, can only paint.
+            let state = block
+                .remote
+                .first()
+                .map(|r| format!("{}.{}", r.name.as_str(), r.kind.as_str()))
+                .or_else(|| {
+                    block
+                        .states
+                        .contains(&StyleStateKind::FocusWithin)
+                        .then(|| "focus_within".to_string())
+                });
+            if let Some(state) = state {
+                for attr in &block.attrs {
+                    if crate::interp::intrinsics::is_layout_attribute(attr.name.as_str()) {
+                        self.errors.push(CompileError::LayoutInStateBlock {
+                            span: attr.span,
+                            name: attr.name.as_str().to_string(),
+                            state: state.clone(),
+                        });
+                    }
+                }
+            }
+            for remote in &mut block.remote {
+                let key = Symbol::intern(&format!("@{}", remote.name.as_str()));
+                if let Some(Value::Int(uid)) = self.env.lookup(&key) {
+                    remote.target = u32::try_from(*uid).ok();
+                    self.remote_targets.extend(remote.target);
+                } else {
+                    remote.target = None;
+                    let names: Vec<String> = self
+                        .env
+                        .snapshot()
+                        .into_iter()
+                        .filter_map(|(k, _)| k.as_str().strip_prefix('@').map(str::to_string))
+                        .collect();
+                    let hint = crate::util::closest_match(
+                        remote.name.as_str(),
+                        names.iter().map(String::as_str),
+                    )
+                    .map(str::to_string);
+                    self.errors.push(CompileError::UnknownStateTarget {
+                        span: remote.span,
+                        name: remote.name.as_str().to_string(),
+                        hint,
+                    });
+                }
+            }
+        }
+    }
+
     /// The prop/value-driven style states an element contributes (RFC-0024), on
     /// top of the router's pointer/focus/drag states: `checked` (a value-widget's
     /// bound value is true), `selected` (the `selected:` prop, or a `RadioButton`

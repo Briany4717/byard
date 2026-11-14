@@ -190,7 +190,7 @@ enum Command {
         /// a press at the first, eight moves, a release at the second.
         /// Repeatable, in order with `--tap`.
         #[arg(long, value_name = "X,Y:X,Y", value_parser = parse_drag)]
-        drag: Vec<((f32, f32), (f32, f32))>,
+        drag: Vec<commands::shot::Drag>,
         /// Press a key before the picture, like `Left`, `shift+Left` or
         /// `mod+a`; repeatable. Applied in order with `--tap` and `--type`.
         #[arg(long, value_name = "KEY", value_parser = parse_key)]
@@ -262,7 +262,7 @@ fn parse_point(s: &str) -> Result<(f32, f32), String> {
 }
 
 /// `X,Y:X,Y`, for `byard shot --drag`.
-fn parse_drag(s: &str) -> Result<((f32, f32), (f32, f32)), String> {
+fn parse_drag(s: &str) -> Result<commands::shot::Drag, String> {
     let (from, to) = s
         .split_once(':')
         .ok_or("expected X,Y:X,Y, like 200,600:200,300")?;
@@ -285,7 +285,7 @@ fn shot_steps(
     holds: &[(f32, f32)],
     releases: &[(f32, f32)],
     hovers: &[(f32, f32)],
-    drags: &[((f32, f32), (f32, f32))],
+    drags: &[commands::shot::Drag],
     keys: &[commands::shot::Key],
     typed: &[String],
     waits: &[u32],
@@ -588,7 +588,15 @@ mod tests {
     #[test]
     fn a_drag_is_one_step_in_the_order_written() {
         assert_eq!(
-            steps_of(&["shot", "--tap", "1,2", "--drag", "10,20:30,40", "--wait", "5"]),
+            steps_of(&[
+                "shot",
+                "--tap",
+                "1,2",
+                "--drag",
+                "10,20:30,40",
+                "--wait",
+                "5"
+            ]),
             [
                 Step::Tap(1.0, 2.0),
                 Step::Drag((10.0, 20.0), (30.0, 40.0)),

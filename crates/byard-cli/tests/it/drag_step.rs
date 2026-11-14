@@ -49,7 +49,10 @@ fn a_drag_step_presses_moves_and_releases() {
     .unwrap();
     let (ok, text) = run(&dir, &["test"]);
     assert!(ok, "{text}");
-    assert!(text.contains("2 passed") || text.contains("passed"), "{text}");
+    assert!(
+        text.contains("2 passed") || text.contains("passed"),
+        "{text}"
+    );
 }
 
 #[test]
@@ -71,7 +74,13 @@ fn shot_drag_reaches_the_tree() {
     let tree = dir.join("tree.txt");
     let (ok, text) = run(
         &dir,
-        &["shot", "--drag", "20,20:20,150", "--a11y", tree.to_str().unwrap()],
+        &[
+            "shot",
+            "--drag",
+            "20,20:20,150",
+            "--a11y",
+            tree.to_str().unwrap(),
+        ],
     );
     assert!(ok, "{text}");
     let tree = std::fs::read_to_string(tree).unwrap();

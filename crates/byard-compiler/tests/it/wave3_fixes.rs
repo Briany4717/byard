@@ -372,7 +372,11 @@ fn enter_and_leave_can_have_different_speeds() {
     for _ in 0..10 {
         app.advance(16);
     }
-    assert!(opacity_of(&app, 0xFF0000) > 0.99, "{}", opacity_of(&app, 0xFF0000));
+    assert!(
+        opacity_of(&app, 0xFF0000) > 0.99,
+        "{}",
+        opacity_of(&app, 0xFF0000)
+    );
     // Out: still going after 200 ms (a 100 ms motion would be over).
     app.tap((5.0, 5.0));
     for _ in 0..12 {
@@ -411,7 +415,7 @@ fn the_modal_scrim_fades_with_its_overlay() {
         }",
     );
     assert!(app.errors().is_empty(), "{:?}", app.errors());
-    assert!(scrim_alpha(&app) == 0.0);
+    assert_eq!(scrim_alpha(&app), 0.0);
     app.tap((5.0, 5.0));
     let first = scrim_alpha(&app);
     assert!(first < 0.05, "the scrim starts clear: {first}");
@@ -423,7 +427,11 @@ fn the_modal_scrim_fades_with_its_overlay() {
     for _ in 0..20 {
         app.advance(16);
     }
-    assert!((scrim_alpha(&app) - 0.32).abs() < 0.01, "{}", scrim_alpha(&app));
+    assert!(
+        (scrim_alpha(&app) - 0.32).abs() < 0.01,
+        "{}",
+        scrim_alpha(&app)
+    );
     // And back out: a press on the scrim dismisses.
     app.tap((390.0, 390.0));
     for _ in 0..3 {
@@ -481,7 +489,10 @@ fn a_path_inside_a_clip_is_emitted_under_that_clip() {
     assert!(app.errors().is_empty(), "{:?}", app.errors());
     assert_eq!(app.frame.fills().len(), 2);
     let clips = app.frame.fill_clips();
-    assert!(clips[0].is_some(), "the one in the Clip is clipped: {clips:?}");
+    assert!(
+        clips[0].is_some(),
+        "the one in the Clip is clipped: {clips:?}"
+    );
     assert!(clips[1].is_none(), "the one outside it is not: {clips:?}");
 }
 
@@ -552,7 +563,10 @@ fn an_endless_loop_asks_for_frames_but_not_to_be_stepped_through() {
         }",
     );
     app.advance(16);
-    assert!(app.interp.has_active_animations(), "a host keeps drawing it");
+    assert!(
+        app.interp.has_active_animations(),
+        "a host keeps drawing it"
+    );
     assert!(app.interp.needs_another_frame());
     assert!(
         !app.interp.needs_another_frame_besides_loops(),

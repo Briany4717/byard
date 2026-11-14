@@ -857,9 +857,10 @@ pub struct Interpreter {
     /// The [`frame_seq`](Self::frame_seq) of the last frame an element drew
     /// its `on enter` values on, `0` before any.
     entering_seq: u64,
-    /// Set by an overlay before it draws a child: the effective opacity of the
-    /// first box drawn lands here, and the modal scrim fades with it.
-    root_opacity: Option<Option<f32>>,
+    /// Set by an overlay before it draws a child, to NaN: the effective
+    /// opacity of the first box drawn replaces it, and the modal scrim fades
+    /// with it. `None` when no overlay is looking.
+    root_opacity: Option<f32>,
     /// The program's top-level functions (RFC-0002), by canonical name, as
     /// entries of `fn_table`. Rebuilt by [`Self::load_views`].
     top_fns: std::collections::HashMap<Symbol, super::env::AstId>,
@@ -912,11 +913,11 @@ pub struct Interpreter {
     ///
     /// [`has_active_animations`]: Self::has_active_animations
     any_active: bool,
-    /// Whether a looping animation that never ends was sampled in the last
-    /// render. Kept apart from `any_active` because it asks for frames for
-    /// good but is a function of the clock alone: a shot that runs to a time
-    /// need not draw the frames in between.
-    endless_active: bool,
+    /// The [`frame_seq`](Self::frame_seq) a looping animation that never ends
+    /// was last sampled on. Kept apart from `any_active` because it asks for
+    /// frames for good but is a function of the clock alone: a shot that runs
+    /// to a time need not draw the frames in between.
+    endless_seq: u64,
     /// First-class style values (RFC-0016): `let name = style { … }` registers
     /// its base attributes and `on <state>` blocks here, and a `..name` spread
     /// on an element splices them in at lower time. Static and view-scoped, no
@@ -1441,7 +1442,7 @@ impl Interpreter {
     /// is true and lets the app idle (0 frames) once every animation settles.
     #[must_use]
     pub fn has_active_animations(&self) -> bool {
-        self.any_active || self.endless_active || self.theme_transitioning()
+        self.any_active || self.endless_seq == self.frame_seq || self.theme_transitioning()
     }
 
     /// [`needs_another_frame`](Self::needs_another_frame) without the loops
@@ -1862,7 +1863,6 @@ impl Interpreter {
         // Recomputed every frame: an animation re-marks itself active below if it
         // sampled without having settled this tick (RFC-0010).
         self.any_active = false;
-        self.endless_active = false;
         self.leave_busy_prev = std::mem::take(&mut self.leave_busy);
         self.focus_requests.clear();
         // RFC-0023: retire fully-faded ripples by time. Gesture-like state kept

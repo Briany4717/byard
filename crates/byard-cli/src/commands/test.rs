@@ -183,17 +183,18 @@ fn target_of(v: &Value, what: &str) -> Result<Target, String> {
 
 /// `drag = ["x,y", "x,y"]`: two points, each `"x,y"`, `[x, y]` or text from a
 /// line of the tree.
-fn drag_of(v: &Value) -> Result<(Target, Target), String> {
-    let Value::Array(a) = v else {
-        return Err("`drag` takes two points, [\"x,y\", \"x,y\"]".into());
+fn drag_of(value: &Value) -> Result<(Target, Target), String> {
+    let two = "`drag` takes two points, [\"x,y\", \"x,y\"]";
+    let Value::Array(ends) = value else {
+        return Err(two.into());
     };
-    let [from, to] = a.as_slice() else {
-        return Err("`drag` takes two points, [\"x,y\", \"x,y\"]".into());
+    let [from, to] = ends.as_slice() else {
+        return Err(two.into());
     };
     let end = |v: &Value| match v {
-        Value::String(s) => match parse_xy(s) {
-            Some((x, y)) => Ok(Target::Point(x, y)),
-            None => Ok(Target::Line(s.clone())),
+        Value::String(text) => match parse_xy(text) {
+            Some((px, py)) => Ok(Target::Point(px, py)),
+            None => Ok(Target::Line(text.clone())),
         },
         other => target_of(other, "drag"),
     };

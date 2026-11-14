@@ -124,7 +124,10 @@ impl Step {
 /// How many moves a [`Step::Drag`] makes between the press and the release,
 /// evenly spaced and a frame apart, so a handler that reads travel sees a
 /// gesture and not a jump.
-const DRAG_MOVES: u32 = 8;
+const DRAG_MOVES: u16 = 8;
+
+/// A drag's two ends, press then release.
+pub type Drag = ((f32, f32), (f32, f32));
 
 /// A pointer event at a logical point, with no payload or modifiers.
 fn pointer_event(kind: EventKind, x: f32, y: f32, time_ms: u64) -> InputEvent {
@@ -359,7 +362,7 @@ impl Scene {
         self.frame_with(&events);
         if let Step::Drag((x0, y0), (x1, y1)) = what {
             for i in 1..=DRAG_MOVES {
-                let t = i as f32 / DRAG_MOVES as f32;
+                let t = f32::from(i) / f32::from(DRAG_MOVES);
                 let at = (x0 + (x1 - x0) * t, y0 + (y1 - y0) * t);
                 let moved = pointer_event(EventKind::PointerMove, at.0, at.1, u64::from(self.now));
                 self.frame_with(&[moved]);

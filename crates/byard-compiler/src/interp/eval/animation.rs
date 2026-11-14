@@ -835,7 +835,7 @@ impl Interpreter {
         // Retarget on a goal change: reseed `from` to where the property
         // actually is right now (interruptible spring), restart the clock.
         if (motion.to - target_val).abs() > f32::EPSILON {
-            let current = if measured && motion.from == motion.to {
+            let current = if measured && (motion.from - motion.to).abs() <= f32::EPSILON {
                 target_val
             } else {
                 motion.sample(now)
@@ -1059,7 +1059,7 @@ impl Interpreter {
         if !phase.finished {
             // A loop that never ends does not keep a leaving element drawn.
             if matches!(spec.repeat, RepeatMode::Infinite) {
-                self.endless_active = true;
+                self.endless_seq = self.frame_seq;
             } else {
                 self.note_active();
             }
@@ -1139,7 +1139,7 @@ impl Interpreter {
         );
         if !phase.finished {
             if matches!(track.repeat, RepeatMode::Infinite) {
-                self.endless_active = true;
+                self.endless_seq = self.frame_seq;
             } else {
                 self.note_active();
             }

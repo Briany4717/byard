@@ -541,7 +541,7 @@ impl Interpreter {
             self.anim_slot = slot.anim;
             let probe = scrim_at.is_some() && self.root_opacity.is_none();
             if probe {
-                self.root_opacity = Some(None);
+                self.root_opacity = Some(f32::NAN);
             }
             self.render_node_with_atlas(
                 slot.node,
@@ -561,8 +561,7 @@ impl Interpreter {
             // The scrim fades with the content it is under (`on enter`,
             // `on leave`, or any `opacity` it animates).
             if probe {
-                if let (Some(Some(opacity)), Some(at)) = (self.root_opacity.take(), scrim_at.take())
-                {
+                if let (Some(opacity), Some(at)) = (self.root_opacity.take(), scrim_at.take()) {
                     if opacity < 1.0 {
                         frame.scale_instance_alpha(at, opacity.max(0.0));
                     }

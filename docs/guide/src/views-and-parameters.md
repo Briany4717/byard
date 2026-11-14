@@ -278,7 +278,7 @@ View Dot() {
 }
 ```
 
-They are `width`, `height`, `m`, `mx`, `my`, `mt`, `mr`, `mb`, `ml`, `grow`, `shrink`, `basis` and
+They are `width`, `height`, `min_width`, `max_width`, `min_height`, `max_height`, `m`, `mx`, `my`, `mt`, `mr`, `mb`, `ml`, `grow`, `shrink`, `basis` and
 `align_self`. A view with several roots, a `when` at its root, gives them to each root that is drawn,
 and what the call writes wins over what the root wrote. A parameter of the same name takes the value
 instead. Any other name is `UnknownParam`, and its message lists these.

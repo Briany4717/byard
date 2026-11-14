@@ -461,6 +461,23 @@ fn a_layout_attribute_may_be_a_variable_and_a_parameter_of_that_name_wins() {
 }
 
 #[test]
+fn size_bounds_on_a_view_call_apply_to_its_root() {
+    let app = App::new(
+        "View Main() { Row #[width: 400, height: 100, align: start] { \
+         Wide() #[max_width: 60] Narrow() #[min_width: 40, min_height: 30] } } \
+         View Wide() { Box #[width: 200, height: 10, bg: 0xFF0000] {} } \
+         View Narrow() { Box #[width: 10, height: 10, bg: 0x00FF00] {} }",
+    );
+    let boxes: Vec<[f32; 4]> = app.frame.instances().iter().map(|b| b.rect).collect();
+    assert_eq!(boxes.len(), 2, "{boxes:?}");
+    assert!(approx(boxes[0][2], 60.0), "max_width caps 200: {boxes:?}");
+    assert!(
+        approx(boxes[1][2], 40.0) && approx(boxes[1][3], 30.0),
+        "min_width and min_height raise 10: {boxes:?}"
+    );
+}
+
+#[test]
 fn layout_attributes_reach_every_root_of_a_when() {
     let mut app = App::new(
         "View Main() { var on = true Row #[width: 400, height: 100] { Pick(on: on) #[ml: 20] } } \

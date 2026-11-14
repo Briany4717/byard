@@ -198,6 +198,10 @@ const ALIGN2D: &[&str] = &[
 pub(crate) const VIEW_CALL_LAYOUT: &[&str] = &[
     "width",
     "height",
+    "min_width",
+    "max_width",
+    "min_height",
+    "max_height",
     "m",
     "mx",
     "my",

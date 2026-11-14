@@ -127,8 +127,9 @@ error: `none` is for a parameter that declared it, and says so.
 m.Icon("wifi") #[ml: 8, grow: 1, align_self: center]
 ```
 
-The attributes a parent reads from its children (`width`, `height`, `m`, `mx`,
-`my`, `mt`, `mr`, `mb`, `ml`, `grow`, `shrink`, `basis`, `align_self`) apply to the
+The attributes a parent reads from its children (`width`, `height`, their
+`min_` and `max_` bounds (RFC-0064), `m`, `mx`, `my`, `mt`, `mr`, `mb`, `ml`, `grow`,
+`shrink`, `basis`, `align_self`) apply to the
 view's root element, as if written on it. A view whose body has more than one
 root, or a `when` at its root, applies them to each root that is drawn. A
 parameter of the same name wins: a view with `width: Int` gets `width` as that.
@@ -253,7 +254,8 @@ present, which is a comparison the checker also reports, since its answer is kno
 ### 4. Layout attributes on a view call
 
 When a name in a user-view call is not a parameter of the callee and is one of
-`width height m mx my mt mr mb ml grow shrink basis align_self`, its value is
+`width height min_width max_width min_height max_height m mx my mt mr mb ml grow
+shrink basis align_self`, its value is
 projected in the caller's scope (as every argument is) and bound in the instance
 under a name no program can write. The callee's body is then lowered with that
 attribute appended to each root element: an intrinsic, or a user view called at

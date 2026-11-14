@@ -153,7 +153,18 @@ impl Interpreter {
             let Ok(Some(rect)) = self.atlas.resolved_rect(*node) else {
                 continue;
             };
-            let size = (rect.width.to_bits(), rect.height.to_bits());
+            let (x, y) = self
+                .atlas
+                .local_offset(*node)
+                .ok()
+                .flatten()
+                .unwrap_or((rect.x, rect.y));
+            let size = (
+                rect.width.to_bits(),
+                rect.height.to_bits(),
+                x.to_bits(),
+                y.to_bits(),
+            );
             let Some(slot) = self.measures.get_mut(*index as usize) else {
                 continue;
             };
@@ -173,6 +184,8 @@ impl Interpreter {
             let payload = Value::Record(vec![
                 (Symbol::intern("w"), Value::Float(f64::from(rect.width))),
                 (Symbol::intern("h"), Value::Float(f64::from(rect.height))),
+                (Symbol::intern("x"), Value::Float(f64::from(x))),
+                (Symbol::intern("y"), Value::Float(f64::from(y))),
             ]);
             (action.borrow_mut())(&mut self.ctx, Some(&payload));
             self.measure_fired = true;

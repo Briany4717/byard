@@ -1027,6 +1027,10 @@ pub struct Interpreter {
     access: access::AccessScratch,
 }
 
+/// What an `on measure` was last told, as raw bits: width, height, x, y
+/// (RFC-0065 §3 added the position, so an element that only moves fires too).
+type MeasureKey = (u32, u32, u32, u32);
+
 /// One element's `on measure` declaration (RFC-0038): the action, and the last
 /// size it was told about.
 struct MeasureSlot {
@@ -1041,9 +1045,9 @@ struct MeasureSlot {
     /// compare equal, so a collapsed element would silently never fire again.
     /// This is the RFC-0032 fingerprint rule, and it applies here for the same
     /// reason it applies there.
-    last: Option<(u32, u32)>,
+    last: Option<MeasureKey>,
     /// The size before [`last`](Self::last), for the oscillation check below.
-    prev: Option<(u32, u32)>,
+    prev: Option<MeasureKey>,
     /// How many times in a row the rect has flipped back to the size it held
     /// two fires ago: the signature of a same-element feedback loop that the
     /// compiler could not see statically (RFC-0038 "no feedback loop").

@@ -2368,6 +2368,25 @@ impl LayoutAtlas {
         Ok(self.resolved_rect_internal(node))
     }
 
+    /// The offset of a node's box from its parent's box, as laid out: the
+    /// position `on measure` reports (RFC-0065 §3), before `translate` and
+    /// `scale`. `None` if the node is unknown or not yet computed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AtlasError::ForeignNode`] if `node` belongs to another atlas.
+    pub fn local_offset(&self, node: AtlasNodeId) -> Result<Option<(f32, f32)>, AtlasError> {
+        self.validate_node(node)?;
+        if self.state != AtlasState::Computed {
+            return Ok(None);
+        }
+        Ok(self
+            .tree
+            .layout(node.node_id)
+            .ok()
+            .map(|l| (l.location.x, l.location.y)))
+    }
+
     /// The `(width, height)` of a node's **content**, the extent of its
     /// children, which for a `ScrollView` (Taffy `overflow: Scroll`) exceeds the
     /// node's own box. Subtracting the viewport size gives the maximum scroll

@@ -23,10 +23,15 @@ struct App {
 
 impl App {
     fn new(src: &str) -> Self {
+        Self::new_with(src, |_| {})
+    }
+
+    fn new_with(src: &str, setup: impl FnOnce(&mut Interpreter)) -> Self {
         let parsed = parse(src);
         assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
         let mut interp = Interpreter::new();
         interp.set_theme(Theme::default());
+        setup(&mut interp);
         interp.load_views(&parsed.views);
         let known: Vec<&str> = parsed.views.iter().map(|v| v.name.as_str()).collect();
         let tree = interp.lower_view(&parsed.views[0], &known);
@@ -363,4 +368,322 @@ fn a_text_takes_opacity() {
     assert!((alpha("full") - 1.0).abs() < 0.01);
     // The row fades as a group, so the run keeps only its own half.
     assert!((alpha("nested") - 0.5).abs() < 0.01, "{}", alpha("nested"));
+}
+
+// ── a `let` inside an element ────────────────────────────────────────────
+
+#[test]
+fn a_let_inside_an_element_is_a_clear_error() {
+    let app = App::new(
+        "View Main() {
+            Row { let x = 4.0
+                Box #[translate.x: x, width: 10, height: 10, bg: 0xFF0000] {} }
+        }",
+    );
+    let errs = app.errors();
+    assert!(
+        errs.iter().any(|e| e.starts_with("LetInElementBody")),
+        "{errs:?}"
+    );
+    // And it is the first thing said.
+    assert!(errs[0].starts_with("LetInElementBody"), "{errs:?}");
+}
+
+#[test]
+fn a_zstack_aligns_a_narrow_child_on_both_axes() {
+    for (alignment, x, y) in [
+        ("top_end", 80.0, 0.0),
+        ("bottom_start", 0.0, 90.0),
+        ("bottom_end", 80.0, 90.0),
+        ("center", 40.0, 45.0),
+    ] {
+        let app = App::new(&format!(
+            "View Main() {{ ZStack #[alignment: {alignment}, width: 100, height: 100] {{
+                Box #[width: 20, height: 10, bg: 0xFF0000] {{}} }} }}"
+        ));
+        let r = app.rect(0xFF0000);
+        assert!(near(r[0], x) && near(r[1], y), "{alignment}: {r:?}");
+    }
+}
+
+#[test]
+fn a_clip_measures_its_child_at_its_own_size_at_a_middle_width() {
+    let app = App::new(
+        "View Main() {
+            var w = -1.0
+            var f = -1.0
+            Column {
+                Clip #[width: 20, height: 30] {
+                    Row {
+                        on measure => { w = it.w }
+                        Box #[width: 50, height: 20, bg: 0xFF0000] {}
+                    }
+                }
+                Clip #[width: 20, height: 30] {
+                    Row #[align_self: stretch] {
+                        on measure => { f = it.w }
+                        Box #[width: 5, height: 20] {}
+                    }
+                }
+            }
+        }",
+    );
+    let get = |n: &str| {
+        let sig = app.interp.var_signal(&Symbol::intern(n)).unwrap();
+        match app.interp.peek(sig) {
+            byard_compiler::interp::env::Value::Float(f) => f,
+            other => panic!("{other:?}"),
+        }
+    };
+    assert!((get("w") - 50.0).abs() < 1.0, "{}", get("w"));
+    assert!(
+        (get("f") - 20.0).abs() < 1.0,
+        "a child that asks fills: {}",
+        get("f")
+    );
+}
+
+// ── timers on the virtual clock, and a duration that is an expression ────
+
+fn timed(src: &str) -> App {
+    let mut app = App::new_with(src, Interpreter::use_virtual_timers);
+    app.at(0);
+    app
+}
+
+impl App {
+    fn at(&mut self, ms: u32) {
+        self.interp.set_now_ms(ms);
+        self.render();
+    }
+}
+
+#[test]
+fn an_after_timer_fires_when_the_app_clock_passes_it() {
+    let mut app = timed("View Main() { var a = 0\n after 300ms => a = 1\n Text(\"{a}\") }");
+    app.at(100);
+    assert_eq!(app.count("a"), 0);
+    app.at(400);
+    assert_eq!(app.count("a"), 1);
+}
+
+#[test]
+fn an_every_timer_repeats_on_the_app_clock_and_after_fires_once() {
+    let mut app = timed(
+        "View Main() { var n = 0\n var once = 0\n every 100ms => n++\n after 100ms => once++\n Text(\"{n}\") }",
+    );
+    for ms in (16..=420).step_by(16) {
+        app.at(ms);
+    }
+    assert!(app.count("n") >= 3, "{}", app.count("n"));
+    assert_eq!(app.count("once"), 1);
+}
+
+#[test]
+fn a_timer_takes_a_duration_that_is_an_expression() {
+    let mut app = timed(
+        "View Main() { var wait = 250\n var a = 0\n after wait * 1ms => a = 1\n Text(\"{a}\") }",
+    );
+    app.at(200);
+    assert_eq!(app.count("a"), 0);
+    app.at(300);
+    assert_eq!(app.count("a"), 1);
+}
+
+// ── long_press ───────────────────────────────────────────────────────────
+
+impl App {
+    fn pointer(&mut self, kind: EventKind, pos: (f32, f32), t: u64) {
+        let ev = InputEvent {
+            kind,
+            pos,
+            delta: (0.0, 0.0),
+            payload: None,
+            time_ms: t,
+            mods: KeyModifiers::default(),
+        };
+        self.interp.dispatch_events(&[ev]);
+        self.render();
+    }
+}
+
+#[test]
+fn a_long_press_fires_while_the_press_is_held_and_once() {
+    let mut app = App::new(
+        "View Main() { var n = 0
+            Box #[width: 100, height: 100, bg: 0xFF0000, long_press => n++] {} }",
+    );
+    app.at(0);
+    app.pointer(EventKind::PointerDown, (20.0, 20.0), 0);
+    app.at(300);
+    assert_eq!(app.count("n"), 0, "not yet");
+    app.at(600);
+    assert_eq!(app.count("n"), 1, "held past the threshold");
+    app.at(900);
+    app.pointer(EventKind::PointerUp, (20.0, 20.0), 900);
+    assert_eq!(app.count("n"), 1, "once, and not again on release");
+}
+
+#[test]
+fn a_wrappers_long_press_fires_over_a_child_that_takes_the_tap() {
+    let mut app = App::new(
+        "View Main() { var n = 0\n var taps = 0
+            Box #[width: 100, height: 100, long_press => n++] {
+                Box #[width: 100, height: 100, bg: 0xFF0000, tap => taps++] {} } }",
+    );
+    app.at(0);
+    app.pointer(EventKind::PointerDown, (20.0, 20.0), 0);
+    app.at(600);
+    app.pointer(EventKind::PointerUp, (20.0, 20.0), 600);
+    assert_eq!(app.count("n"), 1);
+    assert_eq!(app.count("taps"), 0, "a long press is not a tap");
+}
+
+// ── a drag over a child that taps scrolls, and the tap is cancelled ──────
+
+const CAROUSEL: &str = "View Main() {
+    var x = 0.0
+    var taps = 0
+    ScrollView #[axis: horizontal, offset: (x, 0.0), width: 300, height: 100] {
+        Row {
+            Box #[width: 200, height: 100, bg: 0xFF0000, tap => taps++] {}
+            Box #[width: 400, height: 100, bg: 0x0000FF] {}
+        }
+    }
+}";
+
+#[test]
+fn a_drag_over_a_child_with_a_tap_scrolls_and_does_not_tap() {
+    let mut app = App::new(CAROUSEL);
+    app.pointer(EventKind::PointerDown, (150.0, 50.0), 0);
+    app.pointer(EventKind::PointerMove, (100.0, 50.0), 16);
+    app.pointer(EventKind::PointerMove, (50.0, 50.0), 32);
+    app.pointer(EventKind::PointerUp, (50.0, 50.0), 48);
+    let sig = app.interp.var_signal(&Symbol::intern("x")).unwrap();
+    let x = match app.interp.peek(sig) {
+        byard_compiler::interp::env::Value::Float(f) => f,
+        other => panic!("{other:?}"),
+    };
+    assert!((x - 100.0).abs() < 1.0, "scrolled by the travel: {x}");
+    assert_eq!(app.count("taps"), 0);
+}
+
+#[test]
+fn a_tap_that_stays_put_still_taps_in_a_scroll_view() {
+    let mut app = App::new(CAROUSEL);
+    app.tap((100.0, 50.0));
+    assert_eq!(app.count("taps"), 1);
+}
+
+// ── culling by where a child is drawn ────────────────────────────────────
+
+#[test]
+fn a_scroll_view_does_not_cull_a_child_its_translate_brought_into_view() {
+    // The card's slot is far below the 100 high view; it is drawn 300 up.
+    let app = App::new(
+        "View Main() {
+            ScrollView #[width: 300, height: 100] {
+                Column {
+                    Box #[width: 300, height: 400] {}
+                    Box #[width: 100, height: 50, translate: (0, -380), bg: 0xFF0000] {}
+                }
+            }
+        }",
+    );
+    assert!(app.errors().is_empty(), "{:?}", app.errors());
+    let r = app.rect(0xFF0000);
+    assert!(near(r[1], 400.0), "laid out in its slot: {r:?}");
+}
+
+// ── dismiss on an anchored panel, in a view with its own state ───────────
+
+#[test]
+fn an_anchored_panels_dismiss_reaches_the_state_of_its_view() {
+    let mut app = App::new(
+        "View Main() { Panel() }
+        View Panel() {
+            var open = true
+            Column {
+                Box #[width: 100, height: 30] as bar {}
+                Text(\"open: {open}\")
+                Overlay #[modal: false] {
+                    Column #[anchor_to: \"bar\", anchor_edge: below, width: 100, height: 80,
+                             bg: 0x333333, dismiss => open = false] {
+                        Box #[height: 10] {}
+                    }
+                }
+            }
+        }",
+    );
+    let shows = |app: &App| app.frame.texts().iter().any(|t| t.text == "open: true");
+    assert!(shows(&app));
+    app.tap((300.0, 300.0));
+    assert!(!shows(&app), "a press outside closed it");
+}
+
+// ── math ─────────────────────────────────────────────────────────────────
+
+#[test]
+fn sin_cos_sqrt_and_atan2_are_number_methods() {
+    let app = App::new(
+        "View Main() {
+            let a = (90deg).sin()
+            let b = (0.0).cos()
+            let c = 16.sqrt()
+            let d = (1.0).atan2(1.0)
+            Text(\"{a} {b} {c} {d}\")
+        }",
+    );
+    assert!(app.errors().is_empty(), "{:?}", app.errors());
+    let t = app
+        .frame
+        .texts()
+        .iter()
+        .map(|t| t.text.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(t, ["1 1 4 0.7853981633974483"], "{t:?}");
+}
+
+// ── a stroke on a Canvas path ────────────────────────────────────────────
+
+#[test]
+fn a_canvas_path_takes_a_stroke() {
+    let app = App::new(
+        "View Main() { Canvas #[width: 100, height: 100] {
+            path(stroke: 0xFF0000, stroke_width: 6, cap: round, join: round) {
+                move(10, 10)
+                cubic(40, 0, 60, 100, 90, 90)
+            }
+            path(fill: 0x00FF00, stroke: 0x0000FF, stroke_width: 2) {
+                move(0, 0) line(20, 0) line(20, 20) close()
+            }
+        } }",
+    );
+    assert!(app.errors().is_empty(), "{:?}", app.errors());
+    // The first is a stroke alone, the second a fill and its outline.
+    assert_eq!(app.frame.fills().len(), 3);
+    let thick = &app.frame.fills()[0].mesh;
+    // The line is 6 wide: the mesh reaches 3 either side of the points.
+    let min_x = thick
+        .vertices
+        .iter()
+        .map(|v| v.pos[0])
+        .fold(f32::MAX, f32::min);
+    assert!(min_x < 9.0, "{min_x}");
+}
+
+#[test]
+fn a_dash_on_a_canvas_path_is_still_refused() {
+    let app = App::new(
+        "View Main() { Canvas #[width: 100, height: 100] {
+            path(stroke: 0xFF0000, dash: (4, 2)) { move(0, 0) line(50, 50) }
+        } }",
+    );
+    assert!(
+        app.errors()
+            .iter()
+            .any(|e| e.starts_with("PathStrokeUnsupported")),
+        "{:?}",
+        app.errors()
+    );
 }

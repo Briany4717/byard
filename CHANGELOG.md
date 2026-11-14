@@ -12,6 +12,9 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`after` and `every` take any duration expression,** `after wait * 1ms => …`, read when the timer starts, besides a literal such as `300ms`.
+- **`sin()`, `cos()`, `sqrt()` and `atan2(x)` on numbers** (radians, a `Float` back).
+- **A stroke on a `Canvas` path with a body:** `path(stroke: 0xFF0000, stroke_width: 4, cap: round, join: round) { … }`, alone or with a `fill`. A dash, and a stroke on `path(d: …)`, are still `PathStrokeUnsupported`.
 - **`opacity` on `Text`,** as on every other element, to fade a label on its own (it was `UnknownAttribute`; a `Row` around it was the workaround).
 - **Several slots, optional callbacks and layout on a call.** A view takes any number of slots, `View ListItem(headline: Str, leading: Slot = none, trailing: Slot = none)`, filled at the call with `leading: { Icon("wifi") }` (the parameter's type, not the block's contents, says whether braces are a slot or a callback, so `{ Api.save() }` stays an action), placed in the body by name, and tested with `when leading != none`. `on_tap: Fn() = none` makes a callback optional: `when on_tap != none` asks whether it was given, and calling one that was not does nothing. `none` compared with anything else is `NoneNeedsOptional`. `m.Icon("x") #[ml: 8, grow: 1, align_self: center]` puts the layout attributes (`width`, `height` and their `min_`/`max_` bounds, `m` and its sides, `grow`, `shrink`, `basis`, `align_self`) on the view's root element; any other name that is not a parameter is `UnknownParam`, which now lists them. RFC-0062. See `examples/composing_components`.
 - **States that reach other elements.** An element tagged `as field` publishes its states, and the elements after it in the view, and its descendants, write `on field.focused { … }`, `on field.hover + pressed { … }`, so a floating label or an indicator follows a field without a `var`. `focus_within` is a state of every element with focus inside it. A name belongs to the whole view, so a label may be written before its field; a name nothing is tagged with is `UnknownStateTarget`, and a layout attribute in such a block is `LayoutInStateBlock`, which says to use `translate` or `scale`. RFC-0062.
@@ -132,11 +135,18 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A `let` inside an element's braces is `LetInElementBody`.** It was ignored, and the first thing said was an unrelated `AttributeTypeMismatch` where its name was used. A `let` goes at the top of the view or inside a `when` or `for`.
+- **A `ZStack` places a child on both axes.** `alignment` (`center`, `top_end`, `bottom_start`, …) had no horizontal effect when every child was narrower than the stack, which packed its one column at the start: the column is now the whole stack.
+- **A `Clip` lays out its children at their own size at every width,** not only at 0: they are stretched to it only if they ask (`align_self: stretch`). A label sliding open in a clip is no longer measured at the width it has reached.
+- **`long_press` fires while the press is held,** after about half a second, and not only on release, so a held press in `byard shot` or `byard test` fires it. A `long_press` on a wrapper fires over a child that takes the tap.
+- **`after` and `every` follow the app clock in `byard shot` and `byard test`,** so a timeout can be tested with a `wait`.
+- **A press on a child that taps, inside a `ScrollView`, scrolls it** once it travels past the tap slop, and the tap is cancelled; a child with its own `drag` or `change` keeps the gesture.
+- **A `ScrollView` culls a child by where it is drawn,** its own `translate`, `scale` and `rotate` included, not by its layout rect.
+- **`dismiss =>` on an anchored panel runs in the scope of the view it is written in.** An action that wrote a `var` or a binding of its view (a docked search view's `expanded`) did nothing.
 - **A press lands where the element is drawn.** An element's own `translate` carried its children's targets with it but not its own, so a box moved 100 to the right was still pressed where it was laid out. Its own `scale` and `rotate` still leave its target alone, so a hover that scales it does not move its own edge. Found by Byard Material's slider handle.
 - **A `ZStack` child that stretches and has a `height` or a `width` of its own** (`align_self: stretch`, `grow`) now sits where `alignment` puts it along that axis, not at the start: a 1 high rule across a `bottom_start` stack is at the bottom.
 - **`a11y_label` on an `Overlay` reads the view it is written in.** `a11y_label: headline` named the dialog `headline`, the word, when `headline` was a parameter.
 - **An explicit `height` on the header of a `collapse_header` `ScrollView`** is kept: the header no longer shrinks when the content below is taller than the view.
-- **A `Clip` with a `width` of 0 measures its children at their own size** instead of stretching them to 0, so `on measure` inside it reads the real width.
 - **`byard test` and `shot --key` know `PageUp`, `PageDown` and `Insert`** (`Home` and `End` were there), and a key they do not know is an error that lists the ones they do.
 - **A slot inside `when`, `else` and `for`.** `content` placed in a branch of a `when`, or in a `for` body, was "unknown view `content`"; it is spliced there as anywhere else, to any depth of nesting, and a slot placed in each row of a `for` is a set of elements of its own in every row. RFC-0062.
 - **A `let` in a `for` or `when` body** is defined where it is written. It was dropped, so a length it fed was "expected a length" (or, on `width`, silently the default size).

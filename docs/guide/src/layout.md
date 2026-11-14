@@ -89,8 +89,10 @@ View Main() {
 Without `shrink: 0` the circle is squeezed to a sliver by the wide bar beside it.
 A child never shrinks below what its content needs, so the bar must be told it may:
 `width: 0` with `grow: 1` starts it from nothing and gives it what is left, and the
-`Clip` cuts the bar to that. A `Clip` with a `width` of 0 measures what is inside it at
-its own size, not squeezed to nothing, so an `on measure` there reads the real width. A one-line `Text` between two icons takes the same
+`Clip` cuts the bar to that. A `Clip` lays what is inside it out at its own size, at any
+width of its own, and cuts the rest off; a child fills it only if it asks
+(`align_self: stretch`). So an `on measure` there reads the content's width, also while a
+label slides open. A one-line `Text` between two icons takes the same
 `grow: 1, width: 0`, or it pushes the icon after it out of the row.
 
 ### Minimum and maximum
@@ -245,7 +247,8 @@ View Main() {
 ```
 
 The values are `center`, `top`, `bottom`, `start`, `end`, and the corners
-`top_start`, `top_end`, `bottom_start` and `bottom_end`.
+`top_start`, `top_end`, `bottom_start` and `bottom_end`. They place a child along both axes,
+whether the stack is wider than its children or not.
 
 A child that should fill the stack says `grow: 1` or `align_self: stretch`. It then takes the
 stack's whole width and height, unless it has a `width` or a `height` of its own, which it

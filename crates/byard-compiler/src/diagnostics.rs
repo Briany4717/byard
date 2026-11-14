@@ -154,6 +154,22 @@ pub enum CompileError {
         /// `key_down` or `key_up`.
         name: String,
     },
+    /// `autofocus` on an element nothing can focus (RFC-0066 §1): focus would
+    /// never go there, so the attribute would do nothing.
+    AutofocusNeedsFocus {
+        /// Source range of the attribute.
+        span: Span,
+        /// The element it was written on.
+        element: String,
+    },
+    /// A range attribute (`a11y_value_min`, `a11y_value_max`, `a11y_value_step`)
+    /// on an element whose role has no value to give a range to (RFC-0066 §4).
+    AttributeNeedsRole {
+        /// Source range of the attribute.
+        span: Span,
+        /// The attribute.
+        attr: String,
+    },
     /// `a11y_label` or `a11y_description` on a layout container that is not in
     /// the accessibility tree, so nothing would read it (RFC-0063 §5).
     A11yNeedsRole {
@@ -1270,14 +1286,26 @@ pub enum CompileError {
         name: String,
     },
     /// `on name.state` where no element tagged `as name` comes before it
-    /// (RFC-0062).
+    /// (RFC-0062), or an `anchor_to` or `a11y_described_by` that names one
+    /// (RFC-0066 §5).
     UnknownStateTarget {
-        /// Source range of `name.state`.
+        /// Source range of `name.state`, or of the name.
         span: Span,
         /// The name.
         name: String,
         /// The closest declared name.
         hint: Option<String>,
+        /// The attribute that named it (`anchor_to`, `a11y_described_by`), when
+        /// it was not a state block.
+        attr: Option<String>,
+    },
+    /// Two `on enter` (or two `on leave`) blocks on one element (RFC-0066 §3):
+    /// an element has one way of arriving and one of going.
+    DuplicateStateBlock {
+        /// Source range of the second block.
+        span: Span,
+        /// `enter` or `leave`.
+        state: String,
     },
     /// A binding parameter that cannot be one: it has a default, no type, is a
     /// callback, or is called `bind` (RFC-0051).
@@ -1391,6 +1419,9 @@ impl CompileError {
             | Self::UnknownAttribute { span, .. }
             | Self::KeyNeedsFocus { span, .. }
             | Self::A11yNeedsRole { span, .. }
+            | Self::AutofocusNeedsFocus { span, .. }
+            | Self::AttributeNeedsRole { span, .. }
+            | Self::DuplicateStateBlock { span, .. }
             | Self::EventHasNoValue { span, .. }
             | Self::WrongAttributeSeparator { span, .. }
             | Self::ArityMismatch { span, .. }
@@ -1521,6 +1552,9 @@ impl CompileError {
             | Self::UnknownAttribute { span, .. }
             | Self::KeyNeedsFocus { span, .. }
             | Self::A11yNeedsRole { span, .. }
+            | Self::AutofocusNeedsFocus { span, .. }
+            | Self::AttributeNeedsRole { span, .. }
+            | Self::DuplicateStateBlock { span, .. }
             | Self::EventHasNoValue { span, .. }
             | Self::WrongAttributeSeparator { span, .. }
             | Self::ArityMismatch { span, .. }
@@ -1653,6 +1687,9 @@ impl CompileError {
             Self::UnknownAttribute { .. } => "UnknownAttribute",
             Self::KeyNeedsFocus { .. } => "KeyNeedsFocus",
             Self::A11yNeedsRole { .. } => "A11yNeedsRole",
+            Self::AutofocusNeedsFocus { .. } => "AutofocusNeedsFocus",
+            Self::AttributeNeedsRole { .. } => "AttributeNeedsRole",
+            Self::DuplicateStateBlock { .. } => "DuplicateStateBlock",
             Self::EventHasNoValue { .. } => "EventHasNoValue",
             Self::WrongAttributeSeparator { .. } => "WrongAttributeSeparator",
             Self::ArityMismatch { .. } => "ArityMismatch",
@@ -1870,6 +1907,21 @@ impl CompileError {
                  like this is not one; give it a `focus => …` handler, or an `a11y_role` that \
                  takes focus (button, toggle_button, switch, checkbox, radio, tab, menu_item, \
                  link) together with a `tap`"
+            ),
+            Self::AutofocusNeedsFocus { element, .. } => format!(
+                "`autofocus` names the element focus goes to, and a `{element}` written \
+                 like this cannot take focus; give it a `focus => …` handler, a `focused:` \
+                 binding, or an `a11y_role` that takes focus (button, toggle_button, switch, \
+                 checkbox, radio, tab, menu_item, link) together with a `tap`"
+            ),
+            Self::AttributeNeedsRole { attr, .. } => format!(
+                "`{attr}` is the range of a value, and only a `slider` or a `progress_bar` \
+                 has one: add `a11y_role: slider` (or `progress_bar`) to this element, or \
+                 drop the attribute"
+            ),
+            Self::DuplicateStateBlock { state, .. } => format!(
+                "an element has one `on {state}` block: write the values together in the \
+                 first one"
             ),
             Self::A11yNeedsRole { element, attr, .. } => format!(
                 "`{attr}` on a `{element}` is read by nothing: a layout container is in \
@@ -2361,6 +2413,18 @@ impl CompileError {
                 "`{name}` cannot be compared with `none`: only a parameter declared with \
                  `= none` (`on_tap: Fn() = none`, `icon: Slot = none`), or `content`, can be \
                  absent"
+            ),
+            Self::UnknownStateTarget {
+                name,
+                hint,
+                attr: Some(attr),
+                ..
+            } => with_hint(
+                format!(
+                    "`{attr}: {name}` names no element: tag the element with `as {name}` \
+                     in this view (or give a text, for the window-wide name of an `as`)"
+                ),
+                hint.as_deref(),
             ),
             Self::UnknownStateTarget { name, hint, .. } => with_hint(
                 format!(

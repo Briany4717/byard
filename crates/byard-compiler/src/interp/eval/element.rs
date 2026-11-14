@@ -77,6 +77,25 @@ impl Interpreter {
         let (attrs, mut state_blocks) = self.expand_style_spreads(&el.attrs);
         // RFC-0062: `on field.focused` names another element; find it.
         self.resolve_remote_states(&mut state_blocks);
+        self.check_element_refs(&attrs);
+        // RFC-0066: an `on enter` needs the element to be told apart from the
+        // same one on the frame before, which a canvas or a package's native
+        // view cannot be. Said, not dropped.
+        if el.name.as_str() == "Canvas" || byard_core::render::registry::info(el.name.as_str()).is_some() {
+            if let Some(block) = state_blocks
+                .iter()
+                .find(|b| b.states.contains(&crate::parser::ast::StyleStateKind::Enter))
+            {
+                self.errors.push(CompileError::InvalidAttributeCombination {
+                    span: block.span,
+                    message: format!(
+                        "`on enter` is for boxes, text and images: a `{}` has no first frame \
+                         of its own to start from. Put it on the `Box` around it",
+                        el.name.as_str()
+                    ),
+                });
+            }
+        }
         // Validate the base *and* every state block's attributes against the
         // intrinsic's contract (an `on hover { bg: … }` must obey the same §5
         // rules as an inline `bg:`); the state attrs are validation-only and do
@@ -226,6 +245,7 @@ impl Interpreter {
                     children,
                     env_snapshot: self.capture_env_snapshot(),
                     inst: self.cur_inst,
+                    uid,
                 }
             }
             // Value widgets: resolve bound signal and keep as leaf nodes.
@@ -585,6 +605,7 @@ impl Interpreter {
                     then_scopes: Vec::new(),
                     els_scopes: Vec::new(),
                     last_take: None,
+                    leaving: None,
                 });
                 out.push(RenderNode::When {
                     cond: cond_scope,
@@ -616,6 +637,8 @@ impl Interpreter {
                     bodies: Vec::new(),
                     slot_scopes: Vec::new(),
                     len: 0,
+                    leaving_to: 0,
+                    leaving_since: 0,
                 });
                 out.push(RenderNode::For {
                     pool,

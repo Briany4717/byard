@@ -114,6 +114,20 @@ pub(super) struct WhenPool {
     pub(super) then_scopes: Vec<ScopeId>,
     /// The reactive scopes lowering `else` opened, retired with the branch.
     pub(super) els_scopes: Vec<ScopeId>,
+    /// The branch that has just been left and is kept drawn until its `on
+    /// leave` motion settles (RFC-0066 §3): `true` for `then`. `None` for the
+    /// common `when`, which has nothing leaving.
+    pub(super) leaving: Option<Leaving>,
+}
+
+/// A branch of a `when` on its way out (RFC-0066 §3).
+#[derive(Clone, Copy)]
+pub(super) struct Leaving {
+    /// Whether it is the `then` branch.
+    pub(super) then: bool,
+    /// The render ([`Interpreter::frame_seq`]) it started on: it is not asked
+    /// whether it has settled before a frame has drawn it.
+    pub(super) since: u64,
 }
 
 /// A `for`'s reusable body pool (RFC-0018). Bodies are lowered once per slot and
@@ -150,6 +164,12 @@ pub(super) struct ForPool {
     pub(super) slot_scopes: Vec<Vec<ScopeId>>,
     /// How many bodies are live (painted) this frame, the current list length.
     pub(super) len: usize,
+    /// Rows `len..leaving_to` are kept drawn, leaving (RFC-0066 §3); equal to
+    /// `len` or less when none are. `since` is the render the rows began to go
+    /// on.
+    pub(super) leaving_to: usize,
+    /// See `leaving_to`.
+    pub(super) leaving_since: u64,
 }
 
 /// What [`Interpreter::render`] remembers between frames so it can decide
@@ -201,6 +221,51 @@ fn has_lets(members: &[crate::parser::ast::Member]) -> bool {
         .any(|m| matches!(m, crate::parser::ast::Member::Let { .. }))
 }
 
+/// The leaving group of a `when` pool, as [`AnimSlot::leave`](super::animation::AnimSlot)
+/// carries it: odd, so it never meets a `for` pool's.
+const fn when_group(pool: usize) -> u32 {
+    (pool as u32) * 2 + 1
+}
+
+/// The leaving group of a `for` pool (see [`when_group`]).
+const fn for_group(pool: usize) -> u32 {
+    (pool as u32) * 2 + 2
+}
+
+/// Whether any element in `nodes`, or in the branches and rows lowered under
+/// them, has an `on leave` block (RFC-0066 §3).
+fn has_leave_block(nodes: &[RenderNode], pools: &Pools<'_>) -> bool {
+    use crate::parser::ast::StyleStateKind;
+    let leave = |blocks: &[crate::parser::ast::StateBlock]| {
+        blocks
+            .iter()
+            .any(|b| b.states.contains(&StyleStateKind::Leave))
+    };
+    nodes.iter().any(|n| match n {
+        RenderNode::Box {
+            state_blocks,
+            children,
+            ..
+        } => leave(state_blocks) || has_leave_block(children, pools),
+        RenderNode::Text { state_blocks, .. }
+        | RenderNode::Image { state_blocks, .. }
+        | RenderNode::Native { state_blocks, .. }
+        | RenderNode::Canvas { state_blocks, .. } => leave(state_blocks),
+        RenderNode::Overlay { children, .. } => has_leave_block(children, pools),
+        RenderNode::When { pool, .. } => pools.whens.get(*pool).is_some_and(|p| {
+            [&p.then, &p.els]
+                .into_iter()
+                .flatten()
+                .any(|b| has_leave_block(b, pools))
+        }),
+        RenderNode::For { pool, .. } => pools
+            .fors
+            .get(*pool)
+            .is_some_and(|p| p.bodies.iter().any(|b| has_leave_block(b, pools))),
+        _ => false,
+    })
+}
+
 impl Interpreter {
     /// The structural shape a retained build must match (RFC-0032 §R4): how
     /// many overlays are mounted, and how deep / how many screens live each
@@ -233,7 +298,7 @@ impl Interpreter {
         pools: Pools<'a>,
         viewport: (f32, f32),
         flat_ids: &mut Vec<byard_core::atlas::layout::AtlasNodeId>,
-        overlays: &[&'a RenderNode],
+        overlays: &[(&'a RenderNode, AnimSlot)],
         overlay_layouts: &mut Vec<OverlayLayout<'a>>,
     ) -> Option<(
         Option<byard_core::atlas::layout::AtlasNodeId>,
@@ -249,8 +314,8 @@ impl Interpreter {
         // Expand reactive `when`/`for` at the root, then build each concrete node.
         let root_children = self.build_children(tree, pools, flat_ids);
 
-        for ov in overlays {
-            if let Some(layout) = self.build_overlay_layout(ov, pools) {
+        for &(ov, slot) in overlays {
+            if let Some(layout) = self.build_overlay_layout(ov, slot, pools) {
                 overlay_layouts.push(layout);
             }
         }
@@ -315,7 +380,7 @@ impl Interpreter {
     /// A node passes through carrying whatever slot it inherited; a `for` body
     /// replaces it with that slot's own element signal. `when` is transparent,
     /// a branch is not an instance, it is the same one under a condition.
-    fn expand_concrete_in<'a>(
+    pub(super) fn expand_concrete_in<'a>(
         &self,
         nodes: &'a [RenderNode],
         pools: Pools<'a>,
@@ -332,6 +397,26 @@ impl Interpreter {
                     // The taken branch was lowered by `reconcile_structure`; an
                     // as-yet-unselected branch is `None` and expands to nothing.
                     if let Some(p) = pools.whens.get(*pool) {
+                        // RFC-0066: the branch that has just gone is still
+                        // drawn, inert, until its motion settles.
+                        if let Some(gone) = p.leaving.filter(|l| l.then != take) {
+                            let branch = if gone.then {
+                                p.then.as_ref()
+                            } else {
+                                p.els.as_ref()
+                            };
+                            if let Some(branch) = branch {
+                                let at = if slot.leave == 0 {
+                                    AnimSlot {
+                                        leave: when_group(*pool),
+                                        ..slot
+                                    }
+                                } else {
+                                    slot
+                                };
+                                out.extend(self.expand_concrete_in(branch, pools, at));
+                            }
+                        }
                         let branch = if take {
                             p.then.as_ref()
                         } else {
@@ -344,14 +429,20 @@ impl Interpreter {
                 }
                 RenderNode::For { pool, .. } => {
                     if let Some(p) = pools.fors.get(*pool) {
-                        for (i, body) in p.bodies.iter().take(p.len).enumerate() {
+                        // RFC-0066: rows past the list's end that are still
+                        // going are drawn after the live ones.
+                        let shown = p.len.max(p.leaving_to);
+                        for (i, body) in p.bodies.iter().take(shown).enumerate() {
                             // The slot's own element signal, unique across the
                             // program, because a nested `for` is lowered once
                             // per outer slot and gets its own fresh signals.
-                            let row = p
+                            let mut row = p
                                 .item_slots
                                 .get(i)
                                 .map_or(slot, |s| AnimSlot { row: s.0, ..slot });
+                            if i >= p.len && row.leave == 0 {
+                                row.leave = for_group(*pool);
+                            }
                             out.extend(self.expand_concrete_in(body, pools, row));
                         }
                     }
@@ -630,10 +721,36 @@ impl Interpreter {
                     if previous.is_some_and(|was| was != take) {
                         let (then_span, els_span) = self.when_pools[*pool].branch_spans;
                         let gone = if take { els_span } else { then_span };
-                        self.drop_animation_state(gone, self.when_pools[*pool].inst);
+                        // RFC-0066: a branch with an `on leave` stays drawn,
+                        // inert, until its motion settles, and its animations
+                        // go then and not now.
+                        if self.state_uses.leave && self.branch_leaves(*pool, !take) {
+                            self.when_pools[*pool].leaving = Some(Leaving {
+                                then: !take,
+                                since: self.frame_seq,
+                            });
+                        } else {
+                            self.drop_animation_state(gone, self.when_pools[*pool].inst);
+                        }
                         dirtied = true;
                     }
                     self.when_pools[*pool].last_take = Some(take);
+                    if let Some(l) = self.when_pools[*pool].leaving {
+                        if l.then == take {
+                            // Shown again before it was gone: it comes back
+                            // from where it is, as the same elements.
+                            self.when_pools[*pool].leaving = None;
+                            dirtied = true;
+                        } else if self.frame_seq > l.since
+                            && !self.leave_busy_prev.contains(&when_group(*pool))
+                        {
+                            self.when_pools[*pool].leaving = None;
+                            let (then_span, els_span) = self.when_pools[*pool].branch_spans;
+                            let gone = if l.then { then_span } else { els_span };
+                            self.drop_animation_state(gone, self.when_pools[*pool].inst);
+                            dirtied = true;
+                        }
+                    }
                     // Lazily lower the taken branch on first selection (so an
                     // untaken recursive branch never lowers), then descend into it
                     // to reconcile any nested `when`/`for`.
@@ -714,10 +831,36 @@ impl Interpreter {
                     // waiting there for the next occupant.
                     let previous_len = self.for_pools[*pool].len;
                     if new_len < previous_len {
-                        self.drop_slot_state(*pool, new_len, previous_len);
+                        // RFC-0066: rows with an `on leave` are drawn, inert,
+                        // until their motion settles; their state goes then.
+                        if self.state_uses.leave && self.rows_leave(*pool, new_len, previous_len) {
+                            let seq = self.frame_seq;
+                            let f = &mut self.for_pools[*pool];
+                            if f.leaving_to <= previous_len {
+                                f.leaving_since = seq;
+                            }
+                            f.leaving_to = f.leaving_to.max(previous_len);
+                        } else {
+                            self.drop_slot_state(*pool, new_len, previous_len);
+                        }
                         dirtied = true;
                     }
                     self.for_pools[*pool].len = new_len;
+                    {
+                        let f = &mut self.for_pools[*pool];
+                        if f.leaving_to < new_len {
+                            f.leaving_to = new_len;
+                        }
+                    }
+                    if self.for_pools[*pool].leaving_to > new_len
+                        && self.frame_seq > self.for_pools[*pool].leaving_since
+                        && !self.leave_busy_prev.contains(&for_group(*pool))
+                    {
+                        let to = self.for_pools[*pool].leaving_to;
+                        self.for_pools[*pool].leaving_to = new_len;
+                        self.drop_slot_state(*pool, new_len, to);
+                        dirtied = true;
+                    }
                     self.trim_for_pool(*pool);
                     // Reconcile nested loops inside the live bodies. Take the
                     // bodies out so nested growth (which mutates `self.for_pools`)
@@ -744,6 +887,35 @@ impl Interpreter {
             }
         }
         dirtied
+    }
+
+    /// Whether the branch of `when` pool `pool` that has just been left
+    /// holds an element with an `on leave` block (RFC-0066 §3).
+    fn branch_leaves(&self, pool: usize, then: bool) -> bool {
+        let pools = Pools {
+            fors: &self.for_pools,
+            whens: &self.when_pools,
+            navs: &self.nav_pools,
+        };
+        let p = &self.when_pools[pool];
+        let branch = if then { p.then.as_ref() } else { p.els.as_ref() };
+        branch.is_some_and(|nodes| has_leave_block(nodes, &pools))
+    }
+
+    /// Whether rows `from..to` of `for` pool `pool` hold an element with an `on
+    /// leave` block (RFC-0066 §3).
+    fn rows_leave(&self, pool: usize, from: usize, to: usize) -> bool {
+        let pools = Pools {
+            fors: &self.for_pools,
+            whens: &self.when_pools,
+            navs: &self.nav_pools,
+        };
+        self.for_pools[pool]
+            .bodies
+            .iter()
+            .take(to)
+            .skip(from)
+            .any(|b| has_leave_block(b, &pools))
     }
 
     /// Builds the atlas layout for a node slice, expanding reactive `when`/`for`

@@ -29,6 +29,15 @@ impl Interpreter {
     }
 }
 
+/// What an `anchor_to:` points at (RFC-0066 §5).
+enum AnchorTarget {
+    /// An element, by the identity its `as` name has in the view the overlay
+    /// child was written in.
+    Element(u32),
+    /// A text, looked up among every `as` name in the window.
+    Name(String),
+}
+
 /// Whether the overlay names its own `scrim:` colour.
 fn has_scrim_prop(attrs: &[Attr]) -> bool {
     attrs.iter().any(|a| a.name.as_str() == "scrim")
@@ -40,6 +49,9 @@ fn has_scrim_prop(attrs: &[Attr]) -> bool {
 pub(super) struct OverlayLayout<'a> {
     /// The `RenderNode::Overlay` this describes (source of `attrs`/`children`).
     node: &'a RenderNode,
+    /// The animation slot it was expanded under: the leaving group, when it
+    /// is on its way out (RFC-0066 §3).
+    pub(super) anim: super::animation::AnimSlot,
     /// The absolute wrapper container in the atlas; its node index doubles as
     /// the modal scrim's element id.
     pub(super) wrapper_id: byard_core::atlas::layout::AtlasNodeId,
@@ -215,23 +227,38 @@ impl Interpreter {
         &self,
         nodes: &'a [RenderNode],
         pools: Pools<'a>,
-        out: &mut Vec<&'a RenderNode>,
+        out: &mut Vec<(&'a RenderNode, super::animation::AnimSlot)>,
     ) {
-        for concrete in self.expand_concrete(nodes, pools) {
+        self.collect_overlays_in(nodes, pools, self.anim_slot, out);
+    }
+
+    fn collect_overlays_in<'a>(
+        &self,
+        nodes: &'a [RenderNode],
+        pools: Pools<'a>,
+        slot: super::animation::AnimSlot,
+        out: &mut Vec<(&'a RenderNode, super::animation::AnimSlot)>,
+    ) {
+        for concrete in self.expand_concrete_in(nodes, pools, slot) {
             match concrete.node {
                 RenderNode::Overlay { children, .. } => {
-                    out.push(concrete.node);
-                    self.collect_overlays(children, pools, out);
+                    out.push((concrete.node, concrete.slot));
+                    self.collect_overlays_in(children, pools, concrete.slot, out);
                 }
                 RenderNode::Box { children, .. } => {
-                    self.collect_overlays(children, pools, out);
+                    self.collect_overlays_in(children, pools, concrete.slot, out);
                 }
                 // RFC-0026 × RFC-0017: a modal opened by a live screen floats
                 // over the whole app, exactly as one opened anywhere else.
                 RenderNode::Nav { pool, .. } => {
                     if let Some(p) = pools.navs.get(*pool) {
                         for screen in &p.live {
-                            self.collect_overlays(&p.entries[screen.entry].nodes, pools, out);
+                            self.collect_overlays_in(
+                                &p.entries[screen.entry].nodes,
+                                pools,
+                                concrete.slot,
+                                out,
+                            );
                         }
                     }
                 }
@@ -249,14 +276,17 @@ impl Interpreter {
     pub(super) fn build_overlay_layout<'a>(
         &mut self,
         ov: &'a RenderNode,
+        ov_slot: super::animation::AnimSlot,
         pools: Pools<'a>,
     ) -> Option<OverlayLayout<'a>> {
         let RenderNode::Overlay { children, .. } = ov else {
             return None;
         };
         // RFC-0018: an overlay's direct children may be reactive `when`/`for`;
-        // expand them to concrete anchor targets before laying each out.
-        let concrete = self.expand_concrete(children, pools);
+        // expand them to concrete anchor targets before laying each out. Under
+        // the slot the overlay itself was expanded with, so that what is inside
+        // one that is leaving is leaving too (RFC-0066 §3).
+        let concrete = self.expand_concrete_in(children, pools, ov_slot);
         let mut anchor_ids = Vec::with_capacity(concrete.len());
         let mut slots = Vec::with_capacity(concrete.len());
         // An overlay is emitted away from where it was written, and the render
@@ -297,20 +327,58 @@ impl Interpreter {
         let wrapper_id = self.atlas.add_container(wrapper_style, &anchor_ids).ok()?;
         Some(OverlayLayout {
             node: ov,
+            anim: ov_slot,
             wrapper_id,
             children: slots,
         })
     }
 
-    /// The `anchor_to:` name of an overlay child (RFC-0036), if it anchors to
-    /// an element rather than to the viewport.
-    fn anchor_ref(&mut self, child: &RenderNode) -> Option<String> {
-        match child {
-            RenderNode::Box { attrs, .. } => {
-                let attrs = attrs.clone();
-                self.eval_str_prop(&attrs, "anchor_to")
-            }
-            _ => None,
+    /// What an overlay child's `anchor_to:` points at (RFC-0036, RFC-0066 §5),
+    /// if it anchors to an element rather than to the viewport: the element an
+    /// `as` name tags in the view the child was written in, or a text, looked up
+    /// in the whole window.
+    fn anchor_target(&mut self, child: &RenderNode) -> Option<AnchorTarget> {
+        let RenderNode::Box {
+            attrs,
+            env_snapshot,
+            ..
+        } = child
+        else {
+            return None;
+        };
+        if !attrs.iter().any(|a| a.name.as_str() == "anchor_to") {
+            return None;
+        }
+        // The names the child was written among are looked up where it was
+        // written, so two instances of a view each reach their own element.
+        let base = self.env.len();
+        for (k, v) in env_snapshot {
+            self.env.push(k.clone(), v.clone());
+        }
+        let target = match self.element_ref(attrs, "anchor_to") {
+            Some(uid) => Some(AnchorTarget::Element(uid)),
+            None => self.eval_str_prop(attrs, "anchor_to").map(AnchorTarget::Name),
+        };
+        self.env.truncate(base);
+        target
+    }
+
+    /// Where `target` landed this frame, if it was drawn.
+    fn anchor_rect(&self, target: &AnchorTarget) -> Option<crate::interp::intrinsics::Rect> {
+        match target {
+            AnchorTarget::Element(uid) => self.anchor_uid_rects.get(uid).copied(),
+            // Compared by text rather than interned. `anchor_to` may be
+            // computed, and the interner is process-global and append-only
+            // for the life of the process, so interning a per-frame string
+            // would grow memory without bound and take the write lock on the
+            // logic thread every time a new one appeared. The table holds a
+            // handful of entries, one per `as` tag in the view, so the scan is
+            // cheaper than the hash would be.
+            AnchorTarget::Name(name) => self
+                .anchor_rects
+                .iter()
+                .find(|(k, _)| k.as_str() == name)
+                .map(|(_, r)| *r),
         }
     }
 
@@ -322,7 +390,7 @@ impl Interpreter {
     /// both need the child to arrive at its own content size: a stretched
     /// panel would be "placed" correctly and still cover the screen.
     fn is_pass_placed(&mut self, child: &RenderNode) -> bool {
-        if self.anchor_ref(child).is_some() {
+        if self.anchor_target(child).is_some() {
             return true;
         }
         match child {
@@ -358,11 +426,19 @@ impl Interpreter {
         let RenderNode::Overlay {
             attrs,
             env_snapshot,
+            children,
+            uid,
             ..
         } = ol.node
         else {
             return;
         };
+        // RFC-0066 §3: an overlay that is leaving is drawn and nothing else.
+        let leaving = ol.anim.leave != 0;
+        let was_inert = leaving.then(|| self.router.set_inert(true));
+        if leaving && self.access.on {
+            self.access.hide();
+        }
         let viewport = crate::interp::intrinsics::Rect::new(0.0, 0.0, width, height);
         // `modal` defaults true (RFC-0017 §Modality); `dismiss_on_outside`
         // defaults to whatever `modal` is.
@@ -370,6 +446,17 @@ impl Interpreter {
         let dismiss_on_outside = self
             .eval_bool_prop(attrs, "dismiss_on_outside")
             .unwrap_or(modal);
+        // RFC-0066 §1: a modal overlay, or one holding a dialog or a menu, is a
+        // focus scope: Tab cycles inside it, and focus goes in and comes back.
+        // Opened before the scrim, whose handler is the first thing in it.
+        let scope = if leaving {
+            None
+        } else {
+            self.overlay_scope(modal, children, pools)
+        };
+        if let Some(menu) = scope {
+            self.router.begin_scope(*uid, menu);
+        }
 
         // Clamp everything the overlay paints to the viewport (RFC-0017
         // resolved-question: scissor interaction).
@@ -475,6 +562,15 @@ impl Interpreter {
 
         self.access_leave(frame, dialog);
         frame.end_clip();
+        if scope.is_some() {
+            self.router.end_scope();
+        }
+        if let Some(was) = was_inert {
+            self.router.set_inert(was);
+            if self.access.on {
+                self.access.unhide();
+            }
+        }
     }
 
     /// Whether an overlay child covers the whole viewport: a scrim written by
@@ -510,7 +606,7 @@ impl Interpreter {
         if !has_dismiss {
             return;
         }
-        let Some(name) = self.eval_str_prop(attrs, "anchor_to") else {
+        let Some(target) = self.anchor_target(slot.node) else {
             return;
         };
         let Ok(Some(own)) = self.atlas.resolved_rect(slot.id) else {
@@ -522,12 +618,7 @@ impl Interpreter {
             own.width,
             own.height,
         )];
-        if let Some(anchor) = self
-            .anchor_rects
-            .iter()
-            .find(|(k, _)| k.as_str() == name)
-            .map(|(_, r)| *r)
-        {
+        if let Some(anchor) = self.anchor_rect(&target) {
             keep.push(anchor);
         }
         if let Some(action) = self.lower_overlay_dismiss(attrs) {
@@ -653,21 +744,10 @@ impl Interpreter {
             };
             return (ax - own.x, ay - own.y);
         }
-        let Some(name) = self.eval_str_prop(attrs, "anchor_to") else {
+        let Some(target) = self.anchor_target(slot.node) else {
             return (0.0, 0.0);
         };
-        // Compared by text rather than interned. `anchor_to` may be computed,
-        // and the interner is process-global and append-only for the life of
-        // the process, so interning a per-frame string would grow memory
-        // without bound and take the write lock on the logic thread every time
-        // a new one appeared. The table holds a handful of entries — one per
-        // `as` tag in the view — so the scan is cheaper than the hash would be.
-        let Some(anchor) = self
-            .anchor_rects
-            .iter()
-            .find(|(k, _)| k.as_str() == name)
-            .map(|(_, r)| *r)
-        else {
+        let Some(anchor) = self.anchor_rect(&target) else {
             return (0.0, 0.0);
         };
         let Ok(Some(own)) = self.atlas.resolved_rect(slot.id) else {

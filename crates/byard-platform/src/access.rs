@@ -10,13 +10,13 @@
 use std::collections::HashMap;
 
 use accesskit::{
-    Action, ActionData, ActionRequest, Affine, Node, NodeId, Rect, Role, Toggled, TreeId, TreeInfo,
-    TreeUpdate,
+    Action, ActionData, ActionRequest, Affine, Live, Node, NodeId, Rect, Role, Toggled, TreeId,
+    TreeInfo, TreeUpdate,
 };
 use byard_core::PlatformHost;
 use byard_core::access::{
-    AccessAction, AccessActions, AccessFlags, AccessId, AccessNode, AccessRequest, AccessRole,
-    AccessTree, AccessValue,
+    AccessAction, AccessActions, AccessFlags, AccessId, AccessLive, AccessNode, AccessRequest,
+    AccessRole, AccessTree, AccessValue,
 };
 use winit::event_loop::{ActiveEventLoop, EventLoopProxy};
 use winit::window::Window;
@@ -175,6 +175,16 @@ fn node(n: &AccessNode, children: Vec<NodeId>) -> Node {
         if n.actions.contains(ours) {
             out.add_action(theirs);
         }
+    }
+    // RFC-0066: a live region says what changes in it, and a node can name the
+    // one that describes it.
+    match n.live {
+        AccessLive::Off => {}
+        AccessLive::Polite => out.set_live(Live::Polite),
+        AccessLive::Assertive => out.set_live(Live::Assertive),
+    }
+    if let Some(target) = n.described_by {
+        out.set_described_by(vec![node_id(target)]);
     }
     if !children.is_empty() {
         out.set_children(children);
@@ -401,6 +411,8 @@ mod tests {
             bounds: FrameRect::new(10.0, 20.0, 30.0, 40.0),
             flags: AccessFlags::empty(),
             actions: AccessActions::empty(),
+            live: AccessLive::Off,
+            described_by: None,
         }
     }
 

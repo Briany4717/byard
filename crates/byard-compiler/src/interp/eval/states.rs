@@ -163,6 +163,8 @@ fn state_bit(kind: StyleStateKind) -> crate::interp::events::StyleState {
         StyleStateKind::Dragging => StyleState::DRAGGING,
         StyleStateKind::FocusVisible => StyleState::FOCUS_VISIBLE,
         StyleStateKind::FocusWithin => StyleState::FOCUS_WITHIN,
+        StyleStateKind::Enter => StyleState::ENTERING,
+        StyleStateKind::Leave => StyleState::LEAVING,
     }
 }
 
@@ -338,6 +340,40 @@ impl Interpreter {
         }
     }
 
+    /// What an element's `on enter` and `on leave` blocks need to know
+    /// (RFC-0066 §3): `ENTERING` on the first frame an element with an `on
+    /// enter` is drawn, `LEAVING` while it is in a branch that has gone.
+    /// Nothing is read, and nothing allocated, in a program that has neither.
+    pub(super) fn motion_state(
+        &mut self,
+        key: Option<u64>,
+        blocks: &[StateBlock],
+    ) -> crate::interp::events::StyleState {
+        use crate::interp::events::StyleState;
+        let mut state = StyleState::empty();
+        if !(self.state_uses.enter || self.state_uses.leave) {
+            return state;
+        }
+        if self.anim_slot.leave != 0 {
+            state = state.union(StyleState::LEAVING);
+        }
+        if let Some(key) = key.filter(|_| {
+            self.state_uses.enter
+                && blocks
+                    .iter()
+                    .any(|b| b.states.contains(&StyleStateKind::Enter))
+        }) {
+            if !self.entered_prev.contains(&key) {
+                state = state.union(StyleState::ENTERING);
+                // The frame after this one is where it moves to its own
+                // values, so one has to be asked for.
+                self.any_active = true;
+            }
+            self.entered_now.insert(key);
+        }
+        state
+    }
+
     /// Publishes, before the frame paints, the states of every element a state
     /// block names (RFC-0062 §5): the router's pointer and focus states and the
     /// value states layout read, so that an element written *before* the one it
@@ -361,6 +397,42 @@ impl Interpreter {
                 let state = pointer.union(value);
                 self.elem_states.insert(uid, state);
             }
+        }
+    }
+
+    /// Checks the names an element points at with `anchor_to` and
+    /// `a11y_described_by` (RFC-0066 §5): a bare word that is neither an `as` tag
+    /// in scope nor anything the view binds names nothing. A text, or a word
+    /// the view binds, is the window-wide form and is left alone.
+    pub(super) fn check_element_refs(&mut self, attrs: &[Attr]) {
+        for attr in attrs {
+            if !matches!(attr.name.as_str(), "anchor_to" | "a11y_described_by") {
+                continue;
+            }
+            let AttrKind::Prop {
+                value: Expr::Ident(name, span),
+            } = &attr.kind
+            else {
+                continue;
+            };
+            let key = Symbol::intern(&format!("@{}", name.as_str()));
+            if self.env.lookup(&key).is_some() || self.env.lookup(name).is_some() {
+                continue;
+            }
+            let names: Vec<String> = self
+                .env
+                .snapshot()
+                .into_iter()
+                .filter_map(|(k, _)| k.as_str().strip_prefix('@').map(str::to_string))
+                .collect();
+            let hint = crate::util::closest_match(name.as_str(), names.iter().map(String::as_str))
+                .map(str::to_string);
+            self.errors.push(CompileError::UnknownStateTarget {
+                span: *span,
+                name: name.as_str().to_string(),
+                hint,
+                attr: Some(attr.name.as_str().to_string()),
+            });
         }
     }
 
@@ -408,6 +480,34 @@ impl Interpreter {
     /// notes which features the frame has to pay for. A name nothing declared
     /// is `UnknownStateTarget`.
     pub(super) fn resolve_remote_states(&mut self, blocks: &mut [StateBlock]) {
+        // RFC-0066 §3: `on enter` and `on leave` are blocks of paint values, and
+        // an element has one of each.
+        for kind in [StyleStateKind::Enter, StyleStateKind::Leave] {
+            let mut seen = false;
+            for block in blocks.iter().filter(|b| b.states.contains(&kind)) {
+                if kind == StyleStateKind::Enter {
+                    self.state_uses.enter = true;
+                } else {
+                    self.state_uses.leave = true;
+                }
+                if seen {
+                    self.errors.push(CompileError::DuplicateStateBlock {
+                        span: block.span,
+                        state: kind.as_str().to_string(),
+                    });
+                }
+                seen = true;
+                for attr in &block.attrs {
+                    if crate::interp::intrinsics::is_layout_attribute(attr.name.as_str()) {
+                        self.errors.push(CompileError::LayoutInStateBlock {
+                            span: attr.span,
+                            name: attr.name.as_str().to_string(),
+                            state: kind.as_str().to_string(),
+                        });
+                    }
+                }
+            }
+        }
         for block in blocks {
             if block.states.contains(&StyleStateKind::FocusWithin)
                 || block
@@ -462,6 +562,7 @@ impl Interpreter {
                         span: remote.span,
                         name: remote.name.as_str().to_string(),
                         hint,
+                        attr: None,
                     });
                 }
             }

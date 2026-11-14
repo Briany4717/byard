@@ -357,7 +357,12 @@ impl Interpreter {
                     // RFC-0012 §A: the six modeled-but-previously-unexposed events.
                     "hover" => super::events::EventKind::Hover,
                     "pointer_enter" => super::events::EventKind::PointerEnter,
-                    "pointer_exit" => super::events::EventKind::PointerExit,
+                    // RFC-0066 §5: `pointer_leave` is the name that pairs with
+                    // `pointer_enter`; both are about the element and what is
+                    // inside it.
+                    "pointer_exit" | "pointer_leave" => super::events::EventKind::PointerExit,
+                    "focus_in" => super::events::EventKind::FocusIn,
+                    "focus_out" => super::events::EventKind::FocusOut,
                     "long_press" => super::events::EventKind::LongPress,
                     "double_tap" => super::events::EventKind::DoubleTap,
                     "secondary" => super::events::EventKind::Secondary,
@@ -445,6 +450,71 @@ impl Interpreter {
     ) {
         let role = self.declared_role(attrs);
         self.register_focusable_as(attrs, hit_rect, elem_idx, role);
+    }
+
+    /// What RFC-0066 adds to an element's focus, each read only when the element
+    /// writes it: `autofocus`, the crossings `pointer_enter`, `pointer_leave`,
+    /// `focus_in` and `focus_out` (they need the elements inside it), a write
+    /// to a bound `focused:` that moves focus, and a menu item that opens a
+    /// submenu.
+    pub(super) fn register_focus_extras(
+        &mut self,
+        attrs: &[Attr],
+        paint_attrs: &[Attr],
+        idx: u32,
+        atlas_node: byard_core::atlas::layout::AtlasNodeId,
+        role: Option<AccessRole>,
+    ) {
+        let mut crossing = false;
+        for attr in attrs {
+            match (attr.name.as_str(), &attr.kind) {
+                ("autofocus", AttrKind::Prop { .. }) => {
+                    if self.eval_bool_prop(paint_attrs, "autofocus") == Some(true) {
+                        self.router.mark_autofocus(idx);
+                    }
+                }
+                (
+                    "pointer_enter" | "pointer_exit" | "pointer_leave" | "focus_in" | "focus_out",
+                    AttrKind::Event { .. },
+                ) => crossing = true,
+                ("focused", AttrKind::Prop { .. }) => {
+                    // A write of `true` to the bound `var` moves focus here,
+                    // and of `false` takes it away. Where they agree with the
+                    // router, which writes the `var` itself, nothing is asked.
+                    if let Some(sig) = self.resolve_focused_sig(attrs) {
+                        let focused = self.router.is_focused(idx);
+                        match self.ctx.peek_signal(sig).as_bool() {
+                            Some(true) if !focused => self.focus_requests.push((idx, true)),
+                            Some(false) if focused => self.focus_requests.push((idx, false)),
+                            _ => {}
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        if crossing {
+            let mut inside = Vec::new();
+            self.collect_subtree(atlas_node, &mut inside);
+            self.router.listen_subtree(idx, inside);
+        }
+        if role == Some(AccessRole::MenuItem) {
+            if let Some(expanded) = self.eval_bool_prop(paint_attrs, "a11y_expanded") {
+                self.router.submenu_opener(idx, !expanded);
+            }
+        }
+    }
+
+    /// The element indices of everything laid out inside `node`.
+    fn collect_subtree(
+        &self,
+        node: byard_core::atlas::layout::AtlasNodeId,
+        out: &mut Vec<u32>,
+    ) {
+        for child in self.atlas.children(node) {
+            out.extend(self.atlas.node_index(child));
+            self.collect_subtree(child, out);
+        }
     }
 
     /// The role an element's `a11y_role:` names, if it has one.
@@ -542,7 +612,10 @@ impl Interpreter {
         }
         let sig = self.focus_signal(attrs);
         self.router.focusable(idx, hit_rect, sig);
-        if matches!(role, Some(AccessRole::Tab | AccessRole::RadioButton)) {
+        if matches!(
+            role,
+            Some(AccessRole::Tab | AccessRole::RadioButton | AccessRole::MenuItem)
+        ) {
             // RFC-0063 §4: where Tab enters the group. Read only for a member
             // of a group.
             let selected = self.router.in_group()

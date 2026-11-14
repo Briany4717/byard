@@ -369,6 +369,12 @@ const POINTER_EVENTS: &[&str] = &[
     "pointer_move",
     "pointer_enter",
     "pointer_exit",
+    // RFC-0066 §5: `pointer_leave` is `pointer_exit` by the name that pairs
+    // with `pointer_enter`; `focus_in` and `focus_out` are the same crossings
+    // for keyboard focus. All four are about the element and what is inside it.
+    "pointer_leave",
+    "focus_in",
+    "focus_out",
     "hover",
     "long_press",
     "double_tap",
@@ -475,6 +481,18 @@ fn add_universal(m: &mut HashMap<&'static str, PropDef>) {
     // RFC-0063: what a reader says after the name, a field's supporting or
     // error text.
     m.insert("a11y_description", pnt(PropType::Str));
+    // RFC-0066 §4: whether a change is announced, what describes the element,
+    // and the range of a value. Paint class like the rest: nothing here moves
+    // anything.
+    m.insert("a11y_live", pnt(PropType::Enum(A11Y_LIVE)));
+    m.insert("a11y_described_by", pnt(PropType::Str));
+    for range in ["a11y_value_min", "a11y_value_max", "a11y_value_step"] {
+        m.insert(range, pnt(PropType::Float));
+    }
+    // RFC-0066 §1 and §5: the element focus goes to when its overlay opens, and
+    // an element the pointer passes through.
+    m.insert("autofocus", pnt(PropType::Bool));
+    m.insert("interactive", pnt(PropType::Bool));
     for flag in [
         "a11y_checked",
         "a11y_mixed",
@@ -512,6 +530,9 @@ pub fn role_implies_focus(role: AccessRole) -> bool {
     )
 }
 
+/// The words `a11y_live:` takes (RFC-0066 §4).
+const A11Y_LIVE: &[&str] = &["polite", "assertive", "off"];
+
 /// Whether an `a11y_role:` value can be a role that implies focus. A keyword
 /// is read as it is; a `?:` counts if either branch can be one; anything the
 /// checker cannot read (a `let`, a parameter) is given the benefit of the
@@ -532,6 +553,27 @@ fn role_value_may_take_focus(value: &Expr) -> bool {
     // one that takes focus. A name the program binds is a value.
     word.and_then(AccessRole::from_keyword)
         .is_some_and(role_implies_focus)
+}
+
+/// Whether an `a11y_role:` value can be a role with a value that has a range:
+/// a `slider` or a `progress_bar`. As [`role_value_may_take_focus`], a value the
+/// checker cannot read is given the benefit of the doubt.
+fn role_value_may_have_range(value: &Expr) -> bool {
+    let word = match value {
+        Expr::Ident(sym, _) => Some(sym.as_str()),
+        Expr::StrLit(parts, _) => match parts.as_slice() {
+            [StrPart::Text(s)] => Some(s.as_str()),
+            _ => return true,
+        },
+        Expr::Ternary { then, els, .. } => {
+            return role_value_may_have_range(then) || role_value_may_have_range(els);
+        }
+        _ => return true,
+    };
+    // A word that is no keyword is a name the program binds, or is reported on
+    // its own; it is not this check's to refuse.
+    word.and_then(AccessRole::from_keyword)
+        .is_none_or(|r| matches!(r, AccessRole::Slider | AccessRole::ProgressBar))
 }
 
 /// Whether the attributes make the element a stop in the Tab order, so that
@@ -1411,6 +1453,44 @@ pub fn validate_element_in(
                 errs.push(CompileError::A11yNeedsRole {
                     span: attr.span,
                     element: name.to_string(),
+                    attr: attr.name.as_str().to_string(),
+                });
+            }
+        }
+    }
+
+    // RFC-0066 §1: `autofocus` names where focus goes, so it needs somewhere
+    // focus can go.
+    if let Some(at) = attrs
+        .iter()
+        .find(|a| a.name.as_str() == "autofocus" && matches!(a.kind, AttrKind::Prop { .. }))
+    {
+        if !info.focusable && !focus_reachable(attrs) {
+            errs.push(CompileError::AutofocusNeedsFocus {
+                span: at.span,
+                element: name.to_string(),
+            });
+        }
+    }
+    // RFC-0066 §4: a range is the range of a value, which a slider and a
+    // progress bar have. A role the checker cannot read (a `let`, a parameter)
+    // is given the benefit of the doubt, as `focus_reachable` gives it.
+    if name != "Slider" {
+        let role = attrs.iter().find_map(|a| match &a.kind {
+            AttrKind::Prop { value } if a.name.as_str() == "a11y_role" => Some(value),
+            _ => None,
+        });
+        let has_value = role.is_some_and(role_value_may_have_range);
+        if !has_value {
+            for attr in attrs.iter().filter(|a| {
+                matches!(a.kind, AttrKind::Prop { .. })
+                    && matches!(
+                        a.name.as_str(),
+                        "a11y_value_min" | "a11y_value_max" | "a11y_value_step"
+                    )
+            }) {
+                errs.push(CompileError::AttributeNeedsRole {
+                    span: attr.span,
                     attr: attr.name.as_str().to_string(),
                 });
             }

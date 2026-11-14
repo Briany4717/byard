@@ -13,6 +13,7 @@ use super::Interpreter;
 use super::layout::collect_pools;
 use super::props::spacing_value;
 use crate::diagnostics::Span;
+use byard_core::frame::RepeatMode;
 use crate::interp::env::Value;
 use crate::parser::ast::Expr;
 use crate::symbol::Symbol;
@@ -113,6 +114,10 @@ pub(crate) struct AnimSlot {
     pub(super) row: u32,
     /// The view instance, or `0` outside any user view.
     pub(super) inst: u32,
+    /// The group of leaving elements the node is inside (RFC-0066 §3): `0` for
+    /// one that is not leaving. Not part of an [`AnimKey`], so an element that
+    /// starts to leave keeps the motions it had.
+    pub(super) leave: u32,
 }
 
 /// What a persisted animation belongs to: the `with` node that wrote it, **and
@@ -555,7 +560,7 @@ impl Interpreter {
             }
         }
         if !all_settled {
-            self.any_active = true;
+            self.note_active();
         }
         color_from_channels(current)
     }
@@ -628,7 +633,7 @@ impl Interpreter {
         };
         shown.offset = offset;
         if !settled {
-            self.any_active = true;
+            self.note_active();
         }
         Some(shown)
     }
@@ -687,7 +692,7 @@ impl Interpreter {
             blend_shadows(&record.from, &record.to, record.progress.sample(now))
         };
         if !settled {
-            self.any_active = true;
+            self.note_active();
         }
         shown
     }
@@ -822,7 +827,7 @@ impl Interpreter {
         // overshoot alive instead of freezing it at the first target crossing.
         let settled = motion.is_settled_with_eps(now, ANIM_SETTLE_EPS_POS, ANIM_SETTLE_EPS_VEL);
         if !settled {
-            self.any_active = true;
+            self.note_active();
         }
         sampled
     }
@@ -869,9 +874,10 @@ impl Interpreter {
         spec: &crate::interp::anim::MotionSpec<'_>,
         key: AnimKey,
     ) -> f32 {
-        let from_val = spec
-            .from
-            .map_or(target_val, |expr| self.eval_number(expr, target_val));
+        let from_val = match spec.from {
+            Some(expr) => self.eval_number(expr, target_val),
+            None => self.remembered_start(key, target_val, pack_curve(spec.curve)),
+        };
         let motion = byard_core::frame::Motion {
             from: from_val,
             to: target_val,
@@ -882,6 +888,29 @@ impl Interpreter {
             Some(phase) => motion.sample_secs(phase),
             None => from_val,
         }
+    }
+
+    /// Where a delayed, staggered or repeating animation with no `from:` starts
+    /// (RFC-0066 §3): the target it had before this one, so an element that
+    /// arrives at a value (`on enter` gave it the first) moves from that value
+    /// to its own, whatever the curve's delay or stagger. The target itself while
+    /// it has not changed, which is what an animation with no `from:` always did.
+    fn remembered_start(&mut self, key: AnimKey, target: f32, curve: byard_core::frame::MotionCurve) -> f32 {
+        let now = self.now_ms;
+        let m = self
+            .animations
+            .entry(key)
+            .or_insert_with(|| byard_core::frame::Motion {
+                from: target,
+                to: target,
+                start_ms: now,
+                curve,
+            });
+        if (m.to - target).abs() > f32::EPSILON {
+            m.from = m.to;
+            m.to = target;
+        }
+        m.from
     }
 
     /// The pair form of [`Self::eval_looped`]: each component gets its own
@@ -904,6 +933,14 @@ impl Interpreter {
         let now = self.now_ms;
         // A pair has two components, so this only reaches the heap for a wider
         // tuple.
+        let mut starts: smallvec::SmallVec<[f32; 2]> = smallvec::SmallVec::new();
+        if from_value.is_none() {
+            for (axis, (_, v)) in items.iter().enumerate() {
+                let to = spacing_value(v).unwrap_or_default();
+                let part = u8::try_from(axis + 1).unwrap_or(4).min(4);
+                starts.push(self.remembered_start(key.part(part), to, curve));
+            }
+        }
         let motions: smallvec::SmallVec<[byard_core::frame::Motion; 2]> = items
             .iter()
             .enumerate()
@@ -915,7 +952,7 @@ impl Interpreter {
                         .and_then(|(_, v)| spacing_value(v))
                         .unwrap_or(to),
                     Some(scalar) => spacing_value(scalar).unwrap_or(to),
-                    None => to,
+                    None => starts.get(axis).copied().unwrap_or(to),
                 };
                 byard_core::frame::Motion {
                     from,
@@ -977,7 +1014,7 @@ impl Interpreter {
         // Still inside the delay: hold the start value, and stay in the active
         // set so the frames that will start the motion keep coming.
         if elapsed < delay_ms {
-            self.any_active = true;
+            self.note_active();
             return None;
         }
         let period = motions
@@ -987,7 +1024,12 @@ impl Interpreter {
             .unwrap_or(Motion::MIN_PERIOD_MS);
         let phase = loop_phase(period, elapsed - delay_ms, spec.repeat, spec.reverse);
         if !phase.finished {
-            self.any_active = true;
+            // A loop that never ends does not keep a leaving element drawn.
+            if matches!(spec.repeat, RepeatMode::Infinite) {
+                self.any_active = true;
+            } else {
+                self.note_active();
+            }
         }
         Some(phase.t_secs)
     }
@@ -1037,7 +1079,7 @@ impl Interpreter {
         let fingerprint = track.restart.map_or(0, |expr| self.restart_key(expr));
         let (elapsed, _) = self.loop_elapsed(key, fingerprint, false);
         if elapsed < delay_ms {
-            self.any_active = true;
+            self.note_active();
             let first = track.steps.first()?.value;
             return Some(KeyframeBlend {
                 lo: first,
@@ -1052,7 +1094,11 @@ impl Interpreter {
             track.reverse,
         );
         if !phase.finished {
-            self.any_active = true;
+            if matches!(track.repeat, RepeatMode::Infinite) {
+                self.any_active = true;
+            } else {
+                self.note_active();
+            }
         }
         // The step table is capped by the RFC (and validated on resolution), so
         // the timing lookup runs on the stack with no allocation.
@@ -1159,6 +1205,17 @@ impl Interpreter {
         self.shadow_animations
             .retain(|k, _| !dead.contains(&k.slot));
         self.anim_clocks.retain(|k, _| !dead.contains(&k.slot));
+    }
+
+    /// Records that a motion sampled this frame has not settled: frames must
+    /// keep coming, and, for an element that is leaving, it is not gone yet
+    /// (RFC-0066 §3).
+    pub(super) fn note_active(&mut self) {
+        self.any_active = true;
+        let group = self.anim_slot.leave;
+        if group != 0 && !self.leave_busy.contains(&group) {
+            self.leave_busy.push(group);
+        }
     }
 
     /// The animation key for `span` on the instance currently being rendered.

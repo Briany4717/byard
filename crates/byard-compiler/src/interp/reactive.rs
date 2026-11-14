@@ -64,6 +64,13 @@ impl ScopeId {
     const fn index(self) -> usize {
         self.index as usize
     }
+
+    /// An identity of this scope alone, for a node that has no uid of its own
+    /// but owns a scope no other does (a `Text`'s content, an `Image`'s source).
+    #[inline]
+    pub(crate) const fn key(self) -> u64 {
+        (1 << 63) | ((self.generation as u64) << 32) | self.index as u64
+    }
 }
 
 /// Identifies a `RenderFrame` field a value binding projects into. Opaque to

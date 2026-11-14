@@ -155,6 +155,13 @@ impl Interpreter {
         // Opacity decides nothing about where a press lands.
         hit.opacity = 1.0;
         let previous = self.router.set_hit_frame(hit);
+        // RFC-0066 §3: a leaving node is drawn and nothing else. It takes no
+        // input, is out of the Tab order and out of the accessibility tree.
+        let leaving = self.anim_slot.leave != 0;
+        let was_inert = leaving.then(|| self.router.set_inert(true));
+        if leaving && self.access.on {
+            self.access.hide();
+        }
         self.render_node_with_atlas_inner(
             node,
             atlas_node,
@@ -169,6 +176,12 @@ impl Interpreter {
             window,
             pools,
         );
+        if let Some(was) = was_inert {
+            self.router.set_inert(was);
+            if self.access.on {
+                self.access.unhide();
+            }
+        }
         self.router.restore_hit_frame(previous);
     }
 
@@ -256,7 +269,8 @@ impl Interpreter {
                         .map_or_else(crate::interp::events::StyleState::empty, |i| {
                             self.element_style_state(i)
                         })
-                        .union(self.prop_style_state(attrs, None, ""));
+                        .union(self.prop_style_state(attrs, None, ""))
+                        .union(self.motion_state(Some(content.key()), state_blocks));
                     let attrs =
                         resolve_state_attrs(attrs, state_blocks, state, &self.elem_states, &|c| {
                             viewport_holds(c, self.viewport, &self.theme)
@@ -442,12 +456,20 @@ impl Interpreter {
                             scroll_shift,
                             cull_clip,
                         );
+                        let through = attrs.iter().any(|a| a.name.as_str() == "interactive")
+                            && self.eval_bool_prop(attrs, "interactive") == Some(false);
+                        if through {
+                            self.router.enter_pass_through();
+                        }
                         self.register_event_attrs(
                             attrs,
                             hit_rect,
                             shifted_rect(self_rect, scroll_shift),
                             elem_idx,
                         );
+                        if through {
+                            self.router.leave_pass_through();
+                        }
                     }
                 }
                 self.env.truncate(env_base);
@@ -490,6 +512,9 @@ impl Interpreter {
                 let mut access_scope = access::Scope::default();
                 // Whether this box opened a tab list or radio group (RFC-0052).
                 let mut group_open = false;
+                // Whether this box is `interactive: false` (RFC-0066 §5), so the
+                // pointer goes through what it registers, to the way out.
+                let mut through_open = false;
                 // Likewise the composed paint transform children inherit (RFC-0011
                 // group transforms): this box's own transform ∘ its ancestors',
                 // set once the rect is known, else passed through unchanged.
@@ -511,15 +536,14 @@ impl Interpreter {
                     // been without them.
                     if let Some(name) = anchor_name {
                         let tl = inherited_transform.apply_point([rect.x, rect.y]);
-                        self.anchor_rects.insert(
-                            name.clone(),
-                            crate::interp::intrinsics::Rect::new(
-                                tl[0] + scroll_shift.0,
-                                tl[1] + scroll_shift.1,
-                                rect.width * inherited_transform.scale[0],
-                                rect.height * inherited_transform.scale[1],
-                            ),
+                        let landed = crate::interp::intrinsics::Rect::new(
+                            tl[0] + scroll_shift.0,
+                            tl[1] + scroll_shift.1,
+                            rect.width * inherited_transform.scale[0],
+                            rect.height * inherited_transform.scale[1],
                         );
+                        self.anchor_rects.insert(name.clone(), landed);
+                        self.anchor_uid_rects.insert(*uid, landed);
                     }
                     let elem_idx = self.atlas.node_index(atlas_node);
                     // RFC-0012 S5: a `disabled:` element still lays out and paints,
@@ -544,7 +568,8 @@ impl Interpreter {
                         .map_or_else(crate::interp::events::StyleState::empty, |i| {
                             self.element_style_state(i)
                         })
-                        .union(self.prop_style_state(attrs, *bound_sig, name.as_str()));
+                        .union(self.prop_style_state(attrs, *bound_sig, name.as_str()))
+                        .union(self.motion_state(Some(u64::from(*uid)), state_blocks));
                     // RFC-0062: an element tagged `as name` publishes the states it
                     // resolved, for the elements after it that name them. Before
                     // its children paint, so a descendant sees this frame's.
@@ -783,6 +808,15 @@ impl Interpreter {
                         cull_clip,
                     );
 
+                    // RFC-0066 §5: `interactive: false` takes the element and
+                    // everything in it out of hit-testing, so presses, hover and
+                    // the wheel go to what is under it. Read only when written.
+                    if attrs.iter().any(|a| a.name.as_str() == "interactive")
+                        && self.eval_bool_prop(paint_attrs, "interactive") == Some(false)
+                    {
+                        self.router.enter_pass_through();
+                        through_open = true;
+                    }
                     // RFC-0016: an element that styles `on hover`/`on pressed` but
                     // registers no handler still needs the engine to track the
                     // pointer over it, so register a bare hover/press hit region.
@@ -912,7 +946,7 @@ impl Interpreter {
                     // RFC-0052: its `a11y_role:` is read once, for the focus
                     // rule and for a tab list or radio group to open.
                     let declared = self.declared_role(attrs);
-                    if element_name == "Button" {
+                    if element_name == "Button" && declared != Some(AccessRole::MenuItem) {
                         if let Some(idx) = elem_idx.filter(|&i| {
                             self.router
                                 .has_handler(i, crate::interp::events::EventKind::Tap)
@@ -930,11 +964,20 @@ impl Interpreter {
                     ) {
                         self.register_focusable_as(attrs, hit_rect, elem_idx, declared);
                     }
+                    if let Some(idx) = elem_idx {
+                        self.register_focus_extras(attrs, paint_attrs, idx, atlas_node, declared);
+                    }
                     if let Some(kind) = match declared {
                         Some(AccessRole::TabList) => Some(crate::interp::events::GroupKind::Tabs),
                         Some(AccessRole::RadioGroup) => {
                             Some(crate::interp::events::GroupKind::Radios)
                         }
+                        // RFC-0066 §2: a menu is an arrow group, down a column
+                        // and along a row for a menu bar.
+                        Some(AccessRole::Menu) => Some(crate::interp::events::GroupKind::Menu {
+                            horizontal: name.as_str() == "Row"
+                                || Self::enum_prop(attrs, "direction") == Some("row"),
+                        }),
                         _ => None,
                     } {
                         self.router.open_group(kind);
@@ -1332,6 +1375,9 @@ impl Interpreter {
                 if group_open {
                     self.router.close_group();
                 }
+                if through_open {
+                    self.router.leave_pass_through();
+                }
                 // Close the RFC-0019 instance-env scope opened at the top of this
                 // arm (balanced with `env_base`), restoring the caller's env for
                 // the remaining siblings.
@@ -1504,7 +1550,8 @@ impl Interpreter {
                         .map_or_else(crate::interp::events::StyleState::empty, |i| {
                             self.element_style_state(i)
                         })
-                        .union(self.prop_style_state(attrs, None, ""));
+                        .union(self.prop_style_state(attrs, None, ""))
+                        .union(self.motion_state(Some(src.key()), state_blocks));
                     let attrs =
                         resolve_state_attrs(attrs, state_blocks, state, &self.elem_states, &|c| {
                             viewport_holds(c, self.viewport, &self.theme)
@@ -1582,7 +1629,8 @@ impl Interpreter {
                         .map_or_else(crate::interp::events::StyleState::empty, |i| {
                             self.element_style_state(i)
                         })
-                        .union(self.prop_style_state(attrs, None, ""));
+                        .union(self.prop_style_state(attrs, None, ""))
+                        .union(self.motion_state(None, state_blocks));
                     let paint_attrs =
                         resolve_state_attrs(attrs, state_blocks, state, &self.elem_states, &|c| {
                             viewport_holds(c, self.viewport, &self.theme)
@@ -1783,7 +1831,8 @@ impl Interpreter {
                         .map_or_else(crate::interp::events::StyleState::empty, |i| {
                             self.element_style_state(i)
                         })
-                        .union(self.prop_style_state(attrs, None, ""));
+                        .union(self.prop_style_state(attrs, None, ""))
+                        .union(self.motion_state(None, state_blocks));
                     let paint_attrs =
                         resolve_state_attrs(attrs, state_blocks, state, &self.elem_states, &|c| {
                             viewport_holds(c, self.viewport, &self.theme)

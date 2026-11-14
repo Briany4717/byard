@@ -250,7 +250,7 @@ byard shot crates/byard-cli/examples/ripple --hold 200,90 --at 120 -o pressed.pn
 ```
 
 A key is a single character or one of `Left`, `Right`, `Up`, `Down`, `Home`, `End`,
-`Backspace`, `Delete`, `Enter`, `Tab`, `Escape` and `Space`, in any case. In front of it go
+`PageUp`, `PageDown`, `Insert`, `Backspace`, `Delete`, `Enter`, `Tab`, `Escape` and `Space`, in any case. In front of it go
 modifiers, joined by `+`: `shift`, `ctrl`, `alt` (or `option`), `meta` (or `cmd`) and `mod`.
 `mod` is Command on macOS and Control elsewhere, as for the keys in
 [controls](controls.md#editing). Typed text goes in as it would from a keyboard, as one

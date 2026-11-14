@@ -56,6 +56,19 @@ pub(crate) struct FilledPath {
     /// The path's own `opacity:`, before the canvas's is applied.
     alpha: f32,
     span: Span,
+    /// The outline, when the path writes `stroke:`.
+    stroke: Option<PathStroke>,
+}
+
+/// A stroked path's line: colour, width in logical pixels, and the shape of
+/// its ends (`butt` 0, `round` 1, `square` 2) and corners (`miter` 0, `round`
+/// 1, `bevel` 2).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PathStroke {
+    color: [f32; 4],
+    width: f32,
+    cap: u8,
+    join: u8,
 }
 
 impl ShapeGroupSink {
@@ -305,6 +318,24 @@ impl lyon_tessellation::FillVertexConstructor<byard_core::encoder::canvas_fill::
     }
 }
 
+impl lyon_tessellation::StrokeVertexConstructor<byard_core::encoder::canvas_fill::FillVertex>
+    for WithUv
+{
+    fn new_vertex(
+        &mut self,
+        vertex: lyon_tessellation::StrokeVertex<'_, '_>,
+    ) -> byard_core::encoder::canvas_fill::FillVertex {
+        let p = vertex.position();
+        byard_core::encoder::canvas_fill::FillVertex {
+            pos: [p.x, p.y],
+            uv: [
+                (p.x - self.bounds[0]) / self.bounds[2],
+                (p.y - self.bounds[1]) / self.bounds[3],
+            ],
+        }
+    }
+}
+
 /// Tessellates a path into the triangles the `CanvasFill` pipeline draws
 /// (RFC-0037).
 ///
@@ -403,6 +434,109 @@ pub(super) fn tessellate_path(
         // A tessellation failure is a path the tessellator could not make
         // sense of. An empty mesh draws nothing, which is what a shape nobody
         // could triangulate looks like; the alternative is garbage triangles.
+        return byard_core::frame::FillMesh::default();
+    }
+    byard_core::frame::FillMesh {
+        vertices: buffers.vertices,
+        indices: buffers.indices,
+        bounds,
+    }
+}
+
+/// Tessellates a path's outline, `width` thick, into the same triangles a fill
+/// is drawn with (`CanvasFill`), so a stroked path costs one more mesh and no
+/// new pipeline.
+pub(super) fn tessellate_stroke(
+    commands: &[PathCommand],
+    tolerance: f32,
+    stroke: PathStroke,
+) -> byard_core::frame::FillMesh {
+    use lyon_tessellation::geom::point;
+    use lyon_tessellation::path::Path;
+    use lyon_tessellation::{
+        BuffersBuilder, LineCap, LineJoin, StrokeOptions, StrokeTessellator, VertexBuffers,
+    };
+
+    let mut builder = Path::builder();
+    let mut open = false;
+    for command in commands {
+        match command {
+            PathCommand::Move(p) => {
+                if open {
+                    builder.end(false);
+                }
+                builder.begin(point(p[0], p[1]));
+                open = true;
+            }
+            PathCommand::Line(p) if open => {
+                builder.line_to(point(p[0], p[1]));
+            }
+            PathCommand::Quad(c, p) if open => {
+                builder.quadratic_bezier_to(point(c[0], c[1]), point(p[0], p[1]));
+            }
+            PathCommand::Cubic(a, b, p) if open => {
+                builder.cubic_bezier_to(point(a[0], a[1]), point(b[0], b[1]), point(p[0], p[1]));
+            }
+            PathCommand::Close if open => {
+                builder.end(true);
+                open = false;
+            }
+            _ => {}
+        }
+    }
+    if open {
+        builder.end(false);
+    }
+    let path = builder.build();
+
+    // The stroke reaches half its width past the points: the bounds `uv` is
+    // normalised against include that.
+    let (mut min_x, mut min_y) = (f32::MAX, f32::MAX);
+    let (mut max_x, mut max_y) = (f32::MIN, f32::MIN);
+    for command in commands {
+        let points: &[[f32; 2]] = match command {
+            PathCommand::Move(p) | PathCommand::Line(p) => std::slice::from_ref(p),
+            PathCommand::Quad(c, p) => &[*c, *p],
+            PathCommand::Cubic(a, b, p) => &[*a, *b, *p],
+            PathCommand::Close => &[],
+        };
+        for p in points {
+            min_x = min_x.min(p[0]);
+            min_y = min_y.min(p[1]);
+            max_x = max_x.max(p[0]);
+            max_y = max_y.max(p[1]);
+        }
+    }
+    let bounds = [
+        min_x,
+        min_y,
+        (max_x - min_x).max(1e-3),
+        (max_y - min_y).max(1e-3),
+    ];
+    let cap = match stroke.cap {
+        1 => LineCap::Round,
+        2 => LineCap::Square,
+        _ => LineCap::Butt,
+    };
+    let join = match stroke.join {
+        1 => LineJoin::Round,
+        2 => LineJoin::Bevel,
+        _ => LineJoin::Miter,
+    };
+    let options = StrokeOptions::tolerance(tolerance)
+        .with_line_width(stroke.width.max(0.0))
+        .with_line_cap(cap)
+        .with_line_join(join);
+    let mut buffers: VertexBuffers<byard_core::encoder::canvas_fill::FillVertex, u32> =
+        VertexBuffers::new();
+    let ok = StrokeTessellator::new()
+        .tessellate_path(
+            &path,
+            &options,
+            &mut BuffersBuilder::new(&mut buffers, WithUv { bounds }),
+        )
+        .is_ok();
+    if !ok {
         return byard_core::frame::FillMesh::default();
     }
     byard_core::frame::FillMesh {
@@ -1222,7 +1356,22 @@ impl Interpreter {
         let gradient = Self::shape_arg(el, "gradient")
             .cloned()
             .and_then(|expr| self.resolve_gradient_expr(&expr, 0.0));
-        if gradient.is_none() && fill[3] <= 0.0 {
+        let stroke = self.shape_color(el, "stroke").map(|color| PathStroke {
+            color,
+            width: self.shape_num(el, "stroke_width").unwrap_or(1.0),
+            cap: match Self::shape_token(el, "cap").as_deref() {
+                Some("round") => 1,
+                Some("square") => 2,
+                _ => 0,
+            },
+            join: match Self::shape_token(el, "join").as_deref() {
+                Some("round") => 1,
+                Some("bevel") => 2,
+                _ => 0,
+            },
+        });
+        let stroke = stroke.filter(|s| s.color[3] > 0.0 && s.width > 0.0);
+        if gradient.is_none() && fill[3] <= 0.0 && stroke.is_none() {
             return None; // nothing to paint
         }
         Some(FilledPath {
@@ -1232,6 +1381,7 @@ impl Interpreter {
             even_odd: Self::shape_token(el, "winding").as_deref() == Some("even_odd"),
             alpha: self.shape_num(el, "opacity").unwrap_or(1.0),
             span: el.span,
+            stroke,
         })
     }
 
@@ -1255,6 +1405,12 @@ impl Interpreter {
         let extent = (canvas.w.max(canvas.h) * scale).max(1.0);
         let tolerance = (extent / 800.0).clamp(0.05, 0.5);
 
+        if let Some(stroke) = path.stroke {
+            self.push_stroked_path(path, stroke, tolerance, transform, opacity, frame);
+        }
+        if path.gradient.is_none() && path.fill[3] <= 0.0 {
+            return; // stroke only
+        }
         let key = path_fingerprint(&path.commands, tolerance, path.even_odd);
         let mesh = if let Some(cached) = self.path_meshes.get_mut(&key) {
             cached.last_used = self.frame_seq;
@@ -1279,6 +1435,56 @@ impl Interpreter {
             mesh,
             color: path.fill,
             gradient: path.gradient,
+            transform,
+            opacity: opacity * path.alpha,
+            dirty: true,
+        });
+    }
+
+    /// The outline of a path, as one more mesh drawn with the stroke's colour.
+    /// Cached like the fill's, under a key that includes the line.
+    fn push_stroked_path(
+        &mut self,
+        path: &FilledPath,
+        stroke: PathStroke,
+        tolerance: f32,
+        transform: byard_core::frame::Transform,
+        opacity: f32,
+        frame: &mut byard_core::frame::RenderFrame,
+    ) {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        (
+            path_fingerprint(&path.commands, tolerance, false),
+            stroke.width.to_bits(),
+            stroke.cap,
+            stroke.join,
+            "stroke",
+        )
+            .hash(&mut hasher);
+        let key = hasher.finish();
+        let mesh = if let Some(cached) = self.path_meshes.get_mut(&key) {
+            cached.last_used = self.frame_seq;
+            std::sync::Arc::clone(&cached.mesh)
+        } else {
+            let mesh = std::sync::Arc::new(tessellate_stroke(&path.commands, tolerance, stroke));
+            self.tessellations += 1;
+            self.path_meshes.insert(
+                key,
+                CachedMesh {
+                    mesh: std::sync::Arc::clone(&mesh),
+                    last_used: self.frame_seq,
+                },
+            );
+            mesh
+        };
+        if mesh.indices.is_empty() {
+            return;
+        }
+        frame.push_fill(byard_core::frame::CanvasFill {
+            mesh,
+            color: stroke.color,
+            gradient: None,
             transform,
             opacity: opacity * path.alpha,
             dirty: true,
@@ -1328,6 +1534,7 @@ impl Interpreter {
                     even_odd: a.even_odd,
                     alpha: a.alpha + (b.alpha - a.alpha) * t,
                     span: a.span,
+                    stroke: a.stroke,
                 };
                 self.push_filled_path(&blended, canvas, opacity, transform, frame);
             }

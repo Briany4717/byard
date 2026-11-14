@@ -1244,8 +1244,18 @@ impl Interpreter {
             if in_stack {
                 let grows = self.eval_float_prop(attrs, "grow").is_some_and(|g| g > 0.0);
                 if grows || item.align_self == Some(Align::Stretch) {
-                    item.align_self = Some(Align::Stretch);
-                    item.justify_self = Some(Align::Stretch);
+                    // Stretching fills an axis only where the child has no size
+                    // of its own; along an axis it does, it keeps that size and
+                    // sits where the stack's `alignment` puts it (a 1 high rule
+                    // that stretches across a `bottom_start` stack is at the
+                    // bottom, not at the top where a plain stretch would leave it).
+                    let sized = |axis: &str| {
+                        attrs.iter().any(|a| {
+                            a.name.as_str() == axis && matches!(a.kind, AttrKind::Prop { .. })
+                        })
+                    };
+                    item.align_self = (!sized("height")).then_some(Align::Stretch);
+                    item.justify_self = (!sized("width")).then_some(Align::Stretch);
                 }
             }
         }
@@ -1451,6 +1461,20 @@ impl Interpreter {
         let attrs = self.with_layout_states(name.as_str(), attrs, states);
         let style = self.eval_container_style(name.as_str(), &attrs);
         let id = self.atlas.add_container(style, &child_ids)?;
+        // A collapsing header's height is what it was written as: its measure
+        // may not squeeze it when the content below is taller than the view
+        // (the collapse distance is that height less `collapse_min`).
+        if name.as_str() == "ScrollView"
+            && Self::enum_prop(&attrs, "collapse_header") == Some("true")
+        {
+            if let Some(&header) = child_ids.first() {
+                let mut item = self.atlas.flex_item(header);
+                if item.shrink.is_none() {
+                    item.shrink = Some(0.0);
+                    self.atlas.set_flex_item(header, item)?;
+                }
+            }
+        }
         flat_ids.push(id);
         flat_ids.extend(temp_flat);
         Ok(id)

@@ -123,13 +123,10 @@ View Main() {
     assert_eq!(app.count("hits"), 1);
 }
 
-/// An element's *own* transform still does not move its own hit target.
-///
-/// Kept deliberately and asserted so it stays kept: a hover-scale that grew
-/// the element's own target would push the pointer at its edge in and out of
-/// hover as it animated. Only *ancestors'* transforms move a target.
+/// An element's own `translate` moves its own hit target with it: it is
+/// pressed where it is drawn, not where it was laid out.
 #[test]
-fn an_elements_own_transform_still_leaves_its_own_target_alone() {
+fn an_elements_own_translate_moves_its_own_target() {
     let src = r"
 View Main() {
     var hits = 0
@@ -139,7 +136,30 @@ View Main() {
 }
 ";
     let mut app = App::new(src);
+    app.tap((250.0, 50.0));
+    assert_eq!(app.count("hits"), 1, "where it is drawn");
     app.tap((50.0, 50.0));
+    assert_eq!(app.count("hits"), 1, "where it was laid out is empty now");
+}
+
+/// An element's own `scale` still does not move its own hit target.
+///
+/// Kept deliberately and asserted so it stays kept: a hover-scale that grew
+/// the element's own target would push the pointer at its edge in and out of
+/// hover as it animated, and a drag handler's `e.dx` stays in laid-out units
+/// while the element scales (`on dragging { scale: 1.5 }`).
+#[test]
+fn an_elements_own_scale_still_leaves_its_own_target_alone() {
+    let src = r"
+View Main() {
+    var hits = 0
+    Column #[width: 400, height: 400] {
+        Box #[width: 100, height: 100, scale: 0.5, origin: (0.0, 0.0), bg: 0xFF0000] => hits++
+    }
+}
+";
+    let mut app = App::new(src);
+    app.tap((80.0, 80.0));
     assert_eq!(
         app.count("hits"),
         1,

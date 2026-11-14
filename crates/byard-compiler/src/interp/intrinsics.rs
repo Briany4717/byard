@@ -771,6 +771,7 @@ fn lookup_intrinsic(name: &str) -> Option<Intrinsic> {
                     ("max_height", lay(PropType::Int)),
                     ("max_lines", lay(PropType::Int)),
                     ("overflow", pnt(PropType::Enum(OVERFLOW))),
+                    ("opacity", pnt(PropType::Float)),
                     ("basis", lay(PropType::Int)),
                     ("p", lay(PropType::Len)),
                     ("m", lay(PropType::Len)),
@@ -2840,14 +2841,21 @@ pub fn validate_shape(el: &ElementNode, theme: Option<&Theme>) -> Vec<CompileErr
     // RFC-0020 §2 Tier 2 is fill-only in v1: stroking a `path` is rejected
     // rather than silently ignored (never-silent, RFC-0002 D4 spirit).
     if shape == "path" {
-        let strokes = [
-            "stroke",
-            "stroke_width",
-            "cap",
-            "join",
-            "dash",
-            "dash_offset",
-        ];
+        // A path with a body is stroked as a mesh (`stroke`, `stroke_width`,
+        // `cap`, `join`); a dash is not, and neither is a `d:` path, which is
+        // baked as a fill.
+        let strokes: &[&str] = if el.children.is_empty() {
+            &[
+                "stroke",
+                "stroke_width",
+                "cap",
+                "join",
+                "dash",
+                "dash_offset",
+            ]
+        } else {
+            &["dash", "dash_offset"]
+        };
         if el.content.iter().any(|a| {
             a.name
                 .as_ref()

@@ -125,8 +125,8 @@ pub(crate) enum EffectKind {
     Timer {
         /// `true` for `every` (repeating), `false` for `after` (one-shot).
         every: bool,
-        /// The interval or delay, in milliseconds.
-        dur_ms: u64,
+        /// The memo of the interval or delay, in milliseconds.
+        dur: ScopeId,
     },
     /// `on change(a, b) => …`: run when a watched value differs from what it
     /// was when the scope last settled. One memo per watched value, so an
@@ -202,6 +202,10 @@ pub(super) struct Bridge {
     /// They are always armed while a field has focus, so a harness waiting for
     /// "nothing outstanding" must not count them.
     engine_timers: usize,
+    /// The timers a view wrote, when they follow the app clock the host sets
+    /// with `set_now_ms` and not the real one (`byard shot` and `byard test`).
+    /// `None` is the ordinary case: a Tokio task per timer.
+    virtual_timers: Option<Vec<VirtualTimer>>,
     /// Monotonic continuation id source.
     next_id: u64,
     /// The structural effects lowered so far.
@@ -263,6 +267,15 @@ impl Bridge {
         );
         id
     }
+}
+
+/// A timer on the app clock: the continuation its ticks resume into, when it is
+/// next due, and its period.
+pub(super) struct VirtualTimer {
+    continuation: u64,
+    due_ms: u64,
+    period_ms: u64,
+    every: bool,
 }
 
 /// A timer the engine armed for itself, not one a view wrote (RFC-0041 §6):
@@ -901,10 +914,39 @@ impl Interpreter {
         let Some(slot) = self.bridge.effects.get(index) else {
             return;
         };
-        let EffectKind::Timer { every, dur_ms } = slot.kind else {
+        let EffectKind::Timer { every, dur } = slot.kind else {
             return;
         };
+        // The delay is read when the scope mounts. A number of milliseconds,
+        // or nothing worth arming.
+        let dur_ms = match self.ctx.read_memo(dur) {
+            Value::Int(n) => u64::try_from(n).unwrap_or(0),
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            Value::Float(f) if f >= 0.0 => f as u64,
+            _ => 0,
+        };
         let arms = Rc::clone(&slot.action);
+        if self.bridge.virtual_timers.is_some() {
+            if dur_ms == 0 {
+                return;
+            }
+            let continuation =
+                self.bridge
+                    .open(arms, Some(index), Span::new(0, 0), every, Vec::new());
+            let first = u64::from(self.now_ms) + dur_ms;
+            if let Some(timers) = self.bridge.virtual_timers.as_mut() {
+                timers.push(VirtualTimer {
+                    continuation,
+                    due_ms: first,
+                    period_ms: dur_ms,
+                    every,
+                });
+            }
+            if let Some(slot) = self.bridge.effects.get_mut(index) {
+                slot.continuation = Some(continuation);
+            }
+            return;
+        }
         let Some(dispatcher) = self.bridge.dispatcher.clone() else {
             // A check, not a run (see `drain_calls`): there is no runtime to
             // arm against and nothing is waiting for a tick.
@@ -965,6 +1007,46 @@ impl Interpreter {
         drop(timer);
         if self.bridge.continuations.remove(&continuation).is_some() {
             self.bridge.engine_timers = self.bridge.engine_timers.saturating_sub(1);
+        }
+    }
+
+    /// Makes the timers a view writes (`after`, `every`) follow the app clock:
+    /// they fire as the host
+    /// moves the clock with `set_now_ms`, instead of in real time. For a
+    /// headless run, where a frame is a fixed step and a wait is a count of them.
+    pub fn use_virtual_timers(&mut self) {
+        self.bridge.virtual_timers.get_or_insert_with(Vec::new);
+    }
+
+    /// Whether a timer on the app clock is still waiting to fire.
+    #[must_use]
+    pub fn has_pending_virtual_timers(&self) -> bool {
+        self.bridge.virtual_timers.as_ref().is_some_and(|t| {
+            t.iter()
+                .any(|t| self.bridge.continuations.contains_key(&t.continuation))
+        })
+    }
+
+    /// Fires the timers on the app clock that are due at `now_ms`.
+    pub(super) fn fire_due_timers(&mut self, now_ms: u64) {
+        let Some(timers) = self.bridge.virtual_timers.as_mut() else {
+            return;
+        };
+        // A scope that unmounted took its continuation with it.
+        timers.retain(|t| self.bridge.continuations.contains_key(&t.continuation));
+        let mut due = Vec::new();
+        for t in timers.iter_mut() {
+            // A frame is 16 ms, so a period shorter than that fires once a frame.
+            if t.due_ms <= now_ms {
+                due.push(t.continuation);
+                if t.every {
+                    t.due_ms = now_ms + t.period_ms;
+                }
+            }
+        }
+        timers.retain(|t| t.every || t.due_ms > now_ms);
+        for id in due {
+            self.fire_timer(id);
         }
     }
 

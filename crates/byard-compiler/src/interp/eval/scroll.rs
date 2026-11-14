@@ -8,8 +8,8 @@
 //! carries it there), paging, the end-of-list event, and the elastic
 //! pull-to-refresh indicator.
 
-use super::Interpreter;
 use super::animation::pack_curve;
+use super::{Interpreter, RenderNode};
 use crate::interp::env::{SignalId, Value};
 use crate::parser::ast::{Attr, AttrKind};
 
@@ -294,10 +294,51 @@ impl Interpreter {
         })
     }
 
+    /// The transform a `ScrollView` child is drawn under: the one it inherits
+    /// with its own `translate`, `scale` and `rotate` composed in, so culling
+    /// looks at where it is drawn.
+    pub(super) fn child_drawn_transform(
+        &mut self,
+        child: &RenderNode,
+        child_id: byard_core::atlas::layout::AtlasNodeId,
+        inherited: byard_core::frame::Transform,
+    ) -> byard_core::frame::Transform {
+        let RenderNode::Box {
+            attrs,
+            env_snapshot,
+            ..
+        } = child
+        else {
+            return inherited;
+        };
+        let moves = attrs.iter().any(|a| {
+            matches!(a.name.as_str(), "translate" | "scale" | "rotate")
+                && matches!(a.kind, AttrKind::Prop { .. })
+        });
+        let Ok(Some(r)) = self.atlas.resolved_rect(child_id) else {
+            return inherited;
+        };
+        if !moves {
+            return inherited;
+        }
+        let env_base = self.env.len();
+        for (k, v) in env_snapshot {
+            self.env.push(k.clone(), v.clone());
+        }
+        let own = self.resolve_transform(
+            attrs,
+            crate::interp::intrinsics::Rect::new(r.x, r.y, r.width, r.height),
+        );
+        self.env.truncate(env_base);
+        inherited.compose(&own)
+    }
+
     /// Whether a `ScrollView` child's laid-out rectangle, mapped through the
     /// scroll-shifted `transform`, falls entirely outside `clip`, the emission-
     /// culling test (RFC-0005 §3.3). All four corners are transformed so a scaled
     /// ancestor is handled; an unknown rect is conservatively kept (never culled).
+    /// `transform` is the one the child is drawn under, its own included
+    /// ([`child_drawn_transform`](Self::child_drawn_transform)).
     pub(super) fn child_fully_clipped(
         &self,
         child_id: byard_core::atlas::layout::AtlasNodeId,

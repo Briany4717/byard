@@ -1654,6 +1654,40 @@ impl Interpreter {
                     other => other,
                 }))
             }
+            // `angle.sin()`, `angle.cos()`, `n.sqrt()`: radians in, a `Float` out
+            // (a `90deg` is one, so `(90deg).sin()` is 1). `y.atan2(x)` is the
+            // angle of the point (x, y), in radians.
+            "sin" | "cos" | "sqrt" => {
+                let which = name.as_str().to_string();
+                Some(Box::new(move |ctx| {
+                    #[allow(clippy::cast_precision_loss)]
+                    let x = match base_c(ctx) {
+                        Value::Int(n) => n as f64,
+                        Value::Float(f) => f,
+                        _ => return Value::Unit,
+                    };
+                    Value::Float(match which.as_str() {
+                        "sin" => x.sin(),
+                        "cos" => x.cos(),
+                        _ => x.sqrt(),
+                    })
+                }))
+            }
+            "atan2" if !args.is_empty() => {
+                let mut other = self.lower_expr(&args.first()?.value, payload_name);
+                Some(Box::new(move |ctx| {
+                    #[allow(clippy::cast_precision_loss)]
+                    let num = |v: Value| match v {
+                        Value::Int(n) => Some(n as f64),
+                        Value::Float(f) => Some(f),
+                        _ => None,
+                    };
+                    match (num(base_c(ctx)), num(other(ctx))) {
+                        (Some(y), Some(x)) => Value::Float(y.atan2(x)),
+                        _ => Value::Unit,
+                    }
+                }))
+            }
             "abs" => Some(Box::new(move |ctx| match base_c(ctx) {
                 Value::Int(n) => Value::Int(n.wrapping_abs()),
                 Value::Float(f) => Value::Float(f.abs()),

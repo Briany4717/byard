@@ -552,6 +552,14 @@ impl Interpreter {
                 }
             }
         }
+        // A `Clip` is a window onto content with a size of its own: its children
+        // are laid out at their own width, at any width of the window, and cut
+        // off, not squeezed to it (a label sliding open must not be measured at
+        // the width it has reached). A child fills it only if it asks
+        // (`align_self: stretch`), and an `align` the author wrote still wins.
+        if element_name == "Clip" && !attrs.iter().any(|a| a.name.as_str() == "align") {
+            style.align = Align::Start;
+        }
         // A `ScrollView` that grows is a window onto its content, not a
         // container sized by it. Its content (a 500-row list is thousands of px
         // tall) must not make it, or the column around it, ask for that much

@@ -445,6 +445,8 @@ use it.
 | `toFloat()` | `Int` | The `Float` |
 | `abs()` | `Int`, `Float` | The same kind |
 | `min(other)`, `max(other)` | `Int`, `Float` | The smaller or larger; `Float` if either is |
+| `sin()`, `cos()`, `sqrt()` | `Int`, `Float` | A `Float`; the angle is in radians, so `(90deg).sin()` is 1 |
+| `atan2(x)` | `Int`, `Float` | The angle of the point (x, y) in radians, `y.atan2(x)` |
 
 `round` takes a half away from zero: `(2.5).round()` is `3` and `(-2.5).round()` is
 `-3`. `floor` goes down (`(-2.5).floor()` is `-3`) and `ceil` up. `n.max(0)` keeps a

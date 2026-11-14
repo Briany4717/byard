@@ -86,8 +86,13 @@ View Tabs(bind current: Int = 0, variant: TabVariant = .primary,
 View Tab(label: Str, index: Int) {
     inject Theme as t
     inject TabsStyle as s
+    var tx: Float = 0.0
+    var tw: Float = 0.0
+    on change(s.current) => s.place(index, tx, tw)
     Box #[a11y_role: tab, a11y_selected: index == s.current, p: 16] {
-        on measure => s.place(index, it.x, it.w)
+        on measure => { tx = it.x
+            tw = it.w
+            s.place(index, tx, tw) }
         Text(label) #[typo: s.variant == .primary ? t.titleSmall : t.labelLarge]
     }
 }
@@ -98,7 +103,8 @@ gives them for everything the view draws, its slots included, and `inject`
 reads the nearest one above. A `Tab` drawn outside any `Tabs` gets the
 defaults, so it still works alone. Provided values are live: change `variant`
 on the `Tabs`, and every `Tab` follows. Each tab reports where it is through the
-`place` callback, and the indicator slides to the one that is selected; the
+`place` callback (on a move, and again when the selection changes, since a tab
+that does not move is not measured again), and the indicator slides to the one that is selected; the
 `bind current: Int = 0` lets a caller own the selection or leave it to `Tabs`
 (below).
 
@@ -111,7 +117,7 @@ View IconButton(icon: Str, color: Color? = none) {
 }
 ```
 
-`Color?` is a colour or nothing, and `= none` lets the call leave it out. You
+`Color?` is a colour or nothing (a colour is an `Int`; `Color` names it), and `= none` lets the call leave it out. You
 read it with `??`, or inside `when color != none { … }`, where it is a colour.
 A bare `bg: color` is an error that says to write one of the two.
 
@@ -136,7 +142,8 @@ indicator sits in that parent and moves to them with `with`.
 
 - **Declaration.** `context Name { field: Type = default … }` at the top level of
   a file, public or `private` like a `type`. Every field has a default; for `Fn`
-  and `Slot` it may be `none`. Field types are the parameter types, `T?` among
+  it may be `none`. A `Slot` is not a field type (`BadContextField`): a block of
+  elements goes to a parameter. Field types are the parameter types, `T?` among
   them. A context named like a capability, a controller or `Theme` is
   `DuplicateName`.
 - **`provide Name(field: expr, …)`** is a body member of a view, written once per
@@ -190,6 +197,9 @@ layout and cost nothing to expose.
 | `UnknownContext` | `provide` or `inject` of a name that is no context, capability, controller or `Theme` |
 | `UnknownField` | a `provide` field the context doesn't declare (closest name suggested) |
 | `ContextFieldNeedsDefault` | a context field without a default |
+| `BadContextField` | a context field of type `Slot` |
+| `MisplacedProvide` | a `provide` anywhere but the top of a view's body |
+| `BadOptionalDefault` | a `T?` with a default other than `none`, or `= none` on a type that is not optional, `Fn` or `Slot` |
 
 ## Drawbacks
 

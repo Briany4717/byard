@@ -468,7 +468,8 @@ impl Interpreter {
         // inside it in the tree.
         let dialog = if self.access.on {
             let elem = self.atlas.node_index(ol.wrapper_id);
-            self.access_enter_overlay(frame, attrs, modal, elem, viewport)
+            let inner = self.first_role(children, pools);
+            self.access_enter_overlay(frame, attrs, modal, inner, elem, viewport)
         } else {
             access::Scope::default()
         };
@@ -563,6 +564,7 @@ impl Interpreter {
         }
 
         self.access_leave(frame, dialog);
+        self.access.modal_pending = false;
         frame.end_clip();
         if scope.is_some() {
             self.router.end_scope();

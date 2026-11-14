@@ -71,7 +71,7 @@ impl Interpreter {
 
     /// The role of the first element in `nodes`, in tree order, that writes an
     /// `a11y_role`.
-    fn first_role(
+    pub(super) fn first_role(
         &mut self,
         nodes: &[RenderNode],
         pools: super::layout::Pools<'_>,

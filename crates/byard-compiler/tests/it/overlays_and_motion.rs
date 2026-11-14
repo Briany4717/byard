@@ -567,3 +567,28 @@ View Wrap(bind ins: Int, bind outs: Int, content: Slot) {
             .collect::<Vec<_>>()
     );
 }
+
+#[test]
+fn a_modal_overlay_holding_a_dialog_adds_no_second_dialog() {
+    let mut app = App::new(DIALOG);
+    app.key("Tab");
+    app.key("Enter");
+    app.send(&[]);
+    let d = app.dump();
+    assert_eq!(d.matches("Dialog").count(), 1, "{d}");
+    assert!(d.contains("Dialog \"Discard\" [modal]"), "{d}");
+    // A modal overlay with no dialog inside keeps its own node.
+    let src = r#"
+View Main() {
+    Column {
+        Overlay { Column #[anchor: center] { Text("hi") } }
+    }
+}
+"#;
+    let app = App::new(src);
+    assert!(
+        app.dump().contains("Dialog (unnamed) [modal]"),
+        "{}",
+        app.dump()
+    );
+}

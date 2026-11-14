@@ -42,6 +42,9 @@ pub(super) struct AccessScratch {
     open: Vec<Open>,
     /// The layout containers that enclose the walk, innermost last.
     containers: Vec<Container>,
+    /// A modal overlay whose content is its own dialog gives no node of its
+    /// own: the dialog it holds is the modal one (RFC-0066).
+    pub(super) modal_pending: bool,
     /// For each node of the tree, how many containers enclosed it, so the
     /// "label beside it" rule can tell a `Row`'s own children from those of a
     /// container nested inside it.
@@ -436,6 +439,7 @@ impl Interpreter {
         frame: &mut RenderFrame,
         attrs: &[Attr],
         modal: bool,
+        inner: Option<AccessRole>,
         elem: Option<u32>,
         viewport: Rect,
     ) -> Scope {
@@ -449,17 +453,22 @@ impl Interpreter {
                 ..Scope::default()
             };
         }
-        let node = elem.filter(|_| modal).map(|elem| {
-            let label = self.access_label(attrs);
-            let mut node = self.leaf(
-                AccessRole::Dialog,
-                elem,
-                label,
-                bounds(viewport, &Transform::IDENTITY),
-            );
-            node.flags.insert(AccessFlags::MODAL);
-            node
-        });
+        // A dialog or an alert inside says what it is, and carries the flag.
+        self.access.modal_pending =
+            modal && matches!(inner, Some(AccessRole::Dialog | AccessRole::Alert));
+        let node = elem
+            .filter(|_| modal && !self.access.modal_pending)
+            .map(|elem| {
+                let label = self.access_label(attrs);
+                let mut node = self.leaf(
+                    AccessRole::Dialog,
+                    elem,
+                    label,
+                    bounds(viewport, &Transform::IDENTITY),
+                );
+                node.flags.insert(AccessFlags::MODAL);
+                node
+            });
         self.open_scope(frame, node, false, false, false)
     }
 
@@ -744,6 +753,11 @@ impl Interpreter {
     /// state; a switch it names has no state of its own to default to, so an
     /// author's switch with no `a11y_checked` is off.
     fn apply_declared(&mut self, node: &mut AccessNode, attrs: &[Attr], built_in: bool) {
+        if self.access.modal_pending && matches!(node.role, AccessRole::Dialog | AccessRole::Alert)
+        {
+            self.access.modal_pending = false;
+            node.flags.insert(AccessFlags::MODAL);
+        }
         if let Some(text) = self
             .eval_str_prop(attrs, "a11y_description")
             .filter(|t| !t.is_empty())

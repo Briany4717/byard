@@ -214,7 +214,7 @@ rows.
 | `Image`, `VectorIcon` | Image |
 | `ScrollView` | ScrollView |
 | A `NavHost` and its tabs | TabList and Tab |
-| A modal `Overlay` | Dialog |
+| A modal `Overlay` | Dialog, unless what it holds is itself a `dialog` or an `alert`: that one carries the modal flag and the overlay adds no node |
 
 A `Canvas` is in the tree only if it has an `a11y_label`. What a `ScrollView` has scrolled
 out of sight is not in the tree either. A `Slider` also writes its `var` when a reader

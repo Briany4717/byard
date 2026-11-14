@@ -89,7 +89,8 @@ View Main() {
 Without `shrink: 0` the circle is squeezed to a sliver by the wide bar beside it.
 A child never shrinks below what its content needs, so the bar must be told it may:
 `width: 0` with `grow: 1` starts it from nothing and gives it what is left, and the
-`Clip` cuts the bar to that. A one-line `Text` between two icons takes the same
+`Clip` cuts the bar to that. A `Clip` with a `width` of 0 measures what is inside it at
+its own size, not squeezed to nothing, so an `on measure` there reads the real width. A one-line `Text` between two icons takes the same
 `grow: 1, width: 0`, or it pushes the icon after it out of the row.
 
 ### Minimum and maximum
@@ -244,11 +245,13 @@ View Main() {
 ```
 
 The values are `center`, `top`, `bottom`, `start`, `end`, and the corners
-`top_start`, `top_end`, `bottom_start` and `bottom_end`.
+`top_start`, `top_end`, `bottom_start` and `bottom_end`. They place a child along both axes,
+whether the stack is as wide as its widest child or wider.
 
 A child that should fill the stack says `grow: 1` or `align_self: stretch`. It then takes the
 stack's whole width and height, unless it has a `width` or a `height` of its own, which it
-keeps. This is how an overlay or a background layer is written:
+keeps, and along that axis it sits where `alignment` puts it (a `Box #[height: 1, align_self:
+stretch]` in a `bottom_start` stack is a rule across the bottom). This is how an overlay or a background layer is written:
 
 ```byld
 View Main() {
@@ -300,7 +303,8 @@ A `ScrollView` also snaps to pages or items (`snap: page`, `snap: item`, with
 `snap_align`), reports `page` and `page_count`, calls `end_reached =>` near the
 end for infinite lists, and can pull to refresh (`pull_refresh: true` with
 `refresh =>`). A header that shrinks as you scroll is `collapse_header: true`
-with `collapse_min`; the children of that header read the engine's
+with `collapse_min`; the header is its first child, and keeps the `height` it is given
+whatever the content below measures; the children of that header read the engine's
 `scroll_fraction`, from 0 to 1. The `scroll_snap` and `collapse_header` examples
 show each one working.
 

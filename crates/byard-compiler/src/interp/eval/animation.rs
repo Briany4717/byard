@@ -756,7 +756,16 @@ impl Interpreter {
     /// A target change reseeds `from` to the current on-screen value so a
     /// mid-flight reversal is continuous.
     pub(super) fn eval_animated(&mut self, target: &Expr, anim: &Expr, key: AnimKey) -> Value {
+        let probing = self.first_measure_pending();
+        if probing {
+            self.ctx.start_read_log();
+        }
         let target_value = self.eval_pure(target);
+        self.snap_seq = if probing && self.read_first_measure() {
+            self.frame_seq
+        } else {
+            0
+        };
         // No advancing clock (a host that never calls `set_now_ms`, e.g. a
         // non-animating test path): resolve straight to the target so an
         // animation can never latch `has_active_animations` on `t = 0` forever.
@@ -801,6 +810,26 @@ impl Interpreter {
         Value::Float(f64::from(self.animate_f32(target_val, &spec, key)))
     }
 
+    /// Whether the frame before this one was an element's first measurement
+    /// and its handler wrote something: only then is a read log of the
+    /// target worth taking.
+    fn first_measure_pending(&self) -> bool {
+        self.first_measure_seq != 0
+            && self.frame_seq == self.first_measure_seq + 1
+            && !self.first_measure_written.is_empty()
+    }
+
+    /// Whether the target, as it was just evaluated, read something an
+    /// element's first `on measure` wrote: only that value is where the
+    /// element *is*. A change the same frame made for another reason, a
+    /// branch of the target that did not read it, is still a change.
+    fn read_first_measure(&mut self) -> bool {
+        let (signals, memos) = self.ctx.take_read_log();
+        let written = &self.first_measure_written;
+        signals.iter().any(|s| written.contains(s))
+            || memos.iter().any(|m| self.ctx.memo_reads_any(*m, written))
+    }
+
     /// Moves one number towards `target_val` on the motion `spec` names, under
     /// `key`, and returns where it is now (RFC-0010, RFC-0025). Marks the frame
     /// active until the motion settles. The scalar `with` and each slot of an
@@ -822,7 +851,7 @@ impl Interpreter {
         // The frame after an element is measured for the first time: what it
         // wrote is where the element is, so an animation still on its first
         // value starts from there and does not travel from the placeholder.
-        let measured = self.first_measure_seq != 0 && self.frame_seq == self.first_measure_seq + 1;
+        let measured = self.snap_seq != 0 && self.snap_seq == self.frame_seq;
         let motion = self
             .animations
             .entry(key)

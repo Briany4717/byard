@@ -174,9 +174,7 @@ impl Interpreter {
             if slot.fired_frame == frame || slot.last == Some(size) {
                 continue;
             }
-            if slot.last.is_none() {
-                self.first_measure_seq = frame;
-            }
+            let first = slot.last.is_none();
             let flipped_back = slot.prev == Some(size);
             slot.prev = slot.last;
             slot.last = Some(size);
@@ -190,7 +188,18 @@ impl Interpreter {
                 (Symbol::intern("x"), Value::Float(f64::from(x))),
                 (Symbol::intern("y"), Value::Float(f64::from(y))),
             ]);
+            if first {
+                self.ctx.start_write_log();
+            }
             (action.borrow_mut())(&mut self.ctx, Some(&payload));
+            if first {
+                let written = self.ctx.take_write_log();
+                if self.first_measure_seq != frame {
+                    self.first_measure_written.clear();
+                }
+                self.first_measure_seq = frame;
+                self.first_measure_written.extend(written);
+            }
             self.measure_fired = true;
             if let Some(span) = warn {
                 self.perf_warnings

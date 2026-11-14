@@ -463,7 +463,7 @@ View Main() {
 position in its parent, in points, as laid out (before `translate` and `scale`). A
 sliding tab indicator keeps the selected tab's `it.x` and `it.w` and moves to them with
 `translate.x: ix with …`. A change of position alone fires `on measure` too. The first
-measurement of an element is not a change: a value it writes is drawn at once, where an
+measurement of an element is not a change: a value it writes is drawn at once (an animation whose value reads it starts there; nothing else on that frame is affected), where an
 indicator would otherwise grow from 0 to its place on the first frame; every later one
 moves with its `with`. The line is drawn to the
 measured width and not to a number written in the file, so it stays right as the

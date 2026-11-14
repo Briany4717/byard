@@ -639,3 +639,42 @@ fn a_click_fires_focus_in_but_does_not_show_focus() {
     app.render();
     app.rect(0xFF0000);
 }
+
+// ── 31 again: only what the first measure wrote ──────────────────────────
+//
+// The extended FAB of Byard Material: a Clip whose width animates holds a Row
+// that reports its width. The press that collapses it lands on the frame the
+// Row is first measured on, and the width must still slide.
+
+const FAB: &str = "View Main() {
+    var open = true
+    var labelW = 0.0
+    Column {
+        Box #[width: 10, height: 10, bg: 0x0000FF, tap => open = false] {}
+        Clip #[width: (open ? labelW + 40 : 0.0) with anim.linear(1s), height: 20] {
+            Row #[height: 20] {
+                on measure => { labelW = it.w }
+                Box #[width: 100, height: 20, bg: 0xFF0000] {}
+            }
+        }
+    }
+}";
+
+#[test]
+fn a_press_on_the_frame_of_the_first_measure_still_slides_an_unrelated_width() {
+    let mut app = App::new(FAB);
+    assert!(app.errors().is_empty(), "{:?}", app.errors());
+    // The press is the very next frame: the Row is measured on it.
+    app.tap((5.0, 5.0));
+    for _ in 0..4 {
+        app.advance(16);
+    }
+    let w = app.rect(0xFF0000)[2];
+    assert!(near(w, 100.0), "the label itself: {w}");
+    // The slot has a width between the label's and nothing, not 0 at once.
+    let slot: Vec<f32> = app.frame.clips().iter().map(|c| c.rect.width).collect();
+    assert!(
+        slot.iter().any(|w| *w > 5.0 && *w < 39.9),
+        "the clip slid, it did not jump: {slot:?}"
+    );
+}

@@ -854,6 +854,13 @@ pub struct Interpreter {
     /// new target as its start: a first measurement is where the element is,
     /// not a change to move to.
     first_measure_seq: u64,
+    /// The signals those first measurements wrote: only an animation whose
+    /// target reads one of them starts from the new value.
+    first_measure_written: Vec<super::env::SignalId>,
+    /// Set by `eval_animated` for the animation it is about to move, to the
+    /// current frame when its target reads what a first measurement just
+    /// wrote, else `0`.
+    snap_seq: u64,
     /// The [`frame_seq`](Self::frame_seq) of the last frame an element drew
     /// its `on enter` values on, `0` before any.
     entering_seq: u64,

@@ -552,14 +552,12 @@ impl Interpreter {
                 }
             }
         }
-        // A `Clip` closed to nothing (`width: 0`) is a window onto content that
-        // is still there: its children are measured at their own width and cut
-        // off, not stretched to a width of 0. (An `align` the author wrote
-        // still wins, and so does a child's own `align_self`.)
-        if element_name == "Clip"
-            && style.width == Some(0.0)
-            && !attrs.iter().any(|a| a.name.as_str() == "align")
-        {
+        // A `Clip` is a window onto content with a size of its own: its children
+        // are laid out at their own width, at any width of the window, and cut
+        // off, not squeezed to it (a label sliding open must not be measured at
+        // the width it has reached). A child fills it only if it asks
+        // (`align_self: stretch`), and an `align` the author wrote still wins.
+        if element_name == "Clip" && !attrs.iter().any(|a| a.name.as_str() == "align") {
             style.align = Align::Start;
         }
         // A `ScrollView` that grows is a window onto its content, not a

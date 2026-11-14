@@ -1269,6 +1269,16 @@ pub enum CompileError {
         /// What it was compared to, as written.
         name: String,
     },
+    /// A `let` written inside an element's braces. A `let` goes at the top of the
+    /// view, or inside a `when` or `for` body.
+    LetInElementBody {
+        /// Source range of the `let`.
+        span: Span,
+        /// The name it declares.
+        name: String,
+        /// The element it is in.
+        element: String,
+    },
     /// `on name.state` where no element tagged `as name` comes before it
     /// (RFC-0062).
     UnknownStateTarget {
@@ -1467,6 +1477,7 @@ impl CompileError {
             | Self::NoneNeedsOptional { span, .. }
             | Self::BlockFitsNeither { span, .. }
             | Self::LayoutInStateBlock { span, .. }
+            | Self::LetInElementBody { span, .. }
             | Self::UnknownStateTarget { span, .. }
             | Self::ArgumentTypeMismatch { span, .. }
             | Self::KeywordAsName { span, .. }
@@ -1597,6 +1608,7 @@ impl CompileError {
             | Self::NoneNeedsOptional { span, .. }
             | Self::BlockFitsNeither { span, .. }
             | Self::LayoutInStateBlock { span, .. }
+            | Self::LetInElementBody { span, .. }
             | Self::UnknownStateTarget { span, .. }
             | Self::ArgumentTypeMismatch { span, .. }
             | Self::KeywordAsName { span, .. }
@@ -1729,6 +1741,7 @@ impl CompileError {
             Self::NoneNeedsOptional { .. } => "NoneNeedsOptional",
             Self::BlockFitsNeither { .. } => "BlockFitsNeither",
             Self::LayoutInStateBlock { .. } => "LayoutInStateBlock",
+            Self::LetInElementBody { .. } => "LetInElementBody",
             Self::UnknownStateTarget { .. } => "UnknownStateTarget",
             Self::ArgumentTypeMismatch { .. } => "ArgumentTypeMismatch",
             Self::KeywordAsName { .. } => "KeywordAsName",
@@ -2065,8 +2078,9 @@ impl CompileError {
                  measured size is for"
             ),
             Self::PathStrokeUnsupported { .. } => {
-                "`path` renders fills only; stroke it with `arc`/`line`/`bezier` \
-                 or outline the `d` data"
+                "a `path(d: …)` renders fills only, and no path takes `dash`: write the \
+                 path as a body (`path(stroke: …) { move(…) … }`) to stroke it, or use \
+                 `arc`/`line`/`bezier` for a dashed line"
                     .to_string()
             }
             Self::DynamicStyleForbidden { .. } => {
@@ -2361,6 +2375,10 @@ impl CompileError {
                 "`{name}` cannot be compared with `none`: only a parameter declared with \
                  `= none` (`on_tap: Fn() = none`, `icon: Slot = none`), or `content`, can be \
                  absent"
+            ),
+            Self::LetInElementBody { name, element, .. } => format!(
+                "`let {name}` is written inside `{element}`, where it would be ignored: put it \
+                 at the top of the view, or inside a `when` or `for` body"
             ),
             Self::UnknownStateTarget { name, hint, .. } => with_hint(
                 format!(

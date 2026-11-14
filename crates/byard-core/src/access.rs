@@ -263,6 +263,31 @@ pub enum AccessValue {
     },
 }
 
+/// How a node's changes are announced (RFC-0066 §4): a live region.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub enum AccessLive {
+    /// Changes are not announced on their own. The default.
+    #[default]
+    Off,
+    /// A change is said after what the reader is saying now.
+    Polite,
+    /// A change interrupts what the reader is saying.
+    Assertive,
+}
+
+impl AccessLive {
+    /// The word `a11y_live:` and the dump use; `None` for [`Off`](Self::Off),
+    /// which the dump leaves out.
+    #[must_use]
+    pub const fn name(self) -> Option<&'static str> {
+        match self {
+            Self::Off => None,
+            Self::Polite => Some("polite"),
+            Self::Assertive => Some("assertive"),
+        }
+    }
+}
+
 /// A node's state, as a set of flags (RFC-0042 §1).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct AccessFlags(u16);
@@ -393,6 +418,11 @@ pub struct AccessNode {
     pub flags: AccessFlags,
     /// What an assistive technology may ask of it.
     pub actions: AccessActions,
+    /// Whether a change to it is announced (RFC-0066 §4, `a11y_live`).
+    pub live: AccessLive,
+    /// The node that describes this one (RFC-0066 §5, `a11y_described_by`):
+    /// a tooltip's text, say. A reader says its name after this node's own.
+    pub described_by: Option<AccessId>,
 }
 
 /// The accessibility tree of one frame (RFC-0042 §1): the controls and the
@@ -459,6 +489,8 @@ impl AccessTree {
             }
             n.flags.hash(&mut h);
             n.actions.hash(&mut h);
+            n.live.hash(&mut h);
+            n.described_by.hash(&mut h);
         }
         h.finish()
     }
@@ -501,6 +533,23 @@ impl AccessTree {
             if let Some(value) = &n.value {
                 out.push_str(" = ");
                 write_value(&mut out, value);
+            }
+            if let Some(live) = n.live.name() {
+                let _ = write!(out, " live {live}");
+            }
+            if let Some(target) = n.described_by {
+                // By its name when it has one, so the dump reads as the reader
+                // would, and by its id when the target is gone or has none.
+                match self.node(target) {
+                    Some(AccessNode {
+                        name: Some(name), ..
+                    }) => {
+                        let _ = write!(out, " described_by {name:?}");
+                    }
+                    _ => {
+                        let _ = write!(out, " described_by #{}", target.0);
+                    }
+                }
             }
             if !n.flags.is_empty() {
                 out.push_str(" [");
@@ -746,6 +795,8 @@ mod tests {
             bounds: Rect::new(10.0, 20.0, 30.0, 40.0),
             flags: AccessFlags::empty(),
             actions: AccessActions::empty(),
+            live: AccessLive::Off,
+            described_by: None,
         }
     }
 

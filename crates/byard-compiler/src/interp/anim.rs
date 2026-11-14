@@ -720,6 +720,17 @@ fn destructure_anim_call(
                 Ok((field, *span, args.as_slice()))
             }
             Expr::Ident(name, span) if !require_namespace => Ok((name, *span, args.as_slice())),
+            // `t.springSpatialFast(from: 0)`: a token is a curve with nothing to
+            // add, and where a value starts is written once, in `on enter`.
+            Expr::Member { base, span, .. } if !is_anim_base(base) => {
+                Err(CompileError::InvalidAnimation {
+                    span: *span,
+                    message: "a motion token is a whole curve and takes no arguments, so it has \
+                              no `from:`; write where the value starts in an `on enter { … }` \
+                              block on the element"
+                        .to_string(),
+                })
+            }
             _ => Err(not_a_curve(*span)),
         },
         // `anim.spring` / `spring`, the bare form, all defaults.

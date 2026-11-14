@@ -43,6 +43,7 @@ mod controls;
 mod editing;
 mod element;
 mod expr;
+mod focus;
 mod follow;
 mod instance;
 mod layout;
@@ -382,6 +383,10 @@ pub enum RenderNode {
         /// Fixed at lowering and kept for as long as the node lives, which is
         /// what lets two calls of one view keep their own animations.
         inst: u32,
+        /// This overlay's identity, fixed when it is lowered: what a focus scope
+        /// is from one frame to the next, so focus can be given back when the
+        /// overlay goes (RFC-0066 §1).
+        uid: u32,
     },
     /// A reactive `when cond { … } else { … }` (RFC-0018 structural reactivity).
     /// The driver re-reads `cond` every frame and expands the taken branch, so a
@@ -496,9 +501,16 @@ pub(crate) struct SlotSource {
 
 /// The RFC-0062 state features lowering found in use.
 #[derive(Debug, Default, Clone, Copy)]
+#[allow(clippy::struct_excessive_bools)]
 pub(crate) struct StateUses {
     /// A state block names `focus_within`.
     pub(crate) focus_within: bool,
+    /// An element has an `on enter` block (RFC-0066).
+    pub(crate) enter: bool,
+    /// An element has an `on leave` block (RFC-0066).
+    pub(crate) leave: bool,
+    /// An element is tagged `as name` (RFC-0062, RFC-0066).
+    pub(crate) names: bool,
 }
 
 /// One context a view above provides (RFC-0065): its fields, as the values a
@@ -795,6 +807,26 @@ pub struct Interpreter {
     remote_targets: std::collections::HashSet<u32>,
     /// What lowering found the frame has to pay for.
     state_uses: StateUses,
+    /// The leaving groups that had a motion running while they were painted
+    /// (RFC-0066 §3), this frame's and last frame's: a group that was not busy
+    /// last frame has settled. Empty, and so unallocated, until something
+    /// leaves.
+    leave_busy: Vec<u32>,
+    leave_busy_prev: Vec<u32>,
+    /// The elements with an `on enter` block that were drawn last frame and
+    /// this one: one that was not drawn last frame is on its first.
+    entered_prev: std::collections::HashSet<u64>,
+    entered_now: std::collections::HashSet<u64>,
+    /// Writes to a bound `focused:` that ask for focus to move, `(element,
+    /// whether it is to have it)`, in the order the elements were drawn
+    /// (RFC-0066 §1).
+    focus_requests: Vec<(u32, bool)>,
+    /// What the focus scopes that are mounted need to give back when they go
+    /// (RFC-0066 §1): by the identity of the overlay that is one.
+    live_scopes: Vec<focus::LiveScope>,
+    /// The elements marked `autofocus` outside any overlay that have already
+    /// been given focus, by identity.
+    autofocused: std::collections::HashSet<u32>,
     /// The layout indices of the focused element and its ancestors, for this
     /// frame, once something asked.
     focus_chain: Option<Vec<u32>>,
@@ -1004,6 +1036,9 @@ pub struct Interpreter {
     /// name declared before it: by the time the overlay is placed, the anchor's
     /// rect is a fact rather than a prediction.
     anchor_rects: std::collections::HashMap<Symbol, crate::interp::intrinsics::Rect>,
+    /// The same rects by the identity of the element that landed there
+    /// (RFC-0066 §5), for an `anchor_to` that names an element in its own view.
+    anchor_uid_rects: std::collections::HashMap<u32, crate::interp::intrinsics::Rect>,
     /// RFC-0021 pull-to-refresh: the in-flight spring retracting or resting the
     /// pull region per elem (see [`PullAnim`]).
     pull_anims: std::collections::HashMap<u32, PullAnim>,
@@ -1797,6 +1832,8 @@ impl Interpreter {
         // Recomputed every frame: an animation re-marks itself active below if it
         // sampled without having settled this tick (RFC-0010).
         self.any_active = false;
+        self.leave_busy_prev = std::mem::take(&mut self.leave_busy);
+        self.focus_requests.clear();
         // RFC-0023: retire fully-faded ripples by time. Gesture-like state kept
         // across renders, so this runs before the walk, ink whose element no
         // longer renders (hot reload, `when` unmount) ages out here too.
@@ -1814,6 +1851,7 @@ impl Interpreter {
         // rects have to go first. An anchor whose element unmounted must stop
         // existing rather than keep pointing at where it used to be.
         self.anchor_rects.clear();
+        self.anchor_uid_rects.clear();
         // RFC-0062: the states named elements publish are this frame's too.
         self.elem_states.clear();
         self.focus_chain = None;
@@ -1927,7 +1965,7 @@ impl Interpreter {
         // positioned wrapper floating over the main tree. Nothing is built when
         // no overlay is mounted, so the overlay path is truly zero-cost, the
         // render root stays the plain main container it always was.
-        let mut overlays: Vec<&RenderNode> = Vec::new();
+        let mut overlays: Vec<(&RenderNode, AnimSlot)> = Vec::new();
         self.collect_overlays(tree, pools, &mut overlays);
 
         // ── RFC-0032 §R4: may this frame retain the layout tree? ──────────────
@@ -2122,9 +2160,13 @@ impl Interpreter {
             // identity leaves the walk with it, it is emitted here rather than
             // where it was written, so whatever row the main pass finished
             // inside must not carry over into it.
-            self.anim_slot = AnimSlot::default();
+            self.anim_slot = ol.anim;
             self.emit_overlay(ol, frame, width, height, pools);
         }
+        self.anim_slot = AnimSlot::default();
+        // RFC-0066 §1: focus goes into the scopes that opened, back out of the
+        // ones that closed, and where a bound `focused:` asks.
+        self.settle_focus();
 
         // RFC-0032 §R3 step 6, and the last thing this frame does before its
         // primitives leave the interpreter: replace the blanket `dirty: true`
@@ -2148,6 +2190,12 @@ impl Interpreter {
         // in flight rather than waiting a frame for nothing.
         self.dispatch_native_calls(frame);
         self.access_end(frame);
+        // RFC-0066: what drew this frame is what "was drawn" means for the
+        // next one, so an `on enter` plays when an element comes back.
+        if self.state_uses.enter {
+            std::mem::swap(&mut self.entered_prev, &mut self.entered_now);
+            self.entered_now.clear();
+        }
 
         self.settle_text_editing();
 

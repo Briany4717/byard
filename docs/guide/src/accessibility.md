@@ -182,6 +182,18 @@ A layout container that is given one stops being flattened away: it is a node, a
 what it holds hangs under it. For the keys such a control answers to, and the ring it
 draws, see [the keyboard](controls.md#the-keyboard).
 
+## Announcements and ranges
+
+`a11y_live: polite` on an element makes a reader say its text when it appears or changes,
+after what it is saying now; `assertive` interrupts, `off` is the default. It is how a
+snackbar is heard without taking focus. `a11y_described_by: tip` points the element at the
+one tagged `as tip` in the same view, which a reader says after the name; a name nothing
+is tagged with is `UnknownStateTarget`. `a11y_value_min`, `a11y_value_max` and
+`a11y_value_step` give a `slider` or a `progress_bar` built from a `Box` its range, next to
+`a11y_value`; on any other role they are `AttributeNeedsRole`. The dump writes them as
+`live polite`, `described_by "…"` and `= 40 in 0..100 step 5`. A leaving element is not in
+the tree.
+
 ## What is in the tree
 
 The tree is the controls and not the layout around them. `Row`, `Column`, `Box`, `Grid`
@@ -203,7 +215,7 @@ rows.
 | `Image`, `VectorIcon` | Image |
 | `ScrollView` | ScrollView |
 | A `NavHost` and its tabs | TabList and Tab |
-| A modal `Overlay` | Dialog |
+| A modal `Overlay` | Dialog, unless what it holds is itself a `dialog` or an `alert`: that one carries the modal flag and the overlay adds no node |
 
 A `Canvas` is in the tree only if it has an `a11y_label`. What a `ScrollView` has scrolled
 out of sight is not in the tree either. A `Slider` also writes its `var` when a reader

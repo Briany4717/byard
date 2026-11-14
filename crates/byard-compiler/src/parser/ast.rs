@@ -658,6 +658,11 @@ pub enum StyleStateKind {
     FocusVisible,
     /// The element, or an element inside it, holds keyboard focus (RFC-0062).
     FocusWithin,
+    /// The element's first frame: the values it arrives from (RFC-0066 §3).
+    Enter,
+    /// The element is leaving, kept drawn until its motion ends: the values it
+    /// goes to (RFC-0066 §3).
+    Leave,
 }
 
 impl StyleStateKind {
@@ -679,6 +684,8 @@ impl StyleStateKind {
             "dragging" => Some(Self::Dragging),
             "focus_visible" => Some(Self::FocusVisible),
             "focus_within" => Some(Self::FocusWithin),
+            "enter" => Some(Self::Enter),
+            "leave" => Some(Self::Leave),
             _ => None,
         }
     }
@@ -698,11 +705,13 @@ impl StyleStateKind {
             Self::Dragging => "dragging",
             Self::FocusVisible => "focus_visible",
             Self::FocusWithin => "focus_within",
+            Self::Enter => "enter",
+            Self::Leave => "leave",
         }
     }
 
     /// Every state name, for `closest_match` suggestions.
-    pub const NAMES: [&'static str; 11] = [
+    pub const NAMES: [&'static str; 13] = [
         "hover",
         "pressed",
         "focused",
@@ -714,6 +723,8 @@ impl StyleStateKind {
         "dragging",
         "focus_visible",
         "focus_within",
+        "enter",
+        "leave",
     ];
 }
 

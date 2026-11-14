@@ -165,9 +165,11 @@ fn collect_name_spans_in_members(members: &[Member], target_name: &str, out: &mu
             Member::Expr(expr) => {
                 collect_name_spans_in_expr(expr, target_name, out);
             }
-            Member::Lifecycle { action, .. }
-            | Member::Timer { action, .. }
-            | Member::Measure { action, .. } => {
+            Member::Timer { dur, action, .. } => {
+                collect_name_spans_in_expr(dur, target_name, out);
+                collect_name_spans_in_expr(action, target_name, out);
+            }
+            Member::Lifecycle { action, .. } | Member::Measure { action, .. } => {
                 collect_name_spans_in_expr(action, target_name, out);
             }
             Member::Change {

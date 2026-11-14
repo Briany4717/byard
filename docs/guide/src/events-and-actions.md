@@ -91,7 +91,7 @@ Every element except `Spacer` takes the pointer events:
 |-------|-------|
 | `tap` (also `click`) | A press and release in the same place, quickly |
 | `double_tap` | Two taps close together |
-| `long_press` | A press held without moving |
+| `long_press` | A press held without moving, about half a second: it fires while held, not on release. Over a child that takes the press, the nearest `long_press` above it fires |
 | `secondary` | A right click, or a two-finger tap |
 | `pointer_down`, `pointer_up` | The raw press and release |
 | `pointer_move` | The pointer moves over the element |
@@ -108,7 +108,7 @@ Some elements add their own:
 | `TextField` | `input`, `change`, `submit` |
 | `Toggle`, `Slider`, `Checkbox`, `RadioButton` | `change` |
 | `ScrollView` | `scroll`, `end_reached`, `page_change`, `scroll_end`, `refresh` |
-| An overlay or its anchored child | `dismiss` |
+| An overlay or its anchored child | `dismiss` (its action reads and writes the state of the view it is written in) |
 | `NavStack` | `route_change` |
 
 An event the element does not have is an error, with the nearest name suggested. A
@@ -117,6 +117,10 @@ An event the element does not have is an error, with the nearest name suggested.
 `switch`, `checkbox`, `radio`, `tab`, `menu_item`, `link`). On one it cannot reach, the error
 says so and says how to fix it. Space and Enter press such a control as its role says and
 do not reach `key_down`; every other key does.
+
+A press on something that only taps, inside a `ScrollView`, still scrolls it: once the
+pointer moves past a few pixels the view takes the drag and the `tap` is cancelled. An
+element with its own `drag`, `pointer_drag` or `change` keeps its drag.
 
 Three things are worth knowing:
 

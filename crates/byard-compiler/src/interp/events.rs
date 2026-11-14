@@ -225,6 +225,11 @@ struct DownState {
     time_ms: u64,
     /// True when the secondary (right) button initiated the press.
     secondary: bool,
+    /// The router's clock when the press began, which a held press measures
+    /// its long press against.
+    clock_ms: u64,
+    /// Whether the long press already fired while the press was held.
+    long_fired: bool,
 }
 
 /// The interaction-state mask of one element (RFC-0012 Part B): the engine-owned
@@ -342,6 +347,9 @@ pub struct EventRouter {
     handlers: Vec<Handler>,
     focusables: Vec<Focusable>,
     down: Option<DownState>,
+    /// The app clock the host last set (`set_clock_ms`), for a press that is
+    /// still held when its long-press time passes.
+    clock_ms: u64,
     focused: Option<u32>,
     /// The `var` the focused element reports into, kept from the frame that
     /// focused it so an element that goes away can still be blurred.
@@ -752,6 +760,33 @@ impl EventRouter {
         self.claims_pointer_from(pos, 0)
     }
 
+    /// Whether the press at `pos` is claimed only by something that taps or
+    /// presses, with no drag of its own and nothing to focus: a drag that
+    /// starts there can scroll a view around it and cancel the tap.
+    #[must_use]
+    pub fn press_only_taps(&self, pos: (f32, f32)) -> bool {
+        let at = |kinds: &[EventKind]| {
+            self.handlers
+                .iter()
+                .any(|h| hits(h.rect, h.frame, pos) && kinds.contains(&h.kind))
+        };
+        at(&[EventKind::Tap, EventKind::PointerDown])
+            && !at(&[
+                EventKind::PointerDrag,
+                EventKind::DragStart,
+                EventKind::Drag,
+                EventKind::Change,
+            ])
+            && self.focusable_at(None, pos).is_none()
+    }
+
+    /// Gives up the press in flight: its release is no tap, and no drag of its
+    /// own begins. A view that took the gesture to scroll calls this.
+    pub fn cancel_press(&mut self) {
+        self.down = None;
+        self.dragging = None;
+    }
+
     /// How many handlers are registered so far this frame. Handlers are
     /// registered in paint order, so this is a position in that order: a
     /// handler registered after it belongs to something drawn on top.
@@ -966,6 +1001,8 @@ impl EventRouter {
                     pos: ev.pos,
                     time_ms: ev.time_ms,
                     secondary,
+                    clock_ms: self.clock_ms,
+                    long_fired: false,
                 });
                 // A fresh press starts a new gesture, not yet a drag (RFC-0024).
                 self.dragging = None;
@@ -1032,6 +1069,7 @@ impl EventRouter {
                     } else {
                         // Check long press (held > LONG_PRESS_MS without much movement).
                         if down.elem.is_some()
+                            && !down.long_fired
                             && down.elem == self.hit_any(atlas, ev.pos)
                             && moved < TAP_SLOP
                             && elapsed >= LONG_PRESS_MS
@@ -1244,7 +1282,11 @@ impl EventRouter {
         // something above this handler also listens for presses here, that
         // element has the press, even if it has no handler of this kind (a
         // `TextField` over a panel with `tap`).
+        // A long press is the exception: it goes to the nearest element that
+        // listens for one, so a wrapper's `long_press` fires over a child that
+        // takes the tap.
         if kind.is_press()
+            && kind != EventKind::LongPress
             && self
                 .press_owner(pos)
                 .is_some_and(|e| e != self.handlers[i].elem)
@@ -1329,6 +1371,28 @@ impl EventRouter {
             (Some((_, e)), None) | (None, Some((_, e))) => Some(e),
             (None, None) => None,
         }
+    }
+
+    /// Tells the router the app clock, and fires the long press of a press that
+    /// has been held for [`LONG_PRESS_MS`] without moving off its spot: while
+    /// it is still held, not when it is released.
+    pub fn set_clock_ms(&mut self, ctx: &mut ReactiveCtx, ms: u64) {
+        self.clock_ms = ms;
+        let Some(down) = self.down.as_ref() else {
+            return;
+        };
+        if down.long_fired
+            || down.secondary
+            || self.dragging.is_some()
+            || ms.saturating_sub(down.clock_ms) < LONG_PRESS_MS
+        {
+            return;
+        }
+        let pos = down.pos;
+        if let Some(down) = self.down.as_mut() {
+            down.long_fired = true;
+        }
+        self.fire(ctx, None, EventKind::LongPress, pos, None);
     }
 
     /// Finds the topmost handler of `kind` whose registered (inflated, E8) hit

@@ -379,7 +379,15 @@ impl Interpreter {
         // inside it in the tree.
         let dialog = if self.access.on {
             let elem = self.atlas.node_index(ol.wrapper_id);
-            self.access_enter_overlay(frame, attrs, modal, elem, viewport)
+            // The label is an expression of the view the overlay was written
+            // in, so it is read in that view's environment.
+            let env_base = self.env.len();
+            for (k, v) in env_snapshot {
+                self.env.push(k.clone(), v.clone());
+            }
+            let scope = self.access_enter_overlay(frame, attrs, modal, elem, viewport);
+            self.env.truncate(env_base);
+            scope
         } else {
             access::Scope::default()
         };
@@ -470,7 +478,15 @@ impl Interpreter {
             // RFC-0036 `on dismiss`: registered after the child has painted,
             // because the rects it keeps are the ones the child just landed
             // on.
+            //
+            // Lowered in the scope the overlay was written in, so an action
+            // that writes a `var` or a binding of its view reaches it.
+            let env_base = self.env.len();
+            for (k, v) in env_snapshot {
+                self.env.push(k.clone(), v.clone());
+            }
             self.register_light_dismiss(slot, shift);
+            self.env.truncate(env_base);
         }
 
         self.access_leave(frame, dialog);

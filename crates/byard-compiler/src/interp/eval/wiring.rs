@@ -784,7 +784,11 @@ impl Interpreter {
                     if self.begin_nav_swipe(ev.pos) {
                         continue;
                     }
-                    let target = if self.router.claims_pointer(ev.pos) {
+                    let claimed = self.router.claims_pointer(ev.pos);
+                    // A press on something that only taps still scrolls the
+                    // view around it, once the pointer has travelled.
+                    let pending = claimed && self.router.press_only_taps(ev.pos);
+                    let target = if claimed && !pending {
                         None
                     } else {
                         self.scroll_targets
@@ -803,7 +807,7 @@ impl Interpreter {
                     if let Some(elem) = target.and_then(|t| t.elem) {
                         self.snap_anims.remove(&elem);
                     }
-                    self.scroll_drag = target.map(|t| ScrollDrag {
+                    let drag = target.map(|t| ScrollDrag {
                         start_pos: (px, py),
                         x: t.x.map(|a| self.capture_drag_axis(a)),
                         y: t.y.map(|a| self.capture_drag_axis(a)),
@@ -811,6 +815,13 @@ impl Interpreter {
                         pull_refresh: t.pull_refresh,
                         refreshing_sig: t.refreshing_sig,
                     });
+                    if pending {
+                        self.scroll_drag = None;
+                        self.pending_scroll = drag;
+                    } else {
+                        self.pending_scroll = None;
+                        self.scroll_drag = drag;
+                    }
                     // A fresh press cancels a pull view's retract spring and resets
                     // fling-velocity tracking so this gesture starts clean (RFC-0021).
                     if let Some(elem) = target.and_then(|t| t.elem) {
@@ -823,6 +834,14 @@ impl Interpreter {
                     if self.nav_swipe.is_some() {
                         self.drive_nav_swipe(ev.pos);
                         continue;
+                    }
+                    if let Some(p) = self.pending_scroll {
+                        let (dx, dy) = (ev.pos.0 - p.start_pos.0, ev.pos.1 - p.start_pos.1);
+                        if (dx * dx + dy * dy).sqrt() > crate::interp::events::TAP_SLOP {
+                            self.pending_scroll = None;
+                            self.scroll_drag = Some(p);
+                            self.router.cancel_press();
+                        }
                     }
                     if let Some(d) = self.scroll_drag {
                         if let Some(a) = d.x {
@@ -852,6 +871,7 @@ impl Interpreter {
                     // or springs back, the finger's progress hands straight
                     // over to the spring.
                     self.release_nav_swipe();
+                    self.pending_scroll = None;
                     // RFC-0021 snap: on release, settle the offset to the nearest
                     // page for a `snap: page` ScrollView (before clearing the drag).
                     if let Some(d) = self.scroll_drag {

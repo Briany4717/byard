@@ -130,6 +130,11 @@ View Main() {
 - `cubic(c1x, c1y, c2x, c2y, x, y)` is a curve with two.
 - `close()` joins the end back to the start.
 
+A path with `stroke` is outlined too: `stroke` is the colour, `stroke_width` how thick (1
+by default), `cap` the ends (`butt`, `round`, `square`) and `join` the corners (`miter`,
+`round`, `bevel`). With no `fill` it is only the line, which is how a curved progress ring
+or a wave is drawn. `dash` is not available on a path, nor any stroke on `path(d: …)`.
+
 A body path is turned into a mesh, remembered, and not worked out again while its
 numbers stay the same. A path whose data moved is redone. A path that does not
 start with `move` is an error.

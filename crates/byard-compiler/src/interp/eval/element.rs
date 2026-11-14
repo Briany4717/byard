@@ -71,6 +71,15 @@ impl Interpreter {
     /// attribute contract first (diagnostics accumulate in [`Interpreter::errors`]).
     /// `known_views` are user `ViewDecl` names in scope.
     pub fn lower_element(&mut self, el: &ElementNode, known_views: &[&str]) -> RenderNode {
+        for m in &el.children {
+            if let Member::Let { name, span, .. } = m {
+                self.errors.push(CompileError::LetInElementBody {
+                    span: *span,
+                    name: name.as_str().to_string(),
+                    element: el.name.as_str().to_string(),
+                });
+            }
+        }
         // RFC-0016: expand `..style` spreads into a flat attribute set *before*
         // validating or lowering, so everything downstream sees ordinary
         // resolved attributes (and a spread can never leak into the checker).
@@ -515,17 +524,13 @@ impl Interpreter {
             // reply path as a lifecycle effect, which is the point: a timer
             // *is* a repeating mount-scoped effect.
             Member::Timer {
-                every,
-                dur_ms,
-                action,
-                ..
+                every, dur, action, ..
             } => {
                 if let Ok(lowered) = self.lower_action(action, None) {
+                    let compute = self.lower_expr(dur, None);
+                    let dur = self.ctx.open_memo(compute);
                     let index = self.register_effect(
-                        controller::EffectKind::Timer {
-                            every: *every,
-                            dur_ms: *dur_ms,
-                        },
+                        controller::EffectKind::Timer { every: *every, dur },
                         lowered,
                     );
                     out.push(RenderNode::Effect { index });

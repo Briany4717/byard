@@ -135,9 +135,11 @@ View Main() {
         .body
         .iter()
         .filter_map(|m| match m {
-            byard_compiler::parser::ast::Member::Timer { every, dur_ms, .. } => {
-                Some((*every, *dur_ms))
-            }
+            byard_compiler::parser::ast::Member::Timer {
+                every,
+                dur: byard_compiler::parser::ast::Expr::IntLit(ms, _),
+                ..
+            } => Some((*every, u64::try_from(*ms).unwrap())),
             _ => None,
         })
         .collect();

@@ -12,6 +12,7 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A drag step.** `byard shot --drag 200,600:200,300` and `{ drag = ["200,600", "200,300"] }` in `byard test` press at the first point, move to the second in eight moves a frame apart, and release: a scroll, a swipe or a sheet pulled down, with no `--hold`, `--hover` and `--release` to put together.
 - **Context.** `context TabsStyle { current: Int = 0 }` declares values with defaults, `provide TabsStyle(current: current)` in a view gives them to everything it draws, slots included, and `inject TabsStyle as s` reads the nearest one above (or the defaults), live, so a `Tab` written in a caller's block follows the `Tabs` that draws it. A field may be an `Fn`, for an item to report to its container. A view that neither provides nor injects pays nothing. `DuplicateProvide`, `UnknownContext`, `UnknownField`, `ContextFieldNeedsDefault`, `MisplacedProvide`. RFC-0065. See `crates/byard-cli/examples/context_and_optional`.
 - **Optional values.** `color: Color? = none` may be left out or passed `none`, and is read with `??` or inside `when color != none` and the true arm of `color != none ? a : b`; any other read is `NoneNotHandled`. `bind selected: Int = 0` may be left out too, and the view keeps its own `var` (`BadBindingParam` no longer applies to a default). RFC-0065.
 - **`it.x` and `it.y` in `on measure`**, the element's position in its parent, for a sliding indicator. RFC-0065.

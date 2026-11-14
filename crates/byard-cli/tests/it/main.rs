@@ -22,6 +22,7 @@ mod context_and_optional_example;
 mod corner_smoothing_example;
 mod data_ops_example;
 mod diagnostics_shape;
+mod drag_step;
 mod error_overlay_example;
 mod example_roots;
 mod fmt;

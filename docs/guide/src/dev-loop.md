@@ -211,6 +211,7 @@ picture. Every test of a screen can pass while the screen is wrong.
 | `--tap <X,Y>` | none | Tap a logical point before the picture. Repeat it for more taps |
 | `--hold <X,Y>` | none | Press at a point and keep the button down for the picture. `--at` is how long. Repeatable |
 | `--hover <X,Y>` | none | Move the pointer to a point, pressing nothing. Repeatable |
+| `--drag <X,Y:X,Y>` | none | Drag between two points: a press, eight moves a frame apart, a release. Repeatable |
 | `--key <KEY>` | none | Press a key before the picture, such as `Left`, `shift+Left` or `mod+a`. Repeatable |
 | `--type <TEXT>` | none | Type text before the picture. Repeatable |
 | `--wait <MS>` | none | Let app time pass before the next input or the picture. Repeatable |
@@ -314,6 +315,7 @@ test that needs an animation to finish has a `{ wait = 400 }` where it matters.
 | Step | |
 |------|-|
 | `{ tap = ... }`, `{ hold = ... }`, `{ hover = ... }` | A point `[x, y]`, or text from a line of the tree: the pointer goes to the centre of that node. No line, or more than one, is a failure that lists the lines |
+| `{ drag = ["x,y", "x,y"] }` | A press at the first point, eight moves a frame apart, a release at the second, as `--drag`. Each end is `"x,y"`, `[x, y]` or text from a line of the tree |
 | `{ key = "mod+a" }` | A key, as `--key` |
 | `{ type = "text" }` | Typed text |
 | `{ wait = 200 }` | Milliseconds of app time pass |

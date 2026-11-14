@@ -238,6 +238,33 @@ impl Interpreter {
         })
     }
 
+    /// The identity of the element `name:` points at by the name its `as`
+    /// gave it, as an `anchor_to: tip` or an `a11y_described_by: tip` does
+    /// (RFC-0066 §5). The name is looked up where the attribute is written, so
+    /// two instances of a view each reach their own element. `None` when the
+    /// attribute is absent or is not a bare name an `as` declared, which is
+    /// the string form.
+    pub(super) fn element_ref(&self, attrs: &[Attr], name: &str) -> Option<u32> {
+        attrs.iter().find_map(|a| {
+            if a.name.as_str() != name {
+                return None;
+            }
+            let AttrKind::Prop {
+                value: Expr::Ident(sym, _),
+            } = &a.kind
+            else {
+                return None;
+            };
+            match self
+                .env
+                .lookup(&Symbol::intern(&format!("@{}", sym.as_str())))
+            {
+                Some(Value::Int(uid)) => u32::try_from(*uid).ok(),
+                _ => None,
+            }
+        })
+    }
+
     pub(super) fn eval_float_prop(&mut self, attrs: &[Attr], name: &str) -> Option<f64> {
         attrs.iter().find_map(|a| {
             if a.name.as_str() == name {

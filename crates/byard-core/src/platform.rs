@@ -124,7 +124,8 @@ impl KeyModifiers {
     /// `cmd`, `super`) and `mod`, the platform's shortcut key (RFC-0041 §Q5).
     /// The key is a single character, or one of `Left`, `Right`, `Up`, `Down`,
     /// `Home`, `End`, `PageUp`, `PageDown`, `Insert`, `Backspace`, `Delete`,
-    /// `Enter`, `Tab`, `Escape` and `Space`; case does not matter for those.
+    /// `Enter`, `Tab`, `Escape` and `Space`, the arrows also as the platform
+    /// names them (`ArrowLeft`); case does not matter for those.
     ///
     /// # Errors
     ///
@@ -158,10 +159,10 @@ impl KeyModifiers {
             }
         }
         let name = match key.to_ascii_lowercase().as_str() {
-            "left" => "ArrowLeft".to_string(),
-            "right" => "ArrowRight".to_string(),
-            "up" => "ArrowUp".to_string(),
-            "down" => "ArrowDown".to_string(),
+            "left" | "arrowleft" => "ArrowLeft".to_string(),
+            "right" | "arrowright" => "ArrowRight".to_string(),
+            "up" | "arrowup" => "ArrowUp".to_string(),
+            "down" | "arrowdown" => "ArrowDown".to_string(),
             "home" => "Home".to_string(),
             "end" => "End".to_string(),
             "pageup" | "page_up" => "PageUp".to_string(),
@@ -193,7 +194,7 @@ impl KeyModifiers {
 
 /// The key names a command line accepts, as an error lists them.
 const KEY_NAMES: &str = "Left, Right, Up, Down, Home, End, PageUp, PageDown, Insert, Backspace, \
-     Delete, Enter, Tab, Escape or Space";
+     Delete, Enter, Tab, Escape or Space (an arrow also as ArrowLeft and so on)";
 
 /// A mouse/pointer button, expressed without depending on any windowing
 /// crate's types, mirrors the variants `winit::event::MouseButton` exposes
@@ -643,6 +644,18 @@ pub trait PlatformHost {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_key_is_spelt_short_or_as_the_platform_does() {
+        assert_eq!(
+            KeyModifiers::parse_chord("ArrowDown").map(|c| c.1),
+            Ok("ArrowDown".to_string())
+        );
+        assert_eq!(
+            KeyModifiers::parse_chord("down").map(|c| c.1),
+            Ok("ArrowDown".to_string())
+        );
+    }
+
     use super::*;
 
     /// Minimal `PlatformHost` that exercises only the trait's default

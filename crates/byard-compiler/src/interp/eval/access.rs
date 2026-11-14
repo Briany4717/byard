@@ -18,7 +18,7 @@
 
 use super::layout::Pools;
 use byard_core::access::{
-    AccessActions, AccessFlags, AccessId, AccessNode, AccessRole, AccessValue,
+    AccessActions, AccessFlags, AccessId, AccessLive, AccessNode, AccessRole, AccessValue,
 };
 use byard_core::frame::{Rect as FrameRect, RenderFrame, Transform};
 
@@ -42,10 +42,26 @@ pub(super) struct AccessScratch {
     open: Vec<Open>,
     /// The layout containers that enclose the walk, innermost last.
     containers: Vec<Container>,
+    /// A modal overlay whose content is its own dialog gives no node of its
+    /// own: the dialog it holds is the modal one (RFC-0066).
+    pub(super) modal_pending: bool,
     /// For each node of the tree, how many containers enclosed it, so the
     /// "label beside it" rule can tell a `Row`'s own children from those of a
     /// container nested inside it.
     owners: Vec<u32>,
+}
+
+impl AccessScratch {
+    /// Takes what is walked until [`unhide`](Self::unhide) out of the tree
+    /// (RFC-0066 §3: what is leaving is not in it).
+    pub(super) fn hide(&mut self) {
+        self.hidden += 1;
+    }
+
+    /// Ends a [`hide`](Self::hide).
+    pub(super) fn unhide(&mut self) {
+        self.hidden = self.hidden.saturating_sub(1);
+    }
 }
 
 /// A node with a role whose subtree is being walked.
@@ -423,6 +439,7 @@ impl Interpreter {
         frame: &mut RenderFrame,
         attrs: &[Attr],
         modal: bool,
+        inner: Option<AccessRole>,
         elem: Option<u32>,
         viewport: Rect,
     ) -> Scope {
@@ -436,17 +453,22 @@ impl Interpreter {
                 ..Scope::default()
             };
         }
-        let node = elem.filter(|_| modal).map(|elem| {
-            let label = self.access_label(attrs);
-            let mut node = self.leaf(
-                AccessRole::Dialog,
-                elem,
-                label,
-                bounds(viewport, &Transform::IDENTITY),
-            );
-            node.flags.insert(AccessFlags::MODAL);
-            node
-        });
+        // A dialog or an alert inside says what it is, and carries the flag.
+        self.access.modal_pending =
+            modal && matches!(inner, Some(AccessRole::Dialog | AccessRole::Alert));
+        let node = elem
+            .filter(|_| modal && !self.access.modal_pending)
+            .map(|elem| {
+                let label = self.access_label(attrs);
+                let mut node = self.leaf(
+                    AccessRole::Dialog,
+                    elem,
+                    label,
+                    bounds(viewport, &Transform::IDENTITY),
+                );
+                node.flags.insert(AccessFlags::MODAL);
+                node
+            });
         self.open_scope(frame, node, false, false, false)
     }
 
@@ -536,6 +558,8 @@ impl Interpreter {
             } else {
                 AccessActions::empty()
             },
+            live: AccessLive::Off,
+            described_by: None,
         }
     }
 
@@ -729,6 +753,11 @@ impl Interpreter {
     /// state; a switch it names has no state of its own to default to, so an
     /// author's switch with no `a11y_checked` is off.
     fn apply_declared(&mut self, node: &mut AccessNode, attrs: &[Attr], built_in: bool) {
+        if self.access.modal_pending && matches!(node.role, AccessRole::Dialog | AccessRole::Alert)
+        {
+            self.access.modal_pending = false;
+            node.flags.insert(AccessFlags::MODAL);
+        }
         if let Some(text) = self
             .eval_str_prop(attrs, "a11y_description")
             .filter(|t| !t.is_empty())
@@ -769,6 +798,57 @@ impl Interpreter {
         }
         if self.eval_bool_prop(attrs, "a11y_disabled") == Some(true) {
             node.flags.insert(AccessFlags::DISABLED);
+        }
+        self.apply_announcements(node, attrs);
+    }
+
+    /// What RFC-0066 adds for a reader: whether a change is announced
+    /// (`a11y_live`), what describes the element (`a11y_described_by`) and the
+    /// range of a value (`a11y_value_min`, `a11y_value_max`, `a11y_value_step`).
+    /// Each is read only when the element writes it.
+    fn apply_announcements(&mut self, node: &mut AccessNode, attrs: &[Attr]) {
+        if let Some(word) = Self::enum_prop(attrs, "a11y_live") {
+            node.live = match word {
+                "polite" => AccessLive::Polite,
+                "assertive" => AccessLive::Assertive,
+                _ => AccessLive::Off,
+            };
+        }
+        if attrs.iter().any(|a| a.name.as_str() == "a11y_described_by") {
+            if let Some(uid) = self.element_ref(attrs, "a11y_described_by") {
+                node.described_by = self
+                    .prev_elem_uids
+                    .iter()
+                    .find(|(_, u)| *u == uid)
+                    .map(|(index, _)| AccessId(*index));
+            }
+        }
+        if matches!(node.role, AccessRole::Slider | AccessRole::ProgressBar) {
+            let min = self.eval_float_prop(attrs, "a11y_value_min");
+            let max = self.eval_float_prop(attrs, "a11y_value_max");
+            let step = self.eval_float_prop(attrs, "a11y_value_step");
+            if min.is_some() || max.is_some() || step.is_some() {
+                // The number the element reports: its own, when a built-in
+                // control reported one; else the text of `a11y_value`.
+                let (value, was_min, was_max, was_step) = match &node.value {
+                    Some(AccessValue::Number {
+                        value,
+                        min,
+                        max,
+                        step,
+                    }) => (Some(*value), Some(*min), Some(*max), *step),
+                    Some(AccessValue::Text(t)) => (t.trim().parse::<f64>().ok(), None, None, None),
+                    _ => (None, None, None, None),
+                };
+                let min = min.or(was_min).unwrap_or(0.0);
+                let max = max.or(was_max).unwrap_or(1.0);
+                node.value = Some(AccessValue::Number {
+                    value: value.unwrap_or(min),
+                    min,
+                    max,
+                    step: step.or(was_step),
+                });
+            }
         }
     }
 

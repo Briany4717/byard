@@ -23,7 +23,14 @@ fn boxes(src: &str) -> Vec<[f32; 4]> {
     let known: Vec<&str> = parsed.views.iter().map(|v| v.name.as_str()).collect();
     interp.load_views(&parsed.views);
     let tree = interp.lower_view(&parsed.views[0], &known);
-    assert!(interp.errors().is_empty(), "{:?}", interp.errors());
+    assert!(
+        interp
+            .errors()
+            .iter()
+            .all(byard_compiler::CompileError::is_warning),
+        "{:?}",
+        interp.errors()
+    );
     interp.tick();
     let mut frame = RenderFrame::new();
     interp.render(&tree, &mut frame, W, H);
@@ -304,7 +311,13 @@ fn errors_of(src: &str) -> Vec<String> {
     let known: Vec<&str> = parsed.views.iter().map(|v| v.name.as_str()).collect();
     interp.load_views(&parsed.views);
     let _ = interp.lower_view(&parsed.views[0], &known);
-    interp.errors().iter().map(|e| format!("{e:?}")).collect()
+    // The text form of `anchor_to` is a warning (RFC-0066); these are about errors.
+    interp
+        .errors()
+        .iter()
+        .filter(|e| !e.is_warning())
+        .map(|e| format!("{e:?}"))
+        .collect()
 }
 
 /// A view whose field is `field_w` wide and whose panel matches it.
@@ -423,7 +436,14 @@ fn a_matched_width_adds_no_layout_work_to_a_steady_frame() {
         let known: Vec<&str> = parsed.views.iter().map(|v| v.name.as_str()).collect();
         interp.load_views(&parsed.views);
         let tree = interp.lower_view(&parsed.views[0], &known);
-        assert!(interp.errors().is_empty(), "{:?}", interp.errors());
+        assert!(
+            interp
+                .errors()
+                .iter()
+                .all(byard_compiler::CompileError::is_warning),
+            "{:?}",
+            interp.errors()
+        );
         let mut render_once = || {
             path_counters::reset();
             interp.tick();
@@ -489,7 +509,14 @@ fn an_absolute_offset_is_measured_from_the_viewport_origin() {
         let known: Vec<&str> = parsed.views.iter().map(|v| v.name.as_str()).collect();
         interp.load_views(&parsed.views);
         let tree = interp.lower_view(&parsed.views[0], &known);
-        assert!(interp.errors().is_empty(), "{:?}", interp.errors());
+        assert!(
+            interp
+                .errors()
+                .iter()
+                .all(byard_compiler::CompileError::is_warning),
+            "{:?}",
+            interp.errors()
+        );
         interp.tick();
         let mut frame = RenderFrame::new();
         interp.render(&tree, &mut frame, w, h);

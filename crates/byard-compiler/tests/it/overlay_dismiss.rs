@@ -63,7 +63,14 @@ impl App {
         let known: Vec<&str> = parsed.views.iter().map(|v| v.name.as_str()).collect();
         interp.load_views(&parsed.views);
         let tree = interp.lower_view(&parsed.views[0], &known);
-        assert!(interp.errors().is_empty(), "{:?}", interp.errors());
+        assert!(
+            interp
+                .errors()
+                .iter()
+                .all(byard_compiler::CompileError::is_warning),
+            "{:?}",
+            interp.errors()
+        );
         let mut app = Self { interp, tree };
         app.render();
         app

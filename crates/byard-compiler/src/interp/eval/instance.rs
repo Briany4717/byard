@@ -663,6 +663,10 @@ impl Interpreter {
             && self.for_depth == 0
             && self.nav_depth == 0
             && self.restored_depth == 0
+            // RFC-0066: a name an `as` declared in a branch is gone from the
+            // environment once the branch is lowered, and a `when` written
+            // inside it is lowered later.
+            && !self.state_uses.names
         {
             Vec::new()
         } else {

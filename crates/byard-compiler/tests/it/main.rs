@@ -61,6 +61,7 @@ mod numbers_from_text;
 mod on_change;
 mod or_else;
 mod overlay_dismiss;
+mod overlays_and_motion;
 mod package_language;
 mod path_from_data;
 mod path_morph;

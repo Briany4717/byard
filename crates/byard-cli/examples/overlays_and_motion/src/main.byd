@@ -1,0 +1,192 @@
+// RFC-0066: a dialog that takes focus, a menu with a submenu, a card that comes
+// and goes with `on enter` and `on leave`, a tooltip anchored by name, and a
+// slider that tells a reader its range.
+//
+//   byard shot crates/byard-cli/examples/overlays_and_motion --tap 280,40 -o dialog.png
+//   byard shot ... --tap 40,40 --at 100 -o card_mid_enter.png
+//   byard shot ... --tap 40,40 --wait 600 --tap 40,40 --at 90 -o card_mid_leave.png
+//   byard shot ... --hover 370,40 --at 100 -o tooltip.png
+//   byard shot ... --tap 130,40 --wait 100 --key Down --key Right -o menu.png
+//   byard shot ... --a11y tree.txt -o tree.png
+
+View Main() {
+    var card = false
+    var menu = false
+    var sub = false
+    var dialog = false
+    var volume = 40
+
+    Column #[grow: 1, bg: 0x14141C, p: 20, gap: 16] {
+        Row #[gap: 12] {
+            Button("Card") #[width: 96, height: 40, bg: 0x3A3A58, radius: 8, color: 0xE7ECF2] => { card = !card }
+            Button("Menu") #[
+                width: 96,
+                height: 40,
+                bg: 0x3A3A58,
+                radius: 8,
+                color: 0xE7ECF2,
+            ] as menuButton => { menu = !menu }
+            Button("Dialog") #[width: 96, height: 40, bg: 0x3A3A58, radius: 8, color: 0xE7ECF2] => { dialog = true }
+            Hint("Tip", "Only explains itself")
+        }
+
+        when card {
+            Column #[
+                width: 200,
+                height: 90,
+                bg: 0x2B3A67,
+                radius: 14,
+                p: 14,
+                gap: 6,
+                opacity: 1.0 with anim.easeOut(240ms),
+                translate: (0, 0) with anim.easeOut(240ms),
+                a11y_role: group,
+                a11y_label: "Saved card",
+            ] {
+                on enter { opacity: 0.0, translate: (0, 24) }
+                on leave { opacity: 0.0, translate: (0, 24) }
+                Text("Saved") #[color: 0xFFFFFF, typo: titleMedium]
+                Text("Arrives and leaves with motion") #[color: 0xC8D0E8]
+            }
+        }
+
+        Box #[
+            a11y_role: slider,
+            a11y_label: "Volume",
+            a11y_value: "{volume}",
+            a11y_value_min: 0,
+            a11y_value_max: 100,
+            a11y_value_step: 5,
+            width: 200,
+            height: 10,
+            bg: 0x3B3B4F,
+            radius: 5,
+        ]
+
+        Text("{volume} of 100") #[color: 0xE7ECF2, a11y_live: polite]
+    }
+
+    when menu {
+        Overlay #[modal: false] {
+            Column #[
+                anchor_to: menuButton,
+                anchor_edge: below,
+                anchor_gap: 4,
+                bg: 0x232334,
+                radius: 10,
+                p: 6,
+                width: 140,
+                a11y_role: menu,
+                dismiss => { menu = false sub = false },
+            ] {
+                Item("Copy", false, false)
+                Box as shareItem { Item("Share", true, sub, on_tap: { sub = true }) }
+                Item("Paste", false, false)
+                when sub {
+                    Overlay #[modal: false] {
+                        Column #[
+                            anchor_to: shareItem,
+                            anchor_edge: after,
+                            anchor_gap: 4,
+                            bg: 0x232334,
+                            radius: 10,
+                            p: 6,
+                            width: 120,
+                            a11y_role: menu,
+                            dismiss => { sub = false },
+                        ] {
+                            Item("Mail", false, false)
+                            Item("Chat", false, false)
+                        }
+                    }
+                }
+            }
+        }
+    }
+    when dialog {
+        Overlay #[dismiss => { dialog = false }] {
+            Column #[
+                anchor: center,
+                bg: 0x232334,
+                radius: 16,
+                p: 20,
+                gap: 14,
+                width: 280,
+                a11y_role: dialog,
+                a11y_label: "Discard draft?",
+            ] {
+                on enter { opacity: 0.0, scale: (0.92, 0.92) }
+                on leave { opacity: 0.0, scale: (0.92, 0.92) }
+                Text("Discard draft?") #[color: 0xFFFFFF, typo: titleMedium]
+                Row #[gap: 10] {
+                    Button("Cancel") #[
+                        width: 100,
+                        height: 40,
+                        bg: 0x3A3A58,
+                        radius: 8,
+                        color: 0xE7ECF2,
+                    ] => { dialog = false }
+                    Button("Discard") #[
+                        width: 100,
+                        height: 40,
+                        bg: 0x3A3A58,
+                        radius: 8,
+                        color: 0xE7ECF2,
+                        autofocus: true,
+                    ] => { dialog = false }
+                }
+            }
+        }
+    }
+}
+
+View Item(label: Str, opens: Bool, expanded: Bool, on_tap: Fn() = {}) {
+    Box #[
+        a11y_role: menu_item,
+        a11y_label: label,
+        a11y_expanded: opens ? expanded : none,
+        height: 32,
+        p: (6, 10),
+        radius: 6,
+        bg: 0x232334,
+        tap => on_tap(),
+    ] {
+        on focus_visible { bg: 0x3A3A58 }
+        Text(label) #[color: 0xE7ECF2]
+    }
+}
+
+View Hint(caption: Str, words: Str) {
+    var shown = false
+    Box #[
+        width: 60,
+        height: 40,
+        bg: 0x3A3A58,
+        radius: 8,
+        align: center,
+        justify: center,
+        pointer_enter => shown = true,
+        pointer_leave => shown = false,
+        focus_in => shown = true,
+        focus_out => shown = false,
+    ] as target {
+        Text(caption) #[color: 0xE7ECF2]
+    }
+    when shown {
+        Overlay #[modal: false] {
+            Box #[
+                anchor_to: target,
+                anchor_edge: below,
+                anchor_gap: 6,
+                bg: 0xE7ECF2,
+                radius: 6,
+                p: 8,
+                interactive: false,
+                a11y_role: group,
+                a11y_label: words,
+            ] {
+                Text(words) #[color: 0x14141C, size: 12]
+            }
+        }
+    }
+}

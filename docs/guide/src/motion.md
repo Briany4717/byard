@@ -367,6 +367,38 @@ can run at different points. `restart: entrance` replays the cascade each time t
 button changes `entrance`, which is how you run a start-up animation again without
 reloading.
 
+## Coming and going
+
+`on enter` and `on leave` are state blocks for how an element arrives and how it goes.
+They take paint attributes and `translate`, `scale`, `rotate` and `opacity`; a layout
+attribute is `LayoutInStateBlock`, and an element has one block of each.
+
+<!-- ignore: a piece of a larger view, with names it does not declare -->
+```byld,ignore
+when open {
+    Column #[opacity: 1.0 with t.springEffectsFast,
+             translate: (0, 0) with t.springSpatialFast] {
+        on enter { opacity: 0.0, translate: (0, 24) }
+        on leave { opacity: 0.0, translate: (0, 24) }
+        Text("Saved")
+    }
+}
+```
+
+`on enter` gives the values the element has on its first frame; from there it moves to its
+own with their `with`. A token, or `anim.stagger(t.springSpatialFast, 40ms, i)`, needs no
+`from:`: the start is written once, in the block. `on leave` gives the values it goes to
+when a `when` turns false, a `for` loses a row or an overlay closes. It stays drawn until
+those motions end, and meanwhile takes no input, is out of the Tab order and is not in
+the accessibility tree. Shown again before it has gone, it turns round from where it is.
+A branch that has an `on leave` anywhere in it is kept whole; the rest of it stays as it
+was. Rows of a `for` are positional, so it is the last rows of the list that leave.
+Nothing is kept for an element that has neither block, and a loop that never ends does
+not keep a leaving element drawn.
+
+A test or a `byard shot` that expects the element gone must wait for its motion
+(`--wait`).
+
 ## A view you call more than once
 
 An animation belongs to the element it runs on, not to the line that wrote it. A view

@@ -132,8 +132,8 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
-- **A press lands where the element is drawn.** An element's own `translate`, `scale` and `rotate` carried its children's targets with it but not its own, so a box moved 100 to the right was still pressed where it was laid out. Found by Byard Material's slider handle.
-- **`ZStack` alignment is no longer lost.** In a stack whose children are all smaller than it, `alignment: top_end` and `center` had nowhere to move a child horizontally and left it at the start; and a child that stretches (`align_self: stretch`, `grow`) with a `height` or a `width` of its own now sits where `alignment` puts it along that axis, not at the start (a rule across the bottom of a `bottom_start` stack).
+- **A press lands where the element is drawn.** An element's own `translate` carried its children's targets with it but not its own, so a box moved 100 to the right was still pressed where it was laid out. Its own `scale` and `rotate` still leave its target alone, so a hover that scales it does not move its own edge. Found by Byard Material's slider handle.
+- **A `ZStack` child that stretches and has a `height` or a `width` of its own** (`align_self: stretch`, `grow`) now sits where `alignment` puts it along that axis, not at the start: a 1 high rule across a `bottom_start` stack is at the bottom.
 - **`a11y_label` on an `Overlay` reads the view it is written in.** `a11y_label: headline` named the dialog `headline`, the word, when `headline` was a parameter.
 - **An explicit `height` on the header of a `collapse_header` `ScrollView`** is kept: the header no longer shrinks when the content below is taller than the view.
 - **A `Clip` with a `width` of 0 measures its children at their own size** instead of stretching them to 0, so `on measure` inside it reads the real width.

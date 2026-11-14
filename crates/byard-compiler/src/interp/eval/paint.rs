@@ -172,30 +172,36 @@ impl Interpreter {
         self.router.restore_hit_frame(previous);
     }
 
-    /// Makes the hit regions this element registers follow its own transform
-    /// too, so a press lands where the element is drawn: a `translate` or a
-    /// `scale` of its own moves its target with it, as an ancestor's already
-    /// does. `drawn` is the element's transform composed with its ancestors'.
+    /// Makes the hit regions this element registers follow its own `translate`,
+    /// so a press lands where the element is drawn: a box moved 100 to the right
+    /// is pressed 100 to the right, as one inside a translated card already was.
+    /// `inherited` is the transform its ancestors compose.
     ///
-    /// An element that moves nothing of its own keeps the frame it inherited,
-    /// and costs nothing. The scroll displacement is in `drawn` for paint but
-    /// reaches the hit rects another way, so it is taken out, and the pivot
-    /// moves with the rects.
+    /// Only the translation. An element's own `scale` and `rotate` still leave
+    /// its own target alone (RFC-0011): a hover scale that grew the target would
+    /// push a pointer at the edge in and out of hover as it animated, and a
+    /// handler's `e.dx` and `e.x` stay in the element's laid-out units while it
+    /// is scaled (`on dragging { scale: 1.5 }`). An element that does not
+    /// translate keeps the frame it inherited, and costs nothing. The scroll
+    /// displacement is in the transform for paint but reaches the hit rects
+    /// another way, so it is taken out.
     #[allow(clippy::float_cmp)]
     fn hit_where_drawn(
         &mut self,
         own: &byard_core::frame::Transform,
-        drawn: byard_core::frame::Transform,
+        inherited: &byard_core::frame::Transform,
         scroll_shift: (f32, f32),
     ) {
-        if own.translate == [0.0, 0.0] && own.scale == [1.0, 1.0] && own.rotate == 0.0 {
+        if own.translate == [0.0, 0.0] {
             return;
         }
-        let mut hit = drawn;
+        let moved = byard_core::frame::Transform {
+            translate: own.translate,
+            ..byard_core::frame::Transform::IDENTITY
+        };
+        let mut hit = inherited.compose(&moved);
         hit.translate[0] -= scroll_shift.0;
         hit.translate[1] -= scroll_shift.1;
-        hit.origin[0] += scroll_shift.0;
-        hit.origin[1] += scroll_shift.1;
         hit.opacity = 1.0;
         // The wrapper around the node puts back the frame it replaced.
         let _ = self.router.set_hit_frame(hit);
@@ -331,7 +337,7 @@ impl Interpreter {
                         ),
                     );
                     let transform = inherited_transform.compose(&own);
-                    self.hit_where_drawn(&own, transform, scroll_shift);
+                    self.hit_where_drawn(&own, &inherited_transform, scroll_shift);
                     let own_group = own.rotate.abs() > f32::EPSILON
                         && frame.begin_group_rotated(
                             1.0,
@@ -608,7 +614,7 @@ impl Interpreter {
                     let own_transform = self.resolve_transform(paint_attrs, current_rect);
                     let transform = inherited_transform.compose(&own_transform);
                     child_transform = transform;
-                    self.hit_where_drawn(&own_transform, transform, scroll_shift);
+                    self.hit_where_drawn(&own_transform, &inherited_transform, scroll_shift);
                     let bg = self.eval_color_prop(paint_attrs, "bg");
                     let radii = self.resolve_radii(paint_attrs, "radius");
                     // RFC-0031 §S1: the corner profile `radii` are measured

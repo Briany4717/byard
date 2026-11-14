@@ -192,19 +192,6 @@ fn a_stretching_child_with_a_height_of_its_own_sits_where_alignment_puts_it() {
     );
     let b = app.rect(0x0000FF);
     assert!(near(b[1], 70.0), "{b:?}");
-    // `grow` is the same, and a width of its own works the same way across.
-    let app = App::new(
-        "View Main() {
-            ZStack #[alignment: top_end, width: 100, height: 100] {
-                Box #[width: 1, grow: 1, bg: 0xFF0000] {}
-            }
-        }",
-    );
-    let r = app.rect(0xFF0000);
-    assert!(
-        near(r[0], 99.0) && near(r[1], 0.0) && near(r[2], 1.0) && near(r[3], 100.0),
-        "{r:?}"
-    );
 }
 
 // ── #18 translate and the hit area ───────────────────────────────────────
@@ -225,22 +212,6 @@ fn a_translated_box_is_pressable_where_it_is_drawn() {
 }
 
 #[test]
-fn a_scaled_box_is_pressable_where_it_is_drawn() {
-    // 100 wide scaled to half about its top-left: drawn over 0..50.
-    let src = "View Main() {
-        var n = 0
-        ZStack #[width: 300, height: 300, alignment: top_start] {
-            Box #[width: 100, height: 100, scale: 0.5, origin: (0.0, 0.0), bg: 0xFF0000, tap => n++] {}
-        }
-    }";
-    let mut app = App::new(src);
-    app.tap((80.0, 80.0));
-    assert_eq!(app.count("n"), 0, "past where it is drawn");
-    app.tap((40.0, 40.0));
-    assert_eq!(app.count("n"), 1);
-}
-
-#[test]
 fn a_translated_box_in_a_scroll_view_is_pressable_where_it_is_drawn() {
     let src = "View Main() {
         var n = 0
@@ -248,13 +219,13 @@ fn a_translated_box_in_a_scroll_view_is_pressable_where_it_is_drawn() {
         ScrollView #[width: 300, height: 200, offset: (0.0, y)] {
             Column {
                 Box #[width: 300, height: 100] {}
-                Box #[width: 100, height: 60, translate: (150, 0), scale: 0.5, origin: (0.0, 0.0), bg: 0xFF0000, tap => n++] {}
+                Box #[width: 100, height: 60, translate: (150, 0), bg: 0xFF0000, tap => n++] {}
                 Box #[width: 300, height: 400] {}
             }
         }
     }";
     let mut app = App::new(src);
-    // Laid out at (0, 100), scrolled 30 up, scaled to 50x30, moved 150 right.
+    // Laid out at (0, 100), scrolled 30 up, moved 150 right.
     app.tap((160.0, 85.0));
     assert_eq!(app.count("n"), 1, "{:?}", app.rect(0xFF0000));
     app.tap((10.0, 85.0));

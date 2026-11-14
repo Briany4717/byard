@@ -409,8 +409,10 @@ One axis can be set alone: `translate.y: 4`. To pivot on the middle of the eleme
 spin wants, say `origin: center`.
 
 Transforms compose down the tree. A button inside a rotated card turns with it, and
-a tap on it lands where it is drawn. So does a `translate` or `scale` of the element
-itself: a box moved 100 to the right is pressed 100 to the right. They apply to text too, and a rotated label
+a tap on it lands where it is drawn. So does a `translate` of the element
+itself: a box moved 100 to the right is pressed 100 to the right. Its own `scale` and
+`rotate` leave its own target where it was laid out, so a hover that scales it does not
+move the edge it is hovered by. They apply to text too, and a rotated label
 turns with its card. A `Clip` inside a rotated card is cut along the card's turned
 edges.
 

@@ -2129,17 +2129,19 @@ impl LayoutAtlas {
         // it (the ZStack keeps each child at its natural size).
         taffy_style.justify_items = Some(justify);
         taffy_style.align_items = Some(align_items);
-        // The cell is the whole stack, not just as wide as the widest child:
-        // otherwise the column is packed at the start, `alignment: top_end` has
-        // nowhere to put a smaller child but the start, and a stretching empty
-        // box (`align_self: stretch`, or `grow`) is as wide as nothing
-        // (RFC-0059).
+        // A child that stretches (`align_self: stretch`, or `grow`) is asked to
+        // fill the stack. The cell is then the whole stack: otherwise the column
+        // is only as wide as the widest child, packed at the start, and a
+        // stretching empty box is as wide as nothing (RFC-0059). A stack with no
+        // such child keeps the layout it always had.
         let fills = children.iter().any(|c| {
             self.tree
                 .style(c.node_id)
                 .is_ok_and(|s| s.justify_self == Some(AlignItems::Stretch))
         });
-        taffy_style.justify_content = Some(JustifyContent::Stretch);
+        if fills {
+            taffy_style.justify_content = Some(JustifyContent::Stretch);
+        }
 
         let mut fp = LayoutFingerprint::new(NodeKind::Stack);
         fp.container(&style)

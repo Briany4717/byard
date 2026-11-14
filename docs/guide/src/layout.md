@@ -245,8 +245,7 @@ View Main() {
 ```
 
 The values are `center`, `top`, `bottom`, `start`, `end`, and the corners
-`top_start`, `top_end`, `bottom_start` and `bottom_end`. They place a child along both axes,
-whether the stack is as wide as its widest child or wider.
+`top_start`, `top_end`, `bottom_start` and `bottom_end`.
 
 A child that should fill the stack says `grow: 1` or `align_self: stretch`. It then takes the
 stack's whole width and height, unless it has a `width` or a `height` of its own, which it

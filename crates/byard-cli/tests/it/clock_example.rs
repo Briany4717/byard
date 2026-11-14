@@ -53,9 +53,11 @@ fn the_timers_example_checks_clean() {
 #[test]
 fn a_shot_with_now_shows_that_time_and_a_tap_stamps_it() {
     let shown = labels("tap", &["--now", "2026-11-05T09:00:00", "--tap", "100,324"]);
+    // `on mount` wrote the fixed time, and `every 1s` ticked once before the
+    // shot settled, on the shot's own clock.
     assert!(
-        shown.contains(&"Thu 5 Nov, 09:00:00".to_string()),
-        "`on mount` wrote the fixed time: {shown:?}"
+        shown.contains(&"Thu 5 Nov, 09:00:01".to_string()),
+        "the clock is the fixed time plus the shot's: {shown:?}"
     );
     assert!(
         shown.contains(&"2026-11-05T09:00:00".to_string()),

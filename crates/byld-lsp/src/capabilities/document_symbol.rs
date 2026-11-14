@@ -338,15 +338,16 @@ fn collect_member_symbols(doc: &Document, members: &[Member], out: &mut Vec<Docu
                 });
             }
             Member::Timer {
-                every,
-                dur_ms,
-                span,
-                ..
+                every, dur, span, ..
             } => {
+                let dur_text = match dur {
+                    byard_compiler::parser::ast::Expr::IntLit(ms, _) => format!("{ms}ms"),
+                    _ => "…".to_string(),
+                };
                 let range = doc.line_index.span_to_range(&doc.content, *span);
                 #[allow(deprecated)]
                 out.push(DocumentSymbol {
-                    name: format!("{} {}ms", if *every { "every" } else { "after" }, dur_ms),
+                    name: format!("{} {dur_text}", if *every { "every" } else { "after" }),
                     detail: Some("Timer effect".to_string()),
                     kind: SymbolKind::EVENT,
                     tags: None,

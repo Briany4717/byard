@@ -938,6 +938,10 @@ pub struct Interpreter {
     /// pointer press lands on inert `ScrollView` content; each move writes the
     /// offset so the content tracks the pointer; cleared on release.
     scroll_drag: Option<ScrollDrag>,
+    /// A press that landed on something that only taps, inside a `ScrollView`:
+    /// it becomes a drag-to-scroll, and the tap is cancelled, if the pointer
+    /// travels past the tap slop before it is released.
+    pending_scroll: Option<ScrollDrag>,
     /// RFC-0021 `on_end_reached` debounce: `ScrollView` element indices currently
     /// past their `end_threshold` and already fired. An elem re-fires only after
     /// its offset falls back below the threshold (removed here), so appending
@@ -1308,6 +1312,8 @@ impl Interpreter {
         self.now_ms = ms;
         self.clock_set = true;
         self.clock.set_app_ms(ms);
+        self.router.set_clock_ms(&mut self.ctx, u64::from(ms));
+        self.fire_due_timers(u64::from(ms));
     }
 
     /// Fixes the wall clock `now()` and `nowUtc()` read at `iso` (an ISO date

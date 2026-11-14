@@ -246,6 +246,9 @@ impl App {
         let dispatcher = Dispatcher::new(registry, relay.io_handle(), relay.io_result_sender());
         let mut interp = Interpreter::new();
         interp.set_dispatcher(dispatcher);
+        // `after` and `every` count the shot's own frames, not the real time
+        // they take to draw.
+        interp.use_virtual_timers();
         interp.set_theme(theme);
         if let Some(iso) = plan.wall_clock.as_deref() {
             interp
@@ -364,6 +367,7 @@ fn is_busy(interp: &Interpreter) -> bool {
         || interp.has_background_work()
         || interp.outstanding_continuations() > 0
         || interp.outstanding_native_requests() > 0
+        || interp.has_pending_virtual_timers()
 }
 
 /// The offscreen texture a shot is drawn into, and the encoder that draws it.

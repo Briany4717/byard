@@ -111,7 +111,7 @@ library package.
 | `--a11y <FILE>` | | Writes the accessibility tree to a text file, one node a line. A control a screen reader could not name is marked `(unnamed)`. |
 
 `--tap`, `--hold`, `--hover`, `--key`, `--type` and `--wait` run in the order they are written on the command line. A key is a single
-character or one of `Left`, `Right`, `Up`, `Down`, `Home`, `End`, `Backspace`, `Delete`, `Enter`,
+character or one of `Left`, `Right`, `Up`, `Down`, `Home`, `End`, `PageUp`, `PageDown`, `Insert`, `Backspace`, `Delete`, `Enter`,
 `Tab`, `Escape` and `Space`, with any of `shift`, `ctrl`, `alt`, `meta` and `mod` before it, joined
 by `+`. `mod` is Command on macOS and Control elsewhere. With `--a11y`, the picture is drawn only if
 `-o` is given too, and the tree needs no GPU. See [the dev loop](dev-loop.md#byard-shot) and

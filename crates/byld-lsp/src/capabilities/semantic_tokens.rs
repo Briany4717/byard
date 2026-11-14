@@ -320,7 +320,9 @@ fn collect_member_tokens(members: &[Member], out: &mut Vec<RawToken>) {
                 });
                 collect_expr_tokens(action, out);
             }
-            Member::Timer { action, span, .. } => {
+            Member::Timer {
+                dur, action, span, ..
+            } => {
                 // "every" and "after" are both five characters, so the keyword
                 // run is the same length either way.
                 out.push(RawToken {
@@ -328,6 +330,7 @@ fn collect_member_tokens(members: &[Member], out: &mut Vec<RawToken>) {
                     token_type: 0, // KEYWORD
                     modifiers: 0,
                 });
+                collect_expr_tokens(dur, out);
                 collect_expr_tokens(action, out);
             }
             Member::Measure { action, span } => {

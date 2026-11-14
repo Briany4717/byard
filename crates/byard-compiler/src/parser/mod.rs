@@ -158,6 +158,29 @@ impl<'a> Parser<'a> {
         self.tokens.get(self.pos).map(|(t, _)| t)
     }
 
+    /// Whether `every` or `after` under the cursor starts a timer: a duration
+    /// literal follows, or an expression that ends at a `=>` on the way (so
+    /// `after wait * 1ms => …`, and still not a variable named `after`).
+    fn at_timer_duration(&self) -> bool {
+        match self.peek2() {
+            Some(Token::DurationLit(_)) => true,
+            Some(Token::Ident(_) | Token::IntLit(_) | Token::FloatLit(_) | Token::LParen) => {
+                let mut depth = 0_usize;
+                for (token, _) in self.tokens.iter().skip(self.pos + 2).take(24) {
+                    match token {
+                        Token::LParen | Token::LBrack => depth += 1,
+                        Token::RParen | Token::RBracket => depth = depth.saturating_sub(1),
+                        Token::Arrow if depth == 0 => return true,
+                        Token::LBrace | Token::RBrace | Token::Comma => return false,
+                        _ => {}
+                    }
+                }
+                false
+            }
+            _ => false,
+        }
+    }
+
     fn peek2(&self) -> Option<Token> {
         self.tokens.get(self.pos + 1).map(|(t, _)| t.clone())
     }
@@ -749,7 +772,7 @@ impl<'a> Parser<'a> {
             // identifiers anywhere an app wants them.
             Some(Token::Ident(name))
                 if (name.as_str() == "every" || name.as_str() == "after")
-                    && matches!(self.peek2(), Some(Token::DurationLit(_))) =>
+                    && self.at_timer_duration() =>
             {
                 Some(self.parse_timer())
             }
@@ -902,16 +925,12 @@ impl<'a> Parser<'a> {
         let start = self.cur_span();
         let every = matches!(self.cur(), Some(Token::Ident(s)) if s.as_str() == "every");
         self.advance(); // every | after
-        let dur_ms = match self.cur() {
-            Some(Token::DurationLit(ms)) => u64::from(*ms),
-            _ => 0,
-        };
-        self.advance(); // the duration
+        let dur = self.parse_expr(0);
         self.expect(&Token::Arrow, "'=>'");
         let action = self.parse_expr(0);
         Member::Timer {
             every,
-            dur_ms,
+            dur,
             action,
             span: self.span_from(start),
         }

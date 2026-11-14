@@ -53,10 +53,14 @@ const STR_METHODS: [&str; 14] = [
 
 /// The methods an `Int` has (RFC-0048); `alpha` is a colour's, which is an
 /// `Int` too.
-const INT_METHODS: [&str; 5] = ["toFloat", "abs", "min", "max", "alpha"];
+const INT_METHODS: [&str; 9] = [
+    "toFloat", "abs", "min", "max", "alpha", "sin", "cos", "sqrt", "atan2",
+];
 
 /// The methods a `Float` has (RFC-0048).
-const FLOAT_METHODS: [&str; 6] = ["round", "floor", "ceil", "abs", "min", "max"];
+const FLOAT_METHODS: [&str; 10] = [
+    "round", "floor", "ceil", "abs", "min", "max", "sin", "cos", "sqrt", "atan2",
+];
 
 /// Names the engine puts in scope itself: the animation namespace
 /// (`anim.spring`), a collapsing header's `scroll_fraction`, and the `route`
@@ -1240,7 +1244,11 @@ impl Checker<'_> {
             }
             // A lifecycle effect's body is an action, checked like any other
             // action expression; it declares no bindings of its own.
-            Member::Lifecycle { action, .. } | Member::Timer { action, .. } => {
+            Member::Lifecycle { action, .. } => {
+                self.value(action);
+            }
+            Member::Timer { dur, action, .. } => {
+                self.check_expr(dur);
                 self.value(action);
             }
             Member::Change {
@@ -1767,7 +1775,8 @@ impl Checker<'_> {
             // Text read as a number may be nothing, which `??` defaults; the
             // checker has no optional type, so (as for `find`) it is the type
             // it is when it is a value (RFC-0048 §5).
-            (Ty::Str | Ty::Int, "toFloat") => Ty::Float,
+            (Ty::Str | Ty::Int, "toFloat")
+            | (Ty::Int | Ty::Float, "sin" | "cos" | "sqrt" | "atan2") => Ty::Float,
             (Ty::Int | Ty::Float, "min" | "max") => {
                 let other = args
                     .first()

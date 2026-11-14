@@ -353,17 +353,17 @@ impl SpanEq for Member {
             (
                 Self::Timer {
                     every,
-                    dur_ms,
+                    dur,
                     action,
                     span: _,
                 },
                 Self::Timer {
                     every: e2,
-                    dur_ms: d2,
+                    dur: d2,
                     action: a2,
                     span: _,
                 },
-            ) => every == e2 && dur_ms == d2 && action.span_eq(a2),
+            ) => every == e2 && dur.span_eq(d2) && action.span_eq(a2),
             (
                 Self::Measure { action, span: _ },
                 Self::Measure {

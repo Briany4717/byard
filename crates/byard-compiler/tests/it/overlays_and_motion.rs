@@ -511,7 +511,7 @@ fn interactive_false_lets_a_tap_through() {
 View Main() {
     var under = 0
     var over = 0
-    ZStack {
+    ZStack #[alignment: top_start] {
         Box #[width: 100, height: 100, bg: 0x00FF00, tap => under += 1]
         Box #[width: 100, height: 100, interactive: false, tap => over += 1]
         Text("{under}:{over}")

@@ -348,8 +348,9 @@ pub enum Member {
     Timer {
         /// `true` for `every` (repeating), `false` for `after` (one-shot).
         every: bool,
-        /// The interval or delay, in milliseconds.
-        dur_ms: u64,
+        /// The interval or delay, in milliseconds: a literal (`300ms`, `2s`) or
+        /// any expression that is a number of them (`wait * 1ms`).
+        dur: Expr,
         /// The action to run on each fire.
         action: Expr,
         /// Source span.

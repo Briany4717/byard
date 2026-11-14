@@ -242,7 +242,10 @@ View Main() {
 
 `every 1s => …` repeats, and `after 3s => …` runs once. Durations are `ms`, `s` and
 `min`: `500ms`, `30s`, `5min`. The first `every` fires after its interval, and an
-interval of zero is refused.
+interval of zero is refused. The duration may be any expression that is a number of
+milliseconds, read when the timer starts: `after wait * 1ms => …`. In `byard shot` and
+`byard test` timers follow the app clock, so a `--wait 1000` or a `wait = 1000` step runs
+an `after 300ms` timer, and nothing in them waits in real time.
 
 Where you write a timer decides when it runs. At the top of a view, it runs while the
 view is up. Inside a `when`, it runs while that `when` is true, stops the moment it turns

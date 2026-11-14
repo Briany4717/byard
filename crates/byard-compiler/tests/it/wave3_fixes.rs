@@ -484,3 +484,59 @@ fn a_path_inside_a_clip_is_emitted_under_that_clip() {
     assert!(clips[0].is_some(), "the one in the Clip is clipped: {clips:?}");
     assert!(clips[1].is_none(), "the one outside it is not: {clips:?}");
 }
+
+// ── 40. more than 8 keyframe stops ───────────────────────────────────────
+
+fn stops(n: usize) -> String {
+    (0..n)
+        .map(|i| format!("{}%: {}", i * 100 / (n - 1), i * 10))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+#[test]
+fn nine_keyframe_stops_in_a_path_are_an_error() {
+    let app = App::new(&format!(
+        "View Main() {{ Canvas #[width: 400, height: 10] {{
+            path(stroke: 0xFF0000, stroke_width: 4) {{
+                move(0, 5)
+                line(anim.keyframes({}, duration: 1s), 5)
+            }}
+        }} }}",
+        stops(9)
+    ));
+    let errs = app.errors();
+    assert!(
+        errs.iter().any(|e| e.starts_with("TooManyKeyframes")),
+        "{errs:?}"
+    );
+}
+
+#[test]
+fn nine_keyframe_stops_in_a_shape_are_an_error() {
+    let app = App::new(&format!(
+        "View Main() {{ Canvas #[width: 400, height: 10] {{
+            line(x1: 0, y1: 5, x2: anim.keyframes({}, duration: 1s), y2: 5, stroke: 0xFF0000)
+        }} }}",
+        stops(9)
+    ));
+    let errs = app.errors();
+    assert!(
+        errs.iter().any(|e| e.starts_with("TooManyKeyframes")),
+        "{errs:?}"
+    );
+}
+
+#[test]
+fn eight_keyframe_stops_in_a_path_are_fine() {
+    let app = App::new(&format!(
+        "View Main() {{ Canvas #[width: 400, height: 10] {{
+            path(stroke: 0xFF0000, stroke_width: 4) {{
+                move(0, 5)
+                line(anim.keyframes({}, duration: 1s), 5)
+            }}
+        }} }}",
+        stops(8)
+    ));
+    assert!(app.errors().is_empty(), "{:?}", app.errors());
+}

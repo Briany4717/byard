@@ -333,8 +333,9 @@ View Main() {
 ```
 
 That is Material's indeterminate progress bar: two tracks of keyframes that loop.
-There must be at least two stops, in order, and `duration` is required. `loop: true`
-repeats it. Keyframes replace the value, so they are not written after `with`.
+There must be at least two stops and at most eight, in order, and `duration` is required.
+More than eight is `TooManyKeyframes`, wherever the sequence is written, a coordinate in a
+path body included. `loop: true` repeats it. Keyframes replace the value, so they are not written after `with`.
 
 ## Lists that arrive in turn
 

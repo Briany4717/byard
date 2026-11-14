@@ -1085,14 +1085,25 @@ impl Interpreter {
     /// Positions a keyframe sequence on the engine clock: which two steps
     /// surround "now" and how far between them the value sits (RFC-0025 §3).
     ///
-    /// Returns `None` when the sequence is malformed (the checker has already
-    /// reported it) or the host never advanced the clock. Marks the animation
+    /// Returns `None` when the sequence is malformed (reported, once, here or
+    /// by the attribute checker) or the host never advanced the clock. Marks the animation
     /// active unless a finite sequence has played out, the settling contract
     /// the whole animation system shares.
     fn keyframe_blend<'a>(&mut self, expr: &'a Expr) -> Option<KeyframeBlend<'a>> {
         use byard_core::frame::{MAX_KEYFRAME_STEPS, MotionCurve, keyframe_cursor, loop_phase};
 
-        let track = crate::interp::anim::resolve_keyframes_in(expr, Some(&self.theme))?.ok()?;
+        let track = match crate::interp::anim::resolve_keyframes_in(expr, Some(&self.theme))? {
+            Ok(track) => track,
+            // A sequence the attribute checker never sees (a coordinate in a
+            // path body, an argument of a shape) is reported here, once, so it
+            // is never a value that is silently flat.
+            Err(err) => {
+                if !self.errors.contains(&err) {
+                    self.errors.push(err);
+                }
+                return None;
+            }
+        };
         let key = self.anim_key(expr.span());
         // Without an advancing clock, resolve to the sequence's first value,
         // mirrors the `with` path, and never latches the active set at `t = 0`.

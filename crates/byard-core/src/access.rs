@@ -287,9 +287,11 @@ impl AccessFlags {
     /// The node can be expanded and is not (RFC-0052). `EXPANDED` and this
     /// are both statements; a node with neither is not expandable.
     pub const COLLAPSED: Self = Self(1 << 8);
+    /// A text field of several lines, where Enter is a line break (RFC-0064).
+    pub const MULTILINE: Self = Self(1 << 9);
 
     /// Every flag, in the order the dump writes them.
-    const ALL: [(Self, &'static str); 9] = [
+    const ALL: [(Self, &'static str); 10] = [
         (Self::FOCUSABLE, "focusable"),
         (Self::FOCUSED, "focused"),
         (Self::DISABLED, "disabled"),
@@ -299,6 +301,7 @@ impl AccessFlags {
         (Self::EXPANDED, "expanded"),
         (Self::COLLAPSED, "collapsed"),
         (Self::MODAL, "modal"),
+        (Self::MULTILINE, "multiline"),
     ];
 
     /// No flags.

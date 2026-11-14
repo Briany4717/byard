@@ -48,6 +48,7 @@ fn shadow_decorated(
         // A shadow cast is geometry, not fill: the element's own ramp belongs to
         // its surface, never to the blurred silhouette beneath it.
         gradient: None,
+        border_gap: [0.0; 2],
         dirty: true,
     }
 }
@@ -343,6 +344,14 @@ impl Interpreter {
                         Some("justify") => byard_core::frame::TextAlign::Justify,
                         _ => byard_core::frame::TextAlign::Start,
                     };
+                    // RFC-0064: the cap and what a cut looks like. Read only
+                    // when written; a run without `max_lines` is shaped as it
+                    // always was.
+                    let max_lines = self
+                        .text_max_lines(attrs)
+                        .map_or(0, |n| u16::try_from(n).unwrap_or(u16::MAX));
+                    let ellipsis =
+                        max_lines > 0 && Self::enum_prop(attrs, "overflow") != Some("clip");
                     let single_line = self.eval_bool_prop(attrs, "wrap") == Some(false);
                     let wrap_w = if single_line {
                         None
@@ -397,6 +406,8 @@ impl Interpreter {
                     frame.push_text_wrapped(
                         byard_core::TextLine {
                             align,
+                            max_lines,
+                            ellipsis,
                             x: anchor[0],
                             y: anchor[1],
                             text,
@@ -583,6 +594,12 @@ impl Interpreter {
                     } else {
                         0.0
                     };
+                    // RFC-0064: a gap in the top edge of that border.
+                    let border_gap = if border_color.is_some() {
+                        self.resolve_border_gap(paint_attrs)
+                    } else {
+                        [0.0; 2]
+                    };
                     // `shadow` is a token (`sm`/`md`/`lg`) → an offset+blur drop
                     // shadow; any other non-empty value falls back to `md`.
                     // `shadow` (RFC-0011 custom shadows): a preset token, a
@@ -678,6 +695,7 @@ impl Interpreter {
                                 base,
                                 border_width,
                                 border_color: border_rgba,
+                                border_gap,
                                 opacity,
                                 gradient,
                                 // Re-walked and re-emitted every tick;
@@ -702,6 +720,7 @@ impl Interpreter {
                                 },
                                 border_width,
                                 border_color: border_rgba,
+                                border_gap,
                                 opacity: 1.0,
                                 dirty: true,
                                 ..Default::default()

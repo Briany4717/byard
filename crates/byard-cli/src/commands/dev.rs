@@ -707,6 +707,7 @@ const OVERLAY_BLUR: f32 = 18.0;
 /// chars per headline to keep the overlay bounded without needing Taffy layout
 ///, this path is deliberately independent of the interpreter, since the
 /// interpreter is what just failed.
+#[allow(clippy::too_many_lines)]
 fn render_error_overlay(frame: &mut RenderFrame, errors: &[CompileError], w: f32, h: f32) {
     // The frosted pane: the whole viewport, blurred, with a dark tint over it.
     // Not an opaque fill, and not a plain translucent scrim either, a scrim
@@ -759,6 +760,8 @@ fn render_error_overlay(frame: &mut RenderFrame, errors: &[CompileError], w: f32
     };
     frame.push_text(TextLine {
         align: byard_core::frame::TextAlign::Start,
+        max_lines: 0,
+        ellipsis: false,
         x,
         y,
         text: title,
@@ -775,6 +778,8 @@ fn render_error_overlay(frame: &mut RenderFrame, errors: &[CompileError], w: f32
         let headline = truncate_str(&err.headline(), OVERLAY_MAX_HEADLINE_CHARS);
         frame.push_text(TextLine {
             align: byard_core::frame::TextAlign::Start,
+            max_lines: 0,
+            ellipsis: false,
             x,
             y,
             text: headline,
@@ -792,6 +797,8 @@ fn render_error_overlay(frame: &mut RenderFrame, errors: &[CompileError], w: f32
         y += line_height * 0.3;
         frame.push_text(TextLine {
             align: byard_core::frame::TextAlign::Start,
+            max_lines: 0,
+            ellipsis: false,
             x,
             y,
             text: format!("… and {} more error(s)", errors.len() - OVERLAY_MAX_ERRORS),
@@ -807,6 +814,8 @@ fn render_error_overlay(frame: &mut RenderFrame, errors: &[CompileError], w: f32
 
     frame.push_text(TextLine {
         align: byard_core::frame::TextAlign::Start,
+        max_lines: 0,
+        ellipsis: false,
         x,
         y: y + line_height * 0.6,
         text: "Fix the file and save to dismiss, the last good view is behind this.".to_string(),

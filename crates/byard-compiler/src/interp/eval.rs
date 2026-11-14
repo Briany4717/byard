@@ -860,6 +860,9 @@ pub struct Interpreter {
     /// reads this to convert a wheel into a clamped scroll, the same
     /// render-then-dispatch handshake the router's hit rects use.
     scroll_targets: Vec<ScrollTarget>,
+    /// The multiline fields drawn last render and where the pointer reaches
+    /// them (RFC-0064): a wheel over one scrolls its text first.
+    wheel_fields: Vec<(crate::interp::intrinsics::Rect, editing::FieldHandle)>,
     /// Live native-view instances (RFC-0039), indexed by a lowered element's
     /// `slot`.
     ///
@@ -1794,6 +1797,7 @@ impl Interpreter {
         // router's hit rects. RFC-0021 `snap: item` boundaries follow the same
         // lifecycle (settle above read the previous frame's; emit rebuilds them).
         self.scroll_targets.clear();
+        self.wheel_fields.clear();
         self.scroll_item_bounds.clear();
         // RFC-0039: where each native view ended up is re-recorded every
         // render, for the same reason the scroll targets are, a rect from two

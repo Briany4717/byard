@@ -87,7 +87,14 @@ fn role(role: AccessRole) -> Role {
 
 /// One element as an AccessKit node, with its children as the tree gave them.
 fn node(n: &AccessNode, children: Vec<NodeId>) -> Node {
-    let mut out = Node::new(role(n.role));
+    // RFC-0064: AccessKit has a role of its own for a field of several lines.
+    let mut out = Node::new(
+        if n.role == AccessRole::TextInput && n.flags.contains(AccessFlags::MULTILINE) {
+            Role::MultilineTextInput
+        } else {
+            role(n.role)
+        },
+    );
     let b = n.bounds;
     out.set_bounds(Rect {
         x0: f64::from(b.x),
@@ -617,6 +624,15 @@ mod tests {
         assert_eq!(*id, ROOT);
         assert_eq!(window_node.children().len(), 2);
         assert_eq!(update.nodes.len(), 1);
+    }
+
+    #[test]
+    fn a_multiline_field_is_a_multiline_text_input_to_accesskit() {
+        let single = element(0, None, AccessRole::TextInput, "Notes");
+        let mut multi = element(1, None, AccessRole::TextInput, "Notes");
+        multi.flags.insert(AccessFlags::MULTILINE);
+        assert_eq!(node(&single, Vec::new()).role(), Role::TextInput);
+        assert_eq!(node(&multi, Vec::new()).role(), Role::MultilineTextInput);
     }
 
     #[test]

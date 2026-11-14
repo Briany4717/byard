@@ -101,6 +101,7 @@ fn a_kind_mismatch_aborts_the_retained_build() {
         family: None,
         width: None,
         fallback: (10.0, 12.0),
+        max_lines: None,
     });
     assert!(matches!(
         err,
@@ -177,6 +178,7 @@ fn text_content_is_part_of_the_layout_fingerprint() {
         family: None,
         width: None,
         fallback: (10.0, 14.0),
+        max_lines: None,
     };
     let mut atlas = LayoutAtlas::new();
     let t = atlas.add_text_leaf(spec("hello")).unwrap();
@@ -214,6 +216,7 @@ fn a_family_change_marks_the_leaf_and_an_unchanged_one_does_not() {
         family: family.map(std::sync::Arc::from),
         width: None,
         fallback: (10.0, 14.0),
+        max_lines: None,
     };
     let mut atlas = LayoutAtlas::new();
     let t = atlas.add_text_leaf(spec(Some("Space Grotesk"))).unwrap();
@@ -286,6 +289,7 @@ fn the_family_on_a_leaf_reaches_the_sizer() {
             family: Some(std::sync::Arc::from("Space Grotesk")),
             width: None,
             fallback: (10.0, 14.0),
+            max_lines: None,
         })
         .unwrap();
     atlas.set_root(t).unwrap();
@@ -331,6 +335,7 @@ fn recompute_dirty_with_text_reaches_the_sizer() {
             family: None,
             width: None,
             fallback: (10.0, 14.0),
+            max_lines: None,
         })
         .unwrap();
     let root = atlas

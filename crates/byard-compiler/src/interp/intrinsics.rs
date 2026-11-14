@@ -220,6 +220,12 @@ pub(crate) fn is_layout_attribute(name: &str) -> bool {
 const LAYOUT: &[(&str, PropDef)] = &[
     ("width", lay(PropType::Int)),
     ("height", lay(PropType::Int)),
+    // RFC-0064: bounds on the size layout settles on. Static, like every
+    // layout attribute.
+    ("min_width", lay(PropType::Int)),
+    ("max_width", lay(PropType::Int)),
+    ("min_height", lay(PropType::Int)),
+    ("max_height", lay(PropType::Int)),
     ("gap", lay(PropType::Int)),
     ("p", lay(PropType::Len)),
     ("m", lay(PropType::Len)),
@@ -268,6 +274,9 @@ const DECORATION: &[(&str, PropDef)] = &[
     ("outline_offset", pnt(PropType::Int)),
     ("overlay", pnt(PropType::Color)),
     ("shadow", pnt(PropType::Str)),
+    // RFC-0064: a gap in the top edge of the border, `(start, length)` in px
+    // from the element's left edge, for a label that sits in the outline.
+    ("border_gap", pnt(PropType::Vec2)),
     // RFC-0001 §3.1: the `DecoratedBox` pipeline's declared remit includes
     // gradients. `gradient` is a named tuple (validated at lower time, like
     // `shadow`); `gradient_offset` is an ordinary number, so it animates through
@@ -345,6 +354,8 @@ const TEXT_PROPS: &[(&str, PropDef)] = &[
     ("align", lay(PropType::Enum(ALIGN))),
     ("wrap", lay(PropType::Bool)),
 ];
+/// RFC-0064: the cap on a `Text`'s lines and what the cut looks like.
+const OVERFLOW: &[&str] = &["ellipsis", "clip"];
 
 const POINTER_EVENTS: &[&str] = &[
     "tap",
@@ -717,7 +728,15 @@ fn lookup_intrinsic(name: &str) -> Option<Intrinsic> {
     };
     Some(match name {
         "Box" => container(true),
-        "Column" | "Row" => container(false),
+        "Column" => container(false),
+        // RFC-0064: only a row wraps, and `row_gap` is the space between its
+        // lines.
+        "Row" => {
+            let mut row = container(false);
+            row.props.insert("wrap", lay(PropType::Bool));
+            row.props.insert("row_gap", lay(PropType::Int));
+            row
+        }
         "Spacer" => Intrinsic {
             arity: 0,
             content: None,
@@ -742,6 +761,12 @@ fn lookup_intrinsic(name: &str) -> Option<Intrinsic> {
                 &[
                     ("width", lay(PropType::Int)),
                     ("height", lay(PropType::Int)),
+                    ("min_width", lay(PropType::Int)),
+                    ("max_width", lay(PropType::Int)),
+                    ("min_height", lay(PropType::Int)),
+                    ("max_height", lay(PropType::Int)),
+                    ("max_lines", lay(PropType::Int)),
+                    ("overflow", pnt(PropType::Enum(OVERFLOW))),
                     ("basis", lay(PropType::Int)),
                     ("p", lay(PropType::Len)),
                     ("m", lay(PropType::Len)),
@@ -785,6 +810,11 @@ fn lookup_intrinsic(name: &str) -> Option<Intrinsic> {
         "TextField" => {
             let mut props = props_from(&[LAYOUT, DECORATION, EFFECTS, TEXT_PROPS, TRANSFORM]);
             props.insert("placeholder", lay(PropType::Str));
+            // RFC-0064: more than one line. `lines` is a fixed count; the
+            // other two let the field grow with its content between them.
+            for k in ["lines", "min_lines", "max_lines"] {
+                props.insert(k, lay(PropType::Int));
+            }
             props.insert("value", lay(PropType::Str));
             props.insert("bind", lay(PropType::Str));
             props.insert("focused", pnt(PropType::Bool));
@@ -1528,7 +1558,131 @@ pub fn validate_element_in(
         }
     }
 
+    check_combinations(name, attrs, &mut errs);
     errs
+}
+
+/// The integer a literal is, or `None` for anything else.
+fn int_literal(value: &Expr) -> Option<i64> {
+    match value {
+        Expr::IntLit(n, _) => Some(*n),
+        _ => None,
+    }
+}
+
+/// Whether `value` is the literal `false`.
+fn is_false(value: &Expr) -> bool {
+    matches!(value, Expr::Ident(s, _) if s.as_str() == "false")
+}
+
+/// RFC-0064: attributes that mean nothing without, or against, another. Each
+/// is reported at the attribute that is out of place, with what to write.
+fn check_combinations(name: &str, attrs: &[Attr], errs: &mut Vec<CompileError>) {
+    let prop = |n: &str| {
+        attrs.iter().find_map(|a| match &a.kind {
+            AttrKind::Prop { value } if a.name.as_str() == n && a.axis.is_none() => {
+                Some((a, value))
+            }
+            _ => None,
+        })
+    };
+    let mut bad = |at: &Attr, message: String| {
+        errs.push(CompileError::InvalidAttributeCombination {
+            span: at.span,
+            message,
+        });
+    };
+    // A count below one is meaningless wherever it is written.
+    let counts: &[&str] = match name {
+        "Text" => &["max_lines"],
+        "TextField" => &["lines", "min_lines", "max_lines"],
+        _ => &[],
+    };
+    for &c in counts {
+        if let Some((at, v)) = prop(c) {
+            if int_literal(v).is_some_and(|n| n < 1) {
+                bad(at, format!("`{c}` counts lines, so it is 1 or more"));
+            }
+        }
+    }
+    match name {
+        "Row" => {
+            if let Some((at, _)) = prop("row_gap") {
+                if prop("wrap").is_none_or(|(_, v)| is_false(v)) {
+                    bad(
+                        at,
+                        "`row_gap` is the space between wrapped lines: add `wrap: true` to the row, or drop it"
+                            .to_string(),
+                    );
+                }
+            }
+        }
+        "Text" => {
+            if let Some((at, _)) = prop("overflow") {
+                if prop("max_lines").is_none() {
+                    bad(
+                        at,
+                        "`overflow` says how a cut looks, and nothing is cut without `max_lines`: add `max_lines: n`"
+                            .to_string(),
+                    );
+                }
+            }
+            if let (Some((at, _)), Some((_, w))) = (prop("max_lines"), prop("wrap")) {
+                if is_false(w) {
+                    bad(
+                        at,
+                        "`max_lines` caps the lines of text that wraps, and `wrap: false` is one line: drop `wrap: false`"
+                            .to_string(),
+                    );
+                }
+            }
+        }
+        "TextField" => {
+            if let Some((at, _)) = prop("lines") {
+                for other in ["min_lines", "max_lines"] {
+                    if prop(other).is_some() {
+                        bad(
+                            at,
+                            format!(
+                                "`lines` fixes the height and `{other}` lets it grow: write one or the other"
+                            ),
+                        );
+                        break;
+                    }
+                }
+            }
+            if let (Some((_, lo)), Some((at, hi))) = (prop("min_lines"), prop("max_lines")) {
+                if let (Some(lo), Some(hi)) = (int_literal(lo), int_literal(hi)) {
+                    if lo > hi {
+                        bad(
+                            at,
+                            format!("`max_lines` ({hi}) is below `min_lines` ({lo})"),
+                        );
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    if let Some((at, value)) = prop("border_gap") {
+        let pair = match value {
+            Expr::Tuple(args, _) => args.len() == 2 && args.iter().all(|a| a.name.is_none()),
+            Expr::IntLit(..) | Expr::FloatLit(..) | Expr::StrLit(..) => false,
+            _ => true,
+        };
+        if !pair {
+            errs.push(CompileError::AttributeTypeMismatch {
+                span: value.span(),
+                expected: "a pair `(start, length)` of pixels".to_string(),
+            });
+        } else if prop("border").is_none() {
+            bad(
+                at,
+                "`border_gap` is a gap in the border, and there is no `border`: add `border: <colour>`"
+                    .to_string(),
+            );
+        }
+    }
 }
 
 /// The layout properties that take `with` (RFC-0061): the sizes, the gap, and the

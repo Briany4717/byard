@@ -74,6 +74,9 @@ pub struct DecoratedInstance {
     ///
     /// [`GRADIENT_NONE`]: crate::frame::GRADIENT_NONE
     pub grad_kind: u32,
+    /// A gap in the top edge of the border, `[start, length]` in logical
+    /// pixels from the element's left edge (RFC-0064); `[0, 0]` for none.
+    pub border_gap: [f32; 2],
 }
 
 impl From<&DecoratedBox> for DecoratedInstance {
@@ -100,12 +103,13 @@ impl From<&DecoratedBox> for DecoratedInstance {
             grad_kind: d
                 .gradient
                 .map_or(crate::frame::GRADIENT_NONE, |g| g.kind as u32),
+            border_gap: d.border_gap,
         }
     }
 }
 
 impl DecoratedInstance {
-    /// Vertex buffer layout for the per-instance step (locations 1..=14; the
+    /// Vertex buffer layout for the per-instance step (locations 1..=15; the
     /// static quad occupies location 0).
     ///
     /// # Why the transform arrives in two attributes and not four
@@ -142,6 +146,7 @@ impl DecoratedInstance {
             12 => Float32x4, // gradient to
             13 => Float32x4, // gradient axis (meaning per kind, see the field)
             14 => Uint32,    // gradient kind (RFC-0035)
+            15 => Float32x2, // border gap (RFC-0064)
         ];
         wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<DecoratedInstance>() as wgpu::BufferAddress,

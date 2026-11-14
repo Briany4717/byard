@@ -37,6 +37,7 @@ The ones that paint:
 | `smooth` | `0` to `1` | Corner profile. `0` is a circular arc, about `0.6` a continuous corner like an Apple icon |
 | `opacity` | `0` to `1` | Of the whole element and what it holds |
 | `border`, `border_width` | colour, number | A line inside the edge. A box with a `border` and no `bg` draws just the line |
+| `border_gap` | `(start, length)` | A gap in the top edge of the border, below |
 | `outline`, `outline_width`, `outline_offset` | colour, number, number | A ring outside the shape, see [below](#outline-and-overlay) |
 | `overlay` | colour or gradient | A tint over `bg`, under the children, see [below](#outline-and-overlay) |
 | `shadow` | preset, tuple or list | See below |
@@ -67,12 +68,34 @@ A colour is an `Int`. Write `0xRRGGBB`, or `0xAARRGGBB` for alpha. A colour from
 theme is a name, and `.alpha()` makes it translucent: `t.primary.alpha(0.16)`.
 [Theming](theming.md) covers both.
 
+### A gap in a border
+
+`border_gap: (start, length)` leaves the top edge of the border out between `start` and
+`start + length` pixels from the element's left edge. It is for the outlined field whose label
+sits in the outline: what is under the border shows through the gap, so there is no patch to
+match to a background.
+
+```byld
+View Main() {
+    Column #[bg: 0x2B2930, p: 24, width: 280] {
+        Box #[border: 0xCAC4D0, border_width: 1, radius: 4, height: 48,
+              border_gap: (12, 52)] {
+            Text("Label") #[color: 0xCAC4D0, size: 12, ml: 16, mt: -7]
+        }
+    }
+}
+```
+
+It needs a `border` (on the element or in one of its states) and a pair of numbers, or it
+is an error. Keep the gap on the straight part of the edge: one that reaches into a rounded
+corner removes the border only along the top.
+
 ### Shadows
 
 ```byld
 View Main() {
     Column #[bg: 0xF2F3F5, p: 40, gap: 28, width: 400] {
-        // A preset: "sm", "md" or "lg".
+        // A preset: "sm", "md", "lg", "xl" or "2xl".
         Box #[bg: 0xFFFFFF, radius: 12, width: 320, height: 56, shadow: "md"] {}
 
         // Named fields: x, y, blur, spread and color, in any order.
@@ -86,6 +109,20 @@ View Main() {
     }
 }
 ```
+
+The presets are the elevations of Material, level 0 being no shadow at all:
+
+| Material level | Preset | Is |
+|----------------|--------|----|
+| 0 | `"none"` | no shadow |
+| 1 | `"sm"` | `(y: 1, blur: 3)` |
+| 2 | `"md"` | `(y: 3, blur: 8)` |
+| 3 | `"lg"` | `(y: 6, blur: 16)` |
+| 4 | `"xl"` | `(y: 8, blur: 20)` |
+| 5 | `"2xl"` | `(y: 12, blur: 28)` |
+
+A floating action button that sits at level 3 and lifts to level 4 on hover is
+`shadow: hovered ? "xl" : "lg" with anim.spring()`.
 
 A plain tuple is positional: `(x, y, blur, spread, color)`, and any slot may be
 left out from the end. A list paints its first shadow on top. A shadow follows

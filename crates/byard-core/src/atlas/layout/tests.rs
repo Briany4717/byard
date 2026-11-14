@@ -417,6 +417,7 @@ fn text_leaf_wraps_to_parent_width() {
             family: None,
             width: None,
             fallback: (200.0, 24.0),
+            max_lines: None,
         })
         .unwrap();
     // A **column** (cross axis = width): align-items stretch constrains the
@@ -483,6 +484,7 @@ fn fractional_text_width_reserves_a_whole_pixel_and_stays_one_line() {
             family: None,
             width: None,
             fallback: (100.4, 19.2),
+            max_lines: None,
         })
         .unwrap();
     // A **row** keeps width as the main axis, so the text takes its natural
@@ -524,6 +526,7 @@ fn text_leaf_without_sizer_uses_fallback() {
             family: None,
             width: None,
             fallback: (42.0, 19.0),
+            max_lines: None,
         })
         .unwrap();
     atlas.set_root(text).unwrap();

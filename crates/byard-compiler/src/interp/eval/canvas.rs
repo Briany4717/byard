@@ -1520,6 +1520,8 @@ impl Interpreter {
         let anchor = transform.apply_point([tx, ty]);
         frame.push_text(byard_core::TextLine {
             align: byard_core::frame::TextAlign::Start,
+            max_lines: 0,
+            ellipsis: false,
             x: anchor[0],
             y: anchor[1],
             text,

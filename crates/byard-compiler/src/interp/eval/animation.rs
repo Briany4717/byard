@@ -55,6 +55,11 @@ pub(super) struct LoopClock {
     /// mount, and cleared by a retarget that cancels a `delay:`, never by one
     /// that restarts a stagger.
     honor_delay: bool,
+    /// The render this timeline began on, and whether it has been retargeted
+    /// since: what tells the move off an `on enter` value (the frame after
+    /// the element arrived) from a change the user made.
+    born_seq: u64,
+    retargeted: bool,
 }
 
 /// The persisted state of one animated gradient (RFC-0057 §3): where it left
@@ -1308,6 +1313,8 @@ impl Interpreter {
             last_seen_seq: seq,
             endpoints,
             honor_delay: true,
+            born_seq: seq,
+            retargeted: false,
         });
         if seq.saturating_sub(clock.last_seen_seq) > 1 {
             clock.start_ms = clock
@@ -1316,9 +1323,17 @@ impl Interpreter {
         }
         clock.last_seen_seq = seq;
         if clock.endpoints != endpoints {
+            // The first retarget, on the frame after an element with an `on
+            // enter` arrived, is the element leaving the values that block
+            // gave it for its own: a mount, whose delay is waited out.
+            let arriving = !clock.retargeted
+                && self.entering_seq != 0
+                && clock.born_seq == self.entering_seq
+                && seq == clock.born_seq + 1;
+            clock.retargeted = true;
             clock.endpoints = endpoints;
             clock.start_ms = now;
-            clock.honor_delay = !cancellable;
+            clock.honor_delay = !cancellable || arriving;
         }
         clock.last_seen_ms = now;
         (now.saturating_sub(clock.start_ms), clock.honor_delay)

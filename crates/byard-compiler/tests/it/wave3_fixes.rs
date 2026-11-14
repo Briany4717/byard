@@ -266,3 +266,79 @@ fn a_later_measure_still_moves() {
     let mid = app.rect(0xFF0000)[2];
     assert!(mid > 100.0 && mid < 200.0, "{mid}");
 }
+
+// ── 33 and 38. `on enter` and a delayed `with`; two speeds ───────────────
+
+/// The opacity the 40 wide box is drawn at, wherever the frame keeps it
+/// (a group, the blended pass or the solid one); 0 when none is drawn.
+fn opacity_of(app: &App, _rgb: u32) -> f32 {
+    let mut out: Vec<f32> = app.frame.groups().iter().map(|g| g.opacity).collect();
+    out.extend(
+        app.frame
+            .decorated()
+            .iter()
+            .filter(|d| (d.base.rect[2] - 40.0).abs() < 0.5)
+            .map(|d| d.base.color[3] * d.opacity),
+    );
+    out.extend(
+        app.frame
+            .instances()
+            .iter()
+            .filter(|b| (b.rect[2] - 40.0).abs() < 0.5)
+            .map(|b| b.color[3] * b.transform.opacity),
+    );
+    out.first().copied().unwrap_or(0.0)
+}
+
+#[test]
+fn on_enter_honours_a_delayed_with() {
+    let mut app = App::new(
+        "View Main() {
+            Box #[width: 40, height: 40, bg: 0xFF0000,
+                  opacity: 1.0 with anim.ease(150ms, delay: 2000ms)] {
+                on enter { opacity: 0.0 }
+            }
+        }",
+    );
+    assert!(app.errors().is_empty(), "{:?}", app.errors());
+    for _ in 0..19 {
+        app.advance(16);
+    }
+    let early = opacity_of(&app, 0xFF0000);
+    assert!(early < 0.01, "still waiting at 300 ms, opacity {early}");
+    app.advance(2000);
+    app.advance(200);
+    let late = opacity_of(&app, 0xFF0000);
+    assert!(late > 0.99, "{late}");
+}
+
+#[test]
+fn enter_and_leave_can_have_different_speeds() {
+    let src = "View Main() {
+        var on = true
+        Column {
+            Box #[width: 10, height: 10, bg: 0x0000FF, tap => on = !on] {}
+            when on {
+                Box #[width: 40, height: 40, bg: 0xFF0000,
+                      opacity: 1.0 with anim.ease(100ms)] {
+                    on enter { opacity: 0.0 }
+                    on leave { opacity: 0.0 with anim.ease(1000ms) }
+                }
+            }
+        }
+    }";
+    let mut app = App::new(src);
+    assert!(app.errors().is_empty(), "{:?}", app.errors());
+    // In: done in 100 ms.
+    for _ in 0..10 {
+        app.advance(16);
+    }
+    assert!(opacity_of(&app, 0xFF0000) > 0.99, "{}", opacity_of(&app, 0xFF0000));
+    // Out: still going after 200 ms (a 100 ms motion would be over).
+    app.tap((5.0, 5.0));
+    for _ in 0..12 {
+        app.advance(16);
+    }
+    let out = opacity_of(&app, 0xFF0000);
+    assert!(out > 0.3, "the exit took the speed of the way in: {out}");
+}

@@ -387,7 +387,11 @@ when open {
 
 `on enter` gives the values the element has on its first frame; from there it moves to its
 own with their `with`. A token, or `anim.stagger(t.springSpatialFast, 40ms, i)`, needs no
-`from:`: the start is written once, in the block. `on leave` gives the values it goes to
+`from:`: the start is written once, in the block. A `delay:` is waited out too, so
+`opacity: 1.0 with anim.ease(150ms, delay: 2s)` with `on enter { opacity: 0.0 }` stays
+hidden for two seconds. The way in takes the curve of the attribute, the way out the one
+written in `on leave` (`on leave { opacity: 0.0 with anim.ease(80ms) }`), so the two may
+have different speeds. `on leave` gives the values it goes to
 when a `when` turns false, a `for` loses a row or an overlay closes. It stays drawn until
 those motions end, and meanwhile takes no input, is out of the Tab order and is not in
 the accessibility tree. Shown again before it has gone, it turns round from where it is.

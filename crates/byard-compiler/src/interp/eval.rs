@@ -854,6 +854,9 @@ pub struct Interpreter {
     /// new target as its start: a first measurement is where the element is,
     /// not a change to move to.
     first_measure_seq: u64,
+    /// The [`frame_seq`](Self::frame_seq) of the last frame an element drew
+    /// its `on enter` values on, `0` before any.
+    entering_seq: u64,
     /// The program's top-level functions (RFC-0002), by canonical name, as
     /// entries of `fn_table`. Rebuilt by [`Self::load_views`].
     top_fns: std::collections::HashMap<Symbol, super::env::AstId>,

@@ -365,6 +365,7 @@ impl Interpreter {
         }) {
             if !self.entered_prev.contains(&key) {
                 state = state.union(StyleState::ENTERING);
+                self.entering_seq = self.frame_seq;
                 // The frame after this one is where it moves to its own
                 // values, so one has to be asked for.
                 self.any_active = true;

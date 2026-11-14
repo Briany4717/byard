@@ -857,6 +857,9 @@ pub struct Interpreter {
     /// The [`frame_seq`](Self::frame_seq) of the last frame an element drew
     /// its `on enter` values on, `0` before any.
     entering_seq: u64,
+    /// Set by an overlay before it draws a child: the effective opacity of the
+    /// first box drawn lands here, and the modal scrim fades with it.
+    root_opacity: Option<Option<f32>>,
     /// The program's top-level functions (RFC-0002), by canonical name, as
     /// entries of `fn_table`. Rebuilt by [`Self::load_views`].
     top_fns: std::collections::HashMap<Symbol, super::env::AstId>,

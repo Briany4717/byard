@@ -341,7 +341,9 @@ The scrim is the theme's `scrim` colour at 32%, which is black unless the theme 
 otherwise; `scrim: 0x80000000` gives the overlay another colour,
 and a fully transparent one draws none. A child that fills the whole window is
 taken for a scrim you wrote yourself, and then no other is drawn. A non-modal
-overlay has no scrim. `dismiss =>` runs when the scrim is tapped (a press outside
+overlay has no scrim. The scrim fades with the overlay's first element: when that element's
+`opacity` is animated (an `on enter { opacity: 0.0 }` and `on leave`), the scrim arrives
+and goes with it. `dismiss =>` runs when the scrim is tapped (a press outside
 the overlay's content, not on a panel, its padding or a field in it) or Escape is
 pressed. A child places
 itself with `anchor`: `center`, `top`, `bottom`, `start` or `end`.

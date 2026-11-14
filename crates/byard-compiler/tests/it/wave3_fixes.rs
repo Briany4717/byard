@@ -342,3 +342,54 @@ fn enter_and_leave_can_have_different_speeds() {
     let out = opacity_of(&app, 0xFF0000);
     assert!(out > 0.3, "the exit took the speed of the way in: {out}");
 }
+
+// ── 34. the modal scrim follows its overlay's enter and leave ────────────
+
+fn scrim_alpha(app: &App) -> f32 {
+    app.frame
+        .instances()
+        .iter()
+        .find(|b| b.rect == [0.0, 0.0, 400.0, 400.0])
+        .map_or(0.0, |b| b.color[3])
+}
+
+#[test]
+fn the_modal_scrim_fades_with_its_overlay() {
+    let mut app = App::new(
+        "View Main() {
+            var open = false
+            Column {
+                Box #[width: 10, height: 10, bg: 0x0000FF, tap => open = !open] {}
+                when open {
+                    Overlay #[modal: true, dismiss => open = false] {
+                        Box #[width: 100, height: 100, bg: 0xFF0000, opacity: 1.0 with anim.linear(200ms)] {
+                            on enter { opacity: 0.0 }
+                            on leave { opacity: 0.0 }
+                        }
+                    }
+                }
+            }
+        }",
+    );
+    assert!(app.errors().is_empty(), "{:?}", app.errors());
+    assert!(scrim_alpha(&app) == 0.0);
+    app.tap((5.0, 5.0));
+    let first = scrim_alpha(&app);
+    assert!(first < 0.05, "the scrim starts clear: {first}");
+    for _ in 0..4 {
+        app.advance(16);
+    }
+    let mid = scrim_alpha(&app);
+    assert!(mid > 0.0 && mid < 0.3, "{mid}");
+    for _ in 0..20 {
+        app.advance(16);
+    }
+    assert!((scrim_alpha(&app) - 0.32).abs() < 0.01, "{}", scrim_alpha(&app));
+    // And back out: a press on the scrim dismisses.
+    app.tap((390.0, 390.0));
+    for _ in 0..3 {
+        app.advance(16);
+    }
+    let out = scrim_alpha(&app);
+    assert!(out > 0.0 && out < 0.3, "{out}");
+}

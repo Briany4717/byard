@@ -482,6 +482,7 @@ impl Interpreter {
             access::Scope::default()
         };
 
+        let mut scrim_at = None;
         // A modal overlay installs its scrim *before* its content so the content
         // wins hit-testing where it overlaps, while the scrim blocks (and
         // optionally dismisses) everything beneath the overlay.
@@ -517,6 +518,7 @@ impl Interpreter {
                 .eval_color_prop(attrs, "scrim")
                 .map_or_else(|| self.theme_scrim(), color_rgba_auto);
             if colour[3] > 0.0 && (!own_scrim || has_scrim_prop(attrs)) {
+                scrim_at = Some(frame.instances().len());
                 frame.push_instance(byard_core::BoxInstance {
                     rect: [0.0, 0.0, width, height],
                     color: colour,
@@ -537,6 +539,10 @@ impl Interpreter {
 
             let mut flat_idx = 0;
             self.anim_slot = slot.anim;
+            let probe = scrim_at.is_some() && self.root_opacity.is_none();
+            if probe {
+                self.root_opacity = Some(None);
+            }
             self.render_node_with_atlas(
                 slot.node,
                 slot.id,
@@ -552,6 +558,16 @@ impl Interpreter {
                 pools,
             );
 
+            // The scrim fades with the content it is under (`on enter`,
+            // `on leave`, or any `opacity` it animates).
+            if probe {
+                if let (Some(Some(opacity)), Some(at)) = (self.root_opacity.take(), scrim_at.take())
+                {
+                    if opacity < 1.0 {
+                        frame.scale_instance_alpha(at, opacity.max(0.0));
+                    }
+                }
+            }
             // A press on the content is the content's, not the scrim's.
             if modal && !self.fills(slot, width, height) {
                 if let Ok(Some(own)) = self.atlas.resolved_rect(slot.id) {

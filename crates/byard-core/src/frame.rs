@@ -2427,6 +2427,15 @@ impl RenderFrame {
         self.solid_clips.push(c);
     }
 
+    /// Scales the alpha of the solid box at `index` by `factor`, for what is
+    /// pushed before the thing whose fade it follows is known (a modal's
+    /// scrim). Out of range does nothing.
+    pub fn scale_instance_alpha(&mut self, index: usize, factor: f32) {
+        if let Some(instance) = self.instances.get_mut(index) {
+            instance.color[3] *= factor;
+        }
+    }
+
     /// Per-instance dirty state, parallel to [`instances`](Self::instances).
     ///
     /// [`BoxInstance`] is a pure GPU `Pod` vertex type with no room for a

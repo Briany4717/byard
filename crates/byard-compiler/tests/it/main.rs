@@ -96,4 +96,5 @@ mod unknown_name;
 mod user_views;
 mod variations;
 mod watcher_files;
+mod wave3_fixes;
 mod wave2_fixes;

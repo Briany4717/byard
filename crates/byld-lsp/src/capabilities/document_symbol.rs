@@ -384,7 +384,7 @@ fn collect_member_symbols(doc: &Document, members: &[Member], out: &mut Vec<Docu
                     children: None,
                 });
             }
-            Member::Expr(_) => {}
+            Member::Provide { .. } | Member::Expr(_) => {}
         }
     }
 }

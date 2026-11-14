@@ -110,10 +110,12 @@ impl SpanEq for Param {
             ty,
             default,
             bind,
+            optional,
             span: _,
         } = self;
         *name == other.name
             && *bind == other.bind
+            && *optional == other.optional
             && ty.span_eq(&other.ty)
             && default.span_eq(&other.default)
     }
@@ -167,9 +169,13 @@ impl SpanEq for RecordDecl {
             name,
             fields,
             private,
+            context,
             span: _,
         } = self;
-        *name == other.name && *private == other.private && fields.span_eq(&other.fields)
+        *name == other.name
+            && *private == other.private
+            && *context == other.context
+            && fields.span_eq(&other.fields)
     }
 }
 
@@ -209,8 +215,16 @@ impl SpanEq for EnumDecl {
 
 impl SpanEq for RecordField {
     fn span_eq(&self, other: &Self) -> bool {
-        let Self { name, ty, optional } = self;
-        *name == other.name && ty.span_eq(&other.ty) && *optional == other.optional
+        let Self {
+            name,
+            ty,
+            optional,
+            default,
+        } = self;
+        *name == other.name
+            && ty.span_eq(&other.ty)
+            && *optional == other.optional
+            && default.span_eq(&other.default)
     }
 }
 
@@ -288,6 +302,18 @@ impl SpanEq for Member {
                     span: _,
                 },
             ) => name == n2 && ty.span_eq(t2),
+            (
+                Self::Provide {
+                    ty,
+                    fields,
+                    span: _,
+                },
+                Self::Provide {
+                    ty: t2,
+                    fields: f2,
+                    span: _,
+                },
+            ) => ty.span_eq(t2) && fields.span_eq(f2),
             (Self::Element(a), Self::Element(b)) => a.span_eq(b),
             (
                 Self::For {

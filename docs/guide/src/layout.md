@@ -407,7 +407,10 @@ View Main() {
 }
 ```
 
-`it.w` and `it.h` are the element's width and height. The line is drawn to the
+`it.w` and `it.h` are the element's width and height, and `it.x` and `it.y` its
+position in its parent, in points, as laid out (before `translate` and `scale`). A
+sliding tab indicator keeps the selected tab's `it.x` and `it.w` and moves to them with
+`translate.x: ix with …`. A change of position alone fires `on measure` too. The line is drawn to the
 measured width and not to a number written in the file, so it stays right as the
 window resizes. Use the measurement downward: a parent measures, its children
 read the number. The other way round never settles: a parent that is as wide as its

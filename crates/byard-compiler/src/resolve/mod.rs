@@ -492,9 +492,9 @@ fn resolve_root(
     // One table of every function, canonically named, and one of every
     // record type, shared by every view.
     let helpers = std::sync::Arc::new(fns);
-    let records = std::sync::Arc::new(records);
     // A case written alone, where the callee's parameter says which enum.
-    shorthand::rewrite(&mut views, &enums);
+    shorthand::rewrite(&mut views, &enums, &mut records);
+    let records = std::sync::Arc::new(records);
     let consts = std::sync::Arc::new(consts);
     let enums = std::sync::Arc::new(enums);
     for view in &mut views {
@@ -584,10 +584,7 @@ impl Resolver<'_> {
             }
             let mut records = parsed.records;
             for record in &mut records {
-                rebase::shift(&mut record.span, base);
-                for field in &mut record.fields {
-                    rebase::shift_type(&mut field.ty, base);
-                }
+                rebase::shift_record(record, base);
                 data.record_names.insert(record.name.clone());
                 if record.private {
                     data.private_records.insert(record.name.clone());
@@ -880,6 +877,17 @@ impl Resolver<'_> {
                 walk::ty(&mut field.ty, &mut |t| {
                     self.rewrite_type(t, pkg_name, &aliases, &mut errors);
                 });
+                // A context's default is an expression of the program's
+                // constants and functions, like a constant's value.
+                if let Some(default) = &mut field.default {
+                    walk::expr(default, &mut |e| {
+                        self.rewrite_value(e, &sc, &mut errors);
+                    });
+                    let own_fns = &own_fns;
+                    walk::expr(default, &mut |e| {
+                        self.rewrite_call(e, pkg_name, own_fns, &no_shadow, &aliases, &mut errors);
+                    });
+                }
             }
         }
         let module = &mut self.packages.get_mut(pkg_name).unwrap().modules[module_idx];

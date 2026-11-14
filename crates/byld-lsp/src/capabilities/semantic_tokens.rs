@@ -353,6 +353,16 @@ fn collect_member_tokens(members: &[Member], out: &mut Vec<RawToken>) {
                 }
                 collect_expr_tokens(action, out);
             }
+            Member::Provide { span, fields, .. } => {
+                out.push(RawToken {
+                    span: Span::new(span.start, span.start + 7), // "provide"
+                    token_type: 0,
+                    modifiers: 0,
+                });
+                for arg in fields {
+                    collect_expr_tokens(&arg.value, out);
+                }
+            }
             Member::Inject { name, span, .. } => {
                 out.push(RawToken {
                     span: Span::new(span.start, span.start + 6), // "inject"

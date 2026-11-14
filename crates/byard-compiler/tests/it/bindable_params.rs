@@ -597,10 +597,6 @@ fn a_var_of_another_type_is_a_type_mismatch_and_an_int_is_not_a_float() {
 #[test]
 fn a_binding_declaration_that_cannot_work_is_told_at_the_parameter() {
     for (src, needle) in [
-        (
-            "View V(bind on: Bool = true) { Text(\"x\") }",
-            "cannot have a default",
-        ),
         ("View V(bind on) { Text(\"x\") }", ""),
         (
             "View V(bind cb: Fn()) { Text(\"x\") }",

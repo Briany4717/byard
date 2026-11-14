@@ -230,9 +230,20 @@ impl Interpreter {
     /// Projects one call argument into a reactive memo over the **parent** scope
     /// (the env active at the call site), so a parameter fed a parent `var` stays
     /// live (RFC-0004); a literal lowers to a constant memo with no dirty edges.
-    fn project_arg(&mut self, expr: &Expr) -> ScopeId {
+    pub(super) fn project_arg(&mut self, expr: &Expr) -> ScopeId {
         let compute = self.lower_expr(expr, None);
         self.ctx.open_memo(compute)
+    }
+
+    /// [`project_arg`](Self::project_arg) for the argument of `param`. The word
+    /// `none` given to an optional parameter (`T?`, RFC-0065) is nothing, not
+    /// the text "none" it would read as elsewhere.
+    fn param_arg(&mut self, param: &Param, value: &Expr) -> ScopeId {
+        if param.optional && is_none(value) && self.env.lookup(&Symbol::intern("none")).is_none() {
+            let nothing: super::Lowered = Box::new(|_| Value::Unit);
+            return self.ctx.open_memo(nothing);
+        }
+        self.project_arg(value)
     }
 
     /// Binds a single named argument (`name: value`, from `(...)` or `#[...]`) to
@@ -289,7 +300,7 @@ impl Interpreter {
             // empty here and let `bind_callbacks` handle it.
             Some(i) if is_callback_param(&params[i]) => {}
             Some(i) if slots[i].is_none() => {
-                slots[i] = Some(self.project_arg(value));
+                slots[i] = Some(self.param_arg(&params[i], value));
             }
             Some(_) => self.errors.push(CompileError::DuplicateParam {
                 span: value.span(),
@@ -386,7 +397,7 @@ impl Interpreter {
                 positional_count += 1;
                 if let Some(&i) = value_param_idx.get(next_positional) {
                     next_positional += 1;
-                    let scope = self.project_arg(&arg.value);
+                    let scope = self.param_arg(&params[i], &arg.value);
                     if slots[i].is_some() {
                         self.errors.push(CompileError::DuplicateParam {
                             span: arg.value.span(),
@@ -498,7 +509,7 @@ impl Interpreter {
     /// names, those visible where it was written, so `count++` is the
     /// caller's `count` whatever the callee calls its own names (RFC-0019
     /// §2/§3).
-    fn register_callback(
+    pub(super) fn register_callback(
         &mut self,
         params: &[Symbol],
         body: &Expr,
@@ -514,7 +525,7 @@ impl Interpreter {
     /// `arity` ignored parameters), used when a bare-identifier forward cannot
     /// be resolved to a live callback in the current lowering context. Matching
     /// the declared arity keeps the invocation-site arity check (§4) quiet.
-    fn noop_callback(&mut self, arity: usize, span: Span) -> super::env::AstId {
+    pub(super) fn noop_callback(&mut self, arity: usize, span: Span) -> super::env::AstId {
         let params: Vec<Symbol> = (0..arity)
             .map(|i| Symbol::intern(&format!("__cb_arg{i}")))
             .collect();
@@ -793,7 +804,21 @@ impl Interpreter {
             // did not pass was reported as `MissingParam`; it gets a cell of
             // its own so that the body is not reported for it again.
             if param.bind {
-                let sig = match bindings.signals.iter().find(|(n, _)| n == &param.name) {
+                let bound = bindings.signals.iter().find(|(n, _)| n == &param.name);
+                if let (None, Some(default)) = (bound, param_default(param)) {
+                    // Nothing bound: the instance keeps a `var` of its own
+                    // with the default (RFC-0065 §2), the same as if the view
+                    // had written `var name = default`, and reads and writes
+                    // it the same way.
+                    self.eval_member(&crate::parser::ast::Member::Var {
+                        name: param.name.clone(),
+                        ty: param.ty.clone(),
+                        init: default.clone(),
+                        span: param.span,
+                    });
+                    continue;
+                }
+                let sig = match bound {
                     Some(&(_, sig)) => sig,
                     None => self.ctx.create_signal(Value::Unit),
                 };
@@ -802,6 +827,9 @@ impl Interpreter {
                 bindings.bindings.iter().find(|(n, _)| n == &param.name)
             {
                 self.env.push(param.name.clone(), Value::Memo(*scope));
+            } else if param.optional {
+                // Left out (`= none`): nothing, which `??` and `!= none` see.
+                self.env.push(param.name.clone(), Value::Unit);
             } else if let Some(default) = param_default(param) {
                 // Lowered in the current (callee) frame, so a default may
                 // reference earlier parameters.
@@ -812,7 +840,9 @@ impl Interpreter {
             // diagnostic in `bind_args`; leave it unbound.
         }
         // Local `var`/`let`/`fn`/`inject` open in the instance frame, so two
-        // instances of the same view keep independent state.
+        // instances of the same view keep independent state. What the view
+        // `provide`s is in the chain only while its body is lowered.
+        let outer_contexts = self.ctx_chain.clone();
         self.eval_view_decls(&callee);
 
         // 3) Lower the callee body and splice the roots as siblings (RFC-0007
@@ -856,6 +886,7 @@ impl Interpreter {
         if pushed {
             self.slot_stack.pop();
         }
+        self.ctx_chain = outer_contexts;
         self.cur_inst = caller_inst;
         out.extend(nodes);
 

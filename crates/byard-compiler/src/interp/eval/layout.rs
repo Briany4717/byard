@@ -106,6 +106,9 @@ pub(super) struct WhenPool {
     /// put back while a branch is lowered so `content` and the named slots
     /// resolve there as they do outside it.
     pub(super) slots: Option<std::rc::Rc<super::SlotFrame>>,
+    /// The contexts provided above the `when` (RFC-0065), put back while a
+    /// branch is lowered so an `inject` in it finds them.
+    pub(super) ctx: Option<std::rc::Rc<super::CtxNode>>,
     /// The lowered `then` branch, once first taken.
     pub(super) then: Option<Vec<RenderNode>>,
     /// The lowered `else` branch, once first taken.
@@ -138,6 +141,8 @@ pub(super) struct ForPool {
     /// The slots of the view instance the `for` was written in (see
     /// `WhenPool::slots`).
     pub(super) slots: Option<std::rc::Rc<super::SlotFrame>>,
+    /// The contexts provided above the `for` (see `WhenPool::ctx`).
+    pub(super) ctx: Option<std::rc::Rc<super::CtxNode>>,
     /// One signal per pooled index, holding that slot's current element value.
     pub(super) item_slots: Vec<super::env::SignalId>,
     /// One lowered body per pooled index. A prefix of `item_slots`: a pool that
@@ -521,6 +526,7 @@ impl Interpreter {
         if let Some(frame) = slots {
             self.slot_stack.push(frame);
         }
+        let outer_ctx = std::mem::replace(&mut self.ctx_chain, self.when_pools[pool].ctx.clone());
         // The scopes the branch opens are recorded, so a route popped with this
         // `when` in it can retire them.
         self.ctx.push_scope_tracker();
@@ -529,6 +535,7 @@ impl Interpreter {
         if pushed {
             self.slot_stack.pop();
         }
+        self.ctx_chain = outer_ctx;
         self.restored_depth -= u32::from(restored);
         self.cur_inst = enclosing;
         self.env.truncate(env_base);
@@ -571,12 +578,14 @@ impl Interpreter {
         if let Some(frame) = slots {
             self.slot_stack.push(frame);
         }
+        let outer_ctx = std::mem::replace(&mut self.ctx_chain, self.for_pools[pool].ctx.clone());
         self.ctx.push_scope_tracker();
         let body_nodes = self.lower_body_members(&body_ast, &known_refs);
         let scopes = self.ctx.pop_scope_tracker();
         if pushed {
             self.slot_stack.pop();
         }
+        self.ctx_chain = outer_ctx;
         self.for_depth -= 1;
         self.cur_inst = enclosing;
         self.env.truncate(env_base);

@@ -255,6 +255,7 @@ pub(crate) fn format_ty(ty: &Ty) -> String {
             };
             format!("Fn({}){}", params_str.join(", "), ret_str)
         }
+        Ty::Optional(inner) => format!("{}?", format_ty(inner)),
         Ty::Named(sym) => sym.as_str().to_string(),
         Ty::Unknown => "Unknown".to_string(),
     }

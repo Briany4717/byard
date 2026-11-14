@@ -37,6 +37,7 @@ mod access;
 mod animation;
 pub(crate) use animation::gradient_stop_count;
 mod canvas;
+mod context;
 mod controller;
 mod controls;
 mod editing;
@@ -88,6 +89,7 @@ fn members_span(members: &[Member]) -> Span {
             | Member::Let { span, .. }
             | Member::Fn { span, .. }
             | Member::Inject { span, .. }
+            | Member::Provide { span, .. }
             | Member::For { span, .. }
             | Member::When { span, .. }
             | Member::Route { span, .. }
@@ -499,6 +501,17 @@ pub(crate) struct StateUses {
     pub(crate) focus_within: bool,
 }
 
+/// One context a view above provides (RFC-0065): its fields, as the values a
+/// view that `inject`s it reads, and the provider above this one. A chain of
+/// these is the contexts in scope where a view is drawn; a view that provides
+/// none adds nothing to it.
+#[derive(Debug)]
+pub(crate) struct CtxNode {
+    pub(crate) parent: Option<std::rc::Rc<CtxNode>>,
+    pub(crate) name: Symbol,
+    pub(crate) fields: Vec<(Symbol, Value)>,
+}
+
 /// The slots one view instance was called with (RFC-0062): for each `Slot`
 /// parameter and `content`, `None` when the call did not give it.
 #[derive(Debug, Default)]
@@ -638,6 +651,12 @@ pub struct Interpreter {
     /// pre-lowered in the *caller* scope so a `content` element reference inside
     /// the callee body splices nodes that capture the caller's environment.
     slot_stack: Vec<std::rc::Rc<SlotFrame>>,
+    /// The contexts provided by the views being drawn, innermost first
+    /// (RFC-0065). Lowering a view's body happens inside the lowering of the
+    /// views that draw it, slots included, so this is where `inject` looks.
+    ctx_chain: Option<std::rc::Rc<CtxNode>>,
+    /// The program's contexts: name → fields, with their defaults.
+    contexts: std::collections::HashMap<Symbol, std::rc::Rc<Vec<crate::parser::ast::RecordField>>>,
     /// Reactive `for` body pools (RFC-0018), indexed by [`RenderNode::For::pool`].
     /// Grows as `for` loops are lowered; each pool holds that loop's reusable
     /// per-slot bodies and element signals. Reconciled once per frame before the
@@ -1248,7 +1267,12 @@ impl Interpreter {
         }
         self.consts.clear();
         self.enums.clear();
+        self.contexts.clear();
         if let Some(first) = views.first() {
+            for decl in first.records.iter().filter(|r| r.context) {
+                self.contexts
+                    .insert(decl.name.clone(), std::rc::Rc::new(decl.fields.clone()));
+            }
             for decl in first.enums.iter() {
                 let cases = decl.cases.iter().map(|(c, _)| c.clone()).collect();
                 self.enums.insert(decl.name.clone(), cases);
@@ -1399,6 +1423,12 @@ impl Interpreter {
         for member in &view.body {
             self.eval_member(member);
         }
+        // What the view provides is in scope for everything it draws below.
+        // Done last, so the values may name any `var` or parameter of the
+        // view wherever the `provide` is written.
+        if !self.contexts.is_empty() {
+            self.provide_contexts(view);
+        }
     }
 
     fn eval_member(&mut self, member: &Member) {
@@ -1453,6 +1483,12 @@ impl Interpreter {
                     crate::parser::ast::Type::Named { name: n, .. } => n.clone(),
                     crate::parser::ast::Type::Function { .. } => Symbol::intern("?"),
                 };
+                // A context of the program (RFC-0065): the nearest provider
+                // among the views being drawn, or its defaults.
+                if self.contexts.contains_key(&ty_name) {
+                    self.inject_context(&ty_name, name);
+                    return;
+                }
                 match self.env.resolve_inject(&ty_name).cloned() {
                     Some(val) => self.env.push(name.clone(), val),
                     // Nothing provides it. Which of the two things that means
@@ -2202,6 +2238,7 @@ impl Interpreter {
         self.check_font_families(view);
         // The root is outside every call, whatever the last lowering left.
         self.cur_inst = 0;
+        self.ctx_chain = None;
         // RFC-0018: a fresh tree gets fresh `when`/`for` pools; the previous
         // tree's pool ids are discarded with it (hot-reload re-lowers the tree).
         self.for_pools.clear();
@@ -2269,6 +2306,9 @@ impl Interpreter {
 /// What a parameter reads as when its view is lowered with no call: the zero of
 /// its declared type.
 fn unset_param(param: &Param) -> Value {
+    if param.optional {
+        return Value::Unit;
+    }
     match &param.ty {
         Some(Type::Named { name, args, .. }) if args.is_empty() => match name.as_str() {
             "Int" => Value::Int(0),

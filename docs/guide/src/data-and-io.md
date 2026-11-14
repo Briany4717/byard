@@ -67,7 +67,9 @@ of those can use a capability, the view says it wants it:
 inject Http as http
 ```
 
-`inject Name as handle` makes the capability's methods callable as `handle.method(…)`.
+`inject Name as handle` makes the capability's methods callable as `handle.method(…)`. The
+same word reads a [context](views-and-parameters.md#context-values-for-everything-a-view-draws)
+that a view above provides.
 
 ### The error record
 

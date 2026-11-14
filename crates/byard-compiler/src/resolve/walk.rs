@@ -23,6 +23,11 @@ pub(crate) fn member_exprs(member: &mut Member, f: &mut dyn FnMut(&mut Expr)) {
             expr(body, f);
         }
         Member::Inject { .. } => {}
+        Member::Provide { fields, .. } => {
+            for arg in fields {
+                expr(&mut arg.value, f);
+            }
+        }
         Member::Element(el) => element(el, f),
         Member::For { iter, body, .. } => {
             expr(iter, f);
@@ -272,7 +277,8 @@ fn declared_types(m: &mut Member, f: &mut dyn FnMut(&mut Type)) {
     match m {
         Member::Var { ty: Some(t), .. }
         | Member::Let { ty: Some(t), .. }
-        | Member::Inject { ty: t, .. } => ty(t, f),
+        | Member::Inject { ty: t, .. }
+        | Member::Provide { ty: t, .. } => ty(t, f),
         Member::Fn { params, ret, .. } => {
             for p in params {
                 if let Some(t) = &mut p.ty {

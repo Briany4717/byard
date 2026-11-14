@@ -341,6 +341,20 @@ impl<'a> Parser<'a> {
                     record.private = private;
                     items.records.push(record);
                 }
+                // `context Name { field: Type = default }` (RFC-0065), contextual
+                // as `type` is. It lives with the records: a handle to one is
+                // read like a record.
+                Some(Token::Ident(word))
+                    if word.as_str() == "context"
+                        && self.peek2().is_some_and(|t| {
+                            matches!(t, Token::Ident(_)) || is_name_keyword(&t)
+                        })
+                        && matches!(self.peek3(), Some(Token::LBrace)) =>
+                {
+                    let mut record = self.parse_context_decl();
+                    record.private = private;
+                    items.records.push(record);
+                }
                 // `enum Name { a, b }`, contextual as `type` is.
                 Some(Token::Ident(word))
                     if word.as_str() == "enum"
@@ -403,7 +417,7 @@ impl<'a> Parser<'a> {
                     items.imports.push(import);
                 }
                 _ => {
-                    self.error("'View', 'use', 'fn', 'type', 'enum' or 'let'");
+                    self.error("'View', 'use', 'fn', 'type', 'enum', 'context' or 'let'");
                     self.skip_to_next_item();
                 }
             }
@@ -422,7 +436,7 @@ impl<'a> Parser<'a> {
         word.as_str() == "private"
             && match self.peek2() {
                 Some(Token::View | Token::Fn | Token::Let) => true,
-                Some(Token::Ident(next)) => matches!(next.as_str(), "type" | "enum"),
+                Some(Token::Ident(next)) => matches!(next.as_str(), "type" | "enum" | "context"),
                 _ => false,
             }
     }
@@ -441,7 +455,7 @@ impl<'a> Parser<'a> {
                 Token::View | Token::Fn | Token::Use | Token::Let if depth == 0 => return,
                 Token::Ident(word)
                     if depth == 0
-                        && matches!(word.as_str(), "type" | "enum")
+                        && matches!(word.as_str(), "type" | "enum" | "context")
                         && matches!(self.peek2(), Some(Token::Ident(_)))
                         && matches!(self.peek3(), Some(Token::Eq | Token::LBrace)) =>
                 {
@@ -474,6 +488,7 @@ impl<'a> Parser<'a> {
                 name: field,
                 ty,
                 optional,
+                default: None,
             });
             self.eat(&Token::Comma);
         }
@@ -482,6 +497,48 @@ impl<'a> Parser<'a> {
             name,
             fields,
             private: false,
+            context: false,
+            span: self.span_from(start),
+        }
+    }
+
+    /// `context_decl := "context" IDENT "{" (IDENT ":" type "?"? ("=" expr)? ","?)* "}"`
+    /// (RFC-0065). A record whose fields carry defaults; whether each one has
+    /// one is the checker's to say (`ContextFieldNeedsDefault`).
+    fn parse_context_decl(&mut self) -> RecordDecl {
+        let start = self.cur_span();
+        self.advance(); // context
+        let name = self
+            .expect_decl_name("a context", "a context name")
+            .unwrap_or_else(|| Symbol::intern(""));
+        self.expect(&Token::LBrace, "'{'");
+        let mut fields = Vec::new();
+        while !matches!(self.cur(), Some(Token::RBrace) | None) {
+            let Some(field) = self.expect_decl_name("a field", "a field name") else {
+                break;
+            };
+            self.expect(&Token::Colon, "':'");
+            let ty = self.parse_type();
+            let optional = self.eat(&Token::Question);
+            let default = if self.eat(&Token::Eq) {
+                Some(self.parse_expr(0))
+            } else {
+                None
+            };
+            fields.push(RecordField {
+                name: field,
+                ty,
+                optional,
+                default,
+            });
+            self.eat(&Token::Comma);
+        }
+        self.expect(&Token::RBrace, "'}'");
+        RecordDecl {
+            name,
+            fields,
+            private: false,
+            context: true,
             span: self.span_from(start),
         }
     }
@@ -597,6 +654,8 @@ impl<'a> Parser<'a> {
             } else {
                 None
             };
+            // `T?`: a parameter the call may leave out (RFC-0065).
+            let optional = ty.is_some() && self.eat(&Token::Question);
             // Optional default value (`= expr`), RFC-0007 D-B.
             let default = if self.eat(&Token::Eq) {
                 Some(self.parse_expr(0))
@@ -608,6 +667,7 @@ impl<'a> Parser<'a> {
                 ty,
                 default,
                 bind,
+                optional,
                 span: self.span_from(start),
             });
             if !self.eat(&Token::Comma) {
@@ -702,6 +762,15 @@ impl<'a> Parser<'a> {
             Some(Token::Let) => Some(self.parse_binding(false)),
             Some(Token::Fn) => Some(self.parse_fn()),
             Some(Token::Inject) => Some(self.parse_inject()),
+            // `provide Name(field: value, …)` (RFC-0065). Contextual: a name
+            // and a `(` after the word can be nothing else.
+            Some(Token::Ident(word))
+                if word.as_str() == "provide"
+                    && matches!(self.peek2(), Some(Token::Ident(_)))
+                    && matches!(self.peek3(), Some(Token::LParen)) =>
+            {
+                Some(self.parse_provide())
+            }
             Some(Token::For) => Some(self.parse_for()),
             Some(Token::When) => Some(self.parse_when()),
             Some(Token::Style) => Some(self.parse_style_block()),
@@ -929,6 +998,21 @@ impl<'a> Parser<'a> {
         Member::Inject {
             ty,
             name,
+            span: self.span_from(start),
+        }
+    }
+
+    /// `provide_stmt := "provide" type "(" arg_list ")"` (RFC-0065).
+    fn parse_provide(&mut self) -> Member {
+        let start = self.cur_span();
+        self.advance(); // provide
+        let ty = self.parse_type();
+        self.expect(&Token::LParen, "'('");
+        let fields = self.parse_arg_list(&Token::RParen);
+        self.expect(&Token::RParen, "')'");
+        Member::Provide {
+            ty,
+            fields,
             span: self.span_from(start),
         }
     }

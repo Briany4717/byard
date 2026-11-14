@@ -1280,6 +1280,7 @@ fn describe_member(m: &Member) -> String {
         Member::Let { .. } => "a `let` declaration".to_string(),
         Member::Fn { .. } => "a `fn` declaration".to_string(),
         Member::Inject { .. } => "an `inject` declaration".to_string(),
+        Member::Provide { .. } => "a `provide` declaration".to_string(),
         Member::For { .. } => "a `for` loop".to_string(),
         Member::When { .. } => "a `when` block".to_string(),
         Member::Style { .. } => "a `style` block".to_string(),
@@ -1307,6 +1308,7 @@ fn member_span(m: &Member) -> crate::diagnostics::Span {
         | Member::Let { span, .. }
         | Member::Fn { span, .. }
         | Member::Inject { span, .. }
+        | Member::Provide { span, .. }
         | Member::For { span, .. }
         | Member::When { span, .. }
         | Member::Route { span, .. }
@@ -2662,6 +2664,7 @@ fn validate_canvas_body(members: &[Member], errs: &mut Vec<CompileError>, theme:
             Member::Let { span, .. } => push_non_shape(errs, *span, "let"),
             Member::Fn { span, .. } => push_non_shape(errs, *span, "fn"),
             Member::Inject { span, .. } => push_non_shape(errs, *span, "inject"),
+            Member::Provide { span, .. } => push_non_shape(errs, *span, "provide"),
             Member::Style { span, .. } => push_non_shape(errs, *span, "style"),
             Member::Route { kind, span, .. } => push_non_shape(errs, *span, kind.as_str()),
             Member::Lifecycle { span, .. } => push_non_shape(errs, *span, "on mount"),

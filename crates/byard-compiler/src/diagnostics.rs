@@ -1279,8 +1279,8 @@ pub enum CompileError {
         /// The closest declared name.
         hint: Option<String>,
     },
-    /// A binding parameter that cannot be one: it has a default, no type, is a
-    /// callback, or is called `bind` (RFC-0051).
+    /// A binding parameter that cannot be one: it has no type, is a callback,
+    /// or is called `bind` (RFC-0051; a default is allowed since RFC-0065).
     BadBindingParam {
         /// Source range of the parameter.
         span: Span,
@@ -1329,6 +1329,68 @@ pub enum CompileError {
         /// The reserved name.
         name: String,
     },
+    /// A value that may be none (`color: Color?`) read where a value is wanted,
+    /// outside `??` and a `!= none` branch (RFC-0065 §2).
+    NoneNotHandled {
+        /// Source range of the read.
+        span: Span,
+        /// The name read.
+        name: String,
+    },
+    /// A view provides one context twice (RFC-0065 §1).
+    DuplicateProvide {
+        /// Source range of the second `provide`.
+        span: Span,
+        /// The context.
+        name: String,
+    },
+    /// `provide`, or `inject`, of a name that is no context (RFC-0065 §1).
+    UnknownContext {
+        /// Source range of the name.
+        span: Span,
+        /// The name as written.
+        name: String,
+        /// The closest context the program declares, if any.
+        hint: Option<String>,
+    },
+    /// A context field with no default: every field has one, so an `inject`
+    /// with no provider above has something to read (RFC-0065 §1).
+    ContextFieldNeedsDefault {
+        /// Source range of the field.
+        span: Span,
+        /// The context.
+        context: String,
+        /// The field.
+        name: String,
+    },
+    /// `provide` written somewhere other than the top of a view's body
+    /// (RFC-0065 §1): it gives values to everything the view draws, so it
+    /// cannot depend on a `when` or a `for`.
+    MisplacedProvide {
+        /// Source range of the `provide`.
+        span: Span,
+        /// The context.
+        name: String,
+    },
+    /// An optional parameter (`T?`) with a default that is not `none`, or
+    /// `= none` on a parameter that is not optional (RFC-0065 §2).
+    BadOptionalDefault {
+        /// Source range of the parameter.
+        span: Span,
+        /// The parameter.
+        name: String,
+        /// `= none` was written without the `?`.
+        none_needs_question: bool,
+    },
+    /// A context field of a type a context cannot hold: a `Slot` (RFC-0065 §1).
+    BadContextField {
+        /// Source range of the field.
+        span: Span,
+        /// The context.
+        context: String,
+        /// The field.
+        name: String,
+    },
 }
 
 /// What a control's `bind:` was given in place of a `var`.
@@ -1350,8 +1412,6 @@ pub enum BindTarget {
 /// What is wrong with the declaration of a binding parameter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BindingProblem {
-    /// It has a default value.
-    Default,
     /// It has no type.
     NoType,
     /// Its type is `Fn(...)`.
@@ -1463,6 +1523,13 @@ impl CompileError {
             | Self::BindNeedsName { span, .. }
             | Self::BindOutsideViewCall { span, .. }
             | Self::BadBindingParam { span, .. }
+            | Self::BadContextField { span, .. }
+            | Self::NoneNotHandled { span, .. }
+            | Self::DuplicateProvide { span, .. }
+            | Self::UnknownContext { span, .. }
+            | Self::ContextFieldNeedsDefault { span, .. }
+            | Self::MisplacedProvide { span, .. }
+            | Self::BadOptionalDefault { span, .. }
             | Self::SlotArgument { span, .. }
             | Self::NoneNeedsOptional { span, .. }
             | Self::BlockFitsNeither { span, .. }
@@ -1593,6 +1660,13 @@ impl CompileError {
             | Self::BindNeedsName { span, .. }
             | Self::BindOutsideViewCall { span, .. }
             | Self::BadBindingParam { span, .. }
+            | Self::BadContextField { span, .. }
+            | Self::NoneNotHandled { span, .. }
+            | Self::DuplicateProvide { span, .. }
+            | Self::UnknownContext { span, .. }
+            | Self::ContextFieldNeedsDefault { span, .. }
+            | Self::MisplacedProvide { span, .. }
+            | Self::BadOptionalDefault { span, .. }
             | Self::SlotArgument { span, .. }
             | Self::NoneNeedsOptional { span, .. }
             | Self::BlockFitsNeither { span, .. }
@@ -1725,6 +1799,13 @@ impl CompileError {
             Self::BindNeedsName { .. } => "BindNeedsName",
             Self::BindOutsideViewCall { .. } => "BindOutsideViewCall",
             Self::BadBindingParam { .. } => "BadBindingParam",
+            Self::BadContextField { .. } => "BadContextField",
+            Self::NoneNotHandled { .. } => "NoneNotHandled",
+            Self::DuplicateProvide { .. } => "DuplicateProvide",
+            Self::UnknownContext { .. } => "UnknownContext",
+            Self::ContextFieldNeedsDefault { .. } => "ContextFieldNeedsDefault",
+            Self::MisplacedProvide { .. } => "MisplacedProvide",
+            Self::BadOptionalDefault { .. } => "BadOptionalDefault",
             Self::SlotArgument { .. } => "SlotArgument",
             Self::NoneNeedsOptional { .. } => "NoneNeedsOptional",
             Self::BlockFitsNeither { .. } => "BlockFitsNeither",
@@ -2369,12 +2450,54 @@ impl CompileError {
                 ),
                 hint.as_deref(),
             ),
-            Self::BadBindingParam { name, problem, .. } => match problem {
-                BindingProblem::Default => format!(
-                    "binding `{name}` cannot have a default value: it is the caller's `var`, \
-                     so there is nothing for a default to stand in for. Make it a plain \
-                     parameter, or keep a `var` of your own in the view"
+            Self::NoneNotHandled { name, .. } => format!(
+                "`{name}` may be none here. Give it a value for when it is: `{name} ?? fallback`, \
+                 or read it where it is known, inside `when {name} != none {{ … }}` or \
+                 `{name} != none ? a : b`"
+            ),
+            Self::DuplicateProvide { name, .. } => format!(
+                "this view already provides `{name}`: write one `provide {name}(…)` with every \
+                 field you set"
+            ),
+            Self::UnknownContext { name, hint, .. } => with_hint(
+                format!(
+                    "`{name}` is not a context: declare it with `context {name} {{ … }}`, or \
+                     name a capability, a controller or `Theme`"
                 ),
+                hint.as_deref(),
+            ),
+            Self::ContextFieldNeedsDefault { context, name, .. } => format!(
+                "field `{name}` of context `{context}` needs a default: write \
+                 `{name}: Type = value`, so a view with no provider above it has something to read"
+            ),
+            Self::MisplacedProvide { name, .. } => format!(
+                "`provide {name}` goes at the top of a view's body, not inside a `when`, a `for` \
+                 or an element: it gives values to everything the view draws"
+            ),
+            Self::BadOptionalDefault {
+                name,
+                none_needs_question,
+                ..
+            } => {
+                if *none_needs_question {
+                    format!(
+                        "`{name}` defaults to `none`, so its type has to allow it: write \
+                         `{name}: T? = none`. (`none` stands in for a callback or a slot only \
+                         with `Fn(…)` and `Slot`)"
+                    )
+                } else {
+                    format!(
+                        "the default of `{name}` can only be `none`: a `T?` parameter may be \
+                         left out. For a default value, drop the `?` and write \
+                         `{name}: T = value`"
+                    )
+                }
+            }
+            Self::BadContextField { context, name, .. } => format!(
+                "field `{name}` of context `{context}` is a `Slot`: a context holds values and \
+                 `Fn` callbacks. A block of elements goes to a parameter declared `: Slot`"
+            ),
+            Self::BadBindingParam { name, problem, .. } => match problem {
                 BindingProblem::NoType => {
                     format!("binding `{name}` needs a type: write `bind {name}: Type`")
                 }

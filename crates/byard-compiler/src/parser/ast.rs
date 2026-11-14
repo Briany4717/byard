@@ -63,6 +63,10 @@ pub struct Param {
     /// (RFC-0051): the caller passes a `var`, and the view reads and writes it
     /// as its own.
     pub bind: bool,
+    /// Whether the type was written `T?` (RFC-0065): the call may leave the
+    /// parameter out (`= none`) or pass `none`, and the view reads it with `??`
+    /// or inside a `!= none` branch.
+    pub optional: bool,
     /// Source span.
     pub span: Span,
 }
@@ -150,6 +154,9 @@ pub struct RecordDecl {
     pub fields: Vec<RecordField>,
     /// Written `private type …` (RFC-0055).
     pub private: bool,
+    /// Declared `context Name { … }` rather than `type` (RFC-0065): the fields
+    /// carry defaults, and a view `provide`s and `inject`s it.
+    pub context: bool,
     /// Source span.
     pub span: Span,
 }
@@ -197,6 +204,9 @@ pub struct RecordField {
     pub ty: Type,
     /// Whether a value may leave it out (`?`).
     pub optional: bool,
+    /// The default, written `= expr`: every field of a context has one
+    /// (RFC-0065). A `type`'s field has none.
+    pub default: Option<Expr>,
 }
 
 /// A top-level `fn` (RFC-0002, top-level functions): a pure helper visible to
@@ -264,6 +274,16 @@ pub enum Member {
         ty: Type,
         /// Local binding name.
         name: Symbol,
+        /// Source span.
+        span: Span,
+    },
+    /// `provide Name(field: expr, …)`, the values a view gives to everything it
+    /// draws, slots included (RFC-0065 §1).
+    Provide {
+        /// The context provided, a named type.
+        ty: Type,
+        /// The fields written, `field: value`.
+        fields: Vec<Arg>,
         /// Source span.
         span: Span,
     },

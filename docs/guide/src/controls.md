@@ -118,6 +118,9 @@ View Main() {
 error[BindNotAVar]: `TextField #[bind: value]` cannot change `value`: a parameter is a copy of what the caller passed
 ```
 
+A `bind` may have a default, `bind value: Str = ""`: a call that passes no `var` gets
+one the view keeps for itself.
+
 The message names the fix: declare it `bind value: Str`. A view that wants to keep a
 copy of what it was given, to edit it and hand the result up when the user is done,
 still takes a value and a callback. `examples/reusable_field` does.

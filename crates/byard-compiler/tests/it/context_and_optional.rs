@@ -156,8 +156,16 @@ fn on_measure_gives_the_position_in_the_parent() {
     );
     // 10 of padding in the parent, then 7 of margin; below the first box and
     // the padding.
-    assert!((app.float("x") - 17.0).abs() < 0.5, "x = {}", app.float("x"));
-    assert!((app.float("y") - 30.0).abs() < 0.5, "y = {}", app.float("y"));
+    assert!(
+        (app.float("x") - 17.0).abs() < 0.5,
+        "x = {}",
+        app.float("x")
+    );
+    assert!(
+        (app.float("y") - 30.0).abs() < 0.5,
+        "y = {}",
+        app.float("y")
+    );
 }
 
 #[test]
@@ -178,5 +186,230 @@ fn a_sliding_indicator_follows_an_item_that_only_moves() {
     assert!((app.float("ix") - 40.0).abs() < 0.5);
     assert!((app.float("iw") - 60.0).abs() < 0.5);
     app.set("pad", Value::Int(100));
-    assert!((app.float("ix") - 100.0).abs() < 0.5, "ix = {}", app.float("ix"));
+    assert!(
+        (app.float("ix") - 100.0).abs() < 0.5,
+        "ix = {}",
+        app.float("ix")
+    );
+}
+
+// ── 1. context ──────────────────────────────────────────────────────────
+
+const TABS: &str = r#"
+context TabsStyle {
+    variant: Str = "primary"
+    current: Int = 0
+}
+
+View Main() {
+    var variant = "primary"
+    var current = 1
+    Tabs(variant: variant, bind: current) {
+        Tab("a", 0)
+        Tab("b", 1)
+    }
+}
+
+View Tabs(bind current: Int, variant: Str, content) {
+    provide TabsStyle(variant: variant, current: current)
+    Row { content }
+}
+
+View Tab(label: Str, index: Int) {
+    inject TabsStyle as s
+    Text("{label}:{s.variant}:{index == s.current}")
+}
+"#;
+
+#[test]
+fn a_tab_drawn_through_a_slot_reads_the_containers_context_and_follows_it() {
+    let mut app = App::new(TABS);
+    assert_eq!(texts(&app), ["a:primary:false", "b:primary:true"]);
+    app.set("variant", Value::Str("secondary".into()));
+    app.set("current", Value::Int(0));
+    assert_eq!(texts(&app), ["a:secondary:true", "b:secondary:false"]);
+}
+
+#[test]
+fn the_nearest_provider_wins() {
+    let app = App::new(
+        r#"
+context Tone { name: Str = "none" }
+View Main() { Outer() }
+View Outer() {
+    provide Tone(name: "outer")
+    Column { Probe() Inner() }
+}
+View Inner() {
+    provide Tone(name: "inner")
+    Column { Probe() }
+}
+View Probe() { inject Tone as t
+    Text(t.name) }
+"#,
+    );
+    assert_eq!(texts(&app), ["outer", "inner"]);
+}
+
+#[test]
+fn with_no_provider_a_view_reads_the_defaults() {
+    let app = App::new(
+        r#"
+context TabsStyle { variant: Str = "primary"
+    current: Int = 3
+    place: Fn(Int) = none }
+View Main() { Tab() }
+View Tab() { inject TabsStyle as s
+    on measure => s.place(1)
+    Text("{s.variant}{s.current}") }
+"#,
+    );
+    assert_eq!(texts(&app), ["primary3"]);
+}
+
+#[test]
+fn a_context_callback_reports_to_the_provider() {
+    let app = App::new(
+        r"
+context Report { hit: Fn(Int) = none }
+View Main() { var seen = 0
+    Host(seen: seen) }
+View Host(bind seen: Int) {
+    provide Report(hit: {|n| seen = n })
+    Item()
+}
+View Item() { inject Report as r
+    Box #[width: 10, height: 10] { on measure => r.hit(7) } }
+",
+    );
+    assert_eq!(app.int("seen"), 7);
+}
+
+#[test]
+fn a_view_without_context_is_untouched_by_a_provider_elsewhere() {
+    let app = App::new(
+        "context C { n: Int = 1 }\n\
+         View Main() { Column { Plain() } }\n\
+         View Plain() { Text(\"x\") }",
+    );
+    assert_eq!(texts(&app), ["x"]);
+}
+
+#[test]
+fn context_diagnostics() {
+    let base = "context C { n: Int = 1\n s: Str = \"a\" }\n";
+    let e = checked(&format!(
+        "{base}View Main() {{ provide C(n: 1)\n provide C(n: 2)\n Text(\"x\") }}"
+    ));
+    assert!(has(&e, "DuplicateProvide"), "{e:?}");
+    let e = checked(&format!(
+        "{base}View Main() {{ provide D(n: 1)\n Text(\"x\") }}"
+    ));
+    assert!(has(&e, "UnknownContext"), "{e:?}");
+    let e = checked(&format!(
+        "{base}View Main() {{ inject Cc as c\n Text(\"x\") }}"
+    ));
+    assert!(has(&e, "UnknownContext"), "{e:?}");
+    let e = checked(&format!(
+        "{base}View Main() {{ provide C(nn: 1)\n Text(\"x\") }}"
+    ));
+    assert!(has(&e, "UnknownField"), "{e:?}");
+    let e = checked("context C { n: Int }\nView Main() { Text(\"x\") }");
+    assert!(has(&e, "ContextFieldNeedsDefault"), "{e:?}");
+    let e = checked(&format!(
+        "{base}View Main() {{ when true {{ provide C(n: 1) }}\n Text(\"x\") }}"
+    ));
+    assert!(has(&e, "MisplacedProvide"), "{e:?}");
+    let e = checked(&format!(
+        "{base}View Main() {{ provide C(n: \"x\")\n Text(\"x\") }}"
+    ));
+    assert!(has(&e, "ArgumentTypeMismatch"), "{e:?}");
+    let ok = checked(&format!(
+        "{base}View Main() {{ provide C(n: 2)\n Text(\"x\") }}"
+    ));
+    assert!(ok.is_empty(), "{ok:?}");
+}
+
+// ── 2. optional values and bind defaults ────────────────────────────────
+
+const ICON: &str = r"
+View Main() { Column { Chip(1) Chip(2, color: 0x00FF00) Chip(3, color: none) } }
+View Chip(n: Int, color: Color? = none) {
+    Box #[width: 10 + n, height: 10, bg: color ?? 0xFF0000]
+}
+";
+
+#[test]
+fn an_optional_colour_is_the_argument_or_the_fallback() {
+    let app = App::new(ICON);
+    let r = app.boxed(11.0, 10.0).color;
+    let g = app.boxed(12.0, 10.0).color;
+    let n = app.boxed(13.0, 10.0).color;
+    assert!(r[0] > 0.9 && r[1] < 0.1, "{r:?}");
+    assert!(g[1] > 0.9 && g[0] < 0.1, "{g:?}");
+    assert!(n[0] > 0.9 && n[1] < 0.1, "{n:?}");
+}
+
+#[test]
+fn an_optional_is_known_inside_a_not_none_branch() {
+    let app = App::new(
+        r"
+View Main() { Column { Chip(1) Chip(2, color: 0x00FF00) } }
+View Chip(n: Int, color: Color? = none) {
+    when color != none { Box #[width: 10 + n, height: 10, bg: color] }
+    else { Box #[width: 10 + n, height: 20, bg: 0x333333] }
+}
+",
+    );
+    assert!(app.boxed(11.0, 20.0).color[3] > 0.0);
+    assert!(app.boxed(12.0, 10.0).color[1] > 0.9);
+}
+
+#[test]
+fn reading_an_optional_bare_is_none_not_handled() {
+    let e = checked(
+        "View Main() { Chip(1) }\n\
+         View Chip(n: Int, color: Color? = none) { Box #[width: 10, height: 10, bg: color] }",
+    );
+    assert!(has(&e, "NoneNotHandled"), "{e:?}");
+    let ok = checked(
+        "View Main() { Chip(1) }\n\
+         View Chip(n: Int, color: Color? = none) { Box #[width: 10, height: 10, bg: color != none ? color : 0x112233] }",
+    );
+    assert!(ok.is_empty(), "{ok:?}");
+    let e = checked(
+        "View Main() { Chip(1) }\n\
+         View Chip(n: Int, color: Color? = 5) { Text(\"x\") }",
+    );
+    assert!(has(&e, "BadOptionalDefault"), "{e:?}");
+}
+
+const GROUP: &str = r#"
+View Main() { var page = 5
+    Column { Group() Group(bind: page) Text("{page}") } }
+View Group(bind sel: Int = 0) {
+    Box #[width: 10, height: 10, bg: 0x333333, tap => sel = sel + 1]
+    Text("s{sel}")
+}
+"#;
+
+#[test]
+fn an_unbound_bind_with_a_default_keeps_its_own_var() {
+    let mut app = App::new(GROUP);
+    let t = texts(&app);
+    assert_eq!(t, ["s0", "s5", "5"], "{t:?}");
+    let at = {
+        let b = app.boxed(10.0, 10.0);
+        (b.rect[0] + 5.0, b.rect[1] + 5.0)
+    };
+    app.tap(at);
+    assert_eq!(texts(&app), ["s1", "s5", "5"]);
+}
+
+#[test]
+fn a_bind_with_a_default_is_no_longer_a_bad_binding_and_without_one_is_required() {
+    let ok = checked("View Main() { Group() }\nView Group(bind sel: Int = 0) { Text(\"x\") }");
+    assert!(ok.is_empty(), "{ok:?}");
+    let e = checked("View Main() { Group() }\nView Group(bind sel: Int) { Text(\"x\") }");
+    assert!(has(&e, "MissingParam"), "{e:?}");
 }

@@ -254,6 +254,9 @@ pub enum RenderNode {
         /// Fixed at lowering and kept for as long as the node lives, which is
         /// what lets two calls of one view keep their own animations.
         inst: u32,
+        /// The identity the run's `as name` gave it (`a11y_described_by`,
+        /// `anchor_to`); `None` for a run that is not tagged.
+        uid: Option<u32>,
     },
     /// A flexible gap (layout-only, RFC-0005): absorbs its parent's free space
     /// along the main axis. `attrs` carries `grow`/`basis`, which is why this is

@@ -164,6 +164,7 @@ impl Interpreter {
                             content,
                             env_snapshot: Vec::new(),
                             inst: self.cur_inst,
+                            uid: None,
                         }],
                         action: el.action.clone(),
                         bound_sig: None,
@@ -181,6 +182,7 @@ impl Interpreter {
                         content,
                         env_snapshot,
                         inst: self.cur_inst,
+                        uid: el.anchor_name.is_some().then_some(uid),
                     }
                 }
             }

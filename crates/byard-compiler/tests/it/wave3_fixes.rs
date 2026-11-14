@@ -170,3 +170,37 @@ fn a_ternary_arm_none_is_still_text_where_the_text_is_wanted() {
     assert!(app.errors().is_empty(), "{:?}", app.errors());
     assert!(app.frame.texts().iter().any(|t| t.text == "none"));
 }
+// ── 32. `a11y_described_by` ──────────────────────────────────────────────
+
+#[test]
+fn described_by_can_point_at_a_bare_text() {
+    let app = App::new(
+        "View Main() {
+            Column #[a11y_role: group, a11y_label: \"Box\", a11y_described_by: note] {
+                Text(\"Read this first\") as note
+            }
+        }",
+    );
+    assert!(app.errors().is_empty(), "{:?}", app.errors());
+    let text = app.frame.access().unwrap().to_text();
+    assert!(text.contains("described_by"), "{text}");
+}
+
+#[test]
+fn a_name_tagged_in_a_when_is_visible_to_attributes_outside_it() {
+    let src = "View Main() {
+            var has = true
+            Column #[a11y_role: group, a11y_label: \"Box\", a11y_described_by: note] {
+                when has { Text(\"Read this first\") as note }
+            }
+        }";
+    let app = App::new(src);
+    assert!(app.errors().is_empty(), "{:?}", app.errors());
+    let text = app.frame.access().unwrap().to_text();
+    assert!(text.contains("described_by"), "{text}");
+    // Not mounted: it describes nothing, and it is not an error.
+    let app = App::new(&src.replace("var has = true", "var has = false"));
+    assert!(app.errors().is_empty(), "{:?}", app.errors());
+    let text = app.frame.access().unwrap().to_text();
+    assert!(!text.contains("described_by"), "{text}");
+}

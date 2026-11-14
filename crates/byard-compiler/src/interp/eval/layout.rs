@@ -561,20 +561,23 @@ impl Interpreter {
     /// Lowers the members of a `for` or `when` body (RFC-0061): its `let`s are
     /// defined first, in the body's own scope, so the elements read them; then
     /// the body is lowered as a scope of its own, with its `as` names declared
-    /// before any element reads them (RFC-0062). A view body defines its `let`s
+    /// before any element reads them (RFC-0062; a `when` branch reuses the
+    /// ones its enclosing scope declared for it). A view body defines its `let`s
     /// when the view is instantiated, which is why this is not in
     /// [`lower_members`](Self::lower_members).
     fn lower_body_members(
         &mut self,
         members: &[crate::parser::ast::Member],
         known_views: &[&str],
+        reuse_names: bool,
     ) -> Vec<RenderNode> {
         for m in members {
             if matches!(m, crate::parser::ast::Member::Let { .. }) {
                 self.eval_member(m);
             }
         }
-        self.lower_scope(members, known_views)
+        self.declare_state_names(members, reuse_names);
+        self.lower_members(members, known_views)
     }
 
     /// Lowers one branch of a `when` pool from its AST and the environment
@@ -621,7 +624,7 @@ impl Interpreter {
         // The scopes the branch opens are recorded, so a route popped with this
         // `when` in it can retire them.
         self.ctx.push_scope_tracker();
-        let nodes = self.lower_body_members(&ast, &known_refs);
+        let nodes = self.lower_body_members(&ast, &known_refs, true);
         let scopes = self.ctx.pop_scope_tracker();
         if pushed {
             self.slot_stack.pop();
@@ -671,7 +674,7 @@ impl Interpreter {
         }
         let outer_ctx = std::mem::replace(&mut self.ctx_chain, self.for_pools[pool].ctx.clone());
         self.ctx.push_scope_tracker();
-        let body_nodes = self.lower_body_members(&body_ast, &known_refs);
+        let body_nodes = self.lower_body_members(&body_ast, &known_refs, false);
         let scopes = self.ctx.pop_scope_tracker();
         if pushed {
             self.slot_stack.pop();
@@ -1272,6 +1275,7 @@ impl Interpreter {
                 content,
                 state_blocks,
                 env_snapshot,
+                uid,
                 ..
             } => {
                 // The scope the run was written in, so a `size:` that reads a
@@ -1282,6 +1286,12 @@ impl Interpreter {
                 }
                 let out = self.build_text_leaf(attrs, state_blocks, *content, flat_ids);
                 self.env.truncate(env_base);
+                // A run tagged `as name` is found by that name, as a box is.
+                if let (Some(uid), Ok(id)) = (uid, &out) {
+                    if let Some(idx) = self.atlas.node_index(*id) {
+                        self.elem_uids.push((idx, *uid));
+                    }
+                }
                 out
             }
             RenderNode::Box {

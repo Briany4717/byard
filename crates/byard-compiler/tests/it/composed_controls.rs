@@ -431,6 +431,30 @@ View Main() {
 }
 
 #[test]
+fn a_list_item_with_a_tap_is_a_tab_stop_and_one_without_is_not() {
+    let mut app = App::new(
+        r#"
+View Main() {
+    var n = 0
+    Column #[a11y_role: list, gap: 4, p: 10] {
+        Box #[a11y_role: list_item, a11y_label: "Read", width: 200, height: 40]
+        Box #[a11y_role: list_item, a11y_label: "Wi-Fi", width: 200, height: 40, tap => n++]
+    }
+}
+"#,
+    );
+    app.tabs(1);
+    assert_eq!(app.focused().as_deref(), Some("Wi-Fi"));
+    app.key("Enter");
+    app.key("Space");
+    assert_eq!(app.int("n"), 2);
+    assert!(
+        !app.named("Read").flags.contains(AccessFlags::FOCUSABLE),
+        "nothing to press, so not a stop"
+    );
+}
+
+#[test]
 fn a_tap_with_no_role_or_focus_stays_out_of_the_tab_order() {
     let mut app = App::new(
         r#"

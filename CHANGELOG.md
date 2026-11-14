@@ -58,6 +58,7 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **A `list_item` with a `tap` is in the Tab order,** as a `button` is, and Space and Enter press it. A tappable row in a list no longer needs an empty `focus =>` to be reached from the keyboard; one with nothing to press stays out.
 - **`a11y_label` or `a11y_description` on a `Box`, `Row`, `Column`, `Grid`, `ZStack` or `Clip` with no role and no `tap` is an error.** Such a container is not in the accessibility tree, so the label was read by nothing; give it an `a11y_role`. RFC-0063.
 - **Tab enters a `tab_list` or `radio_group` once, at its selected member.** The group is one stop, as WAI-ARIA has it: the next Tab leaves it and the arrow keys move inside it; with nothing selected Tab enters at the first. This changes the Tab order of an app with one; it used to stop at every member. RFC-0063.
 - **`tap(e)` is an error.** A `tap` carries no value, so a name on it read as empty; the error points to `pointer_down(e)`, which has the position.

@@ -367,14 +367,14 @@ View Main() {
 ```
 
 A role that implies focus is `button`, `toggle_button`, `switch`, `checkbox`, `radio`,
-`tab`, `menu_item` and `link`. A role alone does not put an element in the Tab order if it
+`tab`, `menu_item`, `link` and `list_item`. A role alone does not put an element in the Tab order if it
 has nothing to press; an element with a `focus =>`, a `blur =>` or a `focused:` is in it
 whatever its role, and a `tap` there is pressed by the keys too. A `Box` with only a `tap`
 and no role stays out of the order. What presses it follows the role:
 
 | Role | Space | Enter |
 |------|-------|-------|
-| none, `button`, `toggle_button`, `menu_item`, `tab` | presses | presses |
+| none, `button`, `toggle_button`, `menu_item`, `tab`, `list_item` | presses | presses |
 | `switch` | presses | presses |
 | `checkbox`, `radio` | presses | does nothing |
 | `link` | does nothing | presses |

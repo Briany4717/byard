@@ -236,7 +236,7 @@ fn key_down_on_an_element_nothing_can_focus_says_how_to() {
         // A tap without a role is still not in the Tab order.
         "Box #[width: 10, height: 10, tap => n++, key_down(k) => n++]",
         // A role that does not take focus, even with a tap.
-        "Box #[a11y_role: list_item, width: 10, height: 10, tap => n++, key_down(k) => n++]",
+        "Box #[a11y_role: image, width: 10, height: 10, tap => n++, key_down(k) => n++]",
         // A role that does, but nothing to press.
         "Box #[a11y_role: button, width: 10, height: 10, key_down(k) => n++]",
     ] {

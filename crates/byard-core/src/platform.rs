@@ -123,8 +123,8 @@ impl KeyModifiers {
     /// The modifiers are `shift`, `ctrl`, `alt` (or `option`), `meta` (or
     /// `cmd`, `super`) and `mod`, the platform's shortcut key (RFC-0041 §Q5).
     /// The key is a single character, or one of `Left`, `Right`, `Up`, `Down`,
-    /// `Home`, `End`, `Backspace`, `Delete`, `Enter`, `Tab`, `Escape` and
-    /// `Space`; case does not matter for those.
+    /// `Home`, `End`, `PageUp`, `PageDown`, `Insert`, `Backspace`, `Delete`,
+    /// `Enter`, `Tab`, `Escape` and `Space`; case does not matter for those.
     ///
     /// # Errors
     ///
@@ -164,6 +164,9 @@ impl KeyModifiers {
             "down" => "ArrowDown".to_string(),
             "home" => "Home".to_string(),
             "end" => "End".to_string(),
+            "pageup" | "page_up" => "PageUp".to_string(),
+            "pagedown" | "page_down" => "PageDown".to_string(),
+            "insert" | "ins" => "Insert".to_string(),
             "backspace" => "Backspace".to_string(),
             "delete" | "del" => "Delete".to_string(),
             "enter" | "return" => "Enter".to_string(),
@@ -174,7 +177,7 @@ impl KeyModifiers {
             "" => return Err(format!("`{chord}` names no key")),
             _ => {
                 return Err(format!(
-                    "`{key}` is not a key I know; try Left, Home, Delete or a single character"
+                    "`{key}` is not a key I know; use a single character or one of {KEY_NAMES}"
                 ));
             }
         };
@@ -187,6 +190,10 @@ impl KeyModifiers {
         self.mod_held() && self.shift
     }
 }
+
+/// The key names a command line accepts, as an error lists them.
+const KEY_NAMES: &str = "Left, Right, Up, Down, Home, End, PageUp, PageDown, Insert, Backspace, \
+     Delete, Enter, Tab, Escape or Space";
 
 /// A mouse/pointer button, expressed without depending on any windowing
 /// crate's types, mirrors the variants `winit::event::MouseButton` exposes
@@ -744,6 +751,17 @@ mod tests {
         assert_eq!(KeyModifiers::parse_chord("mod++").unwrap().1, "+");
         assert_eq!(KeyModifiers::parse_chord("+").unwrap().1, "+");
         assert_eq!(KeyModifiers::parse_chord("space").unwrap().1, " ");
+        for (given, name) in [
+            ("PageUp", "PageUp"),
+            ("pagedown", "PageDown"),
+            ("Insert", "Insert"),
+            ("home", "Home"),
+            ("END", "End"),
+        ] {
+            assert_eq!(KeyModifiers::parse_chord(given).unwrap().1, name);
+        }
+        let err = KeyModifiers::parse_chord("Flibber").unwrap_err();
+        assert!(err.contains("PageUp") && err.contains("Insert"), "{err}");
     }
 
     #[test]

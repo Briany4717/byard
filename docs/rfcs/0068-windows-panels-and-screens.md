@@ -169,8 +169,9 @@ behaves like one, with no mask to write.
 
 When a screen is connected, `screens` grows and the `for` gives it its panel;
 when one is unplugged, its panel goes. `key s.name` is what keeps the other
-bars as they are: without it, a `for` rebuilds every item when its list
-changes, and every bar would close and reopen.
+bars as they are: without it, a `for` matches its rows by position, and
+connecting a screen in the middle of the list would hand each bar the next
+screen's place, with its state.
 
 ### Where a panel goes
 
@@ -396,9 +397,12 @@ nothing changes.
 
 ### 4b. `for … key`
 
-Today a `for` whose list changes unmounts every item and mounts the new list
-(RFC-0004 deferred keyed reconciliation). For elements that is a cost; for a
-surface it is a window closing and reopening. So:
+Today a `for` reuses its rows by position (RFC-0018's pool; RFC-0004 deferred
+keyed reconciliation): when an item is inserted at the front, every row keeps
+its state and receives the next item, so a row's `var`s end up belonging to a
+different item. For a list of counters that is a wrong count. For surfaces it
+would be the bar of one screen moving, with its open popup and its state, to
+another screen. So:
 
 ```byld
 for s in screens key s.name { … }
@@ -422,8 +426,8 @@ signals, one per mount. That costs one signal per item, which only a keyed
 `for` pays. A `for` without `key` behaves exactly as it does now.
 
 The checker warns `SurfaceForNeedsKey` at a `for` without `key` whose body
-makes a `Window` or a `Panel`: every change to its list would close and reopen
-every one of them.
+makes a `Window` or a `Panel`: every change to its list would move surfaces,
+with their state, to other items.
 
 ### 5. The runtime
 
@@ -842,7 +846,7 @@ and would be rebuilt, losing exactly the state the key was for. Matching by an
 key is the program's to say, as in React, SwiftUI's `ForEach(id:)` and
 Svelte's keyed `each`. It is an addition to `for`, not a requirement: lists of
 plain elements keep working unkeyed, and only surfaces get the warning, since for them
-an unkeyed rebuild is visible.
+state moving between items is a surface moving between screens.
 
 ### Q15, how much of Wayland is exposed
 

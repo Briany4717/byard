@@ -1,9 +1,9 @@
 # RFC-0060: Blending like the design tools
 
-- **Status:** Draft
+- **Status:** Accepted
 - **Author(s):** Briany4717
 - **Created:** 2026-11-07
-- **Last updated:** 2026-11-07
+- **Last updated:** 2026-11-15
 - **Depends on:** RFC-0039 (native render extensions, whose package shaders this
   changes), RFC-0057 (colour motion in OKLab, which this leaves alone), RFC-0050
   (Byard Material, where the difference was measured).
@@ -86,10 +86,14 @@ compares the two.
 ### 3. Reading the target back
 
 `backdrop` and `blur` sample the target. Through a `Unorm` view they read the
-encoded byte. They decode on read, so blur is still a mix of light, and encode
-on write. CSS's `backdrop-filter` blurs in sRGB, so this is a choice. Decoding
-costs about as much as not decoding, and it keeps a blurred edge as light as the
-one drawn now.
+encoded byte, and they write it back as it is: no decode on read, no encode on
+write. A blur is therefore a mix of sRGB values, which is what CSS's
+`backdrop-filter` does. The point of this RFC is to look like the tools a design
+comes from, and a frosted panel in Figma or a browser is blurred in sRGB. It
+also saves the `pow` that decoding and re-encoding would cost on every tap.
+
+A blurred edge is a little darker between a light and a dark region than the
+linear blur drawn now. That is how the same panel looks in Chrome.
 
 Images are uploaded as `Rgba8UnormSrgb` and decoded on sampling as before, then
 encoded by `byard_out`, so an opaque image is byte for byte what it was.
@@ -113,8 +117,10 @@ gets the same treatment as the engine's own shaders.
 ### 6. Cost
 
 One `pow` per channel per fragment written, two for a blend that reads back.
-That's measured on the stockroom and aura_weather budgets before this is
-accepted. On the GPUs Byard's CI runs, `pow` is an `exp2` and a `log2`.
+That is measured on the stockroom and aura_weather budgets, on main and on
+the branch. An approximation of the curve is allowed only if that measurement
+calls for it, and opaque pixels stay byte-exact either way. On the GPUs
+Byard's CI runs, `pow` is an `exp2` and a `log2`.
 
 ## Drawbacks
 
@@ -149,12 +155,16 @@ Browsers composite in sRGB. Android's `Canvas`, and Compose on top of it, blend
 in sRGB. Figma and Sketch blend in sRGB. Game engines blend in linear, which is
 where Byard's current choice comes from.
 
-## Unresolved questions
+## Resolved questions
 
-- Whether `backdrop`/`blur` should blur in sRGB to match CSS exactly, or in
-  light as proposed.
-- The exact cost on the slowest CI GPU, which decides whether `byard_out` may use
-  an approximation of the curve. Opaque pixels must stay byte-exact either way.
+- **Should `backdrop`/`blur` blur in sRGB or in light?** In sRGB, like CSS
+  `backdrop-filter`. They read the encoded bytes and write them back without
+  decoding. The RFC exists to look like the tools a design comes from, and it
+  saves work. Section 3 is written to match.
+- **Does the cost of `byard_out` call for an approximation of the curve?**
+  Decided by measurement on the budgets (section 6), not in advance. An
+  approximation is allowed only if the numbers call for it, and opaque pixels
+  are byte-exact either way.
 
 ## Future possibilities
 

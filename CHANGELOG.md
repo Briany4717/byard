@@ -140,6 +140,7 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`byard shot` and `byard test` draw the same picture on any machine.** A field generated on another thread (a `path` filled through the vector atlas, an SVG icon) landed on whichever frame the worker finished by, so a slow or busy machine drew it later or not at all. A headless frame now waits for what the last one asked for, and a windowed app still never waits.
 - **`after` and `every` run in `byard shot` and `byard test`.** They followed the app clock only in `App::shot`; the command line never armed them, so a snackbar's timeout or a ticking clock stayed where it started however long a `--wait`, `--at` or `wait` step was. Skipping idle frames stops at the next timer, so it fires on the frame it is due.
 - **A `let` inside an element's braces is `LetInElementBody`.** It was ignored, and the first thing said was an unrelated `AttributeTypeMismatch` where its name was used. A `let` goes at the top of the view or inside a `when` or `for`.
 - **A `ZStack` places a child on both axes.** `alignment` (`center`, `top_end`, `bottom_start`, …) had no horizontal effect when every child was narrower than the stack, which packed its one column at the start: the column is now the whole stack.

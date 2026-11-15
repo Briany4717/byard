@@ -273,6 +273,10 @@ pub struct SceneOptions<'a> {
     pub access: bool,
 }
 
+/// How long a frame waits for work on another thread before it draws
+/// without it.
+const BACKGROUND_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+
 impl Scene {
     /// Starts `view` of `project` and runs its first frame.
     pub fn new(
@@ -321,6 +325,8 @@ impl Scene {
 
     /// One frame: the events, a tick, a full render. 16 ms pass.
     fn frame_with(&mut self, events: &[InputEvent]) {
+        // A field the last frame asked for lands on this one, on any machine.
+        self.interp.wait_for_background_work(BACKGROUND_WAIT);
         self.interp.set_now_ms(self.now);
         self.interp.dispatch_events(events);
         self.interp.tick();

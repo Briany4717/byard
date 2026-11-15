@@ -1200,19 +1200,25 @@ mod tests {
         // Give the watcher a moment to register before the edit.
         std::thread::sleep(std::time::Duration::from_millis(200));
         std::fs::write(dir.join("src/main.byd"), "View Main() { Text(\"two\") }").unwrap();
+        // macOS can still report the files being created, just before the
+        // edit, so a reload of the old text may come first. Every reload must
+        // be a complete read, never one between the truncate and the write,
+        // and one of them must be the edit.
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        let parsed = loop {
+        loop {
             if let Some(parsed) = reloads.take() {
-                break parsed;
+                assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+                assert_eq!(parsed.views.len(), 1);
+                if format!("{:?}", parsed.views[0]).contains("two") {
+                    break;
+                }
             }
-            assert!(std::time::Instant::now() < deadline, "no reload within 5 s");
+            assert!(
+                std::time::Instant::now() < deadline,
+                "no reload of the edit within 5 s"
+            );
             std::thread::sleep(std::time::Duration::from_millis(20));
-        };
-        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
-        // The first reload is the complete one, not a read between the
-        // truncate and the write.
-        assert_eq!(parsed.views.len(), 1);
-        assert!(format!("{:?}", parsed.views[0]).contains("two"));
+        }
     }
 
     /// A declaration that has drifted from the view registered under its name

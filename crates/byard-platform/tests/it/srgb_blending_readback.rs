@@ -131,7 +131,7 @@ fn solid(rect: [f32; 4], color: [f32; 4]) -> BoxInstance {
     }
 }
 
-/// The state layer of Material's IconButton: its content colour at 10% over
+/// The state layer of Material's `IconButton`: its content colour at 10% over
 /// its container. White at 10% over `#6750A4`.
 #[test]
 fn a_ten_percent_white_layer_over_material_primary_reads_what_the_design_tools_read() {
@@ -140,7 +140,7 @@ fn a_ten_percent_white_layer_over_material_primary_reads_what_the_design_tools_r
         return;
     };
     let mut frame = RenderFrame::new();
-    frame.push_instance(solid([0.0, 0.0, 256.0, 16.0], rgba(0x6750A4)));
+    frame.push_instance(solid([0.0, 0.0, 256.0, 16.0], rgba(0x0067_50A4)));
     // 0x1A is 26 of 255, 10.2%: the nearest byte to a tenth.
     frame.push_instance(solid([64.0, 0.0, 128.0, 16.0], to_rgba(0x1AFF_FFFF, true)));
     let px = render(&device, &queue, &frame);
@@ -171,7 +171,7 @@ fn half_black_over_white_is_the_middle_grey() {
         return;
     };
     let mut frame = RenderFrame::new();
-    frame.push_instance(solid([0.0, 0.0, 256.0, 16.0], rgba(0xFFFFFF)));
+    frame.push_instance(solid([0.0, 0.0, 256.0, 16.0], rgba(0x00FF_FFFF)));
     frame.push_instance(solid([0.0, 0.0, 128.0, 16.0], to_rgba(0x8000_0000, true)));
     let px = render(&device, &queue, &frame);
     let grey = px.at(64, 8)[0];

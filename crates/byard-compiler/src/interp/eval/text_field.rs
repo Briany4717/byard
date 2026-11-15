@@ -560,6 +560,11 @@ impl Interpreter {
         // RFC-0064: a field of several lines is drawn by its own pass. The
         // single line below is the field it always was, untouched.
         let multiline = self.field_lines(attrs) != FieldLines::Single;
+        // RFC-0067: how far `text_align` moves the text of a one-line field
+        // from the start of its content box. Worked out below, once the width
+        // of what is drawn is known, and `0` for `start`, which is nearly
+        // every field.
+        let mut align_dx = 0.0_f32;
         let multi_geom = if multiline {
             let (pad_x, pad_top, pad_bottom) = self.field_pads(attrs);
             Some(self.paint_multiline(
@@ -633,7 +638,25 @@ impl Interpreter {
                     store.touch(idx, seq);
                 }
             }
-            let origin_x = text_x - scroll;
+            if !multiline {
+                let word = Self::enum_prop(attrs, "text_align");
+                if matches!(word, Some("center" | "end")) {
+                    // What is drawn is the value, or the placeholder in its
+                    // place, and the preedit after the caret.
+                    let drawn = if editing.is_some() && !is_placeholder {
+                        value_w + preedit_w
+                    } else {
+                        self.measure_in(&display_text, &font) + preedit_w
+                    };
+                    let free = (view_w - drawn).max(0.0);
+                    align_dx = if word == Some("center") {
+                        free / 2.0
+                    } else {
+                        free
+                    };
+                }
+            }
+            let origin_x = text_x + align_dx - scroll;
             // The text is clipped to the content box when it overflows it, which is
             // the only time it can reach outside.
             // A field that is not being edited does not scroll, so what it shows
@@ -797,7 +820,7 @@ impl Interpreter {
                 idx,
                 editing::FieldGeom {
                     font,
-                    text_x,
+                    text_x: text_x + align_dx,
                     view_w,
                     frame: self.router.current_frame(),
                     multi: multi_geom,

@@ -597,6 +597,11 @@ pub struct Interpreter {
     /// responsive block (RFC-0016 `on width >= md`) compares against. Set at
     /// the top of every render, before layout reads it.
     viewport: (f32, f32),
+    /// The two reactive `Float` signals behind `window.width` and
+    /// `window.height` (RFC-0067): `None` until a program lowers a read of
+    /// `window`, so one that never writes it pays a single `Option` test a
+    /// frame. Kept across a hot reload, like the theme's scheme.
+    window: Option<(SignalId, SignalId)>,
     /// The registered font families, in the shape the render thread reads
     /// them (RFC-0034), rebuilt whenever the theme changes and handed to
     /// every frame.
@@ -1844,6 +1849,7 @@ impl Interpreter {
         // layout built against last frame's viewport would lay out one width's
         // variant and paint another's.
         self.viewport = (width, height);
+        self.sync_window();
         // Every frame answers `needs_another_frame` for itself, including one
         // that returns before layout.
         self.measure_fired = false;

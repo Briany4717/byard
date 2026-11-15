@@ -527,6 +527,8 @@ pub fn role_implies_focus(role: AccessRole) -> bool {
             | AccessRole::Tab
             | AccessRole::MenuItem
             | AccessRole::Link
+            // RFC-0067: a cell of a grid is pressed and reached as a tab is.
+            | AccessRole::GridCell
             // A list item you can tap opens something, as a row in a settings
             // list does; one without a `tap` stays out, like the others.
             | AccessRole::ListItem
@@ -559,7 +561,7 @@ fn role_value_may_take_focus(value: &Expr) -> bool {
 }
 
 /// Whether an `a11y_role:` value can be a role with a value that has a range:
-/// a `slider` or a `progress_bar`. As [`role_value_may_take_focus`], a value the
+/// a `slider`, a `spin_button` or a `progress_bar`. As [`role_value_may_take_focus`], a value the
 /// checker cannot read is given the benefit of the doubt.
 fn role_value_may_have_range(value: &Expr) -> bool {
     let word = match value {
@@ -575,8 +577,12 @@ fn role_value_may_have_range(value: &Expr) -> bool {
     };
     // A word that is no keyword is a name the program binds, or is reported on
     // its own; it is not this check's to refuse.
-    word.and_then(AccessRole::from_keyword)
-        .is_none_or(|r| matches!(r, AccessRole::Slider | AccessRole::ProgressBar))
+    word.and_then(AccessRole::from_keyword).is_none_or(|r| {
+        matches!(
+            r,
+            AccessRole::Slider | AccessRole::ProgressBar | AccessRole::SpinButton
+        )
+    })
 }
 
 /// Whether the attributes make the element a stop in the Tab order, so that
@@ -876,6 +882,11 @@ fn lookup_intrinsic(name: &str) -> Option<Intrinsic> {
             // `line` (the default) or `none`, for a field whose design draws
             // its own indicator.
             props.insert("indicator", pnt(PropType::Enum(&["line", "none"])));
+            // RFC-0067: where the text sits in the content box.
+            props.insert(
+                "text_align",
+                pnt(PropType::Enum(&["start", "center", "end"])),
+            );
             Intrinsic {
                 arity: 0,
                 content: None,
@@ -1741,6 +1752,21 @@ fn check_combinations(name: &str, attrs: &[Attr], errs: &mut Vec<CompileError>) 
                     }
                 }
             }
+            // RFC-0067: the lines of a multiline field are laid out by their
+            // own pass, which sets them from the start.
+            if let Some((at, value)) = prop("text_align") {
+                let from_start = matches!(value, Expr::Ident(s, _) if s.as_str() == "start");
+                let one_line = prop("lines").is_none_or(|(_, v)| int_literal(v) == Some(1))
+                    && prop("min_lines").is_none_or(|(_, v)| int_literal(v) == Some(1))
+                    && prop("max_lines").is_none_or(|(_, v)| int_literal(v) == Some(1));
+                if !from_start && !one_line {
+                    bad(
+                        at,
+                        "`text_align` places the text of a one-line field; the lines of a field with `lines`, `min_lines` or `max_lines` start at its left: drop `text_align` or the lines"
+                            .to_string(),
+                    );
+                }
+            }
             if let (Some((_, lo)), Some((at, hi))) = (prop("min_lines"), prop("max_lines")) {
                 if let (Some(lo), Some(hi)) = (int_literal(lo), int_literal(hi)) {
                     if lo > hi {
@@ -2292,6 +2318,8 @@ fn shape_geometry(name: &str) -> (ShapeParams, ShapeParams) {
                 ("color", PropType::Color),
                 ("size", PropType::Float),
                 ("align", PropType::Enum(&["start", "center", "end"])),
+                // RFC-0067: a theme text style, as on a `Text`.
+                ("typo", PropType::Typo),
             ],
         ),
         _ => (&[], &[]),

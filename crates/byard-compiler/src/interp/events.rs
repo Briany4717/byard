@@ -276,6 +276,15 @@ pub enum GroupKind {
         /// Whether the items run along a row.
         horizontal: bool,
     },
+    /// A grid (RFC-0067): Left and Right move by cell and on to the next or
+    /// previous row at the end of one, Up and Down by row, Home and End to the
+    /// ends of the row. Every other key, and an arrow with nowhere to go, is
+    /// left to the focused cell.
+    Grid {
+        /// The number of columns of a layout `Grid` whose cells are not written
+        /// inside `row` elements, or `0` when the rows are the `row` elements.
+        columns: u16,
+    },
 }
 
 /// A set of focus targets the arrow keys move between.
@@ -283,6 +292,12 @@ struct Group {
     kind: GroupKind,
     /// The members, each with whether it is the selected one (RFC-0063 §4).
     members: Vec<(u32, bool)>,
+    /// For a grid (RFC-0067): the row each member is in, parallel to `members`.
+    /// Empty for every other kind, which pay nothing for it.
+    rows: Vec<u32>,
+    /// For a grid: the number of `row` elements opened so far, the row a member
+    /// registered now is in.
+    row: u32,
 }
 
 impl Group {
@@ -727,7 +742,19 @@ impl EventRouter {
         self.groups.push(Group {
             kind,
             members: Vec::new(),
+            rows: Vec::new(),
+            row: 0,
         });
+    }
+
+    /// Starts the next row of the innermost open group, when it is a grid
+    /// (RFC-0067). The cells registered from here on are in it.
+    pub fn next_row(&mut self) {
+        if let Some(&g) = self.open_groups.last() {
+            if matches!(self.groups[g].kind, GroupKind::Grid { .. }) {
+                self.groups[g].row += 1;
+            }
+        }
     }
 
     /// Closes the innermost open group.
@@ -743,7 +770,11 @@ impl EventRouter {
             return;
         }
         if let Some(&g) = self.open_groups.last() {
-            self.groups[g].members.push((elem, selected));
+            let group = &mut self.groups[g];
+            group.members.push((elem, selected));
+            if matches!(group.kind, GroupKind::Grid { .. }) {
+                group.rows.push(group.row);
+            }
         }
     }
 
@@ -1949,6 +1980,9 @@ impl EventRouter {
             return false;
         };
         let kind = group.kind;
+        if matches!(kind, GroupKind::Grid { .. }) {
+            return self.grid_key(ctx, key, focused);
+        }
         let live: smallvec::SmallVec<[u32; 16]> = group
             .members
             .iter()
@@ -1984,6 +2018,89 @@ impl EventRouter {
         if kind == GroupKind::Radios && target != focused {
             self.fire_on_elem(ctx, Some(target), EventKind::Tap, (0.0, 0.0), None);
         }
+        true
+    }
+
+    /// The arrow, Home and End keys of a grid (RFC-0067). Returns whether the
+    /// key moved focus; one with nowhere to go is not used, so it reaches the
+    /// focused cell's `key_down`.
+    ///
+    /// A cell's column is counted among the cells of its row, enabled or not,
+    /// so a disabled day does not shift the days after it; a disabled cell is
+    /// never a target.
+    fn grid_key(&mut self, ctx: &mut ReactiveCtx, key: &str, focused: u32) -> bool {
+        let Some(group) = self.groups.iter().find(|g| g.has(focused)) else {
+            return false;
+        };
+        let GroupKind::Grid { columns } = group.kind else {
+            return false;
+        };
+        let n = group.members.len();
+        let row_of = |i: usize| -> u32 {
+            if group.row == 0 && columns > 0 {
+                u32::try_from(i / usize::from(columns)).unwrap_or(u32::MAX)
+            } else {
+                group.rows.get(i).copied().unwrap_or(0)
+            }
+        };
+        let enabled = |i: usize| !self.disabled.contains(&group.members[i].0);
+        let Some(here) = group.members.iter().position(|&(m, _)| m == focused) else {
+            return false;
+        };
+        let row = row_of(here);
+        // Rows are contiguous runs of the members, in tree order.
+        let start = (0..=here).rev().take_while(|&i| row_of(i) == row).last();
+        let start = start.unwrap_or(here);
+        let end = (here..n).take_while(|&i| row_of(i) == row).last();
+        let end = end.unwrap_or(here);
+        let column = here - start;
+        let target = match key {
+            "ArrowRight" => (here + 1..n).find(|&i| enabled(i)),
+            "ArrowLeft" => (0..here).rev().find(|&i| enabled(i)),
+            "Home" => (start..=end).find(|&i| enabled(i)),
+            "End" => (start..=end).rev().find(|&i| enabled(i)),
+            "ArrowDown" | "ArrowUp" => {
+                let down = key == "ArrowDown";
+                // Row by row, away from this one, to the first that has an
+                // enabled cell at this column (its last, when it is shorter).
+                let mut found = None;
+                let mut at = if down { end + 1 } else { start };
+                while found.is_none() {
+                    let (lo, hi) = if down {
+                        if at >= n {
+                            break;
+                        }
+                        let r = row_of(at);
+                        let hi = (at..n).take_while(|&i| row_of(i) == r).last().unwrap_or(at);
+                        (at, hi)
+                    } else {
+                        if at == 0 {
+                            break;
+                        }
+                        let hi = at - 1;
+                        let r = row_of(hi);
+                        let lo = (0..=hi)
+                            .rev()
+                            .take_while(|&i| row_of(i) == r)
+                            .last()
+                            .unwrap_or(hi);
+                        (lo, hi)
+                    };
+                    let cell = (lo + column).min(hi);
+                    if enabled(cell) {
+                        found = Some(cell);
+                    }
+                    at = if down { hi + 1 } else { lo };
+                }
+                found
+            }
+            _ => None,
+        };
+        let Some(target) = target.filter(|&t| t != here) else {
+            return false;
+        };
+        let target = group.members[target].0;
+        self.steal_focus(ctx, Some(target), true);
         true
     }
 

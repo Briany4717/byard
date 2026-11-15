@@ -527,6 +527,15 @@ impl Interpreter {
                         });
                     }
                 }
+                if self.is_builtin_window(name, payload_name) {
+                    let (w, h) = self.window_signals();
+                    return Box::new(move |ctx| {
+                        Value::Record(vec![
+                            (Symbol::intern("width"), ctx.read_signal(w)),
+                            (Symbol::intern("height"), ctx.read_signal(h)),
+                        ])
+                    });
+                }
                 self.lower_ident(name, payload_name)
             }
             Expr::Array(elems, _) => {
@@ -574,6 +583,11 @@ impl Interpreter {
             Expr::SlotBlock { .. } => Box::new(|_| Value::Unit),
             Expr::Binary { op, lhs, rhs, .. } => {
                 let op = *op;
+                // `window.width >= md` (RFC-0067): a name beside the window's
+                // size is a breakpoint.
+                if let Some(lowered) = self.lower_window_comparison(op, lhs, rhs, payload_name) {
+                    return lowered;
+                }
                 // `x != none` (RFC-0062): whether a slot or callback parameter
                 // was given is known when the view is instantiated.
                 if matches!(op, BinOp::Eq | BinOp::Ne) {
@@ -899,6 +913,11 @@ impl Interpreter {
             // other member access needs controller metadata (not modeled in
             // Phase 2); lambdas/assignments are actions, not projected values.
             Expr::Member { base, field, span } => {
+                // `window.width` and `window.height` (RFC-0067): the reactive
+                // read of one of the two signals.
+                if let Some(extent) = self.window_extent(expr, payload_name) {
+                    return Box::new(move |ctx| ctx.read_signal(extent));
+                }
                 if let Some(lowered) = self.lower_enum_case(base, field, payload_name) {
                     return lowered;
                 }
@@ -922,6 +941,141 @@ impl Interpreter {
                 Box::new(move |ctx| data_member(&base_c(ctx), &field))
             }
             Expr::Lambda { .. } | Expr::Error(_) => Box::new(|_| Value::Unit),
+        }
+    }
+
+    /// Whether `name` is the built-in `window` (RFC-0067): nothing the view
+    /// binds is called that.
+    fn is_builtin_window(&self, name: &Symbol, payload_name: Option<&Symbol>) -> bool {
+        name.as_str() == "window"
+            && payload_name != Some(name)
+            && !self.lambda_params.contains(name)
+            && self.env.lookup(name).is_none()
+            && !self.consts.contains_key(name)
+    }
+
+    /// The signals behind `window`, made on the first read with the viewport
+    /// being rendered at (RFC-0067).
+    fn window_signals(&mut self) -> (SignalId, SignalId) {
+        if let Some(pair) = self.window {
+            return pair;
+        }
+        let (w, h) = self.viewport;
+        let pair = (
+            self.ctx.create_signal(Value::Float(f64::from(w))),
+            self.ctx.create_signal(Value::Float(f64::from(h))),
+        );
+        self.window = Some(pair);
+        pair
+    }
+
+    /// The signal `window.width` or `window.height` reads, or `None` when
+    /// `expr` is not one of the two (RFC-0067).
+    fn window_extent(&mut self, expr: &Expr, payload_name: Option<&Symbol>) -> Option<SignalId> {
+        let Expr::Member { base, field, .. } = expr else {
+            return None;
+        };
+        let Expr::Ident(name, _) = base.as_ref() else {
+            return None;
+        };
+        if !matches!(field.as_str(), "width" | "height")
+            || !self.is_builtin_window(name, payload_name)
+        {
+            return None;
+        }
+        let (w, h) = self.window_signals();
+        Some(if field.as_str() == "width" { w } else { h })
+    }
+
+    /// A comparison of `window.width` or `window.height` with a bare name
+    /// nothing binds: the name is a breakpoint of `[theme.breakpoints]`, as
+    /// after `on width >=` (RFC-0067). One that is not declared is
+    /// `UnknownBreakpoint`, and the comparison is false, as a block with an
+    /// undeclared breakpoint never applies.
+    fn lower_window_comparison(
+        &mut self,
+        op: BinOp,
+        lhs: &Expr,
+        rhs: &Expr,
+        payload_name: Option<&Symbol>,
+    ) -> Option<Lowered> {
+        if !matches!(
+            op,
+            BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge | BinOp::Eq | BinOp::Ne
+        ) {
+            return None;
+        }
+        let unbound = |this: &Self, e: &Expr| match e {
+            Expr::Ident(n, span)
+                if !matches!(n.as_str(), "true" | "false" | "none")
+                    && payload_name != Some(n)
+                    && !this.lambda_params.contains(n)
+                    && this.env.lookup(n).is_none()
+                    && !this.consts.contains_key(n) =>
+            {
+                Some((n.clone(), *span))
+            }
+            _ => None,
+        };
+        let is_extent = |this: &mut Self, e: &Expr| this.window_extent(e, payload_name).is_some();
+        let (extent, (name, span), flipped) =
+            if is_extent(self, lhs) && unbound(self, rhs).is_some() {
+                (lhs, unbound(self, rhs)?, false)
+            } else if is_extent(self, rhs) && unbound(self, lhs).is_some() {
+                (rhs, unbound(self, lhs)?, true)
+            } else {
+                return None;
+            };
+        let Some(px) = self.theme.breakpoint(name.as_str()) else {
+            let already = self.errors.iter().any(
+                |e| matches!(e, CompileError::UnknownBreakpoint { span: s, .. } if *s == span),
+            );
+            if !already {
+                let names = self.theme.breakpoint_names();
+                self.errors.push(CompileError::UnknownBreakpoint {
+                    span,
+                    name: name.as_str().to_string(),
+                    hint: crate::util::closest_match(
+                        name.as_str(),
+                        names.iter().map(String::as_str),
+                    )
+                    .map(str::to_string),
+                });
+            }
+            return Some(Box::new(|_| Value::Bool(false)));
+        };
+        let mut read = self.lower_expr(extent, payload_name);
+        let px = Value::Float(f64::from(px));
+        Some(Box::new(move |ctx| {
+            let extent = read(ctx);
+            if flipped {
+                eval_binary(op, px.clone(), extent)
+            } else {
+                eval_binary(op, extent, px.clone())
+            }
+        }))
+    }
+
+    /// Brings `window.width` and `window.height` up to the viewport this frame
+    /// is rendered at (RFC-0067), and pulls, so a `when` that reads them is
+    /// reconciled in the frame the window changed in. Nothing when no program
+    /// has read `window`, and nothing when the size is the same.
+    pub(super) fn sync_window(&mut self) {
+        let Some((w, h)) = self.window else {
+            return;
+        };
+        let (vw, vh) = self.viewport;
+        let mut changed = false;
+        for (sig, now) in [(w, vw), (h, vh)] {
+            let now = Value::Float(f64::from(now));
+            if self.ctx.peek_signal(sig) != now {
+                self.ctx.write_signal(sig, now);
+                changed = true;
+            }
+        }
+        if changed {
+            let epoch = self.ctx.begin_tick();
+            self.ctx.pull(epoch);
         }
     }
 

@@ -636,13 +636,26 @@ impl Interpreter {
             node.actions.insert(AccessActions::PRESS);
         }
         if self.router.has_handler(elem, RouterKind::Change) {
-            if matches!(node.role, AccessRole::TextInput | AccessRole::Slider) {
+            if matches!(
+                node.role,
+                AccessRole::TextInput | AccessRole::Slider | AccessRole::SpinButton
+            ) {
                 node.actions.insert(AccessActions::SET_VALUE);
             }
-            if node.role == AccessRole::Slider {
+            if matches!(node.role, AccessRole::Slider | AccessRole::SpinButton) {
                 node.actions.insert(AccessActions::INCREMENT);
                 node.actions.insert(AccessActions::DECREMENT);
             }
+        }
+        // RFC-0067: a spin button with no `change` is stepped by its own Up
+        // and Down keys, which a reader's Increment and Decrement send.
+        if node.role == AccessRole::SpinButton
+            && !node.actions.contains(AccessActions::SET_VALUE)
+            && self.router.is_focus_target(elem)
+            && self.router.has_handler(elem, RouterKind::KeyDown)
+        {
+            node.actions.insert(AccessActions::INCREMENT);
+            node.actions.insert(AccessActions::DECREMENT);
         }
     }
 
@@ -823,7 +836,10 @@ impl Interpreter {
                     .map(|(index, _)| AccessId(*index));
             }
         }
-        if matches!(node.role, AccessRole::Slider | AccessRole::ProgressBar) {
+        if matches!(
+            node.role,
+            AccessRole::Slider | AccessRole::ProgressBar | AccessRole::SpinButton
+        ) {
             let min = self.eval_float_prop(attrs, "a11y_value_min");
             let max = self.eval_float_prop(attrs, "a11y_value_max");
             let step = self.eval_float_prop(attrs, "a11y_value_step");

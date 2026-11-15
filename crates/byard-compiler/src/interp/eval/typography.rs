@@ -77,12 +77,6 @@ impl Interpreter {
         self.theme_mix.is_some() && self.theme_mix_value < 1.0
     }
 
-    /// Glyph-accurate `(width, height)` of `text` at `font_size`, lazily
-    /// initializing the font system on first use.
-    pub(super) fn measure_text(&mut self, text: &str, font_size: f32) -> (f32, f32) {
-        self.measure_text_wrapped(text, font_size, None, 400, None)
-    }
-
     /// Measures `text`, wrapping to `max_width` logical pixels when `Some`
     /// (RFC-0018 text wrap). Returns the wrapped `(width, height)`.
     pub(super) fn measure_text_wrapped(

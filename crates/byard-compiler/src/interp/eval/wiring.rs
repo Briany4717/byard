@@ -505,6 +505,19 @@ impl Interpreter {
         }
     }
 
+    /// How many columns a grid's cells run in when its rows are not written as
+    /// `row` elements (RFC-0067): the tracks of a layout `Grid`'s `columns:`
+    /// template, `0` for anything else (the `row` elements are the rows, and a
+    /// grid with neither is one row).
+    pub(super) fn grid_columns(&mut self, element_name: &str, attrs: &[Attr]) -> u16 {
+        if element_name != "Grid" {
+            return 0;
+        }
+        self.eval_str_prop(attrs, "columns")
+            .and_then(|template| crate::interp::intrinsics::parse_grid_template(&template))
+            .map_or(0, |tracks| u16::try_from(tracks.len()).unwrap_or(u16::MAX))
+    }
+
     /// The element indices of everything laid out inside `node`.
     fn collect_subtree(&self, node: byard_core::atlas::layout::AtlasNodeId, out: &mut Vec<u32>) {
         for child in self.atlas.children(node) {
@@ -610,7 +623,12 @@ impl Interpreter {
         self.router.focusable(idx, hit_rect, sig);
         if matches!(
             role,
-            Some(AccessRole::Tab | AccessRole::RadioButton | AccessRole::MenuItem)
+            Some(
+                AccessRole::Tab
+                    | AccessRole::RadioButton
+                    | AccessRole::MenuItem
+                    | AccessRole::GridCell
+            )
         ) {
             // RFC-0063 §4: where Tab enters the group. Read only for a member
             // of a group.

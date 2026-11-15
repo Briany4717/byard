@@ -37,7 +37,19 @@ pixels, with `(0, 0)` at the top-left.
 | `ngon` | `cx`, `cy`, `r`, `n`, and optionally `corner`, `inner` and `rotate` |
 | `bezier` | `x1`, `y1`, `cx1`, `cy1`, `cx2`, `cy2`, `x2`, `y2` |
 | `path` | A body of commands, or `d:` with SVG path text |
-| `text` | The text, then `x`, `y`, and optionally `color`, `size` and `align` |
+| `text` | The text, then `x`, `y`, and optionally `color`, `size`, `typo` and `align` |
+
+`text` takes the text style a `Text` does: `typo: labelLarge` gives it the theme token's size,
+weight and family (`typo: t.labelLarge` through `inject Theme as t` works too), so a dial's
+numbers are drawn in the face the rest of the app is. A `size` written beside it wins over the
+token's size, and `align` measures the line in the face it is drawn in. A `text` with no `typo` is
+drawn in the default face at the regular weight, as it was.
+
+```byld,fragment
+Canvas #[width: 120, height: 60] {
+    text("12", x: 60, y: 36, typo: titleLarge, align: center, color: 0xE6E1E5)
+}
+```
 
 Every shape that can be painted also takes these:
 

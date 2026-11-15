@@ -2331,7 +2331,8 @@ impl Interpreter {
         // as it always was. A hot reload of the same view invalidates in
         // `reload`, which knows the AST changed.
         let identity = (view.name.clone(), view.span);
-        if self.lowered_view.as_ref() != Some(&identity) {
+        let another_view = self.lowered_view.as_ref() != Some(&identity);
+        if another_view {
             self.invalidate_retained_layout();
             self.lowered_view = Some(identity);
         }
@@ -2367,12 +2368,15 @@ impl Interpreter {
         // the view, so nothing binds its parameters. They go into scope as
         // unset values: a name an attribute reads is then known to be a name
         // the view binds, the same as inside a call, and not a bare keyword.
-        // A parameter that is already a name here keeps its value. An unset one
+        // A parameter that is already a name here keeps its value, when it is
+        // the same view lowered again; another view's names are not this
+        // view's (a `min: Str` there must not be the `min: Float` here), so
+        // its parameters shadow whatever the last lowering left. An unset one
         // is the zero of its declared type, so a number is a number where a
         // number goes (`radius: v`) and a `Str` there is still the mismatch it
         // should be; a type with no obvious zero stays `Unit`.
         for param in &view.params {
-            if self.env.lookup(&param.name).is_none() {
+            if another_view || self.env.lookup(&param.name).is_none() {
                 self.env.push(param.name.clone(), unset_param(param));
             }
         }

@@ -301,7 +301,7 @@ A registry directory is written into `byard.toml` relative to the project, howev
 spelled (`/work/registry` from anywhere becomes `../registry`), so the manifest and the lock say the
 same on every machine. A registry URL is written as given, with or without a trailing slash, and may
 have a path: a static site such as a GitHub Pages project works with
-`byard add material --registry https://briany4717.github.io/byard-registry`. If `byard.toml` already
+`byard add material --registry https://packages.byard.dev`. If `byard.toml` already
 names a registry directory by an absolute path, `byard get` warns that it only works on this machine.
 
 ## `byard get` and the lockfile
@@ -354,7 +354,7 @@ BYARD_REGISTRY=./registry byard publish
 
 It needs `name` and `version` in `[package]`, and the package has to pass `byard check`: the errors are
 printed and nothing is published otherwise, since a version cannot be replaced. It writes an archive of what the package is made of, its
-manifest, sources, declared assets, README and licence, as `registry/kit/0.1.0.tar.gz`, and adds a line
+manifest, sources, declared assets and the licence files beside them, README and licence, as `registry/kit/0.1.0.tar.gz`, and adds a line
 to the registry's `index.toml` naming the archive, its hash and its dependencies.
 
 - **Versions are immutable.** Publishing the same content again does nothing. Publishing different

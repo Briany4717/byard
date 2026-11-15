@@ -103,6 +103,83 @@ macro_rules! swap_state {
     };
 }
 
+/// Where each `Window` of `views` is written, by source span: the view, and
+/// its place among that view's windows in source order.
+pub(super) fn index_windows(
+    views: &[crate::parser::ast::ViewDecl],
+) -> std::collections::HashMap<(u32, u32), (Symbol, u32)> {
+    fn walk(
+        members: &[Member],
+        view: &Symbol,
+        n: &mut u32,
+        out: &mut std::collections::HashMap<(u32, u32), (Symbol, u32)>,
+    ) {
+        for m in members {
+            match m {
+                Member::Element(el) => {
+                    if el.name.as_str() == WINDOW {
+                        out.insert((el.span.start, el.span.end), (view.clone(), *n));
+                        *n += 1;
+                    }
+                    walk(&el.children, view, n, out);
+                }
+                Member::When { then, els, .. } => {
+                    walk(then, view, n, out);
+                    if let Some(els) = els {
+                        walk(els, view, n, out);
+                    }
+                }
+                Member::For { body, .. } => walk(body, view, n, out),
+                _ => {}
+            }
+        }
+    }
+    let mut out = std::collections::HashMap::new();
+    for v in views {
+        let mut n = 0;
+        walk(&v.body, &v.name, &mut n, &mut out);
+    }
+    out
+}
+
+/// What says which window a `Window` is when the tree is lowered again: the
+/// element's place in the program, which an edit elsewhere does not move.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct Site {
+    view: Option<Symbol>,
+    ordinal: u32,
+    inst: u32,
+    /// The `as` name.
+    name: Option<String>,
+    /// The title when it is written as a text or a name, which a reload that
+    /// adds a window before this one leaves as it was.
+    title: String,
+}
+
+/// The title of a window as written, without its span: its text, or the name
+/// it reads.
+fn title_key(attrs: &[Attr]) -> String {
+    use crate::parser::ast::{Expr, StrPart};
+    let Some(AttrKind::Prop { value }) = attrs
+        .iter()
+        .find(|a| a.name.as_str() == "title")
+        .map(|a| &a.kind)
+    else {
+        return String::new();
+    };
+    match value {
+        Expr::StrLit(parts, _) => parts
+            .iter()
+            .map(|p| match p {
+                StrPart::Text(t) => t.clone(),
+                StrPart::Interp(..) => "{}".to_string(),
+            })
+            .collect(),
+        Expr::Ident(n, _) => format!("@{}", n.as_str()),
+        _ => String::new(),
+    }
+}
+
 /// One open surface: a mounted `Window`.
 // The flags are independent reasons to draw it again, each its own switch.
 #[allow(clippy::struct_excessive_bools)]
@@ -117,6 +194,7 @@ struct Live {
     size: (f32, f32),
     /// The signals behind `window.width` and `window.height` inside it.
     win: (SignalId, SignalId),
+    site: Site,
     close: Option<Rc<RefCell<Action>>>,
     /// The surface's own state while another is bound; `None` while this one is.
     state: Option<Box<SurfaceState>>,
@@ -158,6 +236,8 @@ pub(super) struct Surfaces {
     idle_seq: Option<u64>,
     /// Every surface is drawn again at the next tick.
     force: bool,
+    /// The reloads that have been matched with the windows.
+    reloads_seen: u32,
 }
 
 impl Surfaces {
@@ -219,6 +299,9 @@ impl Interpreter {
         let width = self.ctx.create_signal(Value::Float(0.0));
         let height = self.ctx.create_signal(Value::Float(0.0));
         self.window_pairs.push((uid, (width, height)));
+        if let Some(site) = self.window_sites.get(&(el.span.start, el.span.end)) {
+            self.window_keys.insert(uid, site.clone());
+        }
         let outer = self.ctx_chain.take();
         self.ctx_chain = Some(Rc::new(super::CtxNode {
             parent: outer.clone(),
@@ -542,6 +625,12 @@ impl Interpreter {
             let id = live.id;
             let mut frame = new_frame();
             let st = self.bind_surface(index);
+            if force {
+                // A reload or a theme change: this surface's last layout says
+                // nothing about the tree it is drawn from now.
+                self.retained.invalidated = true;
+                self.paint.reset();
+            }
             self.ctx.watch_reads();
             self.ctx.push_scope_tracker();
             self.render_frame(
@@ -727,10 +816,118 @@ impl Interpreter {
 
     // ── opening and closing ─────────────────────────────────────────────
 
+    /// The place in the program a `Window` node is written.
+    fn site_of(&self, node: &RenderNode) -> Site {
+        let RenderNode::Box {
+            attrs,
+            anchor_name,
+            uid,
+            inst,
+            ..
+        } = node
+        else {
+            return Site::default();
+        };
+        let at = self.window_keys.get(uid);
+        Site {
+            view: at.map(|(v, _)| v.clone()),
+            ordinal: at.map_or(0, |(_, n)| *n),
+            inst: *inst,
+            name: anchor_name.as_ref().map(|n| n.as_str().to_string()),
+            title: title_key(attrs),
+        }
+    }
+
+    /// After a reload the tree was lowered again, so every window is a new node.
+    /// The ones that are still written where they were keep their surface
+    /// (RFC-0068 §2, identity; Q12): matched, in turn, by the `as` name, by the
+    /// title as written, and by their place among the view's windows, so an
+    /// edit to a window's content, its title, or a window added before it
+    /// leaves the others as they were. Whatever is left over opens or closes.
+    fn rematch_after_reload(&mut self, windows: &[&RenderNode]) {
+        let Some(surfaces) = self.surfaces.as_ref() else {
+            return;
+        };
+        let mounted: Vec<u32> = windows
+            .iter()
+            .filter_map(|n| match n {
+                RenderNode::Box { uid, .. } => Some(*uid),
+                _ => None,
+            })
+            .collect();
+        let mut stale: Vec<usize> = (0..surfaces.live.len())
+            .filter(|&i| !mounted.contains(&surfaces.live[i].uid))
+            .collect();
+        let live_uids: Vec<u32> = surfaces.live.iter().map(|l| l.uid).collect();
+        let mut fresh: Vec<&RenderNode> = windows
+            .iter()
+            .copied()
+            .filter(|n| matches!(n, RenderNode::Box { uid, .. } if !live_uids.contains(uid)))
+            .collect();
+        for pass in 0..3 {
+            let mut k = 0;
+            while k < fresh.len() {
+                let site = self.site_of(fresh[k]);
+                let hit = stale.iter().position(|&i| {
+                    let have = &self.surfaces.as_ref().expect("surfaces").live[i].site;
+                    have.view == site.view
+                        && have.inst == site.inst
+                        && match pass {
+                            0 => site.name.is_some() && have.name == site.name,
+                            1 => {
+                                have.name == site.name
+                                    && !site.title.is_empty()
+                                    && have.title == site.title
+                            }
+                            _ => have.ordinal == site.ordinal,
+                        }
+                });
+                let Some(h) = hit else {
+                    k += 1;
+                    continue;
+                };
+                let index = stale.remove(h);
+                let node = fresh.remove(k);
+                let RenderNode::Box {
+                    attrs,
+                    env_snapshot,
+                    uid,
+                    ..
+                } = node
+                else {
+                    continue;
+                };
+                let win = self
+                    .window_pairs
+                    .iter()
+                    .find(|(u, _)| u == uid)
+                    .map(|(_, pair)| *pair);
+                let close = self.lower_close(attrs, env_snapshot);
+                if let Some(l) = self.surfaces.as_mut().map(|s| &mut s.live[index]) {
+                    l.uid = *uid;
+                    if let Some(win) = win {
+                        l.win = win;
+                    }
+                    l.site = site;
+                    l.close = close;
+                    l.structure_moved = true;
+                }
+            }
+        }
+    }
+
     /// Compares the mounted windows with the surfaces that are open: a new
     /// window opens a surface, one that is gone closes its, and one whose
     /// reactive attributes moved is reconfigured.
     fn reconcile_surfaces(&mut self, windows: &[&RenderNode]) {
+        let reloads = self.reloads;
+        if self
+            .surfaces
+            .as_mut()
+            .is_some_and(|s| std::mem::replace(&mut s.reloads_seen, reloads) != reloads)
+        {
+            self.rematch_after_reload(windows);
+        }
         let mut seen: Vec<u32> = Vec::with_capacity(windows.len());
         for &node in windows {
             let RenderNode::Box {
@@ -815,6 +1012,7 @@ impl Interpreter {
             );
         let mut spec = spec;
         spec.handles_close = close.is_some();
+        let site = self.site_of(node);
         let surfaces = self.surfaces.get_or_insert_with(Box::default);
         surfaces.next_id += 1;
         surfaces.had_any = true;
@@ -823,13 +1021,14 @@ impl Interpreter {
             id,
             spec: spec.clone(),
         });
-        let size = spec.size;
+        let opening = spec.size;
         surfaces.live.push(Live {
             id,
             uid: *uid,
             spec,
-            size,
+            size: opening,
             win,
+            site,
             close,
             state: Some(Box::default()),
             reads: ReadSet::default(),

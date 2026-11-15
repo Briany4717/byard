@@ -19,6 +19,7 @@ struct Windows {
     /// Every change the program asked of the platform, in order.
     changes: Vec<SurfaceChange>,
     t: u64,
+    views: Vec<byard_compiler::parser::ast::ViewDecl>,
 }
 
 impl Windows {
@@ -38,9 +39,27 @@ impl Windows {
             frames: Vec::new(),
             changes: Vec::new(),
             t: 0,
+            views: parsed.views,
         };
         w.step(&[]);
         w
+    }
+
+    /// Hot-reloads the program to `src`, the way `byard dev` does, and runs the
+    /// ticks after it.
+    fn reload(&mut self, src: &str) {
+        let parsed = parse(src);
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        if let Some(tree) = byard_compiler::interp::reload::apply_program(
+            &mut self.interp,
+            &self.views,
+            &parsed.views,
+        ) {
+            self.tree = tree;
+        }
+        self.views = parsed.views;
+        self.changes.clear();
+        self.settle();
     }
 
     fn step(&mut self, events: &[InputEvent]) {
@@ -818,4 +837,92 @@ View Main() {
     );
     assert_eq!(w.texts("B"), ["plain"]);
     assert_eq!(w.paints("B"), 1);
+}
+
+const RELOAD_A: &str = r#"
+View Main() {
+    Window #[title: "One", width: 200, height: 100] { Text("first") }
+    Window #[title: "Two", width: 200, height: 100] { Text("second") }
+}
+"#;
+
+fn ids_by_title(w: &Windows) -> Vec<(String, SurfaceId)> {
+    let mut all: Vec<(String, SurfaceId)> = w
+        .interp
+        .surface_ids()
+        .into_iter()
+        .map(|id| (w.interp.surface_spec(id).unwrap().title.clone(), id))
+        .collect();
+    all.sort();
+    all
+}
+
+#[test]
+fn a_reload_that_edits_a_windows_content_keeps_its_surface() {
+    let mut w = Windows::new(RELOAD_A);
+    let before = ids_by_title(&w);
+    w.reload(&RELOAD_A.replace("first", "edited first"));
+    assert_eq!(ids_by_title(&w), before);
+    assert!(w.changes.is_empty(), "{:?}", w.changes);
+    assert_eq!(w.texts("One"), ["edited first"]);
+    assert_eq!(w.texts("Two"), ["second"]);
+}
+
+#[test]
+fn a_reload_that_changes_a_title_configures_the_same_surface() {
+    let mut w = Windows::new(RELOAD_A);
+    let one = w.surface("One");
+    w.reload(&RELOAD_A.replace("\"One\"", "\"Uno\""));
+    assert_eq!(w.surface("Uno"), one);
+    assert_eq!(w.changes.len(), 1, "{:?}", w.changes);
+    assert!(
+        matches!(&w.changes[0], SurfaceChange::Configure { id, spec } if *id == one && spec.title == "Uno")
+    );
+}
+
+#[test]
+fn a_reload_that_removes_the_second_window_destroys_only_it() {
+    let mut w = Windows::new(RELOAD_A);
+    let (one, two) = (w.surface("One"), w.surface("Two"));
+    w.reload(
+        r#"
+View Main() {
+    Window #[title: "One", width: 200, height: 100] { Text("first") }
+}
+"#,
+    );
+    assert_eq!(w.interp.surface_ids(), [one]);
+    assert_eq!(w.changes, [SurfaceChange::Destroy { id: two }]);
+}
+
+#[test]
+fn a_reload_that_adds_a_window_before_another_leaves_the_other_alone() {
+    let mut w = Windows::new(RELOAD_A);
+    let (one, two) = (w.surface("One"), w.surface("Two"));
+    w.reload(
+        r#"
+View Main() {
+    Window #[title: "New", width: 200, height: 100] { Text("new") }
+    Window #[title: "One", width: 200, height: 100] { Text("first") }
+    Window #[title: "Two", width: 200, height: 100] { Text("second") }
+}
+"#,
+    );
+    assert_eq!(w.surface("One"), one);
+    assert_eq!(w.surface("Two"), two);
+    let new = w.surface("New");
+    assert!(new != one && new != two && new.index() > 2);
+    assert_eq!(w.changes.len(), 1, "{:?}", w.changes);
+    assert!(matches!(&w.changes[0], SurfaceChange::Create { id, .. } if *id == new));
+}
+
+#[test]
+fn a_user_view_named_window_is_told_it_shadows_the_element() {
+    let parsed = parse("View Window() { Text(\"x\") }\nView Main() { Window() }");
+    let mut interp = Interpreter::new();
+    let errors = interp.load_views(&parsed.views);
+    assert!(
+        errors.iter().any(|e| e.kind() == "IntrinsicShadowed"),
+        "{errors:?}"
+    );
 }

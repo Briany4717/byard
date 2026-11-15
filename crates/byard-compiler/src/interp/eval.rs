@@ -1128,6 +1128,15 @@ pub struct Interpreter {
     /// The signals behind the `window` of each `Window` lowered, by the
     /// element's uid. Empty for a program with none.
     window_pairs: Vec<(u32, (SignalId, SignalId))>,
+    /// Where each `Window` is written, by source span: its view and its place
+    /// among that view's windows (RFC-0068 §2, identity). Rebuilt by
+    /// `load_views`, so a reload reads the new program's.
+    window_sites: std::collections::HashMap<(u32, u32), (Symbol, u32)>,
+    /// The site of each `Window` node lowered, by the node's uid.
+    window_keys: std::collections::HashMap<u32, (Symbol, u32)>,
+    /// How many times a reload lowered the tree again: surfaces are matched
+    /// with the new windows by where they are written, not by identity of node.
+    reloads: u32,
     /// The title of a `Window` that has none: the one the program's single
     /// window would have.
     default_window_title: String,
@@ -1326,6 +1335,7 @@ impl Interpreter {
         // Every view carries the same program-wide function table; register
         // it once, fresh, so a reload replaces rather than accumulates names.
         self.top_fns.clear();
+        self.window_sites = surfaces::index_windows(views);
         if let Some(first) = views.first() {
             self.records = std::rc::Rc::new(
                 first
@@ -1717,6 +1727,7 @@ impl Interpreter {
         // The tree is about to be re-lowered from a different AST, so nothing
         // about last frame's build order can be assumed (RFC-0032 §R4).
         self.invalidate_retained_layout();
+        self.reloads += 1;
         let old = std::mem::take(&mut self.var_sigs);
         self.env = Env::new();
         // A reload replaces the program, so every continuation now names a

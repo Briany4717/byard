@@ -283,6 +283,7 @@ pub fn find_in_members(
                 var,
                 index,
                 iter,
+                key,
                 body,
                 span,
             } if span_contains(*span, offset) => {
@@ -296,6 +297,9 @@ pub fn find_in_members(
                     });
                 }
                 if let Some(target) = find_in_expr(iter, offset) {
+                    return Some(target);
+                }
+                if let Some(target) = key.as_ref().and_then(|k| find_in_expr(k, offset)) {
                     return Some(target);
                 }
                 if let Some(target) = find_in_members(body, offset, parent_element) {
@@ -595,9 +599,16 @@ pub fn find_class_ref_in_members(members: &[Member], offset: usize) -> Option<St
                 }
             }
             Member::For {
-                iter, body, span, ..
+                iter,
+                key,
+                body,
+                span,
+                ..
             } if span_contains(*span, offset) => {
                 if let Some(name) = find_class_ref_in_expr(iter, offset) {
+                    return Some(name);
+                }
+                if let Some(name) = key.as_ref().and_then(|k| find_class_ref_in_expr(k, offset)) {
                     return Some(name);
                 }
                 if let Some(name) = find_class_ref_in_members(body, offset) {

@@ -10,6 +10,10 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`for … key`.** `for t in tasks key t.id { … }` and `for i, t in tasks key t.id { … }` keep a row, with its `var`s, memos and animations, for as long as its key is in the list: inserting at the front, removing from the middle or reordering moves the rows instead of rebuilding them, and the loop variable and index follow the item. A key that goes plays its row's `on leave`. `key` takes a `Str`, an `Int`, a `Float`, a `Bool`, an enum or a record of those (`ForKeyNotComparable` otherwise); two items with one key are a `DuplicateForKey` error and the second is not drawn. A `for` without `key` is as it was, and `key` is still a fine name for anything else. RFC-0068. See `crates/byard-cli/examples/keyed_list`.
+
 ## [0.1.0] - 2026-11-15
 
 The first release.

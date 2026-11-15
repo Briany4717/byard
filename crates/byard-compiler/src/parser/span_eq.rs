@@ -320,6 +320,7 @@ impl SpanEq for Member {
                     var,
                     index,
                     iter,
+                    key,
                     body,
                     span: _,
                 },
@@ -327,10 +328,13 @@ impl SpanEq for Member {
                     var: v2,
                     index: x2,
                     iter: i2,
+                    key: k2,
                     body: b2,
                     span: _,
                 },
-            ) => var == v2 && index == x2 && iter.span_eq(i2) && body.span_eq(b2),
+            ) => {
+                var == v2 && index == x2 && iter.span_eq(i2) && key.span_eq(k2) && body.span_eq(b2)
+            }
             (
                 Self::When {
                     cond,

@@ -32,6 +32,18 @@ fn a_grouping_spec_in_an_interpolation_is_kept_as_written() {
     );
 }
 
+#[test]
+fn a_keyed_for_is_printed_and_stable() {
+    // RFC-0068 §4b.
+    let out = fmt_stable(
+        "View M() {\nfor   i,t in ts   key   t.id{\nText(\"a\")\n}\nfor s in screens key s.name{\nText(\"b\")\n}\nfor key in ks key key{\nText(\"c\")\n}\n}\n",
+    );
+    assert_eq!(
+        out,
+        "View M() {\n    for i, t in ts key t.id {\n        Text(\"a\")\n    }\n    for s in screens key s.name {\n        Text(\"b\")\n    }\n    for key in ks key key {\n        Text(\"c\")\n    }\n}\n"
+    );
+}
+
 // ---- spacing ------------------------------------------------------------
 
 #[test]

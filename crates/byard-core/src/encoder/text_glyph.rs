@@ -114,6 +114,16 @@ struct CachedLine {
     /// The glyphs of a line with `variations`, drawn as custom glyphs
     /// (RFC-0054); empty for every other line.
     custom: Vec<glyphon::CustomGlyph>,
+    /// Whether `custom` holds the line's ordinary text, drawn that way because
+    /// one of its fonts has variation axes (see `variation_glyphs`), and the
+    /// buffer itself draws nothing. Such glyphs are placed from the text
+    /// area's physical origin and scale, which is `placed`, so they are built
+    /// again when the line moves.
+    text_custom: bool,
+    placed: [f32; 3],
+    /// The vertical extent of the line's runs in logical pixels from its top,
+    /// for skipping a line a clip hides, as glyphon skips a buffer's runs.
+    extent: (f32, f32),
     /// The [`shape_key`] `buffer` was last shaped from, the authority on
     /// whether it still describes this line.
     shape_key: u64,
@@ -453,6 +463,9 @@ struct ShapePass {
     /// Whether the viewport changed, which invalidates every shaped buffer
     /// regardless of content (DPI/scale reaches the shaper).
     viewport_dirty: bool,
+    /// Logical to physical, for placing the glyphs of a line drawn as custom
+    /// glyphs.
+    scale_factor: f32,
 }
 
 // ── Pipeline ──────────────────────────────────────────────────────────────────
@@ -747,6 +760,9 @@ impl TextGlyphPipeline {
             self.cache.push(CachedLine {
                 buffer,
                 custom: Vec::new(),
+                text_custom: false,
+                placed: [0.0; 3],
+                extent: (0.0, 0.0),
                 // No buffer has been shaped for this entry yet. The value is
                 // never compared, `is_new` forces the shape below, but it is
                 // set to a marker rather than to a plausible key so a future
@@ -766,6 +782,7 @@ impl TextGlyphPipeline {
             #[cfg(debug_assertions)]
             length_changed,
             viewport_dirty,
+            scale_factor,
         };
         self.shape_range(text_lines, wraps, 0..split, pass);
         if split < text_lines.len() {
@@ -917,7 +934,31 @@ impl TextGlyphPipeline {
             // pre-existing slot whose key still matches holds byte-identical
             // glyphs with the right metadata, whether or not the pool's length
             // moved around it.
+            // Where the line's text area sits, physically. Glyphs drawn as
+            // custom glyphs are placed from it.
+            let placed = [
+                line.x * pass.scale_factor,
+                line.y * pass.scale_factor,
+                pass.scale_factor,
+            ];
             if !is_new && !needs_reshape(pass.viewport_dirty, key != entry.shape_key) {
+                // The glyph run stands. A line drawn as custom glyphs that
+                // has moved is placed again, which shapes nothing.
+                // Exact: the same inputs give the same floats.
+                #[allow(clippy::float_cmp)]
+                let moved = entry.placed != placed;
+                if entry.text_custom && moved {
+                    entry.custom.clear();
+                    entry.placed = placed;
+                    self.variation_glyphs.build_text(
+                        &mut self.font_system,
+                        &entry.buffer,
+                        (placed[0], placed[1]),
+                        placed[2],
+                        i,
+                        &mut entry.custom,
+                    );
+                }
                 continue; // byte-identical glyph run, the cached buffer stands
             }
             entry.shape_key = key;
@@ -925,11 +966,38 @@ impl TextGlyphPipeline {
 
             shape_line(&mut self.font_system, &mut entry.buffer, line, wrap_w, i);
             entry.custom.clear();
+            entry.text_custom = false;
             if let Some(axes) = &line.variations {
                 self.variation_glyphs.build(
                     &mut self.font_system,
                     &entry.buffer,
                     axes,
+                    i,
+                    &mut entry.custom,
+                );
+            } else if self
+                .variation_glyphs
+                .is_variable_line(&mut self.font_system, &entry.buffer)
+            {
+                // A font with variation axes never goes through glyphon's own
+                // glyph cache: see `variation_glyphs`' module docs.
+                entry.text_custom = true;
+                entry.placed = placed;
+                entry.extent =
+                    entry
+                        .buffer
+                        .layout_runs()
+                        .fold((f32::MAX, f32::MIN), |(top, bottom), run| {
+                            (
+                                top.min(run.line_top),
+                                bottom.max(run.line_top + run.line_height),
+                            )
+                        });
+                self.variation_glyphs.build_text(
+                    &mut self.font_system,
+                    &entry.buffer,
+                    (placed[0], placed[1]),
+                    placed[2],
                     i,
                     &mut entry.custom,
                 );
@@ -1005,13 +1073,37 @@ fn collect_layer_text_areas<'cache>(
                 byte(blue),
                 (alpha.clamp(0.0, 1.0) * 255.0).round() as u8,
             );
+            let bounds = text_clips
+                .get(global)
+                .copied()
+                .flatten()
+                .and_then(|idx| clips.get(idx as usize))
+                .map_or(
+                    TextBounds {
+                        left: 0,
+                        top: 0,
+                        right: i32::MAX,
+                        bottom: i32::MAX,
+                    },
+                    |c| clip_to_text_bounds(c.rect, scale_factor),
+                );
+            let entry = &cache[global];
+            // A line drawn as custom glyphs is skipped when a clip hides it, as
+            // glyphon skips the runs of a buffer it hides.
+            let hidden = entry.text_custom && {
+                let top = line.y.mul_add(scale_factor, entry.extent.0 * scale_factor);
+                let bottom = line.y.mul_add(scale_factor, entry.extent.1 * scale_factor);
+                #[allow(clippy::cast_precision_loss)]
+                let (clip_top, clip_bottom) = (bounds.top as f32, bounds.bottom as f32);
+                top > clip_bottom || clip_top > bottom
+            };
             TextArea {
                 // A line drawn as custom glyphs shows its glyphs only through
                 // them (RFC-0054); the empty buffer draws none of its own.
-                buffer: if line.variations.is_some() {
+                buffer: if line.variations.is_some() || entry.text_custom {
                     empty
                 } else {
-                    &cache[global].buffer
+                    &entry.buffer
                 },
                 // glyphon's Viewport/Resolution is configured in PHYSICAL
                 // pixels (see EncoderSubsystem::update_viewport), but
@@ -1030,22 +1122,9 @@ fn collect_layer_text_areas<'cache>(
                 // `TextBounds` (physical px), the clean, per-area way to
                 // clip text without a render-pass scissor. Unclipped
                 // lines stay unbounded.
-                bounds: text_clips
-                    .get(global)
-                    .copied()
-                    .flatten()
-                    .and_then(|idx| clips.get(idx as usize))
-                    .map_or(
-                        TextBounds {
-                            left: 0,
-                            top: 0,
-                            right: i32::MAX,
-                            bottom: i32::MAX,
-                        },
-                        |c| clip_to_text_bounds(c.rect, scale_factor),
-                    ),
+                bounds,
                 default_color,
-                custom_glyphs: &cache[global].custom,
+                custom_glyphs: if hidden { &[] } else { &entry.custom },
             }
         })
         .collect()

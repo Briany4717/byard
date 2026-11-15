@@ -398,7 +398,7 @@ when a `when` turns false, a `for` loses a row or an overlay closes. It stays dr
 those motions end, and meanwhile takes no input, is out of the Tab order and is not in
 the accessibility tree. Shown again before it has gone, it turns round from where it is.
 A branch that has an `on leave` anywhere in it is kept whole; the rest of it stays as it
-was. Rows of a `for` are positional, so it is the last rows of the list that leave.
+was. Rows of a `for` are positional, so it is the last rows of the list that leave; with `for … key` ([state](state.md#rows-that-keep-their-state-key)) it is the rows whose keys are gone.
 Nothing is kept for an element that has neither block, and a loop that never ends does
 not keep a leaving element drawn.
 

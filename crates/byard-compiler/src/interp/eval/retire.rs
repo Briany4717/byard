@@ -53,7 +53,7 @@ impl Interpreter {
     /// pools those live in, and the effect and measure slots. A node's own
     /// scopes (its text, its `when` condition) are in the list of whoever lowered
     /// the node, which is why they are not counted again here.
-    fn retire_nodes(&mut self, nodes: Vec<RenderNode>) {
+    pub(super) fn retire_nodes(&mut self, nodes: Vec<RenderNode>) {
         for node in nodes {
             match node {
                 RenderNode::Box {
@@ -117,7 +117,18 @@ impl Interpreter {
         f.slots = None;
         f.len = 0;
         f.leaving_to = 0;
+        let keyed = f.keyed.take();
         self.free_for_pools.push(pool);
+        // A keyed `for` has a position signal per row as well.
+        if let Some(keyed) = keyed {
+            for slot in keyed
+                .index_slots
+                .into_iter()
+                .chain(keyed.spare.into_iter().flat_map(|(a, b)| [a, b]))
+            {
+                self.ctx.reset_signal_silent(slot, super::Value::Unit);
+            }
+        }
         // The signals themselves stay in the table (signals are not recycled),
         // but nothing reads them again, so what they hold is let go.
         for slot in slots {
@@ -170,6 +181,10 @@ impl Interpreter {
     /// row that left.
     pub(super) fn trim_for_pool(&mut self, pool: usize) {
         let f = &self.for_pools[pool];
+        // A keyed `for` keeps no spare bodies: a row is kept for its key.
+        if f.keyed.is_some() {
+            return;
+        }
         let base = f.len.max(f.leaving_to).max(FOR_POOL_FLOOR);
         if f.bodies.len() <= base * FOR_POOL_SLACK {
             return;

@@ -639,10 +639,29 @@ impl Interpreter {
                 var,
                 index,
                 iter,
+                key,
                 body,
                 ..
             } => {
                 let list_scope = self.bind_value(iter);
+                // RFC-0068 §4b: the key is lowered once, reading the loop
+                // variable from a scratch signal the reconcile writes each
+                // item into. A plain `for` has none of this.
+                let keyed = key.as_ref().map(|key| {
+                    let key_item = self.ctx.create_signal(Value::Unit);
+                    let base = self.env.len();
+                    self.env.push(var.clone(), Value::Signal(key_item));
+                    let key_fn = self.lower_expr(key, None);
+                    self.env.truncate(base);
+                    Box::new(super::layout::KeyedFor {
+                        key_item,
+                        key_fn: Some(key_fn),
+                        key_span: key.span(),
+                        index_slots: Vec::new(),
+                        keys: Vec::new(),
+                        spare: Vec::new(),
+                    })
+                });
                 let env_snapshot = self.capture_env_snapshot();
                 let pool = self.alloc_for_pool(ForPool {
                     item_var: var.clone(),
@@ -659,6 +678,7 @@ impl Interpreter {
                     len: 0,
                     leaving_to: 0,
                     leaving_since: 0,
+                    keyed,
                 });
                 out.push(RenderNode::For {
                     pool,

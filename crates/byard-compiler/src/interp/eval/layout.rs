@@ -175,6 +175,56 @@ pub(super) struct ForPool {
     pub(super) leaving_to: usize,
     /// See `leaving_to`.
     pub(super) leaving_since: u64,
+    /// What a `for … key` adds (RFC-0068 §4b); `None` for a plain `for`, which
+    /// is why a plain `for` pays nothing for it.
+    pub(super) keyed: Option<Box<KeyedFor>>,
+}
+
+/// A canonical, hashable form of a key, so rows are matched in one pass.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(super) enum KeyRepr {
+    Int(i64),
+    Float(u64),
+    Bool(bool),
+    Str(String),
+    /// A record or a tuple: its fields' keys, in order.
+    Seq(Vec<KeyRepr>),
+    /// A value with no equality worth matching by: all of them are equal.
+    Other,
+}
+
+impl KeyRepr {
+    pub(super) fn of(v: &Value) -> Self {
+        match v {
+            Value::Int(n) => Self::Int(*n),
+            Value::Float(f) => Self::Float(if *f == 0.0 { 0 } else { f.to_bits() }),
+            Value::Bool(b) => Self::Bool(*b),
+            Value::Str(s) => Self::Str(s.clone()),
+            Value::Record(fields) => Self::Seq(fields.iter().map(|(_, v)| Self::of(v)).collect()),
+            Value::Tuple(fields) => Self::Seq(fields.iter().map(|(_, v)| Self::of(v)).collect()),
+            Value::List(items) => Self::Seq(items.iter().map(Self::of).collect()),
+            _ => Self::Other,
+        }
+    }
+}
+
+/// The state of a keyed `for` (RFC-0068 §4b). Its rows are kept in the pool's
+/// arrays in list order, then the rows that are leaving, so everything that
+/// walks a pool (paint, hit testing, animation slots) sees what it sees for a
+/// plain `for`; only the order of the rows is the list's, not the slots'.
+pub(super) struct KeyedFor {
+    /// The scratch signal the key expression reads the loop variable from.
+    pub(super) key_item: crate::interp::env::SignalId,
+    /// The key expression, lowered. Taken out while it runs.
+    pub(super) key_fn: Option<super::Lowered>,
+    /// Where the key is written, for `DuplicateForKey`.
+    pub(super) key_span: Span,
+    /// One signal per row holding its position (parallel to `bodies`).
+    pub(super) index_slots: Vec<crate::interp::env::SignalId>,
+    /// Each row's key (parallel to `bodies`).
+    pub(super) keys: Vec<KeyRepr>,
+    /// Signals of rows that went, reused by the next rows.
+    pub(super) spare: Vec<(crate::interp::env::SignalId, crate::interp::env::SignalId)>,
 }
 
 /// What [`Interpreter::render`] remembers between frames so it can decide
@@ -530,7 +580,11 @@ impl Interpreter {
                 let p = &self.for_pools[i];
                 if p.bodies.is_empty() && key("for", &(&p.item_var, &p.index_var, &p.body)) {
                     let slot = self.ctx.create_signal(Value::Unit);
-                    let (nodes, scopes) = self.lower_for_body(i, slot);
+                    let index_slot = self.for_pools[i]
+                        .keyed
+                        .is_some()
+                        .then(|| self.ctx.create_signal(Value::Int(0)));
+                    let (nodes, scopes) = self.lower_for_body(i, slot, index_slot);
                     // Held as the pool's one pooled body, with `len` still 0:
                     // it is never drawn, and the nested pools it registered
                     // stay reachable for the next sweep.
@@ -643,6 +697,7 @@ impl Interpreter {
         &mut self,
         pool: usize,
         slot: crate::interp::env::SignalId,
+        index_slot: Option<crate::interp::env::SignalId>,
     ) -> (Vec<RenderNode>, Vec<ScopeId>) {
         // Clone the lowering inputs out first so the borrow on `self.for_pools`
         // is released before `lower_members` (which may append *nested* pools).
@@ -659,7 +714,12 @@ impl Interpreter {
         }
         self.env.push(item_var, Value::Signal(slot));
         if let Some(index_var) = index_var {
-            self.env.push(index_var, Value::Int(slot_index));
+            // A keyed row's position moves with the list, so it is a signal;
+            // a plain row *is* its position, so it is a constant.
+            self.env.push(
+                index_var,
+                index_slot.map_or(Value::Int(slot_index), Value::Signal),
+            );
         }
         let known_refs: Vec<&str> = known.iter().map(String::as_str).collect();
         // Mark that we are lowering inside a `for` body so any event action
@@ -803,6 +863,16 @@ impl Interpreter {
                         Some(Value::List(items)) => items,
                         _ => Vec::new(),
                     };
+                    if self.for_pools[*pool].keyed.is_some() {
+                        dirtied |= self.reconcile_keyed_for(*pool, &items);
+                        let live = self.for_pools[*pool].len;
+                        let bodies = std::mem::take(&mut self.for_pools[*pool].bodies);
+                        for body in bodies.iter().take(live) {
+                            dirtied |= self.reconcile_structure(body, depth + 1);
+                        }
+                        self.for_pools[*pool].bodies = bodies;
+                        continue;
+                    }
                     let new_len = items.len();
                     // Grow the pool: lower one body per newly-needed index, each
                     // reading its element from a fresh per-slot signal.
@@ -815,7 +885,7 @@ impl Interpreter {
                             .get(self.for_pools[*pool].bodies.len())
                             .copied();
                         let slot = reused.unwrap_or_else(|| self.ctx.create_signal(Value::Unit));
-                        let (body_nodes, scopes) = self.lower_for_body(*pool, slot);
+                        let (body_nodes, scopes) = self.lower_for_body(*pool, slot, None);
                         // Index `*pool` is still valid (nested lowering only
                         // appended higher indices).
                         if reused.is_none() {
@@ -899,6 +969,267 @@ impl Interpreter {
             }
         }
         dirtied
+    }
+
+    /// Reconciles a keyed `for` (RFC-0068 §4b) against its new list.
+    ///
+    /// A row whose key is in the new list keeps everything it has: its lowered
+    /// body, so its `var`s, memos and effects, and its element signal, so its
+    /// animations (they are keyed by that signal). Its loop variable and index
+    /// are rewritten, and what reads them updates as any read does. A key that
+    /// is new gets a body of its own; one that is gone is retired, or kept
+    /// drawn after the live rows while its `on leave` plays. The pool's arrays
+    /// end up in the list's order, so everything that walks a pool is
+    /// unchanged. Returns whether anything changed.
+    fn reconcile_keyed_for(&mut self, pool: usize, items: &[Value]) -> bool {
+        let mut dirtied = false;
+        let unchanged = {
+            let f = &self.for_pools[pool];
+            f.len == items.len()
+                && f.item_slots.len() >= f.len
+                && (0..f.len).all(|i| self.ctx.peek_signal(f.item_slots[i]) == items[i])
+        };
+        if !unchanged {
+            dirtied |= self.rematch_keyed_rows(pool, items);
+        }
+        // Rows that were leaving go once their motion has settled.
+        let f = &self.for_pools[pool];
+        if f.leaving_to > f.len
+            && self.frame_seq > f.leaving_since
+            && !self.leave_busy_prev.contains(&for_group(pool))
+        {
+            let from = f.len;
+            self.retire_keyed_rows(pool, from);
+            self.for_pools[pool].leaving_to = from;
+            dirtied = true;
+        }
+        dirtied
+    }
+
+    /// The part of [`reconcile_keyed_for`](Self::reconcile_keyed_for) that runs
+    /// when the list is not the one the rows were made for.
+    #[allow(clippy::too_many_lines)]
+    fn rematch_keyed_rows(&mut self, pool: usize, items: &[Value]) -> bool {
+        use std::collections::{HashMap, HashSet};
+        let mut dirtied = false;
+        // 1. Each item's key, read in the loop's scope.
+        let (key_item, mut key_fn, key_span) = {
+            let k = self.for_pools[pool]
+                .keyed
+                .as_mut()
+                .expect("a keyed for has its key state");
+            (
+                k.key_item,
+                k.key_fn.take().expect("the key is not already running"),
+                k.key_span,
+            )
+        };
+        let mut reprs: Vec<KeyRepr> = Vec::with_capacity(items.len());
+        for it in items {
+            self.ctx.reset_signal_silent(key_item, it.clone());
+            reprs.push(KeyRepr::of(&key_fn(&mut self.ctx)));
+        }
+        self.for_pools[pool]
+            .keyed
+            .as_mut()
+            .expect("a keyed for has its key state")
+            .key_fn = Some(key_fn);
+        // 2. Match them with the rows there are. A second item with a key an
+        // earlier one has is not drawn.
+        let old_keys = std::mem::take(
+            &mut self.for_pools[pool]
+                .keyed
+                .as_mut()
+                .expect("a keyed for has its key state")
+                .keys,
+        );
+        let old_by_key: HashMap<&KeyRepr, usize> =
+            old_keys.iter().enumerate().map(|(i, k)| (k, i)).collect();
+        let mut seen: HashSet<&KeyRepr> = HashSet::with_capacity(items.len());
+        // (the old row it keeps, if any, and the item it shows)
+        let mut live: Vec<(Option<usize>, usize)> = Vec::with_capacity(items.len());
+        let mut kept = vec![false; old_keys.len()];
+        for (j, repr) in reprs.iter().enumerate() {
+            if !seen.insert(repr) {
+                let key = key_text(&reprs[j]);
+                let already = self.errors.iter().any(|e| {
+                    matches!(e, CompileError::DuplicateForKey { span, key: k }
+                        if *span == key_span && *k == key)
+                });
+                if !already {
+                    self.errors.push(CompileError::DuplicateForKey {
+                        span: key_span,
+                        key,
+                    });
+                }
+                continue;
+            }
+            let old = old_by_key.get(repr).copied();
+            if let Some(o) = old {
+                kept[o] = true;
+            }
+            live.push((old, j));
+        }
+        drop(old_by_key);
+        // 3. Take the rows apart and put them together in the list's order.
+        let f = &mut self.for_pools[pool];
+        let old_len = f.len;
+        let mut bodies: Vec<Option<Vec<RenderNode>>> = std::mem::take(&mut f.bodies)
+            .into_iter()
+            .map(Some)
+            .collect();
+        let mut scopes: Vec<Option<Vec<ScopeId>>> = std::mem::take(&mut f.slot_scopes)
+            .into_iter()
+            .map(Some)
+            .collect();
+        let old_slots = std::mem::take(&mut f.item_slots);
+        let old_index_slots = std::mem::take(
+            &mut f
+                .keyed
+                .as_mut()
+                .expect("a keyed for has its key state")
+                .index_slots,
+        );
+        let mut n_bodies = Vec::with_capacity(live.len());
+        let mut n_scopes = Vec::with_capacity(live.len());
+        let mut n_slots = Vec::with_capacity(live.len());
+        let mut n_index = Vec::with_capacity(live.len());
+        let mut n_keys = Vec::with_capacity(live.len());
+        let mut moved = false;
+        for (pos, &(old, j)) in live.iter().enumerate() {
+            if let Some(o) = old {
+                moved |= o != pos;
+                n_bodies.push(bodies[o].take().expect("a row is kept once"));
+                n_scopes.push(scopes[o].take().expect("a row is kept once"));
+                n_slots.push(old_slots[o]);
+                n_index.push(old_index_slots[o]);
+            } else {
+                moved = true;
+                let (slot, index) = self.for_pools[pool]
+                    .keyed
+                    .as_mut()
+                    .and_then(|k| k.spare.pop())
+                    .unwrap_or_else(|| {
+                        (
+                            self.ctx.create_signal(Value::Unit),
+                            self.ctx.create_signal(Value::Int(0)),
+                        )
+                    });
+                // Written before the body is lowered, so what a `var` starts
+                // from reads the item it is made for.
+                self.ctx.reset_signal_silent(slot, items[j].clone());
+                #[allow(clippy::cast_possible_wrap)]
+                self.ctx.reset_signal_silent(index, Value::Int(pos as i64));
+                let (body, body_scopes) = self.lower_for_body(pool, slot, Some(index));
+                n_bodies.push(body);
+                n_scopes.push(body_scopes);
+                n_slots.push(slot);
+                n_index.push(index);
+            }
+            n_keys.push(reprs[j].clone());
+        }
+        // The rows that are gone: still going (kept drawn), going now with an
+        // `on leave` (kept drawn), or gone.
+        let live_n = n_bodies.len();
+        let mut dying: Vec<usize> = Vec::new();
+        let mut leaving: Vec<usize> = Vec::new();
+        let mut started_leaving = false;
+        for o in 0..old_keys.len() {
+            if kept[o] {
+                continue;
+            }
+            if o >= old_len {
+                leaving.push(o);
+                continue;
+            }
+            let leaves = self.state_uses.leave && {
+                let pools = Pools {
+                    fors: &self.for_pools,
+                    whens: &self.when_pools,
+                    navs: &self.nav_pools,
+                };
+                bodies[o]
+                    .as_deref()
+                    .is_some_and(|b| has_leave_block(b, &pools))
+            };
+            if leaves {
+                started_leaving = true;
+                leaving.push(o);
+            } else {
+                dying.push(o);
+            }
+        }
+        moved |= started_leaving || !dying.is_empty();
+        for &o in leaving.iter().chain(dying.iter()) {
+            n_bodies.push(bodies[o].take().expect("a row is only in one place"));
+            n_scopes.push(scopes[o].take().expect("a row is only in one place"));
+            n_slots.push(old_slots[o]);
+            n_index.push(old_index_slots[o]);
+            n_keys.push(old_keys[o].clone());
+        }
+        let seq = self.frame_seq;
+        let f = &mut self.for_pools[pool];
+        f.bodies = n_bodies;
+        f.slot_scopes = n_scopes;
+        f.item_slots = n_slots;
+        f.len = live_n;
+        f.leaving_to = live_n + leaving.len();
+        if started_leaving {
+            f.leaving_since = seq;
+        }
+        {
+            let k = f.keyed.as_mut().expect("a keyed for has its key state");
+            k.index_slots = n_index;
+            k.keys = n_keys;
+        }
+        // 4. Rows that are gone for good go now.
+        if !dying.is_empty() {
+            let from = live_n + leaving.len();
+            self.retire_keyed_rows(pool, from);
+        }
+        // 5. Rebind what the rows read. An unchanged value writes nothing.
+        for (pos, &(_, j)) in live.iter().enumerate() {
+            let (slot, index) = {
+                let f = &self.for_pools[pool];
+                (
+                    f.item_slots[pos],
+                    f.keyed.as_ref().expect("keyed").index_slots[pos],
+                )
+            };
+            if self.ctx.peek_signal(slot) != items[j] {
+                self.ctx.write_signal(slot, items[j].clone());
+                dirtied = true;
+            }
+            #[allow(clippy::cast_possible_wrap)]
+            let at = Value::Int(pos as i64);
+            if self.ctx.peek_signal(index) != at {
+                self.ctx.write_signal(index, at);
+                dirtied = true;
+            }
+        }
+        dirtied | moved
+    }
+
+    /// Retires the rows of a keyed `for` from `from` to the end of its arrays:
+    /// their animations and element signals first (the signals go to the next
+    /// rows), then their scopes and nodes.
+    fn retire_keyed_rows(&mut self, pool: usize, from: usize) {
+        let to = self.for_pools[pool].bodies.len();
+        self.drop_slot_state(pool, from, to);
+        let f = &mut self.for_pools[pool];
+        let bodies = f.bodies.split_off(from);
+        let scopes = f.slot_scopes.split_off(from);
+        let slots = f.item_slots.split_off(from);
+        let k = f.keyed.as_mut().expect("a keyed for has its key state");
+        let indices = k.index_slots.split_off(from);
+        k.keys.truncate(from);
+        k.spare.extend(slots.into_iter().zip(indices));
+        for s in scopes {
+            self.retired.scopes.extend(s);
+        }
+        for body in bodies {
+            self.retire_nodes(body);
+        }
     }
 
     /// Whether the branch of `when` pool `pool` that has just been left
@@ -1985,4 +2316,19 @@ fn is_text_box_attr(name: &str) -> bool {
             | "mb"
             | "ml"
     )
+}
+
+/// The text of a key for a diagnostic.
+fn key_text(repr: &KeyRepr) -> String {
+    fn text(r: &KeyRepr) -> String {
+        match r {
+            KeyRepr::Int(n) => n.to_string(),
+            KeyRepr::Float(b) => f64::from_bits(*b).to_string(),
+            KeyRepr::Bool(b) => b.to_string(),
+            KeyRepr::Str(s) => format!("\"{s}\""),
+            KeyRepr::Seq(v) => format!("({})", v.iter().map(text).collect::<Vec<_>>().join(", ")),
+            KeyRepr::Other => "?".to_string(),
+        }
+    }
+    text(repr)
 }

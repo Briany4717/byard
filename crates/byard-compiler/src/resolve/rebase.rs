@@ -150,10 +150,17 @@ fn shift_member(member: &mut Member, delta: u32) {
         }
         Member::Element(el) => shift_element(el, delta),
         Member::For {
-            iter, body, span, ..
+            iter,
+            key,
+            body,
+            span,
+            ..
         } => {
             shift(span, delta);
             shift_expr(iter, delta);
+            if let Some(key) = key {
+                shift_expr(key, delta);
+            }
             for m in body {
                 shift_member(m, delta);
             }

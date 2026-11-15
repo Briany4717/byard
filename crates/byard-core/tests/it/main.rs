@@ -14,4 +14,7 @@ mod instrumentation;
 mod native_view_paint;
 mod package_shader;
 mod paint_transform;
+mod scroll_cost;
+mod variable_font_isolation;
+mod variable_glyph_ids;
 mod wgsl_validation;

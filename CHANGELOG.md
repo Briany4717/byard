@@ -146,6 +146,7 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Variable fonts no longer need a patched swash.** swash 0.2.10 still leaks one variable font's weight into the next (dfrg/swash#149), and crates.io ignores a `[patch]`, so a published `byard` would have shipped the leak. A line with any glyph from a font that has variation axes is now drawn as custom glyphs by Byard's own rasteriser, with every axis set and the same hinting, subpixel bins and sizes as before, and `third_party/swash` is gone. A test fails when swash fixes the leak and says what to remove.
 - **`byard publish` takes an icon font.** A font declared as a table (`symbols = { path = "…", icons = true }`) stopped `publish` with "must be a string path", and the same check broke the checksum of a git dependency on such a package. A font's licence file beside it (`LICENSE…`, `OFL…`, `COPYING…`, `NOTICE…`) is now published with it, since Apache-2.0 and the OFL require it to travel with the font; it is shipped, not pinned.
 - **`autofocus` fires for an element drawn into an overlay that is already open.** It only did when the overlay opened; now it takes focus the first time it is drawn if nothing in the overlay has focus (a month grid replaced inside an open dialog).
 - **`scroll_fraction` reaches the whole header.** It was only bound for a direct child of a `ScrollView` with a literal `collapse_header: true`; `collapse_header: top != none`, and a `when` arm that passes it as an argument to a view, now work.

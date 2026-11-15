@@ -1,0 +1,30 @@
+name: swash canary
+
+# Byard draws variable fonts with its own rasterizer because swash leaks variation
+# coordinates from one font to the next (dfrg/swash#149). Once a week this resolves the
+# newest swash crates.io has and runs the canary that reproduces the leak. While the leak
+# is there, it passes. The week it fails, swash has fixed it: the failure says what to
+# remove so variable fonts can go back through glyphon's cache.
+on:
+  schedule:
+    - cron: "23 7 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  canary:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: The newest swash
+        run: |
+          cargo update -p swash
+          cargo tree -i swash -e normal --depth 0
+
+      - name: Does swash still leak?
+        run: cargo test -p byard-core --lib swash_still_leaks_variation_coordinates

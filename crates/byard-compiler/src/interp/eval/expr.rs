@@ -957,6 +957,10 @@ impl Interpreter {
     /// The signals behind `window`, made on the first read with the viewport
     /// being rendered at (RFC-0067).
     fn window_signals(&mut self) -> (SignalId, SignalId) {
+        // RFC-0068 §4: inside a `Window`, the size of that window.
+        if let Some(pair) = self.enclosing_window() {
+            return pair;
+        }
         if let Some(pair) = self.window {
             return pair;
         }

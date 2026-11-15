@@ -664,7 +664,20 @@ impl Interpreter {
     }
 
     /// Converts winit-sourced input events to interpreter event payloads and dispatches them to the `EventRouter`.
+    ///
+    /// In a program with windows each event goes to the surface it names, with
+    /// that surface's hit test, hover and pointer capture (RFC-0068 §6).
     pub fn dispatch_events(&mut self, events: &[byard_core::InputEvent]) {
+        if self.surfaces.is_some() {
+            self.dispatch_to_surfaces(events);
+            return;
+        }
+        self.dispatch_events_bound(events);
+    }
+
+    /// [`dispatch_events`](Self::dispatch_events) for the surface that is
+    /// bound, or for the one window of a single-surface program.
+    pub(super) fn dispatch_events_bound(&mut self, events: &[byard_core::InputEvent]) {
         use crate::interp::events::{EventKind as CompKind, InputEvent as CompEvent};
         use byard_core::platform::{EventKind as CoreKind, InputPayload};
 
@@ -720,6 +733,9 @@ impl Interpreter {
                     consumed[i] = true;
                     self.scroll_into_view(ev.pos, ev.delta);
                 }
+                // A surface's close request is the program's, not an
+                // element's (RFC-0068 §2).
+                CoreKind::CloseRequest => consumed[i] = true,
                 _ => {}
             }
         }
@@ -753,7 +769,8 @@ impl Interpreter {
                     | CoreKind::SystemScheme
                     | CoreKind::WindowFocus
                     | CoreKind::AccessFocus
-                    | CoreKind::AccessScrollIntoView => {
+                    | CoreKind::AccessScrollIntoView
+                    | CoreKind::CloseRequest => {
                         unreachable!(
                             "composition, window focus, scheme and accessibility events are consumed before routing"
                         )

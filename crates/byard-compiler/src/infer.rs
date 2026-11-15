@@ -141,6 +141,9 @@ pub struct Inference {
     pub bindings: Vec<(Symbol, Ty)>,
     /// The type of each top-level constant (RFC-0055), in declaration order.
     pub consts: Vec<(Symbol, Ty)>,
+    /// What surfaces the program writes (RFC-0068 §1): whether it is a
+    /// single-surface program, the implicit window, or has a `Window`.
+    pub surfaces: crate::surfaces::SurfaceShape,
 }
 
 /// What the value a handler may name is, by event (RFC-0063 §2).
@@ -297,6 +300,7 @@ pub fn check_views(views: &[ViewDecl]) -> Inference {
         };
         checker.check_view(view);
     }
+    out.surfaces = crate::surfaces::check_surfaces(views, &mut out.errors);
     out
 }
 

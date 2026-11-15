@@ -34,6 +34,7 @@ pub const INTRINSIC_NAMES: &[&str] = &[
     "ScrollView",
     "VectorIcon",
     "Overlay",
+    "Window",
     "Canvas",
     "Grid",
     "Clip",
@@ -1110,6 +1111,33 @@ fn lookup_intrinsic(name: &str) -> Option<Intrinsic> {
                 interactive: true,
                 props,
                 events: events_from(false, &[]),
+            }
+        }
+        // RFC-0068 §2: `Window`, a window of its own. Content: none. Children:
+        // the window's content, laid out as the implicit window's content is. It
+        // takes no layout or decoration attributes of its own (its background is
+        // the theme's `surface`); what it takes is what the platform needs to
+        // make the window. `close =>` runs on the platform's close request.
+        "Window" => {
+            let mut props: HashMap<&'static str, PropDef> = HashMap::new();
+            props.insert("title", pnt(PropType::Str));
+            props.insert("width", pnt(PropType::Float));
+            props.insert("height", pnt(PropType::Float));
+            props.insert("min_width", pnt(PropType::Float));
+            props.insert("min_height", pnt(PropType::Float));
+            props.insert("max_width", pnt(PropType::Float));
+            props.insert("max_height", pnt(PropType::Float));
+            props.insert("resizable", pnt(PropType::Bool));
+            props.insert("decorations", pnt(PropType::Bool));
+            props.insert("transparent", pnt(PropType::Bool));
+            Intrinsic {
+                arity: 0,
+                content: None,
+                children: true,
+                focusable: false,
+                interactive: false,
+                props,
+                events: HashSet::from(["close"]),
             }
         }
         // RFC-0017: the overlay escape-hatch. Content: none. Children: the

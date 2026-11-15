@@ -55,6 +55,7 @@ mod props;
 mod retire;
 mod scroll;
 mod states;
+mod surfaces;
 mod text_field;
 mod typography;
 mod wiring;
@@ -1120,6 +1121,16 @@ pub struct Interpreter {
     /// RFC-0042: the accessibility tree being built by the paint walk, when
     /// the frame asked for one. Empty, and unallocated, otherwise.
     access: access::AccessScratch,
+    /// The surfaces of a program with `Window`s (RFC-0068 §5). `None`, and
+    /// nothing else of this feature built, for every program that has one
+    /// window.
+    surfaces: Option<Box<surfaces::Surfaces>>,
+    /// The signals behind the `window` of each `Window` lowered, by the
+    /// element's uid. Empty for a program with none.
+    window_pairs: Vec<(u32, (SignalId, SignalId))>,
+    /// The title of a `Window` that has none: the one the program's single
+    /// window would have.
+    default_window_title: String,
 }
 
 /// What an `on measure` was last told, as raw bits: width, height, x, y
@@ -1413,6 +1424,11 @@ impl Interpreter {
         self.clock_set = true;
         self.clock.set_app_ms(ms);
         self.router.set_clock_ms(&mut self.ctx, u64::from(ms));
+        // Each window's router counts a long press and a double tap by the
+        // same clock (RFC-0068 §6).
+        if self.surfaces.is_some() {
+            self.set_surface_clocks(u64::from(ms));
+        }
         self.fire_due_timers(u64::from(ms));
     }
 
@@ -1458,6 +1474,9 @@ impl Interpreter {
     /// is true and lets the app idle (0 frames) once every animation settles.
     #[must_use]
     pub fn has_active_animations(&self) -> bool {
+        if self.surfaces.is_some() {
+            return self.surfaces_want_frame() || self.theme_transitioning();
+        }
         self.any_active || self.endless_seq == self.frame_seq || self.theme_transitioning()
     }
 
@@ -1468,6 +1487,9 @@ impl Interpreter {
     /// can be skipped (`byard shot`).
     #[must_use]
     pub fn needs_another_frame_besides_loops(&self) -> bool {
+        if self.surfaces.is_some() {
+            return self.surfaces_want_frame() || self.theme_transitioning();
+        }
         self.any_active || self.theme_transitioning() || self.measure_fired
     }
 
@@ -1478,6 +1500,9 @@ impl Interpreter {
     /// element's rect does not run, so a still screen settles at zero frames.
     #[must_use]
     pub fn needs_another_frame(&self) -> bool {
+        if self.surfaces.is_some() {
+            return self.surfaces_want_frame() || self.theme_transitioning();
+        }
         self.has_active_animations() || self.measure_fired
     }
 
@@ -1818,7 +1843,7 @@ impl Interpreter {
         // long as the handlers do, until the next frame replaces them, so they
         // are recorded here and given back then (see `release_frame_scopes`).
         self.ctx.push_scope_tracker();
-        self.render_frame(tree, frame, width, height);
+        self.render_frame(tree, frame, width, height, None);
         self.frame_scopes = self.ctx.pop_scope_tracker();
     }
 
@@ -1838,6 +1863,11 @@ impl Interpreter {
         }
     }
 
+    /// Draws one frame of `tree`. `shared` is `Some` only when a multi-surface
+    /// program draws one of its surfaces (RFC-0068 §5): the structure of the
+    /// whole program was settled once for the tick already, and the pools are
+    /// lent for every surface the tick draws, so this surface only builds,
+    /// lays out and paints.
     #[allow(clippy::similar_names)]
     fn render_frame(
         &mut self,
@@ -1845,6 +1875,7 @@ impl Interpreter {
         frame: &mut byard_core::frame::RenderFrame,
         width: f32,
         height: f32,
+        shared: Option<layout::SharedFrame<'_>>,
     ) {
         use byard_core::frame::Viewport;
 
@@ -1889,7 +1920,9 @@ impl Interpreter {
         // Recomputed every frame: an animation re-marks itself active below if it
         // sampled without having settled this tick (RFC-0010).
         self.any_active = false;
-        self.leave_busy_prev = std::mem::take(&mut self.leave_busy);
+        if shared.is_none() {
+            self.leave_busy_prev = std::mem::take(&mut self.leave_busy);
+        }
         self.focus_requests.clear();
         // RFC-0023: retire fully-faded ripples by time. Gesture-like state kept
         // across renders, so this runs before the walk, ink whose element no
@@ -1899,7 +1932,9 @@ impl Interpreter {
             .retain(|r| (now.saturating_sub(r.start_ms) as f32) < r.duration_ms);
         // One monotonic tick per render, the clock-independent basis for the
         // RFC-0021 "scroll has gone quiet" snap settle.
-        self.frame_seq = self.frame_seq.wrapping_add(1);
+        if shared.is_none() {
+            self.frame_seq = self.frame_seq.wrapping_add(1);
+        }
         // Runtime diagnostics are recomputed per frame, so clear them *before*
         // the passes that record them (reconcile can raise one too, RFC-0026's
         // stack-depth guard fires while navigation is being reconciled).
@@ -1984,37 +2019,28 @@ impl Interpreter {
         // would otherwise read stale (false/empty) for a frame. Re-pull and
         // re-reconcile until nothing new mounts. Bounded by the reconcile depth
         // guard, so a runaway recursion still terminates (with a diagnostic).
-        let mut passes = 0;
-        let mut structure_changed = false;
-        loop {
-            // The structural walk marks every effect it reaches; settling
-            // reads those marks and fires the mount/unmount edges they imply
-            // (RFC-0028 §4b). It runs *inside* the fixpoint because a mount
-            // action writes `var`s, and a screen whose `on mount` sets
-            // `state = "loading"` should show the spinner on the frame it
-            // mounted, not the one after.
-            let mut changed = self.reconcile_structure(tree, 0);
-            changed |= self.settle_effects();
-            // After the effects: a popped screen's `on unmount` has just run,
-            // against its `let`s, and nothing reads them again.
-            self.release_retired();
-            if !changed || passes > MAX_INSTANCE_DEPTH {
-                break;
-            }
-            structure_changed = true;
-            let epoch = self.ctx.begin_tick();
-            self.ctx.pull(epoch);
-            passes += 1;
-        }
+        let structure_changed = match &shared {
+            Some(shared) => shared.structure_changed,
+            None => self.settle_structure(tree),
+        };
         // Phase B is read-only over the pools: take them out so `&mut self`
         // (atlas, router, …) stays free while build/paint borrow them.
-        let for_pools = std::mem::take(&mut self.for_pools);
-        let when_pools = std::mem::take(&mut self.when_pools);
-        let nav_pools = std::mem::take(&mut self.nav_pools);
-        let pools = Pools {
-            fors: &for_pools,
-            whens: &when_pools,
-            navs: &nav_pools,
+        let (for_pools, when_pools, nav_pools) = if shared.is_some() {
+            (Vec::new(), Vec::new(), Vec::new())
+        } else {
+            (
+                std::mem::take(&mut self.for_pools),
+                std::mem::take(&mut self.when_pools),
+                std::mem::take(&mut self.nav_pools),
+            )
+        };
+        let pools = match &shared {
+            Some(shared) => shared.pools,
+            None => Pools {
+                fors: &for_pools,
+                whens: &when_pools,
+                navs: &nav_pools,
+            },
         };
 
         // RFC-0017: collect every mounted `Overlay` (pre-order = declaration =
@@ -2099,9 +2125,11 @@ impl Interpreter {
         let Some((main_id, _root_id)) = root_ids else {
             // Nothing to lay out (an empty tree). Still restore the pools taken
             // out above, or the next frame would see them empty (RFC-0018).
-            self.for_pools = for_pools;
-            self.when_pools = when_pools;
-            self.nav_pools = nav_pools;
+            if shared.is_none() {
+                self.for_pools = for_pools;
+                self.when_pools = when_pools;
+                self.nav_pools = nav_pools;
+            }
             self.retained.flat_ids.clear();
             self.retained.viewport = None;
             self.retained.shape = None;
@@ -2236,9 +2264,11 @@ impl Interpreter {
 
         // RFC-0018/RFC-0026: return the (possibly grown) pools taken out for the
         // read-only build/paint phase.
-        self.for_pools = for_pools;
-        self.when_pools = when_pools;
-        self.nav_pools = nav_pools;
+        if shared.is_none() {
+            self.for_pools = for_pools;
+            self.when_pools = when_pools;
+            self.nav_pools = nav_pools;
+        }
 
         // RFC-0039: place the controller requests this frame's views issued.
         // After the walk, because a request is placed once per frame and the
@@ -2274,6 +2304,37 @@ impl Interpreter {
         }
     }
 
+    /// Settles the structure of `tree`: reconciles every `when` and `for`,
+    /// fires the mount and unmount edges that reveals, and does it again until
+    /// nothing new mounts (RFC-0018 structural reactivity, phase A). Returns
+    /// whether anything changed, which keeps the layout tree from being
+    /// retained.
+    pub(super) fn settle_structure(&mut self, tree: &[RenderNode]) -> bool {
+        let mut passes = 0;
+        let mut structure_changed = false;
+        loop {
+            // The structural walk marks every effect it reaches; settling
+            // reads those marks and fires the mount/unmount edges they imply
+            // (RFC-0028 §4b). It runs *inside* the fixpoint because a mount
+            // action writes `var`s, and a screen whose `on mount` sets
+            // `state = "loading"` should show the spinner on the frame it
+            // mounted, not the one after.
+            let mut changed = self.reconcile_structure(tree, 0);
+            changed |= self.settle_effects();
+            // After the effects: a popped screen's `on unmount` has just run,
+            // against its `let`s, and nothing reads them again.
+            self.release_retired();
+            if !changed || passes > MAX_INSTANCE_DEPTH {
+                break;
+            }
+            structure_changed = true;
+            let epoch = self.ctx.begin_tick();
+            self.ctx.pull(epoch);
+            passes += 1;
+        }
+        structure_changed
+    }
+
     /// Forces the next [`render`](Self::render) onto the full rebuild path
     /// (RFC-0032 §R4).
     ///
@@ -2284,6 +2345,10 @@ impl Interpreter {
     /// more expensive than the rebuild it replaced (RFC-0032 §Q6).
     pub fn invalidate_retained_layout(&mut self) {
         self.retained.invalidated = true;
+        // Every surface is drawn again: what changed can be anywhere in them.
+        if let Some(surfaces) = &mut self.surfaces {
+            surfaces.force_all();
+        }
         // A pool *position* is about to stop meaning what it meant, so the
         // positional paint comparison has to forget too, otherwise two
         // unrelated primitives that happen to hash alike would be equated

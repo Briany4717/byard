@@ -80,6 +80,17 @@ pub(super) struct Pools<'a> {
     pub(super) navs: &'a [NavPool],
 }
 
+/// What a multi-surface program lends the drawing of one of its surfaces
+/// (RFC-0068 §5): the pools, taken out of the interpreter once for every
+/// surface the tick draws, and whether this surface's structure moved since it
+/// was last drawn. The structure of the whole program was settled before any
+/// surface was drawn.
+#[derive(Clone, Copy)]
+pub(super) struct SharedFrame<'a> {
+    pub(super) pools: Pools<'a>,
+    pub(super) structure_changed: bool,
+}
+
 /// A `when`'s lazily-lowered branch cache (RFC-0018). Each branch's AST is kept
 /// and lowered only the first time the condition selects it, then reused, so an
 /// untaken (possibly recursive) branch costs nothing until it is actually shown.
@@ -482,7 +493,11 @@ impl Interpreter {
                         }
                     }
                 }
-                RenderNode::For { pool, .. } => {
+                RenderNode::For { pool, list } => {
+                    // A surface that draws these rows depends on the list that
+                    // made them (RFC-0068 §5); nothing records it for any
+                    // other program.
+                    self.ctx.note_scope_read(*list);
                     if let Some(p) = pools.fors.get(*pool) {
                         // RFC-0066: rows past the list's end that are still
                         // going are drawn after the live ones.
@@ -958,7 +973,23 @@ impl Interpreter {
                 RenderNode::Nav { pool, path } => {
                     dirtied |= self.reconcile_nav(*pool, *path, depth);
                 }
-                RenderNode::Box { children, .. } | RenderNode::Overlay { children, .. } => {
+                RenderNode::Box {
+                    name,
+                    children,
+                    uid,
+                    ..
+                } => {
+                    let moved = self.reconcile_structure(children, depth + 1);
+                    // RFC-0068 §5: a window whose own structure moved has to be
+                    // drawn again, and only that one. A single-surface program
+                    // has no surfaces to ask.
+                    if moved && self.surfaces.is_some() && name.as_str() == super::surfaces::WINDOW
+                    {
+                        self.surface_structure_moved(*uid);
+                    }
+                    dirtied |= moved;
+                }
+                RenderNode::Overlay { children, .. } => {
                     dirtied |= self.reconcile_structure(children, depth + 1);
                 }
                 // Being reached by this walk *is* being mounted (RFC-0028

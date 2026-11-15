@@ -262,7 +262,8 @@ View Main() {
 `selection` and `scrim`, the `fill`, `stroke` and text `color` of a canvas shape, and
 the `color` of a shadow. Colours are mixed in OKLab, a space built on linear light, with
 their alpha premultiplied, so a fade to or from a translucent colour keeps the other end's
-hue and has no grey fringe. That is what a state layer is:
+hue and has no grey fringe. What lands on screen is then blended in sRGB, like a design
+tool does. That is what a state layer is:
 
 ```byld
 View Main() {

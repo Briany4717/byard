@@ -68,6 +68,14 @@ A colour is an `Int`. Write `0xRRGGBB`, or `0xAARRGGBB` for alpha. A colour from
 theme is a name, and `.alpha()` makes it translucent: `t.primary.alpha(0.16)`.
 [Theming](theming.md) covers both.
 
+Translucent colour blends the way the design tools do: in sRGB, on the encoded values.
+White at 10% over `#6750A4` is `(118, 98, 173)` in Byard, as it is in Figma, a browser and
+Android, so an opacity copied from a design looks like it did there. Opaque colours arrive as
+the exact bytes you wrote. Blurred glass (`blur`) mixes in sRGB too, as CSS's
+`backdrop-filter` does, and text edges blend like a browser's. Gradients and colour
+animations are mixed in OKLab, as [motion](motion.md) describes, and only the final write
+changes.
+
 ### A gap in a border
 
 `border_gap: (start, length)` leaves the top edge of the border out between `start` and

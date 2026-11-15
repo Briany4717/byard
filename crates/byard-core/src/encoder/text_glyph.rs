@@ -73,8 +73,8 @@
 use std::hash::Hasher as _;
 
 use glyphon::{
-    Attrs, Buffer, Cache, Color, FontSystem, Metrics, Resolution, SwashCache, TextArea, TextAtlas,
-    TextBounds, TextRenderer, Viewport,
+    Attrs, Buffer, Cache, Color, ColorMode, FontSystem, Metrics, Resolution, SwashCache, TextArea,
+    TextAtlas, TextBounds, TextRenderer, Viewport,
 };
 
 /// Converts a logical-pixel content clip ([`crate::frame::ClipRect`]) into
@@ -565,7 +565,8 @@ impl TextGlyphPipeline {
         let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
 
         let glyph_cache = Cache::new(device);
-        let mut atlas = TextAtlas::new(device, queue, &glyph_cache, format);
+        let mut atlas =
+            TextAtlas::with_color_mode(device, queue, &glyph_cache, format, ColorMode::Web);
         let viewport = Viewport::new(device, &glyph_cache);
         // Enable the same draw-order depth state as the box/texture pipelines so
         // glyphon's text participates in cross-pass paint ordering (RFC-0011)
@@ -921,7 +922,13 @@ impl TextGlyphPipeline {
             return;
         }
         self.variation_glyphs.clear();
-        self.atlas = TextAtlas::new(device, queue, &self.glyph_cache, self.format);
+        self.atlas = TextAtlas::with_color_mode(
+            device,
+            queue,
+            &self.glyph_cache,
+            self.format,
+            ColorMode::Web,
+        );
         // The renderers were made from the old atlas; `prepare` makes more.
         self.renderers.clear();
         for (i, (entry, line)) in self.cache.iter_mut().zip(text_lines).enumerate() {
@@ -1134,9 +1141,10 @@ fn collect_layer_text_areas<'cache>(
         .map(|(offset, line)| {
             let global = start + offset; // global line index (cache/clips/depths)
             // The frame's colours are linear, like every other primitive's;
-            // glyphon takes sRGB bytes and linearises them in its shader.
-            // Handing it the linear values as bytes converted them twice and
-            // painted every mid-tone far too dark.
+            // glyphon takes sRGB bytes. In `ColorMode::Web` (RFC-0060, the mode
+            // for a `Unorm` target) it writes them as they are, and the glyph
+            // coverage blends in sRGB like a browser's text. Handing it the
+            // linear values as bytes would encode them twice.
             let [red, green, blue, alpha] = line.color;
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let byte = |linear: f32| {

@@ -56,7 +56,7 @@ fn render(
     let scale = 2.0_f32;
     let phys_w = (logical_w * scale) as u32;
     let phys_h = (logical_h * scale) as u32;
-    let fmt = wgpu::TextureFormat::Bgra8UnormSrgb;
+    let fmt = wgpu::TextureFormat::Bgra8Unorm;
     let mut enc = pollster::block_on(EncoderSubsystem::init(
         Arc::clone(device),
         Arc::clone(queue),

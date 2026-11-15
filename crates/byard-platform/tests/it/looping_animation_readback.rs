@@ -37,7 +37,7 @@ fn marker_center_x(
 ) -> f32 {
     let phys_w = (LOGICAL_W * SCALE) as u32;
     let phys_h = (LOGICAL_H * SCALE) as u32;
-    let fmt = wgpu::TextureFormat::Bgra8UnormSrgb;
+    let fmt = wgpu::TextureFormat::Bgra8Unorm;
     let mut enc = pollster::block_on(EncoderSubsystem::init(
         Arc::clone(device),
         Arc::clone(queue),

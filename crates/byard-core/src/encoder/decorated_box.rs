@@ -183,7 +183,7 @@ pub async fn build_pipeline(
     // exactly until somebody improves one of them (RFC-0037).
     let source = format!(
         "{}\n{}\n{}",
-        include_str!("clip.wgsl"),
+        super::clip_block(),
         include_str!("gradient.wgsl"),
         include_str!("decorated_box.wgsl")
     );

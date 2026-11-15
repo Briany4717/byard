@@ -258,6 +258,30 @@ impl ReactiveLabel {
     }
 }
 
+/// The surface's format and the format the engine draws in (RFC-0060).
+///
+/// The engine draws into `Unorm` targets and its shaders write sRGB-encoded
+/// bytes, so the blend mixes encoded values like a design tool. A `Unorm`
+/// surface is taken when one is offered. When the surface only offers sRGB, it
+/// is taken with its `Unorm` twin allowed as a view format; the engine's own
+/// target is the twin, and the final copy onto the surface is byte for byte.
+fn negotiate_formats(
+    offered: &[wgpu::TextureFormat],
+) -> (wgpu::TextureFormat, wgpu::TextureFormat) {
+    let surface = offered
+        .iter()
+        .find(|f| {
+            matches!(
+                f,
+                wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Rgba8Unorm
+            )
+        })
+        .or_else(|| offered.iter().find(|f| f.is_srgb()))
+        .copied()
+        .unwrap_or(offered[0]);
+    (surface, surface.remove_srgb_suffix())
+}
+
 impl Engine {
     /// Initialises the engine, selects a GPU adapter, and compiles all pipelines.
     ///
@@ -335,14 +359,13 @@ impl Engine {
             .map_err(|_| ByardError::UnsupportedBackend)?;
 
         // --- Surface format negotiation ---
-        // Prefer sRGB so that linear-space colours in shaders display correctly.
         let caps = surface.get_capabilities(&adapter);
-        let surface_format = caps
-            .formats
-            .iter()
-            .find(|f| f.is_srgb())
-            .copied()
-            .unwrap_or(caps.formats[0]);
+        let (surface_format, target_format) = negotiate_formats(&caps.formats);
+        let view_formats = if target_format == surface_format {
+            vec![]
+        } else {
+            vec![target_format]
+        };
 
         // --- Composite alpha negotiation ---
         // The UI clears its target to `Color::TRANSPARENT` (an incremental
@@ -380,7 +403,7 @@ impl Engine {
             height,
             present_mode: wgpu::PresentMode::AutoVsync,
             alpha_mode,
-            view_formats: vec![],
+            view_formats,
             desired_maximum_frame_latency: 2,
         };
         surface.configure(&device, &surface_config);
@@ -393,7 +416,7 @@ impl Engine {
         let mut encoder = EncoderSubsystem::init(
             Arc::clone(&device),
             Arc::clone(&queue),
-            surface_format,
+            target_format,
             scale_f32,
             width,
             height,
@@ -899,6 +922,22 @@ fn logical_viewport(phys_w: u32, phys_h: u32, scale: f64) -> Viewport {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_engine_draws_in_the_unorm_twin_of_the_surface() {
+        use wgpu::TextureFormat::{Bgra8Unorm, Bgra8UnormSrgb, Rgba8Unorm, Rgba8UnormSrgb};
+        // A surface that offers Unorm is taken as it is.
+        assert_eq!(
+            negotiate_formats(&[Bgra8UnormSrgb, Bgra8Unorm]),
+            (Bgra8Unorm, Bgra8Unorm)
+        );
+        // One that only offers sRGB is taken, and the engine draws in its twin
+        // (which `configure` then lists as a view format).
+        assert_eq!(
+            negotiate_formats(&[Rgba8UnormSrgb]),
+            (Rgba8UnormSrgb, Rgba8Unorm)
+        );
+    }
 
     /// Asserts two `f32` values are equal within a small tolerance.
     ///

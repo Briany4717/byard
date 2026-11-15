@@ -65,7 +65,7 @@ fn the_faded_card_hides_its_overlap_and_the_per_piece_card_does_not() {
     let mut enc = pollster::block_on(EncoderSubsystem::init(
         Arc::clone(&device),
         Arc::clone(&queue),
-        wgpu::TextureFormat::Rgba8UnormSrgb,
+        wgpu::TextureFormat::Rgba8Unorm,
         1.0,
         W,
         H,
@@ -90,7 +90,7 @@ fn the_faded_card_hides_its_overlap_and_the_per_piece_card_does_not() {
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        format: wgpu::TextureFormat::Rgba8Unorm,
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT
             | wgpu::TextureUsages::COPY_SRC
             | wgpu::TextureUsages::COPY_DST,

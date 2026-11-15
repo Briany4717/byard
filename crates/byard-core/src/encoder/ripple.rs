@@ -75,7 +75,7 @@ pub async fn build_pipeline(
         source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Owned(format!(
             "{}
 {}",
-            include_str!("clip.wgsl"),
+            super::clip_block(),
             include_str!("ripple.wgsl")
         ))),
     });

@@ -43,7 +43,7 @@ fn scanline(
 ) -> Vec<(u8, u8, u8)> {
     let phys_w = (LOGICAL_W * SCALE) as u32;
     let phys_h = (LOGICAL_H * SCALE) as u32;
-    let fmt = wgpu::TextureFormat::Bgra8UnormSrgb;
+    let fmt = wgpu::TextureFormat::Bgra8Unorm;
     let mut enc = pollster::block_on(EncoderSubsystem::init(
         Arc::clone(device),
         Arc::clone(queue),
@@ -331,8 +331,12 @@ fn a_fade_blends_the_two_screens_instead_of_moving_them() {
     // Mid-fade the centre pixel is neither screen's pure fill: the incoming
     // blue is compositing over the outgoing red, so *both* channels are lifted
     // off their resting value and neither is saturated.
+    //
+    // RFC-0060: the blend is in sRGB now, like a browser's cross-fade. It used
+    // to be in linear light, which lifts a mix more and put this floor at 140;
+    // in sRGB the same moment reads (104, 25, 118), so the floor is 60.
     assert!(
-        !is_home(px) && !is_detail(px) && px.0 > 140 && px.2 > 140,
+        !is_home(px) && !is_detail(px) && px.0 > 60 && px.2 > 60,
         "both screens contribute to the same pixel mid-fade: {px:?}"
     );
     // Nothing moved: the blend covers the whole width, edge to edge.

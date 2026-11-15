@@ -60,7 +60,9 @@ error[UnknownThemeToken]: theme `byard-base` declares no token `primry`
 
 `color.alpha(0.16)` is a colour at an opacity, so a translucent tint follows the
 theme and the scheme instead of being a hex of its own. The opacity is held between
-0 and 1.
+0 and 1. It looks the way the design tool shows it: the blend is in sRGB, so Material's 10%
+state layer over its container is `(118, 98, 173)` on `#6750A4`, not the stronger colour a
+blend in linear light gives.
 
 Writing `t.dark` flips the scheme: `Toggle #[bind: t.dark]` is a dark mode switch, and
 so is `Button("flip") => t.dark = !t.dark`.

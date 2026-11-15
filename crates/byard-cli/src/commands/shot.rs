@@ -531,7 +531,7 @@ impl Gpu {
             (size.0 as f32 * scale).round() as u32,
             (size.1 as f32 * scale).round() as u32,
         );
-        let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+        let format = wgpu::TextureFormat::Rgba8Unorm;
         let mut enc = pollster::block_on(EncoderSubsystem::init(
             Arc::clone(device),
             Arc::clone(queue),

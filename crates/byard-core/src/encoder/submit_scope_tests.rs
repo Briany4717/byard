@@ -13,7 +13,7 @@ fn submitting_a_command_buffer_enters_encode_submit() {
     let mut enc = pollster::block_on(EncoderSubsystem::init(
         std::sync::Arc::clone(&device),
         std::sync::Arc::clone(&queue),
-        wgpu::TextureFormat::Rgba8UnormSrgb,
+        wgpu::TextureFormat::Rgba8Unorm,
         1.0,
         32,
         32,

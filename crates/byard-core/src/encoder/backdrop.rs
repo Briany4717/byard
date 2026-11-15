@@ -315,7 +315,11 @@ fn composite_pipeline(
 ) -> wgpu::RenderPipeline {
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("ByardCore - Backdrop WGSL Shader"),
-        source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(include_str!("backdrop.wgsl"))),
+        source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Owned(format!(
+            "{}\n{}",
+            crate::color::wgsl_transfer(),
+            include_str!("backdrop.wgsl")
+        ))),
     });
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("ByardCore - Backdrop Pipeline Layout"),

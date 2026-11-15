@@ -459,12 +459,17 @@ fn box_with_shadow_token_becomes_decorated_box() {
     let mut frame = byard_core::frame::RenderFrame::new();
     interp.render(&tree, &mut frame, 400.0, 300.0);
 
-    assert_eq!(frame.decorated().len(), 1, "shadowed box → DecoratedBox");
-    assert!(frame.decorated()[0].shadow_blur > 0.0);
-    assert!(
-        frame.decorated()[0].shadow_color[3] > 0.0,
-        "shadow is translucent"
+    // A preset is Material's two shadows, ambient and key, each its own
+    // DecoratedBox.
+    assert_eq!(
+        frame.decorated().len(),
+        2,
+        "shadowed box → two DecoratedBoxes"
     );
+    for d in frame.decorated() {
+        assert!(d.shadow_blur > 0.0);
+        assert!(d.shadow_color[3] > 0.0, "shadow is translucent");
+    }
 }
 
 /// Renders `src`'s first view and returns the frame's decorated boxes'

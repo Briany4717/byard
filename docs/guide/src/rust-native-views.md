@@ -114,7 +114,10 @@ because something changed inside it, such as a hover that byld cannot see, calls
 
 A view that needs pixels no engine pipeline draws describes a shader of its own: the
 instance record, its fields and the WGSL, registered with `App::shader`. The engine builds
-the pipeline. The `Glow` view in the example does this.
+the pipeline. The `Glow` view in the example does this. The shader's `fs_main` returns a
+linear colour with straight alpha, as the engine's own do; the engine encodes it to sRGB on
+the way out, so it blends like everything else. An error in the WGSL names `fs_main` and the
+line you wrote.
 
 ## Asking for data
 

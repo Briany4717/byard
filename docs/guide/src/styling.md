@@ -68,6 +68,14 @@ A colour is an `Int`. Write `0xRRGGBB`, or `0xAARRGGBB` for alpha. A colour from
 theme is a name, and `.alpha()` makes it translucent: `t.primary.alpha(0.16)`.
 [Theming](theming.md) covers both.
 
+Translucent colour blends the way the design tools do: in sRGB, on the encoded values.
+White at 10% over `#6750A4` is `(118, 98, 173)` in Byard, as it is in Figma, a browser and
+Android, so an opacity copied from a design looks like it did there. Opaque colours arrive as
+the exact bytes you wrote. Blurred glass (`blur`) mixes in sRGB too, as CSS's
+`backdrop-filter` does, and text edges blend like a browser's. Gradients and colour
+animations are mixed in OKLab, as [motion](motion.md) describes, and only the final write
+changes.
+
 ### A gap in a border
 
 `border_gap: (start, length)` leaves the top edge of the border out between `start` and
@@ -110,16 +118,18 @@ View Main() {
 }
 ```
 
-The presets are the elevations of Material, level 0 being no shadow at all:
+The presets are the elevations of Material, level 0 being no shadow at all. Each is
+Material's pair, a key shadow at 30% black on top and an ambient one at 15% black, with the
+same numbers as Material on the web, so they look the same:
 
-| Material level | Preset | Is |
-|----------------|--------|----|
-| 0 | `"none"` | no shadow |
-| 1 | `"sm"` | `(y: 1, blur: 3)` |
-| 2 | `"md"` | `(y: 3, blur: 8)` |
-| 3 | `"lg"` | `(y: 6, blur: 16)` |
-| 4 | `"xl"` | `(y: 8, blur: 20)` |
-| 5 | `"2xl"` | `(y: 12, blur: 28)` |
+| Material level | Preset | Key | Ambient |
+|----------------|--------|-----|---------|
+| 0 | `"none"` | no shadow | |
+| 1 | `"sm"` | `(y: 1, blur: 2)` | `(y: 1, blur: 3, spread: 1)` |
+| 2 | `"md"` | `(y: 1, blur: 2)` | `(y: 2, blur: 6, spread: 2)` |
+| 3 | `"lg"` | `(y: 1, blur: 3)` | `(y: 4, blur: 8, spread: 3)` |
+| 4 | `"xl"` | `(y: 2, blur: 3)` | `(y: 6, blur: 10, spread: 4)` |
+| 5 | `"2xl"` | `(y: 4, blur: 4)` | `(y: 8, blur: 12, spread: 6)` |
 
 A floating action button that sits at level 3 and lifts to level 4 on hover is
 `shadow: hovered ? "xl" : "lg" with anim.spring()`.

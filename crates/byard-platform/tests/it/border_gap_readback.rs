@@ -43,7 +43,7 @@ impl Readback {
 
 fn render(device: &Arc<wgpu::Device>, queue: &Arc<wgpu::Queue>, frame: &RenderFrame) -> Readback {
     let phys = (LOGICAL * SCALE) as u32;
-    let fmt = wgpu::TextureFormat::Bgra8UnormSrgb;
+    let fmt = wgpu::TextureFormat::Bgra8Unorm;
     let mut enc = pollster::block_on(EncoderSubsystem::init(
         Arc::clone(device),
         Arc::clone(queue),

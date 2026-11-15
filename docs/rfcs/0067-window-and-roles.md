@@ -245,12 +245,14 @@ saying "a `slider`, `spin_button` or `progress_bar`"), and when any is written t
 node's value is a number, `a11y_value` read as one, with the range. A node with
 the role and no range is a text value, as a `slider` is.
 
-When the element has a `change` handler, a reader's Increment, Decrement and
-SetValue are offered and run it, with the same payload a `slider`'s are
-(RFC-0042 §5). The control does the rest: it is not a role that takes focus by
-itself (`role_implies_focus` is unchanged), so a spin button is reachable by Tab
-when it has `focus =>` or `focused:`, as a composed slider is, and its Up and Down
-are the `key_down` it writes. The engine does not move a value it does not own.
+Up and Down are the control's: a `Box` takes no `change`, so its keys are the
+`key_down` it writes (RFC-0063 §1). A spin button that is a focus target and has a
+`key_down` offers a reader Increment and Decrement, and they are sent to it as the
+ArrowUp and ArrowDown keys, after focusing it; SetValue is not offered, as the
+engine does not move a value it does not own. One with a `change` handler (a
+built-in control given the role) takes the numbers as a `slider` does (RFC-0042
+§5). It is not a role that takes focus by itself (`role_implies_focus` is
+unchanged), so it is reachable by Tab when it has `focus =>` or `focused:`.
 
 The dump writes it as a slider is written: `SpinButton "Hours" = 4 in 1..12 step 1`.
 A spin button is a node that needs a name (`(unnamed)` without one).
@@ -341,11 +343,10 @@ width of what is drawn (value and preedit). When what is drawn is as wide as the
 or wider, the offset is `0` and the field scrolls to keep the caret in view, as it
 did. The pointer places the caret by the same offset.
 
-`text_align: center` or `end` on a multiline field (`lines`, `min_lines` or
-`max_lines` above one) is `TextAlignNeedsOneLine`, at the attribute, which says
-that a multiline field's lines are left-aligned; `start` is allowed anywhere.
-An expression that is only known at run time is accepted and reported once, when the
-field is drawn, if it names the keywords and the field is multiline.
+`text_align: center` or `end` on a field that writes `lines`, `min_lines` or
+`max_lines` (other than as `1`) is `InvalidAttributeCombination`, at the attribute,
+which says that a multiline field's lines start at its left; `start` is allowed
+anywhere.
 
 ## Cost
 

@@ -20,6 +20,7 @@
 - [Motion](motion.md)
 - [Drawing](drawing.md)
 - [Navigation](navigation.md)
+- [Several windows](windows.md)
 - [Data and I/O](data-and-io.md)
 
 # Theming

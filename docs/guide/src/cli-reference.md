@@ -109,7 +109,8 @@ library package.
 | `--key <KEY>` | | Presses a key before the picture, such as `Left`, `shift+Left` or `mod+a`. Repeat it to press more. |
 | `--type <TEXT>` | | Types text before the picture. Repeat it to type more. |
 | `--wait <MS>` | | Lets this many milliseconds of app time pass before the next input or the picture. Repeatable. |
-| `--a11y <FILE>` | | Writes the accessibility tree to a text file, one node a line. A control a screen reader could not name is marked `(unnamed)`. |
+| `--surface <NAME>` | | In a program with several windows (`Window`), the one to draw: its `as` name, else its title. The taps and keys are for it too. It is drawn at the size it opens at, and `--size` is not used. A program with one window needs no flag; with several and no `--surface`, the command lists their names. A program with no `Window` refuses it. |
+| `--a11y <FILE>` | | Writes the accessibility tree to a text file, one node a line. A control a screen reader could not name is marked `(unnamed)`. In a program with windows, each window starts with a `Window "title"` line and its tree is indented below it. |
 
 `--tap`, `--hold`, `--hover`, `--drag`, `--key`, `--type` and `--wait` run in the order they are written on the command line. A key is a single
 character or one of `Left`, `Right`, `Up`, `Down`, `Home`, `End`, `PageUp`, `PageDown`, `Insert`, `Backspace`, `Delete`, `Enter`,
@@ -131,7 +132,10 @@ Runs the scenario files `tests/*.toml` of a project: each test draws a view head
 with the inputs `shot` takes, and checks the accessibility tree. It opens no window and never needs a
 GPU. Output is one line per test and a summary, as `cargo test` prints; the exit status is 1 if any
 test failed or any scenario file is wrong. A project with no `tests/*.toml` is an error. The format is
-in [the dev loop](dev-loop.md#byard-test).
+in [the dev loop](dev-loop.md#byard-test). In a program with several windows (`Window`), it sees every one:
+the dump starts each window with a `Window "title"` line, a step that names an element finds it on whichever
+window it is and taps it there, and `--shots` writes a picture of each window at its own size
+(`<file>-<name>-<window>.png`); see [several windows](windows.md).
 
 | Argument or flag | Default | |
 |------------------|---------|-|

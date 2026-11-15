@@ -10,6 +10,10 @@ Byard uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **For Rust code that drives `byard-core` directly: an `InputEvent` names its surface.** It has a `surface: SurfaceId` field, `SurfaceId::MAIN` for the one window every program has today, so an `InputEvent { … }` written out in full needs `surface: SurfaceId::MAIN` (or `..` from one that has it). `Engine` also gains `add_surface`, `resize_surface`, `drop_surface` and `render_surfaces` on a shared `Gpu`, the ground RFC-0068's windows and panels are built on. Apps written in Byld, and `byard::App`, see no change.
+
 ## [0.1.0] - 2026-11-15
 
 The first release.

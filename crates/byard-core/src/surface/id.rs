@@ -1,4 +1,4 @@
-//! Surfaces: what a program draws into (RFC-0068 §5, §6).
+//! Which surface is which: what a program draws into (RFC-0068 §5, §6).
 //!
 //! A Byard program has always drawn into one window. RFC-0068 lets it own
 //! several surfaces (windows, panels, popups) that share one interpreter, and

@@ -1617,8 +1617,14 @@ mod tests {
             .collect();
         assert!(files.contains(&"fonts/Icons.ttf".to_string()), "{files:?}");
         assert!(files.contains(&"fonts/Text.ttf".to_string()), "{files:?}");
-        assert!(files.contains(&"fonts/OFL-Text.txt".to_string()), "{files:?}");
-        assert!(files.contains(&"fonts/LICENSE-Icons".to_string()), "{files:?}");
+        assert!(
+            files.contains(&"fonts/OFL-Text.txt".to_string()),
+            "{files:?}"
+        );
+        assert!(
+            files.contains(&"fonts/LICENSE-Icons".to_string()),
+            "{files:?}"
+        );
         assert!(!files.contains(&"fonts/notes.txt".to_string()), "{files:?}");
 
         // A licence is shipped, not pinned: changing one keeps the checksum.

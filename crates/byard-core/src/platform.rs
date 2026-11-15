@@ -289,6 +289,10 @@ pub enum EventKind {
     /// `InputEvent.payload` as `InputPayload::Bool` means it has focus. A
     /// text field's caret only blinks in a window that has it (RFC-0041 §6).
     WindowFocus,
+    /// The platform asked to close a surface (the window's close button,
+    /// Alt+F4, Cmd+W; RFC-0068 §2). Not routed to an element: the surface's
+    /// `Window` runs its `close =>`, and a window with none ends the program.
+    CloseRequest,
 }
 
 impl EventKind {
@@ -329,7 +333,8 @@ impl EventKind {
             | Self::SystemScheme
             | Self::AccessFocus
             | Self::AccessScrollIntoView
-            | Self::WindowFocus => false,
+            | Self::WindowFocus
+            | Self::CloseRequest => false,
         }
     }
 }

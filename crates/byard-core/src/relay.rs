@@ -269,6 +269,17 @@ struct FrameSlot {
     rendered_version: AtomicU64,
 }
 
+/// What one tick of a multi-surface program did, as far as the relay loop
+/// needs to know (RFC-0068 §5): the loop wakes the render thread only for a
+/// tick that gave it something, so a still program wakes nothing.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SurfaceTick {
+    /// How many surfaces were painted and published.
+    pub painted: u32,
+    /// Whether a surface's accessibility tree differs from the one last sent.
+    pub access_changed: bool,
+}
+
 /// Owns the atomic frame swap, the frame recycle pool, and the async I/O
 /// runtime described in RFC-0001 §5.
 ///
@@ -864,8 +875,9 @@ impl Relay {
                 let mut seen = true;
                 // The hash of the accessibility tree last published, if any.
                 let mut last_tree: Option<u64> = None;
+                // Decided once: whether the program has windows of its own.
+                let multi = runtime.multi_surface();
                 while !relay.is_shutdown() {
-                    let mut frame = relay.acquire_recycled();
                     // Tick step 0 (RFC-0028 §6): apply everything the async
                     // pool completed *before* input is processed and before
                     // the pull, so a reply and a same-tick input mark together
@@ -886,16 +898,27 @@ impl Relay {
                     // engine-level dirty-target plumbing is wired in a later
                     // phase, so pass an empty slice for now.
                     let had_input = !inputs.is_empty();
-                    runtime.evaluate_tick(&mut frame, &inputs, &[]);
-                    // RFC-0042: a tree that differs from the last one sent is
-                    // news the render thread must hear, even on an idle tick
-                    // with no input, or the platform would learn of it only at
-                    // the next redraw for some other reason. `None` (the
-                    // common case) costs nothing.
-                    let tree_hash = frame.access().map(crate::access::AccessTree::content_hash);
-                    let tree_changed = tree_hash.is_some() && tree_hash != last_tree;
-                    last_tree = tree_hash;
-                    relay.publish(frame);
+                    let (tree_changed, painted) = if multi {
+                        // RFC-0068 §5: each surface that has something new is
+                        // painted into a frame of its own and published to
+                        // its slot by the runtime; a surface with nothing new
+                        // costs nothing and wakes nothing.
+                        let tick = runtime.evaluate_surfaces(&relay, &inputs);
+                        (tick.access_changed, tick.painted > 0)
+                    } else {
+                        let mut frame = relay.acquire_recycled();
+                        runtime.evaluate_tick(&mut frame, &inputs, &[]);
+                        // RFC-0042: a tree that differs from the last one sent
+                        // is news the render thread must hear, even on an idle
+                        // tick with no input, or the platform would learn of it
+                        // only at the next redraw for some other reason. `None`
+                        // (the common case) costs nothing.
+                        let tree_hash = frame.access().map(crate::access::AccessTree::content_hash);
+                        let tree_changed = tree_hash.is_some() && tree_hash != last_tree;
+                        last_tree = tree_hash;
+                        relay.publish(frame);
+                        (tree_changed, true)
+                    };
                     let more = runtime.wants_another_frame();
 
                     // Idle throttle: a UI with no pending input re-publishes an
@@ -908,7 +931,7 @@ impl Relay {
                     if tree_changed {
                         relay.wake_renderer();
                     }
-                    if had_input || applied || more {
+                    if (painted && (had_input || applied)) || more {
                         // The frame just published reflects this input, or an
                         // async result that landed with no input at all. Either
                         // way, wake an event-driven (`Wait`-mode) render thread
@@ -1828,6 +1851,121 @@ mod tests {
             relay.current().is_some(),
             "ticking must have published at least one frame"
         );
+    }
+
+    // ── RFC-0068 §5: a multi-surface runtime publishes to each surface's slot ──
+
+    /// A program of two windows: the first tick opens both and draws both, and
+    /// every later tick has nothing new for either.
+    struct TwoWindows {
+        ticks: Arc<AtomicUsize>,
+    }
+
+    impl LogicRuntime for TwoWindows {
+        fn evaluate_tick(
+            &mut self,
+            _frame: &mut RenderFrame,
+            _input_events: &[InputEvent],
+            _dirty: &[crate::frame::TargetId],
+        ) {
+            panic!("a multi-surface program is driven by `evaluate_surfaces`");
+        }
+
+        fn multi_surface(&self) -> bool {
+            true
+        }
+
+        fn evaluate_surfaces(
+            &mut self,
+            relay: &Relay,
+            _input_events: &[InputEvent],
+        ) -> SurfaceTick {
+            if self.ticks.fetch_add(1, Ordering::SeqCst) > 0 {
+                return SurfaceTick::default();
+            }
+            for n in 1..=2_u32 {
+                let id = SurfaceId::new(n);
+                relay.push_surface_change(SurfaceChange::Create {
+                    id,
+                    spec: crate::SurfaceSpec::window(format!("window {n}")),
+                });
+                let mut frame = relay.acquire_recycled();
+                frame.push_rect(
+                    Rect::new(0.0, 0.0, 10.0 * f32::from(u16::try_from(n).unwrap()), 1.0),
+                    false,
+                );
+                relay.publish_to(id, frame);
+            }
+            SurfaceTick {
+                painted: 2,
+                access_changed: false,
+            }
+        }
+    }
+
+    #[test]
+    fn a_multi_surface_runtime_publishes_each_surface_to_its_own_slot() {
+        let relay = Arc::new(Relay::new().unwrap());
+        let ticks = Arc::new(AtomicUsize::new(0));
+        let ticks_factory = Arc::clone(&ticks);
+        let handle = Relay::spawn_logic_from_view(&relay, move |_arena| {
+            Box::new(TwoWindows {
+                ticks: ticks_factory,
+            })
+        })
+        .expect("thread spawn should succeed in tests");
+        let start = Instant::now();
+        while ticks.load(Ordering::SeqCst) < 3 && start.elapsed() < Duration::from_secs(2) {
+            thread::yield_now();
+        }
+        relay.request_shutdown();
+        handle.join().expect("logic thread must not panic");
+
+        // `evaluate_tick` panics, so the loop never called it: both frames
+        // came from `evaluate_surfaces`, one per slot.
+        let first = relay
+            .current_for(SurfaceId::new(1))
+            .expect("window 1 drawn");
+        let second = relay
+            .current_for(SurfaceId::new(2))
+            .expect("window 2 drawn");
+        assert_eq!(first.rects()[0], Rect::new(0.0, 0.0, 10.0, 1.0));
+        assert_eq!(second.rects()[0], Rect::new(0.0, 0.0, 20.0, 1.0));
+        // MAIN has no frame: a program of windows has no implicit one.
+        assert!(relay.current().is_none());
+        let changes: Vec<SurfaceChange> = relay.drain_surface_changes().collect();
+        assert_eq!(
+            changes.iter().map(SurfaceChange::id).collect::<Vec<_>>(),
+            [SurfaceId::new(1), SurfaceId::new(2)]
+        );
+    }
+
+    #[test]
+    fn a_still_multi_surface_tick_wakes_nobody() {
+        let relay = Arc::new(Relay::new().unwrap());
+        let wakes = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&wakes);
+        relay.set_frame_waker(Arc::new(move || {
+            counter.fetch_add(1, Ordering::SeqCst);
+        }));
+        let ticks = Arc::new(AtomicUsize::new(0));
+        let ticks_factory = Arc::clone(&ticks);
+        let handle = Relay::spawn_logic_from_view(&relay, move |_arena| {
+            Box::new(TwoWindows {
+                ticks: ticks_factory,
+            })
+        })
+        .expect("thread spawn should succeed in tests");
+        let start = Instant::now();
+        while ticks.load(Ordering::SeqCst) < 20 && start.elapsed() < Duration::from_secs(5) {
+            thread::sleep(Duration::from_millis(1));
+        }
+        relay.request_shutdown();
+        handle.join().expect("logic thread must not panic");
+        assert!(ticks.load(Ordering::SeqCst) >= 20, "the loop kept ticking");
+        // The first tick pushed two surface changes, which wake the renderer
+        // once each; the idle ticks after it drew nothing and woke nothing.
+        assert_eq!(wakes.load(Ordering::SeqCst), 2);
     }
 
     // ── RFC-0028 §7: two channels, one per destination thread ────────────

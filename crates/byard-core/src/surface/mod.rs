@@ -28,7 +28,7 @@ pub mod id;
 pub mod placement;
 pub mod positioner;
 
-pub use id::{PerSurface, SurfaceChange, SurfaceId, SurfaceSpec};
+pub use id::{PerSurface, SurfaceChange, SurfaceId, SurfaceKind, SurfaceSpec};
 
 /// A rectangle in whole logical pixels, with `y` growing downwards.
 ///

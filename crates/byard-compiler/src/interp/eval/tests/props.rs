@@ -1063,3 +1063,28 @@ fn a_text_parameter_in_radius_is_still_a_mismatch() {
             .any(|e| matches!(e, CompileError::AttributeTypeMismatch { .. })),
     );
 }
+
+// ── RFC-0067: the window costs nothing until it is read ─────────
+
+#[test]
+fn the_window_is_made_only_when_a_program_reads_it() {
+    let (mut unused, tree) = lower_named("View Main() { Text(\"a\") }", "Main");
+    unused.tick();
+    let mut frame = byard_core::frame::RenderFrame::new();
+    unused.render(&tree, &mut frame, 400.0, 300.0);
+    unused.render(&tree, &mut frame, 500.0, 300.0);
+    assert!(
+        unused.window.is_none(),
+        "no signals for a program that never reads `window`"
+    );
+
+    let (mut used, tree) = lower_named("View Main() { Text(\"{window.width}\") }", "Main");
+    assert!(used.window.is_some());
+    used.tick();
+    used.render(&tree, &mut frame, 400.0, 300.0);
+    let (w, h) = used.window.expect("signals");
+    assert_eq!(used.ctx.peek_signal(w), Value::Float(400.0));
+    assert_eq!(used.ctx.peek_signal(h), Value::Float(300.0));
+    used.render(&tree, &mut frame, 640.0, 300.0);
+    assert_eq!(used.ctx.peek_signal(w), Value::Float(640.0));
+}

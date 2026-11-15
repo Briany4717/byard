@@ -63,9 +63,9 @@ const FLOAT_METHODS: [&str; 10] = [
 ];
 
 /// Names the engine puts in scope itself: the animation namespace
-/// (`anim.spring`), a collapsing header's `scroll_fraction`, and the `route`
-/// of the screen a navigation case draws.
-const BUILT_IN_NAMES: [&str; 3] = ["anim", "scroll_fraction", "route"];
+/// (`anim.spring`), a collapsing header's `scroll_fraction`, the `route`
+/// of the screen a navigation case draws, and the `window` (RFC-0067).
+const BUILT_IN_NAMES: [&str; 4] = ["anim", "scroll_fraction", "route", "window"];
 
 /// Functions the language itself provides: `untrack(expr)`, the
 /// `match(element)` width of an anchored overlay, the navigation actions
@@ -167,12 +167,14 @@ fn event_value(event: &str) -> EventValue {
     }
 }
 
-/// The fields of the built-in event records a pointer or drag handler is
-/// given (RFC-0063 §2), all `Float`.
+/// The fields of the built-in records, all `Float`: the value a pointer or drag
+/// handler is given (RFC-0063 §2), and the `window` (RFC-0067).
 fn event_record_fields(record: &str) -> Option<&'static [&'static str]> {
     match record {
         "PointerEvent" => Some(&["x", "y", "width", "height"]),
         "DragEvent" => Some(&["x", "y", "width", "height", "dx", "dy"]),
+        // RFC-0067: the built-in `window`.
+        "Window" => Some(&["width", "height"]),
         _ => None,
     }
 }
@@ -703,6 +705,37 @@ impl Checker<'_> {
         let ty = self.check_expr(expr);
         self.strict = was;
         ty
+    }
+
+    /// Whether the program itself (not the engine) has something called
+    /// `name` in scope.
+    fn knows_own(&self, name: &Symbol) -> bool {
+        self.env.contains_key(name)
+            || self.declared.contains(name)
+            || self.fns.contains_key(name)
+            || self.consts.contains_key(name)
+    }
+
+    /// Whether `e` is `window.width` or `window.height` of the built-in
+    /// `window` (RFC-0067).
+    fn is_window_extent(&self, e: &Expr) -> bool {
+        matches!(
+            e,
+            Expr::Member { base, field, .. }
+                if matches!(field.as_str(), "width" | "height")
+                    && matches!(base.as_ref(), Expr::Ident(n, _)
+                        if n.as_str() == "window" && !self.knows_own(n))
+        )
+    }
+
+    /// Whether a comparison is the window's size against a bare name nothing
+    /// declares, which is a breakpoint (RFC-0067).
+    fn window_breakpoint(&self, lhs: &Expr, rhs: &Expr) -> bool {
+        let bare = |e: &Expr| {
+            matches!(e, Expr::Ident(n, _)
+                if !matches!(n.as_str(), "true" | "false" | "none") && !self.knows(n))
+        };
+        (self.is_window_extent(lhs) && bare(rhs)) || (self.is_window_extent(rhs) && bare(lhs))
     }
 
     /// Whether anything in scope is called `name`.
@@ -1658,7 +1691,15 @@ impl Checker<'_> {
                         .get(sym)
                         .or_else(|| self.consts.get(sym))
                         .cloned()
-                        .unwrap_or(Ty::Unknown);
+                        .unwrap_or_else(|| {
+                            // RFC-0067: the window's size, unless the program
+                            // names something `window`.
+                            if sym.as_str() == "window" && !self.knows_own(sym) {
+                                Ty::Named(Symbol::intern("Window"))
+                            } else {
+                                Ty::Unknown
+                            }
+                        });
                     match ty {
                         Ty::Optional(inner) => self.read_optional(sym.as_str(), *inner, *span),
                         ty => ty,
@@ -1735,6 +1776,21 @@ impl Checker<'_> {
                         };
                         let l = self.value(lhs);
                         (l, self.narrowed_in(safe, |s| s.value(rhs)))
+                    }
+                    // `window.width >= md` (RFC-0067): a name beside the
+                    // window's size is a breakpoint, whose being declared is
+                    // the project's to say, so it is a number here.
+                    BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge | BinOp::Eq | BinOp::Ne
+                        if self.window_breakpoint(lhs, rhs) =>
+                    {
+                        let side = |s: &mut Self, e: &Expr| {
+                            if s.is_window_extent(e) {
+                                s.value(e)
+                            } else {
+                                Ty::Float
+                            }
+                        };
+                        (side(self, lhs), side(self, rhs))
                     }
                     _ => (self.value(lhs), self.value(rhs)),
                 };

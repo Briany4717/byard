@@ -526,6 +526,44 @@ error[UnknownBreakpoint]: no breakpoint `md` is declared
 
 The names are yours: Byard does not fix a `sm`, `md` and `lg`.
 
+### The window as a value
+
+A block can change how things look and how much room they take, but it cannot choose which
+elements are there. For that the window's size is a value, `window`, in any expression:
+
+```byld
+View Main() {
+    Column #[bg: 0x14141C, p: 20, gap: 12, grow: 1] {
+        Text("{window.width} x {window.height}") #[color: 0xE7ECF2]
+        when window.width >= 600 {
+            Row #[gap: 12] {
+                Box #[bg: 0x2B3A67, width: 120, height: 80, radius: 12] {}
+                Box #[bg: 0x1C2430, grow: 1, height: 80, radius: 12] {}
+            }
+        } else {
+            Column #[gap: 12] {
+                Box #[bg: 0x2B3A67, height: 80, radius: 12] {}
+                Box #[bg: 0x1C2430, height: 80, radius: 12] {}
+            }
+        }
+    }
+}
+```
+
+`window.width` and `window.height` are `Float`s, in logical pixels, and follow the window: the
+`when` above builds the row from 600 wide and the column below it, in the frame the window
+crossed the width, and the one that is not shown is not in the tree. A `let` that reads them follows
+them too, and so does an attribute (`width: window.width * 0.5`). `window` on its own is the
+record of the two. A program that never writes `window` pays nothing for it, and a view that has
+a `var` or a parameter called `window` reads its own.
+
+Beside `window.width` or `window.height` in a comparison, a bare name is a breakpoint from
+`[theme.breakpoints]`, the same names `on width >= md` takes, so the number is written once:
+`when window.width >= md`, `when window.height < lg`, `when md <= window.width`. One that is not
+declared is the same `UnknownBreakpoint`, and the comparison never holds. The rule is for that one
+place: `md + 1` is an unknown name. It is how a component such as a scaffold picks a navigation
+bar or a rail by itself, without the app passing a flag. See `crates/byard-cli/examples/window_and_roles`.
+
 ## Text
 
 ```byld

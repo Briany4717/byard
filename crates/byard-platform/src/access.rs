@@ -82,6 +82,10 @@ fn role(role: AccessRole) -> Role {
         AccessRole::Navigation => Role::Navigation,
         AccessRole::Toolbar => Role::Toolbar,
         AccessRole::Heading => Role::Heading,
+        AccessRole::SpinButton => Role::SpinButton,
+        AccessRole::Grid => Role::Grid,
+        AccessRole::Row => Role::Row,
+        AccessRole::GridCell => Role::GridCell,
     }
 }
 
@@ -466,6 +470,10 @@ mod tests {
             (R::Navigation, Role::Navigation),
             (R::Toolbar, Role::Toolbar),
             (R::Heading, Role::Heading),
+            (R::SpinButton, Role::SpinButton),
+            (R::Grid, Role::Grid),
+            (R::Row, Role::Row),
+            (R::GridCell, Role::GridCell),
         ];
         for (ours, theirs) in pairs {
             assert_eq!(role(ours), theirs);

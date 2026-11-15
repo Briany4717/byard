@@ -95,13 +95,23 @@ pub enum AccessRole {
     Toolbar,
     /// A title (RFC-0052).
     Heading,
+    /// A number with a range that the control changes in steps: the hour box of
+    /// a time picker (RFC-0067).
+    SpinButton,
+    /// A table of cells the arrow keys move between: a month of days
+    /// (RFC-0067).
+    Grid,
+    /// A row of a [`Grid`](Self::Grid) (RFC-0067).
+    Row,
+    /// One cell of a [`Grid`](Self::Grid) (RFC-0067).
+    GridCell,
 }
 
 impl AccessRole {
     /// The keywords `a11y_role:` accepts (RFC-0052 §2), each with the role it
     /// names. The one list the checker, [`from_keyword`](Self::from_keyword)
     /// and the tests share.
-    pub const KEYWORDS: [&'static str; 23] = [
+    pub const KEYWORDS: [&'static str; 27] = [
         "button",
         "toggle_button",
         "switch",
@@ -125,6 +135,10 @@ impl AccessRole {
         "group",
         "image",
         "heading",
+        "spin_button",
+        "grid",
+        "row",
+        "grid_cell",
     ];
 
     /// The role a `a11y_role:` keyword names, or `None` for a word outside the
@@ -155,6 +169,10 @@ impl AccessRole {
             "group" => Self::Group,
             "image" => Self::Image,
             "heading" => Self::Heading,
+            "spin_button" => Self::SpinButton,
+            "grid" => Self::Grid,
+            "row" => Self::Row,
+            "grid_cell" => Self::GridCell,
             _ => return None,
         })
     }
@@ -188,6 +206,10 @@ impl AccessRole {
             Self::Navigation => "Navigation",
             Self::Toolbar => "Toolbar",
             Self::Heading => "Heading",
+            Self::SpinButton => "SpinButton",
+            Self::Grid => "Grid",
+            Self::Row => "Row",
+            Self::GridCell => "GridCell",
         }
     }
 
@@ -210,6 +232,9 @@ impl AccessRole {
                 | Self::ToggleButton
                 | Self::MenuItem
                 | Self::Link
+                | Self::SpinButton
+                | Self::Grid
+                | Self::GridCell
         )
     }
 
@@ -228,6 +253,7 @@ impl AccessRole {
                 | Self::Tab
                 | Self::MenuItem
                 | Self::Link
+                | Self::GridCell
         )
     }
 }
@@ -733,6 +759,36 @@ impl AccessRequest {
             }
             AccessAction::SetNumber(v) if allowed(AccessActions::SET_VALUE) => {
                 number(clamped(node, *v))
+            }
+            // A spin button the control steps itself (RFC-0067) has no `change`
+            // to write a number to: the reader's Increment and Decrement are
+            // the Up and Down key it already handles, on the node.
+            AccessAction::Increment | AccessAction::Decrement
+                if node.role == AccessRole::SpinButton && !allowed(AccessActions::SET_VALUE) =>
+            {
+                let up = self.action == AccessAction::Increment;
+                let allowed_here = if up {
+                    AccessActions::INCREMENT
+                } else {
+                    AccessActions::DECREMENT
+                };
+                if !allowed(allowed_here) {
+                    return Vec::new();
+                }
+                let key = || {
+                    Some(InputPayload::Key(
+                        if up { "ArrowUp" } else { "ArrowDown" }.into(),
+                    ))
+                };
+                vec![
+                    event(
+                        EventKind::AccessFocus,
+                        (0.0, 0.0),
+                        Some(InputPayload::Element(self.target.0)),
+                    ),
+                    event(EventKind::KeyDown, centre, key()),
+                    event(EventKind::KeyUp, centre, key()),
+                ]
             }
             AccessAction::Increment if allowed(AccessActions::INCREMENT) => {
                 number(stepped(node, 1.0))

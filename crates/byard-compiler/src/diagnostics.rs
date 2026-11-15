@@ -2021,9 +2021,9 @@ impl CompileError {
                  checkbox, radio, tab, menu_item, link) together with a `tap`"
             ),
             Self::AttributeNeedsRole { attr, .. } => format!(
-                "`{attr}` is the range of a value, and only a `slider` or a `progress_bar` \
-                 has one: add `a11y_role: slider` (or `progress_bar`) to this element, or \
-                 drop the attribute"
+                "`{attr}` is the range of a value, and only a `slider`, a `spin_button` or a \
+                 `progress_bar` has one: add `a11y_role: slider` (or `spin_button`, \
+                 `progress_bar`) to this element, or drop the attribute"
             ),
             Self::AnchorToText { name, .. } => format!(
                 "`anchor_to: \"{name}\"` is looked up among every `as` in the window, so two \

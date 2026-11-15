@@ -449,6 +449,10 @@ a single-colour vector icon, tinted with `color` and sized with `size`.
 
 ## Knowing your own size
 
+For the window's size, not an element's, there is `window.width` and `window.height`, which a
+`when` can read to choose between a bar and a rail
+([styling](styling.md#the-window-as-a-value)).
+
 Sometimes a child needs to know how wide its parent turned out. `on measure` runs
 an action whenever the element it is written in has been laid out, with the
 result as `it`:

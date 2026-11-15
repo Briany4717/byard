@@ -161,6 +161,17 @@ field falls back to 200. Its height is 36 unless `height` says otherwise. The te
 left edge unless `p` or `pl` says otherwise; that inset is part of the field and stays at 10,
 so a design that wants none writes `p: (horizontal: 0)`.
 
+`text_align: center` or `text_align: end` places the text, the placeholder and the caret in the
+field's content box instead of at its start, for a digit box or a number that reads from the
+right; `start` is the default. Text longer than the box scrolls as before. It is for a
+one-line field: on one with `lines`, `min_lines` or `max_lines` it is an
+`InvalidAttributeCombination`.
+
+```byld,fragment
+var hour = "12"
+TextField #[bind: hour, width: 96, height: 72, typo: displayMedium, text_align: center]
+```
+
 While it has focus a field draws a 2 pixel line in the theme's `primary` along its bottom edge.
 `indicator: none` leaves it out, for a design that draws its own, and `indicator: line` is the
 default. Whatever else a focused field should look like is the field's own `border` and
@@ -370,7 +381,7 @@ View Main() {
 ```
 
 A role that implies focus is `button`, `toggle_button`, `switch`, `checkbox`, `radio`,
-`tab`, `menu_item`, `link` and `list_item`. A role alone does not put an element in the Tab order if it
+`tab`, `menu_item`, `link`, `grid_cell` and `list_item`. A role alone does not put an element in the Tab order if it
 has nothing to press; an element with a `focus =>`, a `blur =>` or a `focused:` is in it
 whatever its role, and a `tap` there is pressed by the keys too. A `Box` with only a `tap`
 and no role stays out of the order. What presses it follows the role:
@@ -398,6 +409,10 @@ or `radio` inside it as a group, and the arrow keys walk it:
 A group is one stop for Tab, as the WAI-ARIA pattern for tab lists and radio groups has it. Tab enters it at the member that is selected (`a11y_selected`
 or `a11y_checked` true), or at the first when none is, and the next Tab leaves it;
 Shift+Tab comes back to the selected one. The arrows move inside it.
+
+A `grid` is a group too, of the `grid_cell`s in its `row`s: it is one Tab stop, and the arrows
+move by cell and by row. Its keys, and the ones it leaves to the cell (PageUp and PageDown
+among them), are in [accessibility](accessibility.md#grids-and-spin-buttons).
 
 A disabled member is skipped. In a `radio_group` the one that gets focus is also pressed, as
 the arrow keys select among built-in `RadioButton`s. In a `tab_list` it is not: Enter or

@@ -1027,10 +1027,18 @@ impl Interpreter {
                             horizontal: name.as_str() == "Row"
                                 || Self::enum_prop(attrs, "direction") == Some("row"),
                         }),
+                        // RFC-0067: a grid is an arrow group of its cells, in
+                        // rows of its `row` elements, or of the tracks of a
+                        // layout `Grid` that has none.
+                        Some(AccessRole::Grid) => Some(crate::interp::events::GroupKind::Grid {
+                            columns: self.grid_columns(element_name, attrs),
+                        }),
                         _ => None,
                     } {
                         self.router.open_group(kind);
                         group_open = true;
+                    } else if declared == Some(AccessRole::Row) {
+                        self.router.next_row();
                     }
 
                     // RFC-0042: describe the box now that its handlers and

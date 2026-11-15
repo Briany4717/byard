@@ -11,7 +11,8 @@ use super::paint::dim_alpha;
 use super::{CanvasItem, Interpreter};
 use crate::diagnostics::{CompileError, Span};
 use crate::interp::env::Value;
-use crate::parser::ast::{Attr, ElementNode, Expr, Member};
+use crate::parser::ast::{Attr, AttrKind, ElementNode, Expr, Member};
+use crate::symbol::Symbol;
 
 /// Where a canvas body's Tier-1 shapes go (RFC-0031 §S4).
 ///
@@ -1707,7 +1708,36 @@ impl Interpreter {
         if text.is_empty() {
             return;
         }
-        let size = self.shape_num(el, "size").unwrap_or(self.theme.font_size);
+        // RFC-0067: a `typo:` token brings its size, weight and family, read
+        // by the code a `Text` reads them with. Without one the line is drawn
+        // as it always was, in the default face at 400.
+        let typo: Vec<Attr> = el
+            .content
+            .iter()
+            .filter(|a| a.name.as_ref().is_some_and(|n| n.as_str() == "typo"))
+            .map(|a| Attr {
+                name: Symbol::intern("typo"),
+                axis: None,
+                kind: AttrKind::Prop {
+                    value: a.value.clone(),
+                },
+                span: a.value.span(),
+            })
+            .collect();
+        let (typo_size, weight, family) = if typo.is_empty() {
+            (None, 400, None)
+        } else {
+            (
+                self.eval_typo_size(&typo),
+                self.resolve_weight(&typo),
+                self.resolve_family(&typo),
+            )
+        };
+        #[allow(clippy::cast_precision_loss)]
+        let size = self
+            .shape_num(el, "size")
+            .or(typo_size.map(|s| s as f32))
+            .unwrap_or(self.theme.font_size);
         let color = self
             .shape_color(el, "color")
             // Theme tokens are `#RRGGBB` only (the manifest rejects anything
@@ -1715,7 +1745,9 @@ impl Interpreter {
             .unwrap_or_else(|| super::intrinsics::color_to_rgba(self.theme.on_surface(), false));
         let x = canvas.x + self.shape_num(el, "x").unwrap_or(0.0);
         let y = canvas.y + self.shape_num(el, "y").unwrap_or(0.0);
-        let measured = self.measure_text(&text, size).0;
+        let measured = self
+            .measure_text_wrapped(&text, size, None, weight, family.as_deref())
+            .0;
         let tx = match Self::shape_token(el, "align").as_deref() {
             Some("center") => x - measured / 2.0,
             Some("end") => x - measured,
@@ -1733,8 +1765,8 @@ impl Interpreter {
             y: anchor[1],
             text,
             font_size: size * transform.uniform_scale(),
-            weight: 400,
-            family: None,
+            weight,
+            family,
             variations: None,
             color: dim_alpha(color, opacity),
             dirty: true,

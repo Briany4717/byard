@@ -143,6 +143,8 @@ The switch is named by the `Text` beside it, as a built-in `Toggle` is. A `butto
 | `button`, `toggle_button` | Button; a toggle button is a button that is on or off |
 | `switch`, `checkbox`, `radio`, `radio_group` | Switch, check box, radio button, radio group |
 | `slider`, `progress_bar` | Slider, progress indicator |
+| `spin_button` | Spin button: a number with a range that Up and Down change |
+| `grid`, `row`, `grid_cell` | Grid, row, cell: [a month of days, a table](#grids-and-spin-buttons) |
 | `tab`, `tab_list` | Tab, tab list |
 | `menu_item`, `menu` | Menu item, menu |
 | `link` | Link |
@@ -161,7 +163,7 @@ View Main() {
 ```
 
 ```diagnostic
-error[AttributeTypeMismatch]: expected one of ["button", "toggle_button", "switch", "checkbox", "radio", "radio_group", "slider", "tab", "tab_list", "menu_item", "menu", "link", "text_field", "progress_bar", "list", "list_item", "dialog", "alert", "navigation", "toolbar", "group", "image", "heading"] (did you mean `checkbox`?)
+error[AttributeTypeMismatch]: expected one of ["button", "toggle_button", "switch", "checkbox", "radio", "radio_group", "slider", "tab", "tab_list", "menu_item", "menu", "link", "text_field", "progress_bar", "list", "list_item", "dialog", "alert", "navigation", "toolbar", "group", "image", "heading", "spin_button", "grid", "row", "grid_cell"] (did you mean `checkbox`?)
 ```
 
 The role can come from a value, so a control that is a toggle button or a plain button
@@ -182,6 +184,86 @@ A layout container that is given one stops being flattened away: it is a node, a
 what it holds hangs under it. For the keys such a control answers to, and the ring it
 draws, see [the keyboard](controls.md#the-keyboard).
 
+### Grids and spin buttons
+
+A month of days, or any table of cells the arrow keys walk, is a `grid` of `row`s of
+`grid_cell`s. The grid is one stop for Tab, entered at the cell that is `a11y_selected` (the
+first when none is), and the arrow keys move inside it:
+
+```byld
+View Main() {
+    var picked = 6
+
+    Column #[bg: 0x14141C, p: 20, gap: 4, a11y_role: grid, a11y_label: "November 2026"] {
+        for week in [0, 1, 2] {
+            Row #[a11y_role: row, gap: 4] {
+                for day in [1, 2, 3, 4, 5, 6, 7] {
+                    Box #[a11y_role: grid_cell, a11y_label: "November {week * 7 + day}",
+                          a11y_selected: picked == week * 7 + day,
+                          width: 36, height: 36, radius: 18,
+                          bg: (picked == week * 7 + day ? 0x6750A4 : 0x1C2430),
+                          tap => picked = week * 7 + day,
+                          key_down(k) => { if k == "PageDown" { picked = picked + 28 } }] {
+                        Text("{week * 7 + day}") #[color: 0xE7ECF2, size: 14]
+                    }
+                }
+            }
+        }
+    }
+}
+```
+
+| Key | Moves focus |
+|-----|-------------|
+| Right, Left | To the next or previous cell, on to the next or previous row at the end of one. Not past the first or last cell |
+| Down, Up | To the cell in the same column of the next or previous row (the last cell of a shorter one) |
+| Home, End | To the first or last cell of the row |
+
+A disabled cell is skipped, and does not shift the columns of the cells after it. **Every key the
+grid does not use is the cell's own `key_down`**: PageUp and PageDown (a month back, a screenful:
+the grid cannot know which), Ctrl+Home, and a letter. So is an arrow that has nowhere to go: Up on
+the first row is the cell's `key_down("ArrowUp")`, which is where a date picker turns the page.
+A `grid_cell` is focusable as a `tab` is: with a `tap`, or a `focus =>` or `focused:`. A layout
+`Grid` with no `row` elements takes its rows from the tracks of its `columns:` template:
+
+```byld,fragment
+Grid #[columns: "repeat(7, 40)", gap: 4, a11y_role: grid, a11y_label: "Days"] {
+    for day in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] {
+        Box #[a11y_role: grid_cell, a11y_label: "Day {day}", width: 40, height: 36, tap => {}] {
+            Text("{day}")
+        }
+    }
+}
+```
+
+A grid with neither is one row. A `spin_button` is a number the control changes in steps, the hour
+box of a time picker. It takes `a11y_value` and the range `a11y_value_min`, `a11y_value_max` and
+`a11y_value_step`, and Up and Down are the `key_down` the control writes; a reader's Increment and
+Decrement send the same two keys to it:
+
+```byld
+View Main() {
+    var hour = 4
+    var focus = false
+
+    Row #[p: 20] {
+        Box #[a11y_role: spin_button, a11y_label: "Hours", a11y_value: "{hour}",
+              a11y_value_min: 1, a11y_value_max: 12, a11y_value_step: 1,
+              focused: focus, width: 80, height: 48, radius: 8, bg: 0x2B3A67,
+              key_down(k) => {
+                  if k == "ArrowUp" { hour = hour % 12 + 1 }
+                  if k == "ArrowDown" { hour = (hour + 10) % 12 + 1 }
+              }] {
+            Text("{hour}") #[color: 0xE7ECF2, size: 24]
+        }
+    }
+}
+```
+
+```text
+SpinButton "Hours" = 4 in 1..12 step 1 [focusable] @ 20,20 80x48
+```
+
 ## Announcements and ranges
 
 `a11y_live: polite` on an element makes a reader say its text when it appears or changes,
@@ -191,7 +273,7 @@ one tagged `as tip` in the same view, which a reader says after the name. The ta
 a bare `Text` (`Text("Read this first") as tip`) and may sit inside a `when` below the
 element: while it is not shown there is nothing to describe by, and no error. A name
 nothing is tagged with is `UnknownStateTarget`. `a11y_value_min`, `a11y_value_max` and
-`a11y_value_step` give a `slider` or a `progress_bar` built from a `Box` its range, next to
+`a11y_value_step` give a `slider`, a `spin_button` or a `progress_bar` built from a `Box` its range, next to
 `a11y_value`; on any other role they are `AttributeNeedsRole`. The dump writes them as
 `live polite`, `described_by "…"` and `= 40 in 0..100 step 5`. A leaving element is not in
 the tree.

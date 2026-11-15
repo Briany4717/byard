@@ -297,6 +297,9 @@ View Main() {
 error[ConstantCycle]: constants cannot read each other in a circle: gap → pad → gap
 ```
 
+A function may read a constant too, `private` or not (`fn bump(x: Int) -> Int => x + gap`), as it may call
+another function.
+
 A `var`, a parameter or a `let` inside a view that has the same name hides the constant in that
 view. A [package](packages.md) shares its constants with the apps that use it as `k.gap`.
 

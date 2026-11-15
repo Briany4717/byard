@@ -327,7 +327,9 @@ fn check_top_fns(
         undo: Vec::new(),
         origins: HashMap::new(),
         fns: HashMap::new(),
-        declared: HashSet::new(),
+        // The constants are names a function may read, public or private;
+        // their types are not known yet (they may call these functions).
+        declared: consts.iter().map(|c| c.name.clone()).collect(),
         views: &no_views,
         view_params: &no_view_params,
         records: &no_records,

@@ -1794,6 +1794,45 @@ mod tests {
         assert_eq!(body_names(&program.views[1]), ["icons.Star"]);
     }
 
+    /// A package's `private let` is read by its own `private fn`, which a
+    /// public view then calls (the names are only private to other packages).
+    #[test]
+    fn a_private_let_is_visible_inside_a_private_fn_of_the_package() {
+        let mut p = MemProvider(BTreeMap::from([(
+            "a",
+            vec![
+                ("a/tokens.byd", "private let step = 4"),
+                (
+                    "a/x.byd",
+                    "private fn bump(x: Int) -> Int => x + step\n\
+                     View X() { Text(\"{bump(1)}\") }",
+                ),
+            ],
+        )]));
+        let program = resolve_program(root("use a\nView App() { a.X() }"), &mut p);
+        assert!(program.errors.is_empty(), "{:?}", program.errors);
+        let mut interp = Interpreter::new();
+        interp.load_views(&program.views);
+        let known: Vec<&str> = program.views.iter().map(|v| v.name.as_str()).collect();
+        for view in &program.views {
+            let _ = interp.lower_view(view, &known);
+        }
+        assert!(interp.errors().is_empty(), "{:?}", interp.errors());
+    }
+
+    /// The same in a single project: a function reads a constant, private or not.
+    #[test]
+    fn a_function_may_read_a_constant() {
+        for decl in ["let", "private let"] {
+            let src = format!(
+                "{decl} step = 4\nprivate fn bump(x: Int) -> Int => x + step\n\
+                 View App() {{ Text(\"{{bump(1)}}\") }}"
+            );
+            let program = resolve_program(root(&src), &mut MemProvider(BTreeMap::new()));
+            assert!(program.errors.is_empty(), "{decl}: {:?}", program.errors);
+        }
+    }
+
     #[test]
     fn source_map_locates_errors_in_the_right_file() {
         let mut p = MemProvider(BTreeMap::from([(

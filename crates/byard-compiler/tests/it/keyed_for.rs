@@ -356,3 +356,99 @@ View Counter(name: Str) {
     app.set("cells", Value::List(vec![pos(5, 5), pos(0, 0), pos(1, 0)]));
     assert_eq!(rows(&app), ["5,5=0", "0,0=0", "1,0=1"]);
 }
+
+const SLIDES: &str = r#"
+View Main() {
+    var items = [30, 50]
+    Column #[gap: 0] {
+        for n in items KEY {
+            Slide(n)
+        }
+    }
+}
+View Slide(h: Int) {
+    var wide = false
+    Row #[gap: 0] {
+        Button("go") #[width: 40, height: 20] => wide = !wide
+        Box #[width: 100, height: h, bg: wide ? 0xFF0000 : 0x0000FF with anim.linear(1000ms)]
+    }
+}
+"#;
+
+/// How red the box `h` high is (it is blue at rest, red once it has grown).
+fn opacity_of(app: &App, h: f32) -> f32 {
+    app.frame
+        .instances()
+        .iter()
+        .find(|b| (b.rect[3] - h).abs() < 0.5 && (b.rect[2] - 100.0).abs() < 0.5)
+        .map_or(-1.0, |b| b.color[0])
+}
+
+#[test]
+fn a_keyed_items_animation_keeps_going_across_a_reorder() {
+    let mut app = App::new(&SLIDES.replace("KEY", "key n"));
+    app.wait(100);
+    let rest = opacity_of(&app, 50.0);
+    // Start the 50-high item's animation (its button is in the second row).
+    app.tap(20.0, 40.0);
+    app.wait(300);
+    let before = opacity_of(&app, 50.0);
+    assert!(
+        before > rest + 0.1 && before < 0.95,
+        "mid-flight: {rest} then {before}"
+    );
+    app.set("items", Value::List(vec![Value::Int(50), Value::Int(30)]));
+    let after = opacity_of(&app, 50.0);
+    assert!(
+        (after - before).abs() < 0.15,
+        "the same animation, from where it was: {before} then {after}"
+    );
+    app.wait(200);
+    assert!(opacity_of(&app, 50.0) > after, "and it keeps going");
+    // The other item never moved.
+    assert!((opacity_of(&app, 30.0) - rest).abs() < 0.01);
+}
+
+#[test]
+fn a_plain_fors_animation_stays_with_the_position_under_a_reorder() {
+    // What a plain `for` has always done: the animation belongs to the slot,
+    // so after the reorder the slot's new item (the 30-high one) is the one
+    // mid-flight, and the 50-high item shows its slot's resting value.
+    let mut app = App::new(&SLIDES.replace("KEY", ""));
+    app.wait(100);
+    let rest = opacity_of(&app, 50.0);
+    app.tap(20.0, 40.0);
+    app.wait(300);
+    let before = opacity_of(&app, 50.0);
+    assert!(before > rest + 0.1, "mid-flight: {rest} then {before}");
+    app.set("items", Value::List(vec![Value::Int(50), Value::Int(30)]));
+    assert!(
+        (opacity_of(&app, 50.0) - rest).abs() < 0.01,
+        "{}",
+        opacity_of(&app, 50.0)
+    );
+    assert!(
+        opacity_of(&app, 30.0) > rest + 0.1,
+        "{}",
+        opacity_of(&app, 30.0)
+    );
+}
+
+#[test]
+fn a_key_on_a_canvas_or_path_for_is_an_error_not_a_silent_no_op() {
+    for body in [
+        "Canvas #[width: 100, height: 100] { for i in [1, 2] key i { circle(10, 10, 4) } }",
+        "Canvas #[width: 100, height: 100] { path(fill: 0xFF0000) { move(0, 0)\n for i in [1, 2] key i { line(i, 5) } } }",
+    ] {
+        let parsed = parse(&format!("View Main() {{ {body} }}"));
+        assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+        let mut interp = Interpreter::new();
+        interp.load_views(&parsed.views);
+        let _ = interp.lower_view(&parsed.views[0], &["Main"]);
+        let found = interp
+            .errors()
+            .iter()
+            .any(|e| matches!(e, CompileError::KeyInCanvasFor { .. }));
+        assert!(found, "{body}: {:?}", interp.errors());
+    }
+}

@@ -2357,11 +2357,19 @@ fn first_path_command(members: &[Member]) -> Option<&ElementNode> {
     })
 }
 
+/// A `key` on a `for` that draws shapes (RFC-0068 §4b) changes nothing.
+fn push_key_in_canvas(key: Option<&Expr>, errs: &mut Vec<CompileError>) {
+    if let Some(key) = key {
+        errs.push(CompileError::KeyInCanvasFor { span: key.span() });
+    }
+}
+
 fn validate_path_members(members: &[Member], errs: &mut Vec<CompileError>) {
     for member in members {
         let cmd = match member {
             Member::Element(cmd) => cmd,
-            Member::For { body, .. } => {
+            Member::For { key, body, .. } => {
+                push_key_in_canvas(key.as_ref(), errs);
                 validate_path_members(body, errs);
                 continue;
             }
@@ -2763,7 +2771,10 @@ fn validate_canvas_body(members: &[Member], errs: &mut Vec<CompileError>, theme:
                         .map(str::to_string),
                 });
             }
-            Member::For { body, .. } => validate_canvas_body(body, errs, theme),
+            Member::For { key, body, .. } => {
+                push_key_in_canvas(key.as_ref(), errs);
+                validate_canvas_body(body, errs, theme);
+            }
             Member::When { then, els, .. } => {
                 validate_canvas_body(then, errs, theme);
                 if let Some(els) = els {

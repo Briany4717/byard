@@ -220,8 +220,8 @@ byard shot shell/ --screens "DP-1:1920x1080" --tap 1880,20 -o popup.png
 ```
 
 With no compositor, `shot` lays the panels out on the simulated screens by
-layer shell's rules: anchors, margins, exclusive zones in the order the panels
-were created, and popups positioned and flipped as the compositor would. It
+layer shell's rules: anchors, margins and exclusive zones in the order
+the compositor applies them, and popups positioned and flipped as it would. It
 draws them over a checkerboard where nothing is. `--surface` picks one surface,
 by its `as` name or its `namespace`, and `--screen` picks which screen's
 instance. `byard test` sees every surface: the accessibility dump has a `Window`
@@ -653,8 +653,11 @@ and re-exports, and the hooks are a `Vec` that is empty.
   `Window` shoots as it does now.
 - **Placement.** Panels are placed on their screen by layer shell's rules, as
   wlroots implements them, with the same arithmetic as `wlr_layer_shell`'s
-  arrange pass: anchors, margins, and exclusive zones applied in creation order,
-  each shrinking the area left for the next. Windows are placed in the area left,
+  arrange pass (sway's `arrange_layers`): layers from `overlay` down to
+  `background`, every panel that reserves space before any that does not,
+  creation order within that, each reservation shrinking the area left for the
+  next. A panel that reserves nothing therefore avoids a bar created after it,
+  as it does on the desktop. Windows are placed in the area left,
   centred at their opening size. Popups are positioned by an `xdg_positioner`
   solver with the same flip and slide rules.
 - **The image.** Without `--surface`, the image is the screens laid out side by

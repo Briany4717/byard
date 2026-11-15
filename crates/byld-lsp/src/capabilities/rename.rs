@@ -137,6 +137,7 @@ fn collect_name_spans_in_members(members: &[Member], target_name: &str, out: &mu
             Member::For {
                 var,
                 iter,
+                key,
                 body,
                 span,
                 ..
@@ -148,6 +149,9 @@ fn collect_name_spans_in_members(members: &[Member], target_name: &str, out: &mu
                     ));
                 }
                 collect_name_spans_in_expr(iter, target_name, out);
+                if let Some(key) = key {
+                    collect_name_spans_in_expr(key, target_name, out);
+                }
                 collect_name_spans_in_members(body, target_name, out);
             }
             Member::Route { body, .. } => {

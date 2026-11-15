@@ -1,0 +1,44 @@
+// RFC-0068 §4b, `for … key`: an item keeps what it made while its key is in the list.
+//
+// Run it (from the repo root):
+//   cd crates/byard-cli/examples/keyed_list
+//   cargo run -p byard-cli -- dev
+//
+// Each row is a `Counter`, with a `var` of its own. Press "+" on a few rows to
+// give them different counts, then press "Add at the front". The new row goes
+// first, and every other row keeps its own count, because the `for` says what
+// identifies an item: `key name`. Take `key name` out and the counts stay
+// where they are in the list instead, so they belong to a different name
+// after each insert.
+//
+// "Remove first" takes the first row away and "Reverse" turns the list round;
+// the counts follow their names through both.
+View Main() {
+    var names = ["Ada", "Grace", "Linus"]
+    var next = 1
+
+    Column #[p: 24, gap: 12, grow: 1, bg: 0xFFFBFE] {
+        Row #[gap: 8] {
+            Button("Add at the front") => {
+                names = names.reverse().push("Row {next}").reverse()
+                next += 1
+            }
+            Button("Remove first") => names = names.slice(1, names.len)
+            Button("Reverse") => names = names.reverse()
+        }
+        Column #[gap: 8] {
+            for name in names key name {
+                Counter(name)
+            }
+        }
+    }
+}
+
+View Counter(name: Str) {
+    var count = 0
+    Row #[gap: 12, align: center, p: 8, bg: 0xECE6F0, radius: 8, width: 280] {
+        Text(name) #[width: 90]
+        Text("{count}") #[width: 40]
+        Button("+") => count += 1
+    }
+}

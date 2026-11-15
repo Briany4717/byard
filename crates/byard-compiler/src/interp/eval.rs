@@ -463,7 +463,7 @@ impl RenderNode {
 }
 
 /// A lowered reactive computation (see the module docs).
-type Lowered = Box<dyn FnMut(&mut ReactiveCtx) -> Value>;
+pub(super) type Lowered = Box<dyn FnMut(&mut ReactiveCtx) -> Value>;
 
 /// One entry of the function table: parameter names, body, whether it is a
 /// callback prop, and, for a callback, the names visible where it was written.

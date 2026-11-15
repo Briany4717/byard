@@ -448,6 +448,33 @@ fn a_for_loop_may_bind_an_index_before_its_item() {
 }
 
 #[test]
+fn a_for_loop_may_be_keyed_and_key_is_not_reserved() {
+    // RFC-0068 §4b: `key` is read after the list, and only there.
+    let view = one_view("View V() { Column { for i, t in ts key t.id { Text(t.name) } } }");
+    let column = as_element(&view.body[0]);
+    let Member::For {
+        var, index, key, ..
+    } = &column.children[0]
+    else {
+        panic!("expected a for loop, got {:?}", column.children[0]);
+    };
+    assert_eq!(*var, sym("t"));
+    assert_eq!(index.as_ref(), Some(&sym("i")));
+    assert!(matches!(key, Some(Expr::Member { .. })), "{key:?}");
+    // Without it there is none.
+    let view = one_view("View V() { Column { for t in ts { Text(t) } } }");
+    let column = as_element(&view.body[0]);
+    assert!(matches!(&column.children[0], Member::For { key: None, .. }));
+    // A binding called `key` keeps working: as the list, as the loop variable,
+    // as the key itself, and as a plain name.
+    one_view("View V() { var key = 1\n Column { for k in key { Text(k) } } }");
+    one_view("View V() { Column { for key in ks { Text(key) } } }");
+    one_view("View V() { Column { for key in ks key key { Text(key) } } }");
+    one_view("View V() { Column { for k in key key key { Text(k) } } }");
+    one_view("View V() { let key = 2\n Text(key) }");
+}
+
+#[test]
 fn animation_modifiers_and_second_durations_parse() {
     // RFC-0025 §4: repeat/reverse/delay/loop modifiers ride along as ordinary
     // named arguments, and a duration may be written in seconds.

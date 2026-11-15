@@ -248,6 +248,7 @@ fn collect_member_tokens(members: &[Member], out: &mut Vec<RawToken>) {
             Member::For {
                 var,
                 iter,
+                key,
                 body,
                 span,
                 ..
@@ -263,6 +264,9 @@ fn collect_member_tokens(members: &[Member], out: &mut Vec<RawToken>) {
                     modifiers: 1,  // DECLARATION
                 });
                 collect_expr_tokens(iter, out);
+                if let Some(key) = key {
+                    collect_expr_tokens(key, out);
+                }
                 collect_member_tokens(body, out);
             }
             Member::When {

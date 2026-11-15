@@ -9,8 +9,10 @@ token or push a tag are done by hand.
 - Nothing waits on swash. Its variation-coordinate leak (dfrg/swash#149) is
   worked around in Byard's own code, so a published `byard` draws variable
   fonts correctly with whatever swash crates.io resolves. Watch the canary,
-  `cargo test -p byard-core swash_still_leaks_variation_coordinates`: when it
-  fails, swash has fixed the leak, and its message says what to remove.
+  `cargo test -p byard-core swash_still_leaks_variation_coordinates`. The
+  `swash canary` workflow runs it every Monday against the newest swash on
+  crates.io: when it fails, swash has fixed the leak, and its message says what
+  to remove.
 - The workspace version in `Cargo.toml` (`[workspace.package]` and the
   internal crates in `[workspace.dependencies]`) is the one being released.
 - `CHANGELOG.md` has the version and its date under `[Unreleased]`, and the

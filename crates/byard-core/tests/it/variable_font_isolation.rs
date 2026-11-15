@@ -157,8 +157,19 @@ fn a_variable_font_draws_the_same_after_another_at_a_heavy_weight() {
     let mut fresh = encoder(&device, &queue);
     let alone = render(&mut fresh, &device, &queue, &icon);
     assert!(alone.iter().any(|&b| b != 0), "the icon drew something");
+    // Where the two pictures differ, for a CI log: the bytes, and the box of the
+    // pixels, so a stray line and a changed glyph read differently.
+    let differing = after.iter().zip(&alone).filter(|(a, b)| a != b).count();
+    let mut area = (usize::MAX, usize::MAX, 0, 0);
+    for (i, (a, b)) in after.chunks_exact(4).zip(alone.chunks_exact(4)).enumerate() {
+        if a != b {
+            let (x, y) = (i % SIZE as usize, i / SIZE as usize);
+            area = (area.0.min(x), area.1.min(y), area.2.max(x), area.3.max(y));
+        }
+    }
     assert!(
         after == alone,
-        "the icon line drew differently after a heavy variable line"
+        "the icon line drew differently after a heavy variable line: {differing} bytes differ, \
+         in the box {area:?}"
     );
 }

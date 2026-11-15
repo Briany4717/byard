@@ -209,3 +209,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     return byard_out(vec4<f32>(in.color.rgb, in.color.a * alpha * in.opacity * clip_coverage(in.position.xy)));
 }
+
+// The clear quad's fragment stage (`EncoderSubsystem::clear_pipeline`): wipe
+// every pixel the quad covers, to transparent black. No distance field, no
+// derivatives and no `discard`: `fs_main` drops a fragment whose coverage
+// comes out as zero, and on the diagonal two triangles share, WARP's
+// derivatives made that happen to pixels inside the quad, which left a
+// one-pixel line of the previous frame's ink across a redrawn region.
+@fragment
+fn fs_clear() -> @location(0) vec4<f32> {
+    return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+}

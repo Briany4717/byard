@@ -157,8 +157,24 @@ fn a_variable_font_draws_the_same_after_another_at_a_heavy_weight() {
     let mut fresh = encoder(&device, &queue);
     let alone = render(&mut fresh, &device, &queue, &icon);
     assert!(alone.iter().any(|&b| b != 0), "the icon drew something");
+    // How far apart the two pictures are: the bytes that differ, the largest
+    // difference, and the pixels whose coverage moved by more than a quarter.
+    let differing = after.iter().zip(&alone).filter(|(a, b)| a != b).count();
+    let largest = after
+        .iter()
+        .zip(&alone)
+        .map(|(a, b)| a.abs_diff(*b))
+        .max()
+        .unwrap_or(0);
+    let moved = after
+        .chunks_exact(4)
+        .zip(alone.chunks_exact(4))
+        .filter(|(a, b)| a[0].abs_diff(b[0]) > 64)
+        .count();
+    let drawn = alone.chunks_exact(4).filter(|p| p[0] > 0).count();
     assert!(
         after == alone,
-        "the icon line drew differently after a heavy variable line"
+        "the icon line drew differently after a heavy variable line: {differing} bytes differ, \
+         the largest by {largest}; {moved} of {drawn} drawn pixels moved by more than 64"
     );
 }
